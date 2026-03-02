@@ -55,6 +55,12 @@ export class MountStage implements Stage {
       args.push("-v", "/var/run/docker.sock:/var/run/docker.sock");
     }
 
+    // git 設定マウント (user.name / user.email などをコンテナに引き継ぐ)
+    const gitConfigDir = `${Deno.env.get("HOME")}/.config/git`;
+    if (await fileExists(gitConfigDir)) {
+      args.push("-v", `${gitConfigDir}:/home/nas/.config/git:ro`);
+    }
+
     // プロファイルの環境変数
     for (const [key, value] of Object.entries(result.profile.env)) {
       envVars[key] = value;
