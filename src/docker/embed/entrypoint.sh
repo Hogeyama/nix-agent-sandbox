@@ -46,6 +46,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
   if [ "$NAW_UID" != "0" ]; then
     nix-daemon &
     while [ ! -S /nix/var/nix/daemon-socket/socket ]; do sleep 0.1; done
+    export NIX_REMOTE=daemon
   fi
   exec "${EXEC_PREFIX[@]}" nix develop "$WORKSPACE" --command "${AGENT_COMMAND[@]}"
 else

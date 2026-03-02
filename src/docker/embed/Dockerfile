@@ -43,7 +43,8 @@ RUN mkdir -p /var/empty && \
     for n in $(seq 1 4); do \
       echo "nixbld${n}:x:$((30000 + n)):30000:Nix build user ${n}:/var/empty:/sbin/nologin" >> /etc/passwd; \
     done && \
-    echo "build-users-group = nixbld" >> /etc/nix/nix.conf
+    echo "build-users-group = nixbld" >> /etc/nix/nix.conf && \
+    echo "sandbox = false" >> /etc/nix/nix.conf
 
 # コンテナ内ユーザーの HOME
 RUN mkdir -p /home/naw
