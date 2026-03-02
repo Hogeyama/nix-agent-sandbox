@@ -16,23 +16,51 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
   }
 
   const home = Deno.env.get("HOME") ?? "/root";
+  const xdgConfigHome = Deno.env.get("XDG_CONFIG_HOME");
+  const xdgStateHome = Deno.env.get("XDG_STATE_HOME");
 
-  // ~/.config/.copilot/ をマウント（認証情報・設定）
-  const copilotConfigDir = `${home}/.config/.copilot`;
-  try {
-    Deno.statSync(copilotConfigDir);
-    args.push("-v", `${copilotConfigDir}:/home/nas/.config/.copilot`);
-  } catch {
-    // ~/.config/.copilot が無い場合はスキップ
+  // Copilot が実際に使うパスを決定（XDG 未設定時は $HOME/.copilot）
+  const hostCopilotConfigDir = xdgConfigHome
+    ? `${xdgConfigHome}/.copilot`
+    : `${home}/.copilot`;
+  const hostCopilotStateDir = xdgStateHome
+    ? `${xdgStateHome}/.copilot`
+    : `${home}/.copilot`;
+
+  const containerCopilotConfigDir = remapToContainer(
+    hostCopilotConfigDir,
+    home,
+  );
+  const containerCopilotStateDir = remapToContainer(hostCopilotStateDir, home);
+
+  // XDG_CONFIG_HOME をコンテナに渡す（ホストで設定されている場合のみ）
+  if (xdgConfigHome) {
+    const containerConfigHome = remapToContainer(xdgConfigHome, home);
+    envVars["XDG_CONFIG_HOME"] = containerConfigHome;
   }
 
-  // ~/.local/state/.copilot/ をマウント（セッション履歴・状態）
-  const copilotStateDir = `${home}/.local/state/.copilot`;
+  // XDG_STATE_HOME をコンテナに渡す（ホストで設定されている場合のみ）
+  if (xdgStateHome) {
+    const containerStateHome = remapToContainer(xdgStateHome, home);
+    envVars["XDG_STATE_HOME"] = containerStateHome;
+  }
+
+  // config ディレクトリをマウント
   try {
-    Deno.statSync(copilotStateDir);
-    args.push("-v", `${copilotStateDir}:/home/nas/.local/state/.copilot`);
+    Deno.statSync(hostCopilotConfigDir);
+    args.push("-v", `${hostCopilotConfigDir}:${containerCopilotConfigDir}`);
   } catch {
-    // ~/.local/state/.copilot が無い場合はスキップ
+    // ディレクトリが無い場合はスキップ
+  }
+
+  // state ディレクトリをマウント（config と同じ場合は重複を避ける）
+  if (hostCopilotStateDir !== hostCopilotConfigDir) {
+    try {
+      Deno.statSync(hostCopilotStateDir);
+      args.push("-v", `${hostCopilotStateDir}:${containerCopilotStateDir}`);
+    } catch {
+      // ディレクトリが無い場合はスキップ
+    }
   }
 
   // copilot バイナリのマウント (実体パスを解決してマウント)
@@ -67,6 +95,17 @@ function getGhToken(): string | null {
     // ignore
   }
   return null;
+}
+
+/**
+ * ホストのパスをコンテナ内パスにリマップする。
+ * $HOME 配下のパスは /home/nas/ 配下に変換し、それ以外はそのまま返す。
+ */
+function remapToContainer(hostPath: string, hostHome: string): string {
+  if (hostPath.startsWith(hostHome + "/")) {
+    return "/home/nas/" + hostPath.slice(hostHome.length + 1);
+  }
+  return hostPath;
 }
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
