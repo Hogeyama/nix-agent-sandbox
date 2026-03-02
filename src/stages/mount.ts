@@ -27,14 +27,12 @@ export class MountStage implements Stage {
       envVars["NAW_GID"] = String(gid);
     }
 
-    // Nix store overlay (nix develop を使う場合のみ)
-    // ホスト store とコンテナ store を fuse-overlayfs で統合する
-    if (result.nixEnabled && result.profile.nix.mountHostStore) {
-      const hasHostNixStore = await fileExists("/nix/store");
-      if (hasHostNixStore) {
-        args.push("-v", "/nix/store:/nix/store-host:ro");
-        args.push("--device", "/dev/fuse");
-        args.push("--cap-add", "SYS_ADMIN");
+    // Nix ソケットマウント (ホストの nix daemon にソケット経由で接続)
+    if (result.nixEnabled && result.profile.nix.mountSocket) {
+      const hasHostNix = await fileExists("/nix");
+      if (hasHostNix) {
+        args.push("-v", "/nix:/nix");
+        envVars["NIX_REMOTE"] = "daemon";
         envVars["NIX_ENABLED"] = "true";
       }
     }

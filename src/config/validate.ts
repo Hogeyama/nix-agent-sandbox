@@ -56,8 +56,8 @@ function validateProfile(name: string, raw: RawProfile): Profile {
       : undefined,
     nix: {
       enable: raw.nix?.enable ?? DEFAULT_NIX_CONFIG.enable,
-      mountHostStore: raw.nix?.["mount-host-store"] ??
-        DEFAULT_NIX_CONFIG.mountHostStore,
+      mountSocket: raw.nix?.["mount-socket"] ??
+        DEFAULT_NIX_CONFIG.mountSocket,
       extraPackages: raw.nix?.["extra-packages"] ??
         DEFAULT_NIX_CONFIG.extraPackages,
     },

@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- /nix/store overlay (ホストの store をマウントしている場合) ---
-if [ -d /nix/store-host ]; then
-  echo "[naw] Setting up /nix/store overlay..."
-  mkdir -p /nix/store-overlay/{upper,work}
-  fuse-overlayfs \
-    -o "lowerdir=/nix/store-container:/nix/store-host,upperdir=/nix/store-overlay/upper,workdir=/nix/store-overlay/work" \
-    /nix/store
-  echo "[naw] /nix/store overlay ready"
+# --- Nix PATH セットアップ (ホストの nix をソケット経由で使う場合) ---
+if [ "${NIX_ENABLED:-false}" = "true" ]; then
+  # ホストの nix プロファイルを PATH に追加
+  for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
+    if [ -d "$p" ]; then
+      export PATH="$p:$PATH"
+      break
+    fi
+  done
 fi
 
 # --- ユーザーセットアップ ---
@@ -21,6 +22,13 @@ if [ "$NAW_UID" != "0" ]; then
   echo "naw:x:${NAW_UID}:${NAW_GID}:naw:/home/naw:/bin/bash" >> /etc/passwd
   grep -q "^naw:" /etc/group 2>/dev/null || echo "naw:x:${NAW_GID}:" >> /etc/group
   chown -R "${NAW_UID}:${NAW_GID}" /home/naw
+
+  # nix trusted-users にホストユーザーを追加 (nix daemon 経由操作に必要)
+  if [ "${NIX_ENABLED:-false}" = "true" ] && [ -d /nix/var/nix ]; then
+    mkdir -p /etc/nix
+    echo "trusted-users = root naw" >> /etc/nix/nix.conf 2>/dev/null || true
+  fi
+
   export HOME=/home/naw
 
   # git safe.directory (naw ユーザー用)
@@ -41,14 +49,8 @@ fi
 
 # --- nix develop 統合 ---
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
-  echo "[naw] Detected flake.nix, entering nix develop..."
-  # 非 root の場合は nix-daemon を起動 (マルチユーザーモード)
-  if [ "$NAW_UID" != "0" ]; then
-    nix-daemon &
-    while [ ! -S /nix/var/nix/daemon-socket/socket ]; do sleep 0.1; done
-    export NIX_REMOTE=daemon
-  fi
-  exec "${EXEC_PREFIX[@]}" nix develop "$WORKSPACE" --command "${AGENT_COMMAND[@]}"
+  echo "[naw] Detected flake.nix, entering nix develop (via host daemon)..."
+  exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command "${AGENT_COMMAND[@]}"
 else
   exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
 fi

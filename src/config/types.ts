@@ -11,7 +11,7 @@ export interface WorktreeConfig {
 /** Nix 設定 */
 export interface NixConfig {
   enable: boolean | "auto";
-  mountHostStore: boolean;
+  mountSocket: boolean;
   extraPackages: string[];
 }
 
@@ -50,7 +50,7 @@ export interface RawProfile {
   };
   nix?: {
     enable?: boolean | "auto";
-    "mount-host-store"?: boolean;
+    "mount-socket"?: boolean;
     "extra-packages"?: string[];
   };
   docker?: {
@@ -62,7 +62,7 @@ export interface RawProfile {
 /** デフォルト値 */
 export const DEFAULT_NIX_CONFIG: NixConfig = {
   enable: "auto",
-  mountHostStore: true,
+  mountSocket: true,
   extraPackages: [],
 };
 

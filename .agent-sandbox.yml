@@ -5,7 +5,7 @@ profiles:
     agent: claude
     nix:
       enable: auto
-      mount-host-store: true
+      mount-socket: true
     docker:
       mount-socket: true
 
@@ -13,6 +13,6 @@ profiles:
     agent: copilot
     nix:
       enable: auto
-      mount-host-store: true
+      mount-socket: true
     docker:
       mount-socket: true

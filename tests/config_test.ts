@@ -34,7 +34,7 @@ Deno.test("validateConfig: full config", () => {
         },
         nix: {
           enable: true,
-          "mount-host-store": true,
+          "mount-socket": true,
           "extra-packages": ["nixpkgs.ripgrep"],
         },
         docker: {
@@ -50,7 +50,7 @@ Deno.test("validateConfig: full config", () => {
   assertEquals(p.worktree?.base, "origin/main");
   assertEquals(p.worktree?.onCreate, "npm install");
   assertEquals(p.nix.enable, true);
-  assertEquals(p.nix.mountHostStore, true);
+  assertEquals(p.nix.mountSocket, true);
   assertEquals(p.nix.extraPackages, ["nixpkgs.ripgrep"]);
   assertEquals(p.docker.mountSocket, true);
   assertEquals(p.env["FOO"], "bar");
