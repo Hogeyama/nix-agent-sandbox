@@ -33,7 +33,7 @@ export async function main(args: string[]): Promise<void> {
   const subcommand = nasArgs.find((a) => !a.startsWith("-"));
 
   if (subcommand === "rebuild") {
-    await runRebuild(nasArgs.filter((a) => a !== "rebuild"), agentExtraArgs);
+    await runRebuild(nasArgs.filter((a) => a !== "rebuild"));
     return;
   }
 
@@ -62,7 +62,6 @@ export async function main(args: string[]): Promise<void> {
 
 async function runRebuild(
   nasArgs: string[],
-  agentExtraArgs: string[],
 ): Promise<void> {
   const profileName = nasArgs.find((a) => !a.startsWith("-"));
   try {
@@ -82,9 +81,6 @@ async function runRebuild(
     const stages = [
       new WorktreeStage(),
       new DockerBuildStage(),
-      new NixDetectStage(),
-      new MountStage(),
-      new LaunchStage(agentExtraArgs),
     ];
 
     await runPipeline(stages, ctx);
@@ -99,10 +95,10 @@ function printUsage(): void {
 
 Usage:
   nas [profile-name] [options] [-- agent-args...]
-  nas rebuild [profile-name] [options] [-- agent-args...]
+  nas rebuild [profile-name] [options]
 
 Subcommands:
-  rebuild   Docker イメージを削除して再ビルドしてから起動する
+  rebuild   Docker イメージを削除して再ビルドする
 
 Options:
   -h, --help      Show this help
@@ -112,7 +108,6 @@ Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
   nas copilot-nix -- -p "list files"     # Pass args to the agent
-  nas rebuild                            # Rebuild Docker image and launch
-  nas rebuild copilot-nix               # Rebuild with specific profile
+  nas rebuild                            # Rebuild Docker image only
 `);
 }
