@@ -16,14 +16,14 @@ export class NixDetectStage implements Stage {
     if (nixCfg.enable === "auto") {
       nixEnabled = await hasFlakeNix(ctx.workDir);
       console.log(
-        `[naw] Nix: auto-detected flake.nix → ${
+        `[nas] Nix: auto-detected flake.nix → ${
           nixEnabled ? "enabled" : "disabled"
         }`,
       );
     } else {
       nixEnabled = nixCfg.enable;
       console.log(
-        `[naw] Nix: explicitly ${nixEnabled ? "enabled" : "disabled"}`,
+        `[nas] Nix: explicitly ${nixEnabled ? "enabled" : "disabled"}`,
       );
     }
 

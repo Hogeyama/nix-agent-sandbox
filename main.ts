@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-all
 
 /**
- * naw - Nix Agent Workspace
+ * nas - Nix Agent Sandbox
  * Docker + Nix で AI エージェントの隔離された作業環境を起動する CLI ツール
  */
 

@@ -38,7 +38,7 @@ export function createContext(
     profile,
     profileName,
     workDir,
-    imageName: "naw-sandbox",
+    imageName: "nas-sandbox",
     dockerArgs: [],
     envVars: {},
     nixEnabled: false,

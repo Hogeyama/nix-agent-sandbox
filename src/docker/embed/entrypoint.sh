@@ -13,29 +13,29 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
 fi
 
 # --- ユーザーセットアップ ---
-NAW_UID="${NAW_UID:-0}"
-NAW_GID="${NAW_GID:-0}"
+NAS_UID="${NAS_UID:-0}"
+NAS_GID="${NAS_GID:-0}"
 WORKSPACE="${WORKSPACE:-/workspace}"
 
-if [ "$NAW_UID" != "0" ]; then
+if [ "$NAS_UID" != "0" ]; then
   # ホストユーザーに合わせた非 root ユーザーを作成
-  echo "naw:x:${NAW_UID}:${NAW_GID}:naw:/home/naw:/bin/bash" >> /etc/passwd
-  grep -q "^naw:" /etc/group 2>/dev/null || echo "naw:x:${NAW_GID}:" >> /etc/group
-  chown -R "${NAW_UID}:${NAW_GID}" /home/naw
+  echo "nas:x:${NAS_UID}:${NAS_GID}:nas:/home/nas:/bin/bash" >>/etc/passwd
+  grep -q "^nas:" /etc/group 2>/dev/null || echo "nas:x:${NAS_GID}:" >>/etc/group
+  chown -R "${NAS_UID}:${NAS_GID}" /home/nas
 
   # nix trusted-users にホストユーザーを追加 (nix daemon 経由操作に必要)
   if [ "${NIX_ENABLED:-false}" = "true" ] && [ -d /nix/var/nix ]; then
     mkdir -p /etc/nix
-    echo "trusted-users = root naw" >> /etc/nix/nix.conf 2>/dev/null || true
+    echo "trusted-users = root nas" >>/etc/nix/nix.conf 2>/dev/null || true
   fi
 
-  export HOME=/home/naw
+  export HOME=/home/nas
 
-  # git safe.directory (naw ユーザー用)
-  setpriv --reuid="${NAW_UID}" --regid="${NAW_GID}" --init-groups -- \
+  # git safe.directory (nas ユーザー用)
+  setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --init-groups -- \
     git config --global --add safe.directory "$WORKSPACE"
 
-  EXEC_PREFIX=(setpriv --reuid="${NAW_UID}" --regid="${NAW_GID}" --init-groups --)
+  EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --init-groups --)
 else
   git config --global --add safe.directory "$WORKSPACE"
   EXEC_PREFIX=()
@@ -49,7 +49,7 @@ fi
 
 # --- nix develop 統合 ---
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
-  echo "[naw] Detected flake.nix, entering nix develop (via host daemon)..."
+  echo "[nas] Detected flake.nix, entering nix develop (via host daemon)..."
   exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command "${AGENT_COMMAND[@]}"
 else
   exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"

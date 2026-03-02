@@ -15,10 +15,10 @@ export class DockerBuildStage implements Stage {
 
     if (await dockerImageExists(imageName)) {
       console.log(
-        `[naw] Docker image "${imageName}" already exists, skipping build`,
+        `[nas] Docker image "${imageName}" already exists, skipping build`,
       );
     } else {
-      console.log(`[naw] Building Docker image "${imageName}"...`);
+      console.log(`[nas] Building Docker image "${imageName}"...`);
       const dockerfileDir = path.fromFileUrl(
         new URL("../docker/embed/", import.meta.url),
       );
@@ -39,10 +39,10 @@ export class LaunchStage implements Stage {
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     const command = [...ctx.agentCommand, ...this.extraArgs];
-    console.log(`[naw] Launching container...`);
-    console.log(`[naw]   Image: ${ctx.imageName}`);
-    console.log(`[naw]   Agent: ${ctx.profile.agent}`);
-    console.log(`[naw]   Command: ${command.join(" ")}`);
+    console.log(`[nas] Launching container...`);
+    console.log(`[nas]   Image: ${ctx.imageName}`);
+    console.log(`[nas]   Agent: ${ctx.profile.agent}`);
+    console.log(`[nas]   Command: ${command.join(" ")}`);
 
     await dockerRun({
       image: ctx.imageName,

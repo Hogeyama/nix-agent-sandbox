@@ -8,7 +8,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # エージェントバイナリのマウント先
-RUN mkdir -p /usr/local/bin /home/naw /nix
+RUN mkdir -p /usr/local/bin /home/nas /nix
 ENV PATH="/usr/local/bin:${PATH}"
 
 WORKDIR /workspace

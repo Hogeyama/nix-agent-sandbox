@@ -21,7 +21,7 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
   const copilotConfigDir = `${home}/.config/.copilot`;
   try {
     Deno.statSync(copilotConfigDir);
-    args.push("-v", `${copilotConfigDir}:/home/naw/.config/.copilot`);
+    args.push("-v", `${copilotConfigDir}:/home/nas/.config/.copilot`);
   } catch {
     // ~/.config/.copilot が無い場合はスキップ
   }
@@ -36,7 +36,9 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
     ...ctx,
     dockerArgs: args,
     envVars,
-    agentCommand: copilotBin ? ["copilot"] : ["bash", "-c", "echo 'copilot binary not found'; exit 1"],
+    agentCommand: copilotBin
+      ? ["copilot"]
+      : ["bash", "-c", "echo 'copilot binary not found'; exit 1"],
   };
 }
 

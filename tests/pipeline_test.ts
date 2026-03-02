@@ -20,7 +20,7 @@ Deno.test("createContext: returns correct initial values", () => {
   const ctx = createContext(testConfig, testProfile, "test", "/tmp/work");
   assertEquals(ctx.profileName, "test");
   assertEquals(ctx.workDir, "/tmp/work");
-  assertEquals(ctx.imageName, "naw-sandbox");
+  assertEquals(ctx.imageName, "nas-sandbox");
   assertEquals(ctx.dockerArgs, []);
   assertEquals(ctx.nixEnabled, false);
 });

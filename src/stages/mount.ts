@@ -23,8 +23,8 @@ export class MountStage implements Stage {
     const uid = Deno.uid();
     const gid = Deno.gid();
     if (uid !== null && gid !== null) {
-      envVars["NAW_UID"] = String(uid);
-      envVars["NAW_GID"] = String(gid);
+      envVars["NAS_UID"] = String(uid);
+      envVars["NAS_GID"] = String(gid);
     }
 
     // Nix ソケットマウント (ホストの nix daemon にソケット経由で接続)

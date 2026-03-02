@@ -15,14 +15,14 @@ export function configureClaude(ctx: ExecutionContext): ExecutionContext {
   const claudeDir = `${home}/.claude`;
   const claudeMount = prepareMountSource(claudeDir);
   if (claudeMount) {
-    args.push("-v", `${claudeMount}:/home/naw/.claude`);
+    args.push("-v", `${claudeMount}:/home/nas/.claude`);
   }
 
   // ~/.claude.json をマウント（設定）
   const claudeJson = `${home}/.claude.json`;
   const claudeJsonMount = prepareMountSource(claudeJson);
   if (claudeJsonMount) {
-    args.push("-v", `${claudeJsonMount}:/home/naw/.claude.json`);
+    args.push("-v", `${claudeJsonMount}:/home/nas/.claude.json`);
   }
 
   // claude バイナリのマウント (実体パスを解決してマウント)
@@ -60,17 +60,17 @@ function prepareMountSource(sourcePath: string): string | null {
   }
 
   // FUSE 上のパスはコピーして使う
-  const tmpDir = Deno.makeTempDirSync({ prefix: "naw-mount-" });
+  const tmpDir = Deno.makeTempDirSync({ prefix: "nas-mount-" });
   const basename = sourcePath.split("/").pop()!;
   const dest = `${tmpDir}/${basename}`;
-  console.log(`[naw] Copying FUSE-mounted ${sourcePath} → ${dest}`);
+  console.log(`[nas] Copying FUSE-mounted ${sourcePath} → ${dest}`);
 
   const stat = Deno.statSync(sourcePath);
   if (stat.isDirectory) {
     const cp = new Deno.Command("cp", { args: ["-a", sourcePath, dest] });
     const result = cp.outputSync();
     if (!result.success) {
-      console.error(`[naw] Warning: failed to copy ${sourcePath}`);
+      console.error(`[nas] Warning: failed to copy ${sourcePath}`);
       return null;
     }
   } else {

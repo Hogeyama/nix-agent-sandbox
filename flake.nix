@@ -1,5 +1,5 @@
 {
-  description = "naw — Nix Agent Workspace dev shell";
+  description = "naw — Nix Agent Sandbox dev shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -10,7 +10,8 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-      in {
+      in
+      {
         devShells.default = pkgs.mkShell {
           packages = [ pkgs.deno ];
         };

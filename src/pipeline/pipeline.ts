@@ -17,7 +17,7 @@ export async function runPipeline(
 ): Promise<ExecutionContext> {
   let current = ctx;
   for (const stage of stages) {
-    console.log(`[naw] Running stage: ${stage.name}`);
+    console.log(`[nas] Running stage: ${stage.name}`);
     current = await stage.execute(current);
   }
   return current;
