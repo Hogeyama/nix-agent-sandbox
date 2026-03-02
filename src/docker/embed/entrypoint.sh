@@ -49,7 +49,13 @@ fi
 # --- nix develop 統合 ---
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
   echo "[nas] Detected flake.nix, entering nix develop (via host daemon)..."
-  exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command "${AGENT_COMMAND[@]}"
+  # workaround for https://github.com/github/copilot-cli/issues/1161#issuecomment-3938706868:
+  # 配列をスペース区切りの文字列に変換
+  CMD_STR=$(printf '%q ' "${AGENT_COMMAND[@]}")
+  # /bin/bash (readline対応) をPATHの先頭に配置して、
+  # Nixの readline なし bash より優先させる
+  exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
+    bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
 else
   exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
 fi
