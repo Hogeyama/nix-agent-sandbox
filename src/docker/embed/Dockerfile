@@ -37,6 +37,14 @@ RUN GLIBC_PATH=$(nix-build '<nixpkgs>' -A glibc --no-out-link) && \
     for lib in "$GCC_LIB"/lib/lib*.so*; do ln -sf "$lib" /usr/local/lib/; done
 ENV LD_LIBRARY_PATH="/usr/local/lib"
 
+# Multi-user Nix: nixbld ビルドユーザーを追加 (nix-daemon がサンドボックスビルドに使用)
+RUN mkdir -p /var/empty && \
+    echo "nixbld:x:30000:" >> /etc/group && \
+    for n in $(seq 1 4); do \
+      echo "nixbld${n}:x:$((30000 + n)):30000:Nix build user ${n}:/var/empty:/sbin/nologin" >> /etc/passwd; \
+    done && \
+    echo "build-users-group = nixbld" >> /etc/nix/nix.conf
+
 # コンテナ内ユーザーの HOME
 RUN mkdir -p /home/naw
 

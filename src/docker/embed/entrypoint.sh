@@ -42,6 +42,11 @@ fi
 # --- nix develop 統合 ---
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
   echo "[naw] Detected flake.nix, entering nix develop..."
+  # 非 root の場合は nix-daemon を起動 (マルチユーザーモード)
+  if [ "$NAW_UID" != "0" ]; then
+    nix-daemon &
+    while [ ! -S /nix/var/nix/daemon-socket/socket ]; do sleep 0.1; done
+  fi
   exec "${EXEC_PREFIX[@]}" nix develop "$WORKSPACE" --command "${AGENT_COMMAND[@]}"
 else
   exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
