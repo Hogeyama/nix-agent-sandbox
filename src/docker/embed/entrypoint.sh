@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Nix PATH セットアップ (ホストの nix をソケット経由で使う場合) ---
-if [ "${NIX_ENABLED:-false}" = "true" ]; then
-  # ホストの nix プロファイルを PATH に追加
-  for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
-    if [ -d "$p" ]; then
-      export PATH="$p:$PATH"
-      break
-    fi
-  done
+# --- Nix セットアップ ---
+if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_BIN_PATH:-}" ]; then
+  # ホストの nix バイナリ (/nix/store/... 内) へのシンボリックリンクを作成
+  ln -sf "$NIX_BIN_PATH" /usr/local/bin/nix
+fi
+if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_CONF_PATH:-}" ] && [ -f "$NIX_CONF_PATH" ]; then
+  # ホストの nix.conf をコンテナ内に配置
+  mkdir -p /etc/nix
+  cp "$NIX_CONF_PATH" /etc/nix/nix.conf
 fi
 
 # --- ユーザーセットアップ ---
@@ -23,9 +23,8 @@ if [ "$NAS_UID" != "0" ]; then
   grep -q "^nas:" /etc/group 2>/dev/null || echo "nas:x:${NAS_GID}:" >>/etc/group
   chown -R "${NAS_UID}:${NAS_GID}" /home/nas
 
-  # nix trusted-users にホストユーザーを追加 (nix daemon 経由操作に必要)
-  if [ "${NIX_ENABLED:-false}" = "true" ] && [ -d /nix/var/nix ]; then
-    mkdir -p /etc/nix
+  # nix trusted-users にコンテナユーザーを追加 (nix daemon 経由操作に必要)
+  if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f /etc/nix/nix.conf ]; then
     echo "trusted-users = root nas" >>/etc/nix/nix.conf 2>/dev/null || true
   fi
 

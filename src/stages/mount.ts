@@ -32,8 +32,21 @@ export class MountStage implements Stage {
       const hasHostNix = await fileExists("/nix");
       if (hasHostNix) {
         args.push("-v", "/nix:/nix");
+        // ホストの nix.conf の実体パスを解決してコンテナに渡す
+        // (NixOS では /etc/nix/nix.conf がシンボリックリンクで /nix/store 内を指す)
+        const nixConfPath = await resolveRealPath("/etc/nix/nix.conf");
+        if (nixConfPath) {
+          envVars["NIX_CONF_PATH"] = nixConfPath;
+        }
         envVars["NIX_REMOTE"] = "daemon";
         envVars["NIX_ENABLED"] = "true";
+
+        // ホストの nix バイナリの実体パスを取得してコンテナに渡す
+        // (NixOS では /nix/var/nix/profiles/default/bin に nix がないため)
+        const nixBinPath = await resolveNixBinPath();
+        if (nixBinPath) {
+          envVars["NIX_BIN_PATH"] = nixBinPath;
+        }
       }
     }
 
@@ -62,6 +75,30 @@ export class MountStage implements Stage {
     await Promise.resolve();
     return result;
   }
+}
+
+async function resolveRealPath(path: string): Promise<string | null> {
+  try {
+    const cmd = new Deno.Command("readlink", { args: ["-f", path], stdout: "piped", stderr: "null" });
+    const { code, stdout } = await cmd.output();
+    if (code === 0) {
+      const resolved = new TextDecoder().decode(stdout).trim();
+      if (resolved) return resolved;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+async function resolveNixBinPath(): Promise<string | null> {
+  // NixOS: /run/current-system/sw/bin/nix → /nix/store/.../bin/nix
+  const resolved = await resolveRealPath("/run/current-system/sw/bin/nix");
+  if (resolved?.startsWith("/nix/store/")) return resolved;
+
+  // fallback: check common profile paths
+  for (const p of ["/nix/var/nix/profiles/default/bin/nix", "/root/.nix-profile/bin/nix"]) {
+    if (await fileExists(p)) return p;
+  }
+  return null;
 }
 
 async function fileExists(path: string): Promise<boolean> {
