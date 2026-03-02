@@ -19,11 +19,22 @@ export class MountStage implements Stage {
     args.push("-v", `${result.workDir}:/workspace`);
     args.push("-w", "/workspace");
 
-    // Nix store マウント
-    if (result.nixEnabled && result.profile.nix.mountHostStore) {
-      args.push("-v", "/nix/store:/nix/store-host:ro");
-      args.push("--device", "/dev/fuse");
-      envVars["NIX_ENABLED"] = "true";
+    // Nix store マウント (ホストに /nix/store がある場合は常にマウント)
+    // agent バイナリが nix store 内のライブラリに依存する場合があるため
+    const hasHostNixStore = await fileExists("/nix/store");
+    if (hasHostNixStore) {
+      if (result.nixEnabled && result.profile.nix.mountHostStore) {
+        // overlay モード: ホストの store + コンテナ内ビルド可能
+        args.push("-v", "/nix/store:/nix/store-host:ro");
+        args.push("--device", "/dev/fuse");
+        args.push("--cap-add", "SYS_ADMIN");
+        envVars["NIX_ENABLED"] = "true";
+      } else {
+        // 読み取り専用マウント: agent バイナリの依存解決用
+        args.push("-v", "/nix/store:/nix/store-host:ro");
+        args.push("--device", "/dev/fuse");
+        args.push("--cap-add", "SYS_ADMIN");
+      }
     }
 
     // Docker socket マウント
@@ -50,5 +61,14 @@ export class MountStage implements Stage {
 
     await Promise.resolve();
     return result;
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await Deno.stat(path);
+    return true;
+  } catch {
+    return false;
   }
 }

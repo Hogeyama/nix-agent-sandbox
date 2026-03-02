@@ -1,0 +1,18 @@
+default: claude-nix
+
+profiles:
+  claude-nix:
+    agent: claude
+    nix:
+      enable: auto
+      mount-host-store: true
+    docker:
+      mount-socket: true
+
+  copilot-nix:
+    agent: copilot
+    nix:
+      enable: auto
+      mount-host-store: true
+    docker:
+      mount-socket: true

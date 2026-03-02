@@ -15,8 +15,8 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
     envVars["GITHUB_TOKEN"] = token;
   }
 
-  // copilot バイナリのマウント
-  const copilotBin = findBinary("copilot");
+  // copilot バイナリのマウント (実体パスを解決してマウント)
+  const copilotBin = findBinaryResolved("copilot");
   if (copilotBin) {
     args.push("-v", `${copilotBin}:/usr/local/bin/copilot:ro`);
   }
@@ -51,8 +51,8 @@ function getGhToken(): string | null {
   return null;
 }
 
-/** ホスト上のバイナリパスを取得 */
-function findBinary(name: string): string | null {
+/** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
+function findBinaryResolved(name: string): string | null {
   try {
     const cmd = new Deno.Command("which", {
       args: [name],
@@ -61,7 +61,8 @@ function findBinary(name: string): string | null {
     });
     const output = cmd.outputSync();
     if (output.success) {
-      return new TextDecoder().decode(output.stdout).trim();
+      const binPath = new TextDecoder().decode(output.stdout).trim();
+      return Deno.realPathSync(binPath);
     }
   } catch {
     // ignore
