@@ -47,6 +47,7 @@ function validateProfile(name: string, raw: RawProfile): Profile {
 
   return {
     agent: raw.agent as AgentType,
+    agentArgs: raw["agent-args"] ?? [],
     worktree: raw.worktree
       ? {
         base: raw.worktree.base ?? "origin/main",

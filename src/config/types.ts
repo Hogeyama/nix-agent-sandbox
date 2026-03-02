@@ -23,6 +23,7 @@ export interface DockerConfig {
 /** プロファイル */
 export interface Profile {
   agent: AgentType;
+  agentArgs: string[];
   worktree?: WorktreeConfig;
   nix: NixConfig;
   docker: DockerConfig;
@@ -43,6 +44,7 @@ export interface RawConfig {
 
 export interface RawProfile {
   agent?: string;
+  "agent-args"?: string[];
   worktree?: {
     base?: string;
     "on-create"?: string;

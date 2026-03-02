@@ -47,7 +47,7 @@ export class LaunchStage implements Stage {
   }
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    const command = [...ctx.agentCommand, ...this.extraArgs];
+    const command = [...ctx.agentCommand, ...ctx.profile.agentArgs, ...this.extraArgs];
     console.log(`[nas] Launching container...`);
     console.log(`[nas]   Image: ${ctx.imageName}`);
     console.log(`[nas]   Agent: ${ctx.profile.agent}`);

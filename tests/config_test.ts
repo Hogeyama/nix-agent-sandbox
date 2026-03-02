@@ -75,6 +75,31 @@ Deno.test("validateConfig: invalid agent throws", () => {
   );
 });
 
+Deno.test("validateConfig: agent-args are parsed", () => {
+  const raw: RawConfig = {
+    profiles: {
+      test: {
+        agent: "copilot",
+        "agent-args": ["--yolo"],
+      },
+    },
+  };
+  const config = validateConfig(raw);
+  assertEquals(config.profiles.test.agentArgs, ["--yolo"]);
+});
+
+Deno.test("validateConfig: agent-args defaults to empty array", () => {
+  const raw: RawConfig = {
+    profiles: {
+      test: {
+        agent: "claude",
+      },
+    },
+  };
+  const config = validateConfig(raw);
+  assertEquals(config.profiles.test.agentArgs, []);
+});
+
 Deno.test("validateConfig: invalid default profile throws", () => {
   assertThrows(
     () =>

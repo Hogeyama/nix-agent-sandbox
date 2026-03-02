@@ -109,5 +109,12 @@ Examples:
   nas copilot-nix                        # Use specific profile
   nas copilot-nix -- -p "list files"     # Pass args to the agent
   nas rebuild                            # Rebuild Docker image only
+
+Profile agent-args (in .agent-sandbox.yml):
+  profiles:
+    copilot-nix:
+      agent: copilot
+      agent-args:
+        - "--yolo"
 `);
 }

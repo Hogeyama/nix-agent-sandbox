@@ -6,6 +6,7 @@ import type { Config, Profile } from "../src/config/types.ts";
 
 const testProfile: Profile = {
   agent: "claude",
+  agentArgs: [],
   nix: { enable: "auto", mountSocket: true, extraPackages: [] },
   docker: { mountSocket: false },
   env: {},

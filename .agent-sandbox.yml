@@ -3,6 +3,8 @@ default: copilot-nix
 profiles:
   claude-nix:
     agent: claude
+    agent-args:
+      - "--yolo"
     nix:
       enable: auto
       mount-socket: true
@@ -11,6 +13,8 @@ profiles:
 
   copilot-nix:
     agent: copilot
+    agent-args:
+      - "--yolo"
     nix:
       enable: auto
       mount-socket: true
