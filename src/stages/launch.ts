@@ -19,10 +19,19 @@ export class DockerBuildStage implements Stage {
       );
     } else {
       console.log(`[nas] Building Docker image "${imageName}"...`);
-      const dockerfileDir = path.fromFileUrl(
-        new URL("../docker/embed/", import.meta.url),
-      );
-      await dockerBuild(dockerfileDir, imageName);
+      // deno compile 時は仮想FS上のパスになり docker デーモンからアクセスできないため、
+      // 埋め込みファイルを一時ディレクトリに書き出してからビルドする
+      const tmpDir = await Deno.makeTempDir({ prefix: "nas-docker-build-" });
+      try {
+        const baseUrl = new URL("../docker/embed/", import.meta.url);
+        for (const name of ["Dockerfile", "entrypoint.sh"]) {
+          const content = await Deno.readTextFile(new URL(name, baseUrl));
+          await Deno.writeTextFile(path.join(tmpDir, name), content);
+        }
+        await dockerBuild(tmpDir, imageName);
+      } finally {
+        await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+      }
     }
 
     return ctx;
