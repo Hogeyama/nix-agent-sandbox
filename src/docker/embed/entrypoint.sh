@@ -30,7 +30,15 @@ if [ "$NAS_UID" != "0" ]; then
 
   export HOME=/home/nas
 
-  EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --init-groups --)
+  # Docker socket の GID を補助グループに追加 (DooD 用)
+  # --init-groups と --groups は排他なので、Docker ソケットがある場合は
+  # --groups に NAS_GID と Docker GID を明示的に列挙する
+  if [ -S /var/run/docker.sock ]; then
+    DOCKER_SOCK_GID=$(stat -c '%g' /var/run/docker.sock)
+    EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --groups "${NAS_GID},${DOCKER_SOCK_GID}" --)
+  else
+    EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --init-groups --)
+  fi
 else
   EXEC_PREFIX=()
 fi
