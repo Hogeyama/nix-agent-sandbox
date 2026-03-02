@@ -21,7 +21,7 @@ if [ "$NAS_UID" != "0" ]; then
   # ホストユーザーに合わせた非 root ユーザーを作成
   echo "nas:x:${NAS_UID}:${NAS_GID}:nas:/home/nas:/bin/bash" >>/etc/passwd
   grep -q "^nas:" /etc/group 2>/dev/null || echo "nas:x:${NAS_GID}:" >>/etc/group
-  chown -R "${NAS_UID}:${NAS_GID}" /home/nas
+  chown "${NAS_UID}:${NAS_GID}" /home/nas
 
   # nix trusted-users にコンテナユーザーを追加 (nix daemon 経由操作に必要)
   if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f /etc/nix/nix.conf ]; then
