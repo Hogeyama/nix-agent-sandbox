@@ -26,6 +26,15 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
     // ~/.config/.copilot が無い場合はスキップ
   }
 
+  // ~/.local/state/.copilot/ をマウント（セッション履歴・状態）
+  const copilotStateDir = `${home}/.local/state/.copilot`;
+  try {
+    Deno.statSync(copilotStateDir);
+    args.push("-v", `${copilotStateDir}:/home/nas/.local/state/.copilot`);
+  } catch {
+    // ~/.local/state/.copilot が無い場合はスキップ
+  }
+
   // copilot バイナリのマウント (実体パスを解決してマウント)
   const copilotBin = findBinaryResolved("copilot");
   if (copilotBin) {
