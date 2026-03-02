@@ -54,6 +54,11 @@ export async function dockerRun(opts: DockerRunOptions): Promise<void> {
   }
 }
 
+/** docker image を削除 */
+export async function dockerRemoveImage(tag: string): Promise<void> {
+  await $`docker rmi ${tag}`.printCommand();
+}
+
 /** docker image が存在するか確認 */
 export async function dockerImageExists(tag: string): Promise<boolean> {
   try {
