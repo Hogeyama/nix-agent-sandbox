@@ -13,7 +13,8 @@ RUN nix-env -iA \
   nixpkgs.cacert \
   nixpkgs.bash \
   nixpkgs.fuse-overlayfs \
-  nixpkgs.fuse3
+  nixpkgs.fuse3 \
+  nixpkgs.util-linux
 
 # Docker CLI (docker-client のみ。git-minimal との衝突を避けるため別ステップ)
 RUN nix-env -iA nixpkgs.docker-client
@@ -35,6 +36,9 @@ RUN GLIBC_PATH=$(nix-build '<nixpkgs>' -A glibc --no-out-link) && \
     for lib in "$GLIBC_PATH"/lib/lib*.so*; do ln -sf "$lib" /usr/local/lib/; done && \
     for lib in "$GCC_LIB"/lib/lib*.so*; do ln -sf "$lib" /usr/local/lib/; done
 ENV LD_LIBRARY_PATH="/usr/local/lib"
+
+# コンテナ内ユーザーの HOME
+RUN mkdir -p /home/naw
 
 # コンテナ内の nix store をバックアップ (overlay 用、ビルド時に1回だけ実行)
 RUN cp -al /nix/store /nix/store-container

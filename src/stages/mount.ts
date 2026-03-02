@@ -19,6 +19,14 @@ export class MountStage implements Stage {
     args.push("-v", `${result.workDir}:/workspace`);
     args.push("-w", "/workspace");
 
+    // ホストユーザーの UID/GID をコンテナに渡す (entrypoint で非 root ユーザー作成に使用)
+    const uid = Deno.uid();
+    const gid = Deno.gid();
+    if (uid !== null && gid !== null) {
+      envVars["NAW_UID"] = String(uid);
+      envVars["NAW_GID"] = String(gid);
+    }
+
     // Nix store overlay (nix develop を使う場合のみ)
     // ホスト store とコンテナ store を fuse-overlayfs で統合する
     if (result.nixEnabled && result.profile.nix.mountHostStore) {

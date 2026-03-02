@@ -14,9 +14,18 @@ export function configureClaude(ctx: ExecutionContext): ExecutionContext {
   const claudeDir = `${home}/.claude`;
   try {
     Deno.statSync(claudeDir);
-    args.push("-v", `${claudeDir}:/root/.claude`);
+    args.push("-v", `${claudeDir}:/home/naw/.claude`);
   } catch {
     // ~/.claude が無い場合はスキップ
+  }
+
+  // ~/.claude.json をマウント（設定）
+  const claudeJson = `${home}/.claude.json`;
+  try {
+    Deno.statSync(claudeJson);
+    args.push("-v", `${claudeJson}:/home/naw/.claude.json`);
+  } catch {
+    // ~/.claude.json が無い場合はスキップ
   }
 
   // claude バイナリのマウント (実体パスを解決してマウント)

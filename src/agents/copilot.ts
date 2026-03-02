@@ -21,7 +21,7 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
   const copilotConfigDir = `${home}/.config/.copilot`;
   try {
     Deno.statSync(copilotConfigDir);
-    args.push("-v", `${copilotConfigDir}:/root/.config/.copilot`);
+    args.push("-v", `${copilotConfigDir}:/home/naw/.config/.copilot`);
   } catch {
     // ~/.config/.copilot が無い場合はスキップ
   }
