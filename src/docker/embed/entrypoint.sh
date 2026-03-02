@@ -30,15 +30,16 @@ if [ "$NAS_UID" != "0" ]; then
 
   export HOME=/home/nas
 
-  # git safe.directory (nas ユーザー用)
-  setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --init-groups -- \
-    git config --global --add safe.directory "$WORKSPACE"
-
   EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --init-groups --)
 else
-  git config --global --add safe.directory "$WORKSPACE"
   EXEC_PREFIX=()
 fi
+
+# git safe.directory をファイルに書かず env var で渡す
+# (read-only マウントの .config/git に書き込もうとするのを回避)
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0="safe.directory"
+export GIT_CONFIG_VALUE_0="$WORKSPACE"
 
 # --- エージェントコマンド ---
 AGENT_COMMAND=("${@}")
