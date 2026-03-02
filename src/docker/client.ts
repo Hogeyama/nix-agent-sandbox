@@ -25,7 +25,13 @@ export async function dockerRun(opts: DockerRunOptions): Promise<void> {
   const args: string[] = ["docker", "run", "--rm"];
 
   if (opts.interactive) {
-    args.push("-it");
+    // TTY がある場合のみ -t を付ける (非 TTY 環境では -i のみ)
+    const isTty = Deno.stdin.isTerminal();
+    if (isTty) {
+      args.push("-it");
+    } else {
+      args.push("-i");
+    }
   }
 
   for (const [key, value] of Object.entries(opts.envVars)) {

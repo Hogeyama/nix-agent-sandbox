@@ -23,8 +23,13 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
 
+  // `--` 以降はエージェントに渡す引数
+  const dashDashIdx = args.indexOf("--");
+  const nawArgs = dashDashIdx >= 0 ? args.slice(0, dashDashIdx) : args;
+  const agentExtraArgs = dashDashIdx >= 0 ? args.slice(dashDashIdx + 1) : [];
+
   // プロファイル名 (最初の非フラグ引数)
-  const profileName = args.find((a) => !a.startsWith("-"));
+  const profileName = nawArgs.find((a) => !a.startsWith("-"));
 
   try {
     const config = await loadConfig();
@@ -36,7 +41,7 @@ export async function main(args: string[]): Promise<void> {
       new DockerBuildStage(),
       new NixDetectStage(),
       new MountStage(),
-      new LaunchStage(),
+      new LaunchStage(agentExtraArgs),
     ];
 
     await runPipeline(stages, ctx);
@@ -50,14 +55,15 @@ function printUsage(): void {
   console.log(`naw - Nix Agent Workspace
 
 Usage:
-  naw [profile-name] [options]
+  naw [profile-name] [options] [-- agent-args...]
 
 Options:
   -h, --help      Show this help
   -V, --version   Show version
 
 Examples:
-  naw              # Use default profile
-  naw claude-nix   # Use specific profile
+  naw                                    # Use default profile (interactive)
+  naw copilot-nix                        # Use specific profile
+  naw copilot-nix -- -p "list files"     # Pass args to the agent
 `);
 }

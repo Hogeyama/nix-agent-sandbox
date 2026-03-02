@@ -12,7 +12,6 @@ RUN nix-env -iA \
   nixpkgs.curl \
   nixpkgs.cacert \
   nixpkgs.bash \
-  nixpkgs.nodejs \
   nixpkgs.fuse-overlayfs \
   nixpkgs.fuse3
 
@@ -23,13 +22,22 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # エージェントバイナリのマウント先
-RUN mkdir -p /usr/local/bin
+RUN mkdir -p /usr/local/bin /usr/local/lib
 ENV PATH="/usr/local/bin:${PATH}"
 
-# 標準パスの ld-linux (非 NixOS ビルドの ELF バイナリ用)
-RUN mkdir -p /lib64 && \
-    GLIBC_PATH=$(nix-build '<nixpkgs>' -A glibc --no-out-link 2>/dev/null) && \
-    ln -sf "$GLIBC_PATH/lib64/ld-linux-x86-64.so.2" /lib64/ld-linux-x86-64.so.2
+# 標準共有ライブラリ (非 NixOS ビルドの ELF バイナリ用)
+# glibc: ld-linux, libc, libm, libdl, libpthread
+# gcc-unwrapped.lib: libstdc++, libgcc_s
+RUN GLIBC_PATH=$(nix-build '<nixpkgs>' -A glibc --no-out-link) && \
+    GCC_LIB=$(nix-build '<nixpkgs>' -A gcc-unwrapped.lib --no-out-link) && \
+    mkdir -p /lib64 && \
+    ln -sf "$GLIBC_PATH/lib64/ld-linux-x86-64.so.2" /lib64/ld-linux-x86-64.so.2 && \
+    for lib in "$GLIBC_PATH"/lib/lib*.so*; do ln -sf "$lib" /usr/local/lib/; done && \
+    for lib in "$GCC_LIB"/lib/lib*.so*; do ln -sf "$lib" /usr/local/lib/; done
+ENV LD_LIBRARY_PATH="/usr/local/lib"
+
+# コンテナ内の nix store をバックアップ (overlay 用、ビルド時に1回だけ実行)
+RUN cp -al /nix/store /nix/store-container
 
 WORKDIR /workspace
 ENTRYPOINT ["/entrypoint.sh"]

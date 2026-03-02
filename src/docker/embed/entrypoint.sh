@@ -2,11 +2,9 @@
 set -euo pipefail
 
 # --- /nix/store overlay (ホストの store をマウントしている場合) ---
-# コンテナ既存の store とホスト store を統合する
+# ビルド時にバックアップした store-container とホスト store を統合する
 if [ -d /nix/store-host ]; then
   echo "[naw] Setting up /nix/store overlay..."
-  # 既存のコンテナ store を退避
-  cp -al /nix/store /nix/store-container 2>/dev/null || true
   mkdir -p /nix/store-overlay/{upper,work}
   fuse-overlayfs \
     -o "lowerdir=/nix/store-container:/nix/store-host,upperdir=/nix/store-overlay/upper,workdir=/nix/store-overlay/work" \
@@ -14,8 +12,11 @@ if [ -d /nix/store-host ]; then
   echo "[naw] /nix/store overlay ready"
 fi
 
-# --- nix develop 統合 ---
+# --- git safe.directory (ホストユーザーと container root の UID 差異対策) ---
 WORKSPACE="${WORKSPACE:-/workspace}"
+git config --global --add safe.directory "$WORKSPACE"
+
+# --- nix develop 統合 ---
 AGENT_COMMAND=("${@}")
 
 if [ ${#AGENT_COMMAND[@]} -eq 0 ]; then

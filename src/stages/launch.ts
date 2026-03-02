@@ -31,18 +31,24 @@ export class DockerBuildStage implements Stage {
 
 export class LaunchStage implements Stage {
   name = "LaunchStage";
+  private extraArgs: string[];
+
+  constructor(extraArgs: string[] = []) {
+    this.extraArgs = extraArgs;
+  }
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
+    const command = [...ctx.agentCommand, ...this.extraArgs];
     console.log(`[naw] Launching container...`);
     console.log(`[naw]   Image: ${ctx.imageName}`);
     console.log(`[naw]   Agent: ${ctx.profile.agent}`);
-    console.log(`[naw]   Command: ${ctx.agentCommand.join(" ")}`);
+    console.log(`[naw]   Command: ${command.join(" ")}`);
 
     await dockerRun({
       image: ctx.imageName,
       args: ctx.dockerArgs,
       envVars: ctx.envVars,
-      command: ctx.agentCommand,
+      command,
       interactive: true,
     });
 

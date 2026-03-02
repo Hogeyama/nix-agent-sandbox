@@ -15,6 +15,17 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
     envVars["GITHUB_TOKEN"] = token;
   }
 
+  const home = Deno.env.get("HOME") ?? "/root";
+
+  // ~/.config/.copilot/ をマウント（認証情報・設定）
+  const copilotConfigDir = `${home}/.config/.copilot`;
+  try {
+    Deno.statSync(copilotConfigDir);
+    args.push("-v", `${copilotConfigDir}:/root/.config/.copilot`);
+  } catch {
+    // ~/.config/.copilot が無い場合はスキップ
+  }
+
   // copilot バイナリのマウント (実体パスを解決してマウント)
   const copilotBin = findBinaryResolved("copilot");
   if (copilotBin) {
@@ -25,11 +36,7 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
     ...ctx,
     dockerArgs: args,
     envVars,
-    agentCommand: copilotBin ? ["copilot"] : [
-      "bash",
-      "-c",
-      "curl -fsSL https://gh.io/copilot-install | bash && copilot",
-    ],
+    agentCommand: copilotBin ? ["copilot"] : ["bash", "-c", "echo 'copilot binary not found'; exit 1"],
   };
 }
 
