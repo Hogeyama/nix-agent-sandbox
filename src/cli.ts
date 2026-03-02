@@ -13,20 +13,20 @@ import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 const VERSION = "0.1.0";
 
 export async function main(args: string[]): Promise<void> {
-  // フラグ処理
-  if (args.includes("--help") || args.includes("-h")) {
-    printUsage();
-    return;
-  }
-  if (args.includes("--version") || args.includes("-V")) {
-    console.log(`naw ${VERSION}`);
-    return;
-  }
-
   // `--` 以降はエージェントに渡す引数
   const dashDashIdx = args.indexOf("--");
   const nawArgs = dashDashIdx >= 0 ? args.slice(0, dashDashIdx) : args;
   const agentExtraArgs = dashDashIdx >= 0 ? args.slice(dashDashIdx + 1) : [];
+
+  // フラグ処理 (naw 自身の引数のみ)
+  if (nawArgs.includes("--help") || nawArgs.includes("-h")) {
+    printUsage();
+    return;
+  }
+  if (nawArgs.includes("--version") || nawArgs.includes("-V")) {
+    console.log(`naw ${VERSION}`);
+    return;
+  }
 
   // プロファイル名 (最初の非フラグ引数)
   const profileName = nawArgs.find((a) => !a.startsWith("-"));

@@ -9,23 +9,20 @@ export function configureClaude(ctx: ExecutionContext): ExecutionContext {
   const args = [...ctx.dockerArgs];
   const envVars = { ...ctx.envVars };
 
-  // ~/.claude/ をマウント（認証情報）
   const home = Deno.env.get("HOME") ?? "/root";
+
+  // ~/.claude/ をマウント（認証情報）
   const claudeDir = `${home}/.claude`;
-  try {
-    Deno.statSync(claudeDir);
-    args.push("-v", `${claudeDir}:/home/naw/.claude`);
-  } catch {
-    // ~/.claude が無い場合はスキップ
+  const claudeMount = prepareMountSource(claudeDir);
+  if (claudeMount) {
+    args.push("-v", `${claudeMount}:/home/naw/.claude`);
   }
 
   // ~/.claude.json をマウント（設定）
   const claudeJson = `${home}/.claude.json`;
-  try {
-    Deno.statSync(claudeJson);
-    args.push("-v", `${claudeJson}:/home/naw/.claude.json`);
-  } catch {
-    // ~/.claude.json が無い場合はスキップ
+  const claudeJsonMount = prepareMountSource(claudeJson);
+  if (claudeJsonMount) {
+    args.push("-v", `${claudeJsonMount}:/home/naw/.claude.json`);
   }
 
   // claude バイナリのマウント (実体パスを解決してマウント)
@@ -44,6 +41,62 @@ export function configureClaude(ctx: ExecutionContext): ExecutionContext {
       "curl -fsSL https://claude.ai/install.sh | bash && claude",
     ],
   };
+}
+
+/**
+ * マウントソースを準備する。
+ * FUSE ファイルシステム上のパスは Docker daemon からアクセスできないため、
+ * 一時ディレクトリにコピーしてからマウントする。
+ */
+function prepareMountSource(sourcePath: string): string | null {
+  try {
+    Deno.statSync(sourcePath);
+  } catch {
+    return null;
+  }
+
+  if (!isOnFuseFs(sourcePath)) {
+    return sourcePath;
+  }
+
+  // FUSE 上のパスはコピーして使う
+  const tmpDir = Deno.makeTempDirSync({ prefix: "naw-mount-" });
+  const basename = sourcePath.split("/").pop()!;
+  const dest = `${tmpDir}/${basename}`;
+  console.log(`[naw] Copying FUSE-mounted ${sourcePath} → ${dest}`);
+
+  const stat = Deno.statSync(sourcePath);
+  if (stat.isDirectory) {
+    const cp = new Deno.Command("cp", { args: ["-a", sourcePath, dest] });
+    const result = cp.outputSync();
+    if (!result.success) {
+      console.error(`[naw] Warning: failed to copy ${sourcePath}`);
+      return null;
+    }
+  } else {
+    Deno.copyFileSync(sourcePath, dest);
+  }
+
+  return dest;
+}
+
+/** パスが FUSE ファイルシステム上にあるか判定 */
+function isOnFuseFs(path: string): boolean {
+  try {
+    const cmd = new Deno.Command("stat", {
+      args: ["-f", "-c", "%T", path],
+      stdout: "piped",
+      stderr: "null",
+    });
+    const output = cmd.outputSync();
+    if (output.success) {
+      const fsType = new TextDecoder().decode(output.stdout).trim();
+      return fsType.includes("fuse");
+    }
+  } catch {
+    // ignore
+  }
+  return false;
 }
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
