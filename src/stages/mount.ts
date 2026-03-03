@@ -2,6 +2,7 @@
  * マウント構成の組み立てステージ
  */
 
+import * as path from "@std/path";
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import { configureClaude } from "../agents/claude.ts";
@@ -17,9 +18,11 @@ export class MountStage implements Stage {
     const args = [...result.dockerArgs];
     const envVars = { ...result.envVars };
 
-    // ワークスペースマウント
-    args.push("-v", `${result.workDir}:/workspace`);
-    args.push("-w", "/workspace");
+    // ワークスペースマウント (ホスト側のディレクトリ名をコンテナ内でも使う)
+    const containerWorkDir = `/${path.basename(result.workDir)}`;
+    args.push("-v", `${result.workDir}:${containerWorkDir}`);
+    args.push("-w", containerWorkDir);
+    envVars["WORKSPACE"] = containerWorkDir;
 
     // ホストユーザーの UID/GID をコンテナに渡す (entrypoint で非 root ユーザー作成に使用)
     const uid = Deno.uid();
