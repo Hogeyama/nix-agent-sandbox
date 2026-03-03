@@ -2,6 +2,8 @@ FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl ca-certificates bash docker.io docker-compose-v2 \
+  gh ripgrep fd-find \
+  && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
   && rm -rf /var/lib/apt/lists/*
 
 COPY entrypoint.sh /entrypoint.sh
