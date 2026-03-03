@@ -135,7 +135,7 @@ nas [profile-name] [-- agent-args...]
 ### コンテナの中身
 
 - **ベースイメージ**: `ubuntu:24.04`
-- **プリインストール**: git, curl, bash, ca-certificates, docker CLI
+- **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin
 - **エージェントバイナリ**: ホストからバインドマウント（`/usr/local/bin/` に配置）
 
 ### 認証の引き継ぎ
