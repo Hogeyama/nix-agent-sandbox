@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { MountStage } from "../src/stages/mount.ts";
+import { MountStage, serializeNixExtraPackages } from "../src/stages/mount.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 
@@ -47,4 +47,18 @@ Deno.test("MountStage: invalid dynamic key throws", async () => {
     Error,
     "Invalid env var name",
   );
+});
+
+Deno.test("serializeNixExtraPackages: returns newline-delimited list", () => {
+  const serialized = serializeNixExtraPackages([
+    "nixpkgs#gh",
+    "  nixpkgs#ripgrep  ",
+    "",
+    "   ",
+  ]);
+  assertEquals(serialized, "nixpkgs#gh\nnixpkgs#ripgrep");
+});
+
+Deno.test("serializeNixExtraPackages: returns null for empty list", () => {
+  assertEquals(serializeNixExtraPackages(["", "   "]), null);
 });

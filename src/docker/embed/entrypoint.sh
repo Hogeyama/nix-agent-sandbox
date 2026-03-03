@@ -55,16 +55,38 @@ if [ ${#AGENT_COMMAND[@]} -eq 0 ]; then
   AGENT_COMMAND=("bash")
 fi
 
-# --- nix develop 統合 ---
-if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
-  echo "[nas] Detected flake.nix, entering nix develop (via host daemon)..."
+# --- nix 統合 ---
+if [ "${NIX_ENABLED:-false}" = "true" ]; then
+  NIX_EXTRA_PACKAGES_LIST=()
+  if [ -n "${NIX_EXTRA_PACKAGES:-}" ]; then
+    while IFS= read -r pkg; do
+      [ -n "$pkg" ] && NIX_EXTRA_PACKAGES_LIST+=("$pkg")
+    done <<< "${NIX_EXTRA_PACKAGES}"
+  fi
+
   # workaround for https://github.com/github/copilot-cli/issues/1161#issuecomment-3938706868:
   # 配列をスペース区切りの文字列に変換
   CMD_STR=$(printf '%q ' "${AGENT_COMMAND[@]}")
   # /bin/bash (readline対応) をPATHの先頭に配置して、
   # Nixの readline なし bash より優先させる
-  exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-    bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+  if [ -f "$WORKSPACE/flake.nix" ]; then
+    if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
+      echo "[nas] Detected flake.nix, entering nix shell + nix develop (via host daemon)..."
+      exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+        nix develop "$WORKSPACE" --command \
+        bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+    else
+      echo "[nas] Detected flake.nix, entering nix develop (via host daemon)..."
+      exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
+        bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+    fi
+  elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
+    echo "[nas] flake.nix not found, entering nix shell (via host daemon)..."
+    exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+      bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+  else
+    exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
+  fi
 else
   exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
 fi

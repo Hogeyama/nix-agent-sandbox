@@ -50,6 +50,12 @@ export class MountStage implements Stage {
         }
         envVars["NIX_REMOTE"] = "daemon";
         envVars["NIX_ENABLED"] = "true";
+        const nixExtraPackages = serializeNixExtraPackages(
+          result.profile.nix.extraPackages,
+        );
+        if (nixExtraPackages) {
+          envVars["NIX_EXTRA_PACKAGES"] = nixExtraPackages;
+        }
 
         // ホストの nix バイナリの実体パスを取得してコンテナに渡す
         // (NixOS では /nix/var/nix/profiles/default/bin に nix がないため)
@@ -173,4 +179,12 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export function serializeNixExtraPackages(packages: string[]): string | null {
+  const normalized = packages
+    .map((pkg) => pkg.trim())
+    .filter((pkg) => pkg.length > 0);
+  if (normalized.length === 0) return null;
+  return normalized.join("\n");
 }

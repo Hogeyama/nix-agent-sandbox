@@ -117,7 +117,7 @@ profiles:
 | `worktree.on-create` | string | `""` | worktree 作成後に実行するコマンド |
 | `nix.enable` | bool \| `"auto"` | `"auto"` | Nix 統合。`auto` は `flake.nix` で判定 |
 | `nix.mount-socket` | bool | `true` | ホストの nix daemon にソケット経由で接続 |
-| `nix.extra-packages` | string[] | `[]` | 追加 Nix パッケージ |
+| `nix.extra-packages` | string[] | `[]` | `nix shell` で追加するパッケージ（`nix develop` 前に適用） |
 | `docker.mount-socket` | bool | `false` | Docker socket をマウント |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
 
@@ -152,6 +152,7 @@ nas [profile-name] [-- agent-args...]
 
 Docker の DooD（Docker outside of Docker）と同じパターンで、ホストの nix daemon にソケット経由で接続します。
 プロジェクトに `flake.nix` がある場合、コンテナ内で `nix develop` を経由してエージェントを起動します。ホストの `/nix` をマウントし、`NIX_REMOTE=daemon` でホストの nix daemon を利用します。コンテナ内に nix をインストールする必要はありません。
+`nix.extra-packages` が設定されている場合は `nix shell` を挟みます。`flake.nix` がある場合は `nix shell <packages...> --command nix develop ...`、`flake.nix` がない場合は `nix shell <packages...> --command <agent>` で起動します。
 
 ## 制約・注意事項
 
