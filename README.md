@@ -90,8 +90,11 @@ profiles:
       mount-socket: true    # ホストの nix daemon ソケット経由で nix を使用
     docker:
       mount-socket: false   # ホストの docker.sock をマウント
-    env:                    # コンテナに渡す追加環境変数
-      SOME_VAR: value
+    env:                    # 追加環境変数（固定値 or コマンド出力）
+      - key: SOME_VAR
+        val: value
+      - key_cmd: "cat /path/to/key"
+        val_cmd: "cat /path/to/value"
 
   claude-nix:
     agent: claude
@@ -116,7 +119,7 @@ profiles:
 | `nix.mount-socket` | bool | `true` | ホストの nix daemon にソケット経由で接続 |
 | `nix.extra-packages` | string[] | `[]` | 追加 Nix パッケージ |
 | `docker.mount-socket` | bool | `false` | Docker socket をマウント |
-| `env` | map | `{}` | 追加環境変数 |
+| `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
 
 ## 仕組み
 

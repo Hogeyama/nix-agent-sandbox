@@ -2,7 +2,15 @@
  * .agent-sandbox.yml のバリデーション
  */
 
-import type { Config, Profile, RawConfig, RawProfile } from "./types.ts";
+import type {
+  CommandEnvConfig,
+  Config,
+  EnvConfig,
+  Profile,
+  RawConfig,
+  RawProfile,
+  StaticEnvConfig,
+} from "./types.ts";
 import { DEFAULT_DOCKER_CONFIG, DEFAULT_NIX_CONFIG } from "./types.ts";
 import type { AgentType } from "./types.ts";
 
@@ -66,6 +74,64 @@ function validateProfile(name: string, raw: RawProfile): Profile {
       mountSocket: raw.docker?.["mount-socket"] ??
         DEFAULT_DOCKER_CONFIG.mountSocket,
     },
-    env: raw.env ?? {},
+    env: validateEnv(name, raw.env),
   };
+}
+
+function validateEnv(
+  profileName: string,
+  rawEnv: RawProfile["env"],
+): EnvConfig[] {
+  if (!rawEnv) return [];
+  if (!Array.isArray(rawEnv)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": env must be a list`,
+    );
+  }
+
+  return rawEnv.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": env[${index}] must be an object`,
+      );
+    }
+    const hasStatic = entry.key !== undefined || entry.val !== undefined;
+    const hasCommand = entry.key_cmd !== undefined || entry.val_cmd !== undefined;
+    if (hasStatic && hasCommand) {
+      throw new ConfigValidationError(
+        `profile "${profileName}": env[${index}] must use either (key,val) or (key_cmd,val_cmd)`,
+      );
+    }
+
+    if (hasStatic) {
+      if (typeof entry.key !== "string" || entry.key.trim() === "") {
+        throw new ConfigValidationError(
+          `profile "${profileName}": env[${index}].key must be a non-empty string`,
+        );
+      }
+      if (typeof entry.val !== "string") {
+        throw new ConfigValidationError(
+          `profile "${profileName}": env[${index}].val must be a string`,
+        );
+      }
+      const staticEntry: StaticEnvConfig = { key: entry.key, val: entry.val };
+      return staticEntry;
+    }
+
+    if (typeof entry.key_cmd !== "string" || entry.key_cmd.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": env[${index}].key_cmd must be a non-empty string`,
+      );
+    }
+    if (typeof entry.val_cmd !== "string" || entry.val_cmd.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": env[${index}].val_cmd must be a non-empty string`,
+      );
+    }
+    const commandEntry: CommandEnvConfig = {
+      keyCmd: entry.key_cmd,
+      valCmd: entry.val_cmd,
+    };
+    return commandEntry;
+  });
 }

@@ -7,6 +7,8 @@ import type { ExecutionContext } from "../pipeline/context.ts";
 import { configureClaude } from "../agents/claude.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 export class MountStage implements Stage {
   name = "MountStage";
 
@@ -70,7 +72,30 @@ export class MountStage implements Stage {
     }
 
     // プロファイルの環境変数
-    for (const [key, value] of Object.entries(result.profile.env)) {
+    for (const [index, envEntry] of result.profile.env.entries()) {
+      if ("key" in envEntry) {
+        if (!ENV_VAR_NAME_RE.test(envEntry.key)) {
+          throw new Error(
+            `[nas] Invalid env var name from profile.env[${index}].key: ${envEntry.key}`,
+          );
+        }
+        envVars[envEntry.key] = envEntry.val;
+        continue;
+      }
+
+      const key = await runCommandForEnv(
+        envEntry.keyCmd,
+        `profile.env[${index}].key_cmd`,
+      );
+      if (!ENV_VAR_NAME_RE.test(key)) {
+        throw new Error(
+          `[nas] Invalid env var name from profile.env[${index}].key_cmd: ${key}`,
+        );
+      }
+      const value = await runCommandForEnv(
+        envEntry.valCmd,
+        `profile.env[${index}].val_cmd`,
+      );
       envVars[key] = value;
     }
 
@@ -101,6 +126,32 @@ async function resolveRealPath(path: string): Promise<string | null> {
     }
   } catch { /* ignore */ }
   return null;
+}
+
+async function runCommandForEnv(
+  command: string,
+  sourceName: string,
+): Promise<string> {
+  const cmd = new Deno.Command("sh", {
+    args: ["-c", command],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  if (code !== 0) {
+    const stderrText = new TextDecoder().decode(stderr).trim();
+    throw new Error(
+      `[nas] Failed to execute ${sourceName}: ${
+        stderrText || `exit code ${code}`
+      }`,
+    );
+  }
+
+  const output = new TextDecoder().decode(stdout).trim();
+  if (!output) {
+    throw new Error(`[nas] ${sourceName} returned empty output`);
+  }
+  return output;
 }
 
 async function resolveNixBinPath(): Promise<string | null> {

@@ -19,6 +19,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.agent, "claude");
   assertEquals(config.profiles.test.nix.enable, "auto");
   assertEquals(config.profiles.test.docker.mountSocket, false);
+  assertEquals(config.profiles.test.env, []);
 });
 
 Deno.test("validateConfig: full config", () => {
@@ -40,7 +41,10 @@ Deno.test("validateConfig: full config", () => {
         docker: {
           "mount-socket": true,
         },
-        env: { FOO: "bar" },
+        env: [
+          { key: "FOO", val: "bar" },
+          { key_cmd: "printf BAR", val_cmd: "printf baz" },
+        ],
       },
     },
   };
@@ -53,7 +57,11 @@ Deno.test("validateConfig: full config", () => {
   assertEquals(p.nix.mountSocket, true);
   assertEquals(p.nix.extraPackages, ["nixpkgs.ripgrep"]);
   assertEquals(p.docker.mountSocket, true);
-  assertEquals(p.env["FOO"], "bar");
+  assertEquals(p.env[0], { key: "FOO", val: "bar" });
+  assertEquals(p.env[1], {
+    keyCmd: "printf BAR",
+    valCmd: "printf baz",
+  });
 });
 
 Deno.test("validateConfig: missing profiles throws", () => {
@@ -109,5 +117,42 @@ Deno.test("validateConfig: invalid default profile throws", () => {
       }),
     ConfigValidationError,
     "not found in profiles",
+  );
+});
+
+Deno.test("validateConfig: mixed env entry throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            env: [{
+              key: "A",
+              val: "B",
+              key_cmd: "echo C",
+              val_cmd: "echo D",
+            }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "env[0] must use either",
+  );
+});
+
+Deno.test("validateConfig: invalid env command entry throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            env: [{ key_cmd: "", val_cmd: "echo x" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "env[0].key_cmd",
   );
 });

@@ -20,6 +20,20 @@ export interface DockerConfig {
   mountSocket: boolean;
 }
 
+/** 固定値の環境変数エントリ */
+export interface StaticEnvConfig {
+  key: string;
+  val: string;
+}
+
+/** コマンド出力の環境変数エントリ */
+export interface CommandEnvConfig {
+  keyCmd: string;
+  valCmd: string;
+}
+
+export type EnvConfig = StaticEnvConfig | CommandEnvConfig;
+
 /** プロファイル */
 export interface Profile {
   agent: AgentType;
@@ -27,7 +41,7 @@ export interface Profile {
   worktree?: WorktreeConfig;
   nix: NixConfig;
   docker: DockerConfig;
-  env: Record<string, string>;
+  env: EnvConfig[];
 }
 
 /** トップレベル設定 */
@@ -58,7 +72,12 @@ export interface RawProfile {
   docker?: {
     "mount-socket"?: boolean;
   };
-  env?: Record<string, string>;
+  env?: Array<{
+    key?: string;
+    val?: string;
+    key_cmd?: string;
+    val_cmd?: string;
+  }>;
 }
 
 /** デフォルト値 */

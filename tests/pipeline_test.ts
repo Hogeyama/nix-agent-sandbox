@@ -9,7 +9,7 @@ const testProfile: Profile = {
   agentArgs: [],
   nix: { enable: "auto", mountSocket: true, extraPackages: [] },
   docker: { mountSocket: false },
-  env: {},
+  env: [],
 };
 
 const testConfig: Config = {
