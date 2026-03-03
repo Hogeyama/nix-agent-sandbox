@@ -36,7 +36,15 @@ export class MountStage implements Stage {
         // (NixOS では /etc/nix/nix.conf がシンボリックリンクで /nix/store 内を指す)
         const nixConfPath = await resolveRealPath("/etc/nix/nix.conf");
         if (nixConfPath) {
-          envVars["NIX_CONF_PATH"] = nixConfPath;
+          // /nix 配下はすでにマウント済みなのでそのまま使える。
+          // 非NixOSなど /etc 配下の場合は個別に readonly マウントする。
+          if (!nixConfPath.startsWith("/nix/")) {
+            const containerNixConfPath = "/tmp/nas-host-nix.conf";
+            args.push("-v", `${nixConfPath}:${containerNixConfPath}:ro`);
+            envVars["NIX_CONF_PATH"] = containerNixConfPath;
+          } else {
+            envVars["NIX_CONF_PATH"] = nixConfPath;
+          }
         }
         envVars["NIX_REMOTE"] = "daemon";
         envVars["NIX_ENABLED"] = "true";
