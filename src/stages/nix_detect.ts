@@ -1,8 +1,7 @@
 /**
- * flake.nix 検出 + nix develop 統合
+ * ホスト Nix 検出 + nix develop 統合
  */
 
-import * as path from "@std/path";
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 
@@ -14,9 +13,9 @@ export class NixDetectStage implements Stage {
     let nixEnabled: boolean;
 
     if (nixCfg.enable === "auto") {
-      nixEnabled = await hasFlakeNix(ctx.workDir);
+      nixEnabled = await hasHostNix();
       console.log(
-        `[nas] Nix: auto-detected flake.nix → ${
+        `[nas] Nix: auto-detected host nix → ${
           nixEnabled ? "enabled" : "disabled"
         }`,
       );
@@ -31,9 +30,9 @@ export class NixDetectStage implements Stage {
   }
 }
 
-async function hasFlakeNix(dir: string): Promise<boolean> {
+async function hasHostNix(): Promise<boolean> {
   try {
-    await Deno.stat(path.join(dir, "flake.nix"));
+    await Deno.stat("/nix");
     return true;
   } catch {
     return false;
