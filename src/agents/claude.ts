@@ -3,6 +3,7 @@
  */
 
 import type { ExecutionContext } from "../pipeline/context.ts";
+import { buildAgentCommandWithTmuxTitle } from "./command.ts";
 
 /** Claude Code 固有のマウントと環境変数を追加 */
 export function configureClaude(ctx: ExecutionContext): ExecutionContext {
@@ -35,7 +36,7 @@ export function configureClaude(ctx: ExecutionContext): ExecutionContext {
     ...ctx,
     dockerArgs: args,
     envVars,
-    agentCommand: claudeBin ? ["claude"] : [
+    agentCommand: claudeBin ? buildAgentCommandWithTmuxTitle("claude", "claude") : [
       "bash",
       "-c",
       "curl -fsSL https://claude.ai/install.sh | bash && claude",

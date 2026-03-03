@@ -3,6 +3,7 @@
  */
 
 import type { ExecutionContext } from "../pipeline/context.ts";
+import { buildAgentCommandWithTmuxTitle } from "./command.ts";
 
 /** Copilot CLI 固有のマウントと環境変数を追加 */
 export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
@@ -74,7 +75,7 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
     dockerArgs: args,
     envVars,
     agentCommand: copilotBin
-      ? ["copilot"]
+      ? buildAgentCommandWithTmuxTitle("copilot", "copilot")
       : ["bash", "-c", "echo 'copilot binary not found'; exit 1"],
   };
 }
