@@ -62,6 +62,8 @@ nas rebuild copilot-nix  # プロファイル指定
 
 既存のイメージを削除してから再ビルドし、そのまま起動します。
 
+`nas` のバージョンアップにより内蔵の Dockerfile/entrypoint が更新された場合、起動時に自動検知して `nas rebuild` の実行を促すメッセージが表示されます。
+
 ### エージェントに引数を渡す
 
 `--` の後にエージェント固有の引数を渡せます。
@@ -78,6 +80,10 @@ nas -- -p "テストを書いて" --yolo
 
 プロジェクトルートに `.agent-sandbox.yml` を配置します。カレントディレクトリから上位に向かって自動検索されます。
 
+### グローバル設定
+
+`~/.config/nas/agent-sandbox.yml` にグローバル設定を配置できます。ローカル（プロジェクト側）の設定とマージされ、同名プロファイルではローカルが優先されます。共通の環境変数やツール設定を一箇所にまとめたい場合に便利です。
+
 ```yaml
 # .agent-sandbox.yml
 default: copilot-nix
@@ -90,6 +96,8 @@ profiles:
       mount-socket: true    # ホストの nix daemon ソケット経由で nix を使用
     docker:
       mount-socket: false   # ホストの docker.sock をマウント
+    gpg:
+      mount-socket: true    # ホストの gpg-agent ソケットを転送（署名用）
     env:                    # 追加環境変数（固定値 or コマンド出力）
       - key: SOME_VAR
         val: value
@@ -121,6 +129,7 @@ profiles:
 | `docker.mount-socket` | bool | `false` | Docker socket をマウント |
 | `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `aws.mount-config` | bool | `false` | AWS 設定ディレクトリ（`~/.aws`）をマウント |
+| `gpg.mount-socket` | bool | `false` | ホストの gpg-agent ソケットと公開鍵リング等を転送（コンテナ内での GPG 署名用） |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
 
 ## 仕組み
@@ -140,7 +149,7 @@ nas [profile-name] [-- agent-args...]
 ### コンテナの中身
 
 - **ベースイメージ**: `ubuntu:24.04`
-- **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin, gh, ripgrep, fd, Python 3（`python`/`python3`）, Node.js, Google Cloud CLI（`gcloud`）
+- **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin, gh, ripgrep, fd, Python 3（`python`/`python3`）, Node.js, Google Cloud CLI（`gcloud`）, AWS CLI v2（`aws`）
 - **エージェントバイナリ**: ホストからバインドマウント（`/usr/local/bin/` に配置）
 
 ### 認証の引き継ぎ
@@ -228,5 +237,8 @@ deno task compile     # バイナリビルド
 │       └── copilot.ts      # Copilot CLI 固有設定
 └── tests/
     ├── config_test.ts
+    ├── embed_hash_test.ts
+    ├── merge_test.ts
+    ├── mount_stage_test.ts
     └── pipeline_test.ts
 ```
