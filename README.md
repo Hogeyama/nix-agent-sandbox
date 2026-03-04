@@ -138,7 +138,7 @@ nas [profile-name] [-- agent-args...]
 ### コンテナの中身
 
 - **ベースイメージ**: `ubuntu:24.04`
-- **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin, gh, ripgrep, fd, Python 3（`python`/`python3`）, Node.js
+- **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin, gh, ripgrep, fd, Python 3（`python`/`python3`）, Node.js, Google Cloud CLI（`gcloud`）
 - **エージェントバイナリ**: ホストからバインドマウント（`/usr/local/bin/` に配置）
 
 ### 認証の引き継ぎ

@@ -3,6 +3,13 @@ FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl ca-certificates bash docker.io docker-compose-v2 \
   gh ripgrep fd-find python3 python-is-python3 nodejs \
+  gnupg \
+  && mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    | gpg --dearmor -o /etc/apt/keyrings/google-cloud-cli.gpg \
+  && echo "deb [signed-by=/etc/apt/keyrings/google-cloud-cli.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+    > /etc/apt/sources.list.d/google-cloud-sdk.list \
+  && apt-get update && apt-get install -y --no-install-recommends google-cloud-cli \
   && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
   && rm -rf /var/lib/apt/lists/*
 
