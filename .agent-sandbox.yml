@@ -16,7 +16,7 @@ profiles:
     aws:
       mount-config: true
     gpg:
-      mount-socket: true
+      forward-agent: true
 
   copilot:
     agent: copilot

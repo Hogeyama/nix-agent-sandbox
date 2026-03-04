@@ -10,7 +10,7 @@ const baseProfile: Profile = {
   docker: { mountSocket: false },
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
-  gpg: { mountSocket: false },
+  gpg: { forwardAgent: false },
   env: [],
 };
 
@@ -55,7 +55,7 @@ Deno.test("MountStage: invalid dynamic key throws", async () => {
 Deno.test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async () => {
   const profile: Profile = {
     ...baseProfile,
-    gpg: { mountSocket: true },
+    gpg: { forwardAgent: true },
   };
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   const result = await new MountStage().execute(ctx);

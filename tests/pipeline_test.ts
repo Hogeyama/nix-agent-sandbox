@@ -11,7 +11,7 @@ const testProfile: Profile = {
   docker: { mountSocket: false },
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
-  gpg: { mountSocket: false },
+  gpg: { forwardAgent: false },
   env: [],
 };
 

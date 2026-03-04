@@ -19,7 +19,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.agent, "claude");
   assertEquals(config.profiles.test.nix.enable, "auto");
   assertEquals(config.profiles.test.docker.mountSocket, false);
-  assertEquals(config.profiles.test.gpg.mountSocket, false);
+  assertEquals(config.profiles.test.gpg.forwardAgent, false);
   assertEquals(config.profiles.test.env, []);
 });
 
@@ -158,21 +158,21 @@ Deno.test("validateConfig: invalid env command entry throws", () => {
   );
 });
 
-Deno.test("validateConfig: gpg.mount-socket defaults to false", () => {
+Deno.test("validateConfig: gpg.forward-agent defaults to false", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.gpg.mountSocket, false);
+  assertEquals(config.profiles.test.gpg.forwardAgent, false);
 });
 
-Deno.test("validateConfig: gpg.mount-socket can be enabled", () => {
+Deno.test("validateConfig: gpg.forward-agent can be enabled", () => {
   const config = validateConfig({
     profiles: {
       test: {
         agent: "claude",
-        gpg: { "mount-socket": true },
+        gpg: { "forward-agent": true },
       },
     },
   });
-  assertEquals(config.profiles.test.gpg.mountSocket, true);
+  assertEquals(config.profiles.test.gpg.forwardAgent, true);
 });

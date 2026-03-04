@@ -83,8 +83,8 @@ function validateProfile(name: string, raw: RawProfile): Profile {
         DEFAULT_AWS_CONFIG.mountConfig,
     },
     gpg: {
-      mountSocket: raw.gpg?.["mount-socket"] ??
-        DEFAULT_GPG_CONFIG.mountSocket,
+      forwardAgent: raw.gpg?.["forward-agent"] ??
+        DEFAULT_GPG_CONFIG.forwardAgent,
     },
     env: validateEnv(name, raw.env),
   };

@@ -97,7 +97,7 @@ profiles:
     docker:
       mount-socket: false   # ホストの docker.sock をマウント
     gpg:
-      mount-socket: true    # ホストの gpg-agent ソケットを転送（署名用）
+      forward-agent: true   # ホストの gpg-agent を転送（署名用）
     env:                    # 追加環境変数（固定値 or コマンド出力）
       - key: SOME_VAR
         val: value
@@ -129,7 +129,7 @@ profiles:
 | `docker.mount-socket` | bool | `false` | Docker socket をマウント |
 | `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `aws.mount-config` | bool | `false` | AWS 設定ディレクトリ（`~/.aws`）をマウント |
-| `gpg.mount-socket` | bool | `false` | ホストの gpg-agent ソケットと公開鍵リング等を転送（コンテナ内での GPG 署名用） |
+| `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
 
 ## 仕組み

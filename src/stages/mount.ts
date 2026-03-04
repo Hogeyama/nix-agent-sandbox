@@ -95,7 +95,7 @@ export class MountStage implements Stage {
     //   - trustdb.gpg: 鍵の信頼度DB。これがないと "unusable public key" エラーになりうる
     //   - gpg.conf: default-key 等のユーザ設定
     //   - gpg-agent.conf: エージェントの動作設定(pinentry 等)
-    if (result.profile.gpg.mountSocket) {
+    if (result.profile.gpg.forwardAgent) {
       const gpgSocketPath = await resolveGpgAgentSocket();
       if (gpgSocketPath && await fileExists(gpgSocketPath)) {
         args.push("-v", `${gpgSocketPath}:/home/nas/.gnupg/S.gpg-agent`);

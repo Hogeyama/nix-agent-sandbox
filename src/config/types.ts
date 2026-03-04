@@ -32,7 +32,7 @@ export interface AwsConfig {
 
 /** GPG 設定 */
 export interface GpgConfig {
-  mountSocket: boolean;
+  forwardAgent: boolean;
 }
 
 /** 固定値の環境変数エントリ */
@@ -97,7 +97,7 @@ export interface RawProfile {
     "mount-config"?: boolean;
   };
   gpg?: {
-    "mount-socket"?: boolean;
+    "forward-agent"?: boolean;
   };
   env?: Array<{
     key?: string;
@@ -127,5 +127,5 @@ export const DEFAULT_AWS_CONFIG: AwsConfig = {
 };
 
 export const DEFAULT_GPG_CONFIG: GpgConfig = {
-  mountSocket: false,
+  forwardAgent: false,
 };
