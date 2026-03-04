@@ -4,11 +4,19 @@
 
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
-import { dockerBuild, dockerImageExists, dockerRun } from "../docker/client.ts";
+import {
+  computeEmbedHash,
+  dockerBuild,
+  dockerImageExists,
+  dockerRun,
+  getImageLabel,
+} from "../docker/client.ts";
 import * as path from "@std/path";
 
 export class DockerBuildStage implements Stage {
   name = "DockerBuildStage";
+
+  static readonly EMBED_HASH_LABEL = "nas.embed-hash";
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     const imageName = ctx.imageName;
@@ -17,8 +25,21 @@ export class DockerBuildStage implements Stage {
       console.log(
         `[nas] Docker image "${imageName}" already exists, skipping build`,
       );
+
+      // Check if the embedded files have changed since the image was built
+      const currentHash = await computeEmbedHash();
+      const imageHash = await getImageLabel(
+        imageName,
+        DockerBuildStage.EMBED_HASH_LABEL,
+      );
+      if (imageHash !== currentHash) {
+        console.log(
+          "[nas] \u26a0 Docker image is outdated. Run `nas rebuild` to update.",
+        );
+      }
     } else {
       console.log(`[nas] Building Docker image "${imageName}"...`);
+      const embedHash = await computeEmbedHash();
       // deno compile 時は仮想FS上のパスになり docker デーモンからアクセスできないため、
       // 埋め込みファイルを一時ディレクトリに書き出してからビルドする
       const tmpDir = await Deno.makeTempDir({ prefix: "nas-docker-build-" });
@@ -28,7 +49,9 @@ export class DockerBuildStage implements Stage {
           const content = await Deno.readTextFile(new URL(name, baseUrl));
           await Deno.writeTextFile(path.join(tmpDir, name), content);
         }
-        await dockerBuild(tmpDir, imageName);
+        await dockerBuild(tmpDir, imageName, {
+          [DockerBuildStage.EMBED_HASH_LABEL]: embedHash,
+        });
       } finally {
         await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
       }

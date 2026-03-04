@@ -3,6 +3,8 @@
  */
 
 import $ from "dax";
+import { crypto } from "@std/crypto";
+import { encodeHex } from "@std/encoding/hex";
 
 export interface DockerRunOptions {
   image: string;
@@ -12,12 +14,47 @@ export interface DockerRunOptions {
   interactive: boolean;
 }
 
+/** 埋め込みファイル (Dockerfile + entrypoint.sh) の SHA-256 ハッシュを計算 */
+export async function computeEmbedHash(): Promise<string> {
+  const baseUrl = new URL("./embed/", import.meta.url);
+  const parts: string[] = [];
+  for (const name of ["Dockerfile", "entrypoint.sh"]) {
+    parts.push(await Deno.readTextFile(new URL(name, baseUrl)));
+  }
+  const data = new TextEncoder().encode(parts.join("\n"));
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return encodeHex(new Uint8Array(hash));
+}
+
+/** docker image のラベル値を取得 */
+export async function getImageLabel(
+  tag: string,
+  label: string,
+): Promise<string | null> {
+  try {
+    const result =
+      await $`docker inspect --format ${"{{index .Config.Labels \"" + label + "\"}}"} ${tag}`
+        .quiet();
+    const value = result.stdout.trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
 /** docker build を実行 */
 export async function dockerBuild(
   contextDir: string,
   tag: string,
+  labels?: Record<string, string>,
 ): Promise<void> {
-  await $`docker build -t ${tag} ${contextDir}`.printCommand();
+  const labelArgs: string[] = [];
+  if (labels) {
+    for (const [key, value] of Object.entries(labels)) {
+      labelArgs.push("--label", `${key}=${value}`);
+    }
+  }
+  await $`docker build ${labelArgs} -t ${tag} ${contextDir}`.printCommand();
 }
 
 /** docker run を実行 */
