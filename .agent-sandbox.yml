@@ -1,17 +1,22 @@
-default: copilot-nix
+default: copilot
 
 profiles:
-  claude-nix:
+  claude:
     agent: claude
     agent-args:
-      - "--yolo"
+      - --allowedTools
+      - "shell"
     nix:
       enable: auto
       mount-socket: true
     docker:
       mount-socket: true
+    gcloud:
+      mount-config: true
+    aws:
+      mount-config: true
 
-  copilot-nix:
+  copilot:
     agent: copilot
     agent-args:
       - "--yolo"
@@ -20,3 +25,7 @@ profiles:
       mount-socket: true
     docker:
       mount-socket: true
+    gcloud:
+      mount-config: true
+    aws:
+      mount-config: true
