@@ -88,6 +88,38 @@ export class MountStage implements Stage {
       }
     }
 
+    // GPG ソケットマウント
+    // ソケットだけでは署名できない。gpg クライアントは署名時に以下を参照する:
+    //   - S.gpg-agent: ホストの gpg-agent と通信し秘密鍵での署名操作を委譲する
+    //   - pubring.kbx: 公開鍵リング。鍵IDの解決と署名対象の鍵の特定に必要
+    //   - trustdb.gpg: 鍵の信頼度DB。これがないと "unusable public key" エラーになりうる
+    //   - gpg.conf: default-key 等のユーザ設定
+    //   - gpg-agent.conf: エージェントの動作設定(pinentry 等)
+    if (result.profile.gpg.mountSocket) {
+      const gpgSocketPath = await resolveGpgAgentSocket();
+      if (gpgSocketPath && await fileExists(gpgSocketPath)) {
+        args.push("-v", `${gpgSocketPath}:/home/nas/.gnupg/S.gpg-agent`);
+        envVars["GPG_AGENT_INFO"] = "/home/nas/.gnupg/S.gpg-agent";
+      }
+      const home = Deno.env.get("HOME") ?? "/root";
+      const gpgConf = `${home}/.gnupg/gpg.conf`;
+      if (await fileExists(gpgConf)) {
+        args.push("-v", `${gpgConf}:/home/nas/.gnupg/gpg.conf:ro`);
+      }
+      const gpgAgentConf = `${home}/.gnupg/gpg-agent.conf`;
+      if (await fileExists(gpgAgentConf)) {
+        args.push("-v", `${gpgAgentConf}:/home/nas/.gnupg/gpg-agent.conf:ro`);
+      }
+      const pubring = `${home}/.gnupg/pubring.kbx`;
+      if (await fileExists(pubring)) {
+        args.push("-v", `${pubring}:/home/nas/.gnupg/pubring.kbx:ro`);
+      }
+      const trustdb = `${home}/.gnupg/trustdb.gpg`;
+      if (await fileExists(trustdb)) {
+        args.push("-v", `${trustdb}:/home/nas/.gnupg/trustdb.gpg:ro`);
+      }
+    }
+
     // AWS 設定マウント
     if (result.profile.aws.mountConfig) {
       const awsConfigDir = `${Deno.env.get("HOME")}/.aws`;
@@ -139,6 +171,26 @@ export class MountStage implements Stage {
     await Promise.resolve();
     return result;
   }
+}
+
+async function resolveGpgAgentSocket(): Promise<string | null> {
+  try {
+    const cmd = new Deno.Command("gpgconf", { args: ["--list-dir", "agent-socket"], stdout: "piped", stderr: "null" });
+    const { code, stdout } = await cmd.output();
+    if (code === 0) {
+      const socketPath = new TextDecoder().decode(stdout).trim();
+      if (socketPath) return socketPath;
+    }
+  } catch { /* gpgconf not available */ }
+
+  // フォールバック
+  const uid = Deno.uid();
+  if (uid !== null) {
+    const runUserSocket = `/run/user/${uid}/gnupg/S.gpg-agent`;
+    if (await fileExists(runUserSocket)) return runUserSocket;
+  }
+  const home = Deno.env.get("HOME") ?? "/root";
+  return `${home}/.gnupg/S.gpg-agent`;
 }
 
 async function resolveRealPath(path: string): Promise<string | null> {

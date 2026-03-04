@@ -11,7 +11,7 @@ import type {
   RawProfile,
   StaticEnvConfig,
 } from "./types.ts";
-import { DEFAULT_AWS_CONFIG, DEFAULT_DOCKER_CONFIG, DEFAULT_GCLOUD_CONFIG, DEFAULT_NIX_CONFIG } from "./types.ts";
+import { DEFAULT_AWS_CONFIG, DEFAULT_DOCKER_CONFIG, DEFAULT_GCLOUD_CONFIG, DEFAULT_GPG_CONFIG, DEFAULT_NIX_CONFIG } from "./types.ts";
 import type { AgentType } from "./types.ts";
 
 const VALID_AGENTS: AgentType[] = ["claude", "copilot"];
@@ -81,6 +81,10 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     aws: {
       mountConfig: raw.aws?.["mount-config"] ??
         DEFAULT_AWS_CONFIG.mountConfig,
+    },
+    gpg: {
+      mountSocket: raw.gpg?.["mount-socket"] ??
+        DEFAULT_GPG_CONFIG.mountSocket,
     },
     env: validateEnv(name, raw.env),
   };

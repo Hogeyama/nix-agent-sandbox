@@ -19,6 +19,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.agent, "claude");
   assertEquals(config.profiles.test.nix.enable, "auto");
   assertEquals(config.profiles.test.docker.mountSocket, false);
+  assertEquals(config.profiles.test.gpg.mountSocket, false);
   assertEquals(config.profiles.test.env, []);
 });
 
@@ -155,4 +156,23 @@ Deno.test("validateConfig: invalid env command entry throws", () => {
     ConfigValidationError,
     "env[0].key_cmd",
   );
+});
+
+Deno.test("validateConfig: gpg.mount-socket defaults to false", () => {
+  const config = validateConfig({
+    profiles: { test: { agent: "claude" } },
+  });
+  assertEquals(config.profiles.test.gpg.mountSocket, false);
+});
+
+Deno.test("validateConfig: gpg.mount-socket can be enabled", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        gpg: { "mount-socket": true },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.gpg.mountSocket, true);
 });

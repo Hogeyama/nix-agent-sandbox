@@ -10,6 +10,7 @@ const baseProfile: Profile = {
   docker: { mountSocket: false },
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
+  gpg: { mountSocket: false },
   env: [],
 };
 
@@ -49,6 +50,47 @@ Deno.test("MountStage: invalid dynamic key throws", async () => {
     Error,
     "Invalid env var name",
   );
+});
+
+Deno.test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async () => {
+  const profile: Profile = {
+    ...baseProfile,
+    gpg: { mountSocket: true },
+  };
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+
+  const home = Deno.env.get("HOME") ?? "/root";
+
+  // Check pubring.kbx mount if file exists on host
+  const pubringExists = await Deno.stat(`${home}/.gnupg/pubring.kbx`).then(
+    () => true,
+    () => false,
+  );
+  if (pubringExists) {
+    const pubringMount = result.dockerArgs.find((a) =>
+      a.includes("pubring.kbx")
+    );
+    assertEquals(
+      pubringMount,
+      `${home}/.gnupg/pubring.kbx:/home/nas/.gnupg/pubring.kbx:ro`,
+    );
+  }
+
+  // Check trustdb.gpg mount if file exists on host
+  const trustdbExists = await Deno.stat(`${home}/.gnupg/trustdb.gpg`).then(
+    () => true,
+    () => false,
+  );
+  if (trustdbExists) {
+    const trustdbMount = result.dockerArgs.find((a) =>
+      a.includes("trustdb.gpg")
+    );
+    assertEquals(
+      trustdbMount,
+      `${home}/.gnupg/trustdb.gpg:/home/nas/.gnupg/trustdb.gpg:ro`,
+    );
+  }
 });
 
 Deno.test("serializeNixExtraPackages: returns newline-delimited list", () => {

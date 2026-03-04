@@ -30,6 +30,11 @@ export interface AwsConfig {
   mountConfig: boolean;
 }
 
+/** GPG 設定 */
+export interface GpgConfig {
+  mountSocket: boolean;
+}
+
 /** 固定値の環境変数エントリ */
 export interface StaticEnvConfig {
   key: string;
@@ -53,6 +58,7 @@ export interface Profile {
   docker: DockerConfig;
   gcloud: GcloudConfig;
   aws: AwsConfig;
+  gpg: GpgConfig;
   env: EnvConfig[];
 }
 
@@ -90,6 +96,9 @@ export interface RawProfile {
   aws?: {
     "mount-config"?: boolean;
   };
+  gpg?: {
+    "mount-socket"?: boolean;
+  };
   env?: Array<{
     key?: string;
     val?: string;
@@ -115,4 +124,8 @@ export const DEFAULT_GCLOUD_CONFIG: GcloudConfig = {
 
 export const DEFAULT_AWS_CONFIG: AwsConfig = {
   mountConfig: false,
+};
+
+export const DEFAULT_GPG_CONFIG: GpgConfig = {
+  mountSocket: false,
 };

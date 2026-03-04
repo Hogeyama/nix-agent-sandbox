@@ -30,12 +30,30 @@ if [ "$NAS_UID" != "0" ]; then
 
   export HOME=/home/nas
 
-  # Docker socket の GID を補助グループに追加 (DooD 用)
-  # --init-groups と --groups は排他なので、Docker ソケットがある場合は
-  # --groups に NAS_GID と Docker GID を明示的に列挙する
+  # GPG ソケットがマウントされている場合、ディレクトリの所有権を設定
+  if [ -e /home/nas/.gnupg/S.gpg-agent ]; then
+    chown "${NAS_UID}:${NAS_GID}" /home/nas/.gnupg
+    chmod 700 /home/nas/.gnupg
+  fi
+
+  # Docker socket / GPG socket の GID を補助グループに追加
+  # --init-groups と --groups は排他なので、ソケットがある場合は
+  # --groups に NAS_GID と各 GID を明示的に列挙する
+  EXTRA_GIDS=""
   if [ -S /var/run/docker.sock ]; then
     DOCKER_SOCK_GID=$(stat -c '%g' /var/run/docker.sock)
-    EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --groups "${NAS_GID},${DOCKER_SOCK_GID}" --)
+    EXTRA_GIDS="${DOCKER_SOCK_GID}"
+  fi
+  if [ -S /home/nas/.gnupg/S.gpg-agent ]; then
+    GPG_SOCK_GID=$(stat -c '%g' /home/nas/.gnupg/S.gpg-agent)
+    if [ -n "$EXTRA_GIDS" ]; then
+      EXTRA_GIDS="${EXTRA_GIDS},${GPG_SOCK_GID}"
+    else
+      EXTRA_GIDS="${GPG_SOCK_GID}"
+    fi
+  fi
+  if [ -n "$EXTRA_GIDS" ]; then
+    EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --groups "${NAS_GID},${EXTRA_GIDS}" --)
   else
     EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --init-groups --)
   fi
