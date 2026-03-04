@@ -4,23 +4,105 @@
 
 import { parse as parseYaml } from "@std/yaml";
 import * as path from "@std/path";
-import type { Config, RawConfig } from "./types.ts";
+import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
 const CONFIG_FILENAME = ".agent-sandbox.yml";
 
+/** グローバル設定ファイルのパス */
+export const GLOBAL_CONFIG_PATH = path.join(
+  Deno.env.get("HOME") ?? "/",
+  ".config",
+  "nas",
+  "agent-sandbox.yml",
+);
+
 /** 設定ファイルを読み込んで検証済み Config を返す */
 export async function loadConfig(startDir?: string): Promise<Config> {
-  const configPath = await findConfigFile(startDir ?? Deno.cwd());
-  if (!configPath) {
+  const globalRaw = await loadGlobalConfig();
+  const localPath = await findConfigFile(startDir ?? Deno.cwd());
+  const localRaw = localPath
+    ? parseYaml(await Deno.readTextFile(localPath)) as RawConfig
+    : null;
+
+  if (!globalRaw && !localRaw) {
     throw new Error(
       `${CONFIG_FILENAME} not found in current directory or parent directories`,
     );
   }
 
-  const text = await Deno.readTextFile(configPath);
-  const raw = parseYaml(text) as RawConfig;
-  return validateConfig(raw);
+  const merged = mergeRawConfigs(globalRaw, localRaw);
+  return validateConfig(merged);
+}
+
+/** グローバル設定ファイルを読み込む。なければ null */
+export async function loadGlobalConfig(): Promise<RawConfig | null> {
+  try {
+    const text = await Deno.readTextFile(GLOBAL_CONFIG_PATH);
+    return parseYaml(text) as RawConfig;
+  } catch {
+    return null;
+  }
+}
+
+/** グローバルとローカルの RawConfig をマージする */
+export function mergeRawConfigs(
+  global: RawConfig | null,
+  local: RawConfig | null,
+): RawConfig {
+  if (!global) return local!;
+  if (!local) return global;
+
+  // プロファイルをマージ
+  const globalProfiles = global.profiles ?? {};
+  const localProfiles = local.profiles ?? {};
+  const allNames = new Set([
+    ...Object.keys(globalProfiles),
+    ...Object.keys(localProfiles),
+  ]);
+
+  const mergedProfiles: Record<string, RawProfile> = {};
+  for (const name of allNames) {
+    const gp = globalProfiles[name];
+    const lp = localProfiles[name];
+    if (gp && lp) {
+      mergedProfiles[name] = mergeRawProfiles(gp, lp);
+    } else {
+      mergedProfiles[name] = (lp ?? gp)!;
+    }
+  }
+
+  return {
+    default: local.default ?? global.default,
+    profiles: mergedProfiles,
+  };
+}
+
+/** 2つの RawProfile をフィールド単位でマージする（ローカル優先） */
+export function mergeRawProfiles(
+  global: RawProfile,
+  local: RawProfile,
+): RawProfile {
+  return {
+    agent: local.agent ?? global.agent,
+    "agent-args": local["agent-args"] ?? global["agent-args"],
+    worktree: shallowMerge(global.worktree, local.worktree),
+    nix: shallowMerge(global.nix, local.nix),
+    docker: shallowMerge(global.docker, local.docker),
+    gcloud: shallowMerge(global.gcloud, local.gcloud),
+    aws: shallowMerge(global.aws, local.aws),
+    env: local.env ?? global.env,
+  };
+}
+
+/** オブジェクトのフィールド単位でシャローマージ（ローカル優先） */
+function shallowMerge<T extends Record<string, unknown>>(
+  global?: T,
+  local?: T,
+): T | undefined {
+  if (!global) return local;
+  if (!local) return global;
+  return { ...global, ...local };
 }
 
 /** 指定ディレクトリから上位に向かって設定ファイルを探す */
