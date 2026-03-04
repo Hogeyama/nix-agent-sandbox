@@ -25,6 +25,11 @@ export interface GcloudConfig {
   mountConfig: boolean;
 }
 
+/** AWS 設定 */
+export interface AwsConfig {
+  mountConfig: boolean;
+}
+
 /** 固定値の環境変数エントリ */
 export interface StaticEnvConfig {
   key: string;
@@ -47,6 +52,7 @@ export interface Profile {
   nix: NixConfig;
   docker: DockerConfig;
   gcloud: GcloudConfig;
+  aws: AwsConfig;
   env: EnvConfig[];
 }
 
@@ -81,6 +87,9 @@ export interface RawProfile {
   gcloud?: {
     "mount-config"?: boolean;
   };
+  aws?: {
+    "mount-config"?: boolean;
+  };
   env?: Array<{
     key?: string;
     val?: string;
@@ -101,5 +110,9 @@ export const DEFAULT_DOCKER_CONFIG: DockerConfig = {
 };
 
 export const DEFAULT_GCLOUD_CONFIG: GcloudConfig = {
+  mountConfig: false,
+};
+
+export const DEFAULT_AWS_CONFIG: AwsConfig = {
   mountConfig: false,
 };

@@ -10,6 +10,7 @@ const testProfile: Profile = {
   nix: { enable: "auto", mountSocket: true, extraPackages: [] },
   docker: { mountSocket: false },
   gcloud: { mountConfig: false },
+  aws: { mountConfig: false },
   env: [],
 };
 

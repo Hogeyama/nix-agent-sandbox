@@ -88,6 +88,14 @@ export class MountStage implements Stage {
       }
     }
 
+    // AWS 設定マウント
+    if (result.profile.aws.mountConfig) {
+      const awsConfigDir = `${Deno.env.get("HOME")}/.aws`;
+      if (await fileExists(awsConfigDir)) {
+        args.push("-v", `${awsConfigDir}:/home/nas/.aws`);
+      }
+    }
+
     // プロファイルの環境変数
     for (const [index, envEntry] of result.profile.env.entries()) {
       if ("key" in envEntry) {

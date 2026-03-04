@@ -9,6 +9,7 @@ const baseProfile: Profile = {
   nix: { enable: false, mountSocket: false, extraPackages: [] },
   docker: { mountSocket: false },
   gcloud: { mountConfig: false },
+  aws: { mountConfig: false },
   env: [],
 };
 
