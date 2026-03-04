@@ -20,6 +20,11 @@ export interface DockerConfig {
   mountSocket: boolean;
 }
 
+/** gcloud 設定 */
+export interface GcloudConfig {
+  mountConfig: boolean;
+}
+
 /** 固定値の環境変数エントリ */
 export interface StaticEnvConfig {
   key: string;
@@ -41,6 +46,7 @@ export interface Profile {
   worktree?: WorktreeConfig;
   nix: NixConfig;
   docker: DockerConfig;
+  gcloud: GcloudConfig;
   env: EnvConfig[];
 }
 
@@ -72,6 +78,9 @@ export interface RawProfile {
   docker?: {
     "mount-socket"?: boolean;
   };
+  gcloud?: {
+    "mount-config"?: boolean;
+  };
   env?: Array<{
     key?: string;
     val?: string;
@@ -89,4 +98,8 @@ export const DEFAULT_NIX_CONFIG: NixConfig = {
 
 export const DEFAULT_DOCKER_CONFIG: DockerConfig = {
   mountSocket: false,
+};
+
+export const DEFAULT_GCLOUD_CONFIG: GcloudConfig = {
+  mountConfig: false,
 };

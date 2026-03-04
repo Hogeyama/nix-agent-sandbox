@@ -8,6 +8,7 @@ const baseProfile: Profile = {
   agentArgs: [],
   nix: { enable: false, mountSocket: false, extraPackages: [] },
   docker: { mountSocket: false },
+  gcloud: { mountConfig: false },
   env: [],
 };
 

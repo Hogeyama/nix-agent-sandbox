@@ -119,6 +119,7 @@ profiles:
 | `nix.mount-socket` | bool | `true` | ホストの nix daemon にソケット経由で接続 |
 | `nix.extra-packages` | string[] | `[]` | `nix shell` で追加するパッケージ（`nix develop` 前に適用） |
 | `docker.mount-socket` | bool | `false` | Docker socket をマウント |
+| `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
 
 ## 仕組み

@@ -11,7 +11,7 @@ import type {
   RawProfile,
   StaticEnvConfig,
 } from "./types.ts";
-import { DEFAULT_DOCKER_CONFIG, DEFAULT_NIX_CONFIG } from "./types.ts";
+import { DEFAULT_DOCKER_CONFIG, DEFAULT_GCLOUD_CONFIG, DEFAULT_NIX_CONFIG } from "./types.ts";
 import type { AgentType } from "./types.ts";
 
 const VALID_AGENTS: AgentType[] = ["claude", "copilot"];
@@ -73,6 +73,10 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     docker: {
       mountSocket: raw.docker?.["mount-socket"] ??
         DEFAULT_DOCKER_CONFIG.mountSocket,
+    },
+    gcloud: {
+      mountConfig: raw.gcloud?.["mount-config"] ??
+        DEFAULT_GCLOUD_CONFIG.mountConfig,
     },
     env: validateEnv(name, raw.env),
   };

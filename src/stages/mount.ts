@@ -80,6 +80,14 @@ export class MountStage implements Stage {
       args.push("-v", `${gitConfigDir}:/home/nas/.config/git:ro`);
     }
 
+    // gcloud 設定マウント
+    if (result.profile.gcloud.mountConfig) {
+      const gcloudConfigDir = `${Deno.env.get("HOME")}/.config/gcloud`;
+      if (await fileExists(gcloudConfigDir)) {
+        args.push("-v", `${gcloudConfigDir}:/home/nas/.config/gcloud`);
+      }
+    }
+
     // プロファイルの環境変数
     for (const [index, envEntry] of result.profile.env.entries()) {
       if ("key" in envEntry) {
