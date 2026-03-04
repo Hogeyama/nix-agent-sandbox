@@ -11,6 +11,8 @@
     "check": "deno check main.ts"
   },
   "imports": {
+    "@std/crypto": "jsr:@std/crypto@^1.0.5",
+    "@std/encoding": "jsr:@std/encoding@^1.0.10",
     "@std/yaml": "jsr:@std/yaml@^1",
     "@std/path": "jsr:@std/path@^1",
     "@std/fs": "jsr:@std/fs@^1",
