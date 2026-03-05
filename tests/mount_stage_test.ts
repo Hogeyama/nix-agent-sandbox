@@ -42,6 +42,20 @@ Deno.test("MountStage: resolves static and command env", async () => {
   assertEquals(result.envVars["DYNAMIC_KEY"], "dynamic_value");
 });
 
+Deno.test("MountStage: workspace mount keeps full absolute path", async () => {
+  const workDir = Deno.cwd();
+  const ctx = createContext(baseConfig, baseProfile, "test", workDir);
+  const result = await new MountStage().execute(ctx);
+
+  const mountArg = `${workDir}:${workDir}`;
+  const mountIndex = result.dockerArgs.indexOf(mountArg);
+  assertEquals(mountIndex >= 1 && result.dockerArgs[mountIndex - 1] === "-v", true);
+
+  const workDirIndex = result.dockerArgs.indexOf(workDir);
+  assertEquals(workDirIndex >= 1 && result.dockerArgs[workDirIndex - 1] === "-w", true);
+  assertEquals(result.envVars["WORKSPACE"], workDir);
+});
+
 Deno.test("MountStage: invalid dynamic key throws", async () => {
   const profile: Profile = {
     ...baseProfile,

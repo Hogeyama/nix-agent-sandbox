@@ -27,8 +27,8 @@ export class MountStage implements Stage {
     envVars["NAS_USER"] = containerUser;
     envVars["NAS_HOME"] = containerHome;
 
-    // ワークスペースマウント (ホスト側のディレクトリ名をコンテナ内でも使う)
-    const containerWorkDir = `/${path.basename(result.workDir)}`;
+    // ワークスペースマウント (ホスト側の絶対パスをコンテナ内でも使う)
+    const containerWorkDir = path.resolve(result.workDir);
     args.push("-v", `${result.workDir}:${containerWorkDir}`);
     args.push("-w", containerWorkDir);
     envVars["WORKSPACE"] = containerWorkDir;
