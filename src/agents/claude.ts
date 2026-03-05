@@ -8,19 +8,20 @@ import type { ExecutionContext } from "../pipeline/context.ts";
 export function configureClaude(ctx: ExecutionContext): ExecutionContext {
   const args = [...ctx.dockerArgs];
   const envVars = { ...ctx.envVars };
+  const containerHome = ctx.envVars["NAS_HOME"] ?? resolveContainerHome();
 
   const home = Deno.env.get("HOME") ?? "/root";
 
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
   const claudeDir = `${home}/.claude`;
   if (dirExistsSync(claudeDir)) {
-    args.push("-v", `${claudeDir}:/home/nas/.claude`);
+    args.push("-v", `${claudeDir}:${containerHome}/.claude`);
   }
 
   // ~/.claude.json をマウント（設定）
   const claudeJson = `${home}/.claude.json`;
   if (fileExistsSync(claudeJson)) {
-    args.push("-v", `${claudeJson}:/home/nas/.claude.json`);
+    args.push("-v", `${claudeJson}:${containerHome}/.claude.json`);
   }
 
   // claude バイナリのマウント (実体パスを解決してマウント)
@@ -78,4 +79,9 @@ function findBinaryResolved(name: string): string | null {
     // ignore
   }
   return null;
+}
+
+function resolveContainerHome(): string {
+  const user = Deno.env.get("USER")?.trim();
+  return `/home/${user || "nas"}`;
 }

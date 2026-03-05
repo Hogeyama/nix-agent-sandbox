@@ -15,25 +15,29 @@ fi
 # --- ユーザーセットアップ ---
 NAS_UID="${NAS_UID:-0}"
 NAS_GID="${NAS_GID:-0}"
+NAS_USER="${NAS_USER:-${USER:-nas}}"
+NAS_HOME="/home/${NAS_USER}"
 WORKSPACE="${WORKSPACE:-/workspace}"
 
 if [ "$NAS_UID" != "0" ]; then
   # ホストユーザーに合わせた非 root ユーザーを作成
-  echo "nas:x:${NAS_UID}:${NAS_GID}:nas:/home/nas:/bin/bash" >>/etc/passwd
-  grep -q "^nas:" /etc/group 2>/dev/null || echo "nas:x:${NAS_GID}:" >>/etc/group
-  chown "${NAS_UID}:${NAS_GID}" /home/nas
+  mkdir -p "$NAS_HOME"
+  echo "${NAS_USER}:x:${NAS_UID}:${NAS_GID}:${NAS_USER}:${NAS_HOME}:/bin/bash" >>/etc/passwd
+  grep -q "^${NAS_USER}:" /etc/group 2>/dev/null || echo "${NAS_USER}:x:${NAS_GID}:" >>/etc/group
+  chown "${NAS_UID}:${NAS_GID}" "$NAS_HOME"
 
   # nix trusted-users にコンテナユーザーを追加 (nix daemon 経由操作に必要)
   if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f /etc/nix/nix.conf ]; then
-    echo "trusted-users = root nas" >>/etc/nix/nix.conf 2>/dev/null || true
+    echo "trusted-users = root ${NAS_USER}" >>/etc/nix/nix.conf 2>/dev/null || true
   fi
 
-  export HOME=/home/nas
+  export HOME="$NAS_HOME"
+  export USER="$NAS_USER"
 
   # GPG ソケットがマウントされている場合、ディレクトリの所有権を設定
-  if [ -e /home/nas/.gnupg/S.gpg-agent ]; then
-    chown "${NAS_UID}:${NAS_GID}" /home/nas/.gnupg
-    chmod 700 /home/nas/.gnupg
+  if [ -e "${NAS_HOME}/.gnupg/S.gpg-agent" ]; then
+    chown "${NAS_UID}:${NAS_GID}" "${NAS_HOME}/.gnupg"
+    chmod 700 "${NAS_HOME}/.gnupg"
   fi
 
   # Docker socket / GPG socket の GID を補助グループに追加
@@ -44,8 +48,8 @@ if [ "$NAS_UID" != "0" ]; then
     DOCKER_SOCK_GID=$(stat -c '%g' /var/run/docker.sock)
     EXTRA_GIDS="${DOCKER_SOCK_GID}"
   fi
-  if [ -S /home/nas/.gnupg/S.gpg-agent ]; then
-    GPG_SOCK_GID=$(stat -c '%g' /home/nas/.gnupg/S.gpg-agent)
+  if [ -S "${NAS_HOME}/.gnupg/S.gpg-agent" ]; then
+    GPG_SOCK_GID=$(stat -c '%g' "${NAS_HOME}/.gnupg/S.gpg-agent")
     if [ -n "$EXTRA_GIDS" ]; then
       EXTRA_GIDS="${EXTRA_GIDS},${GPG_SOCK_GID}"
     else

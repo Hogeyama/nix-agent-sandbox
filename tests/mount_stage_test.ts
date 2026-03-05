@@ -20,6 +20,11 @@ const baseConfig: Config = {
   profiles: { test: baseProfile },
 };
 
+function getContainerHome(): string {
+  const user = Deno.env.get("USER")?.trim();
+  return `/home/${user || "nas"}`;
+}
+
 Deno.test("MountStage: resolves static and command env", async () => {
   const profile: Profile = {
     ...baseProfile,
@@ -62,6 +67,7 @@ Deno.test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async ()
   const result = await new MountStage().execute(ctx);
 
   const home = Deno.env.get("HOME") ?? "/root";
+  const containerHome = getContainerHome();
 
   // Check pubring.kbx mount if file exists on host
   const pubringExists = await Deno.stat(`${home}/.gnupg/pubring.kbx`).then(
@@ -74,7 +80,7 @@ Deno.test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async ()
     );
     assertEquals(
       pubringMount,
-      `${home}/.gnupg/pubring.kbx:/home/nas/.gnupg/pubring.kbx:ro`,
+      `${home}/.gnupg/pubring.kbx:${containerHome}/.gnupg/pubring.kbx:ro`,
     );
   }
 
@@ -89,13 +95,14 @@ Deno.test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async ()
     );
     assertEquals(
       trustdbMount,
-      `${home}/.gnupg/trustdb.gpg:/home/nas/.gnupg/trustdb.gpg:ro`,
+      `${home}/.gnupg/trustdb.gpg:${containerHome}/.gnupg/trustdb.gpg:ro`,
     );
   }
 });
 
 Deno.test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
   const home = Deno.env.get("HOME") ?? "/root";
+  const containerHome = getContainerHome();
   const profile: Profile = {
     ...baseProfile,
     extraMounts: [
@@ -107,7 +114,7 @@ Deno.test("MountStage: applies extra-mounts with mode and ~ expansion", async ()
   const result = await new MountStage().execute(ctx);
 
   assertEquals(
-    result.dockerArgs.includes(`${home}:/home/nas/.cabal:ro`),
+    result.dockerArgs.includes(`${home}:${containerHome}/.cabal:ro`),
     true,
   );
   assertEquals(

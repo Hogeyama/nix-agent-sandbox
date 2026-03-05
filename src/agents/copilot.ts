@@ -8,6 +8,7 @@ import type { ExecutionContext } from "../pipeline/context.ts";
 export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
   const args = [...ctx.dockerArgs];
   const envVars = { ...ctx.envVars };
+  const containerHome = ctx.envVars["NAS_HOME"] ?? resolveContainerHome();
 
   // gh auth token で GitHub トークンを取得
   const token = getGhToken();
@@ -30,18 +31,31 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
   const containerCopilotConfigDir = remapToContainer(
     hostCopilotConfigDir,
     home,
+    containerHome,
   );
-  const containerCopilotStateDir = remapToContainer(hostCopilotStateDir, home);
+  const containerCopilotStateDir = remapToContainer(
+    hostCopilotStateDir,
+    home,
+    containerHome,
+  );
 
   // XDG_CONFIG_HOME をコンテナに渡す（ホストで設定されている場合のみ）
   if (xdgConfigHome) {
-    const containerConfigHome = remapToContainer(xdgConfigHome, home);
+    const containerConfigHome = remapToContainer(
+      xdgConfigHome,
+      home,
+      containerHome,
+    );
     envVars["XDG_CONFIG_HOME"] = containerConfigHome;
   }
 
   // XDG_STATE_HOME をコンテナに渡す（ホストで設定されている場合のみ）
   if (xdgStateHome) {
-    const containerStateHome = remapToContainer(xdgStateHome, home);
+    const containerStateHome = remapToContainer(
+      xdgStateHome,
+      home,
+      containerHome,
+    );
     envVars["XDG_STATE_HOME"] = containerStateHome;
   }
 
@@ -99,11 +113,15 @@ function getGhToken(): string | null {
 
 /**
  * ホストのパスをコンテナ内パスにリマップする。
- * $HOME 配下のパスは /home/nas/ 配下に変換し、それ以外はそのまま返す。
+ * $HOME 配下のパスはコンテナ内の $HOME 配下に変換し、それ以外はそのまま返す。
  */
-function remapToContainer(hostPath: string, hostHome: string): string {
+function remapToContainer(
+  hostPath: string,
+  hostHome: string,
+  containerHome: string,
+): string {
   if (hostPath.startsWith(hostHome + "/")) {
-    return "/home/nas/" + hostPath.slice(hostHome.length + 1);
+    return `${containerHome}/` + hostPath.slice(hostHome.length + 1);
   }
   return hostPath;
 }
@@ -125,4 +143,9 @@ function findBinaryResolved(name: string): string | null {
     // ignore
   }
   return null;
+}
+
+function resolveContainerHome(): string {
+  const user = Deno.env.get("USER")?.trim();
+  return `/home/${user || "nas"}`;
 }

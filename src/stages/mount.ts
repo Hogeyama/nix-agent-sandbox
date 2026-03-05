@@ -9,7 +9,7 @@ import { configureClaude } from "../agents/claude.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const CONTAINER_HOME = "/home/nas";
+const DEFAULT_CONTAINER_USER = "nas";
 const RESERVED_EXTRA_MOUNT_DESTINATIONS = new Set([
   "/nix",
   "/var/run/docker.sock",
@@ -22,6 +22,10 @@ export class MountStage implements Stage {
     let result = { ...ctx };
     const args = [...result.dockerArgs];
     const envVars = { ...result.envVars };
+    const containerUser = resolveContainerUser();
+    const containerHome = `/home/${containerUser}`;
+    envVars["NAS_USER"] = containerUser;
+    envVars["NAS_HOME"] = containerHome;
 
     // ワークスペースマウント (ホスト側のディレクトリ名をコンテナ内でも使う)
     const containerWorkDir = `/${path.basename(result.workDir)}`;
@@ -86,14 +90,14 @@ export class MountStage implements Stage {
     // git 設定マウント (user.name / user.email などをコンテナに引き継ぐ)
     const gitConfigDir = `${Deno.env.get("HOME")}/.config/git`;
     if (await fileExists(gitConfigDir)) {
-      args.push("-v", `${gitConfigDir}:/home/nas/.config/git:ro`);
+      args.push("-v", `${gitConfigDir}:${containerHome}/.config/git:ro`);
     }
 
     // gcloud 設定マウント
     if (result.profile.gcloud.mountConfig) {
       const gcloudConfigDir = `${Deno.env.get("HOME")}/.config/gcloud`;
       if (await fileExists(gcloudConfigDir)) {
-        args.push("-v", `${gcloudConfigDir}:/home/nas/.config/gcloud`);
+        args.push("-v", `${gcloudConfigDir}:${containerHome}/.config/gcloud`);
       }
     }
 
@@ -107,25 +111,25 @@ export class MountStage implements Stage {
     if (result.profile.gpg.forwardAgent) {
       const gpgSocketPath = await resolveGpgAgentSocket();
       if (gpgSocketPath && await fileExists(gpgSocketPath)) {
-        args.push("-v", `${gpgSocketPath}:/home/nas/.gnupg/S.gpg-agent`);
-        envVars["GPG_AGENT_INFO"] = "/home/nas/.gnupg/S.gpg-agent";
+        args.push("-v", `${gpgSocketPath}:${containerHome}/.gnupg/S.gpg-agent`);
+        envVars["GPG_AGENT_INFO"] = `${containerHome}/.gnupg/S.gpg-agent`;
       }
       const home = Deno.env.get("HOME") ?? "/root";
       const gpgConf = `${home}/.gnupg/gpg.conf`;
       if (await fileExists(gpgConf)) {
-        args.push("-v", `${gpgConf}:/home/nas/.gnupg/gpg.conf:ro`);
+        args.push("-v", `${gpgConf}:${containerHome}/.gnupg/gpg.conf:ro`);
       }
       const gpgAgentConf = `${home}/.gnupg/gpg-agent.conf`;
       if (await fileExists(gpgAgentConf)) {
-        args.push("-v", `${gpgAgentConf}:/home/nas/.gnupg/gpg-agent.conf:ro`);
+        args.push("-v", `${gpgAgentConf}:${containerHome}/.gnupg/gpg-agent.conf:ro`);
       }
       const pubring = `${home}/.gnupg/pubring.kbx`;
       if (await fileExists(pubring)) {
-        args.push("-v", `${pubring}:/home/nas/.gnupg/pubring.kbx:ro`);
+        args.push("-v", `${pubring}:${containerHome}/.gnupg/pubring.kbx:ro`);
       }
       const trustdb = `${home}/.gnupg/trustdb.gpg`;
       if (await fileExists(trustdb)) {
-        args.push("-v", `${trustdb}:/home/nas/.gnupg/trustdb.gpg:ro`);
+        args.push("-v", `${trustdb}:${containerHome}/.gnupg/trustdb.gpg:ro`);
       }
     }
 
@@ -133,7 +137,7 @@ export class MountStage implements Stage {
     if (result.profile.aws.mountConfig) {
       const awsConfigDir = `${Deno.env.get("HOME")}/.aws`;
       if (await fileExists(awsConfigDir)) {
-        args.push("-v", `${awsConfigDir}:/home/nas/.aws`);
+        args.push("-v", `${awsConfigDir}:${containerHome}/.aws`);
       }
     }
 
@@ -153,7 +157,7 @@ export class MountStage implements Stage {
         continue;
       }
 
-      const dst = expandContainerPath(extraMount.dst);
+      const dst = expandContainerPath(extraMount.dst, containerHome);
       if (!path.isAbsolute(dst)) {
         throw new Error(
           `[nas] profile.extra-mounts[${index}].dst must be an absolute path: ${extraMount.dst}`,
@@ -256,12 +260,18 @@ function expandHostPath(rawPath: string): string {
   return rawPath;
 }
 
-function expandContainerPath(rawPath: string): string {
-  if (rawPath === "~") return CONTAINER_HOME;
+function expandContainerPath(rawPath: string, containerHome: string): string {
+  if (rawPath === "~") return containerHome;
   if (rawPath.startsWith("~/")) {
-    return path.join(CONTAINER_HOME, rawPath.slice(2));
+    return path.join(containerHome, rawPath.slice(2));
   }
   return rawPath;
+}
+
+function resolveContainerUser(): string {
+  const user = Deno.env.get("USER")?.trim();
+  if (user) return user;
+  return DEFAULT_CONTAINER_USER;
 }
 
 async function runCommandForEnv(
