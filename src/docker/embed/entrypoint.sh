@@ -68,11 +68,14 @@ else
   EXEC_PREFIX=()
 fi
 
-# git safe.directory をファイルに書かず env var で渡す
+# git safe.directory を設定
+# env var 方式: 直接実行されるコマンド向け
 # (read-only マウントの .config/git に書き込もうとするのを回避)
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0="safe.directory"
 export GIT_CONFIG_VALUE_0="$WORKSPACE"
+# /etc/gitconfig 方式: nix が内部で git を呼ぶ際に env var が渡らないため
+git config --system safe.directory "$WORKSPACE"
 
 # --- エージェントコマンド ---
 AGENT_COMMAND=("${@}")
