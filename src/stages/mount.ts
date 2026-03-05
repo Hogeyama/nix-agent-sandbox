@@ -9,6 +9,11 @@ import { configureClaude } from "../agents/claude.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const CONTAINER_HOME = "/home/nas";
+const RESERVED_EXTRA_MOUNT_DESTINATIONS = new Set([
+  "/nix",
+  "/var/run/docker.sock",
+]);
 
 export class MountStage implements Stage {
   name = "MountStage";
@@ -23,6 +28,10 @@ export class MountStage implements Stage {
     args.push("-v", `${result.workDir}:${containerWorkDir}`);
     args.push("-w", containerWorkDir);
     envVars["WORKSPACE"] = containerWorkDir;
+    const extraMountDestinations = new Set<string>([
+      ...RESERVED_EXTRA_MOUNT_DESTINATIONS,
+      path.normalize(containerWorkDir),
+    ]);
 
     // ホストユーザーの UID/GID をコンテナに渡す (entrypoint で非 root ユーザー作成に使用)
     const uid = Deno.uid();
@@ -128,6 +137,40 @@ export class MountStage implements Stage {
       }
     }
 
+    // 追加マウント
+    for (const [index, extraMount] of result.profile.extraMounts.entries()) {
+      const src = expandHostPath(extraMount.src);
+      if (!path.isAbsolute(src)) {
+        throw new Error(
+          `[nas] profile.extra-mounts[${index}].src must be an absolute path after ~ expansion: ${extraMount.src}`,
+        );
+      }
+      const normalizedSrc = path.resolve(src);
+      if (!await fileExists(normalizedSrc)) {
+        console.error(
+          `[nas] Skipping profile.extra-mounts[${index}] because src does not exist: ${normalizedSrc}`,
+        );
+        continue;
+      }
+
+      const dst = expandContainerPath(extraMount.dst);
+      if (!path.isAbsolute(dst)) {
+        throw new Error(
+          `[nas] profile.extra-mounts[${index}].dst must be an absolute path: ${extraMount.dst}`,
+        );
+      }
+      const normalizedDst = path.normalize(dst);
+      if (extraMountDestinations.has(normalizedDst)) {
+        throw new Error(
+          `[nas] profile.extra-mounts[${index}].dst conflicts with existing mount destination: ${normalizedDst}`,
+        );
+      }
+      extraMountDestinations.add(normalizedDst);
+
+      const modeSuffix = extraMount.mode === "ro" ? ":ro" : "";
+      args.push("-v", `${normalizedSrc}:${normalizedDst}${modeSuffix}`);
+    }
+
     // プロファイルの環境変数
     for (const [index, envEntry] of result.profile.env.entries()) {
       if ("key" in envEntry) {
@@ -203,6 +246,22 @@ async function resolveRealPath(path: string): Promise<string | null> {
     }
   } catch { /* ignore */ }
   return null;
+}
+
+function expandHostPath(rawPath: string): string {
+  const home = Deno.env.get("HOME");
+  if (!home) return rawPath;
+  if (rawPath === "~") return home;
+  if (rawPath.startsWith("~/")) return path.join(home, rawPath.slice(2));
+  return rawPath;
+}
+
+function expandContainerPath(rawPath: string): string {
+  if (rawPath === "~") return CONTAINER_HOME;
+  if (rawPath.startsWith("~/")) {
+    return path.join(CONTAINER_HOME, rawPath.slice(2));
+  }
+  return rawPath;
 }
 
 async function runCommandForEnv(

@@ -98,6 +98,10 @@ profiles:
       mount-socket: false   # ホストの docker.sock をマウント
     gpg:
       forward-agent: true   # ホストの gpg-agent を転送（署名用）
+    extra-mounts:           # 任意の追加マウント
+      - src: ~/.cabal
+        dst: ~/.cabal
+        mode: ro            # "ro" | "rw"（省略時は "ro"）
     env:                    # 追加環境変数（固定値 or コマンド出力）
       - key: SOME_VAR
         val: value
@@ -130,7 +134,10 @@ profiles:
 | `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `aws.mount-config` | bool | `false` | AWS 設定ディレクトリ（`~/.aws`）をマウント |
 | `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |
+| `extra-mounts` | list | `[]` | 追加マウント。`[{ src, dst, mode? }]`（`mode` は `"ro"`/`"rw"`、省略時 `"ro"`） |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
+
+`extra-mounts` の `src` が存在しない場合、そのエントリは警告を出してスキップされます。
 
 ## 仕組み
 

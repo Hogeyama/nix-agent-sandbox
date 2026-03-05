@@ -6,6 +6,7 @@ import type {
   CommandEnvConfig,
   Config,
   EnvConfig,
+  ExtraMountConfig,
   Profile,
   RawConfig,
   RawProfile,
@@ -86,8 +87,48 @@ function validateProfile(name: string, raw: RawProfile): Profile {
       forwardAgent: raw.gpg?.["forward-agent"] ??
         DEFAULT_GPG_CONFIG.forwardAgent,
     },
+    extraMounts: validateExtraMounts(name, raw["extra-mounts"]),
     env: validateEnv(name, raw.env),
   };
+}
+
+function validateExtraMounts(
+  profileName: string,
+  rawExtraMounts: RawProfile["extra-mounts"],
+): ExtraMountConfig[] {
+  if (!rawExtraMounts) return [];
+  if (!Array.isArray(rawExtraMounts)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": extra-mounts must be a list`,
+    );
+  }
+
+  return rawExtraMounts.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": extra-mounts[${index}] must be an object`,
+      );
+    }
+    if (typeof entry.src !== "string" || entry.src.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": extra-mounts[${index}].src must be a non-empty string`,
+      );
+    }
+    if (typeof entry.dst !== "string" || entry.dst.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": extra-mounts[${index}].dst must be a non-empty string`,
+      );
+    }
+
+    const mode = entry.mode ?? "ro";
+    if (mode !== "ro" && mode !== "rw") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": extra-mounts[${index}].mode must be "ro" or "rw"`,
+      );
+    }
+
+    return { src: entry.src, dst: entry.dst, mode };
+  });
 }
 
 function validateEnv(

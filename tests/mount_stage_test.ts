@@ -11,6 +11,7 @@ const baseProfile: Profile = {
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
+  extraMounts: [],
   env: [],
 };
 
@@ -91,6 +92,71 @@ Deno.test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async ()
       `${home}/.gnupg/trustdb.gpg:/home/nas/.gnupg/trustdb.gpg:ro`,
     );
   }
+});
+
+Deno.test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
+  const home = Deno.env.get("HOME") ?? "/root";
+  const profile: Profile = {
+    ...baseProfile,
+    extraMounts: [
+      { src: "~", dst: "~/.cabal", mode: "ro" },
+      { src: Deno.cwd(), dst: "/tmp/nas-extra-rw", mode: "rw" },
+    ],
+  };
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+
+  assertEquals(
+    result.dockerArgs.includes(`${home}:/home/nas/.cabal:ro`),
+    true,
+  );
+  assertEquals(
+    result.dockerArgs.includes(`${Deno.cwd()}:/tmp/nas-extra-rw`),
+    true,
+  );
+});
+
+Deno.test("MountStage: skips missing extra-mounts src", async () => {
+  const profile: Profile = {
+    ...baseProfile,
+    extraMounts: [{
+      src: `/tmp/nas-missing-${crypto.randomUUID()}`,
+      dst: "/tmp/nas-missing-dst",
+      mode: "ro",
+    }],
+  };
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(
+    result.dockerArgs.some((arg) => arg.includes(":/tmp/nas-missing-dst")),
+    false,
+  );
+});
+
+Deno.test("MountStage: relative extra-mount dst throws", async () => {
+  const profile: Profile = {
+    ...baseProfile,
+    extraMounts: [{ src: Deno.cwd(), dst: "relative/path", mode: "ro" }],
+  };
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  await assertRejects(
+    () => new MountStage().execute(ctx),
+    Error,
+    "dst must be an absolute path",
+  );
+});
+
+Deno.test("MountStage: reserved extra-mount dst throws", async () => {
+  const profile: Profile = {
+    ...baseProfile,
+    extraMounts: [{ src: Deno.cwd(), dst: "/nix", mode: "ro" }],
+  };
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  await assertRejects(
+    () => new MountStage().execute(ctx),
+    Error,
+    "conflicts with existing mount destination",
+  );
 });
 
 Deno.test("serializeNixExtraPackages: returns newline-delimited list", () => {

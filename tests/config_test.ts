@@ -20,6 +20,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.nix.enable, "auto");
   assertEquals(config.profiles.test.docker.mountSocket, false);
   assertEquals(config.profiles.test.gpg.forwardAgent, false);
+  assertEquals(config.profiles.test.extraMounts, []);
   assertEquals(config.profiles.test.env, []);
 });
 
@@ -42,6 +43,10 @@ Deno.test("validateConfig: full config", () => {
         docker: {
           "mount-socket": true,
         },
+        "extra-mounts": [
+          { src: "~/.cabal", dst: "~/.cabal" },
+          { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
+        ],
         env: [
           { key: "FOO", val: "bar" },
           { key_cmd: "printf BAR", val_cmd: "printf baz" },
@@ -58,6 +63,10 @@ Deno.test("validateConfig: full config", () => {
   assertEquals(p.nix.mountSocket, true);
   assertEquals(p.nix.extraPackages, ["nixpkgs.ripgrep"]);
   assertEquals(p.docker.mountSocket, true);
+  assertEquals(p.extraMounts, [
+    { src: "~/.cabal", dst: "~/.cabal", mode: "ro" },
+    { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
+  ]);
   assertEquals(p.env[0], { key: "FOO", val: "bar" });
   assertEquals(p.env[1], {
     keyCmd: "printf BAR",
@@ -155,6 +164,38 @@ Deno.test("validateConfig: invalid env command entry throws", () => {
       }),
     ConfigValidationError,
     "env[0].key_cmd",
+  );
+});
+
+Deno.test("validateConfig: invalid extra-mounts mode throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            "extra-mounts": [{ src: "/tmp/src", dst: "/tmp/dst", mode: "invalid" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "extra-mounts[0].mode",
+  );
+});
+
+Deno.test("validateConfig: missing extra-mounts src throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            "extra-mounts": [{ dst: "/tmp/dst", mode: "ro" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "extra-mounts[0].src",
   );
 });
 

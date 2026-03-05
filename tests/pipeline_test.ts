@@ -12,6 +12,7 @@ const testProfile: Profile = {
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
+  extraMounts: [],
   env: [],
 };
 

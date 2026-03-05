@@ -35,6 +35,13 @@ export interface GpgConfig {
   forwardAgent: boolean;
 }
 
+/** 追加マウント設定 */
+export interface ExtraMountConfig {
+  src: string;
+  dst: string;
+  mode: "ro" | "rw";
+}
+
 /** 固定値の環境変数エントリ */
 export interface StaticEnvConfig {
   key: string;
@@ -59,6 +66,7 @@ export interface Profile {
   gcloud: GcloudConfig;
   aws: AwsConfig;
   gpg: GpgConfig;
+  extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
 }
 
@@ -99,6 +107,11 @@ export interface RawProfile {
   gpg?: {
     "forward-agent"?: boolean;
   };
+  "extra-mounts"?: Array<{
+    src?: string;
+    dst?: string;
+    mode?: string;
+  }>;
   env?: Array<{
     key?: string;
     val?: string;
