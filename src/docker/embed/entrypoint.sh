@@ -34,6 +34,9 @@ if [ "$NAS_UID" != "0" ]; then
   export HOME="$NAS_HOME"
   export USER="$NAS_USER"
 
+  # Nix 用に実際の HOME ディレクトリの所有権を設定
+  chown -f "${NAS_UID}:${NAS_GID}" "$NAS_HOME" 2>/dev/null || true
+
   # GPG ソケットがマウントされている場合、ディレクトリの所有権を設定
   if [ -e "${NAS_HOME}/.gnupg/S.gpg-agent" ]; then
     chown "${NAS_UID}:${NAS_GID}" "${NAS_HOME}/.gnupg"
@@ -83,7 +86,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   if [ -n "${NIX_EXTRA_PACKAGES:-}" ]; then
     while IFS= read -r pkg; do
       [ -n "$pkg" ] && NIX_EXTRA_PACKAGES_LIST+=("$pkg")
-    done <<< "${NIX_EXTRA_PACKAGES}"
+    done <<<"${NIX_EXTRA_PACKAGES}"
   fi
 
   # workaround for https://github.com/github/copilot-cli/issues/1161#issuecomment-3938706868:
@@ -92,15 +95,50 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   # /bin/bash (readline対応) をPATHの先頭に配置して、
   # Nixの readline なし bash より優先させる
   if [ -f "$WORKSPACE/flake.nix" ]; then
-    if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-      echo "[nas] Detected flake.nix, entering nix shell + nix develop (via host daemon)..."
-      exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-        nix develop "$WORKSPACE" --command \
-        bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+    # --- nix-direnv 方式: nix print-dev-env でキャッシュ ---
+    NAS_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
+    mkdir -p "$NAS_NIX_CACHE"
+
+    # キャッシュキー: flake.nix + flake.lock のハッシュ
+    if [ -f "$WORKSPACE/flake.lock" ]; then
+      FLAKE_HASH=$(cat "$WORKSPACE/flake.nix" "$WORKSPACE/flake.lock" | sha256sum | cut -d' ' -f1)
     else
-      echo "[nas] Detected flake.nix, entering nix develop (via host daemon)..."
-      exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-        bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+      FLAKE_HASH=$(sha256sum "$WORKSPACE/flake.nix" | cut -d' ' -f1)
+    fi
+
+    CACHE_FILE="${NAS_NIX_CACHE}/${FLAKE_HASH}.env"
+    PROFILE_LINK="${NAS_NIX_CACHE}/profile-${FLAKE_HASH}"
+
+    if [ ! -f "$CACHE_FILE" ]; then
+      echo "[nas] Caching nix dev environment via print-dev-env..."
+      if env NIX_REMOTE=daemon nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CACHE_FILE}.tmp"; then
+        mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
+        chmod 644 "$CACHE_FILE"
+        echo "[nas] Nix dev environment cached."
+      else
+        echo "[nas] nix print-dev-env failed, falling back to nix develop..."
+        rm -f "${CACHE_FILE}.tmp"
+        # フォールバック: 従来の nix develop
+        if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
+          exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+            nix develop "$WORKSPACE" --command \
+            bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+        else
+          exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
+            bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+        fi
+      fi
+    else
+      echo "[nas] Using cached nix dev environment."
+    fi
+
+    # キャッシュ済み環境を source してエージェント起動
+    if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
+      exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+        bash -c "source '$CACHE_FILE'; export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+    else
+      exec "${EXEC_PREFIX[@]}" \
+        bash -c "source '$CACHE_FILE'; export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
     fi
   elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
     echo "[nas] flake.nix not found, entering nix shell (via host daemon)..."

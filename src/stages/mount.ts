@@ -66,6 +66,18 @@ export class MountStage implements Stage {
         }
         envVars["NIX_REMOTE"] = "daemon";
         envVars["NIX_ENABLED"] = "true";
+
+        // nix print-dev-env キャッシュ用ディレクトリをマウント (ホスト側に永続化)
+        const xdgCache = Deno.env.get("XDG_CACHE_HOME") ||
+          `${Deno.env.get("HOME")}/.cache`;
+        const nasCacheDir = `${xdgCache}/nas`;
+        await Deno.mkdir(nasCacheDir, { recursive: true }).catch(() => {});
+        args.push("-v", `${nasCacheDir}:${containerHome}/.cache/nas`);
+
+        // ホストの ~/.cache/nix もマウント (Nix が書き込みアクセスを要求する場合)
+        const hostNixCache = `${xdgCache}/nix`;
+        await Deno.mkdir(hostNixCache, { recursive: true }).catch(() => {});
+        args.push("-v", `${hostNixCache}:${containerHome}/.cache/nix`);
         const nixExtraPackages = serializeNixExtraPackages(
           result.profile.nix.extraPackages,
         );
