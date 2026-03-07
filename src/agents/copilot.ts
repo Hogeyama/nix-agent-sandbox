@@ -77,6 +77,25 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
     }
   }
 
+  // Copilot v1.0.2 で config.json が ~/.copilot へシンボリックリンクになるケースをカバー
+  const hostLegacyCopilotDir = `${home}/.copilot`;
+  if (
+    hostLegacyCopilotDir !== hostCopilotConfigDir &&
+    hostLegacyCopilotDir !== hostCopilotStateDir
+  ) {
+    try {
+      Deno.statSync(hostLegacyCopilotDir);
+      const containerLegacyCopilotDir = remapToContainer(
+        hostLegacyCopilotDir,
+        home,
+        containerHome,
+      );
+      args.push("-v", `${hostLegacyCopilotDir}:${containerLegacyCopilotDir}`);
+    } catch {
+      // ディレクトリが無い場合はスキップ
+    }
+  }
+
   // copilot バイナリのマウント (実体パスを解決してマウント)
   const copilotBin = findBinaryResolved("copilot");
   if (copilotBin) {
