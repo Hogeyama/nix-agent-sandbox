@@ -45,7 +45,7 @@ export class DockerBuildStage implements Stage {
       const tmpDir = await Deno.makeTempDir({ prefix: "nas-docker-build-" });
       try {
         const baseUrl = new URL("../docker/embed/", import.meta.url);
-        for (const name of ["Dockerfile", "entrypoint.sh"]) {
+        for (const name of ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"]) {
           const content = await Deno.readTextFile(new URL(name, baseUrl));
           await Deno.writeTextFile(path.join(tmpDir, name), content);
         }

@@ -16,7 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY osc52-clip.sh /usr/local/bin/osc52-clip
+RUN chmod +x /entrypoint.sh /usr/local/bin/osc52-clip \
+  && ln -s osc52-clip /usr/local/bin/xclip \
+  && ln -s osc52-clip /usr/local/bin/xsel \
+  && ln -s osc52-clip /usr/local/bin/wl-copy
 
 # エージェントバイナリのマウント先
 RUN mkdir -p /usr/local/bin /home /nix

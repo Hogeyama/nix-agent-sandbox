@@ -18,7 +18,7 @@ export interface DockerRunOptions {
 export async function computeEmbedHash(): Promise<string> {
   const baseUrl = new URL("./embed/", import.meta.url);
   const parts: string[] = [];
-  for (const name of ["Dockerfile", "entrypoint.sh"]) {
+  for (const name of ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"]) {
     parts.push(await Deno.readTextFile(new URL(name, baseUrl)));
   }
   const data = new TextEncoder().encode(parts.join("\n"));
