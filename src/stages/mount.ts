@@ -217,6 +217,13 @@ export class MountStage implements Stage {
 
     result = { ...result, dockerArgs: args, envVars };
 
+    // ホスト側が tmux 内の場合、コンテナに伝える (OSC 52 clipboard shim が使用)
+    const hostTmux = Deno.env.get("TMUX");
+    if (hostTmux) {
+      envVars["NAS_HOST_TMUX"] = "1";
+      result = { ...result, envVars };
+    }
+
     // エージェント固有の設定
     switch (result.profile.agent) {
       case "claude":

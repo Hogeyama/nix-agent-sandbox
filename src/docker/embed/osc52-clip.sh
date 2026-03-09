@@ -10,6 +10,10 @@
 set -euo pipefail
 
 NAS_CLIP_DEBUG="${NAS_CLIP_DEBUG:-0}"
+# NAS_HOST_TMUX is set by nas when the host runs inside tmux.
+# When set, we wrap OSC 52 in tmux DCS passthrough so it bypasses
+# tmux's set-clipboard and reaches the terminal emulator directly.
+NAS_HOST_TMUX="${NAS_HOST_TMUX:-0}"
 
 debug() {
   if [ "$NAS_CLIP_DEBUG" = "1" ]; then
@@ -63,14 +67,15 @@ case "$SELECTION" in
 esac
 
 debug "selection=$SELECTION mode=$MODE filter=$FILTER osc_target=$OSC_TARGET"
+debug "TMUX=${TMUX:-<unset>} TERM=${TERM:-<unset>} NAS_HOST_TMUX=$NAS_HOST_TMUX"
 
 # --- Emit OSC 52 sequence with tmux/screen passthrough ---
 emit_osc52() {
   local encoded="$1"
   local target="$2"
 
-  if [ -n "${TMUX:-}" ]; then
-    debug "tmux detected — using DCS passthrough"
+  if [ -n "${TMUX:-}" ] || [ "$NAS_HOST_TMUX" = "1" ]; then
+    debug "using tmux DCS passthrough (TMUX=${TMUX:-<unset>}, NAS_HOST_TMUX=$NAS_HOST_TMUX)"
     # tmux: wrap in \ePtmux;\e ... \e\\
     # shellcheck disable=SC1003  # \033\\ is ESC-backslash (ST), not a stray quote
     printf '\033Ptmux;\033\033]52;%s;%s\a\033\\' "$target" "$encoded"
@@ -79,7 +84,7 @@ emit_osc52() {
     # shellcheck disable=SC1003
     printf '\033P\033]52;%s;%s\a\033\\' "$target" "$encoded"
   else
-    debug "direct terminal output"
+    debug "direct terminal output (no tmux/screen detected)"
     printf '\033]52;%s;%s\a' "$target" "$encoded"
   fi
 }
