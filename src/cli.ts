@@ -63,6 +63,7 @@ export async function main(args: string[]): Promise<void> {
 async function runRebuild(
   nasArgs: string[],
 ): Promise<void> {
+  const force = nasArgs.includes("--force") || nasArgs.includes("-f");
   const profileName = nasArgs.find((a) => !a.startsWith("-"));
   try {
     const config = await loadConfig();
@@ -71,7 +72,7 @@ async function runRebuild(
 
     if (await dockerImageExists(ctx.imageName)) {
       console.log(`[nas] Removing Docker image "${ctx.imageName}"...`);
-      await dockerRemoveImage(ctx.imageName);
+      await dockerRemoveImage(ctx.imageName, { force });
     } else {
       console.log(
         `[nas] Docker image "${ctx.imageName}" does not exist, skipping removal`,
@@ -104,11 +105,15 @@ Options:
   -h, --help      Show this help
   -V, --version   Show version
 
+Rebuild options:
+  -f, --force     Force remove Docker image (docker rmi --force)
+
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
   nas copilot-nix -- -p "list files"     # Pass args to the agent
   nas rebuild                            # Rebuild Docker image only
+  nas rebuild --force                    # Force remove image and rebuild
 
 Profile agent-args (in .agent-sandbox.yml):
   profiles:
