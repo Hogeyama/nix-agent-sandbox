@@ -39,6 +39,11 @@ if [ "$NAS_UID" != "0" ]; then
   echo "${NAS_USER}:x:${NAS_GID}:" >>/etc/group
   chown "${NAS_UID}:${NAS_GID}" "$NAS_HOME"
 
+  # Docker がマウントポイントの親ディレクトリを root で作成するため、
+  # $NAS_HOME 配下の root 所有ディレクトリの所有権を修正
+  find "$NAS_HOME" -maxdepth 3 -type d \( -uid 0 -o -gid 0 \) \
+    -exec chown "${NAS_UID}:${NAS_GID}" {} + 2>/dev/null || true
+
   # nix trusted-users にコンテナユーザーを追加 (nix daemon 経由操作に必要)
   if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f /etc/nix/nix.conf ]; then
     echo "trusted-users = root ${NAS_USER}" >>/etc/nix/nix.conf 2>/dev/null || true
