@@ -25,9 +25,11 @@ export class WorktreeStage implements Stage {
 
     const repoRoot = await getGitRoot(ctx.workDir);
     this.repoRoot = repoRoot;
-    this.baseBranch = wt.base;
 
-    await validateBaseBranch(repoRoot, wt.base);
+    const resolvedBase = await resolveBase(repoRoot, wt.base);
+    this.baseBranch = resolvedBase;
+
+    await validateBaseBranch(repoRoot, resolvedBase);
 
     // 同じプロファイルの既存 worktree を検索
     const existing = await findProfileWorktrees(repoRoot, ctx.profileName);
@@ -56,9 +58,9 @@ export class WorktreeStage implements Stage {
     this.branchName = branchName;
 
     console.log(
-      `[nas] Creating worktree: ${worktreePath} (branch: ${branchName}) from ${wt.base}`,
+      `[nas] Creating worktree: ${worktreePath} (branch: ${branchName}) from ${resolvedBase}`,
     );
-    await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${wt.base}`
+    await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`
       .printCommand();
 
     if (wt.onCreate) {
@@ -477,6 +479,26 @@ async function getGitRoot(dir: string): Promise<string> {
   } catch {
     throw new Error(
       `"${dir}" is not inside a git repository. Worktree requires a git repo.`,
+    );
+  }
+}
+
+/**
+ * "HEAD" を現在のブランチ名に解決する。それ以外はそのまま返す。
+ */
+export async function resolveBase(
+  repoRoot: string,
+  base: string,
+): Promise<string> {
+  if (base !== "HEAD") return base;
+  try {
+    const branch =
+      (await $`git -C ${repoRoot} symbolic-ref --short HEAD`.text()).trim();
+    console.log(`[nas] Resolved HEAD to current branch: ${branch}`);
+    return branch;
+  } catch {
+    throw new Error(
+      'worktree.base is "HEAD" but the repository is in detached HEAD state.',
     );
   }
 }
