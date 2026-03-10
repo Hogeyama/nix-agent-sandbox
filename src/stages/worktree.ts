@@ -179,60 +179,122 @@ export class WorktreeStage implements Stage {
           .printCommand();
       }
 
-      // targetBranch が既にチェックアウトされている場合があるので
-      // detached HEAD で一時 worktree を作り、cherry-pick 後にブランチを進める
-      const targetRef = (
-        await $`git -C ${this.repoRoot} rev-parse refs/heads/${targetBranch}`.text()
-      ).trim();
-      const tmpWorktree = path.join(
+      // targetBranch が既にどこかの worktree でチェックアウトされているか確認
+      const checkedOutIn = await findWorktreeForBranch(
         this.repoRoot,
-        ".git",
-        "nas-worktrees",
-        `nas-cherry-pick-tmp-${Date.now()}`,
+        targetBranch,
       );
-      await $`git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`
-        .printCommand();
-      try {
-        await $`git -C ${tmpWorktree} cherry-pick ${commitList}`.printCommand();
 
-        // cherry-pick 成功 → targetBranch を新しい HEAD に進める
-        const newHead = (
-          await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
-        ).trim();
-        await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
-          .printCommand();
-        console.log("[nas] Cherry-pick completed successfully.");
-        return true;
-      } catch (cpErr) {
-        // cherry-pick 失敗 — 空コミット（既に適用済み）かどうか確認してスキップを試行
-        console.error(`[nas] cherry-pick exited with error: ${(cpErr as Error).message}`);
-        const resolved = await this.resolveEmptyCherryPicks(
-          tmpWorktree,
-          commitList.length,
+      if (checkedOutIn) {
+        // そのworktreeで直接 cherry-pick（working tree も同期される）
+        return await this.cherryPickInWorktree(
+          checkedOutIn,
+          commitList,
+          targetBranch,
         );
-        if (resolved) {
-          const newHead = (
-            await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
-          ).trim();
-          await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
-            .printCommand();
-          return true;
-        }
-
-        console.error("[nas] Cherry-pick failed with conflicts.");
-        try {
-          await $`git -C ${tmpWorktree} cherry-pick --abort`.quiet("both");
-        } catch { /* ignore */ }
-        return false;
-      } finally {
-        await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`
-          .quiet("both");
       }
+
+      // どこにもチェックアウトされていない → detached HEAD で一時 worktree を使う
+      return await this.cherryPickDetached(commitList, targetBranch);
     } catch (err) {
       console.error(
         `[nas] Cherry-pick setup failed: ${(err as Error).message}`,
       );
       return false;
+    }
+  }
+
+  /** targetBranch がチェックアウトされている worktree で直接 cherry-pick */
+  private async cherryPickInWorktree(
+    worktreePath: string,
+    commitList: string[],
+    targetBranch: string,
+  ): Promise<boolean> {
+    // dirty check — 未コミットの変更があると cherry-pick できない
+    const dirty = await isWorktreeDirty(worktreePath);
+    if (dirty) {
+      console.error(
+        `[nas] Cannot cherry-pick: worktree for "${targetBranch}" has uncommitted changes.`,
+      );
+      console.error(`[nas]   ${worktreePath}`);
+      return false;
+    }
+
+    console.log(`[nas] Cherry-picking in worktree: ${worktreePath}`);
+    try {
+      await $`git -C ${worktreePath} cherry-pick ${commitList}`.printCommand();
+      console.log("[nas] Cherry-pick completed successfully.");
+      return true;
+    } catch (cpErr) {
+      console.error(
+        `[nas] cherry-pick exited with error: ${(cpErr as Error).message}`,
+      );
+      const resolved = await this.resolveEmptyCherryPicks(
+        worktreePath,
+        commitList.length,
+      );
+      if (resolved) return true;
+
+      console.error("[nas] Cherry-pick failed with conflicts.");
+      try {
+        await $`git -C ${worktreePath} cherry-pick --abort`.quiet("both");
+      } catch { /* ignore */ }
+      return false;
+    }
+  }
+
+  /** targetBranch がどこにもチェックアウトされていない場合の cherry-pick */
+  private async cherryPickDetached(
+    commitList: string[],
+    targetBranch: string,
+  ): Promise<boolean> {
+    const targetRef = (
+      await $`git -C ${this.repoRoot} rev-parse refs/heads/${targetBranch}`
+        .text()
+    ).trim();
+    const tmpWorktree = path.join(
+      this.repoRoot!,
+      ".git",
+      "nas-worktrees",
+      `nas-cherry-pick-tmp-${Date.now()}`,
+    );
+    await $`git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`
+      .printCommand();
+    try {
+      await $`git -C ${tmpWorktree} cherry-pick ${commitList}`.printCommand();
+
+      const newHead = (
+        await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
+      ).trim();
+      await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
+        .printCommand();
+      console.log("[nas] Cherry-pick completed successfully.");
+      return true;
+    } catch (cpErr) {
+      console.error(
+        `[nas] cherry-pick exited with error: ${(cpErr as Error).message}`,
+      );
+      const resolved = await this.resolveEmptyCherryPicks(
+        tmpWorktree,
+        commitList.length,
+      );
+      if (resolved) {
+        const newHead = (
+          await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
+        ).trim();
+        await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
+          .printCommand();
+        return true;
+      }
+
+      console.error("[nas] Cherry-pick failed with conflicts.");
+      try {
+        await $`git -C ${tmpWorktree} cherry-pick --abort`.quiet("both");
+      } catch { /* ignore */ }
+      return false;
+    } finally {
+      await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`
+        .quiet("both");
     }
   }
 
@@ -363,6 +425,32 @@ function promptReuseWorktree(
 }
 
 // --- Helper functions ---
+
+/**
+ * 指定ブランチがチェックアウトされている worktree のパスを返す。
+ * どこにもチェックアウトされていなければ null。
+ */
+async function findWorktreeForBranch(
+  repoRoot: string,
+  branchName: string,
+): Promise<string | null> {
+  const output = await $`git -C ${repoRoot} worktree list --porcelain`.text();
+  let currentPath: string | null = null;
+  const targetRef = `refs/heads/${branchName}`;
+
+  for (const line of output.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      currentPath = line.slice("worktree ".length);
+    } else if (line.startsWith("branch ") && currentPath) {
+      if (line.slice("branch ".length) === targetRef) {
+        return currentPath;
+      }
+    } else if (line === "") {
+      currentPath = null;
+    }
+  }
+  return null;
+}
 
 /**
  * remote ref (e.g. "origin/main") からローカルブランチ名を推定する。
