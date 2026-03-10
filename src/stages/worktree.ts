@@ -70,6 +70,12 @@ export class WorktreeStage implements Stage {
   async teardown(_ctx: ExecutionContext): Promise<void> {
     if (!this.worktreePath || !this.repoRoot) return;
 
+    // Show the current HEAD so the user can reference this commit later
+    try {
+      const head = (await $`git -C ${this.worktreePath} rev-parse HEAD`.text()).trim();
+      console.log(`[nas] Worktree HEAD: ${head}`);
+    } catch { /* ignore – worktree may already be gone */ }
+
     const worktreeAction = await promptWorktreeAction(this.worktreePath);
 
     if (worktreeAction === "keep") {
