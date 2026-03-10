@@ -569,7 +569,7 @@ export async function listOrphanNasBranches(
     .text();
   const allNasBranches = branchOutput
     .split("\n")
-    .map((l) => l.trim().replace(/^\* /, ""))
+    .map((l) => l.trim().replace(/^[*+] /, ""))
     .filter((l) => l.length > 0);
 
   if (allNasBranches.length === 0) return [];
