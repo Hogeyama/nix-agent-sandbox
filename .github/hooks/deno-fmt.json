@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "./scripts/deno-fmt-hook.sh",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}

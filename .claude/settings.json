@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "deno fmt --quiet"
+          }
+        ]
+      }
+    ]
+  }
+}
