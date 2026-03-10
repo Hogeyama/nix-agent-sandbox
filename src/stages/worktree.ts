@@ -179,17 +179,28 @@ export class WorktreeStage implements Stage {
           .printCommand();
       }
 
-      // worktree の外からcherry-pickするため、一時 worktree を使う
+      // targetBranch が既にチェックアウトされている場合があるので
+      // detached HEAD で一時 worktree を作り、cherry-pick 後にブランチを進める
+      const targetRef = (
+        await $`git -C ${this.repoRoot} rev-parse refs/heads/${targetBranch}`.text()
+      ).trim();
       const tmpWorktree = path.join(
         this.repoRoot,
         ".git",
         "nas-worktrees",
         `nas-cherry-pick-tmp-${Date.now()}`,
       );
-      await $`git -C ${this.repoRoot} worktree add ${tmpWorktree} ${targetBranch}`
+      await $`git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`
         .printCommand();
       try {
         await $`git -C ${tmpWorktree} cherry-pick ${commitList}`.printCommand();
+
+        // cherry-pick 成功 → targetBranch を新しい HEAD に進める
+        const newHead = (
+          await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
+        ).trim();
+        await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
+          .printCommand();
         console.log("[nas] Cherry-pick completed successfully.");
         return true;
       } catch (cpErr) {
@@ -200,6 +211,11 @@ export class WorktreeStage implements Stage {
           commitList.length,
         );
         if (resolved) {
+          const newHead = (
+            await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
+          ).trim();
+          await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
+            .printCommand();
           return true;
         }
 
