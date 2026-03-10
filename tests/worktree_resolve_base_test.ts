@@ -38,8 +38,7 @@ Deno.test("resolveBase: HEAD resolves to current branch name", async () => {
 
 Deno.test("resolveBase: HEAD in detached state throws error", async () => {
   await withTempRepo(async (repo) => {
-    const sha =
-      (await $`git -C ${repo} rev-parse HEAD`.text()).trim();
+    const sha = (await $`git -C ${repo} rev-parse HEAD`.text()).trim();
     await $`git -C ${repo} checkout ${sha}`.quiet("both");
 
     await assertRejects(
