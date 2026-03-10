@@ -80,10 +80,19 @@ export class WorktreeStage implements Stage {
     // worktree を削除する場合、ブランチをどうするか聞く
     const branchAction = await promptBranchAction(this.branchName);
 
+    let shouldDeleteBranch = branchAction !== "rename";
+
     if (branchAction === "rename") {
       await this.renameBranch();
     } else if (branchAction === "cherry-pick") {
-      await this.cherryPickToBase();
+      const success = await this.cherryPickToBase();
+      if (!success) {
+        // cherry-pick 失敗時はブランチを残す
+        shouldDeleteBranch = false;
+        console.log(
+          `[nas] Branch "${this.branchName}" is preserved for manual resolution.`,
+        );
+      }
     }
     // branchAction === "delete" → worktree 削除時にブランチも削除
 
@@ -97,8 +106,8 @@ export class WorktreeStage implements Stage {
       );
     }
 
-    // rename 以外はブランチ削除
-    if (branchAction !== "rename" && this.branchName) {
+    // rename / cherry-pick 失敗時以外はブランチ削除
+    if (shouldDeleteBranch && this.branchName) {
       try {
         await $`git -C ${this.repoRoot} branch -D ${this.branchName}`;
         console.log(`[nas] Deleted branch: ${this.branchName}`);
@@ -129,8 +138,8 @@ export class WorktreeStage implements Stage {
     }
   }
 
-  private async cherryPickToBase(): Promise<void> {
-    if (!this.branchName || !this.repoRoot || !this.baseBranch) return;
+  private async cherryPickToBase(): Promise<boolean> {
+    if (!this.branchName || !this.repoRoot || !this.baseBranch) return false;
 
     // base ブランチ上にないコミット一覧を取得
     const commits = (
@@ -140,7 +149,7 @@ export class WorktreeStage implements Stage {
 
     if (!commits) {
       console.log("[nas] No commits to cherry-pick.");
-      return;
+      return true;
     }
 
     const commitList = commits.split("\n");
@@ -175,16 +184,22 @@ export class WorktreeStage implements Stage {
       try {
         await $`git -C ${tmpWorktree} cherry-pick ${commitList}`.printCommand();
         console.log("[nas] Cherry-pick completed successfully.");
-      } catch (err) {
-        console.error(
-          `[nas] Cherry-pick failed: ${(err as Error).message}`,
+        return true;
+      } catch {
+        // cherry-pick 失敗 — 空コミット（既に適用済み）かどうか確認してスキップを試行
+        const resolved = await this.resolveEmptyCherryPicks(
+          tmpWorktree,
+          commitList.length,
         );
-        console.error(
-          "[nas] Aborting cherry-pick. Your branch is preserved.",
-        );
+        if (resolved) {
+          return true;
+        }
+
+        console.error("[nas] Cherry-pick failed with conflicts.");
         try {
           await $`git -C ${tmpWorktree} cherry-pick --abort`.quiet("both");
         } catch { /* ignore */ }
+        return false;
       } finally {
         await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`
           .quiet("both");
@@ -193,6 +208,52 @@ export class WorktreeStage implements Stage {
       console.error(
         `[nas] Cherry-pick setup failed: ${(err as Error).message}`,
       );
+      return false;
+    }
+  }
+
+  /**
+   * 空の cherry-pick（既に適用済み）を --skip でスキップしていく。
+   * 全コミットが処理されれば true、コンフリクト等で解決不能なら false。
+   */
+  private async resolveEmptyCherryPicks(
+    worktree: string,
+    maxAttempts: number,
+  ): Promise<boolean> {
+    for (let i = 0; i < maxAttempts; i++) {
+      // CHERRY_PICK_HEAD が存在するか（cherry-pick 進行中か）
+      try {
+        await $`git -C ${worktree} rev-parse CHERRY_PICK_HEAD`.quiet("both");
+      } catch {
+        // cherry-pick 進行中ではない → 完了済み
+        console.log("[nas] Cherry-pick completed (empty commits skipped).");
+        return true;
+      }
+
+      // working tree がクリーンなら空コミット → skip
+      const status =
+        await $`git -C ${worktree} status --porcelain`.quiet("both").text();
+      if (status.trim() === "") {
+        console.log("[nas] Skipping empty cherry-pick (already applied).");
+        try {
+          await $`git -C ${worktree} cherry-pick --skip`;
+        } catch {
+          // --skip 後にまた空コミットが来る場合があるのでループを続行
+          continue;
+        }
+      } else {
+        // 変更がある = 実際のコンフリクト
+        return false;
+      }
+    }
+
+    // ループ終了後、まだ CHERRY_PICK_HEAD が残っているか確認
+    try {
+      await $`git -C ${worktree} rev-parse CHERRY_PICK_HEAD`.quiet("both");
+      return false; // まだ進行中 → 失敗
+    } catch {
+      console.log("[nas] Cherry-pick completed (empty commits skipped).");
+      return true;
     }
   }
 }
