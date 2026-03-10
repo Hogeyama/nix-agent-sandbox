@@ -88,6 +88,54 @@ nas -- -p "このリポジトリの概要を教えて"
 nas -- -p "テストを書いて" --yolo
 ```
 
+### デモ: Worktree による隔離作業 → cherry-pick で取り込み
+
+`worktree` 設定のプロファイルで `nas` を実行し、エージェント終了後に成果物を cherry-pick で取り込む一連の流れです。
+
+```
+$ nas copilot-worktree
+[nas] Running stage: WorktreeStage
+[nas] Existing worktree(s) found for this profile:
+  1. .../.git/nas-worktrees/nas-copilot-worktree-2026-03-10T12-37-30  [nas/copilot-worktree/2026-03-10T12-37-30]
+  0. Create new worktree
+[nas] Choose [0-1]: 1
+[nas] Reusing worktree: .../.git/nas-worktrees/nas-copilot-worktree-2026-03-10T12-37-30
+[nas] Running stage: DockerBuildStage
+[nas] Docker image "nas-sandbox" already exists, skipping build
+[nas] Running stage: NixDetectStage
+[nas] Nix: auto-detected host nix → enabled
+[nas] Running stage: MountStage
+[nas] Running stage: LaunchStage
+[nas] Launching container...
+[nas]   Image: nas-sandbox
+[nas]   Agent: copilot
+[nas]   Command: copilot --yolo
+[nas] Using cached nix dev environment.
+
+  ... (エージェントが起動し、作業を行う) ...
+
+[nas] Teardown: WorktreeStage
+[nas] Worktree HEAD: 987004d
+[nas] What to do with the worktree?
+  1. Delete
+  2. Keep
+[nas] Choose [1/2]: 1
+[nas] Recent commits on nas/copilot-worktree/2026-03-10T12-37-30:
+  987004d chore: add deno fmt hooks for Copilot CLI and Claude Code
+  96d7191 style: apply deno fmt to all source files
+  245dbda chore: exclude markdown files from deno fmt
+[nas] What to do with the branch?
+  1. Delete
+  2. Cherry-pick to base branch
+  3. Rename and keep
+[nas] Choose [1/2/3]: 2
+[nas] Cherry-picking 3 commit(s) onto main...
+[nas] Cherry-pick completed successfully.
+[nas] Deleted branch: nas/copilot-worktree/2026-03-10T12-37-30
+```
+
+エージェントに隔離ブランチで自由に作業させ、成果物のコミットだけを安全にベースブランチへ取り込めます。
+
 ## 設定ファイル
 
 プロジェクトルートに `.agent-sandbox.yml` を配置します。カレントディレクトリから上位に向かって自動検索されます。
