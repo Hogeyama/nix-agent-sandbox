@@ -12,7 +12,13 @@ import type {
   RawProfile,
   StaticEnvConfig,
 } from "./types.ts";
-import { DEFAULT_AWS_CONFIG, DEFAULT_DOCKER_CONFIG, DEFAULT_GCLOUD_CONFIG, DEFAULT_GPG_CONFIG, DEFAULT_NIX_CONFIG } from "./types.ts";
+import {
+  DEFAULT_AWS_CONFIG,
+  DEFAULT_DOCKER_CONFIG,
+  DEFAULT_GCLOUD_CONFIG,
+  DEFAULT_GPG_CONFIG,
+  DEFAULT_NIX_CONFIG,
+} from "./types.ts";
 import type { AgentType } from "./types.ts";
 
 const VALID_AGENTS: AgentType[] = ["claude", "copilot"];
@@ -57,9 +63,7 @@ function validateProfile(name: string, raw: RawProfile): Profile {
   return {
     agent: raw.agent as AgentType,
     agentArgs: raw["agent-args"] ?? [],
-    worktree: raw.worktree
-      ? validateWorktree(name, raw.worktree)
-      : undefined,
+    worktree: raw.worktree ? validateWorktree(name, raw.worktree) : undefined,
     nix: {
       enable: raw.nix?.enable ?? DEFAULT_NIX_CONFIG.enable,
       mountSocket: raw.nix?.["mount-socket"] ??
@@ -155,7 +159,8 @@ function validateEnv(
       );
     }
     const hasStatic = entry.key !== undefined || entry.val !== undefined;
-    const hasCommand = entry.key_cmd !== undefined || entry.val_cmd !== undefined;
+    const hasCommand = entry.key_cmd !== undefined ||
+      entry.val_cmd !== undefined;
     if (hasStatic && hasCommand) {
       throw new ConfigValidationError(
         `profile "${profileName}": env[${index}] must use either (key,val) or (key_cmd,val_cmd)`,

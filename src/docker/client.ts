@@ -32,9 +32,10 @@ export async function getImageLabel(
   label: string,
 ): Promise<string | null> {
   try {
-    const result =
-      await $`docker inspect --format ${"{{index .Config.Labels \"" + label + "\"}}"} ${tag}`
-        .quiet();
+    const result = await $`docker inspect --format ${
+      '{{index .Config.Labels "' + label + '"}}'
+    } ${tag}`
+      .quiet();
     const value = result.stdout.trim();
     return value || null;
   } catch {

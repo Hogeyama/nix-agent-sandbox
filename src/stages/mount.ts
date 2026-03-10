@@ -135,7 +135,10 @@ export class MountStage implements Stage {
       }
       const gpgAgentConf = `${home}/.gnupg/gpg-agent.conf`;
       if (await fileExists(gpgAgentConf)) {
-        args.push("-v", `${gpgAgentConf}:${containerHome}/.gnupg/gpg-agent.conf:ro`);
+        args.push(
+          "-v",
+          `${gpgAgentConf}:${containerHome}/.gnupg/gpg-agent.conf:ro`,
+        );
       }
       const pubring = `${home}/.gnupg/pubring.kbx`;
       if (await fileExists(pubring)) {
@@ -243,7 +246,11 @@ export class MountStage implements Stage {
 
 async function resolveGpgAgentSocket(): Promise<string | null> {
   try {
-    const cmd = new Deno.Command("gpgconf", { args: ["--list-dir", "agent-socket"], stdout: "piped", stderr: "null" });
+    const cmd = new Deno.Command("gpgconf", {
+      args: ["--list-dir", "agent-socket"],
+      stdout: "piped",
+      stderr: "null",
+    });
     const { code, stdout } = await cmd.output();
     if (code === 0) {
       const socketPath = new TextDecoder().decode(stdout).trim();
@@ -263,7 +270,11 @@ async function resolveGpgAgentSocket(): Promise<string | null> {
 
 async function resolveRealPath(path: string): Promise<string | null> {
   try {
-    const cmd = new Deno.Command("readlink", { args: ["-f", path], stdout: "piped", stderr: "null" });
+    const cmd = new Deno.Command("readlink", {
+      args: ["-f", path],
+      stdout: "piped",
+      stderr: "null",
+    });
     const { code, stdout } = await cmd.output();
     if (code === 0) {
       const resolved = new TextDecoder().decode(stdout).trim();
@@ -327,7 +338,12 @@ async function resolveNixBinPath(): Promise<string | null> {
   if (resolved?.startsWith("/nix/store/")) return resolved;
 
   // fallback: check common profile paths
-  for (const p of ["/nix/var/nix/profiles/default/bin/nix", "/root/.nix-profile/bin/nix"]) {
+  for (
+    const p of [
+      "/nix/var/nix/profiles/default/bin/nix",
+      "/root/.nix-profile/bin/nix",
+    ]
+  ) {
     if (await fileExists(p)) return p;
   }
   return null;

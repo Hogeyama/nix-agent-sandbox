@@ -1,8 +1,5 @@
 import { assertEquals } from "@std/assert";
-import {
-  mergeRawConfigs,
-  mergeRawProfiles,
-} from "../src/config/load.ts";
+import { mergeRawConfigs, mergeRawProfiles } from "../src/config/load.ts";
 import type { RawConfig, RawProfile } from "../src/config/types.ts";
 
 Deno.test("mergeRawConfigs: global only", () => {
@@ -24,14 +21,23 @@ Deno.test("mergeRawConfigs: local only", () => {
 });
 
 Deno.test("mergeRawConfigs: local default overrides global", () => {
-  const global: RawConfig = { default: "g", profiles: { g: { agent: "claude" } } };
-  const local: RawConfig = { default: "l", profiles: { l: { agent: "copilot" } } };
+  const global: RawConfig = {
+    default: "g",
+    profiles: { g: { agent: "claude" } },
+  };
+  const local: RawConfig = {
+    default: "l",
+    profiles: { l: { agent: "copilot" } },
+  };
   const result = mergeRawConfigs(global, local);
   assertEquals(result.default, "l");
 });
 
 Deno.test("mergeRawConfigs: global default used when local has none", () => {
-  const global: RawConfig = { default: "g", profiles: { g: { agent: "claude" } } };
+  const global: RawConfig = {
+    default: "g",
+    profiles: { g: { agent: "claude" } },
+  };
   const local: RawConfig = { profiles: { l: { agent: "copilot" } } };
   const result = mergeRawConfigs(global, local);
   assertEquals(result.default, "g");

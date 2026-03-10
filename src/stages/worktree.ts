@@ -46,7 +46,12 @@ export class WorktreeStage implements Stage {
     const worktreeName = generateWorktreeName(ctx.profileName);
     const branchName = generateBranchName(ctx.profileName);
     // .git/nas-worktrees/ 内に作成 → 元リポのマウントだけで完結する
-    const worktreePath = path.join(repoRoot, ".git", "nas-worktrees", worktreeName);
+    const worktreePath = path.join(
+      repoRoot,
+      ".git",
+      "nas-worktrees",
+      worktreeName,
+    );
     this.worktreePath = worktreePath;
     this.branchName = branchName;
 
@@ -72,7 +77,8 @@ export class WorktreeStage implements Stage {
 
     // Show the current HEAD so the user can reference this commit later
     try {
-      const head = (await $`git -C ${this.worktreePath} rev-parse HEAD`.text()).trim();
+      const head = (await $`git -C ${this.worktreePath} rev-parse HEAD`.text())
+        .trim();
       console.log(`[nas] Worktree HEAD: ${head}`);
     } catch { /* ignore – worktree may already be gone */ }
 
@@ -127,7 +133,9 @@ export class WorktreeStage implements Stage {
 
   private async renameBranch(): Promise<void> {
     if (!this.branchName || !this.repoRoot) return;
-    const newName = prompt(`[nas] New branch name (current: ${this.branchName}):`)
+    const newName = prompt(
+      `[nas] New branch name (current: ${this.branchName}):`,
+    )
       ?.trim();
     if (!newName) {
       console.log("[nas] No name entered, keeping original branch name.");
@@ -317,8 +325,9 @@ export class WorktreeStage implements Stage {
       }
 
       // working tree がクリーンなら空コミット → skip
-      const status =
-        await $`git -C ${worktree} status --porcelain`.quiet("both").text();
+      const status = await $`git -C ${worktree} status --porcelain`.quiet(
+        "both",
+      ).text();
       if (status.trim() === "") {
         console.log("[nas] Skipping empty cherry-pick (already applied).");
         try {
@@ -642,7 +651,9 @@ export async function cleanNasWorktrees(
           console.log(`[nas] Deleted branch: ${branchName}`);
         } catch (err) {
           console.error(
-            `[nas] Failed to delete branch ${branchName}: ${(err as Error).message}`,
+            `[nas] Failed to delete branch ${branchName}: ${
+              (err as Error).message
+            }`,
           );
         }
       }
@@ -661,7 +672,9 @@ export async function cleanNasWorktrees(
       removedOrphans++;
     } catch (err) {
       console.error(
-        `[nas] Failed to delete orphan branch ${branchName}: ${(err as Error).message}`,
+        `[nas] Failed to delete orphan branch ${branchName}: ${
+          (err as Error).message
+        }`,
       );
     }
   }

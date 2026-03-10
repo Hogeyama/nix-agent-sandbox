@@ -173,7 +173,11 @@ Deno.test("validateConfig: invalid extra-mounts mode throws", () => {
         profiles: {
           test: {
             agent: "claude",
-            "extra-mounts": [{ src: "/tmp/src", dst: "/tmp/dst", mode: "invalid" }],
+            "extra-mounts": [{
+              src: "/tmp/src",
+              dst: "/tmp/dst",
+              mode: "invalid",
+            }],
           },
         },
       }),

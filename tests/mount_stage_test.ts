@@ -49,10 +49,16 @@ Deno.test("MountStage: workspace mount keeps full absolute path", async () => {
 
   const mountArg = `${workDir}:${workDir}`;
   const mountIndex = result.dockerArgs.indexOf(mountArg);
-  assertEquals(mountIndex >= 1 && result.dockerArgs[mountIndex - 1] === "-v", true);
+  assertEquals(
+    mountIndex >= 1 && result.dockerArgs[mountIndex - 1] === "-v",
+    true,
+  );
 
   const workDirIndex = result.dockerArgs.indexOf(workDir);
-  assertEquals(workDirIndex >= 1 && result.dockerArgs[workDirIndex - 1] === "-w", true);
+  assertEquals(
+    workDirIndex >= 1 && result.dockerArgs[workDirIndex - 1] === "-w",
+    true,
+  );
   assertEquals(result.envVars["WORKSPACE"], workDir);
 });
 
