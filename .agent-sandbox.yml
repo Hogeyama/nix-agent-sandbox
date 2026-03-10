@@ -31,6 +31,8 @@ profiles:
       mount-config: true
     aws:
       mount-config: true
+    gpg:
+      forward-agent: true
 
   copilot-worktree:
     agent: copilot
@@ -38,8 +40,7 @@ profiles:
       - "--yolo"
     worktree:
       base: main
-      on-create: >
-        deno install
+      on-create: deno install
     nix:
       enable: auto
       mount-socket: true
@@ -49,3 +50,5 @@ profiles:
       mount-config: true
     aws:
       mount-config: true
+    gpg:
+      forward-agent: true
