@@ -118,11 +118,20 @@ async function runWorktreeCommand(
         console.log(`  ${e.path}  [${branch}]  ${e.head.slice(0, 8)}`);
       }
     } else if (sub === "clean") {
-      const removed = await cleanNasWorktrees(Deno.cwd(), {
+      const result = await cleanNasWorktrees(Deno.cwd(), {
         force,
         deleteBranch,
       });
-      console.log(`[nas] Removed ${removed} worktree(s).`);
+      const parts: string[] = [];
+      if (result.worktrees > 0) {
+        parts.push(`${result.worktrees} worktree(s)`);
+      }
+      if (result.orphanBranches > 0) {
+        parts.push(`${result.orphanBranches} orphan branch(es)`);
+      }
+      if (parts.length > 0) {
+        console.log(`[nas] Removed ${parts.join(", ")}.`);
+      }
     } else {
       console.error(`[nas] Unknown worktree subcommand: ${sub}`);
       console.error(

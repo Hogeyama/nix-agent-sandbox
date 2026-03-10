@@ -551,41 +551,89 @@ export async function listNasWorktrees(
   return entries;
 }
 
+export interface CleanResult {
+  worktrees: number;
+  orphanBranches: number;
+}
+
+/** worktree に紐づかない nas/* ブランチを一覧取得 */
+export async function listOrphanNasBranches(
+  workDir: string,
+): Promise<string[]> {
+  const repoRoot = await getGitRoot(workDir);
+
+  // stale な worktree 参照を先に片付ける
+  await $`git -C ${repoRoot} worktree prune`.quiet("both");
+
+  const branchOutput = await $`git -C ${repoRoot} branch --list nas/*`
+    .text();
+  const allNasBranches = branchOutput
+    .split("\n")
+    .map((l) => l.trim().replace(/^\* /, ""))
+    .filter((l) => l.length > 0);
+
+  if (allNasBranches.length === 0) return [];
+
+  const entries = await listNasWorktrees(workDir);
+  const worktreeBranches = new Set(
+    entries
+      .filter((e) => e.branch)
+      .map((e) => e.branch.replace("refs/heads/", "")),
+  );
+
+  return allNasBranches.filter((b) => !worktreeBranches.has(b));
+}
+
 /** nas worktree をすべて削除する */
 export async function cleanNasWorktrees(
   workDir: string,
   opts: { force?: boolean; deleteBranch?: boolean } = {},
-): Promise<number> {
+): Promise<CleanResult> {
   const repoRoot = await getGitRoot(workDir);
   const entries = await listNasWorktrees(workDir);
+  const orphanBranches = opts.deleteBranch
+    ? await listOrphanNasBranches(workDir)
+    : [];
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && orphanBranches.length === 0) {
     console.log("[nas] No nas worktrees found.");
-    return 0;
+    return { worktrees: 0, orphanBranches: 0 };
   }
 
   if (!opts.force) {
-    console.log(`[nas] Found ${entries.length} nas worktree(s):`);
-    for (const entry of entries) {
-      const branch = entry.branch
-        ? entry.branch.replace("refs/heads/", "")
-        : "(detached)";
-      console.log(`  ${entry.path}  [${branch}]`);
+    if (entries.length > 0) {
+      console.log(`[nas] Found ${entries.length} nas worktree(s):`);
+      for (const entry of entries) {
+        const branch = entry.branch
+          ? entry.branch.replace("refs/heads/", "")
+          : "(detached)";
+        console.log(`  ${entry.path}  [${branch}]`);
+      }
     }
-    const action = opts.deleteBranch ? "Remove all (including branches)" : "Remove all";
+    if (orphanBranches.length > 0) {
+      console.log(
+        `[nas] Found ${orphanBranches.length} orphan nas branch(es):`,
+      );
+      for (const b of orphanBranches) {
+        console.log(`  ${b}`);
+      }
+    }
+    const action = opts.deleteBranch
+      ? "Remove all (including branches)"
+      : "Remove all";
     const ok = confirm(`[nas] ${action}?`);
     if (!ok) {
       console.log("[nas] Aborted.");
-      return 0;
+      return { worktrees: 0, orphanBranches: 0 };
     }
   }
 
-  let removed = 0;
+  let removedWorktrees = 0;
   for (const entry of entries) {
     try {
       await $`git -C ${repoRoot} worktree remove --force ${entry.path}`;
       console.log(`[nas] Removed: ${entry.path}`);
-      removed++;
+      removedWorktrees++;
 
       if (opts.deleteBranch && entry.branch) {
         const branchName = entry.branch.replace("refs/heads/", "");
@@ -605,5 +653,18 @@ export async function cleanNasWorktrees(
     }
   }
 
-  return removed;
+  let removedOrphans = 0;
+  for (const branchName of orphanBranches) {
+    try {
+      await $`git -C ${repoRoot} branch -D ${branchName}`;
+      console.log(`[nas] Deleted orphan branch: ${branchName}`);
+      removedOrphans++;
+    } catch (err) {
+      console.error(
+        `[nas] Failed to delete orphan branch ${branchName}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  return { worktrees: removedWorktrees, orphanBranches: removedOrphans };
 }
