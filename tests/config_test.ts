@@ -58,7 +58,6 @@ Deno.test("validateConfig: full config", () => {
   assertEquals(p.agent, "claude");
   assertEquals(p.worktree?.base, "origin/main");
   assertEquals(p.worktree?.onCreate, "npm install");
-  assertEquals(p.worktree?.cleanup, "auto");
   assertEquals(p.nix.enable, true);
   assertEquals(p.nix.mountSocket, true);
   assertEquals(p.nix.extraPackages, ["nixpkgs.ripgrep"]);
@@ -218,7 +217,7 @@ Deno.test("validateConfig: gpg.forward-agent can be enabled", () => {
   assertEquals(config.profiles.test.gpg.forwardAgent, true);
 });
 
-Deno.test("validateConfig: worktree.cleanup defaults to auto", () => {
+Deno.test("validateConfig: worktree defaults", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -227,45 +226,19 @@ Deno.test("validateConfig: worktree.cleanup defaults to auto", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.cleanup, "auto");
+  assertEquals(config.profiles.test.worktree?.base, "main");
+  assertEquals(config.profiles.test.worktree?.onCreate, "");
 });
 
-Deno.test("validateConfig: worktree.cleanup accepts force", () => {
+Deno.test("validateConfig: worktree on-create is preserved", () => {
   const config = validateConfig({
     profiles: {
       test: {
         agent: "claude",
-        worktree: { cleanup: "force" },
+        worktree: { "on-create": "npm install" },
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.cleanup, "force");
-});
-
-Deno.test("validateConfig: worktree.cleanup accepts keep", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        worktree: { cleanup: "keep" },
-      },
-    },
-  });
-  assertEquals(config.profiles.test.worktree?.cleanup, "keep");
-});
-
-Deno.test("validateConfig: invalid worktree.cleanup throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            worktree: { cleanup: "invalid" },
-          },
-        },
-      }),
-    ConfigValidationError,
-    "worktree.cleanup must be one of",
-  );
+  assertEquals(config.profiles.test.worktree?.base, "origin/main");
+  assertEquals(config.profiles.test.worktree?.onCreate, "npm install");
 });

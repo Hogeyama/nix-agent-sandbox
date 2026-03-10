@@ -6,15 +6,15 @@ import $ from "dax";
 import * as path from "@std/path";
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
-import type { WorktreeCleanup } from "../config/types.ts";
 
 export class WorktreeStage implements Stage {
   name = "WorktreeStage";
 
-  /** execute で作成した worktree のパス（teardown 用） */
+  /** execute で作成/再利用した worktree のパス（teardown 用） */
   private worktreePath: string | null = null;
   private repoRoot: string | null = null;
-  private cleanup: WorktreeCleanup = "auto";
+  private branchName: string | null = null;
+  private baseBranch: string | null = null;
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     const wt = ctx.profile.worktree;
@@ -23,18 +23,32 @@ export class WorktreeStage implements Stage {
       return ctx;
     }
 
-    this.cleanup = wt.cleanup;
-
     const repoRoot = await getGitRoot(ctx.workDir);
     this.repoRoot = repoRoot;
+    this.baseBranch = wt.base;
 
     await validateBaseBranch(repoRoot, wt.base);
+
+    // 同じプロファイルの既存 worktree を検索
+    const existing = await findProfileWorktrees(repoRoot, ctx.profileName);
+    if (existing.length > 0) {
+      const reused = await promptReuseWorktree(existing);
+      if (reused) {
+        this.worktreePath = reused.path;
+        this.branchName = reused.branch
+          ? reused.branch.replace("refs/heads/", "")
+          : null;
+        console.log(`[nas] Reusing worktree: ${reused.path}`);
+        return { ...ctx, workDir: reused.path, mountDir: repoRoot };
+      }
+    }
 
     const worktreeName = generateWorktreeName(ctx.profileName);
     const branchName = generateBranchName(ctx.profileName);
     // .git/nas-worktrees/ 内に作成 → 元リポのマウントだけで完結する
     const worktreePath = path.join(repoRoot, ".git", "nas-worktrees", worktreeName);
     this.worktreePath = worktreePath;
+    this.branchName = branchName;
 
     console.log(
       `[nas] Creating worktree: ${worktreePath} (branch: ${branchName}) from ${wt.base}`,
@@ -56,22 +70,24 @@ export class WorktreeStage implements Stage {
   async teardown(_ctx: ExecutionContext): Promise<void> {
     if (!this.worktreePath || !this.repoRoot) return;
 
-    if (this.cleanup === "keep") {
+    const worktreeAction = await promptWorktreeAction(this.worktreePath);
+
+    if (worktreeAction === "keep") {
       console.log(`[nas] Worktree kept: ${this.worktreePath}`);
       return;
     }
 
-    if (this.cleanup === "auto") {
-      const dirty = await isWorktreeDirty(this.worktreePath);
-      if (dirty) {
-        console.log(
-          `[nas] Worktree has uncommitted changes, keeping: ${this.worktreePath}`,
-        );
-        return;
-      }
-    }
+    // worktree を削除する場合、ブランチをどうするか聞く
+    const branchAction = await promptBranchAction(this.branchName);
 
-    // cleanup === "force" or (cleanup === "auto" && clean)
+    if (branchAction === "rename") {
+      await this.renameBranch();
+    } else if (branchAction === "cherry-pick") {
+      await this.cherryPickToBase();
+    }
+    // branchAction === "delete" → worktree 削除時にブランチも削除
+
+    // worktree を削除
     console.log(`[nas] Removing worktree: ${this.worktreePath}`);
     try {
       await $`git -C ${this.repoRoot} worktree remove --force ${this.worktreePath}`;
@@ -80,7 +96,196 @@ export class WorktreeStage implements Stage {
         `[nas] Failed to remove worktree: ${(err as Error).message}`,
       );
     }
+
+    // rename 以外はブランチ削除
+    if (branchAction !== "rename" && this.branchName) {
+      try {
+        await $`git -C ${this.repoRoot} branch -D ${this.branchName}`;
+        console.log(`[nas] Deleted branch: ${this.branchName}`);
+      } catch (err) {
+        console.error(
+          `[nas] Failed to delete branch: ${(err as Error).message}`,
+        );
+      }
+    }
   }
+
+  private async renameBranch(): Promise<void> {
+    if (!this.branchName || !this.repoRoot) return;
+    const newName = prompt(`[nas] New branch name (current: ${this.branchName}):`)
+      ?.trim();
+    if (!newName) {
+      console.log("[nas] No name entered, keeping original branch name.");
+      return;
+    }
+    try {
+      await $`git -C ${this.repoRoot} branch -m ${this.branchName} ${newName}`;
+      console.log(`[nas] Renamed branch: ${this.branchName} → ${newName}`);
+      this.branchName = newName;
+    } catch (err) {
+      console.error(
+        `[nas] Failed to rename branch: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async cherryPickToBase(): Promise<void> {
+    if (!this.branchName || !this.repoRoot || !this.baseBranch) return;
+
+    // base ブランチ上にないコミット一覧を取得
+    const commits = (
+      await $`git -C ${this.repoRoot} log ${this.baseBranch}..${this.branchName} --format=%H --reverse`
+        .text()
+    ).trim();
+
+    if (!commits) {
+      console.log("[nas] No commits to cherry-pick.");
+      return;
+    }
+
+    const commitList = commits.split("\n");
+    console.log(
+      `[nas] Cherry-picking ${commitList.length} commit(s) onto ${this.baseBranch}...`,
+    );
+
+    // base が remote ref (origin/main) の場合、ローカルブランチ名を推定
+    const targetBranch = resolveLocalBranch(this.baseBranch);
+
+    try {
+      // ローカルブランチが存在するか確認、なければ作成
+      try {
+        await $`git -C ${this.repoRoot} rev-parse --verify refs/heads/${targetBranch}`
+          .quiet("both");
+      } catch {
+        console.log(
+          `[nas] Creating local branch "${targetBranch}" from ${this.baseBranch}`,
+        );
+        await $`git -C ${this.repoRoot} branch ${targetBranch} ${this.baseBranch}`;
+      }
+
+      // worktree の外からcherry-pickするため、一時 worktree を使う
+      const tmpWorktree = path.join(
+        this.repoRoot,
+        ".git",
+        "nas-worktrees",
+        `nas-cherry-pick-tmp-${Date.now()}`,
+      );
+      await $`git -C ${this.repoRoot} worktree add ${tmpWorktree} ${targetBranch}`
+        .quiet("both");
+      try {
+        await $`git -C ${tmpWorktree} cherry-pick ${commitList}`.printCommand();
+        console.log("[nas] Cherry-pick completed successfully.");
+      } catch (err) {
+        console.error(
+          `[nas] Cherry-pick failed: ${(err as Error).message}`,
+        );
+        console.error(
+          "[nas] Aborting cherry-pick. Your branch is preserved.",
+        );
+        try {
+          await $`git -C ${tmpWorktree} cherry-pick --abort`.quiet("both");
+        } catch { /* ignore */ }
+      } finally {
+        await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`
+          .quiet("both");
+      }
+    } catch (err) {
+      console.error(
+        `[nas] Cherry-pick setup failed: ${(err as Error).message}`,
+      );
+    }
+  }
+}
+
+// --- Interactive prompts ---
+
+type WorktreeAction = "keep" | "delete";
+
+async function promptWorktreeAction(
+  worktreePath: string,
+): Promise<WorktreeAction> {
+  // 未コミットの変更があれば表示
+  const dirty = await isWorktreeDirty(worktreePath);
+  if (dirty) {
+    console.log("[nas] ⚠ Worktree has uncommitted changes.");
+  }
+
+  console.log("[nas] What to do with the worktree?");
+  console.log("  1. Keep");
+  console.log("  2. Delete");
+
+  while (true) {
+    const answer = prompt("[nas] Choose [1/2]:")?.trim() ?? "";
+    if (answer === "1") return "keep";
+    if (answer === "2") return "delete";
+    console.log("[nas] Please enter 1 or 2.");
+  }
+}
+
+type BranchAction = "rename" | "cherry-pick" | "delete";
+
+async function promptBranchAction(
+  branchName: string | null,
+): Promise<BranchAction> {
+  if (!branchName) return "delete";
+
+  // ブランチ上のコミット数を表示（参考情報）
+  try {
+    const log = await $`git log --oneline ${branchName} --not --remotes -10`
+      .text();
+    if (log.trim()) {
+      console.log(`[nas] Recent commits on ${branchName}:`);
+      for (const line of log.trim().split("\n")) {
+        console.log(`  ${line}`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  console.log("[nas] What to do with the branch?");
+  console.log("  1. Rename and keep");
+  console.log("  2. Cherry-pick to base branch");
+  console.log("  3. Delete");
+
+  while (true) {
+    const answer = prompt("[nas] Choose [1/2/3]:")?.trim() ?? "";
+    if (answer === "1") return "rename";
+    if (answer === "2") return "cherry-pick";
+    if (answer === "3") return "delete";
+    console.log("[nas] Please enter 1, 2, or 3.");
+  }
+}
+
+function promptReuseWorktree(
+  entries: WorktreeEntry[],
+): WorktreeEntry | null {
+  console.log("[nas] Existing worktree(s) found for this profile:");
+  for (let i = 0; i < entries.length; i++) {
+    const branch = entries[i].branch
+      ? entries[i].branch.replace("refs/heads/", "")
+      : "(detached)";
+    console.log(`  ${i + 1}. ${entries[i].path}  [${branch}]`);
+  }
+  console.log(`  0. Create new worktree`);
+
+  while (true) {
+    const raw = prompt(`[nas] Choose [0-${entries.length}]:`);
+    const answer = raw?.trim() ?? "";
+    if (answer === "0" || answer === "") return null;
+    const idx = parseInt(answer, 10);
+    if (idx >= 1 && idx <= entries.length) return entries[idx - 1];
+    console.log(`[nas] Please enter 0-${entries.length}.`);
+  }
+}
+
+// --- Helper functions ---
+
+/**
+ * remote ref (e.g. "origin/main") からローカルブランチ名を推定する。
+ * ローカル ref ならそのまま返す。
+ */
+function resolveLocalBranch(ref: string): string {
+  const match = ref.match(/^[^/]+\/(.+)$/);
+  return match ? match[1] : ref;
 }
 
 async function getGitRoot(dir: string): Promise<string> {
@@ -120,6 +325,16 @@ function generateWorktreeName(profileName: string): string {
 function generateBranchName(profileName: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   return `nas/${profileName}/${ts}`;
+}
+
+/** プロファイル名にマッチする既存 worktree を検索 */
+async function findProfileWorktrees(
+  repoRoot: string,
+  profileName: string,
+): Promise<WorktreeEntry[]> {
+  const all = await listNasWorktrees(repoRoot);
+  const prefix = `nas-${profileName}-`;
+  return all.filter((e) => path.basename(e.path).startsWith(prefix));
 }
 
 // --- Worktree management (subcommand) ---
