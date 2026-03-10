@@ -175,7 +175,8 @@ export class WorktreeStage implements Stage {
         console.log(
           `[nas] Creating local branch "${targetBranch}" from ${this.baseBranch}`,
         );
-        await $`git -C ${this.repoRoot} branch ${targetBranch} ${this.baseBranch}`;
+        await $`git -C ${this.repoRoot} branch ${targetBranch} ${this.baseBranch}`
+          .printCommand();
       }
 
       // worktree の外からcherry-pickするため、一時 worktree を使う
@@ -186,13 +187,14 @@ export class WorktreeStage implements Stage {
         `nas-cherry-pick-tmp-${Date.now()}`,
       );
       await $`git -C ${this.repoRoot} worktree add ${tmpWorktree} ${targetBranch}`
-        .quiet("both");
+        .printCommand();
       try {
         await $`git -C ${tmpWorktree} cherry-pick ${commitList}`.printCommand();
         console.log("[nas] Cherry-pick completed successfully.");
         return true;
-      } catch {
+      } catch (cpErr) {
         // cherry-pick 失敗 — 空コミット（既に適用済み）かどうか確認してスキップを試行
+        console.error(`[nas] cherry-pick exited with error: ${(cpErr as Error).message}`);
         const resolved = await this.resolveEmptyCherryPicks(
           tmpWorktree,
           commitList.length,
