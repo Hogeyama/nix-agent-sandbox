@@ -20,10 +20,23 @@ NAS_HOME="/home/${NAS_USER}"
 WORKSPACE="${WORKSPACE:-/workspace}"
 
 if [ "$NAS_UID" != "0" ]; then
+  # 同じ UID/GID を持つ既存エントリを削除 (ubuntu:24.04 のデフォルト ubuntu ユーザー等)
+  EXISTING_USER=$(awk -F: -v uid="$NAS_UID" '$3 == uid {print $1}' /etc/passwd)
+  if [ -n "$EXISTING_USER" ] && [ "$EXISTING_USER" != "$NAS_USER" ]; then
+    sed -i "/^${EXISTING_USER}:/d" /etc/passwd
+  fi
+  EXISTING_GROUP=$(awk -F: -v gid="$NAS_GID" '$3 == gid {print $1}' /etc/group)
+  if [ -n "$EXISTING_GROUP" ] && [ "$EXISTING_GROUP" != "$NAS_USER" ]; then
+    sed -i "/^${EXISTING_GROUP}:/d" /etc/group
+  fi
+  # 同名エントリが残っていれば削除 (UID が異なる同名ユーザー)
+  sed -i "/^${NAS_USER}:/d" /etc/passwd
+  sed -i "/^${NAS_USER}:/d" /etc/group
+
   # ホストユーザーに合わせた非 root ユーザーを作成
   mkdir -p "$NAS_HOME"
   echo "${NAS_USER}:x:${NAS_UID}:${NAS_GID}:${NAS_USER}:${NAS_HOME}:/bin/bash" >>/etc/passwd
-  grep -q "^${NAS_USER}:" /etc/group 2>/dev/null || echo "${NAS_USER}:x:${NAS_GID}:" >>/etc/group
+  echo "${NAS_USER}:x:${NAS_GID}:" >>/etc/group
   chown "${NAS_UID}:${NAS_GID}" "$NAS_HOME"
 
   # nix trusted-users にコンテナユーザーを追加 (nix daemon 経由操作に必要)

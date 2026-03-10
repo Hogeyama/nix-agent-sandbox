@@ -15,6 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && cd /tmp && unzip -q awscliv2.zip && ./aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip \
   && rm -rf /var/lib/apt/lists/*
 
+# ubuntu:24.04 のデフォルト ubuntu ユーザー (UID 1000) を削除。
+# ホストユーザーが UID 1000 の場合に entrypoint でのユーザー作成と衝突するため。
+RUN userdel -r ubuntu 2>/dev/null && groupdel ubuntu 2>/dev/null || true
+
 COPY entrypoint.sh /entrypoint.sh
 COPY osc52-clip.sh /usr/local/bin/osc52-clip
 RUN chmod +x /entrypoint.sh /usr/local/bin/osc52-clip \
