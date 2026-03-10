@@ -1,11 +1,14 @@
 /** エージェント種別 */
 export type AgentType = "claude" | "copilot";
 
+/** Worktree クリーンアップ戦略 */
+export type WorktreeCleanup = "force" | "auto" | "keep";
+
 /** Worktree 設定 */
 export interface WorktreeConfig {
   base: string;
   onCreate: string;
-  onEnd: string;
+  cleanup: WorktreeCleanup;
 }
 
 /** Nix 設定 */
@@ -88,7 +91,7 @@ export interface RawProfile {
   worktree?: {
     base?: string;
     "on-create"?: string;
-    "on-end"?: string;
+    cleanup?: string;
   };
   nix?: {
     enable?: boolean | "auto";

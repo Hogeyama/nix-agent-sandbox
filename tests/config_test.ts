@@ -33,7 +33,6 @@ Deno.test("validateConfig: full config", () => {
         worktree: {
           base: "origin/main",
           "on-create": "npm install",
-          "on-end": "",
         },
         nix: {
           enable: true,
@@ -59,6 +58,7 @@ Deno.test("validateConfig: full config", () => {
   assertEquals(p.agent, "claude");
   assertEquals(p.worktree?.base, "origin/main");
   assertEquals(p.worktree?.onCreate, "npm install");
+  assertEquals(p.worktree?.cleanup, "auto");
   assertEquals(p.nix.enable, true);
   assertEquals(p.nix.mountSocket, true);
   assertEquals(p.nix.extraPackages, ["nixpkgs.ripgrep"]);
@@ -216,4 +216,56 @@ Deno.test("validateConfig: gpg.forward-agent can be enabled", () => {
     },
   });
   assertEquals(config.profiles.test.gpg.forwardAgent, true);
+});
+
+Deno.test("validateConfig: worktree.cleanup defaults to auto", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        worktree: { base: "main" },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.worktree?.cleanup, "auto");
+});
+
+Deno.test("validateConfig: worktree.cleanup accepts force", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        worktree: { cleanup: "force" },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.worktree?.cleanup, "force");
+});
+
+Deno.test("validateConfig: worktree.cleanup accepts keep", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        worktree: { cleanup: "keep" },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.worktree?.cleanup, "keep");
+});
+
+Deno.test("validateConfig: invalid worktree.cleanup throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            worktree: { cleanup: "invalid" },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "worktree.cleanup must be one of",
+  );
 });

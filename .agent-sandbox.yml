@@ -31,3 +31,21 @@ profiles:
       mount-config: true
     aws:
       mount-config: true
+
+  copilot-worktree:
+    agent: copilot
+    agent-args:
+      - "--yolo"
+    worktree:
+      base: main
+      on-create: >
+        deno install
+    nix:
+      enable: auto
+      mount-socket: true
+    docker:
+      mount-socket: true
+    gcloud:
+      mount-config: true
+    aws:
+      mount-config: true

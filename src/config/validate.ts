@@ -11,11 +11,13 @@ import type {
   RawConfig,
   RawProfile,
   StaticEnvConfig,
+  WorktreeCleanup,
 } from "./types.ts";
 import { DEFAULT_AWS_CONFIG, DEFAULT_DOCKER_CONFIG, DEFAULT_GCLOUD_CONFIG, DEFAULT_GPG_CONFIG, DEFAULT_NIX_CONFIG } from "./types.ts";
 import type { AgentType } from "./types.ts";
 
 const VALID_AGENTS: AgentType[] = ["claude", "copilot"];
+const VALID_WORKTREE_CLEANUP: WorktreeCleanup[] = ["force", "auto", "keep"];
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -58,11 +60,7 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     agent: raw.agent as AgentType,
     agentArgs: raw["agent-args"] ?? [],
     worktree: raw.worktree
-      ? {
-        base: raw.worktree.base ?? "origin/main",
-        onCreate: raw.worktree["on-create"] ?? "",
-        onEnd: raw.worktree["on-end"] ?? "",
-      }
+      ? validateWorktree(name, raw.worktree)
       : undefined,
     nix: {
       enable: raw.nix?.enable ?? DEFAULT_NIX_CONFIG.enable,
@@ -89,6 +87,23 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     },
     extraMounts: validateExtraMounts(name, raw["extra-mounts"]),
     env: validateEnv(name, raw.env),
+  };
+}
+
+function validateWorktree(
+  profileName: string,
+  raw: NonNullable<RawProfile["worktree"]>,
+): import("./types.ts").WorktreeConfig {
+  const cleanup = raw.cleanup ?? "auto";
+  if (!VALID_WORKTREE_CLEANUP.includes(cleanup as WorktreeCleanup)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": worktree.cleanup must be one of: ${VALID_WORKTREE_CLEANUP.join(", ")}`,
+    );
+  }
+  return {
+    base: raw.base ?? "origin/main",
+    onCreate: raw["on-create"] ?? "",
+    cleanup: cleanup as WorktreeCleanup,
   };
 }
 

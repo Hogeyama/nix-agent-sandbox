@@ -12,8 +12,10 @@ export interface ExecutionContext {
   profile: Profile;
   /** プロファイル名 */
   profileName: string;
-  /** 作業ディレクトリ (worktree 作成後はそのパス) */
+  /** 作業ディレクトリ (コンテナ内の PWD) */
   workDir: string;
+  /** マウントするホストディレクトリ (workDir と異なる場合に設定) */
+  mountDir?: string;
   /** Docker イメージ名 */
   imageName: string;
   /** docker run に渡す引数 */

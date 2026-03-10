@@ -36,7 +36,7 @@ nix develop               # Enter dev shell (provides Deno only)
 ```
 Input: Profile name + agent args
   ↓
-WorktreeStage          (Creates git worktree if configured)
+WorktreeStage          (Creates git worktree with named branch if configured; teardown cleans up based on cleanup strategy)
   ↓
 DockerBuildStage       (Builds/uses Docker image)
   ↓
@@ -62,7 +62,7 @@ src/
     context.ts           # ExecutionContext interface & createContext()
     pipeline.ts          # Stage interface & runPipeline()
   stages/
-    worktree.ts          # Creates git worktree with on-create hooks if configured
+    worktree.ts          # Creates git worktree with named branch, teardown cleanup, and management subcommands
     nix_detect.ts        # Resolves nix.enable="auto" by checking flake.nix existence
     mount.ts             # Assembles docker mount args, env vars (static + command-based)
     launch.ts            # DockerBuildStage (builds/rebuilds image) & LaunchStage (docker run)

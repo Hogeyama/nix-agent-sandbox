@@ -28,13 +28,15 @@ export class MountStage implements Stage {
     envVars["NAS_HOME"] = containerHome;
 
     // ワークスペースマウント (ホスト側の絶対パスをコンテナ内でも使う)
+    // mountDir が設定されている場合はそれをマウントし、workDir は PWD としてのみ使う
+    const mountSource = path.resolve(result.mountDir ?? result.workDir);
     const containerWorkDir = path.resolve(result.workDir);
-    args.push("-v", `${result.workDir}:${containerWorkDir}`);
+    args.push("-v", `${mountSource}:${mountSource}`);
     args.push("-w", containerWorkDir);
     envVars["WORKSPACE"] = containerWorkDir;
     const extraMountDestinations = new Set<string>([
       ...RESERVED_EXTRA_MOUNT_DESTINATIONS,
-      path.normalize(containerWorkDir),
+      path.normalize(mountSource),
     ]);
 
     // ホストユーザーの UID/GID をコンテナに渡す (entrypoint で非 root ユーザー作成に使用)
