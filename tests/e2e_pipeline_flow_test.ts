@@ -54,15 +54,16 @@ class RecordingStage implements Stage {
     this.executionOrder = executionOrder;
   }
 
-  async execute(ctx: Ctx): Promise<Ctx> {
+  execute(ctx: Ctx): Promise<Ctx> {
     this.executed = true;
     this.executionOrder.push(`execute:${this.name}`);
-    return ctx;
+    return Promise.resolve(ctx);
   }
 
-  async teardown(_ctx: Ctx): Promise<void> {
+  teardown(_ctx: Ctx): Promise<void> {
     this.tornDown = true;
     this.executionOrder.push(`teardown:${this.name}`);
+    return Promise.resolve();
   }
 }
 
@@ -95,12 +96,13 @@ Deno.test("Pipeline: teardown runs in reverse order after failure", async () => 
   const s1 = new RecordingStage("Stage1", order);
   const failStage: Stage = {
     name: "FailStage",
-    async execute(_ctx: Ctx): Promise<Ctx> {
+    execute(_ctx: Ctx): Promise<Ctx> {
       order.push("execute:FailStage");
-      throw new Error("boom");
+      return Promise.reject(new Error("boom"));
     },
-    async teardown(_ctx: Ctx): Promise<void> {
+    teardown(_ctx: Ctx): Promise<void> {
       order.push("teardown:FailStage");
+      return Promise.resolve();
     },
   };
   const s3 = new RecordingStage("Stage3", order);
@@ -127,22 +129,22 @@ Deno.test("Pipeline: teardown runs in reverse order after failure", async () => 
 Deno.test("Pipeline: context modifications propagate through stages", async () => {
   const stage1: Stage = {
     name: "AddEnv",
-    async execute(ctx: Ctx): Promise<Ctx> {
-      return {
+    execute(ctx: Ctx): Promise<Ctx> {
+      return Promise.resolve({
         ...ctx,
         envVars: { ...ctx.envVars, STAGE1: "yes" },
         dockerArgs: [...ctx.dockerArgs, "--stage1"],
-      };
+      });
     },
   };
   const stage2: Stage = {
     name: "AddMore",
-    async execute(ctx: Ctx): Promise<Ctx> {
-      return {
+    execute(ctx: Ctx): Promise<Ctx> {
+      return Promise.resolve({
         ...ctx,
         envVars: { ...ctx.envVars, STAGE2: "yes" },
         dockerArgs: [...ctx.dockerArgs, "--stage2"],
-      };
+      });
     },
   };
 
@@ -429,7 +431,6 @@ Deno.test("E2E Pipeline: gcloud mount config", async () => {
   const gcloudDir = `${home}/.config/gcloud`;
   const hasGcloud = await Deno.stat(gcloudDir).then(() => true, () => false);
   if (hasGcloud) {
-    const containerHome = result.envVars["NAS_HOME"];
     assertEquals(
       result.dockerArgs.some((a) => a.includes(".config/gcloud")),
       true,

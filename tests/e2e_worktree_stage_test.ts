@@ -8,29 +8,12 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import $ from "dax";
 import * as path from "@std/path";
-import { createContext } from "../src/pipeline/context.ts";
 import {
   cleanNasWorktrees,
   listNasWorktrees,
   listOrphanNasBranches,
   resolveBase,
 } from "../src/stages/worktree.ts";
-import type { Config, Profile } from "../src/config/types.ts";
-
-function makeProfile(overrides: Partial<Profile> = {}): Profile {
-  return {
-    agent: "claude",
-    agentArgs: [],
-    nix: { enable: false, mountSocket: false, extraPackages: [] },
-    docker: { mountSocket: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
-    extraMounts: [],
-    env: [],
-    ...overrides,
-  };
-}
 
 /** 一時 git リポジトリを作成してコールバックを実行し、後片付けする */
 async function withTempRepo(

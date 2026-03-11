@@ -8,7 +8,6 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { MountStage, serializeNixExtraPackages } from "../src/stages/mount.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
-import * as path from "@std/path";
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -176,7 +175,6 @@ Deno.test("MountStage: multiple env vars including both static and dynamic", asy
 
 Deno.test("MountStage: extra-mount with ~ src expansion", async () => {
   const home = Deno.env.get("HOME") ?? "/root";
-  const containerHome = getContainerHome();
   const profile = makeProfile({
     extraMounts: [{ src: "~", dst: "/mnt/home", mode: "ro" }],
   });
