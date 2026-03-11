@@ -92,6 +92,18 @@ Deno.test("validateConfig: invalid agent throws", () => {
   );
 });
 
+Deno.test("validateConfig: codex agent is valid", () => {
+  const raw: RawConfig = {
+    profiles: {
+      test: {
+        agent: "codex",
+      },
+    },
+  };
+  const config = validateConfig(raw);
+  assertEquals(config.profiles.test.agent, "codex");
+});
+
 Deno.test("validateConfig: agent-args are parsed", () => {
   const raw: RawConfig = {
     profiles: {

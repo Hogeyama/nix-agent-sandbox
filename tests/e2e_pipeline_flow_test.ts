@@ -376,6 +376,21 @@ Deno.test("E2E Pipeline: MountStage agent=copilot configures copilot", async () 
   assertEquals(result.agentCommand.length > 0, true);
 });
 
+Deno.test("E2E Pipeline: MountStage agent=codex configures codex", async () => {
+  const profile = makeProfile({ agent: "codex" });
+  const config = makeConfig({ test: profile }, "test");
+  const ctx = createContext(config, profile, "test", Deno.cwd());
+
+  const result = await runPipeline([new MountStage()], ctx);
+
+  assertEquals(result.agentCommand.length > 0, true);
+  if (result.agentCommand[0] === "codex") {
+    assertEquals(result.agentCommand, ["codex"]);
+  } else {
+    assertEquals(result.agentCommand[0], "bash");
+  }
+});
+
 // --- 複数ステージの組み合わせ ---
 
 Deno.test("E2E Pipeline: full pipeline preserves all context", async () => {

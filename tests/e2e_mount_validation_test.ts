@@ -568,6 +568,13 @@ Deno.test("MountStage: copilot agent sets agentCommand", async () => {
   assertEquals(result.agentCommand.length > 0, true);
 });
 
+Deno.test("MountStage: codex agent sets agentCommand", async () => {
+  const profile = makeProfile({ agent: "codex" });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.agentCommand.length > 0, true);
+});
+
 Deno.test("MountStage: claude agent mounts ~/.claude if exists", async () => {
   const home = Deno.env.get("HOME") ?? "/root";
   const claudeDir = `${home}/.claude`;
@@ -609,6 +616,39 @@ Deno.test("MountStage: copilot agent sets GITHUB_TOKEN if gh available", async (
     if (tokenResult.success) {
       assertEquals("GITHUB_TOKEN" in result.envVars, true);
     }
+  }
+});
+
+Deno.test("MountStage: codex agent mounts ~/.codex if exists", async () => {
+  const home = Deno.env.get("HOME") ?? "/root";
+  const codexDir = `${home}/.codex`;
+  const hasCodex = await Deno.stat(codexDir).then(
+    (s) => s.isDirectory,
+    () => false,
+  );
+
+  const profile = makeProfile({ agent: "codex" });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+
+  if (hasCodex) {
+    assertEquals(
+      result.dockerArgs.some((a) => a.includes("/.codex")),
+      true,
+    );
+  }
+});
+
+Deno.test("MountStage: codex agent forwards OPENAI_API_KEY when set", async () => {
+  const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
+  const profile = makeProfile({ agent: "codex" });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+
+  if (openAiApiKey?.trim()) {
+    assertEquals(result.envVars["OPENAI_API_KEY"], openAiApiKey.trim());
+  } else {
+    assertEquals("OPENAI_API_KEY" in result.envVars, false);
   }
 });
 

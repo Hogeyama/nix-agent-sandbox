@@ -7,6 +7,7 @@ import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import { configureClaude } from "../agents/claude.ts";
 import { configureCopilot } from "../agents/copilot.ts";
+import { configureCodex } from "../agents/codex.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_CONTAINER_USER = "nas";
@@ -236,6 +237,9 @@ export class MountStage implements Stage {
         break;
       case "copilot":
         result = configureCopilot(result);
+        break;
+      case "codex":
+        result = configureCodex(result);
         break;
     }
 

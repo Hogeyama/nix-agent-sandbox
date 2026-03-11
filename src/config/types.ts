@@ -1,5 +1,5 @@
 /** エージェント種別 */
-export type AgentType = "claude" | "copilot";
+export type AgentType = "claude" | "copilot" | "codex";
 
 /** Worktree 設定 */
 export interface WorktreeConfig {

@@ -56,6 +56,13 @@ Deno.test("validate: agent=copilot is valid", () => {
   assertEquals(config.profiles.test.agent, "copilot");
 });
 
+Deno.test("validate: agent=codex is valid", () => {
+  const config = validateConfig({
+    profiles: { test: { agent: "codex" } },
+  });
+  assertEquals(config.profiles.test.agent, "codex");
+});
+
 Deno.test("validate: missing agent throws", () => {
   assertThrows(
     () => validateConfig({ profiles: { test: {} } }),

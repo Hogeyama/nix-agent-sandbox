@@ -21,7 +21,7 @@ import {
 } from "./types.ts";
 import type { AgentType } from "./types.ts";
 
-const VALID_AGENTS: AgentType[] = ["claude", "copilot"];
+const VALID_AGENTS: AgentType[] = ["claude", "copilot", "codex"];
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {

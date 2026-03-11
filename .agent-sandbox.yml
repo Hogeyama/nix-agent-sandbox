@@ -41,6 +41,22 @@ profiles:
     gpg:
       forward-agent: true
 
+  codex:
+    agent: codex
+    agent-args:
+      - --full-auto
+    nix:
+      enable: auto
+      mount-socket: true
+    docker:
+      mount-socket: true
+    gcloud:
+      mount-config: true
+    aws:
+      mount-config: true
+    gpg:
+      forward-agent: true
+
   copilot-worktree:
     agent: copilot
     agent-args:

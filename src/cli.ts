@@ -173,6 +173,7 @@ Worktree options:
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
+  nas codex-nix -- -p "list files"       # Pass args to Codex
   nas copilot-nix -- -p "list files"     # Pass args to the agent
   nas rebuild                            # Rebuild Docker image only
   nas rebuild --force                    # Force remove image and rebuild
@@ -188,5 +189,10 @@ Profile agent-args (in .agent-sandbox.yml):
       agent: copilot
       agent-args:
         - "--yolo"
+    codex-nix:
+      agent: codex
+      agent-args:
+        - "--model"
+        - "gpt-5-codex"
 `);
 }

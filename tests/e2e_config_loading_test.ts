@@ -69,6 +69,19 @@ profiles:
   });
 });
 
+Deno.test("loadConfig: loads minimal codex profile", async () => {
+  const yaml = `
+profiles:
+  codex-dev:
+    agent: codex
+`;
+  await withTempConfig(yaml, async (dir) => {
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
+    assertEquals(config.profiles["codex-dev"].agent, "codex");
+    assertEquals(config.profiles["codex-dev"].agentArgs, []);
+  });
+});
+
 Deno.test("loadConfig: loads full YAML with all profile fields", async () => {
   const yaml = `
 default: full
@@ -138,6 +151,8 @@ profiles:
     agent: copilot
     agent-args:
       - "--yolo"
+  codex-dev:
+    agent: codex
   claude-nix:
     agent: claude
     nix:
@@ -145,9 +160,10 @@ profiles:
 `;
   await withTempConfig(yaml, async (dir) => {
     const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    assertEquals(Object.keys(config.profiles).length, 3);
+    assertEquals(Object.keys(config.profiles).length, 4);
     assertEquals(config.profiles["claude-dev"].agent, "claude");
     assertEquals(config.profiles["copilot-dev"].agent, "copilot");
+    assertEquals(config.profiles["codex-dev"].agent, "codex");
     assertEquals(config.profiles["copilot-dev"].agentArgs, ["--yolo"]);
     assertEquals(config.profiles["claude-nix"].nix.enable, true);
   });
