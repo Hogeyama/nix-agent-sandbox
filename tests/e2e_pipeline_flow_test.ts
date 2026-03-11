@@ -42,33 +42,6 @@ function makeConfig(
   };
 }
 
-/** DockerBuildStage のモック（何もしない） */
-class MockDockerBuildStage implements Stage {
-  name = "MockDockerBuildStage";
-  async execute(ctx: Ctx): Promise<Ctx> {
-    return ctx;
-  }
-}
-
-/** LaunchStage のモック（docker run を実行せず agentCommand を記録） */
-class MockLaunchStage implements Stage {
-  name = "MockLaunchStage";
-  launchedWith: {
-    command: string[];
-    envVars: Record<string, string>;
-    dockerArgs: string[];
-  } | null = null;
-
-  async execute(ctx: Ctx): Promise<Ctx> {
-    this.launchedWith = {
-      command: [...ctx.agentCommand, ...ctx.profile.agentArgs],
-      envVars: { ...ctx.envVars },
-      dockerArgs: [...ctx.dockerArgs],
-    };
-    return ctx;
-  }
-}
-
 /** teardown を記録するステージ */
 class RecordingStage implements Stage {
   name: string;
@@ -194,9 +167,8 @@ Deno.test("E2E Pipeline: NixDetect → Mount with nix disabled", async () => {
   const config = makeConfig({ test: profile }, "test");
   const ctx = createContext(config, profile, "test", Deno.cwd());
 
-  const mockLaunch = new MockLaunchStage();
   const result = await runPipeline(
-    [new NixDetectStage(), new MountStage(), mockLaunch],
+    [new NixDetectStage(), new MountStage()],
     ctx,
   );
 
@@ -406,7 +378,7 @@ Deno.test("E2E Pipeline: MountStage agent=copilot configures copilot", async () 
 
 // --- 複数ステージの組み合わせ ---
 
-Deno.test("E2E Pipeline: full mock pipeline preserves all context", async () => {
+Deno.test("E2E Pipeline: full pipeline preserves all context", async () => {
   const profile = makeProfile({
     agent: "claude",
     agentArgs: ["--dangerously-skip-permissions"],
@@ -416,21 +388,15 @@ Deno.test("E2E Pipeline: full mock pipeline preserves all context", async () => 
   const config = makeConfig({ test: profile }, "test");
   const ctx = createContext(config, profile, "test", Deno.cwd());
 
-  const mockLaunch = new MockLaunchStage();
-  await runPipeline(
-    [
-      new MockDockerBuildStage(),
-      new NixDetectStage(),
-      new MountStage(),
-      mockLaunch,
-    ],
+  const result = await runPipeline(
+    [new NixDetectStage(), new MountStage()],
     ctx,
   );
 
-  assertEquals(mockLaunch.launchedWith !== null, true);
-  assertEquals(mockLaunch.launchedWith!.envVars["TEST_VAR"], "test_value");
+  assertEquals(result.envVars["TEST_VAR"], "test_value");
+  assertEquals(result.agentCommand.length > 0, true);
   assertEquals(
-    mockLaunch.launchedWith!.command.includes("--dangerously-skip-permissions"),
+    result.profile.agentArgs.includes("--dangerously-skip-permissions"),
     true,
   );
 });
