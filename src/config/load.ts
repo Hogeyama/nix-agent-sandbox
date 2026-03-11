@@ -17,10 +17,26 @@ export const GLOBAL_CONFIG_PATH = path.join(
   "agent-sandbox.yml",
 );
 
+/** loadConfig のオプション */
+export interface LoadConfigOptions {
+  /** 開始ディレクトリ（デフォルト: Deno.cwd()） */
+  startDir?: string;
+  /** グローバル設定ファイルのパス（null でグローバル読み込みを無効化） */
+  globalConfigPath?: string | null;
+}
+
 /** 設定ファイルを読み込んで検証済み Config を返す */
-export async function loadConfig(startDir?: string): Promise<Config> {
-  const globalRaw = await loadGlobalConfig();
-  const localPath = await findConfigFile(startDir ?? Deno.cwd());
+export async function loadConfig(
+  startDirOrOpts?: string | LoadConfigOptions,
+): Promise<Config> {
+  const opts: LoadConfigOptions = typeof startDirOrOpts === "string"
+    ? { startDir: startDirOrOpts }
+    : startDirOrOpts ?? {};
+
+  const globalRaw = opts.globalConfigPath === null
+    ? null
+    : await loadGlobalConfig(opts.globalConfigPath);
+  const localPath = await findConfigFile(opts.startDir ?? Deno.cwd());
   const localRaw = localPath
     ? parseYaml(await Deno.readTextFile(localPath)) as RawConfig
     : null;
@@ -36,9 +52,11 @@ export async function loadConfig(startDir?: string): Promise<Config> {
 }
 
 /** グローバル設定ファイルを読み込む。なければ null */
-export async function loadGlobalConfig(): Promise<RawConfig | null> {
+export async function loadGlobalConfig(
+  configPath?: string,
+): Promise<RawConfig | null> {
   try {
-    const text = await Deno.readTextFile(GLOBAL_CONFIG_PATH);
+    const text = await Deno.readTextFile(configPath ?? GLOBAL_CONFIG_PATH);
     return parseYaml(text) as RawConfig;
   } catch {
     return null;

@@ -60,7 +60,7 @@ profiles:
     agent: claude
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.dev.agent, "claude");
     assertEquals(config.profiles.dev.nix.enable, "auto");
     assertEquals(config.profiles.dev.docker.mountSocket, false);
@@ -104,7 +104,7 @@ profiles:
         val: my_value
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     const p = config.profiles.full;
     assertEquals(config.default, "full");
     assertEquals(p.agent, "copilot");
@@ -144,7 +144,7 @@ profiles:
       enable: true
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(Object.keys(config.profiles).length, 3);
     assertEquals(config.profiles["claude-dev"].agent, "claude");
     assertEquals(config.profiles["copilot-dev"].agent, "copilot");
@@ -166,7 +166,10 @@ profiles:
     );
 
     // grandchildDir から検索開始 → rootDir の設定を見つける
-    const config = await loadConfig(grandchildDir);
+    const config = await loadConfig({
+      startDir: grandchildDir,
+      globalConfigPath: null,
+    });
     assertEquals(config.profiles.test.agent, "claude");
   });
 });
@@ -193,7 +196,10 @@ profiles:
     );
 
     // grandchildDir から検索 → childDir の設定を見つける
-    const config = await loadConfig(grandchildDir);
+    const config = await loadConfig({
+      startDir: grandchildDir,
+      globalConfigPath: null,
+    });
     assertEquals("child-profile" in config.profiles, true);
     assertEquals("parent-profile" in config.profiles, false);
   });
@@ -203,7 +209,7 @@ Deno.test("loadConfig: throws when no config file found", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "nas-cfg-empty-" });
   try {
     await assertRejects(
-      () => loadConfig(tmpDir),
+      () => loadConfig({ startDir: tmpDir, globalConfigPath: null }),
       Error,
       "not found",
     );
@@ -218,7 +224,7 @@ profiles: {}
 `;
   await withTempConfig(yaml, async (dir) => {
     await assertRejects(
-      () => loadConfig(dir),
+      () => loadConfig({ startDir: dir, globalConfigPath: null }),
       Error,
       "at least one entry",
     );
@@ -233,7 +239,7 @@ profiles:
 `;
   await withTempConfig(yaml, async (dir) => {
     await assertRejects(
-      () => loadConfig(dir),
+      () => loadConfig({ startDir: dir, globalConfigPath: null }),
       Error,
       "agent must be one of",
     );
@@ -249,7 +255,7 @@ profiles:
 `;
   await withTempConfig(yaml, async (dir) => {
     await assertRejects(
-      () => loadConfig(dir),
+      () => loadConfig({ startDir: dir, globalConfigPath: null }),
       Error,
       "agent must be one of",
     );
@@ -265,7 +271,7 @@ profiles:
       enable: false
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.test.nix.enable, false);
   });
 });
@@ -279,7 +285,7 @@ profiles:
       enable: auto
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.test.nix.enable, "auto");
   });
 });
@@ -296,7 +302,7 @@ profiles:
         val_cmd: "printf world"
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.test.env.length, 2);
     assertEquals(config.profiles.test.env[0], { key: "STATIC", val: "hello" });
     assertEquals(config.profiles.test.env[1], {
@@ -314,7 +320,7 @@ profiles:
     worktree: {}
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.test.worktree?.base, "origin/main");
     assertEquals(config.profiles.test.worktree?.onCreate, "");
   });
@@ -330,7 +336,7 @@ profiles:
         dst: /mnt/tmp
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.test.extraMounts[0].mode, "ro");
   });
 });
@@ -735,7 +741,7 @@ profiles:
       - "--dangerously-skip-permissions"
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     const { name, profile } = resolveProfile(config);
     assertEquals(name, "production");
     assertEquals(profile.agent, "claude");
@@ -755,7 +761,7 @@ profiles:
     agent: claude
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     const { name, profile } = resolveProfile(config, "staging");
     assertEquals(name, "staging");
     assertEquals(profile.agent, "copilot");
@@ -770,7 +776,7 @@ profiles:
     agent: claude
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     const { name, profile } = resolveProfile(config);
     assertEquals(name, "only");
     assertEquals(profile.agent, "claude");
@@ -791,7 +797,10 @@ profiles:
 `,
     );
 
-    const config = await loadConfig(grandchildDir);
+    const config = await loadConfig({
+      startDir: grandchildDir,
+      globalConfigPath: null,
+    });
     const { name, profile } = resolveProfile(config);
     assertEquals(name, "nested-test");
     assertEquals(profile.agent, "copilot");
@@ -834,7 +843,7 @@ profiles:
         val_cmd: "printf us-east-1"
 `;
   await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig(dir);
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     const { profile } = resolveProfile(config);
     assertEquals(profile.agent, "claude");
     assertEquals(profile.agentArgs, ["--dangerously-skip-permissions"]);

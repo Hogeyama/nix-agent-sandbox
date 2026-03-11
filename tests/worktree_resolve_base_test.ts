@@ -9,6 +9,11 @@ async function withTempRepo(
   const tmpDir = await Deno.makeTempDir({ prefix: "nas-test-" });
   try {
     await $`git init ${tmpDir}`.quiet("both");
+    await $`git -C ${tmpDir} config user.name nas-test`.quiet("both");
+    await $`git -C ${tmpDir} config user.email nas-test@example.com`.quiet(
+      "both",
+    );
+    await $`git -C ${tmpDir} config commit.gpgsign false`.quiet("both");
     await $`git -C ${tmpDir} commit --allow-empty -m "init"`.quiet("both");
     await fn(tmpDir);
   } finally {

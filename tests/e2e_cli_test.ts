@@ -54,6 +54,35 @@ async function withTempConfig(
   }
 }
 
+/** 一時 git リポジトリを初期化し、テストに必要なローカル設定を入れる */
+async function initGitRepo(dir: string): Promise<void> {
+  await new Deno.Command("git", {
+    args: ["init", dir],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  await new Deno.Command("git", {
+    args: ["-C", dir, "config", "user.name", "nas-test"],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  await new Deno.Command("git", {
+    args: ["-C", dir, "config", "user.email", "nas-test@example.com"],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  await new Deno.Command("git", {
+    args: ["-C", dir, "config", "commit.gpgsign", "false"],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  await new Deno.Command("git", {
+    args: ["-C", dir, "commit", "--allow-empty", "-m", "init"],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+}
+
 // --- --help ---
 
 Deno.test("CLI: --help shows usage and exits 0", async () => {
@@ -92,7 +121,7 @@ Deno.test("CLI: -V shows version and exits 0", async () => {
 Deno.test("CLI: exits with error when no config file found", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-noconf-" });
   try {
-    const result = await runNas([], { cwd: tmpDir });
+    const result = await runNas([], { cwd: tmpDir, env: { HOME: tmpDir } });
     assertEquals(result.code, 1);
     assertEquals(result.stderr.includes("not found"), true);
   } finally {
@@ -135,7 +164,7 @@ Deno.test("CLI: exits with error for empty profiles", async () => {
 profiles: {}
 `;
   await withTempConfig(yaml, async (dir) => {
-    const result = await runNas([], { cwd: dir });
+    const result = await runNas([], { cwd: dir, env: { HOME: dir } });
     assertEquals(result.code, 1);
     assertEquals(result.stderr.includes("at least one entry"), true);
   });
@@ -170,17 +199,7 @@ Deno.test("CLI: --version takes precedence over missing config", async () => {
 Deno.test("CLI: worktree list works in a git repo", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-" });
   try {
-    // git repo を初期化
-    await new Deno.Command("git", {
-      args: ["init", tmpDir],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await initGitRepo(tmpDir);
 
     const result = await runNas(["worktree", "list"], { cwd: tmpDir });
     assertEquals(result.code, 0);
@@ -193,16 +212,7 @@ Deno.test("CLI: worktree list works in a git repo", async () => {
 Deno.test("CLI: worktree with unknown subcommand exits with error", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-unk-" });
   try {
-    await new Deno.Command("git", {
-      args: ["init", tmpDir],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await initGitRepo(tmpDir);
 
     const result = await runNas(["worktree", "unknown"], { cwd: tmpDir });
     assertEquals(result.code, 1);
@@ -218,16 +228,7 @@ Deno.test("CLI: worktree with unknown subcommand exits with error", async () => 
 Deno.test("CLI: worktree clean --force on empty repo", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-clean-" });
   try {
-    await new Deno.Command("git", {
-      args: ["init", tmpDir],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await initGitRepo(tmpDir);
 
     const result = await runNas(["worktree", "clean", "--force"], {
       cwd: tmpDir,
@@ -244,16 +245,7 @@ Deno.test("CLI: worktree clean --force on empty repo", async () => {
 Deno.test("CLI: worktree list shows existing nas worktrees", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-show-" });
   try {
-    await new Deno.Command("git", {
-      args: ["init", tmpDir],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await initGitRepo(tmpDir);
 
     // nas worktree を手動で作成
     const wtPath = path.join(
@@ -294,16 +286,7 @@ Deno.test("CLI: worktree list shows existing nas worktrees", async () => {
 Deno.test("CLI: worktree clean --force removes nas worktrees", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-rm-" });
   try {
-    await new Deno.Command("git", {
-      args: ["init", tmpDir],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await initGitRepo(tmpDir);
 
     // nas worktree を作成
     const wtPath = path.join(
@@ -349,16 +332,7 @@ Deno.test("CLI: worktree clean --force removes nas worktrees", async () => {
 Deno.test("CLI: worktree clean -f -B removes worktrees and orphan branches", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-fb-" });
   try {
-    await new Deno.Command("git", {
-      args: ["init", tmpDir],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await initGitRepo(tmpDir);
 
     // worktree を作って消す → orphan branch ができる
     const wtPath = path.join(
@@ -439,7 +413,7 @@ profiles:
     agent: copilot
 `;
   await withTempConfig(yaml, async (dir) => {
-    const result = await runNas([], { cwd: dir });
+    const result = await runNas([], { cwd: dir, env: { HOME: dir } });
     assertEquals(result.code, 1);
     assertEquals(
       result.stderr.includes("No profile specified"),
