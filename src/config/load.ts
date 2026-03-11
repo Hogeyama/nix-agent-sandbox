@@ -92,6 +92,7 @@ export function mergeRawProfiles(
     gcloud: shallowMerge(global.gcloud, local.gcloud),
     aws: shallowMerge(global.aws, local.aws),
     gpg: shallowMerge(global.gpg, local.gpg),
+    "extra-mounts": local["extra-mounts"] ?? global["extra-mounts"],
     env: local.env ?? global.env,
   };
 }
