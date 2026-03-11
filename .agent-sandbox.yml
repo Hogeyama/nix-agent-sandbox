@@ -3,9 +3,12 @@ default: copilot
 profiles:
   claude:
     agent: claude
+    worktree:
+      base: HEAD
+      on-create: deno install
     agent-args:
-      - --allowedTools
-      - "shell"
+      - --permission-mode
+      - auto
     nix:
       enable: auto
       mount-socket: true
@@ -17,6 +20,10 @@ profiles:
       mount-config: true
     gpg:
       forward-agent: true
+    extra-mounts:
+      - src: ~/.cache/.bun
+        dst: ~/.cache/.bun
+        mode: rw
 
   copilot:
     agent: copilot
