@@ -132,7 +132,8 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
 
     if [ ! -f "$CACHE_FILE" ]; then
       echo "[nas] Caching nix dev environment via print-dev-env..."
-      if env NIX_REMOTE=daemon nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CACHE_FILE}.tmp"; then
+      if "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
+        nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CACHE_FILE}.tmp"; then
         mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
         chmod 644 "$CACHE_FILE"
         echo "[nas] Nix dev environment cached."
