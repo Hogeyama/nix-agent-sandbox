@@ -91,6 +91,25 @@ export class WorktreeStage implements Stage {
       return;
     }
 
+    const dirtyWorktreeAction = await promptDirtyWorktreeAction(
+      this.worktreePath,
+    );
+    if (dirtyWorktreeAction === "keep") {
+      console.log(`[nas] Worktree kept: ${this.worktreePath}`);
+      return;
+    }
+    if (dirtyWorktreeAction === "stash") {
+      try {
+        await stashDirtyWorktree(this.worktreePath);
+      } catch (err) {
+        console.error(
+          `[nas] Failed to stash worktree changes: ${(err as Error).message}`,
+        );
+        console.log(`[nas] Worktree kept: ${this.worktreePath}`);
+        return;
+      }
+    }
+
     // worktree を削除する場合、ブランチをどうするか聞く
     const branchAction = await promptBranchAction(this.branchName);
 
@@ -358,6 +377,7 @@ export class WorktreeStage implements Stage {
 // --- Interactive prompts ---
 
 type WorktreeAction = "keep" | "delete";
+type DirtyWorktreeAction = "stash" | "delete" | "keep";
 
 async function promptWorktreeAction(
   worktreePath: string,
@@ -378,6 +398,36 @@ async function promptWorktreeAction(
     if (answer === "2") return "keep";
     console.log("[nas] Please enter 1 or 2.");
   }
+}
+
+async function promptDirtyWorktreeAction(
+  worktreePath: string,
+): Promise<DirtyWorktreeAction | null> {
+  const dirty = await isWorktreeDirty(worktreePath);
+  if (!dirty) return null;
+
+  console.log("[nas] Worktree has uncommitted changes.");
+  console.log("[nas] How should we handle them before deleting it?");
+  console.log("  1. Stash and delete");
+  console.log("  2. Delete without stashing");
+  console.log("  3. Keep");
+
+  while (true) {
+    const answer = prompt("[nas] Choose [1/2/3]:")?.trim() ?? "";
+    if (answer === "1") return "stash";
+    if (answer === "2") return "delete";
+    if (answer === "3") return "keep";
+    console.log("[nas] Please enter 1, 2, or 3.");
+  }
+}
+
+async function stashDirtyWorktree(worktreePath: string): Promise<void> {
+  const stashMessage = `nas teardown ${path.basename(worktreePath)} ${
+    new Date().toISOString()
+  }`;
+  await $`git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`
+    .printCommand();
+  console.log(`[nas] Stashed worktree changes: ${stashMessage}`);
 }
 
 type BranchAction = "rename" | "cherry-pick" | "delete";
