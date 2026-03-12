@@ -3,6 +3,7 @@
  */
 
 import { loadConfig, resolveProfile } from "./config/load.ts";
+import type { Profile } from "./config/types.ts";
 import { createContext } from "./pipeline/context.ts";
 import { runPipeline } from "./pipeline/pipeline.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
@@ -14,6 +15,16 @@ import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { dockerImageExists, dockerRemoveImage } from "./docker/client.ts";
 
 const VERSION = "0.1.0";
+
+type WorktreeOverride =
+  | { type: "none" }
+  | { type: "enable"; base: string }
+  | { type: "disable" };
+
+interface ParsedMainArgs {
+  profileName?: string;
+  worktreeOverride: WorktreeOverride;
+}
 
 export async function main(args: string[]): Promise<void> {
   // `--` 以降はエージェントに渡す引数
@@ -32,7 +43,7 @@ export async function main(args: string[]): Promise<void> {
   }
 
   // サブコマンド処理
-  const subcommand = nasArgs.find((a) => !a.startsWith("-"));
+  const subcommand = findFirstNonFlagArg(nasArgs);
 
   if (subcommand === "rebuild") {
     await runRebuild(nasArgs.filter((a) => a !== "rebuild"));
@@ -44,13 +55,15 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
 
-  // プロファイル名 (最初の非フラグ引数)
-  const profileName = subcommand;
+  const { profileName, worktreeOverride } = parseProfileAndWorktreeArgs(
+    nasArgs,
+  );
 
   try {
     const config = await loadConfig();
     const { name, profile } = resolveProfile(config, profileName);
-    const ctx = createContext(config, profile, name, Deno.cwd());
+    const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
+    const ctx = createContext(config, effectiveProfile, name, Deno.cwd());
 
     const stages = [
       new WorktreeStage(),
@@ -147,6 +160,72 @@ async function runWorktreeCommand(
   }
 }
 
+function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
+  let profileName: string | undefined;
+  let worktreeOverride: WorktreeOverride = { type: "none" };
+
+  for (let i = 0; i < nasArgs.length; i++) {
+    const arg = nasArgs[i];
+    if (arg === "--worktree" || arg === "-b") {
+      const branch = nasArgs[i + 1];
+      if (!branch || branch.startsWith("-")) {
+        throw new Error("--worktree/-b requires a branch name.");
+      }
+      i++;
+      worktreeOverride = { type: "enable", base: normalizeWorktreeBase(branch) };
+      continue;
+    }
+    if (arg.startsWith("-b") && arg.length > 2) {
+      const branch = arg.slice(2);
+      if (branch.startsWith("-")) {
+        throw new Error("--worktree/-b requires a branch name.");
+      }
+      worktreeOverride = { type: "enable", base: normalizeWorktreeBase(branch) };
+      continue;
+    }
+    if (arg === "--no-worktree") {
+      worktreeOverride = { type: "disable" };
+      continue;
+    }
+    if (!arg.startsWith("-") && profileName === undefined) {
+      profileName = arg;
+    }
+  }
+
+  return { profileName, worktreeOverride };
+}
+
+function applyWorktreeOverride(
+  profile: Profile,
+  override: WorktreeOverride,
+): Profile {
+  if (override.type === "none") return profile;
+  if (override.type === "disable") {
+    return { ...profile, worktree: undefined };
+  }
+  const onCreate = profile.worktree?.onCreate ?? "";
+  return { ...profile, worktree: { base: override.base, onCreate } };
+}
+
+function normalizeWorktreeBase(branch: string): string {
+  if (branch === "@" || branch === "HEAD") return "HEAD";
+  return branch;
+}
+
+function findFirstNonFlagArg(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--worktree" || arg === "-b") {
+      i++;
+      continue;
+    }
+    if (arg.startsWith("-b") && arg.length > 2) continue;
+    if (arg === "--no-worktree") continue;
+    if (!arg.startsWith("-")) return arg;
+  }
+  return undefined;
+}
+
 function printUsage(): void {
   console.log(`nas - Nix Agent Sandbox
 
@@ -162,6 +241,8 @@ Subcommands:
 Options:
   -h, --help      Show this help
   -V, --version   Show version
+  -b, --worktree <branch>  Enable worktree and set base branch (use @ or HEAD for current HEAD)
+  --no-worktree   Disable worktree even if configured in profile
 
 Rebuild options:
   -f, --force     Force remove Docker image (docker rmi --force)
@@ -184,6 +265,8 @@ Examples:
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
   nas worktree clean -f -B              # Force remove worktrees and branches
+  nas my-profile -b feature/login       # Create worktree from feature/login
+  nas --worktree @                      # Use default profile, base current HEAD
 
 Profile agent-args (in .agent-sandbox.yml):
   profiles:
@@ -198,3 +281,5 @@ Profile agent-args (in .agent-sandbox.yml):
         - "gpt-5-codex"
 `);
 }
+
+export { applyWorktreeOverride, parseProfileAndWorktreeArgs };

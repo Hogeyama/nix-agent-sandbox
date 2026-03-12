@@ -68,6 +68,11 @@ nas rebuild copilot-nix  # プロファイル指定
 
 `worktree` が設定されたプロファイルで `nas` を実行すると、ベースブランチから `nas/{profile}/{timestamp}` ブランチ付きの git worktree が自動作成されます。エージェント終了後は `cleanup` 設定に応じて自動削除されます。
 
+CLI から一時的に worktree 動作を上書きできます。
+
+- `nas <profile> -b <branch>` / `nas --worktree <branch>` で worktree を有効化し、ベースブランチを指定（`@` または `HEAD` で現在の HEAD を利用）
+- `nas --no-worktree` でプロファイル設定に関わらず worktree を無効化
+
 溜まった worktree を手動で管理するには `worktree` サブコマンドを使います。
 
 ```sh
