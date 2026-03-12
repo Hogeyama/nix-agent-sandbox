@@ -63,6 +63,8 @@ export class WorktreeStage implements Stage {
     await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`
       .printCommand();
 
+    await inheritDirtyBaseWorktree(repoRoot, resolvedBase, worktreePath);
+
     if (wt.onCreate) {
       console.log(`[nas] Running on-create hook: ${wt.onCreate}`);
       await $`bash -c ${wt.onCreate}`.cwd(worktreePath).printCommand();
@@ -569,6 +571,86 @@ async function validateBaseBranch(
 async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   const status = await $`git -C ${worktreePath} status --porcelain`.text();
   return status.trim().length > 0;
+}
+
+async function inheritDirtyBaseWorktree(
+  repoRoot: string,
+  baseRef: string,
+  targetWorktreePath: string,
+): Promise<void> {
+  const localBaseBranch = resolveLocalBranch(baseRef);
+  const sourceWorktreePath = await findWorktreeForBranch(
+    repoRoot,
+    localBaseBranch,
+  );
+  if (!sourceWorktreePath || sourceWorktreePath === targetWorktreePath) return;
+
+  if (!await isWorktreeDirty(sourceWorktreePath)) return;
+
+  console.log(
+    `[nas] Inheriting dirty changes from ${sourceWorktreePath} (${localBaseBranch})`,
+  );
+
+  await applyTrackedDiff(sourceWorktreePath, targetWorktreePath);
+  await copyUntrackedFiles(sourceWorktreePath, targetWorktreePath);
+}
+
+async function applyTrackedDiff(
+  sourceWorktreePath: string,
+  targetWorktreePath: string,
+): Promise<void> {
+  const stagedPatch =
+    await $`git -C ${sourceWorktreePath} diff --binary --cached`
+      .text();
+  if (stagedPatch.trim().length > 0) {
+    await applyPatchFile(targetWorktreePath, stagedPatch, ["--index"]);
+  }
+
+  const unstagedPatch = await $`git -C ${sourceWorktreePath} diff --binary`
+    .text();
+  if (unstagedPatch.trim().length > 0) {
+    await applyPatchFile(targetWorktreePath, unstagedPatch);
+  }
+}
+
+async function applyPatchFile(
+  targetWorktreePath: string,
+  patch: string,
+  extraArgs: string[] = [],
+): Promise<void> {
+  const patchFile = await Deno.makeTempFile({
+    prefix: "nas-worktree-",
+    suffix: ".patch",
+  });
+  try {
+    const normalizedPatch = patch.endsWith("\n") ? patch : `${patch}\n`;
+    await Deno.writeTextFile(patchFile, normalizedPatch);
+    await $`git -C ${targetWorktreePath} apply --binary --allow-empty ${extraArgs} ${patchFile}`
+      .printCommand();
+  } finally {
+    await Deno.remove(patchFile).catch(() => undefined);
+  }
+}
+
+async function copyUntrackedFiles(
+  sourceWorktreePath: string,
+  targetWorktreePath: string,
+): Promise<void> {
+  const output =
+    await $`git -C ${sourceWorktreePath} ls-files --others --exclude-standard -z`
+      .text();
+  if (output.length === 0) return;
+
+  const untrackedFiles = output
+    .split("\0")
+    .filter((file) => file.length > 0);
+
+  for (const relativePath of untrackedFiles) {
+    const sourcePath = path.join(sourceWorktreePath, relativePath);
+    const targetPath = path.join(targetWorktreePath, relativePath);
+    await Deno.mkdir(path.dirname(targetPath), { recursive: true });
+    await Deno.copyFile(sourcePath, targetPath);
+  }
 }
 
 function generateWorktreeName(profileName: string): string {
