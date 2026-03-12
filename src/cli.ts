@@ -23,41 +23,71 @@ type WorktreeOverride =
 
 interface ParsedMainArgs {
   profileName?: string;
+  profileIndex?: number;
   worktreeOverride: WorktreeOverride;
+  agentArgs: string[];
 }
 
 export async function main(args: string[]): Promise<void> {
-  // `--` 以降はエージェントに渡す引数
+  // `--` 以降は常にエージェントに渡す引数。profile 名の後ろも同様に agent 引数として扱う。
   const dashDashIdx = args.indexOf("--");
-  const nasArgs = dashDashIdx >= 0 ? args.slice(0, dashDashIdx) : args;
-  const agentExtraArgs = dashDashIdx >= 0 ? args.slice(dashDashIdx + 1) : [];
-
-  // フラグ処理 (nas 自身の引数のみ)
-  if (nasArgs.includes("--help") || nasArgs.includes("-h")) {
-    printUsage();
-    return;
-  }
-  if (nasArgs.includes("--version") || nasArgs.includes("-V")) {
-    console.log(`nas ${VERSION}`);
-    return;
-  }
+  const argsBeforeDashDash = dashDashIdx >= 0
+    ? args.slice(0, dashDashIdx)
+    : args;
+  const explicitAgentArgs = dashDashIdx >= 0 ? args.slice(dashDashIdx + 1) : [];
 
   // サブコマンド処理
-  const subcommand = findFirstNonFlagArg(nasArgs);
+  const subcommand = findFirstNonFlagArg(argsBeforeDashDash);
+
+  if (subcommand === "rebuild" || subcommand === "worktree") {
+    if (
+      argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
+    ) {
+      printUsage();
+      return;
+    }
+    if (
+      argsBeforeDashDash.includes("--version") ||
+      argsBeforeDashDash.includes("-V")
+    ) {
+      console.log(`nas ${VERSION}`);
+      return;
+    }
+  }
 
   if (subcommand === "rebuild") {
-    await runRebuild(nasArgs.filter((a) => a !== "rebuild"));
+    await runRebuild(argsBeforeDashDash.filter((a) => a !== "rebuild"));
     return;
   }
 
   if (subcommand === "worktree") {
-    await runWorktreeCommand(nasArgs.filter((a) => a !== "worktree"));
+    await runWorktreeCommand(
+      argsBeforeDashDash.filter((a) => a !== "worktree"),
+    );
     return;
   }
 
-  const { profileName, worktreeOverride } = parseProfileAndWorktreeArgs(
-    nasArgs,
+  const {
+    profileName,
+    profileIndex,
+    worktreeOverride,
+    agentArgs,
+  } = parseProfileAndWorktreeArgs(
+    argsBeforeDashDash,
   );
+  const nasControlArgs = profileIndex === undefined
+    ? argsBeforeDashDash
+    : argsBeforeDashDash.slice(0, profileIndex);
+  const agentExtraArgs = [...agentArgs, ...explicitAgentArgs];
+
+  if (nasControlArgs.includes("--help") || nasControlArgs.includes("-h")) {
+    printUsage();
+    return;
+  }
+  if (nasControlArgs.includes("--version") || nasControlArgs.includes("-V")) {
+    console.log(`nas ${VERSION}`);
+    return;
+  }
 
   try {
     const config = await loadConfig();
@@ -162,17 +192,26 @@ async function runWorktreeCommand(
 
 function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
   let profileName: string | undefined;
+  let profileIndex: number | undefined;
   let worktreeOverride: WorktreeOverride = { type: "none" };
+  const agentArgs: string[] = [];
 
   for (let i = 0; i < nasArgs.length; i++) {
     const arg = nasArgs[i];
+    if (profileName !== undefined) {
+      agentArgs.push(arg);
+      continue;
+    }
     if (arg === "--worktree" || arg === "-b") {
       const branch = nasArgs[i + 1];
       if (!branch || branch.startsWith("-")) {
         throw new Error("--worktree/-b requires a branch name.");
       }
       i++;
-      worktreeOverride = { type: "enable", base: normalizeWorktreeBase(branch) };
+      worktreeOverride = {
+        type: "enable",
+        base: normalizeWorktreeBase(branch),
+      };
       continue;
     }
     if (arg.startsWith("-b") && arg.length > 2) {
@@ -180,7 +219,10 @@ function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
       if (branch.startsWith("-")) {
         throw new Error("--worktree/-b requires a branch name.");
       }
-      worktreeOverride = { type: "enable", base: normalizeWorktreeBase(branch) };
+      worktreeOverride = {
+        type: "enable",
+        base: normalizeWorktreeBase(branch),
+      };
       continue;
     }
     if (arg === "--no-worktree") {
@@ -189,10 +231,11 @@ function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
     }
     if (!arg.startsWith("-") && profileName === undefined) {
       profileName = arg;
+      profileIndex = i;
     }
   }
 
-  return { profileName, worktreeOverride };
+  return { profileName, profileIndex, worktreeOverride, agentArgs };
 }
 
 function applyWorktreeOverride(
@@ -230,7 +273,7 @@ function printUsage(): void {
   console.log(`nas - Nix Agent Sandbox
 
 Usage:
-  nas [profile-name] [options] [-- agent-args...]
+  nas [options-before-profile] [profile-name] [agent-args...]
   nas rebuild [profile-name] [options]
   nas worktree [list|clean] [options]
 
@@ -244,6 +287,11 @@ Options:
   -b, --worktree <branch>  Enable worktree and set base branch (use @ or HEAD for current HEAD)
   --no-worktree   Disable worktree even if configured in profile
 
+Main command notes:
+  - nas options must appear before [profile-name]
+  - args after [profile-name] are passed to the agent
+  - if [profile-name] is omitted, use -- before agent args
+
 Rebuild options:
   -f, --force     Force remove Docker image (docker rmi --force)
 
@@ -256,8 +304,9 @@ Worktree options:
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
-  nas codex-nix -- -p "list files"       # Pass args to Codex
-  nas copilot-nix -- -p "list files"     # Pass args to the agent
+  nas copilot-nix -p "list files"        # Pass args after profile to the agent
+  nas copilot-nix --resume=session-id    # Copilot CLI resume without --
+  nas -- -p "list files"                 # Pass args to the default profile
   nas rebuild                            # Rebuild Docker image only
   nas rebuild --force                    # Force remove image and rebuild
   nas worktree list                      # List all nas worktrees

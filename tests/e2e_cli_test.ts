@@ -435,4 +435,6 @@ Deno.test("CLI: help includes example commands", async () => {
   assertEquals(result.stdout.includes("nas rebuild"), true);
   assertEquals(result.stdout.includes("nas worktree list"), true);
   assertEquals(result.stdout.includes("nas worktree clean"), true);
+  assertEquals(result.stdout.includes('nas copilot-nix -p "list files"'), true);
+  assertEquals(result.stdout.includes('nas -- -p "list files"'), true);
 });

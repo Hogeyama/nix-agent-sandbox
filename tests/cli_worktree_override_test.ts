@@ -9,8 +9,10 @@ function createProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     agent: "claude",
     agentArgs: [],
-    worktree: overrides.worktree ?? { base: "origin/main", onCreate: "echo hook" },
-    nix: overrides.nix ?? { enable: "auto", mountSocket: true, extraPackages: [] },
+    worktree: overrides.worktree ??
+      { base: "origin/main", onCreate: "echo hook" },
+    nix: overrides.nix ??
+      { enable: "auto", mountSocket: true, extraPackages: [] },
     docker: overrides.docker ?? { enable: false, shared: false },
     gcloud: overrides.gcloud ?? { mountConfig: false },
     aws: overrides.aws ?? { mountConfig: false },
@@ -24,33 +26,75 @@ Deno.test("parseProfileAndWorktreeArgs keeps defaults when unspecified", () => {
   const result = parseProfileAndWorktreeArgs([]);
   assertEquals(result.profileName, undefined);
   assertEquals(result.worktreeOverride, { type: "none" });
+  assertEquals(result.agentArgs, []);
 });
 
-Deno.test("parseProfileAndWorktreeArgs captures profile and HEAD alias", () => {
-  const result = parseProfileAndWorktreeArgs(["my-profile", "-b", "@"]);
+Deno.test("parseProfileAndWorktreeArgs captures profile after worktree options", () => {
+  const result = parseProfileAndWorktreeArgs(["-b", "@", "my-profile"]);
   assertEquals(result.profileName, "my-profile");
   assertEquals(result.worktreeOverride, { type: "enable", base: "HEAD" });
+  assertEquals(result.agentArgs, []);
 });
 
 Deno.test("parseProfileAndWorktreeArgs supports combined short option with HEAD alias", () => {
   const result = parseProfileAndWorktreeArgs(["-b@"]);
   assertEquals(result.profileName, undefined);
   assertEquals(result.worktreeOverride, { type: "enable", base: "HEAD" });
+  assertEquals(result.agentArgs, []);
 });
 
 Deno.test("parseProfileAndWorktreeArgs supports combined short option with branch name", () => {
-  const result = parseProfileAndWorktreeArgs(["-bfeature/login"]);
-  assertEquals(result.profileName, undefined);
+  const result = parseProfileAndWorktreeArgs(["-bfeature/login", "my-profile"]);
+  assertEquals(result.profileName, "my-profile");
   assertEquals(result.worktreeOverride, {
     type: "enable",
     base: "feature/login",
   });
+  assertEquals(result.agentArgs, []);
 });
 
 Deno.test("parseProfileAndWorktreeArgs supports disabling worktree", () => {
   const result = parseProfileAndWorktreeArgs(["--no-worktree"]);
   assertEquals(result.profileName, undefined);
   assertEquals(result.worktreeOverride, { type: "disable" });
+  assertEquals(result.agentArgs, []);
+});
+
+Deno.test("parseProfileAndWorktreeArgs collects agent args after profile", () => {
+  const result = parseProfileAndWorktreeArgs([
+    "-b",
+    "feature/base",
+    "copilot",
+    "--resume=2b2155c8-e59b-4c76-b1df-7f9d14aeecfb",
+    "-p",
+    "continue",
+  ]);
+  assertEquals(result.profileName, "copilot");
+  assertEquals(result.worktreeOverride, {
+    type: "enable",
+    base: "feature/base",
+  });
+  assertEquals(result.agentArgs, [
+    "--resume=2b2155c8-e59b-4c76-b1df-7f9d14aeecfb",
+    "-p",
+    "continue",
+  ]);
+});
+
+Deno.test("parseProfileAndWorktreeArgs treats nas-style flags after profile as agent args", () => {
+  const result = parseProfileAndWorktreeArgs([
+    "copilot",
+    "--no-worktree",
+    "-b",
+    "feature/agent-side",
+  ]);
+  assertEquals(result.profileName, "copilot");
+  assertEquals(result.worktreeOverride, { type: "none" });
+  assertEquals(result.agentArgs, [
+    "--no-worktree",
+    "-b",
+    "feature/agent-side",
+  ]);
 });
 
 Deno.test("parseProfileAndWorktreeArgs throws when branch is missing", () => {
