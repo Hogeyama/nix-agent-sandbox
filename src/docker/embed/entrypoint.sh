@@ -17,7 +17,7 @@ NAS_UID="${NAS_UID:-0}"
 NAS_GID="${NAS_GID:-0}"
 NAS_USER="${NAS_USER:-${USER:-nas}}"
 NAS_HOME="/home/${NAS_USER}"
-WORKSPACE="${WORKSPACE:-/workspace}"
+WORKSPACE="${WORKSPACE:?WORKSPACE must be set}"
 
 if [ "$NAS_UID" != "0" ]; then
   # 同じ UID/GID を持つ既存エントリを削除 (ubuntu:24.04 のデフォルト ubuntu ユーザー等)

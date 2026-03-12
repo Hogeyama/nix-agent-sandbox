@@ -30,5 +30,4 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/osc52-clip \
 RUN mkdir -p /usr/local/bin /home /nix
 ENV PATH="/usr/local/bin:${PATH}"
 
-WORKDIR /workspace
 ENTRYPOINT ["/entrypoint.sh"]
