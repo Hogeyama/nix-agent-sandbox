@@ -574,7 +574,7 @@ Deno.test("validate: mixed static and command throws", () => {
         },
       }),
     ConfigValidationError,
-    "must use either",
+    "must have exactly one of key or key_cmd",
   );
 });
 

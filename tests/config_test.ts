@@ -160,7 +160,7 @@ Deno.test("validateConfig: mixed env entry throws", () => {
         },
       }),
     ConfigValidationError,
-    "env[0] must use either",
+    "must have exactly one of key or key_cmd",
   );
 });
 

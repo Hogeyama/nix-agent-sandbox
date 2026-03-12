@@ -3,14 +3,14 @@
  */
 
 import type {
-  CommandEnvConfig,
   Config,
   EnvConfig,
+  EnvKeySpec,
+  EnvValSpec,
   ExtraMountConfig,
   Profile,
   RawConfig,
   RawProfile,
-  StaticEnvConfig,
 } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
@@ -160,44 +160,59 @@ function validateEnv(
         `profile "${profileName}": env[${index}] must be an object`,
       );
     }
-    const hasStatic = entry.key !== undefined || entry.val !== undefined;
-    const hasCommand = entry.key_cmd !== undefined ||
-      entry.val_cmd !== undefined;
-    if (hasStatic && hasCommand) {
-      throw new ConfigValidationError(
-        `profile "${profileName}": env[${index}] must use either (key,val) or (key_cmd,val_cmd)`,
-      );
-    }
-
-    if (hasStatic) {
-      if (typeof entry.key !== "string" || entry.key.trim() === "") {
-        throw new ConfigValidationError(
-          `profile "${profileName}": env[${index}].key must be a non-empty string`,
-        );
-      }
-      if (typeof entry.val !== "string") {
-        throw new ConfigValidationError(
-          `profile "${profileName}": env[${index}].val must be a string`,
-        );
-      }
-      const staticEntry: StaticEnvConfig = { key: entry.key, val: entry.val };
-      return staticEntry;
-    }
-
-    if (typeof entry.key_cmd !== "string" || entry.key_cmd.trim() === "") {
-      throw new ConfigValidationError(
-        `profile "${profileName}": env[${index}].key_cmd must be a non-empty string`,
-      );
-    }
-    if (typeof entry.val_cmd !== "string" || entry.val_cmd.trim() === "") {
-      throw new ConfigValidationError(
-        `profile "${profileName}": env[${index}].val_cmd must be a non-empty string`,
-      );
-    }
-    const commandEntry: CommandEnvConfig = {
-      keyCmd: entry.key_cmd,
-      valCmd: entry.val_cmd,
-    };
-    return commandEntry;
+    const prefix = `profile "${profileName}": env[${index}]`;
+    const keySpec = validateEnvKey(prefix, entry);
+    const valSpec = validateEnvVal(prefix, entry);
+    return { ...keySpec, ...valSpec } as EnvConfig;
   });
+}
+
+type RawEnvEntry = NonNullable<RawProfile["env"]>[number];
+
+function validateEnvKey(prefix: string, entry: RawEnvEntry): EnvKeySpec {
+  const hasKey = entry.key !== undefined;
+  const hasKeyCmd = entry.key_cmd !== undefined;
+  if (hasKey === hasKeyCmd) {
+    throw new ConfigValidationError(
+      `${prefix} must have exactly one of key or key_cmd`,
+    );
+  }
+  if (hasKey) {
+    if (typeof entry.key !== "string" || entry.key.trim() === "") {
+      throw new ConfigValidationError(
+        `${prefix}.key must be a non-empty string`,
+      );
+    }
+    return { key: entry.key };
+  }
+  if (typeof entry.key_cmd !== "string" || entry.key_cmd.trim() === "") {
+    throw new ConfigValidationError(
+      `${prefix}.key_cmd must be a non-empty string`,
+    );
+  }
+  return { keyCmd: entry.key_cmd };
+}
+
+function validateEnvVal(prefix: string, entry: RawEnvEntry): EnvValSpec {
+  const hasVal = entry.val !== undefined;
+  const hasValCmd = entry.val_cmd !== undefined;
+  if (hasVal === hasValCmd) {
+    throw new ConfigValidationError(
+      `${prefix} must have exactly one of val or val_cmd`,
+    );
+  }
+  if (hasVal) {
+    if (typeof entry.val !== "string") {
+      throw new ConfigValidationError(
+        `${prefix}.val must be a string`,
+      );
+    }
+    return { val: entry.val };
+  }
+  if (typeof entry.val_cmd !== "string" || entry.val_cmd.trim() === "") {
+    throw new ConfigValidationError(
+      `${prefix}.val_cmd must be a non-empty string`,
+    );
+  }
+  return { valCmd: entry.val_cmd };
 }

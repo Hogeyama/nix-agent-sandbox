@@ -42,19 +42,14 @@ export interface ExtraMountConfig {
   mode: "ro" | "rw";
 }
 
-/** 固定値の環境変数エントリ */
-export interface StaticEnvConfig {
-  key: string;
-  val: string;
-}
+/** 環境変数のキー指定 */
+export type EnvKeySpec = { key: string } | { keyCmd: string };
 
-/** コマンド出力の環境変数エントリ */
-export interface CommandEnvConfig {
-  keyCmd: string;
-  valCmd: string;
-}
+/** 環境変数の値指定 */
+export type EnvValSpec = { val: string } | { valCmd: string };
 
-export type EnvConfig = StaticEnvConfig | CommandEnvConfig;
+/** 環境変数エントリ (key/key_cmd × val/val_cmd の4通り) */
+export type EnvConfig = EnvKeySpec & EnvValSpec;
 
 /** プロファイル */
 export interface Profile {

@@ -189,26 +189,17 @@ export class MountStage implements Stage {
 
     // プロファイルの環境変数
     for (const [index, envEntry] of result.profile.env.entries()) {
-      if ("key" in envEntry) {
-        if (!ENV_VAR_NAME_RE.test(envEntry.key)) {
-          throw new Error(
-            `[nas] Invalid env var name from profile.env[${index}].key: ${envEntry.key}`,
-          );
-        }
-        envVars[envEntry.key] = envEntry.val;
-        continue;
-      }
-
-      const key = await runCommandForEnv(
+      const key = "key" in envEntry ? envEntry.key : await runCommandForEnv(
         envEntry.keyCmd,
         `profile.env[${index}].key_cmd`,
       );
       if (!ENV_VAR_NAME_RE.test(key)) {
+        const source = "key" in envEntry ? "key" : "key_cmd";
         throw new Error(
-          `[nas] Invalid env var name from profile.env[${index}].key_cmd: ${key}`,
+          `[nas] Invalid env var name from profile.env[${index}].${source}: ${key}`,
         );
       }
-      const value = await runCommandForEnv(
+      const value = "val" in envEntry ? envEntry.val : await runCommandForEnv(
         envEntry.valCmd,
         `profile.env[${index}].val_cmd`,
       );
