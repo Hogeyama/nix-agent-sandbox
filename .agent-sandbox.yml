@@ -1,14 +1,15 @@
-default: copilot
+default: claude
 
 profiles:
   claude:
     agent: claude
-    worktree:
-      base: HEAD
-      on-create: deno install
     agent-args:
-      - --permission-mode
-      - auto
+      - --allowedTools
+      - "Bash(*)"
+      - --allowedTools
+      - "Edit"
+      - --disallowedTools
+      - "Bash(git push *)"
     nix:
       enable: auto
       mount-socket: true
@@ -21,30 +22,9 @@ profiles:
       mount-config: true
     gpg:
       forward-agent: true
-    extra-mounts:
-      - src: ~/.cache/.bun
-        dst: ~/.cache/.bun
-        mode: rw
-
-  copilot:
-    agent: copilot
-    agent-args:
-      - "--yolo"
     env:
       - key: GITHUB_TOKEN
-        val_cmd: "gh auth token"
-    nix:
-      enable: auto
-      mount-socket: true
-    docker:
-      enable: true
-      shared: true
-    gcloud:
-      mount-config: true
-    aws:
-      mount-config: true
-    gpg:
-      forward-agent: true
+        val_cmd: gh auth token
 
   codex:
     agent: codex
@@ -62,14 +42,17 @@ profiles:
       mount-config: true
     gpg:
       forward-agent: true
+    env:
+      - key: GITHUB_TOKEN
+        val_cmd: gh auth token
 
-  copilot-worktree:
+  copilot:
     agent: copilot
     agent-args:
-      - "--yolo"
-    worktree:
-      base: main
-      on-create: deno install
+      - --allow-all-paths
+      - --allow-tool=shell
+      - --allow-tool=write
+      - --deny-tool=shell(git push)
     nix:
       enable: auto
       mount-socket: true
@@ -82,3 +65,6 @@ profiles:
       mount-config: true
     gpg:
       forward-agent: true
+    env:
+      - key: GITHUB_TOKEN
+        val_cmd: gh auth token
