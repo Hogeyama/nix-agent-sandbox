@@ -128,7 +128,7 @@ profiles:
     assertEquals(p.nix.mountSocket, true);
     assertEquals(p.nix.extraPackages, ["nixpkgs#ripgrep", "nixpkgs#fd"]);
     assertEquals(p.docker.enable, true);
-    assertEquals(p.gcloud.mountConfig, true);
+    assertEquals(p.docker.shared, false);
     assertEquals(p.aws.mountConfig, true);
     assertEquals(p.gpg.forwardAgent, true);
     assertEquals(p.extraMounts.length, 1);
@@ -367,7 +367,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { enable: false },
+        docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -378,7 +378,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         agent: "copilot",
         agentArgs: ["--yolo"],
         nix: { enable: false, mountSocket: false, extraPackages: [] },
-        docker: { enable: false },
+        docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -402,7 +402,7 @@ Deno.test("resolveProfile: falls back to default profile", () => {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { enable: false },
+        docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -424,7 +424,7 @@ Deno.test("resolveProfile: auto-selects when only one profile and no default", (
         agent: "copilot",
         agentArgs: [],
         nix: { enable: false, mountSocket: false, extraPackages: [] },
-        docker: { enable: false },
+        docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -446,7 +446,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { enable: false },
+        docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -457,7 +457,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         agent: "copilot",
         agentArgs: [],
         nix: { enable: false, mountSocket: false, extraPackages: [] },
-        docker: { enable: false },
+        docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -481,7 +481,7 @@ Deno.test("resolveProfile: throws for nonexistent profile name", () => {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { enable: false },
+        docker: { enable: false, shared: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -587,10 +587,10 @@ Deno.test("mergeRawProfiles: nix config is shallow merged", () => {
 Deno.test("mergeRawProfiles: docker config is shallow merged", () => {
   const global: RawProfile = {
     agent: "claude",
-    docker: { enable: false },
+    docker: { enable: false, shared: false },
   };
   const local: RawProfile = {
-    docker: { enable: true },
+    docker: { enable: true, shared: false },
   };
   const merged = mergeRawProfiles(global, local);
   assertEquals(merged.docker?.enable, true);
@@ -680,7 +680,7 @@ Deno.test("validateConfig: multiple profiles each independently validated", () =
       c: {
         agent: "claude",
         nix: { enable: true },
-        docker: { enable: true },
+        docker: { enable: true, shared: false },
       },
     },
   };

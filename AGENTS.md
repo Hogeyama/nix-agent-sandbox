@@ -44,7 +44,7 @@ NixDetectStage         (Checks for flake.nix, resolves "auto" setting)
   ↓
 MountStage             (Builds mount points and docker args)
   ↓
-DindStage              (Starts DinD rootless sidecar if docker.enable)
+DindStage              (Starts DinD rootless sidecar if docker.enable; shared mode reuses existing sidecar)
   ↓
 LaunchStage            (Starts container, drops UID, runs agent)
   ↓
@@ -67,7 +67,7 @@ src/
     worktree.ts          # Creates git worktree with named branch, teardown cleanup, and management subcommands
     nix_detect.ts        # Resolves nix.enable="auto" by checking flake.nix existence
     mount.ts             # Assembles docker mount args, env vars (static + command-based)
-    dind.ts              # DinD rootless sidecar lifecycle (start, readiness, teardown)
+    dind.ts              # DinD rootless sidecar lifecycle (start, readiness, teardown; shared mode)
     launch.ts            # DockerBuildStage (builds/rebuilds image) & LaunchStage (docker run)
   docker/
     client.ts            # Docker CLI wrappers (run, build, image existence checks)
@@ -89,7 +89,7 @@ tests/
 
 - `loadConfig()` searches for `.agent-sandbox.yml` starting from cwd and moving up
 - `resolveProfile()` returns the selected profile (falls back to `config.default`)
-- `validateConfig()` applies defaults: `nix.enable="auto"`, `docker.enable=false`, `env=[]`, etc.
+- `validateConfig()` applies defaults: `nix.enable="auto"`, `docker.enable=false`, `docker.shared=false`, `env=[]`, etc.
 
 ### Pipeline Context
 

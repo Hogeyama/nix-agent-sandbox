@@ -160,6 +160,7 @@ profiles:
       mount-socket: true    # ホストの nix daemon ソケット経由で nix を使用
     docker:
       enable: false        # DinD rootless サイドカーを起動して隔離された Docker 環境を提供
+      shared: false        # true にするとサイドカーをセッション間で共有（起動が速い）
     gpg:
       forward-agent: true   # ホストの gpg-agent を転送（署名用）
     extra-mounts:           # 任意の追加マウント
@@ -183,6 +184,7 @@ profiles:
       mount-socket: true
     docker:
       enable: false
+      shared: false
 ```
 
 ### プロファイル設定リファレンス
@@ -197,6 +199,7 @@ profiles:
 | `nix.mount-socket` | bool | `true` | ホストの nix daemon にソケット経由で接続 |
 | `nix.extra-packages` | string[] | `[]` | `nix shell` で追加するパッケージ（`nix develop` 前に適用） |
 | `docker.enable` | bool | `false` | DinD rootless サイドカーを起動して隔離された Docker 環境を提供 |
+| `docker.shared` | bool | `false` | サイドカーをセッション間で共有（起動が速い。`false` ではセッションごとに起動・破棄） |
 | `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `aws.mount-config` | bool | `false` | AWS 設定ディレクトリ（`~/.aws`）をマウント |
 | `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |

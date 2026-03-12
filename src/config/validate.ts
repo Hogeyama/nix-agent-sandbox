@@ -74,6 +74,8 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     docker: {
       enable: raw.docker?.enable ??
         DEFAULT_DOCKER_CONFIG.enable,
+      shared: raw.docker?.shared ??
+        DEFAULT_DOCKER_CONFIG.shared,
     },
     gcloud: {
       mountConfig: raw.gcloud?.["mount-config"] ??

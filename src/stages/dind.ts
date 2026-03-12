@@ -4,6 +4,10 @@
  * docker:dind-rootless コンテナをサイドカーとして起動し、
  * エージェントコンテナから隔離された Docker デーモンを利用可能にする。
  *
+ * 動作モード:
+ * - shared=false (デフォルト): セッションごとに専用サイドカーを起動・破棄
+ * - shared=true: 固定名 "nas-dind-shared" のサイドカーを使い回し、teardown で削除しない
+ *
  * 起動手順:
  * 1. dind-rootless をデフォルト bridge で起動（rootlesskit が vpnkit + copy-up で
  *    ネットワーク名前空間をセットアップするため、カスタムネットワーク上では起動に失敗する）
@@ -30,12 +34,15 @@ const DIND_IMAGE = "docker:dind-rootless";
 const DIND_INTERNAL_PORT = 2375;
 const DIND_CACHE_VOLUME = "nas-docker-cache";
 const DIND_DATA_DIR = "/home/rootless/.local/share/docker";
+const SHARED_CONTAINER_NAME = "nas-dind-shared";
+const SHARED_NETWORK_NAME = "nas-dind-shared";
 const READINESS_TIMEOUT_MS = 30_000;
 const READINESS_POLL_INTERVAL_MS = 500;
 
 export class DindStage implements Stage {
   name = "DindStage";
 
+  private shared = false;
   private networkName: string | null = null;
   private containerName: string | null = null;
 
@@ -45,42 +52,57 @@ export class DindStage implements Stage {
       return ctx;
     }
 
-    const sessionId = crypto.randomUUID().slice(0, 8);
-    const networkName = `nas-dind-${sessionId}`;
-    const containerName = `nas-dind-${sessionId}`;
+    this.shared = ctx.profile.docker.shared;
+
+    let networkName: string;
+    let containerName: string;
+
+    if (this.shared) {
+      networkName = SHARED_NETWORK_NAME;
+      containerName = SHARED_CONTAINER_NAME;
+    } else {
+      const sessionId = crypto.randomUUID().slice(0, 8);
+      networkName = `nas-dind-${sessionId}`;
+      containerName = `nas-dind-${sessionId}`;
+    }
     this.networkName = networkName;
     this.containerName = containerName;
 
-    // DinD rootless サイドカーをデフォルト bridge で起動
-    // ※ rootlesskit が vpnkit + --copy-up=/run,/etc でネットワーク名前空間を構築するため、
-    //    カスタム Docker ネットワーク上では起動に失敗する。
-    //    起動後に docker network connect でカスタムネットワークに接続する。
-    // ※ Docker named volume を使用。初回は Dockerfile の VOLUME 宣言から
-    //    正しいパーミッション（rootless:rootless）で初期化される。
-    //    ホスト bind mount は rootlesskit の UID remapping と競合するため使わない。
-    console.log(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
-    await dockerRunDetached({
-      name: containerName,
-      image: DIND_IMAGE,
-      args: [
-        "--privileged",
-        "-v",
-        `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`,
-      ],
-      envVars: {
-        DOCKER_TLS_CERTDIR: "",
-      },
-    });
+    // 共有モード: 既に起動中ならサイドカー作成をスキップ
+    if (this.shared && await dockerIsRunning(containerName)) {
+      console.log(`[nas] DinD: reusing shared sidecar (${containerName})`);
+    } else {
+      // 共有モードで停止済みコンテナが残っている場合は削除して再作成
+      if (this.shared) {
+        await dockerRm(containerName).catch(() => {});
+      }
 
-    // DinD readiness check (TCP 経由)
-    console.log("[nas] DinD: waiting for daemon to be ready...");
-    await waitForDindReady(containerName, READINESS_TIMEOUT_MS);
-    console.log("[nas] DinD: daemon is ready");
+      // DinD rootless サイドカーをデフォルト bridge で起動
+      // ※ rootlesskit が vpnkit + --copy-up=/run,/etc でネットワーク名前空間を構築するため、
+      //    カスタム Docker ネットワーク上では起動に失敗する。
+      //    起動後に docker network connect でカスタムネットワークに接続する。
+      console.log(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
+      await dockerRunDetached({
+        name: containerName,
+        image: DIND_IMAGE,
+        args: [
+          "--privileged",
+          "-v",
+          `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`,
+        ],
+        envVars: {
+          DOCKER_TLS_CERTDIR: "",
+        },
+      });
 
-    // カスタムネットワークを作成し、サイドカーを接続
-    console.log(`[nas] DinD: creating network ${networkName}`);
-    await dockerNetworkCreate(networkName);
-    await dockerNetworkConnect(networkName, containerName);
+      // DinD readiness check (TCP 経由)
+      console.log("[nas] DinD: waiting for daemon to be ready...");
+      await waitForDindReady(containerName, READINESS_TIMEOUT_MS);
+      console.log("[nas] DinD: daemon is ready");
+    }
+
+    // カスタムネットワーク作成（既存ならスキップ）& サイドカー接続
+    await ensureNetwork(networkName, containerName);
 
     // エージェントコンテナに DinD ネットワークと DOCKER_HOST を設定
     const args = [...ctx.dockerArgs, "--network", networkName];
@@ -94,6 +116,14 @@ export class DindStage implements Stage {
 
   async teardown(_ctx: ExecutionContext): Promise<void> {
     if (!this.containerName) return;
+
+    // 共有モードではサイドカーもネットワークも残す
+    if (this.shared) {
+      console.log(
+        `[nas] DinD: keeping shared sidecar (${this.containerName})`,
+      );
+      return;
+    }
 
     try {
       console.log(`[nas] DinD: stopping sidecar ${this.containerName}`);
@@ -114,6 +144,24 @@ export class DindStage implements Stage {
         // ネットワークが既に削除されている場合は無視
       }
     }
+  }
+}
+
+/** ネットワークを作成（既存ならスキップ）し、コンテナを接続 */
+async function ensureNetwork(
+  networkName: string,
+  containerName: string,
+): Promise<void> {
+  try {
+    await dockerNetworkCreate(networkName);
+    console.log(`[nas] DinD: created network ${networkName}`);
+  } catch {
+    // 既に存在する場合は無視
+  }
+  try {
+    await dockerNetworkConnect(networkName, containerName);
+  } catch {
+    // 既に接続済みの場合は無視
   }
 }
 

@@ -14,6 +14,7 @@ profiles:
       mount-socket: true
     docker:
       enable: true
+      shared: true
     gcloud:
       mount-config: true
     aws:
@@ -34,6 +35,7 @@ profiles:
       mount-socket: true
     docker:
       enable: true
+      shared: true
     gcloud:
       mount-config: true
     aws:
@@ -50,6 +52,7 @@ profiles:
       mount-socket: true
     docker:
       enable: true
+      shared: true
     gcloud:
       mount-config: true
     aws:
@@ -69,6 +72,7 @@ profiles:
       mount-socket: true
     docker:
       enable: true
+      shared: true
     gcloud:
       mount-config: true
     aws:

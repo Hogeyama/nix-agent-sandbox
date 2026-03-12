@@ -22,7 +22,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     agent: "claude",
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
-    docker: { enable: false },
+    docker: { enable: false, shared: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
@@ -249,7 +249,7 @@ Deno.test("E2E Pipeline: MountStage sets workspace mount and env", async () => {
 
 Deno.test("E2E Pipeline: MountStage with docker.enable does not mount socket", async () => {
   const profile = makeProfile({
-    docker: { enable: true },
+    docker: { enable: true, shared: false },
   });
   const config = makeConfig({ test: profile }, "test");
   const ctx = createContext(config, profile, "test", Deno.cwd());
@@ -265,7 +265,7 @@ Deno.test("E2E Pipeline: MountStage with docker.enable does not mount socket", a
 
 Deno.test("E2E Pipeline: MountStage without docker does not mount socket", async () => {
   const profile = makeProfile({
-    docker: { enable: false },
+    docker: { enable: false, shared: false },
   });
   const config = makeConfig({ test: profile }, "test");
   const ctx = createContext(config, profile, "test", Deno.cwd());

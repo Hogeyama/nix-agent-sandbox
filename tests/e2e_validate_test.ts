@@ -291,6 +291,7 @@ Deno.test("validate: docker defaults", () => {
     profiles: { test: { agent: "claude" } },
   });
   assertEquals(config.profiles.test.docker.enable, false);
+  assertEquals(config.profiles.test.docker.shared, false);
 });
 
 Deno.test("validate: docker enable=true", () => {
@@ -298,11 +299,23 @@ Deno.test("validate: docker enable=true", () => {
     profiles: {
       test: {
         agent: "claude",
-        docker: { enable: true },
+        docker: { enable: true, shared: false },
       },
     },
   });
   assertEquals(config.profiles.test.docker.enable, true);
+});
+
+Deno.test("validate: docker shared=true", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        docker: { enable: true, shared: true },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.docker.shared, true);
 });
 
 // --- gcloud バリデーション ---
@@ -651,7 +664,7 @@ Deno.test("validate: multiple valid profiles all validated", () => {
       b: { agent: "copilot", "agent-args": ["--yolo"] },
       c: {
         agent: "claude",
-        docker: { enable: true },
+        docker: { enable: true, shared: false },
         gpg: { "forward-agent": true },
       },
     },

@@ -14,7 +14,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     agent: "claude",
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
-    docker: { enable: false },
+    docker: { enable: false, shared: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
@@ -374,7 +374,7 @@ Deno.test("serializeNixExtraPackages: all empty returns null", () => {
 // --- docker (DinD rootless, MountStage no longer mounts socket) ---
 
 Deno.test("MountStage: docker socket not mounted even when docker.enable is true", async () => {
-  const profile = makeProfile({ docker: { enable: true } });
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   const result = await new MountStage().execute(ctx);
   // DinD 移行後: MountStage は docker.sock をマウントしない (DindStage が担当)
@@ -385,7 +385,7 @@ Deno.test("MountStage: docker socket not mounted even when docker.enable is true
 });
 
 Deno.test("MountStage: docker socket not mounted when docker.enable is false", async () => {
-  const profile = makeProfile({ docker: { enable: false } });
+  const profile = makeProfile({ docker: { enable: false, shared: false } });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   const result = await new MountStage().execute(ctx);
   assertEquals(

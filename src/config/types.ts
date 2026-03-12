@@ -17,6 +17,7 @@ export interface NixConfig {
 /** Docker 設定 */
 export interface DockerConfig {
   enable: boolean;
+  shared: boolean;
 }
 
 /** gcloud 設定 */
@@ -95,6 +96,7 @@ export interface RawProfile {
   };
   docker?: {
     enable?: boolean;
+    shared?: boolean;
   };
   gcloud?: {
     "mount-config"?: boolean;
@@ -127,6 +129,7 @@ export const DEFAULT_NIX_CONFIG: NixConfig = {
 
 export const DEFAULT_DOCKER_CONFIG: DockerConfig = {
   enable: false,
+  shared: false,
 };
 
 export const DEFAULT_GCLOUD_CONFIG: GcloudConfig = {

@@ -19,6 +19,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.agent, "claude");
   assertEquals(config.profiles.test.nix.enable, "auto");
   assertEquals(config.profiles.test.docker.enable, false);
+  assertEquals(config.profiles.test.docker.shared, false);
   assertEquals(config.profiles.test.gpg.forwardAgent, false);
   assertEquals(config.profiles.test.extraMounts, []);
   assertEquals(config.profiles.test.env, []);
@@ -62,6 +63,7 @@ Deno.test("validateConfig: full config", () => {
   assertEquals(p.nix.mountSocket, true);
   assertEquals(p.nix.extraPackages, ["nixpkgs.ripgrep"]);
   assertEquals(p.docker.enable, true);
+  assertEquals(p.docker.shared, false);
   assertEquals(p.extraMounts, [
     { src: "~/.cabal", dst: "~/.cabal", mode: "ro" },
     { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
