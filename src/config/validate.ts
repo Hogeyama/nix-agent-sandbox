@@ -72,8 +72,8 @@ function validateProfile(name: string, raw: RawProfile): Profile {
         DEFAULT_NIX_CONFIG.extraPackages,
     },
     docker: {
-      mountSocket: raw.docker?.["mount-socket"] ??
-        DEFAULT_DOCKER_CONFIG.mountSocket,
+      enable: raw.docker?.enable ??
+        DEFAULT_DOCKER_CONFIG.enable,
     },
     gcloud: {
       mountConfig: raw.gcloud?.["mount-config"] ??

@@ -22,7 +22,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     agent: "claude",
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
-    docker: { mountSocket: false },
+    docker: { enable: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
@@ -247,24 +247,25 @@ Deno.test("E2E Pipeline: MountStage sets workspace mount and env", async () => {
   assertEquals(result.envVars["NAS_HOME"], `/home/${user}`);
 });
 
-Deno.test("E2E Pipeline: MountStage with docker socket mount", async () => {
+Deno.test("E2E Pipeline: MountStage with docker.enable does not mount socket", async () => {
   const profile = makeProfile({
-    docker: { mountSocket: true },
+    docker: { enable: true },
   });
   const config = makeConfig({ test: profile }, "test");
   const ctx = createContext(config, profile, "test", Deno.cwd());
 
   const result = await runPipeline([new MountStage()], ctx);
 
+  // DinD 移行後: MountStage は docker.sock をマウントしない
   assertEquals(
     result.dockerArgs.includes("/var/run/docker.sock:/var/run/docker.sock"),
-    true,
+    false,
   );
 });
 
-Deno.test("E2E Pipeline: MountStage without docker socket mount", async () => {
+Deno.test("E2E Pipeline: MountStage without docker does not mount socket", async () => {
   const profile = makeProfile({
-    docker: { mountSocket: false },
+    docker: { enable: false },
   });
   const config = makeConfig({ test: profile }, "test");
   const ctx = createContext(config, profile, "test", Deno.cwd());

@@ -110,3 +110,99 @@ export async function dockerImageExists(tag: string): Promise<boolean> {
     return false;
   }
 }
+
+/** docker network を作成 */
+export async function dockerNetworkCreate(name: string): Promise<void> {
+  await $`docker network create ${name}`.quiet();
+}
+
+/** docker network にコンテナを接続 */
+export async function dockerNetworkConnect(
+  networkName: string,
+  containerName: string,
+): Promise<void> {
+  await $`docker network connect ${networkName} ${containerName}`.quiet();
+}
+
+/** docker network を削除 */
+export async function dockerNetworkRemove(name: string): Promise<void> {
+  await $`docker network rm ${name}`.quiet();
+}
+
+export interface DockerRunDetachedOptions {
+  name: string;
+  image: string;
+  args: string[];
+  envVars: Record<string, string>;
+}
+
+/** docker run をデタッチモードで実行 */
+export async function dockerRunDetached(
+  opts: DockerRunDetachedOptions,
+): Promise<void> {
+  const args: string[] = ["run", "-d", "--name", opts.name];
+  for (const [key, value] of Object.entries(opts.envVars)) {
+    args.push("-e", `${key}=${value}`);
+  }
+  args.push(...opts.args);
+  args.push(opts.image);
+  await $`docker ${args}`.quiet();
+}
+
+/** docker stop を実行 */
+export async function dockerStop(containerName: string): Promise<void> {
+  await $`docker stop ${containerName}`.quiet();
+}
+
+/** docker rm を実行 */
+export async function dockerRm(containerName: string): Promise<void> {
+  await $`docker rm ${containerName}`.quiet();
+}
+
+/** docker exec を実行して結果を返す */
+export async function dockerExec(
+  containerName: string,
+  command: string[],
+): Promise<{ code: number; stdout: string }> {
+  try {
+    const result =
+      await $`docker exec ${containerName} ${command}`.quiet();
+    return { code: 0, stdout: result.stdout.trim() };
+  } catch (err) {
+    if (err && typeof err === "object" && "exitCode" in err) {
+      return { code: (err as { exitCode: number }).exitCode, stdout: "" };
+    }
+    return { code: 1, stdout: "" };
+  }
+}
+
+/** コンテナが実行中かどうかを確認 */
+export async function dockerIsRunning(
+  containerName: string,
+): Promise<boolean> {
+  try {
+    const fmt = "{{.State.Running}}";
+    const result =
+      await $`docker inspect --format=${fmt} ${containerName}`
+        .quiet();
+    return result.stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** コンテナのログを取得 */
+export async function dockerLogs(
+  containerName: string,
+  options?: { tail?: number },
+): Promise<string> {
+  try {
+    const tailArgs = options?.tail ? ["--tail", String(options.tail)] : [];
+    const result =
+      await $`docker logs ${tailArgs} ${containerName}`.quiet("both");
+    // docker logs outputs to both stdout and stderr
+    return (result.stdout + result.stderr).trim();
+  } catch {
+    return "(failed to retrieve container logs)";
+  }
+}

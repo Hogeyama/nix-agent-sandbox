@@ -290,19 +290,19 @@ Deno.test("validate: docker defaults", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.docker.mountSocket, false);
+  assertEquals(config.profiles.test.docker.enable, false);
 });
 
-Deno.test("validate: docker mount-socket=true", () => {
+Deno.test("validate: docker enable=true", () => {
   const config = validateConfig({
     profiles: {
       test: {
         agent: "claude",
-        docker: { "mount-socket": true },
+        docker: { enable: true },
       },
     },
   });
-  assertEquals(config.profiles.test.docker.mountSocket, true);
+  assertEquals(config.profiles.test.docker.enable, true);
 });
 
 // --- gcloud バリデーション ---
@@ -651,13 +651,13 @@ Deno.test("validate: multiple valid profiles all validated", () => {
       b: { agent: "copilot", "agent-args": ["--yolo"] },
       c: {
         agent: "claude",
-        docker: { "mount-socket": true },
+        docker: { enable: true },
         gpg: { "forward-agent": true },
       },
     },
   });
   assertEquals(config.profiles.a.nix.enable, true);
   assertEquals(config.profiles.b.agentArgs, ["--yolo"]);
-  assertEquals(config.profiles.c.docker.mountSocket, true);
+  assertEquals(config.profiles.c.docker.enable, true);
   assertEquals(config.profiles.c.gpg.forwardAgent, true);
 });

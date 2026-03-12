@@ -7,7 +7,7 @@ const baseProfile: Profile = {
   agent: "claude",
   agentArgs: [],
   nix: { enable: false, mountSocket: false, extraPackages: [] },
-  docker: { mountSocket: false },
+  docker: { enable: false },
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },

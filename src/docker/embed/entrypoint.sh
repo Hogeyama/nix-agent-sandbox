@@ -61,21 +61,13 @@ if [ "$NAS_UID" != "0" ]; then
     chmod 700 "${NAS_HOME}/.gnupg"
   fi
 
-  # Docker socket / GPG socket の GID を補助グループに追加
+  # GPG socket の GID を補助グループに追加
   # --init-groups と --groups は排他なので、ソケットがある場合は
   # --groups に NAS_GID と各 GID を明示的に列挙する
   EXTRA_GIDS=""
-  if [ -S /var/run/docker.sock ]; then
-    DOCKER_SOCK_GID=$(stat -c '%g' /var/run/docker.sock)
-    EXTRA_GIDS="${DOCKER_SOCK_GID}"
-  fi
   if [ -S "${NAS_HOME}/.gnupg/S.gpg-agent" ]; then
     GPG_SOCK_GID=$(stat -c '%g' "${NAS_HOME}/.gnupg/S.gpg-agent")
-    if [ -n "$EXTRA_GIDS" ]; then
-      EXTRA_GIDS="${EXTRA_GIDS},${GPG_SOCK_GID}"
-    else
-      EXTRA_GIDS="${GPG_SOCK_GID}"
-    fi
+    EXTRA_GIDS="${GPG_SOCK_GID}"
   fi
   if [ -n "$EXTRA_GIDS" ]; then
     EXEC_PREFIX=(setpriv --reuid="${NAS_UID}" --regid="${NAS_GID}" --groups "${NAS_GID},${EXTRA_GIDS}" --)

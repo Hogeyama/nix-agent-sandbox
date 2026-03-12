@@ -13,7 +13,6 @@ const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_CONTAINER_USER = "nas";
 const RESERVED_EXTRA_MOUNT_DESTINATIONS = new Set([
   "/nix",
-  "/var/run/docker.sock",
 ]);
 
 export class MountStage implements Stage {
@@ -95,11 +94,6 @@ export class MountStage implements Stage {
           envVars["NIX_BIN_PATH"] = nixBinPath;
         }
       }
-    }
-
-    // Docker socket マウント
-    if (result.profile.docker.mountSocket) {
-      args.push("-v", "/var/run/docker.sock:/var/run/docker.sock");
     }
 
     // git 設定マウント (user.name / user.email などをコンテナに引き継ぐ)

@@ -9,6 +9,7 @@ import { WorktreeStage } from "./stages/worktree.ts";
 import { cleanNasWorktrees, listNasWorktrees } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { MountStage } from "./stages/mount.ts";
+import { DindStage } from "./stages/dind.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { dockerImageExists, dockerRemoveImage } from "./docker/client.ts";
 
@@ -56,6 +57,7 @@ export async function main(args: string[]): Promise<void> {
       new DockerBuildStage(),
       new NixDetectStage(),
       new MountStage(),
+      new DindStage(),
       new LaunchStage(agentExtraArgs),
     ];
 

@@ -8,7 +8,7 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
     agent: "claude",
     agentArgs: [],
     nix: { enable: nixEnable, mountSocket: true, extraPackages: [] },
-    docker: { mountSocket: false },
+    docker: { enable: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },

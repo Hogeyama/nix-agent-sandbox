@@ -16,7 +16,7 @@ export interface NixConfig {
 
 /** Docker 設定 */
 export interface DockerConfig {
-  mountSocket: boolean;
+  enable: boolean;
 }
 
 /** gcloud 設定 */
@@ -94,7 +94,7 @@ export interface RawProfile {
     "extra-packages"?: string[];
   };
   docker?: {
-    "mount-socket"?: boolean;
+    enable?: boolean;
   };
   gcloud?: {
     "mount-config"?: boolean;
@@ -126,7 +126,7 @@ export const DEFAULT_NIX_CONFIG: NixConfig = {
 };
 
 export const DEFAULT_DOCKER_CONFIG: DockerConfig = {
-  mountSocket: false,
+  enable: false,
 };
 
 export const DEFAULT_GCLOUD_CONFIG: GcloudConfig = {

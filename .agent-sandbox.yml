@@ -13,7 +13,7 @@ profiles:
       enable: auto
       mount-socket: true
     docker:
-      mount-socket: true
+      enable: true
     gcloud:
       mount-config: true
     aws:
@@ -33,7 +33,7 @@ profiles:
       enable: auto
       mount-socket: true
     docker:
-      mount-socket: true
+      enable: true
     gcloud:
       mount-config: true
     aws:
@@ -49,7 +49,7 @@ profiles:
       enable: auto
       mount-socket: true
     docker:
-      mount-socket: true
+      enable: true
     gcloud:
       mount-config: true
     aws:
@@ -68,7 +68,7 @@ profiles:
       enable: auto
       mount-socket: true
     docker:
-      mount-socket: true
+      enable: true
     gcloud:
       mount-config: true
     aws:

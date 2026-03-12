@@ -63,7 +63,7 @@ profiles:
     const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.dev.agent, "claude");
     assertEquals(config.profiles.dev.nix.enable, "auto");
-    assertEquals(config.profiles.dev.docker.mountSocket, false);
+    assertEquals(config.profiles.dev.docker.enable, false);
     assertEquals(config.profiles.dev.env, []);
     assertEquals(config.profiles.dev.extraMounts, []);
   });
@@ -101,7 +101,7 @@ profiles:
         - nixpkgs#ripgrep
         - nixpkgs#fd
     docker:
-      mount-socket: true
+      enable: true
     gcloud:
       mount-config: true
     aws:
@@ -127,7 +127,7 @@ profiles:
     assertEquals(p.nix.enable, true);
     assertEquals(p.nix.mountSocket, true);
     assertEquals(p.nix.extraPackages, ["nixpkgs#ripgrep", "nixpkgs#fd"]);
-    assertEquals(p.docker.mountSocket, true);
+    assertEquals(p.docker.enable, true);
     assertEquals(p.gcloud.mountConfig, true);
     assertEquals(p.aws.mountConfig, true);
     assertEquals(p.gpg.forwardAgent, true);
@@ -367,7 +367,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { mountSocket: false },
+        docker: { enable: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -378,7 +378,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         agent: "copilot",
         agentArgs: ["--yolo"],
         nix: { enable: false, mountSocket: false, extraPackages: [] },
-        docker: { mountSocket: false },
+        docker: { enable: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -402,7 +402,7 @@ Deno.test("resolveProfile: falls back to default profile", () => {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { mountSocket: false },
+        docker: { enable: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -424,7 +424,7 @@ Deno.test("resolveProfile: auto-selects when only one profile and no default", (
         agent: "copilot",
         agentArgs: [],
         nix: { enable: false, mountSocket: false, extraPackages: [] },
-        docker: { mountSocket: false },
+        docker: { enable: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -446,7 +446,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { mountSocket: false },
+        docker: { enable: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -457,7 +457,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         agent: "copilot",
         agentArgs: [],
         nix: { enable: false, mountSocket: false, extraPackages: [] },
-        docker: { mountSocket: false },
+        docker: { enable: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -481,7 +481,7 @@ Deno.test("resolveProfile: throws for nonexistent profile name", () => {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
-        docker: { mountSocket: false },
+        docker: { enable: false },
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
@@ -587,13 +587,13 @@ Deno.test("mergeRawProfiles: nix config is shallow merged", () => {
 Deno.test("mergeRawProfiles: docker config is shallow merged", () => {
   const global: RawProfile = {
     agent: "claude",
-    docker: { "mount-socket": false },
+    docker: { enable: false },
   };
   const local: RawProfile = {
-    docker: { "mount-socket": true },
+    docker: { enable: true },
   };
   const merged = mergeRawProfiles(global, local);
-  assertEquals(merged.docker?.["mount-socket"], true);
+  assertEquals(merged.docker?.enable, true);
 });
 
 Deno.test("mergeRawProfiles: env is replaced (not merged)", () => {
@@ -680,7 +680,7 @@ Deno.test("validateConfig: multiple profiles each independently validated", () =
       c: {
         agent: "claude",
         nix: { enable: true },
-        docker: { "mount-socket": true },
+        docker: { enable: true },
       },
     },
   };
@@ -689,7 +689,7 @@ Deno.test("validateConfig: multiple profiles each independently validated", () =
   assertEquals(config.profiles.b.agent, "copilot");
   assertEquals(config.profiles.b.agentArgs, ["--flag"]);
   assertEquals(config.profiles.c.nix.enable, true);
-  assertEquals(config.profiles.c.docker.mountSocket, true);
+  assertEquals(config.profiles.c.docker.enable, true);
 });
 
 Deno.test("validateConfig: extra-mounts with all modes", () => {
@@ -841,7 +841,7 @@ profiles:
       extra-packages:
         - nixpkgs#ripgrep
     docker:
-      mount-socket: true
+      enable: true
     gcloud:
       mount-config: true
     aws:
@@ -867,7 +867,7 @@ profiles:
     assertEquals(profile.worktree?.onCreate, "npm install && npm run build");
     assertEquals(profile.nix.enable, true);
     assertEquals(profile.nix.extraPackages, ["nixpkgs#ripgrep"]);
-    assertEquals(profile.docker.mountSocket, true);
+    assertEquals(profile.docker.enable, true);
     assertEquals(profile.gcloud.mountConfig, true);
     assertEquals(profile.aws.mountConfig, true);
     assertEquals(profile.gpg.forwardAgent, true);

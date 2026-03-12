@@ -76,15 +76,15 @@ Deno.test("mergeRawConfigs: same-name profile fields are merged", () => {
 Deno.test("mergeRawProfiles: nested object shallow merge", () => {
   const global: RawProfile = {
     agent: "claude",
-    docker: { "mount-socket": true },
+    docker: { enable: true },
     gcloud: { "mount-config": true },
   };
   const local: RawProfile = {
-    docker: { "mount-socket": false },
+    docker: { enable: false },
   };
   const result = mergeRawProfiles(global, local);
   assertEquals(result.agent, "claude");
-  assertEquals(result.docker?.["mount-socket"], false);
+  assertEquals(result.docker?.enable, false);
   assertEquals(result.gcloud?.["mount-config"], true); // from global
 });
 

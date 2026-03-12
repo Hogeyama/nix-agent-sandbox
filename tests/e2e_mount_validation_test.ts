@@ -14,7 +14,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     agent: "claude",
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
-    docker: { mountSocket: false },
+    docker: { enable: false },
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
@@ -256,17 +256,18 @@ Deno.test("MountStage: extra-mount to /nix conflicts", async () => {
   );
 });
 
-Deno.test("MountStage: extra-mount to /var/run/docker.sock conflicts", async () => {
+Deno.test("MountStage: extra-mount to /var/run/docker.sock is allowed (DinD migration)", async () => {
   const profile = makeProfile({
     extraMounts: [
       { src: Deno.cwd(), dst: "/var/run/docker.sock", mode: "ro" },
     ],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
-    Error,
-    "conflicts with existing mount destination",
+  // DinD 移行後: /var/run/docker.sock は予約パスではなくなったため許可される
+  const result = await new MountStage().execute(ctx);
+  assertEquals(
+    result.dockerArgs.some((a) => a.includes(":/var/run/docker.sock")),
+    true,
   );
 });
 
@@ -370,20 +371,21 @@ Deno.test("serializeNixExtraPackages: all empty returns null", () => {
   assertEquals(serializeNixExtraPackages([]), null);
 });
 
-// --- docker socket mount ---
+// --- docker (DinD rootless, MountStage no longer mounts socket) ---
 
-Deno.test("MountStage: docker socket mount included when enabled", async () => {
-  const profile = makeProfile({ docker: { mountSocket: true } });
+Deno.test("MountStage: docker socket not mounted even when docker.enable is true", async () => {
+  const profile = makeProfile({ docker: { enable: true } });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   const result = await new MountStage().execute(ctx);
+  // DinD 移行後: MountStage は docker.sock をマウントしない (DindStage が担当)
   assertEquals(
     result.dockerArgs.includes("/var/run/docker.sock:/var/run/docker.sock"),
-    true,
+    false,
   );
 });
 
-Deno.test("MountStage: docker socket mount excluded when disabled", async () => {
-  const profile = makeProfile({ docker: { mountSocket: false } });
+Deno.test("MountStage: docker socket not mounted when docker.enable is false", async () => {
+  const profile = makeProfile({ docker: { enable: false } });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   const result = await new MountStage().execute(ctx);
   assertEquals(
