@@ -10,12 +10,6 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
   const envVars = { ...ctx.envVars };
   const containerHome = ctx.envVars["NAS_HOME"] ?? resolveContainerHome();
 
-  // gh auth token で GitHub トークンを取得
-  const token = getGhToken();
-  if (token) {
-    envVars["GITHUB_TOKEN"] = token;
-  }
-
   const home = Deno.env.get("HOME") ?? "/root";
   const xdgConfigHome = Deno.env.get("XDG_CONFIG_HOME");
   const xdgStateHome = Deno.env.get("XDG_STATE_HOME");
@@ -110,24 +104,6 @@ export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
       ? ["copilot"]
       : ["bash", "-c", "echo 'copilot binary not found'; exit 1"],
   };
-}
-
-/** gh auth token を取得 */
-function getGhToken(): string | null {
-  try {
-    const cmd = new Deno.Command("gh", {
-      args: ["auth", "token"],
-      stdout: "piped",
-      stderr: "null",
-    });
-    const output = cmd.outputSync();
-    if (output.success) {
-      return new TextDecoder().decode(output.stdout).trim();
-    }
-  } catch {
-    // ignore
-  }
-  return null;
 }
 
 /**

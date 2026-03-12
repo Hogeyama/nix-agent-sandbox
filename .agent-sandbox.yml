@@ -30,6 +30,9 @@ profiles:
     agent: copilot
     agent-args:
       - "--yolo"
+    env:
+      - key: GITHUB_TOKEN
+        val_cmd: "gh auth token"
     nix:
       enable: auto
       mount-socket: true
