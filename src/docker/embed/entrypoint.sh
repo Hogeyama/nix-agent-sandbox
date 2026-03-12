@@ -107,7 +107,20 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   CMD_STR=$(printf '%q ' "${AGENT_COMMAND[@]}")
   # /bin/bash (readline対応) をPATHの先頭に配置して、
   # Nixの readline なし bash より優先させる
+  HAS_DEVSHELL=false
   if [ -f "$WORKSPACE/flake.nix" ]; then
+    # flake に devShells.<system>.default があるかチェック (nix flake show は derivation を評価しないため高速)
+    SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
+    if [ -n "$SYSTEM" ] && "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
+      nix flake show --json "$WORKSPACE" 2>/dev/null | \
+      jq -e ".devShells.\"$SYSTEM\".default" >/dev/null 2>&1; then
+      HAS_DEVSHELL=true
+    else
+      echo "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
+    fi
+  fi
+
+  if [ "$HAS_DEVSHELL" = "true" ]; then
     # --- nix-direnv 方式: nix print-dev-env でキャッシュ ---
     NAS_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
     mkdir -p "$NAS_NIX_CACHE"
