@@ -203,6 +203,8 @@ async function waitForDindReady(
   // タイムアウト時はログを出力して原因調査を助ける
   const logs = await dockerLogs(containerName, { tail: 50 });
   throw new Error(
-    `DinD rootless failed to become ready within ${timeoutMs / 1000}s\n--- container logs ---\n${logs}`,
+    `DinD rootless failed to become ready within ${
+      timeoutMs / 1000
+    }s\n--- container logs ---\n${logs}`,
   );
 }

@@ -165,8 +165,7 @@ export async function dockerExec(
   command: string[],
 ): Promise<{ code: number; stdout: string }> {
   try {
-    const result =
-      await $`docker exec ${containerName} ${command}`.quiet();
+    const result = await $`docker exec ${containerName} ${command}`.quiet();
     return { code: 0, stdout: result.stdout.trim() };
   } catch (err) {
     if (err && typeof err === "object" && "exitCode" in err) {
@@ -182,9 +181,8 @@ export async function dockerIsRunning(
 ): Promise<boolean> {
   try {
     const fmt = "{{.State.Running}}";
-    const result =
-      await $`docker inspect --format=${fmt} ${containerName}`
-        .quiet();
+    const result = await $`docker inspect --format=${fmt} ${containerName}`
+      .quiet();
     return result.stdout.trim() === "true";
   } catch {
     return false;
@@ -198,8 +196,9 @@ export async function dockerLogs(
 ): Promise<string> {
   try {
     const tailArgs = options?.tail ? ["--tail", String(options.tail)] : [];
-    const result =
-      await $`docker logs ${tailArgs} ${containerName}`.quiet("both");
+    const result = await $`docker logs ${tailArgs} ${containerName}`.quiet(
+      "both",
+    );
     // docker logs outputs to both stdout and stderr
     return (result.stdout + result.stderr).trim();
   } catch {
