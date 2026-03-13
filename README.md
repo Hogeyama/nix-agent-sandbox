@@ -236,7 +236,7 @@ nas [options-before-profile] [profile-name] [agent-args...]
 
 - **ベースイメージ**: `ubuntu:24.04`
 - **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin, gh, ripgrep, fd, Python 3（`python`/`python3`）, Node.js, Google Cloud CLI（`gcloud`）, AWS CLI v2（`aws`）
-- **エージェントバイナリ**: ホストからバインドマウント（`/usr/local/bin/` に配置）
+- **エージェントバイナリ**: ホストからバインドマウント（Claude Code は `~/.local/bin/`、Copilot/Codex は `/usr/local/bin/` に配置）
 
 ### 認証の引き継ぎ
 
