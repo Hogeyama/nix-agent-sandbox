@@ -616,28 +616,12 @@ Deno.test("MountStage: claude agent uses ~/.local/bin in container", async () =>
   }
 });
 
-Deno.test("MountStage: copilot agent sets GITHUB_TOKEN if gh available", async () => {
+Deno.test("MountStage: copilot agent does not set GITHUB_TOKEN implicitly", async () => {
   const profile = makeProfile({ agent: "copilot" });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   const result = await new MountStage().execute(ctx);
 
-  // gh コマンドが使える環境では GITHUB_TOKEN が設定される
-  const hasGh = await new Deno.Command("which", {
-    args: ["gh"],
-    stdout: "null",
-    stderr: "null",
-  }).output().then((o) => o.success, () => false);
-  if (hasGh) {
-    // gh auth token が成功する場合のみ
-    const tokenResult = await new Deno.Command("gh", {
-      args: ["auth", "token"],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    if (tokenResult.success) {
-      assertEquals("GITHUB_TOKEN" in result.envVars, true);
-    }
-  }
+  assertEquals("GITHUB_TOKEN" in result.envVars, false);
 });
 
 Deno.test("MountStage: codex agent mounts ~/.codex if exists", async () => {
