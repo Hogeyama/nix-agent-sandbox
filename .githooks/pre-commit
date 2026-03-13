@@ -2,8 +2,8 @@
 set -e
 
 if ! command -v deno >/dev/null 2>&1; then
-  echo "Warning: deno not found, skipping pre-commit checks"
-  exit 0
+  echo "Error: deno not found. Run 'nix develop' first, or use 'nix develop -c git commit ...'"
+  exit 1
 fi
 
 echo "Running deno fmt..."

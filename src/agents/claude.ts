@@ -4,7 +4,8 @@
 
 import type { ExecutionContext } from "../pipeline/context.ts";
 
-const DEFAULT_CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const DEFAULT_CONTAINER_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /** Claude Code 固有のマウントと環境変数を追加 */
 export function configureClaude(ctx: ExecutionContext): ExecutionContext {
@@ -14,7 +15,9 @@ export function configureClaude(ctx: ExecutionContext): ExecutionContext {
   const containerLocalBin = `${containerHome}/.local/bin`;
 
   const home = Deno.env.get("HOME") ?? "/root";
-  envVars["PATH"] = `${containerLocalBin}:${envVars["PATH"] ?? DEFAULT_CONTAINER_PATH}`;
+  envVars["PATH"] = `${containerLocalBin}:${
+    envVars["PATH"] ?? DEFAULT_CONTAINER_PATH
+  }`;
 
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
   const claudeDir = `${home}/.claude`;
