@@ -159,6 +159,11 @@ export async function dockerRm(containerName: string): Promise<void> {
   await $`docker rm ${containerName}`.quiet();
 }
 
+/** docker volume rm を実行 */
+export async function dockerVolumeRemove(name: string): Promise<void> {
+  await $`docker volume rm ${name}`.quiet();
+}
+
 /** docker exec を実行して結果を返す */
 export async function dockerExec(
   containerName: string,

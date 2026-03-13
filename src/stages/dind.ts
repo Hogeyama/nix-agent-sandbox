@@ -28,6 +28,7 @@ import {
   dockerRm,
   dockerRunDetached,
   dockerStop,
+  dockerVolumeRemove,
 } from "../docker/client.ts";
 
 const DIND_IMAGE = "docker:dind-rootless";
@@ -36,6 +37,8 @@ const DIND_CACHE_VOLUME = "nas-docker-cache";
 const DIND_DATA_DIR = "/home/rootless/.local/share/docker";
 const SHARED_CONTAINER_NAME = "nas-dind-shared";
 const SHARED_NETWORK_NAME = "nas-dind-shared";
+const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
+const SHARED_TMP_MOUNT_PATH = "/tmp/nas-shared";
 const READINESS_TIMEOUT_MS = 30_000;
 const READINESS_POLL_INTERVAL_MS = 500;
 
@@ -45,6 +48,7 @@ export class DindStage implements Stage {
   private shared = false;
   private networkName: string | null = null;
   private containerName: string | null = null;
+  private sharedTmpVolume: string | null = null;
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     if (!ctx.profile.docker.enable) {
@@ -57,16 +61,21 @@ export class DindStage implements Stage {
     let networkName: string;
     let containerName: string;
 
+    let sharedTmpVolume: string;
+
     if (this.shared) {
       networkName = SHARED_NETWORK_NAME;
       containerName = SHARED_CONTAINER_NAME;
+      sharedTmpVolume = SHARED_TMP_VOLUME;
     } else {
       const sessionId = crypto.randomUUID().slice(0, 8);
       networkName = `nas-dind-${sessionId}`;
       containerName = `nas-dind-${sessionId}`;
+      sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
     }
     this.networkName = networkName;
     this.containerName = containerName;
+    this.sharedTmpVolume = sharedTmpVolume;
 
     // 共有モード: 既に起動中ならサイドカー作成をスキップ
     if (this.shared && await dockerIsRunning(containerName)) {
@@ -89,11 +98,21 @@ export class DindStage implements Stage {
           "--privileged",
           "-v",
           `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`,
+          "-v",
+          `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
         ],
         envVars: {
           DOCKER_TLS_CERTDIR: "",
         },
       });
+
+      // 共有 tmp を全ユーザーから書き込み可能にする（DinD rootless の UID と
+      // エージェントコンテナの UID が異なるため）
+      await dockerExec(containerName, [
+        "chmod",
+        "1777",
+        SHARED_TMP_MOUNT_PATH,
+      ]);
 
       // DinD readiness check (TCP 経由)
       console.log("[nas] DinD: waiting for daemon to be ready...");
@@ -104,11 +123,18 @@ export class DindStage implements Stage {
     // カスタムネットワーク作成（既存ならスキップ）& サイドカー接続
     await ensureNetwork(networkName, containerName);
 
-    // エージェントコンテナに DinD ネットワークと DOCKER_HOST を設定
-    const args = [...ctx.dockerArgs, "--network", networkName];
+    // エージェントコンテナに DinD ネットワーク、DOCKER_HOST、共有 tmp を設定
+    const args = [
+      ...ctx.dockerArgs,
+      "--network",
+      networkName,
+      "-v",
+      `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
+    ];
     const envVars = {
       ...ctx.envVars,
       DOCKER_HOST: `tcp://${containerName}:${DIND_INTERNAL_PORT}`,
+      NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
     };
 
     return { ...ctx, dockerArgs: args, envVars };
@@ -142,6 +168,14 @@ export class DindStage implements Stage {
         await dockerNetworkRemove(this.networkName);
       } catch {
         // ネットワークが既に削除されている場合は無視
+      }
+    }
+    if (this.sharedTmpVolume) {
+      try {
+        console.log(`[nas] DinD: removing volume ${this.sharedTmpVolume}`);
+        await dockerVolumeRemove(this.sharedTmpVolume);
+      } catch {
+        // ボリュームが既に削除されている場合は無視
       }
     }
   }
