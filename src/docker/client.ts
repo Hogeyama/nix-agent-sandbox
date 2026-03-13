@@ -168,9 +168,12 @@ export async function dockerVolumeRemove(name: string): Promise<void> {
 export async function dockerExec(
   containerName: string,
   command: string[],
+  options?: { user?: string },
 ): Promise<{ code: number; stdout: string }> {
+  const userArgs = options?.user ? ["-u", options.user] : [];
   try {
-    const result = await $`docker exec ${containerName} ${command}`.quiet();
+    const result = await $`docker exec ${userArgs} ${containerName} ${command}`
+      .quiet();
     return { code: 0, stdout: result.stdout.trim() };
   } catch (err) {
     if (err && typeof err === "object" && "exitCode" in err) {

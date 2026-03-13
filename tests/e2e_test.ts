@@ -25,6 +25,9 @@ const IMAGE_NAME = "nas-sandbox";
 // DinD 共有 tmp が利用可能なら bind mount テストで使う。
 // なければホスト Docker 前提で /tmp を使う。
 const SHARED_TMP = Deno.env.get("NAS_DIND_SHARED_TMP");
+const DOCKER_HOST = Deno.env.get("DOCKER_HOST");
+const USING_DIND = SHARED_TMP !== undefined && DOCKER_HOST !== undefined;
+const RUNNING_ON_HOST_DOCKER = !USING_DIND;
 
 /**
  * テスト用一時ディレクトリを作成する。
@@ -35,7 +38,29 @@ async function makeTempDir(prefix: string): Promise<string> {
   const name = `${prefix}${crypto.randomUUID().slice(0, 8)}`;
   const dir = `${base}/${name}`;
   await Deno.mkdir(dir, { recursive: true });
+  if (SHARED_TMP) {
+    // Deno.mkdir の mode では sticky bit が落ちるため、作成後に明示設定する。
+    await Deno.chmod(dir, 0o1777);
+  }
   return dir;
+}
+
+async function makeTreeWritableForDind(root: string): Promise<void> {
+  if (!USING_DIND) return;
+
+  for await (const entry of Deno.readDir(root)) {
+    const child = path.join(root, entry.name);
+    if (entry.isDirectory) {
+      await makeTreeWritableForDind(child);
+      await Deno.chmod(child, 0o1777);
+    } else if (entry.isFile) {
+      const stat = await Deno.stat(child);
+      const mode = stat.mode ?? 0;
+      await Deno.chmod(child, (mode & 0o111) === 0 ? 0o666 : 0o777);
+    }
+  }
+
+  await Deno.chmod(root, 0o1777);
 }
 
 // --- ヘルパー ---
@@ -406,8 +431,10 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: git commit works inside container",
-  ignore: !canBindMount,
+  name: "E2E [host-only]: git commit works inside container",
+  // rootless DinD 経由の bind mount では git object/index の新規作成が
+  // remapped UID + デフォルト権限に引っ張られ、host Docker と同じ挙動にならない。
+  ignore: !canBindMount || !RUNNING_ON_HOST_DOCKER,
   async fn() {
     const tmpDir = await makeTempDir("nas-e2e-gitc-");
     try {
@@ -430,6 +457,7 @@ Deno.test({
         stdout: "null",
         stderr: "null",
       }).output();
+      await makeTreeWritableForDind(tmpDir);
 
       const result = await dockerRun(
         [
@@ -521,10 +549,11 @@ Deno.test({
 // ============================================================
 
 const hasHostNix = await Deno.stat("/nix").then(() => true, () => false);
+const canMountHostNix = hasHostNix && RUNNING_ON_HOST_DOCKER;
 
 Deno.test({
-  name: "E2E: nix enabled - /nix is accessible and nix --version works",
-  ignore: !canBindMount || !hasHostNix,
+  name: "E2E [host-only]: nix enabled - /nix is accessible and nix --version works",
+  ignore: !canBindMount || !canMountHostNix,
   async fn() {
     const workDir = await makeTempDir("nas-e2e-nix-");
     try {

@@ -38,6 +38,10 @@ const DIND_DATA_DIR = "/home/rootless/.local/share/docker";
 const SHARED_CONTAINER_NAME = "nas-dind-shared";
 const SHARED_NETWORK_NAME = "nas-dind-shared";
 const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
+// rootless DinD の inner daemon から見える bind mount 元は sidecar 自身の
+// ファイルシステムだけなので、nas コンテナと共有する中継地点が必要になる。
+// この volume を sidecar と nas コンテナの両方に /tmp/nas-shared としてマウントし、
+// nas 側で作ったテスト用ディレクトリを inner docker run の bind mount 元にする。
 const SHARED_TMP_MOUNT_PATH = "/tmp/nas-shared";
 const READINESS_TIMEOUT_MS = 30_000;
 const READINESS_POLL_INTERVAL_MS = 500;
@@ -77,8 +81,11 @@ export class DindStage implements Stage {
     this.containerName = containerName;
     this.sharedTmpVolume = sharedTmpVolume;
 
+    const isReusingSharedSidecar = this.shared &&
+      await dockerIsRunning(containerName);
+
     // 共有モード: 既に起動中ならサイドカー作成をスキップ
-    if (this.shared && await dockerIsRunning(containerName)) {
+    if (isReusingSharedSidecar) {
       console.log(`[nas] DinD: reusing shared sidecar (${containerName})`);
     } else {
       // 共有モードで停止済みコンテナが残っている場合は削除して再作成
@@ -106,19 +113,16 @@ export class DindStage implements Stage {
         },
       });
 
-      // 共有 tmp を全ユーザーから書き込み可能にする（DinD rootless の UID と
-      // エージェントコンテナの UID が異なるため）
-      await dockerExec(containerName, [
-        "chmod",
-        "1777",
-        SHARED_TMP_MOUNT_PATH,
-      ]);
-
       // DinD readiness check (TCP 経由)
       console.log("[nas] DinD: waiting for daemon to be ready...");
       await waitForDindReady(containerName, READINESS_TIMEOUT_MS);
       console.log("[nas] DinD: daemon is ready");
     }
+
+    // 共有 tmp を全ユーザーから書き込み可能にする（DinD rootless の UID と
+    // エージェントコンテナの UID が異なるため）。
+    // shared sidecar 再利用時も毎回矯正し、既存 volume の 0755 を引きずらない。
+    await ensureSharedTmpWritable(containerName);
 
     // カスタムネットワーク作成（既存ならスキップ）& サイドカー接続
     await ensureNetwork(networkName, containerName);
@@ -178,6 +182,19 @@ export class DindStage implements Stage {
         // ボリュームが既に削除されている場合は無視
       }
     }
+  }
+}
+
+async function ensureSharedTmpWritable(containerName: string): Promise<void> {
+  const result = await dockerExec(containerName, [
+    "chmod",
+    "1777",
+    SHARED_TMP_MOUNT_PATH,
+  ], { user: "0" });
+  if (result.code !== 0) {
+    throw new Error(
+      `Failed to make shared tmp writable: ${SHARED_TMP_MOUNT_PATH}`,
+    );
   }
 }
 
