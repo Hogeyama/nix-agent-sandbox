@@ -595,6 +595,27 @@ Deno.test("MountStage: claude agent mounts ~/.claude if exists", async () => {
   }
 });
 
+Deno.test("MountStage: claude agent uses ~/.local/bin in container", async () => {
+  const containerHome = getContainerHome();
+  const profile = makeProfile({ agent: "claude" });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+
+  assertEquals(
+    result.envVars["PATH"]?.startsWith(`${containerHome}/.local/bin:`),
+    true,
+  );
+
+  if (result.agentCommand[0] === "claude") {
+    assertEquals(
+      result.dockerArgs.some((a) =>
+        a.includes(`${containerHome}/.local/bin/claude:ro`)
+      ),
+      true,
+    );
+  }
+});
+
 Deno.test("MountStage: copilot agent sets GITHUB_TOKEN if gh available", async () => {
   const profile = makeProfile({ agent: "copilot" });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());

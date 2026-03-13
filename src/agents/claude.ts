@@ -4,13 +4,20 @@
 
 import type { ExecutionContext } from "../pipeline/context.ts";
 
+const DEFAULT_CONTAINER_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /** Claude Code 固有のマウントと環境変数を追加 */
 export function configureClaude(ctx: ExecutionContext): ExecutionContext {
   const args = [...ctx.dockerArgs];
   const envVars = { ...ctx.envVars };
   const containerHome = ctx.envVars["NAS_HOME"] ?? resolveContainerHome();
+  const containerLocalBin = `${containerHome}/.local/bin`;
 
   const home = Deno.env.get("HOME") ?? "/root";
+  envVars["PATH"] = `${containerLocalBin}:${
+    envVars["PATH"] ?? DEFAULT_CONTAINER_PATH
+  }`;
 
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
   const claudeDir = `${home}/.claude`;
@@ -27,7 +34,7 @@ export function configureClaude(ctx: ExecutionContext): ExecutionContext {
   // claude バイナリのマウント (実体パスを解決してマウント)
   const claudeBin = findBinaryResolved("claude");
   if (claudeBin) {
-    args.push("-v", `${claudeBin}:/usr/local/bin/claude:ro`);
+    args.push("-v", `${claudeBin}:${containerLocalBin}/claude:ro`);
   }
 
   return {
