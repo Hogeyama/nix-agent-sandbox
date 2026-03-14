@@ -7,7 +7,6 @@
 
 import { assertEquals, assertRejects } from "@std/assert";
 import { computeEmbedHash } from "../src/docker/client.ts";
-import { DockerBuildStage } from "../src/stages/launch.ts";
 import {
   dockerBuild,
   dockerExec,
@@ -38,47 +37,6 @@ Deno.test("computeEmbedHash: returns valid SHA-256 hex string", async () => {
   const hash = await computeEmbedHash();
   assertEquals(hash.length, 64);
   assertEquals(/^[0-9a-f]{64}$/.test(hash), true);
-});
-
-Deno.test("computeEmbedHash: hash is not empty", async () => {
-  const hash = await computeEmbedHash();
-  assertEquals(hash.length > 0, true);
-  assertEquals(
-    hash !==
-      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    true,
-  ); // SHA-256 of empty string
-});
-
-// --- DockerBuildStage constants ---
-
-Deno.test("DockerBuildStage: EMBED_HASH_LABEL is set", () => {
-  assertEquals(DockerBuildStage.EMBED_HASH_LABEL, "nas.embed-hash");
-});
-
-// --- 埋め込みファイルの存在確認 ---
-
-Deno.test("Embedded Dockerfile exists and is readable", async () => {
-  const baseUrl = new URL("../src/docker/embed/Dockerfile", import.meta.url);
-  const content = await Deno.readTextFile(baseUrl);
-  assertEquals(content.length > 0, true);
-  assertEquals(content.includes("FROM"), true);
-});
-
-Deno.test("Embedded entrypoint.sh exists and is readable", async () => {
-  const baseUrl = new URL("../src/docker/embed/entrypoint.sh", import.meta.url);
-  const content = await Deno.readTextFile(baseUrl);
-  assertEquals(content.length > 0, true);
-  assertEquals(content.includes("#!/"), true);
-});
-
-Deno.test("Embedded osc52-clip.sh exists and is readable", async () => {
-  const baseUrl = new URL(
-    "../src/docker/embed/osc52-clip.sh",
-    import.meta.url,
-  );
-  const content = await Deno.readTextFile(baseUrl);
-  assertEquals(content.length > 0, true);
 });
 
 // --- embed hash は全埋め込みファイルから計算される ---

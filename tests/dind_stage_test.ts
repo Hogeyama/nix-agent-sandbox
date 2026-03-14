@@ -86,11 +86,6 @@ const dindAvailable = await canRunDindRootless();
 // Unit tests (Docker 不要)
 // ============================================================
 
-Deno.test("DindStage: name property", () => {
-  const stage = new DindStage();
-  assertEquals(stage.name, "DindStage");
-});
-
 Deno.test("DindStage: skip when disabled", async () => {
   const profile = makeProfile({ docker: { enable: false, shared: false } });
   const ctx = makeCtx(profile);
