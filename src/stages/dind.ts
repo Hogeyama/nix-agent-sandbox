@@ -97,26 +97,7 @@ export class DindStage implements Stage {
       // ※ rootlesskit が vpnkit + --copy-up=/run,/etc でネットワーク名前空間を構築するため、
       //    カスタム Docker ネットワーク上では起動に失敗する。
       //    起動後に docker network connect でカスタムネットワークに接続する。
-      console.log(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
-      await dockerRunDetached({
-        name: containerName,
-        image: DIND_IMAGE,
-        args: [
-          "--privileged",
-          "-v",
-          `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`,
-          "-v",
-          `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
-        ],
-        envVars: {
-          DOCKER_TLS_CERTDIR: "",
-        },
-      });
-
-      // DinD readiness check (TCP 経由)
-      console.log("[nas] DinD: waiting for daemon to be ready...");
-      await waitForDindReady(containerName, READINESS_TIMEOUT_MS);
-      console.log("[nas] DinD: daemon is ready");
+      await startDindSidecar(containerName, sharedTmpVolume);
     }
 
     // 共有 tmp を全ユーザーから書き込み可能にする（DinD rootless の UID と
@@ -213,6 +194,65 @@ async function ensureNetwork(
     await dockerNetworkConnect(networkName, containerName);
   } catch {
     // 既に接続済みの場合は無視
+  }
+}
+
+/**
+ * DinD サイドカーを起動する。
+ * キャッシュボリュームありで試み、起動に失敗したらキャッシュなしでリトライする。
+ */
+async function startDindSidecar(
+  containerName: string,
+  sharedTmpVolume: string,
+): Promise<void> {
+  console.log(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
+  await dockerRunDetached({
+    name: containerName,
+    image: DIND_IMAGE,
+    args: [
+      "--privileged",
+      "-v",
+      `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`,
+      "-v",
+      `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
+    ],
+    envVars: {
+      DOCKER_TLS_CERTDIR: "",
+    },
+  });
+
+  console.log("[nas] DinD: waiting for daemon to be ready...");
+  try {
+    await waitForDindReady(containerName, READINESS_TIMEOUT_MS);
+    console.log("[nas] DinD: daemon is ready");
+  } catch (e) {
+    console.warn(
+      `[nas] DinD: failed to start with cache volume (${DIND_CACHE_VOLUME}), retrying without cache...`,
+    );
+    // キャッシュボリュームに stale lock がある可能性があるため、キャッシュなしで再試行
+    await dockerStop(containerName).catch(() => {});
+    await dockerRm(containerName).catch(() => {});
+
+    await dockerRunDetached({
+      name: containerName,
+      image: DIND_IMAGE,
+      args: [
+        "--privileged",
+        "-v",
+        `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
+      ],
+      envVars: {
+        DOCKER_TLS_CERTDIR: "",
+      },
+    });
+
+    console.log("[nas] DinD: waiting for daemon to be ready (no cache)...");
+    await waitForDindReady(containerName, READINESS_TIMEOUT_MS);
+    console.log("[nas] DinD: daemon is ready (without cache)");
+
+    // 壊れたキャッシュボリュームを削除して次回はクリーンに開始
+    await dockerVolumeRemove(DIND_CACHE_VOLUME).catch(() => {});
+    void e;
   }
 }
 
