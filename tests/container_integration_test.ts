@@ -1,16 +1,18 @@
 /**
- * Real E2E tests: Docker コンテナの実起動
+ * Container integration tests: Docker イメージと entrypoint の実起動
  *
- * 実際に Docker イメージをビルドし、コンテナを起動してテスト用コマンドを実行し、
- * entrypoint.sh の動作（UID/GID マッピング、ワークスペースマウント、git safe.directory、
- * Nix 統合など）を検証する。
+ * ここで検証するのは nas CLI 全体ではなく、ビルド済みイメージ + entrypoint.sh の
+ * 実動作。Docker コンテナを直接起動し、UID/GID マッピング、ワークスペース
+ * マウント、git safe.directory、Nix 統合などを確認する。
+ *
+ * CLI 経路の E2E は tests/cli_e2e_test.ts に分離する。
  *
  * 前提条件: Docker デーモンが起動していること
  *
  * bind mount を伴うテスト:
- *   DinD 環境ではエージェントコンテナとDinDサイドカーの間で共有ボリューム
- *   (/tmp/nas-shared) を使い、DinDデーモンからbind mount可能にする。
- *   NAS_DIND_SHARED_TMP 環境変数が設定されていない場合、ホストDockerを前提に
+ *   DinD 環境ではエージェントコンテナと DinD サイドカーの間で共有ボリューム
+ *   (/tmp/nas-shared) を使い、DinD デーモンから bind mount 可能にする。
+ *   NAS_DIND_SHARED_TMP 環境変数が設定されていない場合、ホスト Docker を前提に
  *   /tmp 直下を使用する。
  */
 
@@ -169,7 +171,7 @@ async function dockerRun(
 // ============================================================
 
 Deno.test({
-  name: "E2E: container runs command and exits 0",
+  name: "Integration: container runs command and exits 0",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun(["echo", "hello from nas"]);
@@ -179,7 +181,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: non-zero exit code is propagated",
+  name: "Integration: non-zero exit code is propagated",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun(["bash", "-c", "exit 42"]);
@@ -188,7 +190,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: entrypoint drops to host UID/GID",
+  name: "Integration: entrypoint drops to host UID/GID",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun(["id"]);
@@ -212,7 +214,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: USER and HOME are set correctly",
+  name: "Integration: USER and HOME are set correctly",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun(["bash", "-c", "echo $USER:$HOME"]);
@@ -224,7 +226,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: home directory exists and is owned by user",
+  name: "Integration: home directory exists and is owned by user",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun([
@@ -240,7 +242,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: custom env vars are passed to container",
+  name: "Integration: custom env vars are passed to container",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun(
@@ -253,7 +255,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: env var with special characters",
+  name: "Integration: env var with special characters",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun(
@@ -269,7 +271,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: container has required tools installed",
+  name: "Integration: container has required tools installed",
   ignore: !dockerAvailable,
   async fn() {
     const tools = [
@@ -305,7 +307,7 @@ const canBindMount = dockerAvailable &&
   (SHARED_TMP !== undefined || !Deno.env.get("DOCKER_HOST"));
 
 Deno.test({
-  name: "E2E: workspace is mounted and files are accessible",
+  name: "Integration: workspace is mounted and files are accessible",
   ignore: !canBindMount,
   async fn() {
     const tmpDir = await makeTempDir("nas-e2e-ws-");
@@ -328,7 +330,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: working directory is set to workspace",
+  name: "Integration: working directory is set to workspace",
   ignore: !canBindMount,
   async fn() {
     const tmpDir = await makeTempDir("nas-e2e-pwd-");
@@ -343,7 +345,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: files created in container are visible on host",
+  name: "Integration: files created in container are visible on host",
   ignore: !canBindMount,
   async fn() {
     const tmpDir = await makeTempDir("nas-e2e-write-");
@@ -365,7 +367,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: file ownership in workspace matches host user",
+  name: "Integration: file ownership in workspace matches host user",
   ignore: !canBindMount,
   async fn() {
     const tmpDir = await makeTempDir("nas-e2e-own-");
@@ -388,7 +390,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: git safe.directory is configured for workspace",
+  name: "Integration: git safe.directory is configured for workspace",
   ignore: !canBindMount,
   async fn() {
     const tmpDir = await makeTempDir("nas-e2e-git-");
@@ -431,7 +433,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E [host-only]: git commit works inside container",
+  name: "Integration [host-only]: git commit works inside container",
   // rootless DinD 経由の bind mount では git object/index の新規作成が
   // remapped UID + デフォルト権限に引っ張られ、host Docker と同じ挙動にならない。
   ignore: !canBindMount || !RUNNING_ON_HOST_DOCKER,
@@ -485,7 +487,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: extra mount (ro) is accessible in container",
+  name: "Integration: extra mount (ro) is accessible in container",
   ignore: !canBindMount,
   async fn() {
     const mountSrc = await makeTempDir("nas-e2e-mnt-");
@@ -513,7 +515,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: extra mount (rw) allows writing from container",
+  name: "Integration: extra mount (rw) allows writing from container",
   ignore: !canBindMount,
   async fn() {
     const mountSrc = await makeTempDir("nas-e2e-rw-");
@@ -552,7 +554,8 @@ const hasHostNix = await Deno.stat("/nix").then(() => true, () => false);
 const canMountHostNix = hasHostNix && RUNNING_ON_HOST_DOCKER;
 
 Deno.test({
-  name: "E2E [host-only]: nix enabled - /nix is accessible and nix --version works",
+  name:
+    "Integration [host-only]: nix enabled - /nix is accessible and nix --version works",
   ignore: !canBindMount || !canMountHostNix,
   async fn() {
     const workDir = await makeTempDir("nas-e2e-nix-");
@@ -621,7 +624,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "E2E: nix disabled - /nix/store is not accessible",
+  name: "Integration: nix disabled - /nix/store is not accessible",
   ignore: !dockerAvailable,
   async fn() {
     const result = await dockerRun([
