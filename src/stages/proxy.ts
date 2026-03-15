@@ -173,6 +173,10 @@ export function replaceNetwork(
 export function parseDindContainerName(
   envVars: Record<string, string>,
 ): string | null {
+  const explicitName = envVars["NAS_DIND_CONTAINER_NAME"];
+  if (explicitName && explicitName.trim() !== "") {
+    return explicitName;
+  }
   const dockerHost = envVars["DOCKER_HOST"];
   if (!dockerHost) return null;
   const match = dockerHost.match(/^tcp:\/\/([^:]+):\d+$/);

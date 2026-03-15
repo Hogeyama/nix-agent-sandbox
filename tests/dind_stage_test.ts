@@ -144,6 +144,16 @@ Deno.test({
       assertEquals(typeof result.envVars["DOCKER_HOST"], "string");
       assertEquals(result.envVars["DOCKER_HOST"].startsWith("tcp://"), true);
       assertEquals(result.envVars["DOCKER_HOST"].endsWith(":2375"), true);
+      assertEquals(
+        typeof result.envVars["NAS_DIND_CONTAINER_NAME"],
+        "string",
+      );
+      assertEquals(
+        result.envVars["DOCKER_HOST"].includes(
+          result.envVars["NAS_DIND_CONTAINER_NAME"],
+        ),
+        true,
+      );
 
       assertEquals(typeof result.envVars["NAS_DIND_SHARED_TMP"], "string");
 
@@ -213,6 +223,10 @@ Deno.test({
       assertEquals(
         result.envVars["DOCKER_HOST"],
         "tcp://nas-dind-shared:2375",
+      );
+      assertEquals(
+        result.envVars["NAS_DIND_CONTAINER_NAME"],
+        "nas-dind-shared",
       );
 
       const networkIdx = result.dockerArgs.indexOf("--network");

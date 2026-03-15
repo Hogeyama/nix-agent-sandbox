@@ -89,6 +89,14 @@ Deno.test("parseDindContainerName: extracts from DOCKER_HOST", () => {
   assertEquals(name, "nas-dind-abc12345");
 });
 
+Deno.test("parseDindContainerName: prefers explicit env var", () => {
+  const name = parseDindContainerName({
+    NAS_DIND_CONTAINER_NAME: "nas-dind-explicit",
+    DOCKER_HOST: "tcp://nas-dind-abc12345:2375",
+  });
+  assertEquals(name, "nas-dind-explicit");
+});
+
 Deno.test("parseDindContainerName: returns null for invalid format", () => {
   const name = parseDindContainerName({
     DOCKER_HOST: "unix:///var/run/docker.sock",
@@ -120,6 +128,7 @@ Deno.test({
     const runtimeRoot = await Deno.makeTempDir({
       prefix: "nas-proxy-runtime-",
     });
+    const runtimeDir = `${runtimeRoot}/nas/network`;
     const oldRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
     Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
 
@@ -132,6 +141,12 @@ Deno.test({
     const stage = new ProxyStage();
 
     try {
+      await Deno.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
+      await Deno.writeTextFile(`${runtimeDir}/envoy.yaml`, "# stale\n", {
+        create: true,
+        mode: 0o600,
+      });
+
       const result = await stage.execute(ctx);
       assertMatch(
         result.envVars["http_proxy"],
@@ -143,6 +158,11 @@ Deno.test({
       assertEquals(
         result.dockerArgs.includes(`nas-session-net-${ctx.sessionId}`),
         true,
+      );
+      assertEquals(((await Deno.stat(runtimeDir)).mode ?? 0) & 0o777, 0o755);
+      assertEquals(
+        ((await Deno.stat(`${runtimeDir}/envoy.yaml`)).mode ?? 0) & 0o777,
+        0o644,
       );
       assertEquals(await dockerIsRunning("nas-envoy-shared"), true);
     } finally {

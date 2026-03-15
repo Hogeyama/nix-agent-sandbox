@@ -129,6 +129,7 @@ export class DindStage implements Stage {
     const envVars = {
       ...ctx.envVars,
       DOCKER_HOST: `tcp://${containerName}:${DIND_INTERNAL_PORT}`,
+      NAS_DIND_CONTAINER_NAME: containerName,
       NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
     };
 
