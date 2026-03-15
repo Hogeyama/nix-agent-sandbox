@@ -116,6 +116,21 @@ export async function dockerNetworkCreate(name: string): Promise<void> {
   await $`docker network create ${name}`.quiet();
 }
 
+/** docker network を --internal フラグ付きで作成（外部アクセス不可） */
+export async function dockerNetworkCreateInternal(
+  name: string,
+): Promise<void> {
+  await $`docker network create --internal ${name}`.quiet();
+}
+
+/** docker network からコンテナを切断 */
+export async function dockerNetworkDisconnect(
+  networkName: string,
+  containerName: string,
+): Promise<void> {
+  await $`docker network disconnect ${networkName} ${containerName}`.quiet();
+}
+
 /** docker network にコンテナを接続 */
 export async function dockerNetworkConnect(
   networkName: string,

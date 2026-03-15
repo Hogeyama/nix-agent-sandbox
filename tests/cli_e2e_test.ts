@@ -37,6 +37,22 @@ async function isDockerAvailable(): Promise<boolean> {
 
 const dockerAvailable = await isDockerAvailable();
 
+async function isProxyImageAvailable(): Promise<boolean> {
+  try {
+    const cmd = new Deno.Command("docker", {
+      args: ["image", "inspect", "ubuntu/squid"],
+      stdout: "null",
+      stderr: "null",
+    });
+    const result = await cmd.output();
+    return result.success;
+  } catch {
+    return false;
+  }
+}
+
+const proxyAvailable = dockerAvailable && await isProxyImageAvailable();
+
 async function makeTempDir(prefix: string): Promise<string> {
   const base = SHARED_TMP ?? "/tmp";
   const name = `${prefix}${crypto.randomUUID().slice(0, 8)}`;
@@ -176,6 +192,129 @@ Deno.test({
       assertEquals(result.code, 0);
       const content = await Deno.readTextFile(outputPath);
       assertEquals(content.trim(), "written-by-fake-codex");
+    });
+  },
+});
+
+// ============================================================
+// Proxy E2E tests
+// ============================================================
+
+async function withProxyProject(
+  fn: (projectDir: string, env: Record<string, string>) => Promise<void>,
+): Promise<void> {
+  const rootDir = await makeTempDir("nas-proxy-e2e-");
+  try {
+    const projectDir = path.join(rootDir, "project");
+    const homeDir = path.join(rootDir, "home");
+    const binDir = path.join(rootDir, "bin");
+
+    await Deno.mkdir(projectDir, { recursive: true });
+    await Deno.mkdir(path.join(homeDir, ".codex"), { recursive: true });
+    await Deno.mkdir(binDir, { recursive: true });
+    await makeWritableForDind(projectDir);
+    await makeWritableForDind(homeDir);
+    await makeWritableForDind(path.join(homeDir, ".codex"));
+    await makeWritableForDind(binDir);
+
+    // Mock agent that curls allowed and blocked domains, reporting HTTP status
+    const fakeCodexPath = path.join(binDir, "codex");
+    await Deno.writeTextFile(
+      fakeCodexPath,
+      [
+        "#!/bin/sh",
+        // curl allowed domain (github.com)
+        'ALLOWED=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://github.com/ 2>/dev/null)',
+        'printf "ALLOWED_STATUS=%s\\n" "$ALLOWED"',
+        // curl blocked domain (example.com)
+        'BLOCKED=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://example.com/ 2>/dev/null)',
+        'printf "BLOCKED_STATUS=%s\\n" "$BLOCKED"',
+        // verify proxy env vars are set
+        'printf "http_proxy=%s\\n" "$http_proxy"',
+        'printf "https_proxy=%s\\n" "$https_proxy"',
+      ].join("\n"),
+    );
+    await Deno.chmod(fakeCodexPath, 0o755);
+
+    await Deno.writeTextFile(
+      path.join(projectDir, ".agent-sandbox.yml"),
+      [
+        "default: test",
+        "profiles:",
+        "  test:",
+        "    agent: codex",
+        "    nix:",
+        "      enable: false",
+        "    docker:",
+        "      enable: false",
+        "      shared: false",
+        "    gcloud:",
+        "      mountConfig: false",
+        "    aws:",
+        "      mountConfig: false",
+        "    gpg:",
+        "      forwardAgent: false",
+        "    network:",
+        "      allowlist:",
+        "        - github.com",
+        "    extra-mounts: []",
+        "    env: []",
+      ].join("\n"),
+    );
+
+    const env = {
+      HOME: homeDir,
+      PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+    };
+
+    await fn(projectDir, env);
+  } finally {
+    await Deno.remove(rootDir, { recursive: true }).catch(() => {});
+  }
+}
+
+Deno.test({
+  name: "CLI E2E: proxy allows listed domain and blocks unlisted domain",
+  ignore: !proxyAvailable || !canBindMount,
+  async fn() {
+    await withProxyProject(async (projectDir, env) => {
+      const result = await runNas(["test"], {
+        cwd: projectDir,
+        env,
+      });
+
+      assertEquals(
+        result.code,
+        0,
+        `nas exited with ${result.code}: ${result.stderr}`,
+      );
+
+      // proxy env vars should be set
+      assertEquals(
+        result.stdout.includes("http_proxy=http://"),
+        true,
+        "http_proxy should be set",
+      );
+
+      // allowed domain: expect 2xx or 3xx
+      const allowedMatch = result.stdout.match(/ALLOWED_STATUS=(\d+)/);
+      assertEquals(allowedMatch !== null, true, "Should report allowed status");
+      const allowedStatus = parseInt(allowedMatch![1], 10);
+      assertEquals(
+        allowedStatus >= 200 && allowedStatus < 400,
+        true,
+        `Expected 2xx/3xx for allowed domain, got ${allowedStatus}`,
+      );
+
+      // blocked domain: expect 403 (squid deny)
+      const blockedMatch = result.stdout.match(/BLOCKED_STATUS=(\d+)/);
+      assertEquals(blockedMatch !== null, true, "Should report blocked status");
+      const blockedStatus = parseInt(blockedMatch![1], 10);
+      assertEquals(
+        blockedStatus,
+        403,
+        `Expected 403 for blocked domain, got ${blockedStatus}`,
+      );
     });
   },
 });

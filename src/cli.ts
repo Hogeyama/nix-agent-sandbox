@@ -11,6 +11,7 @@ import { cleanNasWorktrees, listNasWorktrees } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { MountStage } from "./stages/mount.ts";
 import { DindStage } from "./stages/dind.ts";
+import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { dockerImageExists, dockerRemoveImage } from "./docker/client.ts";
 
@@ -101,6 +102,7 @@ export async function main(args: string[]): Promise<void> {
       new NixDetectStage(),
       new MountStage(),
       new DindStage(),
+      new ProxyStage(),
       new LaunchStage(agentExtraArgs),
     ];
 

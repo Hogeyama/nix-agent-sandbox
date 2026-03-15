@@ -96,6 +96,7 @@ async function ensureImage(): Promise<void> {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    network: { allowlist: [] },
     extraMounts: [],
     env: [],
   };

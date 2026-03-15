@@ -18,6 +18,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    network: { allowlist: [] },
     extraMounts: [],
     env: [],
     ...overrides,

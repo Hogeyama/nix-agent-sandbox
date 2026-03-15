@@ -17,6 +17,7 @@ import {
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
   DEFAULT_NIX_CONFIG,
 } from "./types.ts";
 import type { AgentType } from "./types.ts";
@@ -88,6 +89,9 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     gpg: {
       forwardAgent: raw.gpg?.["forward-agent"] ??
         DEFAULT_GPG_CONFIG.forwardAgent,
+    },
+    network: {
+      allowlist: validateAllowlist(name, raw.network?.allowlist),
     },
     extraMounts: validateExtraMounts(name, raw["extra-mounts"]),
     env: validateEnv(name, raw.env),
@@ -215,4 +219,21 @@ function validateEnvVal(prefix: string, entry: RawEnvEntry): EnvValSpec {
     );
   }
   return { valCmd: entry.val_cmd };
+}
+
+function validateAllowlist(profileName: string, raw?: unknown): string[] {
+  if (!raw) return DEFAULT_NETWORK_CONFIG.allowlist;
+  if (!Array.isArray(raw)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": network.allowlist must be a list`,
+    );
+  }
+  for (const [i, entry] of raw.entries()) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": network.allowlist[${i}] must be a non-empty string`,
+      );
+    }
+  }
+  return raw as string[];
 }

@@ -35,6 +35,11 @@ export interface GpgConfig {
   forwardAgent: boolean;
 }
 
+/** ネットワーク設定 */
+export interface NetworkConfig {
+  allowlist: string[];
+}
+
 /** 追加マウント設定 */
 export interface ExtraMountConfig {
   src: string;
@@ -61,6 +66,7 @@ export interface Profile {
   gcloud: GcloudConfig;
   aws: AwsConfig;
   gpg: GpgConfig;
+  network: NetworkConfig;
   extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
 }
@@ -102,6 +108,9 @@ export interface RawProfile {
   gpg?: {
     "forward-agent"?: boolean;
   };
+  network?: {
+    allowlist?: string[];
+  };
   "extra-mounts"?: Array<{
     src?: string;
     dst?: string;
@@ -137,4 +146,8 @@ export const DEFAULT_AWS_CONFIG: AwsConfig = {
 
 export const DEFAULT_GPG_CONFIG: GpgConfig = {
   forwardAgent: false,
+};
+
+export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
+  allowlist: [],
 };

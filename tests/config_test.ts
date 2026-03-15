@@ -21,6 +21,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.docker.enable, false);
   assertEquals(config.profiles.test.docker.shared, false);
   assertEquals(config.profiles.test.gpg.forwardAgent, false);
+  assertEquals(config.profiles.test.network.allowlist, []);
   assertEquals(config.profiles.test.extraMounts, []);
   assertEquals(config.profiles.test.env, []);
 });
@@ -259,4 +260,61 @@ Deno.test("validateConfig: worktree on-create is preserved", () => {
   });
   assertEquals(config.profiles.test.worktree?.base, "origin/main");
   assertEquals(config.profiles.test.worktree?.onCreate, "npm install");
+});
+
+Deno.test("validateConfig: network.allowlist defaults to empty array", () => {
+  const config = validateConfig({
+    profiles: { test: { agent: "claude" } },
+  });
+  assertEquals(config.profiles.test.network.allowlist, []);
+});
+
+Deno.test("validateConfig: network.allowlist is parsed correctly", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        network: {
+          allowlist: ["github.com", "api.anthropic.com"],
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.network.allowlist, [
+    "github.com",
+    "api.anthropic.com",
+  ]);
+});
+
+Deno.test("validateConfig: network.allowlist invalid entry throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            network: { allowlist: ["github.com", ""] },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "network.allowlist[1] must be a non-empty string",
+  );
+});
+
+Deno.test("validateConfig: network.allowlist non-array throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            // deno-lint-ignore no-explicit-any
+            network: { allowlist: "not-an-array" as any },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "network.allowlist must be a list",
+  );
 });

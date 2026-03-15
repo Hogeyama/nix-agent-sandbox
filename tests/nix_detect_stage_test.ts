@@ -12,6 +12,7 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    network: { allowlist: [] },
     extraMounts: [],
     env: [],
   };

@@ -40,6 +40,7 @@ function createTestProfile(base: string): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    network: { allowlist: [] },
     extraMounts: [],
     env: [],
   };
