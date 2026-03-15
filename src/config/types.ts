@@ -1,6 +1,8 @@
 /** エージェント種別 */
 export type AgentType = "claude" | "copilot" | "codex";
 
+import type { ApprovalScope } from "../network/protocol.ts";
+
 /** Worktree 設定 */
 export interface WorktreeConfig {
   base: string;
@@ -36,8 +38,18 @@ export interface GpgConfig {
 }
 
 /** ネットワーク設定 */
+export type NetworkPromptNotify = "auto" | "tmux" | "desktop" | "off";
+
+export interface NetworkPromptConfig {
+  enable: boolean;
+  timeoutSeconds: number;
+  defaultScope: ApprovalScope;
+  notify: NetworkPromptNotify;
+}
+
 export interface NetworkConfig {
   allowlist: string[];
+  prompt: NetworkPromptConfig;
 }
 
 /** 追加マウント設定 */
@@ -110,6 +122,12 @@ export interface RawProfile {
   };
   network?: {
     allowlist?: string[];
+    prompt?: {
+      enable?: boolean;
+      "timeout-seconds"?: number;
+      "default-scope"?: ApprovalScope;
+      notify?: NetworkPromptNotify;
+    };
   };
   "extra-mounts"?: Array<{
     src?: string;
@@ -148,6 +166,14 @@ export const DEFAULT_GPG_CONFIG: GpgConfig = {
   forwardAgent: false,
 };
 
+export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {
+  enable: false,
+  timeoutSeconds: 300,
+  defaultScope: "host-port",
+  notify: "auto",
+};
+
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
   allowlist: [],
+  prompt: DEFAULT_NETWORK_PROMPT_CONFIG,
 };

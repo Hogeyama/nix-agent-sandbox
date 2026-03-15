@@ -13,7 +13,12 @@ import {
   resolveProfile,
 } from "../src/config/load.ts";
 import { validateConfig } from "../src/config/validate.ts";
-import type { Config, RawConfig, RawProfile } from "../src/config/types.ts";
+import {
+  type Config,
+  DEFAULT_NETWORK_CONFIG,
+  type RawConfig,
+  type RawProfile,
+} from "../src/config/types.ts";
 
 /** 一時ディレクトリに設定ファイルを配置してテストを実行するヘルパー */
 async function withTempConfig(
@@ -371,7 +376,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
-        network: { allowlist: [] },
+        network: structuredClone(DEFAULT_NETWORK_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -383,7 +388,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
-        network: { allowlist: [] },
+        network: structuredClone(DEFAULT_NETWORK_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -408,7 +413,7 @@ Deno.test("resolveProfile: falls back to default profile", () => {
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
-        network: { allowlist: [] },
+        network: structuredClone(DEFAULT_NETWORK_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -431,7 +436,7 @@ Deno.test("resolveProfile: auto-selects when only one profile and no default", (
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
-        network: { allowlist: [] },
+        network: structuredClone(DEFAULT_NETWORK_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -454,7 +459,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
-        network: { allowlist: [] },
+        network: structuredClone(DEFAULT_NETWORK_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -466,7 +471,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
-        network: { allowlist: [] },
+        network: structuredClone(DEFAULT_NETWORK_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -491,7 +496,7 @@ Deno.test("resolveProfile: throws for nonexistent profile name", () => {
         gcloud: { mountConfig: false },
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
-        network: { allowlist: [] },
+        network: structuredClone(DEFAULT_NETWORK_CONFIG),
         extraMounts: [],
         env: [],
       },

@@ -5,11 +5,22 @@
  */
 
 import { assertEquals, assertRejects } from "@std/assert";
+import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
 import { MountStage, serializeNixExtraPackages } from "../src/stages/mount.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 
-function makeProfile(overrides: Partial<Profile> = {}): Profile {
+type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
+  prompt?: Partial<Profile["network"]["prompt"]>;
+};
+
+type ProfileOverrides = Omit<Partial<Profile>, "network"> & {
+  network?: NetworkOverrides;
+};
+
+function makeProfile(overrides: ProfileOverrides = {}): Profile {
+  const baseNetwork = structuredClone(DEFAULT_NETWORK_CONFIG);
+  const { network, ...rest } = overrides;
   return {
     agent: "claude",
     agentArgs: [],
@@ -18,10 +29,17 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
-    network: { allowlist: [] },
+    network: {
+      ...baseNetwork,
+      ...network,
+      prompt: {
+        ...baseNetwork.prompt,
+        ...network?.prompt,
+      },
+    },
     extraMounts: [],
     env: [],
-    ...overrides,
+    ...rest,
   };
 }
 

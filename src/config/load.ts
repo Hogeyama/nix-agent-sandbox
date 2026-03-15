@@ -110,9 +110,22 @@ export function mergeRawProfiles(
     gcloud: shallowMerge(global.gcloud, local.gcloud),
     aws: shallowMerge(global.aws, local.aws),
     gpg: shallowMerge(global.gpg, local.gpg),
-    network: shallowMerge(global.network, local.network),
+    network: mergeRawNetworkConfigs(global.network, local.network),
     "extra-mounts": local["extra-mounts"] ?? global["extra-mounts"],
     env: local.env ?? global.env,
+  };
+}
+
+function mergeRawNetworkConfigs(
+  global?: RawProfile["network"],
+  local?: RawProfile["network"],
+): RawProfile["network"] {
+  if (!global) return local;
+  if (!local) return global;
+  return {
+    ...global,
+    ...local,
+    prompt: shallowMerge(global.prompt, local.prompt),
   };
 }
 

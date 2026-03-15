@@ -2,12 +2,15 @@
  * .agent-sandbox.yml のバリデーション
  */
 
+import type { ApprovalScope } from "../network/protocol.ts";
 import type {
   Config,
   EnvConfig,
   EnvKeySpec,
   EnvValSpec,
   ExtraMountConfig,
+  NetworkPromptConfig,
+  NetworkPromptNotify,
   Profile,
   RawConfig,
   RawProfile,
@@ -18,11 +21,19 @@ import {
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
 } from "./types.ts";
 import type { AgentType } from "./types.ts";
 
 const VALID_AGENTS: AgentType[] = ["claude", "copilot", "codex"];
+const VALID_PROMPT_SCOPES: ApprovalScope[] = ["once", "host-port", "host"];
+const VALID_PROMPT_NOTIFIES: NetworkPromptNotify[] = [
+  "auto",
+  "tmux",
+  "desktop",
+  "off",
+];
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -61,6 +72,8 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     );
   }
 
+  const network = validateNetwork(name, raw.network);
+
   return {
     agent: raw.agent as AgentType,
     agentArgs: raw["agent-args"] ?? [],
@@ -90,9 +103,7 @@ function validateProfile(name: string, raw: RawProfile): Profile {
       forwardAgent: raw.gpg?.["forward-agent"] ??
         DEFAULT_GPG_CONFIG.forwardAgent,
     },
-    network: {
-      allowlist: validateAllowlist(name, raw.network?.allowlist),
-    },
+    network,
     extraMounts: validateExtraMounts(name, raw["extra-mounts"]),
     env: validateEnv(name, raw.env),
   };
@@ -243,4 +254,68 @@ function validateAllowlist(profileName: string, raw?: unknown): string[] {
     }
   }
   return raw as string[];
+}
+
+function validateNetwork(
+  profileName: string,
+  raw?: RawProfile["network"],
+): import("./types.ts").NetworkConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": network must be an object`,
+    );
+  }
+
+  return {
+    allowlist: validateAllowlist(profileName, raw?.allowlist),
+    prompt: validateNetworkPrompt(profileName, raw?.prompt),
+  };
+}
+
+function validateNetworkPrompt(
+  profileName: string,
+  raw?: NonNullable<NonNullable<RawProfile["network"]>["prompt"]>,
+): NetworkPromptConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": network.prompt must be an object`,
+    );
+  }
+
+  const timeoutSeconds = raw?.["timeout-seconds"] ??
+    DEFAULT_NETWORK_PROMPT_CONFIG.timeoutSeconds;
+  if (
+    !Number.isInteger(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": network.prompt.timeout-seconds must be a positive integer`,
+    );
+  }
+
+  const defaultScope = raw?.["default-scope"] ??
+    DEFAULT_NETWORK_PROMPT_CONFIG.defaultScope;
+  if (!VALID_PROMPT_SCOPES.includes(defaultScope)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": network.prompt.default-scope must be one of: ${
+        VALID_PROMPT_SCOPES.join(", ")
+      }`,
+    );
+  }
+
+  const notify = raw?.notify ?? DEFAULT_NETWORK_PROMPT_CONFIG.notify;
+  if (!VALID_PROMPT_NOTIFIES.includes(notify)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": network.prompt.notify must be one of: ${
+        VALID_PROMPT_NOTIFIES.join(", ")
+      }`,
+    );
+  }
+
+  return {
+    enable: raw?.enable ?? DEFAULT_NETWORK_PROMPT_CONFIG.enable,
+    timeoutSeconds,
+    defaultScope,
+    notify,
+  };
 }

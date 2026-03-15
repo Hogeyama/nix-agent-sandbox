@@ -7,6 +7,7 @@ import { assertEquals } from "@std/assert";
 import { configureClaude } from "../src/agents/claude.ts";
 import { configureCopilot } from "../src/agents/copilot.ts";
 import { configureCodex } from "../src/agents/codex.ts";
+import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 
@@ -18,7 +19,7 @@ const baseProfile: Profile = {
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
-  network: { allowlist: [] },
+  network: structuredClone(DEFAULT_NETWORK_CONFIG),
   extraMounts: [],
   env: [],
 };

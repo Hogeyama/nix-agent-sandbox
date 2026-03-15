@@ -2,6 +2,7 @@
  * Pipeline / Stage / ExecutionContext
  */
 
+import { encodeHex } from "@std/encoding/hex";
 import type { Config, Profile } from "../config/types.ts";
 
 /** パイプライン実行中に各ステージが読み書きするコンテキスト */
@@ -12,6 +13,8 @@ export interface ExecutionContext {
   profile: Profile;
   /** プロファイル名 */
   profileName: string;
+  /** セッション ID */
+  sessionId: string;
   /** 作業ディレクトリ (コンテナ内の PWD) */
   workDir: string;
   /** マウントするホストディレクトリ (workDir と異なる場合に設定) */
@@ -22,6 +25,16 @@ export interface ExecutionContext {
   dockerArgs: string[];
   /** docker run に渡す環境変数 */
   envVars: Record<string, string>;
+  /** ネットワーク runtime dir */
+  networkRuntimeDir?: string;
+  /** プロキシ資格情報トークン */
+  networkPromptToken?: string;
+  /** 動的承認が有効か */
+  networkPromptEnabled: boolean;
+  /** broker UDS パス */
+  networkBrokerSocket?: string;
+  /** プロキシ endpoint */
+  networkProxyEndpoint?: string;
   /** Nix が有効か (auto 解決後) */
   nixEnabled: boolean;
   /** エージェント起動コマンド */
@@ -35,15 +48,27 @@ export function createContext(
   profileName: string,
   workDir: string,
 ): ExecutionContext {
+  const sessionId = `sess_${randomHex(6)}`;
+  const proxyEnabled = profile.network.allowlist.length > 0 ||
+    profile.network.prompt.enable;
+
   return {
     config,
     profile,
     profileName,
+    sessionId,
     workDir,
     imageName: "nas-sandbox",
     dockerArgs: [],
     envVars: {},
+    networkPromptToken: proxyEnabled ? randomHex(32) : undefined,
+    networkPromptEnabled: profile.network.prompt.enable,
     nixEnabled: false,
     agentCommand: [],
   };
+}
+
+function randomHex(bytes: number): string {
+  const data = crypto.getRandomValues(new Uint8Array(bytes));
+  return encodeHex(data);
 }

@@ -8,6 +8,7 @@ import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
 } from "../src/cli.ts";
+import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
 import type { Profile } from "../src/config/types.ts";
 
 const baseProfile: Profile = {
@@ -18,7 +19,7 @@ const baseProfile: Profile = {
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
-  network: { allowlist: [] },
+  network: structuredClone(DEFAULT_NETWORK_CONFIG),
   extraMounts: [],
   env: [],
 };

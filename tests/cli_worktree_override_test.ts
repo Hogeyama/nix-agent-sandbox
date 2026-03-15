@@ -3,6 +3,7 @@ import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
 } from "../src/cli.ts";
+import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
 import type { Profile } from "../src/config/types.ts";
 
 function createProfile(overrides: Partial<Profile> = {}): Profile {
@@ -17,7 +18,7 @@ function createProfile(overrides: Partial<Profile> = {}): Profile {
     gcloud: overrides.gcloud ?? { mountConfig: false },
     aws: overrides.aws ?? { mountConfig: false },
     gpg: overrides.gpg ?? { forwardAgent: false },
-    network: { allowlist: [] },
+    network: structuredClone(DEFAULT_NETWORK_CONFIG),
     extraMounts: overrides.extraMounts ?? [],
     env: overrides.env ?? [],
   };

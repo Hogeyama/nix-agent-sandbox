@@ -22,6 +22,10 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.docker.shared, false);
   assertEquals(config.profiles.test.gpg.forwardAgent, false);
   assertEquals(config.profiles.test.network.allowlist, []);
+  assertEquals(config.profiles.test.network.prompt.enable, false);
+  assertEquals(config.profiles.test.network.prompt.timeoutSeconds, 300);
+  assertEquals(config.profiles.test.network.prompt.defaultScope, "host-port");
+  assertEquals(config.profiles.test.network.prompt.notify, "auto");
   assertEquals(config.profiles.test.extraMounts, []);
   assertEquals(config.profiles.test.env, []);
 });
@@ -267,6 +271,82 @@ Deno.test("validateConfig: network.allowlist defaults to empty array", () => {
     profiles: { test: { agent: "claude" } },
   });
   assertEquals(config.profiles.test.network.allowlist, []);
+});
+
+Deno.test("validateConfig: network.prompt defaults are applied", () => {
+  const config = validateConfig({
+    profiles: { test: { agent: "claude" } },
+  });
+  assertEquals(config.profiles.test.network.prompt, {
+    enable: false,
+    timeoutSeconds: 300,
+    defaultScope: "host-port",
+    notify: "auto",
+  });
+});
+
+Deno.test("validateConfig: network.prompt accepts explicit values", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        network: {
+          prompt: {
+            enable: true,
+            "timeout-seconds": 42,
+            "default-scope": "host",
+            notify: "tmux",
+          },
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.network.prompt, {
+    enable: true,
+    timeoutSeconds: 42,
+    defaultScope: "host",
+    notify: "tmux",
+  });
+});
+
+Deno.test("validateConfig: network.prompt rejects invalid default-scope", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            network: {
+              prompt: {
+                "default-scope": "invalid" as "host",
+              },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "network.prompt.default-scope must be one of",
+  );
+});
+
+Deno.test("validateConfig: network.prompt rejects invalid notify", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            network: {
+              prompt: {
+                notify: "invalid" as "auto",
+              },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "network.prompt.notify must be one of",
+  );
 });
 
 Deno.test("validateConfig: network.allowlist is parsed correctly", () => {

@@ -1,4 +1,5 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertMatch } from "@std/assert";
+import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { runPipeline } from "../src/pipeline/pipeline.ts";
 import type { Stage } from "../src/pipeline/pipeline.ts";
@@ -12,7 +13,7 @@ const testProfile: Profile = {
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
-  network: { allowlist: [] },
+  network: structuredClone(DEFAULT_NETWORK_CONFIG),
   extraMounts: [],
   env: [],
 };
@@ -25,10 +26,25 @@ const testConfig: Config = {
 Deno.test("createContext: returns correct initial values", () => {
   const ctx = createContext(testConfig, testProfile, "test", "/tmp/work");
   assertEquals(ctx.profileName, "test");
+  assertMatch(ctx.sessionId, /^sess_[0-9a-f]{12}$/);
   assertEquals(ctx.workDir, "/tmp/work");
   assertEquals(ctx.imageName, "nas-sandbox");
   assertEquals(ctx.dockerArgs, []);
+  assertEquals(ctx.networkPromptEnabled, false);
+  assertEquals(ctx.networkPromptToken, undefined);
   assertEquals(ctx.nixEnabled, false);
+});
+
+Deno.test("createContext: generates prompt token when proxy path is enabled", () => {
+  const profile: Profile = {
+    ...testProfile,
+    network: {
+      ...structuredClone(DEFAULT_NETWORK_CONFIG),
+      allowlist: ["github.com"],
+    },
+  };
+  const ctx = createContext(testConfig, profile, "test", "/tmp/work");
+  assertMatch(ctx.networkPromptToken ?? "", /^[0-9a-f]{64}$/);
 });
 
 Deno.test("runPipeline: executes stages in order", async () => {

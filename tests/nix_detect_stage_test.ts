@@ -1,4 +1,5 @@
 import { assertEquals } from "@std/assert";
+import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
 import { NixDetectStage } from "../src/stages/nix_detect.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
@@ -12,7 +13,7 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
-    network: { allowlist: [] },
+    network: structuredClone(DEFAULT_NETWORK_CONFIG),
     extraMounts: [],
     env: [],
   };

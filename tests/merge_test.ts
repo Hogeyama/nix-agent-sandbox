@@ -138,3 +138,33 @@ Deno.test("mergeRawProfiles: aws shallow merge", () => {
   const result = mergeRawProfiles(global, local);
   assertEquals(result.aws?.["mount-config"], false);
 });
+
+Deno.test("mergeRawProfiles: network.prompt subfields are preserved", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    network: {
+      allowlist: ["github.com"],
+      prompt: {
+        enable: true,
+        "timeout-seconds": 300,
+        "default-scope": "host-port",
+        notify: "auto",
+      },
+    },
+  };
+  const local: RawProfile = {
+    network: {
+      prompt: {
+        notify: "desktop",
+      },
+    },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.network?.allowlist, ["github.com"]);
+  assertEquals(result.network?.prompt, {
+    enable: true,
+    "timeout-seconds": 300,
+    "default-scope": "host-port",
+    notify: "desktop",
+  });
+});
