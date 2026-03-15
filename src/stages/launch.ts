@@ -13,6 +13,19 @@ import {
 } from "../docker/client.ts";
 import * as path from "@std/path";
 
+const EMBEDDED_BUILD_ASSET_GROUPS = [
+  {
+    baseUrl: new URL("../docker/embed/", import.meta.url),
+    outputDir: "",
+    files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
+  },
+  {
+    baseUrl: new URL("../docker/envoy/", import.meta.url),
+    outputDir: "envoy",
+    files: ["envoy.template.yaml"],
+  },
+] as const;
+
 export class DockerBuildStage implements Stage {
   name = "DockerBuildStage";
 
@@ -44,10 +57,15 @@ export class DockerBuildStage implements Stage {
       // 埋め込みファイルを一時ディレクトリに書き出してからビルドする
       const tmpDir = await Deno.makeTempDir({ prefix: "nas-docker-build-" });
       try {
-        const baseUrl = new URL("../docker/embed/", import.meta.url);
-        for (const name of ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"]) {
-          const content = await Deno.readTextFile(new URL(name, baseUrl));
-          await Deno.writeTextFile(path.join(tmpDir, name), content);
+        for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
+          for (const name of group.files) {
+            const content = await Deno.readTextFile(
+              new URL(name, group.baseUrl),
+            );
+            const outputPath = path.join(tmpDir, group.outputDir, name);
+            await Deno.mkdir(path.dirname(outputPath), { recursive: true });
+            await Deno.writeTextFile(outputPath, content);
+          }
         }
         await dockerBuild(tmpDir, imageName, {
           [DockerBuildStage.EMBED_HASH_LABEL]: embedHash,

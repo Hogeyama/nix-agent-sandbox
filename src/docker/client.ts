@@ -7,6 +7,17 @@ import { crypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding/hex";
 import type { DockerLabels } from "./nas_resources.ts";
 
+const EMBEDDED_ASSET_GROUPS = [
+  {
+    baseUrl: new URL("./embed/", import.meta.url),
+    files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
+  },
+  {
+    baseUrl: new URL("./envoy/", import.meta.url),
+    files: ["envoy.template.yaml"],
+  },
+] as const;
+
 export interface DockerRunOptions {
   image: string;
   args: string[];
@@ -36,10 +47,11 @@ export interface DockerVolumeDetails {
 
 /** 埋め込みファイル (Dockerfile + entrypoint.sh) の SHA-256 ハッシュを計算 */
 export async function computeEmbedHash(): Promise<string> {
-  const baseUrl = new URL("./embed/", import.meta.url);
   const parts: string[] = [];
-  for (const name of ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"]) {
-    parts.push(await Deno.readTextFile(new URL(name, baseUrl)));
+  for (const group of EMBEDDED_ASSET_GROUPS) {
+    for (const name of group.files) {
+      parts.push(await Deno.readTextFile(new URL(name, group.baseUrl)));
+    }
   }
   const data = new TextEncoder().encode(parts.join("\n"));
   const hash = await crypto.subtle.digest("SHA-256", data);
@@ -171,8 +183,14 @@ export async function dockerNetworkDisconnect(
 export async function dockerNetworkConnect(
   networkName: string,
   containerName: string,
+  options?: { aliases?: string[] },
 ): Promise<void> {
-  await $`docker network connect ${networkName} ${containerName}`.quiet();
+  const aliasArgs: string[] = [];
+  for (const alias of options?.aliases ?? []) {
+    aliasArgs.push("--alias", alias);
+  }
+  await $`docker network connect ${aliasArgs} ${networkName} ${containerName}`
+    .quiet();
 }
 
 /** docker network を削除 */
@@ -185,7 +203,11 @@ export interface DockerRunDetachedOptions {
   image: string;
   args: string[];
   envVars: Record<string, string>;
+  network?: string;
+  mounts?: string[];
+  publishedPorts?: string[];
   labels?: DockerLabels;
+  entrypoint?: string;
   command?: string[];
 }
 
@@ -194,11 +216,23 @@ export async function dockerRunDetached(
   opts: DockerRunDetachedOptions,
 ): Promise<void> {
   const args: string[] = ["run", "-d", "--name", opts.name];
+  if (opts.network) {
+    args.push("--network", opts.network);
+  }
+  for (const mount of opts.mounts ?? []) {
+    args.push("--mount", mount);
+  }
+  for (const publishedPort of opts.publishedPorts ?? []) {
+    args.push("-p", publishedPort);
+  }
   for (const [key, value] of Object.entries(opts.envVars)) {
     args.push("-e", `${key}=${value}`);
   }
   for (const [key, value] of Object.entries(opts.labels ?? {})) {
     args.push("--label", `${key}=${value}`);
+  }
+  if (opts.entrypoint) {
+    args.push("--entrypoint", opts.entrypoint);
   }
   args.push(...opts.args);
   args.push(opts.image);

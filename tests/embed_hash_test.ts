@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { computeEmbedHash } from "../src/docker/client.ts";
 
 Deno.test("computeEmbedHash returns consistent hash", async () => {
@@ -9,15 +9,56 @@ Deno.test("computeEmbedHash returns consistent hash", async () => {
   assertEquals(hash1.length, 64);
 });
 
-Deno.test("computeEmbedHash changes when files differ", async () => {
-  const originalHash = await computeEmbedHash();
-
-  // Temporarily patch computeEmbedHash by directly hashing different content
-  const { crypto } = await import("@std/crypto");
-  const { encodeHex } = await import("@std/encoding/hex");
-  const data = new TextEncoder().encode("different content");
+Deno.test("computeEmbedHash matches embed and envoy assets", async () => {
+  const parts: string[] = [];
+  for (
+    const [baseUrl, files] of [
+      [
+        new URL("../src/docker/embed/", import.meta.url),
+        ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
+      ],
+      [
+        new URL("../src/docker/envoy/", import.meta.url),
+        ["envoy.template.yaml"],
+      ],
+    ] as const
+  ) {
+    for (const name of files) {
+      parts.push(await Deno.readTextFile(new URL(name, baseUrl)));
+    }
+  }
+  const data = new TextEncoder().encode(parts.join("\n"));
   const hash = await crypto.subtle.digest("SHA-256", data);
-  const differentHash = encodeHex(new Uint8Array(hash));
+  const expected = Array.from(new Uint8Array(hash))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 
-  assertNotEquals(originalHash, differentHash);
+  assertEquals(await computeEmbedHash(), expected);
+});
+
+Deno.test("envoy template includes required proxy settings", async () => {
+  const template = await Deno.readTextFile(
+    new URL("../src/docker/envoy/envoy.template.yaml", import.meta.url),
+  );
+
+  for (
+    const fragment of [
+      "0.0.0.0:15001",
+      "envoy.filters.http.dynamic_forward_proxy",
+      "envoy.filters.http.ext_authz",
+      "timeout: 300s",
+      "timeout: 0s",
+      "pipe: { path: /nas-network/auth-router.sock }",
+      "/authorize",
+      "Proxy-Authorization",
+      "Host",
+      "x-request-id",
+      "headers_to_add",
+      "x-nas-original-method",
+      "x-nas-original-authority",
+      "x-nas-original-url",
+    ]
+  ) {
+    assertEquals(template.includes(fragment), true);
+  }
 });

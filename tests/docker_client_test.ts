@@ -5,7 +5,7 @@
  * また Docker CLI ラッパー関数のインテグレーションテストを含む。
  */
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { computeEmbedHash } from "../src/docker/client.ts";
 import {
   dockerBuild,
@@ -42,12 +42,24 @@ Deno.test("computeEmbedHash: returns valid SHA-256 hex string", async () => {
 // --- embed hash は全埋め込みファイルから計算される ---
 
 Deno.test("computeEmbedHash: includes all embedded files", async () => {
-  // ハッシュが Dockerfile + entrypoint.sh + osc52-clip.sh から計算されることを検証
+  // ハッシュが embed/ と envoy/ の埋め込みファイルから計算されることを検証
   // 各ファイルの内容を読み取って手動でハッシュを計算し、computeEmbedHash と比較
-  const baseUrl = new URL("../src/docker/embed/", import.meta.url);
   const parts: string[] = [];
-  for (const name of ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"]) {
-    parts.push(await Deno.readTextFile(new URL(name, baseUrl)));
+  for (
+    const [baseUrl, files] of [
+      [
+        new URL("../src/docker/embed/", import.meta.url),
+        ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
+      ],
+      [
+        new URL("../src/docker/envoy/", import.meta.url),
+        ["envoy.template.yaml"],
+      ],
+    ] as const
+  ) {
+    for (const name of files) {
+      parts.push(await Deno.readTextFile(new URL(name, baseUrl)));
+    }
   }
   const data = new TextEncoder().encode(parts.join("\n"));
   const hash = await crypto.subtle.digest("SHA-256", data);
@@ -65,10 +77,36 @@ Deno.test("computeEmbedHash: includes all embedded files", async () => {
 
 const TEST_IMAGE = "alpine:latest";
 const PREFIX = "nas-test-" + Date.now();
+const DOCKER_DAEMON_AVAILABLE = (() => {
+  try {
+    return new Deno.Command("docker", {
+      args: ["info"],
+      stdout: "null",
+      stderr: "null",
+    }).outputSync().success;
+  } catch {
+    return false;
+  }
+})();
+
+function skipWithoutDockerDaemon(testName: string): boolean {
+  if (DOCKER_DAEMON_AVAILABLE) {
+    return false;
+  }
+  console.log(`[skip] ${testName}: docker daemon unavailable`);
+  return true;
+}
 
 // --- dockerImageExists ---
 
 Deno.test("dockerImageExists: returns true for existing image", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "dockerImageExists: returns true for existing image",
+    )
+  ) {
+    return;
+  }
   // alpine を pull しておく
   const cmd = new Deno.Command("docker", {
     args: ["pull", "-q", TEST_IMAGE],
@@ -101,6 +139,13 @@ Deno.test("getImageLabel: returns null for non-existing label", async () => {
 // --- dockerBuild with labels ---
 
 Deno.test("dockerBuild: builds image with labels and getImageLabel reads them", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "dockerBuild: builds image with labels and getImageLabel reads them",
+    )
+  ) {
+    return;
+  }
   const tag = `${PREFIX}-build-label`;
   const tmpDir = await Deno.makeTempDir();
   try {
@@ -136,9 +181,36 @@ async function startLongRunningContainer(
   }
 }
 
+async function inspectDockerObject(
+  ...args: string[]
+): Promise<Record<string, unknown>> {
+  const cmd = new Deno.Command("docker", {
+    args,
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const result = await cmd.output();
+  if (!result.success) {
+    throw new Error(
+      `docker ${args.join(" ")} failed: ${
+        new TextDecoder().decode(result.stderr).trim()
+      }`,
+    );
+  }
+
+  return JSON.parse(new TextDecoder().decode(result.stdout))[0];
+}
+
 // --- dockerRunDetached ---
 
 Deno.test("dockerRunDetached: starts container in detached mode", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "dockerRunDetached: starts container in detached mode",
+    )
+  ) {
+    return;
+  }
   const containerName = `${PREFIX}-detached`;
   try {
     await dockerRunDetached({
@@ -160,9 +232,101 @@ Deno.test("dockerRunDetached: starts container in detached mode", async () => {
   }
 });
 
+Deno.test("dockerRunDetached: supports network, mounts, ports, labels, entrypoint, command", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "dockerRunDetached: supports network, mounts, ports, labels, entrypoint, command",
+    )
+  ) {
+    return;
+  }
+  const networkName = `${PREFIX}-detached-net`;
+  const containerName = `${PREFIX}-detached-extended`;
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(`${tmpDir}/hello.txt`, "hello");
+    await dockerNetworkCreate(networkName);
+
+    await dockerRunDetached({
+      name: containerName,
+      image: TEST_IMAGE,
+      args: [],
+      envVars: { "TEST_VAR": "detached_value" },
+      network: networkName,
+      mounts: [`type=bind,src=${tmpDir},dst=/workspace,readonly`],
+      publishedPorts: ["127.0.0.1::8080"],
+      labels: { "test.label": "extended" },
+      entrypoint: "/bin/sh",
+      command: ["-c", "sleep 300"],
+    });
+
+    const inspected = await inspectDockerObject("inspect", containerName) as {
+      Config?: {
+        Cmd?: string[];
+        Entrypoint?: string[];
+        Env?: string[];
+        Labels?: Record<string, string>;
+      };
+      HostConfig?: {
+        NetworkMode?: string;
+      };
+      Mounts?: Array<{
+        Destination?: string;
+        RW?: boolean;
+        Source?: string;
+        Type?: string;
+      }>;
+      NetworkSettings?: {
+        Ports?: Record<
+          string,
+          Array<{ HostIp?: string; HostPort?: string }>
+        >;
+      };
+    };
+
+    assertEquals(inspected.HostConfig?.NetworkMode, networkName);
+    assertEquals(inspected.Config?.Entrypoint, ["/bin/sh"]);
+    assertEquals(inspected.Config?.Cmd, ["-c", "sleep 300"]);
+    assertEquals(inspected.Config?.Labels?.["test.label"], "extended");
+    assertEquals(
+      inspected.Config?.Env?.includes("TEST_VAR=detached_value"),
+      true,
+    );
+    assertEquals(
+      inspected.Mounts?.some((mount) =>
+        mount.Type === "bind" &&
+        mount.Source === tmpDir &&
+        mount.Destination === "/workspace" &&
+        mount.RW === false
+      ),
+      true,
+    );
+    assertEquals(
+      inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostIp,
+      "127.0.0.1",
+    );
+    assert(
+      (inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostPort ?? "")
+        .length > 0,
+    );
+  } finally {
+    await dockerStop(containerName).catch(() => {});
+    await dockerRm(containerName).catch(() => {});
+    await dockerNetworkRemove(networkName).catch(() => {});
+    await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
 // --- dockerIsRunning / dockerExec / dockerLogs / dockerStop / dockerRm ---
 
 Deno.test("container lifecycle: isRunning, exec, logs, stop, rm", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "container lifecycle: isRunning, exec, logs, stop, rm",
+    )
+  ) {
+    return;
+  }
   const containerName = `${PREFIX}-lifecycle`;
   try {
     await startLongRunningContainer(containerName, {
@@ -231,6 +395,13 @@ Deno.test("dockerIsRunning: returns false for non-existing container", async () 
 // --- dockerExec: failing command ---
 
 Deno.test("dockerExec: returns non-zero code for failing command", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "dockerExec: returns non-zero code for failing command",
+    )
+  ) {
+    return;
+  }
   const containerName = `${PREFIX}-exec-fail`;
   try {
     await startLongRunningContainer(containerName);
@@ -253,6 +424,13 @@ Deno.test("dockerLogs: returns fallback for non-existing container", async () =>
 // --- dockerRun: non-interactive ---
 
 Deno.test("dockerRun: runs non-interactive command successfully", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "dockerRun: runs non-interactive command successfully",
+    )
+  ) {
+    return;
+  }
   await dockerRun({
     image: TEST_IMAGE,
     args: [],
@@ -279,6 +457,13 @@ Deno.test("dockerRun: throws on non-zero exit", async () => {
 });
 
 Deno.test("dockerRun: interactive mode without TTY uses -i only", async () => {
+  if (
+    skipWithoutDockerDaemon(
+      "dockerRun: interactive mode without TTY uses -i only",
+    )
+  ) {
+    return;
+  }
   // テスト環境は非 TTY なので -i のみが付く
   await dockerRun({
     image: TEST_IMAGE,
@@ -293,6 +478,9 @@ Deno.test("dockerRun: interactive mode without TTY uses -i only", async () => {
 // --- dockerNetwork ---
 
 Deno.test("dockerNetwork: create, connect, remove", async () => {
+  if (skipWithoutDockerDaemon("dockerNetwork: create, connect, remove")) {
+    return;
+  }
   const networkName = `${PREFIX}-net`;
   const containerName = `${PREFIX}-net-container`;
   try {
@@ -310,9 +498,46 @@ Deno.test("dockerNetwork: create, connect, remove", async () => {
   }
 });
 
+Deno.test("dockerNetworkConnect: supports aliases", async () => {
+  if (skipWithoutDockerDaemon("dockerNetworkConnect: supports aliases")) {
+    return;
+  }
+  const networkName = `${PREFIX}-net-alias`;
+  const containerName = `${PREFIX}-net-alias-container`;
+  try {
+    await dockerNetworkCreate(networkName);
+    await startLongRunningContainer(containerName);
+
+    await dockerNetworkConnect(networkName, containerName, {
+      aliases: ["svc-alias", "svc-alt"],
+    });
+
+    const inspected = await inspectDockerObject("inspect", containerName) as {
+      NetworkSettings?: {
+        Networks?: Record<
+          string,
+          { Aliases?: string[]; DNSNames?: string[] }
+        >;
+      };
+    };
+    const network = inspected.NetworkSettings?.Networks?.[networkName];
+
+    assertEquals(Boolean(network), true);
+    assertEquals(network?.Aliases?.includes("svc-alias"), true);
+    assertEquals(network?.Aliases?.includes("svc-alt"), true);
+  } finally {
+    await dockerStop(containerName).catch(() => {});
+    await dockerRm(containerName).catch(() => {});
+    await dockerNetworkRemove(networkName).catch(() => {});
+  }
+});
+
 // --- dockerRemoveImage ---
 
 Deno.test("dockerRemoveImage: removes a tagged image", async () => {
+  if (skipWithoutDockerDaemon("dockerRemoveImage: removes a tagged image")) {
+    return;
+  }
   const tag = `${PREFIX}-rmi-test`;
   const tmpDir = await Deno.makeTempDir();
   try {
@@ -335,6 +560,9 @@ Deno.test("dockerRemoveImage: removes a tagged image", async () => {
 // --- dockerVolumeRemove ---
 
 Deno.test("dockerVolumeRemove: removes a volume", async () => {
+  if (skipWithoutDockerDaemon("dockerVolumeRemove: removes a volume")) {
+    return;
+  }
   const volumeName = `${PREFIX}-vol`;
   // create volume first
   const cmd = new Deno.Command("docker", {
