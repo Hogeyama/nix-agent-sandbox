@@ -8,8 +8,21 @@
  * の先頭に置き、コンテナ内へ mount されたそのバイナリが実行されることを確認する。
  */
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertMatch } from "@std/assert";
 import * as path from "@std/path";
+import { sendBrokerRequest, SessionBroker } from "../src/network/broker.ts";
+import {
+  brokerSocketPath,
+  pendingSessionDir,
+  resolveNetworkRuntimePaths,
+  writeSessionRegistry,
+} from "../src/network/registry.ts";
+import {
+  type AuthorizeRequest,
+  type DecisionResponse,
+  hashToken,
+  type PendingEntry,
+} from "../src/network/protocol.ts";
 
 const MAIN_TS = path.join(
   path.dirname(path.fromFileUrl(import.meta.url)),
@@ -36,22 +49,6 @@ async function isDockerAvailable(): Promise<boolean> {
 }
 
 const dockerAvailable = await isDockerAvailable();
-
-async function isProxyImageAvailable(): Promise<boolean> {
-  try {
-    const cmd = new Deno.Command("docker", {
-      args: ["image", "inspect", "ubuntu/squid"],
-      stdout: "null",
-      stderr: "null",
-    });
-    const result = await cmd.output();
-    return result.success;
-  } catch {
-    return false;
-  }
-}
-
-const proxyAvailable = dockerAvailable && await isProxyImageAvailable();
 
 async function makeTempDir(prefix: string): Promise<string> {
   const base = SHARED_TMP ?? "/tmp";
@@ -197,124 +194,247 @@ Deno.test({
 });
 
 // ============================================================
-// Proxy E2E tests
+// Network approval CLI E2E tests
 // ============================================================
 
-async function withProxyProject(
-  fn: (projectDir: string, env: Record<string, string>) => Promise<void>,
+interface BrokerFixture {
+  runtimeDir: string;
+  sessionId: string;
+  socketPath: string;
+  broker: SessionBroker;
+}
+
+async function withBrokerFixture(
+  options: {
+    promptEnabled?: boolean;
+    timeoutSeconds?: number;
+  } = {},
+  fn: (fixture: BrokerFixture) => Promise<void>,
 ): Promise<void> {
-  const rootDir = await makeTempDir("nas-proxy-e2e-");
+  const runtimeDir = await makeTempDir("nas-network-e2e-");
+  const sessionId = `sess_${
+    crypto.randomUUID().replaceAll("-", "").slice(0, 12)
+  }`;
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const socketPath = brokerSocketPath(paths, sessionId);
+  const broker = new SessionBroker({
+    paths,
+    sessionId,
+    allowlist: [],
+    promptEnabled: options.promptEnabled ?? true,
+    timeoutSeconds: options.timeoutSeconds ?? 30,
+    defaultScope: "host-port",
+    notify: "off",
+  });
+  await broker.start(socketPath);
+  await writeSessionRegistry(paths, {
+    version: 1,
+    sessionId,
+    tokenHash: await hashToken("test-token"),
+    brokerSocket: socketPath,
+    profileName: "test",
+    allowlist: [],
+    promptEnabled: options.promptEnabled ?? true,
+    createdAt: new Date().toISOString(),
+    pid: Deno.pid,
+  });
+
   try {
-    const projectDir = path.join(rootDir, "project");
-    const homeDir = path.join(rootDir, "home");
-    const binDir = path.join(rootDir, "bin");
-
-    await Deno.mkdir(projectDir, { recursive: true });
-    await Deno.mkdir(path.join(homeDir, ".codex"), { recursive: true });
-    await Deno.mkdir(binDir, { recursive: true });
-    await makeWritableForDind(projectDir);
-    await makeWritableForDind(homeDir);
-    await makeWritableForDind(path.join(homeDir, ".codex"));
-    await makeWritableForDind(binDir);
-
-    // Mock agent that curls allowed and blocked domains, reporting HTTP status
-    const fakeCodexPath = path.join(binDir, "codex");
-    await Deno.writeTextFile(
-      fakeCodexPath,
-      [
-        "#!/bin/sh",
-        // curl allowed domain (github.com)
-        'ALLOWED=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://github.com/ 2>/dev/null)',
-        'printf "ALLOWED_STATUS=%s\\n" "$ALLOWED"',
-        // curl blocked domain (example.com)
-        'BLOCKED=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://example.com/ 2>/dev/null)',
-        'printf "BLOCKED_STATUS=%s\\n" "$BLOCKED"',
-        // verify proxy env vars are set
-        'printf "http_proxy=%s\\n" "$http_proxy"',
-        'printf "https_proxy=%s\\n" "$https_proxy"',
-      ].join("\n"),
-    );
-    await Deno.chmod(fakeCodexPath, 0o755);
-
-    await Deno.writeTextFile(
-      path.join(projectDir, ".agent-sandbox.yml"),
-      [
-        "default: test",
-        "profiles:",
-        "  test:",
-        "    agent: codex",
-        "    nix:",
-        "      enable: false",
-        "    docker:",
-        "      enable: false",
-        "      shared: false",
-        "    gcloud:",
-        "      mountConfig: false",
-        "    aws:",
-        "      mountConfig: false",
-        "    gpg:",
-        "      forwardAgent: false",
-        "    network:",
-        "      allowlist:",
-        "        - github.com",
-        "    extra-mounts: []",
-        "    env: []",
-      ].join("\n"),
-    );
-
-    const env = {
-      HOME: homeDir,
-      PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
-    };
-
-    await fn(projectDir, env);
+    await fn({ runtimeDir, sessionId, socketPath, broker });
   } finally {
-    await Deno.remove(rootDir, { recursive: true }).catch(() => {});
+    await broker.close().catch(() => {});
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
   }
 }
 
-Deno.test({
-  name: "CLI E2E: proxy allows listed domain and blocks unlisted domain",
-  ignore: !proxyAvailable || !canBindMount,
-  async fn() {
-    await withProxyProject(async (projectDir, env) => {
-      const result = await runNas(["test"], {
-        cwd: projectDir,
-        env,
-      });
+async function authorizeThroughBroker(
+  socketPath: string,
+  sessionId: string,
+  requestId: string,
+  host: string,
+  port: number,
+): Promise<DecisionResponse> {
+  const request: AuthorizeRequest = {
+    version: 1,
+    type: "authorize",
+    requestId,
+    sessionId,
+    target: { host, port },
+    method: "CONNECT",
+    requestKind: "connect",
+    observedAt: new Date().toISOString(),
+  };
+  return await sendBrokerRequest<DecisionResponse>(socketPath, request);
+}
 
-      assertEquals(
-        result.code,
-        0,
-        `nas exited with ${result.code}: ${result.stderr}`,
-      );
+async function waitForPending(
+  socketPath: string,
+): Promise<{ type: "pending"; items: PendingEntry[] }> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const pending = await sendBrokerRequest<
+      { type: "pending"; items: PendingEntry[] }
+    >(
+      socketPath,
+      { type: "list_pending" },
+    );
+    if (pending.items.length > 0) {
+      return pending;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Timed out waiting for pending CLI entry");
+}
 
-      // proxy env vars should be set
-      assertEquals(
-        result.stdout.includes("http_proxy=http://"),
-        true,
-        "http_proxy should be set",
-      );
+Deno.test("CLI E2E: network pending lists queued approvals", async () => {
+  await withBrokerFixture({}, async ({ runtimeDir, sessionId, socketPath }) => {
+    const authorizePromise = authorizeThroughBroker(
+      socketPath,
+      sessionId,
+      "req_pending",
+      "api.openai.com",
+      443,
+    );
+    await waitForPending(socketPath);
 
-      // allowed domain: expect 2xx or 3xx
-      const allowedMatch = result.stdout.match(/ALLOWED_STATUS=(\d+)/);
-      assertEquals(allowedMatch !== null, true, "Should report allowed status");
-      const allowedStatus = parseInt(allowedMatch![1], 10);
-      assertEquals(
-        allowedStatus >= 200 && allowedStatus < 400,
-        true,
-        `Expected 2xx/3xx for allowed domain, got ${allowedStatus}`,
-      );
+    const result = await runNas(
+      ["network", "pending", "--runtime-dir", runtimeDir],
+      { cwd: Deno.cwd() },
+    );
 
-      // blocked domain: expect 403 (squid deny)
-      const blockedMatch = result.stdout.match(/BLOCKED_STATUS=(\d+)/);
-      assertEquals(blockedMatch !== null, true, "Should report blocked status");
-      const blockedStatus = parseInt(blockedMatch![1], 10);
-      assertEquals(
-        blockedStatus,
-        403,
-        `Expected 403 for blocked domain, got ${blockedStatus}`,
-      );
+    assertEquals(result.code, 0);
+    assertMatch(
+      result.stdout,
+      new RegExp(`${sessionId} req_pending api\\.openai\\.com:443 pending`),
+    );
+
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_pending",
     });
-  },
+    const decision = await authorizePromise;
+    assertEquals(decision.decision, "deny");
+  });
 });
+
+Deno.test("CLI E2E: network approve resumes pending request", async () => {
+  await withBrokerFixture({}, async ({ runtimeDir, sessionId, socketPath }) => {
+    const authorizePromise = authorizeThroughBroker(
+      socketPath,
+      sessionId,
+      "req_approve_cli",
+      "api.openai.com",
+      443,
+    );
+    await waitForPending(socketPath);
+
+    const result = await runNas(
+      [
+        "network",
+        "approve",
+        sessionId,
+        "req_approve_cli",
+        "--scope",
+        "host-port",
+        "--runtime-dir",
+        runtimeDir,
+      ],
+      { cwd: Deno.cwd() },
+    );
+
+    assertEquals(result.code, 0);
+    assertEquals(
+      result.stdout.includes(`Approved ${sessionId} req_approve_cli`),
+      true,
+    );
+
+    const decision = await authorizePromise;
+    assertEquals(decision.decision, "allow");
+    assertEquals(decision.scope, "host-port");
+  });
+});
+
+Deno.test("CLI E2E: network deny rejects pending request", async () => {
+  await withBrokerFixture({}, async ({ runtimeDir, sessionId, socketPath }) => {
+    const authorizePromise = authorizeThroughBroker(
+      socketPath,
+      sessionId,
+      "req_deny_cli",
+      "example.com",
+      443,
+    );
+    await waitForPending(socketPath);
+
+    const result = await runNas(
+      [
+        "network",
+        "deny",
+        sessionId,
+        "req_deny_cli",
+        "--runtime-dir",
+        runtimeDir,
+      ],
+      { cwd: Deno.cwd() },
+    );
+
+    assertEquals(result.code, 0);
+    assertEquals(
+      result.stdout.includes(`Denied ${sessionId} req_deny_cli`),
+      true,
+    );
+
+    const decision = await authorizePromise;
+    assertEquals(decision.decision, "deny");
+  });
+});
+
+Deno.test("CLI E2E: network gc removes stale runtime state", async () => {
+  const runtimeDir = await makeTempDir("nas-network-gc-");
+  try {
+    const paths = await resolveNetworkRuntimePaths(runtimeDir);
+    const sessionId = "sess_stale";
+    const staleSocket = brokerSocketPath(paths, sessionId);
+    await Deno.mkdir(pendingSessionDir(paths, sessionId), { recursive: true });
+    await Deno.writeTextFile(staleSocket, "");
+    await Deno.writeTextFile(paths.authRouterSocket, "");
+    await Deno.writeTextFile(paths.authRouterPidFile, "999999\n");
+    await writeSessionRegistry(paths, {
+      version: 1,
+      sessionId,
+      tokenHash: await hashToken("stale-token"),
+      brokerSocket: staleSocket,
+      profileName: "test",
+      allowlist: [],
+      promptEnabled: true,
+      createdAt: new Date().toISOString(),
+      pid: 999999,
+    });
+
+    const result = await runNas(
+      ["network", "gc", "--runtime-dir", runtimeDir],
+      { cwd: Deno.cwd() },
+    );
+
+    assertEquals(result.code, 0);
+    assertEquals(
+      result.stdout.includes(
+        "GC removed 1 session(s), 1 pending dir(s), 1 broker socket(s).",
+      ),
+      true,
+    );
+    assertEquals(await exists(paths.authRouterSocket), false);
+    assertEquals(await exists(paths.authRouterPidFile), false);
+    assertEquals(await exists(staleSocket), false);
+  } finally {
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
+
+async function exists(targetPath: string): Promise<boolean> {
+  try {
+    await Deno.stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
