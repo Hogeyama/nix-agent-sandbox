@@ -160,7 +160,9 @@ export async function computeAllowlistHash(
  * デーモンモードの既存ハンドルと衝突して squid がクラッシュする。
  */
 export function generateSquidConfig(allowlist: string[]): string {
-  const domains = allowlist.map((d) => `.${d}`).join(" ");
+  const domains = allowlist.map((d) =>
+    d.startsWith("*.") ? `.${d.slice(2)}` : d
+  ).join(" ");
   return `http_port ${PROXY_PORT}
 acl allowed_domains dstdomain ${domains}
 acl CONNECT method CONNECT

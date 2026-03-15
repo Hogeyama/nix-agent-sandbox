@@ -302,6 +302,55 @@ Deno.test("validateConfig: network.allowlist invalid entry throws", () => {
   );
 });
 
+Deno.test("validateConfig: network.allowlist accepts wildcard prefix", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        network: {
+          allowlist: ["*.github.com", "api.anthropic.com"],
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.network.allowlist, [
+    "*.github.com",
+    "api.anthropic.com",
+  ]);
+});
+
+Deno.test("validateConfig: network.allowlist rejects wildcard in middle", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            network: { allowlist: ["git*hub.com"] },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "contains wildcard",
+  );
+});
+
+Deno.test("validateConfig: network.allowlist rejects trailing wildcard", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            network: { allowlist: ["github.*"] },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "contains wildcard",
+  );
+});
+
 Deno.test("validateConfig: network.allowlist non-array throws", () => {
   assertThrows(
     () =>

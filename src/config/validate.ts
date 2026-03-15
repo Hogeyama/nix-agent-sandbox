@@ -234,6 +234,13 @@ function validateAllowlist(profileName: string, raw?: unknown): string[] {
         `profile "${profileName}": network.allowlist[${i}] must be a non-empty string`,
       );
     }
+    // *.domain.com は許可、それ以外の位置に * があればエラー
+    const domain = entry.startsWith("*.") ? entry.slice(2) : entry;
+    if (domain.includes("*")) {
+      throw new ConfigValidationError(
+        `profile "${profileName}": network.allowlist[${i}] ("${entry}") contains wildcard "*" in an invalid position; only "*.domain.com" prefix form is allowed`,
+      );
+    }
   }
   return raw as string[];
 }

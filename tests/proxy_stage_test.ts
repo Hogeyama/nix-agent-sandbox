@@ -60,10 +60,10 @@ Deno.test("ProxyStage: skip when allowlist is empty", async () => {
   assertEquals(result.envVars, {});
 });
 
-Deno.test("generateSquidConfig: produces correct ACL", () => {
+Deno.test("generateSquidConfig: exact domain produces exact match ACL", () => {
   const config = generateSquidConfig(["github.com", "api.anthropic.com"]);
   assertEquals(
-    config.includes("dstdomain .github.com .api.anthropic.com"),
+    config.includes("dstdomain github.com api.anthropic.com"),
     true,
   );
   assertEquals(config.includes("http_port 3128"), true);
@@ -74,6 +74,14 @@ Deno.test("generateSquidConfig: produces correct ACL", () => {
   assertEquals(config.includes("http_access allow allowed_domains"), true);
   assertEquals(config.includes("http_access deny all"), true);
   assertEquals(config.includes("cache deny all"), true);
+});
+
+Deno.test("generateSquidConfig: wildcard domain produces leading-dot ACL", () => {
+  const config = generateSquidConfig(["*.github.com", "api.anthropic.com"]);
+  assertEquals(
+    config.includes("dstdomain .github.com api.anthropic.com"),
+    true,
+  );
 });
 
 Deno.test("computeAllowlistHash: same list same hash", async () => {
