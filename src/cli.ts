@@ -15,8 +15,15 @@ import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { dockerImageExists, dockerRemoveImage } from "./docker/client.ts";
 import { cleanNasContainers } from "./container_clean.ts";
+import { sendBrokerRequest } from "./network/broker.ts";
 import { serveAuthRouter } from "./network/envoy_auth_router.ts";
-import { resolveNetworkRuntimePaths } from "./network/registry.ts";
+import {
+  gcNetworkRuntime,
+  listPendingEntries,
+  readSessionRegistry,
+  resolveNetworkRuntimePaths,
+} from "./network/registry.ts";
+import type { ApprovalScope } from "./network/protocol.ts";
 
 const VERSION = "0.1.0";
 
@@ -45,7 +52,7 @@ export async function main(args: string[]): Promise<void> {
 
   if (
     subcommand === "rebuild" || subcommand === "worktree" ||
-    subcommand === "container"
+    subcommand === "container" || subcommand === "network"
   ) {
     if (
       argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
@@ -259,7 +266,7 @@ async function runContainerCommand(
 async function runNetworkCommand(
   nasArgs: string[],
 ): Promise<void> {
-  const sub = nasArgs.find((a) => !a.startsWith("-"));
+  const sub = nasArgs.find((arg) => !arg.startsWith("-"));
   const runtimeDir = getFlagValue(nasArgs, "--runtime-dir");
 
   try {
@@ -269,9 +276,63 @@ async function runNetworkCommand(
       return;
     }
 
+    if (sub === "pending" || sub === undefined) {
+      await gcNetworkRuntime(paths);
+      const items = await listPendingEntries(paths);
+      if (items.length === 0) {
+        console.log("[nas] No pending network approvals.");
+        return;
+      }
+      for (const item of items) {
+        const target = `${item.target.host}:${item.target.port}`;
+        console.log(
+          `${item.sessionId} ${item.requestId} ${target} ${item.state} ${item.createdAt}`,
+        );
+      }
+      return;
+    }
+
+    if (sub === "approve") {
+      const [sessionId, requestId] = positionalArgsAfterSubcommand(
+        nasArgs,
+        sub,
+      );
+      const scope = (getFlagValue(nasArgs, "--scope") ?? undefined) as
+        | ApprovalScope
+        | undefined;
+      await sendDecision(paths, sessionId, requestId, {
+        type: "approve",
+        requestId,
+        scope,
+      });
+      console.log(`[nas] Approved ${sessionId} ${requestId}`);
+      return;
+    }
+
+    if (sub === "deny") {
+      const [sessionId, requestId] = positionalArgsAfterSubcommand(
+        nasArgs,
+        sub,
+      );
+      await sendDecision(paths, sessionId, requestId, {
+        type: "deny",
+        requestId,
+      });
+      console.log(`[nas] Denied ${sessionId} ${requestId}`);
+      return;
+    }
+
+    if (sub === "gc") {
+      const result = await gcNetworkRuntime(paths);
+      console.log(
+        `[nas] GC removed ${result.removedSessions.length} session(s), ${result.removedPendingDirs.length} pending dir(s), ${result.removedBrokerSockets.length} broker socket(s).`,
+      );
+      return;
+    }
+
     console.error(`[nas] Unknown network subcommand: ${sub}`);
     console.error(
-      "  Usage: nas network serve-auth-router --runtime-dir <dir>",
+      "  Usage: nas network [pending|approve|deny|gc] [--scope ...]",
     );
     Deno.exit(1);
   } catch (err) {
@@ -352,19 +413,15 @@ function findFirstNonFlagArg(args: string[]): string | undefined {
       i++;
       continue;
     }
+    if (arg === "--scope" || arg === "--runtime-dir") {
+      i++;
+      continue;
+    }
     if (arg.startsWith("-b") && arg.length > 2) continue;
     if (arg === "--no-worktree") continue;
     if (!arg.startsWith("-")) return arg;
   }
   return undefined;
-}
-
-function getFlagValue(args: string[], flag: string): string | null {
-  const index = args.indexOf(flag);
-  if (index === -1 || index + 1 >= args.length) {
-    return null;
-  }
-  return args[index + 1] ?? null;
 }
 
 function printUsage(): void {
@@ -375,11 +432,13 @@ Usage:
   nas rebuild [profile-name] [options]
   nas worktree [list|clean] [options]
   nas container clean
+  nas network [pending|approve|deny|gc]
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする
   worktree  git worktree の管理
   container sidecar container の管理
+  network   network 承認キューと runtime の管理
 
 Options:
   -h, --help      Show this help
@@ -404,6 +463,12 @@ Worktree options:
 Container options:
   clean           未使用の nas sidecar container/network/volume を削除
 
+Network options:
+  pending         保留中の network 承認要求を表示
+  approve         承認する
+  deny            拒否する
+  gc              stale runtime state を掃除する
+
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
@@ -415,6 +480,8 @@ Examples:
   nas worktree list                      # List all nas worktrees
   nas worktree clean                     # Remove all nas worktrees
   nas container clean                    # Remove unused nas sidecars
+  nas network pending                    # Show pending approvals
+  nas network approve <session> <request> --scope host-port
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
   nas worktree clean -f -B              # Force remove worktrees and branches
@@ -436,3 +503,47 @@ Profile agent-args (in .agent-sandbox.yml):
 }
 
 export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
+
+async function sendDecision(
+  paths: Awaited<ReturnType<typeof resolveNetworkRuntimePaths>>,
+  sessionId: string,
+  requestId: string,
+  message: { type: "approve"; requestId: string; scope?: ApprovalScope } | {
+    type: "deny";
+    requestId: string;
+  },
+): Promise<void> {
+  await gcNetworkRuntime(paths);
+  const session = await readSessionRegistry(paths, sessionId);
+  if (!session) {
+    throw new Error(`Session not found: ${sessionId}`);
+  }
+  await sendBrokerRequest(session.brokerSocket, message);
+}
+
+function getFlagValue(args: string[], flag: string): string | null {
+  const idx = args.indexOf(flag);
+  if (idx === -1 || idx + 1 >= args.length) return null;
+  return args[idx + 1];
+}
+
+function positionalArgsAfterSubcommand(
+  args: string[],
+  subcommand: string,
+): [string, string] {
+  const positional = args.filter((arg, index) => {
+    if (arg.startsWith("-")) return false;
+    if (arg === subcommand) return false;
+    if (
+      index > 0 &&
+      (args[index - 1] === "--scope" || args[index - 1] === "--runtime-dir")
+    ) {
+      return false;
+    }
+    return true;
+  });
+  if (positional.length < 2) {
+    throw new Error(`${subcommand} requires <session-id> <request-id>`);
+  }
+  return [positional[0], positional[1]];
+}
