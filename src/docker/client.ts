@@ -204,7 +204,15 @@ export interface DockerRunDetachedOptions {
   args: string[];
   envVars: Record<string, string>;
   network?: string;
-  mounts?: string[];
+  mounts?: Array<
+    | string
+    | {
+      source: string;
+      target: string;
+      mode?: string;
+      type?: "bind" | "volume";
+    }
+  >;
   publishedPorts?: string[];
   labels?: DockerLabels;
   entrypoint?: string;
@@ -220,7 +228,21 @@ export async function dockerRunDetached(
     args.push("--network", opts.network);
   }
   for (const mount of opts.mounts ?? []) {
-    args.push("--mount", mount);
+    if (typeof mount === "string") {
+      args.push("--mount", mount);
+      continue;
+    }
+    const mountType = mount.type ?? "bind";
+    const segments = [
+      `type=${mountType}`,
+      `src=${mount.source}`,
+      `dst=${mount.target}`,
+    ];
+    const mountMode = normalizeMountMode(mount.mode);
+    if (mountMode) {
+      segments.push(mountMode);
+    }
+    args.push("--mount", segments.join(","));
   }
   for (const publishedPort of opts.publishedPorts ?? []) {
     args.push("-p", publishedPort);
@@ -237,7 +259,60 @@ export async function dockerRunDetached(
   args.push(...opts.args);
   args.push(opts.image);
   args.push(...(opts.command ?? []));
-  await $`docker ${args}`.quiet();
+  const result = await new Deno.Command("docker", {
+    args,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  if (!result.success) {
+    throw new Error(
+      formatDockerCommandFailure(
+        args,
+        result.code,
+        result.stdout,
+        result.stderr,
+      ),
+    );
+  }
+}
+
+function formatDockerCommandFailure(
+  args: string[],
+  code: number,
+  stdout: Uint8Array,
+  stderr: Uint8Array,
+): string {
+  const stdoutText = new TextDecoder().decode(stdout).trim();
+  const stderrText = new TextDecoder().decode(stderr).trim();
+  const lines = [`docker ${args.join(" ")} exited with code ${code}`];
+  if (stderrText.length > 0) {
+    lines.push(`stderr:\n${stderrText}`);
+  }
+  if (stdoutText.length > 0) {
+    lines.push(`stdout:\n${stdoutText}`);
+  }
+  return lines.join("\n\n");
+}
+
+function normalizeMountMode(mode?: string): string | null {
+  if (!mode || mode === "" || mode === "rw" || mode === "readwrite") {
+    return null;
+  }
+  if (mode === "ro" || mode === "readonly") {
+    return "readonly";
+  }
+  return mode;
+}
+
+export async function dockerContainerExists(
+  containerName: string,
+): Promise<boolean> {
+  try {
+    await $`docker inspect ${containerName}`.quiet();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** docker stop を実行 */

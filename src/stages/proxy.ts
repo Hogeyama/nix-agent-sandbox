@@ -1,182 +1,161 @@
-/**
- * Forward Proxy サイドカーステージ
- *
- * Squid forward proxy を使って、エージェントコンテナからの外部通信を
- * allowlist で制御する。
- *
- * ネットワーク構成:
- * - internal network (--internal): 外部アクセス不可
- *   - Agent container (http_proxy → proxy:3128)
- *   - Proxy container (bridge にも接続 → 外部アクセス可)
- *   - DinD sidecar (bridge にも接続 → image pull 可)
- *
- * 共有方式:
- * - allowlist の内容に基づいてハッシュを計算し、同じ allowlist なら同じ proxy を再利用
- * - コンテナ名/ネットワーク名: nas-proxy-{allowlistHash}
- *
- * DinD との共存:
- * - DindStage が先に実行され、ctx に --network nas-dind-xxx と DOCKER_HOST が設定される
- * - ProxyStage は DOCKER_HOST から DinD コンテナ名を取得し、internal network に接続する
- * - ctx.dockerArgs の --network を DinD のネットワークから internal に置換する
- *   → DindStage が作った custom network (nas-dind-xxx) は agent から使われなくなるが、
- *     DindStage の teardown で削除される
- * - Agent は internal network のみに所属し、DinD には internal 経由で到達可能
- * - DinD の bridge 接続はそのまま残る → image pull は proxy を経由せず直接外部へ
- *
- * Teardown の方針:
- * - proxy コンテナは allowlist ハッシュベースで共有 → 他セッションが使用中の可能性 → 残す
- * - DinD は disconnect しない:
- *   - shared DinD: 他セッションが同じ internal network 経由でアクセス中の可能性
- *   - 非 shared DinD: DindStage の teardown でコンテナごと消えるので不要
- */
-
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import {
-  dockerExec,
+  dockerContainerExists,
   dockerIsRunning,
+  dockerLogs,
   dockerNetworkConnect,
   dockerNetworkCreateWithLabels,
+  dockerNetworkDisconnect,
+  dockerNetworkRemove,
   dockerRm,
   dockerRunDetached,
 } from "../docker/client.ts";
-import { crypto } from "@std/crypto";
-import { encodeHex } from "@std/encoding/hex";
 import {
+  NAS_KIND_ENVOY,
   NAS_KIND_LABEL,
-  NAS_KIND_PROXY,
-  NAS_KIND_PROXY_NETWORK,
+  NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
 } from "../docker/nas_resources.ts";
+import { SessionBroker } from "../network/broker.ts";
+import { ensureAuthRouterDaemon } from "../network/envoy_auth_router.ts";
+import {
+  brokerSocketPath,
+  gcNetworkRuntime,
+  type NetworkRuntimePaths,
+  removePendingDir,
+  removeSessionRegistry,
+  resolveNetworkRuntimePaths,
+  writeSessionRegistry,
+} from "../network/registry.ts";
+import { generateSessionToken } from "../network/protocol.ts";
 
-const PROXY_IMAGE = "ubuntu/squid";
-const PROXY_PORT = 3128;
-const READINESS_TIMEOUT_MS = 30_000;
-const READINESS_POLL_INTERVAL_MS = 500;
+const ENVOY_IMAGE = "envoyproxy/envoy:v1.37.1";
+const ENVOY_CONTAINER_NAME = "nas-envoy-shared";
+const ENVOY_ALIAS = "nas-envoy";
+const ENVOY_PROXY_PORT = 15001;
+const ENVOY_READY_TIMEOUT_MS = 15_000;
 
 export class ProxyStage implements Stage {
   name = "ProxyStage";
+
+  private runtimePaths: NetworkRuntimePaths | null = null;
   private networkName: string | null = null;
-  private containerName: string | null = null;
+  private dindContainerName: string | null = null;
+  private broker: SessionBroker | null = null;
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    const allowlist = ctx.profile.network.allowlist;
-    if (allowlist.length === 0) {
-      console.log("[nas] Proxy: skipped (no allowlist configured)");
+    if (!isProxyEnabled(ctx)) {
+      console.log("[nas] Proxy: skipped (allowlist/prompt disabled)");
       return ctx;
     }
 
-    const hash = await computeAllowlistHash(allowlist);
-    this.networkName = `nas-proxy-${hash}`;
-    this.containerName = `nas-proxy-${hash}`;
+    const runtimePaths = await resolveNetworkRuntimePaths();
+    this.runtimePaths = runtimePaths;
+    await gcNetworkRuntime(runtimePaths);
+    await renderEnvoyConfig(runtimePaths);
 
-    const isReusing = await dockerIsRunning(this.containerName);
+    const brokerSocket = brokerSocketPath(runtimePaths, ctx.sessionId);
+    const prompt = ctx.profile.network.prompt;
+    const broker = new SessionBroker({
+      paths: runtimePaths,
+      sessionId: ctx.sessionId,
+      allowlist: ctx.profile.network.allowlist,
+      promptEnabled: prompt.enable,
+      timeoutSeconds: prompt.timeoutSeconds,
+      defaultScope: prompt.defaultScope,
+      notify: prompt.notify,
+    });
+    await broker.start(brokerSocket);
+    this.broker = broker;
 
-    if (isReusing) {
-      console.log(
-        `[nas] Proxy: reusing proxy for this allowlist (${this.containerName})`,
-      );
-    } else {
-      // 停止済みコンテナが残っている場合は削除
-      await dockerRm(this.containerName).catch(() => {});
+    const token = ctx.networkPromptToken ?? generateSessionToken();
+    await writeSessionRegistry(runtimePaths, {
+      version: 1,
+      sessionId: ctx.sessionId,
+      tokenHash: await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(token),
+      )
+        .then((digest) =>
+          "sha256:" + Array.from(new Uint8Array(digest))
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("")
+        ),
+      brokerSocket,
+      profileName: ctx.profileName,
+      allowlist: ctx.profile.network.allowlist,
+      createdAt: new Date().toISOString(),
+      pid: Deno.pid,
+      promptEnabled: prompt.enable,
+    });
 
-      // 1. internal ネットワーク作成
-      await ensureInternalNetwork(this.networkName);
-      // 2. squid コンテナを bridge で起動
-      await startProxySidecar(this.containerName);
-      // 3. squid を internal ネットワークに接続
-      await dockerNetworkConnect(this.networkName, this.containerName).catch(
-        () => {},
-      );
-      // 4. readiness 待機
-      await waitForReady(this.containerName);
-      // 5. squid 設定書き込み + reconfigure
-      await writeSquidConfig(this.containerName, allowlist);
+    await ensureAuthRouterDaemon(runtimePaths);
+    await ensureSharedEnvoy(runtimePaths);
+
+    this.networkName = `nas-session-net-${ctx.sessionId}`;
+    await ensureSessionNetwork(this.networkName);
+    await dockerNetworkConnect(this.networkName, ENVOY_CONTAINER_NAME, {
+      aliases: [ENVOY_ALIAS],
+    }).catch(() => {});
+
+    this.dindContainerName = parseDindContainerName(ctx.envVars);
+    if (this.dindContainerName) {
+      await dockerNetworkConnect(this.networkName, this.dindContainerName)
+        .catch(() => {});
     }
 
-    // DinD が有効なら internal ネットワークに接続
-    const dindContainerName = parseDindContainerName(ctx.envVars);
-    if (dindContainerName) {
-      await dockerNetworkConnect(this.networkName, dindContainerName).catch(
-        () => {},
-      );
-    }
-
-    // ctx.dockerArgs の --network を置き換え
-    const args = replaceNetwork(ctx.dockerArgs, this.networkName);
-
-    // proxy 環境変数
-    const proxyUrl = `http://${this.containerName}:${PROXY_PORT}`;
+    const proxyUrl =
+      `http://${ctx.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
     const noProxyEntries = ["localhost", "127.0.0.1"];
-    if (dindContainerName) {
-      noProxyEntries.push(dindContainerName);
+    if (this.dindContainerName) {
+      noProxyEntries.push(this.dindContainerName);
     }
-    const envVars = {
-      ...ctx.envVars,
-      http_proxy: proxyUrl,
-      https_proxy: proxyUrl,
-      HTTP_PROXY: proxyUrl,
-      HTTPS_PROXY: proxyUrl,
-      no_proxy: noProxyEntries.join(","),
-      NO_PROXY: noProxyEntries.join(","),
+
+    return {
+      ...ctx,
+      dockerArgs: replaceNetwork(ctx.dockerArgs, this.networkName),
+      envVars: {
+        ...ctx.envVars,
+        http_proxy: proxyUrl,
+        https_proxy: proxyUrl,
+        HTTP_PROXY: proxyUrl,
+        HTTPS_PROXY: proxyUrl,
+        no_proxy: noProxyEntries.join(","),
+        NO_PROXY: noProxyEntries.join(","),
+      },
+      networkRuntimeDir: runtimePaths.runtimeDir,
+      networkPromptToken: token,
+      networkPromptEnabled: prompt.enable,
+      networkBrokerSocket: brokerSocket,
+      networkProxyEndpoint: proxyUrl,
     };
-
-    return { ...ctx, dockerArgs: args, envVars };
   }
 
-  teardown(_ctx: ExecutionContext): Promise<void> {
-    if (!this.containerName) return Promise.resolve();
+  async teardown(ctx: ExecutionContext): Promise<void> {
+    if (!this.runtimePaths) return;
 
-    // DinD は internal network から disconnect しない:
-    // - shared DinD: 他セッションが同じ internal network 経由で
-    //   DinD にアクセスしている可能性がある。disconnect すると壊れる。
-    // - 非 shared DinD: DindStage の teardown でコンテナごと消えるので
-    //   network からの disconnect は不要。
+    if (this.broker) {
+      await this.broker.close();
+      this.broker = null;
+    }
 
-    // proxy コンテナは allowlist ハッシュベースで共有されるため、
-    // 他セッションが同じ proxy を使用中の可能性がある → 残す
-    console.log(`[nas] Proxy: keeping proxy (${this.containerName})`);
-    return Promise.resolve();
+    await removeSessionRegistry(this.runtimePaths, ctx.sessionId);
+    await removePendingDir(this.runtimePaths, ctx.sessionId);
+
+    if (this.networkName) {
+      await dockerNetworkDisconnect(this.networkName, ENVOY_CONTAINER_NAME)
+        .catch(() => {});
+      if (this.dindContainerName) {
+        await dockerNetworkDisconnect(this.networkName, this.dindContainerName)
+          .catch(() => {});
+      }
+      await dockerNetworkRemove(this.networkName).catch(() => {});
+    }
   }
 }
 
-/** allowlist からソート済みハッシュを計算して共有キーを生成 */
-export async function computeAllowlistHash(
-  allowlist: string[],
-): Promise<string> {
-  const sorted = [...allowlist].sort();
-  const data = new TextEncoder().encode(sorted.join("\n"));
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  return encodeHex(new Uint8Array(hashBuffer)).slice(0, 8);
-}
-
-/**
- * Squid 設定を生成
- *
- * 注意: access_log stdio:/dev/stdout を入れてはいけない。
- * squid はデーモンモードで起動し、起動時に access_log のファイルハンドルを開く。
- * reconfigure で stdio:/dev/stdout に切り替えようとすると、
- * デーモンモードの既存ハンドルと衝突して squid がクラッシュする。
- */
-export function generateSquidConfig(allowlist: string[]): string {
-  const domains = allowlist.map((d) =>
-    d.startsWith("*.") ? `.${d.slice(2)}` : d
-  ).join(" ");
-  return `http_port ${PROXY_PORT}
-acl allowed_domains dstdomain ${domains}
-acl CONNECT method CONNECT
-acl SSL_ports port 443
-http_access deny CONNECT !SSL_ports
-http_access allow CONNECT allowed_domains
-http_access allow allowed_domains
-http_access deny all
-cache deny all
-coredump_dir /var/spool/squid
-`;
-}
-
-/** --network を探して置換、なければ追加 */
 export function replaceNetwork(
   dockerArgs: string[],
   newNetwork: string,
@@ -191,7 +170,6 @@ export function replaceNetwork(
   return args;
 }
 
-/** DOCKER_HOST から tcp://<name>:<port> をパースしてコンテナ名を抽出 */
 export function parseDindContainerName(
   envVars: Record<string, string>,
 ): string | null {
@@ -201,79 +179,84 @@ export function parseDindContainerName(
   return match ? match[1] : null;
 }
 
-/** internal ネットワークを作成（既存ならスキップ） */
-async function ensureInternalNetwork(networkName: string): Promise<void> {
+function isProxyEnabled(ctx: ExecutionContext): boolean {
+  return ctx.profile.network.allowlist.length > 0 ||
+    ctx.profile.network.prompt.enable;
+}
+
+async function renderEnvoyConfig(paths: NetworkRuntimePaths): Promise<void> {
+  const source = await Deno.readTextFile(
+    new URL("../docker/envoy/envoy.template.yaml", import.meta.url),
+  );
+  // Envoy runs as a non-owner user in the image, so the bind-mounted config
+  // must be world-readable even when an older file already exists.
+  await Deno.writeTextFile(paths.envoyConfigFile, source, {
+    create: true,
+    mode: 0o644,
+  });
+  await Deno.chmod(paths.envoyConfigFile, 0o644).catch((error) => {
+    if (!(error instanceof Deno.errors.NotSupported)) {
+      throw error;
+    }
+  });
+}
+
+async function ensureSessionNetwork(networkName: string): Promise<void> {
   try {
     await dockerNetworkCreateWithLabels(networkName, {
       internal: true,
       labels: {
         [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_PROXY_NETWORK,
+        [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
       },
     });
-    console.log(`[nas] Proxy: created internal network ${networkName}`);
   } catch {
-    // 既に存在する場合は無視
+    // Already exists.
   }
 }
 
-/** Squid プロキシコンテナをデフォルト bridge で起動 */
-async function startProxySidecar(containerName: string): Promise<void> {
-  console.log(`[nas] Proxy: starting proxy sidecar (${PROXY_IMAGE})`);
+async function ensureSharedEnvoy(paths: NetworkRuntimePaths): Promise<void> {
+  if (await dockerIsRunning(ENVOY_CONTAINER_NAME)) {
+    return;
+  }
+  if (await dockerContainerExists(ENVOY_CONTAINER_NAME)) {
+    await dockerRm(ENVOY_CONTAINER_NAME).catch(() => {});
+  }
   await dockerRunDetached({
-    name: containerName,
-    image: PROXY_IMAGE,
+    name: ENVOY_CONTAINER_NAME,
+    image: ENVOY_IMAGE,
     args: [],
     envVars: {},
+    mounts: [
+      {
+        source: paths.runtimeDir,
+        target: "/nas-network",
+        mode: "rw",
+      },
+    ],
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_PROXY,
+      [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
     },
+    command: [
+      "-c",
+      "/nas-network/envoy.yaml",
+      "--log-level",
+      "warning",
+    ],
   });
+  await waitForEnvoyReady();
 }
 
-/** Squid の readiness をポーリングで確認 */
-async function waitForReady(containerName: string): Promise<void> {
-  console.log("[nas] Proxy: waiting for squid to be ready...");
-  const start = Date.now();
-  while (Date.now() - start < READINESS_TIMEOUT_MS) {
-    const result = await dockerExec(containerName, [
-      "squid",
-      "-k",
-      "check",
-    ]);
-    if (result.code === 0) {
-      console.log("[nas] Proxy: squid is ready");
+async function waitForEnvoyReady(): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < ENVOY_READY_TIMEOUT_MS) {
+    if (await dockerIsRunning(ENVOY_CONTAINER_NAME)) {
       return;
     }
-    await new Promise((r) => setTimeout(r, READINESS_POLL_INTERVAL_MS));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error(
-    `Squid proxy failed to become ready within ${READINESS_TIMEOUT_MS / 1000}s`,
+    `Envoy sidecar failed to start:\n${await dockerLogs(ENVOY_CONTAINER_NAME)}`,
   );
-}
-
-/** Squid 設定をコンテナに書き込み、reconfigure でリロード */
-async function writeSquidConfig(
-  containerName: string,
-  allowlist: string[],
-): Promise<void> {
-  const config = generateSquidConfig(allowlist);
-  const result = await dockerExec(containerName, [
-    "sh",
-    "-c",
-    `cat > /etc/squid/squid.conf << 'SQUID_EOF'\n${config}SQUID_EOF`,
-  ]);
-  if (result.code !== 0) {
-    throw new Error("Failed to write squid config");
-  }
-  const reconfigure = await dockerExec(containerName, [
-    "squid",
-    "-k",
-    "reconfigure",
-  ]);
-  if (reconfigure.code !== 0) {
-    throw new Error("Failed to reconfigure squid");
-  }
-  console.log("[nas] Proxy: squid configured with allowlist");
 }
