@@ -15,6 +15,8 @@ import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { dockerImageExists, dockerRemoveImage } from "./docker/client.ts";
 import { cleanNasContainers } from "./container_clean.ts";
+import { serveAuthRouter } from "./network/envoy_auth_router.ts";
+import { resolveNetworkRuntimePaths } from "./network/registry.ts";
 
 const VERSION = "0.1.0";
 
@@ -75,6 +77,13 @@ export async function main(args: string[]): Promise<void> {
   if (subcommand === "container") {
     await runContainerCommand(
       argsBeforeDashDash.filter((a) => a !== "container"),
+    );
+    return;
+  }
+
+  if (subcommand === "network") {
+    await runNetworkCommand(
+      argsBeforeDashDash.filter((a) => a !== "network"),
     );
     return;
   }
@@ -247,6 +256,30 @@ async function runContainerCommand(
   }
 }
 
+async function runNetworkCommand(
+  nasArgs: string[],
+): Promise<void> {
+  const sub = nasArgs.find((a) => !a.startsWith("-"));
+  const runtimeDir = getFlagValue(nasArgs, "--runtime-dir");
+
+  try {
+    const paths = await resolveNetworkRuntimePaths(runtimeDir ?? undefined);
+    if (sub === "serve-auth-router") {
+      await serveAuthRouter(paths.runtimeDir);
+      return;
+    }
+
+    console.error(`[nas] Unknown network subcommand: ${sub}`);
+    console.error(
+      "  Usage: nas network serve-auth-router --runtime-dir <dir>",
+    );
+    Deno.exit(1);
+  } catch (err) {
+    console.error(`[nas] Error: ${(err as Error).message}`);
+    Deno.exit(1);
+  }
+}
+
 function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
   let profileName: string | undefined;
   let profileIndex: number | undefined;
@@ -324,6 +357,14 @@ function findFirstNonFlagArg(args: string[]): string | undefined {
     if (!arg.startsWith("-")) return arg;
   }
   return undefined;
+}
+
+function getFlagValue(args: string[], flag: string): string | null {
+  const index = args.indexOf(flag);
+  if (index === -1 || index + 1 >= args.length) {
+    return null;
+  }
+  return args[index + 1] ?? null;
 }
 
 function printUsage(): void {

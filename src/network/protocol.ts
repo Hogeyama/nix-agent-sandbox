@@ -1,4 +1,8 @@
+import { isIP } from "node:net";
+
 export type ApprovalScope = "once" | "host-port" | "host";
+export type RequestKind = "connect" | "forward";
+export type Decision = "allow" | "deny";
 
 export interface SessionCredentials {
   sessionId: string;
@@ -17,7 +21,7 @@ export interface AuthorizeRequest {
   sessionId: string;
   target: NormalizedTarget;
   method: string;
-  requestKind: "connect" | "forward";
+  requestKind: RequestKind;
   observedAt: string;
 }
 
@@ -25,22 +29,22 @@ export interface DecisionResponse {
   version: 1;
   type: "decision";
   requestId: string;
-  decision: "allow" | "deny";
+  decision: Decision;
   scope?: ApprovalScope;
-  reason?: string;
+  reason: string;
   message?: string;
 }
 
 export interface PendingEntry {
   version: 1;
-  requestId: string;
   sessionId: string;
+  requestId: string;
   target: NormalizedTarget;
-  state: "pending" | "approved" | "denied" | "timed-out";
+  method: string;
+  requestKind: RequestKind;
+  state: "pending";
   createdAt: string;
   updatedAt: string;
-  scope?: ApprovalScope;
-  reason?: string;
 }
 
 export interface SessionRegistryEntry {
@@ -50,23 +54,40 @@ export interface SessionRegistryEntry {
   brokerSocket: string;
   profileName: string;
   allowlist: string[];
-  promptEnabled: boolean;
   createdAt: string;
   pid: number;
+  promptEnabled: boolean;
 }
 
 export interface NormalizeTargetInput {
   method: string;
-  url?: string | null;
   authority?: string | null;
-  host?: string | null;
-  scheme?: string | null;
+  url?: string | null;
+  hostHeader?: string | null;
 }
 
-const LOCALHOST_HOSTS = new Set([
-  "localhost",
-  "metadata.google.internal",
-]);
+export function generateSessionId(): string {
+  return `sess_${randomHex(6)}`;
+}
+
+export function generateSessionToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const binary = Array.from(bytes).map((byte) => String.fromCharCode(byte))
+    .join("");
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+
+export async function hashToken(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `sha256:${hex}`;
+}
 
 export function decodeProxyAuthorization(
   header: string | null | undefined,
@@ -74,264 +95,189 @@ export function decodeProxyAuthorization(
   if (!header) return null;
   const match = header.match(/^Basic\s+(.+)$/i);
   if (!match) return null;
-
-  let decoded: string;
   try {
-    decoded = atob(match[1].trim());
+    const decoded = atob(match[1].trim());
+    const idx = decoded.indexOf(":");
+    if (idx <= 0 || idx === decoded.length - 1) {
+      return null;
+    }
+    return {
+      sessionId: decoded.slice(0, idx),
+      token: decoded.slice(idx + 1),
+    };
   } catch {
     return null;
   }
-
-  const separator = decoded.indexOf(":");
-  if (separator <= 0 || separator === decoded.length - 1) {
-    return null;
-  }
-
-  return {
-    sessionId: decoded.slice(0, separator),
-    token: decoded.slice(separator + 1),
-  };
 }
 
 export function normalizeTarget(
   input: NormalizeTargetInput,
-): NormalizedTarget | null {
-  if (input.method.toUpperCase() === "CONNECT") {
-    return normalizeAuthorityTarget(input.authority);
+): NormalizedTarget {
+  const method = input.method.toUpperCase();
+  if (method === "CONNECT") {
+    const authority = parseAuthority(input.authority ?? input.hostHeader ?? "");
+    if (authority.port === null) {
+      throw new Error("CONNECT target must include an explicit port");
+    }
+    return {
+      host: normalizeHost(authority.host),
+      port: authority.port,
+    };
   }
 
-  const absoluteTarget = normalizeAbsoluteUrlTarget(input.url);
-  if (absoluteTarget) {
-    return absoluteTarget;
+  if (input.url) {
+    try {
+      const url = new URL(input.url);
+      return {
+        host: normalizeHost(url.hostname),
+        port: Number(url.port || defaultPortForScheme(url.protocol)),
+      };
+    } catch {
+      // Fall through to Host/:authority parsing.
+    }
   }
 
-  return normalizeAuthorityTarget(
-    firstNonEmpty(input.host, input.authority),
-    normalizeScheme(input.scheme) ?? "http",
-  );
+  const authority = parseAuthority(input.authority ?? input.hostHeader ?? "");
+  return {
+    host: normalizeHost(authority.host),
+    port: authority.port ?? 80,
+  };
 }
 
-export function isDenyByDefaultTarget(target: NormalizedTarget): boolean {
-  if (LOCALHOST_HOSTS.has(target.host)) {
-    return true;
+export function normalizeHost(host: string): string {
+  let value = host.trim().toLowerCase();
+  if (value.startsWith("[") && value.endsWith("]")) {
+    value = value.slice(1, -1);
   }
-
-  const ipv4 = parseIpv4(target.host);
-  if (ipv4) {
-    return isDeniedIpv4(ipv4);
+  while (value.endsWith(".")) {
+    value = value.slice(0, -1);
   }
-
-  const ipv6 = parseIpv6(target.host);
-  if (ipv6) {
-    return isDeniedIpv6(ipv6);
+  if (value.length === 0) {
+    throw new Error("host must not be empty");
   }
-
-  return false;
+  return value;
 }
 
-function normalizeAbsoluteUrlTarget(
-  rawUrl?: string | null,
-): NormalizedTarget | null {
-  if (!rawUrl) return null;
+export function matchesAllowlist(host: string, allowlist: string[]): boolean {
+  const normalizedHost = normalizeHost(host);
+  return allowlist.some((entry) => {
+    const candidate = normalizeHost(
+      entry.startsWith("*.") ? entry.slice(2) : entry,
+    );
+    if (entry.startsWith("*.")) {
+      return normalizedHost === candidate ||
+        normalizedHost.endsWith(`.${candidate}`);
+    }
+    return normalizedHost === candidate;
+  });
+}
 
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
+export function targetKey(target: NormalizedTarget): string {
+  return `${target.host}:${target.port}`;
+}
+
+export function targetKeyForScope(
+  target: NormalizedTarget,
+  scope: ApprovalScope,
+): string {
+  if (scope === "host") return target.host;
+  return targetKey(target);
+}
+
+export function denyReasonForTarget(target: NormalizedTarget): string | null {
+  const host = normalizeHost(target.host);
+  if (host === "localhost" || host === "metadata.google.internal") {
+    return "blocked-special-host";
+  }
+
+  const ipVersion = isIP(host);
+  if (ipVersion === 4) {
+    if (isDeniedIpv4(host)) return "blocked-private-ip";
     return null;
   }
-
-  const host = normalizeHost(url.hostname);
-  if (!host) return null;
-
-  const scheme = normalizeScheme(url.protocol.slice(0, -1));
-  const port = parsePort(url.port) ?? defaultPortForScheme(scheme);
-  if (!port) return null;
-
-  return { host, port };
-}
-
-function normalizeAuthorityTarget(
-  authority: string | null | undefined,
-  scheme?: string,
-): NormalizedTarget | null {
-  if (!authority || authority.trim() === "") return null;
-  const trimmedAuthority = authority.trim();
-  if (/[\s/?#@]/.test(trimmedAuthority)) {
+  if (ipVersion === 6) {
+    if (isDeniedIpv6(host)) return "blocked-private-ip";
     return null;
   }
-
-  const parsed = parseAuthority(trimmedAuthority);
-  if (!parsed) return null;
-
-  const host = normalizeHost(parsed.host);
-  if (!host) return null;
-
-  const port = parsed.port !== undefined
-    ? parsePort(parsed.port)
-    : defaultPortForScheme(scheme);
-  if (!port) return null;
-
-  return { host, port };
-}
-
-function normalizeHost(rawHost: string): string | null {
-  if (!rawHost) return null;
-
-  let host = rawHost.trim().toLowerCase().replace(/\.+$/, "");
-  if (host.startsWith("[") && host.endsWith("]")) {
-    host = host.slice(1, -1);
-  }
-  if (host === "") {
-    return null;
-  }
-  return host;
-}
-
-function normalizeScheme(rawScheme?: string | null): string | null {
-  if (!rawScheme) return null;
-  return rawScheme.trim().toLowerCase();
-}
-
-function defaultPortForScheme(scheme?: string | null): number | null {
-  if (scheme === "http") return 80;
-  if (scheme === "https") return 443;
   return null;
-}
-
-function parsePort(rawPort: string): number | null {
-  if (rawPort === "") return null;
-  if (!/^\d+$/.test(rawPort)) return null;
-  const port = Number(rawPort);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    return null;
-  }
-  return port;
 }
 
 function parseAuthority(
   authority: string,
-): { host: string; port?: string } | null {
-  if (authority.startsWith("[")) {
-    const closing = authority.indexOf("]");
-    if (closing === -1) return null;
-    const host = authority.slice(1, closing);
-    const remainder = authority.slice(closing + 1);
-    if (remainder === "") return { host };
-    if (!remainder.startsWith(":")) return null;
-    return { host, port: remainder.slice(1) };
+): { host: string; port: number | null } {
+  const value = authority.trim();
+  if (value.length === 0) {
+    throw new Error("authority is required");
   }
 
-  const colonCount = authority.split(":").length - 1;
-  if (colonCount > 1) {
-    return null;
+  if (value.startsWith("[")) {
+    const end = value.indexOf("]");
+    if (end === -1) {
+      throw new Error("invalid IPv6 authority");
+    }
+    const host = value.slice(1, end);
+    const rest = value.slice(end + 1);
+    if (!rest) return { host, port: null };
+    if (!rest.startsWith(":")) {
+      throw new Error("invalid IPv6 authority");
+    }
+    return { host, port: parsePort(rest.slice(1)) };
   }
 
-  const lastColon = authority.lastIndexOf(":");
-  if (lastColon === -1) {
-    return { host: authority };
+  const colonIdx = value.lastIndexOf(":");
+  if (colonIdx <= 0 || value.includes(":") && value.indexOf(":") !== colonIdx) {
+    return { host: value, port: null };
   }
-
   return {
-    host: authority.slice(0, lastColon),
-    port: authority.slice(lastColon + 1),
+    host: value.slice(0, colonIdx),
+    port: parsePort(value.slice(colonIdx + 1)),
   };
 }
 
-function firstNonEmpty(
-  ...values: Array<string | null | undefined>
-): string | null {
-  for (const value of values) {
-    if (value && value.trim() !== "") {
-      return value;
-    }
+function parsePort(value: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`invalid port: ${value}`);
   }
-  return null;
+  return port;
 }
 
-function parseIpv4(host: string): number[] | null {
-  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
-    return null;
-  }
-  const octets = host.split(".").map((part) => Number(part));
-  if (
-    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
-  ) {
-    return null;
-  }
-  return octets;
+function defaultPortForScheme(protocol: string): number {
+  if (protocol === "https:") return 443;
+  return 80;
 }
 
-function isDeniedIpv4(octets: number[]): boolean {
-  const [a, b, c, d] = octets;
-  if (a === 127) return true;
+function randomHex(bytes: number): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function isDeniedIpv4(host: string): boolean {
+  const parts = host.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+  const [a, b] = parts;
+  if (a === 10 || a === 127) return true;
   if (a === 169 && b === 254) return true;
-  if (a === 10) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254 && c === 169 && d === 254) return true;
   return false;
 }
 
-function parseIpv6(host: string): number[] | null {
-  if (!host.includes(":")) {
-    return null;
-  }
-  if (host.includes(":::")) {
-    return null;
-  }
-
-  const [headRaw, tailRaw] = host.split("::");
-  if (host.split("::").length > 2) {
-    return null;
-  }
-
-  const head = parseIpv6Segments(headRaw);
-  if (!head) return null;
-
-  if (tailRaw === undefined) {
-    return head.length === 8 ? head : null;
-  }
-
-  const tail = parseIpv6Segments(tailRaw);
-  if (!tail) return null;
-
-  const missing = 8 - (head.length + tail.length);
-  if (missing < 1) {
-    return null;
-  }
-
-  return [...head, ...new Array<number>(missing).fill(0), ...tail];
-}
-
-function parseIpv6Segments(raw?: string): number[] | null {
-  if (raw === undefined || raw === "") return [];
-  const segments = raw.split(":");
-  const parsed: number[] = [];
-
-  for (const segment of segments) {
-    if (!/^[0-9a-f]{1,4}$/i.test(segment)) {
-      return null;
-    }
-    parsed.push(Number.parseInt(segment, 16));
-  }
-
-  return parsed;
-}
-
-function isDeniedIpv6(segments: number[]): boolean {
-  if (segments.length !== 8) return false;
-  if (segments.every((segment, index) => segment === (index === 7 ? 1 : 0))) {
+function isDeniedIpv6(host: string): boolean {
+  const normalized = host.toLowerCase();
+  if (normalized === "::1") return true;
+  if (
+    normalized.startsWith("fe80:") || normalized.startsWith("fe90:") ||
+    normalized.startsWith("fea0:") || normalized.startsWith("feb0:")
+  ) {
     return true;
   }
-
-  const first = segments[0];
-  if ((first & 0xffc0) === 0xfe80) {
-    return true;
-  }
-  if ((first & 0xfe00) === 0xfc00) {
-    return true;
-  }
-
-  return false;
+  const first = normalized.split(":")[0];
+  if (first.length === 0) return false;
+  const value = Number.parseInt(first, 16);
+  if (Number.isNaN(value)) return false;
+  return (value & 0xfe00) === 0xfc00;
 }
