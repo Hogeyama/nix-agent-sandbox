@@ -92,6 +92,7 @@ Deno.test("CLI: --help shows usage and exits 0", async () => {
   assertEquals(result.stdout.includes("Usage:"), true);
   assertEquals(result.stdout.includes("Subcommands:"), true);
   assertEquals(result.stdout.includes("Options:"), true);
+  assertEquals(result.stdout.includes("container"), true);
 });
 
 Deno.test("CLI: -h shows usage and exits 0", async () => {
@@ -235,6 +236,37 @@ Deno.test("CLI: worktree clean --force on empty repo", async () => {
     });
     assertEquals(result.code, 0);
     assertEquals(result.stdout.includes("No nas worktrees found"), true);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: container clean succeeds when no unused sidecars exist", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-container-clean-" });
+  try {
+    const first = await runNas(["container", "clean"], { cwd: tmpDir });
+    assertEquals(first.code, 0);
+
+    const result = await runNas(["container", "clean"], { cwd: tmpDir });
+    assertEquals(result.code, 0);
+    assertEquals(
+      result.stdout.includes("No unused nas containers found"),
+      true,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: container with unknown subcommand exits with error", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-container-unk-" });
+  try {
+    const result = await runNas(["container", "unknown"], { cwd: tmpDir });
+    assertEquals(result.code, 1);
+    assertEquals(
+      result.stderr.includes("Unknown container subcommand"),
+      true,
+    );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }

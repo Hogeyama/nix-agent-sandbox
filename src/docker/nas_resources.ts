@@ -1,0 +1,64 @@
+export const NAS_MANAGED_LABEL = "nas.managed";
+export const NAS_KIND_LABEL = "nas.kind";
+export const NAS_SHARED_LABEL = "nas.shared";
+export const NAS_MANAGED_VALUE = "true";
+
+export const NAS_KIND_DIND = "dind";
+export const NAS_KIND_PROXY = "proxy";
+export const NAS_KIND_DIND_NETWORK = "dind-network";
+export const NAS_KIND_PROXY_NETWORK = "proxy-network";
+export const NAS_KIND_DIND_TMP = "dind-tmp";
+
+export type DockerLabels = Record<string, string>;
+
+export function isNasManagedLabel(labels: DockerLabels): boolean {
+  return labels[NAS_MANAGED_LABEL] === NAS_MANAGED_VALUE;
+}
+
+export function isNasManagedSidecar(
+  labels: DockerLabels,
+  name: string,
+): boolean {
+  if (isNasManagedLabel(labels)) {
+    return labels[NAS_KIND_LABEL] === NAS_KIND_DIND ||
+      labels[NAS_KIND_LABEL] === NAS_KIND_PROXY;
+  }
+  return isLegacyNasSidecarName(name);
+}
+
+export function isNasManagedNetwork(
+  labels: DockerLabels,
+  name: string,
+): boolean {
+  if (isNasManagedLabel(labels)) {
+    return labels[NAS_KIND_LABEL] === NAS_KIND_DIND_NETWORK ||
+      labels[NAS_KIND_LABEL] === NAS_KIND_PROXY_NETWORK;
+  }
+  return isLegacyNasNetworkName(name);
+}
+
+export function isNasManagedTmpVolume(
+  labels: DockerLabels,
+  name: string,
+): boolean {
+  if (isNasManagedLabel(labels)) {
+    return labels[NAS_KIND_LABEL] === NAS_KIND_DIND_TMP;
+  }
+  return isLegacyNasTmpVolumeName(name);
+}
+
+export function isLegacyNasSidecarName(name: string): boolean {
+  return name === "nas-dind-shared" ||
+    (name.startsWith("nas-dind-") && !name.endsWith("-tmp")) ||
+    name.startsWith("nas-proxy-");
+}
+
+export function isLegacyNasNetworkName(name: string): boolean {
+  return name === "nas-dind-shared" ||
+    name.startsWith("nas-dind-") ||
+    name.startsWith("nas-proxy-");
+}
+
+export function isLegacyNasTmpVolumeName(name: string): boolean {
+  return name === "nas-dind-shared-tmp" || name.startsWith("nas-dind-tmp-");
+}

@@ -23,13 +23,23 @@ import {
   dockerIsRunning,
   dockerLogs,
   dockerNetworkConnect,
-  dockerNetworkCreate,
+  dockerNetworkCreateWithLabels,
   dockerNetworkRemove,
   dockerRm,
   dockerRunDetached,
   dockerStop,
+  dockerVolumeCreate,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import {
+  NAS_KIND_DIND,
+  NAS_KIND_DIND_NETWORK,
+  NAS_KIND_DIND_TMP,
+  NAS_KIND_LABEL,
+  NAS_MANAGED_LABEL,
+  NAS_MANAGED_VALUE,
+  NAS_SHARED_LABEL,
+} from "../docker/nas_resources.ts";
 
 const DIND_IMAGE = "docker:dind-rootless";
 const DIND_INTERNAL_PORT = 2375;
@@ -185,7 +195,12 @@ async function ensureNetwork(
   containerName: string,
 ): Promise<void> {
   try {
-    await dockerNetworkCreate(networkName);
+    await dockerNetworkCreateWithLabels(networkName, {
+      labels: {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_DIND_NETWORK,
+      },
+    });
     console.log(`[nas] DinD: created network ${networkName}`);
   } catch {
     // 既に存在する場合は無視
@@ -206,6 +221,10 @@ async function startDindSidecar(
   sharedTmpVolume: string,
 ): Promise<void> {
   console.log(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
+  await dockerVolumeCreate(sharedTmpVolume, {
+    [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+    [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
+  }).catch(() => {});
   await dockerRunDetached({
     name: containerName,
     image: DIND_IMAGE,
@@ -218,6 +237,11 @@ async function startDindSidecar(
     ],
     envVars: {
       DOCKER_TLS_CERTDIR: "",
+    },
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_DIND,
+      [NAS_SHARED_LABEL]: String(containerName === SHARED_CONTAINER_NAME),
     },
   });
 
@@ -243,6 +267,11 @@ async function startDindSidecar(
       ],
       envVars: {
         DOCKER_TLS_CERTDIR: "",
+      },
+      labels: {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_DIND,
+        [NAS_SHARED_LABEL]: String(containerName === SHARED_CONTAINER_NAME),
       },
     });
 

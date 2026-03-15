@@ -81,6 +81,16 @@ nas worktree clean           # すべて削除（確認プロンプトあり）
 nas worktree clean --force   # 確認なしで削除
 ```
 
+### Sidecar コンテナの掃除
+
+`docker.shared: true` や `network.allowlist` を使っていると、`dind` / `proxy(squid)` の sidecar が残ることがあります。未使用のものだけを止めて削除したい場合は `container clean` を使います。
+
+```sh
+nas container clean
+```
+
+このコマンドは nas が管理する `dind` / `proxy` コンテナのうち、現在どの agent コンテナからも使われていないものだけを対象に `stop` + `rm` します。削除後に空になった nas 管理 network と DinD 用 tmp volume もあわせて回収します。`nas-sandbox` 本体は対象に含みません。
+
 既存のイメージを削除してから再ビルドし、そのまま起動します。
 
 `nas` のバージョンアップにより内蔵の Dockerfile/entrypoint が更新された場合、起動時に自動検知して `nas rebuild` の実行を促すメッセージが表示されます。

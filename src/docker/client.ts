@@ -5,6 +5,7 @@
 import $ from "dax";
 import { crypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding/hex";
+import type { DockerLabels } from "./nas_resources.ts";
 
 export interface DockerRunOptions {
   image: string;
@@ -12,6 +13,25 @@ export interface DockerRunOptions {
   envVars: Record<string, string>;
   command: string[];
   interactive: boolean;
+}
+
+export interface DockerContainerDetails {
+  name: string;
+  running: boolean;
+  labels: DockerLabels;
+  networks: string[];
+}
+
+export interface DockerNetworkDetails {
+  name: string;
+  labels: DockerLabels;
+  containers: string[];
+}
+
+export interface DockerVolumeDetails {
+  name: string;
+  labels: DockerLabels;
+  containers: string[];
 }
 
 /** 埋め込みファイル (Dockerfile + entrypoint.sh) の SHA-256 ハッシュを計算 */
@@ -113,14 +133,30 @@ export async function dockerImageExists(tag: string): Promise<boolean> {
 
 /** docker network を作成 */
 export async function dockerNetworkCreate(name: string): Promise<void> {
-  await $`docker network create ${name}`.quiet();
+  await dockerNetworkCreateWithLabels(name);
 }
 
 /** docker network を --internal フラグ付きで作成（外部アクセス不可） */
 export async function dockerNetworkCreateInternal(
   name: string,
 ): Promise<void> {
-  await $`docker network create --internal ${name}`.quiet();
+  await dockerNetworkCreateWithLabels(name, { internal: true });
+}
+
+/** docker network をラベル付きで作成 */
+export async function dockerNetworkCreateWithLabels(
+  name: string,
+  options?: { internal?: boolean; labels?: DockerLabels },
+): Promise<void> {
+  const args: string[] = ["network", "create"];
+  if (options?.internal) {
+    args.push("--internal");
+  }
+  for (const [key, value] of Object.entries(options?.labels ?? {})) {
+    args.push("--label", `${key}=${value}`);
+  }
+  args.push(name);
+  await $`docker ${args}`.quiet();
 }
 
 /** docker network からコンテナを切断 */
@@ -149,6 +185,8 @@ export interface DockerRunDetachedOptions {
   image: string;
   args: string[];
   envVars: Record<string, string>;
+  labels?: DockerLabels;
+  command?: string[];
 }
 
 /** docker run をデタッチモードで実行 */
@@ -159,8 +197,12 @@ export async function dockerRunDetached(
   for (const [key, value] of Object.entries(opts.envVars)) {
     args.push("-e", `${key}=${value}`);
   }
+  for (const [key, value] of Object.entries(opts.labels ?? {})) {
+    args.push("--label", `${key}=${value}`);
+  }
   args.push(...opts.args);
   args.push(opts.image);
+  args.push(...(opts.command ?? []));
   await $`docker ${args}`.quiet();
 }
 
@@ -177,6 +219,19 @@ export async function dockerRm(containerName: string): Promise<void> {
 /** docker volume rm を実行 */
 export async function dockerVolumeRemove(name: string): Promise<void> {
   await $`docker volume rm ${name}`.quiet();
+}
+
+/** docker volume を作成 */
+export async function dockerVolumeCreate(
+  name: string,
+  labels?: DockerLabels,
+): Promise<void> {
+  const args: string[] = ["volume", "create"];
+  for (const [key, value] of Object.entries(labels ?? {})) {
+    args.push("--label", `${key}=${value}`);
+  }
+  args.push(name);
+  await $`docker ${args}`.quiet();
 }
 
 /** docker exec を実行して結果を返す */
@@ -227,4 +282,87 @@ export async function dockerLogs(
   } catch {
     return "(failed to retrieve container logs)";
   }
+}
+
+/** すべてのコンテナ名を取得 */
+export async function dockerListContainerNames(): Promise<string[]> {
+  const fmt = "{{.Names}}";
+  const result = await $`docker ps -a --format=${fmt}`.quiet();
+  return splitNonEmptyLines(result.stdout);
+}
+
+/** すべての network 名を取得 */
+export async function dockerListNetworkNames(): Promise<string[]> {
+  const fmt = "{{.Name}}";
+  const result = await $`docker network ls --format=${fmt}`.quiet();
+  return splitNonEmptyLines(result.stdout);
+}
+
+/** すべての volume 名を取得 */
+export async function dockerListVolumeNames(): Promise<string[]> {
+  const fmt = "{{.Name}}";
+  const result = await $`docker volume ls --format=${fmt}`.quiet();
+  return splitNonEmptyLines(result.stdout);
+}
+
+/** コンテナ inspect を取得 */
+export async function dockerInspectContainer(
+  containerName: string,
+): Promise<DockerContainerDetails> {
+  const result = await $`docker inspect ${containerName}`.quiet();
+  const parsed = JSON.parse(result.stdout)[0];
+  return {
+    name: String(parsed.Name ?? containerName).replace(/^\//, ""),
+    running: parsed.State?.Running === true,
+    labels: parsed.Config?.Labels ?? {},
+    networks: Object.keys(parsed.NetworkSettings?.Networks ?? {}),
+  };
+}
+
+/** network inspect を取得 */
+export async function dockerInspectNetwork(
+  networkName: string,
+): Promise<DockerNetworkDetails> {
+  const result = await $`docker network inspect ${networkName}`.quiet();
+  const parsed = JSON.parse(result.stdout)[0];
+  const containers = Object.values(parsed.Containers ?? {}).map((entry) =>
+    typeof entry === "object" && entry !== null && "Name" in entry
+      ? String(entry.Name)
+      : ""
+  ).filter((name) => name.length > 0);
+  return {
+    name: String(parsed.Name ?? networkName),
+    labels: parsed.Labels ?? {},
+    containers,
+  };
+}
+
+/** volume inspect を取得 */
+export async function dockerInspectVolume(
+  volumeName: string,
+): Promise<DockerVolumeDetails> {
+  const result = await $`docker volume inspect ${volumeName}`.quiet();
+  const parsed = JSON.parse(result.stdout)[0];
+  return {
+    name: String(parsed.Name ?? volumeName),
+    labels: parsed.Labels ?? {},
+    containers: await dockerListContainersUsingVolume(volumeName),
+  };
+}
+
+/** volume を参照しているコンテナ名を取得 */
+export async function dockerListContainersUsingVolume(
+  volumeName: string,
+): Promise<string[]> {
+  const fmt = "{{.Names}}";
+  const result =
+    await $`docker ps -a --filter volume=${volumeName} --format=${fmt}`
+      .quiet();
+  return splitNonEmptyLines(result.stdout);
+}
+
+function splitNonEmptyLines(text: string): string[] {
+  return text.split("\n").map((line) => line.trim()).filter((line) =>
+    line.length > 0
+  );
 }

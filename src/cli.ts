@@ -14,6 +14,7 @@ import { DindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { dockerImageExists, dockerRemoveImage } from "./docker/client.ts";
+import { cleanNasContainers } from "./container_clean.ts";
 
 const VERSION = "0.1.0";
 
@@ -40,7 +41,10 @@ export async function main(args: string[]): Promise<void> {
   // サブコマンド処理
   const subcommand = findFirstNonFlagArg(argsBeforeDashDash);
 
-  if (subcommand === "rebuild" || subcommand === "worktree") {
+  if (
+    subcommand === "rebuild" || subcommand === "worktree" ||
+    subcommand === "container"
+  ) {
     if (
       argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
     ) {
@@ -64,6 +68,13 @@ export async function main(args: string[]): Promise<void> {
   if (subcommand === "worktree") {
     await runWorktreeCommand(
       argsBeforeDashDash.filter((a) => a !== "worktree"),
+    );
+    return;
+  }
+
+  if (subcommand === "container") {
+    await runContainerCommand(
+      argsBeforeDashDash.filter((a) => a !== "container"),
     );
     return;
   }
@@ -192,6 +203,50 @@ async function runWorktreeCommand(
   }
 }
 
+async function runContainerCommand(
+  nasArgs: string[],
+): Promise<void> {
+  const sub = nasArgs.find((a) => !a.startsWith("-"));
+
+  try {
+    if (sub === "clean") {
+      const result = await cleanNasContainers();
+      const parts: string[] = [];
+      if (result.removedContainers.length > 0) {
+        parts.push(`${result.removedContainers.length} container(s)`);
+      }
+      if (result.removedNetworks.length > 0) {
+        parts.push(`${result.removedNetworks.length} network(s)`);
+      }
+      if (result.removedVolumes.length > 0) {
+        parts.push(`${result.removedVolumes.length} volume(s)`);
+      }
+      if (parts.length === 0) {
+        console.log("[nas] No unused nas containers found.");
+        return;
+      }
+      console.log(`[nas] Removed ${parts.join(", ")}.`);
+      if (result.removedContainers.length > 0) {
+        console.log(`[nas] Containers: ${result.removedContainers.join(", ")}`);
+      }
+      if (result.removedNetworks.length > 0) {
+        console.log(`[nas] Networks: ${result.removedNetworks.join(", ")}`);
+      }
+      if (result.removedVolumes.length > 0) {
+        console.log(`[nas] Volumes: ${result.removedVolumes.join(", ")}`);
+      }
+      return;
+    }
+
+    console.error(`[nas] Unknown container subcommand: ${sub}`);
+    console.error("  Usage: nas container clean");
+    Deno.exit(1);
+  } catch (err) {
+    console.error(`[nas] Error: ${(err as Error).message}`);
+    Deno.exit(1);
+  }
+}
+
 function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
   let profileName: string | undefined;
   let profileIndex: number | undefined;
@@ -278,10 +333,12 @@ Usage:
   nas [options-before-profile] [profile-name] [agent-args...]
   nas rebuild [profile-name] [options]
   nas worktree [list|clean] [options]
+  nas container clean
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする
   worktree  git worktree の管理
+  container sidecar container の管理
 
 Options:
   -h, --help      Show this help
@@ -303,6 +360,9 @@ Worktree options:
   -f, --force     確認なしで削除
   -B, --delete-branch  worktree 削除時にブランチも削除
 
+Container options:
+  clean           未使用の nas sidecar container/network/volume を削除
+
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
@@ -313,6 +373,7 @@ Examples:
   nas rebuild --force                    # Force remove image and rebuild
   nas worktree list                      # List all nas worktrees
   nas worktree clean                     # Remove all nas worktrees
+  nas container clean                    # Remove unused nas sidecars
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
   nas worktree clean -f -B              # Force remove worktrees and branches

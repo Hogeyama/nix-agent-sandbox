@@ -36,12 +36,19 @@ import {
   dockerExec,
   dockerIsRunning,
   dockerNetworkConnect,
-  dockerNetworkCreateInternal,
+  dockerNetworkCreateWithLabels,
   dockerRm,
   dockerRunDetached,
 } from "../docker/client.ts";
 import { crypto } from "@std/crypto";
 import { encodeHex } from "@std/encoding/hex";
+import {
+  NAS_KIND_LABEL,
+  NAS_KIND_PROXY,
+  NAS_KIND_PROXY_NETWORK,
+  NAS_MANAGED_LABEL,
+  NAS_MANAGED_VALUE,
+} from "../docker/nas_resources.ts";
 
 const PROXY_IMAGE = "ubuntu/squid";
 const PROXY_PORT = 3128;
@@ -195,7 +202,13 @@ export function parseDindContainerName(
 /** internal ネットワークを作成（既存ならスキップ） */
 async function ensureInternalNetwork(networkName: string): Promise<void> {
   try {
-    await dockerNetworkCreateInternal(networkName);
+    await dockerNetworkCreateWithLabels(networkName, {
+      internal: true,
+      labels: {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_PROXY_NETWORK,
+      },
+    });
     console.log(`[nas] Proxy: created internal network ${networkName}`);
   } catch {
     // 既に存在する場合は無視
@@ -210,6 +223,10 @@ async function startProxySidecar(containerName: string): Promise<void> {
     image: PROXY_IMAGE,
     args: [],
     envVars: {},
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_PROXY,
+    },
   });
 }
 
