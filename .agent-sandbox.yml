@@ -148,3 +148,36 @@ profiles:
         dst: ~/nix-config
         mode: ro
     <<: [*common_infra, *common_network, *common_env, *common_hostexec]
+
+  hostexec-demo:
+    agent: claude
+    agent-args: []
+    extra-mounts:
+      - src: /dev/null
+        dst: .env
+    secrets:
+      hostexec_demo_api_base_url:
+        from: dotenv:.env#HOSTEXEC_DEMO_API_BASE_URL
+        required: true
+      hostexec_demo_api_token:
+        from: dotenv:.env#HOSTEXEC_DEMO_API_TOKEN
+        required: true
+    hostexec:
+      prompt:
+        enable: true
+        timeout-seconds: 300
+        default-scope: capability
+      rules:
+        - id: deno-task
+          match:
+            argv0: deno
+            subcommands:
+              - task
+          cwd:
+            mode: workspace-only
+          env:
+            HOSTEXEC_DEMO_API_BASE_URL: secret:hostexec_demo_api_base_url
+            HOSTEXEC_DEMO_API_TOKEN: secret:hostexec_demo_api_token
+          approval: prompt
+          fallback: container
+    <<: [*common_infra, *common_network, *common_env]

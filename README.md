@@ -133,9 +133,9 @@ nas -- -p "このリポジトリの概要を教えて"
 nas copilot -p "テストを書いて" --yolo
 ```
 
-### デモ: Worktree による隔離作業 → cherry-pick で取り込み
+### Worktree による隔離作業 → cherry-pick で取り込み
 
-`worktree` 設定のプロファイルで `nas` を実行し、エージェント終了後に成果物を cherry-pick で取り込む一連の流れです。
+`worktree` 設定のプロファイルで `nas` を実行し、エージェント終了後に成果物を cherry-pick で取り込むことができます。
 
 ```
 $ nas copilot-worktree
@@ -178,8 +178,6 @@ $ nas copilot-worktree
 [nas] Cherry-pick completed successfully.
 [nas] Deleted branch: nas/copilot-worktree/2026-03-10T12-37-30
 ```
-
-エージェントに隔離ブランチで自由に作業させ、成果物のコミットだけを安全にベースブランチへ取り込めます。
 
 ## 設定ファイル
 
@@ -254,28 +252,14 @@ profiles:
             keys: [SSH_AUTH_SOCK]
           approval: prompt        # allow | prompt | deny
           fallback: container     # container | deny
-        - id: git-log
+        - # コンテナ内で実行したpnpm buildはホスト側に移譲され、
+          # その際に.envの値がsecretとして注入される。
+          # extra-mountsでコンテナ内の.envは/dev/nullにマウントされているため、
+          # コンテナ内からは.envの内容は見えないことに注意。
+          id: pnpm-build
           match:
-            argv0: git
-            subcommands: [log]
-          cwd:
-            mode: workspace-or-session-tmp
-          approval: allow
-          fallback: container
-        - id: gh-pr
-          match:
-            argv0: gh
-            subcommands: [pr, api]
-          cwd:
-            mode: workspace-or-session-tmp
-          env:
-            GITHUB_TOKEN: secret:github_token
-          approval: prompt
-          fallback: container
-        - id: npm-build
-          match:
-            argv0: npm
-            subcommands: [run]   # たとえば `npm run build` を host 側で実行
+            argv0: pnpm
+            subcommands: [build]
           cwd:
             mode: workspace-only
           env:
@@ -284,8 +268,6 @@ profiles:
           approval: prompt
           fallback: container
 ```
-
-上の例では、コンテナ内の `/path/to/your-project/.env` は `/dev/null` で隠しつつ、host 側 broker は `dotenv:/path/to/your-project/.env#...` から必要な値だけ読み取れます。たとえばエージェントが `npm run build` を実行すると、`hostexec.rules[].match.argv0: npm` と `subcommands: [run]` に一致して host 側で実行され、`API_BASE_URL` / `API_TOKEN` だけが注入されます。つまり `.env` ファイル自体はコンテナから見えないまま、`.env` の値を使った `npm run build` ができます。
 
 ### プロファイル設定リファレンス
 
