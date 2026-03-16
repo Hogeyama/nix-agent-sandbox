@@ -64,6 +64,18 @@ Deno.test("MountStage: workspace mount keeps full absolute path", async () => {
   assertEquals(result.envVars["WORKSPACE"], workDir);
 });
 
+Deno.test("MountStage: propagates log level to container", async () => {
+  const ctx = createContext(
+    baseConfig,
+    baseProfile,
+    "test",
+    Deno.cwd(),
+    "warn",
+  );
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["NAS_LOG_LEVEL"], "warn");
+});
+
 Deno.test("MountStage: invalid dynamic key throws", async () => {
   const profile: Profile = {
     ...baseProfile,

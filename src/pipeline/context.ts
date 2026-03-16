@@ -4,6 +4,7 @@
 
 import { encodeHex } from "@std/encoding/hex";
 import type { Config, Profile } from "../config/types.ts";
+import type { LogLevel } from "../log.ts";
 
 /** パイプライン実行中に各ステージが読み書きするコンテキスト */
 export interface ExecutionContext {
@@ -45,6 +46,8 @@ export interface ExecutionContext {
   nixEnabled: boolean;
   /** エージェント起動コマンド */
   agentCommand: string[];
+  /** ログレベル */
+  logLevel: LogLevel;
 }
 
 /** 初期コンテキストを生成 */
@@ -53,6 +56,7 @@ export function createContext(
   profile: Profile,
   profileName: string,
   workDir: string,
+  logLevel: LogLevel = "info",
 ): ExecutionContext {
   const sessionId = `sess_${randomHex(6)}`;
   const proxyEnabled = profile.network.allowlist.length > 0 ||
@@ -71,6 +75,7 @@ export function createContext(
     networkPromptEnabled: profile.network.prompt.enable,
     nixEnabled: false,
     agentCommand: [],
+    logLevel,
   };
 }
 

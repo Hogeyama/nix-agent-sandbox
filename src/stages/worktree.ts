@@ -6,6 +6,7 @@ import $ from "dax";
 import * as path from "@std/path";
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
+import { logInfo } from "../log.ts";
 
 export class WorktreeStage implements Stage {
   name = "WorktreeStage";
@@ -19,7 +20,7 @@ export class WorktreeStage implements Stage {
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     const wt = ctx.profile.worktree;
     if (!wt) {
-      console.log("[nas] Worktree: skipped (not configured)");
+      logInfo("[nas] Worktree: skipped (not configured)");
       return ctx;
     }
 
@@ -40,7 +41,7 @@ export class WorktreeStage implements Stage {
         this.branchName = reused.branch
           ? reused.branch.replace("refs/heads/", "")
           : null;
-        console.log(`[nas] Reusing worktree: ${reused.path}`);
+        logInfo(`[nas] Reusing worktree: ${reused.path}`);
         return { ...ctx, workDir: reused.path, mountDir: repoRoot };
       }
     }
@@ -57,7 +58,7 @@ export class WorktreeStage implements Stage {
     this.worktreePath = worktreePath;
     this.branchName = branchName;
 
-    console.log(
+    logInfo(
       `[nas] Creating worktree: ${worktreePath} (branch: ${branchName}) from ${resolvedBase}`,
     );
     await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`
@@ -66,7 +67,7 @@ export class WorktreeStage implements Stage {
     await inheritDirtyBaseWorktree(repoRoot, resolvedBase, worktreePath);
 
     if (wt.onCreate) {
-      console.log(`[nas] Running on-create hook: ${wt.onCreate}`);
+      logInfo(`[nas] Running on-create hook: ${wt.onCreate}`);
       await $`bash -c ${wt.onCreate}`.cwd(worktreePath).printCommand();
     }
 

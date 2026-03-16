@@ -4,6 +4,7 @@
 
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
+import { logInfo } from "../log.ts";
 
 export class NixDetectStage implements Stage {
   name = "NixDetectStage";
@@ -14,14 +15,14 @@ export class NixDetectStage implements Stage {
 
     if (nixCfg.enable === "auto") {
       nixEnabled = await hasHostNix();
-      console.log(
+      logInfo(
         `[nas] Nix: auto-detected host nix → ${
           nixEnabled ? "enabled" : "disabled"
         }`,
       );
     } else {
       nixEnabled = nixCfg.enable;
-      console.log(
+      logInfo(
         `[nas] Nix: explicitly ${nixEnabled ? "enabled" : "disabled"}`,
       );
     }

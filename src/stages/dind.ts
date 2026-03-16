@@ -41,6 +41,7 @@ import {
   NAS_MANAGED_VALUE,
   NAS_SHARED_LABEL,
 } from "../docker/nas_resources.ts";
+import { logInfo, logWarn } from "../log.ts";
 
 const DIND_IMAGE = "docker:dind-rootless";
 const DIND_INTERNAL_PORT = 2375;
@@ -80,7 +81,7 @@ export class DindStage implements Stage {
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     if (!ctx.profile.docker.enable) {
-      console.log("[nas] DinD: skipped (not enabled)");
+      logInfo("[nas] DinD: skipped (not enabled)");
       return ctx;
     }
 
@@ -110,7 +111,7 @@ export class DindStage implements Stage {
 
     // 共有モード: 既に起動中ならサイドカー作成をスキップ
     if (isReusingSharedSidecar) {
-      console.log(`[nas] DinD: reusing shared sidecar (${containerName})`);
+      logInfo(`[nas] DinD: reusing shared sidecar (${containerName})`);
     } else {
       // 共有モードで停止済みコンテナが残っている場合は削除して再作成
       if (this.shared) {
@@ -158,14 +159,14 @@ export class DindStage implements Stage {
 
     // 共有モードではサイドカーもネットワークも残す
     if (this.shared) {
-      console.log(
+      logInfo(
         `[nas] DinD: keeping shared sidecar (${this.containerName})`,
       );
       return;
     }
 
     try {
-      console.log(`[nas] DinD: stopping sidecar ${this.containerName}`);
+      logInfo(`[nas] DinD: stopping sidecar ${this.containerName}`);
       await dockerStop(this.containerName, { timeoutSeconds: 0 });
     } catch {
       // コンテナが既に停止している場合は無視
@@ -177,7 +178,7 @@ export class DindStage implements Stage {
     }
     if (this.networkName) {
       try {
-        console.log(`[nas] DinD: removing network ${this.networkName}`);
+        logInfo(`[nas] DinD: removing network ${this.networkName}`);
         await dockerNetworkRemove(this.networkName);
       } catch {
         // ネットワークが既に削除されている場合は無視
@@ -185,7 +186,7 @@ export class DindStage implements Stage {
     }
     if (this.sharedTmpVolume) {
       try {
-        console.log(`[nas] DinD: removing volume ${this.sharedTmpVolume}`);
+        logInfo(`[nas] DinD: removing volume ${this.sharedTmpVolume}`);
         await dockerVolumeRemove(this.sharedTmpVolume);
       } catch {
         // ボリュームが既に削除されている場合は無視
@@ -219,7 +220,7 @@ async function ensureNetwork(
         [NAS_KIND_LABEL]: NAS_KIND_DIND_NETWORK,
       },
     });
-    console.log(`[nas] DinD: created network ${networkName}`);
+    logInfo(`[nas] DinD: created network ${networkName}`);
   } catch {
     // 既に存在する場合は無視
   }
@@ -239,25 +240,25 @@ async function startDindSidecar(
   sharedTmpVolume: string,
   options: DindStageOptions = {},
 ): Promise<void> {
-  console.log(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
+  logInfo(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
   await dockerVolumeCreate(sharedTmpVolume, {
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
     [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
   }).catch(() => {});
 
   await runDindSidecar(containerName, sharedTmpVolume, options);
-  console.log("[nas] DinD: waiting for daemon to be ready...");
+  logInfo("[nas] DinD: waiting for daemon to be ready...");
   try {
     await waitForDindReady(
       containerName,
       options.readinessTimeoutMs ?? READINESS_TIMEOUT_MS,
     );
-    console.log("[nas] DinD: daemon is ready");
+    logInfo("[nas] DinD: daemon is ready");
   } catch (e) {
     if (options.disableCache) {
       throw e;
     }
-    console.warn(
+    logWarn(
       `[nas] DinD: failed to start with cache volume (${DIND_CACHE_VOLUME}), resetting cache and retrying...`,
     );
     // rootless DinD の状態ディレクトリが壊れていると起動できないため、
@@ -267,16 +268,16 @@ async function startDindSidecar(
     await dockerVolumeRemove(DIND_CACHE_VOLUME).catch(() => {});
 
     await runDindSidecar(containerName, sharedTmpVolume, options);
-    console.log("[nas] DinD: waiting for daemon to be ready (fresh cache)...");
+    logInfo("[nas] DinD: waiting for daemon to be ready (fresh cache)...");
     try {
       await waitForDindReady(
         containerName,
         options.readinessTimeoutMs ?? READINESS_TIMEOUT_MS,
       );
-      console.log("[nas] DinD: daemon is ready (fresh cache)");
+      logInfo("[nas] DinD: daemon is ready (fresh cache)");
       return;
     } catch {
-      console.warn(
+      logWarn(
         `[nas] DinD: fresh cache retry also failed, retrying without cache...`,
       );
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
@@ -287,12 +288,12 @@ async function startDindSidecar(
       ...options,
       disableCache: true,
     });
-    console.log("[nas] DinD: waiting for daemon to be ready (no cache)...");
+    logInfo("[nas] DinD: waiting for daemon to be ready (no cache)...");
     await waitForDindReady(
       containerName,
       options.readinessTimeoutMs ?? READINESS_TIMEOUT_MS,
     );
-    console.log("[nas] DinD: daemon is ready (without cache)");
+    logInfo("[nas] DinD: daemon is ready (without cache)");
 
     void e;
   }

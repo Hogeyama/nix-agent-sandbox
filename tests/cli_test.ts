@@ -24,21 +24,6 @@ const MAIN_TS = path.join(
   "main.ts",
 );
 
-async function isDockerDaemonAvailable(): Promise<boolean> {
-  try {
-    const output = await new Deno.Command("docker", {
-      args: ["info"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    return output.success;
-  } catch {
-    return false;
-  }
-}
-
-const dockerDaemonAvailable = await isDockerDaemonAvailable();
-
 /** nas CLI をサブプロセスとして実行するヘルパー */
 async function runNas(
   args: string[],
@@ -124,6 +109,12 @@ Deno.test("CLI: -h shows usage and exits 0", async () => {
   const result = await runNas(["-h"]);
   assertEquals(result.code, 0);
   assertEquals(result.stdout.includes("nas - Nix Agent Sandbox"), true);
+});
+
+Deno.test("CLI: help includes quiet option", async () => {
+  const result = await runNas(["--help"]);
+  assertEquals(result.code, 0);
+  assertEquals(result.stdout.includes("--quiet"), true);
 });
 
 // --- --version ---
@@ -495,7 +486,12 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: {
-      prompt: { enable: true, timeoutSeconds: 30, defaultScope: "capability" },
+      prompt: {
+        enable: true,
+        timeoutSeconds: 30,
+        defaultScope: "capability",
+        notify: "off",
+      },
       rules: [{
         id: "deno-eval",
         match: { argv0: "deno", subcommands: ["eval"] },

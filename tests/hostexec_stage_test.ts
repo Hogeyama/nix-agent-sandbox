@@ -28,7 +28,12 @@ function makeProfile(): Profile {
       token: { from: "env:TOKEN", required: false },
     },
     hostexec: {
-      prompt: { enable: true, timeoutSeconds: 300, defaultScope: "capability" },
+      prompt: {
+        enable: true,
+        timeoutSeconds: 300,
+        defaultScope: "capability",
+        notify: "off",
+      },
       rules: [{
         id: "git-readonly",
         match: { argv0: "git", subcommands: ["pull"] },

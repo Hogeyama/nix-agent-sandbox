@@ -3,6 +3,7 @@
  */
 
 import type { ExecutionContext } from "./context.ts";
+import { logInfo } from "../log.ts";
 
 /** 各ステージが実装するインターフェース */
 export interface Stage {
@@ -20,7 +21,7 @@ export async function runPipeline(
   let current = ctx;
   try {
     for (const stage of stages) {
-      console.log(`[nas] Running stage: ${stage.name}`);
+      logInfo(`[nas] Running stage: ${stage.name}`);
       current = await stage.execute(current);
       completed.push(stage);
     }
@@ -29,7 +30,7 @@ export async function runPipeline(
     for (const stage of completed.reverse()) {
       if (stage.teardown) {
         try {
-          console.log(`[nas] Teardown: ${stage.name}`);
+          logInfo(`[nas] Teardown: ${stage.name}`);
           await stage.teardown(current);
         } catch (err) {
           console.error(

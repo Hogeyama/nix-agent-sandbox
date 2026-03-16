@@ -4,6 +4,7 @@ import { createContext } from "../src/pipeline/context.ts";
 import { runPipeline } from "../src/pipeline/pipeline.ts";
 import type { Stage } from "../src/pipeline/pipeline.ts";
 import type { Config, Profile } from "../src/config/types.ts";
+import { setLogLevel } from "../src/log.ts";
 
 const testProfile: Profile = {
   agent: "claude",
@@ -167,4 +168,33 @@ Deno.test("runPipeline: skips stages without teardown", async () => {
   await runPipeline([stage1, stage2], ctx);
 
   assertEquals(order, ["exec-s1", "exec-s2", "teardown-s2"]);
+});
+
+Deno.test("runPipeline: quiet suppresses stage info logs", async () => {
+  const logged: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logged.push(args.join(" "));
+  };
+
+  try {
+    setLogLevel("warn");
+    const stage: Stage = {
+      name: "quiet-stage",
+      execute: (ctx) => Promise.resolve(ctx),
+      teardown: () => Promise.resolve(),
+    };
+    const ctx = createContext(
+      testConfig,
+      testProfile,
+      "test",
+      "/tmp/work",
+      "warn",
+    );
+    await runPipeline([stage], ctx);
+    assertEquals(logged, []);
+  } finally {
+    console.log = originalLog;
+    setLogLevel("info");
+  }
 });

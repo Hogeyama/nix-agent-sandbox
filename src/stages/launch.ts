@@ -12,6 +12,7 @@ import {
   getImageLabel,
 } from "../docker/client.ts";
 import * as path from "@std/path";
+import { logInfo, logWarn } from "../log.ts";
 
 const EMBEDDED_BUILD_ASSET_GROUPS = [
   {
@@ -35,7 +36,7 @@ export class DockerBuildStage implements Stage {
     const imageName = ctx.imageName;
 
     if (await dockerImageExists(imageName)) {
-      console.log(
+      logInfo(
         `[nas] Docker image "${imageName}" already exists, skipping build`,
       );
 
@@ -46,12 +47,12 @@ export class DockerBuildStage implements Stage {
         DockerBuildStage.EMBED_HASH_LABEL,
       );
       if (imageHash !== currentHash) {
-        console.log(
+        logWarn(
           "[nas] \u26a0 Docker image is outdated. Run `nas rebuild` to update.",
         );
       }
     } else {
-      console.log(`[nas] Building Docker image "${imageName}"...`);
+      logInfo(`[nas] Building Docker image "${imageName}"...`);
       const embedHash = await computeEmbedHash();
       // deno compile 時は仮想FS上のパスになり docker デーモンからアクセスできないため、
       // 埋め込みファイルを一時ディレクトリに書き出してからビルドする
@@ -93,10 +94,10 @@ export class LaunchStage implements Stage {
       ...ctx.profile.agentArgs,
       ...this.extraArgs,
     ];
-    console.log(`[nas] Launching container...`);
-    console.log(`[nas]   Image: ${ctx.imageName}`);
-    console.log(`[nas]   Agent: ${ctx.profile.agent}`);
-    console.log(`[nas]   Command: ${command.join(" ")}`);
+    logInfo(`[nas] Launching container...`);
+    logInfo(`[nas]   Image: ${ctx.imageName}`);
+    logInfo(`[nas]   Agent: ${ctx.profile.agent}`);
+    logInfo(`[nas]   Command: ${command.join(" ")}`);
 
     await dockerRun({
       image: ctx.imageName,

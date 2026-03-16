@@ -30,6 +30,7 @@ import {
   writeSessionRegistry,
 } from "../network/registry.ts";
 import { generateSessionToken } from "../network/protocol.ts";
+import { logInfo } from "../log.ts";
 
 const ENVOY_IMAGE = "envoyproxy/envoy:v1.37.1";
 const ENVOY_CONTAINER_NAME = "nas-envoy-shared";
@@ -48,7 +49,7 @@ export class ProxyStage implements Stage {
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     if (!isProxyEnabled(ctx)) {
-      console.log("[nas] Proxy: skipped (allowlist/prompt disabled)");
+      logInfo("[nas] Proxy: skipped (allowlist/prompt disabled)");
       return ctx;
     }
 

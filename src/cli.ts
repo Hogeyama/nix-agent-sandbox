@@ -31,6 +31,7 @@ import {
   readHostExecSessionRegistry,
   resolveHostExecRuntimePaths,
 } from "./hostexec/registry.ts";
+import { logInfo, type LogLevel, setLogLevel } from "./log.ts";
 
 const VERSION = "0.1.0";
 
@@ -53,6 +54,8 @@ export async function main(args: string[]): Promise<void> {
     ? args.slice(0, dashDashIdx)
     : args;
   const explicitAgentArgs = dashDashIdx >= 0 ? args.slice(dashDashIdx + 1) : [];
+  const logLevel = parseLogLevel(argsBeforeDashDash);
+  setLogLevel(logLevel);
 
   // サブコマンド処理
   const subcommand = findFirstNonFlagArg(argsBeforeDashDash);
@@ -136,7 +139,13 @@ export async function main(args: string[]): Promise<void> {
     const config = await loadConfig();
     const { name, profile } = resolveProfile(config, profileName);
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
-    const ctx = createContext(config, effectiveProfile, name, Deno.cwd());
+    const ctx = createContext(
+      config,
+      effectiveProfile,
+      name,
+      Deno.cwd(),
+      logLevel,
+    );
 
     const stages = [
       new WorktreeStage(),
@@ -161,16 +170,17 @@ async function runRebuild(
 ): Promise<void> {
   const force = nasArgs.includes("--force") || nasArgs.includes("-f");
   const profileName = nasArgs.find((a) => !a.startsWith("-"));
+  const logLevel = parseLogLevel(nasArgs);
   try {
     const config = await loadConfig();
     const { name, profile } = resolveProfile(config, profileName);
-    const ctx = createContext(config, profile, name, Deno.cwd());
+    const ctx = createContext(config, profile, name, Deno.cwd(), logLevel);
 
     if (await dockerImageExists(ctx.imageName)) {
-      console.log(`[nas] Removing Docker image "${ctx.imageName}"...`);
+      logInfo(`[nas] Removing Docker image "${ctx.imageName}"...`);
       await dockerRemoveImage(ctx.imageName, { force });
     } else {
-      console.log(
+      logInfo(
         `[nas] Docker image "${ctx.imageName}" does not exist, skipping removal`,
       );
     }
@@ -475,6 +485,10 @@ function applyWorktreeOverride(
   return { ...profile, worktree: { base: override.base, onCreate } };
 }
 
+function parseLogLevel(args: string[]): LogLevel {
+  return args.includes("--quiet") || args.includes("-q") ? "warn" : "info";
+}
+
 function normalizeWorktreeBase(branch: string): string {
   if (branch === "@" || branch === "HEAD") return "HEAD";
   return branch;
@@ -491,6 +505,7 @@ function findFirstNonFlagArg(args: string[]): string | undefined {
       i++;
       continue;
     }
+    if (arg === "--quiet" || arg === "-q") continue;
     if (arg.startsWith("-b") && arg.length > 2) continue;
     if (arg === "--no-worktree") continue;
     if (!arg.startsWith("-")) return arg;
@@ -518,6 +533,7 @@ Subcommands:
 Options:
   -h, --help      Show this help
   -V, --version   Show version
+  -q, --quiet     Suppress info logs
   -b, --worktree <branch>  Enable worktree and set base branch (use @ or HEAD for current HEAD)
   --no-worktree   Disable worktree even if configured in profile
 

@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+NAS_LOG_LEVEL="${NAS_LOG_LEVEL:-info}"
+
+nas_info() {
+  if [ "$NAS_LOG_LEVEL" != "info" ]; then
+    return 0
+  fi
+  echo "$@"
+}
+
 # --- Nix セットアップ ---
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_BIN_PATH:-}" ]; then
   # ホストの nix バイナリ (/nix/store/... 内) へのシンボリックリンクを作成
@@ -121,7 +130,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
       jq -e ".devShells.\"$SYSTEM\".default" >/dev/null 2>&1; then
       HAS_DEVSHELL=true
     else
-      echo "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
+      nas_info "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
     fi
   fi
 
@@ -141,14 +150,14 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     PROFILE_LINK="${NAS_NIX_CACHE}/profile-${FLAKE_HASH}"
 
     if [ ! -f "$CACHE_FILE" ]; then
-      echo "[nas] Caching nix dev environment via print-dev-env..."
+      nas_info "[nas] Caching nix dev environment via print-dev-env..."
       if "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
         nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CACHE_FILE}.tmp"; then
         mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
         chmod 644 "$CACHE_FILE"
-        echo "[nas] Nix dev environment cached."
+        nas_info "[nas] Nix dev environment cached."
       else
-        echo "[nas] nix print-dev-env failed, falling back to nix develop..."
+        nas_info "[nas] nix print-dev-env failed, falling back to nix develop..."
         rm -f "${CACHE_FILE}.tmp"
         # フォールバック: 従来の nix develop
         if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
@@ -161,7 +170,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
         fi
       fi
     else
-      echo "[nas] Using cached nix dev environment."
+      nas_info "[nas] Using cached nix dev environment."
     fi
 
     # キャッシュ済み環境を source してエージェント起動
@@ -173,7 +182,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
         bash -c "source '$CACHE_FILE'; export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
     fi
   elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-    echo "[nas] flake.nix not found, entering nix shell (via host daemon)..."
+    nas_info "[nas] flake.nix not found, entering nix shell (via host daemon)..."
     exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
       bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
   else

@@ -26,6 +26,7 @@ export class MountStage implements Stage {
     const containerHome = `/home/${containerUser}`;
     envVars["NAS_USER"] = containerUser;
     envVars["NAS_HOME"] = containerHome;
+    envVars["NAS_LOG_LEVEL"] = result.logLevel;
 
     // ワークスペースマウント (ホスト側の絶対パスをコンテナ内でも使う)
     // mountDir が設定されている場合はそれをマウントし、workDir は PWD としてのみ使う
