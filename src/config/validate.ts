@@ -17,6 +17,7 @@ import type {
   HostExecInheritEnvConfig,
   HostExecInheritEnvMode,
   HostExecPromptConfig,
+  HostExecPromptNotify,
   HostExecRule,
   NetworkPromptConfig,
   NetworkPromptNotify,
@@ -63,6 +64,12 @@ const VALID_HOSTEXEC_CWD_MODES: HostExecCwdMode[] = [
 const VALID_HOSTEXEC_INHERIT_ENV_MODES: HostExecInheritEnvMode[] = [
   "minimal",
   "unsafe-inherit-all",
+];
+const VALID_HOSTEXEC_PROMPT_NOTIFIES: HostExecPromptNotify[] = [
+  "auto",
+  "tmux",
+  "desktop",
+  "off",
 ];
 
 export class ConfigValidationError extends Error {
@@ -427,10 +434,19 @@ function validateHostExecPrompt(
       `profile "${profileName}": hostexec.prompt.default-scope must be "capability"`,
     );
   }
+  const notify = raw?.notify ?? DEFAULT_HOSTEXEC_PROMPT_CONFIG.notify;
+  if (!VALID_HOSTEXEC_PROMPT_NOTIFIES.includes(notify)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec.prompt.notify must be one of: ${
+        VALID_HOSTEXEC_PROMPT_NOTIFIES.join(", ")
+      }`,
+    );
+  }
   return {
     enable: raw?.enable ?? DEFAULT_HOSTEXEC_CONFIG.prompt.enable,
     timeoutSeconds,
     defaultScope,
+    notify,
   };
 }
 

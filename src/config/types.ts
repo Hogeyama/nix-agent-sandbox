@@ -54,11 +54,13 @@ export type HostExecCwdMode =
   | "allowlist"
   | "any";
 export type HostExecInheritEnvMode = "minimal" | "unsafe-inherit-all";
+export type HostExecPromptNotify = "auto" | "tmux" | "desktop" | "off";
 
 export interface HostExecPromptConfig {
   enable: boolean;
   timeoutSeconds: number;
   defaultScope: "capability";
+  notify: HostExecPromptNotify;
 }
 
 export interface HostExecCwdConfig {
@@ -205,6 +207,7 @@ export interface RawProfile {
       enable?: boolean;
       "timeout-seconds"?: number;
       "default-scope"?: "capability";
+      notify?: HostExecPromptNotify;
     };
     rules?: Array<{
       id?: string;
@@ -267,6 +270,7 @@ export const DEFAULT_HOSTEXEC_PROMPT_CONFIG: HostExecPromptConfig = {
   enable: true,
   timeoutSeconds: 300,
   defaultScope: "capability",
+  notify: "auto",
 };
 
 export const DEFAULT_HOSTEXEC_CWD_CONFIG: HostExecCwdConfig = {

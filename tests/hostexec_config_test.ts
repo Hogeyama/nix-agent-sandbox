@@ -13,6 +13,9 @@ Deno.test("hostexec config: validates secrets and rules", () => {
           github_token: { from: "env:GITHUB_TOKEN", required: true },
         },
         hostexec: {
+          prompt: {
+            notify: "desktop",
+          },
           rules: [
             {
               id: "git-readonly",
@@ -36,6 +39,7 @@ Deno.test("hostexec config: validates secrets and rules", () => {
   assertEquals(config.profiles.test.hostexec?.rules[0].inheritEnv.keys, [
     "SSH_AUTH_SOCK",
   ]);
+  assertEquals(config.profiles.test.hostexec?.prompt.notify, "desktop");
 });
 
 Deno.test("hostexec config: rejects unknown secret references", () => {
@@ -99,6 +103,26 @@ Deno.test("hostexec config: rejects invalid inherit-env mode", () => {
       }),
     ConfigValidationError,
     "inherit-env.mode",
+  );
+});
+
+Deno.test("hostexec config: rejects invalid notify backend", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            hostexec: {
+              prompt: {
+                notify: "dbus" as never,
+              },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "hostexec.prompt.notify must be one of",
   );
 });
 

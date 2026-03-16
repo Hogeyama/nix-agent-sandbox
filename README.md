@@ -231,6 +231,7 @@ profiles:
         enable: true
         timeout-seconds: 300
         default-scope: capability
+        notify: auto
       rules:
         - id: git-readonly
           match:
@@ -306,6 +307,7 @@ profiles:
 | `hostexec.prompt.enable` | bool | `true` | `approval: prompt` の hostexec 実行を承認キューに入れる |
 | `hostexec.prompt.timeout-seconds` | number | `300` | hostexec 承認の待機秒数。タイムアウト時は deny |
 | `hostexec.prompt.default-scope` | `"capability"` | `"capability"` | hostexec 承認再利用の単位 |
+| `hostexec.prompt.notify` | `"auto"` \| `"tmux"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`auto` は `notify-send` → tmux popup → no-op の順で試行 |
 | `hostexec.rules[].id` | string | （必須） | 監査・承認 fingerprint に使う安定 ID |
 | `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名 |
 | `hostexec.rules[].match.subcommands` | string[] | 省略可 | ツール別正規化後にマッチするサブコマンド。省略時はその `argv0` に対する任意のサブコマンドにマッチ。空配列 `[]` は不可 |

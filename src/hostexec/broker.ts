@@ -6,6 +6,7 @@ import type {
 } from "../config/types.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import { SecretStore } from "./secret_store.ts";
+import { notifyHostExecPendingRequest } from "./notify.ts";
 import {
   hostExecBrokerSocketPath,
   type HostExecRuntimePaths,
@@ -256,6 +257,12 @@ export class HostExecBroker {
     const entry = toPendingEntry(message, resolved, approvalKey, createdAt);
     group.pendingEntries.set(message.requestId, entry);
     await writeHostExecPendingEntry(this.paths, entry);
+    void notifyHostExecPendingRequest({
+      backend: this.config.prompt.notify,
+      brokerSocket: this.socketPath ??
+        hostExecBrokerSocketPath(this.paths, this.sessionId),
+      pending: entry,
+    }).catch(() => {});
     return group;
   }
 
