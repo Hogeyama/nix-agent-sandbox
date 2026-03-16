@@ -31,9 +31,7 @@ curl -fsSL https://copilot.github.com/install.sh | bash
 
 **OpenAI Codex CLI:**
 
-公式ドキュメントに従ってスタンドアロンバイナリとしてインストールしてください。
-
-いずれも `~/.local/bin/` 等にシングルバイナリが配置されます。`which claude` / `which copilot` / `which codex` でパスが解決できれば OK です。
+[Releases · openai/codex](https://github.com/openai/codex/releases) からインストールしてください。
 
 ## セットアップ
 
@@ -83,7 +81,7 @@ nas worktree clean --force   # 確認なしで削除
 
 ### Sidecar コンテナの掃除
 
-`docker.shared: true` や `network.allowlist` / `network.prompt.enable` を使っていると、`dind` / `envoy` / `auth-router` 関連の runtime が残ることがあります。未使用のものだけを止めて削除したい場合は `container clean` と `network gc` を使います。
+`docker.shared: true` や `network.allowlist` / `network.prompt.enable` を使っていると、`dind` / `envoy` 関連の runtime が残ることがあります。未使用のものだけを止めて削除したい場合は `container clean` と `network gc` を使います。
 
 ```sh
 nas container clean
@@ -97,22 +95,18 @@ nas container clean
 
 ```sh
 nas network pending
-nas network approve <session-id> <request-id> --scope host-port
+nas network approve <session-id> <request-id> --scope [once|host-port|host]
 nas network deny <session-id> <request-id>
 nas network gc
 ```
 
 - `pending` は `session_id request_id target state created_at` を 1 行ずつ表示します
-- `approve` の `--scope` は `once` / `host-port` / `host`
+- approve / deny は DBus デスクトップ通知のデフォルトアクション / dissmissからも呼び出されます。approveのscopeはhost-portになります。
 - `gc` は stale session registry / pending dir / broker socket / auth-router pid/socket を掃除します
-
-既存のイメージを削除してから再ビルドし、そのまま起動します。
-
-`nas` のバージョンアップにより内蔵の Dockerfile/entrypoint が更新された場合、起動時に自動検知して `nas rebuild` の実行を促すメッセージが表示されます。
 
 ### エージェントに引数を渡す
 
-プロフィール名の後ろには `--` なしでエージェント固有の引数を渡せます。デフォルトプロファイルを使う場合や明示的に区切りたい場合は、従来どおり `--` も使えます。
+プロフィール名の後ろには `--` なしでエージェント固有の引数を渡せます。デフォルトプロファイルを使う場合や明示的に区切りたい場合は、`--` も使えます。
 
 ```sh
 # profile を明示したら、その後ろはそのまま agent 引数
@@ -122,7 +116,7 @@ nas copilot --resume=2b2155c8-e59b-4c76-b1df-7f9d14aeecfb
 # 非インタラクティブ（スクリプティング）
 nas -- -p "このリポジトリの概要を教えて"
 
-# Copilot CLI で全権限付与（サンドボックス内なので安全）
+# Copilot CLI で全権限付与
 nas copilot -p "テストを書いて" --yolo
 ```
 
@@ -258,33 +252,11 @@ profiles:
 
 ## 仕組み
 
-### パイプライン
-
-```
-nas [options-before-profile] [profile-name] [agent-args...]
-  │
-  ├─ WorktreeStage     git worktree 作成（設定時のみ）
-  ├─ DockerBuildStage  Docker イメージのビルド（キャッシュあり）
-  ├─ NixDetectStage    flake.nix の有無を検出
-  ├─ MountStage        マウント構成の組み立て
-  ├─ DindStage         DinD rootless サイドカー起動（docker.enable 時のみ）
-  ├─ ProxyStage        shared Envoy / auth-router / broker / session network を構成
-  └─ LaunchStage       コンテナ起動 → エージェント実行
-```
-
 ### コンテナの中身
 
 - **ベースイメージ**: `ubuntu:24.04`
 - **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin, gh, ripgrep, fd, Python 3（`python`/`python3`）, Node.js, Google Cloud CLI（`gcloud`）, AWS CLI v2（`aws`）
 - **エージェントバイナリ**: ホストからバインドマウント（Claude Code は `~/.local/bin/`、Copilot/Codex は `/usr/local/bin/` に配置）
-
-### 認証の引き継ぎ
-
-| エージェント | 方法 |
-|-------------|------|
-| Claude Code | `~/.claude/` をマウント |
-| Copilot CLI | `~/.config/.copilot/` をマウント + `GITHUB_TOKEN` を環境変数で渡す |
-| OpenAI Codex CLI | `~/.codex/` をマウント + `OPENAI_API_KEY` を環境変数で渡す（設定時） |
 
 ### Nix 統合（`nix.enable: true` 時）
 
@@ -332,7 +304,7 @@ session network
 
 ### 常にマウントされるもの
 
-- **エージェントの認証情報**: Claude Code の場合は `~/.claude/`、Copilot CLI の場合は `~/.config/.copilot/` と `GITHUB_TOKEN`、OpenAI Codex CLI の場合は `~/.codex/` と `OPENAI_API_KEY`（設定時）がコンテナに渡されます。これはエージェントの動作に必須です。
+- **エージェントの設定**: Claude Code の場合は `~/.claude/`、Copilot CLI の場合は `~/.copilot/`、OpenAI Codex CLI の場合は `~/.codex/` がコンテナに渡されます。これはエージェントの動作に必須です。
 - **Nix（有効時）**: ホストの `/nix` ディレクトリと nix daemon ソケットがマウントされます。
 
 ### 推奨事項
@@ -346,7 +318,7 @@ session network
 ### エージェントバイナリ
 
 - **npm でインストールされたエージェントは動作しません。** npm 版は `node_modules/` ツリー全体に依存するため、単一ファイルのバインドマウントでは起動できません。必ず公式のスタンドアロンインストーラーを使ってください。
-- エージェントバイナリは ELF 形式（Linux x86\_64）であることが前提です。
+- エージェントバイナリは ELF 形式であることが前提です。
 
 ### ファイル所有権
 
@@ -356,12 +328,7 @@ session network
 ### TTY
 
 - インタラクティブモード（引数なしでエージェントを起動）には TTY が必要です。
-- CI/スクリプトなど非 TTY 環境では `copilot -p "プロンプト"` のように profile 名の後ろへ直接引数を渡すか、デフォルトプロファイルを使う場合は `-- -p "プロンプト"` を使ってください。
-
-### Copilot CLI のパーミッション
-
-- Copilot CLI は非インタラクティブモード（`-p`）でシェルコマンドの実行に許可を求めます。
-- サンドボックス内で全操作を許可する場合は `--yolo` を渡してください: `nas copilot -p "..." --yolo`
+- CI/スクリプトなど非 TTY 環境では `nas copilot -p "プロンプト"` のように profile 名の後ろへ直接引数を渡すか、デフォルトプロファイルを使う場合は `-- -p "プロンプト"` を使ってください。
 
 ### Docker
 
@@ -373,59 +340,3 @@ session network
 - ホストに nix がインストールされ、nix-daemon が動作している必要があります。
 - ホストの `/nix` ディレクトリ全体がコンテナにマウントされます。
 
-## 開発
-
-```sh
-deno task dev         # 開発実行
-deno task test        # テスト
-deno task lint        # リント
-deno task fmt         # フォーマット
-deno task check       # 型チェック
-deno task compile     # バイナリビルド
-```
-
-## ディレクトリ構成
-
-```
-.
-├── deno.json
-├── main.ts
-├── src/
-│   ├── cli.ts              # CLI エントリポイント
-│   ├── config/
-│   │   ├── types.ts        # 型定義
-│   │   ├── load.ts         # YAML 読み込み
-│   │   └── validate.ts     # バリデーション
-│   ├── pipeline/
-│   │   ├── context.ts      # ExecutionContext
-│   │   └── pipeline.ts     # Stage インターフェース & 実行
-│   ├── stages/
-│   │   ├── worktree.ts     # git worktree 作成
-│   │   ├── nix_detect.ts   # flake.nix 検出
-│   │   ├── mount.ts        # マウント構成の組み立て
-│   │   ├── dind.ts         # DinD rootless サイドカー管理
-│   │   ├── proxy.ts        # shared Envoy / broker / session network 管理
-│   │   └── launch.ts       # Docker ビルド & コンテナ起動
-│   ├── docker/
-│   │   ├── client.ts       # Docker CLI ラッパー
-│   │   ├── envoy/          # Envoy 設定テンプレート
-│   │   └── embed/
-│   │       ├── Dockerfile
-│   │       └── entrypoint.sh
-│   ├── network/
-│   │   ├── broker.ts       # session ごとの承認 broker
-│   │   ├── envoy_auth_router.ts # Envoy ext_authz HTTP service
-│   │   ├── notify.ts       # tmux / notify-send 通知
-│   │   ├── protocol.ts     # 承認プロトコルと target 正規化
-│   │   └── registry.ts     # runtime dir / session registry / pending 管理
-│   └── agents/
-│       ├── claude.ts       # Claude Code 固有設定
-│       ├── copilot.ts      # Copilot CLI 固有設定
-│       └── codex.ts        # OpenAI Codex CLI 固有設定
-└── tests/
-    ├── config_test.ts
-    ├── embed_hash_test.ts
-    ├── merge_test.ts
-    ├── mount_stage_test.ts
-    └── pipeline_test.ts
-```
