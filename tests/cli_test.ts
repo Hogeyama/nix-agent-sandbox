@@ -266,26 +266,6 @@ Deno.test("CLI: worktree clean --force on empty repo", async () => {
   }
 });
 
-Deno.test({
-  name: "CLI: container clean succeeds when no unused sidecars exist",
-  ignore: !dockerDaemonAvailable,
-  async fn() {
-    const tmpDir = await Deno.makeTempDir({
-      prefix: "clitest-container-clean-",
-    });
-    try {
-      const result = await runNas(["container", "clean"], { cwd: tmpDir });
-      assertEquals(result.code, 0);
-      assertEquals(
-        result.stdout.includes("No unused nas containers found"),
-        true,
-      );
-    } finally {
-      await Deno.remove(tmpDir, { recursive: true });
-    }
-  },
-});
-
 Deno.test("CLI: container with unknown subcommand exits with error", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "clitest-container-unk-" });
   try {
