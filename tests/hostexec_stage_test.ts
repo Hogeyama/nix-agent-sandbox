@@ -34,6 +34,9 @@ function makeProfile(): Profile {
         defaultScope: "capability",
         notify: "off",
       },
+      subcommand: {
+        prefixOptionsWithValue: {},
+      },
       rules: [{
         id: "git-readonly",
         match: { argv0: "git", subcommands: ["pull"] },

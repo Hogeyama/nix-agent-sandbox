@@ -492,6 +492,9 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
         defaultScope: "capability",
         notify: "off",
       },
+      subcommand: {
+        prefixOptionsWithValue: {},
+      },
       rules: [{
         id: "deno-eval",
         match: { argv0: "deno", subcommands: ["eval"] },

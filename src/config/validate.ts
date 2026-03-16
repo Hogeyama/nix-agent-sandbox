@@ -19,6 +19,7 @@ import type {
   HostExecPromptConfig,
   HostExecPromptNotify,
   HostExecRule,
+  HostExecSubcommandConfig,
   NetworkPromptConfig,
   NetworkPromptNotify,
   Profile,
@@ -35,6 +36,7 @@ import {
   DEFAULT_HOSTEXEC_CWD_CONFIG,
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
   DEFAULT_HOSTEXEC_PROMPT_CONFIG,
+  DEFAULT_HOSTEXEC_SUBCOMMAND_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
@@ -407,6 +409,7 @@ function validateHostExec(
 
   return {
     prompt: validateHostExecPrompt(profileName, raw?.prompt),
+    subcommand: validateHostExecSubcommand(profileName, raw?.subcommand),
     rules: validateHostExecRules(profileName, raw?.rules, rawSecrets),
   };
 }
@@ -448,6 +451,45 @@ function validateHostExecPrompt(
     defaultScope,
     notify,
   };
+}
+
+function validateHostExecSubcommand(
+  profileName: string,
+  raw?: NonNullable<NonNullable<RawProfile["hostexec"]>["subcommand"]>,
+): HostExecSubcommandConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec.subcommand must be an object`,
+    );
+  }
+
+  const rawMap = raw?.["prefix-options-with-value"] ??
+    DEFAULT_HOSTEXEC_SUBCOMMAND_CONFIG.prefixOptionsWithValue;
+  if (typeof rawMap !== "object" || rawMap === null || Array.isArray(rawMap)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec.subcommand.prefix-options-with-value must be an object`,
+    );
+  }
+
+  const prefixOptionsWithValue: Record<string, string[]> = {};
+  for (const [argv0, options] of Object.entries(rawMap)) {
+    if (argv0.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": hostexec.subcommand.prefix-options-with-value contains an empty command name`,
+      );
+    }
+    if (
+      !Array.isArray(options) ||
+      options.some((value) => typeof value !== "string" || value.trim() === "")
+    ) {
+      throw new ConfigValidationError(
+        `profile "${profileName}": hostexec.subcommand.prefix-options-with-value.${argv0} must be a list of non-empty strings`,
+      );
+    }
+    prefixOptionsWithValue[argv0] = [...options];
+  }
+
+  return { prefixOptionsWithValue };
 }
 
 function validateHostExecRules(

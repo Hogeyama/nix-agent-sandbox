@@ -28,6 +28,9 @@ function makeConfig(overrides: HostExecConfigOverrides = {}): HostExecConfig {
       notify: "auto",
       ...(overrides.prompt ?? {}),
     },
+    subcommand: {
+      prefixOptionsWithValue: {},
+    },
     rules: overrides.rules ?? [],
   };
 }

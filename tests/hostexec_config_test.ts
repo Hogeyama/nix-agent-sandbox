@@ -16,6 +16,12 @@ Deno.test("hostexec config: validates secrets and rules", () => {
           prompt: {
             notify: "desktop",
           },
+          subcommand: {
+            "prefix-options-with-value": {
+              git: ["-C", "--git-dir"],
+              gh: ["-R", "--repo"],
+            },
+          },
           rules: [
             {
               id: "git-readonly",
@@ -40,6 +46,13 @@ Deno.test("hostexec config: validates secrets and rules", () => {
     "SSH_AUTH_SOCK",
   ]);
   assertEquals(config.profiles.test.hostexec?.prompt.notify, "desktop");
+  assertEquals(
+    config.profiles.test.hostexec?.subcommand.prefixOptionsWithValue,
+    {
+      git: ["-C", "--git-dir"],
+      gh: ["-R", "--repo"],
+    },
+  );
 });
 
 Deno.test("hostexec config: rejects unknown secret references", () => {
@@ -165,5 +178,27 @@ Deno.test("hostexec config: rejects empty subcommands array", () => {
       }),
     ConfigValidationError,
     "match.subcommands",
+  );
+});
+
+Deno.test("hostexec config: rejects invalid prefix-options-with-value entry", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            hostexec: {
+              subcommand: {
+                "prefix-options-with-value": {
+                  git: ["-C", ""],
+                },
+              },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "prefix-options-with-value.git",
   );
 });

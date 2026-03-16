@@ -339,7 +339,11 @@ export class HostExecBroker {
     message: ExecuteRequest,
   ): Promise<ResolvedExecution | null> {
     const argv0 = path.basename(message.argv0);
-    const subcommand = normalizeSubcommand(argv0, message.args);
+    const subcommand = normalizeSubcommand(
+      argv0,
+      message.args,
+      this.config.subcommand,
+    );
     const rule = this.config.rules.find((entry) => {
       if (entry.match.argv0 !== argv0) return false;
       if (subcommand === null) return false;
