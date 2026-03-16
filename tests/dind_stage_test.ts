@@ -101,7 +101,21 @@ async function canRunDindRootless(): Promise<boolean> {
   }
 }
 
+async function canRunDocker(): Promise<boolean> {
+  try {
+    const result = await new Deno.Command("docker", {
+      args: ["version"],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+    return result.success;
+  } catch {
+    return false;
+  }
+}
+
 // 起動時に一度だけチェック
+const dockerAvailable = await canRunDocker();
 const dindAvailable = await canRunDindRootless();
 
 function makeStage(): DindStage {
@@ -138,6 +152,48 @@ async function forceCleanup(
   await dockerRm(containerName).catch(() => {});
   await dockerNetworkRemove(networkName).catch(() => {});
   await dockerVolumeRemove(volumeName).catch(() => {});
+}
+
+async function isSharedSidecarReusable(
+  containerName: string,
+): Promise<boolean> {
+  if (!await dockerIsRunning(containerName)) {
+    return false;
+  }
+  const result = await new Deno.Command("docker", {
+    args: [
+      "exec",
+      containerName,
+      "docker",
+      "-H",
+      "tcp://127.0.0.1:2375",
+      "info",
+    ],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  return result.success;
+}
+
+async function startSharedReuseStub(
+  containerName: string,
+  volumeName: string,
+): Promise<void> {
+  await new Deno.Command("docker", {
+    args: [
+      "run",
+      "-d",
+      "--name",
+      containerName,
+      "-v",
+      `${volumeName}:/tmp/nas-shared`,
+      "alpine:latest",
+      "sleep",
+      "300",
+    ],
+    stdout: "null",
+    stderr: "null",
+  }).output();
 }
 
 Deno.test({
@@ -201,13 +257,16 @@ Deno.test({
 Deno.test({
   name:
     "DindStage: shared mode uses fixed name, reuses sidecar, and keeps it on teardown",
-  ignore: !dindAvailable,
+  ignore: !dockerAvailable,
   fn: async () => {
     const containerName = "nas-dind-shared";
     const networkName = "nas-dind-shared";
     const volumeName = "nas-dind-shared-tmp";
 
-    await forceCleanup(containerName, networkName, volumeName);
+    if (!await isSharedSidecarReusable(containerName)) {
+      await forceCleanup(containerName, networkName, volumeName);
+      await startSharedReuseStub(containerName, volumeName);
+    }
 
     const profile = makeProfile({ docker: { enable: true, shared: true } });
     const ctx = makeCtx(profile);

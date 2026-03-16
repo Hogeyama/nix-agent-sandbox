@@ -19,6 +19,7 @@
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import {
+  dockerContainerIp,
   dockerExec,
   dockerIsRunning,
   dockerLogs,
@@ -328,6 +329,7 @@ async function waitForDindReady(
   timeoutMs: number,
 ): Promise<void> {
   const start = Date.now();
+  let containerIp: string | null = null;
   while (Date.now() - start < timeoutMs) {
     // コンテナが生きているか確認（起動失敗で即座にエラーを返す）
     const running = await dockerIsRunning(containerName);
@@ -338,14 +340,25 @@ async function waitForDindReady(
       );
     }
 
-    // TCP 経由で Docker デーモンの readiness を確認
-    const result = await dockerExec(containerName, [
-      "docker",
-      "-H",
-      `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
-      "info",
-    ]);
-    if (result.code === 0) return;
+    if (!containerIp) {
+      containerIp = await dockerContainerIp(containerName);
+    }
+
+    // まず bridge IP への TCP 接続で daemon の listen 開始を検知し、
+    // 開いてから 1 回だけ docker info で実利用可能か確認する。
+    if (
+      containerIp &&
+      await canConnectTcp(containerIp, DIND_INTERNAL_PORT)
+    ) {
+      const result = await dockerExec(containerName, [
+        "docker",
+        "-H",
+        `tcp://127.0.0.1:${DIND_INTERNAL_PORT}`,
+        "info",
+      ]);
+      if (result.code === 0) return;
+    }
+
     await new Promise((r) => setTimeout(r, READINESS_POLL_INTERVAL_MS));
   }
 
@@ -356,4 +369,17 @@ async function waitForDindReady(
       timeoutMs / 1000
     }s\n--- container logs ---\n${logs}`,
   );
+}
+
+async function canConnectTcp(
+  hostname: string,
+  port: number,
+): Promise<boolean> {
+  try {
+    const conn = await Deno.connect({ hostname, port });
+    conn.close();
+    return true;
+  } catch {
+    return false;
+  }
 }

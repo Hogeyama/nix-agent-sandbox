@@ -436,6 +436,21 @@ export async function dockerInspectContainer(
   };
 }
 
+export async function dockerContainerIp(
+  containerName: string,
+): Promise<string | null> {
+  try {
+    const fmt =
+      "{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}}{{break}}{{end}}{{end}}";
+    const result = await $`docker inspect --format=${fmt} ${containerName}`
+      .quiet();
+    const ip = result.stdout.trim();
+    return ip.length > 0 ? ip : null;
+  } catch {
+    return null;
+  }
+}
+
 /** network inspect を取得 */
 export async function dockerInspectNetwork(
   networkName: string,
