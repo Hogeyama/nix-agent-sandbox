@@ -264,9 +264,6 @@ Deno.test({
       prefix: "clitest-container-clean-",
     });
     try {
-      const first = await runNas(["container", "clean"], { cwd: tmpDir });
-      assertEquals(first.code, 0);
-
       const result = await runNas(["container", "clean"], { cwd: tmpDir });
       assertEquals(result.code, 0);
       assertEquals(

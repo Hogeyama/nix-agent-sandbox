@@ -24,9 +24,41 @@ export interface ContainerCleanResult {
   removedVolumes: string[];
 }
 
-export async function cleanNasContainers(): Promise<ContainerCleanResult> {
-  const containers = await loadContainers();
-  const networks = await loadNetworks();
+export interface ContainerCleanBackend {
+  listContainerNames(): Promise<string[]>;
+  inspectContainer(name: string): Promise<DockerContainerDetails>;
+  listNetworkNames(): Promise<string[]>;
+  inspectNetwork(name: string): Promise<DockerNetworkDetails>;
+  listVolumeNames(): Promise<string[]>;
+  inspectVolume(name: string): Promise<{
+    name: string;
+    labels: Record<string, string>;
+    containers: string[];
+  }>;
+  stopContainer(name: string): Promise<void>;
+  removeContainer(name: string): Promise<void>;
+  removeNetwork(name: string): Promise<void>;
+  removeVolume(name: string): Promise<void>;
+}
+
+const defaultBackend: ContainerCleanBackend = {
+  listContainerNames: dockerListContainerNames,
+  inspectContainer: dockerInspectContainer,
+  listNetworkNames: dockerListNetworkNames,
+  inspectNetwork: dockerInspectNetwork,
+  listVolumeNames: dockerListVolumeNames,
+  inspectVolume: dockerInspectVolume,
+  stopContainer: (name) => dockerStop(name, { timeoutSeconds: 0 }),
+  removeContainer: dockerRm,
+  removeNetwork: dockerNetworkRemove,
+  removeVolume: dockerVolumeRemove,
+};
+
+export async function cleanNasContainers(
+  backend: ContainerCleanBackend = defaultBackend,
+): Promise<ContainerCleanResult> {
+  const containers = await loadContainers(backend);
+  const networks = await loadNetworks(backend);
   const containerMap = new Map(
     containers.map((container) => [container.name, container]),
   );
@@ -44,14 +76,14 @@ export async function cleanNasContainers(): Promise<ContainerCleanResult> {
       continue;
     }
     if (container.running) {
-      await dockerStop(container.name, { timeoutSeconds: 0 });
+      await backend.stopContainer(container.name);
     }
-    await dockerRm(container.name);
+    await backend.removeContainer(container.name);
     removedContainers.push(container.name);
   }
 
-  const removedNetworks = await removeUnusedNetworks();
-  const removedVolumes = await removeUnusedVolumes();
+  const removedNetworks = await removeUnusedNetworks(backend);
+  const removedVolumes = await removeUnusedVolumes(backend);
 
   return {
     removedContainers,
@@ -90,45 +122,53 @@ export function isUnusedNasSidecar(
   return true;
 }
 
-async function loadContainers(): Promise<DockerContainerDetails[]> {
-  const names = await dockerListContainerNames();
-  return await Promise.all(names.map((name) => dockerInspectContainer(name)));
+async function loadContainers(
+  backend: ContainerCleanBackend,
+): Promise<DockerContainerDetails[]> {
+  const names = await backend.listContainerNames();
+  return await Promise.all(names.map((name) => backend.inspectContainer(name)));
 }
 
-async function loadNetworks(): Promise<DockerNetworkDetails[]> {
-  const names = await dockerListNetworkNames();
+async function loadNetworks(
+  backend: ContainerCleanBackend,
+): Promise<DockerNetworkDetails[]> {
+  const names = await backend.listNetworkNames();
   const networks = await Promise.all(
-    names.map((name) => dockerInspectNetwork(name)),
+    names.map((name) => backend.inspectNetwork(name)),
   );
   return networks.filter((network) =>
     isNasManagedNetwork(network.labels, network.name)
   );
 }
 
-async function removeUnusedNetworks(): Promise<string[]> {
-  const names = await dockerListNetworkNames();
+async function removeUnusedNetworks(
+  backend: ContainerCleanBackend,
+): Promise<string[]> {
+  const names = await backend.listNetworkNames();
   const removed: string[] = [];
 
   for (const name of names) {
-    const network = await dockerInspectNetwork(name);
+    const network = await backend.inspectNetwork(name);
     if (!isNasManagedNetwork(network.labels, network.name)) continue;
     if (network.containers.length > 0) continue;
-    await dockerNetworkRemove(name);
+    await backend.removeNetwork(name);
     removed.push(name);
   }
 
   return removed;
 }
 
-async function removeUnusedVolumes(): Promise<string[]> {
-  const names = await dockerListVolumeNames();
+async function removeUnusedVolumes(
+  backend: ContainerCleanBackend,
+): Promise<string[]> {
+  const names = await backend.listVolumeNames();
   const removed: string[] = [];
 
   for (const name of names) {
-    const volume = await dockerInspectVolume(name);
+    const volume = await backend.inspectVolume(name);
     if (!isNasManagedTmpVolume(volume.labels, volume.name)) continue;
     if (volume.containers.length > 0) continue;
-    await dockerVolumeRemove(name);
+    await backend.removeVolume(name);
     removed.push(name);
   }
 

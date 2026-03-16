@@ -2,25 +2,25 @@ import { assertEquals } from "@std/assert";
 import type {
   DockerContainerDetails,
   DockerNetworkDetails,
+  DockerVolumeDetails,
 } from "../src/docker/client.ts";
 import {
   cleanNasContainers,
+  type ContainerCleanBackend,
   isUnusedNasSidecar,
 } from "../src/container_clean.ts";
 import {
   isNasManagedNetwork,
   isNasManagedSidecar,
   NAS_KIND_DIND,
+  NAS_KIND_DIND_NETWORK,
+  NAS_KIND_DIND_TMP,
   NAS_KIND_ENVOY,
   NAS_KIND_LABEL,
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
 } from "../src/docker/nas_resources.ts";
-
-const TEST_IMAGE = "alpine:latest";
-const PREFIX = `nas-clean-${Date.now()}`;
-const DOCKER_INTEGRATION_AVAILABLE = await canRunDockerIntegration();
 
 Deno.test("isNasManagedSidecar: nas-sandbox is not a managed sidecar", () => {
   assertEquals(isNasManagedSidecar({}, "nas-sandbox"), false);
@@ -166,205 +166,192 @@ Deno.test("isUnusedNasSidecar: session network with active container keeps envoy
   );
 });
 
-async function docker(args: string[]): Promise<boolean> {
-  const cmd = new Deno.Command("docker", {
-    args,
-    stdout: "null",
-    stderr: "null",
-  });
-  const result = await cmd.output();
-  return result.success;
-}
+class FakeBackend implements ContainerCleanBackend {
+  containers = new Map<string, DockerContainerDetails>();
+  networks = new Map<string, DockerNetworkDetails>();
+  volumes = new Map<string, DockerVolumeDetails>();
+  stopped: string[] = [];
+  removedContainers: string[] = [];
+  removedNetworks: string[] = [];
+  removedVolumes: string[] = [];
 
-async function canRunDockerIntegration(): Promise<boolean> {
-  if (!await docker(["version"])) {
-    return false;
+  listContainerNames(): Promise<string[]> {
+    return Promise.resolve([...this.containers.keys()]);
   }
-  return await docker(["image", "inspect", TEST_IMAGE]) ||
-    await docker(["pull", "-q", TEST_IMAGE]);
-}
 
-async function ensureTestImage(): Promise<void> {
-  const success = await docker(["image", "inspect", TEST_IMAGE]) ||
-    await docker(["pull", "-q", TEST_IMAGE]);
-  if (!success) {
-    throw new Error(`Failed to ensure image ${TEST_IMAGE}`);
+  inspectContainer(name: string): Promise<DockerContainerDetails> {
+    return Promise.resolve(
+      structuredClone(this.mustGet(this.containers, name)),
+    );
+  }
+
+  listNetworkNames(): Promise<string[]> {
+    return Promise.resolve([...this.networks.keys()]);
+  }
+
+  inspectNetwork(name: string): Promise<DockerNetworkDetails> {
+    return Promise.resolve(structuredClone(this.mustGet(this.networks, name)));
+  }
+
+  listVolumeNames(): Promise<string[]> {
+    return Promise.resolve([...this.volumes.keys()]);
+  }
+
+  inspectVolume(name: string): Promise<DockerVolumeDetails> {
+    return Promise.resolve(structuredClone(this.mustGet(this.volumes, name)));
+  }
+
+  stopContainer(name: string): Promise<void> {
+    this.stopped.push(name);
+    const container = this.mustGet(this.containers, name);
+    container.running = false;
+    return Promise.resolve();
+  }
+
+  removeContainer(name: string): Promise<void> {
+    this.removedContainers.push(name);
+    this.containers.delete(name);
+    for (const network of this.networks.values()) {
+      network.containers = network.containers.filter((entry) => entry !== name);
+    }
+    for (const volume of this.volumes.values()) {
+      volume.containers = volume.containers.filter((entry) => entry !== name);
+    }
+    return Promise.resolve();
+  }
+
+  removeNetwork(name: string): Promise<void> {
+    this.removedNetworks.push(name);
+    this.networks.delete(name);
+    return Promise.resolve();
+  }
+
+  removeVolume(name: string): Promise<void> {
+    this.removedVolumes.push(name);
+    this.volumes.delete(name);
+    return Promise.resolve();
+  }
+
+  private mustGet<T>(map: Map<string, T>, name: string): T {
+    const value = map.get(name);
+    if (!value) {
+      throw new Error(`missing fake docker object: ${name}`);
+    }
+    return value;
   }
 }
 
-async function runSleepContainer(
+function createManagedContainer(
   name: string,
-  args: string[] = [],
-): Promise<void> {
-  const success = await docker([
-    "run",
-    "-d",
-    "--name",
+  kind: string,
+  options: { running?: boolean; networks?: string[] } = {},
+): DockerContainerDetails {
+  return {
     name,
-    ...args,
-    TEST_IMAGE,
-    "sleep",
-    "300",
-  ]);
-  if (!success) {
-    throw new Error(`Failed to start container ${name}`);
-  }
+    running: options.running ?? true,
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: kind,
+    },
+    networks: [...(options.networks ?? [])],
+  };
 }
 
-async function networkExists(name: string): Promise<boolean> {
-  return await docker(["network", "inspect", name]);
+function createManagedNetwork(
+  name: string,
+  kind: string,
+  containers: string[],
+): DockerNetworkDetails {
+  return {
+    name,
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: kind,
+    },
+    containers: [...containers],
+  };
 }
 
-async function volumeExists(name: string): Promise<boolean> {
-  return await docker(["volume", "inspect", name]);
-}
+Deno.test("cleanNasContainers: removes unused shared dind container, network, and tmp volume", async () => {
+  const backend = new FakeBackend();
+  backend.containers.set(
+    "nas-dind-shared",
+    createManagedContainer("nas-dind-shared", NAS_KIND_DIND, {
+      networks: ["nas-dind-shared"],
+    }),
+  );
+  backend.networks.set(
+    "nas-dind-shared",
+    createManagedNetwork("nas-dind-shared", NAS_KIND_DIND_NETWORK, [
+      "nas-dind-shared",
+    ]),
+  );
+  backend.volumes.set("nas-dind-shared-tmp", {
+    name: "nas-dind-shared-tmp",
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
+    },
+    containers: ["nas-dind-shared"],
+  });
 
-async function containerExists(name: string): Promise<boolean> {
-  return await docker(["container", "inspect", name]);
-}
+  const result = await cleanNasContainers(backend);
 
-async function cleanupNames(names: {
-  containers?: string[];
-  networks?: string[];
-  volumes?: string[];
-}): Promise<void> {
-  for (const name of names.containers ?? []) {
-    await docker(["stop", "--time", "0", name]).catch(() => {});
-    await docker(["rm", name]).catch(() => {});
-  }
-  for (const name of names.networks ?? []) {
-    await docker(["network", "rm", name]).catch(() => {});
-  }
-  for (const name of names.volumes ?? []) {
-    await docker(["volume", "rm", name]).catch(() => {});
-  }
-}
-
-Deno.test({
-  name:
-    "cleanNasContainers: removes unused shared dind container, network, and tmp volume",
-  ignore: !DOCKER_INTEGRATION_AVAILABLE,
-  async fn() {
-    const suffix = `${PREFIX}-dind`;
-    const containerName = `nas-dind-${suffix}`;
-    const networkName = containerName;
-    const volumeName = `nas-dind-tmp-${suffix}`;
-
-    await cleanupNames({
-      containers: [containerName],
-      networks: [networkName],
-      volumes: [volumeName],
-    });
-    await ensureTestImage();
-
-    try {
-      await docker(["volume", "create", volumeName]);
-      await docker(["network", "create", networkName]);
-      await runSleepContainer(containerName, [
-        "-v",
-        `${volumeName}:/tmp/nas-shared`,
-      ]);
-      await docker(["network", "connect", networkName, containerName]);
-
-      const result = await cleanNasContainers();
-
-      assertEquals(result.removedContainers.includes(containerName), true);
-      assertEquals(result.removedNetworks.includes(networkName), true);
-      assertEquals(result.removedVolumes.includes(volumeName), true);
-      assertEquals(await containerExists(containerName), false);
-      assertEquals(await networkExists(networkName), false);
-      assertEquals(await volumeExists(volumeName), false);
-    } finally {
-      await cleanupNames({
-        containers: [containerName],
-        networks: [networkName],
-        volumes: [volumeName],
-      });
-    }
-  },
+  assertEquals(result.removedContainers, ["nas-dind-shared"]);
+  assertEquals(result.removedNetworks, ["nas-dind-shared"]);
+  assertEquals(result.removedVolumes, ["nas-dind-shared-tmp"]);
+  assertEquals(backend.stopped, ["nas-dind-shared"]);
 });
 
-Deno.test({
-  name:
-    "cleanNasContainers: keeps sidecar when an active non-managed container shares the network",
-  ignore: !DOCKER_INTEGRATION_AVAILABLE,
-  async fn() {
-    const suffix = `${PREFIX}-keep`;
-    const sidecarName = `nas-proxy-${suffix}`;
-    const userName = `user-${suffix}`;
-    const networkName = sidecarName;
+Deno.test("cleanNasContainers: keeps sidecar when an active non-managed container shares the network", async () => {
+  const backend = new FakeBackend();
+  backend.containers.set(
+    "nas-proxy-sidecar",
+    createManagedContainer("nas-proxy-sidecar", NAS_KIND_ENVOY, {
+      networks: ["nas-session-example"],
+    }),
+  );
+  backend.containers.set("nas-sandbox", {
+    name: "nas-sandbox",
+    running: true,
+    labels: {},
+    networks: ["nas-session-example"],
+  });
+  backend.networks.set(
+    "nas-session-example",
+    createManagedNetwork("nas-session-example", NAS_KIND_SESSION_NETWORK, [
+      "nas-proxy-sidecar",
+      "nas-sandbox",
+    ]),
+  );
 
-    await cleanupNames({
-      containers: [sidecarName, userName],
-      networks: [networkName],
-    });
-    await ensureTestImage();
+  const result = await cleanNasContainers(backend);
 
-    try {
-      await docker(["network", "create", networkName]);
-      await runSleepContainer(sidecarName);
-      await runSleepContainer(userName);
-      await docker(["network", "connect", networkName, sidecarName]);
-      await docker(["network", "connect", networkName, userName]);
-
-      const result = await cleanNasContainers();
-
-      assertEquals(result.removedContainers.includes(sidecarName), false);
-      assertEquals(await containerExists(sidecarName), true);
-      assertEquals(await networkExists(networkName), true);
-    } finally {
-      await cleanupNames({
-        containers: [sidecarName, userName],
-        networks: [networkName],
-      });
-    }
-  },
+  assertEquals(result.removedContainers, []);
+  assertEquals(result.removedNetworks, []);
+  assertEquals(result.removedVolumes, []);
 });
 
-Deno.test({
-  name:
-    "cleanNasContainers: removes unused shared envoy container and session network",
-  ignore: !DOCKER_INTEGRATION_AVAILABLE,
-  async fn() {
-    const suffix = `${PREFIX}-envoy`;
-    const sidecarName = `nas-envoy-${suffix}`;
-    const networkName = `nas-session-${suffix}`;
+Deno.test("cleanNasContainers: removes stopped sidecar and orphaned managed resources", async () => {
+  const backend = new FakeBackend();
+  backend.containers.set(
+    "nas-envoy-shared",
+    createManagedContainer("nas-envoy-shared", NAS_KIND_ENVOY, {
+      running: false,
+      networks: ["nas-session-orphan"],
+    }),
+  );
+  backend.networks.set(
+    "nas-session-orphan",
+    createManagedNetwork("nas-session-orphan", NAS_KIND_SESSION_NETWORK, [
+      "nas-envoy-shared",
+    ]),
+  );
 
-    await cleanupNames({
-      containers: [sidecarName],
-      networks: [networkName],
-    });
-    await ensureTestImage();
+  const result = await cleanNasContainers(backend);
 
-    try {
-      await docker([
-        "network",
-        "create",
-        "--label",
-        `${NAS_MANAGED_LABEL}=${NAS_MANAGED_VALUE}`,
-        "--label",
-        `${NAS_KIND_LABEL}=${NAS_KIND_SESSION_NETWORK}`,
-        networkName,
-      ]);
-      await runSleepContainer(sidecarName, [
-        "--label",
-        `${NAS_MANAGED_LABEL}=${NAS_MANAGED_VALUE}`,
-        "--label",
-        `${NAS_KIND_LABEL}=${NAS_KIND_ENVOY}`,
-      ]);
-      await docker(["network", "connect", networkName, sidecarName]);
-
-      const result = await cleanNasContainers();
-
-      assertEquals(result.removedContainers.includes(sidecarName), true);
-      assertEquals(result.removedNetworks.includes(networkName), true);
-      assertEquals(await containerExists(sidecarName), false);
-      assertEquals(await networkExists(networkName), false);
-    } finally {
-      await cleanupNames({
-        containers: [sidecarName],
-        networks: [networkName],
-      });
-    }
-  },
+  assertEquals(result.removedContainers, ["nas-envoy-shared"]);
+  assertEquals(result.removedNetworks, ["nas-session-orphan"]);
+  assertEquals(result.removedVolumes, []);
+  assertEquals(backend.stopped, []);
 });
