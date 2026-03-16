@@ -1,0 +1,211 @@
+import * as path from "@std/path";
+import type {
+  HostExecPendingEntry,
+  HostExecSessionRegistryEntry,
+} from "./types.ts";
+
+export interface HostExecRuntimePaths {
+  runtimeDir: string;
+  sessionsDir: string;
+  pendingDir: string;
+  brokersDir: string;
+  wrappersDir: string;
+}
+
+export async function resolveHostExecRuntimePaths(
+  runtimeDir?: string,
+): Promise<HostExecRuntimePaths> {
+  const resolved = runtimeDir ?? defaultRuntimeDir();
+  const paths: HostExecRuntimePaths = {
+    runtimeDir: resolved,
+    sessionsDir: path.join(resolved, "sessions"),
+    pendingDir: path.join(resolved, "pending"),
+    brokersDir: path.join(resolved, "brokers"),
+    wrappersDir: path.join(resolved, "wrappers"),
+  };
+  await ensureDir(paths.runtimeDir, 0o755);
+  await ensureDir(paths.sessionsDir);
+  await ensureDir(paths.pendingDir);
+  await ensureDir(paths.brokersDir);
+  await ensureDir(paths.wrappersDir);
+  return paths;
+}
+
+export function hostExecBrokerSocketPath(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+): string {
+  return path.join(paths.brokersDir, `${sessionId}.sock`);
+}
+
+export function hostExecSessionRegistryPath(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+): string {
+  return path.join(paths.sessionsDir, `${sessionId}.json`);
+}
+
+export function hostExecPendingSessionDir(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+): string {
+  return path.join(paths.pendingDir, sessionId);
+}
+
+export function hostExecPendingRequestPath(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+  requestId: string,
+): string {
+  return path.join(
+    hostExecPendingSessionDir(paths, sessionId),
+    `${requestId}.json`,
+  );
+}
+
+export async function writeHostExecSessionRegistry(
+  paths: HostExecRuntimePaths,
+  entry: HostExecSessionRegistryEntry,
+): Promise<void> {
+  await atomicWriteJson(
+    hostExecSessionRegistryPath(paths, entry.sessionId),
+    entry,
+  );
+}
+
+export async function readHostExecSessionRegistry(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+): Promise<HostExecSessionRegistryEntry | null> {
+  return await readJsonFile<HostExecSessionRegistryEntry>(
+    hostExecSessionRegistryPath(paths, sessionId),
+  );
+}
+
+export async function listHostExecPendingEntries(
+  paths: HostExecRuntimePaths,
+  sessionId?: string,
+): Promise<HostExecPendingEntry[]> {
+  if (sessionId) {
+    return await readJsonDir<HostExecPendingEntry>(
+      hostExecPendingSessionDir(paths, sessionId),
+    );
+  }
+  const items: HostExecPendingEntry[] = [];
+  for await (const entry of Deno.readDir(paths.pendingDir)) {
+    if (!entry.isDirectory) continue;
+    items.push(
+      ...await readJsonDir<HostExecPendingEntry>(
+        path.join(paths.pendingDir, entry.name),
+      ),
+    );
+  }
+  return items.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export async function writeHostExecPendingEntry(
+  paths: HostExecRuntimePaths,
+  entry: HostExecPendingEntry,
+): Promise<void> {
+  await ensureDir(hostExecPendingSessionDir(paths, entry.sessionId));
+  await atomicWriteJson(
+    hostExecPendingRequestPath(paths, entry.sessionId, entry.requestId),
+    entry,
+  );
+}
+
+export async function removeHostExecPendingEntry(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+  requestId: string,
+): Promise<void> {
+  await safeRemove(hostExecPendingRequestPath(paths, sessionId, requestId));
+}
+
+export async function removeHostExecPendingDir(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+): Promise<void> {
+  await safeRemove(hostExecPendingSessionDir(paths, sessionId), {
+    recursive: true,
+  });
+}
+
+export async function removeHostExecSessionRegistry(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+): Promise<void> {
+  await safeRemove(hostExecSessionRegistryPath(paths, sessionId));
+}
+
+function defaultRuntimeDir(): string {
+  const xdg = Deno.env.get("XDG_RUNTIME_DIR");
+  if (xdg && xdg.trim() !== "") {
+    return path.join(xdg, "nas", "hostexec");
+  }
+  const uid = typeof Deno.uid === "function" ? Deno.uid() : "unknown";
+  return path.join("/tmp", `nas-${uid}`, "hostexec");
+}
+
+async function ensureDir(dirPath: string, mode = 0o700): Promise<void> {
+  await Deno.mkdir(dirPath, { recursive: true, mode });
+  await chmodIfSupported(dirPath, mode);
+}
+
+async function chmodIfSupported(path: string, mode: number): Promise<void> {
+  await Deno.chmod(path, mode).catch((error) => {
+    if (!(error instanceof Deno.errors.NotSupported)) throw error;
+  });
+}
+
+async function atomicWriteJson(
+  filePath: string,
+  value: unknown,
+): Promise<void> {
+  const dir = path.dirname(filePath);
+  await ensureDir(dir);
+  const tempPath = path.join(
+    dir,
+    `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
+  );
+  await Deno.writeTextFile(tempPath, JSON.stringify(value, null, 2) + "\n", {
+    create: true,
+    mode: 0o600,
+  });
+  await Deno.rename(tempPath, filePath);
+}
+
+async function readJsonFile<T>(filePath: string): Promise<T | null> {
+  try {
+    return JSON.parse(await Deno.readTextFile(filePath)) as T;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return null;
+    throw error;
+  }
+}
+
+async function readJsonDir<T>(dirPath: string): Promise<T[]> {
+  try {
+    const entries: T[] = [];
+    for await (const entry of Deno.readDir(dirPath)) {
+      if (!entry.isFile) continue;
+      const value = await readJsonFile<T>(path.join(dirPath, entry.name));
+      if (value) entries.push(value);
+    }
+    return entries;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+}
+
+async function safeRemove(
+  path: string,
+  options?: { recursive?: boolean },
+): Promise<void> {
+  try {
+    await Deno.remove(path, options);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
+}
