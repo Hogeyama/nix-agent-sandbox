@@ -7,6 +7,16 @@
 
 import { assertEquals } from "@std/assert";
 import * as path from "@std/path";
+import {
+  HostExecBroker,
+  sendHostExecBrokerRequest,
+} from "../src/hostexec/broker.ts";
+import {
+  hostExecBrokerSocketPath,
+  resolveHostExecRuntimePaths,
+  writeHostExecSessionRegistry,
+} from "../src/hostexec/registry.ts";
+import type { PendingListResponse } from "../src/hostexec/types.ts";
 
 const MAIN_TS = path.join(
   path.dirname(path.fromFileUrl(import.meta.url)),
@@ -488,3 +498,94 @@ Deno.test("CLI: help includes example commands", async () => {
   assertEquals(result.stdout.includes('nas copilot-nix -p "list files"'), true);
   assertEquals(result.stdout.includes('nas -- -p "list files"'), true);
 });
+
+Deno.test("CLI: hostexec pending lists queued approvals", async () => {
+  const runtimeRoot = await Deno.makeTempDir({ prefix: "nas-cli-hostexec-" });
+  const runtimeDir = `${runtimeRoot}/nas/hostexec`;
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-cli-hostexec-work-",
+  });
+  const oldToken = Deno.env.get("HOSTEXEC_CLI_TOKEN");
+  Deno.env.set("HOSTEXEC_CLI_TOKEN", "cli-secret");
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_cli",
+    profileName: "test",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: {
+      prompt: { enable: true, timeoutSeconds: 30, defaultScope: "capability" },
+      rules: [{
+        id: "deno-eval",
+        match: { argv0: "deno", subcommands: ["eval"] },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: { TOKEN: "secret:cli_token" },
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "prompt",
+        fallback: "container",
+      }],
+    },
+    secrets: {
+      cli_token: { from: "env:HOSTEXEC_CLI_TOKEN", required: true },
+    },
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_cli");
+  await broker.start(socketPath);
+  await writeHostExecSessionRegistry(paths, {
+    version: 1,
+    sessionId: "sess_cli",
+    brokerSocket: socketPath,
+    profileName: "test",
+    createdAt: new Date().toISOString(),
+    pid: Deno.pid,
+  });
+  try {
+    const execPromise = sendHostExecBrokerRequest(socketPath, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_cli",
+      requestId: "req_cli",
+      argv0: "deno",
+      args: ["eval", "console.log(Deno.env.get('TOKEN'))"],
+      cwd: workspace,
+      tty: false,
+    });
+    await waitForHostExecPending(paths, 1);
+    const result = await runNas([
+      "hostexec",
+      "pending",
+      "--runtime-dir",
+      runtimeDir,
+    ]);
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout.includes("sess_cli req_cli deno-eval"), true);
+    await sendHostExecBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_cli",
+    });
+    await execPromise;
+  } finally {
+    if (oldToken !== undefined) Deno.env.set("HOSTEXEC_CLI_TOKEN", oldToken);
+    else Deno.env.delete("HOSTEXEC_CLI_TOKEN");
+    await broker.close().catch(() => {});
+    await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
+async function waitForHostExecPending(
+  paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
+  count: number,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const items = await sendHostExecBrokerRequest<PendingListResponse>(
+      hostExecBrokerSocketPath(paths, "sess_cli"),
+      { type: "list_pending" },
+    );
+    if (items.type === "pending" && items.items.length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Timed out waiting for hostexec pending entry");
+}

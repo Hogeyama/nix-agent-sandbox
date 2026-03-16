@@ -104,6 +104,19 @@ nas network gc
 - approve / deny は DBus デスクトップ通知のデフォルトアクション / dissmissからも呼び出されます。approveのscopeはhost-portになります。
 - `gc` は stale session registry / pending dir / broker socket / auth-router pid/socket を掃除します
 
+### HostExec 承認キューの確認と操作
+
+`hostexec` を設定すると、コンテナ内の wrapper から host 側 broker にコマンド実行を委譲できます。`approval: prompt` のルールは session ごとの承認キューに入り、`nas hostexec` から確認・承認・拒否できます。
+
+```sh
+nas hostexec pending
+nas hostexec approve <session-id> <request-id>
+nas hostexec deny <session-id> <request-id>
+```
+
+- `pending` は `session_id request_id rule_id cwd argv...` を 1 行ずつ表示します
+- approve / deny は DBus デスクトップ通知のデフォルトアクション / dissmissからも呼び出されます。
+
 ### エージェントに引数を渡す
 
 プロフィール名の後ろには `--` なしでエージェント固有の引数を渡せます。デフォルトプロファイルを使う場合や明示的に区切りたい場合は、`--` も使えます。
@@ -209,6 +222,47 @@ profiles:
         val: value
       - key_cmd: "cat /path/to/key"
         val_cmd: "cat /path/to/value"
+    secrets:                # コンテナへ直接渡さない host 側 secret
+      github_token:
+        from: env:GITHUB_TOKEN      # env: / file: / dotenv: / keyring:
+        required: true
+    hostexec:
+      prompt:
+        enable: true
+        timeout-seconds: 300
+        default-scope: capability
+      rules:
+        - id: git-readonly
+          match:
+            argv0: git
+            subcommands: [pull, fetch]
+          cwd:
+            mode: workspace-or-session-tmp
+          env:
+            GITHUB_TOKEN: secret:github_token
+          inherit-env:
+            mode: minimal
+            keys: [SSH_AUTH_SOCK]
+          approval: prompt        # allow | prompt | deny
+          fallback: container     # container | deny
+        - id: git-log
+          match:
+            argv0: git
+            subcommands: [log]
+          cwd:
+            mode: workspace-or-session-tmp
+          approval: allow
+          fallback: container
+        - id: gh-pr
+          match:
+            argv0: gh
+            subcommands: [pr, api]
+          cwd:
+            mode: workspace-or-session-tmp
+          env:
+            GITHUB_TOKEN: secret:github_token
+          approval: prompt
+          fallback: container
 
   claude-nix:
     agent: claude
@@ -247,6 +301,21 @@ profiles:
 | `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |
 | `extra-mounts` | list | `[]` | 追加マウント。`[{ src, dst, mode? }]`（`mode` は `"ro"`/`"rw"`、省略時 `"ro"`） |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
+| `secrets.<name>.from` | string | （必須） | secret の取得元。`env:VAR_NAME` / `file:/absolute/path` / `dotenv:/absolute/path#KEY` / `keyring:service/account` |
+| `secrets.<name>.required` | bool | `true` | secret が取得できない場合にエラーにするか |
+| `hostexec.prompt.enable` | bool | `true` | `approval: prompt` の hostexec 実行を承認キューに入れる |
+| `hostexec.prompt.timeout-seconds` | number | `300` | hostexec 承認の待機秒数。タイムアウト時は deny |
+| `hostexec.prompt.default-scope` | `"capability"` | `"capability"` | hostexec 承認再利用の単位 |
+| `hostexec.rules[].id` | string | （必須） | 監査・承認 fingerprint に使う安定 ID |
+| `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名 |
+| `hostexec.rules[].match.subcommands` | string[] | 省略可 | ツール別正規化後にマッチするサブコマンド。省略時はその `argv0` に対する任意のサブコマンドにマッチ。空配列 `[]` は不可 |
+| `hostexec.rules[].cwd.mode` | enum | `"workspace-or-session-tmp"` | `workspace-only` / `workspace-or-session-tmp` / `allowlist` / `any` |
+| `hostexec.rules[].cwd.allow` | string[] | `[]` | `cwd.mode: allowlist` 用。絶対パスまたは `workspace:` / `session_tmp:` プレフィクス |
+| `hostexec.rules[].env` | object | `{}` | `ENV_NAME: secret:<name>` 形式で host 実行時だけ secret を注入 |
+| `hostexec.rules[].inherit-env.mode` | enum | `"minimal"` | `minimal` / `unsafe-inherit-all` |
+| `hostexec.rules[].inherit-env.keys` | string[] | `[]` | `minimal` に追加で継承する host 環境変数 |
+| `hostexec.rules[].approval` | enum | `"prompt"` | `allow` / `prompt` / `deny` |
+| `hostexec.rules[].fallback` | enum | `"container"` | ルール不一致や不許可時にコンテナ実行へ戻すか即拒否するか |
 
 `extra-mounts` の `src` が存在しない場合、そのエントリは警告を出してスキップされます。
 
@@ -257,6 +326,44 @@ profiles:
 - **ベースイメージ**: `ubuntu:24.04`
 - **プリインストール**: git, curl, bash, ca-certificates, docker CLI, docker compose plugin, gh, ripgrep, fd, Python 3（`python`/`python3`）, Node.js, Google Cloud CLI（`gcloud`）, AWS CLI v2（`aws`）
 - **エージェントバイナリ**: ホストからバインドマウント（Claude Code は `~/.local/bin/`、Copilot/Codex は `/usr/local/bin/` に配置）
+
+### HostExec / Secret Broker
+
+`hostexec` は、secret をコンテナへ直接見せずに host 側 broker が保持し、許可済みコマンドだけ host で実行する仕組みです。
+
+```
+agent container
+├── wrapper (git / gh / ...)
+├── UDS: hostexec broker socket
+└── pending approval via `nas hostexec`
+
+host
+├── SecretStore (env / file / dotenv / keyring)
+└── HostExecBroker
+```
+
+- broker は host 側で UDS (Unix Domain Socket) を listen し、そのソケットをコンテナへ bind mount します
+- コンテナには secret 値を環境変数として渡さず、broker が host 実行時だけ注入します
+- 未一致ルールは `fallback: container` ならコンテナ内の実バイナリへ戻ります
+- `subcommands` は `git -C /path log` のような前置オプションを正規化して判定します
+- `subcommands` を省略すると、その `argv0` に対する任意のサブコマンドにマッチします
+- `approval: prompt` の再利用は capability fingerprint 単位で、より強い secret や広い env 継承へ化けないようにしています
+
+例:
+
+```sh
+# argv0: git / subcommands: [log] にマッチ
+git -C /path/to/repo log --oneline
+
+# argv0: gh / subcommands: [pr] にマッチ
+gh pr list
+
+# argv0: gh / subcommands: [api] にマッチ
+gh api repos/owner/repo/pulls
+```
+
+- `git -C /path/to/repo log` は `-C` を前置オプションとして飛ばした上で `log` をサブコマンドとして判定します
+- `gh pr list` は `pr` にマッチし、`gh api ...` は `api` にマッチします
 
 ### Nix 統合（`nix.enable: true` 時）
 
@@ -301,6 +408,14 @@ session network
 | `aws.mount-config: true` | AWS の認証情報（`~/.aws`）がコンテナに公開される |
 | `gpg.forward-agent: true` | ホストの GPG 署名鍵がコンテナから利用可能になる |
 | `extra-mounts` | 指定したホストディレクトリがコンテナにマウントされる（`mode: rw` の場合は書き込みも可能） |
+| `hostexec.rules[].inherit-env.mode: unsafe-inherit-all` | host の環境変数が広く継承されるため、secret 漏えい面が大きくなる |
+
+### HostExec の注意点
+
+- `hostexec` は「任意コマンドを host 実行できる機能」ではなく、構造化ルールで限定委譲する仕組みです
+- `bash -lc` / `sh -c` / `python -c` のような任意コード実行に繋がるルールは設定者の責任で避けてください
+- `unsafe-inherit-all` は互換性用の escape hatch であり、通常は `minimal` + `inherit-env.keys` を推奨します
+- agent 設定ディレクトリ（例: `~/.codex` / `~/.copilot`）の mount は引き続き別の認証面として残ります
 
 ### 常にマウントされるもの
 
@@ -339,4 +454,3 @@ session network
 
 - ホストに nix がインストールされ、nix-daemon が動作している必要があります。
 - ホストの `/nix` ディレクトリ全体がコンテナにマウントされます。
-

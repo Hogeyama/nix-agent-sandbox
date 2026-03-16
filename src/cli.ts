@@ -10,6 +10,7 @@ import { WorktreeStage } from "./stages/worktree.ts";
 import { cleanNasWorktrees, listNasWorktrees } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { MountStage } from "./stages/mount.ts";
+import { HostExecStage } from "./stages/hostexec.ts";
 import { DindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
@@ -24,6 +25,12 @@ import {
   resolveNetworkRuntimePaths,
 } from "./network/registry.ts";
 import type { ApprovalScope } from "./network/protocol.ts";
+import { sendHostExecBrokerRequest } from "./hostexec/broker.ts";
+import {
+  listHostExecPendingEntries,
+  readHostExecSessionRegistry,
+  resolveHostExecRuntimePaths,
+} from "./hostexec/registry.ts";
 
 const VERSION = "0.1.0";
 
@@ -52,7 +59,8 @@ export async function main(args: string[]): Promise<void> {
 
   if (
     subcommand === "rebuild" || subcommand === "worktree" ||
-    subcommand === "container" || subcommand === "network"
+    subcommand === "container" || subcommand === "network" ||
+    subcommand === "hostexec"
   ) {
     if (
       argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
@@ -95,6 +103,13 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
 
+  if (subcommand === "hostexec") {
+    await runHostExecCommand(
+      argsBeforeDashDash.filter((a) => a !== "hostexec"),
+    );
+    return;
+  }
+
   const {
     profileName,
     profileIndex,
@@ -128,6 +143,7 @@ export async function main(args: string[]): Promise<void> {
       new DockerBuildStage(),
       new NixDetectStage(),
       new MountStage(),
+      new HostExecStage(),
       new DindStage(),
       new ProxyStage(),
       new LaunchStage(agentExtraArgs),
@@ -238,12 +254,12 @@ async function runContainerCommand(
         parts.push(`${result.removedVolumes.length} volume(s)`);
       }
       if (parts.length === 0) {
-        console.log("[nas] No unused nas containers found.");
+        console.log("[nas] No unused nas sidecars found.");
         return;
       }
       console.log(`[nas] Removed ${parts.join(", ")}.`);
       if (result.removedContainers.length > 0) {
-        console.log(`[nas] Containers: ${result.removedContainers.join(", ")}`);
+        console.log(`[nas] Sidecars: ${result.removedContainers.join(", ")}`);
       }
       if (result.removedNetworks.length > 0) {
         console.log(`[nas] Networks: ${result.removedNetworks.join(", ")}`);
@@ -334,6 +350,64 @@ async function runNetworkCommand(
     console.error(
       "  Usage: nas network [pending|approve|deny|gc] [--scope ...]",
     );
+    Deno.exit(1);
+  } catch (err) {
+    console.error(`[nas] Error: ${(err as Error).message}`);
+    Deno.exit(1);
+  }
+}
+
+async function runHostExecCommand(
+  nasArgs: string[],
+): Promise<void> {
+  const sub = nasArgs.find((arg) => !arg.startsWith("-"));
+  const runtimeDir = getFlagValue(nasArgs, "--runtime-dir");
+
+  try {
+    const paths = await resolveHostExecRuntimePaths(runtimeDir ?? undefined);
+    if (sub === "pending" || sub === undefined) {
+      const items = await listHostExecPendingEntries(paths);
+      if (items.length === 0) {
+        console.log("[nas] No pending hostexec approvals.");
+        return;
+      }
+      for (const item of items) {
+        const argv = [item.argv0, ...item.args].join(" ");
+        console.log(
+          `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}`,
+        );
+      }
+      return;
+    }
+
+    if (sub === "approve") {
+      const [sessionId, requestId] = positionalArgsAfterSubcommand(
+        nasArgs,
+        sub,
+      );
+      await sendHostExecDecision(paths, sessionId, requestId, {
+        type: "approve",
+        requestId,
+      });
+      console.log(`[nas] Approved ${sessionId} ${requestId}`);
+      return;
+    }
+
+    if (sub === "deny") {
+      const [sessionId, requestId] = positionalArgsAfterSubcommand(
+        nasArgs,
+        sub,
+      );
+      await sendHostExecDecision(paths, sessionId, requestId, {
+        type: "deny",
+        requestId,
+      });
+      console.log(`[nas] Denied ${sessionId} ${requestId}`);
+      return;
+    }
+
+    console.error(`[nas] Unknown hostexec subcommand: ${sub}`);
+    console.error("  Usage: nas hostexec [pending|approve|deny]");
     Deno.exit(1);
   } catch (err) {
     console.error(`[nas] Error: ${(err as Error).message}`);
@@ -439,6 +513,7 @@ Subcommands:
   worktree  git worktree の管理
   container sidecar container の管理
   network   network 承認キューと runtime の管理
+  hostexec  hostexec 承認キューの管理
 
 Options:
   -h, --help      Show this help
@@ -469,6 +544,11 @@ Network options:
   deny            拒否する
   gc              stale runtime state を掃除する
 
+HostExec options:
+  pending         保留中の hostexec 承認要求を表示
+  approve         承認する
+  deny            拒否する
+
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
@@ -482,6 +562,7 @@ Examples:
   nas container clean                    # Remove unused nas sidecars
   nas network pending                    # Show pending approvals
   nas network approve <session> <request> --scope host-port
+  nas hostexec pending                   # Show pending hostexec approvals
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
   nas worktree clean -f -B              # Force remove worktrees and branches
@@ -500,6 +581,22 @@ Profile agent-args (in .agent-sandbox.yml):
         - "--model"
         - "gpt-5-codex"
 `);
+}
+
+async function sendHostExecDecision(
+  paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
+  sessionId: string,
+  _requestId: string,
+  message: { type: "approve"; requestId: string } | {
+    type: "deny";
+    requestId: string;
+  },
+): Promise<void> {
+  const session = await readHostExecSessionRegistry(paths, sessionId);
+  if (!session) {
+    throw new Error(`Session not found: ${sessionId}`);
+  }
+  await sendHostExecBrokerRequest(session.brokerSocket, message);
 }
 
 export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
