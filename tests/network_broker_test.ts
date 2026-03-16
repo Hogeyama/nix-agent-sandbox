@@ -1,9 +1,9 @@
 import { assertEquals } from "@std/assert";
 import { sendBrokerRequest, SessionBroker } from "../src/network/broker.ts";
-import {
-  type AuthorizeRequest,
-  type DecisionResponse,
-  type PendingEntry,
+import type {
+  AuthorizeRequest,
+  DecisionResponse,
+  PendingEntry,
 } from "../src/network/protocol.ts";
 import { resolveNetworkRuntimePaths } from "../src/network/registry.ts";
 

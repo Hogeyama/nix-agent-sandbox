@@ -14,6 +14,21 @@ const MAIN_TS = path.join(
   "main.ts",
 );
 
+async function isDockerDaemonAvailable(): Promise<boolean> {
+  try {
+    const output = await new Deno.Command("docker", {
+      args: ["info"],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+    return output.success;
+  } catch {
+    return false;
+  }
+}
+
+const dockerDaemonAvailable = await isDockerDaemonAvailable();
+
 /** nas CLI をサブプロセスとして実行するヘルパー */
 async function runNas(
   args: string[],
@@ -241,21 +256,27 @@ Deno.test("CLI: worktree clean --force on empty repo", async () => {
   }
 });
 
-Deno.test("CLI: container clean succeeds when no unused sidecars exist", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-container-clean-" });
-  try {
-    const first = await runNas(["container", "clean"], { cwd: tmpDir });
-    assertEquals(first.code, 0);
+Deno.test({
+  name: "CLI: container clean succeeds when no unused sidecars exist",
+  ignore: !dockerDaemonAvailable,
+  async fn() {
+    const tmpDir = await Deno.makeTempDir({
+      prefix: "clitest-container-clean-",
+    });
+    try {
+      const first = await runNas(["container", "clean"], { cwd: tmpDir });
+      assertEquals(first.code, 0);
 
-    const result = await runNas(["container", "clean"], { cwd: tmpDir });
-    assertEquals(result.code, 0);
-    assertEquals(
-      result.stdout.includes("No unused nas containers found"),
-      true,
-    );
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+      const result = await runNas(["container", "clean"], { cwd: tmpDir });
+      assertEquals(result.code, 0);
+      assertEquals(
+        result.stdout.includes("No unused nas containers found"),
+        true,
+      );
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
 });
 
 Deno.test("CLI: container with unknown subcommand exits with error", async () => {

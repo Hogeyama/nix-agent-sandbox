@@ -507,7 +507,7 @@ export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
 async function sendDecision(
   paths: Awaited<ReturnType<typeof resolveNetworkRuntimePaths>>,
   sessionId: string,
-  requestId: string,
+  _requestId: string,
   message: { type: "approve"; requestId: string; scope?: ApprovalScope } | {
     type: "deny";
     requestId: string;
