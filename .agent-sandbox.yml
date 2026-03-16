@@ -20,9 +20,13 @@ _common_network: &common_network
       - api.anthropic.com
       - statsig.anthropic.com
       - platform.claude.com
+      - storage.googleapis.com
+      - mcp-proxy.anthropic.com
+      - http-intake.logs.us5.datadoghq.com
       - code.claude.com
       - claude.ai
       - api.openai.com
+      - ab.chatgpt.com
       - chatgpt.com
       - "*.api.openai.com"
       - github.com
@@ -61,11 +65,17 @@ _common_network: &common_network
       - registry.npmjs.org
       - jsr.io
       - deno.land
+    prompt:
+      enable: true
 
 _common_env: &common_env
   env:
     - key: GITHUB_TOKEN
       val_cmd: gh auth token
+    - key: TZ
+      val: Asia/Tokyo
+    - key: LANG
+      val: en_US.UTF-8
 
 profiles:
   claude:
@@ -77,6 +87,11 @@ profiles:
       - "Edit"
       - --disallowedTools
       - "Bash(git push *)"
+    extra-mounts:
+      - # gitignoreが居る
+        src: ~/nix-config
+        dst: ~/nix-config
+        mode: ro
     <<: [*common_infra, *common_network, *common_env]
 
   codex:
@@ -86,7 +101,6 @@ profiles:
       - never
       - --sandbox
       - danger-full-access
-    <<: [*common_infra, *common_network, *common_env]
     extra-mounts:
       - # gitignoreが居る
         src: ~/nix-config
@@ -96,6 +110,7 @@ profiles:
         # だけど権限強すぎるよなあ
         src: /run/user/1000/bus
         dst: /run/user/1000/bus
+    <<: [*common_infra, *common_network, *common_env]
 
   copilot:
     agent: copilot
@@ -104,4 +119,9 @@ profiles:
       - --allow-tool=shell
       - --allow-tool=write
       - --deny-tool=shell(git push)
+    extra-mounts:
+      - # gitignoreが居る
+        src: ~/nix-config
+        dst: ~/nix-config
+        mode: ro
     <<: [*common_infra, *common_network, *common_env]
