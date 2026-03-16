@@ -253,6 +253,8 @@ export class SessionBroker {
     await writePendingEntry(this.paths, toPendingEntry(message, createdAt));
     void notifyPendingRequest({
       backend: this.notify,
+      brokerSocket: this.socketPath ??
+        brokerSocketPath(this.paths, this.sessionId),
       sessionId: this.sessionId,
       requestId: message.requestId,
       target: group.target,
