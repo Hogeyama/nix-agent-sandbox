@@ -303,12 +303,55 @@ Deno.test("MountStage: extra-mount to workspace dir conflicts", async () => {
   );
 });
 
+Deno.test("MountStage: extra-mount file under workspace dir is allowed", async () => {
+  const workDir = Deno.cwd();
+  const profile = makeProfile({
+    extraMounts: [{ src: "/dev/null", dst: `${workDir}/.env`, mode: "ro" }],
+  });
+  const ctx = createContext(baseConfig, profile, "test", workDir);
+  const result = await new MountStage().execute(ctx);
+  assertEquals(
+    result.dockerArgs.includes(`/dev/null:${workDir}/.env:ro`),
+    true,
+  );
+});
+
+Deno.test("MountStage: extra-mount directory under workspace dir still conflicts with nested file mount", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-nested-dir-" });
+  const workDir = Deno.cwd();
+  try {
+    const profile = makeProfile({
+      extraMounts: [{ src: tmpDir, dst: `${workDir}/.config`, mode: "ro" }],
+    });
+    const ctx = createContext(baseConfig, profile, "test", workDir);
+    await assertRejects(
+      () => new MountStage().execute(ctx),
+      Error,
+      "conflicts with existing mount destination",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
 Deno.test("MountStage: extra-mount duplicate dst conflicts", async () => {
   const profile = makeProfile({
     extraMounts: [
       { src: Deno.cwd(), dst: "/mnt/dup", mode: "ro" },
       { src: Deno.cwd(), dst: "/mnt/dup", mode: "rw" },
     ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  await assertRejects(
+    () => new MountStage().execute(ctx),
+    Error,
+    "conflicts with existing mount destination",
+  );
+});
+
+Deno.test("MountStage: extra-mount under reserved /nix conflicts", async () => {
+  const profile = makeProfile({
+    extraMounts: [{ src: "/dev/null", dst: "/nix/.env", mode: "ro" }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   await assertRejects(

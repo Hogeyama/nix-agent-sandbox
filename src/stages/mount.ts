@@ -11,9 +11,15 @@ import { configureCodex } from "../agents/codex.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_CONTAINER_USER = "nas";
-const RESERVED_EXTRA_MOUNT_DESTINATIONS = new Set([
-  "/nix",
-]);
+const RESERVED_EXTRA_MOUNT_DESTINATIONS = ["/nix"] as const;
+
+type MountDestinationKind = "file" | "directory";
+
+interface RegisteredMountDestination {
+  path: string;
+  kind: MountDestinationKind;
+  allowNestedFiles: boolean;
+}
 
 export class MountStage implements Stage {
   name = "MountStage";
@@ -35,10 +41,18 @@ export class MountStage implements Stage {
     args.push("-v", `${mountSource}:${mountSource}`);
     args.push("-w", containerWorkDir);
     envVars["WORKSPACE"] = containerWorkDir;
-    const extraMountDestinations = new Set<string>([
-      ...RESERVED_EXTRA_MOUNT_DESTINATIONS,
-      path.normalize(mountSource),
-    ]);
+    const extraMountDestinations: RegisteredMountDestination[] = [
+      ...RESERVED_EXTRA_MOUNT_DESTINATIONS.map((reservedPath) => ({
+        path: path.normalize(reservedPath),
+        kind: "directory" as const,
+        allowNestedFiles: false,
+      })),
+      {
+        path: path.normalize(mountSource),
+        kind: "directory",
+        allowNestedFiles: true,
+      },
+    ];
 
     // ホストユーザーの UID/GID をコンテナに渡す (entrypoint で非 root ユーザー作成に使用)
     const uid = Deno.uid();
@@ -169,6 +183,7 @@ export class MountStage implements Stage {
         );
         continue;
       }
+      const srcInfo = await Deno.stat(normalizedSrc);
 
       const dst = expandContainerPath(extraMount.dst, containerHome);
       if (!path.isAbsolute(dst)) {
@@ -177,12 +192,21 @@ export class MountStage implements Stage {
         );
       }
       const normalizedDst = path.normalize(dst);
-      if (extraMountDestinations.has(normalizedDst)) {
+      const conflict = findConflictingMountDestination(
+        extraMountDestinations,
+        normalizedDst,
+        srcInfo.isDirectory ? "directory" : "file",
+      );
+      if (conflict) {
         throw new Error(
           `[nas] profile.extra-mounts[${index}].dst conflicts with existing mount destination: ${normalizedDst}`,
         );
       }
-      extraMountDestinations.add(normalizedDst);
+      extraMountDestinations.push({
+        path: normalizedDst,
+        kind: srcInfo.isDirectory ? "directory" : "file",
+        allowNestedFiles: false,
+      });
 
       const modeSuffix = extraMount.mode === "ro" ? ":ro" : "";
       args.push("-v", `${normalizedSrc}:${normalizedDst}${modeSuffix}`);
@@ -346,6 +370,33 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function findConflictingMountDestination(
+  existingDestinations: RegisteredMountDestination[],
+  candidatePath: string,
+  candidateKind: MountDestinationKind,
+): RegisteredMountDestination | null {
+  for (const existing of existingDestinations) {
+    if (existing.path === candidatePath) {
+      return existing;
+    }
+    if (isParentPath(existing.path, candidatePath)) {
+      if (!(existing.allowNestedFiles && candidateKind === "file")) {
+        return existing;
+      }
+    }
+    if (isParentPath(candidatePath, existing.path)) {
+      return existing;
+    }
+  }
+  return null;
+}
+
+function isParentPath(parentPath: string, childPath: string): boolean {
+  const relative = path.relative(parentPath, childPath);
+  return relative !== "" && relative !== "." && !relative.startsWith("..") &&
+    !path.isAbsolute(relative);
 }
 
 export function serializeNixExtraPackages(packages: string[]): string | null {
