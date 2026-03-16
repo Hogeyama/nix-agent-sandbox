@@ -9,17 +9,31 @@ import type {
   EnvKeySpec,
   EnvValSpec,
   ExtraMountConfig,
+  HostExecApproval,
+  HostExecConfig,
+  HostExecCwdConfig,
+  HostExecCwdMode,
+  HostExecFallback,
+  HostExecInheritEnvConfig,
+  HostExecInheritEnvMode,
+  HostExecPromptConfig,
+  HostExecRule,
   NetworkPromptConfig,
   NetworkPromptNotify,
   Profile,
   RawConfig,
   RawProfile,
+  SecretConfig,
 } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
+  DEFAULT_HOSTEXEC_CONFIG,
+  DEFAULT_HOSTEXEC_CWD_CONFIG,
+  DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
+  DEFAULT_HOSTEXEC_PROMPT_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
@@ -33,6 +47,22 @@ const VALID_PROMPT_NOTIFIES: NetworkPromptNotify[] = [
   "tmux",
   "desktop",
   "off",
+];
+const VALID_HOSTEXEC_APPROVALS: HostExecApproval[] = [
+  "allow",
+  "prompt",
+  "deny",
+];
+const VALID_HOSTEXEC_FALLBACKS: HostExecFallback[] = ["container", "deny"];
+const VALID_HOSTEXEC_CWD_MODES: HostExecCwdMode[] = [
+  "workspace-only",
+  "workspace-or-session-tmp",
+  "allowlist",
+  "any",
+];
+const VALID_HOSTEXEC_INHERIT_ENV_MODES: HostExecInheritEnvMode[] = [
+  "minimal",
+  "unsafe-inherit-all",
 ];
 
 export class ConfigValidationError extends Error {
@@ -106,6 +136,8 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     network,
     extraMounts: validateExtraMounts(name, raw["extra-mounts"]),
     env: validateEnv(name, raw.env),
+    secrets: validateSecrets(name, raw.secrets),
+    hostexec: validateHostExec(name, raw.hostexec, raw.secrets),
   };
 }
 
@@ -318,4 +350,287 @@ function validateNetworkPrompt(
     defaultScope,
     notify,
   };
+}
+
+function validateSecrets(
+  profileName: string,
+  rawSecrets: RawProfile["secrets"],
+): Record<string, SecretConfig> {
+  if (!rawSecrets) return {};
+  if (typeof rawSecrets !== "object" || Array.isArray(rawSecrets)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": secrets must be an object`,
+    );
+  }
+
+  const result: Record<string, SecretConfig> = {};
+  for (const [name, entry] of Object.entries(rawSecrets)) {
+    const prefix = `profile "${profileName}": secrets.${name}`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ConfigValidationError(`${prefix} must be an object`);
+    }
+    if (typeof entry.from !== "string" || entry.from.trim() === "") {
+      throw new ConfigValidationError(
+        `${prefix}.from must be a non-empty string`,
+      );
+    }
+    if (!isValidSecretSource(entry.from)) {
+      throw new ConfigValidationError(
+        `${prefix}.from must start with env:, file:, dotenv:, or keyring:`,
+      );
+    }
+    result[name] = {
+      from: entry.from,
+      required: entry.required ?? true,
+    };
+  }
+  return result;
+}
+
+function validateHostExec(
+  profileName: string,
+  raw: RawProfile["hostexec"],
+  rawSecrets: RawProfile["secrets"],
+): HostExecConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec must be an object`,
+    );
+  }
+
+  return {
+    prompt: validateHostExecPrompt(profileName, raw?.prompt),
+    rules: validateHostExecRules(profileName, raw?.rules, rawSecrets),
+  };
+}
+
+function validateHostExecPrompt(
+  profileName: string,
+  raw?: NonNullable<NonNullable<RawProfile["hostexec"]>["prompt"]>,
+): HostExecPromptConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec.prompt must be an object`,
+    );
+  }
+  const timeoutSeconds = raw?.["timeout-seconds"] ??
+    DEFAULT_HOSTEXEC_PROMPT_CONFIG.timeoutSeconds;
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec.prompt.timeout-seconds must be a positive integer`,
+    );
+  }
+  const defaultScope = raw?.["default-scope"] ??
+    DEFAULT_HOSTEXEC_PROMPT_CONFIG.defaultScope;
+  if (defaultScope !== "capability") {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec.prompt.default-scope must be "capability"`,
+    );
+  }
+  return {
+    enable: raw?.enable ?? DEFAULT_HOSTEXEC_CONFIG.prompt.enable,
+    timeoutSeconds,
+    defaultScope,
+  };
+}
+
+function validateHostExecRules(
+  profileName: string,
+  rawRules: NonNullable<RawProfile["hostexec"]>["rules"] | undefined,
+  rawSecrets: RawProfile["secrets"],
+): HostExecRule[] {
+  if (!rawRules) return [];
+  if (!Array.isArray(rawRules)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": hostexec.rules must be a list`,
+    );
+  }
+
+  const secretNames = new Set(Object.keys(rawSecrets ?? {}));
+  return rawRules.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": hostexec.rules[${index}] must be an object`,
+      );
+    }
+    const prefix = `profile "${profileName}": hostexec.rules[${index}]`;
+    if (typeof entry.id !== "string" || entry.id.trim() === "") {
+      throw new ConfigValidationError(
+        `${prefix}.id must be a non-empty string`,
+      );
+    }
+    const match = entry.match;
+    if (!match || typeof match !== "object") {
+      throw new ConfigValidationError(`${prefix}.match must be an object`);
+    }
+    if (typeof match.argv0 !== "string" || match.argv0.trim() === "") {
+      throw new ConfigValidationError(
+        `${prefix}.match.argv0 must be a non-empty string`,
+      );
+    }
+    if (match.subcommands !== undefined) {
+      if (
+        !Array.isArray(match.subcommands) ||
+        match.subcommands.length === 0 ||
+        match.subcommands.some((value) =>
+          typeof value !== "string" || value.trim() === ""
+        )
+      ) {
+        throw new ConfigValidationError(
+          `${prefix}.match.subcommands must be a non-empty list of strings when provided`,
+        );
+      }
+    }
+
+    const env = validateHostExecEnv(prefix, entry.env, secretNames);
+    return {
+      id: entry.id,
+      match: {
+        argv0: match.argv0,
+        subcommands: match.subcommands,
+      },
+      cwd: validateHostExecCwd(prefix, entry.cwd),
+      env,
+      inheritEnv: validateHostExecInheritEnv(prefix, entry["inherit-env"]),
+      approval: validateHostExecApproval(prefix, entry.approval),
+      fallback: validateHostExecFallback(prefix, entry.fallback),
+    };
+  });
+}
+
+function validateHostExecEnv(
+  prefix: string,
+  raw: Record<string, string> | undefined,
+  secretNames: Set<string>,
+): Record<string, string> {
+  if (!raw) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ConfigValidationError(`${prefix}.env must be an object`);
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new ConfigValidationError(
+        `${prefix}.env contains invalid key: ${key}`,
+      );
+    }
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new ConfigValidationError(
+        `${prefix}.env.${key} must be a non-empty string`,
+      );
+    }
+    if (!value.startsWith("secret:")) {
+      throw new ConfigValidationError(
+        `${prefix}.env.${key} must use secret:<name> reference`,
+      );
+    }
+    const secretName = value.slice("secret:".length);
+    if (!secretNames.has(secretName)) {
+      throw new ConfigValidationError(
+        `${prefix}.env.${key} references unknown secret "${secretName}"`,
+      );
+    }
+    env[key] = value;
+  }
+  return env;
+}
+
+function validateHostExecCwd(
+  prefix: string,
+  raw?: NonNullable<
+    NonNullable<RawProfile["hostexec"]>["rules"]
+  >[number]["cwd"],
+): HostExecCwdConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(`${prefix}.cwd must be an object`);
+  }
+  const mode = raw?.mode ?? DEFAULT_HOSTEXEC_CWD_CONFIG.mode;
+  if (!VALID_HOSTEXEC_CWD_MODES.includes(mode)) {
+    throw new ConfigValidationError(
+      `${prefix}.cwd.mode must be one of: ${
+        VALID_HOSTEXEC_CWD_MODES.join(", ")
+      }`,
+    );
+  }
+  const allow = raw?.allow ?? [];
+  if (
+    !Array.isArray(allow) ||
+    allow.some((value) => typeof value !== "string" || value.trim() === "")
+  ) {
+    throw new ConfigValidationError(
+      `${prefix}.cwd.allow must be a list of strings`,
+    );
+  }
+  if (mode !== "allowlist" && allow.length > 0) {
+    throw new ConfigValidationError(
+      `${prefix}.cwd.allow is only valid with mode=allowlist`,
+    );
+  }
+  return { mode, allow };
+}
+
+function validateHostExecInheritEnv(
+  prefix: string,
+  raw?: NonNullable<
+    NonNullable<
+      NonNullable<RawProfile["hostexec"]>["rules"]
+    >[number]["inherit-env"]
+  >,
+): HostExecInheritEnvConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(`${prefix}.inherit-env must be an object`);
+  }
+  const mode = raw?.mode ?? DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG.mode;
+  if (!VALID_HOSTEXEC_INHERIT_ENV_MODES.includes(mode)) {
+    throw new ConfigValidationError(
+      `${prefix}.inherit-env.mode must be one of: ${
+        VALID_HOSTEXEC_INHERIT_ENV_MODES.join(", ")
+      }`,
+    );
+  }
+  const keys = raw?.keys ?? [];
+  if (
+    !Array.isArray(keys) ||
+    keys.some((value) => typeof value !== "string" || value.trim() === "")
+  ) {
+    throw new ConfigValidationError(
+      `${prefix}.inherit-env.keys must be a list of strings`,
+    );
+  }
+  return { mode, keys };
+}
+
+function validateHostExecApproval(
+  prefix: string,
+  raw?: string,
+): HostExecApproval {
+  const approval = raw ?? "prompt";
+  if (!VALID_HOSTEXEC_APPROVALS.includes(approval as HostExecApproval)) {
+    throw new ConfigValidationError(
+      `${prefix}.approval must be one of: ${
+        VALID_HOSTEXEC_APPROVALS.join(", ")
+      }`,
+    );
+  }
+  return approval as HostExecApproval;
+}
+
+function validateHostExecFallback(
+  prefix: string,
+  raw?: string,
+): HostExecFallback {
+  const fallback = raw ?? "container";
+  if (!VALID_HOSTEXEC_FALLBACKS.includes(fallback as HostExecFallback)) {
+    throw new ConfigValidationError(
+      `${prefix}.fallback must be one of: ${
+        VALID_HOSTEXEC_FALLBACKS.join(", ")
+      }`,
+    );
+  }
+  return fallback as HostExecFallback;
+}
+
+function isValidSecretSource(value: string): boolean {
+  return value.startsWith("env:") || value.startsWith("file:") ||
+    value.startsWith("dotenv:") || value.startsWith("keyring:");
 }

@@ -37,6 +37,60 @@ export interface GpgConfig {
   forwardAgent: boolean;
 }
 
+/** Secret 設定 */
+export type SecretSource = string;
+
+export interface SecretConfig {
+  from: SecretSource;
+  required: boolean;
+}
+
+/** HostExec 設定 */
+export type HostExecApproval = "allow" | "prompt" | "deny";
+export type HostExecFallback = "container" | "deny";
+export type HostExecCwdMode =
+  | "workspace-only"
+  | "workspace-or-session-tmp"
+  | "allowlist"
+  | "any";
+export type HostExecInheritEnvMode = "minimal" | "unsafe-inherit-all";
+
+export interface HostExecPromptConfig {
+  enable: boolean;
+  timeoutSeconds: number;
+  defaultScope: "capability";
+}
+
+export interface HostExecCwdConfig {
+  mode: HostExecCwdMode;
+  allow: string[];
+}
+
+export interface HostExecInheritEnvConfig {
+  mode: HostExecInheritEnvMode;
+  keys: string[];
+}
+
+export interface HostExecMatchConfig {
+  argv0: string;
+  subcommands?: string[];
+}
+
+export interface HostExecRule {
+  id: string;
+  match: HostExecMatchConfig;
+  cwd: HostExecCwdConfig;
+  env: Record<string, string>;
+  inheritEnv: HostExecInheritEnvConfig;
+  approval: HostExecApproval;
+  fallback: HostExecFallback;
+}
+
+export interface HostExecConfig {
+  prompt: HostExecPromptConfig;
+  rules: HostExecRule[];
+}
+
 /** ネットワーク設定 */
 export type NetworkPromptNotify = "auto" | "tmux" | "desktop" | "off";
 
@@ -81,6 +135,8 @@ export interface Profile {
   network: NetworkConfig;
   extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
+  secrets?: Record<string, SecretConfig>;
+  hostexec?: HostExecConfig;
 }
 
 /** トップレベル設定 */
@@ -140,6 +196,35 @@ export interface RawProfile {
     key_cmd?: string;
     val_cmd?: string;
   }>;
+  secrets?: Record<string, {
+    from?: string;
+    required?: boolean;
+  }>;
+  hostexec?: {
+    prompt?: {
+      enable?: boolean;
+      "timeout-seconds"?: number;
+      "default-scope"?: "capability";
+    };
+    rules?: Array<{
+      id?: string;
+      match?: {
+        argv0?: string;
+        subcommands?: string[];
+      };
+      cwd?: {
+        mode?: HostExecCwdMode;
+        allow?: string[];
+      };
+      env?: Record<string, string>;
+      "inherit-env"?: {
+        mode?: HostExecInheritEnvMode;
+        keys?: string[];
+      };
+      approval?: HostExecApproval;
+      fallback?: HostExecFallback;
+    }>;
+  };
 }
 
 /** デフォルト値 */
@@ -176,4 +261,25 @@ export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
   allowlist: [],
   prompt: DEFAULT_NETWORK_PROMPT_CONFIG,
+};
+
+export const DEFAULT_HOSTEXEC_PROMPT_CONFIG: HostExecPromptConfig = {
+  enable: true,
+  timeoutSeconds: 300,
+  defaultScope: "capability",
+};
+
+export const DEFAULT_HOSTEXEC_CWD_CONFIG: HostExecCwdConfig = {
+  mode: "workspace-or-session-tmp",
+  allow: [],
+};
+
+export const DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG: HostExecInheritEnvConfig = {
+  mode: "minimal",
+  keys: [],
+};
+
+export const DEFAULT_HOSTEXEC_CONFIG: HostExecConfig = {
+  prompt: DEFAULT_HOSTEXEC_PROMPT_CONFIG,
+  rules: [],
 };

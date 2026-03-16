@@ -113,6 +113,8 @@ export function mergeRawProfiles(
     network: mergeRawNetworkConfigs(global.network, local.network),
     "extra-mounts": local["extra-mounts"] ?? global["extra-mounts"],
     env: local.env ?? global.env,
+    secrets: local.secrets ?? global.secrets,
+    hostexec: mergeRawHostExecConfigs(global.hostexec, local.hostexec),
   };
 }
 
@@ -126,6 +128,20 @@ function mergeRawNetworkConfigs(
     ...global,
     ...local,
     prompt: shallowMerge(global.prompt, local.prompt),
+  };
+}
+
+function mergeRawHostExecConfigs(
+  global?: RawProfile["hostexec"],
+  local?: RawProfile["hostexec"],
+): RawProfile["hostexec"] {
+  if (!global) return local;
+  if (!local) return global;
+  return {
+    ...global,
+    ...local,
+    prompt: shallowMerge(global.prompt, local.prompt),
+    rules: local.rules ?? global.rules,
   };
 }
 
