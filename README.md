@@ -217,6 +217,8 @@ profiles:
       - src: ~/.cabal
         dst: ~/.cabal
         mode: ro            # "ro" | "rw"（省略時は "ro"）
+      - src: /dev/null
+        dst: /path/to/your-project/.env   # コンテナ内では .env を見せない
     env:                    # 追加環境変数（固定値 or コマンド出力）
       - key: SOME_VAR
         val: value
@@ -225,6 +227,12 @@ profiles:
     secrets:                # コンテナへ直接渡さない host 側 secret
       github_token:
         from: env:GITHUB_TOKEN      # env: / file: / dotenv: / keyring:
+        required: true
+      build_api_base:
+        from: dotenv:/path/to/your-project/.env#API_BASE_URL
+        required: true
+      build_api_token:
+        from: dotenv:/path/to/your-project/.env#API_TOKEN
         required: true
     hostexec:
       prompt:
@@ -264,20 +272,20 @@ profiles:
             GITHUB_TOKEN: secret:github_token
           approval: prompt
           fallback: container
-
-  claude-nix:
-    agent: claude
-    worktree:               # git worktree で隔離ブランチを作成
-      base: origin/main
-      on-create: "npm install"
-      cleanup: auto         # "force" | "auto" | "keep"
-    nix:
-      enable: auto
-      mount-socket: true
-    docker:
-      enable: false
-      shared: false
+        - id: npm-build
+          match:
+            argv0: npm
+            subcommands: [run]   # たとえば `npm run build` を host 側で実行
+          cwd:
+            mode: workspace-only
+          env:
+            API_BASE_URL: secret:build_api_base
+            API_TOKEN: secret:build_api_token
+          approval: prompt
+          fallback: container
 ```
+
+上の例では、コンテナ内の `/path/to/your-project/.env` は `/dev/null` で隠しつつ、host 側 broker は `dotenv:/path/to/your-project/.env#...` から必要な値だけ読み取れます。たとえばエージェントが `npm run build` を実行すると、`hostexec.rules[].match.argv0: npm` と `subcommands: [run]` に一致して host 側で実行され、`API_BASE_URL` / `API_TOKEN` だけが注入されます。つまり `.env` ファイル自体はコンテナから見えないまま、`.env` の値を使った `npm run build` ができます。
 
 ### プロファイル設定リファレンス
 
@@ -347,7 +355,6 @@ host
 - broker は host 側で UDS (Unix Domain Socket) を listen し、そのソケットをコンテナへ bind mount します
 - コンテナには secret 値を環境変数として渡さず、broker が host 実行時だけ注入します
 - 未一致ルールは `fallback: container` ならコンテナ内の実バイナリへ戻ります
-- `subcommands` は `git -C /path log` のような前置オプションを正規化して判定します
 - `subcommands` を省略すると、その `argv0` に対する任意のサブコマンドにマッチします
 - `approval: prompt` の再利用は capability fingerprint 単位で、より強い secret や広い env 継承へ化けないようにしています
 
@@ -355,16 +362,12 @@ host
 
 ```sh
 # argv0: git / subcommands: [log] にマッチ
-git -C /path/to/repo log --oneline
-
-# argv0: gh / subcommands: [pr] にマッチ
-gh pr list
+git log --oneline
 
 # argv0: gh / subcommands: [api] にマッチ
 gh api repos/owner/repo/pulls
 ```
 
-- `git -C /path/to/repo log` は `-C` を前置オプションとして飛ばした上で `log` をサブコマンドとして判定します
 - `gh pr list` は `pr` にマッチし、`gh api ...` は `api` にマッチします
 
 ### Nix 統合（`nix.enable: true` 時）
