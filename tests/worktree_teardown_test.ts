@@ -441,9 +441,6 @@ Deno.test("WorktreeStage execute creates new worktree when user declines reuse",
     const next1 = await stage1.execute(ctx1);
     const firstWorktreePath = next1.workDir;
 
-    // ブランチ名にタイムスタンプが使われるため、秒の衝突を避ける
-    await new Promise((r) => setTimeout(r, 1100));
-
     // 2 回目の execute: "0" で新規作成
     await withMockedPrompts(["0"], async () => {
       const stage2 = new WorktreeStage();

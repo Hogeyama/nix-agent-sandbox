@@ -316,8 +316,16 @@ export async function dockerContainerExists(
 }
 
 /** docker stop を実行 */
-export async function dockerStop(containerName: string): Promise<void> {
-  await $`docker stop ${containerName}`.quiet();
+export async function dockerStop(
+  containerName: string,
+  options?: { timeoutSeconds?: number },
+): Promise<void> {
+  const args: string[] = ["stop"];
+  if (options?.timeoutSeconds !== undefined) {
+    args.push("--time", String(options.timeoutSeconds));
+  }
+  args.push(containerName);
+  await $`docker ${args}`.quiet();
 }
 
 /** docker rm を実行 */

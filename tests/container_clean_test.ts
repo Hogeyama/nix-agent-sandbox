@@ -229,7 +229,7 @@ async function cleanupNames(names: {
   volumes?: string[];
 }): Promise<void> {
   for (const name of names.containers ?? []) {
-    await docker(["stop", name]).catch(() => {});
+    await docker(["stop", "--time", "0", name]).catch(() => {});
     await docker(["rm", name]).catch(() => {});
   }
   for (const name of names.networks ?? []) {

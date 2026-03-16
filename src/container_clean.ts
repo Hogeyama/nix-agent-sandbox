@@ -44,7 +44,7 @@ export async function cleanNasContainers(): Promise<ContainerCleanResult> {
       continue;
     }
     if (container.running) {
-      await dockerStop(container.name);
+      await dockerStop(container.name, { timeoutSeconds: 0 });
     }
     await dockerRm(container.name);
     removedContainers.push(container.name);

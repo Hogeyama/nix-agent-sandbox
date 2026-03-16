@@ -45,18 +45,19 @@ Deno.test("envoy template includes required proxy settings", async () => {
     const fragment of [
       "0.0.0.0:15001",
       "envoy.filters.http.dynamic_forward_proxy",
-      "envoy.filters.http.ext_authz",
-      "timeout: 300s",
+      "envoy.filters.http.lua",
+      "request_timeout: 0s",
       "timeout: 0s",
       "pipe: { path: /nas-network/auth-router.sock }",
       "/authorize",
-      "Proxy-Authorization",
-      "Host",
+      "proxy-authorization",
+      "host",
       "x-request-id",
-      "headers_to_add",
       "x-nas-original-method",
       "x-nas-original-authority",
       "x-nas-original-url",
+      "300000",
+      'handle:headers():remove("proxy-authorization")',
     ]
   ) {
     assertEquals(template.includes(fragment), true);

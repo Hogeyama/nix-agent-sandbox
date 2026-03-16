@@ -310,7 +310,7 @@ Deno.test("dockerRunDetached: supports network, mounts, ports, labels, entrypoin
         .length > 0,
     );
   } finally {
-    await dockerStop(containerName).catch(() => {});
+    await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
     await dockerRm(containerName).catch(() => {});
     await dockerNetworkRemove(networkName).catch(() => {});
     await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
@@ -369,7 +369,7 @@ Deno.test("container lifecycle: isRunning, exec, logs, stop, rm", async () => {
     assertEquals(typeof tailLogs, "string");
 
     // stop
-    await dockerStop(containerName);
+    await dockerStop(containerName, { timeoutSeconds: 0 });
 
     // isRunning: false after stop
     const stoppedRunning = await dockerIsRunning(containerName);
@@ -379,7 +379,7 @@ Deno.test("container lifecycle: isRunning, exec, logs, stop, rm", async () => {
     await dockerRm(containerName);
   } catch (e) {
     // cleanup on failure
-    await dockerStop(containerName).catch(() => {});
+    await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
     await dockerRm(containerName).catch(() => {});
     throw e;
   }
@@ -409,7 +409,7 @@ Deno.test("dockerExec: returns non-zero code for failing command", async () => {
     const result = await dockerExec(containerName, ["false"]);
     assertEquals(result.code !== 0, true);
   } finally {
-    await dockerStop(containerName).catch(() => {});
+    await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
     await dockerRm(containerName).catch(() => {});
   }
 });
@@ -492,7 +492,7 @@ Deno.test("dockerNetwork: create, connect, remove", async () => {
     await dockerNetworkConnect(networkName, containerName);
     // 接続成功 = エラーなし
   } finally {
-    await dockerStop(containerName).catch(() => {});
+    await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
     await dockerRm(containerName).catch(() => {});
     await dockerNetworkRemove(networkName).catch(() => {});
   }
@@ -526,7 +526,7 @@ Deno.test("dockerNetworkConnect: supports aliases", async () => {
     assertEquals(network?.Aliases?.includes("svc-alias"), true);
     assertEquals(network?.Aliases?.includes("svc-alt"), true);
   } finally {
-    await dockerStop(containerName).catch(() => {});
+    await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
     await dockerRm(containerName).catch(() => {});
     await dockerNetworkRemove(networkName).catch(() => {});
   }

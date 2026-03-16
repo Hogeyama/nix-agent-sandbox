@@ -86,20 +86,30 @@ async function canRunDindRootless(): Promise<boolean> {
     const result = await cmd.output();
     if (!result.success) return false;
 
-    // rootlesskit の起動に少し時間がかかるので待つ
-    await new Promise((r) => setTimeout(r, 3000));
-    const running = await dockerIsRunning(name);
-    return running;
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const running = await dockerIsRunning(name);
+      if (running) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
   } catch {
     return false;
   } finally {
-    await dockerStop(name).catch(() => {});
+    await dockerStop(name, { timeoutSeconds: 0 }).catch(() => {});
     await dockerRm(name).catch(() => {});
   }
 }
 
 // 起動時に一度だけチェック
 const dindAvailable = await canRunDindRootless();
+
+function makeStage(): DindStage {
+  return new DindStage({
+    disableCache: true,
+    readinessTimeoutMs: 20_000,
+  });
+}
 
 // ============================================================
 // Unit tests (Docker 不要)
@@ -124,19 +134,21 @@ async function forceCleanup(
   networkName: string,
   volumeName: string,
 ): Promise<void> {
-  await dockerStop(containerName).catch(() => {});
+  await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
   await dockerRm(containerName).catch(() => {});
   await dockerNetworkRemove(networkName).catch(() => {});
   await dockerVolumeRemove(volumeName).catch(() => {});
 }
 
 Deno.test({
-  name: "DindStage: non-shared execute sets DOCKER_HOST and network",
+  name:
+    "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
   ignore: !dindAvailable,
   fn: async () => {
     const profile = makeProfile({ docker: { enable: true, shared: false } });
     const ctx = makeCtx(profile);
-    const stage = new DindStage();
+    const stage = makeStage();
+    let containerName: string | undefined;
 
     try {
       const result = await stage.execute(ctx);
@@ -161,24 +173,6 @@ Deno.test({
       assertEquals(networkIdx !== -1, true);
       const networkName = result.dockerArgs[networkIdx + 1];
       assertEquals(networkName.startsWith("nas-dind-"), true);
-    } finally {
-      await stage.teardown(ctx);
-    }
-  },
-});
-
-Deno.test({
-  name: "DindStage: non-shared teardown removes resources",
-  ignore: !dindAvailable,
-  fn: async () => {
-    const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const ctx = makeCtx(profile);
-    const stage = new DindStage();
-
-    let containerName: string | undefined;
-
-    try {
-      const result = await stage.execute(ctx);
 
       const match = result.envVars["DOCKER_HOST"].match(
         /tcp:\/\/([^:]+):2375/,
@@ -188,60 +182,25 @@ Deno.test({
 
       const running = await dockerIsRunning(containerName!);
       assertEquals(running, true);
-
-      await stage.teardown(ctx);
-
-      const afterRunning = await dockerIsRunning(containerName!);
-      assertEquals(afterRunning, false);
     } catch (e) {
       if (containerName) {
-        await dockerStop(containerName).catch(() => {});
+        await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
         await dockerRm(containerName).catch(() => {});
       }
       throw e;
-    }
-  },
-});
-
-Deno.test({
-  name: "DindStage: shared execute uses fixed name nas-dind-shared",
-  ignore: !dindAvailable,
-  fn: async () => {
-    const containerName = "nas-dind-shared";
-    const networkName = "nas-dind-shared";
-    const volumeName = "nas-dind-shared-tmp";
-
-    await forceCleanup(containerName, networkName, volumeName);
-
-    const profile = makeProfile({ docker: { enable: true, shared: true } });
-    const ctx = makeCtx(profile);
-    const stage = new DindStage();
-
-    try {
-      const result = await stage.execute(ctx);
-
-      assertEquals(
-        result.envVars["DOCKER_HOST"],
-        "tcp://nas-dind-shared:2375",
-      );
-      assertEquals(
-        result.envVars["NAS_DIND_CONTAINER_NAME"],
-        "nas-dind-shared",
-      );
-
-      const networkIdx = result.dockerArgs.indexOf("--network");
-      assertEquals(result.dockerArgs[networkIdx + 1], "nas-dind-shared");
-
-      const running = await dockerIsRunning(containerName);
-      assertEquals(running, true);
     } finally {
-      await forceCleanup(containerName, networkName, volumeName);
+      await stage.teardown(ctx);
+      if (containerName) {
+        const afterRunning = await dockerIsRunning(containerName);
+        assertEquals(afterRunning, false);
+      }
     }
   },
 });
 
 Deno.test({
-  name: "DindStage: shared reuse existing sidecar",
+  name:
+    "DindStage: shared mode uses fixed name, reuses sidecar, and keeps it on teardown",
   ignore: !dindAvailable,
   fn: async () => {
     const containerName = "nas-dind-shared";
@@ -252,15 +211,23 @@ Deno.test({
 
     const profile = makeProfile({ docker: { enable: true, shared: true } });
     const ctx = makeCtx(profile);
-    const stage1 = new DindStage();
-    const stage2 = new DindStage();
+    const stage1 = makeStage();
+    const stage2 = makeStage();
 
     try {
       const result1 = await stage1.execute(ctx);
+
       assertEquals(
         result1.envVars["DOCKER_HOST"],
         "tcp://nas-dind-shared:2375",
       );
+      assertEquals(
+        result1.envVars["NAS_DIND_CONTAINER_NAME"],
+        "nas-dind-shared",
+      );
+
+      const networkIdx = result1.dockerArgs.indexOf("--network");
+      assertEquals(result1.dockerArgs[networkIdx + 1], "nas-dind-shared");
 
       const result2 = await stage2.execute(ctx);
       assertEquals(
@@ -270,33 +237,10 @@ Deno.test({
 
       const running = await dockerIsRunning(containerName);
       assertEquals(running, true);
-    } finally {
-      await forceCleanup(containerName, networkName, volumeName);
-    }
-  },
-});
+      await stage1.teardown(ctx);
 
-Deno.test({
-  name: "DindStage: shared teardown does not remove sidecar",
-  ignore: !dindAvailable,
-  fn: async () => {
-    const containerName = "nas-dind-shared";
-    const networkName = "nas-dind-shared";
-    const volumeName = "nas-dind-shared-tmp";
-
-    await forceCleanup(containerName, networkName, volumeName);
-
-    const profile = makeProfile({ docker: { enable: true, shared: true } });
-    const ctx = makeCtx(profile);
-    const stage = new DindStage();
-
-    try {
-      await stage.execute(ctx);
-
-      await stage.teardown(ctx);
-
-      const running = await dockerIsRunning(containerName);
-      assertEquals(running, true);
+      const runningAfterTeardown = await dockerIsRunning(containerName);
+      assertEquals(runningAfterTeardown, true);
     } finally {
       await forceCleanup(containerName, networkName, volumeName);
     }
