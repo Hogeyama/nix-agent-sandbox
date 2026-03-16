@@ -170,13 +170,10 @@ export class MountStage implements Stage {
 
     // 追加マウント
     for (const [index, extraMount] of result.profile.extraMounts.entries()) {
-      const src = expandHostPath(extraMount.src);
-      if (!path.isAbsolute(src)) {
-        throw new Error(
-          `[nas] profile.extra-mounts[${index}].src must be an absolute path after ~ expansion: ${extraMount.src}`,
-        );
-      }
-      const normalizedSrc = path.resolve(src);
+      const normalizedSrc = resolveHostMountPath(
+        extraMount.src,
+        result.workDir,
+      );
       if (!await fileExists(normalizedSrc)) {
         console.error(
           `[nas] Skipping profile.extra-mounts[${index}] because src does not exist: ${normalizedSrc}`,
@@ -185,13 +182,11 @@ export class MountStage implements Stage {
       }
       const srcInfo = await Deno.stat(normalizedSrc);
 
-      const dst = expandContainerPath(extraMount.dst, containerHome);
-      if (!path.isAbsolute(dst)) {
-        throw new Error(
-          `[nas] profile.extra-mounts[${index}].dst must be an absolute path: ${extraMount.dst}`,
-        );
-      }
-      const normalizedDst = path.normalize(dst);
+      const normalizedDst = resolveContainerMountPath(
+        extraMount.dst,
+        containerHome,
+        containerWorkDir,
+      );
       const conflict = findConflictingMountDestination(
         extraMountDestinations,
         normalizedDst,
@@ -312,6 +307,28 @@ function expandContainerPath(rawPath: string, containerHome: string): string {
     return path.join(containerHome, rawPath.slice(2));
   }
   return rawPath;
+}
+
+function resolveHostMountPath(rawPath: string, baseDir: string): string {
+  const expandedPath = expandHostPath(rawPath);
+  return path.normalize(
+    path.isAbsolute(expandedPath)
+      ? path.resolve(expandedPath)
+      : path.resolve(baseDir, expandedPath),
+  );
+}
+
+function resolveContainerMountPath(
+  rawPath: string,
+  containerHome: string,
+  containerWorkDir: string,
+): string {
+  const expandedPath = expandContainerPath(rawPath, containerHome);
+  return path.normalize(
+    path.isAbsolute(expandedPath)
+      ? path.resolve(expandedPath)
+      : path.resolve(containerWorkDir, expandedPath),
+  );
 }
 
 function resolveContainerUser(): string {

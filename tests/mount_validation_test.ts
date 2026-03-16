@@ -251,16 +251,35 @@ Deno.test("MountStage: extra-mount rw mode has no suffix", async () => {
   );
 });
 
-Deno.test("MountStage: extra-mount relative dst throws", async () => {
+Deno.test("MountStage: extra-mount relative dst resolves from workDir", async () => {
   const profile = makeProfile({
-    extraMounts: [{ src: Deno.cwd(), dst: "relative/path", mode: "ro" }],
+    extraMounts: [{ src: "/dev/null", dst: ".env", mode: "ro" }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
-    Error,
-    "dst must be an absolute path",
+  const result = await new MountStage().execute(ctx);
+  assertEquals(
+    result.dockerArgs.includes(`/dev/null:${Deno.cwd()}/.env:ro`),
+    true,
   );
+});
+
+Deno.test("MountStage: extra-mount relative src resolves from workDir", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-relative-src-" });
+  const srcDir = "mount-src";
+  try {
+    await Deno.mkdir(`${tmpDir}/${srcDir}`);
+    const profile = makeProfile({
+      extraMounts: [{ src: srcDir, dst: "/tmp/mount-src", mode: "ro" }],
+    });
+    const ctx = createContext(baseConfig, profile, "test", tmpDir);
+    const result = await new MountStage().execute(ctx);
+    assertEquals(
+      result.dockerArgs.includes(`${tmpDir}/${srcDir}:/tmp/mount-src:ro`),
+      true,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
 });
 
 Deno.test("MountStage: extra-mount to /nix conflicts", async () => {

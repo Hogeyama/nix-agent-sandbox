@@ -216,7 +216,7 @@ profiles:
         dst: ~/.cabal
         mode: ro            # "ro" | "rw"（省略時は "ro"）
       - src: /dev/null
-        dst: /path/to/your-project/.env   # コンテナ内では .env を見せない
+        dst: .env           # 相対パスは workDir 基準。コンテナ内では .env を見せない
     env:                    # 追加環境変数（固定値 or コマンド出力）
       - key: SOME_VAR
         val: value
@@ -290,7 +290,7 @@ profiles:
 | `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `aws.mount-config` | bool | `false` | AWS 設定ディレクトリ（`~/.aws`）をマウント |
 | `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |
-| `extra-mounts` | list | `[]` | 追加マウント。`[{ src, dst, mode? }]`（`mode` は `"ro"`/`"rw"`、省略時 `"ro"`）。既存ワークスペース配下への単一ファイルマウント（例: `/dev/null` → `.env`）も可 |
+| `extra-mounts` | list | `[]` | 追加マウント。`[{ src, dst, mode? }]`（`mode` は `"ro"`/`"rw"`、省略時 `"ro"`）。`src`/`dst` は絶対パスのほか `~` と workDir 基準の相対パスも可。既存ワークスペース配下への単一ファイルマウント（例: `/dev/null` → `.env`）も可 |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key_cmd, val_cmd }]` 形式で環境変数を追加 |
 | `secrets.<name>.from` | string | （必須） | secret の取得元。`env:VAR_NAME` / `file:/absolute/path` / `dotenv:/absolute/path#KEY` / `keyring:service/account` |
 | `secrets.<name>.required` | bool | `true` | secret が取得できない場合にエラーにするか |
