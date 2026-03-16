@@ -44,6 +44,7 @@ export class ProxyStage implements Stage {
   private networkName: string | null = null;
   private dindContainerName: string | null = null;
   private broker: SessionBroker | null = null;
+  private authRouterAbort: AbortController | null = null;
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     if (!isProxyEnabled(ctx)) {
@@ -91,7 +92,7 @@ export class ProxyStage implements Stage {
       promptEnabled: prompt.enable,
     });
 
-    await ensureAuthRouterDaemon(runtimePaths);
+    this.authRouterAbort = await ensureAuthRouterDaemon(runtimePaths);
     await ensureSharedEnvoy(runtimePaths);
 
     this.networkName = `nas-session-net-${ctx.sessionId}`;
@@ -135,6 +136,11 @@ export class ProxyStage implements Stage {
 
   async teardown(ctx: ExecutionContext): Promise<void> {
     if (!this.runtimePaths) return;
+
+    if (this.authRouterAbort) {
+      this.authRouterAbort.abort();
+      this.authRouterAbort = null;
+    }
 
     if (this.broker) {
       await this.broker.close();
