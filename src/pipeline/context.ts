@@ -35,6 +35,12 @@ export interface ExecutionContext {
   networkBrokerSocket?: string;
   /** プロキシ endpoint */
   networkProxyEndpoint?: string;
+  /** hostexec runtime dir */
+  hostexecRuntimeDir?: string;
+  /** hostexec broker UDS パス */
+  hostexecBrokerSocket?: string;
+  /** hostexec session tmp dir */
+  hostexecSessionTmpDir?: string;
   /** Nix が有効か (auto 解決後) */
   nixEnabled: boolean;
   /** エージェント起動コマンド */

@@ -93,6 +93,11 @@ if [ ${#AGENT_COMMAND[@]} -eq 0 ]; then
   AGENT_COMMAND=("bash")
 fi
 
+HOSTEXEC_PATH_PREFIX=""
+if [ -n "${NAS_HOSTEXEC_WRAPPER_DIR:-}" ]; then
+  HOSTEXEC_PATH_PREFIX="${NAS_HOSTEXEC_WRAPPER_DIR}:"
+fi
+
 # --- nix 統合 ---
 if [ "${NIX_ENABLED:-false}" = "true" ]; then
   NIX_EXTRA_PACKAGES_LIST=()
@@ -149,10 +154,10 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
         if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
           exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
             nix develop "$WORKSPACE" --command \
-            bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+            bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
         else
           exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-            bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+            bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
         fi
       fi
     else
@@ -162,15 +167,15 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     # キャッシュ済み環境を source してエージェント起動
     if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
       exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-        bash -c "source '$CACHE_FILE'; export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+        bash -c "source '$CACHE_FILE'; export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
     else
       exec "${EXEC_PREFIX[@]}" \
-        bash -c "source '$CACHE_FILE'; export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+        bash -c "source '$CACHE_FILE'; export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
     fi
   elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
     echo "[nas] flake.nix not found, entering nix shell (via host daemon)..."
     exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-      bash -c "export PATH=\"/bin:\$PATH\"; exec $CMD_STR"
+      bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
   else
     exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
   fi

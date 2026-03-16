@@ -77,6 +77,9 @@ Deno.test("computeEmbedHash: includes all embedded files", async () => {
 
 const TEST_IMAGE = "alpine:latest";
 const PREFIX = "nas-test-" + Date.now();
+const SHARED_TMP = Deno.env.get("NAS_DIND_SHARED_TMP");
+const DOCKER_HOST = Deno.env.get("DOCKER_HOST");
+const canBindMount = SHARED_TMP !== undefined || !DOCKER_HOST;
 const DOCKER_DAEMON_AVAILABLE = (() => {
   try {
     return new Deno.Command("docker", {
@@ -95,6 +98,24 @@ function skipWithoutDockerDaemon(testName: string): boolean {
   }
   console.log(`[skip] ${testName}: docker daemon unavailable`);
   return true;
+}
+
+function skipWithoutHostBindMount(testName: string): boolean {
+  if (canBindMount) {
+    return false;
+  }
+  console.log(`[skip] ${testName}: bind mount unavailable in nested Docker`);
+  return true;
+}
+
+async function makeDockerBindableTempDir(prefix: string): Promise<string> {
+  const base = SHARED_TMP ?? "/tmp";
+  const dir = `${base}/${prefix}${crypto.randomUUID().slice(0, 8)}`;
+  await Deno.mkdir(dir, { recursive: true });
+  if (SHARED_TMP) {
+    await Deno.chmod(dir, 0o1777);
+  }
+  return dir;
 }
 
 // --- dockerImageExists ---
@@ -240,9 +261,16 @@ Deno.test("dockerRunDetached: supports network, mounts, ports, labels, entrypoin
   ) {
     return;
   }
+  if (
+    skipWithoutHostBindMount(
+      "dockerRunDetached: supports network, mounts, ports, labels, entrypoint, command",
+    )
+  ) {
+    return;
+  }
   const networkName = `${PREFIX}-detached-net`;
   const containerName = `${PREFIX}-detached-extended`;
-  const tmpDir = await Deno.makeTempDir();
+  const tmpDir = await makeDockerBindableTempDir("nas-docker-client-");
   try {
     await Deno.writeTextFile(`${tmpDir}/hello.txt`, "hello");
     await dockerNetworkCreate(networkName);

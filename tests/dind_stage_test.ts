@@ -116,6 +116,7 @@ async function canRunDocker(): Promise<boolean> {
 
 // 起動時に一度だけチェック
 const dockerAvailable = await canRunDocker();
+const RUNNING_ON_HOST_DOCKER = !Deno.env.get("DOCKER_HOST");
 const dindAvailable = await canRunDindRootless();
 
 function makeStage(): DindStage {
@@ -223,7 +224,7 @@ async function startSharedReuseStub(
 Deno.test({
   name:
     "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
-  ignore: !dindAvailable,
+  ignore: !dindAvailable || !RUNNING_ON_HOST_DOCKER,
   fn: async () => {
     const profile = makeProfile({ docker: { enable: true, shared: false } });
     const ctx = makeCtx(profile);

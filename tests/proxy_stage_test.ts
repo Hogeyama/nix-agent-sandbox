@@ -118,16 +118,26 @@ async function canRunProxy(): Promise<boolean> {
 }
 
 const proxyAvailable = await canRunProxy();
+const canBindMount = Deno.env.get("NAS_DIND_SHARED_TMP") !== undefined ||
+  !Deno.env.get("DOCKER_HOST");
+
+async function makeDockerBindableTempDir(prefix: string): Promise<string> {
+  const base = Deno.env.get("NAS_DIND_SHARED_TMP") ?? "/tmp";
+  const dir = `${base}/${prefix}${crypto.randomUUID().slice(0, 8)}`;
+  await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
+  if (Deno.env.get("NAS_DIND_SHARED_TMP")) {
+    await Deno.chmod(dir, 0o1777);
+  }
+  return dir;
+}
 
 Deno.test({
   name: "ProxyStage: starts shared Envoy and injects credentialed proxy env",
-  ignore: !proxyAvailable,
+  ignore: !proxyAvailable || !canBindMount,
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
-    const runtimeRoot = await Deno.makeTempDir({
-      prefix: "nas-proxy-runtime-",
-    });
+    const runtimeRoot = await makeDockerBindableTempDir("nas-proxy-runtime-");
     const runtimeDir = `${runtimeRoot}/nas/network`;
     const oldRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
     Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
