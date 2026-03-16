@@ -427,40 +427,6 @@ Deno.test("configureCodex: uses error command when codex binary not found", asyn
   });
 });
 
-Deno.test("configureCodex: passes OPENAI_API_KEY when set", () => {
-  const profile: Profile = { ...baseProfile, agent: "codex" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-
-  const originalKey = Deno.env.get("OPENAI_API_KEY");
-  try {
-    Deno.env.set("OPENAI_API_KEY", "sk-test-key-12345");
-    const result = configureCodex(ctx);
-    assertEquals(result.envVars["OPENAI_API_KEY"], "sk-test-key-12345");
-  } finally {
-    if (originalKey !== undefined) {
-      Deno.env.set("OPENAI_API_KEY", originalKey);
-    } else {
-      Deno.env.delete("OPENAI_API_KEY");
-    }
-  }
-});
-
-Deno.test("configureCodex: does not set OPENAI_API_KEY when not set", () => {
-  const profile: Profile = { ...baseProfile, agent: "codex" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-
-  const originalKey = Deno.env.get("OPENAI_API_KEY");
-  try {
-    Deno.env.delete("OPENAI_API_KEY");
-    const result = configureCodex(ctx);
-    assertEquals(result.envVars["OPENAI_API_KEY"], undefined);
-  } finally {
-    if (originalKey !== undefined) {
-      Deno.env.set("OPENAI_API_KEY", originalKey);
-    }
-  }
-});
-
 Deno.test("configureCodex: mounts ~/.codex when directory exists", async () => {
   await withTempHome(async (tmpHome) => {
     const containerHome = getContainerHome();

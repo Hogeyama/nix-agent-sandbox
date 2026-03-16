@@ -17,12 +17,6 @@ export function configureCodex(ctx: ExecutionContext): ExecutionContext {
     args.push("-v", `${codexDir}:${containerHome}/.codex`);
   }
 
-  // OPENAI_API_KEY を引き継ぐ（設定されている場合のみ）
-  const openAiApiKey = Deno.env.get("OPENAI_API_KEY")?.trim();
-  if (openAiApiKey) {
-    envVars["OPENAI_API_KEY"] = openAiApiKey;
-  }
-
   // codex バイナリのマウント (実体パスを解決してマウント)
   const codexBin = findBinaryResolved("codex");
   if (codexBin) {

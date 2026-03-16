@@ -655,19 +655,6 @@ Deno.test("MountStage: codex agent mounts ~/.codex if exists", async () => {
   }
 });
 
-Deno.test("MountStage: codex agent forwards OPENAI_API_KEY when set", async () => {
-  const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
-  const profile = makeProfile({ agent: "codex" });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-
-  if (openAiApiKey?.trim()) {
-    assertEquals(result.envVars["OPENAI_API_KEY"], openAiApiKey.trim());
-  } else {
-    assertEquals("OPENAI_API_KEY" in result.envVars, false);
-  }
-});
-
 // --- 空のプロファイルでの実行 ---
 
 Deno.test("MountStage: minimal profile produces valid docker args", async () => {
