@@ -244,14 +244,7 @@ async function startDindSidecar(
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
     [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
   }).catch(() => {});
-  const args = [
-    "--privileged",
-    "-v",
-    `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
-  ];
-  if (!options.disableCache) {
-    args.splice(2, 0, "-v", `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`);
-  }
+  const args = buildDindSidecarArgs(sharedTmpVolume, options);
   await dockerRunDetached({
     name: containerName,
     image: DIND_IMAGE,
@@ -313,6 +306,18 @@ async function startDindSidecar(
     await dockerVolumeRemove(DIND_CACHE_VOLUME).catch(() => {});
     void e;
   }
+}
+
+export function buildDindSidecarArgs(
+  sharedTmpVolume: string,
+  options: DindStageOptions = {},
+): string[] {
+  const args = ["--privileged"];
+  if (!options.disableCache) {
+    args.push("-v", `${DIND_CACHE_VOLUME}:${DIND_DATA_DIR}`);
+  }
+  args.push("-v", `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`);
+  return args;
 }
 
 /**

@@ -8,7 +8,7 @@
 
 import { assertEquals } from "@std/assert";
 import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
-import { DindStage } from "../src/stages/dind.ts";
+import { buildDindSidecarArgs, DindStage } from "../src/stages/dind.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import type { ExecutionContext } from "../src/pipeline/context.ts";
@@ -137,6 +137,30 @@ Deno.test("DindStage: skip when disabled", async () => {
   assertEquals(result, ctx);
   assertEquals(result.dockerArgs, []);
   assertEquals(result.envVars, {});
+});
+
+Deno.test("buildDindSidecarArgs: cache enabled keeps both volume specs valid", () => {
+  assertEquals(
+    buildDindSidecarArgs("nas-dind-shared-tmp"),
+    [
+      "--privileged",
+      "-v",
+      "nas-docker-cache:/home/rootless/.local/share/docker",
+      "-v",
+      "nas-dind-shared-tmp:/tmp/nas-shared",
+    ],
+  );
+});
+
+Deno.test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
+  assertEquals(
+    buildDindSidecarArgs("nas-dind-shared-tmp", { disableCache: true }),
+    [
+      "--privileged",
+      "-v",
+      "nas-dind-shared-tmp:/tmp/nas-shared",
+    ],
+  );
 });
 
 // ============================================================
