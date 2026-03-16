@@ -244,21 +244,8 @@ async function startDindSidecar(
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
     [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
   }).catch(() => {});
-  const args = buildDindSidecarArgs(sharedTmpVolume, options);
-  await dockerRunDetached({
-    name: containerName,
-    image: DIND_IMAGE,
-    args,
-    envVars: {
-      DOCKER_TLS_CERTDIR: "",
-    },
-    labels: {
-      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_DIND,
-      [NAS_SHARED_LABEL]: String(containerName === SHARED_CONTAINER_NAME),
-    },
-  });
 
+  await runDindSidecar(containerName, sharedTmpVolume, options);
   console.log("[nas] DinD: waiting for daemon to be ready...");
   try {
     await waitForDindReady(
@@ -271,30 +258,35 @@ async function startDindSidecar(
       throw e;
     }
     console.warn(
-      `[nas] DinD: failed to start with cache volume (${DIND_CACHE_VOLUME}), retrying without cache...`,
+      `[nas] DinD: failed to start with cache volume (${DIND_CACHE_VOLUME}), resetting cache and retrying...`,
     );
-    // キャッシュボリュームに stale lock がある可能性があるため、キャッシュなしで再試行
+    // rootless DinD の状態ディレクトリが壊れていると起動できないため、
+    // まずキャッシュ volume を作り直してから再試行する。
     await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
     await dockerRm(containerName).catch(() => {});
+    await dockerVolumeRemove(DIND_CACHE_VOLUME).catch(() => {});
 
-    await dockerRunDetached({
-      name: containerName,
-      image: DIND_IMAGE,
-      args: [
-        "--privileged",
-        "-v",
-        `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
-      ],
-      envVars: {
-        DOCKER_TLS_CERTDIR: "",
-      },
-      labels: {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_DIND,
-        [NAS_SHARED_LABEL]: String(containerName === SHARED_CONTAINER_NAME),
-      },
+    await runDindSidecar(containerName, sharedTmpVolume, options);
+    console.log("[nas] DinD: waiting for daemon to be ready (fresh cache)...");
+    try {
+      await waitForDindReady(
+        containerName,
+        options.readinessTimeoutMs ?? READINESS_TIMEOUT_MS,
+      );
+      console.log("[nas] DinD: daemon is ready (fresh cache)");
+      return;
+    } catch {
+      console.warn(
+        `[nas] DinD: fresh cache retry also failed, retrying without cache...`,
+      );
+      await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
+      await dockerRm(containerName).catch(() => {});
+    }
+
+    await runDindSidecar(containerName, sharedTmpVolume, {
+      ...options,
+      disableCache: true,
     });
-
     console.log("[nas] DinD: waiting for daemon to be ready (no cache)...");
     await waitForDindReady(
       containerName,
@@ -302,10 +294,28 @@ async function startDindSidecar(
     );
     console.log("[nas] DinD: daemon is ready (without cache)");
 
-    // 壊れたキャッシュボリュームを削除して次回はクリーンに開始
-    await dockerVolumeRemove(DIND_CACHE_VOLUME).catch(() => {});
     void e;
   }
+}
+
+async function runDindSidecar(
+  containerName: string,
+  sharedTmpVolume: string,
+  options: DindStageOptions,
+): Promise<void> {
+  await dockerRunDetached({
+    name: containerName,
+    image: DIND_IMAGE,
+    args: buildDindSidecarArgs(sharedTmpVolume, options),
+    envVars: {
+      DOCKER_TLS_CERTDIR: "",
+    },
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_DIND,
+      [NAS_SHARED_LABEL]: String(containerName === SHARED_CONTAINER_NAME),
+    },
+  });
 }
 
 export function buildDindSidecarArgs(
