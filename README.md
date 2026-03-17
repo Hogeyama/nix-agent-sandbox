@@ -210,7 +210,7 @@ profiles:
         default-scope: host-port   # once | host-port | host
         notify: auto       # auto | off
     gpg:
-      forward-agent: true   # ホストの gpg-agent を転送（署名用）
+      forward-agent: false  # hostexec で gpg を委譲する場合は通常不要
     extra-mounts:           # 任意の追加マウント
       - src: ~/.cabal
         dst: ~/.cabal
@@ -222,6 +222,13 @@ profiles:
         val: value
       - key_cmd: "cat /path/to/key"
         val_cmd: "cat /path/to/value"
+      # git commit -S の署名をホスト側で行う。hostexecの設定も参照。
+      - key: GIT_CONFIG_COUNT
+        val: "1"
+      - key: GIT_CONFIG_KEY_0
+        val: gpg.program
+      - key: GIT_CONFIG_VALUE_0
+        val: /opt/nas/hostexec/gpg
     secrets:                # コンテナへ直接渡さない host 側 secret
       github_token:
         from: env:GITHUB_TOKEN      # env: / file: / dotenv: / keyring:
@@ -267,7 +274,16 @@ profiles:
             API_TOKEN: secret:build_api_token
           approval: prompt
           fallback: container
+        - id: gpg
+          match:
+            argv0: gpg
+          cwd:
+            mode: workspace-or-session-tmp
+          approval: prompt
+          fallback: container
 ```
+
+`gpg.forward-agent` を使わずに署名したい場合は、上記のように `hostexec.rules` に `gpg` を追加し、`GIT_CONFIG_*` で `gpg.program` を設定するパターンが使えます。これによりユーザーのグローバル Git 設定を変更せず、セッション内だけで `git commit -S` を hostexec 経由にできます。
 
 ### プロファイル設定リファレンス
 
