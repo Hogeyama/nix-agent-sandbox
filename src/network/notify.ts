@@ -112,7 +112,10 @@ function formatMessage(notification: PendingNotification) {
   const target = `${notification.target.host}:${notification.target.port}`;
   return {
     title: `[nas] Pending network approval: ${notification.sessionId}`,
-    body: `${target}\nAllow で承認 / 閉じると deny`,
+    body: [
+      `${target}`,
+      "クリックでapprove / 閉じるとdeny",
+    ].join("\n"),
   };
 }
 

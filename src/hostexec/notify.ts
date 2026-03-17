@@ -125,6 +125,7 @@ function formatMessage(pending: HostExecPendingEntry) {
       `rule: ${pending.ruleId}`,
       `cmd: ${formatCommand(pending)}`,
       `cwd: ${pending.cwd}`,
+      "クリックでapprove / 閉じるとdeny",
     ].join("\n"),
   };
 }
