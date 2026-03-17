@@ -39,13 +39,14 @@ function request(
   args: string[],
   cwd: string,
   requestId = `req_${crypto.randomUUID()}`,
+  argv0 = "deno",
 ): ExecuteRequest {
   return {
     version: 1,
     type: "execute",
     sessionId: "sess_test",
     requestId,
-    argv0: "deno",
+    argv0,
     args,
     cwd,
     tty: false,
@@ -359,6 +360,48 @@ Deno.test("HostExecBroker: omitted subcommands matches any normalized subcommand
       throw new Error(`unexpected response type: ${response.type}`);
     }
     assertEquals(response.stdout.trim(), "ok");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("HostExecBroker: omitted subcommands also matches argv0-only command", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [{
+        id: "true-any",
+        match: { argv0: "true" },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "container",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    const response = await sendHostExecBrokerRequest(
+      socketPath,
+      request([], workspace, "req_true_noargs", "true"),
+    );
+    assertEquals(response.type, "result");
+    if (response.type === "result") {
+      assertEquals(response.exitCode, 0);
+    }
   } finally {
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});

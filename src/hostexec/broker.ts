@@ -346,9 +346,9 @@ export class HostExecBroker {
     );
     const rule = this.config.rules.find((entry) => {
       if (entry.match.argv0 !== argv0) return false;
+      if (entry.match.subcommands === undefined) return true;
       if (subcommand === null) return false;
-      return entry.match.subcommands === undefined ||
-        entry.match.subcommands.includes(subcommand);
+      return entry.match.subcommands.includes(subcommand);
     });
     if (!rule) return null;
 
