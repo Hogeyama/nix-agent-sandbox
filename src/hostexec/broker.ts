@@ -53,6 +53,7 @@ interface PendingGroup {
     { request: ExecuteRequest; resolved: ResolvedExecution }
   >;
   timer: number;
+  notificationAbort: AbortController;
 }
 
 const MINIMAL_ENV_KEYS = ["HOME", "PATH", "LANG", "TERM", "USER", "LOGNAME"];
@@ -74,6 +75,7 @@ export class HostExecBroker {
   private readonly approvedKeys = new Set<string>();
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestToApprovalKey = new Map<string, string>();
+  private readonly notificationTasks = new Set<Promise<void>>();
 
   constructor(options: HostExecBrokerOptions) {
     this.paths = options.paths;
@@ -107,6 +109,7 @@ export class HostExecBroker {
     }
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
+      group.notificationAbort.abort();
       for (const waiter of group.waiters.values()) {
         waiter.resolve({
           type: "error",
@@ -115,6 +118,7 @@ export class HostExecBroker {
         });
       }
     }
+    await Promise.allSettled(this.notificationTasks);
     this.groups.clear();
     this.requestToApprovalKey.clear();
     await removeHostExecPendingDir(this.paths, this.sessionId);
@@ -235,6 +239,7 @@ export class HostExecBroker {
     resolved: ResolvedExecution,
   ): Promise<PendingGroup> {
     const createdAt = new Date().toISOString();
+    const notificationAbort = new AbortController();
     const timer = setTimeout(() => {
       void this.resolveGroup(approvalKey, "deny", {
         type: "error",
@@ -251,18 +256,24 @@ export class HostExecBroker {
       pendingEntries: new Map(),
       requests: new Map([[message.requestId, { request: message, resolved }]]),
       timer,
+      notificationAbort,
     };
     this.groups.set(approvalKey, group);
     this.requestToApprovalKey.set(message.requestId, approvalKey);
     const entry = toPendingEntry(message, resolved, approvalKey, createdAt);
     group.pendingEntries.set(message.requestId, entry);
     await writeHostExecPendingEntry(this.paths, entry);
-    void notifyHostExecPendingRequest({
+    const notificationTask = notifyHostExecPendingRequest({
       backend: this.config.prompt.notify,
       brokerSocket: this.socketPath ??
         hostExecBrokerSocketPath(this.paths, this.sessionId),
       pending: entry,
+      signal: notificationAbort.signal,
     }).catch(() => {});
+    this.notificationTasks.add(notificationTask);
+    void notificationTask.finally(() => {
+      this.notificationTasks.delete(notificationTask);
+    });
     return group;
   }
 
@@ -298,6 +309,7 @@ export class HostExecBroker {
     if (!group) return;
     clearTimeout(group.timer);
     this.groups.delete(approvalKey);
+    group.notificationAbort.abort();
 
     for (const [requestId, pending] of group.requests.entries()) {
       this.requestToApprovalKey.delete(requestId);

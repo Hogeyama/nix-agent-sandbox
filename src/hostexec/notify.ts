@@ -6,6 +6,7 @@ export interface HostExecPendingNotification {
   backend: HostExecNotifyBackend;
   brokerSocket: string;
   pending: HostExecPendingEntry;
+  signal?: AbortSignal;
 }
 
 export async function notifyHostExecPendingRequest(
@@ -18,6 +19,10 @@ export async function notifyHostExecPendingRequest(
   }
   if (notification.backend === "desktop") {
     await tryDesktop(notification);
+    return;
+  }
+  if (!hasDesktopSession()) {
+    await tryTmux(notification);
     return;
   }
   if (await tryDesktop(notification)) {
@@ -61,6 +66,7 @@ esac
       "-c",
       script,
     ],
+    signal: notification.signal,
     stdout: "null",
     stderr: "null",
   }).output().catch(() => ({ success: false } as Deno.CommandOutput));
@@ -80,6 +86,7 @@ async function tryDesktop(
       message.title,
       message.body,
     ],
+    signal: notification.signal,
     stdout: "piped",
     stderr: "null",
   }).output().catch(() => ({ success: false } as Deno.CommandOutput));
@@ -102,6 +109,13 @@ async function tryDesktop(
     return true;
   }
   return result.success;
+}
+
+function hasDesktopSession(): boolean {
+  return Boolean(
+    Deno.env.get("DISPLAY") ||
+      Deno.env.get("WAYLAND_DISPLAY"),
+  );
 }
 
 function formatMessage(pending: HostExecPendingEntry) {

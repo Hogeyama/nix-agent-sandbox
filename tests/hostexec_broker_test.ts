@@ -25,7 +25,7 @@ function makeConfig(overrides: HostExecConfigOverrides = {}): HostExecConfig {
       enable: true,
       timeoutSeconds: 30,
       defaultScope: "capability",
-      notify: "auto",
+      notify: "off",
       ...(overrides.prompt ?? {}),
     },
     subcommand: {
