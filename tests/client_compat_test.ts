@@ -113,42 +113,61 @@ async function withProxyFixture(
 async function createBareRepo(rootDir: string): Promise<void> {
   const workDir = path.join(rootDir, "work");
   const repoDir = path.join(rootDir, "repo.git");
+  const gitHome = path.join(rootDir, "git-home");
   await Deno.mkdir(workDir, { recursive: true });
+  await Deno.mkdir(gitHome, { recursive: true });
+  const gitEnv = isolatedGitEnv(gitHome);
 
-  await runChecked("git", ["init", workDir]);
-  await runChecked("git", ["-C", workDir, "checkout", "-b", "main"]);
-  await runChecked("git", ["-C", workDir, "config", "user.name", "nas-test"]);
+  await runChecked("git", ["init", workDir], { env: gitEnv });
+  await runChecked("git", ["-C", workDir, "checkout", "-b", "main"], {
+    env: gitEnv,
+  });
+  await runChecked("git", ["-C", workDir, "config", "user.name", "nas-test"], {
+    env: gitEnv,
+  });
   await runChecked("git", [
     "-C",
     workDir,
     "config",
     "user.email",
     "nas-test@example.com",
-  ]);
+  ], { env: gitEnv });
   await Deno.writeTextFile(
     path.join(workDir, "README.md"),
     "# nas client compat\n",
   );
-  await runChecked("git", ["-C", workDir, "add", "README.md"]);
-  await runChecked("git", ["-C", workDir, "commit", "-m", "init"]);
+  await runChecked("git", ["-C", workDir, "add", "README.md"], { env: gitEnv });
+  await runChecked("git", [
+    "-C",
+    workDir,
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "init",
+  ], { env: gitEnv });
 
-  await runChecked("git", ["init", "--bare", repoDir]);
-  await runChecked("git", ["-C", workDir, "remote", "add", "origin", repoDir]);
+  await runChecked("git", ["init", "--bare", repoDir], { env: gitEnv });
+  await runChecked("git", ["-C", workDir, "remote", "add", "origin", repoDir], {
+    env: gitEnv,
+  });
   await runChecked("git", [
     "-C",
     workDir,
     "push",
     "origin",
     "HEAD:refs/heads/main",
-  ]);
+  ], { env: gitEnv });
   await runChecked("git", [
     "--git-dir",
     repoDir,
     "symbolic-ref",
     "HEAD",
     "refs/heads/main",
-  ]);
-  await runChecked("git", ["--git-dir", repoDir, "update-server-info"]);
+  ], { env: gitEnv });
+  await runChecked("git", ["--git-dir", repoDir, "update-server-info"], {
+    env: gitEnv,
+  });
 }
 
 async function runChecked(
@@ -314,6 +333,17 @@ function cleanClientEnv(
     no_proxy: "",
     ...extra,
   };
+}
+
+function isolatedGitEnv(homeDir: string): Record<string, string> {
+  return cleanClientEnv({
+    HOME: homeDir,
+    XDG_CONFIG_HOME: homeDir,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_COUNT: "0",
+    GIT_TERMINAL_PROMPT: "0",
+  });
 }
 
 function assertRetriedWithProxyAuth(requests: RecordedRequest[]): void {
