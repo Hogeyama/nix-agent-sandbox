@@ -1,5 +1,8 @@
 import { assertEquals } from "@std/assert";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import { NixDetectStage } from "../src/stages/nix_detect.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
@@ -14,6 +17,7 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
+    dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],
     env: [],
   };

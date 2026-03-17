@@ -22,6 +22,16 @@ function makeProfile(): Profile {
         notify: "off",
       },
     },
+    dbus: {
+      session: {
+        enable: false,
+        see: [],
+        talk: [],
+        own: [],
+        calls: [],
+        broadcasts: [],
+      },
+    },
     extraMounts: [],
     env: [],
     secrets: {

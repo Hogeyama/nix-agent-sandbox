@@ -3,7 +3,10 @@ import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
 } from "../src/cli.ts";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import type { Profile } from "../src/config/types.ts";
 
 function createProfile(overrides: Partial<Profile> = {}): Profile {
@@ -19,6 +22,7 @@ function createProfile(overrides: Partial<Profile> = {}): Profile {
     aws: overrides.aws ?? { mountConfig: false },
     gpg: overrides.gpg ?? { forwardAgent: false },
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
+    dbus: overrides.dbus ?? structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: overrides.extraMounts ?? [],
     env: overrides.env ?? [],
   };

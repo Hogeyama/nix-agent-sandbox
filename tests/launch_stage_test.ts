@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
   type Config,
+  DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   type Profile,
 } from "../src/config/types.ts";
@@ -159,6 +160,7 @@ function createTestContext() {
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
+    dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],
     env: [],
   };

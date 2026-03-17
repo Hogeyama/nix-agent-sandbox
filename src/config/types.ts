@@ -113,6 +113,26 @@ export interface NetworkConfig {
   prompt: NetworkPromptConfig;
 }
 
+/** DBus 設定 */
+export interface DbusRuleConfig {
+  name: string;
+  rule: string;
+}
+
+export interface DbusSessionConfig {
+  enable: boolean;
+  sourceAddress?: string;
+  see: string[];
+  talk: string[];
+  own: string[];
+  calls: DbusRuleConfig[];
+  broadcasts: DbusRuleConfig[];
+}
+
+export interface DbusConfig {
+  session: DbusSessionConfig;
+}
+
 /** 追加マウント設定 */
 export interface ExtraMountConfig {
   src: string;
@@ -140,6 +160,7 @@ export interface Profile {
   aws: AwsConfig;
   gpg: GpgConfig;
   network: NetworkConfig;
+  dbus: DbusConfig;
   extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
   secrets?: Record<string, SecretConfig>;
@@ -190,6 +211,23 @@ export interface RawProfile {
       "timeout-seconds"?: number;
       "default-scope"?: ApprovalScope;
       notify?: NetworkPromptNotify;
+    };
+  };
+  dbus?: {
+    session?: {
+      enable?: boolean;
+      "source-address"?: string;
+      see?: string[];
+      talk?: string[];
+      own?: string[];
+      calls?: Array<{
+        name?: string;
+        rule?: string;
+      }>;
+      broadcasts?: Array<{
+        name?: string;
+        rule?: string;
+      }>;
     };
   };
   "extra-mounts"?: Array<{
@@ -272,6 +310,20 @@ export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
   allowlist: [],
   prompt: DEFAULT_NETWORK_PROMPT_CONFIG,
+};
+
+export const DEFAULT_DBUS_SESSION_CONFIG: DbusSessionConfig = {
+  enable: false,
+  sourceAddress: undefined,
+  see: [],
+  talk: [],
+  own: [],
+  calls: [],
+  broadcasts: [],
+};
+
+export const DEFAULT_DBUS_CONFIG: DbusConfig = {
+  session: DEFAULT_DBUS_SESSION_CONFIG,
 };
 
 export const DEFAULT_HOSTEXEC_PROMPT_CONFIG: HostExecPromptConfig = {

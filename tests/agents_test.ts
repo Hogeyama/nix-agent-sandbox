@@ -7,7 +7,10 @@ import { assertEquals } from "@std/assert";
 import { configureClaude } from "../src/agents/claude.ts";
 import { configureCopilot } from "../src/agents/copilot.ts";
 import { configureCodex } from "../src/agents/codex.ts";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 
@@ -20,6 +23,7 @@ const baseProfile: Profile = {
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
+  dbus: structuredClone(DEFAULT_DBUS_CONFIG),
   extraMounts: [],
   env: [],
 };

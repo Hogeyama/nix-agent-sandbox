@@ -1,7 +1,10 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import $ from "dax";
 import * as path from "@std/path";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { WorktreeStage } from "../src/stages/worktree.ts";
@@ -16,6 +19,7 @@ const testProfile: Profile = {
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
+  dbus: structuredClone(DEFAULT_DBUS_CONFIG),
   extraMounts: [],
   env: [],
 };

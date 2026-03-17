@@ -4,6 +4,7 @@ import {
   ProxyStage,
   replaceNetwork,
 } from "../src/stages/proxy.ts";
+import { DEFAULT_DBUS_CONFIG } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import type { ExecutionContext } from "../src/pipeline/context.ts";
@@ -48,6 +49,7 @@ function makeProfile(
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     network,
+    dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],
     env: [],
     ...rest,

@@ -3,6 +3,7 @@ import {
   ConfigValidationError,
   validateConfig,
 } from "../src/config/validate.ts";
+import { DEFAULT_DBUS_CONFIG } from "../src/config/types.ts";
 import type { RawConfig } from "../src/config/types.ts";
 
 Deno.test("validateConfig: valid minimal config", () => {
@@ -26,6 +27,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.network.prompt.timeoutSeconds, 300);
   assertEquals(config.profiles.test.network.prompt.defaultScope, "host-port");
   assertEquals(config.profiles.test.network.prompt.notify, "auto");
+  assertEquals(config.profiles.test.dbus, DEFAULT_DBUS_CONFIG);
   assertEquals(config.profiles.test.extraMounts, []);
   assertEquals(config.profiles.test.env, []);
 });
@@ -238,6 +240,92 @@ Deno.test("validateConfig: gpg.forward-agent can be enabled", () => {
     },
   });
   assertEquals(config.profiles.test.gpg.forwardAgent, true);
+});
+
+Deno.test("validateConfig: dbus.session defaults to disabled", () => {
+  const config = validateConfig({
+    profiles: { test: { agent: "claude" } },
+  });
+  assertEquals(config.profiles.test.dbus, DEFAULT_DBUS_CONFIG);
+});
+
+Deno.test("validateConfig: dbus.session config is parsed", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        dbus: {
+          session: {
+            enable: true,
+            "source-address": "unix:path=/run/user/1000/bus",
+            see: ["org.freedesktop.secrets"],
+            talk: ["org.freedesktop.secrets"],
+            own: ["org.example.Owned"],
+            calls: [{ name: "org.freedesktop.secrets", rule: "*" }],
+            broadcasts: [{ name: "org.freedesktop.secrets", rule: "*" }],
+          },
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.dbus.session.enable, true);
+  assertEquals(
+    config.profiles.test.dbus.session.sourceAddress,
+    "unix:path=/run/user/1000/bus",
+  );
+  assertEquals(config.profiles.test.dbus.session.see, [
+    "org.freedesktop.secrets",
+  ]);
+  assertEquals(config.profiles.test.dbus.session.talk, [
+    "org.freedesktop.secrets",
+  ]);
+  assertEquals(config.profiles.test.dbus.session.own, ["org.example.Owned"]);
+  assertEquals(config.profiles.test.dbus.session.calls, [
+    { name: "org.freedesktop.secrets", rule: "*" },
+  ]);
+  assertEquals(config.profiles.test.dbus.session.broadcasts, [
+    { name: "org.freedesktop.secrets", rule: "*" },
+  ]);
+});
+
+Deno.test("validateConfig: dbus.session invalid source-address throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            dbus: {
+              session: {
+                "source-address": "",
+              },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "dbus.session.source-address",
+  );
+});
+
+Deno.test("validateConfig: dbus.session invalid call rule throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            dbus: {
+              session: {
+                calls: [{ name: "", rule: "*" }],
+              },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "dbus.session.calls[0].name",
+  );
 });
 
 Deno.test("validateConfig: worktree defaults", () => {

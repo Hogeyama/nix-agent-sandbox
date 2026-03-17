@@ -61,6 +61,18 @@ export class MountStage implements Stage {
       envVars["NAS_UID"] = String(uid);
       envVars["NAS_GID"] = String(gid);
     }
+    if (result.dbusProxyEnabled) {
+      if (uid === null) {
+        throw new Error(
+          "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID",
+        );
+      }
+      extraMountDestinations.push({
+        path: path.normalize(`/run/user/${uid}`),
+        kind: "directory",
+        allowNestedFiles: false,
+      });
+    }
 
     // Nix ソケットマウント (ホストの nix daemon にソケット経由で接続)
     if (result.nixEnabled && result.profile.nix.mountSocket) {
@@ -227,6 +239,20 @@ export class MountStage implements Stage {
     }
 
     result = { ...result, dockerArgs: args, envVars };
+
+    if (result.dbusProxyEnabled) {
+      if (uid === null || !result.dbusSessionRuntimeDir) {
+        throw new Error(
+          "[nas] dbus.session.enable requires an initialized DBus proxy runtime",
+        );
+      }
+      const containerRuntimeDir = `/run/user/${uid}`;
+      args.push("-v", `${result.dbusSessionRuntimeDir}:${containerRuntimeDir}`);
+      envVars["XDG_RUNTIME_DIR"] = containerRuntimeDir;
+      envVars["DBUS_SESSION_BUS_ADDRESS"] =
+        `unix:path=${containerRuntimeDir}/bus`;
+      result = { ...result, dockerArgs: args, envVars };
+    }
 
     // ホスト側が tmux 内の場合、コンテナに伝える (OSC 52 clipboard shim が使用)
     const hostTmux = Deno.env.get("TMUX");

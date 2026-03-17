@@ -5,6 +5,7 @@
 import type { ApprovalScope } from "../network/protocol.ts";
 import type {
   Config,
+  DbusRuleConfig,
   EnvConfig,
   EnvKeySpec,
   EnvValSpec,
@@ -29,6 +30,7 @@ import type {
 } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
+  DEFAULT_DBUS_SESSION_CONFIG,
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
@@ -112,6 +114,7 @@ function validateProfile(name: string, raw: RawProfile): Profile {
   }
 
   const network = validateNetwork(name, raw.network);
+  const dbus = validateDbus(name, raw.dbus);
 
   return {
     agent: raw.agent as AgentType,
@@ -143,6 +146,7 @@ function validateProfile(name: string, raw: RawProfile): Profile {
         DEFAULT_GPG_CONFIG.forwardAgent,
     },
     network,
+    dbus,
     extraMounts: validateExtraMounts(name, raw["extra-mounts"]),
     env: validateEnv(name, raw.env),
     secrets: validateSecrets(name, raw.secrets),
@@ -359,6 +363,110 @@ function validateNetworkPrompt(
     defaultScope,
     notify,
   };
+}
+
+function validateDbus(
+  profileName: string,
+  raw?: RawProfile["dbus"],
+): import("./types.ts").DbusConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": dbus must be an object`,
+    );
+  }
+
+  return {
+    session: validateDbusSession(profileName, raw?.session),
+  };
+}
+
+function validateDbusSession(
+  profileName: string,
+  raw?: NonNullable<RawProfile["dbus"]>["session"],
+): import("./types.ts").DbusSessionConfig {
+  if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": dbus.session must be an object`,
+    );
+  }
+
+  const sourceAddress = raw?.["source-address"];
+  if (sourceAddress !== undefined) {
+    if (typeof sourceAddress !== "string" || sourceAddress.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": dbus.session.source-address must be a non-empty string`,
+      );
+    }
+  }
+
+  return {
+    enable: raw?.enable ?? DEFAULT_DBUS_SESSION_CONFIG.enable,
+    sourceAddress,
+    see: validateDbusNameList(profileName, "dbus.session.see", raw?.see),
+    talk: validateDbusNameList(profileName, "dbus.session.talk", raw?.talk),
+    own: validateDbusNameList(profileName, "dbus.session.own", raw?.own),
+    calls: validateDbusRules(profileName, "dbus.session.calls", raw?.calls),
+    broadcasts: validateDbusRules(
+      profileName,
+      "dbus.session.broadcasts",
+      raw?.broadcasts,
+    ),
+  };
+}
+
+function validateDbusNameList(
+  profileName: string,
+  field: string,
+  raw?: string[],
+): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": ${field} must be a list`,
+    );
+  }
+  for (const [index, entry] of raw.entries()) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": ${field}[${index}] must be a non-empty string`,
+      );
+    }
+  }
+  return [...raw];
+}
+
+function validateDbusRules(
+  profileName: string,
+  field: string,
+  raw?: Array<{ name?: string; rule?: string }>,
+): DbusRuleConfig[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new ConfigValidationError(
+      `profile "${profileName}": ${field} must be a list`,
+    );
+  }
+  return raw.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": ${field}[${index}] must be an object`,
+      );
+    }
+    if (typeof entry.name !== "string" || entry.name.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": ${field}[${index}].name must be a non-empty string`,
+      );
+    }
+    if (typeof entry.rule !== "string" || entry.rule.trim() === "") {
+      throw new ConfigValidationError(
+        `profile "${profileName}": ${field}[${index}].rule must be a non-empty string`,
+      );
+    }
+    return {
+      name: entry.name,
+      rule: entry.rule,
+    };
+  });
 }
 
 function validateSecrets(

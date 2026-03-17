@@ -111,6 +111,7 @@ export function mergeRawProfiles(
     aws: shallowMerge(global.aws, local.aws),
     gpg: shallowMerge(global.gpg, local.gpg),
     network: mergeRawNetworkConfigs(global.network, local.network),
+    dbus: mergeRawDbusConfigs(global.dbus, local.dbus),
     "extra-mounts": local["extra-mounts"] ?? global["extra-mounts"],
     env: local.env ?? global.env,
     secrets: local.secrets ?? global.secrets,
@@ -142,6 +143,19 @@ function mergeRawHostExecConfigs(
     ...local,
     prompt: shallowMerge(global.prompt, local.prompt),
     rules: local.rules ?? global.rules,
+  };
+}
+
+function mergeRawDbusConfigs(
+  global?: RawProfile["dbus"],
+  local?: RawProfile["dbus"],
+): RawProfile["dbus"] {
+  if (!global) return local;
+  if (!local) return global;
+  return {
+    ...global,
+    ...local,
+    session: shallowMerge(global.session, local.session),
   };
 }
 

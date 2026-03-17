@@ -1,7 +1,10 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { MountStage, serializeNixExtraPackages } from "../src/stages/mount.ts";
 import { createContext } from "../src/pipeline/context.ts";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 
 const baseProfile: Profile = {
@@ -13,6 +16,7 @@ const baseProfile: Profile = {
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
+  dbus: structuredClone(DEFAULT_DBUS_CONFIG),
   extraMounts: [],
   env: [],
 };
@@ -74,6 +78,45 @@ Deno.test("MountStage: propagates log level to container", async () => {
   );
   const result = await new MountStage().execute(ctx);
   assertEquals(result.envVars["NAS_LOG_LEVEL"], "warn");
+});
+
+Deno.test("MountStage: mounts DBus proxy runtime and injects session env", async () => {
+  const uid = Deno.uid();
+  if (uid === null) return;
+
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-dbus-mount-" });
+  try {
+    const profile: Profile = {
+      ...baseProfile,
+      dbus: {
+        session: {
+          enable: true,
+          see: [],
+          talk: [],
+          own: [],
+          calls: [],
+          broadcasts: [],
+        },
+      },
+    };
+    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+    ctx.dbusProxyEnabled = true;
+    ctx.dbusSessionRuntimeDir = runtimeDir;
+    ctx.dbusSessionSocket = `${runtimeDir}/bus`;
+    const result = await new MountStage().execute(ctx);
+
+    assertEquals(
+      result.dockerArgs.includes(`${runtimeDir}:/run/user/${uid}`),
+      true,
+    );
+    assertEquals(result.envVars["XDG_RUNTIME_DIR"], `/run/user/${uid}`);
+    assertEquals(
+      result.envVars["DBUS_SESSION_BUS_ADDRESS"],
+      `unix:path=/run/user/${uid}/bus`,
+    );
+  } finally {
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
 });
 
 Deno.test("MountStage: invalid dynamic key throws", async () => {

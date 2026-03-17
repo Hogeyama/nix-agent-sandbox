@@ -42,6 +42,14 @@ export interface ExecutionContext {
   hostexecBrokerSocket?: string;
   /** hostexec session tmp dir */
   hostexecSessionTmpDir?: string;
+  /** DBus proxy が有効か */
+  dbusProxyEnabled: boolean;
+  /** DBus runtime dir */
+  dbusSessionRuntimeDir?: string;
+  /** DBus proxy socket path */
+  dbusSessionSocket?: string;
+  /** DBus source address */
+  dbusSessionSourceAddress?: string;
   /** Nix が有効か (auto 解決後) */
   nixEnabled: boolean;
   /** エージェント起動コマンド */
@@ -73,6 +81,7 @@ export function createContext(
     envVars: {},
     networkPromptToken: proxyEnabled ? randomHex(32) : undefined,
     networkPromptEnabled: profile.network.prompt.enable,
+    dbusProxyEnabled: profile.dbus.session.enable,
     nixEnabled: false,
     agentCommand: [],
     logLevel,

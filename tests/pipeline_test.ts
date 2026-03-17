@@ -1,5 +1,8 @@
 import { assertEquals, assertMatch } from "@std/assert";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { runPipeline } from "../src/pipeline/pipeline.ts";
 import type { Stage } from "../src/pipeline/pipeline.ts";
@@ -15,6 +18,7 @@ const testProfile: Profile = {
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
+  dbus: structuredClone(DEFAULT_DBUS_CONFIG),
   extraMounts: [],
   env: [],
 };

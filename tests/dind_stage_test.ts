@@ -7,7 +7,10 @@
  */
 
 import { assertEquals } from "@std/assert";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import { buildDindSidecarArgs, DindStage } from "../src/stages/dind.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
@@ -47,6 +50,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
         ...network?.prompt,
       },
     },
+    dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],
     env: [],
     ...rest,

@@ -9,6 +9,7 @@ import { runPipeline } from "./pipeline/pipeline.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
 import { cleanNasWorktrees, listNasWorktrees } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
+import { DbusProxyStage } from "./stages/dbus_proxy.ts";
 import { MountStage } from "./stages/mount.ts";
 import { HostExecStage } from "./stages/hostexec.ts";
 import { DindStage } from "./stages/dind.ts";
@@ -155,6 +156,7 @@ export async function main(args: string[]): Promise<void> {
       new WorktreeStage(),
       new DockerBuildStage(),
       new NixDetectStage(),
+      new DbusProxyStage(),
       new MountStage(),
       new HostExecStage(),
       new DindStage(),

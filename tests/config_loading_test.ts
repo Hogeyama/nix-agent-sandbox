@@ -15,6 +15,7 @@ import {
 import { validateConfig } from "../src/config/validate.ts";
 import {
   type Config,
+  DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   type RawConfig,
   type RawProfile,
@@ -377,6 +378,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
         network: structuredClone(DEFAULT_NETWORK_CONFIG),
+        dbus: structuredClone(DEFAULT_DBUS_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -389,6 +391,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
         network: structuredClone(DEFAULT_NETWORK_CONFIG),
+        dbus: structuredClone(DEFAULT_DBUS_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -414,6 +417,7 @@ Deno.test("resolveProfile: falls back to default profile", () => {
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
         network: structuredClone(DEFAULT_NETWORK_CONFIG),
+        dbus: structuredClone(DEFAULT_DBUS_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -437,6 +441,7 @@ Deno.test("resolveProfile: auto-selects when only one profile and no default", (
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
         network: structuredClone(DEFAULT_NETWORK_CONFIG),
+        dbus: structuredClone(DEFAULT_DBUS_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -460,6 +465,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
         network: structuredClone(DEFAULT_NETWORK_CONFIG),
+        dbus: structuredClone(DEFAULT_DBUS_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -472,6 +478,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
         network: structuredClone(DEFAULT_NETWORK_CONFIG),
+        dbus: structuredClone(DEFAULT_DBUS_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -497,6 +504,7 @@ Deno.test("resolveProfile: throws for nonexistent profile name", () => {
         aws: { mountConfig: false },
         gpg: { forwardAgent: false },
         network: structuredClone(DEFAULT_NETWORK_CONFIG),
+        dbus: structuredClone(DEFAULT_DBUS_CONFIG),
         extraMounts: [],
         env: [],
       },
@@ -680,6 +688,29 @@ Deno.test("mergeRawProfiles: gpg config is shallow merged", () => {
   };
   const merged = mergeRawProfiles(global, local);
   assertEquals(merged.gpg?.["forward-agent"], true);
+});
+
+Deno.test("mergeRawProfiles: dbus config is shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    dbus: {
+      session: {
+        enable: true,
+        see: ["org.freedesktop.secrets"],
+      },
+    },
+  };
+  const local: RawProfile = {
+    dbus: {
+      session: {
+        talk: ["org.freedesktop.secrets"],
+      },
+    },
+  };
+  const merged = mergeRawProfiles(global, local);
+  assertEquals(merged.dbus?.session?.enable, true);
+  assertEquals(merged.dbus?.session?.see, ["org.freedesktop.secrets"]);
+  assertEquals(merged.dbus?.session?.talk, ["org.freedesktop.secrets"]);
 });
 
 // --- validateConfig: 追加のバリデーション E2E テスト ---

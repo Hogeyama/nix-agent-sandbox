@@ -18,7 +18,10 @@
 
 import { assertEquals } from "@std/assert";
 import * as path from "@std/path";
-import { DEFAULT_NETWORK_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+} from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { runPipeline } from "../src/pipeline/pipeline.ts";
 import { DockerBuildStage } from "../src/stages/launch.ts";
@@ -98,6 +101,7 @@ async function ensureImage(): Promise<void> {
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
+    dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],
     env: [],
   };

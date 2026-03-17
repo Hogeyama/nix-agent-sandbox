@@ -209,6 +209,21 @@ profiles:
         timeout-seconds: 300
         default-scope: host-port   # once | host-port | host
         notify: auto       # auto | off
+    dbus:
+      session:
+        enable: false
+        # source-address を省略すると host の DBUS_SESSION_BUS_ADDRESS、
+        # なければ /run/user/$UID/bus を使う
+        see:
+          - org.freedesktop.secrets
+        talk:
+          - org.freedesktop.secrets
+        calls:
+          - name: org.freedesktop.secrets
+            rule: "*"
+        broadcasts:
+          - name: org.freedesktop.secrets
+            rule: "*"
     gpg:
       forward-agent: false  # hostexec で gpg を委譲する場合は通常不要
     extra-mounts:           # 任意の追加マウント
@@ -285,6 +300,33 @@ profiles:
 
 `gpg.forward-agent` を使わずに署名したい場合は、上記のように `hostexec.rules` に `gpg` を追加し、`GIT_CONFIG_*` で `gpg.program` を設定するパターンが使えます。これによりユーザーのグローバル Git 設定を変更せず、セッション内だけで `git commit -S` を hostexec 経由にできます。
 
+### DBus Session Proxy
+
+`dbus.session.enable: true` を設定すると、host の session bus をコンテナへ直接 bind mount せず、host 側で `xdg-dbus-proxy` を起動して filtered socket だけをコンテナへ渡します。コンテナ内では `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID/bus` を設定し、実体は per-session の proxy socket になります。
+
+Secret Service を使う例:
+
+```yaml
+profiles:
+  codex:
+    agent: codex
+    dbus:
+      session:
+        enable: true
+        calls:
+          - name: org.freedesktop.secrets
+            rule: org.freedesktop.Secret.Service.OpenSession
+          - name: org.freedesktop.secrets
+            rule: org.freedesktop.Secret.Service.SearchItems
+          - name: org.freedesktop.secrets
+            rule: org.freedesktop.Secret.Item.GetSecret
+```
+
+- `xdg-dbus-proxy` が host にない場合、または source session bus が見つからない場合は起動エラーになります
+- `source-address` は `unix:path=...` 形式のみ対応します
+- Secret Service は dynamic object path を使うため、最初は service 名単位で広めに許可し、必要に応じて絞る運用を想定しています
+- proxy 化しても、到達先の DBus service 自体は host 側資産のままです
+
 ### プロファイル設定リファレンス
 
 | キー | 型 | デフォルト | 説明 |
@@ -303,6 +345,13 @@ profiles:
 | `network.prompt.timeout-seconds` | number | `300` | pending 承認の待機秒数。タイムアウト時は deny |
 | `network.prompt.default-scope` | `"once"` \| `"host-port"` \| `"host"` | `"host-port"` | `nas network approve` の既定 scope |
 | `network.prompt.notify` | `"auto"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`auto` は tmux popup → `notify-send` → no-op の順で試行 |
+| `dbus.session.enable` | bool | `false` | host session bus に対する filtered proxy を有効化し、コンテナへ proxy socket だけを渡す |
+| `dbus.session.source-address` | string | 自動解決 | source の session bus address。省略時は `DBUS_SESSION_BUS_ADDRESS`、なければ `/run/user/$UID/bus` |
+| `dbus.session.see` | string[] | `[]` | `xdg-dbus-proxy --see` に渡す well-known name |
+| `dbus.session.talk` | string[] | `[]` | `xdg-dbus-proxy --talk` に渡す well-known name |
+| `dbus.session.own` | string[] | `[]` | `xdg-dbus-proxy --own` に渡す well-known name |
+| `dbus.session.calls` | list | `[]` | `[{ name, rule }]` 形式。各要素を `xdg-dbus-proxy --call=name=rule` として渡す |
+| `dbus.session.broadcasts` | list | `[]` | `[{ name, rule }]` 形式。各要素を `xdg-dbus-proxy --broadcast=name=rule` として渡す |
 | `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `aws.mount-config` | bool | `false` | AWS 設定ディレクトリ（`~/.aws`）をマウント |
 | `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |
@@ -407,11 +456,12 @@ session network
 | 設定 | リスク |
 |------|--------|
 | `docker.enable: true` | `docker:dind-rootless` サイドカーが `--privileged` で起動される（user namespace セットアップに必要）。エージェントコンテナ自体は非特権のまま。Docker 操作はサイドカー内に隔離され、ホストの Docker デーモンにはアクセスできない |
-| `gcloud.mount-config: true` | GCP の認証情報（`~/.config/gcloud`）がコンテナに公開される |
-| `aws.mount-config: true` | AWS の認証情報（`~/.aws`）がコンテナに公開される |
-| `gpg.forward-agent: true` | ホストの GPG 署名鍵がコンテナから利用可能になる |
+| `dbus.session.enable: true` | 許可した DBus service に対して host 側資産へ到達できる。session bus 全体の露出は減るが、許可先 service の権限そのものは残る |
 | `extra-mounts` | 指定したホストディレクトリがコンテナにマウントされる（`mode: rw` の場合は書き込みも可能） |
 | `hostexec.rules[].inherit-env.mode: unsafe-inherit-all` | host の環境変数が広く継承されるため、secret 漏えい面が大きくなる |
+| `gcloud.mount-config: true` | GCP の認証情報（`~/.config/gcloud`）がコンテナに公開される。`hostexec`で`gcloud`を移譲するほうがマシかも |
+| `aws.mount-config: true` | AWS の認証情報（`~/.aws`）がコンテナに公開される。`hostexec`で`aws`を移譲するほうがマシかも|
+| `gpg.forward-agent: true` | ホストの GPG 署名鍵がコンテナから利用可能になる。`hostexec`で`gpg`を移譲するほうがマシかも|
 
 ### HostExec の注意点
 
