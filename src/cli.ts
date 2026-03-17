@@ -14,7 +14,11 @@ import { HostExecStage } from "./stages/hostexec.ts";
 import { DindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
-import { dockerImageExists, dockerRemoveImage } from "./docker/client.ts";
+import {
+  dockerImageExists,
+  dockerRemoveImage,
+  InterruptedCommandError,
+} from "./docker/client.ts";
 import { cleanNasContainers } from "./container_clean.ts";
 import { sendBrokerRequest } from "./network/broker.ts";
 import { serveAuthRouter } from "./network/envoy_auth_router.ts";
@@ -160,8 +164,7 @@ export async function main(args: string[]): Promise<void> {
 
     await runPipeline(stages, ctx);
   } catch (err) {
-    console.error(`[nas] Error: ${(err as Error).message}`);
-    Deno.exit(1);
+    exitOnCliError(err);
   }
 }
 
@@ -191,8 +194,7 @@ async function runRebuild(
 
     await runPipeline(stages, ctx);
   } catch (err) {
-    console.error(`[nas] Error: ${(err as Error).message}`);
-    Deno.exit(1);
+    exitOnCliError(err);
   }
 }
 
@@ -240,8 +242,7 @@ async function runWorktreeCommand(
       Deno.exit(1);
     }
   } catch (err) {
-    console.error(`[nas] Error: ${(err as Error).message}`);
-    Deno.exit(1);
+    exitOnCliError(err);
   }
 }
 
@@ -284,8 +285,7 @@ async function runContainerCommand(
     console.error("  Usage: nas container clean");
     Deno.exit(1);
   } catch (err) {
-    console.error(`[nas] Error: ${(err as Error).message}`);
-    Deno.exit(1);
+    exitOnCliError(err);
   }
 }
 
@@ -362,8 +362,7 @@ async function runNetworkCommand(
     );
     Deno.exit(1);
   } catch (err) {
-    console.error(`[nas] Error: ${(err as Error).message}`);
-    Deno.exit(1);
+    exitOnCliError(err);
   }
 }
 
@@ -616,6 +615,14 @@ async function sendHostExecDecision(
 }
 
 export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
+
+function exitOnCliError(err: unknown): never {
+  if (err instanceof InterruptedCommandError) {
+    Deno.exit(err.exitCode);
+  }
+  console.error(`[nas] Error: ${(err as Error).message}`);
+  Deno.exit(1);
+}
 
 async function sendDecision(
   paths: Awaited<ReturnType<typeof resolveNetworkRuntimePaths>>,

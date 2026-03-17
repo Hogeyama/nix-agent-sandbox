@@ -26,6 +26,39 @@ export interface DockerRunOptions {
   interactive: boolean;
 }
 
+type ForwardedSignal = "SIGINT" | "SIGTERM";
+
+interface SignalTrap {
+  add(signal: ForwardedSignal, handler: () => void): void;
+  remove(signal: ForwardedSignal, handler: () => void): void;
+}
+
+export interface InteractiveCommandOptions {
+  stdin?: "inherit" | "null" | "piped";
+  stdout?: "inherit" | "null" | "piped";
+  stderr?: "inherit" | "null" | "piped";
+  errorLabel?: string;
+  signalTrap?: SignalTrap;
+}
+
+const defaultSignalTrap: SignalTrap = {
+  add(signal, handler) {
+    Deno.addSignalListener(signal, handler);
+  },
+  remove(signal, handler) {
+    Deno.removeSignalListener(signal, handler);
+  },
+};
+
+export class InterruptedCommandError extends Error {
+  readonly exitCode = 130;
+
+  constructor(command: string) {
+    super(`${command} interrupted`);
+    this.name = "InterruptedCommandError";
+  }
+}
+
 export interface DockerContainerDetails {
   name: string;
   running: boolean;
@@ -112,15 +145,53 @@ export async function dockerRun(opts: DockerRunOptions): Promise<void> {
   args.push(opts.image);
   args.push(...opts.command);
 
-  const cmd = new Deno.Command(args[0], {
-    args: args.slice(1),
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
+  await runInteractiveCommand(args[0], args.slice(1), {
+    errorLabel: "docker run",
   });
-  const status = await cmd.spawn().status;
-  if (!status.success) {
-    throw new Error(`docker run exited with code ${status.code}`);
+}
+
+export async function runInteractiveCommand(
+  command: string,
+  args: string[],
+  options: InteractiveCommandOptions = {},
+): Promise<void> {
+  const child = new Deno.Command(command, {
+    args,
+    stdin: options.stdin ?? "inherit",
+    stdout: options.stdout ?? "inherit",
+    stderr: options.stderr ?? "inherit",
+  }).spawn();
+  const signalTrap = options.signalTrap ?? defaultSignalTrap;
+  let interruptedBy: ForwardedSignal | null = null;
+  const handlers = new Map<ForwardedSignal, () => void>();
+
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    const handler = () => {
+      interruptedBy = interruptedBy ?? signal;
+      try {
+        child.kill(signal);
+      } catch {
+        // 子プロセスが先に終了していても終了判定は status 側で扱う。
+      }
+    };
+    handlers.set(signal, handler);
+    signalTrap.add(signal, handler);
+  }
+
+  try {
+    const status = await child.status;
+    if (interruptedBy !== null) {
+      throw new InterruptedCommandError(command);
+    }
+    if (!status.success) {
+      throw new Error(
+        `${options.errorLabel ?? command} exited with code ${status.code}`,
+      );
+    }
+  } finally {
+    for (const [signal, handler] of handlers.entries()) {
+      signalTrap.remove(signal, handler);
+    }
   }
 }
 
