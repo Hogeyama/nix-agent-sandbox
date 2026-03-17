@@ -90,9 +90,21 @@ fi
 # git safe.directory を設定
 # env var 方式: 直接実行されるコマンド向け
 # (read-only マウントの .config/git に書き込もうとするのを回避)
-export GIT_CONFIG_COUNT=1
-export GIT_CONFIG_KEY_0="safe.directory"
-export GIT_CONFIG_VALUE_0="$WORKSPACE"
+append_git_config_env() {
+  local key="$1"
+  local value="$2"
+  local count="${GIT_CONFIG_COUNT:-0}"
+  if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+    count=0
+  fi
+  local key_var="GIT_CONFIG_KEY_${count}"
+  local value_var="GIT_CONFIG_VALUE_${count}"
+  export GIT_CONFIG_COUNT="$((count + 1))"
+  export "${key_var}=${key}"
+  export "${value_var}=${value}"
+}
+
+append_git_config_env "safe.directory" "$WORKSPACE"
 # /etc/gitconfig 方式: nix が内部で git を呼ぶ際に env var が渡らないため
 git config --system safe.directory "$WORKSPACE"
 
@@ -126,7 +138,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     # flake に devShells.<system>.default があるかチェック (nix flake show は derivation を評価しないため高速)
     SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
     if [ -n "$SYSTEM" ] && "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
-      nix flake show --json "$WORKSPACE" 2>/dev/null | \
+      nix flake show --json "$WORKSPACE" 2>/dev/null |
       jq -e ".devShells.\"$SYSTEM\".default" >/dev/null 2>&1; then
       HAS_DEVSHELL=true
     else
