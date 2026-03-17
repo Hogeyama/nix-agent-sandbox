@@ -8,11 +8,16 @@ _common_infra: &common_infra
     enable: true
     shared: true
   gcloud:
-    mount-config: true
+    mount-config: false
   aws:
-    mount-config: true
+    mount-config: false
   gpg:
     forward-agent: false
+  extra-mounts:
+    - # gitignoreが居る
+      src: ~/nix-config
+      dst: ~/nix-config
+      mode: ro
 
 _common_network: &common_network
   network:
@@ -74,6 +79,7 @@ _common_env: &common_env
       val: Asia/Tokyo
     - key: LANG
       val: en_US.UTF-8
+    # hostexecのgpgで署名する
     - key: GIT_CONFIG_COUNT
       val: "1"
     - key: GIT_CONFIG_KEY_0
@@ -123,11 +129,6 @@ profiles:
       - "Edit"
       - --disallowedTools
       - "Bash(git push *)"
-    extra-mounts:
-      - # gitignoreが居る
-        src: ~/nix-config
-        dst: ~/nix-config
-        mode: ro
     <<: [*common_infra, *common_network, *common_env, *common_hostexec]
 
   codex:
@@ -137,29 +138,23 @@ profiles:
       - never
       - --sandbox
       - danger-full-access
-    extra-mounts:
-      - # gitignoreが居る
-        src: ~/nix-config
-        dst: ~/nix-config
-        mode: ro
-      - # codexでkeyringに認証情報を持たせるなら必須
-        # だけど権限強すぎるよなあ
-        src: /run/user/1000/bus
-        dst: /run/user/1000/bus
+    dbus:
+      session:
+        enable: true
+        calls:
+          - name: org.freedesktop.secrets
+            rule: org.freedesktop.Secret.Service.OpenSession
+          - name: org.freedesktop.secrets
+            rule: org.freedesktop.Secret.Service.SearchItems
+          - name: org.freedesktop.secrets
+            rule: org.freedesktop.Secret.Item.GetSecret
     <<: [*common_infra, *common_network, *common_env, *common_hostexec]
 
   copilot:
     agent: copilot
     agent-args:
-      - --allow-all-paths
-      - --allow-tool=shell
-      - --allow-tool=write
+      - --allow-all
       - --deny-tool=shell(git push)
-    extra-mounts:
-      - # gitignoreが居る
-        src: ~/nix-config
-        dst: ~/nix-config
-        mode: ro
     <<: [*common_infra, *common_network, *common_env, *common_hostexec]
 
   hostexec-demo:
@@ -193,4 +188,4 @@ profiles:
             HOSTEXEC_DEMO_API_TOKEN: secret:hostexec_demo_api_token
           approval: prompt
           fallback: container
-    <<: [*common_infra, *common_network, *common_env]
+    <<: [*common_network, *common_env]
