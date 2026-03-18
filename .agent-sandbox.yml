@@ -13,11 +13,6 @@ _common_infra: &common_infra
     mount-config: false
   gpg:
     forward-agent: false
-  extra-mounts:
-    - # gitignoreが居る
-      src: ~/nix-config
-      dst: ~/nix-config
-      mode: ro
 
 _common_network: &common_network
   network:
@@ -117,6 +112,15 @@ _common_hostexec: &common_hostexec
         cwd:
           mode: workspace-or-session-tmp
         approval: prompt
+        fallback: container
+      - id: deno-test
+        match:
+          argv0: deno
+          subcommands:
+            - test
+        cwd:
+          mode: workspace-only
+        approval: allow
         fallback: container
 
 profiles:
