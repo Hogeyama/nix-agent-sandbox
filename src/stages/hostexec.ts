@@ -62,7 +62,6 @@ export class HostExecStage implements Stage {
       workspaceRoot: ctx.mountDir ?? ctx.workDir,
       sessionTmpDir,
       hostexec: config,
-      secrets: ctx.profile.secrets,
     });
     await broker.start(socketPath);
     this.broker = broker;

@@ -112,6 +112,11 @@ function validateProfile(name: string, raw: RawProfile): Profile {
       `profile "${name}": agent must be one of: ${VALID_AGENTS.join(", ")}`,
     );
   }
+  if ("secrets" in raw) {
+    throw new ConfigValidationError(
+      `profile "${name}": secrets has moved to hostexec.secrets`,
+    );
+  }
 
   const network = validateNetwork(name, raw.network);
   const dbus = validateDbus(name, raw.dbus);
@@ -149,8 +154,7 @@ function validateProfile(name: string, raw: RawProfile): Profile {
     dbus,
     extraMounts: validateExtraMounts(name, raw["extra-mounts"]),
     env: validateEnv(name, raw.env),
-    secrets: validateSecrets(name, raw.secrets),
-    hostexec: validateHostExec(name, raw.hostexec, raw.secrets),
+    hostexec: validateHostExec(name, raw.hostexec),
   };
 }
 
@@ -471,18 +475,19 @@ function validateDbusRules(
 
 function validateSecrets(
   profileName: string,
-  rawSecrets: RawProfile["secrets"],
+  rawSecrets: NonNullable<RawProfile["hostexec"]>["secrets"] | undefined,
+  fieldPath = "hostexec.secrets",
 ): Record<string, SecretConfig> {
   if (!rawSecrets) return {};
   if (typeof rawSecrets !== "object" || Array.isArray(rawSecrets)) {
     throw new ConfigValidationError(
-      `profile "${profileName}": secrets must be an object`,
+      `profile "${profileName}": ${fieldPath} must be an object`,
     );
   }
 
   const result: Record<string, SecretConfig> = {};
   for (const [name, entry] of Object.entries(rawSecrets)) {
-    const prefix = `profile "${profileName}": secrets.${name}`;
+    const prefix = `profile "${profileName}": ${fieldPath}.${name}`;
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new ConfigValidationError(`${prefix} must be an object`);
     }
@@ -507,7 +512,6 @@ function validateSecrets(
 function validateHostExec(
   profileName: string,
   raw: RawProfile["hostexec"],
-  rawSecrets: RawProfile["secrets"],
 ): HostExecConfig {
   if (raw !== undefined && (typeof raw !== "object" || raw === null)) {
     throw new ConfigValidationError(
@@ -518,7 +522,8 @@ function validateHostExec(
   return {
     prompt: validateHostExecPrompt(profileName, raw?.prompt),
     subcommand: validateHostExecSubcommand(profileName, raw?.subcommand),
-    rules: validateHostExecRules(profileName, raw?.rules, rawSecrets),
+    secrets: validateSecrets(profileName, raw?.secrets),
+    rules: validateHostExecRules(profileName, raw?.rules, raw?.secrets),
   };
 }
 
@@ -603,7 +608,7 @@ function validateHostExecSubcommand(
 function validateHostExecRules(
   profileName: string,
   rawRules: NonNullable<RawProfile["hostexec"]>["rules"] | undefined,
-  rawSecrets: RawProfile["secrets"],
+  rawSecrets: NonNullable<RawProfile["hostexec"]>["secrets"] | undefined,
 ): HostExecRule[] {
   if (!rawRules) return [];
   if (!Array.isArray(rawRules)) {

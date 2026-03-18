@@ -28,9 +28,10 @@ function makeConfig(overrides: HostExecConfigOverrides = {}): HostExecConfig {
       notify: "off",
       ...(overrides.prompt ?? {}),
     },
-    subcommand: {
+    subcommand: overrides.subcommand ?? {
       prefixOptionsWithValue: {},
     },
+    secrets: overrides.secrets ?? {},
     rules: overrides.rules ?? [],
   };
 }
@@ -93,6 +94,9 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
+      secrets: {
+        test_token: { from: "env:HOSTEXEC_TEST_TOKEN", required: true },
+      },
       rules: [{
         id: "deno-eval",
         match: { argv0: "deno", subcommands: ["eval"] },
@@ -103,9 +107,6 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
         fallback: "container",
       }],
     }),
-    secrets: {
-      test_token: { from: "env:HOSTEXEC_TEST_TOKEN", required: true },
-    },
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
   await broker.start(socketPath);
@@ -245,6 +246,10 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
+      secrets: {
+        token_a: { from: "env:TOKEN_A", required: true },
+        token_b: { from: "env:TOKEN_B", required: true },
+      },
       rules: [
         {
           id: "deno-secret-a",
@@ -266,10 +271,6 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
         },
       ],
     }),
-    secrets: {
-      token_a: { from: "env:TOKEN_A", required: true },
-      token_b: { from: "env:TOKEN_B", required: true },
-    },
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
   await broker.start(socketPath);

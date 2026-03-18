@@ -1,9 +1,5 @@
 import * as path from "@std/path";
-import type {
-  HostExecConfig,
-  HostExecRule,
-  SecretConfig,
-} from "../config/types.ts";
+import type { HostExecConfig, HostExecRule } from "../config/types.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import { SecretStore } from "./secret_store.ts";
 import { notifyHostExecPendingRequest } from "./notify.ts";
@@ -33,7 +29,6 @@ interface HostExecBrokerOptions {
   workspaceRoot: string;
   sessionTmpDir: string;
   hostexec?: HostExecConfig;
-  secrets?: Record<string, SecretConfig>;
 }
 
 interface PendingWaiter {
@@ -84,7 +79,7 @@ export class HostExecBroker {
     this.workspaceRoot = path.resolve(options.workspaceRoot);
     this.sessionTmpDir = path.resolve(options.sessionTmpDir);
     this.config = options.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
-    this.secretStore = new SecretStore(options.secrets ?? {});
+    this.secretStore = new SecretStore(this.config.secrets);
   }
 
   async start(socketPath: string): Promise<void> {

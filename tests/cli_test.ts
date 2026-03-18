@@ -495,6 +495,9 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
       subcommand: {
         prefixOptionsWithValue: {},
       },
+      secrets: {
+        cli_token: { from: "env:HOSTEXEC_CLI_TOKEN", required: true },
+      },
       rules: [{
         id: "deno-eval",
         match: { argv0: "deno", subcommands: ["eval"] },
@@ -504,9 +507,6 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
         approval: "prompt",
         fallback: "container",
       }],
-    },
-    secrets: {
-      cli_token: { from: "env:HOSTEXEC_CLI_TOKEN", required: true },
     },
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_cli");

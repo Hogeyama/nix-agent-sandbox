@@ -163,18 +163,18 @@ profiles:
     extra-mounts:
       - src: /dev/null
         dst: .env
-    secrets:
-      hostexec_demo_api_base_url:
-        from: dotenv:.env#HOSTEXEC_DEMO_API_BASE_URL
-        required: true
-      hostexec_demo_api_token:
-        from: dotenv:.env#HOSTEXEC_DEMO_API_TOKEN
-        required: true
     hostexec:
       prompt:
         enable: true
         timeout-seconds: 300
         default-scope: capability
+      secrets:
+        hostexec_demo_api_base_url:
+          from: dotenv:.env#HOSTEXEC_DEMO_API_BASE_URL
+          required: true
+        hostexec_demo_api_token:
+          from: dotenv:.env#HOSTEXEC_DEMO_API_TOKEN
+          required: true
       rules:
         - id: deno-task
           match:

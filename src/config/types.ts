@@ -95,6 +95,7 @@ export interface HostExecSubcommandConfig {
 export interface HostExecConfig {
   prompt: HostExecPromptConfig;
   subcommand: HostExecSubcommandConfig;
+  secrets: Record<string, SecretConfig>;
   rules: HostExecRule[];
 }
 
@@ -163,7 +164,6 @@ export interface Profile {
   dbus: DbusConfig;
   extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
-  secrets?: Record<string, SecretConfig>;
   hostexec?: HostExecConfig;
 }
 
@@ -241,10 +241,6 @@ export interface RawProfile {
     key_cmd?: string;
     val_cmd?: string;
   }>;
-  secrets?: Record<string, {
-    from?: string;
-    required?: boolean;
-  }>;
   hostexec?: {
     prompt?: {
       enable?: boolean;
@@ -255,6 +251,10 @@ export interface RawProfile {
     subcommand?: {
       "prefix-options-with-value"?: Record<string, string[]>;
     };
+    secrets?: Record<string, {
+      from?: string;
+      required?: boolean;
+    }>;
     rules?: Array<{
       id?: string;
       match?: {
@@ -350,5 +350,6 @@ export const DEFAULT_HOSTEXEC_SUBCOMMAND_CONFIG: HostExecSubcommandConfig = {
 export const DEFAULT_HOSTEXEC_CONFIG: HostExecConfig = {
   prompt: DEFAULT_HOSTEXEC_PROMPT_CONFIG,
   subcommand: DEFAULT_HOSTEXEC_SUBCOMMAND_CONFIG,
+  secrets: {},
   rules: [],
 };

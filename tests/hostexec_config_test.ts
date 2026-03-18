@@ -9,10 +9,10 @@ Deno.test("hostexec config: validates secrets and rules", () => {
     profiles: {
       test: {
         agent: "claude",
-        secrets: {
-          github_token: { from: "env:GITHUB_TOKEN", required: true },
-        },
         hostexec: {
+          secrets: {
+            github_token: { from: "env:GITHUB_TOKEN", required: true },
+          },
           prompt: {
             notify: "desktop",
           },
@@ -39,7 +39,7 @@ Deno.test("hostexec config: validates secrets and rules", () => {
   });
 
   assertEquals(
-    config.profiles.test.secrets?.github_token.from,
+    config.profiles.test.hostexec?.secrets.github_token.from,
     "env:GITHUB_TOKEN",
   );
   assertEquals(config.profiles.test.hostexec?.rules[0].inheritEnv.keys, [
@@ -74,6 +74,24 @@ Deno.test("hostexec config: rejects unknown secret references", () => {
       }),
     ConfigValidationError,
     "unknown secret",
+  );
+});
+
+Deno.test("hostexec config: rejects legacy profile secrets", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            secrets: {
+              github_token: { from: "env:GITHUB_TOKEN", required: true },
+            },
+          } as never,
+        },
+      }),
+    ConfigValidationError,
+    "secrets has moved to hostexec.secrets",
   );
 });
 

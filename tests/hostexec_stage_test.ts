@@ -34,9 +34,6 @@ function makeProfile(): Profile {
     },
     extraMounts: [],
     env: [],
-    secrets: {
-      token: { from: "env:TOKEN", required: false },
-    },
     hostexec: {
       prompt: {
         enable: true,
@@ -46,6 +43,9 @@ function makeProfile(): Profile {
       },
       subcommand: {
         prefixOptionsWithValue: {},
+      },
+      secrets: {
+        token: { from: "env:TOKEN", required: false },
       },
       rules: [{
         id: "git-readonly",
@@ -61,6 +61,13 @@ function makeProfile(): Profile {
 }
 
 Deno.test("HostExecStage: injects wrapper path and socket mounts", async () => {
+  const runtimeRoot = path.join(
+    "/tmp",
+    `nas-he-${crypto.randomUUID().slice(0, 8)}`,
+  );
+  await Deno.mkdir(runtimeRoot, { recursive: true });
+  const originalRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
+  Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
   const profile = makeProfile();
   const config: Config = { profiles: { default: profile } };
   const ctx = createContext(config, profile, "default", Deno.cwd());
@@ -101,5 +108,11 @@ Deno.test("HostExecStage: injects wrapper path and socket mounts", async () => {
     assertEquals(wrapperScript.includes("sys.stdin.buffer.read()"), false);
   } finally {
     await stage.teardown(result);
+    if (originalRuntimeDir !== undefined) {
+      Deno.env.set("XDG_RUNTIME_DIR", originalRuntimeDir);
+    } else {
+      Deno.env.delete("XDG_RUNTIME_DIR");
+    }
+    await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
   }
 });

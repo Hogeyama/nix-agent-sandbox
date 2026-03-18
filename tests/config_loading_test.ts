@@ -713,6 +713,37 @@ Deno.test("mergeRawProfiles: dbus config is shallow merged", () => {
   assertEquals(merged.dbus?.session?.talk, ["org.freedesktop.secrets"]);
 });
 
+Deno.test("mergeRawProfiles: hostexec secrets are shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    hostexec: {
+      secrets: {
+        github_token: {
+          from: "env:GITHUB_TOKEN",
+          required: true,
+        },
+      },
+    },
+  };
+  const local: RawProfile = {
+    hostexec: {
+      secrets: {
+        github_token: {
+          from: "env:OVERRIDE_GITHUB_TOKEN",
+          required: false,
+        },
+      },
+    },
+  };
+  const merged = mergeRawProfiles(global, local);
+  assertEquals(merged.hostexec?.secrets, {
+    github_token: {
+      from: "env:OVERRIDE_GITHUB_TOKEN",
+      required: false,
+    },
+  });
+});
+
 // --- validateConfig: 追加のバリデーション E2E テスト ---
 
 Deno.test("validateConfig: multiple profiles each independently validated", () => {

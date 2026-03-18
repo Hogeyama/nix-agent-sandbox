@@ -114,7 +114,6 @@ export function mergeRawProfiles(
     dbus: mergeRawDbusConfigs(global.dbus, local.dbus),
     "extra-mounts": local["extra-mounts"] ?? global["extra-mounts"],
     env: local.env ?? global.env,
-    secrets: local.secrets ?? global.secrets,
     hostexec: mergeRawHostExecConfigs(global.hostexec, local.hostexec),
   };
 }
@@ -142,6 +141,7 @@ function mergeRawHostExecConfigs(
     ...global,
     ...local,
     prompt: shallowMerge(global.prompt, local.prompt),
+    secrets: local.secrets ?? global.secrets,
     rules: local.rules ?? global.rules,
   };
 }

@@ -175,6 +175,10 @@ profiles:
       - key: ANOTHER_VAR
         val_cmd: "cat /path/to/value"
     hostexec:
+      secrets:
+        github_token:
+          from: env:GITHUB_TOKEN      # env: / file: / dotenv: / keyring:
+          required: true
       prompt:
         enable: true
         timeout-seconds: 300
@@ -188,16 +192,12 @@ profiles:
           cwd:
             mode: workspace-or-session-tmp
           env:
-            GITHUB_TOKEN: secret:github_token # 後述のsecretsから注入する
+            GITHUB_TOKEN: secret:github_token # 後述のhostexec.secretsから注入する
           inherit-env:                        # 環境変数のうち、必要最低限なもの+SSH_AUTH_SOCKだけを継承
             mode: minimal
             keys: [SSH_AUTH_SOCK]
           approval: prompt        # allow | prompt | deny
           fallback: container     # container | deny
-    secrets:
-      github_token:
-        from: env:GITHUB_TOKEN      # env: / file: / dotenv: / keyring:
-        required: true
 ```
 
 ## 設定パターン
@@ -212,6 +212,10 @@ profiles:
       - src: /dev/null
         dst: .env
     hostexec:
+      secrets:
+        build_api_token:
+          from: dotenv:.env#API_TOKEN
+          required: true
       rules:
         - id: pnpm-build
           match:
@@ -223,10 +227,6 @@ profiles:
             API_TOKEN: secret:build_api_token
           approval: allow
           fallback: deny
-    secrets:
-      build_api_token:
-        from: dotenv:.env#API_TOKEN
-        required: true
 ```
 
 ### Git の署名をホストに移譲する
@@ -441,8 +441,8 @@ session network
 | `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |
 | `extra-mounts` | list | `[]` | 追加マウント。`[{ src, dst, mode? }]`（`mode` は `"ro"`/`"rw"`、省略時 `"ro"`）。`src`/`dst` は絶対パスのほか `~` と workDir 基準の相対パスも可。既存ワークスペース配下への単一ファイルマウント（例: `/dev/null` → `.env`）も可 |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key, val_cmd }]` 形式で環境変数を追加 |
-| `secrets.<name>.from` | string | （必須） | secret の取得元。`env:VAR_NAME` / `file:/absolute/path` / `dotenv:/absolute/path#KEY` / `keyring:service/account` |
-| `secrets.<name>.required` | bool | `true` | secret が取得できない場合にエラーにするか |
+| `hostexec.secrets.<name>.from` | string | （必須） | secret の取得元。`env:VAR_NAME` / `file:/absolute/path` / `dotenv:/absolute/path#KEY` / `keyring:service/account` |
+| `hostexec.secrets.<name>.required` | bool | `true` | secret が取得できない場合にエラーにするか |
 | `hostexec.prompt.enable` | bool | `true` | `approval: prompt` の hostexec 実行を承認キューに入れる |
 | `hostexec.prompt.timeout-seconds` | number | `300` | hostexec 承認の待機秒数。タイムアウト時は deny |
 | `hostexec.prompt.default-scope` | `"capability"` | `"capability"` | hostexec 承認再利用の単位。同じ rule_id + subcommand の組み合わせで再利用される |
@@ -457,4 +457,3 @@ session network
 | `hostexec.rules[].inherit-env.keys` | string[] | `[]` | `minimal` に追加で継承する host 環境変数 |
 | `hostexec.rules[].approval` | enum | `"prompt"` | `allow` / `prompt` / `deny` |
 | `hostexec.rules[].fallback` | enum | `"container"` | ルール不一致や不許可時にコンテナ実行へ戻すか即拒否するか |
-
