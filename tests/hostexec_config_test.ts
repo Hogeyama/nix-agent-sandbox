@@ -16,16 +16,13 @@ Deno.test("hostexec config: validates secrets and rules", () => {
           prompt: {
             notify: "desktop",
           },
-          subcommand: {
-            "prefix-options-with-value": {
-              git: ["-C", "--git-dir"],
-              gh: ["-R", "--repo"],
-            },
-          },
           rules: [
             {
               id: "git-readonly",
-              match: { argv0: "git", subcommands: ["pull", "fetch"] },
+              match: {
+                argv0: "git",
+                "arg-regex": "^(pull|fetch)\\b",
+              },
               env: { GITHUB_TOKEN: "secret:github_token" },
               "inherit-env": { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },
               cwd: { mode: "workspace-or-session-tmp" },
@@ -47,11 +44,8 @@ Deno.test("hostexec config: validates secrets and rules", () => {
   ]);
   assertEquals(config.profiles.test.hostexec?.prompt.notify, "desktop");
   assertEquals(
-    config.profiles.test.hostexec?.subcommand.prefixOptionsWithValue,
-    {
-      git: ["-C", "--git-dir"],
-      gh: ["-R", "--repo"],
-    },
+    config.profiles.test.hostexec?.rules[0].match.argRegex,
+    "^(pull|fetch)\\b",
   );
 });
 
@@ -65,7 +59,7 @@ Deno.test("hostexec config: rejects unknown secret references", () => {
             hostexec: {
               rules: [{
                 id: "git-readonly",
-                match: { argv0: "git", subcommands: ["pull"] },
+                match: { argv0: "git" },
                 env: { GITHUB_TOKEN: "secret:missing" },
               }],
             },
@@ -104,7 +98,7 @@ Deno.test("hostexec config: rejects missing rule id", () => {
             agent: "claude",
             hostexec: {
               rules: [{
-                match: { argv0: "git", subcommands: ["pull"] },
+                match: { argv0: "git" },
               }],
             },
           },
@@ -125,7 +119,7 @@ Deno.test("hostexec config: rejects invalid inherit-env mode", () => {
             hostexec: {
               rules: [{
                 id: "git-readonly",
-                match: { argv0: "git", subcommands: ["pull"] },
+                match: { argv0: "git" },
                 "inherit-env": { mode: "all" as never },
               }],
             },
@@ -157,7 +151,7 @@ Deno.test("hostexec config: rejects invalid notify backend", () => {
   );
 });
 
-Deno.test("hostexec config: allows omitted subcommands for any subcommand", () => {
+Deno.test("hostexec config: allows argv0-only match for catch-all", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -173,12 +167,12 @@ Deno.test("hostexec config: allows omitted subcommands for any subcommand", () =
   });
 
   assertEquals(
-    config.profiles.test.hostexec?.rules[0].match.subcommands,
+    config.profiles.test.hostexec?.rules[0].match.argRegex,
     undefined,
   );
 });
 
-Deno.test("hostexec config: rejects empty subcommands array", () => {
+Deno.test("hostexec config: rejects invalid arg-regex", () => {
   assertThrows(
     () =>
       validateConfig({
@@ -188,35 +182,13 @@ Deno.test("hostexec config: rejects empty subcommands array", () => {
             hostexec: {
               rules: [{
                 id: "git-any",
-                match: { argv0: "git", subcommands: [] },
+                match: { argv0: "git", "arg-regex": "[invalid" },
               }],
             },
           },
         },
       }),
     ConfigValidationError,
-    "match.subcommands",
-  );
-});
-
-Deno.test("hostexec config: rejects invalid prefix-options-with-value entry", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              subcommand: {
-                "prefix-options-with-value": {
-                  git: ["-C", ""],
-                },
-              },
-            },
-          },
-        },
-      }),
-    ConfigValidationError,
-    "prefix-options-with-value.git",
+    "arg-regex is not a valid regular expression",
   );
 });

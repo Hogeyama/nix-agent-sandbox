@@ -41,15 +41,12 @@ function makeProfile(): Profile {
         defaultScope: "capability",
         notify: "off",
       },
-      subcommand: {
-        prefixOptionsWithValue: {},
-      },
       secrets: {
         token: { from: "env:TOKEN", required: false },
       },
       rules: [{
         id: "git-readonly",
-        match: { argv0: "git", subcommands: ["pull"] },
+        match: { argv0: "git", argRegex: "^pull\\b" },
         cwd: { mode: "workspace-or-session-tmp", allow: [] },
         env: { GITHUB_TOKEN: "secret:token" },
         inheritEnv: { mode: "minimal", keys: [] },

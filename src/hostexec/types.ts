@@ -17,7 +17,6 @@ export interface HostExecPendingEntry {
   ruleId: string;
   argv0: string;
   args: string[];
-  subcommand: string | null;
   cwd: string;
   state: "pending";
   createdAt: string;
@@ -102,7 +101,6 @@ export interface ResolvedExecutionCapability {
   ruleId: string;
   argv0: string;
   normalizedArgv: string[];
-  normalizedSubcommand: string | null;
   normalizedCwd: string;
   envBindings: EnvBindingFingerprint[];
   inheritEnv: {
@@ -114,7 +112,6 @@ export interface ResolvedExecutionCapability {
 export interface ResolvedExecution {
   rule: HostExecRule;
   cwd: string;
-  subcommand: string | null;
   capability: ResolvedExecutionCapability;
   envVars: Record<string, string>;
 }

@@ -89,12 +89,10 @@ _common_hostexec: &common_hostexec
       timeout-seconds: 300
       default-scope: capability
     rules:
-      - id: git
+      - id: git-fetch-pull
         match:
           argv0: git
-          subcommands:
-            - fetch
-            - pull
+          arg-regex: '^(fetch|pull)\b'
         cwd:
           mode: workspace-or-session-tmp
         approval: allow
@@ -117,8 +115,7 @@ _common_hostexec: &common_hostexec
       - id: deno-test
         match:
           argv0: deno
-          subcommands:
-            - test
+          arg-regex: '^(task\b)?.*\btest\b'
         cwd:
           mode: workspace-only
         approval: allow

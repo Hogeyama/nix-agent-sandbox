@@ -75,7 +75,6 @@ export interface HostExecInheritEnvConfig {
 
 export interface HostExecMatchConfig {
   argv0: string;
-  subcommands?: string[];
   argRegex?: string;
 }
 
@@ -89,13 +88,8 @@ export interface HostExecRule {
   fallback: HostExecFallback;
 }
 
-export interface HostExecSubcommandConfig {
-  prefixOptionsWithValue: Record<string, string[]>;
-}
-
 export interface HostExecConfig {
   prompt: HostExecPromptConfig;
-  subcommand: HostExecSubcommandConfig;
   secrets: Record<string, SecretConfig>;
   rules: HostExecRule[];
 }
@@ -249,9 +243,6 @@ export interface RawProfile {
       "default-scope"?: "capability";
       notify?: HostExecPromptNotify;
     };
-    subcommand?: {
-      "prefix-options-with-value"?: Record<string, string[]>;
-    };
     secrets?: Record<string, {
       from?: string;
       required?: boolean;
@@ -260,7 +251,6 @@ export interface RawProfile {
       id?: string;
       match?: {
         argv0?: string;
-        subcommands?: string[];
         "arg-regex"?: string;
       };
       cwd?: {
@@ -345,13 +335,8 @@ export const DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG: HostExecInheritEnvConfig = {
   keys: [],
 };
 
-export const DEFAULT_HOSTEXEC_SUBCOMMAND_CONFIG: HostExecSubcommandConfig = {
-  prefixOptionsWithValue: {},
-};
-
 export const DEFAULT_HOSTEXEC_CONFIG: HostExecConfig = {
   prompt: DEFAULT_HOSTEXEC_PROMPT_CONFIG,
-  subcommand: DEFAULT_HOSTEXEC_SUBCOMMAND_CONFIG,
   secrets: {},
   rules: [],
 };

@@ -182,14 +182,13 @@ profiles:
       prompt:
         enable: true
         timeout-seconds: 300
-        default-scope: capability # 同じ capability（rule_id + subcommand）単位で承認を再利用
+        default-scope: capability # 同じ capability（rule_id + argv0 + args）単位で承認を再利用
         notify: auto
       rules:
         - id: git-readonly
           match:
             argv0: git
-            subcommands: [pull, fetch]
-            # arg-regex: '...'   # argv0 以降の引数に対する正規表現マッチ（省略可、subcommands と AND）
+            arg-regex: '^(pull|fetch)\b'
           cwd:
             mode: workspace-or-session-tmp
           env:
@@ -221,7 +220,7 @@ profiles:
         - id: pnpm-build
           match:
             argv0: pnpm
-            subcommands: [build]
+            arg-regex: '^build\b'
           cwd:
             mode: workspace-only
           env:
@@ -460,12 +459,11 @@ session network
 | `hostexec.secrets.<name>.required` | bool | `true` | secret が取得できない場合にエラーにするか |
 | `hostexec.prompt.enable` | bool | `true` | `approval: prompt` の hostexec 実行を承認キューに入れる |
 | `hostexec.prompt.timeout-seconds` | number | `300` | hostexec 承認の待機秒数。タイムアウト時は deny |
-| `hostexec.prompt.default-scope` | `"capability"` | `"capability"` | hostexec 承認再利用の単位。同じ rule_id + subcommand の組み合わせで再利用される |
+| `hostexec.prompt.default-scope` | `"capability"` | `"capability"` | hostexec 承認再利用の単位。同じ capability（rule_id + argv0 + args 等）の組み合わせで再利用される |
 | `hostexec.prompt.notify` | `"auto"` \| `"tmux"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`auto` は `notify-send` → tmux popup → no-op の順で試行 |
 | `hostexec.rules[].id` | string | （必須） | 監査・承認 fingerprint に使う安定 ID |
 | `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名 |
-| `hostexec.rules[].match.subcommands` | string[] | 省略可 | ツール別正規化後にマッチするサブコマンド。省略時はその `argv0` に対する任意のサブコマンドにマッチ。空配列 `[]` は不可 |
-| `hostexec.rules[].match.arg-regex` | string | 省略可 | argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。`subcommands` と併用時は AND 条件 |
+| `hostexec.rules[].match.arg-regex` | string | 省略可 | argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。省略時はその `argv0` の全コマンドにマッチ |
 | `hostexec.rules[].cwd.mode` | enum | `"workspace-or-session-tmp"` | `workspace-only` / `workspace-or-session-tmp` / `allowlist` / `any` |
 | `hostexec.rules[].cwd.allow` | string[] | `[]` | `cwd.mode: allowlist` 用。絶対パスまたは `workspace:` / `session_tmp:` プレフィクス |
 | `hostexec.rules[].env` | object | `{}` | `ENV_NAME: secret:<name>` 形式で host 実行時だけ secret を注入 |

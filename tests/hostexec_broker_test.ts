@@ -28,9 +28,6 @@ function makeConfig(overrides: HostExecConfigOverrides = {}): HostExecConfig {
       notify: "off",
       ...(overrides.prompt ?? {}),
     },
-    subcommand: overrides.subcommand ?? {
-      prefixOptionsWithValue: {},
-    },
     secrets: overrides.secrets ?? {},
     rules: overrides.rules ?? [],
   };
@@ -99,7 +96,7 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
       },
       rules: [{
         id: "deno-eval",
-        match: { argv0: "deno", subcommands: ["eval"] },
+        match: { argv0: "deno", argRegex: "^eval\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: { TOKEN: "secret:test_token" },
         inheritEnv: { mode: "minimal", keys: [] },
@@ -194,7 +191,7 @@ exit "\${NAS_NOTIFY_EXIT:-0}"
       },
       rules: [{
         id: "deno-eval",
-        match: { argv0: "deno", subcommands: ["eval"] },
+        match: { argv0: "deno", argRegex: "^eval\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -253,7 +250,7 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
       rules: [
         {
           id: "deno-secret-a",
-          match: { argv0: "deno", subcommands: ["eval"] },
+          match: { argv0: "deno", argRegex: "^eval\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: { TOKEN: "secret:token_a" },
           inheritEnv: { mode: "minimal", keys: [] },
@@ -262,7 +259,7 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
         },
         {
           id: "deno-secret-b",
-          match: { argv0: "deno", subcommands: ["fmt"] },
+          match: { argv0: "deno", argRegex: "^fmt\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: { TOKEN: "secret:token_b" },
           inheritEnv: { mode: "minimal", keys: [] },
@@ -325,7 +322,7 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
   }
 });
 
-Deno.test("HostExecBroker: omitted subcommands matches any normalized subcommand", async () => {
+Deno.test("HostExecBroker: argv0-only rule matches any args", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const workspace = await Deno.makeTempDir({
@@ -368,7 +365,7 @@ Deno.test("HostExecBroker: omitted subcommands matches any normalized subcommand
   }
 });
 
-Deno.test("HostExecBroker: omitted subcommands also matches argv0-only command", async () => {
+Deno.test("HostExecBroker: argv0-only rule also matches no-args command", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const workspace = await Deno.makeTempDir({
@@ -512,7 +509,7 @@ Deno.test("HostExecBroker: fallback deny returns error for unmatched command", a
     hostexec: makeConfig({
       rules: [{
         id: "deno-deny",
-        match: { argv0: "deno", subcommands: ["eval"] },
+        match: { argv0: "deno", argRegex: "^eval\\b" },
         cwd: { mode: "any", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -562,7 +559,7 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
       rules: [
         {
           id: "deno-minimal",
-          match: { argv0: "deno", subcommands: ["eval"] },
+          match: { argv0: "deno", argRegex: "^eval\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
@@ -571,7 +568,7 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
         },
         {
           id: "deno-with-keys",
-          match: { argv0: "deno", subcommands: ["fmt"] },
+          match: { argv0: "deno", argRegex: "^fmt\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: {},
           inheritEnv: { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },

@@ -350,10 +350,9 @@ export class HostExecBroker {
       this.config.rules,
       argv0,
       message.args,
-      this.config.subcommand,
     );
     if (!result) return null;
-    const { rule, subcommand } = result;
+    const { rule } = result;
 
     const normalizedCwd = await normalizeAllowedCwd(
       message.cwd,
@@ -365,13 +364,11 @@ export class HostExecBroker {
     return {
       rule,
       cwd: normalizedCwd,
-      subcommand,
       envVars,
       capability: {
         ruleId: rule.id,
         argv0,
         normalizedArgv: [argv0, ...message.args],
-        normalizedSubcommand: subcommand,
         normalizedCwd: normalizedCwd,
         envBindings: Object.entries(rule.env)
           .map(([key, source]) => ({ key, source }))
@@ -571,7 +568,6 @@ function toPendingEntry(
     ruleId: resolved.rule.id,
     argv0: request.argv0,
     args: request.args,
-    subcommand: resolved.subcommand,
     cwd: resolved.cwd,
     state: "pending",
     createdAt,

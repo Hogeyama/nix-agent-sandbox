@@ -1,12 +1,7 @@
-import type {
-  HostExecRule,
-  HostExecSubcommandConfig,
-} from "../config/types.ts";
-import { normalizeSubcommand } from "./subcommand.ts";
+import type { HostExecRule } from "../config/types.ts";
 
 export interface MatchResult {
   rule: HostExecRule;
-  subcommand: string | null;
 }
 
 /**
@@ -17,19 +12,11 @@ export function matchRule(
   rules: HostExecRule[],
   argv0: string,
   args: string[],
-  subcommandConfig: HostExecSubcommandConfig,
 ): MatchResult | null {
-  const subcommand = normalizeSubcommand(argv0, args, subcommandConfig);
   const argsString = args.join(" ");
 
   for (const rule of rules) {
     if (rule.match.argv0 !== argv0) continue;
-
-    // subcommands チェック
-    if (rule.match.subcommands !== undefined) {
-      if (subcommand === null) continue;
-      if (!rule.match.subcommands.includes(subcommand)) continue;
-    }
 
     // arg-regex チェック
     if (rule.match.argRegex !== undefined) {
@@ -37,7 +24,7 @@ export function matchRule(
       if (!re.test(argsString)) continue;
     }
 
-    return { rule, subcommand };
+    return { rule };
   }
 
   return null;

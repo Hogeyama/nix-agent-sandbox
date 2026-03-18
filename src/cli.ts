@@ -462,7 +462,6 @@ async function runHostExecTestCommand(
     hostexec.rules,
     argv0,
     args,
-    hostexec.subcommand,
   );
 
   if (result) {

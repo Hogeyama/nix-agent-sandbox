@@ -492,15 +492,12 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
         defaultScope: "capability",
         notify: "off",
       },
-      subcommand: {
-        prefixOptionsWithValue: {},
-      },
       secrets: {
         cli_token: { from: "env:HOSTEXEC_CLI_TOKEN", required: true },
       },
       rules: [{
         id: "deno-eval",
-        match: { argv0: "deno", subcommands: ["eval"] },
+        match: { argv0: "deno", argRegex: "^eval\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: { TOKEN: "secret:cli_token" },
         inheritEnv: { mode: "minimal", keys: [] },

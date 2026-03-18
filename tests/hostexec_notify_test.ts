@@ -13,7 +13,6 @@ const TEST_NOTIFICATION: HostExecPendingNotification = {
     ruleId: "git-readonly",
     argv0: "git",
     args: ["pull", "--ff-only"],
-    subcommand: "pull",
     cwd: "/tmp/workspace",
     state: "pending",
     createdAt: "2026-03-17T00:00:00.000Z",
