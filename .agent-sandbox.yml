@@ -106,9 +106,10 @@ _common_hostexec: &common_hostexec
           mode: workspace-or-session-tmp
         approval: allow
         fallback: container
-      - id: gpg
+      - id: gpg-sign
         match:
           argv0: gpg
+          arg-regex: '(^|\s)(--sign|-[a-zA-Z]*s[a-zA-Z]*)(\s|$)'
         cwd:
           mode: workspace-or-session-tmp
         approval: prompt

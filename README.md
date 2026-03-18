@@ -189,6 +189,7 @@ profiles:
           match:
             argv0: git
             subcommands: [pull, fetch]
+            # arg-regex: '...'   # argv0 以降の引数に対する正規表現マッチ（省略可、subcommands と AND）
           cwd:
             mode: workspace-or-session-tmp
           env:
@@ -245,16 +246,28 @@ profiles:
         val: /opt/nas/hostexec/bin/gpg
     hostexec:
       rules:
-        - id: gpg
+        - id: gpg-sign
           match:
             argv0: gpg
+            arg-regex: '(^|\s)(--sign|-[a-zA-Z]*s)(\s|$)'
           cwd:
             mode: workspace-or-session-tmp
           approval: prompt
           fallback: deny
+        - id: gpg-verify
+          match:
+            argv0: gpg
+            arg-regex: '(^|\s)(--verify|-[a-zA-Z]*v)(\s|$)'
+          cwd:
+            mode: workspace-or-session-tmp
+          approval: allow
+          fallback: deny
+        - id: gpg-default
+          match:
+            argv0: gpg
+          approval: deny
+          fallback: deny
 ```
-
-（TODO: `gpg -s`に制限したい）
 
 ### `cli_auth_credentials_store = "keyring"` な Codex を使う
 
@@ -326,9 +339,11 @@ nas network gc
 nas hostexec pending
 nas hostexec approve <session-id> <request-id>
 nas hostexec deny    <session-id> <request-id>
+nas hostexec test --profile <profile> -- <command> [args...]
 ```
 
 - `pending` は `session_id request_id rule_id cwd argv...` を 1 行ずつ表示します
+- `test` はルールマッチングを試行し、マッチしたルールの id・approval・env keys を表示します。regex パターンの試行錯誤に便利です
 
 ## セキュリティについて
 
@@ -450,6 +465,7 @@ session network
 | `hostexec.rules[].id` | string | （必須） | 監査・承認 fingerprint に使う安定 ID |
 | `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名 |
 | `hostexec.rules[].match.subcommands` | string[] | 省略可 | ツール別正規化後にマッチするサブコマンド。省略時はその `argv0` に対する任意のサブコマンドにマッチ。空配列 `[]` は不可 |
+| `hostexec.rules[].match.arg-regex` | string | 省略可 | argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。`subcommands` と併用時は AND 条件 |
 | `hostexec.rules[].cwd.mode` | enum | `"workspace-or-session-tmp"` | `workspace-only` / `workspace-or-session-tmp` / `allowlist` / `any` |
 | `hostexec.rules[].cwd.allow` | string[] | `[]` | `cwd.mode: allowlist` 用。絶対パスまたは `workspace:` / `session_tmp:` プレフィクス |
 | `hostexec.rules[].env` | object | `{}` | `ENV_NAME: secret:<name>` 形式で host 実行時だけ secret を注入 |

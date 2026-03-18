@@ -653,12 +653,35 @@ function validateHostExecRules(
       }
     }
 
+    let argRegex: string | undefined;
+    if (match["arg-regex"] !== undefined) {
+      if (
+        typeof match["arg-regex"] !== "string" ||
+        match["arg-regex"].trim() === ""
+      ) {
+        throw new ConfigValidationError(
+          `${prefix}.match.arg-regex must be a non-empty string when provided`,
+        );
+      }
+      try {
+        new RegExp(match["arg-regex"]);
+      } catch {
+        throw new ConfigValidationError(
+          `${prefix}.match.arg-regex is not a valid regular expression: ${
+            match["arg-regex"]
+          }`,
+        );
+      }
+      argRegex = match["arg-regex"];
+    }
+
     const env = validateHostExecEnv(prefix, entry.env, secretNames);
     return {
       id: entry.id,
       match: {
         argv0: match.argv0,
         subcommands: match.subcommands,
+        argRegex,
       },
       cwd: validateHostExecCwd(prefix, entry.cwd),
       env,

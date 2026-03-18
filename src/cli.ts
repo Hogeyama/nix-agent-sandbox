@@ -31,6 +31,7 @@ import {
 } from "./network/registry.ts";
 import type { ApprovalScope } from "./network/protocol.ts";
 import { sendHostExecBrokerRequest } from "./hostexec/broker.ts";
+import { buildArgsString, matchRule } from "./hostexec/match.ts";
 import {
   listHostExecPendingEntries,
   readHostExecSessionRegistry,
@@ -92,28 +93,28 @@ export async function main(args: string[]): Promise<void> {
 
   if (subcommand === "worktree") {
     await runWorktreeCommand(
-      argsBeforeDashDash.filter((a) => a !== "worktree"),
+      removeFirstOccurrence(argsBeforeDashDash, "worktree"),
     );
     return;
   }
 
   if (subcommand === "container") {
     await runContainerCommand(
-      argsBeforeDashDash.filter((a) => a !== "container"),
+      removeFirstOccurrence(argsBeforeDashDash, "container"),
     );
     return;
   }
 
   if (subcommand === "network") {
     await runNetworkCommand(
-      argsBeforeDashDash.filter((a) => a !== "network"),
+      removeFirstOccurrence(argsBeforeDashDash, "network"),
     );
     return;
   }
 
   if (subcommand === "hostexec") {
     await runHostExecCommand(
-      argsBeforeDashDash.filter((a) => a !== "hostexec"),
+      removeFirstOccurrence(args, "hostexec"),
     );
     return;
   }
@@ -417,12 +418,61 @@ async function runHostExecCommand(
       return;
     }
 
+    if (sub === "test") {
+      await runHostExecTestCommand(nasArgs.filter((a) => a !== "test"));
+      return;
+    }
+
     console.error(`[nas] Unknown hostexec subcommand: ${sub}`);
-    console.error("  Usage: nas hostexec [pending|approve|deny]");
+    console.error("  Usage: nas hostexec [pending|approve|deny|test]");
     Deno.exit(1);
   } catch (err) {
     console.error(`[nas] Error: ${(err as Error).message}`);
     Deno.exit(1);
+  }
+}
+
+async function runHostExecTestCommand(
+  nasArgs: string[],
+): Promise<void> {
+  const profileName = getFlagValue(nasArgs, "--profile");
+  const dashDashIdx = nasArgs.indexOf("--");
+  if (dashDashIdx === -1 || dashDashIdx + 1 >= nasArgs.length) {
+    console.error(
+      "[nas] Usage: nas hostexec test --profile <profile> -- <command> [args...]",
+    );
+    Deno.exit(1);
+  }
+  const commandArgs = nasArgs.slice(dashDashIdx + 1);
+  const argv0 = commandArgs[0];
+  const args = commandArgs.slice(1);
+
+  const config = await loadConfig();
+  const { profile } = resolveProfile(config, profileName ?? undefined);
+  const hostexec = profile.hostexec;
+  if (!hostexec) {
+    console.error("[nas] No hostexec configuration found in profile.");
+    Deno.exit(1);
+  }
+
+  const argsStr = buildArgsString(args);
+  console.log(`args string: "${argsStr}"`);
+
+  const result = matchRule(
+    hostexec.rules,
+    argv0,
+    args,
+    hostexec.subcommand,
+  );
+
+  if (result) {
+    const envKeys = Object.keys(result.rule.env);
+    const envPart = envKeys.length > 0 ? `, env: [${envKeys.join(", ")}]` : "";
+    console.log(
+      `Matched rule: ${result.rule.id} (approval: ${result.rule.approval}${envPart})`,
+    );
+  } else {
+    console.log("No rule matched (fallback applies)");
   }
 }
 
@@ -472,6 +522,12 @@ function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
   }
 
   return { profileName, profileIndex, worktreeOverride, agentArgs };
+}
+
+function removeFirstOccurrence(args: string[], value: string): string[] {
+  const index = args.indexOf(value);
+  if (index === -1) return [...args];
+  return [...args.slice(0, index), ...args.slice(index + 1)];
 }
 
 function applyWorktreeOverride(
@@ -565,6 +621,7 @@ HostExec options:
   pending         保留中の hostexec 承認要求を表示
   approve         承認する
   deny            拒否する
+  test            ルールマッチングをテストする
 
 Examples:
   nas                                    # Use default profile (interactive)

@@ -553,6 +553,35 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
   }
 });
 
+Deno.test("CLI: hostexec test forwards command args after --", async () => {
+  const yaml = `
+profiles:
+  claude:
+    agent: claude
+    hostexec:
+      rules:
+        - id: gpg-sign
+          match:
+            argv0: gpg
+            arg-regex: "^hoge$"
+          cwd:
+            mode: workspace-or-session-tmp
+          approval: allow
+`;
+  await withTempConfig(yaml, async (dir) => {
+    const result = await runNas(
+      ["hostexec", "test", "--profile", "claude", "--", "gpg", "hoge"],
+      { cwd: dir },
+    );
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout.includes('args string: "hoge"'), true);
+    assertEquals(
+      result.stdout.includes("Matched rule: gpg-sign (approval: allow)"),
+      true,
+    );
+  });
+});
+
 async function waitForHostExecPending(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   count: number,

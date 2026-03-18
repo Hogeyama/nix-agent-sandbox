@@ -76,6 +76,7 @@ export interface HostExecInheritEnvConfig {
 export interface HostExecMatchConfig {
   argv0: string;
   subcommands?: string[];
+  argRegex?: string;
 }
 
 export interface HostExecRule {
@@ -260,6 +261,7 @@ export interface RawProfile {
       match?: {
         argv0?: string;
         subcommands?: string[];
+        "arg-regex"?: string;
       };
       cwd?: {
         mode?: HostExecCwdMode;

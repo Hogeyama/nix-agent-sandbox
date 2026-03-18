@@ -12,7 +12,7 @@ import {
   removeHostExecSessionRegistry,
   writeHostExecPendingEntry,
 } from "./registry.ts";
-import { normalizeSubcommand } from "./subcommand.ts";
+import { matchRule } from "./match.ts";
 import type {
   ExecuteRequest,
   HostExecBrokerMessage,
@@ -346,18 +346,14 @@ export class HostExecBroker {
     message: ExecuteRequest,
   ): Promise<ResolvedExecution | null> {
     const argv0 = path.basename(message.argv0);
-    const subcommand = normalizeSubcommand(
+    const result = matchRule(
+      this.config.rules,
       argv0,
       message.args,
       this.config.subcommand,
     );
-    const rule = this.config.rules.find((entry) => {
-      if (entry.match.argv0 !== argv0) return false;
-      if (entry.match.subcommands === undefined) return true;
-      if (subcommand === null) return false;
-      return entry.match.subcommands.includes(subcommand);
-    });
-    if (!rule) return null;
+    if (!result) return null;
+    const { rule, subcommand } = result;
 
     const normalizedCwd = await normalizeAllowedCwd(
       message.cwd,
