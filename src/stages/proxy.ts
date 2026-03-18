@@ -38,6 +38,10 @@ const ENVOY_ALIAS = "nas-envoy";
 const ENVOY_PROXY_PORT = 15001;
 const ENVOY_READY_TIMEOUT_MS = 15_000;
 
+interface ProxyStageOptions {
+  envoyContainerName?: string;
+}
+
 export class ProxyStage implements Stage {
   name = "ProxyStage";
 
@@ -46,6 +50,12 @@ export class ProxyStage implements Stage {
   private dindContainerName: string | null = null;
   private broker: SessionBroker | null = null;
   private authRouterAbort: AbortController | null = null;
+  private readonly envoyContainerName: string;
+
+  constructor(options: ProxyStageOptions = {}) {
+    this.envoyContainerName = options.envoyContainerName ??
+      ENVOY_CONTAINER_NAME;
+  }
 
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     if (!isProxyEnabled(ctx)) {
@@ -94,11 +104,11 @@ export class ProxyStage implements Stage {
     });
 
     this.authRouterAbort = await ensureAuthRouterDaemon(runtimePaths);
-    await ensureSharedEnvoy(runtimePaths);
+    await ensureSharedEnvoy(runtimePaths, this.envoyContainerName);
 
     this.networkName = `nas-session-net-${ctx.sessionId}`;
     await ensureSessionNetwork(this.networkName);
-    await dockerNetworkConnect(this.networkName, ENVOY_CONTAINER_NAME, {
+    await dockerNetworkConnect(this.networkName, this.envoyContainerName, {
       aliases: [ENVOY_ALIAS],
     }).catch(() => {});
 
@@ -152,7 +162,7 @@ export class ProxyStage implements Stage {
     await removePendingDir(this.runtimePaths, ctx.sessionId);
 
     if (this.networkName) {
-      await dockerNetworkDisconnect(this.networkName, ENVOY_CONTAINER_NAME)
+      await dockerNetworkDisconnect(this.networkName, this.envoyContainerName)
         .catch(() => {});
       if (this.dindContainerName) {
         await dockerNetworkDisconnect(this.networkName, this.dindContainerName)
@@ -226,15 +236,18 @@ async function ensureSessionNetwork(networkName: string): Promise<void> {
   }
 }
 
-async function ensureSharedEnvoy(paths: NetworkRuntimePaths): Promise<void> {
-  if (await dockerIsRunning(ENVOY_CONTAINER_NAME)) {
+async function ensureSharedEnvoy(
+  paths: NetworkRuntimePaths,
+  envoyContainerName: string,
+): Promise<void> {
+  if (await dockerIsRunning(envoyContainerName)) {
     return;
   }
-  if (await dockerContainerExists(ENVOY_CONTAINER_NAME)) {
-    await dockerRm(ENVOY_CONTAINER_NAME).catch(() => {});
+  if (await dockerContainerExists(envoyContainerName)) {
+    await dockerRm(envoyContainerName).catch(() => {});
   }
   await dockerRunDetached({
-    name: ENVOY_CONTAINER_NAME,
+    name: envoyContainerName,
     image: ENVOY_IMAGE,
     args: [],
     envVars: {},
@@ -256,18 +269,18 @@ async function ensureSharedEnvoy(paths: NetworkRuntimePaths): Promise<void> {
       "warning",
     ],
   });
-  await waitForEnvoyReady();
+  await waitForEnvoyReady(envoyContainerName);
 }
 
-async function waitForEnvoyReady(): Promise<void> {
+async function waitForEnvoyReady(envoyContainerName: string): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < ENVOY_READY_TIMEOUT_MS) {
-    if (await dockerIsRunning(ENVOY_CONTAINER_NAME)) {
+    if (await dockerIsRunning(envoyContainerName)) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error(
-    `Envoy sidecar failed to start:\n${await dockerLogs(ENVOY_CONTAINER_NAME)}`,
+    `Envoy sidecar failed to start:\n${await dockerLogs(envoyContainerName)}`,
   );
 }

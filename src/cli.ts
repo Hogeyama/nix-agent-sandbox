@@ -419,7 +419,7 @@ async function runHostExecCommand(
     }
 
     if (sub === "test") {
-      await runHostExecTestCommand(nasArgs.filter((a) => a !== "test"));
+      await runHostExecTestCommand(removeFirstOccurrence(nasArgs, "test"));
       return;
     }
 

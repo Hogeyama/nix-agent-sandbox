@@ -579,6 +579,35 @@ profiles:
   });
 });
 
+Deno.test("CLI: hostexec test preserves positional args named like subcommand", async () => {
+  const yaml = `
+profiles:
+  claude:
+    agent: claude
+    hostexec:
+      rules:
+        - id: deno-test
+          match:
+            argv0: deno
+            arg-regex: '^-A\\s+test$'
+          cwd:
+            mode: workspace-or-session-tmp
+          approval: allow
+`;
+  await withTempConfig(yaml, async (dir) => {
+    const result = await runNas(
+      ["hostexec", "test", "--profile", "claude", "--", "deno", "-A", "test"],
+      { cwd: dir },
+    );
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout.includes('args string: "-A test"'), true);
+    assertEquals(
+      result.stdout.includes("Matched rule: deno-test (approval: allow)"),
+      true,
+    );
+  });
+});
+
 async function waitForHostExecPending(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   count: number,

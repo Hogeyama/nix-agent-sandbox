@@ -139,6 +139,9 @@ Deno.test({
   sanitizeResources: false,
   sanitizeOps: false,
   fn: async () => {
+    const envoyContainerName = `nas-envoy-test-${
+      crypto.randomUUID().slice(0, 8)
+    }`;
     const runtimeRoot = await makeDockerBindableTempDir("nas-proxy-runtime-");
     const runtimeDir = `${runtimeRoot}/nas/network`;
     const oldRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
@@ -150,7 +153,7 @@ Deno.test({
       },
     });
     const ctx = makeCtx(profile);
-    const stage = new ProxyStage();
+    const stage = new ProxyStage({ envoyContainerName });
 
     try {
       await Deno.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
@@ -176,10 +179,10 @@ Deno.test({
         ((await Deno.stat(`${runtimeDir}/envoy.yaml`)).mode ?? 0) & 0o777,
         0o644,
       );
-      assertEquals(await dockerIsRunning("nas-envoy-shared"), true);
+      assertEquals(await dockerIsRunning(envoyContainerName), true);
     } finally {
       await stage.teardown(ctx);
-      await cleanupRuntime(runtimeRoot);
+      await cleanupRuntime(runtimeRoot, envoyContainerName);
       if (oldRuntimeDir) {
         Deno.env.set("XDG_RUNTIME_DIR", oldRuntimeDir);
       } else {
@@ -189,7 +192,10 @@ Deno.test({
   },
 });
 
-async function cleanupRuntime(runtimeRoot: string): Promise<void> {
+async function cleanupRuntime(
+  runtimeRoot: string,
+  envoyContainerName: string,
+): Promise<void> {
   const networkDir = `${runtimeRoot}/nas/network`;
   const pidFile = `${networkDir}/auth-router.pid`;
   try {
@@ -204,8 +210,8 @@ async function cleanupRuntime(runtimeRoot: string): Promise<void> {
   } catch {
     // noop
   }
-  await dockerStop("nas-envoy-shared").catch(() => {});
-  await dockerRm("nas-envoy-shared").catch(() => {});
+  await dockerStop(envoyContainerName).catch(() => {});
+  await dockerRm(envoyContainerName).catch(() => {});
   for (const sessionId of await listSessionNetworks(networkDir)) {
     await dockerNetworkRemove(`nas-session-net-${sessionId}`).catch(() => {});
   }
