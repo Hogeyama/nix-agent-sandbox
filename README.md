@@ -192,13 +192,15 @@ profiles:
           cwd:
             mode: workspace-or-session-tmp
           env:
-            GITHUB_TOKEN: secret:github_token # 後述のhostexec.secretsから注入する
+            GITHUB_TOKEN: secret:github_token # hostexec.secrets から注入する
           inherit-env:                        # 環境変数のうち、必要最低限なもの+SSH_AUTH_SOCKだけを継承
             mode: minimal
             keys: [SSH_AUTH_SOCK]
           approval: prompt        # allow | prompt | deny
           fallback: container     # container | deny
 ```
+
+詳細は [プロファイル設定リファレンス](#プロファイル設定リファレンス) を参照してください。
 
 ## 設定パターン
 
