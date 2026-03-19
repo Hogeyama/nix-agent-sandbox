@@ -1,0 +1,269 @@
+let
+  common_infra = {
+    nix = {
+      enable = "auto";
+      mount-socket = true;
+    };
+    docker = {
+      enable = true;
+      shared = true;
+    };
+    gcloud = {
+      mount-config = false;
+    };
+    aws = {
+      mount-config = false;
+    };
+    gpg = {
+      forward-agent = false;
+    };
+  };
+
+  common_network = {
+    network = {
+      allowlist = [
+        "api.anthropic.com"
+        "statsig.anthropic.com"
+        "platform.claude.com"
+        "storage.googleapis.com"
+        "mcp-proxy.anthropic.com"
+        "http-intake.logs.us5.datadoghq.com"
+        "code.claude.com"
+        "claude.ai"
+        "api.openai.com"
+        "ab.chatgpt.com"
+        "chatgpt.com"
+        "*.api.openai.com"
+        "github.com"
+        "www.github.com"
+        "api.github.com"
+        "api.githubcopilot.com"
+        "telemetry.individual.githubcopilot.com"
+        "api.individual.githubcopilot.com"
+        "npm.pkg.github.com"
+        "raw.githubusercontent.com"
+        "pkg-npm.githubusercontent.com"
+        "objects.githubusercontent.com"
+        "codeload.github.com"
+        "avatars.githubusercontent.com"
+        "camo.githubusercontent.com"
+        "gist.github.com"
+        "gitlab.com"
+        "www.gitlab.com"
+        "registry.gitlab.com"
+        "bitbucket.org"
+        "www.bitbucket.org"
+        "api.bitbucket.org"
+        "registry-1.docker.io"
+        "auth.docker.io"
+        "index.docker.io"
+        "hub.docker.com"
+        "www.docker.com"
+        "production.cloudflare.docker.com"
+        "download.docker.com"
+        "gcr.io"
+        "*.gcr.io"
+        "ghcr.io"
+        "mcr.microsoft.com"
+        "*.data.mcr.microsoft.com"
+        "public.ecr.aws"
+        "registry.npmjs.org"
+        "jsr.io"
+        "deno.land"
+      ];
+      prompt = {
+        enable = true;
+      };
+    };
+  };
+
+  common_env = {
+    env = [
+      { key = "TZ"; val = "Asia/Tokyo"; }
+      { key = "LANG"; val = "en_US.UTF-8"; }
+      # hostexecのgpgで署名する
+      { key = "GIT_CONFIG_COUNT"; val = "1"; }
+      { key = "GIT_CONFIG_KEY_0"; val = "gpg.program"; }
+      { key = "GIT_CONFIG_VALUE_0"; val = "gpg"; }
+    ];
+  };
+
+  common_hostexec = {
+    hostexec = {
+      prompt = {
+        enable = true;
+        timeout-seconds = 300;
+        default-scope = "capability";
+      };
+      rules = [
+        {
+          id = "git-fetch-pull";
+          match = {
+            argv0 = "git";
+            arg-regex = ''^(fetch|pull)\b'';
+          };
+          cwd = {
+            mode = "workspace-or-session-tmp";
+          };
+          approval = "allow";
+          fallback = "container";
+        }
+        {
+          id = "gh";
+          match = {
+            argv0 = "gh";
+          };
+          cwd = {
+            mode = "workspace-or-session-tmp";
+          };
+          approval = "allow";
+          fallback = "container";
+        }
+        {
+          id = "gpg-sign";
+          match = {
+            argv0 = "gpg";
+            arg-regex = ''(^|\s)(--sign|-[a-zA-Z]*s[a-zA-Z]*)(\s|$)'';
+          };
+          cwd = {
+            mode = "workspace-or-session-tmp";
+          };
+          approval = "prompt";
+          fallback = "container";
+        }
+        {
+          id = "deno-test-coverage";
+          match = {
+            argv0 = "deno";
+            arg-regex = ''^(task\b)?.*\b(test|coverage)\b'';
+          };
+          cwd = {
+            mode = "workspace-only";
+          };
+          approval = "allow";
+          fallback = "container";
+        }
+      ];
+    };
+  };
+
+  mkProfile = builtins.foldl' (acc: overlay: acc // overlay) {};
+in
+{
+  default = "claude";
+
+  profiles = {
+    claude = mkProfile [
+      { agent = "claude"; }
+      {
+        agent-args = [
+          "--allowedTools" "Bash(*)"
+          "--allowedTools" "Edit"
+          "--disallowedTools" "Bash(git push *)"
+        ];
+      }
+      common_infra
+      common_network
+      common_env
+      common_hostexec
+    ];
+
+    codex = mkProfile [
+      { agent = "codex"; }
+      {
+        agent-args = [
+          "--ask-for-approval" "never"
+          "--sandbox" "danger-full-access"
+        ];
+      }
+      {
+        dbus = {
+          session = {
+            enable = true;
+            calls = [
+              {
+                name = "org.freedesktop.secrets";
+                rule = "org.freedesktop.Secret.Service.OpenSession";
+              }
+              {
+                name = "org.freedesktop.secrets";
+                rule = "org.freedesktop.Secret.Service.SearchItems";
+              }
+              {
+                name = "org.freedesktop.secrets";
+                rule = "org.freedesktop.Secret.Item.GetSecret";
+              }
+            ];
+          };
+        };
+      }
+      common_infra
+      common_network
+      common_env
+      common_hostexec
+    ];
+
+    copilot = mkProfile [
+      { agent = "copilot"; }
+      {
+        agent-args = [
+          "--allow-all"
+          "--deny-tool=shell(git push)"
+        ];
+      }
+      common_infra
+      common_network
+      common_env
+      common_hostexec
+    ];
+
+    hostexec-demo = mkProfile [
+      { agent = "claude"; }
+      { agent-args = []; }
+      {
+        extra-mounts = [
+          { src = "/dev/null"; dst = ".env"; }
+        ];
+      }
+      {
+        hostexec = {
+          prompt = {
+            enable = true;
+            timeout-seconds = 300;
+            default-scope = "capability";
+          };
+          secrets = {
+            hostexec_demo_api_base_url = {
+              from = "dotenv:.env#HOSTEXEC_DEMO_API_BASE_URL";
+              required = true;
+            };
+            hostexec_demo_api_token = {
+              from = "dotenv:.env#HOSTEXEC_DEMO_API_TOKEN";
+              required = true;
+            };
+          };
+          rules = [
+            {
+              id = "deno-task";
+              match = {
+                argv0 = "deno";
+                subcommands = [ "task" ];
+              };
+              cwd = {
+                mode = "workspace-only";
+              };
+              env = {
+                HOSTEXEC_DEMO_API_BASE_URL = "secret:hostexec_demo_api_base_url";
+                HOSTEXEC_DEMO_API_TOKEN = "secret:hostexec_demo_api_token";
+              };
+              approval = "prompt";
+              fallback = "container";
+            }
+          ];
+        };
+      }
+      common_network
+      common_env
+    ];
+  };
+}
