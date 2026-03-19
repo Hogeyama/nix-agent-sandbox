@@ -949,3 +949,148 @@ profiles:
     assertEquals(profile.env.length, 2);
   });
 });
+
+// --- .agent-sandbox.nix support ---
+
+/** 一時ディレクトリに .nix 設定ファイルを配置してテストを実行するヘルパー */
+async function withTempNixConfig(
+  nixExpr: string,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cfg-nix-test-" });
+  try {
+    await Deno.writeTextFile(
+      path.join(tmpDir, ".agent-sandbox.nix"),
+      nixExpr,
+    );
+    await fn(tmpDir);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+}
+
+Deno.test("loadConfig: loads .agent-sandbox.nix when no .yml exists", async () => {
+  const nixExpr = `
+{
+  profiles = {
+    dev = {
+      agent = "claude";
+    };
+  };
+}
+`;
+  await withTempNixConfig(nixExpr, async (dir) => {
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
+    assertEquals(config.profiles.dev.agent, "claude");
+    assertEquals(config.profiles.dev.nix.enable, "auto");
+  });
+});
+
+Deno.test("loadConfig: .yml takes priority over .nix", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cfg-priority-" });
+  try {
+    await Deno.writeTextFile(
+      path.join(tmpDir, ".agent-sandbox.yml"),
+      `
+profiles:
+  from-yml:
+    agent: claude
+`,
+    );
+    await Deno.writeTextFile(
+      path.join(tmpDir, ".agent-sandbox.nix"),
+      `
+{
+  profiles = {
+    from-nix = {
+      agent = "copilot";
+    };
+  };
+}
+`,
+    );
+    const config = await loadConfig({
+      startDir: tmpDir,
+      globalConfigPath: null,
+    });
+    assertEquals("from-yml" in config.profiles, true);
+    assertEquals("from-nix" in config.profiles, false);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("loadConfig: .nix with full profile fields", async () => {
+  const nixExpr = `
+{
+  default = "full";
+  profiles = {
+    full = {
+      agent = "copilot";
+      agent-args = [ "--yolo" "--verbose" ];
+      nix = {
+        enable = true;
+        mount-socket = true;
+        extra-packages = [ "nixpkgs#ripgrep" ];
+      };
+      docker = {
+        enable = true;
+      };
+      extra-mounts = [
+        { src = "/tmp"; dst = "/mnt/tmp"; mode = "rw"; }
+      ];
+      env = [
+        { key = "MY_VAR"; val = "my_value"; }
+      ];
+    };
+  };
+}
+`;
+  await withTempNixConfig(nixExpr, async (dir) => {
+    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
+    const p = config.profiles.full;
+    assertEquals(config.default, "full");
+    assertEquals(p.agent, "copilot");
+    assertEquals(p.agentArgs, ["--yolo", "--verbose"]);
+    assertEquals(p.nix.enable, true);
+    assertEquals(p.nix.mountSocket, true);
+    assertEquals(p.nix.extraPackages, ["nixpkgs#ripgrep"]);
+    assertEquals(p.docker.enable, true);
+    assertEquals(p.extraMounts.length, 1);
+    assertEquals(p.extraMounts[0].mode, "rw");
+    assertEquals(p.env[0], { key: "MY_VAR", val: "my_value" });
+  });
+});
+
+Deno.test("loadConfig: searches upward for .nix config file", async () => {
+  await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
+    await Deno.writeTextFile(
+      path.join(rootDir, ".agent-sandbox.nix"),
+      `
+{
+  profiles = {
+    test = {
+      agent = "claude";
+    };
+  };
+}
+`,
+    );
+    const config = await loadConfig({
+      startDir: grandchildDir,
+      globalConfigPath: null,
+    });
+    assertEquals(config.profiles.test.agent, "claude");
+  });
+});
+
+Deno.test("loadConfig: throws for invalid nix expression", async () => {
+  const nixExpr = `{ invalid syntax !!!`;
+  await withTempNixConfig(nixExpr, async (dir) => {
+    await assertRejects(
+      () => loadConfig({ startDir: dir, globalConfigPath: null }),
+      Error,
+      "Failed to evaluate",
+    );
+  });
+});

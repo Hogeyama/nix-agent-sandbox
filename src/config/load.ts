@@ -7,14 +7,14 @@ import * as path from "@std/path";
 import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
-const CONFIG_FILENAME = ".agent-sandbox.yml";
+const CONFIG_FILENAME_YML = ".agent-sandbox.yml";
+const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 
-/** グローバル設定ファイルのパス */
-export const GLOBAL_CONFIG_PATH = path.join(
+/** グローバル設定ディレクトリ */
+const GLOBAL_CONFIG_DIR = path.join(
   Deno.env.get("HOME") ?? "/",
   ".config",
   "nas",
-  "agent-sandbox.yml",
 );
 
 /** loadConfig のオプション */
@@ -36,14 +36,12 @@ export async function loadConfig(
   const globalRaw = opts.globalConfigPath === null
     ? null
     : await loadGlobalConfig(opts.globalConfigPath);
-  const localPath = await findConfigFile(opts.startDir ?? Deno.cwd());
-  const localRaw = localPath
-    ? parseYaml(await Deno.readTextFile(localPath)) as RawConfig
-    : null;
+  const found = await findConfigFile(opts.startDir ?? Deno.cwd());
+  const localRaw = found ? await loadLocalConfig(found) : null;
 
   if (!globalRaw && !localRaw) {
     throw new Error(
-      `${CONFIG_FILENAME} not found in current directory or parent directories`,
+      `${CONFIG_FILENAME_YML} (or ${CONFIG_FILENAME_NIX}) not found in current directory or parent directories, and no global config found in ${GLOBAL_CONFIG_DIR}`,
     );
   }
 
@@ -55,8 +53,39 @@ export async function loadConfig(
 export async function loadGlobalConfig(
   configPath?: string,
 ): Promise<RawConfig | null> {
+  if (configPath) {
+    // 明示パス指定時はそのまま読む
+    return await loadConfigByPath(configPath);
+  }
+  // .yml → .nix の順で探す
+  for (
+    const [filename, format] of [
+      ["agent-sandbox.yml", "yml"],
+      ["agent-sandbox.nix", "nix"],
+    ] as const
+  ) {
+    const candidate = path.join(GLOBAL_CONFIG_DIR, filename);
+    try {
+      await Deno.stat(candidate);
+      if (format === "yml") {
+        const text = await Deno.readTextFile(candidate);
+        return parseYaml(text) as RawConfig;
+      }
+      return await loadNixConfig(candidate);
+    } catch {
+      // not found, try next
+    }
+  }
+  return null;
+}
+
+/** パスから形式を判定して読み込む */
+async function loadConfigByPath(filePath: string): Promise<RawConfig | null> {
   try {
-    const text = await Deno.readTextFile(configPath ?? GLOBAL_CONFIG_PATH);
+    if (filePath.endsWith(".nix")) {
+      return await loadNixConfig(filePath);
+    }
+    const text = await Deno.readTextFile(filePath);
     return parseYaml(text) as RawConfig;
   } catch {
     return null;
@@ -169,18 +198,80 @@ function shallowMerge<T extends Record<string, unknown>>(
   return { ...global, ...local };
 }
 
-/** 指定ディレクトリから上位に向かって設定ファイルを探す */
-async function findConfigFile(dir: string): Promise<string | null> {
+/** 設定ファイルの検索結果 */
+interface ConfigFileFound {
+  path: string;
+  format: "yml" | "nix";
+}
+
+/** ローカル設定ファイルを読み込む */
+async function loadLocalConfig(
+  found: ConfigFileFound,
+): Promise<RawConfig> {
+  if (found.format === "yml") {
+    return parseYaml(await Deno.readTextFile(found.path)) as RawConfig;
+  }
+  return await loadNixConfig(found.path);
+}
+
+/** nix コマンドが PATH 上に存在するか確認する */
+async function nixCommandExists(): Promise<boolean> {
+  try {
+    const cmd = new Deno.Command("nix", {
+      args: ["--version"],
+      stdout: "null",
+      stderr: "null",
+    });
+    const { code } = await cmd.output();
+    return code === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** .agent-sandbox.nix を nix eval で評価して RawConfig を得る */
+async function loadNixConfig(nixPath: string): Promise<RawConfig> {
+  if (!await nixCommandExists()) {
+    throw new Error(
+      `Found ${CONFIG_FILENAME_NIX} at ${nixPath}, but 'nix' command is not available on PATH. Install Nix or use ${CONFIG_FILENAME_YML} instead.`,
+    );
+  }
+  const cmd = new Deno.Command("nix", {
+    args: ["eval", "--impure", "--json", "--file", nixPath],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  if (code !== 0) {
+    const errMsg = new TextDecoder().decode(stderr).trim();
+    throw new Error(
+      `Failed to evaluate ${nixPath}: nix eval exited with code ${code}\n${errMsg}`,
+    );
+  }
+  const json = new TextDecoder().decode(stdout);
+  return JSON.parse(json) as RawConfig;
+}
+
+/** 指定ディレクトリから上位に向かって設定ファイルを探す (.yml 優先、なければ .nix) */
+async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
   let current = path.resolve(dir);
   const root = path.parse(current).root;
 
   while (true) {
-    const candidate = path.join(current, CONFIG_FILENAME);
-    try {
-      await Deno.stat(candidate);
-      return candidate;
-    } catch {
-      // not found, go up
+    // .yml を優先
+    for (
+      const [filename, format] of [
+        [CONFIG_FILENAME_YML, "yml"],
+        [CONFIG_FILENAME_NIX, "nix"],
+      ] as const
+    ) {
+      const candidate = path.join(current, filename);
+      try {
+        await Deno.stat(candidate);
+        return { path: candidate, format };
+      } catch {
+        // not found, try next
+      }
     }
     const parent = path.dirname(current);
     if (parent === current || current === root) {
