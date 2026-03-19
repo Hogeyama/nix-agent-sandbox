@@ -112,10 +112,10 @@ _common_hostexec: &common_hostexec
           mode: workspace-or-session-tmp
         approval: prompt
         fallback: container
-      - id: deno-test
+      - id: deno-test-coverage
         match:
           argv0: deno
-          arg-regex: '^(task\b)?.*\btest\b'
+          arg-regex: '^(task\b)?.*\b(test|coverage)\b'
         cwd:
           mode: workspace-only
         approval: allow
