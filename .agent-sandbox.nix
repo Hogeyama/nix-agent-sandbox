@@ -147,36 +147,32 @@ let
     };
   };
 
-  mkProfile = builtins.foldl' (acc: overlay: acc // overlay) {};
+  mkProfile = builtins.foldl' (acc: overlay: acc // overlay) { };
 in
 {
   default = "claude";
 
   profiles = {
     claude = mkProfile [
-      { agent = "claude"; }
       {
-        agent-args = [
-          "--allowedTools" "Bash(*)"
-          "--allowedTools" "Edit"
-          "--disallowedTools" "Bash(git push *)"
+        agent = "claude";
+        agent-args = [ "--allow-dangerously-skip-permissions" ];
+        env = common_env.env ++ [
+          # 認証
+          { key = "CLAUDE_CODE_OAUTH_TOKEN"; val_cmd = "pass claude_code_oauth_token"; }
         ];
       }
       common_infra
       common_network
-      common_env
       common_hostexec
     ];
 
     codex = mkProfile [
-      { agent = "codex"; }
       {
+        agent = "codex";
         agent-args = [
-          "--ask-for-approval" "never"
-          "--sandbox" "danger-full-access"
+          "--dangerously-bypass-approvals-and-sandbox"
         ];
-      }
-      {
         dbus = {
           session = {
             enable = true;
@@ -204,11 +200,10 @@ in
     ];
 
     copilot = mkProfile [
-      { agent = "copilot"; }
       {
+        agent = "copilot";
         agent-args = [
           "--allow-all"
-          "--deny-tool=shell(git push)"
         ];
       }
       common_infra
@@ -218,14 +213,12 @@ in
     ];
 
     hostexec-demo = mkProfile [
-      { agent = "claude"; }
-      { agent-args = []; }
       {
+        agent = "claude";
+        agent-args = [ ];
         extra-mounts = [
           { src = "/dev/null"; dst = ".env"; }
         ];
-      }
-      {
         hostexec = {
           prompt = {
             enable = true;
