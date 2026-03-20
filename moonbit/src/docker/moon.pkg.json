@@ -1,0 +1,5 @@
+{
+  "import": [
+    "hogeyama/nas-moonbit/src/process"
+  ]
+}

@@ -1,2 +1,7 @@
 .coverage/
 .hostexec-demo/
+.moonbit-toolchain/
+moonbit/target/
+moonbit/_build/
+moonbit/.mooncakes/
+result

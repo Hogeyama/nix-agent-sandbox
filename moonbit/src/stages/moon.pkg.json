@@ -1,0 +1,8 @@
+{
+  "import": [
+    "hogeyama/nas-moonbit/src/config",
+    "hogeyama/nas-moonbit/src/pipeline",
+    "hogeyama/nas-moonbit/src/process",
+    "hogeyama/nas-moonbit/src/docker"
+  ]
+}

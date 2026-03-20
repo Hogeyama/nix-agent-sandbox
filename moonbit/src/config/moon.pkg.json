@@ -1,0 +1,7 @@
+{
+  "import": [
+    "hogeyama/nas-moonbit/src/process",
+    "moonbitlang/x/fs",
+    "moonbitlang/core/json"
+  ]
+}

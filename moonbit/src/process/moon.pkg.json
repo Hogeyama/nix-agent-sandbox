@@ -1,0 +1,7 @@
+{
+  "import": [],
+  "native-stub": ["process_native.c"],
+  "targets": {
+    "process_native.mbt": ["native", "llvm"]
+  }
+}
