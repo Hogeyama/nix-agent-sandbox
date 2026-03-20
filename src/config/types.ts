@@ -55,11 +55,12 @@ export type HostExecCwdMode =
   | "any";
 export type HostExecInheritEnvMode = "minimal" | "unsafe-inherit-all";
 export type HostExecPromptNotify = "auto" | "tmux" | "desktop" | "off";
+export type HostExecPromptScope = "once" | "capability";
 
 export interface HostExecPromptConfig {
   enable: boolean;
   timeoutSeconds: number;
-  defaultScope: "capability";
+  defaultScope: HostExecPromptScope;
   notify: HostExecPromptNotify;
 }
 
@@ -240,7 +241,7 @@ export interface RawProfile {
     prompt?: {
       enable?: boolean;
       "timeout-seconds"?: number;
-      "default-scope"?: "capability";
+      "default-scope"?: HostExecPromptScope;
       notify?: HostExecPromptNotify;
     };
     secrets?: Record<string, {

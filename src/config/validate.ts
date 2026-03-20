@@ -19,6 +19,7 @@ import type {
   HostExecInheritEnvMode,
   HostExecPromptConfig,
   HostExecPromptNotify,
+  HostExecPromptScope,
   HostExecRule,
   NetworkPromptConfig,
   NetworkPromptNotify,
@@ -66,6 +67,10 @@ const VALID_HOSTEXEC_CWD_MODES: HostExecCwdMode[] = [
 const VALID_HOSTEXEC_INHERIT_ENV_MODES: HostExecInheritEnvMode[] = [
   "minimal",
   "unsafe-inherit-all",
+];
+const VALID_HOSTEXEC_PROMPT_SCOPES: HostExecPromptScope[] = [
+  "once",
+  "capability",
 ];
 const VALID_HOSTEXEC_PROMPT_NOTIFIES: HostExecPromptNotify[] = [
   "auto",
@@ -542,9 +547,11 @@ function validateHostExecPrompt(
   }
   const defaultScope = raw?.["default-scope"] ??
     DEFAULT_HOSTEXEC_PROMPT_CONFIG.defaultScope;
-  if (defaultScope !== "capability") {
+  if (!VALID_HOSTEXEC_PROMPT_SCOPES.includes(defaultScope)) {
     throw new ConfigValidationError(
-      `profile "${profileName}": hostexec.prompt.default-scope must be "capability"`,
+      `profile "${profileName}": hostexec.prompt.default-scope must be one of: ${
+        VALID_HOSTEXEC_PROMPT_SCOPES.join(", ")
+      }`,
     );
   }
   const notify = raw?.notify ?? DEFAULT_HOSTEXEC_PROMPT_CONFIG.notify;

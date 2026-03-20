@@ -617,6 +617,205 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
   }
 });
 
+Deno.test("HostExecBroker: scope once does not cache approval key", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [{
+        id: "deno-eval",
+        match: { argv0: "deno", argRegex: "^eval\\b" },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "prompt",
+        fallback: "container",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    // First request: approve with scope "once"
+    const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      socketPath,
+      request(["eval", "console.log('first')"], workspace, "req_once_1"),
+    );
+    await waitForPendingEntries(paths, 1);
+    await sendHostExecBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_once_1",
+      scope: "once",
+    });
+    const firstResponse = await firstPromise;
+    assertEquals(firstResponse.type, "result");
+    if (firstResponse.type === "result") {
+      assertEquals(firstResponse.stdout.trim(), "first");
+    }
+
+    // Second identical request (same args) should go to pending again (not auto-approved)
+    const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      socketPath,
+      request(["eval", "console.log('first')"], workspace, "req_once_2"),
+    );
+    const earlyResponse = await Promise.race([
+      secondPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
+    ]);
+    assertEquals(
+      earlyResponse,
+      null,
+      "second request should be pending, not auto-approved",
+    );
+
+    // Clean up
+    await sendHostExecBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_once_2",
+    });
+    await secondPromise;
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("HostExecBroker: scope capability caches approval key", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [{
+        id: "deno-eval",
+        match: { argv0: "deno", argRegex: "^eval\\b" },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "prompt",
+        fallback: "container",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    // First request: approve with scope "capability"
+    const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      socketPath,
+      request(["eval", "console.log('first')"], workspace, "req_cap_1"),
+    );
+    await waitForPendingEntries(paths, 1);
+    await sendHostExecBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_cap_1",
+      scope: "capability",
+    });
+    const firstResponse = await firstPromise;
+    assertEquals(firstResponse.type, "result");
+
+    // Second identical request (same args) should be auto-approved (not pending)
+    const secondResponse = await sendHostExecBrokerRequest<
+      HostExecBrokerResponse
+    >(
+      socketPath,
+      request(["eval", "console.log('first')"], workspace, "req_cap_2"),
+    );
+    assertEquals(secondResponse.type, "result");
+    if (secondResponse.type === "result") {
+      assertEquals(secondResponse.stdout.trim(), "first");
+    }
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("HostExecBroker: defaultScope once used when no explicit scope", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      prompt: { defaultScope: "once" },
+      rules: [{
+        id: "deno-eval",
+        match: { argv0: "deno", argRegex: "^eval\\b" },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "prompt",
+        fallback: "container",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    // First request: approve without explicit scope (defaultScope = "once")
+    const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      socketPath,
+      request(["eval", "console.log('first')"], workspace, "req_def_1"),
+    );
+    await waitForPendingEntries(paths, 1);
+    await sendHostExecBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_def_1",
+    });
+    const firstResponse = await firstPromise;
+    assertEquals(firstResponse.type, "result");
+
+    // Second request (same args) should go to pending (defaultScope was "once", so not cached)
+    const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      socketPath,
+      request(["eval", "console.log('first')"], workspace, "req_def_2"),
+    );
+    const earlyResponse = await Promise.race([
+      secondPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
+    ]);
+    assertEquals(
+      earlyResponse,
+      null,
+      "second request should be pending with defaultScope once",
+    );
+
+    await sendHostExecBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_def_2",
+    });
+    await secondPromise;
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
 async function waitForPendingEntries(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   count: number,

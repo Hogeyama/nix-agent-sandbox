@@ -397,9 +397,13 @@ async function runHostExecCommand(
         nasArgs,
         sub,
       );
+      const scope = (getFlagValue(nasArgs, "--scope") ?? undefined) as
+        | import("./config/types.ts").HostExecPromptScope
+        | undefined;
       await sendHostExecDecision(paths, sessionId, requestId, {
         type: "approve",
         requestId,
+        scope,
       });
       console.log(`[nas] Approved ${sessionId} ${requestId}`);
       return;
@@ -424,7 +428,9 @@ async function runHostExecCommand(
     }
 
     console.error(`[nas] Unknown hostexec subcommand: ${sub}`);
-    console.error("  Usage: nas hostexec [pending|approve|deny|test]");
+    console.error(
+      "  Usage: nas hostexec [pending|approve|deny|test] [--scope ...]",
+    );
     Deno.exit(1);
   } catch (err) {
     console.error(`[nas] Error: ${(err as Error).message}`);
@@ -660,10 +666,13 @@ async function sendHostExecDecision(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   sessionId: string,
   _requestId: string,
-  message: { type: "approve"; requestId: string } | {
-    type: "deny";
-    requestId: string;
-  },
+  message:
+    | {
+      type: "approve";
+      requestId: string;
+      scope?: import("./config/types.ts").HostExecPromptScope;
+    }
+    | { type: "deny"; requestId: string },
 ): Promise<void> {
   const session = await readHostExecSessionRegistry(paths, sessionId);
   if (!session) {

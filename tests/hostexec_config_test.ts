@@ -172,6 +172,42 @@ Deno.test("hostexec config: allows argv0-only match for catch-all", () => {
   );
 });
 
+Deno.test("hostexec config: accepts once as default-scope", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        hostexec: {
+          prompt: {
+            "default-scope": "once",
+          },
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.hostexec?.prompt.defaultScope, "once");
+});
+
+Deno.test("hostexec config: rejects invalid default-scope", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            hostexec: {
+              prompt: {
+                "default-scope": "session" as never,
+              },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "hostexec.prompt.default-scope must be one of",
+  );
+});
+
 Deno.test("hostexec config: rejects invalid arg-regex", () => {
   assertThrows(
     () =>

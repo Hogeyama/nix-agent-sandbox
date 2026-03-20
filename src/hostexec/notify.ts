@@ -36,22 +36,26 @@ async function tryTmux(
 ): Promise<boolean> {
   if (!Deno.env.get("TMUX")) return false;
   const command = formatCommand(notification.pending);
-  const approveCmd =
+  const base =
     `nas hostexec approve ${notification.pending.sessionId} ${notification.pending.requestId}`;
+  const denyCmd =
+    `nas hostexec deny ${notification.pending.sessionId} ${notification.pending.requestId}`;
   const script = `
 printf '\\033[1m[nas] Pending hostexec approval\\033[0m\\n\\n'
 printf '  Rule:    %s\\n' ${shellQuote(notification.pending.ruleId)}
 printf '  Command: %s\\n' ${shellQuote(command)}
 printf '  Cwd:     %s\\n' ${shellQuote(notification.pending.cwd)}
 printf '  Session: %s\\n\\n' ${shellQuote(notification.pending.sessionId)}
-printf '  [a] Approve\\n'
+printf '  [a] Approve (remember)\\n'
+printf '  [o] Approve (once)\\n'
 printf '  [d] Deny\\n'
 printf '  [q] Close (request stays pending)\\n\\n'
 printf 'Choice: '
 read -r choice
 case "$choice" in
-  a|A) ${approveCmd} ;;
-  d|D) nas hostexec deny ${notification.pending.sessionId} ${notification.pending.requestId} ;;
+  a|A) ${base} --scope capability ;;
+  o|O) ${base} --scope once ;;
+  d|D) ${denyCmd} ;;
 esac
 `;
   const result = await new Deno.Command("tmux", {

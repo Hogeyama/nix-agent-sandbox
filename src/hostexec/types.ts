@@ -38,6 +38,7 @@ export interface ExecuteRequest {
 export interface ApprovalRequest {
   type: "approve";
   requestId: string;
+  scope?: import("../config/types.ts").HostExecPromptScope;
 }
 
 export interface DenyRequest {

@@ -182,7 +182,7 @@ profiles:
       prompt:
         enable: true
         timeout-seconds: 300
-        default-scope: capability # 同じ capability（rule_id + argv0 + args）単位で承認を再利用
+        default-scope: capability # once: そのリクエストのみ | capability: 同じ capability（rule_id + argv0 + args）単位で承認を再利用
         notify: auto
       rules:
         - id: git-readonly
@@ -461,7 +461,7 @@ session network
 | `hostexec.secrets.<name>.required` | bool | `true` | secret が取得できない場合にエラーにするか |
 | `hostexec.prompt.enable` | bool | `true` | `approval: prompt` の hostexec 実行を承認キューに入れる |
 | `hostexec.prompt.timeout-seconds` | number | `300` | hostexec 承認の待機秒数。タイムアウト時は deny |
-| `hostexec.prompt.default-scope` | `"capability"` | `"capability"` | hostexec 承認再利用の単位。同じ capability（rule_id + argv0 + args 等）の組み合わせで再利用される |
+| `hostexec.prompt.default-scope` | `"once"` \| `"capability"` | `"capability"` | hostexec 承認再利用の単位。`once`: そのリクエストのみ許可（キャッシュしない）、`capability`: 同じ capability（rule_id + argv0 + args 等）の組み合わせで再利用 |
 | `hostexec.prompt.notify` | `"auto"` \| `"tmux"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`auto` は `notify-send` → tmux popup → no-op の順で試行 |
 | `hostexec.rules[].id` | string | （必須） | 監査・承認 fingerprint に使う安定 ID |
 | `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名 |

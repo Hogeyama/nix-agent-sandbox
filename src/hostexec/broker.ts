@@ -1,5 +1,9 @@
 import * as path from "@std/path";
-import type { HostExecConfig, HostExecRule } from "../config/types.ts";
+import type {
+  HostExecConfig,
+  HostExecPromptScope,
+  HostExecRule,
+} from "../config/types.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import { SecretStore } from "./secret_store.ts";
 import { notifyHostExecPendingRequest } from "./notify.ts";
@@ -163,7 +167,7 @@ export class HostExecBroker {
       return { type: "pending", items: await this.listPending() };
     }
     if (message.type === "approve") {
-      return await this.approve(message.requestId);
+      return await this.approve(message.requestId, message.scope);
     }
     if (message.type === "deny") {
       return await this.deny(message.requestId);
@@ -272,12 +276,18 @@ export class HostExecBroker {
     return group;
   }
 
-  private async approve(requestId: string): Promise<HostExecBrokerResponse> {
+  private async approve(
+    requestId: string,
+    scope?: HostExecPromptScope,
+  ): Promise<HostExecBrokerResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
       throw new Error(`Pending request not found: ${requestId}`);
     }
-    this.approvedKeys.add(group.approvalKey);
+    const selectedScope = scope ?? this.config.prompt.defaultScope;
+    if (selectedScope === "capability") {
+      this.approvedKeys.add(group.approvalKey);
+    }
     await this.resolveGroup(group.approvalKey, "approve");
     return { type: "ack", requestId, decision: "approve" };
   }
