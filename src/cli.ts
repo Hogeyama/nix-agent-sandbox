@@ -38,6 +38,8 @@ import {
   resolveHostExecRuntimePaths,
 } from "./hostexec/registry.ts";
 import { logInfo, type LogLevel, setLogLevel } from "./log.ts";
+import { runFzfReview } from "./fzf_review.ts";
+import type { ReviewItem } from "./fzf_review.ts";
 
 const VERSION = "0.1.0";
 
@@ -351,6 +353,59 @@ async function runNetworkCommand(
       return;
     }
 
+    if (sub === "review") {
+      await gcNetworkRuntime(paths);
+      const items = await listPendingEntries(paths);
+      if (items.length === 0) {
+        console.log("[nas] No pending network approvals.");
+        return;
+      }
+      const reviewItems: ReviewItem[] = items.map((item) => {
+        const target = `${item.target.host}:${item.target.port}`;
+        return {
+          sessionId: item.sessionId,
+          requestId: item.requestId,
+          displayLine:
+            `${item.sessionId} ${item.requestId} ${target} ${item.state} ${item.createdAt}`,
+        };
+      });
+      const result = await runFzfReview(reviewItems, [
+        "once",
+        "host-port",
+        "host",
+      ]);
+      if (!result) return;
+      for (const selected of result.items) {
+        const message = result.action === "approve"
+          ? {
+            type: "approve" as const,
+            requestId: selected.requestId,
+            scope: result.scope as ApprovalScope | undefined,
+          }
+          : { type: "deny" as const, requestId: selected.requestId };
+        try {
+          await sendDecision(
+            paths,
+            selected.sessionId,
+            selected.requestId,
+            message,
+          );
+          console.log(
+            `[nas] ${
+              result.action === "approve" ? "Approved" : "Denied"
+            } ${selected.sessionId} ${selected.requestId}`,
+          );
+        } catch (err) {
+          console.error(
+            `[nas] Warning: failed to ${result.action} ${selected.sessionId} ${selected.requestId}: ${
+              (err as Error).message
+            }`,
+          );
+        }
+      }
+      return;
+    }
+
     if (sub === "gc") {
       const result = await gcNetworkRuntime(paths);
       console.log(
@@ -361,7 +416,7 @@ async function runNetworkCommand(
 
     console.error(`[nas] Unknown network subcommand: ${sub}`);
     console.error(
-      "  Usage: nas network [pending|approve|deny|gc] [--scope ...]",
+      "  Usage: nas network [pending|approve|deny|review|gc] [--scope ...]",
     );
     Deno.exit(1);
   } catch (err) {
@@ -422,6 +477,56 @@ async function runHostExecCommand(
       return;
     }
 
+    if (sub === "review") {
+      const items = await listHostExecPendingEntries(paths);
+      if (items.length === 0) {
+        console.log("[nas] No pending hostexec approvals.");
+        return;
+      }
+      const reviewItems: ReviewItem[] = items.map((item) => {
+        const argv = [item.argv0, ...item.args].join(" ");
+        return {
+          sessionId: item.sessionId,
+          requestId: item.requestId,
+          displayLine:
+            `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}`,
+        };
+      });
+      const result = await runFzfReview(reviewItems, ["once", "capability"]);
+      if (!result) return;
+      for (const selected of result.items) {
+        const message = result.action === "approve"
+          ? {
+            type: "approve" as const,
+            requestId: selected.requestId,
+            scope: result.scope as
+              | import("./config/types.ts").HostExecPromptScope
+              | undefined,
+          }
+          : { type: "deny" as const, requestId: selected.requestId };
+        try {
+          await sendHostExecDecision(
+            paths,
+            selected.sessionId,
+            selected.requestId,
+            message,
+          );
+          console.log(
+            `[nas] ${
+              result.action === "approve" ? "Approved" : "Denied"
+            } ${selected.sessionId} ${selected.requestId}`,
+          );
+        } catch (err) {
+          console.error(
+            `[nas] Warning: failed to ${result.action} ${selected.sessionId} ${selected.requestId}: ${
+              (err as Error).message
+            }`,
+          );
+        }
+      }
+      return;
+    }
+
     if (sub === "test") {
       await runHostExecTestCommand(removeFirstOccurrence(nasArgs, "test"));
       return;
@@ -429,7 +534,7 @@ async function runHostExecCommand(
 
     console.error(`[nas] Unknown hostexec subcommand: ${sub}`);
     console.error(
-      "  Usage: nas hostexec [pending|approve|deny|test] [--scope ...]",
+      "  Usage: nas hostexec [pending|approve|deny|review|test] [--scope ...]",
     );
     Deno.exit(1);
   } catch (err) {
@@ -583,7 +688,7 @@ Usage:
   nas rebuild [profile-name] [options]
   nas worktree [list|clean] [options]
   nas container clean
-  nas network [pending|approve|deny|gc]
+  nas network [pending|approve|deny|review|gc]
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする

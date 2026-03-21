@@ -326,10 +326,12 @@ nas container clean
 nas network pending
 nas network approve <session-id> <request-id> --scope [once|host-port|host]
 nas network deny    <session-id> <request-id>
+nas network review
 nas network gc
 ```
 
 - `pending` は `session_id request_id target state created_at` を 1 行ずつ表示します
+- `review` は fzf で pending を対話的に選択し approve / deny できます
 - `gc` は stale session registry / pending dir / broker socket / auth-router pid/socket を掃除します
 
 ### HostExec 承認キューの確認と操作
@@ -340,10 +342,12 @@ nas network gc
 nas hostexec pending
 nas hostexec approve <session-id> <request-id>
 nas hostexec deny    <session-id> <request-id>
+nas hostexec review
 nas hostexec test --profile <profile> -- <command> [args...]
 ```
 
 - `pending` は `session_id request_id rule_id cwd argv...` を 1 行ずつ表示します
+- `review` は fzf で pending を対話的に選択し approve / deny できます
 - `test` はルールマッチングを試行し、マッチしたルールの id・approval・env keys を表示します。regex パターンの試行錯誤に便利です
 
 ## セキュリティについて
