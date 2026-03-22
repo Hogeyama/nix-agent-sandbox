@@ -11,6 +11,7 @@ export const NAS_KIND_PROXY_NETWORK = "proxy-network";
 export const NAS_KIND_SESSION_NETWORK = "session-network";
 export const NAS_KIND_DIND_TMP = "dind-tmp";
 export const NAS_KIND_AGENT = "agent";
+export const NAS_PWD_LABEL = "nas.pwd";
 
 export type DockerLabels = Record<string, string>;
 

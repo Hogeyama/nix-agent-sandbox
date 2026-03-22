@@ -186,6 +186,7 @@ export interface NasContainerInfo {
   name: string;
   running: boolean;
   labels: Record<string, string>;
+  startedAt: string;
 }
 
 export async function getNasContainers(): Promise<NasContainerInfo[]> {
@@ -204,6 +205,7 @@ export async function getNasContainers(): Promise<NasContainerInfo[]> {
         name: details.name,
         running: details.running,
         labels: details.labels,
+        startedAt: details.startedAt,
       });
     }
   }

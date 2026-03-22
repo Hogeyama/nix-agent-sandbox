@@ -16,6 +16,7 @@ import {
   NAS_KIND_LABEL,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
+  NAS_PWD_LABEL,
 } from "../docker/nas_resources.ts";
 import * as path from "@std/path";
 import { logInfo, logWarn } from "../log.ts";
@@ -115,6 +116,7 @@ export class LaunchStage implements Stage {
       labels: {
         [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
         [NAS_KIND_LABEL]: NAS_KIND_AGENT,
+        [NAS_PWD_LABEL]: ctx.workDir,
       },
     });
 

@@ -70,12 +70,14 @@ Deno.test("isUnusedNasSidecar: active non-managed container keeps sidecar alive"
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    startedAt: "2026-01-01T00:00:00Z",
   };
   const userContainer: DockerContainerDetails = {
     name: "nas-sandbox",
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    startedAt: "2026-01-01T00:00:00Z",
   };
   const network: DockerNetworkDetails = {
     name: "nas-proxy-test",
@@ -102,12 +104,14 @@ Deno.test("isUnusedNasSidecar: only managed sidecars on network is unused", () =
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    startedAt: "2026-01-01T00:00:00Z",
   };
   const dind: DockerContainerDetails = {
     name: "nas-dind-shared",
     running: true,
     labels: {},
     networks: ["nas-proxy-test"],
+    startedAt: "2026-01-01T00:00:00Z",
   };
   const network: DockerNetworkDetails = {
     name: "nas-proxy-test",
@@ -137,12 +141,14 @@ Deno.test("isUnusedNasSidecar: session network with active container keeps envoy
       [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
     },
     networks: ["nas-session-example"],
+    startedAt: "2026-01-01T00:00:00Z",
   };
   const userContainer: DockerContainerDetails = {
     name: "nas-sandbox",
     running: true,
     labels: {},
     networks: ["nas-session-example"],
+    startedAt: "2026-01-01T00:00:00Z",
   };
   const sessionNetwork: DockerNetworkDetails = {
     name: "nas-session-example",
@@ -254,6 +260,7 @@ function createManagedContainer(
       [NAS_KIND_LABEL]: kind,
     },
     networks: [...(options.networks ?? [])],
+    startedAt: "2026-01-01T00:00:00Z",
   };
 }
 
@@ -316,6 +323,7 @@ Deno.test("cleanNasContainers: keeps sidecar when an active non-managed containe
     running: true,
     labels: {},
     networks: ["nas-session-example"],
+    startedAt: "2026-01-01T00:00:00Z",
   });
   backend.networks.set(
     "nas-session-example",

@@ -1,21 +1,17 @@
 import { useCallback, useState } from "preact/hooks";
 import { PendingTab } from "./components/PendingTab.tsx";
-import { SessionsTab } from "./components/SessionsTab.tsx";
 import { ContainersTab } from "./components/ContainersTab.tsx";
 import { useSSE } from "./hooks/useSSE.ts";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import type {
   HostExecPendingItem,
-  HostExecSession,
   NetworkPendingItem,
-  NetworkSession,
 } from "./api.ts";
 
-type TabId = "pending" | "sessions" | "containers";
+type TabId = "pending" | "containers";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "pending", label: "Pending" },
-  { id: "sessions", label: "Sessions" },
   { id: "containers", label: "Containers" },
 ];
 
@@ -27,10 +23,6 @@ export function App() {
   const [hostExecPending, setHostExecPending] = useState<
     HostExecPendingItem[]
   >([]);
-  const [networkSessions, setNetworkSessions] = useState<NetworkSession[]>([]);
-  const [hostExecSessions, setHostExecSessions] = useState<HostExecSession[]>(
-    [],
-  );
 
   const totalPending = networkPending.length + hostExecPending.length;
 
@@ -46,15 +38,6 @@ export function App() {
         case "hostexec:pending":
           setHostExecPending(d.items as HostExecPendingItem[]);
           break;
-        case "sessions": {
-          const s = d as {
-            network: NetworkSession[];
-            hostexec: HostExecSession[];
-          };
-          setNetworkSessions(s.network);
-          setHostExecSessions(s.hostexec);
-          break;
-        }
       }
     },
     [],
@@ -104,12 +87,6 @@ export function App() {
           <PendingTab
             networkItems={networkPending}
             hostExecItems={hostExecPending}
-          />
-        )}
-        {activeTab === "sessions" && (
-          <SessionsTab
-            network={networkSessions}
-            hostexec={hostExecSessions}
           />
         )}
         {activeTab === "containers" && <ContainersTab />}
