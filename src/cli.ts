@@ -38,6 +38,7 @@ import {
   resolveHostExecRuntimePaths,
 } from "./hostexec/registry.ts";
 import { logInfo, type LogLevel, setLogLevel } from "./log.ts";
+import { startServer } from "./ui/server.ts";
 import { runFzfReview } from "./fzf_review.ts";
 import type { ReviewItem } from "./fzf_review.ts";
 
@@ -71,7 +72,7 @@ export async function main(args: string[]): Promise<void> {
   if (
     subcommand === "rebuild" || subcommand === "worktree" ||
     subcommand === "container" || subcommand === "network" ||
-    subcommand === "hostexec"
+    subcommand === "hostexec" || subcommand === "ui"
   ) {
     if (
       argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
@@ -117,6 +118,13 @@ export async function main(args: string[]): Promise<void> {
   if (subcommand === "hostexec") {
     await runHostExecCommand(
       removeFirstOccurrence(args, "hostexec"),
+    );
+    return;
+  }
+
+  if (subcommand === "ui") {
+    await runUiCommand(
+      removeFirstOccurrence(argsBeforeDashDash, "ui"),
     );
     return;
   }
@@ -586,6 +594,24 @@ async function runHostExecTestCommand(
   }
 }
 
+async function runUiCommand(nasArgs: string[]): Promise<void> {
+  const portStr = getFlagValue(nasArgs, "--port");
+  const port = portStr ? parseInt(portStr, 10) : 3939;
+  const noOpen = nasArgs.includes("--no-open");
+  const runtimeDir = getFlagValue(nasArgs, "--runtime-dir") ?? undefined;
+
+  if (isNaN(port) || port < 1 || port > 65535) {
+    console.error("[nas] Invalid port number");
+    Deno.exit(1);
+  }
+
+  try {
+    await startServer({ port, open: !noOpen, runtimeDir });
+  } catch (err) {
+    exitOnCliError(err);
+  }
+}
+
 function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
   let profileName: string | undefined;
   let profileIndex: number | undefined;
@@ -668,13 +694,14 @@ function findFirstNonFlagArg(args: string[]): string | undefined {
       i++;
       continue;
     }
-    if (arg === "--scope" || arg === "--runtime-dir") {
+    if (arg === "--scope" || arg === "--runtime-dir" || arg === "--port") {
       i++;
       continue;
     }
     if (arg === "--quiet" || arg === "-q") continue;
     if (arg.startsWith("-b") && arg.length > 2) continue;
     if (arg === "--no-worktree") continue;
+    if (arg === "--no-open") continue;
     if (!arg.startsWith("-")) return arg;
   }
   return undefined;
@@ -689,6 +716,7 @@ Usage:
   nas worktree [list|clean] [options]
   nas container clean
   nas network [pending|approve|deny|review|gc]
+  nas ui [--port PORT] [--no-open] [--runtime-dir DIR]
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする
@@ -696,6 +724,7 @@ Subcommands:
   container sidecar container の管理
   network   network 承認キューと runtime の管理
   hostexec  hostexec 承認キューの管理
+  ui        Web ダッシュボードを起動する
 
 Options:
   -h, --help      Show this help
