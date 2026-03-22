@@ -186,7 +186,7 @@ export function targetKeyForScope(
 
 export function denyReasonForTarget(target: NormalizedTarget): string | null {
   const host = normalizeHost(target.host);
-  if (host === "localhost" || host === "metadata.google.internal") {
+  if (host === "localhost") {
     return "blocked-special-host";
   }
 

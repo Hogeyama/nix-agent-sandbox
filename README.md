@@ -372,7 +372,7 @@ session network
 ```
 
 - エージェントは資格情報付き proxy URL を通じて Envoy に接続し、`Proxy-Authorization` は auth-router で検証された後に upstream へは除去されます
-- `localhost` / loopback / RFC1918 / link-local / ULA / `metadata.google.internal` など deny-by-default 宛先は broker 前で拒否されます
+- `localhost` / loopback / RFC1918 / link-local / ULA など deny-by-default 宛先は broker 前で拒否されます
 - `network.prompt.enable: true` のとき、allowlist 外通信は `nas network pending` に現れ、`approve` / `deny` で制御できます
 - DinD 有効時、`docker.shared: true` なら既存の共有 DinD サイドカーに session network を attach するだけで、サイドカー自体は再作成されません
 
