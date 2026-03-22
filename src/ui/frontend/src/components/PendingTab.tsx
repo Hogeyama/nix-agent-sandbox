@@ -5,6 +5,31 @@ import {
   type NetworkPendingItem,
 } from "../api.ts";
 
+// FIXME: バックエンドからHOMEを渡すようにして正確に判定する
+function shortenHome(path: string): string {
+  const m = path.match(/^\/home\/[^/]+/);
+  if (!m) return path;
+  if (path === m[0]) return "~";
+  return "~" + path.slice(m[0].length);
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      style={copyBtnStyle}
+      title="Copy"
+      onClick={() => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? "\u2713" : "\u2398"}
+    </button>
+  );
+}
+
 interface Props {
   networkItems: NetworkPendingItem[];
   hostExecItems: HostExecPendingItem[];
@@ -92,13 +117,13 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
           <table style={tableStyle}>
             <thead>
               <tr>
-                <th style={thStyle}>Session</th>
-                <th style={thStyle}>Target</th>
-                <th style={thStyle}>Method</th>
-                <th style={thStyle}>Kind</th>
-                <th style={thStyle}>Created</th>
-                <th style={thStyle}>Scope</th>
-                <th style={thStyle}>Actions</th>
+                <th style={{ ...thStyle, width: "10%" }}>Session</th>
+                <th style={{ ...thStyle, width: "25%" }}>Target</th>
+                <th style={{ ...thStyle, width: "10%" }}>Method</th>
+                <th style={{ ...thStyle, width: "10%" }}>Kind</th>
+                <th style={{ ...thStyle, width: "10%" }}>Created</th>
+                <th style={{ ...thStyle, width: "10%" }}>Scope</th>
+                <th style={{ ...thStyle, width: "25%" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -109,7 +134,9 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
                   <tr key={key}>
                     <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
                     <td style={tdStyle}>
-                      {item.target.host}:{item.target.port}
+                      <div style={scrollBox}>
+                        {item.target.host}:{item.target.port}
+                      </div>
                     </td>
                     <td style={tdStyle}>{item.method}</td>
                     <td style={tdStyle}>{item.requestKind}</td>
@@ -131,7 +158,7 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
                         ))}
                       </select>
                     </td>
-                    <td style={tdStyle}>
+                    <td style={tdActionsStyle}>
                       <button
                         style={approveBtnStyle}
                         disabled={disabled}
@@ -164,13 +191,13 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
           <table style={tableStyle}>
             <thead>
               <tr>
-                <th style={thStyle}>Session</th>
-                <th style={thStyle}>Rule</th>
-                <th style={thStyle}>Command</th>
-                <th style={thStyle}>CWD</th>
-                <th style={thStyle}>Created</th>
-                <th style={thStyle}>Scope</th>
-                <th style={thStyle}>Actions</th>
+                <th style={{ ...thStyle, width: "10%" }}>Session</th>
+                <th style={{ ...thStyle, width: "10%" }}>Rule</th>
+                <th style={{ ...thStyle, width: "30%" }}>Command</th>
+                <th style={{ ...thStyle, width: "15%" }}>CWD</th>
+                <th style={{ ...thStyle, width: "10%" }}>Created</th>
+                <th style={{ ...thStyle, width: "10%" }}>Scope</th>
+                <th style={{ ...thStyle, width: "15%" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -183,9 +210,19 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
                     <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
                     <td style={tdStyle}>{item.ruleId}</td>
                     <td style={tdStyle}>
-                      <code style={cmdStyle} title={cmd}>{cmd}</code>
+                      <div style={scrollCopyBox}>
+                        <div style={scrollBox}>
+                          <code style={cmdStyle} title={cmd}>{cmd}</code>
+                        </div>
+                        <CopyButton text={cmd} />
+                      </div>
                     </td>
-                    <td style={tdStyle}>{item.cwd}</td>
+                    <td style={tdStyle}>
+                      <div style={scrollCopyBox}>
+                        <div style={{ ...scrollBox, fontSize: "13px" }}>{shortenHome(item.cwd)}</div>
+                        <CopyButton text={item.cwd} />
+                      </div>
+                    </td>
                     <td style={tdStyle}>
                       {new Date(item.createdAt).toLocaleTimeString()}
                     </td>
@@ -247,7 +284,11 @@ const countBadge = {
   fontSize: "12px",
   fontWeight: "normal" as const,
 };
-const tableStyle = { width: "100%", borderCollapse: "collapse" as const };
+const tableStyle = {
+  width: "100%",
+  borderCollapse: "collapse" as const,
+  tableLayout: "fixed" as const,
+};
 const thStyle = {
   textAlign: "left" as const,
   padding: "8px",
@@ -256,15 +297,42 @@ const thStyle = {
   fontSize: "12px",
   textTransform: "uppercase" as const,
 };
-const tdStyle = { padding: "8px", borderBottom: "1px solid #1e293b" };
-const cmdStyle = {
-  fontSize: "13px",
-  display: "inline-block",
-  maxWidth: "300px",
+const tdStyle = {
+  padding: "8px",
+  borderBottom: "1px solid #1e293b",
   overflow: "hidden" as const,
   textOverflow: "ellipsis" as const,
   whiteSpace: "nowrap" as const,
-  verticalAlign: "middle",
+};
+const scrollCopyBox = {
+  display: "flex" as const,
+  alignItems: "center" as const,
+  gap: "4px",
+};
+const scrollBox = {
+  overflowX: "auto" as const,
+  whiteSpace: "nowrap" as const,
+  flex: "1",
+  minWidth: "0",
+};
+const copyBtnStyle = {
+  flexShrink: 0,
+  background: "none",
+  border: "1px solid #334155",
+  borderRadius: "4px",
+  color: "#94a3b8",
+  cursor: "pointer",
+  padding: "2px 5px",
+  fontSize: "12px",
+  lineHeight: "1",
+};
+const tdActionsStyle = {
+  padding: "8px",
+  borderBottom: "1px solid #1e293b",
+  whiteSpace: "nowrap" as const,
+};
+const cmdStyle = {
+  fontSize: "13px",
 };
 const selectStyle = {
   background: "#0f172a",
