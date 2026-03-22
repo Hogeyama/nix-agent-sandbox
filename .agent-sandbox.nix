@@ -73,6 +73,8 @@ let
         "registry.npmjs.org" # npm
         "jsr.io" # JSR (Deno)
         "deno.land" # Deno
+        "dl.deno.land" # Deno
+        "esm.sh"
       ];
       prompt = {
         enable = true;
