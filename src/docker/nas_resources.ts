@@ -10,6 +10,7 @@ export const NAS_KIND_DIND_NETWORK = "dind-network";
 export const NAS_KIND_PROXY_NETWORK = "proxy-network";
 export const NAS_KIND_SESSION_NETWORK = "session-network";
 export const NAS_KIND_DIND_TMP = "dind-tmp";
+export const NAS_KIND_AGENT = "agent";
 
 export type DockerLabels = Record<string, string>;
 
@@ -49,6 +50,19 @@ export function isNasManagedTmpVolume(
     return labels[NAS_KIND_LABEL] === NAS_KIND_DIND_TMP;
   }
   return isLegacyNasTmpVolumeName(name);
+}
+
+export function isNasManagedAgent(labels: DockerLabels): boolean {
+  return isNasManagedLabel(labels) &&
+    labels[NAS_KIND_LABEL] === NAS_KIND_AGENT;
+}
+
+/** nas.managed なコンテナすべて (sidecar + agent) */
+export function isNasManagedContainer(
+  labels: DockerLabels,
+  name: string,
+): boolean {
+  return isNasManagedSidecar(labels, name) || isNasManagedAgent(labels);
 }
 
 export function isLegacyNasSidecarName(name: string): boolean {

@@ -21,6 +21,7 @@ export function SessionsTab({ network, hostexec }: Props) {
             <thead>
               <tr>
                 <th style={thStyle}>Session ID</th>
+                <th style={thStyle}>Agent</th>
                 <th style={thStyle}>Profile</th>
                 <th style={thStyle}>PID</th>
                 <th style={thStyle}>Prompt</th>
@@ -31,6 +32,7 @@ export function SessionsTab({ network, hostexec }: Props) {
               {network.map((s) => (
                 <tr key={s.sessionId}>
                   <td style={tdStyle}>{s.sessionId.slice(0, 12)}</td>
+                  <td style={tdStyle}>{s.agent ?? "unknown"}</td>
                   <td style={tdStyle}>{s.profileName}</td>
                   <td style={tdStyle}>{s.pid}</td>
                   <td style={tdStyle}>
@@ -55,6 +57,7 @@ export function SessionsTab({ network, hostexec }: Props) {
             <thead>
               <tr>
                 <th style={thStyle}>Session ID</th>
+                <th style={thStyle}>Agent</th>
                 <th style={thStyle}>Profile</th>
                 <th style={thStyle}>PID</th>
                 <th style={thStyle}>Created</th>
@@ -64,6 +67,7 @@ export function SessionsTab({ network, hostexec }: Props) {
               {hostexec.map((s) => (
                 <tr key={s.sessionId}>
                   <td style={tdStyle}>{s.sessionId.slice(0, 12)}</td>
+                  <td style={tdStyle}>{s.agent ?? "unknown"}</td>
                   <td style={tdStyle}>{s.profileName}</td>
                   <td style={tdStyle}>{s.pid}</td>
                   <td style={tdStyle}>

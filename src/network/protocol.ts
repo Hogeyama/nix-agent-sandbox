@@ -57,6 +57,7 @@ export interface SessionRegistryEntry {
   createdAt: string;
   pid: number;
   promptEnabled: boolean;
+  agent?: string;
 }
 
 export interface NormalizeTargetInput {

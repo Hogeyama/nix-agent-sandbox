@@ -35,7 +35,7 @@ import {
   dockerStop,
 } from "../docker/client.ts";
 import type { DockerContainerDetails } from "../docker/client.ts";
-import { isNasManagedSidecar } from "../docker/nas_resources.ts";
+import { isNasManagedContainer } from "../docker/nas_resources.ts";
 import { cleanNasContainers } from "../container_clean.ts";
 import type { ContainerCleanResult } from "../container_clean.ts";
 
@@ -199,7 +199,7 @@ export async function getNasContainers(): Promise<NasContainerInfo[]> {
     } catch {
       continue;
     }
-    if (isNasManagedSidecar(details.labels, details.name)) {
+    if (isNasManagedContainer(details.labels, details.name)) {
       containers.push({
         name: details.name,
         running: details.running,

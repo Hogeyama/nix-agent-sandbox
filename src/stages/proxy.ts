@@ -102,6 +102,7 @@ export class ProxyStage implements Stage {
       createdAt: new Date().toISOString(),
       pid: Deno.pid,
       promptEnabled: prompt.enable,
+      agent: ctx.profile.agent,
     });
 
     this.authRouterAbort = await ensureAuthRouterDaemon(runtimePaths);

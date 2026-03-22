@@ -75,6 +75,7 @@ export interface NetworkSession {
   promptEnabled: boolean;
   brokerSocket: string;
   allowlist: string[];
+  agent?: string;
 }
 
 export interface HostExecSession {
@@ -83,6 +84,7 @@ export interface HostExecSession {
   createdAt: string;
   pid: number;
   brokerSocket: string;
+  agent?: string;
 }
 
 export interface SessionsData {

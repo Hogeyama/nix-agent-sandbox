@@ -7,6 +7,7 @@ export interface HostExecSessionRegistryEntry {
   profileName: string;
   createdAt: string;
   pid: number;
+  agent?: string;
 }
 
 export interface HostExecPendingEntry {

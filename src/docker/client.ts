@@ -24,6 +24,8 @@ export interface DockerRunOptions {
   envVars: Record<string, string>;
   command: string[];
   interactive: boolean;
+  name?: string;
+  labels?: Record<string, string>;
 }
 
 type ForwardedSignal = "SIGINT" | "SIGTERM";
@@ -126,6 +128,13 @@ export async function dockerBuild(
 /** docker run を実行 */
 export async function dockerRun(opts: DockerRunOptions): Promise<void> {
   const args: string[] = ["docker", "run", "--rm"];
+
+  if (opts.name) {
+    args.push("--name", opts.name);
+  }
+  for (const [key, value] of Object.entries(opts.labels ?? {})) {
+    args.push("--label", `${key}=${value}`);
+  }
 
   if (opts.interactive) {
     // TTY がある場合のみ -t を付ける (非 TTY 環境では -i のみ)

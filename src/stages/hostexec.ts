@@ -73,6 +73,7 @@ export class HostExecStage implements Stage {
       profileName: ctx.profileName,
       createdAt: new Date().toISOString(),
       pid: Deno.pid,
+      agent: ctx.profile.agent,
     });
 
     return {

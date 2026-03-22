@@ -11,6 +11,12 @@ import {
   dockerRun,
   getImageLabel,
 } from "../docker/client.ts";
+import {
+  NAS_KIND_AGENT,
+  NAS_KIND_LABEL,
+  NAS_MANAGED_LABEL,
+  NAS_MANAGED_VALUE,
+} from "../docker/nas_resources.ts";
 import * as path from "@std/path";
 import { logInfo, logWarn } from "../log.ts";
 
@@ -105,6 +111,11 @@ export class LaunchStage implements Stage {
       envVars: ctx.envVars,
       command,
       interactive: true,
+      name: `nas-agent-${ctx.sessionId}`,
+      labels: {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_AGENT,
+      },
     });
 
     return ctx;
