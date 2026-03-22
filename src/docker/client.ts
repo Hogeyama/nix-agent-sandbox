@@ -66,6 +66,7 @@ export interface DockerContainerDetails {
   running: boolean;
   labels: DockerLabels;
   networks: string[];
+  startedAt: string;
 }
 
 export interface DockerNetworkDetails {
@@ -513,6 +514,7 @@ export async function dockerInspectContainer(
     running: parsed.State?.Running === true,
     labels: parsed.Config?.Labels ?? {},
     networks: Object.keys(parsed.NetworkSettings?.Networks ?? {}),
+    startedAt: parsed.State?.StartedAt ?? "",
   };
 }
 

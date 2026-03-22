@@ -96,6 +96,7 @@ export interface ContainerInfo {
   name: string;
   running: boolean;
   labels: Record<string, string>;
+  startedAt: string;
 }
 
 export interface ContainerCleanResult {

@@ -1,11 +1,25 @@
 import { useEffect, useState } from "preact/hooks";
 import { api, type ContainerInfo } from "../api.ts";
 
+function formatRelativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0 || isNaN(ms)) return "-";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ${min % 60}min ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ${hr % 24}h ago`;
+}
+
 export function ContainersTab() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
+  const [, setTick] = useState(0);
 
   async function refresh() {
     try {
@@ -21,6 +35,12 @@ export function ContainersTab() {
   useEffect(() => {
     refresh();
     const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Update relative times every 30s
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30000);
     return () => clearInterval(id);
   }, []);
 
@@ -99,36 +119,50 @@ export function ContainersTab() {
                 <th style={thStyle}>Name</th>
                 <th style={thStyle}>Status</th>
                 <th style={thStyle}>Kind</th>
+                <th style={thStyle}>Uptime</th>
+                <th style={thStyle}>PWD</th>
                 <th style={thStyle}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {containers.map((c) => (
-                <tr key={c.name}>
-                  <td style={tdStyle}>{c.name}</td>
-                  <td style={tdStyle}>
-                    <span
-                      style={{
-                        color: c.running ? "#22c55e" : "#94a3b8",
-                      }}
-                    >
-                      {c.running ? "running" : "stopped"}
-                    </span>
-                  </td>
-                  <td style={tdStyle}>{c.labels["nas.kind"] || "-"}</td>
-                  <td style={tdStyle}>
-                    {c.running && (
-                      <button
-                        style={stopBtnStyle}
-                        disabled={busy.has(c.name)}
-                        onClick={() => handleStop(c.name)}
+              {containers.map((c) => {
+                const kind = c.labels["nas.kind"] || "-";
+                const pwd = kind === "agent"
+                  ? (c.labels["nas.pwd"] || "-")
+                  : "";
+                return (
+                  <tr key={c.name}>
+                    <td style={tdStyle}>{c.name}</td>
+                    <td style={tdStyle}>
+                      <span
+                        style={{
+                          color: c.running ? "#22c55e" : "#94a3b8",
+                        }}
                       >
-                        Stop
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                        {c.running ? "running" : "stopped"}
+                      </span>
+                    </td>
+                    <td style={tdStyle}>{kind}</td>
+                    <td style={tdStyle}>
+                      {c.running && c.startedAt
+                        ? formatRelativeTime(c.startedAt)
+                        : "-"}
+                    </td>
+                    <td style={tdPwdStyle}>{pwd}</td>
+                    <td style={tdStyle}>
+                      {c.running && (
+                        <button
+                          style={stopBtnStyle}
+                          disabled={busy.has(c.name)}
+                          onClick={() => handleStop(c.name)}
+                        >
+                          Stop
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -146,6 +180,15 @@ const thStyle = {
   textTransform: "uppercase" as const,
 };
 const tdStyle = { padding: "8px", borderBottom: "1px solid #1e293b" };
+const tdPwdStyle = {
+  ...tdStyle,
+  maxWidth: "200px",
+  overflow: "hidden" as const,
+  textOverflow: "ellipsis" as const,
+  whiteSpace: "nowrap" as const,
+  fontSize: "13px",
+  color: "#94a3b8",
+};
 const stopBtnStyle = {
   background: "#f59e0b",
   color: "white",
