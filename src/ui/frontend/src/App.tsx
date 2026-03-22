@@ -1,6 +1,5 @@
 import { useCallback, useState } from "preact/hooks";
-import { NetworkTab } from "./components/NetworkTab.tsx";
-import { HostExecTab } from "./components/HostExecTab.tsx";
+import { PendingTab } from "./components/PendingTab.tsx";
 import { SessionsTab } from "./components/SessionsTab.tsx";
 import { ContainersTab } from "./components/ContainersTab.tsx";
 import { useSSE } from "./hooks/useSSE.ts";
@@ -12,17 +11,16 @@ import type {
   NetworkSession,
 } from "./api.ts";
 
-type TabId = "network" | "hostexec" | "sessions" | "containers";
+type TabId = "pending" | "sessions" | "containers";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "network", label: "Network" },
-  { id: "hostexec", label: "HostExec" },
+  { id: "pending", label: "Pending" },
   { id: "sessions", label: "Sessions" },
   { id: "containers", label: "Containers" },
 ];
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabId>("network");
+  const [activeTab, setActiveTab] = useState<TabId>("pending");
   const [networkPending, setNetworkPending] = useState<NetworkPendingItem[]>(
     [],
   );
@@ -87,11 +85,8 @@ export function App() {
             }}
           >
             {tab.label}
-            {tab.id === "network" && networkPending.length > 0 && (
-              <span style={badgeStyle}>{networkPending.length}</span>
-            )}
-            {tab.id === "hostexec" && hostExecPending.length > 0 && (
-              <span style={badgeStyle}>{hostExecPending.length}</span>
+            {tab.id === "pending" && totalPending > 0 && (
+              <span style={badgeStyle}>{totalPending}</span>
             )}
           </button>
         ))}
@@ -105,8 +100,12 @@ export function App() {
           minHeight: "400px",
         }}
       >
-        {activeTab === "network" && <NetworkTab items={networkPending} />}
-        {activeTab === "hostexec" && <HostExecTab items={hostExecPending} />}
+        {activeTab === "pending" && (
+          <PendingTab
+            networkItems={networkPending}
+            hostExecItems={hostExecPending}
+          />
+        )}
         {activeTab === "sessions" && (
           <SessionsTab
             network={networkSessions}
