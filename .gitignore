@@ -2,5 +2,3 @@
 .hostexec-demo/
 src/ui/dist/
 !src/ui/dist/.gitkeep
-src/ui/frontend/node_modules/
-src/ui/frontend/deno.lock

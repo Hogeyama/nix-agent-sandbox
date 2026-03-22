@@ -4,8 +4,7 @@
   "exports": "./main.ts",
   "tasks": {
     "dev": "deno run --allow-all main.ts",
-    "build-ui": "cd src/ui/frontend && deno install --node-modules-dir && deno run -A npm:vite@5 build --outDir ../dist",
-    "dev-ui": "cd src/ui/frontend && deno install --node-modules-dir && deno run -A npm:vite@5",
+    "build-ui": "deno run -A scripts/build_ui.ts",
     "compile": "deno task build-ui && deno compile --allow-all --include src/docker/embed/ --include src/docker/envoy/ --include src/ui/dist/ --output nas main.ts",
     "test": "deno test --allow-all",
     "lint": "deno lint",
@@ -27,11 +26,15 @@
     "@std/fs": "jsr:@std/fs@^1",
     "@std/assert": "jsr:@std/assert@^1",
     "dax": "https://deno.land/x/dax@0.39.2/mod.ts",
-    "hono": "jsr:@hono/hono"
+    "hono": "jsr:@hono/hono",
+    "esbuild": "npm:esbuild@0.24",
+    "esbuild-deno-loader": "jsr:@luca/esbuild-deno-loader@0.11",
+    "preact": "https://esm.sh/preact@10",
+    "preact/": "https://esm.sh/preact@10/"
   },
   "compilerOptions": {
     "strict": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "preact"
+    "jsxImportSource": "https://esm.sh/preact@10"
   }
 }
