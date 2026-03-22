@@ -114,6 +114,7 @@ set -euo pipefail
 if [[ -n "\${NAS_NOTIFY_ARGS_LOG:-}" ]]; then
   printf '%s\n' "$@" > "\${NAS_NOTIFY_ARGS_LOG}"
 fi
+printf '42\n'
 printf '%s' "\${NAS_NOTIFY_STDOUT:-}"
 exit "\${NAS_NOTIFY_EXIT:-0}"
 `,

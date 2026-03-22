@@ -8,6 +8,7 @@ export interface PendingNotification {
   sessionId: string;
   requestId: string;
   target: NormalizedTarget;
+  signal?: AbortSignal;
 }
 
 export async function notifyPendingRequest(
@@ -25,6 +26,7 @@ export async function notifyPendingRequest(
   if (await tryDesktop(notification)) {
     return;
   }
+  if (notification.signal?.aborted) return;
   await tryTmux(notification);
 }
 
@@ -65,18 +67,23 @@ esac
       "-c",
       script,
     ],
+    signal: notification.signal,
     stdout: "null",
     stderr: "null",
   }).output().catch(() => ({ success: false } as Deno.CommandOutput));
   return result.success;
 }
 
+let lastDesktopNotificationId: string | null = null;
+
 async function tryDesktop(
   notification: PendingNotification,
 ): Promise<boolean> {
+  if (notification.signal?.aborted) return false;
   const message = formatMessage(notification);
-  const result = await new Deno.Command("notify-send", {
+  const child = new Deno.Command("notify-send", {
     args: [
+      "--print-id",
       "--wait",
       "--expire-time=0",
       "--action=default=Allow",
@@ -86,26 +93,77 @@ async function tryDesktop(
     ],
     stdout: "piped",
     stderr: "null",
-  }).output().catch(() => ({ success: false } as Deno.CommandOutput));
-  if (!result.success) {
-    return false;
+  }).spawn();
+
+  const onAbort = () => {
+    try {
+      child.kill("SIGTERM");
+    } catch { /* already exited */ }
+  };
+  notification.signal?.addEventListener("abort", onAbort);
+
+  try {
+    const { action } = await readNotifySendOutput(child.stdout);
+    const status = await child.status;
+    lastDesktopNotificationId = null;
+
+    if (!status.success) return false;
+
+    if (action === "allow" || action === "default") {
+      await sendBrokerDecision(notification.brokerSocket, {
+        type: "approve",
+        requestId: notification.requestId,
+      });
+      return true;
+    }
+    if (action === "deny" || action === "") {
+      await sendBrokerDecision(notification.brokerSocket, {
+        type: "deny",
+        requestId: notification.requestId,
+      });
+      return true;
+    }
+    return status.success;
+  } finally {
+    notification.signal?.removeEventListener("abort", onAbort);
+    lastDesktopNotificationId = null;
   }
-  const action = new TextDecoder().decode(result.stdout).trim();
-  if (action === "allow" || action === "default") {
-    await sendBrokerDecision(notification.brokerSocket, {
-      type: "approve",
-      requestId: notification.requestId,
-    });
-    return true;
+}
+
+/**
+ * Read notify-send --print-id --wait output incrementally.
+ * First line = notification ID (stored immediately for dismissal),
+ * remaining output = action chosen by user.
+ */
+async function readNotifySendOutput(
+  stdout: ReadableStream<Uint8Array>,
+): Promise<{ id: string | null; action: string }> {
+  const reader = stdout.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let idCaptured = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      if (!idCaptured && buf.includes("\n")) {
+        const nl = buf.indexOf("\n");
+        lastDesktopNotificationId = buf.slice(0, nl).trim();
+        idCaptured = true;
+      }
+    }
+  } catch {
+    // stream error (process killed by signal)
+  } finally {
+    reader.releaseLock();
   }
-  if (action === "deny" || action === "") {
-    await sendBrokerDecision(notification.brokerSocket, {
-      type: "deny",
-      requestId: notification.requestId,
-    });
-    return true;
-  }
-  return result.success;
+
+  const lines = buf.trim().split("\n");
+  const id = lines.length > 0 ? lines[0].trim() : null;
+  const action = lines.length > 1 ? lines[lines.length - 1].trim() : "";
+  return { id, action };
 }
 
 function formatMessage(notification: PendingNotification) {
@@ -173,6 +231,40 @@ function concatChunks(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.length;
   }
   return result;
+}
+
+export async function closeNotification(): Promise<void> {
+  const capturedId = lastDesktopNotificationId;
+  // tmux popup を閉じる
+  if (Deno.env.get("TMUX")) {
+    await new Deno.Command("tmux", {
+      args: ["display-popup", "-C"],
+      stdout: "null",
+      stderr: "null",
+    }).output().catch(() => {});
+  }
+  // desktop notification を閉じる
+  if (capturedId) {
+    await closeDesktopNotification(capturedId);
+  }
+}
+
+async function closeDesktopNotification(id: string): Promise<void> {
+  await new Deno.Command("gdbus", {
+    args: [
+      "call",
+      "--session",
+      "--dest",
+      "org.freedesktop.Notifications",
+      "--object-path",
+      "/org/freedesktop/Notifications",
+      "--method",
+      "org.freedesktop.Notifications.CloseNotification",
+      id,
+    ],
+    stdout: "null",
+    stderr: "null",
+  }).output().catch(() => {});
 }
 
 function shellQuote(value: string): string {

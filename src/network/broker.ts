@@ -16,7 +16,11 @@ import {
   removePendingEntry,
   writePendingEntry,
 } from "./registry.ts";
-import { type NotifyBackend, notifyPendingRequest } from "./notify.ts";
+import {
+  closeNotification,
+  type NotifyBackend,
+  notifyPendingRequest,
+} from "./notify.ts";
 
 interface BrokerOptions {
   paths: NetworkRuntimePaths;
@@ -42,6 +46,7 @@ interface PendingGroup {
   requests: Map<string, AuthorizeRequest>;
   waiters: Map<string, PendingWaiter>;
   timer: number;
+  notificationAbort: AbortController;
 }
 
 type BrokerMessage =
@@ -239,6 +244,7 @@ export class SessionBroker {
     message: AuthorizeRequest,
   ): Promise<PendingGroup> {
     const createdAt = new Date().toISOString();
+    const notificationAbort = new AbortController();
     const timer = setTimeout(() => {
       void this.resolveGroup(
         groupKey,
@@ -254,6 +260,7 @@ export class SessionBroker {
       requests: new Map([[message.requestId, message]]),
       waiters: new Map(),
       timer,
+      notificationAbort,
     };
     this.groups.set(groupKey, group);
     this.requestIndex.set(message.requestId, groupKey);
@@ -265,6 +272,7 @@ export class SessionBroker {
       sessionId: this.sessionId,
       requestId: message.requestId,
       target: group.target,
+      signal: notificationAbort.signal,
     });
     return group;
   }
@@ -313,6 +321,8 @@ export class SessionBroker {
     if (!group) return;
     clearTimeout(group.timer);
     this.groups.delete(groupKey);
+    group.notificationAbort.abort();
+    await closeNotification();
     if (outcome === "deny") {
       this.negativeCache.set(group.targetKey, Date.now() + 30_000);
     }

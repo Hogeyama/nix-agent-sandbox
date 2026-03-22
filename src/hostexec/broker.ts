@@ -6,7 +6,7 @@ import type {
 } from "../config/types.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import { SecretStore } from "./secret_store.ts";
-import { notifyHostExecPendingRequest } from "./notify.ts";
+import { closeNotification, notifyHostExecPendingRequest } from "./notify.ts";
 import {
   hostExecBrokerSocketPath,
   type HostExecRuntimePaths,
@@ -315,6 +315,7 @@ export class HostExecBroker {
     clearTimeout(group.timer);
     this.groups.delete(approvalKey);
     group.notificationAbort.abort();
+    await closeNotification();
 
     for (const [requestId, pending] of group.requests.entries()) {
       this.requestToApprovalKey.delete(requestId);
