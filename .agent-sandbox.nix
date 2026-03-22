@@ -22,38 +22,40 @@ let
   common_network = {
     network = {
       allowlist = [
+        # Anthropic / Claude
         "api.anthropic.com"
         "statsig.anthropic.com"
         "platform.claude.com"
-        "storage.googleapis.com"
         "mcp-proxy.anthropic.com"
-        "http-intake.logs.us5.datadoghq.com"
         "code.claude.com"
         "claude.ai"
+        # 「Claudeの改善にご協力ください」をonにしてると通信するっぽいっぽい
+        # "http-intake.logs.us5.datadoghq.com"
+
+        # OpenAI / ChatGPT
         "api.openai.com"
+        "*.api.openai.com"
         "ab.chatgpt.com"
         "chatgpt.com"
-        "*.api.openai.com"
-        "github.com"
-        "www.github.com"
+
+        # Google
+        "storage.googleapis.com"
+
+        # GitHub
         "api.github.com"
+        # ユーザーのやつ
+        "github.com"
+        "gist.github.com"
+        "raw.githubusercontent.com"
+        # Copilot
         "api.githubcopilot.com"
         "telemetry.individual.githubcopilot.com"
         "api.individual.githubcopilot.com"
-        "npm.pkg.github.com"
-        "raw.githubusercontent.com"
-        "pkg-npm.githubusercontent.com"
-        "objects.githubusercontent.com"
-        "codeload.github.com"
-        "avatars.githubusercontent.com"
+        # 画像系
         "camo.githubusercontent.com"
-        "gist.github.com"
-        "gitlab.com"
-        "www.gitlab.com"
-        "registry.gitlab.com"
-        "bitbucket.org"
-        "www.bitbucket.org"
-        "api.bitbucket.org"
+        "avatars.githubusercontent.com"
+
+        # Docker Hub
         "registry-1.docker.io"
         "auth.docker.io"
         "index.docker.io"
@@ -61,15 +63,18 @@ let
         "www.docker.com"
         "production.cloudflare.docker.com"
         "download.docker.com"
-        "gcr.io"
-        "*.gcr.io"
-        "ghcr.io"
-        "mcr.microsoft.com"
+
+        # Container Registries
+        "*.gcr.io" # Google Container Registry
+        "ghcr.io" # GitHub Container Registry
+        "mcr.microsoft.com" # Microsoft Container Registry
         "*.data.mcr.microsoft.com"
-        "public.ecr.aws"
-        "registry.npmjs.org"
-        "jsr.io"
-        "deno.land"
+        "public.ecr.aws" # AWS ECR
+
+        # Package Registries
+        "registry.npmjs.org" # npm
+        "jsr.io" # JSR (Deno)
+        "deno.land" # Deno
       ];
       prompt = {
         enable = true;
