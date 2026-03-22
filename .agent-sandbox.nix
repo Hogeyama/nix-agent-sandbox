@@ -29,8 +29,6 @@ let
         "mcp-proxy.anthropic.com"
         "code.claude.com"
         "claude.ai"
-        # 「Claudeの改善にご協力ください」をonにしてると通信するっぽいっぽい
-        # "http-intake.logs.us5.datadoghq.com"
 
         # OpenAI / ChatGPT
         "api.openai.com"
@@ -78,6 +76,10 @@ let
       ];
       prompt = {
         enable = true;
+        denylist = [
+          # Claude Codeがなんか送ってるやつ
+          "http-intake.logs.us5.datadoghq.com"
+        ];
       };
     };
   };
