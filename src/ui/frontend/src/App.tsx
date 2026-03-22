@@ -4,6 +4,7 @@ import { HostExecTab } from "./components/HostExecTab.tsx";
 import { SessionsTab } from "./components/SessionsTab.tsx";
 import { ContainersTab } from "./components/ContainersTab.tsx";
 import { useSSE } from "./hooks/useSSE.ts";
+import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import type {
   HostExecPendingItem,
   HostExecSession,
@@ -32,6 +33,10 @@ export function App() {
   const [hostExecSessions, setHostExecSessions] = useState<HostExecSession[]>(
     [],
   );
+
+  const totalPending = networkPending.length + hostExecPending.length;
+
+  useFaviconBadge(totalPending);
 
   const handleSSE = useCallback(
     (event: string, data: unknown) => {
