@@ -100,6 +100,7 @@ export type NetworkPromptNotify = "auto" | "tmux" | "desktop" | "off";
 
 export interface NetworkPromptConfig {
   enable: boolean;
+  denylist: string[];
   timeoutSeconds: number;
   defaultScope: ApprovalScope;
   notify: NetworkPromptNotify;
@@ -204,6 +205,7 @@ export interface RawProfile {
     allowlist?: string[];
     prompt?: {
       enable?: boolean;
+      denylist?: string[];
       "timeout-seconds"?: number;
       "default-scope"?: ApprovalScope;
       notify?: NetworkPromptNotify;
@@ -295,6 +297,7 @@ export const DEFAULT_GPG_CONFIG: GpgConfig = {
 
 export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {
   enable: false,
+  denylist: [],
   timeoutSeconds: 300,
   defaultScope: "host-port",
   notify: "auto",

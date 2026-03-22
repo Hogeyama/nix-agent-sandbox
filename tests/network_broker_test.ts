@@ -14,6 +14,7 @@ Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => 
     paths,
     sessionId: "sess_test",
     allowlist: ["example.com"],
+    denylist: [],
     promptEnabled: false,
     timeoutSeconds: 30,
     defaultScope: "host-port",
@@ -41,6 +42,7 @@ Deno.test("SessionBroker: pending request resumes after approve", async () => {
     paths,
     sessionId: "sess_test",
     allowlist: [],
+    denylist: [],
     promptEnabled: true,
     timeoutSeconds: 30,
     defaultScope: "host-port",
@@ -86,6 +88,99 @@ function authorize(
     observedAt: new Date().toISOString(),
   };
 }
+
+Deno.test("SessionBroker: denylist hit returns deny immediately", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: [],
+    denylist: ["evil.com"],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_deny", "evil.com", 443),
+    );
+    assertEquals(response.decision, "deny");
+    assertEquals(response.reason, "denylist");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("SessionBroker: allowlist=*.example.com allows sub.example.com even if denylist=sub.example.com", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: ["*.example.com"],
+    denylist: ["sub.example.com"],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_wild_allow", "sub.example.com", 443),
+    );
+    assertEquals(response.decision, "allow");
+    assertEquals(response.reason, "allowlist");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("SessionBroker: allowlist=sub.example.com, denylist=*.example.com denies other.example.com", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: ["sub.example.com"],
+    denylist: ["*.example.com"],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  await broker.start(socketPath);
+  try {
+    // sub.example.com is in allowlist → allow
+    const allowResponse = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_allow_sub", "sub.example.com", 443),
+    );
+    assertEquals(allowResponse.decision, "allow");
+    assertEquals(allowResponse.reason, "allowlist");
+
+    // other.example.com matches denylist *.example.com → deny
+    const denyResponse = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_deny_other", "other.example.com", 443),
+    );
+    assertEquals(denyResponse.decision, "deny");
+    assertEquals(denyResponse.reason, "denylist");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
 
 async function waitForPending(
   socketPath: string,

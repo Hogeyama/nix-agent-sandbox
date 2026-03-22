@@ -2,7 +2,7 @@
  * .agent-sandbox.yml のバリデーション
  */
 
-import type { ApprovalScope } from "../network/protocol.ts";
+import { type ApprovalScope, normalizeHost } from "../network/protocol.ts";
 import type {
   Config,
   DbusRuleConfig,
@@ -38,7 +38,6 @@ import {
   DEFAULT_HOSTEXEC_CWD_CONFIG,
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
   DEFAULT_HOSTEXEC_PROMPT_CONFIG,
-  DEFAULT_NETWORK_CONFIG,
   DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
 } from "./types.ts";
@@ -284,28 +283,36 @@ function validateEnvVal(prefix: string, entry: RawEnvEntry): EnvValSpec {
   return { valCmd: entry.val_cmd };
 }
 
-function validateAllowlist(profileName: string, raw?: unknown): string[] {
-  if (!raw) return DEFAULT_NETWORK_CONFIG.allowlist;
+function validateHostList(
+  profileName: string,
+  fieldPath: string,
+  raw?: unknown,
+): string[] {
+  if (!raw) return [];
   if (!Array.isArray(raw)) {
     throw new ConfigValidationError(
-      `profile "${profileName}": network.allowlist must be a list`,
+      `profile "${profileName}": ${fieldPath} must be a list`,
     );
   }
   for (const [i, entry] of raw.entries()) {
     if (typeof entry !== "string" || entry.trim() === "") {
       throw new ConfigValidationError(
-        `profile "${profileName}": network.allowlist[${i}] must be a non-empty string`,
+        `profile "${profileName}": ${fieldPath}[${i}] must be a non-empty string`,
       );
     }
     // *.domain.com は許可、それ以外の位置に * があればエラー
     const domain = entry.startsWith("*.") ? entry.slice(2) : entry;
     if (domain.includes("*")) {
       throw new ConfigValidationError(
-        `profile "${profileName}": network.allowlist[${i}] ("${entry}") contains wildcard "*" in an invalid position; only "*.domain.com" prefix form is allowed`,
+        `profile "${profileName}": ${fieldPath}[${i}] ("${entry}") contains wildcard "*" in an invalid position; only "*.domain.com" prefix form is allowed`,
       );
     }
   }
   return raw as string[];
+}
+
+function validateAllowlist(profileName: string, raw?: unknown): string[] {
+  return validateHostList(profileName, "network.allowlist", raw);
 }
 
 function validateNetwork(
@@ -318,10 +325,25 @@ function validateNetwork(
     );
   }
 
-  return {
-    allowlist: validateAllowlist(profileName, raw?.allowlist),
-    prompt: validateNetworkPrompt(profileName, raw?.prompt),
+  const allowlist = validateAllowlist(profileName, raw?.allowlist);
+  const prompt = validateNetworkPrompt(profileName, raw?.prompt);
+
+  // allowlist と denylist の完全一致重複チェック
+  // ワイルドカードプレフィックスを保持したまま domain 部分を正規化して比較
+  const normalizeEntry = (e: string) => {
+    if (e.startsWith("*.")) return `*.${normalizeHost(e.slice(2))}`;
+    return normalizeHost(e);
   };
+  const normalizedAllowSet = new Set(allowlist.map(normalizeEntry));
+  for (const entry of prompt.denylist) {
+    if (normalizedAllowSet.has(normalizeEntry(entry))) {
+      throw new ConfigValidationError(
+        `profile "${profileName}": "${entry}" appears in both network.allowlist and network.prompt.denylist`,
+      );
+    }
+  }
+
+  return { allowlist, prompt };
 }
 
 function validateNetworkPrompt(
@@ -364,8 +386,15 @@ function validateNetworkPrompt(
     );
   }
 
+  const denylist = validateHostList(
+    profileName,
+    "network.prompt.denylist",
+    raw?.denylist,
+  );
+
   return {
     enable: raw?.enable ?? DEFAULT_NETWORK_PROMPT_CONFIG.enable,
+    denylist,
     timeoutSeconds,
     defaultScope,
     notify,

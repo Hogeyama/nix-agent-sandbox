@@ -24,6 +24,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.gpg.forwardAgent, false);
   assertEquals(config.profiles.test.network.allowlist, []);
   assertEquals(config.profiles.test.network.prompt.enable, false);
+  assertEquals(config.profiles.test.network.prompt.denylist, []);
   assertEquals(config.profiles.test.network.prompt.timeoutSeconds, 300);
   assertEquals(config.profiles.test.network.prompt.defaultScope, "host-port");
   assertEquals(config.profiles.test.network.prompt.notify, "auto");
@@ -367,6 +368,7 @@ Deno.test("validateConfig: network.prompt defaults are applied", () => {
   });
   assertEquals(config.profiles.test.network.prompt, {
     enable: false,
+    denylist: [],
     timeoutSeconds: 300,
     defaultScope: "host-port",
     notify: "auto",
@@ -391,6 +393,7 @@ Deno.test("validateConfig: network.prompt accepts explicit values", () => {
   });
   assertEquals(config.profiles.test.network.prompt, {
     enable: true,
+    denylist: [],
     timeoutSeconds: 42,
     defaultScope: "host",
     notify: "tmux",
@@ -534,4 +537,99 @@ Deno.test("validateConfig: network.allowlist non-array throws", () => {
     ConfigValidationError,
     "network.allowlist must be a list",
   );
+});
+
+Deno.test("validateConfig: network.prompt.denylist defaults to empty array", () => {
+  const config = validateConfig({
+    profiles: { test: { agent: "claude" } },
+  });
+  assertEquals(config.profiles.test.network.prompt.denylist, []);
+});
+
+Deno.test("validateConfig: network.prompt.denylist is parsed correctly", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        network: {
+          prompt: { denylist: ["evil.com", "*.bad.org"] },
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.network.prompt.denylist, [
+    "evil.com",
+    "*.bad.org",
+  ]);
+});
+
+Deno.test("validateConfig: network.prompt.denylist rejects wildcard in middle", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            network: { prompt: { denylist: ["ev*il.com"] } },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "network.prompt.denylist[0]",
+  );
+});
+
+Deno.test("validateConfig: allowlist and denylist overlap throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            network: {
+              allowlist: ["example.com"],
+              prompt: { denylist: ["example.com"] },
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "appears in both network.allowlist and network.prompt.denylist",
+  );
+});
+
+Deno.test("validateConfig: allowlist=*.example.com and denylist=sub.example.com is allowed", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        network: {
+          allowlist: ["*.example.com"],
+          prompt: { denylist: ["sub.example.com"] },
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.network.allowlist, ["*.example.com"]);
+  assertEquals(config.profiles.test.network.prompt.denylist, [
+    "sub.example.com",
+  ]);
+});
+
+Deno.test("validateConfig: allowlist=sub.example.com and denylist=*.example.com is allowed", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        network: {
+          allowlist: ["sub.example.com"],
+          prompt: { denylist: ["*.example.com"] },
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.network.allowlist, ["sub.example.com"]);
+  assertEquals(config.profiles.test.network.prompt.denylist, [
+    "*.example.com",
+  ]);
 });

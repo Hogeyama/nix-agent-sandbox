@@ -66,6 +66,7 @@ Deno.test({
       paths,
       sessionId,
       allowlist: ["example.org"],
+      denylist: [],
       promptEnabled: false,
       timeoutSeconds: 300,
       defaultScope: "host-port",

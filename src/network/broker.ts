@@ -22,6 +22,7 @@ interface BrokerOptions {
   paths: NetworkRuntimePaths;
   sessionId: string;
   allowlist: string[];
+  denylist: string[];
   promptEnabled: boolean;
   timeoutSeconds: number;
   defaultScope: ApprovalScope;
@@ -58,6 +59,7 @@ export class SessionBroker {
   private readonly paths: NetworkRuntimePaths;
   private readonly sessionId: string;
   private readonly allowlist: string[];
+  private readonly denylist: string[];
   private readonly promptEnabled: boolean;
   private readonly timeoutSeconds: number;
   private readonly defaultScope: ApprovalScope;
@@ -76,6 +78,7 @@ export class SessionBroker {
     this.paths = options.paths;
     this.sessionId = options.sessionId;
     this.allowlist = options.allowlist;
+    this.denylist = options.denylist;
     this.promptEnabled = options.promptEnabled;
     this.timeoutSeconds = options.timeoutSeconds;
     this.defaultScope = options.defaultScope;
@@ -193,6 +196,10 @@ export class SessionBroker {
     const denyReason = denyReasonForTarget(message.target);
     if (denyReason) {
       return denyDecision(message.requestId, denyReason);
+    }
+
+    if (matchesAllowlist(message.target.host, this.denylist)) {
+      return denyDecision(message.requestId, "denylist");
     }
 
     const denyUntil = this.negativeCache.get(targetCacheKey);

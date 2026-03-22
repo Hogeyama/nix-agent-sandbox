@@ -17,6 +17,7 @@ function makeProfile(): Profile {
       allowlist: [],
       prompt: {
         enable: false,
+        denylist: [],
         timeoutSeconds: 300,
         defaultScope: "host-port",
         notify: "off",

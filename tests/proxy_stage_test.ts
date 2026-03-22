@@ -17,6 +17,7 @@ import {
 
 const DEFAULT_PROMPT = {
   enable: false,
+  denylist: [] as string[],
   timeoutSeconds: 300,
   defaultScope: "host-port" as const,
   notify: "auto" as const,

@@ -74,6 +74,7 @@ export class ProxyStage implements Stage {
       paths: runtimePaths,
       sessionId: ctx.sessionId,
       allowlist: ctx.profile.network.allowlist,
+      denylist: prompt.denylist,
       promptEnabled: prompt.enable,
       timeoutSeconds: prompt.timeoutSeconds,
       defaultScope: prompt.defaultScope,

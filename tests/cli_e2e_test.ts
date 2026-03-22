@@ -221,6 +221,7 @@ async function withBrokerFixture(
     paths,
     sessionId,
     allowlist: [],
+    denylist: [],
     promptEnabled: options.promptEnabled ?? true,
     timeoutSeconds: options.timeoutSeconds ?? 30,
     defaultScope: "host-port",
