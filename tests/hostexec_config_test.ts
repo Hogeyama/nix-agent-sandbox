@@ -1,4 +1,5 @@
 import { assertEquals, assertThrows } from "@std/assert";
+import { assertMatch } from "@std/assert/match";
 import {
   ConfigValidationError,
   validateConfig,
@@ -227,4 +228,87 @@ Deno.test("hostexec config: rejects invalid arg-regex", () => {
     ConfigValidationError,
     "arg-regex is not a valid regular expression",
   );
+});
+
+Deno.test("hostexec config: warns on identical match rules", () => {
+  const warnings: string[] = [];
+  const origLog = console.log;
+  console.log = (msg: string) => warnings.push(msg);
+  try {
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              { id: "git-a", match: { argv0: "git" } },
+              { id: "git-b", match: { argv0: "git" } },
+            ],
+          },
+        },
+      },
+    });
+  } finally {
+    console.log = origLog;
+  }
+  assertEquals(warnings.length, 1);
+  assertMatch(warnings[0], /git-a.*git-b.*identical match/);
+});
+
+Deno.test("hostexec config: warns when catch-all shadows specific rule", () => {
+  const warnings: string[] = [];
+  const origLog = console.log;
+  console.log = (msg: string) => warnings.push(msg);
+  try {
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              { id: "git-any", match: { argv0: "git" } },
+              {
+                id: "git-pull",
+                match: { argv0: "git", "arg-regex": "^pull" },
+              },
+            ],
+          },
+        },
+      },
+    });
+  } finally {
+    console.log = origLog;
+  }
+  assertMatch(
+    warnings.find((w) => /shadows/.test(w)) ?? "",
+    /git-any.*shadows.*git-pull/,
+  );
+});
+
+Deno.test("hostexec config: no warning when specific rule comes before catch-all", () => {
+  const warnings: string[] = [];
+  const origLog = console.log;
+  console.log = (msg: string) => warnings.push(msg);
+  try {
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
+                id: "git-pull",
+                match: { argv0: "git", "arg-regex": "^pull" },
+              },
+              { id: "git-any", match: { argv0: "git" } },
+            ],
+          },
+        },
+      },
+    });
+  } finally {
+    console.log = origLog;
+  }
+  const shadowWarnings = warnings.filter((w) => /shadows/.test(w));
+  assertEquals(shadowWarnings.length, 0);
 });

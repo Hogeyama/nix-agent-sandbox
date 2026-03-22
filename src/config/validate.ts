@@ -42,6 +42,7 @@ import {
   DEFAULT_NIX_CONFIG,
 } from "./types.ts";
 import type { AgentType } from "./types.ts";
+import { logWarn } from "../log.ts";
 
 const VALID_AGENTS: AgentType[] = ["claude", "copilot", "codex"];
 const VALID_PROMPT_SCOPES: ApprovalScope[] = ["once", "host-port", "host"];
@@ -612,7 +613,7 @@ function validateHostExecRules(
   }
 
   const secretNames = new Set(Object.keys(rawSecrets ?? {}));
-  return rawRules.map((entry, index) => {
+  const rules = rawRules.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       throw new ConfigValidationError(
         `profile "${profileName}": hostexec.rules[${index}] must be an object`,
@@ -670,6 +671,71 @@ function validateHostExecRules(
       fallback: validateHostExecFallback(prefix, entry.fallback),
     };
   });
+
+  warnOverlappingHostExecRules(profileName, rules);
+
+  return rules;
+}
+
+function warnOverlappingHostExecRules(
+  profileName: string,
+  rules: HostExecRule[],
+): void {
+  // Group rules by (argv0, argRegex) to detect overlaps.
+  // Rules with the same argv0 and no argRegex will always match the same
+  // commands, and rules with identical argv0+argRegex are redundant.
+  // A rule with argRegex can shadow or be shadowed by a rule without argRegex
+  // for the same argv0, so we also warn about that.
+  const byArgv0 = new Map<string, HostExecRule[]>();
+  for (const rule of rules) {
+    const key = rule.match.argv0;
+    const group = byArgv0.get(key);
+    if (group) {
+      group.push(rule);
+    } else {
+      byArgv0.set(key, [rule]);
+    }
+  }
+
+  for (const [argv0, group] of byArgv0) {
+    if (group.length < 2) continue;
+
+    // Check for exact duplicates (same argv0 + same argRegex)
+    const seen = new Map<string, HostExecRule>();
+    for (const rule of group) {
+      const regexKey = rule.match.argRegex ?? "";
+      const prev = seen.get(regexKey);
+      if (prev) {
+        logWarn(
+          `[warn] profile "${profileName}": hostexec rules "${prev.id}" and "${rule.id}" ` +
+            `have identical match (argv0="${argv0}"${
+              rule.match.argRegex ? `, arg-regex="${rule.match.argRegex}"` : ""
+            }); only the first rule will ever match`,
+        );
+      } else {
+        seen.set(regexKey, rule);
+      }
+    }
+
+    // Check for catch-all shadowing: a rule without argRegex shadows
+    // all subsequent rules with the same argv0
+    const catchAll = group.find((r) => r.match.argRegex === undefined);
+    if (catchAll) {
+      for (const rule of group) {
+        if (rule === catchAll) continue;
+        if (rule.match.argRegex !== undefined) {
+          // Only warn if the catch-all appears before the more specific rule
+          if (group.indexOf(catchAll) < group.indexOf(rule)) {
+            logWarn(
+              `[warn] profile "${profileName}": hostexec rule "${catchAll.id}" (argv0="${argv0}", no arg-regex) ` +
+                `shadows rule "${rule.id}" (arg-regex="${rule.match.argRegex}"); ` +
+                `consider reordering so the more specific rule comes first`,
+            );
+          }
+        }
+      }
+    }
+  }
 }
 
 function validateHostExecEnv(
