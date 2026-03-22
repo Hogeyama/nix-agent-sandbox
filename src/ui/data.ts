@@ -17,6 +17,7 @@ import type {
 } from "../network/protocol.ts";
 import { sendBrokerRequest } from "../network/broker.ts";
 import {
+  gcHostExecRuntime,
   listHostExecPendingEntries,
   readHostExecSessionRegistry,
   resolveHostExecRuntimePaths,
@@ -50,6 +51,20 @@ export async function createDataContext(
     resolveNetworkRuntimePaths(runtimeDir),
     resolveHostExecRuntimePaths(runtimeDir),
   ]);
+  // 起動時に stale な session/pending を掃除
+  const [netGc, hexGc] = await Promise.all([
+    gcNetworkRuntime(networkPaths),
+    gcHostExecRuntime(hostExecPaths),
+  ]);
+  const netRemoved = netGc.removedSessions.length +
+    netGc.removedPendingDirs.length + netGc.removedBrokerSockets.length;
+  const hexRemoved = hexGc.removedSessions.length +
+    hexGc.removedPendingDirs.length + hexGc.removedBrokerSockets.length;
+  if (netRemoved > 0 || hexRemoved > 0) {
+    console.log(
+      `[nas] GC: removed ${netGc.removedSessions.length} network session(s), ${hexGc.removedSessions.length} hostexec session(s)`,
+    );
+  }
   return { networkPaths, hostExecPaths };
 }
 
@@ -97,6 +112,7 @@ export async function denyNetwork(
 export async function getHostExecPending(
   ctx: UiDataContext,
 ): Promise<HostExecPendingEntry[]> {
+  await gcHostExecRuntime(ctx.hostExecPaths);
   return await listHostExecPendingEntries(ctx.hostExecPaths);
 }
 

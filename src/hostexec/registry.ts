@@ -138,6 +138,94 @@ export async function removeHostExecSessionRegistry(
   await safeRemove(hostExecSessionRegistryPath(paths, sessionId));
 }
 
+export interface HostExecGcResult {
+  removedSessions: string[];
+  removedPendingDirs: string[];
+  removedBrokerSockets: string[];
+}
+
+export async function gcHostExecRuntime(
+  paths: HostExecRuntimePaths,
+): Promise<HostExecGcResult> {
+  const removedSessions: string[] = [];
+  const removedPendingDirs: string[] = [];
+  const removedBrokerSockets: string[] = [];
+
+  // List all session registries
+  const sessions = await listHostExecSessionRegistries(paths);
+  for (const entry of sessions) {
+    const alive = await isPidAlive(entry.pid);
+    const brokerExists = await pathExists(entry.brokerSocket);
+    if (alive && brokerExists) continue;
+    removedSessions.push(entry.sessionId);
+    await removeHostExecSessionRegistry(paths, entry.sessionId);
+    await removeHostExecPendingDir(paths, entry.sessionId);
+    removedPendingDirs.push(entry.sessionId);
+    await safeRemove(entry.brokerSocket);
+    removedBrokerSockets.push(entry.brokerSocket);
+  }
+
+  // Remove orphaned pending dirs (no matching session)
+  const liveSessionIds = new Set(
+    (await listHostExecSessionRegistries(paths)).map((e) => e.sessionId),
+  );
+  try {
+    for await (const dirEntry of Deno.readDir(paths.pendingDir)) {
+      if (!dirEntry.isDirectory) continue;
+      if (liveSessionIds.has(dirEntry.name)) continue;
+      await removeHostExecPendingDir(paths, dirEntry.name);
+      removedPendingDirs.push(dirEntry.name);
+    }
+  } catch (e) {
+    if (!(e instanceof Deno.errors.NotFound)) throw e;
+  }
+
+  // Remove orphaned broker sockets
+  try {
+    for await (const socketEntry of Deno.readDir(paths.brokersDir)) {
+      if (!socketEntry.isFile && !socketEntry.isSymlink) continue;
+      const socketPath = path.join(paths.brokersDir, socketEntry.name);
+      const sessionId = socketEntry.name.replace(/\.sock$/, "");
+      if (liveSessionIds.has(sessionId)) continue;
+      await safeRemove(socketPath);
+      removedBrokerSockets.push(socketPath);
+    }
+  } catch (e) {
+    if (!(e instanceof Deno.errors.NotFound)) throw e;
+  }
+
+  return { removedSessions, removedPendingDirs, removedBrokerSockets };
+}
+
+async function listHostExecSessionRegistries(
+  paths: HostExecRuntimePaths,
+): Promise<HostExecSessionRegistryEntry[]> {
+  return await readJsonDir<HostExecSessionRegistryEntry>(paths.sessionsDir);
+}
+
+async function isPidAlive(pid: number): Promise<boolean> {
+  try {
+    const output = await new Deno.Command("kill", {
+      args: ["-0", String(pid)],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+    return output.success;
+  } catch {
+    return false;
+  }
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await Deno.lstat(targetPath);
+    return true;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+}
+
 function defaultRuntimeDir(): string {
   const xdg = Deno.env.get("XDG_RUNTIME_DIR");
   if (xdg && xdg.trim() !== "") {
