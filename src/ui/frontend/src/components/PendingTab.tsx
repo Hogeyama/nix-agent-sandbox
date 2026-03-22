@@ -183,7 +183,7 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
                     <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
                     <td style={tdStyle}>{item.ruleId}</td>
                     <td style={tdStyle}>
-                      <code style={{ fontSize: "13px" }}>{cmd}</code>
+                      <code style={cmdStyle} title={cmd}>{cmd}</code>
                     </td>
                     <td style={tdStyle}>{item.cwd}</td>
                     <td style={tdStyle}>
@@ -257,6 +257,15 @@ const thStyle = {
   textTransform: "uppercase" as const,
 };
 const tdStyle = { padding: "8px", borderBottom: "1px solid #1e293b" };
+const cmdStyle = {
+  fontSize: "13px",
+  display: "inline-block",
+  maxWidth: "300px",
+  overflow: "hidden" as const,
+  textOverflow: "ellipsis" as const,
+  whiteSpace: "nowrap" as const,
+  verticalAlign: "middle",
+};
 const selectStyle = {
   background: "#0f172a",
   color: "#e2e8f0",
