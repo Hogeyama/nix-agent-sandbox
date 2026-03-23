@@ -2,6 +2,7 @@ import * as path from "@std/path";
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
+import { logInfo } from "../log.ts";
 import { HostExecBroker } from "../hostexec/broker.ts";
 import {
   hostExecBrokerSocketPath,
@@ -46,12 +47,18 @@ export class HostExecStage implements Stage {
       create: true,
       mode: 0o755,
     });
-    await Deno.chmod(wrapperScript, 0o755).catch(() => {});
+    await Deno.chmod(wrapperScript, 0o755).catch((e) =>
+      logInfo(`[nas] HostExec: failed to chmod wrapper script: ${e}`)
+    );
 
     const argv0Names = new Set(config.rules.map((rule) => rule.match.argv0));
     for (const argv0 of argv0Names) {
       const linkPath = path.join(wrapperBinDir, argv0);
-      await Deno.remove(linkPath).catch(() => {});
+      await Deno.remove(linkPath).catch((e) =>
+        logInfo(
+          `[nas] HostExec: failed to remove old symlink ${linkPath}: ${e}`,
+        )
+      );
       await Deno.symlink("hostexec-wrapper.py", linkPath);
     }
 
@@ -111,13 +118,22 @@ export class HostExecStage implements Stage {
     }
     if (this.runtimePaths) {
       await removeHostExecSessionRegistry(this.runtimePaths, ctx.sessionId)
-        .catch(() => {});
+        .catch((e) =>
+          logInfo(
+            `[nas] HostExec teardown: failed to remove session registry: ${e}`,
+          )
+        );
       await removeHostExecPendingDir(this.runtimePaths, ctx.sessionId).catch(
-        () => {},
+        (e) =>
+          logInfo(
+            `[nas] HostExec teardown: failed to remove pending dir: ${e}`,
+          ),
       );
     }
     if (this.wrapperRoot) {
-      await Deno.remove(this.wrapperRoot, { recursive: true }).catch(() => {});
+      await Deno.remove(this.wrapperRoot, { recursive: true }).catch((e) =>
+        logInfo(`[nas] HostExec teardown: failed to remove wrapper root: ${e}`)
+      );
       this.wrapperRoot = null;
     }
   }

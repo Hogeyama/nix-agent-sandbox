@@ -5,6 +5,7 @@
 import * as path from "@std/path";
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
+import { logInfo } from "../log.ts";
 import { configureClaude } from "../agents/claude.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 import { configureCodex } from "../agents/codex.ts";
@@ -100,12 +101,16 @@ export class MountStage implements Stage {
         const xdgCache = Deno.env.get("XDG_CACHE_HOME") ||
           `${Deno.env.get("HOME")}/.cache`;
         const nasCacheDir = `${xdgCache}/nas`;
-        await Deno.mkdir(nasCacheDir, { recursive: true }).catch(() => {});
+        await Deno.mkdir(nasCacheDir, { recursive: true }).catch((e) =>
+          logInfo(`[nas] Mount: failed to create nas cache dir: ${e}`)
+        );
         args.push("-v", `${nasCacheDir}:${containerHome}/.cache/nas`);
 
         // ホストの ~/.cache/nix もマウント (Nix が書き込みアクセスを要求する場合)
         const hostNixCache = `${xdgCache}/nix`;
-        await Deno.mkdir(hostNixCache, { recursive: true }).catch(() => {});
+        await Deno.mkdir(hostNixCache, { recursive: true }).catch((e) =>
+          logInfo(`[nas] Mount: failed to create nix cache dir: ${e}`)
+        );
         args.push("-v", `${hostNixCache}:${containerHome}/.cache/nix`);
         const nixExtraPackages = serializeNixExtraPackages(
           result.profile.nix.extraPackages,

@@ -119,7 +119,11 @@ export class DindStage implements Stage {
     } else {
       // 共有モードで停止済みコンテナが残っている場合は削除して再作成
       if (this.shared) {
-        await dockerRm(containerName).catch(() => {});
+        await dockerRm(containerName).catch((e) =>
+          logInfo(
+            `[nas] DinD: failed to remove stale shared container: ${e}`,
+          )
+        );
       }
 
       // DinD rootless サイドカーをデフォルト bridge で起動
@@ -248,7 +252,9 @@ async function startDindSidecar(
   await dockerVolumeCreate(sharedTmpVolume, {
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
     [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
-  }).catch(() => {});
+  }).catch((e) =>
+    logInfo(`[nas] DinD: failed to create shared tmp volume: ${e}`)
+  );
 
   await runDindSidecar(containerName, sharedTmpVolume, options);
   logInfo("[nas] DinD: waiting for daemon to be ready...");
@@ -267,9 +273,15 @@ async function startDindSidecar(
     );
     // rootless DinD の状態ディレクトリが壊れていると起動できないため、
     // まずキャッシュ volume を作り直してから再試行する。
-    await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
-    await dockerRm(containerName).catch(() => {});
-    await dockerVolumeRemove(DIND_CACHE_VOLUME).catch(() => {});
+    await dockerStop(containerName, { timeoutSeconds: 0 }).catch((e) =>
+      logInfo(`[nas] DinD: failed to stop container for cache reset: ${e}`)
+    );
+    await dockerRm(containerName).catch((e) =>
+      logInfo(`[nas] DinD: failed to remove container for cache reset: ${e}`)
+    );
+    await dockerVolumeRemove(DIND_CACHE_VOLUME).catch((e) =>
+      logInfo(`[nas] DinD: failed to remove cache volume: ${e}`)
+    );
 
     await runDindSidecar(containerName, sharedTmpVolume, options);
     logInfo("[nas] DinD: waiting for daemon to be ready (fresh cache)...");
@@ -284,8 +296,14 @@ async function startDindSidecar(
       logWarn(
         `[nas] DinD: fresh cache retry also failed, retrying without cache...`,
       );
-      await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
-      await dockerRm(containerName).catch(() => {});
+      await dockerStop(containerName, { timeoutSeconds: 0 }).catch((e) =>
+        logInfo(`[nas] DinD: failed to stop container for no-cache retry: ${e}`)
+      );
+      await dockerRm(containerName).catch((e) =>
+        logInfo(
+          `[nas] DinD: failed to remove container for no-cache retry: ${e}`,
+        )
+      );
     }
 
     await runDindSidecar(containerName, sharedTmpVolume, {

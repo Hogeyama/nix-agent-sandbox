@@ -1,3 +1,4 @@
+import { logInfo } from "../log.ts";
 import {
   type ApprovalScope,
   type AuthorizeRequest,
@@ -108,7 +109,9 @@ export class SessionBroker {
       this.listener = null;
     }
     if (this.acceptLoop) {
-      await this.acceptLoop.catch(() => {});
+      await this.acceptLoop.catch((e) =>
+        logInfo(`[nas] NetworkBroker: accept loop error on close: ${e}`)
+      );
     }
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
@@ -126,10 +129,12 @@ export class SessionBroker {
     this.requestIndex.clear();
     await removePendingDir(this.paths, this.sessionId);
     if (this.socketPath) {
-      await Deno.remove(this.socketPath).catch(() => {});
+      await Deno.remove(this.socketPath).catch((e) =>
+        logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`)
+      );
     } else {
       await Deno.remove(brokerSocketPath(this.paths, this.sessionId)).catch(
-        () => {},
+        (e) => logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`),
       );
     }
   }

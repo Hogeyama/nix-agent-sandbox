@@ -1,6 +1,7 @@
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import type { DbusRuleConfig } from "../config/types.ts";
+import { logInfo } from "../log.ts";
 import {
   type DbusSessionPaths,
   gcDbusRuntime,
@@ -61,7 +62,9 @@ export class DbusProxyStage implements Stage {
         recursive: true,
         mode: 0o700,
       });
-      await Deno.chmod(sessionPaths.sessionDir, 0o700).catch(() => {});
+      await Deno.chmod(sessionPaths.sessionDir, 0o700).catch((e) =>
+        logInfo(`[nas] DbusProxy: failed to chmod session dir: ${e}`)
+      );
 
       const commandArgs = buildProxyArgs(
         sourceAddress,
@@ -113,17 +116,23 @@ export class DbusProxyStage implements Stage {
       } catch {
         // noop
       }
-      await this.child.status.catch(() => {});
+      await this.child.status.catch((e) =>
+        logInfo(`[nas] DbusProxy teardown: failed to await child status: ${e}`)
+      );
       this.child = null;
     }
     if (this.stderrCapture) {
-      await this.stderrCapture.catch(() => {});
+      await this.stderrCapture.catch((e) =>
+        logInfo(`[nas] DbusProxy teardown: failed to capture stderr: ${e}`)
+      );
       this.stderrCapture = null;
     }
     if (this.sessionPaths) {
       await Deno.remove(this.sessionPaths.sessionDir, { recursive: true })
-        .catch(
-          () => {},
+        .catch((e) =>
+          logInfo(
+            `[nas] DbusProxy teardown: failed to remove session dir: ${e}`,
+          )
         );
       this.sessionPaths = null;
     }
@@ -136,7 +145,9 @@ export class DbusProxyStage implements Stage {
     } catch {
       this.stderrText = "";
     } finally {
-      await child.stderr.cancel().catch(() => {});
+      await child.stderr.cancel().catch((e) =>
+        logInfo(`[nas] DbusProxy: failed to cancel stderr stream: ${e}`)
+      );
     }
   }
 }

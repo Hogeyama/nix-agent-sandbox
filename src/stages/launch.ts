@@ -79,7 +79,9 @@ export class DockerBuildStage implements Stage {
           [DockerBuildStage.EMBED_HASH_LABEL]: embedHash,
         });
       } finally {
-        await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+        await Deno.remove(tmpDir, { recursive: true }).catch((e) =>
+          logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`)
+        );
       }
     }
 

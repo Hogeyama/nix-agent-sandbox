@@ -112,12 +112,16 @@ export class ProxyStage implements Stage {
     await ensureSessionNetwork(this.networkName);
     await dockerNetworkConnect(this.networkName, this.envoyContainerName, {
       aliases: [ENVOY_ALIAS],
-    }).catch(() => {});
+    }).catch((e) =>
+      logInfo(`[nas] Proxy: failed to connect envoy to network: ${e}`)
+    );
 
     this.dindContainerName = parseDindContainerName(ctx.envVars);
     if (this.dindContainerName) {
       await dockerNetworkConnect(this.networkName, this.dindContainerName)
-        .catch(() => {});
+        .catch((e) =>
+          logInfo(`[nas] Proxy: failed to connect dind to network: ${e}`)
+        );
     }
 
     const proxyUrl =
@@ -165,12 +169,22 @@ export class ProxyStage implements Stage {
 
     if (this.networkName) {
       await dockerNetworkDisconnect(this.networkName, this.envoyContainerName)
-        .catch(() => {});
+        .catch((e) =>
+          logInfo(
+            `[nas] Proxy teardown: failed to disconnect envoy from network: ${e}`,
+          )
+        );
       if (this.dindContainerName) {
         await dockerNetworkDisconnect(this.networkName, this.dindContainerName)
-          .catch(() => {});
+          .catch((e) =>
+            logInfo(
+              `[nas] Proxy teardown: failed to disconnect dind from network: ${e}`,
+            )
+          );
       }
-      await dockerNetworkRemove(this.networkName).catch(() => {});
+      await dockerNetworkRemove(this.networkName).catch((e) =>
+        logInfo(`[nas] Proxy teardown: failed to remove network: ${e}`)
+      );
     }
   }
 }
@@ -246,7 +260,9 @@ async function ensureSharedEnvoy(
     return;
   }
   if (await dockerContainerExists(envoyContainerName)) {
-    await dockerRm(envoyContainerName).catch(() => {});
+    await dockerRm(envoyContainerName).catch((e) =>
+      logInfo(`[nas] Proxy: failed to remove stale envoy container: ${e}`)
+    );
   }
   await dockerRunDetached({
     name: envoyContainerName,

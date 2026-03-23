@@ -1,4 +1,5 @@
 import * as path from "@std/path";
+import { logInfo } from "../log.ts";
 import type {
   HostExecConfig,
   HostExecPromptScope,
@@ -104,7 +105,9 @@ export class HostExecBroker {
       this.listener = null;
     }
     if (this.acceptLoop) {
-      await this.acceptLoop.catch(() => {});
+      await this.acceptLoop.catch((e) =>
+        logInfo(`[nas] HostExecBroker: accept loop error on close: ${e}`)
+      );
     }
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
@@ -124,7 +127,9 @@ export class HostExecBroker {
     await removeHostExecSessionRegistry(this.paths, this.sessionId);
     const target = this.socketPath ??
       hostExecBrokerSocketPath(this.paths, this.sessionId);
-    await Deno.remove(target).catch(() => {});
+    await Deno.remove(target).catch((e) =>
+      logInfo(`[nas] HostExecBroker: failed to remove socket: ${e}`)
+    );
   }
 
   async listPending(): Promise<HostExecPendingEntry[]> {
@@ -268,7 +273,9 @@ export class HostExecBroker {
         hostExecBrokerSocketPath(this.paths, this.sessionId),
       pending: entry,
       signal: notificationAbort.signal,
-    }).catch(() => {});
+    }).catch((e) =>
+      logInfo(`[nas] HostExecBroker: failed to send notification: ${e}`)
+    );
     this.notificationTasks.add(notificationTask);
     void notificationTask.finally(() => {
       this.notificationTasks.delete(notificationTask);

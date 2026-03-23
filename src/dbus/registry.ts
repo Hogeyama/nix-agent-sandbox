@@ -1,4 +1,5 @@
 import * as path from "@std/path";
+import { logInfo } from "../log.ts";
 import {
   defaultRuntimeDir,
   ensureDir,
@@ -53,7 +54,9 @@ export async function gcDbusRuntime(
       const pid = await readPid(pidFile);
       const alive = pid !== null && await isPidAlive(pid);
       if (alive) continue;
-      await Deno.remove(sessionDir, { recursive: true }).catch(() => {});
+      await Deno.remove(sessionDir, { recursive: true }).catch((e) =>
+        logInfo(`[nas] DbusRegistry GC: failed to remove session dir: ${e}`)
+      );
     }
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) throw error;

@@ -13,6 +13,7 @@ import {
   resolveNetworkRuntimePaths,
 } from "./registry.ts";
 import { sendBrokerRequest } from "./broker.ts";
+import { logInfo } from "../log.ts";
 
 export async function ensureAuthRouterDaemon(
   paths: NetworkRuntimePaths,
@@ -23,7 +24,9 @@ export async function ensureAuthRouterDaemon(
   }
 
   const ac = new AbortController();
-  void serveAuthRouter(paths.runtimeDir, { signal: ac.signal }).catch(() => {});
+  void serveAuthRouter(paths.runtimeDir, { signal: ac.signal }).catch((e) =>
+    logInfo(`[nas] AuthRouter: daemon exited with error: ${e}`)
+  );
 
   await Deno.writeTextFile(paths.authRouterPidFile, `${Deno.pid}\n`, {
     create: true,
