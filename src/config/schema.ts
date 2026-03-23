@@ -157,11 +157,11 @@ const envEntrySchema = z.object(
   const hasKey = entry.key !== undefined;
   const hasKeyCmd = entry.key_cmd !== undefined;
   if (hasKey === hasKeyCmd) {
-    throw new ConfigValidationError(
-      ctx.path.length > 0
-        ? `${formatPath(ctx.path)} must have exactly one of key or key_cmd`
-        : "must have exactly one of key or key_cmd",
-    );
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "must have exactly one of key or key_cmd",
+    });
+    return;
   }
   if (hasKey) {
     if (typeof entry.key !== "string" || entry.key.trim() === "") {
@@ -183,11 +183,11 @@ const envEntrySchema = z.object(
   const hasVal = entry.val !== undefined;
   const hasValCmd = entry.val_cmd !== undefined;
   if (hasVal === hasValCmd) {
-    throw new ConfigValidationError(
-      ctx.path.length > 0
-        ? `${formatPath(ctx.path)} must have exactly one of val or val_cmd`
-        : "must have exactly one of val or val_cmd",
-    );
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "must have exactly one of val or val_cmd",
+    });
+    return;
   }
   if (hasVal) {
     if (typeof entry.val !== "string") {
@@ -320,7 +320,7 @@ export function networkSchema(profileName: string) {
       prompt: networkPromptSchema,
     },
     { invalid_type_error: "network must be an object" },
-  ).default({}).superRefine((val, _ctx) => {
+  ).default({}).superRefine((val, ctx) => {
     // Skip overlap check if any entries are invalid (empty strings would crash normalizeHost)
     const allEntries = [...val.allowlist, ...val.prompt.denylist];
     if (allEntries.some((e) => typeof e !== "string" || e.trim() === "")) {
@@ -333,9 +333,11 @@ export function networkSchema(profileName: string) {
     const normalizedAllowSet = new Set(val.allowlist.map(normalizeEntry));
     for (const entry of val.prompt.denylist) {
       if (normalizedAllowSet.has(normalizeEntry(entry))) {
-        throw new ConfigValidationError(
-          `profile "${profileName}": "${entry}" appears in both network.allowlist and network.prompt.denylist`,
-        );
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `"${entry}" appears in both network.allowlist and network.prompt.denylist`,
+        });
       }
     }
   });
@@ -440,9 +442,12 @@ function hostexecRuleSchema(
       }).default({}).superRefine((val, ctx) => {
         for (const [key, value] of Object.entries(val)) {
           if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-            throw new ConfigValidationError(
-              `${prefix}.env contains invalid key: ${key}`,
-            );
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message: `invalid env key name: ${key}`,
+            });
+            continue;
           }
           if (typeof value !== "string" || value.trim() === "") {
             ctx.addIssue({
@@ -453,15 +458,20 @@ function hostexecRuleSchema(
             continue;
           }
           if (!value.startsWith("secret:")) {
-            throw new ConfigValidationError(
-              `${prefix}.env.${key} must use secret:<name> reference`,
-            );
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message: "must use secret:<name> reference",
+            });
+            continue;
           }
           const secretName = value.slice("secret:".length);
           if (!secretNames.has(secretName)) {
-            throw new ConfigValidationError(
-              `${prefix}.env.${key} references unknown secret "${secretName}"`,
-            );
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message: `references unknown secret "${secretName}"`,
+            });
           }
         }
       }),

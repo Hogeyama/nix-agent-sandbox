@@ -312,3 +312,37 @@ Deno.test("hostexec config: no warning when specific rule comes before catch-all
   const shadowWarnings = warnings.filter((w) => /shadows/.test(w));
   assertEquals(shadowWarnings.length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Error aggregation: hostexec env superRefine collects multiple issues
+// ---------------------------------------------------------------------------
+
+Deno.test("hostexec config: collects multiple env errors in a single rule", () => {
+  // hostexecSchema's transform calls ruleSchema.parse() and wraps ZodError
+  // into ConfigValidationError, so only the first env issue surfaces.
+  // But the env superRefine itself now collects all issues within a rule.
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            hostexec: {
+              secrets: { tok: { from: "env:TOK" } },
+              rules: [{
+                id: "r1",
+                match: { argv0: "git" },
+                env: {
+                  "BAD-KEY": "secret:tok",
+                  "NO_PREFIX": "plain-value",
+                  "UNKNOWN": "secret:nope",
+                },
+              }],
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "BAD-KEY",
+  );
+});
