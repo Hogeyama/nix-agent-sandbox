@@ -256,7 +256,10 @@ function randomHex(bytes: number): string {
 
 function isDeniedIpv4(host: string): boolean {
   const parts = host.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
     return false;
   }
   const [a, b] = parts;
@@ -270,15 +273,13 @@ function isDeniedIpv4(host: string): boolean {
 function isDeniedIpv6(host: string): boolean {
   const normalized = host.toLowerCase();
   if (normalized === "::1") return true;
-  if (
-    normalized.startsWith("fe80:") || normalized.startsWith("fe90:") ||
-    normalized.startsWith("fea0:") || normalized.startsWith("feb0:")
-  ) {
-    return true;
-  }
   const first = normalized.split(":")[0];
   if (first.length === 0) return false;
   const value = Number.parseInt(first, 16);
   if (Number.isNaN(value)) return false;
-  return (value & 0xfe00) === 0xfc00;
+  // fc00::/7  — ULA (unique local address)
+  if ((value & 0xfe00) === 0xfc00) return true;
+  // fe80::/10 — link-local
+  if ((value & 0xffc0) === 0xfe80) return true;
+  return false;
 }
