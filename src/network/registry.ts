@@ -1,32 +1,41 @@
 import * as path from "@std/path";
 import type { PendingEntry, SessionRegistryEntry } from "./protocol.ts";
 import {
-  atomicWriteJson,
   defaultRuntimeDir,
   ensureDir,
   isPidAlive,
-  pathExists,
-  readJsonDir,
-  readJsonFile,
   readPid,
   removeIfExists,
-  safeRemove,
 } from "../lib/fs_utils.ts";
+import {
+  type BaseRuntimePaths,
+  type GcResult,
+  gcRuntime,
+  listPendingEntries as genericListPendingEntries,
+  listSessionRegistries as genericListSessionRegistries,
+  readSessionRegistry as genericReadSessionRegistry,
+} from "../lib/runtime_registry.ts";
 
-export interface NetworkRuntimePaths {
-  runtimeDir: string;
-  sessionsDir: string;
-  pendingDir: string;
-  brokersDir: string;
+// Re-export generic functions that don't need return-type narrowing.
+export {
+  brokerSocketPath,
+  pendingRequestPath,
+  pendingSessionDir,
+  removePendingDir,
+  removePendingEntry,
+  removeSessionRegistry,
+  sessionRegistryPath,
+  writePendingEntry,
+  writeSessionRegistry,
+} from "../lib/runtime_registry.ts";
+
+export interface NetworkRuntimePaths extends BaseRuntimePaths {
   authRouterSocket: string;
   authRouterPidFile: string;
   envoyConfigFile: string;
 }
 
-export interface NetworkGcResult {
-  removedSessions: string[];
-  removedPendingDirs: string[];
-  removedBrokerSockets: string[];
+export interface NetworkGcResult extends GcResult {
   removedAuthRouterSocket: boolean;
   removedAuthRouterPidFile: boolean;
 }
@@ -51,150 +60,37 @@ export async function resolveNetworkRuntimePaths(
   return paths;
 }
 
-export function sessionRegistryPath(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-): string {
-  return path.join(paths.sessionsDir, `${sessionId}.json`);
-}
-
-export function brokerSocketPath(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-): string {
-  return path.join(paths.brokersDir, `${sessionId}.sock`);
-}
-
-export function pendingSessionDir(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-): string {
-  return path.join(paths.pendingDir, sessionId);
-}
-
-export function pendingRequestPath(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-  requestId: string,
-): string {
-  return path.join(pendingSessionDir(paths, sessionId), `${requestId}.json`);
-}
-
-export async function writeSessionRegistry(
-  paths: NetworkRuntimePaths,
-  entry: SessionRegistryEntry,
-): Promise<void> {
-  await atomicWriteJson(sessionRegistryPath(paths, entry.sessionId), entry);
-}
+// Typed wrappers for generic read functions.
 
 export async function readSessionRegistry(
-  paths: NetworkRuntimePaths,
+  paths: BaseRuntimePaths,
   sessionId: string,
 ): Promise<SessionRegistryEntry | null> {
-  return await readJsonFile<SessionRegistryEntry>(
-    sessionRegistryPath(paths, sessionId),
+  return await genericReadSessionRegistry<SessionRegistryEntry>(
+    paths,
+    sessionId,
   );
 }
 
 export async function listSessionRegistries(
-  paths: NetworkRuntimePaths,
+  paths: BaseRuntimePaths,
 ): Promise<SessionRegistryEntry[]> {
-  return await readJsonDir<SessionRegistryEntry>(paths.sessionsDir);
-}
-
-export async function removeSessionRegistry(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-): Promise<void> {
-  await safeRemove(sessionRegistryPath(paths, sessionId));
-}
-
-export async function writePendingEntry(
-  paths: NetworkRuntimePaths,
-  entry: PendingEntry,
-): Promise<void> {
-  await ensureDir(pendingSessionDir(paths, entry.sessionId));
-  await atomicWriteJson(
-    pendingRequestPath(paths, entry.sessionId, entry.requestId),
-    entry,
-  );
-}
-
-export async function removePendingEntry(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-  requestId: string,
-): Promise<void> {
-  await safeRemove(pendingRequestPath(paths, sessionId, requestId));
-}
-
-export async function removePendingDir(
-  paths: NetworkRuntimePaths,
-  sessionId: string,
-): Promise<void> {
-  await safeRemove(pendingSessionDir(paths, sessionId), { recursive: true });
+  return await genericListSessionRegistries<SessionRegistryEntry>(paths);
 }
 
 export async function listPendingEntries(
-  paths: NetworkRuntimePaths,
+  paths: BaseRuntimePaths,
   sessionId?: string,
 ): Promise<PendingEntry[]> {
-  if (sessionId) {
-    return await readJsonDir<PendingEntry>(pendingSessionDir(paths, sessionId));
-  }
-
-  const entries: PendingEntry[] = [];
-  for await (const dirEntry of Deno.readDir(paths.pendingDir)) {
-    if (!dirEntry.isDirectory) continue;
-    entries.push(
-      ...await readJsonDir<PendingEntry>(
-        path.join(paths.pendingDir, dirEntry.name),
-      ),
-    );
-  }
-  return entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return await genericListPendingEntries<PendingEntry>(paths, sessionId);
 }
 
 export async function gcNetworkRuntime(
   paths: NetworkRuntimePaths,
 ): Promise<NetworkGcResult> {
-  const removedSessions: string[] = [];
-  const removedPendingDirs: string[] = [];
-  const removedBrokerSockets: string[] = [];
+  const base = await gcRuntime<SessionRegistryEntry>(paths);
 
-  const sessions = await listSessionRegistries(paths);
-  for (const entry of sessions) {
-    const alive = await isPidAlive(entry.pid);
-    const brokerExists = await pathExists(entry.brokerSocket);
-    if (alive && brokerExists) continue;
-    removedSessions.push(entry.sessionId);
-    await removeSessionRegistry(paths, entry.sessionId);
-    await removePendingDir(paths, entry.sessionId);
-    removedPendingDirs.push(entry.sessionId);
-    await safeRemove(entry.brokerSocket);
-    removedBrokerSockets.push(entry.brokerSocket);
-  }
-
-  const liveSessionIds = new Set(
-    (await listSessionRegistries(paths)).map((entry) => entry.sessionId),
-  );
-
-  for await (const dirEntry of Deno.readDir(paths.pendingDir)) {
-    if (!dirEntry.isDirectory) continue;
-    if (liveSessionIds.has(dirEntry.name)) continue;
-    await removePendingDir(paths, dirEntry.name);
-    removedPendingDirs.push(dirEntry.name);
-  }
-
-  for await (const socketEntry of Deno.readDir(paths.brokersDir)) {
-    if (!socketEntry.isFile && !socketEntry.isSymlink) continue;
-    const socketPath = path.join(paths.brokersDir, socketEntry.name);
-    const sessionId = socketEntry.name.replace(/\.sock$/, "");
-    if (liveSessionIds.has(sessionId)) continue;
-    await safeRemove(socketPath);
-    removedBrokerSockets.push(socketPath);
-  }
-
+  // Network-specific: clean up auth router if its process is dead.
   let removedAuthRouterSocket = false;
   let removedAuthRouterPidFile = false;
   const authRouterPid = await readPid(paths.authRouterPidFile);
@@ -206,9 +102,7 @@ export async function gcNetworkRuntime(
   }
 
   return {
-    removedSessions,
-    removedPendingDirs,
-    removedBrokerSockets,
+    ...base,
     removedAuthRouterSocket,
     removedAuthRouterPidFile,
   };
