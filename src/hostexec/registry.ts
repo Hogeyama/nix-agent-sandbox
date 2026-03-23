@@ -3,6 +3,16 @@ import type {
   HostExecPendingEntry,
   HostExecSessionRegistryEntry,
 } from "./types.ts";
+import {
+  atomicWriteJson,
+  defaultRuntimeDir,
+  ensureDir,
+  isPidAlive,
+  pathExists,
+  readJsonDir,
+  readJsonFile,
+  safeRemove,
+} from "../lib/fs_utils.ts";
 
 export interface HostExecRuntimePaths {
   runtimeDir: string;
@@ -15,7 +25,7 @@ export interface HostExecRuntimePaths {
 export async function resolveHostExecRuntimePaths(
   runtimeDir?: string,
 ): Promise<HostExecRuntimePaths> {
-  const resolved = runtimeDir ?? defaultRuntimeDir();
+  const resolved = runtimeDir ?? defaultRuntimeDir("hostexec");
   const paths: HostExecRuntimePaths = {
     runtimeDir: resolved,
     sessionsDir: path.join(resolved, "sessions"),
@@ -201,99 +211,4 @@ async function listHostExecSessionRegistries(
   paths: HostExecRuntimePaths,
 ): Promise<HostExecSessionRegistryEntry[]> {
   return await readJsonDir<HostExecSessionRegistryEntry>(paths.sessionsDir);
-}
-
-async function isPidAlive(pid: number): Promise<boolean> {
-  try {
-    const output = await new Deno.Command("kill", {
-      args: ["-0", String(pid)],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    return output.success;
-  } catch {
-    return false;
-  }
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await Deno.lstat(targetPath);
-    return true;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  }
-}
-
-function defaultRuntimeDir(): string {
-  const xdg = Deno.env.get("XDG_RUNTIME_DIR");
-  if (xdg && xdg.trim() !== "") {
-    return path.join(xdg, "nas", "hostexec");
-  }
-  const uid = typeof Deno.uid === "function" ? Deno.uid() : "unknown";
-  return path.join("/tmp", `nas-${uid}`, "hostexec");
-}
-
-async function ensureDir(dirPath: string, mode = 0o700): Promise<void> {
-  await Deno.mkdir(dirPath, { recursive: true, mode });
-  await chmodIfSupported(dirPath, mode);
-}
-
-async function chmodIfSupported(path: string, mode: number): Promise<void> {
-  await Deno.chmod(path, mode).catch((error) => {
-    if (!(error instanceof Deno.errors.NotSupported)) throw error;
-  });
-}
-
-async function atomicWriteJson(
-  filePath: string,
-  value: unknown,
-): Promise<void> {
-  const dir = path.dirname(filePath);
-  await ensureDir(dir);
-  const tempPath = path.join(
-    dir,
-    `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
-  );
-  await Deno.writeTextFile(tempPath, JSON.stringify(value, null, 2) + "\n", {
-    create: true,
-    mode: 0o600,
-  });
-  await Deno.rename(tempPath, filePath);
-}
-
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await Deno.readTextFile(filePath)) as T;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return null;
-    throw error;
-  }
-}
-
-async function readJsonDir<T>(dirPath: string): Promise<T[]> {
-  try {
-    const entries: T[] = [];
-    for await (const entry of Deno.readDir(dirPath)) {
-      if (!entry.isFile) continue;
-      const value = await readJsonFile<T>(path.join(dirPath, entry.name));
-      if (value) entries.push(value);
-    }
-    return entries;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return [];
-    throw error;
-  }
-}
-
-async function safeRemove(
-  path: string,
-  options?: { recursive?: boolean },
-): Promise<void> {
-  try {
-    await Deno.remove(path, options);
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
 }

@@ -1,4 +1,10 @@
 import * as path from "@std/path";
+import {
+  defaultRuntimeDir,
+  ensureDir,
+  isPidAlive,
+  readPid,
+} from "../lib/fs_utils.ts";
 
 export interface DbusRuntimePaths {
   runtimeDir: string;
@@ -14,7 +20,7 @@ export interface DbusSessionPaths {
 export async function resolveDbusRuntimePaths(
   runtimeDir?: string,
 ): Promise<DbusRuntimePaths> {
-  const resolved = runtimeDir ?? defaultRuntimeDir();
+  const resolved = runtimeDir ?? defaultRuntimeDir("dbus");
   const paths: DbusRuntimePaths = {
     runtimeDir: resolved,
     sessionsDir: path.join(resolved, "sessions"),
@@ -51,41 +57,5 @@ export async function gcDbusRuntime(
     }
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
-}
-
-function defaultRuntimeDir(): string {
-  const xdg = Deno.env.get("XDG_RUNTIME_DIR");
-  if (xdg && xdg.trim() !== "") {
-    return path.join(xdg, "nas", "dbus");
-  }
-  const uid = typeof Deno.uid === "function" ? Deno.uid() : "unknown";
-  return path.join("/tmp", `nas-${uid}`, "dbus");
-}
-
-async function ensureDir(dirPath: string, mode = 0o700): Promise<void> {
-  await Deno.mkdir(dirPath, { recursive: true, mode });
-  await Deno.chmod(dirPath, mode).catch((error) => {
-    if (!(error instanceof Deno.errors.NotSupported)) throw error;
-  });
-}
-
-async function readPid(pidFile: string): Promise<number | null> {
-  try {
-    const value = (await Deno.readTextFile(pidFile)).trim();
-    const pid = Number(value);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return null;
-    throw error;
-  }
-}
-
-async function isPidAlive(pid: number): Promise<boolean> {
-  try {
-    await Deno.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 }

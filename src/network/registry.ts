@@ -1,5 +1,17 @@
 import * as path from "@std/path";
 import type { PendingEntry, SessionRegistryEntry } from "./protocol.ts";
+import {
+  atomicWriteJson,
+  defaultRuntimeDir,
+  ensureDir,
+  isPidAlive,
+  pathExists,
+  readJsonDir,
+  readJsonFile,
+  readPid,
+  removeIfExists,
+  safeRemove,
+} from "../lib/fs_utils.ts";
 
 export interface NetworkRuntimePaths {
   runtimeDir: string;
@@ -22,7 +34,7 @@ export interface NetworkGcResult {
 export async function resolveNetworkRuntimePaths(
   runtimeDir?: string,
 ): Promise<NetworkRuntimePaths> {
-  const resolved = runtimeDir ?? defaultRuntimeDir();
+  const resolved = runtimeDir ?? defaultRuntimeDir("network");
   const paths: NetworkRuntimePaths = {
     runtimeDir: resolved,
     sessionsDir: path.join(resolved, "sessions"),
@@ -200,123 +212,4 @@ export async function gcNetworkRuntime(
     removedAuthRouterSocket,
     removedAuthRouterPidFile,
   };
-}
-
-function defaultRuntimeDir(): string {
-  const xdg = Deno.env.get("XDG_RUNTIME_DIR");
-  if (xdg && xdg.trim().length > 0) {
-    return path.join(xdg, "nas", "network");
-  }
-  const uid = typeof Deno.uid === "function" ? Deno.uid() : "unknown";
-  return path.join("/tmp", `nas-${uid}`, "network");
-}
-
-async function ensureDir(dirPath: string, mode = 0o700): Promise<void> {
-  await Deno.mkdir(dirPath, { recursive: true, mode });
-  await chmodIfSupported(dirPath, mode);
-}
-
-async function atomicWriteJson(
-  filePath: string,
-  value: unknown,
-): Promise<void> {
-  const dir = path.dirname(filePath);
-  await ensureDir(dir);
-  const tempPath = path.join(
-    dir,
-    `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
-  );
-  await Deno.writeTextFile(tempPath, JSON.stringify(value, null, 2) + "\n", {
-    create: true,
-    mode: 0o600,
-  });
-  await Deno.rename(tempPath, filePath);
-}
-
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await Deno.readTextFile(filePath)) as T;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return null;
-    throw error;
-  }
-}
-
-async function readJsonDir<T>(dirPath: string): Promise<T[]> {
-  try {
-    const items: T[] = [];
-    for await (const entry of Deno.readDir(dirPath)) {
-      if (!entry.isFile) continue;
-      const item = await readJsonFile<T>(path.join(dirPath, entry.name));
-      if (item) items.push(item);
-    }
-    return items;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return [];
-    throw error;
-  }
-}
-
-async function safeRemove(
-  targetPath: string,
-  options?: Deno.RemoveOptions,
-): Promise<void> {
-  try {
-    await Deno.remove(targetPath, options);
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
-}
-
-async function removeIfExists(targetPath: string): Promise<boolean> {
-  if (!await pathExists(targetPath)) return false;
-  await safeRemove(targetPath);
-  return true;
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await Deno.lstat(targetPath);
-    return true;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  }
-}
-
-async function readPid(pidFile: string): Promise<number | null> {
-  try {
-    const text = await Deno.readTextFile(pidFile);
-    const pid = Number(text.trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return null;
-    throw error;
-  }
-}
-
-async function isPidAlive(pid: number): Promise<boolean> {
-  try {
-    const output = await new Deno.Command("kill", {
-      args: ["-0", String(pid)],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    return output.success;
-  } catch {
-    return false;
-  }
-}
-
-async function chmodIfSupported(
-  targetPath: string,
-  mode: number,
-): Promise<void> {
-  try {
-    await Deno.chmod(targetPath, mode);
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotSupported)) {
-      throw error;
-    }
-  }
 }
