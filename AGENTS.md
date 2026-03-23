@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Development and testing
-deno task test             # Run tests: `deno test --allow-all`
+deno task test             # Run all tests
+deno task test:unit        # Unit tests only (no Docker needed)
+deno task test:integration # Integration tests only (Docker required)
 deno task test <pattern>   # Run specific test file, e.g., `deno task test config_test`
 deno task lint             # Check code style
 deno task fmt              # Format code
@@ -46,8 +48,11 @@ Output: Exit code from agent process
 
 ```bash
 deno task test                      # Run all tests
+deno task test:unit                 # Unit tests only (no Docker needed)
+deno task test:integration          # Integration tests only (Docker required)
 deno task test tests/config_test.ts # Run specific test file
 # Tests use Deno.test() and @std/assert for assertions
+# Test writing guidelines: /test-policy skill
 ```
 
 ## Important Notes

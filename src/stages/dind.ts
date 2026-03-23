@@ -79,6 +79,10 @@ export class DindStage implements Stage {
       READINESS_TIMEOUT_MS;
   }
 
+  getContainerName(): string | null {
+    return this.containerName;
+  }
+
   async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
     if (!ctx.profile.docker.enable) {
       logInfo("[nas] DinD: skipped (not enabled)");
