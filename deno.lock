@@ -18,7 +18,8 @@
     "npm:@types/node@*": "24.2.0",
     "npm:esbuild@0.24": "0.24.2",
     "npm:vite@*": "5.4.21_@types+node@24.2.0",
-    "npm:vite@5": "5.4.21_@types+node@24.2.0"
+    "npm:vite@5": "5.4.21_@types+node@24.2.0",
+    "npm:zod@3.24.4": "3.24.4"
   },
   "jsr": {
     "@hono/hono@4.12.8": {
@@ -1007,6 +1008,9 @@
     },
     "zimmerframe@1.1.4": {
       "integrity": "sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ=="
+    },
+    "zod@3.24.4": {
+      "integrity": "sha512-OdqJE9UDRPwWsrHjLN2F8bPxvwJBK22EHLWtanu0LSYr5YqzsaaW3RMgmjwr8Rypg5k+meEJdSPXJZXE/yqOMg=="
     }
   },
   "redirects": {
@@ -1184,7 +1188,8 @@
       "jsr:@std/fs@1",
       "jsr:@std/path@1",
       "jsr:@std/yaml@1",
-      "npm:esbuild@0.24"
+      "npm:esbuild@0.24",
+      "npm:zod@3.24.4"
     ]
   }
 }
