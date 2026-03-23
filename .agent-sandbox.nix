@@ -227,6 +227,7 @@ in
         agent-args = [ ];
         extra-mounts = [
           { src = "/dev/null"; dst = ".env"; }
+          { src = "./deno.json"; dst = "deno.json"; mode = "ro"; }
         ];
         hostexec = {
           prompt = {

@@ -1,8 +1,12 @@
 # nas — Nix Agent Sandbox
 
-Docker と Nix を使って、AI エージェント用の隔離された作業環境を起動する CLI ツールです。デフォルトでホストのファイルシステムやネットワークを隔離し、必要に応じてアクセスを許可できます。Claude Code / GitHub Copilot CLI / OpenAI Codex CLI に対応しています。
-[agent-workspace](https://github.com/hiragram/agent-workspace) にインスパイアされ、自分用に再設計したもの。
+Docker を使って、AI エージェント用の隔離された作業環境を起動する CLI ツールです。デフォルトでホストのファイルシステムやネットワークを隔離し、必要に応じてアクセスを許可できます。Claude Code / GitHub Copilot CLI / OpenAI Codex CLI に対応しています。
+[agent-workspace](https://github.com/hiragram/agent-workspace) にインスパイアされました。
 
+> [!NOTE]
+> **名前について**: 当初は「Nix 統合」と「Docker in Docker」を主目的として *nix-agent-sandbox* と命名しました。
+> その後、ネットワーク制御・コマンド移譲・Worktree 管理など様々な機能が追加された結果、
+> Nix 統合は数ある機能のひとつに過ぎなくなっています。
 
 ## 前提条件
 
@@ -75,6 +79,18 @@ DinD サイドカーを起動して、エージェントコンテナから隔離
 ![hostexec prompt](./images/hostexec-prompt.png)
 
 ![hostexec result](./images/hostexec-result.png)
+
+> [!WARNING]
+> `deno task` のような「設定ファイルを読んで実行するコマンド」を hostexec で委譲すると、
+> エージェントが `deno.json` を書き換えることで実質的に任意コマンドのホスト実行が可能になります。
+> 本番運用で使う場合は `extra-mounts` で設定ファイルを read-only マウントするなどの工夫が必要です。
+>
+> ```yaml
+> extra-mounts:
+>   - src: deno.json
+>     dst: deno.json
+>     mode: ro
+> ```
 
 ### Worktree
 
@@ -213,6 +229,9 @@ profiles:
     extra-mounts:
       - src: /dev/null
         dst: .env
+      - src: package.json
+        dst: package.json
+        mode: ro
     hostexec:
       secrets:
         build_api_token:
@@ -230,6 +249,11 @@ profiles:
           approval: allow
           fallback: deny
 ```
+
+> [!WARNING]
+> `deno task` / `npm run` / `make` のような「設定ファイルを読んで実行するコマンド」を hostexec で委譲すると、
+> エージェントがその設定ファイルを書き換えることで任意コマンドのホスト実行が可能になります。
+> これらのコマンドを委譲する場合は `extra-mounts` で設定ファイルを read-only マウントするなどしてください。
 
 ### Git の署名をホストに移譲する
 
