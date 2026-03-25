@@ -116,7 +116,7 @@ fi
 
 HOSTEXEC_PATH_PREFIX=""
 if [ -n "${NAS_HOSTEXEC_WRAPPER_DIR:-}" ]; then
-  HOSTEXEC_PATH_PREFIX="${NAS_HOSTEXEC_WRAPPER_DIR}:"
+  HOSTEXEC_PATH_PREFIX="${NAS_HOSTEXEC_WRAPPER_DIR}"
 fi
 
 # --- nix 統合 ---
@@ -131,8 +131,14 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   # workaround for https://github.com/github/copilot-cli/issues/1161#issuecomment-3938706868:
   # 配列をスペース区切りの文字列に変換
   CMD_STR=$(printf '%q ' "${AGENT_COMMAND[@]}")
-  # /bin/bash (readline対応) をPATHの先頭に配置して、
-  # Nixの readline なし bash より優先させる
+  # /bin/bash (readline対応) を Nix の readline なし bash より優先させる。
+  # /bin 全体を PATH に入れると他のツールまで上書きするため、
+  # bash だけのシンボリックリンクを専用ディレクトリに作る。
+  NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
+  mkdir -p "$NAS_BASH_OVERRIDE"
+  if [ -x /bin/bash ]; then
+    ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
+  fi
   HAS_DEVSHELL=false
   if [ -f "$WORKSPACE/flake.nix" ]; then
     # flake に devShells.<system>.default があるかチェック (nix flake show は derivation を評価しないため高速)
@@ -175,10 +181,10 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
         if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
           exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
             nix develop "$WORKSPACE" --command \
-            bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
+            bash -c "export PATH=\"$HOSTEXEC_PATH_PREFIX:$NAS_BASH_OVERRIDE:\$PATH\"; exec $CMD_STR"
         else
           exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-            bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
+            bash -c "export PATH=\"$HOSTEXEC_PATH_PREFIX:$NAS_BASH_OVERRIDE:\$PATH\"; exec $CMD_STR"
         fi
       fi
     else
@@ -188,15 +194,15 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     # キャッシュ済み環境を source してエージェント起動
     if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
       exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-        bash -c "source '$CACHE_FILE'; export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
+        bash -c "source '$CACHE_FILE'; export PATH=\"$HOSTEXEC_PATH_PREFIX:$NAS_BASH_OVERRIDE:\$PATH\"; exec $CMD_STR"
     else
       exec "${EXEC_PREFIX[@]}" \
-        bash -c "source '$CACHE_FILE'; export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
+        bash -c "source '$CACHE_FILE'; export PATH=\"$HOSTEXEC_PATH_PREFIX:$NAS_BASH_OVERRIDE:\$PATH\"; exec $CMD_STR"
     fi
   elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
     nas_info "[nas] flake.nix not found, entering nix shell (via host daemon)..."
     exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-      bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX}/bin:\$PATH\"; exec $CMD_STR"
+      bash -c "export PATH=\"$HOSTEXEC_PATH_PREFIX:$NAS_BASH_OVERRIDE:\$PATH\"; exec $CMD_STR"
   else
     exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
   fi
