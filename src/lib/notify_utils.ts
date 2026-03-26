@@ -3,11 +3,14 @@
  * Used by both network/notify.ts and hostexec/notify.ts.
  */
 
+import { logWarn } from "../log.ts";
+
 export type NotifyBackend = "auto" | "tmux" | "desktop" | "off";
 
 // Module-level state for tracking the active desktop notification ID.
 // Only one notification is active at a time across the process.
 let lastDesktopNotificationId: string | null = null;
+let notifySendMissingWarned = false;
 
 export interface DesktopNotificationOptions {
   title: string;
@@ -25,19 +28,32 @@ export async function tryDesktopNotification(
   options: DesktopNotificationOptions,
 ): Promise<boolean> {
   if (options.signal?.aborted) return false;
-  const child = new Deno.Command("notify-send", {
-    args: [
-      "--print-id",
-      "--wait",
-      "--expire-time=0",
-      "--action=default=Allow",
-      "--action=deny=Deny",
-      options.title,
-      options.body,
-    ],
-    stdout: "piped",
-    stderr: "null",
-  }).spawn();
+  let child: Deno.ChildProcess;
+  try {
+    child = new Deno.Command("notify-send", {
+      args: [
+        "--print-id",
+        "--wait",
+        "--expire-time=0",
+        "--action=default=Allow",
+        "--action=deny=Deny",
+        options.title,
+        options.body,
+      ],
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+  } catch {
+    // notify-send not found in PATH
+    if (isWSL() && !notifySendMissingWarned) {
+      notifySendMissingWarned = true;
+      logWarn(
+        "[nas] notify-send not found. Install the WSL shim for desktop notifications:\n" +
+          "      ln -s <repo>/scripts/notify-send-wsl ~/.local/bin/notify-send",
+      );
+    }
+    return false;
+  }
 
   const onAbort = () => {
     try {
