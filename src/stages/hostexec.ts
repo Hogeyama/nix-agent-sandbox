@@ -71,6 +71,9 @@ export class HostExecStage implements Stage {
       workspaceRoot: ctx.mountDir ?? ctx.workDir,
       sessionTmpDir,
       hostexec: config,
+      uiEnabled: ctx.config.ui.enable,
+      uiPort: ctx.config.ui.port,
+      uiIdleTimeout: ctx.config.ui.idleTimeout,
     });
     await broker.start(socketPath);
     this.broker = broker;

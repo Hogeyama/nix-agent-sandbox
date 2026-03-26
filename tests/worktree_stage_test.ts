@@ -11,6 +11,7 @@ import * as path from "@std/path";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
@@ -55,6 +56,7 @@ function createTestConfig(profile: Profile): Config {
   return {
     default: "test",
     profiles: { test: profile },
+    ui: DEFAULT_UI_CONFIG,
   };
 }
 

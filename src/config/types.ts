@@ -164,15 +164,28 @@ export interface Profile {
   hostexec?: HostExecConfig;
 }
 
+/** UI 設定 */
+export interface UiConfig {
+  enable: boolean;
+  port: number;
+  idleTimeout: number;
+}
+
 /** トップレベル設定 */
 export interface Config {
   default?: string;
+  ui: UiConfig;
   profiles: Record<string, Profile>;
 }
 
 /** YAML ファイルの生データ型 (バリデーション前) */
 export interface RawConfig {
   default?: string;
+  ui?: {
+    enable?: boolean;
+    port?: number;
+    "idle-timeout"?: number;
+  };
   profiles?: Record<string, RawProfile>;
 }
 
@@ -272,6 +285,12 @@ export interface RawProfile {
 }
 
 /** デフォルト値 */
+export const DEFAULT_UI_CONFIG: UiConfig = {
+  enable: true,
+  port: 3939,
+  idleTimeout: 300,
+};
+
 export const DEFAULT_NIX_CONFIG: NixConfig = {
   enable: "auto",
   mountSocket: true,

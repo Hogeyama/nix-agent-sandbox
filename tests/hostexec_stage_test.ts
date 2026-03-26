@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import * as path from "@std/path";
+import { DEFAULT_UI_CONFIG } from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { HostExecStage } from "../src/stages/hostexec.ts";
@@ -67,7 +68,10 @@ Deno.test("HostExecStage: injects wrapper path and socket mounts", async () => {
   const originalRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
   Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
   const profile = makeProfile();
-  const config: Config = { profiles: { default: profile } };
+  const config: Config = {
+    profiles: { default: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
   const ctx = createContext(config, profile, "default", Deno.cwd());
   const stage = new HostExecStage();
   const result = await stage.execute(ctx);

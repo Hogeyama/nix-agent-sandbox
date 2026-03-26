@@ -3,6 +3,7 @@
  * Used by both network/notify.ts and hostexec/notify.ts.
  */
 
+import * as path from "@std/path";
 import { logWarn } from "../log.ts";
 
 export type NotifyBackend = "auto" | "desktop" | "off";
@@ -108,6 +109,105 @@ export async function closeNotification(): Promise<void> {
 
 export function isWSL(): boolean {
   return Boolean(Deno.env.get("WSL_DISTRO_NAME"));
+}
+
+/**
+ * Resolve the nas command prefix (exec path + args for deno run if needed).
+ * Used by CLI action notifications and daemon spawning.
+ */
+export function resolveNasCommand(): { execPath: string; prefix: string[] } {
+  const execPath = Deno.execPath();
+  const isCompiled = !path.basename(execPath).startsWith("deno");
+  const prefix = isCompiled ? [] : [
+    "run",
+    "-A",
+    new URL("../../main.ts", import.meta.url).pathname,
+  ];
+  return { execPath, prefix };
+}
+
+export interface CliActionNotificationOptions {
+  title: string;
+  body: string;
+  /** nas subcommand args for approve, e.g. ["network", "approve", sessionId, requestId] */
+  approveArgs: string[];
+  /** nas subcommand args for deny, e.g. ["network", "deny", sessionId, requestId] */
+  denyArgs: string[];
+  signal?: AbortSignal;
+}
+
+/**
+ * Show a desktop notification with Approve/Deny actions.
+ * On click, executes the corresponding nas CLI command.
+ * On dismiss, does nothing (request stays pending until timeout).
+ */
+export async function tryCliActionNotification(
+  options: CliActionNotificationOptions,
+): Promise<boolean> {
+  if (options.signal?.aborted) return false;
+  let child: Deno.ChildProcess;
+  try {
+    child = new Deno.Command("notify-send", {
+      args: [
+        "--print-id",
+        "--wait",
+        "--expire-time=0",
+        "--action=approve=Approve",
+        "--action=deny=Deny",
+        options.title,
+        options.body,
+      ],
+      stdout: "piped",
+      stderr: "null",
+    }).spawn();
+  } catch {
+    if (isWSL() && !notifySendMissingWarned) {
+      notifySendMissingWarned = true;
+      logWarn(
+        "[nas] notify-send not found. Install the WSL shim for desktop notifications:\n" +
+          "      ln -s <repo>/scripts/notify-send-wsl ~/.local/bin/notify-send",
+      );
+    }
+    return false;
+  }
+
+  const onAbort = () => {
+    try {
+      child.kill("SIGTERM");
+    } catch { /* already exited */ }
+  };
+  options.signal?.addEventListener("abort", onAbort);
+
+  try {
+    const { action } = await readNotifySendOutput(child.stdout);
+    const status = await child.status;
+    lastDesktopNotificationId = null;
+
+    if (!status.success) return false;
+
+    const { execPath, prefix } = resolveNasCommand();
+    if (action === "approve") {
+      await new Deno.Command(execPath, {
+        args: [...prefix, ...options.approveArgs],
+        stdout: "null",
+        stderr: "null",
+      }).output().catch(() => {});
+      return true;
+    }
+    if (action === "deny") {
+      await new Deno.Command(execPath, {
+        args: [...prefix, ...options.denyArgs],
+        stdout: "null",
+        stderr: "null",
+      }).output().catch(() => {});
+      return true;
+    }
+    // Dismiss → do nothing
+    return true;
+  } finally {
+    options.signal?.removeEventListener("abort", onAbort);
+    lastDesktopNotificationId = null;
+  }
 }
 
 // --- Internal helpers ---

@@ -79,6 +79,9 @@ export class ProxyStage implements Stage {
       timeoutSeconds: prompt.timeoutSeconds,
       defaultScope: prompt.defaultScope,
       notify: prompt.notify,
+      uiEnabled: ctx.config.ui.enable,
+      uiPort: ctx.config.ui.port,
+      uiIdleTimeout: ctx.config.ui.idleTimeout,
     });
     await broker.start(brokerSocket);
     this.broker = broker;

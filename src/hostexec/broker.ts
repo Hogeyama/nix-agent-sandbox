@@ -34,6 +34,9 @@ interface HostExecBrokerOptions {
   workspaceRoot: string;
   sessionTmpDir: string;
   hostexec?: HostExecConfig;
+  uiEnabled?: boolean;
+  uiPort?: number;
+  uiIdleTimeout?: number;
 }
 
 interface PendingWaiter {
@@ -67,6 +70,9 @@ export class HostExecBroker {
   private readonly workspaceRoot: string;
   private readonly sessionTmpDir: string;
   private readonly config: HostExecConfig;
+  private readonly uiEnabled?: boolean;
+  private readonly uiPort?: number;
+  private readonly uiIdleTimeout?: number;
   private readonly secretStore: SecretStore;
   private socketPath: string | null = null;
   private listener: Deno.Listener | null = null;
@@ -84,6 +90,9 @@ export class HostExecBroker {
     this.workspaceRoot = path.resolve(options.workspaceRoot);
     this.sessionTmpDir = path.resolve(options.sessionTmpDir);
     this.config = options.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
+    this.uiEnabled = options.uiEnabled;
+    this.uiPort = options.uiPort;
+    this.uiIdleTimeout = options.uiIdleTimeout;
     this.secretStore = new SecretStore(this.config.secrets);
   }
 
@@ -270,6 +279,9 @@ export class HostExecBroker {
     const notificationTask = notifyHostExecPendingRequest({
       backend: this.config.prompt.notify,
       pending: entry,
+      uiEnabled: this.uiEnabled,
+      uiPort: this.uiPort,
+      uiIdleTimeout: this.uiIdleTimeout,
       signal: notificationAbort.signal,
     }).catch((e) =>
       logInfo(`[nas] HostExecBroker: failed to send notification: ${e}`)

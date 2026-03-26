@@ -3,6 +3,7 @@ import {
   type Config,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
   type Profile,
 } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
@@ -164,7 +165,11 @@ function createTestContext() {
     extraMounts: [],
     env: [],
   };
-  const config: Config = { default: "test", profiles: { test: profile } };
+  const config: Config = {
+    default: "test",
+    profiles: { test: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
   return createContext(config, profile, "test", "/workspace");
 }
 

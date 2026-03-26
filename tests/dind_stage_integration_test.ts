@@ -9,6 +9,7 @@ import { assertEquals } from "@std/assert";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import { DindStage } from "../src/stages/dind.ts";
 import { createContext } from "../src/pipeline/context.ts";
@@ -57,7 +58,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
 }
 
 function makeConfig(profile: Profile): Config {
-  return { profiles: { default: profile } };
+  return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
 }
 
 function makeCtx(profile: Profile): ExecutionContext {

@@ -2,6 +2,7 @@ import { assertEquals, assertMatch } from "@std/assert";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { runPipeline } from "../src/pipeline/pipeline.ts";
@@ -26,6 +27,7 @@ const testProfile: Profile = {
 const testConfig: Config = {
   default: "test",
   profiles: { test: testProfile },
+  ui: DEFAULT_UI_CONFIG,
 };
 
 Deno.test("createContext: returns correct initial values", () => {

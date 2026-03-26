@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import { NixDetectStage } from "../src/stages/nix_detect.ts";
 import { createContext } from "../src/pipeline/context.ts";
@@ -25,7 +26,11 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
 
 function makeCtx(nixEnable: boolean | "auto") {
   const profile = makeProfile(nixEnable);
-  const config: Config = { default: "test", profiles: { test: profile } };
+  const config: Config = {
+    default: "test",
+    profiles: { test: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
   return createContext(config, profile, "test", "/tmp/work");
 }
 

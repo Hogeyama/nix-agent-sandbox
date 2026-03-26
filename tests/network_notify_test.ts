@@ -76,6 +76,28 @@ Deno.test("notifyPendingRequest: auto backend uses desktop", async () => {
   });
 });
 
+Deno.test("notifyPendingRequest: uiEnabled=false shows approve/deny actions", async () => {
+  await withFakeCommands(async ({ dir }) => {
+    const argsLog = `${dir}/notify-args.log`;
+    Deno.env.set("NAS_NOTIFY_ARGS_LOG", argsLog);
+    Deno.env.set("NAS_NOTIFY_EXIT", "0");
+    Deno.env.set("NAS_NOTIFY_STDOUT", "approve");
+
+    await notifyPendingRequest({
+      backend: "desktop",
+      sessionId: "sess_test",
+      requestId: "req_test",
+      target: { host: "api.openai.com", port: 443 },
+      uiEnabled: false,
+    });
+
+    const notifyArgs = await Deno.readTextFile(argsLog);
+    assertEquals(notifyArgs.includes("--action=approve=Approve"), true);
+    assertEquals(notifyArgs.includes("--action=deny=Deny"), true);
+    assertEquals(notifyArgs.includes("--action=default=Open"), false);
+  });
+});
+
 interface HealthServer {
   port: number;
   shutdown: () => Promise<void>;

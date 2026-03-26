@@ -702,3 +702,52 @@ Deno.test("profileSchema: network collects multiple allowlist/denylist overlaps"
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// UI config
+// ---------------------------------------------------------------------------
+
+Deno.test("validateConfig: ui defaults when omitted", () => {
+  const raw: RawConfig = {
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  assertEquals(config.ui.enable, true);
+  assertEquals(config.ui.port, 3939);
+  assertEquals(config.ui.idleTimeout, 300);
+});
+
+Deno.test("validateConfig: ui explicit values", () => {
+  const raw: RawConfig = {
+    ui: { enable: false, port: 8080, "idle-timeout": 0 },
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  assertEquals(config.ui.enable, false);
+  assertEquals(config.ui.port, 8080);
+  assertEquals(config.ui.idleTimeout, 0);
+});
+
+Deno.test("validateConfig: ui invalid port rejects", () => {
+  const raw: RawConfig = {
+    ui: { port: 0 },
+    profiles: { test: { agent: "claude" } },
+  };
+  assertThrows(
+    () => validateConfig(raw),
+    ConfigValidationError,
+    "ui:",
+  );
+});
+
+Deno.test("validateConfig: ui negative idle-timeout rejects", () => {
+  const raw: RawConfig = {
+    ui: { "idle-timeout": -1 },
+    profiles: { test: { agent: "claude" } },
+  };
+  assertThrows(
+    () => validateConfig(raw),
+    ConfigValidationError,
+    "ui:",
+  );
+});

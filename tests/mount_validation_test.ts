@@ -8,6 +8,7 @@ import { assertEquals, assertRejects } from "@std/assert";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import { MountStage, serializeNixExtraPackages } from "../src/stages/mount.ts";
 import { createContext } from "../src/pipeline/context.ts";
@@ -50,6 +51,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
 const baseConfig: Config = {
   default: "test",
   profiles: { test: makeProfile() },
+  ui: DEFAULT_UI_CONFIG,
 };
 
 function getContainerHome(): string {

@@ -1,8 +1,10 @@
 import type { HostExecPendingEntry } from "./types.ts";
 import {
+  type CliActionNotificationOptions,
   closeNotification,
   type DesktopNotificationOptions,
   type NotifyBackend,
+  tryCliActionNotification,
   tryDesktopNotification,
 } from "../lib/notify_utils.ts";
 import { ensureUiDaemon } from "../ui/daemon.ts";
@@ -13,7 +15,9 @@ export { closeNotification };
 export interface HostExecPendingNotification {
   backend: HostExecNotifyBackend;
   pending: HostExecPendingEntry;
+  uiEnabled?: boolean;
   uiPort?: number;
+  uiIdleTimeout?: number;
   signal?: AbortSignal;
 }
 
@@ -21,7 +25,21 @@ export async function notifyHostExecPendingRequest(
   notification: HostExecPendingNotification,
 ): Promise<void> {
   if (notification.backend === "off") return;
-  const uiBaseUrl = await ensureUiDaemon(notification.uiPort);
+
+  if (notification.uiEnabled === false) {
+    await notifyWithCliActions(notification);
+  } else {
+    await notifyWithUiOpen(notification);
+  }
+}
+
+async function notifyWithUiOpen(
+  notification: HostExecPendingNotification,
+): Promise<void> {
+  const uiBaseUrl = await ensureUiDaemon({
+    port: notification.uiPort,
+    idleTimeout: notification.uiIdleTimeout,
+  });
   const deepLinkUrl = new URL("/", uiBaseUrl);
   deepLinkUrl.searchParams.set("type", "hostexec");
   deepLinkUrl.searchParams.set("sessionId", notification.pending.sessionId);
@@ -35,6 +53,29 @@ export async function notifyHostExecPendingRequest(
   });
 }
 
+async function notifyWithCliActions(
+  notification: HostExecPendingNotification,
+): Promise<void> {
+  const message = formatMessage(notification.pending);
+  const options: CliActionNotificationOptions = {
+    ...message,
+    approveArgs: [
+      "hostexec",
+      "approve",
+      notification.pending.sessionId,
+      notification.pending.requestId,
+    ],
+    denyArgs: [
+      "hostexec",
+      "deny",
+      notification.pending.sessionId,
+      notification.pending.requestId,
+    ],
+    signal: notification.signal,
+  };
+  await tryCliActionNotification(options);
+}
+
 function formatMessage(
   pending: HostExecPendingEntry,
 ): Pick<DesktopNotificationOptions, "title" | "body"> {
@@ -44,7 +85,6 @@ function formatMessage(
       `rule: ${pending.ruleId}`,
       `cmd: ${formatCommand(pending)}`,
       `cwd: ${pending.cwd}`,
-      "クリックでUIを開く",
     ].join("\n"),
   };
 }

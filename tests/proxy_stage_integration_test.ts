@@ -8,7 +8,7 @@
 
 import { assertEquals, assertMatch } from "@std/assert";
 import { ProxyStage } from "../src/stages/proxy.ts";
-import { DEFAULT_DBUS_CONFIG } from "../src/config/types.ts";
+import { DEFAULT_DBUS_CONFIG, DEFAULT_UI_CONFIG } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import type { ExecutionContext } from "../src/pipeline/context.ts";
@@ -62,7 +62,7 @@ function makeProfile(
 }
 
 function makeConfig(profile: Profile): Config {
-  return { profiles: { default: profile } };
+  return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
 }
 
 function makeCtx(profile: Profile): ExecutionContext {

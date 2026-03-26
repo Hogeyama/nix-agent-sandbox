@@ -17,6 +17,7 @@ import {
   type Config,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
   type RawConfig,
   type RawProfile,
 } from "../src/config/types.ts";
@@ -396,6 +397,7 @@ Deno.test("resolveProfile: resolves by explicit name", () => {
         env: [],
       },
     },
+    ui: DEFAULT_UI_CONFIG,
   };
 
   const { name, profile } = resolveProfile(config, "other-profile");
@@ -422,6 +424,7 @@ Deno.test("resolveProfile: falls back to default profile", () => {
         env: [],
       },
     },
+    ui: DEFAULT_UI_CONFIG,
   };
 
   const { name, profile } = resolveProfile(config);
@@ -446,6 +449,7 @@ Deno.test("resolveProfile: auto-selects when only one profile and no default", (
         env: [],
       },
     },
+    ui: DEFAULT_UI_CONFIG,
   };
 
   const { name, profile } = resolveProfile(config);
@@ -483,6 +487,7 @@ Deno.test("resolveProfile: throws when multiple profiles and no default", () => 
         env: [],
       },
     },
+    ui: DEFAULT_UI_CONFIG,
   };
 
   assertThrows(
@@ -509,6 +514,7 @@ Deno.test("resolveProfile: throws for nonexistent profile name", () => {
         env: [],
       },
     },
+    ui: DEFAULT_UI_CONFIG,
   };
 
   assertThrows(

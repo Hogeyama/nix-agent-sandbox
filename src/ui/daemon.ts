@@ -5,6 +5,7 @@
 
 import * as path from "@std/path";
 import { logInfo, logWarn } from "../log.ts";
+import { resolveNasCommand } from "../lib/notify_utils.ts";
 
 const DEFAULT_UI_PORT = 3939;
 const HEALTH_TIMEOUT_MS = 2000;
@@ -15,6 +16,11 @@ interface DaemonState {
   pid: number;
   port: number;
   startedAt: string;
+}
+
+export interface EnsureUiDaemonOptions {
+  port?: number;
+  idleTimeout?: number;
 }
 
 function daemonStateDir(): string {
@@ -32,15 +38,16 @@ function daemonStatePath(): string {
  * Returns the base URL (e.g. "http://localhost:3939").
  */
 export async function ensureUiDaemon(
-  port = DEFAULT_UI_PORT,
+  options?: EnsureUiDaemonOptions,
 ): Promise<string> {
+  const port = options?.port ?? DEFAULT_UI_PORT;
   const url = `http://localhost:${port}`;
   if (await isUiDaemonRunning(port)) {
     return url;
   }
 
   logInfo(`[nas] Starting UI daemon on port ${port}...`);
-  const child = await startUiDaemon(port);
+  const child = await startUiDaemon(port, options?.idleTimeout);
 
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -82,19 +89,22 @@ export async function isUiDaemonRunning(port: number): Promise<boolean> {
   }
 }
 
-async function startUiDaemon(port: number): Promise<Deno.ChildProcess> {
-  const execPath = Deno.execPath();
-  const isCompiled = !path.basename(execPath).startsWith("deno");
+async function startUiDaemon(
+  port: number,
+  idleTimeout?: number,
+): Promise<Deno.ChildProcess> {
+  const { execPath, prefix } = resolveNasCommand();
 
-  const args = isCompiled ? ["ui", "--no-open", "--port", String(port)] : [
-    "run",
-    "-A",
-    new URL("../../main.ts", import.meta.url).pathname,
+  const args = [
+    ...prefix,
     "ui",
     "--no-open",
     "--port",
     String(port),
   ];
+  if (idleTimeout !== undefined) {
+    args.push("--idle-timeout", String(idleTimeout));
+  }
 
   const child = new Deno.Command(execPath, {
     args,

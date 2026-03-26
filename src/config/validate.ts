@@ -10,7 +10,7 @@ import type {
   RawConfig,
   RawProfile,
 } from "./types.ts";
-import { formatZodError, profileSchema } from "./schema.ts";
+import { formatZodError, profileSchema, uiSchema } from "./schema.ts";
 import { logWarn } from "../log.ts";
 
 export class ConfigValidationError extends Error {
@@ -26,6 +26,16 @@ export function validateConfig(raw: RawConfig): Config {
     throw new ConfigValidationError("profiles must contain at least one entry");
   }
 
+  let ui;
+  try {
+    ui = uiSchema.parse(raw.ui ?? {});
+  } catch (err) {
+    if (err instanceof ZodError) {
+      throw new ConfigValidationError(`ui: ${formatZodError(err)}`);
+    }
+    throw err;
+  }
+
   const profiles: Record<string, Profile> = {};
   for (const [name, rawProfile] of Object.entries(raw.profiles)) {
     profiles[name] = parseProfile(name, rawProfile);
@@ -39,6 +49,7 @@ export function validateConfig(raw: RawConfig): Config {
 
   return {
     default: raw.default,
+    ui,
     profiles,
   };
 }

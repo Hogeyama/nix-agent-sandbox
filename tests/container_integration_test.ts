@@ -21,6 +21,7 @@ import * as path from "@std/path";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { runPipeline } from "../src/pipeline/pipeline.ts";
@@ -105,7 +106,11 @@ async function ensureImage(): Promise<void> {
     extraMounts: [],
     env: [],
   };
-  const config = { default: "test", profiles: { test: profile } };
+  const config = {
+    default: "test",
+    profiles: { test: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
   const ctx = createContext(config, profile, "test", "/tmp");
   await runPipeline([new DockerBuildStage()], ctx);
   imageBuilt = true;

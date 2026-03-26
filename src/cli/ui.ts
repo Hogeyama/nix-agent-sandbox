@@ -4,20 +4,34 @@
 
 import { startServer } from "../ui/server.ts";
 import { exitOnCliError, getFlagValue } from "./helpers.ts";
+import { loadConfig } from "../config/load.ts";
+import { DEFAULT_UI_CONFIG } from "../config/types.ts";
 
 export async function runUiCommand(nasArgs: string[]): Promise<void> {
+  const config = await loadConfig().catch(() => null);
+  const uiDefaults = config?.ui ?? DEFAULT_UI_CONFIG;
+
   const portStr = getFlagValue(nasArgs, "--port");
-  const port = portStr ? parseInt(portStr, 10) : 3939;
+  const port = portStr ? parseInt(portStr, 10) : uiDefaults.port;
   const noOpen = nasArgs.includes("--no-open");
   const runtimeDir = getFlagValue(nasArgs, "--runtime-dir") ?? undefined;
+  const idleTimeoutStr = getFlagValue(nasArgs, "--idle-timeout");
+  const idleTimeout = idleTimeoutStr
+    ? parseInt(idleTimeoutStr, 10)
+    : uiDefaults.idleTimeout;
 
   if (isNaN(port) || port < 1 || port > 65535) {
     console.error("[nas] Invalid port number");
     Deno.exit(1);
   }
 
+  if (isNaN(idleTimeout) || idleTimeout < 0) {
+    console.error("[nas] Invalid idle-timeout value");
+    Deno.exit(1);
+  }
+
   try {
-    await startServer({ port, open: !noOpen, runtimeDir });
+    await startServer({ port, open: !noOpen, runtimeDir, idleTimeout });
   } catch (err) {
     exitOnCliError(err);
   }

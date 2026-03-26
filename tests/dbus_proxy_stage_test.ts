@@ -4,6 +4,7 @@ import {
   type Config,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
   type Profile,
 } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
@@ -30,7 +31,10 @@ function makeProfile(): Profile {
 }
 
 function makeCtx(profile: Profile) {
-  const config: Config = { profiles: { default: profile } };
+  const config: Config = {
+    profiles: { default: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
   return createContext(config, profile, "default", Deno.cwd());
 }
 

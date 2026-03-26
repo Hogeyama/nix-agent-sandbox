@@ -4,6 +4,7 @@ import { createContext } from "../src/pipeline/context.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 
@@ -24,6 +25,7 @@ const baseProfile: Profile = {
 const baseConfig: Config = {
   default: "test",
   profiles: { test: baseProfile },
+  ui: DEFAULT_UI_CONFIG,
 };
 
 function getContainerHome(): string {

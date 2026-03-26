@@ -18,6 +18,7 @@ import {
   DEFAULT_HOSTEXEC_PROMPT_CONFIG,
   DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "./types.ts";
 import { ConfigValidationError } from "./validate.ts";
 
@@ -531,6 +532,21 @@ export function hostexecSchema(profileName: string) {
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// UI (top-level)
+// ---------------------------------------------------------------------------
+
+export const uiSchema = z.object({
+  enable: z.boolean().default(DEFAULT_UI_CONFIG.enable),
+  port: parsePositiveInt("ui.port").default(DEFAULT_UI_CONFIG.port),
+  "idle-timeout": z.number().int().min(0, { message: "must be >= 0" })
+    .default(DEFAULT_UI_CONFIG.idleTimeout),
+}).default({}).transform((r) => ({
+  enable: r.enable,
+  port: r.port,
+  idleTimeout: r["idle-timeout"],
+}));
 
 // ---------------------------------------------------------------------------
 // Profile

@@ -7,8 +7,14 @@ import { createApiRoutes } from "./routes/api.ts";
 import { createSseRoutes } from "./routes/sse.ts";
 import { createDataContext } from "./data.ts";
 import type { UiDataContext } from "./data.ts";
+import {
+  listPendingEntries,
+  listSessionRegistries,
+} from "../network/registry.ts";
+import { listHostExecPendingEntries } from "../hostexec/registry.ts";
 
 const DIST_BASE = new URL("./dist/", import.meta.url);
+const IDLE_CHECK_INTERVAL_MS = 30_000;
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -65,6 +71,7 @@ export interface ServeOptions {
   port: number;
   open: boolean;
   runtimeDir?: string;
+  idleTimeout?: number;
 }
 
 export async function startServer(options: ServeOptions): Promise<void> {
@@ -96,6 +103,45 @@ export async function startServer(options: ServeOptions): Promise<void> {
     },
   }, app.fetch);
 
+  if (options.idleTimeout && options.idleTimeout > 0) {
+    startIdleWatcher(ctx, options.idleTimeout);
+  }
+
   // Keep the process running
   await new Promise(() => {});
+}
+
+function startIdleWatcher(ctx: UiDataContext, idleTimeoutSec: number): void {
+  let idleSince: number | null = null;
+
+  setInterval(async () => {
+    try {
+      const [sessions, netPending, hePending] = await Promise.all([
+        listSessionRegistries(ctx.networkPaths),
+        listPendingEntries(ctx.networkPaths),
+        listHostExecPendingEntries(ctx.hostExecPaths),
+      ]);
+      const hasActivity = sessions.length > 0 || netPending.length > 0 ||
+        hePending.length > 0;
+
+      if (hasActivity) {
+        idleSince = null;
+        return;
+      }
+
+      if (idleSince === null) {
+        idleSince = Date.now();
+        return;
+      }
+
+      if (Date.now() - idleSince >= idleTimeoutSec * 1000) {
+        console.log(
+          `[nas] UI daemon idle for ${idleTimeoutSec}s, shutting down`,
+        );
+        Deno.exit(0);
+      }
+    } catch {
+      // registry read errors are non-fatal for the idle watcher
+    }
+  }, IDLE_CHECK_INTERVAL_MS);
 }

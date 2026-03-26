@@ -4,6 +4,7 @@ import * as path from "@std/path";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
@@ -27,6 +28,7 @@ const testProfile: Profile = {
 const testConfig: Config = {
   default: "test",
   profiles: { test: testProfile },
+  ui: DEFAULT_UI_CONFIG,
 };
 
 async function withTempRepo(
@@ -362,7 +364,11 @@ Deno.test("WorktreeStage teardown without execute is a no-op", async () => {
     ...testProfile,
     worktree: undefined,
   };
-  const config: Config = { default: "test", profiles: { test: profile } };
+  const config: Config = {
+    default: "test",
+    profiles: { test: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
   const ctx = createContext(config, profile, "test", "/tmp/nonexistent");
   // teardown should not throw
   await stage.teardown(ctx);
@@ -376,7 +382,11 @@ Deno.test("WorktreeStage execute skips when worktree is not configured", async (
     ...testProfile,
     worktree: undefined,
   };
-  const config: Config = { default: "test", profiles: { test: profile } };
+  const config: Config = {
+    default: "test",
+    profiles: { test: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
   const ctx = createContext(config, profile, "test", Deno.cwd());
   const result = await stage.execute(ctx);
   // workDir は変更されない
@@ -391,7 +401,11 @@ Deno.test("WorktreeStage execute throws on invalid base branch", async () => {
       ...testProfile,
       worktree: { base: "nonexistent-branch-xyz", onCreate: "" },
     };
-    const config: Config = { default: "test", profiles: { test: profile } };
+    const config: Config = {
+      default: "test",
+      profiles: { test: profile },
+      ui: DEFAULT_UI_CONFIG,
+    };
     const stage = new WorktreeStage();
     const ctx = createContext(config, profile, "test", repoRoot);
 
@@ -481,7 +495,11 @@ Deno.test("WorktreeStage execute runs onCreate hook", async () => {
       ...testProfile,
       worktree: { base: "HEAD", onCreate: "touch on-create-marker.txt" },
     };
-    const config: Config = { default: "test", profiles: { test: profile } };
+    const config: Config = {
+      default: "test",
+      profiles: { test: profile },
+      ui: DEFAULT_UI_CONFIG,
+    };
     const stage = new WorktreeStage();
     const ctx = createContext(config, profile, "test", repoRoot);
     const next = await stage.execute(ctx);

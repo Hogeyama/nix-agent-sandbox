@@ -168,3 +168,16 @@ Deno.test("mergeRawProfiles: network.prompt subfields are preserved", () => {
     notify: "desktop",
   });
 });
+
+Deno.test("mergeRawConfigs: local ui overrides global ui fields", () => {
+  const global: RawConfig = {
+    ui: { enable: true, port: 3939, "idle-timeout": 300 },
+    profiles: { dev: { agent: "claude" } },
+  };
+  const local: RawConfig = {
+    ui: { port: 8080 },
+    profiles: {},
+  };
+  const result = mergeRawConfigs(global, local);
+  assertEquals(result.ui, { enable: true, port: 8080, "idle-timeout": 300 });
+});
