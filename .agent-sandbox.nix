@@ -139,7 +139,7 @@ let
           cwd = {
             mode = "workspace-or-session-tmp";
           };
-          approval = "prompt";
+          approval = "allow";
           fallback = "container";
         }
         {
@@ -163,11 +163,17 @@ in
 {
   default = "claude";
 
+  ui = {
+    enable = true;
+    port = 3939;
+    idle-timeout = 300;
+  };
+
   profiles = {
     claude = mkProfile [
       {
         agent = "claude";
-        agent-args = [ "--allow-dangerously-skip-permissions" ];
+        agent-args = [ "--dangerously-skip-permissions" ];
         env = common_env.env ++ [
           # 認証
           { key = "CLAUDE_CODE_OAUTH_TOKEN"; val_cmd = "pass claude_code_oauth_token"; }
