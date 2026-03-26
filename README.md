@@ -65,7 +65,7 @@ DinD サイドカーを起動して、エージェントコンテナから隔離
 
 ### ネットワーク制御
 
-通信先ドメインを allowlist で指定できます。allowlist 外の通信はデスクトップ通知経由で approve / deny できます。
+通信先ドメインを allowlist で指定できます。allowlist 外の通信はデスクトップ通知経由で approve / deny できます（`ui.enable: true` の場合はブラウザ UI、`false` の場合は通知のアクションボタン）。
 
 ![network prompt](./images/network-prompt.png)
 
@@ -147,6 +147,12 @@ Deleted branch nas/claude/2026-03-17T13-35-20-819Z (was 48be913).
 # .agent-sandbox.yml
 default: copilot-nix
 
+ui:
+  enable: true              # true: セッション開始時に UI daemon を起動し、通知クリックでブラウザ UI を開く
+                            # false: daemon 不使用。通知のアクションボタンで直接 approve/deny
+  port: 3939                # UI daemon のポート
+  idle-timeout: 300         # 全セッション終了後に daemon を自動停止するまでの秒数（0 = 無期限）
+
 profiles:
   copilot-nix:
     agent: copilot          # "claude" | "copilot" | "codex"
@@ -164,7 +170,7 @@ profiles:
         enable: true        # allowlist 外通信を pending にして手動承認する
         timeout-seconds: 300
         default-scope: host-port # once: リクエスト単位 | host-port: ホスト+ポート単位 | host: ホスト単位
-        notify: auto        # auto | off （デスクトップ通知有無）
+        notify: auto        # auto | desktop | off （デスクトップ通知有無）
     dbus:
       session:
         enable: false
@@ -458,6 +464,25 @@ session network
 - ホストに nix がインストールされ、nix-daemon が動作している必要があります。
 - ホストの `/nix` ディレクトリ全体がコンテナにマウントされます。
 
+## UI 設定リファレンス
+
+| キー | 型 | デフォルト | 説明 |
+|------|------|-----------|------|
+| `ui.enable` | bool | `true` | `true`: セッション開始時に UI daemon を自動起動し、通知クリックでブラウザ UI を開く。`false`: daemon を使わず、通知のアクションボタンで直接 approve/deny |
+| `ui.port` | number | `3939` | UI daemon のリッスンポート。`nas ui` コマンドのデフォルトにも使われる |
+| `ui.idle-timeout` | number | `300` | 全セッション・pending が消滅してから daemon を自動停止するまでの秒数。`0` で無期限 |
+
+UI daemon はセッション開始時に `setsid` で完全にデタッチされるため、nas プロセスの終了後も生存します。`idle-timeout` 経過後に自動停止します。
+
+`nas ui` コマンドで手動起動することもできます:
+
+```sh
+nas ui                          # config のデフォルト設定で起動
+nas ui --port 8080              # ポートを指定
+nas ui --idle-timeout 0         # 自動停止しない
+nas ui --no-open                # ブラウザを自動で開かない
+```
+
 ## プロファイル設定リファレンス
 
 | キー | 型 | デフォルト | 説明 |
@@ -475,7 +500,7 @@ session network
 | `network.prompt.enable` | bool | `false` | allowlist 外通信を session ごとの承認キューに入れる |
 | `network.prompt.timeout-seconds` | number | `300` | pending 承認の待機秒数。タイムアウト時は deny |
 | `network.prompt.default-scope` | `"once"` \| `"host-port"` \| `"host"` | `"host-port"` | `nas network approve` の既定 scope。`once`: そのリクエストのみ、`host-port`: 同じホスト+ポートへの通信を以降許可、`host`: 同じホストへの全ポート通信を以降許可 |
-| `network.prompt.notify` | `"auto"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`auto` は tmux popup → `notify-send` → no-op の順で試行 |
+| `network.prompt.notify` | `"auto"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`ui.enable: true` なら通知クリックでブラウザ UI を開く。`false` なら通知ボタンで直接 approve/deny |
 | `dbus.session.enable` | bool | `false` | host session bus に対する filtered proxy を有効化し、コンテナへ proxy socket だけを渡す |
 | `dbus.session.source-address` | string | 自動解決 | source の session bus address。省略時は `DBUS_SESSION_BUS_ADDRESS`、なければ `/run/user/$UID/bus` |
 | `dbus.session.see` | string[] | `[]` | `xdg-dbus-proxy --see` に渡す well-known name |
@@ -493,7 +518,7 @@ session network
 | `hostexec.prompt.enable` | bool | `true` | `approval: prompt` の hostexec 実行を承認キューに入れる |
 | `hostexec.prompt.timeout-seconds` | number | `300` | hostexec 承認の待機秒数。タイムアウト時は deny |
 | `hostexec.prompt.default-scope` | `"once"` \| `"capability"` | `"capability"` | hostexec 承認再利用の単位。`once`: そのリクエストのみ許可（キャッシュしない）、`capability`: 同じ capability（rule_id + argv0 + args 等）の組み合わせで再利用 |
-| `hostexec.prompt.notify` | `"auto"` \| `"tmux"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`auto` は `notify-send` → tmux popup → no-op の順で試行 |
+| `hostexec.prompt.notify` | `"auto"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`ui.enable: true` なら通知クリックでブラウザ UI を開く。`false` なら通知ボタンで直接 approve/deny |
 | `hostexec.rules[].id` | string | （必須） | 監査・承認 fingerprint に使う安定 ID |
 | `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名 |
 | `hostexec.rules[].match.arg-regex` | string | 省略可 | argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。省略時はその `argv0` の全コマンドにマッチ |
