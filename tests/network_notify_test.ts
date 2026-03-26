@@ -62,24 +62,29 @@ Deno.test("notifyPendingRequest: desktop deny rejects broker request on invalid 
   });
 });
 
-Deno.test("notifyPendingRequest: auto falls back to tmux when desktop is unavailable", async () => {
+Deno.test("notifyPendingRequest: auto backend uses desktop", async () => {
   await withFakeCommands(async ({ dir }) => {
-    const tmuxLog = `${dir}/tmux.log`;
-    Deno.env.set("NAS_NOTIFY_EXIT", "1");
-    Deno.env.set("NAS_TMUX_LOG", tmuxLog);
-    Deno.env.set("NAS_TMUX_EXIT", "0");
-    Deno.env.set("TMUX", "/tmp/tmux-session");
+    const argsLog = `${dir}/notify-args.log`;
+    Deno.env.set("NAS_NOTIFY_ARGS_LOG", argsLog);
+    Deno.env.set("NAS_NOTIFY_EXIT", "0");
+    Deno.env.set("NAS_NOTIFY_STDOUT", "default");
 
-    await notifyPendingRequest({
-      ...TEST_NOTIFICATION,
-      backend: "auto",
-      brokerSocket: `${dir}/unused.sock`,
-    });
+    const { socketPath, messages, close } = await startBrokerStub((
+      requestId,
+    ) => ({ type: "ack", requestId, decision: "approve" }));
+    try {
+      await notifyPendingRequest({
+        ...TEST_NOTIFICATION,
+        backend: "auto",
+        brokerSocket: socketPath,
+      });
+    } finally {
+      await close();
+    }
 
-    const tmuxArgs = await Deno.readTextFile(tmuxLog);
-    assertEquals(tmuxArgs.includes("display-popup"), true);
-    assertEquals(tmuxArgs.includes("req_test"), true);
-    assertEquals(tmuxArgs.includes("sess_test"), true);
+    assertEquals(messages, [{ type: "approve", requestId: "req_test" }]);
+    const notifyArgs = await Deno.readTextFile(argsLog);
+    assertEquals(notifyArgs.includes("[nas] Pending network approval"), true);
   });
 });
 
@@ -88,12 +93,9 @@ async function withFakeCommands(
 ): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "nas-notify-test-" });
   const originalPath = Deno.env.get("PATH") ?? "";
-  const originalTmux = Deno.env.get("TMUX");
   const originalNotifyArgsLog = Deno.env.get("NAS_NOTIFY_ARGS_LOG");
   const originalNotifyExit = Deno.env.get("NAS_NOTIFY_EXIT");
   const originalNotifyStdout = Deno.env.get("NAS_NOTIFY_STDOUT");
-  const originalTmuxLog = Deno.env.get("NAS_TMUX_LOG");
-  const originalTmuxExit = Deno.env.get("NAS_TMUX_EXIT");
 
   try {
     await Deno.writeTextFile(
@@ -108,26 +110,14 @@ printf '%s' "\${NAS_NOTIFY_STDOUT:-}"
 exit "\${NAS_NOTIFY_EXIT:-0}"
 `,
     );
-    await Deno.writeTextFile(
-      `${dir}/tmux`,
-      `#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$@" > "\${NAS_TMUX_LOG}"
-exit "\${NAS_TMUX_EXIT:-0}"
-`,
-    );
     await Deno.chmod(`${dir}/notify-send`, 0o755);
-    await Deno.chmod(`${dir}/tmux`, 0o755);
     Deno.env.set("PATH", `${dir}:${originalPath}`);
     await fn({ dir });
   } finally {
     Deno.env.set("PATH", originalPath);
-    restoreEnv("TMUX", originalTmux);
     restoreEnv("NAS_NOTIFY_ARGS_LOG", originalNotifyArgsLog);
     restoreEnv("NAS_NOTIFY_EXIT", originalNotifyExit);
     restoreEnv("NAS_NOTIFY_STDOUT", originalNotifyStdout);
-    restoreEnv("NAS_TMUX_LOG", originalTmuxLog);
-    restoreEnv("NAS_TMUX_EXIT", originalTmuxExit);
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 }

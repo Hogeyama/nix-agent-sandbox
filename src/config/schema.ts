@@ -303,7 +303,7 @@ export const networkPromptSchema = z.object({
     .default(DEFAULT_NETWORK_PROMPT_CONFIG.timeoutSeconds),
   "default-scope": zodEnum(["once", "host-port", "host"] as const)
     .default(DEFAULT_NETWORK_PROMPT_CONFIG.defaultScope),
-  notify: zodEnum(["auto", "tmux", "desktop", "off"] as const)
+  notify: zodEnum(["auto", "desktop", "off"] as const)
     .default(DEFAULT_NETWORK_PROMPT_CONFIG.notify),
 }).default({}).transform((r) => ({
   enable: r.enable,
@@ -353,7 +353,7 @@ export const hostexecPromptSchema = z.object({
     .default(DEFAULT_HOSTEXEC_PROMPT_CONFIG.timeoutSeconds),
   "default-scope": zodEnum(["once", "capability"] as const)
     .default(DEFAULT_HOSTEXEC_PROMPT_CONFIG.defaultScope),
-  notify: zodEnum(["auto", "tmux", "desktop", "off"] as const)
+  notify: zodEnum(["auto", "desktop", "off"] as const)
     .default(DEFAULT_HOSTEXEC_PROMPT_CONFIG.notify),
 }).default({}).transform((r) => ({
   enable: r.enable,

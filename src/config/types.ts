@@ -54,7 +54,7 @@ export type HostExecCwdMode =
   | "allowlist"
   | "any";
 export type HostExecInheritEnvMode = "minimal" | "unsafe-inherit-all";
-export type HostExecPromptNotify = "auto" | "tmux" | "desktop" | "off";
+export type HostExecPromptNotify = "auto" | "desktop" | "off";
 export type HostExecPromptScope = "once" | "capability";
 
 export interface HostExecPromptConfig {
@@ -96,7 +96,7 @@ export interface HostExecConfig {
 }
 
 /** ネットワーク設定 */
-export type NetworkPromptNotify = "auto" | "tmux" | "desktop" | "off";
+export type NetworkPromptNotify = "auto" | "desktop" | "off";
 
 export interface NetworkPromptConfig {
   enable: boolean;

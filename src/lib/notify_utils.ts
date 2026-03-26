@@ -5,7 +5,7 @@
 
 import { logWarn } from "../log.ts";
 
-export type NotifyBackend = "auto" | "tmux" | "desktop" | "off";
+export type NotifyBackend = "auto" | "desktop" | "off";
 
 // Module-level state for tracking the active desktop notification ID.
 // Only one notification is active at a time across the process.
@@ -90,54 +90,11 @@ export async function tryDesktopNotification(
   }
 }
 
-export interface TmuxPopupOptions {
-  script: string;
-  width: number;
-  height: number;
-  signal?: AbortSignal;
-}
-
 /**
- * Show a tmux display-popup with the given script.
- * Returns false if TMUX is not set or the popup fails.
- */
-export async function tryTmuxPopup(
-  options: TmuxPopupOptions,
-): Promise<boolean> {
-  if (!Deno.env.get("TMUX")) return false;
-  const result = await new Deno.Command("tmux", {
-    args: [
-      "display-popup",
-      "-w",
-      String(options.width),
-      "-h",
-      String(options.height),
-      "-E",
-      "sh",
-      "-c",
-      options.script,
-    ],
-    signal: options.signal,
-    stdout: "null",
-    stderr: "null",
-  }).output().catch(() => ({ success: false } as Deno.CommandOutput));
-  return result.success;
-}
-
-/**
- * Close any active notification (tmux popup and/or desktop notification).
+ * Close any active desktop notification.
  */
 export async function closeNotification(): Promise<void> {
   const capturedId = lastDesktopNotificationId;
-  // tmux popup を閉じる
-  if (Deno.env.get("TMUX")) {
-    await new Deno.Command("tmux", {
-      args: ["display-popup", "-C"],
-      stdout: "null",
-      stderr: "null",
-    }).output().catch(() => {});
-  }
-  // desktop notification を閉じる
   if (capturedId) {
     await closeDesktopNotification(capturedId);
   }
@@ -153,10 +110,6 @@ export function hasDesktopSession(): boolean {
       Deno.env.get("WAYLAND_DISPLAY") ||
       isWSL(),
   );
-}
-
-export function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 // --- Internal helpers ---

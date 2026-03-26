@@ -386,7 +386,7 @@ Deno.test("validateConfig: network.prompt accepts explicit values", () => {
             enable: true,
             "timeout-seconds": 42,
             "default-scope": "host",
-            notify: "tmux",
+            notify: "desktop",
           },
         },
       },
@@ -397,7 +397,7 @@ Deno.test("validateConfig: network.prompt accepts explicit values", () => {
     denylist: [],
     timeoutSeconds: 42,
     defaultScope: "host",
-    notify: "tmux",
+    notify: "desktop",
   });
 });
 
