@@ -49,6 +49,8 @@ let
         "api.githubcopilot.com"
         "telemetry.individual.githubcopilot.com"
         "api.individual.githubcopilot.com"
+        "telemetry.business.githubcopilot.com"
+        "api.business.githubcopilot.com"
         # 画像系
         "camo.githubusercontent.com"
         "avatars.githubusercontent.com"
