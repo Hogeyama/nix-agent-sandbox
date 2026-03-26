@@ -314,7 +314,7 @@ export const networkPromptSchema = z.object({
   notify: r.notify,
 }));
 
-export function networkSchema(profileName: string) {
+export function networkSchema(_profileName: string) {
   return z.object(
     {
       allowlist: hostListSchema("network.allowlist"),
@@ -412,7 +412,7 @@ const hostexecInheritEnvSchema = z.object({
 });
 
 function hostexecRuleSchema(
-  prefix: string,
+  _prefix: string,
   secretNames: Set<string>,
 ) {
   return z.object(
