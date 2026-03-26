@@ -71,6 +71,63 @@ Deno.test("SessionBroker: pending request resumes after approve", async () => {
   }
 });
 
+Deno.test("SessionBroker: close resolves pending request after aborting notifications", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const notifyDir = await Deno.makeTempDir({ prefix: "nas-broker-notify-" });
+  const notifyStartFile = `${notifyDir}/notify-started`;
+  const notifyExitFile = `${notifyDir}/notify-exited`;
+  const originalPath = Deno.env.get("PATH") ?? "";
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  try {
+    await Deno.writeTextFile(
+      `${notifyDir}/notify-send`,
+      `#!/usr/bin/env bash
+set -eu
+echo started > "${notifyStartFile}"
+trap 'echo exited > "${notifyExitFile}"; exit 143' TERM
+while true; do sleep 0.05; done
+`,
+    );
+    await Deno.chmod(`${notifyDir}/notify-send`, 0o755);
+    Deno.env.set("PATH", `${notifyDir}:${originalPath}`);
+
+    const broker = new SessionBroker({
+      paths,
+      sessionId: "sess_test",
+      allowlist: [],
+      denylist: [],
+      promptEnabled: true,
+      timeoutSeconds: 30,
+      defaultScope: "host-port",
+      notify: "desktop",
+    });
+    const socketPath = `${paths.brokersDir}/sess_test.sock`;
+    await broker.start(socketPath);
+    try {
+      const authorizePromise = sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        authorize("sess_test", "req_close", "api.openai.com", 443),
+      );
+
+      await waitForPending(socketPath);
+      await waitForFile(notifyStartFile);
+
+      await broker.close();
+
+      const decision = await authorizePromise;
+      assertEquals(decision.decision, "deny");
+      assertEquals(decision.reason, "broker closed");
+      await waitForFile(notifyExitFile);
+    } finally {
+      await broker.close().catch(() => {});
+    }
+  } finally {
+    Deno.env.set("PATH", originalPath);
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(notifyDir, { recursive: true }).catch(() => {});
+  }
+});
+
 function authorize(
   sessionId: string,
   requestId: string,
@@ -199,4 +256,14 @@ async function waitForPending(
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("Timed out waiting for pending broker entry");
+}
+
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const exists = await Deno.stat(path).then(() => true).catch(() => false);
+    if (exists) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for file: ${path}`);
 }

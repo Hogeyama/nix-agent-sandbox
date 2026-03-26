@@ -79,6 +79,7 @@ export class SessionBroker {
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestIndex = new Map<string, string>();
   private acceptLoop: Promise<void> | null = null;
+  private readonly notificationTasks = new Set<Promise<void>>();
 
   constructor(options: BrokerOptions) {
     this.paths = options.paths;
@@ -115,16 +116,18 @@ export class SessionBroker {
     }
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
-      for (const waiter of group.waiters.values()) {
+      group.notificationAbort.abort();
+      for (const [requestId, waiter] of group.waiters.entries()) {
         waiter.resolve({
           version: 1,
           type: "decision",
-          requestId: "",
+          requestId,
           decision: "deny",
           reason: "broker closed",
         });
       }
     }
+    await Promise.allSettled(this.notificationTasks);
     this.groups.clear();
     this.requestIndex.clear();
     await removePendingDir(this.paths, this.sessionId);
@@ -270,7 +273,7 @@ export class SessionBroker {
     this.groups.set(groupKey, group);
     this.requestIndex.set(message.requestId, groupKey);
     await writePendingEntry(this.paths, toPendingEntry(message, createdAt));
-    void notifyPendingRequest({
+    const notificationTask = notifyPendingRequest({
       backend: this.notify,
       brokerSocket: this.socketPath ??
         brokerSocketPath(this.paths, this.sessionId),
@@ -278,6 +281,12 @@ export class SessionBroker {
       requestId: message.requestId,
       target: group.target,
       signal: notificationAbort.signal,
+    }).catch((e) =>
+      logInfo(`[nas] NetworkBroker: failed to send notification: ${e}`)
+    );
+    this.notificationTasks.add(notificationTask);
+    void notificationTask.finally(() => {
+      this.notificationTasks.delete(notificationTask);
     });
     return group;
   }
