@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# notify-send-wsl — WSL 向け notify-send シム
+#
+# WSL 環境で Linux 版 notify-send の代わりに使用し、
+# Windows のトースト通知にブリッジするラッパースクリプト。
+#
+# nas (nix-agent-sandbox) の通知システムと互換性があります。
+# approve/deny アクションには対応していません（通知表示のみ）。
+# 承認は nas hostexec approve / nas network approve コマンドで行ってください。
+#
+# セットアップ:
+#   1. このスクリプトを PATH の通った場所にコピー or シンボリックリンク:
+#      ln -s /path/to/scripts/notify-send-wsl ~/.local/bin/notify-send
+#   2. 実行権限を付与:
+#      chmod +x ~/.local/bin/notify-send
+#   3. powershell.exe が WSL から呼び出せることを確認:
+#      powershell.exe -Command "echo ok"
+#
+# 実装方式:
+#   System.Windows.Forms.NotifyIcon の BalloonTip を使用。
+#   WinRT ToastNotificationManager は AppUserModelId の登録が必要で
+#   WSL から呼ぶと表示されないケースがあるため、BalloonTip を採用。
+#
+# 制限事項:
+#   - アクションボタン（Allow/Deny）は非対応（通知表示のみ）
+#   - --expire-time は反映されない（BalloonTip は OS のタイムアウトに従う）
+#   - 通知のプログラム的な閉鎖（gdbus 相当）は非対応
+set -euo pipefail
+
+# --- Parse arguments ---
+# notify-send の引数形式:
+#   notify-send [OPTIONS...] SUMMARY [BODY]
+# nas が使う主要オプション:
+#   --print-id  --wait  --expire-time=N  --action=ID=LABEL
+
+print_id=false
+title=""
+body=""
+positional=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --print-id)
+      print_id=true
+      shift
+      ;;
+    --wait)
+      # WSL シムでは待機せず即終了する
+      shift
+      ;;
+    --expire-time=*)
+      # 無視（Windows トーストのタイムアウトは OS 制御）
+      shift
+      ;;
+    --expire-time)
+      shift 2  # --expire-time N 形式
+      ;;
+    --action=*)
+      # アクション定義は無視
+      shift
+      ;;
+    --action)
+      shift 2  # --action ID=LABEL 形式
+      ;;
+    --urgency=*|--urgency|-u)
+      # 無視
+      if [[ "$1" == "--urgency" || "$1" == "-u" ]]; then
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --category=*|--category|-c)
+      if [[ "$1" == "--category" || "$1" == "-c" ]]; then
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --icon=*|--icon|-i)
+      if [[ "$1" == "--icon" || "$1" == "-i" ]]; then
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --hint=*|--hint|-h)
+      if [[ "$1" == "--hint" || "$1" == "-h" ]]; then
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --replace-id=*|--replace-id|-r)
+      if [[ "$1" == "--replace-id" || "$1" == "-r" ]]; then
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --app-name=*|--app-name|-a)
+      if [[ "$1" == "--app-name" || "$1" == "-a" ]]; then
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    -*)
+      # Unknown option — skip
+      shift
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Extract title and body from positional arguments
+if [[ ${#positional[@]} -ge 2 ]]; then
+  title="${positional[0]}"
+  body="${positional[1]}"
+elif [[ ${#positional[@]} -ge 1 ]]; then
+  title="${positional[0]}"
+  body=""
+else
+  title="Notification"
+  body=""
+fi
+
+# --- Print notification ID (for --print-id) ---
+if [[ "$print_id" == true ]]; then
+  echo "0"
+fi
+
+# --- Escape XML special characters for toast XML ---
+xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"
+  s="${s//</&lt;}"
+  s="${s//>/&gt;}"
+  s="${s//\"/&quot;}"
+  s="${s//\'/&apos;}"
+  printf '%s' "$s"
+}
+
+escaped_title="$(xml_escape "$title")"
+escaped_body="$(xml_escape "$body")"
+
+# --- Build PowerShell command for Windows balloon notification ---
+# Uses System.Windows.Forms.NotifyIcon BalloonTip (works reliably in all WSL setups).
+# WinRT ToastNotificationManager requires AppUserModelId registration and may silently
+# fail in WSL, so BalloonTip is the safer default.
+ps_script=$(cat <<'PSEOF'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$n = New-Object System.Windows.Forms.NotifyIcon
+$n.Icon = [System.Drawing.SystemIcons]::Information
+$n.Visible = $true
+$n.BalloonTipTitle = 'TITLE_PLACEHOLDER'
+$n.BalloonTipText = 'BODY_PLACEHOLDER'
+$n.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+$n.ShowBalloonTip(10000)
+Start-Sleep -Seconds 3
+$n.Dispose()
+PSEOF
+)
+
+# Inject escaped title and body into the PowerShell script.
+# Single-quotes in the PS script are used for placeholders, so we need to
+# escape any single-quotes that snuck through XML escaping.
+safe_title="${escaped_title//\'/\'\'}"
+safe_body="${escaped_body//\'/\'\'}"
+ps_script="${ps_script//TITLE_PLACEHOLDER/$safe_title}"
+ps_script="${ps_script//BODY_PLACEHOLDER/$safe_body}"
+
+# --- Show the balloon notification ---
+powershell.exe -NoProfile -NonInteractive -Command "$ps_script" 2>/dev/null || true
+
+# --- Output special action string ---
+# "wsl-notify-only" is not recognized by tryDesktopNotification() in notify_utils.ts,
+# so it falls through to `return status.success` without sending approve/deny.
+# The pending request stays in "pending" state for CLI-based approval.
+echo "wsl-notify-only"
+
+exit 0

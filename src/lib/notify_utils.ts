@@ -127,10 +127,15 @@ export async function closeNotification(): Promise<void> {
   }
 }
 
+export function isWSL(): boolean {
+  return Boolean(Deno.env.get("WSL_DISTRO_NAME"));
+}
+
 export function hasDesktopSession(): boolean {
   return Boolean(
     Deno.env.get("DISPLAY") ||
-      Deno.env.get("WAYLAND_DISPLAY"),
+      Deno.env.get("WAYLAND_DISPLAY") ||
+      isWSL(),
   );
 }
 
