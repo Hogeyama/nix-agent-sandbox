@@ -3,13 +3,27 @@
  */
 
 import { startServer } from "../ui/server.ts";
-import { exitOnCliError, getFlagValue } from "./helpers.ts";
+import { stopUiDaemon } from "../ui/daemon.ts";
+import {
+  exitOnCliError,
+  findFirstNonFlagArg,
+  getFlagValue,
+} from "./helpers.ts";
 import { loadConfig } from "../config/load.ts";
 import { DEFAULT_UI_CONFIG } from "../config/types.ts";
 
 export async function runUiCommand(nasArgs: string[]): Promise<void> {
   const config = await loadConfig().catch(() => null);
   const uiDefaults = config?.ui ?? DEFAULT_UI_CONFIG;
+
+  const sub = findFirstNonFlagArg(nasArgs);
+
+  if (sub === "stop") {
+    const portStr = getFlagValue(nasArgs, "--port");
+    const port = portStr ? parseInt(portStr, 10) : uiDefaults.port;
+    await stopUiDaemon({ port });
+    return;
+  }
 
   const portStr = getFlagValue(nasArgs, "--port");
   const port = portStr ? parseInt(portStr, 10) : uiDefaults.port;

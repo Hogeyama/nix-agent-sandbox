@@ -82,6 +82,69 @@ export async function isUiDaemonRunning(port: number): Promise<boolean> {
   }
 }
 
+/**
+ * Stop a running UI daemon. Reads daemon.json for port, confirms health,
+ * then sends SIGTERM. Falls back to reading PID from state file.
+ */
+export async function stopUiDaemon(
+  options?: { port?: number },
+): Promise<void> {
+  const port = options?.port ?? DEFAULT_UI_PORT;
+
+  if (!(await isUiDaemonRunning(port))) {
+    logInfo("[nas] UI daemon is not running");
+    return;
+  }
+
+  // Try graceful shutdown via /api/shutdown first, fall back to PID
+  let killed = false;
+  try {
+    const state: DaemonState = JSON.parse(
+      await Deno.readTextFile(daemonStatePath()),
+    );
+    Deno.kill(state.pid, "SIGTERM");
+    killed = true;
+  } catch {
+    // state file missing or stale — try to find PID via lsof
+  }
+
+  if (!killed) {
+    // Find PID by port as fallback
+    try {
+      const cmd = new Deno.Command("lsof", {
+        args: ["-ti", `tcp:${port}`, "-sTCP:LISTEN"],
+        stdout: "piped",
+        stderr: "null",
+      });
+      const { stdout } = await cmd.output();
+      const pids = new TextDecoder().decode(stdout).trim().split("\n").filter(
+        Boolean,
+      );
+      for (const pidStr of pids) {
+        const pid = parseInt(pidStr, 10);
+        if (!isNaN(pid)) {
+          Deno.kill(pid, "SIGTERM");
+          killed = true;
+        }
+      }
+    } catch {
+      // lsof not available
+    }
+  }
+
+  if (killed) {
+    logInfo("[nas] UI daemon stopped");
+    // Clean up state file
+    try {
+      await Deno.remove(daemonStatePath());
+    } catch {
+      // ignore
+    }
+  } else {
+    logWarn("[nas] Could not determine daemon PID to stop");
+  }
+}
+
 async function startUiDaemon(
   port: number,
   idleTimeout?: number,

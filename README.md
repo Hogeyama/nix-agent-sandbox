@@ -481,6 +481,8 @@ nas ui                          # config のデフォルト設定で起動
 nas ui --port 8080              # ポートを指定
 nas ui --idle-timeout 0         # 自動停止しない
 nas ui --no-open                # ブラウザを自動で開かない
+nas ui stop                     # daemon を停止
+nas ui stop --port 8080         # ポートを指定して停止
 ```
 
 ## プロファイル設定リファレンス
