@@ -47,24 +47,17 @@ export async function ensureUiDaemon(
   }
 
   logInfo(`[nas] Starting UI daemon on port ${port}...`);
-  const child = await startUiDaemon(port, options?.idleTimeout);
+  await startUiDaemon(port, options?.idleTimeout);
 
+  // setsid --fork makes the actual daemon a grandchild process, so we
+  // cannot track it via child.status. Poll health check instead.
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (await isUiDaemonRunning(port)) {
       logInfo(`[nas] UI daemon ready at ${url}`);
       return url;
     }
-    // Detect early crash: if the child already exited, fail fast
-    const exited = await Promise.race([
-      child.status.then((s) => s),
-      new Promise<null>((r) => setTimeout(() => r(null), STARTUP_POLL_MS)),
-    ]);
-    if (exited !== null) {
-      throw new Error(
-        `UI daemon exited immediately with code ${exited.code}`,
-      );
-    }
+    await new Promise((r) => setTimeout(r, STARTUP_POLL_MS));
   }
 
   logWarn("[nas] UI daemon failed to start within timeout");
@@ -92,7 +85,7 @@ export async function isUiDaemonRunning(port: number): Promise<boolean> {
 async function startUiDaemon(
   port: number,
   idleTimeout?: number,
-): Promise<Deno.ChildProcess> {
+): Promise<void> {
   const { execPath, prefix } = resolveNasCommand();
 
   const args = [
@@ -106,8 +99,14 @@ async function startUiDaemon(
     args.push("--idle-timeout", String(idleTimeout));
   }
 
-  const child = new Deno.Command(execPath, {
-    args,
+  // Fully detach via shell double-fork + setsid so the daemon survives
+  // parent exit. Deno may kill direct child processes on shutdown, so we
+  // launch through a shell subshell that backgrounds and exits immediately.
+  const cmdLine = [execPath, ...args]
+    .map((a) => `'${a.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const child = new Deno.Command("sh", {
+    args: ["-c", `setsid ${cmdLine} </dev/null >/dev/null 2>&1 &`],
     stdin: "null",
     stdout: "null",
     stderr: "null",
@@ -125,5 +124,4 @@ async function startUiDaemon(
     daemonStatePath(),
     JSON.stringify(state, null, 2),
   );
-  return child;
 }

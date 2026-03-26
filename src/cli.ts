@@ -31,6 +31,7 @@ import { runContainerCommand } from "./cli/container.ts";
 import { runNetworkCommand } from "./cli/network.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
 import { runUiCommand } from "./cli/ui.ts";
+import { ensureUiDaemon } from "./ui/daemon.ts";
 
 const VERSION = "0.1.0";
 
@@ -140,6 +141,13 @@ export async function main(args: string[]): Promise<void> {
       Deno.cwd(),
       logLevel,
     );
+
+    if (config.ui.enable) {
+      await ensureUiDaemon({
+        port: config.ui.port,
+        idleTimeout: config.ui.idleTimeout,
+      });
+    }
 
     const stages = [
       new WorktreeStage(),
