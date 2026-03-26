@@ -147,34 +147,12 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
   }
 });
 
-Deno.test("HostExecBroker: desktop notify can deny pending request", async () => {
+Deno.test("HostExecBroker: pending request can be denied via broker", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const workspace = await Deno.makeTempDir({
     prefix: "nas-hostexec-workspace-",
   });
-  const notifyDir = await Deno.makeTempDir({
-    prefix: "nas-hostexec-notify-",
-  });
-  const notifyLog = `${notifyDir}/notify.log`;
-  const originalPath = Deno.env.get("PATH") ?? "";
-  const originalNotifyExit = Deno.env.get("NAS_NOTIFY_EXIT");
-  const originalNotifyStdout = Deno.env.get("NAS_NOTIFY_STDOUT");
-  const originalNotifyArgsLog = Deno.env.get("NAS_NOTIFY_ARGS_LOG");
-  await Deno.writeTextFile(
-    `${notifyDir}/notify-send`,
-    `#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$@" > "\${NAS_NOTIFY_ARGS_LOG}"
-printf '%s' "\${NAS_NOTIFY_STDOUT:-}"
-exit "\${NAS_NOTIFY_EXIT:-0}"
-`,
-  );
-  await Deno.chmod(`${notifyDir}/notify-send`, 0o755);
-  Deno.env.set("PATH", `${notifyDir}:${originalPath}`);
-  Deno.env.set("NAS_NOTIFY_EXIT", "0");
-  Deno.env.set("NAS_NOTIFY_STDOUT", "deny");
-  Deno.env.set("NAS_NOTIFY_ARGS_LOG", notifyLog);
 
   const broker = new HostExecBroker({
     paths,
@@ -187,7 +165,7 @@ exit "\${NAS_NOTIFY_EXIT:-0}"
         enable: true,
         timeoutSeconds: 30,
         defaultScope: "capability",
-        notify: "desktop",
+        notify: "off",
       },
       rules: [{
         id: "deno-eval",
@@ -203,26 +181,25 @@ exit "\${NAS_NOTIFY_EXIT:-0}"
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
   await broker.start(socketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const executePromise = sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('x')"], workspace, "req_notify_deny"),
+      request(["eval", "console.log('x')"], workspace, "req_deny"),
     );
+    const pending = await waitForPendingEntries(paths, 1);
+    assertEquals(pending.length, 1);
+    await sendHostExecBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_deny",
+    });
+    const response = await executePromise;
     assertEquals(response.type, "error");
     if (response.type === "error") {
       assertEquals(response.message, "permission denied by user");
     }
-    const notifyArgs = await Deno.readTextFile(notifyLog);
-    assertEquals(notifyArgs.includes("[nas] Pending hostexec approval"), true);
-    assertEquals(notifyArgs.includes("deno eval console.log('x')"), true);
   } finally {
-    restoreEnv("NAS_NOTIFY_EXIT", originalNotifyExit);
-    restoreEnv("NAS_NOTIFY_STDOUT", originalNotifyStdout);
-    restoreEnv("NAS_NOTIFY_ARGS_LOG", originalNotifyArgsLog);
-    Deno.env.set("PATH", originalPath);
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
     await Deno.remove(workspace, { recursive: true }).catch(() => {});
-    await Deno.remove(notifyDir, { recursive: true }).catch(() => {});
   }
 });
 
@@ -834,12 +811,4 @@ async function waitForPendingCount(
   count: number,
 ) {
   return await waitForPendingEntries(paths, count);
-}
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    Deno.env.delete(name);
-    return;
-  }
-  Deno.env.set(name, value);
 }

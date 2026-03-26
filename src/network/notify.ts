@@ -5,16 +5,17 @@ import {
   type NotifyBackend,
   tryDesktopNotification,
 } from "../lib/notify_utils.ts";
+import { ensureUiDaemon } from "../ui/daemon.ts";
 
 export type { NotifyBackend };
 export { closeNotification };
 
 export interface PendingNotification {
   backend: NotifyBackend;
-  brokerSocket: string;
   sessionId: string;
   requestId: string;
   target: NormalizedTarget;
+  uiPort?: number;
   signal?: AbortSignal;
 }
 
@@ -22,17 +23,16 @@ export async function notifyPendingRequest(
   notification: PendingNotification,
 ): Promise<void> {
   if (notification.backend === "off") return;
-  await tryDesktop(notification);
-}
-
-async function tryDesktop(
-  notification: PendingNotification,
-): Promise<boolean> {
+  const uiBaseUrl = await ensureUiDaemon(notification.uiPort);
+  const deepLinkUrl = new URL("/", uiBaseUrl);
+  deepLinkUrl.searchParams.set("type", "network");
+  deepLinkUrl.searchParams.set("sessionId", notification.sessionId);
+  deepLinkUrl.searchParams.set("requestId", notification.requestId);
+  const deepLink = deepLinkUrl.href;
   const message = formatMessage(notification);
-  return await tryDesktopNotification({
+  await tryDesktopNotification({
     ...message,
-    brokerSocket: notification.brokerSocket,
-    requestId: notification.requestId,
+    uiUrl: deepLink,
     signal: notification.signal,
   });
 }
@@ -45,7 +45,7 @@ function formatMessage(
     title: `[nas] Pending network approval: ${notification.sessionId}`,
     body: [
       `${target}`,
-      "クリックでapprove / 閉じるとdeny",
+      "クリックでUIを開く",
     ].join("\n"),
   };
 }

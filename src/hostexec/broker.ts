@@ -269,8 +269,6 @@ export class HostExecBroker {
     await writeHostExecPendingEntry(this.paths, entry);
     const notificationTask = notifyHostExecPendingRequest({
       backend: this.config.prompt.notify,
-      brokerSocket: this.socketPath ??
-        hostExecBrokerSocketPath(this.paths, this.sessionId),
       pending: entry,
       signal: notificationAbort.signal,
     }).catch((e) =>

@@ -78,6 +78,14 @@ Deno.test("SessionBroker: close resolves pending request after aborting notifica
   const notifyExitFile = `${notifyDir}/notify-exited`;
   const originalPath = Deno.env.get("PATH") ?? "";
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const healthServer = Deno.serve({ port: 0, onListen() {} }, (req) => {
+    if (new URL(req.url).pathname === "/api/health") {
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("Not Found", { status: 404 });
+  });
   try {
     await Deno.writeTextFile(
       `${notifyDir}/notify-send`,
@@ -88,7 +96,14 @@ trap 'echo exited > "${notifyExitFile}"; exit 143' TERM
 while true; do sleep 0.05; done
 `,
     );
+    await Deno.writeTextFile(
+      `${notifyDir}/xdg-open`,
+      `#!/usr/bin/env bash
+true
+`,
+    );
     await Deno.chmod(`${notifyDir}/notify-send`, 0o755);
+    await Deno.chmod(`${notifyDir}/xdg-open`, 0o755);
     Deno.env.set("PATH", `${notifyDir}:${originalPath}`);
 
     const broker = new SessionBroker({
@@ -100,6 +115,7 @@ while true; do sleep 0.05; done
       timeoutSeconds: 30,
       defaultScope: "host-port",
       notify: "desktop",
+      uiPort: healthServer.addr.port,
     });
     const socketPath = `${paths.brokersDir}/sess_test.sock`;
     await broker.start(socketPath);
@@ -123,6 +139,7 @@ while true; do sleep 0.05; done
     }
   } finally {
     Deno.env.set("PATH", originalPath);
+    await healthServer.shutdown();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
     await Deno.remove(notifyDir, { recursive: true }).catch(() => {});
   }

@@ -32,6 +32,7 @@ interface BrokerOptions {
   timeoutSeconds: number;
   defaultScope: ApprovalScope;
   notify: NotifyBackend;
+  uiPort?: number;
 }
 
 interface PendingWaiter {
@@ -70,6 +71,7 @@ export class SessionBroker {
   private readonly timeoutSeconds: number;
   private readonly defaultScope: ApprovalScope;
   private readonly notify: NotifyBackend;
+  private readonly uiPort?: number;
   private socketPath: string | null = null;
   private listener: Deno.Listener | null = null;
   private closing = false;
@@ -90,6 +92,7 @@ export class SessionBroker {
     this.timeoutSeconds = options.timeoutSeconds;
     this.defaultScope = options.defaultScope;
     this.notify = options.notify;
+    this.uiPort = options.uiPort;
   }
 
   async start(socketPath: string): Promise<void> {
@@ -275,11 +278,10 @@ export class SessionBroker {
     await writePendingEntry(this.paths, toPendingEntry(message, createdAt));
     const notificationTask = notifyPendingRequest({
       backend: this.notify,
-      brokerSocket: this.socketPath ??
-        brokerSocketPath(this.paths, this.sessionId),
       sessionId: this.sessionId,
       requestId: message.requestId,
       target: group.target,
+      uiPort: this.uiPort,
       signal: notificationAbort.signal,
     }).catch((e) =>
       logInfo(`[nas] NetworkBroker: failed to send notification: ${e}`)

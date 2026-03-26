@@ -1,101 +1,109 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { notifyPendingRequest } from "../src/network/notify.ts";
 import type { PendingNotification } from "../src/network/notify.ts";
 
-const TEST_NOTIFICATION: PendingNotification = {
-  backend: "desktop",
-  brokerSocket: "",
-  sessionId: "sess_test",
-  requestId: "req_test",
-  target: { host: "api.openai.com", port: 443 },
-};
-
-Deno.test("notifyPendingRequest: desktop approval notifies broker", async () => {
-  await withFakeCommands(async ({ dir }) => {
+Deno.test("notifyPendingRequest: desktop notification opens UI via xdg-open", async () => {
+  await withFakeCommands(async ({ dir, healthServer }) => {
     const argsLog = `${dir}/notify-args.log`;
+    const xdgLog = `${dir}/xdg-open.log`;
     Deno.env.set("NAS_NOTIFY_ARGS_LOG", argsLog);
     Deno.env.set("NAS_NOTIFY_EXIT", "0");
     Deno.env.set("NAS_NOTIFY_STDOUT", "default");
+    Deno.env.set("NAS_XDG_LOG", xdgLog);
 
-    const { socketPath, messages, close } = await startBrokerStub((
-      requestId,
-    ) => ({ type: "ack", requestId, decision: "approve" }));
-    try {
-      await notifyPendingRequest({
-        ...TEST_NOTIFICATION,
-        brokerSocket: socketPath,
-      });
-    } finally {
-      await close();
-    }
+    const notification: PendingNotification = {
+      backend: "desktop",
+      sessionId: "sess_test",
+      requestId: "req_test",
+      target: { host: "api.openai.com", port: 443 },
+      uiPort: healthServer.port,
+    };
 
-    assertEquals(messages, [{ type: "approve", requestId: "req_test" }]);
+    await notifyPendingRequest(notification);
+
     const notifyArgs = await Deno.readTextFile(argsLog);
     assertEquals(notifyArgs.includes("[nas] Pending network approval"), true);
     assertEquals(notifyArgs.includes("api.openai.com:443"), true);
+    assertEquals(notifyArgs.includes("--action=default=Open"), true);
+
+    const xdgArgs = await Deno.readTextFile(xdgLog);
+    assertEquals(xdgArgs.includes("type=network"), true);
+    assertEquals(xdgArgs.includes("sessionId=sess_test"), true);
+    assertEquals(xdgArgs.includes("requestId=req_test"), true);
   });
 });
 
-Deno.test("notifyPendingRequest: desktop deny rejects broker request on invalid ack", async () => {
-  await withFakeCommands(async () => {
+Deno.test("notifyPendingRequest: dismiss does not open browser", async () => {
+  await withFakeCommands(async ({ dir, healthServer }) => {
+    const xdgLog = `${dir}/xdg-open.log`;
     Deno.env.set("NAS_NOTIFY_EXIT", "0");
     Deno.env.set("NAS_NOTIFY_STDOUT", "");
+    Deno.env.set("NAS_XDG_LOG", xdgLog);
 
-    const { socketPath, close } = await startBrokerStub(() => ({
-      type: "ack",
-      requestId: "wrong",
-      decision: "deny",
-    }));
-    try {
-      await assertRejects(
-        () =>
-          notifyPendingRequest({
-            ...TEST_NOTIFICATION,
-            brokerSocket: socketPath,
-          }),
-        Error,
-        "invalid broker response",
-      );
-    } finally {
-      await close();
-    }
+    await notifyPendingRequest({
+      backend: "desktop",
+      sessionId: "sess_test",
+      requestId: "req_test",
+      target: { host: "api.openai.com", port: 443 },
+      uiPort: healthServer.port,
+    });
+
+    const xdgExists = await Deno.stat(xdgLog).then(() => true).catch(() =>
+      false
+    );
+    assertEquals(xdgExists, false, "xdg-open should not have been called");
   });
 });
 
 Deno.test("notifyPendingRequest: auto backend uses desktop", async () => {
-  await withFakeCommands(async ({ dir }) => {
+  await withFakeCommands(async ({ dir, healthServer }) => {
     const argsLog = `${dir}/notify-args.log`;
     Deno.env.set("NAS_NOTIFY_ARGS_LOG", argsLog);
     Deno.env.set("NAS_NOTIFY_EXIT", "0");
     Deno.env.set("NAS_NOTIFY_STDOUT", "default");
+    Deno.env.set("NAS_XDG_LOG", `${dir}/xdg-open.log`);
 
-    const { socketPath, messages, close } = await startBrokerStub((
-      requestId,
-    ) => ({ type: "ack", requestId, decision: "approve" }));
-    try {
-      await notifyPendingRequest({
-        ...TEST_NOTIFICATION,
-        backend: "auto",
-        brokerSocket: socketPath,
-      });
-    } finally {
-      await close();
-    }
+    await notifyPendingRequest({
+      backend: "auto",
+      sessionId: "sess_test",
+      requestId: "req_test",
+      target: { host: "api.openai.com", port: 443 },
+      uiPort: healthServer.port,
+    });
 
-    assertEquals(messages, [{ type: "approve", requestId: "req_test" }]);
     const notifyArgs = await Deno.readTextFile(argsLog);
     assertEquals(notifyArgs.includes("[nas] Pending network approval"), true);
   });
 });
 
+interface HealthServer {
+  port: number;
+  shutdown: () => Promise<void>;
+}
+
+function startHealthServer(): HealthServer {
+  const server = Deno.serve({ port: 0, onListen() {} }, (req) => {
+    if (new URL(req.url).pathname === "/api/health") {
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+  const port = server.addr.port;
+  return { port, shutdown: () => server.shutdown() };
+}
+
 async function withFakeCommands(
-  fn: (paths: { dir: string }) => Promise<void>,
+  fn: (ctx: { dir: string; healthServer: HealthServer }) => Promise<void>,
 ): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "nas-notify-test-" });
   const originalPath = Deno.env.get("PATH") ?? "";
   const originalNotifyArgsLog = Deno.env.get("NAS_NOTIFY_ARGS_LOG");
   const originalNotifyExit = Deno.env.get("NAS_NOTIFY_EXIT");
   const originalNotifyStdout = Deno.env.get("NAS_NOTIFY_STDOUT");
+  const originalXdgLog = Deno.env.get("NAS_XDG_LOG");
+  const healthServer = startHealthServer();
 
   try {
     await Deno.writeTextFile(
@@ -110,83 +118,28 @@ printf '%s' "\${NAS_NOTIFY_STDOUT:-}"
 exit "\${NAS_NOTIFY_EXIT:-0}"
 `,
     );
+    await Deno.writeTextFile(
+      `${dir}/xdg-open`,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "\${NAS_XDG_LOG:-}" ]]; then
+  printf '%s\n' "$@" > "\${NAS_XDG_LOG}"
+fi
+`,
+    );
     await Deno.chmod(`${dir}/notify-send`, 0o755);
+    await Deno.chmod(`${dir}/xdg-open`, 0o755);
     Deno.env.set("PATH", `${dir}:${originalPath}`);
-    await fn({ dir });
+    await fn({ dir, healthServer });
   } finally {
     Deno.env.set("PATH", originalPath);
     restoreEnv("NAS_NOTIFY_ARGS_LOG", originalNotifyArgsLog);
     restoreEnv("NAS_NOTIFY_EXIT", originalNotifyExit);
     restoreEnv("NAS_NOTIFY_STDOUT", originalNotifyStdout);
+    restoreEnv("NAS_XDG_LOG", originalXdgLog);
+    await healthServer.shutdown();
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
-}
-
-async function startBrokerStub(
-  ackFor: (requestId: string) => {
-    type: "ack";
-    requestId: string;
-    decision: "approve" | "deny";
-  },
-): Promise<{
-  socketPath: string;
-  messages: Array<{ type: string; requestId: string }>;
-  close: () => Promise<void>;
-}> {
-  const dir = await Deno.makeTempDir({ prefix: "nas-notify-broker-" });
-  const socketPath = `${dir}/broker.sock`;
-  const listener = Deno.listen({ transport: "unix", path: socketPath });
-  const messages: Array<{ type: string; requestId: string }> = [];
-  const acceptLoop = (async () => {
-    const conn = await listener.accept();
-    try {
-      const line = await readLine(conn);
-      if (!line) return;
-      const message = JSON.parse(line) as { type: string; requestId: string };
-      messages.push(message);
-      const ack = ackFor(message.requestId);
-      await conn.write(new TextEncoder().encode(JSON.stringify(ack) + "\n"));
-    } finally {
-      conn.close();
-    }
-  })();
-
-  return {
-    socketPath,
-    messages,
-    async close() {
-      listener.close();
-      await acceptLoop.catch(() => {});
-      await Deno.remove(dir, { recursive: true }).catch(() => {});
-    },
-  };
-}
-
-async function readLine(conn: Deno.Conn): Promise<string | null> {
-  const decoder = new TextDecoder();
-  const chunks: Uint8Array[] = [];
-  const buffer = new Uint8Array(1);
-  while (true) {
-    const bytesRead = await conn.read(buffer);
-    if (bytesRead === null) {
-      if (chunks.length === 0) return null;
-      break;
-    }
-    if (buffer[0] === 0x0a) break;
-    chunks.push(buffer.slice(0, bytesRead));
-  }
-  return decoder.decode(concatChunks(chunks));
-}
-
-function concatChunks(chunks: Uint8Array[]): Uint8Array {
-  const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const result = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
 }
 
 function restoreEnv(name: string, value: string | undefined): void {

@@ -1,9 +1,10 @@
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import {
   api,
   type HostExecPendingItem,
   type NetworkPendingItem,
 } from "../api.ts";
+import type { DeepLink } from "../App.tsx";
 
 // FIXME: バックエンドからHOMEを渡すようにして正確に判定する
 function shortenHome(path: string): string {
@@ -33,14 +34,25 @@ function CopyButton({ text }: { text: string }) {
 interface Props {
   networkItems: NetworkPendingItem[];
   hostExecItems: HostExecPendingItem[];
+  deepLink?: DeepLink | null;
 }
 
 const NETWORK_SCOPES = ["once", "host-port", "host"] as const;
 const HOSTEXEC_SCOPES = ["once", "capability"] as const;
 
-export function PendingTab({ networkItems, hostExecItems }: Props) {
+export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
   const [scopeMap, setScopeMap] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const highlightRef = useRef<HTMLTableRowElement>(null);
+
+  useEffect(() => {
+    if (highlightRef.current) {
+      highlightRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [deepLink]);
 
   const empty = networkItems.length === 0 && hostExecItems.length === 0;
 
@@ -130,8 +142,15 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
               {networkItems.map((item) => {
                 const key = `net:${item.sessionId}:${item.requestId}`;
                 const disabled = busy.has(key);
+                const isHighlighted = deepLink?.type === "network" &&
+                  deepLink.sessionId === item.sessionId &&
+                  deepLink.requestId === item.requestId;
                 return (
-                  <tr key={key}>
+                  <tr
+                    key={key}
+                    ref={isHighlighted ? highlightRef : undefined}
+                    style={isHighlighted ? highlightRowStyle : undefined}
+                  >
                     <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
                     <td style={tdStyle}>
                       <div style={scrollBox}>
@@ -205,8 +224,15 @@ export function PendingTab({ networkItems, hostExecItems }: Props) {
                 const key = `he:${item.sessionId}:${item.requestId}`;
                 const disabled = busy.has(key);
                 const cmd = [item.argv0, ...item.args].join(" ");
+                const isHighlighted = deepLink?.type === "hostexec" &&
+                  deepLink.sessionId === item.sessionId &&
+                  deepLink.requestId === item.requestId;
                 return (
-                  <tr key={key}>
+                  <tr
+                    key={key}
+                    ref={isHighlighted ? highlightRef : undefined}
+                    style={isHighlighted ? highlightRowStyle : undefined}
+                  >
                     <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
                     <td style={tdStyle}>{item.ruleId}</td>
                     <td style={tdStyle}>
@@ -357,4 +383,8 @@ const denyBtnStyle = {
   borderRadius: "4px",
   padding: "4px 12px",
   cursor: "pointer",
+};
+const highlightRowStyle = {
+  background: "rgba(56, 189, 248, 0.15)",
+  outline: "1px solid #38bdf8",
 };

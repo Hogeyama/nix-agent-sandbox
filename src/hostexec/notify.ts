@@ -5,14 +5,15 @@ import {
   type NotifyBackend,
   tryDesktopNotification,
 } from "../lib/notify_utils.ts";
+import { ensureUiDaemon } from "../ui/daemon.ts";
 
 export type HostExecNotifyBackend = NotifyBackend;
 export { closeNotification };
 
 export interface HostExecPendingNotification {
   backend: HostExecNotifyBackend;
-  brokerSocket: string;
   pending: HostExecPendingEntry;
+  uiPort?: number;
   signal?: AbortSignal;
 }
 
@@ -20,17 +21,16 @@ export async function notifyHostExecPendingRequest(
   notification: HostExecPendingNotification,
 ): Promise<void> {
   if (notification.backend === "off") return;
-  await tryDesktop(notification);
-}
-
-async function tryDesktop(
-  notification: HostExecPendingNotification,
-): Promise<boolean> {
+  const uiBaseUrl = await ensureUiDaemon(notification.uiPort);
+  const deepLinkUrl = new URL("/", uiBaseUrl);
+  deepLinkUrl.searchParams.set("type", "hostexec");
+  deepLinkUrl.searchParams.set("sessionId", notification.pending.sessionId);
+  deepLinkUrl.searchParams.set("requestId", notification.pending.requestId);
+  const deepLink = deepLinkUrl.href;
   const message = formatMessage(notification.pending);
-  return await tryDesktopNotification({
+  await tryDesktopNotification({
     ...message,
-    brokerSocket: notification.brokerSocket,
-    requestId: notification.pending.requestId,
+    uiUrl: deepLink,
     signal: notification.signal,
   });
 }
@@ -44,7 +44,7 @@ function formatMessage(
       `rule: ${pending.ruleId}`,
       `cmd: ${formatCommand(pending)}`,
       `cwd: ${pending.cwd}`,
-      "クリックでapprove / 閉じるとdeny",
+      "クリックでUIを開く",
     ].join("\n"),
   };
 }

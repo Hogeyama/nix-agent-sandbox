@@ -1,4 +1,4 @@
-import { useCallback, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { PendingTab } from "./components/PendingTab.tsx";
 import { ContainersTab } from "./components/ContainersTab.tsx";
 import { useSSE } from "./hooks/useSSE.ts";
@@ -15,6 +15,12 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "containers", label: "Containers" },
 ];
 
+export interface DeepLink {
+  type: "network" | "hostexec";
+  sessionId: string;
+  requestId: string;
+}
+
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>("pending");
   const [networkPending, setNetworkPending] = useState<NetworkPendingItem[]>(
@@ -23,6 +29,25 @@ export function App() {
   const [hostExecPending, setHostExecPending] = useState<
     HostExecPendingItem[]
   >([]);
+
+  const deepLink = useMemo<DeepLink | null>(() => {
+    const params = new URLSearchParams(globalThis.location?.search ?? "");
+    const type = params.get("type");
+    const sessionId = params.get("sessionId");
+    const requestId = params.get("requestId");
+    if (
+      (type === "network" || type === "hostexec") && sessionId && requestId
+    ) {
+      return { type, sessionId, requestId };
+    }
+    return null;
+  }, []);
+
+  useEffect(() => {
+    if (deepLink) {
+      setActiveTab("pending");
+    }
+  }, [deepLink]);
 
   const totalPending = networkPending.length + hostExecPending.length;
 
@@ -87,6 +112,7 @@ export function App() {
           <PendingTab
             networkItems={networkPending}
             hostExecItems={hostExecPending}
+            deepLink={deepLink}
           />
         )}
         {activeTab === "containers" && <ContainersTab />}

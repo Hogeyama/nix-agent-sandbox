@@ -1,5 +1,5 @@
 /**
- * Shared low-level utilities for desktop/tmux notification systems.
+ * Shared low-level utilities for desktop notification systems.
  * Used by both network/notify.ts and hostexec/notify.ts.
  */
 
@@ -11,18 +11,20 @@ export type NotifyBackend = "auto" | "desktop" | "off";
 // Only one notification is active at a time across the process.
 let lastDesktopNotificationId: string | null = null;
 let notifySendMissingWarned = false;
+let xdgOpenMissingWarned = false;
 
 export interface DesktopNotificationOptions {
   title: string;
   body: string;
-  brokerSocket: string;
-  requestId: string;
+  /** URL to open in the browser when the user clicks the notification. */
+  uiUrl: string;
   signal?: AbortSignal;
 }
 
 /**
- * Show a desktop notification via notify-send and send the user's
- * decision (approve/deny) to the broker socket.
+ * Show a desktop notification via notify-send.
+ * On click, opens the given UI URL in the browser.
+ * On dismiss, does nothing (request stays pending until timeout).
  */
 export async function tryDesktopNotification(
   options: DesktopNotificationOptions,
@@ -35,8 +37,7 @@ export async function tryDesktopNotification(
         "--print-id",
         "--wait",
         "--expire-time=0",
-        "--action=default=Allow",
-        "--action=deny=Deny",
+        "--action=default=Open",
         options.title,
         options.body,
       ],
@@ -69,21 +70,26 @@ export async function tryDesktopNotification(
 
     if (!status.success) return false;
 
-    if (action === "allow" || action === "default") {
-      await sendBrokerDecision(options.brokerSocket, {
-        type: "approve",
-        requestId: options.requestId,
-      });
+    if (action === "default") {
+      try {
+        await new Deno.Command("xdg-open", {
+          args: [options.uiUrl],
+          stdout: "null",
+          stderr: "null",
+        }).output();
+      } catch {
+        if (!xdgOpenMissingWarned) {
+          xdgOpenMissingWarned = true;
+          logWarn(
+            "[nas] xdg-open not found; cannot open UI in browser. " +
+              `Open manually: ${options.uiUrl}`,
+          );
+        }
+      }
       return true;
     }
-    if (action === "deny" || action === "") {
-      await sendBrokerDecision(options.brokerSocket, {
-        type: "deny",
-        requestId: options.requestId,
-      });
-      return true;
-    }
-    return status.success;
+    // Dismiss (empty action) → do nothing; request stays pending
+    return true;
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     lastDesktopNotificationId = null;
@@ -102,14 +108,6 @@ export async function closeNotification(): Promise<void> {
 
 export function isWSL(): boolean {
   return Boolean(Deno.env.get("WSL_DISTRO_NAME"));
-}
-
-export function hasDesktopSession(): boolean {
-  return Boolean(
-    Deno.env.get("DISPLAY") ||
-      Deno.env.get("WAYLAND_DISPLAY") ||
-      isWSL(),
-  );
 }
 
 // --- Internal helpers ---
@@ -148,62 +146,6 @@ async function readNotifySendOutput(
   const id = lines.length > 0 ? lines[0].trim() : null;
   const action = lines.length > 1 ? lines[lines.length - 1].trim() : "";
   return { id, action };
-}
-
-async function sendBrokerDecision(
-  socketPath: string,
-  message: { type: "approve"; requestId: string } | {
-    type: "deny";
-    requestId: string;
-  },
-): Promise<void> {
-  const conn = await Deno.connect({ transport: "unix", path: socketPath });
-  try {
-    await conn.write(
-      new TextEncoder().encode(JSON.stringify(message) + "\n"),
-    );
-    const response = await readJsonLine(conn);
-    if (!response) {
-      throw new Error("empty broker response");
-    }
-    const ack = JSON.parse(response) as {
-      type?: string;
-      decision?: string;
-      requestId?: string;
-    };
-    if (ack.type !== "ack" || ack.requestId !== message.requestId) {
-      throw new Error("invalid broker response");
-    }
-  } finally {
-    conn.close();
-  }
-}
-
-async function readJsonLine(conn: Deno.Conn): Promise<string | null> {
-  const decoder = new TextDecoder();
-  const chunks: Uint8Array[] = [];
-  const buffer = new Uint8Array(1);
-  while (true) {
-    const bytesRead = await conn.read(buffer);
-    if (bytesRead === null) {
-      if (chunks.length === 0) return null;
-      break;
-    }
-    if (buffer[0] === 0x0a) break;
-    chunks.push(buffer.slice(0, bytesRead));
-  }
-  return decoder.decode(concatChunks(chunks));
-}
-
-function concatChunks(chunks: Uint8Array[]): Uint8Array {
-  const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const result = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
 }
 
 async function closeDesktopNotification(id: string): Promise<void> {

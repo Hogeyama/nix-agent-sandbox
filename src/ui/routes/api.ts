@@ -20,6 +20,12 @@ import {
 export function createApiRoutes(ctx: UiDataContext): Hono {
   const api = new Hono();
 
+  // --- Health ---
+
+  api.get("/health", (c) => {
+    return c.json({ ok: true });
+  });
+
   // --- Network ---
 
   api.get("/network/pending", async (c) => {
