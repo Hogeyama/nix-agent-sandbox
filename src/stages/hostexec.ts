@@ -54,11 +54,13 @@ export class HostExecStage implements Stage {
     const argv0Names = new Set(config.rules.map((rule) => rule.match.argv0));
     for (const argv0 of argv0Names) {
       const linkPath = path.join(wrapperBinDir, argv0);
-      await Deno.remove(linkPath).catch((e) =>
-        logInfo(
-          `[nas] HostExec: failed to remove old symlink ${linkPath}: ${e}`,
-        )
-      );
+      await Deno.remove(linkPath).catch((e) => {
+        if (!(e instanceof Deno.errors.NotFound)) {
+          logInfo(
+            `[nas] HostExec: failed to remove old symlink ${linkPath}: ${e}`,
+          );
+        }
+      });
       await Deno.symlink("hostexec-wrapper.py", linkPath);
     }
 
