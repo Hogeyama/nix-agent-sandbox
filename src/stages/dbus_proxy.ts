@@ -1,7 +1,7 @@
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import type { DbusRuleConfig } from "../config/types.ts";
-import { logInfo } from "../log.ts";
+import { logInfo, logWarn } from "../log.ts";
 import {
   type DbusSessionPaths,
   gcDbusRuntime,
@@ -25,17 +25,22 @@ export class DbusProxyStage implements Stage {
       return ctx;
     }
 
+    const skip = (reason: string) => {
+      logWarn(reason);
+      return { ...ctx, dbusProxyEnabled: false };
+    };
+
     const uid = Deno.uid();
     if (uid === null) {
-      throw new Error(
-        "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID",
+      return skip(
+        "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID — skipping D-Bus proxy",
       );
     }
 
     const proxyBin = await resolveProxyBinary();
     if (!proxyBin) {
-      throw new Error(
-        "[nas] dbus.session.enable requires xdg-dbus-proxy on the host PATH",
+      return skip(
+        "[nas] xdg-dbus-proxy not found on PATH — skipping D-Bus proxy (install xdg-dbus-proxy to enable)",
       );
     }
 
@@ -44,13 +49,21 @@ export class DbusProxyStage implements Stage {
       uid,
     );
     if (!sourceAddress) {
-      throw new Error(
-        "[nas] dbus.session.enable requires DBUS_SESSION_BUS_ADDRESS or a reachable /run/user/$UID/bus",
+      return skip(
+        "[nas] DBUS_SESSION_BUS_ADDRESS not set and /run/user/$UID/bus not found — skipping D-Bus proxy",
       );
     }
 
-    validateSupportedSourceAddress(sourceAddress);
-    await ensureSourceReachable(sourceAddress);
+    try {
+      validateSupportedSourceAddress(sourceAddress);
+      await ensureSourceReachable(sourceAddress);
+    } catch (e) {
+      return skip(
+        `[nas] D-Bus proxy precondition failed — skipping: ${
+          (e as Error).message
+        }`,
+      );
+    }
 
     try {
       const runtimePaths = await resolveDbusRuntimePaths();

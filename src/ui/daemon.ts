@@ -165,11 +165,15 @@ async function startUiDaemon(
   // Fully detach via shell double-fork + setsid so the daemon survives
   // parent exit. Deno may kill direct child processes on shutdown, so we
   // launch through a shell subshell that backgrounds and exits immediately.
+  // Fall back to plain backgrounding if setsid is not available.
   const cmdLine = [execPath, ...args]
     .map((a) => `'${a.replaceAll("'", "'\\''")}'`)
     .join(" ");
+  const shellCmd = await hasSetsid()
+    ? `setsid ${cmdLine} </dev/null >/dev/null 2>&1 &`
+    : `(${cmdLine}) </dev/null >/dev/null 2>&1 &`;
   const child = new Deno.Command("sh", {
-    args: ["-c", `setsid ${cmdLine} </dev/null >/dev/null 2>&1 &`],
+    args: ["-c", shellCmd],
     stdin: "null",
     stdout: "null",
     stderr: "null",
@@ -187,4 +191,17 @@ async function startUiDaemon(
     daemonStatePath(),
     JSON.stringify(state, null, 2),
   );
+}
+
+async function hasSetsid(): Promise<boolean> {
+  try {
+    const result = await new Deno.Command("sh", {
+      args: ["-c", "command -v setsid"],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+    return result.success;
+  } catch {
+    return false;
+  }
 }

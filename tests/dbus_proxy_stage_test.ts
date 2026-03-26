@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import * as path from "@std/path";
 import {
   type Config,
@@ -95,7 +95,7 @@ Deno.test("DbusProxyStage: skips when disabled", async () => {
   assertEquals(result, ctx);
 });
 
-Deno.test("DbusProxyStage: fails when xdg-dbus-proxy is unavailable", async () => {
+Deno.test("DbusProxyStage: skips when xdg-dbus-proxy is unavailable", async () => {
   const uid = Deno.uid();
   if (uid === null) return;
 
@@ -114,11 +114,8 @@ Deno.test("DbusProxyStage: fails when xdg-dbus-proxy is unavailable", async () =
   const emptyBin = await Deno.makeTempDir({ prefix: "nas-empty-path-" });
   try {
     Deno.env.set("PATH", emptyBin);
-    await assertRejects(
-      () => new DbusProxyStage().execute(ctx),
-      Error,
-      "xdg-dbus-proxy",
-    );
+    const result = await new DbusProxyStage().execute(ctx);
+    assertEquals(result.dbusProxyEnabled, false);
   } finally {
     if (originalPath) {
       Deno.env.set("PATH", originalPath);

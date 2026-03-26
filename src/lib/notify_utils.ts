@@ -47,13 +47,7 @@ export async function tryDesktopNotification(
     }).spawn();
   } catch {
     // notify-send not found in PATH
-    if (isWSL() && !notifySendMissingWarned) {
-      notifySendMissingWarned = true;
-      logWarn(
-        "[nas] notify-send not found. Install the WSL shim for desktop notifications:\n" +
-          "      ln -s <repo>/scripts/notify-send-wsl ~/.local/bin/notify-send",
-      );
-    }
+    warnNotifySendMissing();
     return false;
   }
 
@@ -161,13 +155,7 @@ export async function tryCliActionNotification(
       stderr: "null",
     }).spawn();
   } catch {
-    if (isWSL() && !notifySendMissingWarned) {
-      notifySendMissingWarned = true;
-      logWarn(
-        "[nas] notify-send not found. Install the WSL shim for desktop notifications:\n" +
-          "      ln -s <repo>/scripts/notify-send-wsl ~/.local/bin/notify-send",
-      );
-    }
+    warnNotifySendMissing();
     return false;
   }
 
@@ -208,6 +196,16 @@ export async function tryCliActionNotification(
     options.signal?.removeEventListener("abort", onAbort);
     lastDesktopNotificationId = null;
   }
+}
+
+function warnNotifySendMissing(): void {
+  if (notifySendMissingWarned) return;
+  notifySendMissingWarned = true;
+  const hint = isWSL()
+    ? "Install the WSL shim for desktop notifications:\n" +
+      "      ln -s <repo>/scripts/notify-send-wsl ~/.local/bin/notify-send"
+    : "Install libnotify (e.g. apt install libnotify-bin) for desktop notifications.";
+  logWarn(`[nas] notify-send not found. ${hint}`);
 }
 
 // --- Internal helpers ---
