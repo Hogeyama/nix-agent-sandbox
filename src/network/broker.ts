@@ -140,15 +140,13 @@ export class SessionBroker {
     this.groups.clear();
     this.requestIndex.clear();
     await removePendingDir(this.paths, this.sessionId);
-    if (this.socketPath) {
-      await Deno.remove(this.socketPath).catch((e) =>
-        logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`)
-      );
-    } else {
-      await Deno.remove(brokerSocketPath(this.paths, this.sessionId)).catch(
-        (e) => logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`),
-      );
-    }
+    const sock = this.socketPath ??
+      brokerSocketPath(this.paths, this.sessionId);
+    await Deno.remove(sock).catch((e) => {
+      if (!(e instanceof Deno.errors.NotFound)) {
+        logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`);
+      }
+    });
   }
 
   async listPending(): Promise<PendingEntry[]> {

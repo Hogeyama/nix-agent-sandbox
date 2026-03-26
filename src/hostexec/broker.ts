@@ -136,9 +136,11 @@ export class HostExecBroker {
     await removeHostExecSessionRegistry(this.paths, this.sessionId);
     const target = this.socketPath ??
       hostExecBrokerSocketPath(this.paths, this.sessionId);
-    await Deno.remove(target).catch((e) =>
-      logInfo(`[nas] HostExecBroker: failed to remove socket: ${e}`)
-    );
+    await Deno.remove(target).catch((e) => {
+      if (!(e instanceof Deno.errors.NotFound)) {
+        logInfo(`[nas] HostExecBroker: failed to remove socket: ${e}`);
+      }
+    });
   }
 
   async listPending(): Promise<HostExecPendingEntry[]> {
