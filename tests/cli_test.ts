@@ -608,6 +608,189 @@ profiles:
   });
 });
 
+// --- audit サブコマンド ---
+
+Deno.test("CLI: audit with no logs shows empty message", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-empty-" });
+  try {
+    const auditDir = path.join(tmpDir, "audit");
+    await Deno.mkdir(auditDir, { recursive: true });
+    const result = await runNas(["audit", "--audit-dir", auditDir]);
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout.includes("No audit log entries found"), true);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: audit displays log entries in text format", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-text-" });
+  try {
+    const auditDir = path.join(tmpDir, "audit");
+    await Deno.mkdir(auditDir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const entry = {
+      id: "uuid-1",
+      timestamp: `${today}T10:00:00.000Z`,
+      domain: "network",
+      sessionId: "sess_abc",
+      requestId: "req_1",
+      decision: "allow",
+      reason: "allowlist match",
+      target: "example.com:443",
+    };
+    await Deno.writeTextFile(
+      path.join(auditDir, `${today}.jsonl`),
+      JSON.stringify(entry) + "\n",
+    );
+
+    const result = await runNas(["audit", "--audit-dir", auditDir]);
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout.includes("sess_abc"), true);
+    assertEquals(result.stdout.includes("network"), true);
+    assertEquals(result.stdout.includes("allow"), true);
+    assertEquals(result.stdout.includes("example.com:443"), true);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: audit --json outputs JSON array", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-json-" });
+  try {
+    const auditDir = path.join(tmpDir, "audit");
+    await Deno.mkdir(auditDir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const entry = {
+      id: "uuid-2",
+      timestamp: `${today}T11:00:00.000Z`,
+      domain: "hostexec",
+      sessionId: "sess_def",
+      requestId: "req_2",
+      decision: "deny",
+      reason: "no matching rule",
+      command: "rm -rf /",
+    };
+    await Deno.writeTextFile(
+      path.join(auditDir, `${today}.jsonl`),
+      JSON.stringify(entry) + "\n",
+    );
+
+    const result = await runNas(["audit", "--json", "--audit-dir", auditDir]);
+    assertEquals(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assertEquals(Array.isArray(parsed), true);
+    assertEquals(parsed.length, 1);
+    assertEquals(parsed[0].sessionId, "sess_def");
+    assertEquals(parsed[0].decision, "deny");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: audit --session filters by session", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-sess-" });
+  try {
+    const auditDir = path.join(tmpDir, "audit");
+    await Deno.mkdir(auditDir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const entry1 = {
+      id: "uuid-3",
+      timestamp: `${today}T10:00:00.000Z`,
+      domain: "network",
+      sessionId: "sess_aaa",
+      requestId: "req_3",
+      decision: "allow",
+      reason: "ok",
+      target: "a.com:80",
+    };
+    const entry2 = {
+      id: "uuid-4",
+      timestamp: `${today}T10:01:00.000Z`,
+      domain: "network",
+      sessionId: "sess_bbb",
+      requestId: "req_4",
+      decision: "deny",
+      reason: "blocked",
+      target: "b.com:80",
+    };
+    await Deno.writeTextFile(
+      path.join(auditDir, `${today}.jsonl`),
+      JSON.stringify(entry1) + "\n" + JSON.stringify(entry2) + "\n",
+    );
+
+    const result = await runNas([
+      "audit",
+      "--session",
+      "sess_aaa",
+      "--json",
+      "--audit-dir",
+      auditDir,
+    ]);
+    assertEquals(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assertEquals(parsed.length, 1);
+    assertEquals(parsed[0].sessionId, "sess_aaa");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: audit --domain filters by domain", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-dom-" });
+  try {
+    const auditDir = path.join(tmpDir, "audit");
+    await Deno.mkdir(auditDir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const entry1 = {
+      id: "uuid-5",
+      timestamp: `${today}T10:00:00.000Z`,
+      domain: "network",
+      sessionId: "sess_x",
+      requestId: "req_5",
+      decision: "allow",
+      reason: "ok",
+      target: "x.com:443",
+    };
+    const entry2 = {
+      id: "uuid-6",
+      timestamp: `${today}T10:01:00.000Z`,
+      domain: "hostexec",
+      sessionId: "sess_x",
+      requestId: "req_6",
+      decision: "deny",
+      reason: "blocked",
+      command: "ls",
+    };
+    await Deno.writeTextFile(
+      path.join(auditDir, `${today}.jsonl`),
+      JSON.stringify(entry1) + "\n" + JSON.stringify(entry2) + "\n",
+    );
+
+    const result = await runNas([
+      "audit",
+      "--domain",
+      "hostexec",
+      "--json",
+      "--audit-dir",
+      auditDir,
+    ]);
+    assertEquals(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assertEquals(parsed.length, 1);
+    assertEquals(parsed[0].domain, "hostexec");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: help includes audit subcommand", async () => {
+  const result = await runNas(["--help"]);
+  assertEquals(result.code, 0);
+  assertEquals(result.stdout.includes("audit"), true);
+  assertEquals(result.stdout.includes("監査ログを表示する"), true);
+});
+
 async function waitForHostExecPending(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   count: number,

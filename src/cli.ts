@@ -31,6 +31,7 @@ import { runContainerCommand } from "./cli/container.ts";
 import { runNetworkCommand } from "./cli/network.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
 import { runUiCommand } from "./cli/ui.ts";
+import { runAuditCommand } from "./cli/audit.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
 const VERSION = "0.1.0";
@@ -51,7 +52,8 @@ export async function main(args: string[]): Promise<void> {
   if (
     subcommand === "rebuild" || subcommand === "worktree" ||
     subcommand === "container" || subcommand === "network" ||
-    subcommand === "hostexec" || subcommand === "ui"
+    subcommand === "hostexec" || subcommand === "ui" ||
+    subcommand === "audit"
   ) {
     if (
       argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
@@ -104,6 +106,13 @@ export async function main(args: string[]): Promise<void> {
   if (subcommand === "ui") {
     await runUiCommand(
       removeFirstOccurrence(argsBeforeDashDash, "ui"),
+    );
+    return;
+  }
+
+  if (subcommand === "audit") {
+    await runAuditCommand(
+      removeFirstOccurrence(argsBeforeDashDash, "audit"),
     );
     return;
   }

@@ -58,7 +58,11 @@ export function findFirstNonFlagArg(args: string[]): string | undefined {
       i++;
       continue;
     }
-    if (arg === "--scope" || arg === "--runtime-dir" || arg === "--port") {
+    if (
+      arg === "--scope" || arg === "--runtime-dir" || arg === "--port" ||
+      arg === "--since" || arg === "--session" || arg === "--domain" ||
+      arg === "--audit-dir"
+    ) {
       i++;
       continue;
     }

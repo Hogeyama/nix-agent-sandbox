@@ -12,6 +12,7 @@ Usage:
   nas container clean
   nas network [pending|approve|deny|review|gc]
   nas ui [--port PORT] [--no-open] [--runtime-dir DIR]
+  nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする
@@ -20,6 +21,7 @@ Subcommands:
   network   network 承認キューと runtime の管理
   hostexec  hostexec 承認キューの管理
   ui        Web ダッシュボードを起動する
+  audit     監査ログを表示する
 
 Options:
   -h, --help      Show this help
@@ -57,6 +59,13 @@ HostExec options:
   deny            拒否する
   test            ルールマッチングをテストする
 
+Audit options:
+  --since YYYY-MM-DD    指定日以降のログを表示（デフォルト: 今日）
+  --session ID          セッション ID でフィルタ
+  --domain DOMAIN       ドメインでフィルタ（network|hostexec）
+  --json                JSON 形式で出力
+  --audit-dir DIR       監査ログディレクトリを指定
+
 Examples:
   nas                                    # Use default profile (interactive)
   nas copilot-nix                        # Use specific profile
@@ -74,6 +83,9 @@ Examples:
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
   nas worktree clean -f -B              # Force remove worktrees and branches
+  nas audit                              # Show today's audit logs
+  nas audit --since 2026-01-01           # Show logs since a date
+  nas audit --session sess_abc --json    # JSON output for a session
   nas my-profile -b feature/login       # Create worktree from feature/login
   nas --worktree @                      # Use default profile, base current HEAD
 
