@@ -1,0 +1,34 @@
+# レビュー設定
+# - ここにルールを足すだけでレビュー観点を拡張できる
+# - severity: critical (差し戻し), warning (推奨), info (参考)
+# - stop_when: ルールごとに設定可能。省略時は workflow.stop_when を使用
+#     no_critical_findings: critical がなければ OK
+#     no_findings: warning/info を含め findings が一切なければ OK
+
+workflow:
+  # 計画フェーズのループ上限（reject が続いた場合）
+  max_plan_iterations: 3
+  # 各コミットのレビューループ上限
+  max_review_iterations: 3
+  # コードレビューのデフォルト終了条件
+  stop_when: no_critical_findings
+
+rules:
+  - name: error-handling
+    severity: critical
+    stop_when: no_findings # エラーハンドリングは warning でも差し戻す
+    description: "エラーが握りつぶされていないか。catchブロックが空、エラーを無視するコードがないか"
+
+  - name: security
+    severity: critical
+    stop_when: no_findings # セキュリティは warning でも差し戻す
+    description: "SQLインジェクション、XSS、コマンドインジェクション等の脆弱性がないか"
+
+  - name: test-coverage
+    severity: warning
+    stop_when: no_findings # テスト不足の warning も差し戻す
+    description: "変更箇所に対応するテストがあるか。主要なロジックにテストが書かれているか"
+
+  - name: naming
+    severity: info
+    description: "変数名・関数名がプロジェクトの命名規則に従っているか"
