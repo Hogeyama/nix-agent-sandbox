@@ -41,6 +41,22 @@ export const api = {
     request("POST", `/api/containers/${encodeURIComponent(name)}/stop`),
   cleanContainers: () =>
     request<ContainerCleanResult>("POST", "/api/containers/clean"),
+
+  getAuditLogs: (params?: {
+    domain?: string;
+    session?: string;
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.domain) q.set("domain", params.domain);
+    if (params?.session) q.set("session", params.session);
+    if (params?.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return request<{ items: AuditLogEntry[] }>(
+      "GET",
+      `/api/audit${qs ? `?${qs}` : ""}`,
+    );
+  },
 };
 
 // Types matching backend responses
@@ -103,4 +119,20 @@ export interface ContainerCleanResult {
   removedContainers: string[];
   removedNetworks: string[];
   removedVolumes: string[];
+}
+
+export type AuditDomain = "network" | "hostexec";
+export type AuditDecision = "allow" | "deny";
+
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string;
+  domain: AuditDomain;
+  sessionId: string;
+  requestId: string;
+  decision: AuditDecision;
+  reason: string;
+  scope?: string;
+  target?: string;
+  command?: string;
 }

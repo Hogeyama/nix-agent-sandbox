@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { PendingTab } from "./components/PendingTab.tsx";
 import { ContainersTab } from "./components/ContainersTab.tsx";
+import { AuditTab } from "./components/AuditTab.tsx";
 import { useSSE } from "./hooks/useSSE.ts";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import type {
+  AuditLogEntry,
   HostExecPendingItem,
   NetworkPendingItem,
 } from "./api.ts";
 
-type TabId = "pending" | "containers";
+type TabId = "pending" | "containers" | "audit";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "pending", label: "Pending" },
   { id: "containers", label: "Containers" },
+  { id: "audit", label: "Audit" },
 ];
 
 export interface DeepLink {
@@ -29,6 +32,7 @@ export function App() {
   const [hostExecPending, setHostExecPending] = useState<
     HostExecPendingItem[]
   >([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
 
   const deepLink = useMemo<DeepLink | null>(() => {
     const params = new URLSearchParams(globalThis.location?.search ?? "");
@@ -62,6 +66,9 @@ export function App() {
           break;
         case "hostexec:pending":
           setHostExecPending(d.items as HostExecPendingItem[]);
+          break;
+        case "audit:logs":
+          setAuditLogs(d.items as AuditLogEntry[]);
           break;
       }
     },
@@ -116,6 +123,7 @@ export function App() {
           />
         )}
         {activeTab === "containers" && <ContainersTab />}
+        {activeTab === "audit" && <AuditTab items={auditLogs} />}
       </div>
     </div>
   );
