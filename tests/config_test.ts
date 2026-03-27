@@ -751,3 +751,82 @@ Deno.test("validateConfig: ui negative idle-timeout rejects", () => {
     "ui:",
   );
 });
+
+// ---------------------------------------------------------------------------
+// Error aggregation across profiles and fields
+// ---------------------------------------------------------------------------
+
+Deno.test("validateConfig: multiple errors in one profile are all reported", () => {
+  const err = assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            // deno-lint-ignore no-explicit-any
+            network: { allowlist: "not-an-array" as any },
+            "extra-mounts": [{ dst: "/tmp/dst", mode: "invalid" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+  );
+  const msg = (err as ConfigValidationError).message;
+  assertEquals(msg.includes("network.allowlist must be a list"), true);
+  assertEquals(msg.includes("extra-mounts[0].src"), true);
+});
+
+Deno.test("validateConfig: errors from multiple profiles are reported together", () => {
+  const err = assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          alpha: { agent: "invalid" },
+          beta: { agent: "invalid" },
+        },
+      }),
+    ConfigValidationError,
+  );
+  const msg = (err as ConfigValidationError).message;
+  assertEquals(
+    msg.includes('profile "alpha"'),
+    true,
+    "alpha error missing",
+  );
+  assertEquals(
+    msg.includes('profile "beta"'),
+    true,
+    "beta error missing",
+  );
+});
+
+Deno.test("validateConfig: hostexec rules errors are aggregated across rules", () => {
+  const err = assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            hostexec: {
+              rules: [
+                { id: "", match: { argv0: "git" } },
+                { id: "", match: { argv0: "curl" } },
+              ],
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+  );
+  const msg = (err as ConfigValidationError).message;
+  assertEquals(
+    msg.includes("hostexec.rules[0]"),
+    true,
+    "rules[0] error missing",
+  );
+  assertEquals(
+    msg.includes("hostexec.rules[1]"),
+    true,
+    "rules[1] error missing",
+  );
+});

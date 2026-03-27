@@ -497,7 +497,7 @@ function hostexecRuleSchema(
   }));
 }
 
-export function hostexecSchema(profileName: string) {
+export function hostexecSchema(_profileName: string) {
   return z.object(
     {
       prompt: hostexecPromptSchema,
@@ -508,21 +508,21 @@ export function hostexecSchema(profileName: string) {
   ).default({}).transform((val) => {
     const secretNames = new Set(Object.keys(val.secrets));
     const rules: HostExecRule[] = [];
+    const errors: string[] = [];
 
     for (const [index, rawEntry] of val.rules.entries()) {
-      const prefix = `profile "${profileName}": hostexec.rules[${index}]`;
+      const prefix = `hostexec.rules[${index}]`;
       const ruleSchema = hostexecRuleSchema(prefix, secretNames);
-      try {
-        rules.push(ruleSchema.parse(rawEntry));
-      } catch (err) {
-        if (err instanceof ConfigValidationError) throw err;
-        if (err instanceof z.ZodError) {
-          throw new ConfigValidationError(
-            `${prefix}.${formatZodError(err)}`,
-          );
-        }
-        throw err;
+      const result = ruleSchema.safeParse(rawEntry);
+      if (result.success) {
+        rules.push(result.data);
+      } else {
+        errors.push(`${prefix}.${formatZodError(result.error)}`);
       }
+    }
+
+    if (errors.length > 0) {
+      throw new ConfigValidationError(errors.join("\n  "));
     }
 
     return {
@@ -591,9 +591,12 @@ export function profileSchema(profileName: string) {
 // ---------------------------------------------------------------------------
 
 export function formatZodError(err: z.ZodError): string {
-  const issue = err.issues[0];
-  const path = formatPath(issue.path);
-  return path ? `${path} ${issue.message}` : issue.message;
+  return err.issues
+    .map((issue) => {
+      const path = formatPath(issue.path);
+      return path ? `${path} ${issue.message}` : issue.message;
+    })
+    .join("\n  ");
 }
 
 function formatPath(segments: (string | number)[]): string {

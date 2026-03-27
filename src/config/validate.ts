@@ -26,19 +26,34 @@ export function validateConfig(raw: RawConfig): Config {
     throw new ConfigValidationError("profiles must contain at least one entry");
   }
 
+  const errors: string[] = [];
+
   let ui;
   try {
     ui = uiSchema.parse(raw.ui ?? {});
   } catch (err) {
     if (err instanceof ZodError) {
-      throw new ConfigValidationError(`ui: ${formatZodError(err)}`);
+      errors.push(`ui: ${formatZodError(err)}`);
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   const profiles: Record<string, Profile> = {};
   for (const [name, rawProfile] of Object.entries(raw.profiles)) {
-    profiles[name] = parseProfile(name, rawProfile);
+    try {
+      profiles[name] = parseProfile(name, rawProfile);
+    } catch (err) {
+      if (err instanceof ConfigValidationError) {
+        errors.push(err.message);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new ConfigValidationError(errors.join("\n"));
   }
 
   if (raw.default && !(raw.default in profiles)) {
@@ -49,7 +64,7 @@ export function validateConfig(raw: RawConfig): Config {
 
   return {
     default: raw.default,
-    ui,
+    ui: ui!,
     profiles,
   };
 }
@@ -68,7 +83,11 @@ function parseProfile(name: string, raw: RawProfile): Profile {
     warnOverlappingHostExecRules(name, parsed.hostexec.rules);
     return parsed;
   } catch (err) {
-    if (err instanceof ConfigValidationError) throw err;
+    if (err instanceof ConfigValidationError) {
+      throw new ConfigValidationError(
+        `profile "${name}": ${err.message}`,
+      );
+    }
     if (err instanceof ZodError) {
       throw new ConfigValidationError(
         `profile "${name}": ${formatZodError(err)}`,
