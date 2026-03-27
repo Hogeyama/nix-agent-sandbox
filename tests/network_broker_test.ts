@@ -256,6 +256,110 @@ Deno.test("SessionBroker: allowlist=sub.example.com, denylist=*.example.com deni
   }
 });
 
+Deno.test("SessionBroker: denied target is cached as recent-deny", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: [],
+    denylist: [],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  await broker.start(socketPath);
+  try {
+    // Send an authorize request that goes to prompt, then deny it
+    const authorizePromise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_deny_cache", "cached.example.com", 443),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_deny_cache",
+    });
+    const firstDecision = await authorizePromise;
+    assertEquals(firstDecision.decision, "deny");
+    assertEquals(firstDecision.reason, "denied-by-user");
+
+    // Second request to the same target should be immediately denied
+    const secondDecision = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_deny_cache_2", "cached.example.com", 443),
+    );
+    assertEquals(secondDecision.decision, "deny");
+    assertEquals(secondDecision.reason, "recent-deny");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("SessionBroker: negative cache expires after TTL", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: [],
+    denylist: [],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+    negativeCacheTtlMs: 50,
+  });
+  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  await broker.start(socketPath);
+  try {
+    // Deny a request to populate the negative cache
+    const authorizePromise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_ttl_1", "ttl.example.com", 443),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_ttl_1",
+    });
+    await authorizePromise;
+
+    // Immediately should get recent-deny
+    const cachedDecision = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_ttl_2", "ttl.example.com", 443),
+    );
+    assertEquals(cachedDecision.decision, "deny");
+    assertEquals(cachedDecision.reason, "recent-deny");
+
+    // Wait for TTL to expire, then should go to prompt again
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const afterTtlPromise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_ttl_3", "ttl.example.com", 443),
+    );
+    // If the cache expired, the request goes to prompt (pending)
+    const pending = await waitForPending(socketPath);
+    assertEquals(pending.items.length, 1);
+
+    // Clean up: approve to resolve the pending request
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_ttl_3",
+    });
+    const decision = await afterTtlPromise;
+    assertEquals(decision.decision, "allow");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
+
 async function waitForPending(
   socketPath: string,
 ): Promise<{ type: "pending"; items: PendingEntry[] }> {

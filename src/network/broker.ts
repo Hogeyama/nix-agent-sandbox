@@ -1,3 +1,4 @@
+import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
 import { logInfo } from "../log.ts";
 import {
   type ApprovalScope,
@@ -35,6 +36,8 @@ interface BrokerOptions {
   uiEnabled?: boolean;
   uiPort?: number;
   uiIdleTimeout?: number;
+  /** Override negative-cache TTL for testing. Default: 30 000 ms. */
+  negativeCacheTtlMs?: number;
 }
 
 interface PendingWaiter {
@@ -81,7 +84,7 @@ export class SessionBroker {
   private closing = false;
   private readonly approvedTargets = new Set<string>();
   private readonly approvedHosts = new Set<string>();
-  private readonly negativeCache = new Map<string, number>();
+  private readonly negativeCache: TtlLruCache<string, true>;
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestIndex = new Map<string, string>();
   private acceptLoop: Promise<void> | null = null;
@@ -99,6 +102,10 @@ export class SessionBroker {
     this.uiEnabled = options.uiEnabled;
     this.uiPort = options.uiPort;
     this.uiIdleTimeout = options.uiIdleTimeout;
+    this.negativeCache = new TtlLruCache<string, true>({
+      maxSize: 1024,
+      ttlMs: options.negativeCacheTtlMs ?? 30_000,
+    });
   }
 
   async start(socketPath: string): Promise<void> {
@@ -139,6 +146,7 @@ export class SessionBroker {
     await Promise.allSettled(this.notificationTasks);
     this.groups.clear();
     this.requestIndex.clear();
+    this.negativeCache.clear();
     await removePendingDir(this.paths, this.sessionId);
     const sock = this.socketPath ??
       brokerSocketPath(this.paths, this.sessionId);
@@ -222,8 +230,7 @@ export class SessionBroker {
       return denyDecision(message.requestId, "denylist");
     }
 
-    const denyUntil = this.negativeCache.get(targetCacheKey);
-    if (denyUntil && denyUntil > Date.now()) {
+    if (this.negativeCache.get(targetCacheKey) !== undefined) {
       return denyDecision(message.requestId, "recent-deny");
     }
 
@@ -346,7 +353,7 @@ export class SessionBroker {
     group.notificationAbort.abort();
     await closeNotification();
     if (outcome === "deny") {
-      this.negativeCache.set(group.targetKey, Date.now() + 30_000);
+      this.negativeCache.set(group.targetKey, true);
     }
 
     for (const [requestId, request] of group.requests.entries()) {
