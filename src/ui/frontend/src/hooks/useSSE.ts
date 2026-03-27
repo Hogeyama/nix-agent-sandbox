@@ -16,7 +16,7 @@ export function useSSE(url: string, onEvent: SSEHandler): void {
 
       es = new EventSource(url);
 
-      const events = ["network:pending", "hostexec:pending", "sessions"];
+      const events = ["network:pending", "hostexec:pending", "sessions", "audit:logs"];
       for (const eventName of events) {
         es.addEventListener(eventName, (e: MessageEvent) => {
           try {
