@@ -38,10 +38,14 @@ import type { DockerContainerDetails } from "../docker/client.ts";
 import { isNasManagedContainer } from "../docker/nas_resources.ts";
 import { cleanNasContainers } from "../container_clean.ts";
 import type { ContainerCleanResult } from "../container_clean.ts";
+import { queryAuditLogs, resolveAuditDir } from "../audit/store.ts";
+import type { AuditLogEntry } from "../audit/types.ts";
+import type { AuditLogFilter } from "../audit/types.ts";
 
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
   hostExecPaths: HostExecRuntimePaths;
+  auditDir: string;
 }
 
 export async function createDataContext(
@@ -65,7 +69,8 @@ export async function createDataContext(
       `[nas] GC: removed ${netGc.removedSessions.length} network session(s), ${hexGc.removedSessions.length} hostexec session(s)`,
     );
   }
-  return { networkPaths, hostExecPaths };
+  const auditDir = resolveAuditDir();
+  return { networkPaths, hostExecPaths, auditDir };
 }
 
 // --- Network ---
@@ -219,4 +224,18 @@ export async function stopContainer(name: string): Promise<void> {
 
 export async function cleanContainers(): Promise<ContainerCleanResult> {
   return await cleanNasContainers();
+}
+
+// --- Audit ---
+
+export async function getAuditLogs(
+  ctx: UiDataContext,
+  filter: AuditLogFilter = {},
+  limit?: number,
+): Promise<AuditLogEntry[]> {
+  const entries = await queryAuditLogs(filter, ctx.auditDir);
+  if (limit !== undefined && limit > 0) {
+    return entries.slice(-limit);
+  }
+  return entries;
 }

@@ -27,7 +27,7 @@ function createTestContext(dir: string): UiDataContext {
     brokersDir: `${dir}/hostexec/brokers`,
     wrappersDir: `${dir}/hostexec/wrappers`,
   };
-  return { networkPaths, hostExecPaths };
+  return { networkPaths, hostExecPaths, auditDir: `${dir}/audit` };
 }
 
 Deno.test("GET /network/pending returns items array", async () => {
@@ -253,6 +253,191 @@ Deno.test("GET /network/pending with pending entry returns it", async () => {
     assertEquals(body.items.length, 1);
     assertEquals(body.items[0].requestId, requestId);
     assertEquals(body.items[0].target.host, "example.com");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("GET /audit returns empty items when no logs exist", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+  try {
+    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Hono();
+    app.route("/api", api);
+
+    const res = await app.request("/api/audit");
+    assertEquals(res.status, 200);
+    const body = await res.json();
+    assertEquals(Array.isArray(body.items), true);
+    assertEquals(body.items.length, 0);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("GET /audit returns audit log entries", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+  try {
+    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    // Write a JSONL audit log file
+    const entry = {
+      id: "test-id-001",
+      timestamp: "2026-03-28T12:00:00Z",
+      domain: "network",
+      sessionId: "sess-001",
+      requestId: "req-001",
+      decision: "allow",
+      reason: "allowlist match",
+      target: "example.com:443",
+    };
+    await Deno.writeTextFile(
+      `${tmpDir}/audit/2026-03-28.jsonl`,
+      JSON.stringify(entry) + "\n",
+    );
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Hono();
+    app.route("/api", api);
+
+    const res = await app.request("/api/audit");
+    assertEquals(res.status, 200);
+    const body = await res.json();
+    assertEquals(body.items.length, 1);
+    assertEquals(body.items[0].id, "test-id-001");
+    assertEquals(body.items[0].domain, "network");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("GET /audit with invalid domain returns 400", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+  try {
+    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Hono();
+    app.route("/api", api);
+
+    const res = await app.request("/api/audit?domain=invalid");
+    assertEquals(res.status, 400);
+    const body = await res.json();
+    assertEquals(body.error, 'Invalid domain: must be "network" or "hostexec"');
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("GET /audit with invalid limit returns 400", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+  try {
+    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Hono();
+    app.route("/api", api);
+
+    const res = await app.request("/api/audit?limit=abc");
+    assertEquals(res.status, 400);
+    const body = await res.json();
+    assertEquals(body.error, "Invalid limit: must be a positive integer");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("GET /audit respects limit parameter", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+  try {
+    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    // Write 3 entries
+    const entries = [1, 2, 3].map((i) =>
+      JSON.stringify({
+        id: `id-${i}`,
+        timestamp: `2026-03-28T12:0${i}:00Z`,
+        domain: "network",
+        sessionId: "sess-001",
+        requestId: `req-${i}`,
+        decision: "allow",
+        reason: "test",
+      })
+    );
+    await Deno.writeTextFile(
+      `${tmpDir}/audit/2026-03-28.jsonl`,
+      entries.join("\n") + "\n",
+    );
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Hono();
+    app.route("/api", api);
+
+    const res = await app.request("/api/audit?limit=2");
+    assertEquals(res.status, 200);
+    const body = await res.json();
+    assertEquals(body.items.length, 2);
+    // Should return the last 2 entries
+    assertEquals(body.items[0].id, "id-2");
+    assertEquals(body.items[1].id, "id-3");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("GET /audit filters by session parameter", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+  try {
+    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    const entries = [
+      JSON.stringify({
+        id: "id-1",
+        timestamp: "2026-03-28T12:00:00Z",
+        domain: "network",
+        sessionId: "sess-001",
+        requestId: "req-1",
+        decision: "allow",
+        reason: "test",
+      }),
+      JSON.stringify({
+        id: "id-2",
+        timestamp: "2026-03-28T12:01:00Z",
+        domain: "network",
+        sessionId: "sess-002",
+        requestId: "req-2",
+        decision: "deny",
+        reason: "test",
+      }),
+    ];
+    await Deno.writeTextFile(
+      `${tmpDir}/audit/2026-03-28.jsonl`,
+      entries.join("\n") + "\n",
+    );
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Hono();
+    app.route("/api", api);
+
+    const res = await app.request("/api/audit?session=sess-001");
+    assertEquals(res.status, 200);
+    const body = await res.json();
+    assertEquals(body.items.length, 1);
+    assertEquals(body.items[0].sessionId, "sess-001");
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }

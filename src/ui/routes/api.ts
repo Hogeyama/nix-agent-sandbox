@@ -10,12 +10,14 @@ import {
   cleanContainers,
   denyHostExec,
   denyNetwork,
+  getAuditLogs,
   getHostExecPending,
   getNasContainers,
   getNetworkPending,
   getSessions,
   stopContainer,
 } from "../data.ts";
+import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
 
 export function createApiRoutes(ctx: UiDataContext): Hono {
   const api = new Hono();
@@ -140,6 +142,47 @@ export function createApiRoutes(ctx: UiDataContext): Hono {
     try {
       const result = await cleanContainers();
       return c.json(result);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  // --- Audit ---
+
+  api.get("/audit", async (c) => {
+    try {
+      const since = c.req.query("since");
+      const session = c.req.query("session");
+      const domain = c.req.query("domain");
+      const limitStr = c.req.query("limit");
+
+      // Validate domain parameter
+      if (domain && domain !== "network" && domain !== "hostexec") {
+        return c.json(
+          { error: 'Invalid domain: must be "network" or "hostexec"' },
+          400,
+        );
+      }
+
+      // Validate limit parameter
+      let limit: number | undefined;
+      if (limitStr) {
+        limit = parseInt(limitStr, 10);
+        if (isNaN(limit) || limit < 1) {
+          return c.json(
+            { error: "Invalid limit: must be a positive integer" },
+            400,
+          );
+        }
+      }
+
+      const filter: AuditLogFilter = {};
+      if (since) filter.startDate = since;
+      if (session) filter.sessionId = session;
+      if (domain) filter.domain = domain as AuditDomain;
+
+      const items = await getAuditLogs(ctx, filter, limit);
+      return c.json({ items });
     } catch (e) {
       return c.json({ error: (e as Error).message }, 500);
     }

@@ -4,7 +4,12 @@
 
 import { Hono } from "hono";
 import type { UiDataContext } from "../data.ts";
-import { getHostExecPending, getNetworkPending, getSessions } from "../data.ts";
+import {
+  getAuditLogs,
+  getHostExecPending,
+  getNetworkPending,
+  getSessions,
+} from "../data.ts";
 
 export function createSseRoutes(ctx: UiDataContext): Hono {
   const app = new Hono();
@@ -33,6 +38,7 @@ export function createSseRoutes(ctx: UiDataContext): Hono {
         let prevNetworkJson = "";
         let prevHostExecJson = "";
         let prevSessionsJson = "";
+        let prevAuditJson = "";
 
         async function poll(): Promise<void> {
           if (closed) return;
@@ -61,6 +67,18 @@ export function createSseRoutes(ctx: UiDataContext): Hono {
             if (sessionsJson !== prevSessionsJson) {
               prevSessionsJson = sessionsJson;
               send("sessions", sessions);
+            }
+
+            // Audit logs — send delta since last poll
+            try {
+              const auditLogs = await getAuditLogs(ctx);
+              const auditJson = JSON.stringify(auditLogs);
+              if (auditJson !== prevAuditJson) {
+                prevAuditJson = auditJson;
+                send("audit:logs", { items: auditLogs });
+              }
+            } catch {
+              // ignore audit log read errors
             }
           } catch {
             // ignore polling errors
