@@ -4,6 +4,7 @@ import type { ExecutionContext } from "../pipeline/context.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import { logInfo } from "../log.ts";
 import { HostExecBroker } from "../hostexec/broker.ts";
+import { resolveAuditDir } from "../audit/store.ts";
 import {
   hostExecBrokerSocketPath,
   type HostExecRuntimePaths,
@@ -74,6 +75,7 @@ export class HostExecStage implements Stage {
       uiEnabled: ctx.config.ui.enable,
       uiPort: ctx.config.ui.port,
       uiIdleTimeout: ctx.config.ui.idleTimeout,
+      auditDir: resolveAuditDir(),
     });
     await broker.start(socketPath);
     this.broker = broker;

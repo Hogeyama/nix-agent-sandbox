@@ -1,5 +1,6 @@
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
+import { resolveAuditDir } from "../audit/store.ts";
 import {
   dockerContainerExists,
   dockerIsRunning,
@@ -82,6 +83,7 @@ export class ProxyStage implements Stage {
       uiEnabled: ctx.config.ui.enable,
       uiPort: ctx.config.ui.port,
       uiIdleTimeout: ctx.config.ui.idleTimeout,
+      auditDir: resolveAuditDir(),
     });
     await broker.start(brokerSocket);
     this.broker = broker;
