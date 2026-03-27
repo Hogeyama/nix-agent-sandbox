@@ -1,5 +1,7 @@
 import * as path from "@std/path";
 import { logInfo } from "../log.ts";
+import { appendAuditLog } from "../audit/store.ts";
+import type { AuditLogEntry } from "../audit/types.ts";
 import type {
   HostExecConfig,
   HostExecPromptScope,
@@ -37,6 +39,8 @@ interface HostExecBrokerOptions {
   uiEnabled?: boolean;
   uiPort?: number;
   uiIdleTimeout?: number;
+  /** Directory for audit JSONL logs. If set, decisions are recorded. */
+  auditDir?: string;
 }
 
 interface PendingWaiter {
@@ -73,6 +77,7 @@ export class HostExecBroker {
   private readonly uiEnabled?: boolean;
   private readonly uiPort?: number;
   private readonly uiIdleTimeout?: number;
+  private readonly auditDir?: string;
   private readonly secretStore: SecretStore;
   private socketPath: string | null = null;
   private listener: Deno.Listener | null = null;
@@ -93,6 +98,7 @@ export class HostExecBroker {
     this.uiEnabled = options.uiEnabled;
     this.uiPort = options.uiPort;
     this.uiIdleTimeout = options.uiIdleTimeout;
+    this.auditDir = options.auditDir;
     this.secretStore = new SecretStore(this.config.secrets);
   }
 
@@ -198,7 +204,14 @@ export class HostExecBroker {
     if (!resolved) {
       return { type: "fallback", requestId: message.requestId };
     }
+    const commandStr = [message.argv0, ...message.args].join(" ");
     if (resolved.rule.approval === "deny") {
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        "policy-deny",
+        commandStr,
+      );
       return {
         type: "error",
         requestId: message.requestId,
@@ -213,12 +226,22 @@ export class HostExecBroker {
       !this.config.prompt.enable
     ) {
       if (resolved.rule.approval === "prompt" && !this.config.prompt.enable) {
+        await this.recordAudit(
+          message.requestId,
+          "deny",
+          "prompt-disabled",
+          commandStr,
+        );
         return {
           type: "error",
           requestId: message.requestId,
           message: "hostexec prompt is disabled",
         };
       }
+      const reason = resolved.rule.approval === "allow"
+        ? "rule-allow"
+        : "approved-cached";
+      await this.recordAudit(message.requestId, "allow", reason, commandStr);
       return await this.runResolved(message, resolved);
     }
 
@@ -339,9 +362,17 @@ export class HostExecBroker {
     for (const [requestId, pending] of group.requests.entries()) {
       this.requestToApprovalKey.delete(requestId);
       await removeHostExecPendingEntry(this.paths, this.sessionId, requestId);
+      const commandStr = [pending.request.argv0, ...pending.request.args].join(
+        " ",
+      );
       const waiter = group.waiters.get(requestId);
       if (!waiter) continue;
       if (mode === "deny") {
+        const reason = denyResponse?.type === "error" &&
+            denyResponse.message === "pending approval timed out"
+          ? "prompt-timeout"
+          : "denied-by-user";
+        await this.recordAudit(requestId, "deny", reason, commandStr);
         waiter.resolve({
           ...(denyResponse ?? {
             type: "error",
@@ -352,6 +383,12 @@ export class HostExecBroker {
         } as HostExecBrokerResponse);
         continue;
       }
+      await this.recordAudit(
+        requestId,
+        "allow",
+        "approved-by-user",
+        commandStr,
+      );
       try {
         waiter.resolve(
           await this.runResolved(pending.request, pending.resolved),
@@ -370,6 +407,26 @@ export class HostExecBroker {
     const approvalKey = this.requestToApprovalKey.get(requestId);
     if (!approvalKey) return null;
     return this.groups.get(approvalKey) ?? null;
+  }
+
+  private async recordAudit(
+    requestId: string,
+    decision: "allow" | "deny",
+    reason: string,
+    command: string,
+  ): Promise<void> {
+    if (!this.auditDir) return;
+    const entry: AuditLogEntry = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      domain: "hostexec",
+      sessionId: this.sessionId,
+      requestId,
+      decision,
+      reason,
+      command,
+    };
+    await appendAuditLog(entry, this.auditDir);
   }
 
   private async resolveRequest(

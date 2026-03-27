@@ -6,9 +6,11 @@ import type {
   PendingEntry,
 } from "../src/network/protocol.ts";
 import { resolveNetworkRuntimePaths } from "../src/network/registry.ts";
+import { queryAuditLogs } from "../src/audit/store.ts";
 
 Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const auditDir = await Deno.makeTempDir({ prefix: "nas-broker-audit-" });
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -19,6 +21,7 @@ Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => 
     timeoutSeconds: 30,
     defaultScope: "host-port",
     notify: "off",
+    auditDir,
   });
   const socketPath = `${paths.brokersDir}/sess_test.sock`;
   await broker.start(socketPath);
@@ -29,14 +32,23 @@ Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => 
     );
     assertEquals(response.decision, "allow");
     assertEquals(response.reason, "allowlist");
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].decision, "allow");
+    assertEquals(logs[0].reason, "allowlist");
+    assertEquals(logs[0].target, "example.com:443");
+    assertEquals(logs[0].requestId, "req_1");
   } finally {
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
   }
 });
 
 Deno.test("SessionBroker: pending request resumes after approve", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const auditDir = await Deno.makeTempDir({ prefix: "nas-broker-audit-" });
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -47,6 +59,7 @@ Deno.test("SessionBroker: pending request resumes after approve", async () => {
     timeoutSeconds: 30,
     defaultScope: "host-port",
     notify: "off",
+    auditDir,
   });
   const socketPath = `${paths.brokersDir}/sess_test.sock`;
   await broker.start(socketPath);
@@ -65,9 +78,16 @@ Deno.test("SessionBroker: pending request resumes after approve", async () => {
     const decision = await authorizePromise;
     assertEquals(decision.decision, "allow");
     assertEquals(decision.scope, "host-port");
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].decision, "allow");
+    assertEquals(logs[0].reason, "approved-by-user");
+    assertEquals(logs[0].target, "api.openai.com:443");
   } finally {
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
   }
 });
 
@@ -165,6 +185,7 @@ function authorize(
 
 Deno.test("SessionBroker: denylist hit returns deny immediately", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const auditDir = await Deno.makeTempDir({ prefix: "nas-broker-audit-" });
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -175,6 +196,7 @@ Deno.test("SessionBroker: denylist hit returns deny immediately", async () => {
     timeoutSeconds: 30,
     defaultScope: "host-port",
     notify: "off",
+    auditDir,
   });
   const socketPath = `${paths.brokersDir}/sess_test.sock`;
   await broker.start(socketPath);
@@ -185,9 +207,16 @@ Deno.test("SessionBroker: denylist hit returns deny immediately", async () => {
     );
     assertEquals(response.decision, "deny");
     assertEquals(response.reason, "denylist");
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].decision, "deny");
+    assertEquals(logs[0].reason, "denylist");
+    assertEquals(logs[0].target, "evil.com:443");
   } finally {
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
   }
 });
 

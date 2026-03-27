@@ -14,6 +14,7 @@ import type {
   HostExecBrokerResponse,
   PendingListResponse,
 } from "../src/hostexec/types.ts";
+import { queryAuditLogs } from "../src/audit/store.ts";
 
 type HostExecConfigOverrides = Omit<Partial<HostExecConfig>, "prompt"> & {
   prompt?: Partial<HostExecConfig["prompt"]>;
@@ -78,6 +79,7 @@ Deno.test("HostExecBroker: falls back when no rule matches", async () => {
 
 Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const auditDir = await Deno.makeTempDir({ prefix: "nas-hostexec-audit-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const workspace = await Deno.makeTempDir({
     prefix: "nas-hostexec-workspace-",
@@ -90,6 +92,7 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
     profileName: "test",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
     hostexec: makeConfig({
       secrets: {
         test_token: { from: "env:HOSTEXEC_TEST_TOKEN", required: true },
@@ -138,17 +141,26 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
       throw new Error(`unexpected response type: ${response.type}`);
     }
     assertEquals(response.stdout.trim(), "[REDACTED]");
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].decision, "allow");
+    assertEquals(logs[0].reason, "approved-by-user");
+    assertEquals(logs[0].requestId, "req_approve");
+    assertMatch(logs[0].command!, /^deno eval /);
   } finally {
     if (oldToken !== undefined) Deno.env.set("HOSTEXEC_TEST_TOKEN", oldToken);
     else Deno.env.delete("HOSTEXEC_TEST_TOKEN");
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
     await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
   }
 });
 
 Deno.test("HostExecBroker: pending request can be denied via broker", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const auditDir = await Deno.makeTempDir({ prefix: "nas-hostexec-audit-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const workspace = await Deno.makeTempDir({
     prefix: "nas-hostexec-workspace-",
@@ -160,6 +172,7 @@ Deno.test("HostExecBroker: pending request can be denied via broker", async () =
     profileName: "test",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
     hostexec: makeConfig({
       prompt: {
         enable: true,
@@ -196,10 +209,17 @@ Deno.test("HostExecBroker: pending request can be denied via broker", async () =
     if (response.type === "error") {
       assertEquals(response.message, "permission denied by user");
     }
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].decision, "deny");
+    assertEquals(logs[0].reason, "denied-by-user");
+    assertEquals(logs[0].requestId, "req_deny");
   } finally {
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
     await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
   }
 });
 
@@ -476,6 +496,7 @@ Deno.test("HostExecBroker: allows cwd in session tmp with workspace-or-session-t
 
 Deno.test("HostExecBroker: fallback deny returns error for unmatched command", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const auditDir = await Deno.makeTempDir({ prefix: "nas-hostexec-audit-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const broker = new HostExecBroker({
     paths,
@@ -483,6 +504,7 @@ Deno.test("HostExecBroker: fallback deny returns error for unmatched command", a
     profileName: "test",
     workspaceRoot: Deno.cwd(),
     sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
     hostexec: makeConfig({
       rules: [{
         id: "deno-deny",
@@ -514,9 +536,16 @@ Deno.test("HostExecBroker: fallback deny returns error for unmatched command", a
     if (denyResponse.type === "error") {
       assertMatch(denyResponse.message, /permission denied/);
     }
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    assertEquals(logs.length, 1);
+    assertEquals(logs[0].decision, "deny");
+    assertEquals(logs[0].reason, "policy-deny");
+    assertEquals(logs[0].requestId, "req_deny");
   } finally {
     await broker.close();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
   }
 });
 

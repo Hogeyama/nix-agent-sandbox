@@ -1,5 +1,7 @@
 import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
 import { logInfo } from "../log.ts";
+import { appendAuditLog } from "../audit/store.ts";
+import type { AuditLogEntry } from "../audit/types.ts";
 import {
   type ApprovalScope,
   type AuthorizeRequest,
@@ -38,6 +40,8 @@ interface BrokerOptions {
   uiIdleTimeout?: number;
   /** Override negative-cache TTL for testing. Default: 30 000 ms. */
   negativeCacheTtlMs?: number;
+  /** Directory for audit JSONL logs. If set, decisions are recorded. */
+  auditDir?: string;
 }
 
 interface PendingWaiter {
@@ -79,6 +83,7 @@ export class SessionBroker {
   private readonly uiEnabled?: boolean;
   private readonly uiPort?: number;
   private readonly uiIdleTimeout?: number;
+  private readonly auditDir?: string;
   private socketPath: string | null = null;
   private listener: Deno.Listener | null = null;
   private closing = false;
@@ -102,6 +107,7 @@ export class SessionBroker {
     this.uiEnabled = options.uiEnabled;
     this.uiPort = options.uiPort;
     this.uiIdleTimeout = options.uiIdleTimeout;
+    this.auditDir = options.auditDir;
     this.negativeCache = new TtlLruCache<string, true>({
       maxSize: 1024,
       ttlMs: options.negativeCacheTtlMs ?? 30_000,
@@ -205,11 +211,18 @@ export class SessionBroker {
   private async authorize(
     message: AuthorizeRequest,
   ): Promise<DecisionResponse> {
+    const targetStr = `${message.target.host}:${message.target.port}`;
     const allowlistHit = matchesAllowlist(
       message.target.host,
       this.allowlist,
     );
     if (allowlistHit) {
+      await this.recordAudit(
+        message.requestId,
+        "allow",
+        "allowlist",
+        targetStr,
+      );
       return allowDecision(message.requestId, "allowlist");
     }
 
@@ -218,23 +231,38 @@ export class SessionBroker {
       this.approvedTargets.has(targetCacheKey) ||
       this.approvedHosts.has(message.target.host)
     ) {
+      await this.recordAudit(message.requestId, "allow", "approved", targetStr);
       return allowDecision(message.requestId, "approved");
     }
 
     const denyReason = denyReasonForTarget(message.target);
     if (denyReason) {
+      await this.recordAudit(message.requestId, "deny", denyReason, targetStr);
       return denyDecision(message.requestId, denyReason);
     }
 
     if (matchesAllowlist(message.target.host, this.denylist)) {
+      await this.recordAudit(message.requestId, "deny", "denylist", targetStr);
       return denyDecision(message.requestId, "denylist");
     }
 
     if (this.negativeCache.get(targetCacheKey) !== undefined) {
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        "recent-deny",
+        targetStr,
+      );
       return denyDecision(message.requestId, "recent-deny");
     }
 
     if (!this.promptEnabled) {
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        "not-in-allowlist",
+        targetStr,
+      );
       return denyDecision(message.requestId, "not-in-allowlist");
     }
 
@@ -363,6 +391,13 @@ export class SessionBroker {
         ...baseDecision,
         requestId: request.requestId,
       };
+      const targetStr = `${request.target.host}:${request.target.port}`;
+      await this.recordAudit(
+        requestId,
+        outcome === "allow" ? "allow" : "deny",
+        baseDecision.reason,
+        targetStr,
+      );
       const waiter = group.waiters.get(requestId);
       waiter?.resolve(decision);
     }
@@ -372,6 +407,26 @@ export class SessionBroker {
     const groupKey = this.requestIndex.get(requestId);
     if (!groupKey) return null;
     return this.groups.get(groupKey) ?? null;
+  }
+
+  private async recordAudit(
+    requestId: string,
+    decision: "allow" | "deny",
+    reason: string,
+    target: string,
+  ): Promise<void> {
+    if (!this.auditDir) return;
+    const entry: AuditLogEntry = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      domain: "network",
+      sessionId: this.sessionId,
+      requestId,
+      decision,
+      reason,
+      target,
+    };
+    await appendAuditLog(entry, this.auditDir);
   }
 }
 
