@@ -324,7 +324,11 @@ export class HostExecBroker {
   ): Promise<HostExecBrokerResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
-      throw new Error(`Pending request not found: ${requestId}`);
+      return {
+        type: "error",
+        requestId,
+        message: `Pending request not found: ${requestId}`,
+      };
     }
     const selectedScope = scope ?? this.config.prompt.defaultScope;
     if (selectedScope === "capability") {
@@ -337,7 +341,11 @@ export class HostExecBroker {
   private async deny(requestId: string): Promise<HostExecBrokerResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
-      throw new Error(`Pending request not found: ${requestId}`);
+      return {
+        type: "error",
+        requestId,
+        message: `Pending request not found: ${requestId}`,
+      };
     }
     await this.resolveGroup(group.approvalKey, "deny", {
       type: "error",

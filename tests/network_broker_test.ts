@@ -389,8 +389,64 @@ Deno.test("SessionBroker: negative cache expires after TTL", async () => {
   }
 });
 
+Deno.test("SessionBroker: approve after group already resolved returns error", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: [],
+    denylist: [],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  await broker.start(socketPath);
+  try {
+    // Two concurrent authorize requests to the same host:port
+    const auth1Promise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_group_a", "grouped.example.com", 443),
+    );
+    const auth2Promise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_group_b", "grouped.example.com", 443),
+    );
+
+    // Wait until both are pending in the group
+    await waitForPending(socketPath, 2);
+
+    // Approve via first requestId → entire group resolves (both allowed)
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_group_a",
+      scope: "host-port",
+    });
+    const decision1 = await auth1Promise;
+    const decision2 = await auth2Promise;
+    assertEquals(decision1.decision, "allow");
+    assertEquals(decision2.decision, "allow");
+
+    // Now approve the second requestId → group already gone, should not crash
+    const ack = await sendBrokerRequest<
+      { type: "error"; requestId: string; message: string }
+    >(socketPath, {
+      type: "approve",
+      requestId: "req_group_b",
+    });
+    assertEquals(ack.type, "error");
+    assertEquals(ack.requestId, "req_group_b");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
+
 async function waitForPending(
   socketPath: string,
+  minCount = 1,
 ): Promise<{ type: "pending"; items: PendingEntry[] }> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
@@ -400,7 +456,7 @@ async function waitForPending(
       socketPath,
       { type: "list_pending" },
     );
-    if (pending.items.length > 0) {
+    if (pending.items.length >= minCount) {
       return pending;
     }
     await new Promise((resolve) => setTimeout(resolve, 25));

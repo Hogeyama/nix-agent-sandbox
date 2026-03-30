@@ -69,7 +69,8 @@ type BrokerMessage =
 type BrokerResponse =
   | DecisionResponse
   | { type: "pending"; items: PendingEntry[] }
-  | { type: "ack"; requestId: string; decision: "approve" | "deny" };
+  | { type: "ack"; requestId: string; decision: "approve" | "deny" }
+  | { type: "error"; requestId: string; message: string };
 
 export class SessionBroker {
   private readonly paths: NetworkRuntimePaths;
@@ -340,7 +341,11 @@ export class SessionBroker {
   ): Promise<BrokerResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
-      throw new Error(`Pending request not found: ${requestId}`);
+      return {
+        type: "error",
+        requestId,
+        message: `Pending request not found: ${requestId}`,
+      };
     }
     const selectedScope = scope ?? this.defaultScope;
     if (selectedScope === "host") {
@@ -359,7 +364,11 @@ export class SessionBroker {
   private async deny(requestId: string): Promise<BrokerResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
-      throw new Error(`Pending request not found: ${requestId}`);
+      return {
+        type: "error",
+        requestId,
+        message: `Pending request not found: ${requestId}`,
+      };
     }
     await this.resolveGroup(
       group.groupKey,
