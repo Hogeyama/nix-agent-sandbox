@@ -333,6 +333,47 @@ Deno.test("WorktreeStage teardown cherry-picks commits to base branch", async ()
   });
 });
 
+Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncommitted changes", async () => {
+  await withTempRepo(async (repoRoot) => {
+    // promptWorktreeAction → "1" (delete)
+    // promptDirtyWorktreeAction → skipped (clean)
+    // promptBranchAction → "2" (cherry-pick)
+    await withMockedPrompts(["1", "2"], async () => {
+      const stage = new WorktreeStage();
+      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
+      const next = await stage.execute(ctx);
+      const worktreePath = next.workDir;
+
+      await Deno.writeTextFile(path.join(worktreePath, "feature.txt"), "feature\n");
+      await $`git -C ${worktreePath} add feature.txt`.quiet("both");
+      await $`git -C ${worktreePath} commit -m "add feature"`.quiet("both");
+
+      // base worktree 側に未コミット変更を残した状態で teardown
+      await Deno.writeTextFile(path.join(repoRoot, "dirty.txt"), "dirty\n");
+
+      await stage.teardown(next);
+
+      const baseBranch =
+        (await $`git -C ${repoRoot} symbolic-ref --short HEAD`.text()).trim();
+      const log =
+        (await $`git -C ${repoRoot} log ${baseBranch} --oneline -5`.text())
+          .trim();
+      assertStringIncludes(log, "add feature");
+
+      const dirtyContent = await Deno.readTextFile(path.join(repoRoot, "dirty.txt"));
+      assertEquals(dirtyContent, "dirty\n");
+
+      const branchList =
+        (await $`git -C ${repoRoot} branch --list nas/test/*`.text()).trim();
+      assertEquals(branchList, "");
+
+      const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
+        .text();
+      assertEquals(worktreeList.includes(worktreePath), false);
+    });
+  });
+});
+
 // --- cherry-pick with no commits ---
 
 Deno.test("WorktreeStage teardown cherry-pick with no new commits succeeds", async () => {

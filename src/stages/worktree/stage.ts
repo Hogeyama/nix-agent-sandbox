@@ -261,21 +261,32 @@ export class WorktreeStage implements Stage {
     commitList: string[],
     targetBranch: string,
   ): Promise<boolean> {
-    // dirty check — 未コミットの変更があると cherry-pick できない
     const dirty = await isWorktreeDirty(worktreePath);
+    let stashed = false;
+    const stashMessage = `nas cherry-pick ${targetBranch} ${new Date().toISOString()}`;
+
     if (dirty) {
-      console.error(
-        `[nas] Cannot cherry-pick: worktree for "${targetBranch}" has uncommitted changes.`,
+      console.log(
+        `[nas] Worktree for "${targetBranch}" has uncommitted changes; stashing temporarily before cherry-pick.`,
       );
-      console.error(`[nas]   ${worktreePath}`);
-      return false;
+      try {
+        await $`git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`
+          .printCommand();
+        stashed = true;
+      } catch (err) {
+        console.error(
+          `[nas] Failed to stash changes in "${targetBranch}" worktree: ${(err as Error).message}`,
+        );
+        console.error(`[nas]   ${worktreePath}`);
+        return false;
+      }
     }
 
     console.log(`[nas] Cherry-picking in worktree: ${worktreePath}`);
+    let success = false;
     try {
       await $`git -C ${worktreePath} cherry-pick ${commitList}`.printCommand();
-      console.log("[nas] Cherry-pick completed successfully.");
-      return true;
+      success = true;
     } catch (cpErr) {
       console.error(
         `[nas] cherry-pick exited with error: ${(cpErr as Error).message}`,
@@ -284,14 +295,42 @@ export class WorktreeStage implements Stage {
         worktreePath,
         commitList.length,
       );
-      if (resolved) return true;
+      if (resolved) {
+        success = true;
+      } else {
+        console.error("[nas] Cherry-pick failed with conflicts.");
+        try {
+          await $`git -C ${worktreePath} cherry-pick --abort`.quiet("both");
+        } catch { /* ignore */ }
+      }
+    }
 
-      console.error("[nas] Cherry-pick failed with conflicts.");
-      try {
-        await $`git -C ${worktreePath} cherry-pick --abort`.quiet("both");
-      } catch { /* ignore */ }
+    if (!success) {
+      if (stashed) {
+        try {
+          await $`git -C ${worktreePath} stash pop`.printCommand();
+        } catch (err) {
+          console.error(
+            `[nas] Failed to restore stashed changes in "${targetBranch}" worktree: ${(err as Error).message}`,
+          );
+        }
+      }
       return false;
     }
+
+    if (stashed) {
+      try {
+        await $`git -C ${worktreePath} stash pop`.printCommand();
+      } catch (err) {
+        console.error(
+          `[nas] Cherry-pick succeeded, but restoring stashed changes failed: ${(err as Error).message}`,
+        );
+        return false;
+      }
+    }
+
+    console.log("[nas] Cherry-pick completed successfully.");
+    return true;
   }
 
   /** targetBranch がどこにもチェックアウトされていない場合の cherry-pick */
