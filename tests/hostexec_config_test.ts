@@ -313,6 +313,46 @@ Deno.test("hostexec config: no warning when specific rule comes before catch-all
   assertEquals(shadowWarnings.length, 0);
 });
 
+Deno.test("hostexec config: rejects relative argv0 with fallback container", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            hostexec: {
+              rules: [{
+                id: "gradlew",
+                match: { argv0: "./gradlew" },
+                fallback: "container",
+              }],
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "relative argv0",
+  );
+});
+
+Deno.test("hostexec config: allows relative argv0 with fallback deny", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        hostexec: {
+          rules: [{
+            id: "gradlew",
+            match: { argv0: "./gradlew" },
+            fallback: "deny",
+          }],
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.hostexec?.rules[0].fallback, "deny");
+});
+
 // ---------------------------------------------------------------------------
 // Error aggregation: hostexec env superRefine collects multiple issues
 // ---------------------------------------------------------------------------

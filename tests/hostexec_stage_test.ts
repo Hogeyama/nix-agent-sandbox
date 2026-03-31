@@ -108,6 +108,17 @@ Deno.test("HostExecStage: injects wrapper path and socket mounts", async () => {
       true,
     );
     assertEquals(wrapperScript.includes("sys.stdin.buffer.read()"), false);
+    assertEquals(wrapperScript.includes('"argv0": argv0,'), true);
+    assertEquals(
+      wrapperScript.includes("relative argv0 fallback is not supported"),
+      true,
+    );
+    assertEquals(
+      wrapperScript.includes(
+        "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
+      ),
+      true,
+    );
   } finally {
     await stage.teardown(result);
     if (originalRuntimeDir !== undefined) {
@@ -116,5 +127,55 @@ Deno.test("HostExecStage: injects wrapper path and socket mounts", async () => {
       Deno.env.delete("XDG_RUNTIME_DIR");
     }
     await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("HostExecStage: mounts relative argv0 wrapper target", async () => {
+  const runtimeRoot = path.join(
+    "/tmp",
+    `nas-he-${crypto.randomUUID().slice(0, 8)}`,
+  );
+  const workspace = await Deno.makeTempDir({ prefix: "nas-he-workspace-" });
+  await Deno.mkdir(runtimeRoot, { recursive: true });
+  await Deno.writeTextFile(
+    path.join(workspace, "gradlew"),
+    "#!/bin/sh\nexit 0\n",
+  );
+  await Deno.chmod(path.join(workspace, "gradlew"), 0o755);
+  const originalRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
+  Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
+  const profile = makeProfile();
+  profile.hostexec!.rules = [{
+    id: "gradlew",
+    match: { argv0: "./gradlew" },
+    cwd: { mode: "workspace-only", allow: [] },
+    env: {},
+    inheritEnv: { mode: "minimal", keys: [] },
+    approval: "allow",
+    fallback: "container",
+  }];
+  const config: Config = {
+    profiles: { default: profile },
+    ui: DEFAULT_UI_CONFIG,
+  };
+  const ctx = createContext(config, profile, "default", workspace);
+  const stage = new HostExecStage();
+  const result = await stage.execute(ctx);
+  try {
+    assertEquals(
+      result.dockerArgs.some((arg) =>
+        arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`)
+      ),
+      true,
+    );
+  } finally {
+    await stage.teardown(result);
+    if (originalRuntimeDir !== undefined) {
+      Deno.env.set("XDG_RUNTIME_DIR", originalRuntimeDir);
+    } else {
+      Deno.env.delete("XDG_RUNTIME_DIR");
+    }
+    await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
   }
 });

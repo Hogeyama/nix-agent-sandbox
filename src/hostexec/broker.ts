@@ -19,7 +19,7 @@ import {
   removeHostExecSessionRegistry,
   writeHostExecPendingEntry,
 } from "./registry.ts";
-import { matchRule } from "./match.ts";
+import { isRelativeHostExecArgv0, matchRule } from "./match.ts";
 import type {
   ExecuteRequest,
   HostExecBrokerMessage,
@@ -440,7 +440,7 @@ export class HostExecBroker {
   private async resolveRequest(
     message: ExecuteRequest,
   ): Promise<ResolvedExecution | null> {
-    const argv0 = path.basename(message.argv0);
+    const argv0 = message.argv0;
     const result = matchRule(
       this.config.rules,
       argv0,
@@ -462,8 +462,8 @@ export class HostExecBroker {
       envVars,
       capability: {
         ruleId: rule.id,
-        argv0,
-        normalizedArgv: [argv0, ...message.args],
+        argv0: path.basename(argv0),
+        normalizedArgv: [path.basename(argv0), ...message.args],
         normalizedCwd: normalizedCwd,
         envBindings: Object.entries(rule.env)
           .map(([key, source]) => ({ key, source }))
@@ -504,10 +504,13 @@ export class HostExecBroker {
     request: ExecuteRequest,
     resolved: ResolvedExecution,
   ): Promise<HostExecBrokerResponse> {
+    const commandArgv0 = isRelativeHostExecArgv0(resolved.rule.match.argv0)
+      ? request.argv0
+      : path.basename(request.argv0);
     const stdin = request.stdin
       ? Uint8Array.from(atob(request.stdin), (c) => c.charCodeAt(0))
       : undefined;
-    const output = await new Deno.Command(request.argv0, {
+    const output = await new Deno.Command(commandArgv0, {
       args: request.args,
       cwd: resolved.cwd,
       env: resolved.envVars,

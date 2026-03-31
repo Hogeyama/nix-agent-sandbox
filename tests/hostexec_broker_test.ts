@@ -362,6 +362,98 @@ Deno.test("HostExecBroker: argv0-only rule matches any args", async () => {
   }
 });
 
+Deno.test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper path", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [{
+        id: "sh-any",
+        match: { argv0: "sh" },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "container",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    const response = await sendHostExecBrokerRequest(
+      socketPath,
+      request(
+        ["-c", "printf ok"],
+        workspace,
+        "req_sh_wrapper",
+        "/opt/nas/hostexec/bin/sh",
+      ),
+    );
+    assertEquals(response.type, "result");
+    if (response.type === "result") {
+      assertEquals(response.stdout, "ok");
+    }
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("HostExecBroker: relative rule executes original relative argv0", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  const scriptPath = `${workspace}/gradlew`;
+  await Deno.writeTextFile(scriptPath, "#!/bin/sh\nprintf gradle-ok\n");
+  await Deno.chmod(scriptPath, 0o755);
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [{
+        id: "gradlew-any",
+        match: { argv0: "./gradlew" },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "container",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    const response = await sendHostExecBrokerRequest(
+      socketPath,
+      request([], workspace, "req_gradlew", "./gradlew"),
+    );
+    assertEquals(response.type, "result");
+    if (response.type === "result") {
+      assertEquals(response.stdout, "gradle-ok");
+    }
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
 Deno.test("HostExecBroker: argv0-only rule also matches no-args command", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);

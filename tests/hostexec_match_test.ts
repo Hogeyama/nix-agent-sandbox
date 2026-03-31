@@ -145,3 +145,15 @@ Deno.test("matchRule: no args with argv0-only rule", () => {
   const result = matchRule(rules, "true", []);
   assertEquals(result?.rule.id, "true-any");
 });
+
+Deno.test("matchRule: relative argv0 rule requires relative invocation", () => {
+  const rules = [makeRule("gradlew-any", { argv0: "./gradlew" })];
+  const result = matchRule(rules, "./gradlew", ["test"]);
+  assertEquals(result?.rule.id, "gradlew-any");
+});
+
+Deno.test("matchRule: relative argv0 rule does not match PATH invocation", () => {
+  const rules = [makeRule("gradlew-any", { argv0: "./gradlew" })];
+  const result = matchRule(rules, "gradlew", ["test"]);
+  assertEquals(result, null);
+});

@@ -494,7 +494,17 @@ function hostexecRuleSchema(
     inheritEnv: r["inherit-env"],
     approval: r.approval,
     fallback: r.fallback,
-  }));
+  })).refine(
+    (rule) =>
+      !(rule.fallback === "container" &&
+        (rule.match.argv0.startsWith("./") ||
+          rule.match.argv0.startsWith("../"))),
+    {
+      message:
+        'relative argv0 (e.g. "./gradlew") cannot use fallback "container" because the original binary is replaced by the wrapper inside the container; use fallback "deny" instead',
+      path: ["fallback"],
+    },
+  );
 }
 
 export function hostexecSchema(_profileName: string) {

@@ -344,7 +344,10 @@ Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncom
       const next = await stage.execute(ctx);
       const worktreePath = next.workDir;
 
-      await Deno.writeTextFile(path.join(worktreePath, "feature.txt"), "feature\n");
+      await Deno.writeTextFile(
+        path.join(worktreePath, "feature.txt"),
+        "feature\n",
+      );
       await $`git -C ${worktreePath} add feature.txt`.quiet("both");
       await $`git -C ${worktreePath} commit -m "add feature"`.quiet("both");
 
@@ -360,7 +363,9 @@ Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncom
           .trim();
       assertStringIncludes(log, "add feature");
 
-      const dirtyContent = await Deno.readTextFile(path.join(repoRoot, "dirty.txt"));
+      const dirtyContent = await Deno.readTextFile(
+        path.join(repoRoot, "dirty.txt"),
+      );
       assertEquals(dirtyContent, "dirty\n");
 
       const branchList =

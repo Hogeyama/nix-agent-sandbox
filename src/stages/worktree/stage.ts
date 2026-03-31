@@ -263,7 +263,9 @@ export class WorktreeStage implements Stage {
   ): Promise<boolean> {
     const dirty = await isWorktreeDirty(worktreePath);
     let stashed = false;
-    const stashMessage = `nas cherry-pick ${targetBranch} ${new Date().toISOString()}`;
+    const stashMessage = `nas cherry-pick ${targetBranch} ${
+      new Date().toISOString()
+    }`;
 
     if (dirty) {
       console.log(
@@ -275,7 +277,9 @@ export class WorktreeStage implements Stage {
         stashed = true;
       } catch (err) {
         console.error(
-          `[nas] Failed to stash changes in "${targetBranch}" worktree: ${(err as Error).message}`,
+          `[nas] Failed to stash changes in "${targetBranch}" worktree: ${
+            (err as Error).message
+          }`,
         );
         console.error(`[nas]   ${worktreePath}`);
         return false;
@@ -311,7 +315,9 @@ export class WorktreeStage implements Stage {
           await $`git -C ${worktreePath} stash pop`.printCommand();
         } catch (err) {
           console.error(
-            `[nas] Failed to restore stashed changes in "${targetBranch}" worktree: ${(err as Error).message}`,
+            `[nas] Failed to restore stashed changes in "${targetBranch}" worktree: ${
+              (err as Error).message
+            }`,
           );
         }
       }
@@ -323,7 +329,9 @@ export class WorktreeStage implements Stage {
         await $`git -C ${worktreePath} stash pop`.printCommand();
       } catch (err) {
         console.error(
-          `[nas] Cherry-pick succeeded, but restoring stashed changes failed: ${(err as Error).message}`,
+          `[nas] Cherry-pick succeeded, but restoring stashed changes failed: ${
+            (err as Error).message
+          }`,
         );
         return false;
       }

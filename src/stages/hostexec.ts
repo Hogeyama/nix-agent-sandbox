@@ -13,6 +13,10 @@ import {
   resolveHostExecRuntimePaths,
   writeHostExecSessionRegistry,
 } from "../hostexec/registry.ts";
+import {
+  isBareCommandHostExecArgv0,
+  isRelativeHostExecArgv0,
+} from "../hostexec/match.ts";
 
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
@@ -52,7 +56,11 @@ export class HostExecStage implements Stage {
       logInfo(`[nas] HostExec: failed to chmod wrapper script: ${e}`)
     );
 
-    const argv0Names = new Set(config.rules.map((rule) => rule.match.argv0));
+    const argv0Names = new Set(
+      config.rules
+        .map((rule) => rule.match.argv0)
+        .filter(isBareCommandHostExecArgv0),
+    );
     for (const argv0 of argv0Names) {
       const linkPath = path.join(wrapperBinDir, argv0);
       await Deno.remove(linkPath).catch((e) => {
@@ -63,6 +71,33 @@ export class HostExecStage implements Stage {
         }
       });
       await Deno.symlink("hostexec-wrapper.py", linkPath);
+    }
+
+    const relativeArgv0Candidates = [
+      ...new Set(
+        config.rules.map((rule) => rule.match.argv0).filter(
+          isRelativeHostExecArgv0,
+        ),
+      ),
+    ];
+    const relativeArgv0s: string[] = [];
+    for (const argv0 of relativeArgv0Candidates) {
+      const containerTarget = path.resolve(ctx.workDir, argv0);
+      try {
+        const stat = await Deno.stat(containerTarget);
+        if (!stat.isFile) {
+          logInfo(
+            `[nas] HostExec: relative argv0 is not a file, skipping mount: ${argv0}`,
+          );
+          continue;
+        }
+      } catch (e) {
+        logInfo(
+          `[nas] HostExec: relative argv0 is missing, skipping mount: ${argv0}: ${e}`,
+        );
+        continue;
+      }
+      relativeArgv0s.push(argv0);
     }
 
     const broker = new HostExecBroker({
@@ -100,6 +135,10 @@ export class HostExecStage implements Stage {
         `${runtimePaths.brokersDir}:${runtimePaths.brokersDir}`,
         "-v",
         `${sessionTmpDir}:${path.join(SESSION_TMP_ROOT, ctx.sessionId)}`,
+        ...relativeArgv0s.flatMap((argv0) => [
+          "-v",
+          `${wrapperScript}:${path.resolve(ctx.workDir, argv0)}:ro`,
+        ]),
       ],
       envVars: {
         ...ctx.envVars,
@@ -159,6 +198,8 @@ import sys
 
 
 def find_fallback_binary(argv0: str, wrapper_dir: str) -> str:
+    if os.path.sep in argv0:
+        argv0 = os.path.basename(argv0)
     path_value = os.environ.get("PATH", "")
     for directory in path_value.split(":"):
         if not directory:
@@ -207,7 +248,7 @@ def read_available_stdin() -> bytes:
 
 
 def main() -> int:
-    argv0 = os.path.basename(sys.argv[0])
+    argv0 = sys.argv[0]
     payload = {
         "version": 1,
         "type": "execute",
@@ -225,6 +266,9 @@ def main() -> int:
 
     response = call_broker(payload)
     if response["type"] == "fallback":
+        if (not os.path.isabs(argv0)) and (os.path.sep in argv0):
+            print(f"relative argv0 fallback is not supported: {argv0}", file=sys.stderr)
+            return 1
         binary = find_fallback_binary(argv0, os.environ["NAS_HOSTEXEC_WRAPPER_DIR"])
         os.execv(binary, [binary, *sys.argv[1:]])
     if response["type"] == "error":
