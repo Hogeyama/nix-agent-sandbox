@@ -289,7 +289,7 @@ async function ensureSharedEnvoy(
       "-c",
       "/nas-network/envoy.yaml",
       "--log-level",
-      "warning",
+      "info",
     ],
   });
   await waitForEnvoyReady(envoyContainerName);

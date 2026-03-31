@@ -14,6 +14,10 @@ static_resources:
                 stat_prefix: nas-egress
                 stream_idle_timeout: 0s
                 request_timeout: 0s
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                 route_config:
                   name: nas-egress-route
                   virtual_hosts:

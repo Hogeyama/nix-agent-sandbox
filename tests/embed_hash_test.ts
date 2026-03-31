@@ -48,6 +48,8 @@ Deno.test("envoy template includes required proxy settings", async () => {
       "envoy.filters.http.lua",
       "request_timeout: 0s",
       "timeout: 0s",
+      "access_log:",
+      "envoy.access_loggers.stdout",
       "pipe: { path: /nas-network/auth-router.sock }",
       "/authorize",
       "proxy-authorization",
