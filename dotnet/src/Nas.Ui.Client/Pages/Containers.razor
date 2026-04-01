@@ -1,0 +1,97 @@
+@page "/containers"
+@inject Nas.Ui.Client.Services.NasApiService Api
+
+<PageTitle>NAS - Containers</PageTitle>
+
+<h4 class="mb-3">Docker Containers</h4>
+
+@if (_loading)
+{
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+}
+else if (_error)
+{
+    <div class="alert alert-warning">Unable to connect to NAS backend.</div>
+}
+else
+{
+    <p class="text-muted small mb-3">
+        NAS-managed Docker containers. Data is derived from active sessions.
+    </p>
+
+    @if (_networkSessions is { Count: > 0 } || _hostexecSessions is { Count: > 0 })
+    {
+        <table class="table table-striped table-sm">
+            <thead>
+                <tr>
+                    <th>Session ID</th>
+                    <th>Type</th>
+                    <th>Agent</th>
+                    <th>Profile</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_networkSessions is not null)
+                {
+                    @foreach (var s in _networkSessions)
+                    {
+                        <tr>
+                            <td><code>@s.SessionId</code></td>
+                            <td><span class="badge bg-primary">Network</span></td>
+                            <td>@(s.AgentType ?? "—")</td>
+                            <td>@(s.ProfileName ?? "—")</td>
+                            <td><span class="badge bg-success">Running</span></td>
+                            <td>@(s.StartedAt ?? "—")</td>
+                        </tr>
+                    }
+                }
+                @if (_hostexecSessions is not null)
+                {
+                    @foreach (var s in _hostexecSessions)
+                    {
+                        <tr>
+                            <td><code>@s.SessionId</code></td>
+                            <td><span class="badge bg-success">HostExec</span></td>
+                            <td>@(s.AgentType ?? "—")</td>
+                            <td>@(s.ProfileName ?? "—")</td>
+                            <td><span class="badge bg-success">Running</span></td>
+                            <td>@(s.StartedAt ?? "—")</td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    }
+    else
+    {
+        <div class="alert alert-secondary">No NAS-managed containers running.</div>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private bool _error;
+    private List<Services.SessionEntry>? _networkSessions;
+    private List<Services.SessionEntry>? _hostexecSessions;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var sessions = await Api.GetSessionsAsync();
+
+        if (sessions is null)
+        {
+            _error = true;
+        }
+        else
+        {
+            _networkSessions = sessions.Network;
+            _hostexecSessions = sessions.Hostexec;
+        }
+
+        _loading = false;
+    }
+}

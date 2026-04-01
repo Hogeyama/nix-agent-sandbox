@@ -23,6 +23,8 @@
       devShells.default = pkgs.mkShell {
         packages = [
           pkgs.deno
+          pkgs.dotnet-sdk_9
+          pkgs.just
           nix-bundle-elf.packages.${system}.default
         ];
       };

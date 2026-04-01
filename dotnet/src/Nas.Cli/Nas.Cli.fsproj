@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Nas.Cli</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Args.fs" />
+    <Compile Include="Commands/RebuildCommand.fs" /><Compile Include="Commands/WorktreeCommand.fs" />
+    <Compile Include="Commands/ContainerCommand.fs" /><Compile Include="Commands/NetworkCommand.fs" />
+    <Compile Include="Commands/HostExecCommand.fs" /><Compile Include="Commands/UiCommand.fs" />
+    <Compile Include="Commands/AuditCommand.fs" /><Compile Include="Commands/RunCommand.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+    <ProjectReference Include="../Nas.Stages/Nas.Stages.fsproj" />
+    <ProjectReference Include="../Nas.Docker/Nas.Docker.fsproj" />
+    <ProjectReference Include="../Nas.Network/Nas.Network.fsproj" />
+    <ProjectReference Include="../Nas.HostExec/Nas.HostExec.fsproj" />
+    <ProjectReference Include="../Nas.Audit/Nas.Audit.fsproj" />
+    <ProjectReference Include="../Nas.Ui/Nas.Ui.fsproj" />
+  </ItemGroup>
+</Project>

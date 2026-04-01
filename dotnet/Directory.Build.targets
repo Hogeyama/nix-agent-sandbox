@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup Condition="'$(Language)' == 'F#'">
+    <OtherFlags>$(OtherFlags) --nowarn:3511</OtherFlags>
+  </PropertyGroup>
+</Project>

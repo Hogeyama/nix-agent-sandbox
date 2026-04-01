@@ -1,0 +1,107 @@
+@page "/config"
+@inject Nas.Ui.Client.Services.NasApiService Api
+
+<PageTitle>NAS - Config</PageTitle>
+
+<h4 class="mb-3">Configuration</h4>
+
+@if (_loading)
+{
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+}
+else if (_error)
+{
+    <div class="alert alert-warning">Unable to connect to NAS backend.</div>
+}
+else
+{
+    <div class="card mb-4">
+        <div class="card-header">
+            <strong>Backend Status</strong>
+        </div>
+        <div class="card-body">
+            <dl class="row mb-0">
+                <dt class="col-sm-3">Health</dt>
+                <dd class="col-sm-9">
+                    @if (_healthy)
+                    {
+                        <span class="badge bg-success">Healthy</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-danger">Unhealthy</span>
+                    }
+                </dd>
+                <dt class="col-sm-3">Network Sessions</dt>
+                <dd class="col-sm-9">@_networkCount</dd>
+                <dt class="col-sm-3">HostExec Sessions</dt>
+                <dd class="col-sm-9">@_hostexecCount</dd>
+                <dt class="col-sm-3">Audit Entries</dt>
+                <dd class="col-sm-9">@_auditCount</dd>
+            </dl>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <strong>API Endpoints</strong>
+        </div>
+        <ul class="list-group list-group-flush">
+            <li class="list-group-item d-flex justify-content-between">
+                <code>GET /api/health</code>
+                <span class="text-muted">Health check</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between">
+                <code>GET /api/sessions</code>
+                <span class="text-muted">Session list</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between">
+                <code>GET /api/pending</code>
+                <span class="text-muted">Pending requests</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between">
+                <code>GET /api/audit</code>
+                <span class="text-muted">Audit log</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between">
+                <code>GET /sse/updates</code>
+                <span class="text-muted">Real-time SSE stream</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between">
+                <code>POST /api/shutdown</code>
+                <span class="text-muted">Shutdown daemon</span>
+            </li>
+        </ul>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _error;
+    private bool _healthy;
+    private int _networkCount;
+    private int _hostexecCount;
+    private int _auditCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _healthy = await Api.CheckHealthAsync();
+        var sessions = await Api.GetSessionsAsync();
+        var audit = await Api.GetAuditAsync();
+
+        if (sessions is null && !_healthy)
+        {
+            _error = true;
+        }
+        else
+        {
+            _networkCount = sessions?.Network?.Count ?? 0;
+            _hostexecCount = sessions?.Hostexec?.Count ?? 0;
+            _auditCount = audit?.Count ?? 0;
+        }
+
+        _loading = false;
+    }
+}

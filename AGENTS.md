@@ -55,6 +55,10 @@ deno task test tests/config_test.ts # Run specific test file
 # Test writing guidelines: /test-policy skill
 ```
 
+## .NET / F# Build
+
+See dotnet/justfile
+
 ## Important Notes
 
 - Tests should import from relative paths, not use import maps for internal modules

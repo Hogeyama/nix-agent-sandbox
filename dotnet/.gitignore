@@ -1,0 +1,8 @@
+bin/
+obj/
+local-packages/
+*.user
+.vs/
+nuget.config
+dist/
+TestResults/

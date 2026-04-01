@@ -1,0 +1,132 @@
+@page "/audit"
+@inject Nas.Ui.Client.Services.NasApiService Api
+
+<PageTitle>NAS - Audit Log</PageTitle>
+
+<h4 class="mb-3">Audit Log</h4>
+
+<div class="row g-2 mb-3">
+    <div class="col-md-3">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter by domain…"
+               @bind="_filterDomain" @bind:event="oninput" />
+    </div>
+    <div class="col-md-3">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter by session…"
+               @bind="_filterSession" @bind:event="oninput" />
+    </div>
+    <div class="col-md-2">
+        <input type="date" class="form-control form-control-sm" @bind="_filterDateFrom" />
+    </div>
+    <div class="col-md-2">
+        <input type="date" class="form-control form-control-sm" @bind="_filterDateTo" />
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ClearFilters">Clear</button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+}
+else if (_error)
+{
+    <div class="alert alert-warning">Unable to connect to NAS backend.</div>
+}
+else
+{
+    var filtered = FilteredEntries;
+    <p class="text-muted small">Showing @filtered.Count of @(_entries?.Count ?? 0) entries</p>
+
+    @if (filtered.Count > 0)
+    {
+        <div class="table-responsive">
+            <table class="table table-striped table-sm" style="font-size: 0.85rem;">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Session</th>
+                        <th>Category</th>
+                        <th>Domain</th>
+                        <th>Action</th>
+                        <th>Detail</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var e in filtered.Take(500))
+                    {
+                        <tr>
+                            <td class="text-nowrap">@e.Timestamp</td>
+                            <td><code>@Truncate(e.SessionId)</code></td>
+                            <td>
+                                <span class="badge @CategoryBadge(e.Category)">@e.Category</span>
+                            </td>
+                            <td>@e.Domain</td>
+                            <td>@e.Action</td>
+                            <td class="text-truncate" style="max-width: 300px;">@e.Detail</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-secondary">No audit entries found.</div>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private bool _error;
+    private List<Services.AuditEntry>? _entries;
+    private string _filterDomain = "";
+    private string _filterSession = "";
+    private DateTime? _filterDateFrom;
+    private DateTime? _filterDateTo;
+
+    private List<Services.AuditEntry> FilteredEntries
+    {
+        get
+        {
+            if (_entries is null) return new();
+            var q = _entries.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(_filterDomain))
+                q = q.Where(e => e.Domain?.Contains(_filterDomain, StringComparison.OrdinalIgnoreCase) == true);
+
+            if (!string.IsNullOrWhiteSpace(_filterSession))
+                q = q.Where(e => e.SessionId?.Contains(_filterSession, StringComparison.OrdinalIgnoreCase) == true);
+
+            return q.ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _entries = await Api.GetAuditAsync();
+        if (_entries is null) _error = true;
+        _loading = false;
+    }
+
+    private void ClearFilters()
+    {
+        _filterDomain = "";
+        _filterSession = "";
+        _filterDateFrom = null;
+        _filterDateTo = null;
+    }
+
+    private static string Truncate(string? s) =>
+        s is null ? "—" : s.Length > 12 ? s[..12] + "…" : s;
+
+    private static string CategoryBadge(string? cat) => cat switch
+    {
+        "network" => "bg-primary",
+        "hostexec" => "bg-success",
+        "docker" => "bg-info",
+        _ => "bg-secondary"
+    };
+}

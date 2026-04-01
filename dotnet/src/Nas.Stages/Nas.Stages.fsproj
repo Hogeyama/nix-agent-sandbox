@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><RootNamespace>Nas.Stages</RootNamespace></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="DockerBuildStage.fs" /><Compile Include="NixDetectStage.fs" /><Compile Include="WorktreeHelpers.fs" /><Compile Include="WorktreeStage.fs" />
+    <Compile Include="MountStage.fs" /><Compile Include="DbusProxyStage.fs" /><Compile Include="HostExecStage.fs" />
+    <Compile Include="DindStage.fs" /><Compile Include="ProxyStage.fs" /><Compile Include="LaunchStage.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+    <ProjectReference Include="../Nas.Docker/Nas.Docker.fsproj" />
+    <ProjectReference Include="../Nas.Network/Nas.Network.fsproj" />
+    <ProjectReference Include="../Nas.HostExec/Nas.HostExec.fsproj" />
+    <ProjectReference Include="../Nas.Agents/Nas.Agents.fsproj" />
+    <ProjectReference Include="../Nas.Dbus/Nas.Dbus.fsproj" />
+    <ProjectReference Include="../Nas.Audit/Nas.Audit.fsproj" />
+  </ItemGroup>
+</Project>

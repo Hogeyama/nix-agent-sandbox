@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Nas.HostExec</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Types.fs" />
+    <Compile Include="Match.fs" />
+    <Compile Include="SecretStore.fs" />
+    <Compile Include="Registry.fs" />
+    <Compile Include="Notify.fs" />
+    <Compile Include="Broker.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+    <ProjectReference Include="../Nas.Audit/Nas.Audit.fsproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Nas.Network</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Protocol.fs" />
+    <Compile Include="Registry.fs" />
+    <Compile Include="Notify.fs" />
+    <Compile Include="Broker.fs" />
+    <Compile Include="AuthRouter.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+    <ProjectReference Include="../Nas.Audit/Nas.Audit.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>

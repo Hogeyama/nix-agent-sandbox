@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Nas.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Types.fs" />
+    <Compile Include="Log.fs" />
+    <Compile Include="Lib/FsUtils.fs" />
+    <Compile Include="Lib/TtlLruCache.fs" />
+    <Compile Include="Lib/NotifyUtils.fs" />
+    <Compile Include="Lib/RuntimeRegistry.fs" />
+    <Compile Include="Config/Types.fs" />
+    <Compile Include="Config/Validate.fs" />
+    <Compile Include="Config/Schema.fs" />
+    <Compile Include="Config/Dto.fs" />
+    <Compile Include="Config/Load.fs" />
+    <Compile Include="Pipeline/Context.fs" />
+    <Compile Include="Pipeline/Pipeline.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="16.3.0" />
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
+    <PackageReference Include="CliWrap" Version="3.7.0" />
+  </ItemGroup>
+</Project>

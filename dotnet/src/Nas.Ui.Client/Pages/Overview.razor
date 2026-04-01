@@ -1,0 +1,131 @@
+@page "/"
+@inject Nas.Ui.Client.Services.NasApiService Api
+
+<PageTitle>NAS - Overview</PageTitle>
+
+<h4 class="mb-3">Session Overview</h4>
+
+@if (_loading)
+{
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+}
+else if (_error)
+{
+    <div class="alert alert-warning">Unable to connect to NAS backend.</div>
+}
+else
+{
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card text-bg-primary">
+                <div class="card-body">
+                    <h5 class="card-title">Network Sessions</h5>
+                    <p class="card-text display-6">@(_networkSessions?.Count ?? 0)</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-bg-success">
+                <div class="card-body">
+                    <h5 class="card-title">HostExec Sessions</h5>
+                    <p class="card-text display-6">@(_hostexecSessions?.Count ?? 0)</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-bg-info">
+                <div class="card-body">
+                    <h5 class="card-title">Pending (Network)</h5>
+                    <p class="card-text display-6">@_networkPendingCount</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-bg-warning">
+                <div class="card-body">
+                    <h5 class="card-title">Pending (HostExec)</h5>
+                    <p class="card-text display-6">@_hostexecPendingCount</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (_networkSessions is { Count: > 0 })
+    {
+        <h5>Active Sessions</h5>
+        <table class="table table-striped table-sm">
+            <thead>
+                <tr>
+                    <th>Session ID</th>
+                    <th>Type</th>
+                    <th>Agent</th>
+                    <th>Profile</th>
+                    <th>Started</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in _networkSessions)
+                {
+                    <tr>
+                        <td><code>@Truncate(s.SessionId)</code></td>
+                        <td><span class="badge bg-primary">Network</span></td>
+                        <td>@(s.AgentType ?? "—")</td>
+                        <td>@(s.ProfileName ?? "—")</td>
+                        <td>@(s.StartedAt ?? "—")</td>
+                    </tr>
+                }
+                @if (_hostexecSessions is not null)
+                {
+                    @foreach (var s in _hostexecSessions)
+                    {
+                        <tr>
+                            <td><code>@Truncate(s.SessionId)</code></td>
+                            <td><span class="badge bg-success">HostExec</span></td>
+                            <td>@(s.AgentType ?? "—")</td>
+                            <td>@(s.ProfileName ?? "—")</td>
+                            <td>@(s.StartedAt ?? "—")</td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    }
+    else
+    {
+        <div class="alert alert-secondary">No active sessions.</div>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private bool _error;
+    private List<Services.SessionEntry>? _networkSessions;
+    private List<Services.SessionEntry>? _hostexecSessions;
+    private int _networkPendingCount;
+    private int _hostexecPendingCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var sessions = await Api.GetSessionsAsync();
+        var pending = await Api.GetPendingAsync();
+
+        if (sessions is null)
+        {
+            _error = true;
+        }
+        else
+        {
+            _networkSessions = sessions.Network;
+            _hostexecSessions = sessions.Hostexec;
+            _networkPendingCount = pending?.Network?.Count ?? 0;
+            _hostexecPendingCount = pending?.Hostexec?.Count ?? 0;
+        }
+
+        _loading = false;
+    }
+
+    private static string Truncate(string? s) =>
+        s is null ? "—" : s.Length > 12 ? s[..12] + "…" : s;
+}

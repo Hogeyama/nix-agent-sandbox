@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Nas.Audit</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Types.fs" />
+    <Compile Include="Store.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+  </ItemGroup>
+
+</Project>

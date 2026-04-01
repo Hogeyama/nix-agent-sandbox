@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Nas.Dbus</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Registry.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+  </ItemGroup>
+
+</Project>

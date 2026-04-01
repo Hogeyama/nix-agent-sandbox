@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><RootNamespace>Nas.Ui</RootNamespace></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Data.fs" /><Compile Include="Routes/Api.fs" /><Compile Include="Routes/Sse.fs" />
+    <Compile Include="Server.fs" /><Compile Include="Daemon.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+    <ProjectReference Include="../Nas.Network/Nas.Network.fsproj" />
+    <ProjectReference Include="../Nas.HostExec/Nas.HostExec.fsproj" />
+    <ProjectReference Include="../Nas.Audit/Nas.Audit.fsproj" />
+    <ProjectReference Include="../Nas.Docker/Nas.Docker.fsproj" />
+    <ProjectReference Include="../Nas.Ui.Client/Nas.Ui.Client.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="9.0.14" />
+  </ItemGroup>
+</Project>

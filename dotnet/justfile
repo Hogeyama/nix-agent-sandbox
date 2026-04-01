@@ -1,0 +1,117 @@
+# NAS (Nix Agent Sandbox) — .NET 9 / F# build tasks
+# Usage: just <recipe>   (run from dotnet/ directory)
+
+set dotenv-load := false
+set positional-arguments := true
+
+solution := "NixAgentSandbox.sln"
+cli_proj := "src/Nas.Cli/Nas.Cli.fsproj"
+rid := if arch() == "x86_64" { "linux-x64" } else { "linux-arm64" }
+out_dir := "dist"
+
+# List available recipes (default)
+default:
+    @just --list
+
+# ─── Build ────────────────────────────────────────────────────────────
+
+# Build all projects (Debug)
+build:
+    dotnet build {{ solution }} --nologo
+
+# Build in Release mode
+build-release:
+    dotnet build {{ solution }} --nologo -c Release
+
+# Publish single-file self-contained binary
+publish:
+    dotnet publish {{ cli_proj }} -c Release -r {{ rid }} \
+        -p:PublishTrimmed=false \
+        -o {{ out_dir }} \
+        --nologo
+    mv {{ out_dir }}/Nas.Cli {{ out_dir }}/nas
+
+# Bundle into a single self-extracting executable (includes wwwroot)
+bundle: publish
+    rm -f {{ out_dir }}/nas-bundle
+    nix-bundle-elf rpath --include {{ out_dir }}/wwwroot:orig/wwwroot -o {{ out_dir }}/nas-bundle {{ out_dir }}/nas
+    @ls -lh {{ out_dir }}/nas-bundle
+    @echo "→ {{ out_dir }}/nas-bundle (self-extracting)"
+
+# Publish with trimming (smaller binary, may break reflection)
+publish-trimmed:
+    dotnet publish {{ cli_proj }} -c Release -r {{ rid }} \
+        -p:PublishTrimmed=true \
+        -p:TrimMode=partial \
+        -o {{ out_dir }} \
+        --nologo
+    @ls -lh {{ out_dir }}/Nas.Cli
+    @echo "→ {{ out_dir }}/Nas.Cli (trimmed)"
+
+# ─── Test ─────────────────────────────────────────────────────────────
+
+# Run all tests
+test *args:
+    dotnet test {{ solution }} --nologo {{ args }}
+
+# Run unit tests only (exclude integration)
+test-unit:
+    dotnet test {{ solution }} --nologo --filter "FullyQualifiedName!~Integration"
+
+# Run integration tests only
+test-integration:
+    dotnet test {{ solution }} --nologo --filter "FullyQualifiedName~Integration"
+
+# Run tests for a specific project (e.g., just test-project Nas.Core.Tests)
+test-project name:
+    dotnet test tests/{{ name }} --nologo
+
+# Run tests with verbose output
+test-verbose:
+    dotnet test {{ solution }} --nologo -v normal
+
+# ─── Lint / Format ───────────────────────────────────────────────────
+
+# Check formatting (dry run)
+lint:
+    dotnet format {{ solution }} --verify-no-changes --no-restore
+
+# Auto-format code
+fmt:
+    dotnet format {{ solution }} --no-restore
+
+# Type-check without producing output
+check:
+    dotnet build {{ solution }} --nologo --no-incremental -v q 2>&1 | tail -3
+
+# ─── Clean ────────────────────────────────────────────────────────────
+
+# Remove build artifacts
+clean:
+    dotnet clean {{ solution }} --nologo -v q
+    rm -rf {{ out_dir }}
+
+# Deep clean (bin/, obj/, dist/)
+clean-all: clean
+    find . -type d \( -name bin -o -name obj \) -exec rm -rf {} + 2>/dev/null || true
+    rm -rf {{ out_dir }}
+
+# ─── Utilities ────────────────────────────────────────────────────────
+
+# Restore NuGet packages
+restore:
+    dotnet restore {{ solution }} --nologo
+
+# Show project dependency graph
+deps:
+    dotnet list {{ solution }} reference
+
+# Count lines of source and test code
+loc:
+    @echo "Source:"
+    @find src -name '*.fs' -o -name '*.cs' | xargs wc -l | tail -1
+    @echo "Tests:"
+    @find tests -name '*.fs' | xargs wc -l | tail -1
+
+# Run a quick CI-like pipeline: lint → build → test
+ci: lint build test

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Nas.Agents</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="AgentTypes.fs" />
+    <Compile Include="Claude.fs" />
+    <Compile Include="Copilot.fs" />
+    <Compile Include="Codex.fs" />
+    <Compile Include="AgentSetup.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Nas.Core/Nas.Core.fsproj" />
+  </ItemGroup>
+
+</Project>
