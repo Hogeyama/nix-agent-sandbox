@@ -188,9 +188,14 @@ export class SessionBroker {
       const response = await this.handleMessage(
         JSON.parse(line) as BrokerMessage,
       );
-      await conn.write(
-        new TextEncoder().encode(JSON.stringify(response) + "\n"),
-      );
+      try {
+        await conn.write(
+          new TextEncoder().encode(JSON.stringify(response) + "\n"),
+        );
+      } catch (e) {
+        if (e instanceof Deno.errors.BrokenPipe) return;
+        throw e;
+      }
     } finally {
       conn.close();
     }

@@ -174,9 +174,14 @@ export class HostExecBroker {
       const response = await this.handleMessage(message).catch((error) =>
         toErrorResponse(message, (error as Error).message)
       );
-      await conn.write(
-        new TextEncoder().encode(JSON.stringify(response) + "\n"),
-      );
+      try {
+        await conn.write(
+          new TextEncoder().encode(JSON.stringify(response) + "\n"),
+        );
+      } catch (e) {
+        if (e instanceof Deno.errors.BrokenPipe) return;
+        throw e;
+      }
     } finally {
       conn.close();
     }

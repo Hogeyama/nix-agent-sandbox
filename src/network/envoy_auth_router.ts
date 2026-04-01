@@ -155,7 +155,12 @@ async function writeResponse(
   const fullResponse = new Uint8Array(headerBytes.length + bodyBytes.length);
   fullResponse.set(headerBytes);
   fullResponse.set(bodyBytes, headerBytes.length);
-  await conn.write(fullResponse);
+  try {
+    await conn.write(fullResponse);
+  } catch (e) {
+    if (e instanceof Deno.errors.BrokenPipe) return;
+    throw e;
+  }
 }
 
 const HTTP_STATUS_TEXT: Record<number, string> = {
