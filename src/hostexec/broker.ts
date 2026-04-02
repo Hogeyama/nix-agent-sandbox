@@ -515,14 +515,25 @@ export class HostExecBroker {
     const stdin = request.stdin
       ? Uint8Array.from(atob(request.stdin), (c) => c.charCodeAt(0))
       : undefined;
-    const output = await new Deno.Command(commandArgv0, {
-      args: request.args,
-      cwd: resolved.cwd,
-      env: resolved.envVars,
-      stdin: stdin ? "piped" : "null",
-      stdout: "piped",
-      stderr: "piped",
-    }).spawn();
+    let output: Deno.ChildProcess;
+    try {
+      output = await new Deno.Command(commandArgv0, {
+        args: request.args,
+        cwd: resolved.cwd,
+        env: resolved.envVars,
+        stdin: stdin ? "piped" : "null",
+        stdout: "piped",
+        stderr: "piped",
+      }).spawn();
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) {
+        const searchedPath = resolved.envVars["PATH"] ?? "(unset)";
+        throw new Error(
+          `Command '${commandArgv0}' not found on host. PATH=${searchedPath}`,
+        );
+      }
+      throw error;
+    }
     if (stdin) {
       const writer = output.stdin.getWriter();
       await writer.write(stdin);
