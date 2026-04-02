@@ -18,6 +18,29 @@
         "type": "github"
       }
     },
+    "nix-bundle-elf": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1775150782,
+        "narHash": "sha256-lkOeUAgMFdKTYd70uvWuu1OIsc353DD83VA8zouOLGc=",
+        "owner": "Hogeyama",
+        "repo": "nix-bundle-elf",
+        "rev": "75a1c7408f0caf248c2e6b92ef4e3eb8cec86019",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Hogeyama",
+        "repo": "nix-bundle-elf",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1772198003,
@@ -37,6 +60,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "nix-bundle-elf": "nix-bundle-elf",
         "nixpkgs": "nixpkgs"
       }
     },
