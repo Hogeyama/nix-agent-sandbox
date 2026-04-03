@@ -131,6 +131,31 @@ append_git_config_env "safe.directory" "$WORKSPACE"
 # /etc/gitconfig 方式: nix が内部で git を呼ぶ際に env var が渡らないため
 git config --system safe.directory "$WORKSPACE"
 
+# --- ローカル認証プロキシ ---
+# NAS_UPSTREAM_PROXY が設定されている場合、認証代行ローカルプロキシを起動し
+# http_proxy/https_proxy を localhost:18080 に書き換える。
+if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
+  node /usr/local/bin/local-proxy.mjs &
+  LOCAL_PROXY_PID=$!
+
+  # ヘルスチェック: localhost:18080 に接続可能になるまで待機
+  for i in $(seq 1 50); do
+    if bash -c "echo >/dev/tcp/127.0.0.1/18080" 2>/dev/null; then
+      nas_info "[nas] Local auth proxy ready (pid=$LOCAL_PROXY_PID)"
+      break
+    fi
+    if [ "$i" -eq 50 ]; then
+      echo "[nas] WARNING: local proxy failed to start within 5s" >&2
+    fi
+    sleep 0.1
+  done
+
+  export http_proxy="http://127.0.0.1:18080"
+  export https_proxy="http://127.0.0.1:18080"
+  export HTTP_PROXY="http://127.0.0.1:18080"
+  export HTTPS_PROXY="http://127.0.0.1:18080"
+fi
+
 # --- エージェントコマンド ---
 AGENT_COMMAND=("${@}")
 if [ ${#AGENT_COMMAND[@]} -eq 0 ]; then

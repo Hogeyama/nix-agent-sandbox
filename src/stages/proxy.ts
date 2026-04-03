@@ -38,6 +38,7 @@ const ENVOY_CONTAINER_NAME = "nas-envoy-shared";
 const ENVOY_ALIAS = "nas-envoy";
 const ENVOY_PROXY_PORT = 15001;
 const ENVOY_READY_TIMEOUT_MS = 15_000;
+export const LOCAL_PROXY_PORT = 18080;
 
 interface ProxyStageOptions {
   envoyContainerName?: string;
@@ -131,6 +132,7 @@ export class ProxyStage implements Stage {
 
     const proxyUrl =
       `http://${ctx.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
+    const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
     const noProxyEntries = ["localhost", "127.0.0.1"];
     if (this.dindContainerName) {
       noProxyEntries.push(this.dindContainerName);
@@ -141,10 +143,11 @@ export class ProxyStage implements Stage {
       dockerArgs: replaceNetwork(ctx.dockerArgs, this.networkName),
       envVars: {
         ...ctx.envVars,
-        http_proxy: proxyUrl,
-        https_proxy: proxyUrl,
-        HTTP_PROXY: proxyUrl,
-        HTTPS_PROXY: proxyUrl,
+        NAS_UPSTREAM_PROXY: proxyUrl,
+        http_proxy: localProxyUrl,
+        https_proxy: localProxyUrl,
+        HTTP_PROXY: localProxyUrl,
+        HTTPS_PROXY: localProxyUrl,
         no_proxy: noProxyEntries.join(","),
         NO_PROXY: noProxyEntries.join(","),
       },

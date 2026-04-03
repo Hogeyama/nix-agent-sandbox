@@ -128,11 +128,14 @@ Deno.test({
       });
 
       const result = await stage.execute(ctx);
+      // http_proxy / https_proxy should point to local proxy
+      assertEquals(result.envVars["http_proxy"], "http://127.0.0.1:18080");
+      assertEquals(result.envVars["https_proxy"], "http://127.0.0.1:18080");
+      // NAS_UPSTREAM_PROXY should contain the credentialed upstream URL
       assertMatch(
-        result.envVars["http_proxy"],
+        result.envVars["NAS_UPSTREAM_PROXY"],
         /^http:\/\/sess_[a-f0-9]{12}:[A-Za-z0-9_-]+@nas-envoy:15001$/,
       );
-      assertEquals(result.envVars["https_proxy"], result.envVars["http_proxy"]);
       assertEquals(result.networkBrokerSocket !== null, true);
       assertEquals(result.networkRuntimeDir?.startsWith(runtimeRoot), true);
       assertEquals(

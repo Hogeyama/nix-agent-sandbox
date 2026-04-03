@@ -7,6 +7,7 @@
 
 import { assertEquals } from "@std/assert";
 import {
+  LOCAL_PROXY_PORT,
   parseDindContainerName,
   ProxyStage,
   replaceNetwork,
@@ -106,4 +107,8 @@ Deno.test("parseDindContainerName: returns null for invalid format", () => {
     DOCKER_HOST: "unix:///var/run/docker.sock",
   });
   assertEquals(name, null);
+});
+
+Deno.test("LOCAL_PROXY_PORT: is 18080", () => {
+  assertEquals(LOCAL_PROXY_PORT, 18080);
 });

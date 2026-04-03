@@ -25,7 +25,7 @@ const EMBEDDED_BUILD_ASSET_GROUPS = [
   {
     baseUrl: new URL("../docker/embed/", import.meta.url),
     outputDir: "",
-    files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
+    files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh", "local-proxy.mjs"],
   },
   {
     baseUrl: new URL("../docker/envoy/", import.meta.url),

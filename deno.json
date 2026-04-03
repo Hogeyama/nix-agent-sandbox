@@ -15,7 +15,11 @@
     "hostexec-demo": "deno run --allow-env --allow-read --allow-write scripts/hostexec_demo.ts"
   },
   "lint": {
-    "exclude": ["src/ui/frontend/", "src/ui/dist/"]
+    "exclude": [
+      "src/ui/frontend/",
+      "src/ui/dist/",
+      "src/docker/embed/local-proxy.mjs"
+    ]
   },
   "fmt": {
     "exclude": ["**/*.md", "src/ui/frontend/", "src/ui/dist/"]
