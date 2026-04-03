@@ -7,6 +7,7 @@ import type {
 } from "../src/network/protocol.ts";
 import { resolveNetworkRuntimePaths } from "../src/network/registry.ts";
 import { queryAuditLogs } from "../src/audit/store.ts";
+import { _resetNotifySendCache } from "../src/lib/notify_utils.ts";
 
 Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
@@ -125,6 +126,7 @@ true
     await Deno.chmod(`${notifyDir}/notify-send`, 0o755);
     await Deno.chmod(`${notifyDir}/xdg-open`, 0o755);
     Deno.env.set("PATH", `${notifyDir}:${originalPath}`);
+    _resetNotifySendCache();
 
     const broker = new SessionBroker({
       paths,
@@ -159,6 +161,7 @@ true
     }
   } finally {
     Deno.env.set("PATH", originalPath);
+    _resetNotifySendCache();
     await healthServer.shutdown();
     await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
     await Deno.remove(notifyDir, { recursive: true }).catch(() => {});

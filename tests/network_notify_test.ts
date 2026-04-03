@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { notifyPendingRequest } from "../src/network/notify.ts";
 import type { PendingNotification } from "../src/network/notify.ts";
+import { _resetNotifySendCache } from "../src/lib/notify_utils.ts";
 
 Deno.test("notifyPendingRequest: desktop notification opens UI via xdg-open", async () => {
   await withFakeCommands(async ({ dir, healthServer }) => {
@@ -152,9 +153,11 @@ fi
     await Deno.chmod(`${dir}/notify-send`, 0o755);
     await Deno.chmod(`${dir}/xdg-open`, 0o755);
     Deno.env.set("PATH", `${dir}:${originalPath}`);
+    _resetNotifySendCache();
     await fn({ dir, healthServer });
   } finally {
     Deno.env.set("PATH", originalPath);
+    _resetNotifySendCache();
     restoreEnv("NAS_NOTIFY_ARGS_LOG", originalNotifyArgsLog);
     restoreEnv("NAS_NOTIFY_EXIT", originalNotifyExit);
     restoreEnv("NAS_NOTIFY_STDOUT", originalNotifyStdout);
