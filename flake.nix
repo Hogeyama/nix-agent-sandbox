@@ -20,7 +20,7 @@
           # FOD: needs network, output is hash-checked
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
-          outputHash = "sha256-ANp/QPjC9Fer35GiUtBJ0gp1+2BonnXnRcfhidUonj0=";
+          outputHash = "sha256-ZrlXu1OwsYhVfyas8bhCqjhWIwRFHJzdBdZRkvGWrYM=";
 
           buildPhase = ''
             export DENO_DIR="$out"
@@ -34,6 +34,39 @@
             # Pre-cache the denort runtime binary that deno compile needs
             echo 'Deno.exit(0)' > /tmp/_dummy.ts
             deno compile --output /tmp/_dummy /tmp/_dummy.ts
+
+            # Make DENO_DIR deterministic by normalizing volatile artifacts.
+            # WARNING: This is based on reverse-engineering Deno's internal
+            # cache format and may break on Deno version upgrades. If the FOD
+            # hash starts changing again or Phase 2 fails after a Deno update,
+            # inspect the new cache layout (see git log for the investigation).
+            #
+            # 1. Remote cached files have a trailing denoCacheMetadata comment
+            #    with per-request HTTP headers and timestamps. Normalize to
+            #    keep only url + content-type (needed for module resolution).
+            # 2. SQLite analysis caches have non-deterministic page metadata.
+            # 3. npm registry.json responses contain volatile fields.
+            deno eval '
+              for (const host of ["deno.land","jsr.io","esm.sh","dl.deno.land"]) {
+                const dir = Deno.args[0]+"/remote/https/"+host;
+                try { for (const e of Deno.readDirSync(dir)) {
+                  if (!e.isFile) continue;
+                  const p = dir+"/"+e.name;
+                  const t = Deno.readTextFileSync(p);
+                  const i = t.lastIndexOf("\n// denoCacheMetadata=");
+                  if (i < 0) continue;
+                  const j = JSON.parse(t.slice(i+22));
+                  const h = {};
+                  const ct = j.headers?.["content-type"];
+                  if (ct) h["content-type"] = ct;
+                  Deno.writeTextFileSync(p,
+                    t.slice(0,i)+"\n// denoCacheMetadata="+
+                    JSON.stringify({headers:h,time:0,url:j.url}));
+                } } catch {}
+              }
+            ' "$out"
+            find "$out" -name '*_cache_v2*' -delete
+            find "$out/npm" -name 'registry.json' -delete
           '';
 
           # The output IS the DENO_DIR
@@ -58,15 +91,8 @@
             cp -r ${nas-deps}/* "$DENO_DIR/"
             chmod -R u+w "$DENO_DIR"
 
-            # Build UI (esbuild bundles frontend TSX → src/ui/dist/)
-            deno task build-ui
-
-            # Compile standalone binary
-            deno compile --allow-all --cached-only \
-              --include src/docker/embed/ \
-              --include src/docker/envoy/ \
-              --include src/ui/dist/ \
-              --output nas main.ts
+            # Build UI + compile standalone binary (--cached-only, no network)
+            deno task compile:cached
           '';
 
           installPhase = ''
