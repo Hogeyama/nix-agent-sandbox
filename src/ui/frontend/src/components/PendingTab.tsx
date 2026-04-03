@@ -71,7 +71,7 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
         await api.approveNetwork(
           item.sessionId,
           item.requestId,
-          scopeMap[key] || "once",
+          scopeMap[key] || "host-port",
         );
       } else {
         await api.denyNetwork(item.sessionId, item.requestId);
@@ -165,7 +165,7 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
                     <td style={tdStyle}>
                       <select
                         style={selectStyle}
-                        value={scopeMap[key] || "once"}
+                        value={scopeMap[key] || "host-port"}
                         onChange={(e) =>
                           setScope(
                             key,
