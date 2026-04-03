@@ -13,6 +13,15 @@ export type NotifyBackend = "auto" | "desktop" | "off";
 let lastDesktopNotificationId: string | null = null;
 let notifySendMissingWarned = false;
 let xdgOpenMissingWarned = false;
+let _notifySendCmd: string | null = null;
+let _notifySendNeedsWarning = false;
+
+/** Reset cached notify-send command resolution. For testing only. */
+export function _resetNotifySendCache(): void {
+  _notifySendCmd = null;
+  _notifySendNeedsWarning = false;
+  notifySendMissingWarned = false;
+}
 
 export interface DesktopNotificationOptions {
   title: string;
@@ -31,9 +40,10 @@ export async function tryDesktopNotification(
   options: DesktopNotificationOptions,
 ): Promise<boolean> {
   if (options.signal?.aborted) return false;
+  const cmd = getNotifySendCommand();
   let child: Deno.ChildProcess;
   try {
-    child = new Deno.Command("notify-send", {
+    child = new Deno.Command(cmd, {
       args: [
         "--print-id",
         "--wait",
@@ -46,7 +56,6 @@ export async function tryDesktopNotification(
       stderr: "null",
     }).spawn();
   } catch {
-    // notify-send not found in PATH
     warnNotifySendMissing();
     return false;
   }
@@ -141,7 +150,7 @@ export async function tryCliActionNotification(
   if (options.signal?.aborted) return false;
   let child: Deno.ChildProcess;
   try {
-    child = new Deno.Command("notify-send", {
+    child = new Deno.Command(getNotifySendCommand(), {
       args: [
         "--print-id",
         "--wait",
@@ -198,14 +207,75 @@ export async function tryCliActionNotification(
   }
 }
 
+/**
+ * Check whether `notify-send` is available and warn if not.
+ * On WSL, the bundled shim is used automatically.
+ */
+export function checkNotifySend(): void {
+  getNotifySendCommand();
+  if (_notifySendNeedsWarning) {
+    warnNotifySendMissing();
+  }
+}
+
+function getNotifySendCommand(): string {
+  if (_notifySendCmd !== null) return _notifySendCmd;
+  if (findInPath("notify-send")) {
+    _notifySendCmd = "notify-send";
+  } else if (isWSL()) {
+    _notifySendCmd = extractWslShim();
+  } else {
+    _notifySendCmd = "notify-send";
+    _notifySendNeedsWarning = true;
+  }
+  return _notifySendCmd;
+}
+
+function findInPath(cmd: string): boolean {
+  for (const dir of (Deno.env.get("PATH") ?? "").split(":")) {
+    try {
+      Deno.statSync(`${dir}/${cmd}`);
+      return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+/**
+ * Read the bundled notify-send-wsl script and write it to a real file on disk
+ * so it can be spawned as a subprocess. deno compile embeds --include'd files
+ * in a virtual FS that is readable but not executable via spawn().
+ */
+function extractWslShim(): string {
+  const embeddedUrl = new URL(
+    "../../scripts/notify-send-wsl",
+    import.meta.url,
+  );
+  const embeddedPath = embeddedUrl.pathname;
+
+  // In dev (deno run) the file is already on disk — use it directly.
+  // In compiled mode import.meta.url is a virtual path under /tmp/deno-compile-*
+  // where Deno.statSync succeeds but the file cannot be spawned as a process.
+  const isCompiled = !path.basename(Deno.execPath()).startsWith("deno");
+  if (!isCompiled) return embeddedPath;
+
+  // deno compile: extract from virtual FS to a real temp file
+  const content = Deno.readTextFileSync(embeddedPath);
+  const tmpDir = Deno.makeTempDirSync({ prefix: "nas-wsl-shim-" });
+  const tmpPath = `${tmpDir}/notify-send-wsl`;
+  Deno.writeTextFileSync(tmpPath, content, { mode: 0o755 });
+  return tmpPath;
+}
+
 function warnNotifySendMissing(): void {
   if (notifySendMissingWarned) return;
   notifySendMissingWarned = true;
-  const hint = isWSL()
-    ? "Install the WSL shim for desktop notifications:\n" +
-      "      ln -s <repo>/scripts/notify-send-wsl ~/.local/bin/notify-send"
-    : "Install libnotify (e.g. apt install libnotify-bin) for desktop notifications.";
-  logWarn(`[nas] notify-send not found. ${hint}`);
+  logWarn(
+    "[nas] notify-send not found. " +
+      "Install libnotify (e.g. apt install libnotify-bin) for desktop notifications.",
+  );
 }
 
 // --- Internal helpers ---

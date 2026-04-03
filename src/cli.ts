@@ -14,6 +14,7 @@ import { DindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { setLogLevel } from "./log.ts";
+import { checkNotifySend } from "./lib/notify_utils.ts";
 import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
@@ -150,6 +151,18 @@ export async function main(args: string[]): Promise<void> {
       Deno.cwd(),
       logLevel,
     );
+
+    // notify-send の存在チェック（必要な場合のみ）
+    {
+      const networkNotify = effectiveProfile.network.prompt.notify;
+      const hostexecNotify = effectiveProfile.hostexec?.prompt.notify;
+      if (
+        (networkNotify === "auto" || networkNotify === "desktop") ||
+        (hostexecNotify === "auto" || hostexecNotify === "desktop")
+      ) {
+        checkNotifySend();
+      }
+    }
 
     if (config.ui.enable) {
       await ensureUiDaemon({
