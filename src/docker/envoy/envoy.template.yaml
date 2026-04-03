@@ -94,6 +94,10 @@ static_resources:
                       dns_cache_config:
                         name: dynamic_forward_proxy_cache
                         dns_lookup_family: V4_ONLY
+                        typed_dns_resolver_config:
+                          name: envoy.network.dns_resolver.getaddrinfo
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -108,6 +112,10 @@ static_resources:
           dns_cache_config:
             name: dynamic_forward_proxy_cache
             dns_lookup_family: V4_ONLY
+            typed_dns_resolver_config:
+              name: envoy.network.dns_resolver.getaddrinfo
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
     - name: auth-router
       connect_timeout: 300s
       type: STATIC

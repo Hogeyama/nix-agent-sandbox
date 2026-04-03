@@ -275,7 +275,7 @@ async function ensureSharedEnvoy(
   await dockerRunDetached({
     name: envoyContainerName,
     image: ENVOY_IMAGE,
-    args: [],
+    args: ["--add-host=host.docker.internal:host-gateway"],
     envVars: {},
     mounts: [
       {
