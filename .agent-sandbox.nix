@@ -8,6 +8,9 @@ let
       enable = true;
       shared = true;
     };
+    display = {
+      enable = true;
+    };
     gcloud = {
       mount-config = false;
     };
@@ -17,6 +20,10 @@ let
     gpg = {
       forward-agent = false;
     };
+    extra-mounts = [
+      # playwright-cliを試すため
+      { src = "~/.local/share/pnpm"; dst = "~/.local/share/pnpm"; }
+    ];
   };
 
   common_network = {
@@ -96,6 +103,13 @@ let
       { key = "GIT_CONFIG_COUNT"; val = "1"; }
       { key = "GIT_CONFIG_KEY_0"; val = "gpg.program"; }
       { key = "GIT_CONFIG_VALUE_0"; val = "gpg"; }
+      # playwright-cliを試すため
+      {
+        key = "PATH";
+        val = "~/.local/share/pnpm";
+        mode = "prefix";
+        separator = ":";
+      }
     ];
   };
 

@@ -13,7 +13,29 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.deno ];
+          packages = [
+            pkgs.deno
+            pkgs.pnpm
+            pkgs.chromium
+          ];
+
+          shellHook = ''
+            if [ ! -f .playwright/cli.config.json ]; then
+              mkdir -p .playwright
+              cat > .playwright/cli.config.json <<EOF
+            {
+              "browser": {
+                "browserName": "chromium",
+                "launchOptions": {
+                  "executablePath": "${pkgs.chromium}/bin/chromium",
+                  "args": ["--force-device-scale-factor=2"],
+                  "chromiumSandbox": false
+                }
+              }
+            }
+            EOF
+            fi
+          '';
         };
       });
 }
