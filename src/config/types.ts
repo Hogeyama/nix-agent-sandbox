@@ -144,8 +144,14 @@ export type EnvKeySpec = { key: string } | { keyCmd: string };
 /** 環境変数の値指定 */
 export type EnvValSpec = { val: string } | { valCmd: string };
 
-/** 環境変数エントリ (key/key_cmd × val/val_cmd の4通り) */
-export type EnvConfig = EnvKeySpec & EnvValSpec;
+/** 環境変数の操作モード */
+export type EnvMode = "set" | "prefix" | "suffix";
+
+/** 環境変数エントリ (key/key_cmd × val/val_cmd × mode の組み合わせ) */
+export type EnvConfig = EnvKeySpec & EnvValSpec & {
+  mode: EnvMode;
+  separator?: string;
+};
 
 /** プロファイル */
 export interface Profile {
@@ -251,6 +257,8 @@ export interface RawProfile {
     val?: string;
     key_cmd?: string;
     val_cmd?: string;
+    mode?: string;
+    separator?: string;
   }>;
   hostexec?: {
     prompt?: {

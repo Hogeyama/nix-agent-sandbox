@@ -11,6 +11,28 @@ import { configureCopilot } from "../agents/copilot.ts";
 import { configureCodex } from "../agents/codex.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Shell-safe single-quoting (escape embedded single quotes) */
+function shellQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/** Encode prefix/suffix ops as shell commands for container-runtime evaluation */
+export function encodeDynamicEnvOps(
+  ops: ReadonlyArray<{
+    mode: "prefix" | "suffix";
+    key: string;
+    value: string;
+    separator: string;
+  }>,
+): string {
+  return ops.map((op) => {
+    const fn = op.mode === "prefix" ? "__nas_pfx" : "__nas_sfx";
+    return `${fn} ${shellQuote(op.key)} ${shellQuote(op.value)} ${
+      shellQuote(op.separator)
+    }`;
+  }).join("\n");
+}
 const DEFAULT_CONTAINER_USER = "nas";
 const RESERVED_EXTRA_MOUNT_DESTINATIONS = ["/nix"] as const;
 
@@ -225,6 +247,17 @@ export class MountStage implements Stage {
     }
 
     // プロファイルの環境変数
+    // prefix/suffix で envVars に未登録のキーはコンテナ既定値を参照する必要があるため、
+    // 実行時に評価されるシェルコマンド (NAS_ENV_OPS) として渡す。
+    const dynamicEnvOps: Array<
+      {
+        mode: "prefix" | "suffix";
+        key: string;
+        value: string;
+        separator: string;
+      }
+    > = [];
+
     for (const [index, envEntry] of result.profile.env.entries()) {
       const key = "key" in envEntry ? envEntry.key : await runCommandForEnv(
         envEntry.keyCmd,
@@ -236,11 +269,52 @@ export class MountStage implements Stage {
           `[nas] Invalid env var name from profile.env[${index}].${source}: ${key}`,
         );
       }
-      const value = "val" in envEntry ? envEntry.val : await runCommandForEnv(
-        envEntry.valCmd,
-        `profile.env[${index}].val_cmd`,
-      );
-      envVars[key] = value;
+      const rawValue = "val" in envEntry
+        ? envEntry.val
+        : await runCommandForEnv(
+          envEntry.valCmd,
+          `profile.env[${index}].val_cmd`,
+        );
+      const value = expandContainerPath(rawValue, containerHome);
+      switch (envEntry.mode) {
+        case "prefix":
+          if (key in envVars) {
+            envVars[key] = `${value}${envEntry.separator}${envVars[key]}`;
+          } else {
+            dynamicEnvOps.push({
+              mode: "prefix",
+              key,
+              value,
+              separator: envEntry.separator!,
+            });
+          }
+          break;
+        case "suffix":
+          if (key in envVars) {
+            envVars[key] = `${envVars[key]}${envEntry.separator}${value}`;
+          } else {
+            dynamicEnvOps.push({
+              mode: "suffix",
+              key,
+              value,
+              separator: envEntry.separator!,
+            });
+          }
+          break;
+        default: // "set"
+          envVars[key] = value;
+          // set はそれ以前の dynamic ops を上書きする
+          for (let i = dynamicEnvOps.length - 1; i >= 0; i--) {
+            if (dynamicEnvOps[i].key === key) {
+              dynamicEnvOps.splice(i, 1);
+            }
+          }
+          break;
+      }
+    }
+
+    if (dynamicEnvOps.length > 0) {
+      envVars["NAS_ENV_OPS"] = encodeDynamicEnvOps(dynamicEnvOps);
     }
 
     result = { ...result, dockerArgs: args, envVars };

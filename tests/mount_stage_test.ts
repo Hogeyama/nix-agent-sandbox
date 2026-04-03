@@ -37,10 +37,11 @@ Deno.test("MountStage: resolves static and command env", async () => {
   const profile: Profile = {
     ...baseProfile,
     env: [
-      { key: "STATIC_KEY", val: "static_value" },
+      { key: "STATIC_KEY", val: "static_value", mode: "set" as const },
       {
         keyCmd: "printf DYNAMIC_KEY",
         valCmd: "printf dynamic_value",
+        mode: "set" as const,
       },
     ],
   };
@@ -127,6 +128,7 @@ Deno.test("MountStage: invalid dynamic key throws", async () => {
     env: [{
       keyCmd: "printf INVALID-KEY",
       valCmd: "printf dynamic_value",
+      mode: "set" as const,
     }],
   };
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());

@@ -64,10 +64,10 @@ function getContainerHome(): string {
 Deno.test("MountStage: valid env var names accepted", async () => {
   const profile = makeProfile({
     env: [
-      { key: "SIMPLE", val: "value" },
-      { key: "_UNDERSCORE_START", val: "value" },
-      { key: "WITH_123_NUMBERS", val: "value" },
-      { key: "A", val: "single-char" },
+      { key: "SIMPLE", val: "value", mode: "set" as const },
+      { key: "_UNDERSCORE_START", val: "value", mode: "set" as const },
+      { key: "WITH_123_NUMBERS", val: "value", mode: "set" as const },
+      { key: "A", val: "single-char", mode: "set" as const },
     ],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
@@ -81,10 +81,14 @@ Deno.test("MountStage: valid env var names accepted", async () => {
 Deno.test("MountStage: static env var with special chars in value", async () => {
   const profile = makeProfile({
     env: [
-      { key: "URL", val: "https://example.com/path?foo=bar&baz=qux" },
-      { key: "JSON", val: '{"key": "value"}' },
-      { key: "SPACES", val: "hello world" },
-      { key: "EMPTY", val: "" },
+      {
+        key: "URL",
+        val: "https://example.com/path?foo=bar&baz=qux",
+        mode: "set" as const,
+      },
+      { key: "JSON", val: '{"key": "value"}', mode: "set" as const },
+      { key: "SPACES", val: "hello world", mode: "set" as const },
+      { key: "EMPTY", val: "", mode: "set" as const },
     ],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
@@ -100,7 +104,7 @@ Deno.test("MountStage: static env var with special chars in value", async () => 
 
 Deno.test("MountStage: invalid static env key (starts with number)", async () => {
   const profile = makeProfile({
-    env: [{ key: "123BAD", val: "value" }],
+    env: [{ key: "123BAD", val: "value", mode: "set" as const }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   await assertRejects(
@@ -112,7 +116,7 @@ Deno.test("MountStage: invalid static env key (starts with number)", async () =>
 
 Deno.test("MountStage: invalid static env key (contains dash)", async () => {
   const profile = makeProfile({
-    env: [{ key: "MY-VAR", val: "value" }],
+    env: [{ key: "MY-VAR", val: "value", mode: "set" as const }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   await assertRejects(
@@ -124,7 +128,7 @@ Deno.test("MountStage: invalid static env key (contains dash)", async () => {
 
 Deno.test("MountStage: invalid static env key (contains dot)", async () => {
   const profile = makeProfile({
-    env: [{ key: "MY.VAR", val: "value" }],
+    env: [{ key: "MY.VAR", val: "value", mode: "set" as const }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   await assertRejects(
@@ -136,7 +140,11 @@ Deno.test("MountStage: invalid static env key (contains dot)", async () => {
 
 Deno.test("MountStage: dynamic key command producing valid name", async () => {
   const profile = makeProfile({
-    env: [{ keyCmd: "printf VALID_KEY", valCmd: "printf hello" }],
+    env: [{
+      keyCmd: "printf VALID_KEY",
+      valCmd: "printf hello",
+      mode: "set" as const,
+    }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   const result = await new MountStage().execute(ctx);
@@ -145,7 +153,11 @@ Deno.test("MountStage: dynamic key command producing valid name", async () => {
 
 Deno.test("MountStage: dynamic key command producing invalid name", async () => {
   const profile = makeProfile({
-    env: [{ keyCmd: "printf 'BAD KEY'", valCmd: "printf value" }],
+    env: [{
+      keyCmd: "printf 'BAD KEY'",
+      valCmd: "printf value",
+      mode: "set" as const,
+    }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   await assertRejects(
@@ -157,7 +169,7 @@ Deno.test("MountStage: dynamic key command producing invalid name", async () => 
 
 Deno.test("MountStage: dynamic val command that fails", async () => {
   const profile = makeProfile({
-    env: [{ keyCmd: "printf MY_KEY", valCmd: "false" }],
+    env: [{ keyCmd: "printf MY_KEY", valCmd: "false", mode: "set" as const }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   await assertRejects(
@@ -169,7 +181,11 @@ Deno.test("MountStage: dynamic val command that fails", async () => {
 
 Deno.test("MountStage: dynamic key command that returns empty", async () => {
   const profile = makeProfile({
-    env: [{ keyCmd: "printf ''", valCmd: "printf value" }],
+    env: [{
+      keyCmd: "printf ''",
+      valCmd: "printf value",
+      mode: "set" as const,
+    }],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
   await assertRejects(
@@ -182,10 +198,10 @@ Deno.test("MountStage: dynamic key command that returns empty", async () => {
 Deno.test("MountStage: multiple env vars including both static and dynamic", async () => {
   const profile = makeProfile({
     env: [
-      { key: "STATIC_A", val: "a" },
-      { keyCmd: "printf DYNAMIC_B", valCmd: "printf b" },
-      { key: "STATIC_C", val: "c" },
-      { keyCmd: "printf DYNAMIC_D", valCmd: "printf d" },
+      { key: "STATIC_A", val: "a", mode: "set" as const },
+      { keyCmd: "printf DYNAMIC_B", valCmd: "printf b", mode: "set" as const },
+      { key: "STATIC_C", val: "c", mode: "set" as const },
+      { keyCmd: "printf DYNAMIC_D", valCmd: "printf d", mode: "set" as const },
     ],
   });
   const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
@@ -194,6 +210,160 @@ Deno.test("MountStage: multiple env vars including both static and dynamic", asy
   assertEquals(result.envVars["DYNAMIC_B"], "b");
   assertEquals(result.envVars["STATIC_C"], "c");
   assertEquals(result.envVars["DYNAMIC_D"], "d");
+});
+
+// --- env prefix/suffix モード ---
+
+Deno.test("MountStage: prefix mode prepends to existing var", async () => {
+  const profile = makeProfile({
+    env: [
+      { key: "MY_PATH", val: "/usr/bin", mode: "set" as const },
+      {
+        key: "MY_PATH",
+        val: "/opt/bin",
+        mode: "prefix" as const,
+        separator: ":",
+      },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["MY_PATH"], "/opt/bin:/usr/bin");
+});
+
+Deno.test("MountStage: suffix mode appends to existing var", async () => {
+  const profile = makeProfile({
+    env: [
+      { key: "MY_PATH", val: "/usr/bin", mode: "set" as const },
+      {
+        key: "MY_PATH",
+        val: "/opt/lib",
+        mode: "suffix" as const,
+        separator: ":",
+      },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["MY_PATH"], "/usr/bin:/opt/lib");
+});
+
+Deno.test("MountStage: prefix on unset var generates NAS_ENV_OPS", async () => {
+  const profile = makeProfile({
+    env: [
+      {
+        key: "NEW_VAR",
+        val: "/opt/bin",
+        mode: "prefix" as const,
+        separator: ":",
+      },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["NEW_VAR"], undefined);
+  assertEquals(
+    result.envVars["NAS_ENV_OPS"],
+    "__nas_pfx 'NEW_VAR' '/opt/bin' ':'",
+  );
+});
+
+Deno.test("MountStage: suffix on unset var generates NAS_ENV_OPS", async () => {
+  const profile = makeProfile({
+    env: [
+      {
+        key: "NEW_VAR",
+        val: "/opt/lib",
+        mode: "suffix" as const,
+        separator: ":",
+      },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["NEW_VAR"], undefined);
+  assertEquals(
+    result.envVars["NAS_ENV_OPS"],
+    "__nas_sfx 'NEW_VAR' '/opt/lib' ':'",
+  );
+});
+
+Deno.test("MountStage: multiple prefix entries generate ordered NAS_ENV_OPS", async () => {
+  const profile = makeProfile({
+    env: [
+      {
+        key: "MY_PATH",
+        val: "/opt/a",
+        mode: "prefix" as const,
+        separator: ":",
+      },
+      {
+        key: "MY_PATH",
+        val: "/opt/b",
+        mode: "prefix" as const,
+        separator: ":",
+      },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["MY_PATH"], undefined);
+  assertEquals(
+    result.envVars["NAS_ENV_OPS"],
+    "__nas_pfx 'MY_PATH' '/opt/a' ':'\n__nas_pfx 'MY_PATH' '/opt/b' ':'",
+  );
+});
+
+Deno.test("MountStage: prefix with empty separator concatenates directly", async () => {
+  const profile = makeProfile({
+    env: [
+      { key: "FLAGS", val: "-O2", mode: "set" as const },
+      {
+        key: "FLAGS",
+        val: " -Wall",
+        mode: "suffix" as const,
+        separator: "",
+      },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["FLAGS"], "-O2 -Wall");
+});
+
+Deno.test("MountStage: prefix with val_cmd", async () => {
+  const profile = makeProfile({
+    env: [
+      { key: "MY_PATH", val: "/usr/bin", mode: "set" as const },
+      {
+        key: "MY_PATH",
+        valCmd: "printf /opt/dynamic",
+        mode: "prefix" as const,
+        separator: ":",
+      },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["MY_PATH"], "/opt/dynamic:/usr/bin");
+});
+
+Deno.test("MountStage: set after prefix replaces entire value", async () => {
+  const profile = makeProfile({
+    env: [
+      {
+        key: "MY_PATH",
+        val: "/opt/bin",
+        mode: "prefix" as const,
+        separator: ":",
+      },
+      { key: "MY_PATH", val: "/only/this", mode: "set" as const },
+    ],
+  });
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["MY_PATH"], "/only/this");
+  assertEquals(result.envVars["NAS_ENV_OPS"], undefined);
 });
 
 // --- extra-mounts バリデーション ---

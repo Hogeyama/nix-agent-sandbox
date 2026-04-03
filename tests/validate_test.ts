@@ -544,7 +544,11 @@ Deno.test("validate: static env entry", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0], { key: "FOO", val: "bar" });
+  assertEquals(config.profiles.test.env[0], {
+    key: "FOO",
+    val: "bar",
+    mode: "set",
+  });
 });
 
 Deno.test("validate: command env entry", () => {
@@ -559,6 +563,7 @@ Deno.test("validate: command env entry", () => {
   assertEquals(config.profiles.test.env[0], {
     keyCmd: "echo KEY",
     valCmd: "echo VAL",
+    mode: "set",
   });
 });
 
@@ -639,6 +644,178 @@ Deno.test("validate: command env empty val_cmd throws", () => {
     ConfigValidationError,
     "env[0].val_cmd",
   );
+});
+
+// --- env mode / separator バリデーション ---
+
+Deno.test("validate: env prefix mode with separator", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        env: [{ key: "PATH", val: "/opt/bin", mode: "prefix", separator: ":" }],
+      },
+    },
+  });
+  assertEquals(config.profiles.test.env[0], {
+    key: "PATH",
+    val: "/opt/bin",
+    mode: "prefix",
+    separator: ":",
+  });
+});
+
+Deno.test("validate: env suffix mode with separator", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        env: [
+          {
+            key: "LD_LIBRARY_PATH",
+            val: "/opt/lib",
+            mode: "suffix",
+            separator: ":",
+          },
+        ],
+      },
+    },
+  });
+  assertEquals(config.profiles.test.env[0], {
+    key: "LD_LIBRARY_PATH",
+    val: "/opt/lib",
+    mode: "suffix",
+    separator: ":",
+  });
+});
+
+Deno.test("validate: env prefix mode with val_cmd", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        env: [
+          {
+            key: "PYTHONPATH",
+            val_cmd: "echo /opt/py",
+            mode: "prefix",
+            separator: ":",
+          },
+        ],
+      },
+    },
+  });
+  assertEquals(config.profiles.test.env[0], {
+    key: "PYTHONPATH",
+    valCmd: "echo /opt/py",
+    mode: "prefix",
+    separator: ":",
+  });
+});
+
+Deno.test("validate: env mode defaults to set when omitted", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        env: [{ key: "FOO", val: "bar" }],
+      },
+    },
+  });
+  assertEquals(config.profiles.test.env[0].mode, "set");
+});
+
+Deno.test("validate: env prefix without separator throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            env: [{ key: "PATH", val: "/opt/bin", mode: "prefix" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "separator is required",
+  );
+});
+
+Deno.test("validate: env suffix without separator throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            env: [{ key: "PATH", val: "/opt/bin", mode: "suffix" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "separator is required",
+  );
+});
+
+Deno.test("validate: env set mode with separator throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            env: [{ key: "FOO", val: "bar", mode: "set", separator: ":" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "separator is only allowed",
+  );
+});
+
+Deno.test("validate: env omitted mode with separator throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            env: [{ key: "FOO", val: "bar", separator: ":" }],
+          },
+        },
+      }),
+    ConfigValidationError,
+    "separator is only allowed",
+  );
+});
+
+Deno.test("validate: env invalid mode throws", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            env: [
+              { key: "FOO", val: "bar", mode: "prepend", separator: ":" },
+            ],
+          },
+        },
+      }),
+    ConfigValidationError,
+  );
+});
+
+Deno.test("validate: env prefix with empty separator allowed", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        env: [{ key: "FLAGS", val: "-Wall", mode: "prefix", separator: "" }],
+      },
+    },
+  });
+  assertEquals(config.profiles.test.env[0].separator, "");
 });
 
 // --- 複数プロファイルの独立バリデーション ---

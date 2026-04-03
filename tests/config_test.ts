@@ -77,10 +77,11 @@ Deno.test("validateConfig: full config", () => {
     { src: "~/.cabal", dst: "~/.cabal", mode: "ro" },
     { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
   ]);
-  assertEquals(p.env[0], { key: "FOO", val: "bar" });
+  assertEquals(p.env[0], { key: "FOO", val: "bar", mode: "set" });
   assertEquals(p.env[1], {
     keyCmd: "printf BAR",
     valCmd: "printf baz",
+    mode: "set",
   });
 });
 

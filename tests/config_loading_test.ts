@@ -144,7 +144,7 @@ profiles:
       dst: "/mnt/host-tmp",
       mode: "rw",
     });
-    assertEquals(p.env[0], { key: "MY_VAR", val: "my_value" });
+    assertEquals(p.env[0], { key: "MY_VAR", val: "my_value", mode: "set" });
   });
 });
 
@@ -327,10 +327,15 @@ profiles:
   await withTempConfig(yaml, async (dir) => {
     const config = await loadConfig({ startDir: dir, globalConfigPath: null });
     assertEquals(config.profiles.test.env.length, 2);
-    assertEquals(config.profiles.test.env[0], { key: "STATIC", val: "hello" });
+    assertEquals(config.profiles.test.env[0], {
+      key: "STATIC",
+      val: "hello",
+      mode: "set",
+    });
     assertEquals(config.profiles.test.env[1], {
       keyCmd: "printf DYNAMIC",
       valCmd: "printf world",
+      mode: "set",
     });
   });
 });
@@ -1064,7 +1069,7 @@ Deno.test("loadConfig: .nix with full profile fields", async () => {
     assertEquals(p.docker.enable, true);
     assertEquals(p.extraMounts.length, 1);
     assertEquals(p.extraMounts[0].mode, "rw");
-    assertEquals(p.env[0], { key: "MY_VAR", val: "my_value" });
+    assertEquals(p.env[0], { key: "MY_VAR", val: "my_value", mode: "set" });
   });
 });
 

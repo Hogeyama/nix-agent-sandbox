@@ -10,6 +10,29 @@ nas_info() {
   echo "$@"
 }
 
+# --- 環境変数 prefix/suffix 適用 ---
+__nas_pfx() {
+  local key="$1" val="$2" sep="$3"
+  if [ -n "${!key+x}" ]; then
+    export "$key=${val}${sep}${!key}"
+  else
+    export "$key=${val}"
+  fi
+}
+__nas_sfx() {
+  local key="$1" val="$2" sep="$3"
+  if [ -n "${!key+x}" ]; then
+    export "$key=${!key}${sep}${val}"
+  else
+    export "$key=${val}"
+  fi
+}
+if [ -n "${NAS_ENV_OPS:-}" ]; then
+  eval "$NAS_ENV_OPS"
+  unset NAS_ENV_OPS
+fi
+unset -f __nas_pfx __nas_sfx 2>/dev/null || true
+
 # --- Nix セットアップ ---
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_BIN_PATH:-}" ]; then
   # ホストの nix バイナリ (/nix/store/... 内) へのシンボリックリンクを作成

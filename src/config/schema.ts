@@ -6,7 +6,7 @@
 
 import { z } from "zod";
 import { type ApprovalScope, normalizeHost } from "../network/protocol.ts";
-import type { EnvConfig, HostExecRule, Profile } from "./types.ts";
+import type { EnvConfig, EnvMode, HostExecRule, Profile } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_SESSION_CONFIG,
@@ -152,6 +152,8 @@ const envEntrySchema = z.object(
     key_cmd: z.string().optional(),
     val: z.string().optional(),
     val_cmd: z.string().optional(),
+    mode: z.enum(["set", "prefix", "suffix"]).optional(),
+    separator: z.string().optional(),
   },
   { invalid_type_error: "must be an object" },
 ).superRefine((entry, ctx) => {
@@ -207,6 +209,25 @@ const envEntrySchema = z.object(
       });
     }
   }
+  // mode / separator cross-validation
+  const mode = entry.mode ?? "set";
+  if (mode === "set") {
+    if (entry.separator !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["separator"],
+        message: 'separator is only allowed when mode is "prefix" or "suffix"',
+      });
+    }
+  } else {
+    if (entry.separator === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["separator"],
+        message: `separator is required when mode is "${mode}"`,
+      });
+    }
+  }
 }).transform((entry) => {
   const keySpec = entry.key !== undefined
     ? { key: entry.key }
@@ -214,7 +235,13 @@ const envEntrySchema = z.object(
   const valSpec = entry.val !== undefined
     ? { val: entry.val }
     : { valCmd: entry.val_cmd! };
-  return { ...keySpec, ...valSpec } as EnvConfig;
+  const mode = (entry.mode ?? "set") as EnvMode;
+  return {
+    ...keySpec,
+    ...valSpec,
+    mode,
+    ...(entry.separator !== undefined ? { separator: entry.separator } : {}),
+  } as EnvConfig;
 });
 
 export const envSchema = z.array(
