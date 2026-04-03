@@ -24,9 +24,13 @@ export async function promptWorktreeAction(
   console.log("  2. Keep");
 
   while (true) {
-    const answer = prompt("[nas] Choose [1/2]:")?.trim() ?? "";
-    if (answer === "1") return "delete";
-    if (answer === "2") return "keep";
+    const answer = prompt("[nas] Choose [1/2]:");
+    if (answer === null) {
+      console.log("[nas] stdin closed, keeping worktree.");
+      return "keep";
+    }
+    if (answer.trim() === "1") return "delete";
+    if (answer.trim() === "2") return "keep";
     console.log("[nas] Please enter 1 or 2.");
   }
 }
@@ -44,10 +48,14 @@ export async function promptDirtyWorktreeAction(
   console.log("  3. Keep");
 
   while (true) {
-    const answer = prompt("[nas] Choose [1/2/3]:")?.trim() ?? "";
-    if (answer === "1") return "stash";
-    if (answer === "2") return "delete";
-    if (answer === "3") return "keep";
+    const answer = prompt("[nas] Choose [1/2/3]:");
+    if (answer === null) {
+      console.log("[nas] stdin closed, keeping worktree.");
+      return "keep";
+    }
+    if (answer.trim() === "1") return "stash";
+    if (answer.trim() === "2") return "delete";
+    if (answer.trim() === "3") return "keep";
     console.log("[nas] Please enter 1, 2, or 3.");
   }
 }
@@ -76,10 +84,14 @@ export async function promptBranchAction(
   console.log("  3. Rename and keep");
 
   while (true) {
-    const answer = prompt("[nas] Choose [1/2/3]:")?.trim() ?? "";
-    if (answer === "1") return "delete";
-    if (answer === "2") return "cherry-pick";
-    if (answer === "3") return "rename";
+    const answer = prompt("[nas] Choose [1/2/3]:");
+    if (answer === null) {
+      console.log("[nas] stdin closed, keeping branch.");
+      return "rename";
+    }
+    if (answer.trim() === "1") return "delete";
+    if (answer.trim() === "2") return "cherry-pick";
+    if (answer.trim() === "3") return "rename";
     console.log("[nas] Please enter 1, 2, or 3.");
   }
 }
@@ -98,7 +110,11 @@ export function promptReuseWorktree(
 
   while (true) {
     const raw = prompt(`[nas] Choose [0-${entries.length}]:`);
-    const answer = raw?.trim() ?? "";
+    if (raw === null) {
+      console.log("[nas] stdin closed, creating new worktree.");
+      return null;
+    }
+    const answer = raw.trim();
     if (answer === "0" || answer === "") return null;
     const idx = parseInt(answer, 10);
     if (idx >= 1 && idx <= entries.length) return entries[idx - 1];
