@@ -1,16 +1,28 @@
 import { useMemo, useState } from "preact/hooks";
-import type { AuditLogEntry } from "../api.ts";
+import type { AuditLogEntry, SessionsData } from "../api.ts";
 
 export interface AuditTabProps {
   items: AuditLogEntry[];
+  sessions: SessionsData;
 }
 
-export function AuditTab({ items }: AuditTabProps) {
+export function AuditTab({ items, sessions }: AuditTabProps) {
   const [domainFilter, setDomainFilter] = useState<string>("all");
   const [sessionFilter, setSessionFilter] = useState<string>("");
+  const [activeOnly, setActiveOnly] = useState<boolean>(true);
+
+  const activeSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const s of sessions.network) ids.add(s.sessionId);
+    for (const s of sessions.hostexec) ids.add(s.sessionId);
+    return ids;
+  }, [sessions]);
 
   const filtered = useMemo(() => {
     let result = items;
+    if (activeOnly) {
+      result = result.filter((e) => activeSessionIds.has(e.sessionId));
+    }
     if (domainFilter !== "all") {
       result = result.filter((e) => e.domain === domainFilter);
     }
@@ -18,8 +30,12 @@ export function AuditTab({ items }: AuditTabProps) {
       const q = sessionFilter.trim().toLowerCase();
       result = result.filter((e) => e.sessionId.toLowerCase().includes(q));
     }
+    // Sort by timestamp descending (newest first)
+    result = [...result].sort((a, b) =>
+      b.timestamp.localeCompare(a.timestamp)
+    );
     return result;
-  }, [items, domainFilter, sessionFilter]);
+  }, [items, domainFilter, sessionFilter, activeOnly, activeSessionIds]);
 
   return (
     <div>
@@ -54,6 +70,24 @@ export function AuditTab({ items }: AuditTabProps) {
               setSessionFilter((e.target as HTMLInputElement).value)}
             style={inputStyle}
           />
+        </label>
+        <label
+          style={{
+            color: "#94a3b8",
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={activeOnly}
+            onChange={(e) =>
+              setActiveOnly((e.target as HTMLInputElement).checked)}
+          />
+          Active sessions only
         </label>
         <span style={{ color: "#64748b", fontSize: "12px", marginLeft: "auto" }}>
           {filtered.length} / {items.length} entries

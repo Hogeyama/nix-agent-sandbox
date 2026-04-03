@@ -8,6 +8,7 @@ import type {
   AuditLogEntry,
   HostExecPendingItem,
   NetworkPendingItem,
+  SessionsData,
 } from "./api.ts";
 
 type TabId = "pending" | "containers" | "audit";
@@ -33,6 +34,10 @@ export function App() {
     HostExecPendingItem[]
   >([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [sessions, setSessions] = useState<SessionsData>({
+    network: [],
+    hostexec: [],
+  });
 
   const deepLink = useMemo<DeepLink | null>(() => {
     const params = new URLSearchParams(globalThis.location?.search ?? "");
@@ -66,6 +71,9 @@ export function App() {
           break;
         case "hostexec:pending":
           setHostExecPending(d.items as HostExecPendingItem[]);
+          break;
+        case "sessions":
+          setSessions(d as unknown as SessionsData);
           break;
         case "audit:logs":
           setAuditLogs(d.items as AuditLogEntry[]);
@@ -123,7 +131,9 @@ export function App() {
           />
         )}
         {activeTab === "containers" && <ContainersTab />}
-        {activeTab === "audit" && <AuditTab items={auditLogs} />}
+        {activeTab === "audit" && (
+          <AuditTab items={auditLogs} sessions={sessions} />
+        )}
       </div>
     </div>
   );
