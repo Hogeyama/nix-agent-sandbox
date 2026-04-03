@@ -37,12 +37,20 @@ export async function loadConfig(
     ? null
     : await loadGlobalConfig(opts.globalConfigPath);
   const found = await findConfigFile(opts.startDir ?? Deno.cwd());
-  const localRaw = found ? await loadLocalConfig(found) : null;
+
+  // Nix ローカル設定が関数の場合、グローバル設定を super として渡す
+  const localRaw = found ? await loadLocalConfig(found, globalRaw) : null;
 
   if (!globalRaw && !localRaw) {
     throw new Error(
       `${CONFIG_FILENAME_YML} (or ${CONFIG_FILENAME_NIX}) not found in current directory or parent directories, and no global config found in ${GLOBAL_CONFIG_DIR}`,
     );
+  }
+
+  // Nix 関数でマージ済みの場合は TypeScript マージをスキップ
+  if (localRaw?._nixFunctionMerged) {
+    const { _nixFunctionMerged: _, ...raw } = localRaw;
+    return validateConfig(raw);
   }
 
   const merged = mergeRawConfigs(globalRaw, localRaw);
@@ -209,11 +217,12 @@ interface ConfigFileFound {
 /** ローカル設定ファイルを読み込む */
 async function loadLocalConfig(
   found: ConfigFileFound,
-): Promise<RawConfig> {
+  globalRaw?: RawConfig | null,
+): Promise<RawConfig & { _nixFunctionMerged?: boolean }> {
   if (found.format === "yml") {
     return parseYaml(await Deno.readTextFile(found.path)) as RawConfig;
   }
-  return await loadNixConfig(found.path);
+  return await loadNixConfig(found.path, globalRaw ?? undefined);
 }
 
 /** nix コマンドが PATH 上に存在するか確認する */
@@ -231,27 +240,71 @@ async function nixCommandExists(): Promise<boolean> {
   }
 }
 
-/** .agent-sandbox.nix を nix eval で評価して RawConfig を得る */
-async function loadNixConfig(nixPath: string): Promise<RawConfig> {
+/**
+ * .agent-sandbox.nix を nix eval で評価して RawConfig を得る。
+ *
+ * Nix 式が関数の場合、globalRaw を引数 (super) として適用する。
+ * 関数でマージされた場合、返り値に _nixFunctionMerged: true を付与する。
+ */
+async function loadNixConfig(
+  nixPath: string,
+  globalRaw?: RawConfig,
+): Promise<RawConfig & { _nixFunctionMerged?: boolean }> {
   if (!await nixCommandExists()) {
     throw new Error(
       `Found ${CONFIG_FILENAME_NIX} at ${nixPath}, but 'nix' command is not available on PATH. Install Nix or use ${CONFIG_FILENAME_YML} instead.`,
     );
   }
-  const cmd = new Deno.Command("nix", {
-    args: ["eval", "--impure", "--json", "--file", nixPath],
-    stdout: "piped",
-    stderr: "piped",
+
+  const globalJson = JSON.stringify(globalRaw ?? {});
+
+  // グローバル設定を一時ファイルに書き出す
+  const globalFile = await Deno.makeTempFile({
+    prefix: "nas-global-",
+    suffix: ".json",
   });
-  const { code, stdout, stderr } = await cmd.output();
-  if (code !== 0) {
-    const errMsg = new TextDecoder().decode(stderr).trim();
-    throw new Error(
-      `Failed to evaluate ${nixPath}: nix eval exited with code ${code}\n${errMsg}`,
-    );
+  try {
+    await Deno.writeTextFile(globalFile, globalJson);
+
+    // Nix 式: 関数なら super を渡す、attrset ならそのまま返す
+    const nixExpr = `
+      let
+        local = import ${nixPath};
+        global = builtins.fromJSON (builtins.readFile ${globalFile});
+      in
+        if builtins.isFunction local then
+          { value = local global; __nixFunctionMerged = true; }
+        else
+          { value = local; __nixFunctionMerged = false; }
+    `;
+    const cmd = new Deno.Command("nix", {
+      args: ["eval", "--impure", "--json", "--expr", nixExpr],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stdout, stderr } = await cmd.output();
+    if (code !== 0) {
+      const errMsg = new TextDecoder().decode(stderr).trim();
+      throw new Error(
+        `Failed to evaluate ${nixPath}: nix eval exited with code ${code}\n${errMsg}`,
+      );
+    }
+    const json = new TextDecoder().decode(stdout);
+    const result = JSON.parse(json) as {
+      value: RawConfig;
+      __nixFunctionMerged: boolean;
+    };
+    if (result.__nixFunctionMerged) {
+      return { ...result.value, _nixFunctionMerged: true };
+    }
+    return result.value;
+  } finally {
+    try {
+      await Deno.remove(globalFile);
+    } catch {
+      // cleanup best-effort
+    }
   }
-  const json = new TextDecoder().decode(stdout);
-  return JSON.parse(json) as RawConfig;
 }
 
 /** 指定ディレクトリから上位に向かって設定ファイルを探す (.yml 優先、なければ .nix) */
