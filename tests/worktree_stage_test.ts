@@ -10,6 +10,7 @@ import $ from "dax";
 import * as path from "@std/path";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
@@ -45,6 +46,7 @@ function createTestProfile(base: string): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],

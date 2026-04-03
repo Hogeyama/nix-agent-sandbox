@@ -1,6 +1,9 @@
 import { assertEquals } from "@std/assert";
 import * as path from "@std/path";
-import { DEFAULT_UI_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import { HostExecStage } from "../src/stages/hostexec.ts";
@@ -14,6 +17,7 @@ function makeProfile(): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: {
       allowlist: [],
       prompt: {

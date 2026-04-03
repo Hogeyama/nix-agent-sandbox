@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl ca-certificates bash docker.io docker-compose-v2 \
   gh ripgrep fd-find python3 python-is-python3 nodejs \
   gnupg unzip jq \
+  fonts-noto-cjk fonts-noto-color-emoji fontconfig \
   && mkdir -p /etc/apt/keyrings \
   && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     | gpg --dearmor -o /etc/apt/keyrings/google-cloud-cli.gpg \

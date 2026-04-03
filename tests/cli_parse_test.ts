@@ -10,6 +10,7 @@ import {
 } from "../src/cli.ts";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
 } from "../src/config/types.ts";
 import type { Profile } from "../src/config/types.ts";
@@ -22,6 +23,7 @@ const baseProfile: Profile = {
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
+  display: structuredClone(DEFAULT_DISPLAY_CONFIG),
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
   dbus: structuredClone(DEFAULT_DBUS_CONFIG),
   extraMounts: [],

@@ -4,7 +4,10 @@ import {
   validateConfig,
 } from "../src/config/validate.ts";
 import { profileSchema } from "../src/config/schema.ts";
-import { DEFAULT_DBUS_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
+} from "../src/config/types.ts";
 import type { RawConfig } from "../src/config/types.ts";
 
 Deno.test("validateConfig: valid minimal config", () => {
@@ -23,6 +26,7 @@ Deno.test("validateConfig: valid minimal config", () => {
   assertEquals(config.profiles.test.docker.enable, false);
   assertEquals(config.profiles.test.docker.shared, false);
   assertEquals(config.profiles.test.gpg.forwardAgent, false);
+  assertEquals(config.profiles.test.display, DEFAULT_DISPLAY_CONFIG);
   assertEquals(config.profiles.test.network.allowlist, []);
   assertEquals(config.profiles.test.network.prompt.enable, false);
   assertEquals(config.profiles.test.network.prompt.denylist, []);

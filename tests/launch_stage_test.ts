@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
@@ -160,6 +161,7 @@ function createTestContext() {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],

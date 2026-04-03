@@ -5,6 +5,7 @@ import {
 } from "../src/cli.ts";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
 } from "../src/config/types.ts";
 import type { Profile } from "../src/config/types.ts";
@@ -21,6 +22,7 @@ function createProfile(overrides: Partial<Profile> = {}): Profile {
     gcloud: overrides.gcloud ?? { mountConfig: false },
     aws: overrides.aws ?? { mountConfig: false },
     gpg: overrides.gpg ?? { forwardAgent: false },
+    display: overrides.display ?? structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: overrides.dbus ?? structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: overrides.extraMounts ?? [],

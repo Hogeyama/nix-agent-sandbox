@@ -8,7 +8,11 @@
 
 import { assertEquals, assertMatch } from "@std/assert";
 import { ProxyStage } from "../src/stages/proxy.ts";
-import { DEFAULT_DBUS_CONFIG, DEFAULT_UI_CONFIG } from "../src/config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "../src/config/types.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 import type { ExecutionContext } from "../src/pipeline/context.ts";
@@ -53,6 +57,7 @@ function makeProfile(
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network,
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     extraMounts: [],

@@ -333,6 +333,38 @@ export class MountStage implements Stage {
       result = { ...result, dockerArgs: args, envVars };
     }
 
+    // X11 ディスプレイ転送
+    if (result.profile.display.enable) {
+      const hostDisplay = Deno.env.get("DISPLAY");
+      if (hostDisplay) {
+        const x11SocketDir = "/tmp/.X11-unix";
+        if (await fileExists(x11SocketDir)) {
+          args.push("-v", `${x11SocketDir}:${x11SocketDir}:ro`);
+          envVars["DISPLAY"] = hostDisplay;
+
+          // Xauthority をコンテナに転送 (認証なしだとレンダリングが空になる)
+          const xauthority = Deno.env.get("XAUTHORITY") ??
+            `${Deno.env.get("HOME")}/.Xauthority`;
+          if (await fileExists(xauthority)) {
+            const containerXauthority = `${containerHome}/.Xauthority`;
+            args.push("-v", `${xauthority}:${containerXauthority}:ro`);
+            envVars["XAUTHORITY"] = containerXauthority;
+          }
+
+          // Chromium 等が共有メモリを大量に使うため、デフォルトの 64MB では描画が白くなる
+          args.push("--shm-size", "2g");
+        } else {
+          console.error(
+            "[nas] display.enable is true but /tmp/.X11-unix not found; skipping X11 forwarding",
+          );
+        }
+      } else {
+        console.error(
+          "[nas] display.enable is true but DISPLAY is not set on host; skipping X11 forwarding",
+        );
+      }
+    }
+
     // ホスト側が tmux 内の場合、コンテナに伝える (OSC 52 clipboard shim が使用)
     const hostTmux = Deno.env.get("TMUX");
     if (hostTmux) {

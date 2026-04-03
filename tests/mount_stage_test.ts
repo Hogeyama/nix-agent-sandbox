@@ -3,6 +3,7 @@ import { MountStage, serializeNixExtraPackages } from "../src/stages/mount.ts";
 import { createContext } from "../src/pipeline/context.ts";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
@@ -16,6 +17,7 @@ const baseProfile: Profile = {
   gcloud: { mountConfig: false },
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
+  display: structuredClone(DEFAULT_DISPLAY_CONFIG),
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
   dbus: structuredClone(DEFAULT_DBUS_CONFIG),
   extraMounts: [],
@@ -265,6 +267,90 @@ Deno.test("MountStage: reserved extra-mount dst throws", async () => {
     Error,
     "conflicts with existing mount destination",
   );
+});
+
+Deno.test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () => {
+  const origDisplay = Deno.env.get("DISPLAY");
+  try {
+    Deno.env.set("DISPLAY", ":42");
+    const profile: Profile = {
+      ...baseProfile,
+      display: { enable: true },
+    };
+    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+    const result = await new MountStage().execute(ctx);
+    // DISPLAY should be passed through if /tmp/.X11-unix exists
+    // (it typically does on Linux desktops; if not, DISPLAY won't be set)
+    const x11Exists = await Deno.stat("/tmp/.X11-unix").then(() => true).catch(
+      () => false,
+    );
+    if (x11Exists) {
+      assertEquals(result.envVars["DISPLAY"], ":42");
+      const mountArg = "/tmp/.X11-unix:/tmp/.X11-unix:ro";
+      const mountIndex = result.dockerArgs.indexOf(mountArg);
+      assertEquals(
+        mountIndex >= 1 && result.dockerArgs[mountIndex - 1] === "-v",
+        true,
+      );
+
+      // Xauthority should be forwarded if the file exists on host
+      const home = Deno.env.get("HOME") ?? "/root";
+      const xauthority = Deno.env.get("XAUTHORITY") ?? `${home}/.Xauthority`;
+      const xauthExists = await Deno.stat(xauthority).then(() => true).catch(
+        () => false,
+      );
+      if (xauthExists) {
+        const containerHome = getContainerHome();
+        assertEquals(
+          result.envVars["XAUTHORITY"],
+          `${containerHome}/.Xauthority`,
+        );
+        const xauthMount = `${xauthority}:${containerHome}/.Xauthority:ro`;
+        assertEquals(result.dockerArgs.includes(xauthMount), true);
+      }
+
+      // --shm-size should be set for GUI apps (Chromium etc.)
+      const shmIndex = result.dockerArgs.indexOf("2g");
+      assertEquals(
+        shmIndex >= 1 && result.dockerArgs[shmIndex - 1] === "--shm-size",
+        true,
+      );
+    }
+  } finally {
+    if (origDisplay !== undefined) {
+      Deno.env.set("DISPLAY", origDisplay);
+    } else {
+      Deno.env.delete("DISPLAY");
+    }
+  }
+});
+
+Deno.test("MountStage: display.enable=false does not set DISPLAY", async () => {
+  const profile: Profile = {
+    ...baseProfile,
+    display: { enable: false },
+  };
+  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const result = await new MountStage().execute(ctx);
+  assertEquals(result.envVars["DISPLAY"], undefined);
+});
+
+Deno.test("MountStage: display.enable skips when host DISPLAY unset", async () => {
+  const origDisplay = Deno.env.get("DISPLAY");
+  try {
+    Deno.env.delete("DISPLAY");
+    const profile: Profile = {
+      ...baseProfile,
+      display: { enable: true },
+    };
+    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+    const result = await new MountStage().execute(ctx);
+    assertEquals(result.envVars["DISPLAY"], undefined);
+  } finally {
+    if (origDisplay !== undefined) {
+      Deno.env.set("DISPLAY", origDisplay);
+    }
+  }
 });
 
 Deno.test("serializeNixExtraPackages: returns newline-delimited list", () => {

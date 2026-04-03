@@ -8,6 +8,7 @@
 import { assertEquals } from "@std/assert";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
@@ -42,6 +43,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: {
       ...baseNetwork,
       ...network,

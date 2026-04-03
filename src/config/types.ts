@@ -111,6 +111,11 @@ export interface NetworkConfig {
   prompt: NetworkPromptConfig;
 }
 
+/** ディスプレイ転送設定 */
+export interface DisplayConfig {
+  enable: boolean;
+}
+
 /** DBus 設定 */
 export interface DbusRuleConfig {
   name: string;
@@ -163,6 +168,7 @@ export interface Profile {
   gcloud: GcloudConfig;
   aws: AwsConfig;
   gpg: GpgConfig;
+  display: DisplayConfig;
   network: NetworkConfig;
   dbus: DbusConfig;
   extraMounts: ExtraMountConfig[];
@@ -219,6 +225,9 @@ export interface RawProfile {
   };
   gpg?: {
     "forward-agent"?: boolean;
+  };
+  display?: {
+    enable?: boolean;
   };
   network?: {
     allowlist?: string[];
@@ -320,6 +329,10 @@ export const DEFAULT_AWS_CONFIG: AwsConfig = {
 
 export const DEFAULT_GPG_CONFIG: GpgConfig = {
   forwardAgent: false,
+};
+
+export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
+  enable: false,
 };
 
 export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {

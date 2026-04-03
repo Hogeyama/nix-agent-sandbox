@@ -10,6 +10,7 @@ import type { EnvConfig, EnvMode, HostExecRule, Profile } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_SESSION_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
@@ -123,6 +124,14 @@ export const gpgSchema = z.object({
 }).default({}).transform((r) => ({
   forwardAgent: r["forward-agent"],
 }));
+
+// ---------------------------------------------------------------------------
+// Display
+// ---------------------------------------------------------------------------
+
+export const displaySchema = z.object({
+  enable: z.boolean().default(DEFAULT_DISPLAY_CONFIG.enable),
+}).default({});
 
 // ---------------------------------------------------------------------------
 // Extra mounts
@@ -601,6 +610,7 @@ export function profileSchema(profileName: string) {
     gcloud: gcloudSchema,
     aws: awsSchema,
     gpg: gpgSchema,
+    display: displaySchema,
     network: networkSchema(profileName),
     dbus: dbusSchema,
     "extra-mounts": extraMountsSchema,
@@ -615,6 +625,7 @@ export function profileSchema(profileName: string) {
     gcloud: r.gcloud,
     aws: r.aws,
     gpg: r.gpg,
+    display: r.display,
     network: r.network,
     dbus: r.dbus,
     extraMounts: r["extra-mounts"],

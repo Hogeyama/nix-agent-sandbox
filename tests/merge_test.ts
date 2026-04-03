@@ -139,6 +139,48 @@ Deno.test("mergeRawProfiles: aws shallow merge", () => {
   assertEquals(result.aws?.["mount-config"], false);
 });
 
+Deno.test("mergeRawProfiles: display shallow merge", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    display: { enable: true },
+  };
+  const local: RawProfile = {};
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.display?.enable, true);
+
+  const result2 = mergeRawProfiles(local, global);
+  assertEquals(result2.display?.enable, true);
+});
+
+Deno.test("mergeRawProfiles: all RawProfile keys are preserved", () => {
+  // Guard against forgetting to add new fields to mergeRawProfiles.
+  // When a new field is added to RawProfile, add it here too.
+  const full: Required<RawProfile> = {
+    agent: "claude",
+    "agent-args": ["--flag"],
+    worktree: { base: "main" },
+    nix: { enable: true },
+    docker: { enable: true },
+    gcloud: { "mount-config": true },
+    aws: { "mount-config": true },
+    gpg: { "forward-agent": true },
+    display: { enable: true },
+    network: { allowlist: ["example.com"] },
+    dbus: { session: { enable: true } },
+    "extra-mounts": [{ src: "/a", dst: "/b" }],
+    env: [{ key: "K", val: "V" }],
+    hostexec: { rules: [] },
+  };
+  const result = mergeRawProfiles(full, {});
+  for (const key of Object.keys(full) as (keyof RawProfile)[]) {
+    assertEquals(
+      result[key] !== undefined,
+      true,
+      `mergeRawProfiles dropped field "${key}"`,
+    );
+  }
+});
+
 Deno.test("mergeRawProfiles: network.prompt subfields are preserved", () => {
   const global: RawProfile = {
     agent: "claude",
