@@ -188,11 +188,8 @@ in
       {
         agent = "claude";
         agent-args = [ "--dangerously-skip-permissions" ];
-        env = common_env.env ++ [
-          # 認証
-          { key = "CLAUDE_CODE_OAUTH_TOKEN"; val_cmd = "pass claude_code_oauth_token"; }
-        ];
       }
+      common_env
       common_infra
       common_network
       common_hostexec
