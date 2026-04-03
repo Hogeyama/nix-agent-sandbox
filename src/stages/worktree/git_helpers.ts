@@ -118,14 +118,15 @@ async function applyTrackedDiff(
   targetWorktreePath: string,
 ): Promise<void> {
   const stagedPatch =
-    await $`git -C ${sourceWorktreePath} diff --binary --cached`
+    await $`git -C ${sourceWorktreePath} diff --no-ext-diff --binary --cached`
       .text();
   if (stagedPatch.trim().length > 0) {
     await applyPatchFile(targetWorktreePath, stagedPatch, ["--index"]);
   }
 
-  const unstagedPatch = await $`git -C ${sourceWorktreePath} diff --binary`
-    .text();
+  const unstagedPatch =
+    await $`git -C ${sourceWorktreePath} diff --no-ext-diff --binary`
+      .text();
   if (unstagedPatch.trim().length > 0) {
     await applyPatchFile(targetWorktreePath, unstagedPatch);
   }
