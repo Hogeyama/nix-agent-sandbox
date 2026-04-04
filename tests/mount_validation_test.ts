@@ -4,16 +4,22 @@
  * MountStage の各種バリデーションロジック、エッジケース、環境変数処理を検証する。
  */
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
-import { MountStage, serializeNixExtraPackages } from "../src/stages/mount.ts";
-import { createContext } from "../src/pipeline/context.ts";
+import {
+  createMountStage,
+  resolveMountProbes,
+  serializeNixExtraPackages,
+} from "../src/stages/mount.ts";
+import type { MountProbes } from "../src/stages/mount.ts";
 import type { Config, Profile } from "../src/config/types.ts";
+import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
+import { buildHostEnv, resolveProbes } from "../src/pipeline/host_env.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;
@@ -61,6 +67,48 @@ function getContainerHome(): string {
   return `/home/${user || "nas"}`;
 }
 
+/** Build a StageInput + MountProbes for testing */
+async function buildTestInput(
+  profile: Profile,
+  workDir: string,
+  overrides?: {
+    priorOverrides?: Partial<PriorStageOutputs>;
+  },
+): Promise<{ input: StageInput; mountProbes: MountProbes }> {
+  const hostEnv = buildHostEnv();
+  const probes = await resolveProbes(hostEnv);
+  const mountProbes = await resolveMountProbes(
+    hostEnv,
+    profile,
+    workDir,
+    probes.gpgAgentSocket,
+  );
+
+  const prior: PriorStageOutputs = {
+    dockerArgs: [],
+    envVars: { NAS_LOG_LEVEL: "info" },
+    workDir,
+    nixEnabled: false,
+    imageName: "nas-sandbox",
+    agentCommand: [],
+    networkPromptEnabled: false,
+    dbusProxyEnabled: false,
+    ...overrides?.priorOverrides,
+  };
+
+  const input: StageInput = {
+    config: baseConfig,
+    profile,
+    profileName: "test",
+    sessionId: "sess_test",
+    host: hostEnv,
+    probes,
+    prior,
+  };
+
+  return { input, mountProbes };
+}
+
 // --- 環境変数バリデーション ---
 
 Deno.test("MountStage: valid env var names accepted", async () => {
@@ -72,12 +120,12 @@ Deno.test("MountStage: valid env var names accepted", async () => {
       { key: "A", val: "single-char", mode: "set" as const },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["SIMPLE"], "value");
-  assertEquals(result.envVars["_UNDERSCORE_START"], "value");
-  assertEquals(result.envVars["WITH_123_NUMBERS"], "value");
-  assertEquals(result.envVars["A"], "single-char");
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["SIMPLE"], "value");
+  assertEquals(plan.envVars["_UNDERSCORE_START"], "value");
+  assertEquals(plan.envVars["WITH_123_NUMBERS"], "value");
+  assertEquals(plan.envVars["A"], "single-char");
 });
 
 Deno.test("MountStage: static env var with special chars in value", async () => {
@@ -93,24 +141,24 @@ Deno.test("MountStage: static env var with special chars in value", async () => 
       { key: "EMPTY", val: "", mode: "set" as const },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.envVars["URL"],
+    plan.envVars["URL"],
     "https://example.com/path?foo=bar&baz=qux",
   );
-  assertEquals(result.envVars["JSON"], '{"key": "value"}');
-  assertEquals(result.envVars["SPACES"], "hello world");
-  assertEquals(result.envVars["EMPTY"], "");
+  assertEquals(plan.envVars["JSON"], '{"key": "value"}');
+  assertEquals(plan.envVars["SPACES"], "hello world");
+  assertEquals(plan.envVars["EMPTY"], "");
 });
 
 Deno.test("MountStage: invalid static env key (starts with number)", async () => {
   const profile = makeProfile({
     env: [{ key: "123BAD", val: "value", mode: "set" as const }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "Invalid env var name",
   );
@@ -120,9 +168,9 @@ Deno.test("MountStage: invalid static env key (contains dash)", async () => {
   const profile = makeProfile({
     env: [{ key: "MY-VAR", val: "value", mode: "set" as const }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "Invalid env var name",
   );
@@ -132,9 +180,9 @@ Deno.test("MountStage: invalid static env key (contains dot)", async () => {
   const profile = makeProfile({
     env: [{ key: "MY.VAR", val: "value", mode: "set" as const }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "Invalid env var name",
   );
@@ -148,9 +196,9 @@ Deno.test("MountStage: dynamic key command producing valid name", async () => {
       mode: "set" as const,
     }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["VALID_KEY"], "hello");
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["VALID_KEY"], "hello");
 });
 
 Deno.test("MountStage: dynamic key command producing invalid name", async () => {
@@ -161,9 +209,9 @@ Deno.test("MountStage: dynamic key command producing invalid name", async () => 
       mode: "set" as const,
     }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "Invalid env var name",
   );
@@ -173,12 +221,13 @@ Deno.test("MountStage: dynamic val command that fails", async () => {
   const profile = makeProfile({
     env: [{ keyCmd: "printf MY_KEY", valCmd: "false", mode: "set" as const }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
-    Error,
-    "Failed to execute",
-  );
+  // val_cmd failure happens in resolveMountProbes, not plan()
+  try {
+    await buildTestInput(profile, Deno.cwd());
+    throw new Error("Expected resolveMountProbes to throw");
+  } catch (e) {
+    assertEquals((e as Error).message.includes("Failed to execute"), true);
+  }
 });
 
 Deno.test("MountStage: dynamic key command that returns empty", async () => {
@@ -189,12 +238,13 @@ Deno.test("MountStage: dynamic key command that returns empty", async () => {
       mode: "set" as const,
     }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
-    Error,
-    "returned empty output",
-  );
+  // Empty key_cmd output is caught during resolveMountProbes
+  try {
+    await buildTestInput(profile, Deno.cwd());
+    throw new Error("Expected resolveMountProbes to throw");
+  } catch (e) {
+    assertEquals((e as Error).message.includes("returned empty output"), true);
+  }
 });
 
 Deno.test("MountStage: multiple env vars including both static and dynamic", async () => {
@@ -206,12 +256,12 @@ Deno.test("MountStage: multiple env vars including both static and dynamic", asy
       { keyCmd: "printf DYNAMIC_D", valCmd: "printf d", mode: "set" as const },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["STATIC_A"], "a");
-  assertEquals(result.envVars["DYNAMIC_B"], "b");
-  assertEquals(result.envVars["STATIC_C"], "c");
-  assertEquals(result.envVars["DYNAMIC_D"], "d");
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["STATIC_A"], "a");
+  assertEquals(plan.envVars["DYNAMIC_B"], "b");
+  assertEquals(plan.envVars["STATIC_C"], "c");
+  assertEquals(plan.envVars["DYNAMIC_D"], "d");
 });
 
 // --- env prefix/suffix モード ---
@@ -228,9 +278,9 @@ Deno.test("MountStage: prefix mode prepends to existing var", async () => {
       },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["MY_PATH"], "/opt/bin:/usr/bin");
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["MY_PATH"], "/opt/bin:/usr/bin");
 });
 
 Deno.test("MountStage: suffix mode appends to existing var", async () => {
@@ -245,9 +295,9 @@ Deno.test("MountStage: suffix mode appends to existing var", async () => {
       },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["MY_PATH"], "/usr/bin:/opt/lib");
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["MY_PATH"], "/usr/bin:/opt/lib");
 });
 
 Deno.test("MountStage: prefix on unset var generates NAS_ENV_OPS", async () => {
@@ -261,11 +311,11 @@ Deno.test("MountStage: prefix on unset var generates NAS_ENV_OPS", async () => {
       },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["NEW_VAR"], undefined);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["NEW_VAR"], undefined);
   assertEquals(
-    result.envVars["NAS_ENV_OPS"],
+    plan.envVars["NAS_ENV_OPS"],
     "__nas_pfx 'NEW_VAR' '/opt/bin' ':'",
   );
 });
@@ -281,11 +331,11 @@ Deno.test("MountStage: suffix on unset var generates NAS_ENV_OPS", async () => {
       },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["NEW_VAR"], undefined);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["NEW_VAR"], undefined);
   assertEquals(
-    result.envVars["NAS_ENV_OPS"],
+    plan.envVars["NAS_ENV_OPS"],
     "__nas_sfx 'NEW_VAR' '/opt/lib' ':'",
   );
 });
@@ -307,11 +357,11 @@ Deno.test("MountStage: multiple prefix entries generate ordered NAS_ENV_OPS", as
       },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["MY_PATH"], undefined);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["MY_PATH"], undefined);
   assertEquals(
-    result.envVars["NAS_ENV_OPS"],
+    plan.envVars["NAS_ENV_OPS"],
     "__nas_pfx 'MY_PATH' '/opt/a' ':'\n__nas_pfx 'MY_PATH' '/opt/b' ':'",
   );
 });
@@ -328,9 +378,9 @@ Deno.test("MountStage: prefix with empty separator concatenates directly", async
       },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["FLAGS"], "-O2 -Wall");
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["FLAGS"], "-O2 -Wall");
 });
 
 Deno.test("MountStage: prefix with val_cmd", async () => {
@@ -345,9 +395,9 @@ Deno.test("MountStage: prefix with val_cmd", async () => {
       },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["MY_PATH"], "/opt/dynamic:/usr/bin");
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["MY_PATH"], "/opt/dynamic:/usr/bin");
 });
 
 Deno.test("MountStage: set after prefix replaces entire value", async () => {
@@ -362,10 +412,10 @@ Deno.test("MountStage: set after prefix replaces entire value", async () => {
       { key: "MY_PATH", val: "/only/this", mode: "set" as const },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.envVars["MY_PATH"], "/only/this");
-  assertEquals(result.envVars["NAS_ENV_OPS"], undefined);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.envVars["MY_PATH"], "/only/this");
+  assertEquals(plan.envVars["NAS_ENV_OPS"], undefined);
 });
 
 // --- extra-mounts バリデーション ---
@@ -375,10 +425,10 @@ Deno.test("MountStage: extra-mount with ~ src expansion", async () => {
   const profile = makeProfile({
     extraMounts: [{ src: "~", dst: "/mnt/home", mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.includes(`${home}:/mnt/home:ro`),
+    plan.dockerArgs.includes(`${home}:/mnt/home:ro`),
     true,
   );
 });
@@ -393,10 +443,10 @@ Deno.test("MountStage: extra-mount with ~/subdir src expansion", async () => {
   const profile = makeProfile({
     extraMounts: [{ src: "~/.config", dst: "/mnt/config", mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.includes(`${home}/.config:/mnt/config:ro`),
+    plan.dockerArgs.includes(`${home}/.config:/mnt/config:ro`),
     true,
   );
 });
@@ -406,10 +456,10 @@ Deno.test("MountStage: extra-mount dst ~ expands to container home", async () =>
   const profile = makeProfile({
     extraMounts: [{ src: Deno.cwd(), dst: "~/mounted", mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.includes(
+    plan.dockerArgs.includes(
       `${Deno.cwd()}:${containerHome}/mounted:ro`,
     ),
     true,
@@ -420,11 +470,11 @@ Deno.test("MountStage: extra-mount rw mode has no suffix", async () => {
   const profile = makeProfile({
     extraMounts: [{ src: Deno.cwd(), dst: "/mnt/rw-test", mode: "rw" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   // rw モードは :rw サフィックスなし
   assertEquals(
-    result.dockerArgs.includes(`${Deno.cwd()}:/mnt/rw-test`),
+    plan.dockerArgs.includes(`${Deno.cwd()}:/mnt/rw-test`),
     true,
   );
 });
@@ -433,10 +483,10 @@ Deno.test("MountStage: extra-mount relative dst resolves from workDir", async ()
   const profile = makeProfile({
     extraMounts: [{ src: "/dev/null", dst: ".env", mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.includes(`/dev/null:${Deno.cwd()}/.env:ro`),
+    plan.dockerArgs.includes(`/dev/null:${Deno.cwd()}/.env:ro`),
     true,
   );
 });
@@ -449,10 +499,10 @@ Deno.test("MountStage: extra-mount relative src resolves from workDir", async ()
     const profile = makeProfile({
       extraMounts: [{ src: srcDir, dst: "/tmp/mount-src", mode: "ro" }],
     });
-    const ctx = createContext(baseConfig, profile, "test", tmpDir);
-    const result = await new MountStage().execute(ctx);
+    const { input, mountProbes } = await buildTestInput(profile, tmpDir);
+    const plan = createMountStage(mountProbes).plan(input)!;
     assertEquals(
-      result.dockerArgs.includes(`${tmpDir}/${srcDir}:/tmp/mount-src:ro`),
+      plan.dockerArgs.includes(`${tmpDir}/${srcDir}:/tmp/mount-src:ro`),
       true,
     );
   } finally {
@@ -464,9 +514,9 @@ Deno.test("MountStage: extra-mount to /nix conflicts", async () => {
   const profile = makeProfile({
     extraMounts: [{ src: Deno.cwd(), dst: "/nix", mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "conflicts with existing mount destination",
   );
@@ -478,11 +528,11 @@ Deno.test("MountStage: extra-mount to /var/run/docker.sock is allowed (DinD migr
       { src: Deno.cwd(), dst: "/var/run/docker.sock", mode: "ro" },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
   // DinD 移行後: /var/run/docker.sock は予約パスではなくなったため許可される
-  const result = await new MountStage().execute(ctx);
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.some((a) => a.includes(":/var/run/docker.sock")),
+    plan.dockerArgs.some((a: string) => a.includes(":/var/run/docker.sock")),
     true,
   );
 });
@@ -492,9 +542,9 @@ Deno.test("MountStage: extra-mount to workspace dir conflicts", async () => {
   const profile = makeProfile({
     extraMounts: [{ src: "/tmp", dst: workDir, mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", workDir);
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, workDir);
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "conflicts with existing mount destination",
   );
@@ -505,10 +555,10 @@ Deno.test("MountStage: extra-mount file under workspace dir is allowed", async (
   const profile = makeProfile({
     extraMounts: [{ src: "/dev/null", dst: `${workDir}/.env`, mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", workDir);
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, workDir);
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.includes(`/dev/null:${workDir}/.env:ro`),
+    plan.dockerArgs.includes(`/dev/null:${workDir}/.env:ro`),
     true,
   );
 });
@@ -520,9 +570,9 @@ Deno.test("MountStage: extra-mount directory under workspace dir still conflicts
     const profile = makeProfile({
       extraMounts: [{ src: tmpDir, dst: `${workDir}/.config`, mode: "ro" }],
     });
-    const ctx = createContext(baseConfig, profile, "test", workDir);
-    await assertRejects(
-      () => new MountStage().execute(ctx),
+    const { input, mountProbes } = await buildTestInput(profile, workDir);
+    assertThrows(
+      () => createMountStage(mountProbes).plan(input),
       Error,
       "conflicts with existing mount destination",
     );
@@ -538,9 +588,9 @@ Deno.test("MountStage: extra-mount duplicate dst conflicts", async () => {
       { src: Deno.cwd(), dst: "/mnt/dup", mode: "rw" },
     ],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "conflicts with existing mount destination",
   );
@@ -550,9 +600,9 @@ Deno.test("MountStage: extra-mount under reserved /nix conflicts", async () => {
   const profile = makeProfile({
     extraMounts: [{ src: "/dev/null", dst: "/nix/.env", mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  await assertRejects(
-    () => new MountStage().execute(ctx),
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  assertThrows(
+    () => createMountStage(mountProbes).plan(input),
     Error,
     "conflicts with existing mount destination",
   );
@@ -563,10 +613,10 @@ Deno.test("MountStage: extra-mount nonexistent src is skipped", async () => {
   const profile = makeProfile({
     extraMounts: [{ src: missingPath, dst: "/mnt/missing", mode: "ro" }],
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.some((a) => a.includes("/mnt/missing")),
+    plan.dockerArgs.some((a: string) => a.includes("/mnt/missing")),
     false,
   );
 });
@@ -581,14 +631,14 @@ Deno.test("MountStage: multiple valid extra-mounts all mounted", async () => {
         { src: tmpDir2, dst: "/mnt/two", mode: "rw" },
       ],
     });
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    const result = await new MountStage().execute(ctx);
+    const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+    const plan = createMountStage(mountProbes).plan(input)!;
     assertEquals(
-      result.dockerArgs.includes(`${tmpDir1}:/mnt/one:ro`),
+      plan.dockerArgs.includes(`${tmpDir1}:/mnt/one:ro`),
       true,
     );
     assertEquals(
-      result.dockerArgs.includes(`${tmpDir2}:/mnt/two`),
+      plan.dockerArgs.includes(`${tmpDir2}:/mnt/two`),
       true,
     );
   } finally {
@@ -634,21 +684,21 @@ Deno.test("serializeNixExtraPackages: all empty returns null", () => {
 
 Deno.test("MountStage: docker socket not mounted even when docker.enable is true", async () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   // DinD 移行後: MountStage は docker.sock をマウントしない (DindStage が担当)
   assertEquals(
-    result.dockerArgs.includes("/var/run/docker.sock:/var/run/docker.sock"),
+    plan.dockerArgs.includes("/var/run/docker.sock:/var/run/docker.sock"),
     false,
   );
 });
 
 Deno.test("MountStage: docker socket not mounted when docker.enable is false", async () => {
   const profile = makeProfile({ docker: { enable: false, shared: false } });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.includes("/var/run/docker.sock:/var/run/docker.sock"),
+    plan.dockerArgs.includes("/var/run/docker.sock:/var/run/docker.sock"),
     false,
   );
 });
@@ -657,22 +707,22 @@ Deno.test("MountStage: docker socket not mounted when docker.enable is false", a
 
 Deno.test("MountStage: GPG not mounted when disabled", async () => {
   const profile = makeProfile({ gpg: { forwardAgent: false } });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.some((a) => a.includes("S.gpg-agent")),
+    plan.dockerArgs.some((a: string) => a.includes("S.gpg-agent")),
     false,
   );
-  assertEquals("GPG_AGENT_INFO" in result.envVars, false);
+  assertEquals("GPG_AGENT_INFO" in plan.envVars, false);
 });
 
 Deno.test("MountStage: GPG environment set when enabled", async () => {
   const profile = makeProfile({ gpg: { forwardAgent: true } });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   // GPG が有効な場合、GPG 関連のマウントまたは環境変数が設定される
   // ホストの GPG 設定によって結果が変わるが、少なくとも処理は完了する
-  assertEquals(result.dockerArgs.length > 0, true);
+  assertEquals(plan.dockerArgs.length > 0, true);
 });
 
 // --- workspace mount ---
@@ -680,41 +730,41 @@ Deno.test("MountStage: GPG environment set when enabled", async () => {
 Deno.test("MountStage: workspace uses absolute path", async () => {
   const workDir = Deno.cwd();
   const profile = makeProfile();
-  const ctx = createContext(baseConfig, profile, "test", workDir);
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, workDir);
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   // -v mount
-  const vIdx = result.dockerArgs.indexOf("-v");
+  const vIdx = plan.dockerArgs.indexOf("-v");
   assertEquals(vIdx >= 0, true);
-  const mountArg = result.dockerArgs[vIdx + 1];
+  const mountArg = plan.dockerArgs[vIdx + 1];
   assertEquals(mountArg, `${workDir}:${workDir}`);
 
   // -w workdir
-  const wIdx = result.dockerArgs.indexOf("-w");
+  const wIdx = plan.dockerArgs.indexOf("-w");
   assertEquals(wIdx >= 0, true);
-  assertEquals(result.dockerArgs[wIdx + 1], workDir);
+  assertEquals(plan.dockerArgs[wIdx + 1], workDir);
 });
 
 Deno.test("MountStage: NAS_USER and NAS_HOME are set", async () => {
   const profile = makeProfile();
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   const user = Deno.env.get("USER")?.trim() || "nas";
-  assertEquals(result.envVars["NAS_USER"], user);
-  assertEquals(result.envVars["NAS_HOME"], `/home/${user}`);
+  assertEquals(plan.envVars["NAS_USER"], user);
+  assertEquals(plan.envVars["NAS_HOME"], `/home/${user}`);
 });
 
 Deno.test("MountStage: NAS_UID and NAS_GID are set on Linux", async () => {
   const profile = makeProfile();
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   const uid = Deno.uid();
   const gid = Deno.gid();
   if (uid !== null && gid !== null) {
-    assertEquals(result.envVars["NAS_UID"], String(uid));
-    assertEquals(result.envVars["NAS_GID"], String(gid));
+    assertEquals(plan.envVars["NAS_UID"], String(uid));
+    assertEquals(plan.envVars["NAS_GID"], String(gid));
   }
 });
 
@@ -724,24 +774,23 @@ Deno.test("MountStage: nix disabled does not mount /nix", async () => {
   const profile = makeProfile({
     nix: { enable: false, mountSocket: true, extraPackages: [] },
   });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  // nixEnabled が false のままの ctx
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.dockerArgs.includes("/nix:/nix"), false);
-  assertEquals("NIX_REMOTE" in result.envVars, false);
+  // nixEnabled が false のままの prior
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  assertEquals(plan.dockerArgs.includes("/nix:/nix"), false);
+  assertEquals("NIX_REMOTE" in plan.envVars, false);
 });
 
 Deno.test("MountStage: nix enabled but mountSocket false skips socket", async () => {
   const profile = makeProfile({
     nix: { enable: true, mountSocket: false, extraPackages: [] },
   });
-  const ctx = {
-    ...createContext(baseConfig, profile, "test", Deno.cwd()),
-    nixEnabled: true,
-  };
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd(), {
+    priorOverrides: { nixEnabled: true },
+  });
+  const plan = createMountStage(mountProbes).plan(input)!;
   // mountSocket が false なので /nix はマウントされない
-  assertEquals(result.dockerArgs.includes("/nix:/nix"), false);
+  assertEquals(plan.dockerArgs.includes("/nix:/nix"), false);
 });
 
 Deno.test("MountStage: nix enabled with mountSocket mounts /nix if host has nix", async () => {
@@ -749,18 +798,17 @@ Deno.test("MountStage: nix enabled with mountSocket mounts /nix if host has nix"
   const profile = makeProfile({
     nix: { enable: true, mountSocket: true, extraPackages: [] },
   });
-  const ctx = {
-    ...createContext(baseConfig, profile, "test", Deno.cwd()),
-    nixEnabled: true,
-  };
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd(), {
+    priorOverrides: { nixEnabled: true },
+  });
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   if (hasHostNix) {
-    assertEquals(result.dockerArgs.includes("/nix:/nix"), true);
-    assertEquals(result.envVars["NIX_REMOTE"], "daemon");
-    assertEquals(result.envVars["NIX_ENABLED"], "true");
+    assertEquals(plan.dockerArgs.includes("/nix:/nix"), true);
+    assertEquals(plan.envVars["NIX_REMOTE"], "daemon");
+    assertEquals(plan.envVars["NIX_ENABLED"], "true");
   } else {
-    assertEquals(result.dockerArgs.includes("/nix:/nix"), false);
+    assertEquals(plan.dockerArgs.includes("/nix:/nix"), false);
   }
 });
 
@@ -773,15 +821,14 @@ Deno.test("MountStage: nix extra-packages set when nix enabled and host has nix"
       extraPackages: ["nixpkgs#gh", "nixpkgs#jq"],
     },
   });
-  const ctx = {
-    ...createContext(baseConfig, profile, "test", Deno.cwd()),
-    nixEnabled: true,
-  };
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd(), {
+    priorOverrides: { nixEnabled: true },
+  });
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   if (hasHostNix) {
     assertEquals(
-      result.envVars["NIX_EXTRA_PACKAGES"],
+      plan.envVars["NIX_EXTRA_PACKAGES"],
       "nixpkgs#gh\nnixpkgs#jq",
     );
   }
@@ -791,10 +838,10 @@ Deno.test("MountStage: nix extra-packages set when nix enabled and host has nix"
 
 Deno.test("MountStage: gcloud not mounted when disabled", async () => {
   const profile = makeProfile({ gcloud: { mountConfig: false } });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.some((a) => a.includes(".config/gcloud")),
+    plan.dockerArgs.some((a: string) => a.includes(".config/gcloud")),
     false,
   );
 });
@@ -803,10 +850,10 @@ Deno.test("MountStage: gcloud not mounted when disabled", async () => {
 
 Deno.test("MountStage: aws not mounted when disabled", async () => {
   const profile = makeProfile({ aws: { mountConfig: false } });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
   assertEquals(
-    result.dockerArgs.some((a) => a.includes(".aws")),
+    plan.dockerArgs.some((a: string) => a.includes(".aws")),
     false,
   );
 });
@@ -815,23 +862,26 @@ Deno.test("MountStage: aws not mounted when disabled", async () => {
 
 Deno.test("MountStage: claude agent sets agentCommand", async () => {
   const profile = makeProfile({ agent: "claude" });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.agentCommand.length > 0, true);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  const agentCommand = plan.outputOverrides.agentCommand as string[];
+  assertEquals(agentCommand.length > 0, true);
 });
 
 Deno.test("MountStage: copilot agent sets agentCommand", async () => {
   const profile = makeProfile({ agent: "copilot" });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.agentCommand.length > 0, true);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  const agentCommand = plan.outputOverrides.agentCommand as string[];
+  assertEquals(agentCommand.length > 0, true);
 });
 
 Deno.test("MountStage: codex agent sets agentCommand", async () => {
   const profile = makeProfile({ agent: "codex" });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
-  assertEquals(result.agentCommand.length > 0, true);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+  const agentCommand = plan.outputOverrides.agentCommand as string[];
+  assertEquals(agentCommand.length > 0, true);
 });
 
 Deno.test("MountStage: claude agent mounts ~/.claude if exists", async () => {
@@ -843,12 +893,12 @@ Deno.test("MountStage: claude agent mounts ~/.claude if exists", async () => {
   );
 
   const profile = makeProfile({ agent: "claude" });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   if (hasClaude) {
     assertEquals(
-      result.dockerArgs.some((a) => a.includes("/.claude")),
+      plan.dockerArgs.some((a: string) => a.includes("/.claude")),
       true,
     );
   }
@@ -857,17 +907,18 @@ Deno.test("MountStage: claude agent mounts ~/.claude if exists", async () => {
 Deno.test("MountStage: claude agent uses ~/.local/bin in container", async () => {
   const containerHome = getContainerHome();
   const profile = makeProfile({ agent: "claude" });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   assertEquals(
-    result.envVars["PATH"]?.startsWith(`${containerHome}/.local/bin:`),
+    plan.envVars["PATH"]?.startsWith(`${containerHome}/.local/bin:`),
     true,
   );
 
-  if (result.agentCommand[0] === "claude") {
+  const agentCommand = plan.outputOverrides.agentCommand as string[];
+  if (agentCommand[0] === "claude") {
     assertEquals(
-      result.dockerArgs.some((a) =>
+      plan.dockerArgs.some((a: string) =>
         a.includes(`${containerHome}/.local/bin/claude:ro`)
       ),
       true,
@@ -884,12 +935,12 @@ Deno.test("MountStage: codex agent mounts ~/.codex if exists", async () => {
   );
 
   const profile = makeProfile({ agent: "codex" });
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   if (hasCodex) {
     assertEquals(
-      result.dockerArgs.some((a) => a.includes("/.codex")),
+      plan.dockerArgs.some((a: string) => a.includes("/.codex")),
       true,
     );
   }
@@ -899,15 +950,15 @@ Deno.test("MountStage: codex agent mounts ~/.codex if exists", async () => {
 
 Deno.test("MountStage: minimal profile produces valid docker args", async () => {
   const profile = makeProfile();
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   // 最低限: -v (workspace mount) と -w (workdir) が含まれる
-  assertEquals(result.dockerArgs.includes("-v"), true);
-  assertEquals(result.dockerArgs.includes("-w"), true);
+  assertEquals(plan.dockerArgs.includes("-v"), true);
+  assertEquals(plan.dockerArgs.includes("-w"), true);
 
   // 基本的な env vars が設定される
-  assertEquals("NAS_USER" in result.envVars, true);
-  assertEquals("NAS_HOME" in result.envVars, true);
-  assertEquals("WORKSPACE" in result.envVars, true);
+  assertEquals("NAS_USER" in plan.envVars, true);
+  assertEquals("NAS_HOME" in plan.envVars, true);
+  assertEquals("WORKSPACE" in plan.envVars, true);
 });

@@ -19,7 +19,6 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
-import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
 
 const baseProfile: Profile = {
@@ -850,17 +849,60 @@ Deno.test("resolveCodexProbes: returns null when codex not on PATH", async () =>
 // MountStage 経由のエージェント選択テスト (統合)
 // ============================================================
 
-import { MountStage } from "../src/stages/mount.ts";
+import { createMountStage, resolveMountProbes } from "../src/stages/mount.ts";
+import type { MountProbes } from "../src/stages/mount.ts";
+import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
+import { buildHostEnv, resolveProbes } from "../src/pipeline/host_env.ts";
+
+async function buildMountTestInput(
+  profile: Profile,
+  workDir: string,
+): Promise<{ input: StageInput; mountProbes: MountProbes }> {
+  const hostEnv = buildHostEnv();
+  const probes = await resolveProbes(hostEnv);
+  const mountProbes = await resolveMountProbes(
+    hostEnv,
+    profile,
+    workDir,
+    probes.gpgAgentSocket,
+  );
+
+  const prior: PriorStageOutputs = {
+    dockerArgs: [],
+    envVars: { NAS_LOG_LEVEL: "info" },
+    workDir,
+    nixEnabled: false,
+    imageName: "nas-sandbox",
+    agentCommand: [],
+    networkPromptEnabled: false,
+    dbusProxyEnabled: false,
+  };
+
+  const input: StageInput = {
+    config: baseConfig,
+    profile,
+    profileName: "test",
+    sessionId: "sess_test",
+    host: hostEnv,
+    probes,
+    prior,
+  };
+
+  return { input, mountProbes };
+}
 
 Deno.test("MountStage: dispatches to configureClaude for agent=claude", async () => {
   const profile: Profile = { ...baseProfile, agent: "claude" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  const result = await new MountStage().execute(ctx);
+  const { input, mountProbes } = await buildMountTestInput(
+    profile,
+    Deno.cwd(),
+  );
+  const plan = createMountStage(mountProbes).plan(input)!;
 
   // Claude の特徴: PATH に .local/bin が入る
   const containerHome = getContainerHome();
   assertEquals(
-    result.envVars["PATH"]?.includes(`${containerHome}/.local/bin`),
+    plan.envVars["PATH"]?.includes(`${containerHome}/.local/bin`),
     true,
   );
 });
@@ -868,17 +910,23 @@ Deno.test("MountStage: dispatches to configureClaude for agent=claude", async ()
 Deno.test("MountStage: dispatches to configureCopilot for agent=copilot", async () => {
   await withFakeBinary("copilot", async () => {
     const profile: Profile = { ...baseProfile, agent: "copilot" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    const result = await new MountStage().execute(ctx);
-    assertEquals(result.agentCommand, ["copilot"]);
+    const { input, mountProbes } = await buildMountTestInput(
+      profile,
+      Deno.cwd(),
+    );
+    const plan = createMountStage(mountProbes).plan(input)!;
+    assertEquals(plan.outputOverrides.agentCommand, ["copilot"]);
   });
 });
 
 Deno.test("MountStage: dispatches to configureCodex for agent=codex", async () => {
   await withFakeBinary("codex", async () => {
     const profile: Profile = { ...baseProfile, agent: "codex" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    const result = await new MountStage().execute(ctx);
-    assertEquals(result.agentCommand, ["codex"]);
+    const { input, mountProbes } = await buildMountTestInput(
+      profile,
+      Deno.cwd(),
+    );
+    const plan = createMountStage(mountProbes).plan(input)!;
+    assertEquals(plan.outputOverrides.agentCommand, ["codex"]);
   });
 });

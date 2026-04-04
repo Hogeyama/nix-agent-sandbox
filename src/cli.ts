@@ -11,7 +11,7 @@ import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
-import { MountStage } from "./stages/mount.ts";
+import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
 import { createHostExecStage } from "./stages/hostexec.ts";
 import { createDindStage } from "./stages/dind.ts";
 import { createProxyStage } from "./stages/proxy.ts";
@@ -190,12 +190,20 @@ export async function main(args: string[]): Promise<void> {
       });
     }
 
+    // MountProbes を事前解決
+    const mountProbes = await resolveMountProbes(
+      hostEnv,
+      effectiveProfile,
+      Deno.cwd(),
+      probes.gpgAgentSocket,
+    );
+
     const legacyStages = [
       new WorktreeStage(),
       new DockerBuildStage(),
       // NixDetectStage is a PlanStage — added directly below
       // DbusProxyStage is a PlanStage — added directly below
-      new MountStage(),
+      // MountStage is a PlanStage — added directly below
       // HostExecStage is a PlanStage — added directly below
       // DindStage is a PlanStage — added directly below
       // ProxyStage is a PlanStage — added directly below
@@ -206,6 +214,7 @@ export async function main(args: string[]): Promise<void> {
     const adapted = legacyStages.map((s) => adaptLegacyStage(s, ctx));
     // NixDetectStage を DockerBuildStage の後に挿入 (index 2)
     // DbusProxyStage を NixDetectStage の後に挿入 (index 3)
+    // MountStage を DbusProxyStage の後に挿入 (index 4)
     // HostExecStage を MountStage の後に挿入 (index 5)
     // DindStage を HostExecStage の後に挿入 (index 6)
     // ProxyStage を DindStage の後に挿入 (index 7)
@@ -213,17 +222,17 @@ export async function main(args: string[]): Promise<void> {
       ...adapted.slice(0, 2),
       NixDetectStage,
       createDbusProxyStage(),
-      ...adapted.slice(2, 3),
+      createMountStage(mountProbes),
       createHostExecStage(),
       createDindStage(),
       createProxyStage(),
-      ...adapted.slice(3),
+      ...adapted.slice(2),
     ];
 
     // 初期 PriorStageOutputs を構築
     const initialPrior: PriorStageOutputs = {
       dockerArgs: ctx.dockerArgs,
-      envVars: ctx.envVars,
+      envVars: { ...ctx.envVars, NAS_LOG_LEVEL: logLevel },
       workDir: ctx.workDir,
       mountDir: ctx.mountDir,
       nixEnabled: ctx.nixEnabled,
