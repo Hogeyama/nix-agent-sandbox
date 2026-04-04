@@ -184,19 +184,23 @@ export async function tryCliActionNotification(
 
     const { execPath, prefix } = resolveNasCommand();
     if (action === "approve") {
-      await new Deno.Command(execPath, {
-        args: [...prefix, ...options.approveArgs],
-        stdout: "null",
-        stderr: "null",
-      }).output().catch(() => {});
+      try {
+        await new Deno.Command(execPath, {
+          args: [...prefix, ...options.approveArgs],
+          stdout: "null",
+          stderr: "null",
+        }).output();
+      } catch { /* command may not be resolvable */ }
       return true;
     }
     if (action === "deny") {
-      await new Deno.Command(execPath, {
-        args: [...prefix, ...options.denyArgs],
-        stdout: "null",
-        stderr: "null",
-      }).output().catch(() => {});
+      try {
+        await new Deno.Command(execPath, {
+          args: [...prefix, ...options.denyArgs],
+          stdout: "null",
+          stderr: "null",
+        }).output();
+      } catch { /* command may not be resolvable */ }
       return true;
     }
     // Dismiss → do nothing
@@ -317,19 +321,23 @@ async function readNotifySendOutput(
 }
 
 async function closeDesktopNotification(id: string): Promise<void> {
-  await new Deno.Command("gdbus", {
-    args: [
-      "call",
-      "--session",
-      "--dest",
-      "org.freedesktop.Notifications",
-      "--object-path",
-      "/org/freedesktop/Notifications",
-      "--method",
-      "org.freedesktop.Notifications.CloseNotification",
-      id,
-    ],
-    stdout: "null",
-    stderr: "null",
-  }).output().catch(() => {});
+  try {
+    await new Deno.Command("gdbus", {
+      args: [
+        "call",
+        "--session",
+        "--dest",
+        "org.freedesktop.Notifications",
+        "--object-path",
+        "/org/freedesktop/Notifications",
+        "--method",
+        "org.freedesktop.Notifications.CloseNotification",
+        id,
+      ],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+  } catch {
+    // gdbus may not be available (e.g. WSL without D-Bus)
+  }
 }
