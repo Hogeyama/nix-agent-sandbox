@@ -22,7 +22,7 @@ import {
   ensureNetwork,
   ensureSharedTmpWritable,
   startDindSidecar,
-} from "../stages/dind.ts";
+} from "../docker/dind.ts";
 import {
   dockerBuild,
   dockerContainerExists,
