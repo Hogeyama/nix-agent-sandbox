@@ -59,6 +59,7 @@ Deno.test("HostExecBroker: falls back when no rule matches", async () => {
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: Deno.cwd(),
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig(),
@@ -90,6 +91,7 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     auditDir,
@@ -170,6 +172,7 @@ Deno.test("HostExecBroker: pending request can be denied via broker", async () =
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     auditDir,
@@ -237,6 +240,7 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -329,6 +333,7 @@ Deno.test("HostExecBroker: argv0-only rule matches any args", async () => {
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -372,6 +377,7 @@ Deno.test("HostExecBroker: PATH rule executes basename when request argv0 is wra
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -422,6 +428,7 @@ Deno.test("HostExecBroker: relative rule executes original relative argv0", asyn
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -464,6 +471,7 @@ Deno.test("HostExecBroker: argv0-only rule also matches no-args command", async 
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -509,6 +517,7 @@ Deno.test("HostExecBroker: rejects cwd outside workspace with workspace-only mod
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -554,6 +563,7 @@ Deno.test("HostExecBroker: allows cwd in session tmp with workspace-or-session-t
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir,
     hostexec: makeConfig({
@@ -594,6 +604,7 @@ Deno.test("HostExecBroker: fallback deny returns error for unmatched command", a
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: Deno.cwd(),
     sessionTmpDir: `${runtimeDir}/tmp`,
     auditDir,
@@ -651,6 +662,7 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -725,6 +737,7 @@ Deno.test("HostExecBroker: scope once does not cache approval key", async () => 
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -797,6 +810,7 @@ Deno.test("HostExecBroker: scope capability caches approval key", async () => {
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
@@ -856,6 +870,7 @@ Deno.test("HostExecBroker: defaultScope once used when no explicit scope", async
     paths,
     sessionId: "sess_test",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({

@@ -56,7 +56,7 @@ Deno.test("notifyPendingRequest: dismiss does not open browser", async () => {
   });
 });
 
-Deno.test("notifyPendingRequest: auto backend uses desktop", async () => {
+Deno.test("notifyPendingRequest: desktop backend sends notification", async () => {
   await withFakeCommands(async ({ dir, healthServer }) => {
     const argsLog = `${dir}/notify-args.log`;
     Deno.env.set("NAS_NOTIFY_ARGS_LOG", argsLog);
@@ -65,7 +65,7 @@ Deno.test("notifyPendingRequest: auto backend uses desktop", async () => {
     Deno.env.set("NAS_XDG_LOG", `${dir}/xdg-open.log`);
 
     await notifyPendingRequest({
-      backend: "auto",
+      backend: "desktop",
       sessionId: "sess_test",
       requestId: "req_test",
       target: { host: "api.openai.com", port: 443 },

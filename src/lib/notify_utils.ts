@@ -7,6 +7,22 @@ import * as path from "@std/path";
 import { logWarn } from "../log.ts";
 
 export type NotifyBackend = "auto" | "desktop" | "off";
+export type ResolvedNotifyBackend = "desktop" | "off";
+
+/**
+ * Resolve "auto" to a concrete backend.
+ * On WSL, "auto" resolves to "off" (opt-in: set "desktop" explicitly).
+ * On native Linux, "auto" resolves to "desktop".
+ */
+export function resolveNotifyBackend(
+  backend: NotifyBackend,
+  isWSL: boolean,
+): ResolvedNotifyBackend {
+  if (backend === "off") return "off";
+  if (backend === "desktop") return "desktop";
+  // auto: off on WSL, desktop otherwise
+  return isWSL ? "off" : "desktop";
+}
 
 // Module-level state for tracking the active desktop notification ID.
 // Only one notification is active at a time across the process.

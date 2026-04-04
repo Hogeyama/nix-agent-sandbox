@@ -1,5 +1,6 @@
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
+import { isWSL, resolveNotifyBackend } from "../lib/notify_utils.ts";
 import { resolveAuditDir } from "../audit/store.ts";
 import {
   dockerContainerExists,
@@ -80,7 +81,7 @@ export class ProxyStage implements Stage {
       promptEnabled: prompt.enable,
       timeoutSeconds: prompt.timeoutSeconds,
       defaultScope: prompt.defaultScope,
-      notify: prompt.notify,
+      notify: resolveNotifyBackend(prompt.notify, isWSL()),
       uiEnabled: ctx.config.ui.enable,
       uiPort: ctx.config.ui.port,
       uiIdleTimeout: ctx.config.ui.idleTimeout,

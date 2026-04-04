@@ -3,17 +3,17 @@ import {
   type CliActionNotificationOptions,
   closeNotification,
   type DesktopNotificationOptions,
-  type NotifyBackend,
+  type ResolvedNotifyBackend,
   tryCliActionNotification,
   tryDesktopNotification,
 } from "../lib/notify_utils.ts";
 import { ensureUiDaemon } from "../ui/daemon.ts";
 
-export type HostExecNotifyBackend = NotifyBackend;
+export type { ResolvedNotifyBackend };
 export { closeNotification };
 
 export interface HostExecPendingNotification {
-  backend: HostExecNotifyBackend;
+  backend: ResolvedNotifyBackend;
   pending: HostExecPendingEntry;
   uiEnabled?: boolean;
   uiPort?: number;

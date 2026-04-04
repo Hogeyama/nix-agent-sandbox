@@ -3,6 +3,7 @@ import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import { logInfo } from "../log.ts";
+import { isWSL, resolveNotifyBackend } from "../lib/notify_utils.ts";
 import { HostExecBroker } from "../hostexec/broker.ts";
 import { resolveAuditDir } from "../audit/store.ts";
 import {
@@ -107,6 +108,7 @@ export class HostExecStage implements Stage {
       workspaceRoot: ctx.mountDir ?? ctx.workDir,
       sessionTmpDir,
       hostexec: config,
+      notify: resolveNotifyBackend(config.prompt.notify, isWSL()),
       uiEnabled: ctx.config.ui.enable,
       uiPort: ctx.config.ui.port,
       uiIdleTimeout: ctx.config.ui.idleTimeout,

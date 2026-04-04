@@ -9,7 +9,11 @@ import type {
 } from "../config/types.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import { SecretStore } from "./secret_store.ts";
-import { closeNotification, notifyHostExecPendingRequest } from "./notify.ts";
+import {
+  closeNotification,
+  notifyHostExecPendingRequest,
+  type ResolvedNotifyBackend,
+} from "./notify.ts";
 import {
   hostExecBrokerSocketPath,
   type HostExecRuntimePaths,
@@ -36,6 +40,7 @@ interface HostExecBrokerOptions {
   workspaceRoot: string;
   sessionTmpDir: string;
   hostexec?: HostExecConfig;
+  notify: ResolvedNotifyBackend;
   uiEnabled?: boolean;
   uiPort?: number;
   uiIdleTimeout?: number;
@@ -74,6 +79,7 @@ export class HostExecBroker {
   private readonly workspaceRoot: string;
   private readonly sessionTmpDir: string;
   private readonly config: HostExecConfig;
+  private readonly notify: ResolvedNotifyBackend;
   private readonly uiEnabled?: boolean;
   private readonly uiPort?: number;
   private readonly uiIdleTimeout?: number;
@@ -95,6 +101,7 @@ export class HostExecBroker {
     this.workspaceRoot = path.resolve(options.workspaceRoot);
     this.sessionTmpDir = path.resolve(options.sessionTmpDir);
     this.config = options.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
+    this.notify = options.notify;
     this.uiEnabled = options.uiEnabled;
     this.uiPort = options.uiPort;
     this.uiIdleTimeout = options.uiIdleTimeout;
@@ -307,7 +314,7 @@ export class HostExecBroker {
     group.pendingEntries.set(message.requestId, entry);
     await writeHostExecPendingEntry(this.paths, entry);
     const notificationTask = notifyHostExecPendingRequest({
-      backend: this.config.prompt.notify,
+      backend: this.notify,
       pending: entry,
       uiEnabled: this.uiEnabled,
       uiPort: this.uiPort,

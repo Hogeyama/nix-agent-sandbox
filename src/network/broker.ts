@@ -22,8 +22,8 @@ import {
 } from "./registry.ts";
 import {
   closeNotification,
-  type NotifyBackend,
   notifyPendingRequest,
+  type ResolvedNotifyBackend,
 } from "./notify.ts";
 
 interface BrokerOptions {
@@ -34,7 +34,7 @@ interface BrokerOptions {
   promptEnabled: boolean;
   timeoutSeconds: number;
   defaultScope: ApprovalScope;
-  notify: NotifyBackend;
+  notify: ResolvedNotifyBackend;
   uiEnabled?: boolean;
   uiPort?: number;
   uiIdleTimeout?: number;
@@ -80,7 +80,7 @@ export class SessionBroker {
   private readonly promptEnabled: boolean;
   private readonly timeoutSeconds: number;
   private readonly defaultScope: ApprovalScope;
-  private readonly notify: NotifyBackend;
+  private readonly notify: ResolvedNotifyBackend;
   private readonly uiEnabled?: boolean;
   private readonly uiPort?: number;
   private readonly uiIdleTimeout?: number;

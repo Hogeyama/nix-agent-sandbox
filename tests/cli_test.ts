@@ -483,6 +483,7 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
     paths,
     sessionId: "sess_cli",
     profileName: "test",
+    notify: "off",
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: {

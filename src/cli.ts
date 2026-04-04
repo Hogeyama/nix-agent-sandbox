@@ -14,7 +14,11 @@ import { DindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { setLogLevel } from "./log.ts";
-import { checkNotifySend } from "./lib/notify_utils.ts";
+import {
+  checkNotifySend,
+  isWSL,
+  resolveNotifyBackend,
+} from "./lib/notify_utils.ts";
 import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
@@ -154,11 +158,18 @@ export async function main(args: string[]): Promise<void> {
 
     // notify-send の存在チェック（必要な場合のみ）
     {
-      const networkNotify = effectiveProfile.network.prompt.notify;
-      const hostexecNotify = effectiveProfile.hostexec?.prompt.notify;
+      const wsl = isWSL();
+      const networkNotify = resolveNotifyBackend(
+        effectiveProfile.network.prompt.notify,
+        wsl,
+      );
+      const hostexecNotify = resolveNotifyBackend(
+        effectiveProfile.hostexec?.prompt.notify ?? "auto",
+        wsl,
+      );
       if (
-        (networkNotify === "auto" || networkNotify === "desktop") ||
-        (hostexecNotify === "auto" || hostexecNotify === "desktop")
+        networkNotify === "desktop" ||
+        hostexecNotify === "desktop"
       ) {
         checkNotifySend();
       }

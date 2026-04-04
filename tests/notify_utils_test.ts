@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { isWSL } from "../src/lib/notify_utils.ts";
+import { isWSL, resolveNotifyBackend } from "../src/lib/notify_utils.ts";
 
 function withEnv(
   overrides: Record<string, string | undefined>,
@@ -39,4 +39,22 @@ Deno.test("isWSL: returns false when WSL_DISTRO_NAME is unset", () => {
   withEnv({ WSL_DISTRO_NAME: undefined }, () => {
     assertEquals(isWSL(), false);
   });
+});
+
+Deno.test("resolveNotifyBackend: off stays off regardless of WSL", () => {
+  assertEquals(resolveNotifyBackend("off", false), "off");
+  assertEquals(resolveNotifyBackend("off", true), "off");
+});
+
+Deno.test("resolveNotifyBackend: desktop stays desktop regardless of WSL", () => {
+  assertEquals(resolveNotifyBackend("desktop", false), "desktop");
+  assertEquals(resolveNotifyBackend("desktop", true), "desktop");
+});
+
+Deno.test("resolveNotifyBackend: auto resolves to desktop on non-WSL", () => {
+  assertEquals(resolveNotifyBackend("auto", false), "desktop");
+});
+
+Deno.test("resolveNotifyBackend: auto resolves to off on WSL", () => {
+  assertEquals(resolveNotifyBackend("auto", true), "off");
 });

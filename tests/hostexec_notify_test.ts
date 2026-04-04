@@ -63,7 +63,7 @@ Deno.test("notifyHostExecPendingRequest: dismiss does not open browser", async (
   });
 });
 
-Deno.test("notifyHostExecPendingRequest: auto backend uses desktop", async () => {
+Deno.test("notifyHostExecPendingRequest: desktop backend sends notification", async () => {
   await withFakeCommands(async ({ dir, healthServer }) => {
     const argsLog = `${dir}/notify-args.log`;
     Deno.env.set("NAS_NOTIFY_ARGS_LOG", argsLog);
@@ -72,7 +72,7 @@ Deno.test("notifyHostExecPendingRequest: auto backend uses desktop", async () =>
     Deno.env.set("NAS_XDG_LOG", `${dir}/xdg-open.log`);
 
     await notifyHostExecPendingRequest({
-      backend: "auto",
+      backend: "desktop",
       pending: TEST_PENDING,
       uiPort: healthServer.port,
     });

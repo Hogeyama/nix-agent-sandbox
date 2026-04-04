@@ -3,17 +3,17 @@ import {
   type CliActionNotificationOptions,
   closeNotification,
   type DesktopNotificationOptions,
-  type NotifyBackend,
+  type ResolvedNotifyBackend,
   tryCliActionNotification,
   tryDesktopNotification,
 } from "../lib/notify_utils.ts";
 import { ensureUiDaemon } from "../ui/daemon.ts";
 
-export type { NotifyBackend };
+export type { ResolvedNotifyBackend };
 export { closeNotification };
 
 export interface PendingNotification {
-  backend: NotifyBackend;
+  backend: ResolvedNotifyBackend;
   sessionId: string;
   requestId: string;
   target: NormalizedTarget;
