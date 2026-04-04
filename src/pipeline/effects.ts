@@ -8,6 +8,8 @@
 import type {
   DbusProxyEffect,
   DindSidecarEffect,
+  DockerImageBuildEffect,
+  DockerRunInteractiveEffect,
   ProcessSpawnEffect,
   ProxySessionEffect,
   ResourceEffect,
@@ -22,6 +24,7 @@ import {
   startDindSidecar,
 } from "../stages/dind.ts";
 import {
+  dockerBuild,
   dockerContainerExists,
   dockerIsRunning,
   dockerLogs,
@@ -30,10 +33,12 @@ import {
   dockerNetworkDisconnect,
   dockerNetworkRemove,
   dockerRm,
+  dockerRun,
   dockerRunDetached,
   dockerStop,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import * as path from "@std/path";
 import { gcDbusRuntime } from "../dbus/registry.ts";
 import { HostExecBroker } from "../hostexec/broker.ts";
 import {
@@ -96,10 +101,13 @@ export async function executeEffect(
       return await executeUnixListener(effect);
     case "proxy-session":
       return await executeProxySession(effect);
+    case "docker-image-build":
+      return await executeDockerImageBuild(effect);
+    case "docker-run-interactive":
+      return await executeDockerRunInteractive(effect);
     case "docker-container":
     case "docker-network":
     case "docker-volume":
-    case "docker-run-interactive":
       throw new Error(`Effect not yet implemented: ${effect.kind}`);
   }
 }
@@ -985,4 +993,68 @@ async function waitForEnvoyReady(
   throw new Error(
     `Envoy sidecar failed to start:\n${await dockerLogs(envoyContainerName)}`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// docker-image-build effect
+// ---------------------------------------------------------------------------
+
+async function executeDockerImageBuild(
+  effect: DockerImageBuildEffect,
+): Promise<ResourceHandle> {
+  const { imageName, assetGroups, labels } = effect;
+
+  // deno compile 時は仮想FS上のパスになり docker デーモンからアクセスできないため、
+  // 埋め込みファイルを一時ディレクトリに書き出してからビルドする
+  const tmpDir = await Deno.makeTempDir({ prefix: "nas-docker-build-" });
+  try {
+    for (const group of assetGroups) {
+      for (const name of group.files) {
+        const content = await Deno.readTextFile(
+          new URL(name, group.baseUrl),
+        );
+        const outputPath = path.join(tmpDir, group.outputDir, name);
+        await Deno.mkdir(path.dirname(outputPath), { recursive: true });
+        await Deno.writeTextFile(outputPath, content);
+      }
+    }
+    await dockerBuild(tmpDir, imageName, labels);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true }).catch((e) =>
+      logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`)
+    );
+  }
+
+  return {
+    kind: "docker-image-build",
+    close: async () => {
+      // Docker images are not cleaned up on teardown —
+      // they persist as a cache for subsequent runs.
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// docker-run-interactive effect
+// ---------------------------------------------------------------------------
+
+async function executeDockerRunInteractive(
+  effect: DockerRunInteractiveEffect,
+): Promise<ResourceHandle> {
+  await dockerRun({
+    image: effect.image,
+    args: effect.args,
+    envVars: effect.envVars,
+    command: effect.command,
+    interactive: true,
+    name: effect.name,
+    labels: effect.labels,
+  });
+
+  return {
+    kind: "docker-run-interactive",
+    close: async () => {
+      // Container runs with --rm, no cleanup needed.
+    },
+  };
 }

@@ -4,11 +4,17 @@
 
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import { createContext } from "../pipeline/context.ts";
-import { runPipeline } from "../pipeline/pipeline.ts";
-import { DockerBuildStage } from "../stages/launch.ts";
+import {
+  createDockerBuildStage,
+  resolveBuildProbes,
+} from "../stages/launch.ts";
+import { teardownHandles } from "../pipeline/effects.ts";
 import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
 import { logInfo } from "../log.ts";
 import { exitOnCliError, parseLogLevel } from "./helpers.ts";
+import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
+import { executePlan } from "../pipeline/effects.ts";
+import type { PriorStageOutputs } from "../pipeline/types.ts";
 
 export async function runRebuild(nasArgs: string[]): Promise<void> {
   const force = nasArgs.includes("--force") || nasArgs.includes("-f");
@@ -28,8 +34,35 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
       );
     }
 
-    const stages = [new DockerBuildStage()];
-    await runPipeline(stages, ctx);
+    // Image was just removed, so probes will report imageExists=false
+    const buildProbes = await resolveBuildProbes(ctx.imageName);
+    const stage = createDockerBuildStage(buildProbes);
+
+    const hostEnv = buildHostEnv();
+    const probes = await resolveProbes(hostEnv);
+    const prior: PriorStageOutputs = {
+      dockerArgs: [],
+      envVars: {},
+      workDir: ctx.workDir,
+      nixEnabled: false,
+      imageName: ctx.imageName,
+      agentCommand: [],
+      networkPromptEnabled: false,
+      dbusProxyEnabled: false,
+    };
+    const plan = stage.plan({
+      config,
+      profile,
+      profileName: name,
+      sessionId: ctx.sessionId,
+      host: hostEnv,
+      probes,
+      prior,
+    });
+    if (plan) {
+      const handles = await executePlan(plan);
+      await teardownHandles(handles);
+    }
   } catch (err) {
     exitOnCliError(err);
   }

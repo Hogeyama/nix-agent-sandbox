@@ -138,15 +138,6 @@ Deno.test("executeEffect: unimplemented effects throw", async () => {
     },
     { kind: "docker-network", name: "n", connect: [] },
     { kind: "docker-volume", name: "v" },
-    {
-      kind: "docker-run-interactive",
-      image: "img",
-      name: "n",
-      args: [],
-      envVars: {},
-      command: [],
-      labels: {},
-    },
   ];
 
   for (const effect of unimplementedKinds) {

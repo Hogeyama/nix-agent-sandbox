@@ -1,16 +1,18 @@
 /**
- * Docker イメージビルド + コンテナ起動ステージ
+ * Docker イメージビルド + コンテナ起動ステージ (PlanStage)
+ *
+ * DockerBuildStage: image 存在チェックは probe (resolveBuildProbes)、
+ *   ビルドは docker-image-build effect。
+ * LaunchStage: docker-run-interactive effect を返す。
  */
 
-import type { Stage } from "../pipeline/pipeline.ts";
-import type { ExecutionContext } from "../pipeline/context.ts";
-import {
-  computeEmbedHash,
-  dockerBuild,
-  dockerImageExists,
-  dockerRun,
-  getImageLabel,
-} from "../docker/client.ts";
+import type {
+  DockerImageBuildEffect,
+  DockerRunInteractiveEffect,
+  PlanStage,
+  StageInput,
+  StagePlan,
+} from "../pipeline/types.ts";
 import {
   NAS_KIND_AGENT,
   NAS_KIND_LABEL,
@@ -18,110 +20,159 @@ import {
   NAS_MANAGED_VALUE,
   NAS_PWD_LABEL,
 } from "../docker/nas_resources.ts";
-import * as path from "@std/path";
+import {
+  computeEmbedHash,
+  dockerImageExists,
+  getImageLabel,
+} from "../docker/client.ts";
 import { logInfo, logWarn } from "../log.ts";
+
+// ---------------------------------------------------------------------------
+// Embedded build asset groups
+// ---------------------------------------------------------------------------
 
 const EMBEDDED_BUILD_ASSET_GROUPS = [
   {
-    baseUrl: new URL("../docker/embed/", import.meta.url),
+    baseUrl: new URL("../docker/embed/", import.meta.url).href,
     outputDir: "",
     files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh", "local-proxy.mjs"],
   },
   {
-    baseUrl: new URL("../docker/envoy/", import.meta.url),
+    baseUrl: new URL("../docker/envoy/", import.meta.url).href,
     outputDir: "envoy",
     files: ["envoy.template.yaml"],
   },
 ] as const;
 
-export class DockerBuildStage implements Stage {
-  name = "DockerBuildStage";
+// ---------------------------------------------------------------------------
+// Build probes
+// ---------------------------------------------------------------------------
 
-  static readonly EMBED_HASH_LABEL = "nas.embed-hash";
-
-  async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    const imageName = ctx.imageName;
-
-    if (await dockerImageExists(imageName)) {
-      logInfo(
-        `[nas] Docker image "${imageName}" already exists, skipping build`,
-      );
-
-      // Check if the embedded files have changed since the image was built
-      const currentHash = await computeEmbedHash();
-      const imageHash = await getImageLabel(
-        imageName,
-        DockerBuildStage.EMBED_HASH_LABEL,
-      );
-      if (imageHash !== currentHash) {
-        logWarn(
-          "[nas] \u26a0 Docker image is outdated. Run `nas rebuild` to update.",
-        );
-      }
-    } else {
-      logInfo(`[nas] Building Docker image "${imageName}"...`);
-      const embedHash = await computeEmbedHash();
-      // deno compile 時は仮想FS上のパスになり docker デーモンからアクセスできないため、
-      // 埋め込みファイルを一時ディレクトリに書き出してからビルドする
-      const tmpDir = await Deno.makeTempDir({ prefix: "nas-docker-build-" });
-      try {
-        for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
-          for (const name of group.files) {
-            const content = await Deno.readTextFile(
-              new URL(name, group.baseUrl),
-            );
-            const outputPath = path.join(tmpDir, group.outputDir, name);
-            await Deno.mkdir(path.dirname(outputPath), { recursive: true });
-            await Deno.writeTextFile(outputPath, content);
-          }
-        }
-        await dockerBuild(tmpDir, imageName, {
-          [DockerBuildStage.EMBED_HASH_LABEL]: embedHash,
-        });
-      } finally {
-        await Deno.remove(tmpDir, { recursive: true }).catch((e) =>
-          logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`)
-        );
-      }
-    }
-
-    return ctx;
-  }
+export interface BuildProbes {
+  readonly imageExists: boolean;
+  readonly currentEmbedHash: string;
+  readonly imageEmbedHash: string | null;
 }
 
-export class LaunchStage implements Stage {
-  name = "LaunchStage";
-  private extraArgs: string[];
+export const EMBED_HASH_LABEL = "nas.embed-hash";
 
-  constructor(extraArgs: string[] = []) {
-    this.extraArgs = extraArgs;
+/**
+ * Resolve build-related probes (I/O). Called once before pipeline starts.
+ */
+export async function resolveBuildProbes(
+  imageName: string,
+): Promise<BuildProbes> {
+  const [imageExists, currentEmbedHash] = await Promise.all([
+    dockerImageExists(imageName),
+    computeEmbedHash(),
+  ]);
+
+  let imageEmbedHash: string | null = null;
+  if (imageExists) {
+    imageEmbedHash = await getImageLabel(imageName, EMBED_HASH_LABEL);
   }
 
-  async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    const command = [
-      ...ctx.agentCommand,
-      ...ctx.profile.agentArgs,
-      ...this.extraArgs,
-    ];
-    logInfo(`[nas] Launching container...`);
-    logInfo(`[nas]   Image: ${ctx.imageName}`);
-    logInfo(`[nas]   Agent: ${ctx.profile.agent}`);
-    logInfo(`[nas]   Command: ${command.join(" ")}`);
+  return { imageExists, currentEmbedHash, imageEmbedHash };
+}
 
-    await dockerRun({
-      image: ctx.imageName,
-      args: ctx.dockerArgs,
-      envVars: ctx.envVars,
-      command,
-      interactive: true,
-      name: `nas-agent-${ctx.sessionId}`,
-      labels: {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_AGENT,
-        [NAS_PWD_LABEL]: ctx.workDir,
-      },
-    });
+// ---------------------------------------------------------------------------
+// DockerBuildStage (PlanStage)
+// ---------------------------------------------------------------------------
 
-    return ctx;
-  }
+export function createDockerBuildStage(
+  buildProbes: BuildProbes,
+): PlanStage {
+  return {
+    kind: "plan",
+    name: "DockerBuildStage",
+
+    plan(input: StageInput): StagePlan | null {
+      const imageName = input.prior.imageName;
+
+      if (buildProbes.imageExists) {
+        logInfo(
+          `[nas] Docker image "${imageName}" already exists, skipping build`,
+        );
+
+        if (buildProbes.imageEmbedHash !== buildProbes.currentEmbedHash) {
+          logWarn(
+            "[nas] \u26a0 Docker image is outdated. Run `nas rebuild` to update.",
+          );
+        }
+
+        // No effects needed — image already exists
+        return {
+          effects: [],
+          dockerArgs: [],
+          envVars: {},
+          outputOverrides: {},
+        };
+      }
+
+      logInfo(`[nas] Building Docker image "${imageName}"...`);
+
+      const buildEffect: DockerImageBuildEffect = {
+        kind: "docker-image-build",
+        imageName,
+        assetGroups: EMBEDDED_BUILD_ASSET_GROUPS,
+        labels: {
+          [EMBED_HASH_LABEL]: buildProbes.currentEmbedHash,
+        },
+      };
+
+      return {
+        effects: [buildEffect],
+        dockerArgs: [],
+        envVars: {},
+        outputOverrides: {},
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// LaunchStage (PlanStage)
+// ---------------------------------------------------------------------------
+
+export function createLaunchStage(
+  extraArgs: string[] = [],
+): PlanStage {
+  return {
+    kind: "plan",
+    name: "LaunchStage",
+
+    plan(input: StageInput): StagePlan | null {
+      const command = [
+        ...input.prior.agentCommand,
+        ...input.profile.agentArgs,
+        ...extraArgs,
+      ];
+
+      logInfo(`[nas] Launching container...`);
+      logInfo(`[nas]   Image: ${input.prior.imageName}`);
+      logInfo(`[nas]   Agent: ${input.profile.agent}`);
+      logInfo(`[nas]   Command: ${command.join(" ")}`);
+
+      const runEffect: DockerRunInteractiveEffect = {
+        kind: "docker-run-interactive",
+        image: input.prior.imageName,
+        name: `nas-agent-${input.sessionId}`,
+        args: [...input.prior.dockerArgs],
+        envVars: { ...input.prior.envVars },
+        command,
+        labels: {
+          [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+          [NAS_KIND_LABEL]: NAS_KIND_AGENT,
+          [NAS_PWD_LABEL]: input.prior.workDir,
+        },
+      };
+
+      return {
+        effects: [runEffect],
+        dockerArgs: [],
+        envVars: {},
+        outputOverrides: {},
+      };
+    },
+  };
 }

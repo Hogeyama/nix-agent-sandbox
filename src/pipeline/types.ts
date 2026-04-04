@@ -151,6 +151,7 @@ export type ResourceEffect =
   | WaitForReadyEffect
   | DindSidecarEffect
   | DbusProxyEffect
+  | DockerImageBuildEffect
   | DockerRunInteractiveEffect
   | ProxySessionEffect;
 
@@ -239,6 +240,18 @@ export interface DbusProxyEffect {
   args: string[];
   timeoutMs: number;
   pollIntervalMs: number;
+}
+
+export interface DockerImageBuildEffect {
+  kind: "docker-image-build";
+  imageName: string;
+  /** Embedded asset groups to extract to a temp dir before building */
+  assetGroups: readonly {
+    baseUrl: string;
+    outputDir: string;
+    files: readonly string[];
+  }[];
+  labels: Record<string, string>;
 }
 
 export interface DockerRunInteractiveEffect {

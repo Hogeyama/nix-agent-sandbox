@@ -15,7 +15,11 @@ import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
 import { createHostExecStage } from "./stages/hostexec.ts";
 import { createDindStage } from "./stages/dind.ts";
 import { createProxyStage } from "./stages/proxy.ts";
-import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
+import {
+  createDockerBuildStage,
+  createLaunchStage,
+  resolveBuildProbes,
+} from "./stages/launch.ts";
 import { setLogLevel } from "./log.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import {
@@ -198,35 +202,33 @@ export async function main(args: string[]): Promise<void> {
       probes.gpgAgentSocket,
     );
 
+    // BuildProbes を事前解決
+    const buildProbes = await resolveBuildProbes(ctx.imageName);
+
     const legacyStages = [
       new WorktreeStage(),
-      new DockerBuildStage(),
+      // DockerBuildStage is a PlanStage — added directly below
       // NixDetectStage is a PlanStage — added directly below
       // DbusProxyStage is a PlanStage — added directly below
       // MountStage is a PlanStage — added directly below
       // HostExecStage is a PlanStage — added directly below
       // DindStage is a PlanStage — added directly below
       // ProxyStage is a PlanStage — added directly below
-      new LaunchStage(agentExtraArgs),
+      // LaunchStage is a PlanStage — added directly below
     ];
 
     // Legacy stage を adaptLegacyStage でラップし、PlanStage を直接挿入
     const adapted = legacyStages.map((s) => adaptLegacyStage(s, ctx));
-    // NixDetectStage を DockerBuildStage の後に挿入 (index 2)
-    // DbusProxyStage を NixDetectStage の後に挿入 (index 3)
-    // MountStage を DbusProxyStage の後に挿入 (index 4)
-    // HostExecStage を MountStage の後に挿入 (index 5)
-    // DindStage を HostExecStage の後に挿入 (index 6)
-    // ProxyStage を DindStage の後に挿入 (index 7)
     const stages = [
-      ...adapted.slice(0, 2),
+      ...adapted,
+      createDockerBuildStage(buildProbes),
       NixDetectStage,
       createDbusProxyStage(),
       createMountStage(mountProbes),
       createHostExecStage(),
       createDindStage(),
       createProxyStage(),
-      ...adapted.slice(2),
+      createLaunchStage(agentExtraArgs),
     ];
 
     // 初期 PriorStageOutputs を構築
