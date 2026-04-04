@@ -2,52 +2,88 @@
  * Claude Code エージェント対応
  */
 
-import type { ExecutionContext } from "../pipeline/context.ts";
-
 const DEFAULT_CONTAINER_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-/** Claude Code 固有のマウントと環境変数を追加 */
-export function configureClaude(ctx: ExecutionContext): ExecutionContext {
-  const args = [...ctx.dockerArgs];
-  const envVars = { ...ctx.envVars };
-  const containerHome = ctx.envVars["NAS_HOME"] ?? resolveContainerHome();
+// ---------------------------------------------------------------------------
+// Probe types & resolver (side-effectful)
+// ---------------------------------------------------------------------------
+
+/** Claude 用 probe 結果 */
+export interface ClaudeProbes {
+  readonly claudeDirExists: boolean;
+  readonly claudeJsonExists: boolean;
+  readonly claudeBinPath: string | null;
+}
+
+/** ホスト環境を調べて ClaudeProbes を返す (副作用あり) */
+export function resolveClaudeProbes(hostHome: string): ClaudeProbes {
+  return {
+    claudeDirExists: dirExistsSync(`${hostHome}/.claude`),
+    claudeJsonExists: fileExistsSync(`${hostHome}/.claude.json`),
+    claudeBinPath: findBinaryResolved("claude"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pure configurator
+// ---------------------------------------------------------------------------
+
+/** configureClaude の入力 */
+export interface ClaudeConfigInput {
+  readonly containerHome: string;
+  readonly hostHome: string;
+  readonly probes: ClaudeProbes;
+  readonly priorDockerArgs: readonly string[];
+  readonly priorEnvVars: Readonly<Record<string, string>>;
+}
+
+/** configureClaude の出力 */
+export interface AgentConfigResult {
+  readonly dockerArgs: string[];
+  readonly envVars: Record<string, string>;
+  readonly agentCommand: string[];
+}
+
+/** Claude Code 固有のマウントと環境変数を決定する (純粋関数) */
+export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
+  const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
+    input;
+  const args = [...priorDockerArgs];
+  const envVars = { ...priorEnvVars };
   const containerLocalBin = `${containerHome}/.local/bin`;
 
-  const home = Deno.env.get("HOME") ?? "/root";
   envVars["PATH"] = `${containerLocalBin}:${
     envVars["PATH"] ?? DEFAULT_CONTAINER_PATH
   }`;
 
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
-  const claudeDir = `${home}/.claude`;
-  if (dirExistsSync(claudeDir)) {
-    args.push("-v", `${claudeDir}:${containerHome}/.claude`);
+  if (probes.claudeDirExists) {
+    args.push("-v", `${hostHome}/.claude:${containerHome}/.claude`);
   }
 
   // ~/.claude.json をマウント（設定）
-  const claudeJson = `${home}/.claude.json`;
-  if (fileExistsSync(claudeJson)) {
-    args.push("-v", `${claudeJson}:${containerHome}/.claude.json`);
+  if (probes.claudeJsonExists) {
+    args.push("-v", `${hostHome}/.claude.json:${containerHome}/.claude.json`);
   }
 
   // claude バイナリのマウント (実体パスを解決してマウント)
-  const claudeBin = findBinaryResolved("claude");
-  if (claudeBin) {
-    args.push("-v", `${claudeBin}:${containerLocalBin}/claude:ro`);
+  if (probes.claudeBinPath) {
+    args.push("-v", `${probes.claudeBinPath}:${containerLocalBin}/claude:ro`);
   }
 
-  return {
-    ...ctx,
-    dockerArgs: args,
-    envVars,
-    agentCommand: claudeBin ? ["claude"] : [
-      "bash",
-      "-c",
-      "curl -fsSL https://claude.ai/install.sh | bash && claude",
-    ],
-  };
+  const agentCommand: string[] = probes.claudeBinPath ? ["claude"] : [
+    "bash",
+    "-c",
+    "curl -fsSL https://claude.ai/install.sh | bash && claude",
+  ];
+
+  return { dockerArgs: [...args], envVars, agentCommand };
 }
+
+// ---------------------------------------------------------------------------
+// Internal helpers (side-effectful, used only by resolveClaudeProbes)
+// ---------------------------------------------------------------------------
 
 /** ディレクトリが存在するか判定 */
 function dirExistsSync(path: string): boolean {
@@ -86,9 +122,4 @@ function findBinaryResolved(name: string): string | null {
     // ignore
   }
   return null;
-}
-
-function resolveContainerHome(): string {
-  const user = Deno.env.get("USER")?.trim();
-  return `/home/${user || "nas"}`;
 }

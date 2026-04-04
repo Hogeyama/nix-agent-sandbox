@@ -2,36 +2,71 @@
  * OpenAI Codex CLI エージェント対応
  */
 
-import type { ExecutionContext } from "../pipeline/context.ts";
+// ---------------------------------------------------------------------------
+// Probe types & resolver (side-effectful)
+// ---------------------------------------------------------------------------
 
-/** Codex 固有のマウントと環境変数を追加 */
-export function configureCodex(ctx: ExecutionContext): ExecutionContext {
-  const args = [...ctx.dockerArgs];
-  const envVars = { ...ctx.envVars };
-  const containerHome = ctx.envVars["NAS_HOME"] ?? resolveContainerHome();
-  const home = Deno.env.get("HOME") ?? "/root";
+/** Codex 用 probe 結果 */
+export interface CodexProbes {
+  readonly codexDirExists: boolean;
+  readonly codexBinPath: string | null;
+}
+
+/** ホスト環境を調べて CodexProbes を返す (副作用あり) */
+export function resolveCodexProbes(hostHome: string): CodexProbes {
+  return {
+    codexDirExists: dirExistsSync(`${hostHome}/.codex`),
+    codexBinPath: findBinaryResolved("codex"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pure configurator
+// ---------------------------------------------------------------------------
+
+/** configureCodex の入力 */
+export interface CodexConfigInput {
+  readonly containerHome: string;
+  readonly hostHome: string;
+  readonly probes: CodexProbes;
+  readonly priorDockerArgs: readonly string[];
+  readonly priorEnvVars: Readonly<Record<string, string>>;
+}
+
+/** configureCodex の出力 */
+export interface AgentConfigResult {
+  readonly dockerArgs: string[];
+  readonly envVars: Record<string, string>;
+  readonly agentCommand: string[];
+}
+
+/** Codex 固有のマウントと環境変数を決定する (純粋関数) */
+export function configureCodex(input: CodexConfigInput): AgentConfigResult {
+  const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
+    input;
+  const args = [...priorDockerArgs];
+  const envVars = { ...priorEnvVars };
 
   // ~/.codex をマウント（認証情報・設定）
-  const codexDir = `${home}/.codex`;
-  if (dirExistsSync(codexDir)) {
-    args.push("-v", `${codexDir}:${containerHome}/.codex`);
+  if (probes.codexDirExists) {
+    args.push("-v", `${hostHome}/.codex:${containerHome}/.codex`);
   }
 
   // codex バイナリのマウント (実体パスを解決してマウント)
-  const codexBin = findBinaryResolved("codex");
-  if (codexBin) {
-    args.push("-v", `${codexBin}:/usr/local/bin/codex:ro`);
+  if (probes.codexBinPath) {
+    args.push("-v", `${probes.codexBinPath}:/usr/local/bin/codex:ro`);
   }
 
-  return {
-    ...ctx,
-    dockerArgs: args,
-    envVars,
-    agentCommand: codexBin
-      ? ["codex"]
-      : ["bash", "-c", "echo 'codex binary not found'; exit 1"],
-  };
+  const agentCommand: string[] = probes.codexBinPath
+    ? ["codex"]
+    : ["bash", "-c", "echo 'codex binary not found'; exit 1"];
+
+  return { dockerArgs: [...args], envVars, agentCommand };
 }
+
+// ---------------------------------------------------------------------------
+// Internal helpers (side-effectful, used only by resolveCodexProbes)
+// ---------------------------------------------------------------------------
 
 /** ディレクトリが存在するか判定 */
 function dirExistsSync(path: string): boolean {
@@ -60,9 +95,4 @@ function findBinaryResolved(name: string): string | null {
     // ignore
   }
   return null;
-}
-
-function resolveContainerHome(): string {
-  const user = Deno.env.get("USER")?.trim();
-  return `/home/${user || "nas"}`;
 }

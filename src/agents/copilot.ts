@@ -2,109 +2,156 @@
  * GitHub Copilot CLI エージェント対応
  */
 
-import type { ExecutionContext } from "../pipeline/context.ts";
+// ---------------------------------------------------------------------------
+// Probe types & resolver (side-effectful)
+// ---------------------------------------------------------------------------
 
-/** Copilot CLI 固有のマウントと環境変数を追加 */
-export function configureCopilot(ctx: ExecutionContext): ExecutionContext {
-  const args = [...ctx.dockerArgs];
-  const envVars = { ...ctx.envVars };
-  const containerHome = ctx.envVars["NAS_HOME"] ?? resolveContainerHome();
+/** Copilot 用 probe 結果 */
+export interface CopilotProbes {
+  readonly copilotBinPath: string | null;
+  readonly copilotConfigDirExists: boolean;
+  readonly copilotStateDirExists: boolean;
+  readonly copilotLegacyDirExists: boolean;
+  /** ホスト環境変数 XDG_CONFIG_HOME */
+  readonly xdgConfigHome: string | null;
+  /** ホスト環境変数 XDG_STATE_HOME */
+  readonly xdgStateHome: string | null;
+}
 
-  const home = Deno.env.get("HOME") ?? "/root";
-  const xdgConfigHome = Deno.env.get("XDG_CONFIG_HOME");
-  const xdgStateHome = Deno.env.get("XDG_STATE_HOME");
+/** ホスト環境を調べて CopilotProbes を返す (副作用あり) */
+export function resolveCopilotProbes(hostHome: string): CopilotProbes {
+  const xdgConfigHome = Deno.env.get("XDG_CONFIG_HOME") ?? null;
+  const xdgStateHome = Deno.env.get("XDG_STATE_HOME") ?? null;
+
+  const hostCopilotConfigDir = xdgConfigHome
+    ? `${xdgConfigHome}/.copilot`
+    : `${hostHome}/.copilot`;
+  const hostCopilotStateDir = xdgStateHome
+    ? `${xdgStateHome}/.copilot`
+    : `${hostHome}/.copilot`;
+  const hostLegacyCopilotDir = `${hostHome}/.copilot`;
+
+  return {
+    copilotBinPath: findBinaryResolved("copilot"),
+    copilotConfigDirExists: pathExistsSync(hostCopilotConfigDir),
+    copilotStateDirExists: pathExistsSync(hostCopilotStateDir),
+    copilotLegacyDirExists: (hostLegacyCopilotDir !== hostCopilotConfigDir &&
+        hostLegacyCopilotDir !== hostCopilotStateDir)
+      ? pathExistsSync(hostLegacyCopilotDir)
+      : false,
+    xdgConfigHome,
+    xdgStateHome,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pure configurator
+// ---------------------------------------------------------------------------
+
+/** configureCopilot の入力 */
+export interface CopilotConfigInput {
+  readonly containerHome: string;
+  readonly hostHome: string;
+  readonly probes: CopilotProbes;
+  readonly priorDockerArgs: readonly string[];
+  readonly priorEnvVars: Readonly<Record<string, string>>;
+}
+
+/** configureCopilot の出力 */
+export interface AgentConfigResult {
+  readonly dockerArgs: string[];
+  readonly envVars: Record<string, string>;
+  readonly agentCommand: string[];
+}
+
+/** Copilot CLI 固有のマウントと環境変数を決定する (純粋関数) */
+export function configureCopilot(
+  input: CopilotConfigInput,
+): AgentConfigResult {
+  const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
+    input;
+  const args = [...priorDockerArgs];
+  const envVars = { ...priorEnvVars };
+
+  const xdgConfigHome = probes.xdgConfigHome;
+  const xdgStateHome = probes.xdgStateHome;
 
   // Copilot が実際に使うパスを決定（XDG 未設定時は $HOME/.copilot）
   const hostCopilotConfigDir = xdgConfigHome
     ? `${xdgConfigHome}/.copilot`
-    : `${home}/.copilot`;
+    : `${hostHome}/.copilot`;
   const hostCopilotStateDir = xdgStateHome
     ? `${xdgStateHome}/.copilot`
-    : `${home}/.copilot`;
+    : `${hostHome}/.copilot`;
 
   const containerCopilotConfigDir = remapToContainer(
     hostCopilotConfigDir,
-    home,
+    hostHome,
     containerHome,
   );
   const containerCopilotStateDir = remapToContainer(
     hostCopilotStateDir,
-    home,
+    hostHome,
     containerHome,
   );
 
   // XDG_CONFIG_HOME をコンテナに渡す（ホストで設定されている場合のみ）
   if (xdgConfigHome) {
-    const containerConfigHome = remapToContainer(
+    envVars["XDG_CONFIG_HOME"] = remapToContainer(
       xdgConfigHome,
-      home,
+      hostHome,
       containerHome,
     );
-    envVars["XDG_CONFIG_HOME"] = containerConfigHome;
   }
 
   // XDG_STATE_HOME をコンテナに渡す（ホストで設定されている場合のみ）
   if (xdgStateHome) {
-    const containerStateHome = remapToContainer(
+    envVars["XDG_STATE_HOME"] = remapToContainer(
       xdgStateHome,
-      home,
+      hostHome,
       containerHome,
     );
-    envVars["XDG_STATE_HOME"] = containerStateHome;
   }
 
   // config ディレクトリをマウント
-  try {
-    Deno.statSync(hostCopilotConfigDir);
+  if (probes.copilotConfigDirExists) {
     args.push("-v", `${hostCopilotConfigDir}:${containerCopilotConfigDir}`);
-  } catch {
-    // ディレクトリが無い場合はスキップ
   }
 
   // state ディレクトリをマウント（config と同じ場合は重複を避ける）
-  if (hostCopilotStateDir !== hostCopilotConfigDir) {
-    try {
-      Deno.statSync(hostCopilotStateDir);
-      args.push("-v", `${hostCopilotStateDir}:${containerCopilotStateDir}`);
-    } catch {
-      // ディレクトリが無い場合はスキップ
-    }
+  if (
+    hostCopilotStateDir !== hostCopilotConfigDir &&
+    probes.copilotStateDirExists
+  ) {
+    args.push("-v", `${hostCopilotStateDir}:${containerCopilotStateDir}`);
   }
 
   // Copilot v1.0.2 で config.json が ~/.copilot へシンボリックリンクになるケースをカバー
-  const hostLegacyCopilotDir = `${home}/.copilot`;
-  if (
-    hostLegacyCopilotDir !== hostCopilotConfigDir &&
-    hostLegacyCopilotDir !== hostCopilotStateDir
-  ) {
-    try {
-      Deno.statSync(hostLegacyCopilotDir);
-      const containerLegacyCopilotDir = remapToContainer(
-        hostLegacyCopilotDir,
-        home,
-        containerHome,
-      );
-      args.push("-v", `${hostLegacyCopilotDir}:${containerLegacyCopilotDir}`);
-    } catch {
-      // ディレクトリが無い場合はスキップ
-    }
+  if (probes.copilotLegacyDirExists) {
+    const hostLegacyCopilotDir = `${hostHome}/.copilot`;
+    const containerLegacyCopilotDir = remapToContainer(
+      hostLegacyCopilotDir,
+      hostHome,
+      containerHome,
+    );
+    args.push("-v", `${hostLegacyCopilotDir}:${containerLegacyCopilotDir}`);
   }
 
   // copilot バイナリのマウント (実体パスを解決してマウント)
-  const copilotBin = findBinaryResolved("copilot");
-  if (copilotBin) {
-    args.push("-v", `${copilotBin}:/usr/local/bin/copilot:ro`);
+  if (probes.copilotBinPath) {
+    args.push("-v", `${probes.copilotBinPath}:/usr/local/bin/copilot:ro`);
   }
 
-  return {
-    ...ctx,
-    dockerArgs: args,
-    envVars,
-    agentCommand: copilotBin
-      ? ["copilot"]
-      : ["bash", "-c", "echo 'copilot binary not found'; exit 1"],
-  };
+  const agentCommand: string[] = probes.copilotBinPath
+    ? ["copilot"]
+    : ["bash", "-c", "echo 'copilot binary not found'; exit 1"];
+
+  return { dockerArgs: [...args], envVars, agentCommand };
 }
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
 
 /**
  * ホストのパスをコンテナ内パスにリマップする。
@@ -119,6 +166,19 @@ function remapToContainer(
     return `${containerHome}/` + hostPath.slice(hostHome.length + 1);
   }
   return hostPath;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers (side-effectful, used only by resolveCopilotProbes)
+// ---------------------------------------------------------------------------
+
+function pathExistsSync(path: string): boolean {
+  try {
+    Deno.statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
@@ -138,9 +198,4 @@ function findBinaryResolved(name: string): string | null {
     // ignore
   }
   return null;
-}
-
-function resolveContainerHome(): string {
-  const user = Deno.env.get("USER")?.trim();
-  return `/home/${user || "nas"}`;
 }

@@ -4,9 +4,15 @@
  */
 
 import { assertEquals } from "@std/assert";
-import { configureClaude } from "../src/agents/claude.ts";
-import { configureCopilot } from "../src/agents/copilot.ts";
-import { configureCodex } from "../src/agents/codex.ts";
+import { configureClaude, resolveClaudeProbes } from "../src/agents/claude.ts";
+import type { ClaudeProbes } from "../src/agents/claude.ts";
+import {
+  configureCopilot,
+  resolveCopilotProbes,
+} from "../src/agents/copilot.ts";
+import type { CopilotProbes } from "../src/agents/copilot.ts";
+import { configureCodex, resolveCodexProbes } from "../src/agents/codex.ts";
+import type { CodexProbes } from "../src/agents/codex.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -105,13 +111,23 @@ async function withoutBinary(
 }
 
 // ============================================================
-// configureClaude
+// configureClaude (pure function tests)
 // ============================================================
 
 Deno.test("configureClaude: sets PATH with .local/bin prepended", () => {
-  const containerHome = getContainerHome();
-  const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-  const result = configureClaude(ctx);
+  const containerHome = "/home/testuser";
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome,
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
   assertEquals(
     result.envVars["PATH"]?.startsWith(`${containerHome}/.local/bin:`),
     true,
@@ -119,177 +135,444 @@ Deno.test("configureClaude: sets PATH with .local/bin prepended", () => {
   );
 });
 
-Deno.test("configureClaude: uses NAS_HOME from envVars when set", () => {
-  const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-  ctx.envVars["NAS_HOME"] = "/home/custom";
-  const result = configureClaude(ctx);
+Deno.test("configureClaude: mounts ~/.claude when directory exists", () => {
+  const containerHome = "/home/testuser";
+  const hostHome = "/home/host";
+  const probes: ClaudeProbes = {
+    claudeDirExists: true,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome,
+    hostHome,
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  const mountArg = `${hostHome}/.claude:${containerHome}/.claude`;
   assertEquals(
-    result.envVars["PATH"]?.startsWith("/home/custom/.local/bin:"),
+    result.dockerArgs.includes(mountArg),
     true,
+    `dockerArgs should contain ${mountArg}`,
   );
 });
 
-Deno.test("configureClaude: mounts ~/.claude when directory exists", async () => {
-  await withTempHome(async (tmpHome) => {
-    const containerHome = getContainerHome();
-    await Deno.mkdir(`${tmpHome}/.claude`, { recursive: true });
-
-    const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-    const result = configureClaude(ctx);
-    const mountArg = `${tmpHome}/.claude:${containerHome}/.claude`;
-    assertEquals(
-      result.dockerArgs.includes(mountArg),
-      true,
-      `dockerArgs should contain ${mountArg}`,
-    );
+Deno.test("configureClaude: does not mount ~/.claude when directory is absent", () => {
+  const containerHome = "/home/testuser";
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome,
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
   });
+  const hasClaudeMount = result.dockerArgs.some((a) => a.includes("/.claude"));
+  assertEquals(hasClaudeMount, false);
 });
 
-Deno.test("configureClaude: does not mount ~/.claude when directory is absent", async () => {
-  await withTempHome((tmpHome) => {
-    const containerHome = getContainerHome();
-    const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-    const result = configureClaude(ctx);
-    const hasClaudeMount = result.dockerArgs.some((a) =>
-      a === `${tmpHome}/.claude:${containerHome}/.claude`
-    );
-    assertEquals(hasClaudeMount, false);
+Deno.test("configureClaude: mounts ~/.claude.json when file exists", () => {
+  const containerHome = "/home/testuser";
+  const hostHome = "/home/host";
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: true,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome,
+    hostHome,
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
   });
+  const mountArg = `${hostHome}/.claude.json:${containerHome}/.claude.json`;
+  assertEquals(
+    result.dockerArgs.includes(mountArg),
+    true,
+    `dockerArgs should contain ${mountArg}`,
+  );
 });
 
-Deno.test("configureClaude: mounts ~/.claude.json when file exists", async () => {
-  await withTempHome(async (tmpHome) => {
-    const containerHome = getContainerHome();
-    await Deno.writeTextFile(`${tmpHome}/.claude.json`, "{}");
-
-    const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-    const result = configureClaude(ctx);
-    const mountArg = `${tmpHome}/.claude.json:${containerHome}/.claude.json`;
-    assertEquals(
-      result.dockerArgs.includes(mountArg),
-      true,
-      `dockerArgs should contain ${mountArg}`,
-    );
+Deno.test("configureClaude: does not mount ~/.claude.json when file is absent", () => {
+  const containerHome = "/home/testuser";
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome,
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
   });
+  const hasMount = result.dockerArgs.some((a) => a.includes(".claude.json"));
+  assertEquals(hasMount, false);
 });
 
-Deno.test("configureClaude: does not mount ~/.claude.json when file is absent", async () => {
-  await withTempHome((tmpHome) => {
-    const containerHome = getContainerHome();
-    const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-    const result = configureClaude(ctx);
-    const hasMount = result.dockerArgs.some((a) =>
-      a === `${tmpHome}/.claude.json:${containerHome}/.claude.json`
-    );
-    assertEquals(hasMount, false);
+Deno.test("configureClaude: mounts binary and uses ['claude'] when binary found", () => {
+  const containerHome = "/home/testuser";
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: "/usr/bin/claude",
+  };
+  const result = configureClaude({
+    containerHome,
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
   });
+  assertEquals(result.agentCommand, ["claude"]);
+  const hasBinaryMount = result.dockerArgs.some((a) =>
+    a.endsWith("/claude:ro")
+  );
+  assertEquals(hasBinaryMount, true, "should mount claude binary");
 });
 
-Deno.test("configureClaude: mounts binary and uses ['claude'] when found on PATH", async () => {
-  await withFakeBinary("claude", () => {
-    const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-    const result = configureClaude(ctx);
-    assertEquals(result.agentCommand, ["claude"]);
-    const hasBinaryMount = result.dockerArgs.some((a) =>
-      a.endsWith("/claude:ro")
-    );
-    assertEquals(hasBinaryMount, true, "should mount claude binary");
+Deno.test("configureClaude: uses install script when claude binary not found", () => {
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
   });
-});
-
-Deno.test("configureClaude: uses install script when claude binary not found", async () => {
-  await withoutBinary("claude", () => {
-    const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-    const result = configureClaude(ctx);
-    assertEquals(result.agentCommand[0], "bash");
-    assertEquals(result.agentCommand[1], "-c");
-    assertEquals(result.agentCommand[2]?.includes("install.sh"), true);
-  });
+  assertEquals(result.agentCommand[0], "bash");
+  assertEquals(result.agentCommand[1], "-c");
+  assertEquals(result.agentCommand[2]?.includes("install.sh"), true);
 });
 
 Deno.test("configureClaude: preserves existing dockerArgs", () => {
-  const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-  ctx.dockerArgs = ["--existing", "arg"];
-  const result = configureClaude(ctx);
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: ["--existing", "arg"],
+    priorEnvVars: {},
+  });
   assertEquals(result.dockerArgs[0], "--existing");
   assertEquals(result.dockerArgs[1], "arg");
 });
 
 Deno.test("configureClaude: preserves existing envVars", () => {
-  const ctx = createContext(baseConfig, baseProfile, "test", Deno.cwd());
-  ctx.envVars["EXISTING"] = "value";
-  const result = configureClaude(ctx);
+  const probes: ClaudeProbes = {
+    claudeDirExists: false,
+    claudeJsonExists: false,
+    claudeBinPath: null,
+  };
+  const result = configureClaude({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: { EXISTING: "value" },
+  });
   assertEquals(result.envVars["EXISTING"], "value");
 });
 
 // ============================================================
-// configureCopilot
+// resolveClaudeProbes (integration with filesystem)
 // ============================================================
 
-Deno.test("configureCopilot: uses ['copilot'] when found on PATH", async () => {
-  await withFakeBinary("copilot", () => {
-    const profile: Profile = { ...baseProfile, agent: "copilot" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    const result = configureCopilot(ctx);
-    assertEquals(result.agentCommand, ["copilot"]);
-    const hasBinaryMount = result.dockerArgs.some((a) =>
-      a.includes("/copilot:ro")
-    );
-    assertEquals(hasBinaryMount, true, "should mount copilot binary");
-  });
-});
-
-Deno.test("configureCopilot: uses error command when copilot binary not found", async () => {
-  await withoutBinary("copilot", () => {
-    const profile: Profile = { ...baseProfile, agent: "copilot" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    const result = configureCopilot(ctx);
-    assertEquals(result.agentCommand[0], "bash");
-    assertEquals(
-      result.agentCommand[2]?.includes("copilot binary not found"),
-      true,
-    );
-  });
-});
-
-Deno.test("configureCopilot: mounts copilot config dir with NAS_HOME", async () => {
+Deno.test("resolveClaudeProbes: detects existing ~/.claude directory", async () => {
   await withTempHome(async (tmpHome) => {
-    await Deno.mkdir(`${tmpHome}/.copilot`, { recursive: true });
-
-    const profile: Profile = { ...baseProfile, agent: "copilot" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    ctx.envVars["NAS_HOME"] = "/home/custom";
-    const result = configureCopilot(ctx);
-    const mountArg = result.dockerArgs.find((a) =>
-      a.includes(`${tmpHome}/.copilot`)
-    );
-    assertEquals(
-      mountArg !== undefined,
-      true,
-      "should mount copilot config dir",
-    );
-    assertEquals(
-      mountArg?.includes("/home/custom/"),
-      true,
-      "should use NAS_HOME for container path",
-    );
+    await Deno.mkdir(`${tmpHome}/.claude`, { recursive: true });
+    const probes = resolveClaudeProbes(tmpHome);
+    assertEquals(probes.claudeDirExists, true);
   });
 });
 
-Deno.test("configureCopilot: does not mount copilot config when absent", async () => {
-  await withTempHome(() => {
+Deno.test("resolveClaudeProbes: detects missing ~/.claude directory", async () => {
+  await withTempHome((tmpHome) => {
+    const probes = resolveClaudeProbes(tmpHome);
+    assertEquals(probes.claudeDirExists, false);
+  });
+});
+
+Deno.test("resolveClaudeProbes: detects existing ~/.claude.json", async () => {
+  await withTempHome(async (tmpHome) => {
+    await Deno.writeTextFile(`${tmpHome}/.claude.json`, "{}");
+    const probes = resolveClaudeProbes(tmpHome);
+    assertEquals(probes.claudeJsonExists, true);
+  });
+});
+
+Deno.test("resolveClaudeProbes: finds claude binary on PATH", async () => {
+  await withFakeBinary("claude", () => {
+    const probes = resolveClaudeProbes("/tmp");
+    assertEquals(probes.claudeBinPath !== null, true);
+  });
+});
+
+Deno.test("resolveClaudeProbes: returns null when claude not on PATH", async () => {
+  await withoutBinary("claude", () => {
+    const probes = resolveClaudeProbes("/tmp");
+    assertEquals(probes.claudeBinPath, null);
+  });
+});
+
+// ============================================================
+// configureCopilot (pure function tests)
+// ============================================================
+
+Deno.test("configureCopilot: uses ['copilot'] when binary found", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: "/usr/bin/copilot",
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: null,
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.agentCommand, ["copilot"]);
+  const hasBinaryMount = result.dockerArgs.some((a) =>
+    a.includes("/copilot:ro")
+  );
+  assertEquals(hasBinaryMount, true, "should mount copilot binary");
+});
+
+Deno.test("configureCopilot: uses error command when copilot binary not found", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: null,
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.agentCommand[0], "bash");
+  assertEquals(
+    result.agentCommand[2]?.includes("copilot binary not found"),
+    true,
+  );
+});
+
+Deno.test("configureCopilot: mounts copilot config dir with custom containerHome", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: true,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: null,
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/custom",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  const mountArg = result.dockerArgs.find((a) => a.includes(".copilot"));
+  assertEquals(
+    mountArg !== undefined,
+    true,
+    "should mount copilot config dir",
+  );
+  assertEquals(
+    mountArg?.includes("/home/custom/"),
+    true,
+    "should use containerHome for container path",
+  );
+});
+
+Deno.test("configureCopilot: does not mount copilot config when absent", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: null,
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  const hasCopilotMount = result.dockerArgs.some((a) => a.includes(".copilot"));
+  assertEquals(hasCopilotMount, false);
+});
+
+Deno.test("configureCopilot: preserves existing dockerArgs and envVars", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: null,
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: ["--pre-existing"],
+    priorEnvVars: { KEEP_ME: "yes" },
+  });
+  assertEquals(result.dockerArgs[0], "--pre-existing");
+  assertEquals(result.envVars["KEEP_ME"], "yes");
+});
+
+Deno.test("configureCopilot: passes XDG_CONFIG_HOME when set", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: "/tmp/nas-test-xdg-config",
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.envVars["XDG_CONFIG_HOME"] !== undefined, true);
+});
+
+Deno.test("configureCopilot: passes XDG_STATE_HOME when set", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: null,
+    xdgStateHome: "/tmp/nas-test-xdg-state",
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.envVars["XDG_STATE_HOME"] !== undefined, true);
+});
+
+Deno.test("configureCopilot: remaps XDG paths under HOME to containerHome", () => {
+  const hostHome = "/home/host";
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: `${hostHome}/.config`,
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome,
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.envVars["XDG_CONFIG_HOME"], "/home/testuser/.config");
+});
+
+Deno.test("configureCopilot: does not remap XDG paths outside HOME", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: "/opt/custom-config",
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.envVars["XDG_CONFIG_HOME"], "/opt/custom-config");
+});
+
+Deno.test("configureCopilot: does not set XDG vars when not set on host", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: null,
+    copilotConfigDirExists: false,
+    copilotStateDirExists: false,
+    copilotLegacyDirExists: false,
+    xdgConfigHome: null,
+    xdgStateHome: null,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.envVars["XDG_CONFIG_HOME"], undefined);
+  assertEquals(result.envVars["XDG_STATE_HOME"], undefined);
+});
+
+// ============================================================
+// resolveCopilotProbes (integration with filesystem)
+// ============================================================
+
+Deno.test("resolveCopilotProbes: detects existing config dir", async () => {
+  await withTempHome(async (tmpHome) => {
+    const origXdg = Deno.env.get("XDG_CONFIG_HOME");
+    try {
+      Deno.env.delete("XDG_CONFIG_HOME");
+      await Deno.mkdir(`${tmpHome}/.copilot`, { recursive: true });
+      const probes = resolveCopilotProbes(tmpHome);
+      assertEquals(probes.copilotConfigDirExists, true);
+    } finally {
+      if (origXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", origXdg);
+    }
+  });
+});
+
+Deno.test("resolveCopilotProbes: detects missing config dir", async () => {
+  await withTempHome((tmpHome) => {
     const origXdg = Deno.env.get("XDG_CONFIG_HOME");
     const origXdgState = Deno.env.get("XDG_STATE_HOME");
     try {
       Deno.env.delete("XDG_CONFIG_HOME");
       Deno.env.delete("XDG_STATE_HOME");
-      const profile: Profile = { ...baseProfile, agent: "copilot" };
-      const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-      const result = configureCopilot(ctx);
-      const hasCopilotMount = result.dockerArgs.some((a) =>
-        a.includes(".copilot")
-      );
-      assertEquals(hasCopilotMount, false);
+      const probes = resolveCopilotProbes(tmpHome);
+      assertEquals(probes.copilotConfigDirExists, false);
     } finally {
       if (origXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", origXdg);
       if (origXdgState !== undefined) {
@@ -299,205 +582,268 @@ Deno.test("configureCopilot: does not mount copilot config when absent", async (
   });
 });
 
-Deno.test("configureCopilot: preserves existing dockerArgs and envVars", () => {
-  const profile: Profile = { ...baseProfile, agent: "copilot" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  ctx.dockerArgs = ["--pre-existing"];
-  ctx.envVars["KEEP_ME"] = "yes";
-  const result = configureCopilot(ctx);
-  assertEquals(result.dockerArgs[0], "--pre-existing");
-  assertEquals(result.envVars["KEEP_ME"], "yes");
+Deno.test("resolveCopilotProbes: finds copilot binary on PATH", async () => {
+  await withFakeBinary("copilot", () => {
+    const probes = resolveCopilotProbes("/tmp");
+    assertEquals(probes.copilotBinPath !== null, true);
+  });
 });
 
-Deno.test("configureCopilot: passes XDG_CONFIG_HOME when set", () => {
-  const profile: Profile = { ...baseProfile, agent: "copilot" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
+Deno.test("resolveCopilotProbes: returns null when copilot not on PATH", async () => {
+  await withoutBinary("copilot", () => {
+    const probes = resolveCopilotProbes("/tmp");
+    assertEquals(probes.copilotBinPath, null);
+  });
+});
 
-  const originalXdg = Deno.env.get("XDG_CONFIG_HOME");
-  try {
-    Deno.env.set("XDG_CONFIG_HOME", "/tmp/nas-test-xdg-config");
-    const result = configureCopilot(ctx);
-    // XDG_CONFIG_HOME がコンテナ用にリマップされて設定されるはず
-    assertEquals(result.envVars["XDG_CONFIG_HOME"] !== undefined, true);
-  } finally {
-    if (originalXdg !== undefined) {
-      Deno.env.set("XDG_CONFIG_HOME", originalXdg);
-    } else {
+Deno.test("resolveCopilotProbes: detects existing state dir", async () => {
+  await withTempHome(async (tmpHome) => {
+    const origXdg = Deno.env.get("XDG_CONFIG_HOME");
+    const origXdgState = Deno.env.get("XDG_STATE_HOME");
+    try {
       Deno.env.delete("XDG_CONFIG_HOME");
-    }
-  }
-});
-
-Deno.test("configureCopilot: passes XDG_STATE_HOME when set", () => {
-  const profile: Profile = { ...baseProfile, agent: "copilot" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-
-  const originalXdg = Deno.env.get("XDG_STATE_HOME");
-  try {
-    Deno.env.set("XDG_STATE_HOME", "/tmp/nas-test-xdg-state");
-    const result = configureCopilot(ctx);
-    assertEquals(result.envVars["XDG_STATE_HOME"] !== undefined, true);
-  } finally {
-    if (originalXdg !== undefined) {
-      Deno.env.set("XDG_STATE_HOME", originalXdg);
-    } else {
       Deno.env.delete("XDG_STATE_HOME");
+      // XDG 未設定時は state dir = config dir = $HOME/.copilot
+      await Deno.mkdir(`${tmpHome}/.copilot`, { recursive: true });
+      const probes = resolveCopilotProbes(tmpHome);
+      assertEquals(probes.copilotStateDirExists, true);
+    } finally {
+      if (origXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", origXdg);
+      if (origXdgState !== undefined) {
+        Deno.env.set("XDG_STATE_HOME", origXdgState);
+      }
     }
-  }
-});
-
-Deno.test("configureCopilot: remaps XDG paths under HOME to containerHome", () => {
-  const profile: Profile = { ...baseProfile, agent: "copilot" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  ctx.envVars["NAS_HOME"] = "/home/testuser";
-
-  const home = Deno.env.get("HOME") ?? "/root";
-  const originalXdg = Deno.env.get("XDG_CONFIG_HOME");
-  try {
-    // HOME 配下のパスを XDG_CONFIG_HOME に設定
-    Deno.env.set("XDG_CONFIG_HOME", `${home}/.config`);
-    const result = configureCopilot(ctx);
-    // リマップされて /home/testuser/.config になるはず
-    assertEquals(result.envVars["XDG_CONFIG_HOME"], "/home/testuser/.config");
-  } finally {
-    if (originalXdg !== undefined) {
-      Deno.env.set("XDG_CONFIG_HOME", originalXdg);
-    } else {
-      Deno.env.delete("XDG_CONFIG_HOME");
-    }
-  }
-});
-
-Deno.test("configureCopilot: does not remap XDG paths outside HOME", () => {
-  const profile: Profile = { ...baseProfile, agent: "copilot" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-
-  const originalXdg = Deno.env.get("XDG_CONFIG_HOME");
-  try {
-    // HOME 外のパス
-    Deno.env.set("XDG_CONFIG_HOME", "/opt/custom-config");
-    const result = configureCopilot(ctx);
-    assertEquals(result.envVars["XDG_CONFIG_HOME"], "/opt/custom-config");
-  } finally {
-    if (originalXdg !== undefined) {
-      Deno.env.set("XDG_CONFIG_HOME", originalXdg);
-    } else {
-      Deno.env.delete("XDG_CONFIG_HOME");
-    }
-  }
-});
-
-Deno.test("configureCopilot: does not set XDG vars when not set on host", () => {
-  const profile: Profile = { ...baseProfile, agent: "copilot" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-
-  const origConfig = Deno.env.get("XDG_CONFIG_HOME");
-  const origState = Deno.env.get("XDG_STATE_HOME");
-  try {
-    Deno.env.delete("XDG_CONFIG_HOME");
-    Deno.env.delete("XDG_STATE_HOME");
-    const result = configureCopilot(ctx);
-    assertEquals(result.envVars["XDG_CONFIG_HOME"], undefined);
-    assertEquals(result.envVars["XDG_STATE_HOME"], undefined);
-  } finally {
-    if (origConfig !== undefined) Deno.env.set("XDG_CONFIG_HOME", origConfig);
-    if (origState !== undefined) Deno.env.set("XDG_STATE_HOME", origState);
-  }
-});
-
-// ============================================================
-// configureCodex
-// ============================================================
-
-Deno.test("configureCodex: uses ['codex'] when found on PATH", async () => {
-  await withFakeBinary("codex", () => {
-    const profile: Profile = { ...baseProfile, agent: "codex" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    const result = configureCodex(ctx);
-    assertEquals(result.agentCommand, ["codex"]);
-    const hasBinaryMount = result.dockerArgs.some((a) =>
-      a.includes("/codex:ro")
-    );
-    assertEquals(hasBinaryMount, true, "should mount codex binary");
   });
 });
 
-Deno.test("configureCodex: uses error command when codex binary not found", async () => {
-  await withoutBinary("codex", () => {
-    const profile: Profile = { ...baseProfile, agent: "codex" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    const result = configureCodex(ctx);
-    assertEquals(result.agentCommand[0], "bash");
-    assertEquals(
-      result.agentCommand[2]?.includes("codex binary not found"),
-      true,
-    );
-  });
-});
-
-Deno.test("configureCodex: mounts ~/.codex when directory exists", async () => {
-  await withTempHome(async (tmpHome) => {
-    const containerHome = getContainerHome();
-    await Deno.mkdir(`${tmpHome}/.codex`, { recursive: true });
-
-    const ctx = createContext(
-      baseConfig,
-      { ...baseProfile, agent: "codex" },
-      "test",
-      Deno.cwd(),
-    );
-    const result = configureCodex(ctx);
-    const mountArg = `${tmpHome}/.codex:${containerHome}/.codex`;
-    assertEquals(
-      result.dockerArgs.includes(mountArg),
-      true,
-      `dockerArgs should contain ${mountArg}`,
-    );
-  });
-});
-
-Deno.test("configureCodex: does not mount ~/.codex when directory is absent", async () => {
+Deno.test("resolveCopilotProbes: detects missing state dir", async () => {
   await withTempHome((tmpHome) => {
-    const containerHome = getContainerHome();
-    const ctx = createContext(
-      baseConfig,
-      { ...baseProfile, agent: "codex" },
-      "test",
-      Deno.cwd(),
-    );
-    const result = configureCodex(ctx);
-    const hasMount = result.dockerArgs.some((a) =>
-      a === `${tmpHome}/.codex:${containerHome}/.codex`
-    );
-    assertEquals(hasMount, false);
+    const origXdg = Deno.env.get("XDG_CONFIG_HOME");
+    const origXdgState = Deno.env.get("XDG_STATE_HOME");
+    try {
+      Deno.env.delete("XDG_CONFIG_HOME");
+      Deno.env.delete("XDG_STATE_HOME");
+      const probes = resolveCopilotProbes(tmpHome);
+      assertEquals(probes.copilotStateDirExists, false);
+    } finally {
+      if (origXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", origXdg);
+      if (origXdgState !== undefined) {
+        Deno.env.set("XDG_STATE_HOME", origXdgState);
+      }
+    }
   });
 });
 
-Deno.test("configureCodex: uses NAS_HOME for codex mount path", async () => {
+Deno.test("resolveCopilotProbes: detects existing legacy dir when XDG paths differ", async () => {
   await withTempHome(async (tmpHome) => {
-    await Deno.mkdir(`${tmpHome}/.codex`, { recursive: true });
-
-    const profile: Profile = { ...baseProfile, agent: "codex" };
-    const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-    ctx.envVars["NAS_HOME"] = "/home/custom";
-    const result = configureCodex(ctx);
-    const mountArg = `${tmpHome}/.codex:/home/custom/.codex`;
-    assertEquals(
-      result.dockerArgs.includes(mountArg),
-      true,
-      `dockerArgs should contain ${mountArg}`,
-    );
+    const origXdg = Deno.env.get("XDG_CONFIG_HOME");
+    const origXdgState = Deno.env.get("XDG_STATE_HOME");
+    const xdgConfigDir = await Deno.makeTempDir({ prefix: "nas-test-xdg-" });
+    const xdgStateDir = await Deno.makeTempDir({ prefix: "nas-test-xdg-" });
+    try {
+      Deno.env.set("XDG_CONFIG_HOME", xdgConfigDir);
+      Deno.env.set("XDG_STATE_HOME", xdgStateDir);
+      // legacy dir は $HOME/.copilot (XDG とは異なるパス)
+      await Deno.mkdir(`${tmpHome}/.copilot`, { recursive: true });
+      const probes = resolveCopilotProbes(tmpHome);
+      assertEquals(probes.copilotLegacyDirExists, true);
+    } finally {
+      if (origXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", origXdg);
+      else Deno.env.delete("XDG_CONFIG_HOME");
+      if (origXdgState !== undefined) {
+        Deno.env.set("XDG_STATE_HOME", origXdgState);
+      } else Deno.env.delete("XDG_STATE_HOME");
+      await Deno.remove(xdgConfigDir, { recursive: true }).catch(() => {});
+      await Deno.remove(xdgStateDir, { recursive: true }).catch(() => {});
+    }
   });
+});
+
+Deno.test("resolveCopilotProbes: legacy dir is false when it does not exist", async () => {
+  await withTempHome((_tmpHome) => {
+    const origXdg = Deno.env.get("XDG_CONFIG_HOME");
+    const origXdgState = Deno.env.get("XDG_STATE_HOME");
+    try {
+      Deno.env.set("XDG_CONFIG_HOME", "/tmp/nas-nonexistent-xdg-config");
+      Deno.env.set("XDG_STATE_HOME", "/tmp/nas-nonexistent-xdg-state");
+      // $HOME/.copilot does not exist
+      const probes = resolveCopilotProbes(_tmpHome);
+      assertEquals(probes.copilotLegacyDirExists, false);
+    } finally {
+      if (origXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", origXdg);
+      else Deno.env.delete("XDG_CONFIG_HOME");
+      if (origXdgState !== undefined) {
+        Deno.env.set("XDG_STATE_HOME", origXdgState);
+      } else Deno.env.delete("XDG_STATE_HOME");
+    }
+  });
+});
+
+Deno.test("resolveCopilotProbes: legacy dir is false when XDG not set (same as config dir)", async () => {
+  await withTempHome(async (tmpHome) => {
+    const origXdg = Deno.env.get("XDG_CONFIG_HOME");
+    const origXdgState = Deno.env.get("XDG_STATE_HOME");
+    try {
+      Deno.env.delete("XDG_CONFIG_HOME");
+      Deno.env.delete("XDG_STATE_HOME");
+      // XDG 未設定時は legacy dir == config dir なので常に false
+      await Deno.mkdir(`${tmpHome}/.copilot`, { recursive: true });
+      const probes = resolveCopilotProbes(tmpHome);
+      assertEquals(probes.copilotLegacyDirExists, false);
+    } finally {
+      if (origXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", origXdg);
+      if (origXdgState !== undefined) {
+        Deno.env.set("XDG_STATE_HOME", origXdgState);
+      }
+    }
+  });
+});
+
+// ============================================================
+// configureCodex (pure function tests)
+// ============================================================
+
+Deno.test("configureCodex: uses ['codex'] when binary found", () => {
+  const probes: CodexProbes = {
+    codexDirExists: false,
+    codexBinPath: "/usr/bin/codex",
+  };
+  const result = configureCodex({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.agentCommand, ["codex"]);
+  const hasBinaryMount = result.dockerArgs.some((a) => a.includes("/codex:ro"));
+  assertEquals(hasBinaryMount, true, "should mount codex binary");
+});
+
+Deno.test("configureCodex: uses error command when codex binary not found", () => {
+  const probes: CodexProbes = {
+    codexDirExists: false,
+    codexBinPath: null,
+  };
+  const result = configureCodex({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  assertEquals(result.agentCommand[0], "bash");
+  assertEquals(
+    result.agentCommand[2]?.includes("codex binary not found"),
+    true,
+  );
+});
+
+Deno.test("configureCodex: mounts ~/.codex when directory exists", () => {
+  const containerHome = "/home/testuser";
+  const hostHome = "/home/host";
+  const probes: CodexProbes = {
+    codexDirExists: true,
+    codexBinPath: null,
+  };
+  const result = configureCodex({
+    containerHome,
+    hostHome,
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  const mountArg = `${hostHome}/.codex:${containerHome}/.codex`;
+  assertEquals(
+    result.dockerArgs.includes(mountArg),
+    true,
+    `dockerArgs should contain ${mountArg}`,
+  );
+});
+
+Deno.test("configureCodex: does not mount ~/.codex when directory is absent", () => {
+  const probes: CodexProbes = {
+    codexDirExists: false,
+    codexBinPath: null,
+  };
+  const result = configureCodex({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  const hasMount = result.dockerArgs.some((a) => a.includes(".codex"));
+  assertEquals(hasMount, false);
+});
+
+Deno.test("configureCodex: uses containerHome for codex mount path", () => {
+  const probes: CodexProbes = {
+    codexDirExists: true,
+    codexBinPath: null,
+  };
+  const result = configureCodex({
+    containerHome: "/home/custom",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  const mountArg = `/home/host/.codex:/home/custom/.codex`;
+  assertEquals(
+    result.dockerArgs.includes(mountArg),
+    true,
+    `dockerArgs should contain ${mountArg}`,
+  );
 });
 
 Deno.test("configureCodex: preserves existing dockerArgs and envVars", () => {
-  const profile: Profile = { ...baseProfile, agent: "codex" };
-  const ctx = createContext(baseConfig, profile, "test", Deno.cwd());
-  ctx.dockerArgs = ["--pre-existing"];
-  ctx.envVars["KEEP_ME"] = "yes";
-  const result = configureCodex(ctx);
+  const probes: CodexProbes = {
+    codexDirExists: false,
+    codexBinPath: null,
+  };
+  const result = configureCodex({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: ["--pre-existing"],
+    priorEnvVars: { KEEP_ME: "yes" },
+  });
   assertEquals(result.dockerArgs[0], "--pre-existing");
   assertEquals(result.envVars["KEEP_ME"], "yes");
+});
+
+// ============================================================
+// resolveCodexProbes (integration with filesystem)
+// ============================================================
+
+Deno.test("resolveCodexProbes: detects existing ~/.codex directory", async () => {
+  await withTempHome(async (tmpHome) => {
+    await Deno.mkdir(`${tmpHome}/.codex`, { recursive: true });
+    const probes = resolveCodexProbes(tmpHome);
+    assertEquals(probes.codexDirExists, true);
+  });
+});
+
+Deno.test("resolveCodexProbes: detects missing ~/.codex directory", async () => {
+  await withTempHome((tmpHome) => {
+    const probes = resolveCodexProbes(tmpHome);
+    assertEquals(probes.codexDirExists, false);
+  });
+});
+
+Deno.test("resolveCodexProbes: finds codex binary on PATH", async () => {
+  await withFakeBinary("codex", () => {
+    const probes = resolveCodexProbes("/tmp");
+    assertEquals(probes.codexBinPath !== null, true);
+  });
+});
+
+Deno.test("resolveCodexProbes: returns null when codex not on PATH", async () => {
+  await withoutBinary("codex", () => {
+    const probes = resolveCodexProbes("/tmp");
+    assertEquals(probes.codexBinPath, null);
+  });
 });
 
 // ============================================================

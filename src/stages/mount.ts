@@ -6,9 +6,9 @@ import * as path from "@std/path";
 import type { Stage } from "../pipeline/pipeline.ts";
 import type { ExecutionContext } from "../pipeline/context.ts";
 import { logInfo } from "../log.ts";
-import { configureClaude } from "../agents/claude.ts";
-import { configureCopilot } from "../agents/copilot.ts";
-import { configureCodex } from "../agents/codex.ts";
+import { configureClaude, resolveClaudeProbes } from "../agents/claude.ts";
+import { configureCopilot, resolveCopilotProbes } from "../agents/copilot.ts";
+import { configureCodex, resolveCodexProbes } from "../agents/codex.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -373,16 +373,61 @@ export class MountStage implements Stage {
     }
 
     // エージェント固有の設定
-    switch (result.profile.agent) {
-      case "claude":
-        result = configureClaude(result);
-        break;
-      case "copilot":
-        result = configureCopilot(result);
-        break;
-      case "codex":
-        result = configureCodex(result);
-        break;
+    {
+      const hostHome = Deno.env.get("HOME") ?? "/root";
+      switch (result.profile.agent) {
+        case "claude": {
+          const probes = resolveClaudeProbes(hostHome);
+          const agentResult = configureClaude({
+            containerHome,
+            hostHome,
+            probes,
+            priorDockerArgs: result.dockerArgs,
+            priorEnvVars: result.envVars,
+          });
+          result = {
+            ...result,
+            dockerArgs: agentResult.dockerArgs,
+            envVars: agentResult.envVars,
+            agentCommand: agentResult.agentCommand,
+          };
+          break;
+        }
+        case "copilot": {
+          const probes = resolveCopilotProbes(hostHome);
+          const agentResult = configureCopilot({
+            containerHome,
+            hostHome,
+            probes,
+            priorDockerArgs: result.dockerArgs,
+            priorEnvVars: result.envVars,
+          });
+          result = {
+            ...result,
+            dockerArgs: agentResult.dockerArgs,
+            envVars: agentResult.envVars,
+            agentCommand: agentResult.agentCommand,
+          };
+          break;
+        }
+        case "codex": {
+          const probes = resolveCodexProbes(hostHome);
+          const agentResult = configureCodex({
+            containerHome,
+            hostHome,
+            probes,
+            priorDockerArgs: result.dockerArgs,
+            priorEnvVars: result.envVars,
+          });
+          result = {
+            ...result,
+            dockerArgs: agentResult.dockerArgs,
+            envVars: agentResult.envVars,
+            agentCommand: agentResult.agentCommand,
+          };
+          break;
+        }
+      }
     }
 
     await Promise.resolve();
