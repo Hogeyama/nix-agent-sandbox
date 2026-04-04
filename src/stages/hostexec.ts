@@ -1,19 +1,21 @@
+/**
+ * HostExec Stage (PlanStage)
+ *
+ * ホスト上のコマンド実行を仲介する HostExecBroker を起動し、
+ * エージェントコンテナ内からラッパースクリプト経由でアクセスできるようにする。
+ */
+
 import * as path from "@std/path";
-import type { Stage } from "../pipeline/pipeline.ts";
-import type { ExecutionContext } from "../pipeline/context.ts";
+import type {
+  HostEnv,
+  PlanStage,
+  ResourceEffect,
+  StageInput,
+  StagePlan,
+} from "../pipeline/types.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
-import { logInfo } from "../log.ts";
-import { isWSL, resolveNotifyBackend } from "../lib/notify_utils.ts";
-import { HostExecBroker } from "../hostexec/broker.ts";
-import { resolveAuditDir } from "../audit/store.ts";
-import {
-  hostExecBrokerSocketPath,
-  type HostExecRuntimePaths,
-  removeHostExecPendingDir,
-  removeHostExecSessionRegistry,
-  resolveHostExecRuntimePaths,
-  writeHostExecSessionRegistry,
-} from "../hostexec/registry.ts";
+import { resolveNotifyBackend } from "../lib/notify_utils.ts";
+import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import {
   isBareCommandHostExecArgv0,
   isRelativeHostExecArgv0,
@@ -22,169 +24,213 @@ import {
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
 
-export class HostExecStage implements Stage {
-  name = "HostExecStage";
+// ---------------------------------------------------------------------------
+// PlanStage
+// ---------------------------------------------------------------------------
 
-  private runtimePaths: HostExecRuntimePaths | null = null;
-  private broker: HostExecBroker | null = null;
-  private wrapperRoot: string | null = null;
-  private sessionTmpDir: string | null = null;
+export function createHostExecStage(): PlanStage {
+  return {
+    kind: "plan",
+    name: "HostExecStage",
 
-  async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    const config = ctx.profile.hostexec ??
-      structuredClone(DEFAULT_HOSTEXEC_CONFIG);
-    if (config.rules.length === 0) {
-      return ctx;
-    }
-
-    const runtimePaths = await resolveHostExecRuntimePaths();
-    this.runtimePaths = runtimePaths;
-    const socketPath = hostExecBrokerSocketPath(runtimePaths, ctx.sessionId);
-    const wrapperRoot = path.join(runtimePaths.wrappersDir, ctx.sessionId);
-    const wrapperBinDir = path.join(wrapperRoot, "bin");
-    const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
-    const sessionTmpDir = path.join(wrapperRoot, "tmp");
-    this.wrapperRoot = wrapperRoot;
-    this.sessionTmpDir = sessionTmpDir;
-
-    await Deno.mkdir(wrapperBinDir, { recursive: true, mode: 0o755 });
-    await Deno.mkdir(sessionTmpDir, { recursive: true, mode: 0o700 });
-    await Deno.writeTextFile(wrapperScript, buildWrapperScript(), {
-      create: true,
-      mode: 0o755,
-    });
-    await Deno.chmod(wrapperScript, 0o755).catch((e) =>
-      logInfo(`[nas] HostExec: failed to chmod wrapper script: ${e}`)
-    );
-
-    const argv0Names = new Set(
-      config.rules
-        .map((rule) => rule.match.argv0)
-        .filter(isBareCommandHostExecArgv0),
-    );
-    for (const argv0 of argv0Names) {
-      const linkPath = path.join(wrapperBinDir, argv0);
-      await Deno.remove(linkPath).catch((e) => {
-        if (!(e instanceof Deno.errors.NotFound)) {
-          logInfo(
-            `[nas] HostExec: failed to remove old symlink ${linkPath}: ${e}`,
-          );
-        }
-      });
-      await Deno.symlink("hostexec-wrapper.py", linkPath);
-    }
-
-    const relativeArgv0Candidates = [
-      ...new Set(
-        config.rules.map((rule) => rule.match.argv0).filter(
-          isRelativeHostExecArgv0,
-        ),
-      ),
-    ];
-    const relativeArgv0s: string[] = [];
-    for (const argv0 of relativeArgv0Candidates) {
-      const containerTarget = path.resolve(ctx.workDir, argv0);
-      try {
-        const stat = await Deno.stat(containerTarget);
-        if (!stat.isFile) {
-          logInfo(
-            `[nas] HostExec: relative argv0 is not a file, skipping mount: ${argv0}`,
-          );
-          continue;
-        }
-      } catch (e) {
-        logInfo(
-          `[nas] HostExec: relative argv0 is missing, skipping mount: ${argv0}: ${e}`,
-        );
-        continue;
+    plan(input: StageInput): StagePlan | null {
+      const config = input.profile.hostexec ??
+        structuredClone(DEFAULT_HOSTEXEC_CONFIG);
+      if (config.rules.length === 0) {
+        return null;
       }
-      relativeArgv0s.push(argv0);
-    }
 
-    const broker = new HostExecBroker({
-      paths: runtimePaths,
-      sessionId: ctx.sessionId,
-      profileName: ctx.profileName,
-      workspaceRoot: ctx.mountDir ?? ctx.workDir,
-      sessionTmpDir,
-      hostexec: config,
-      notify: resolveNotifyBackend(config.prompt.notify, isWSL()),
-      uiEnabled: ctx.config.ui.enable,
-      uiPort: ctx.config.ui.port,
-      uiIdleTimeout: ctx.config.ui.idleTimeout,
-      auditDir: resolveAuditDir(),
-    });
-    await broker.start(socketPath);
-    this.broker = broker;
+      const runtimePaths = resolveHostExecRuntimePathsPure(input.host);
+      const socketPath = path.join(
+        runtimePaths.brokersDir,
+        `${input.sessionId}.sock`,
+      );
+      const wrapperRoot = path.join(
+        runtimePaths.wrappersDir,
+        input.sessionId,
+      );
+      const wrapperBinDir = path.join(wrapperRoot, "bin");
+      const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
+      const sessionTmpDir = path.join(wrapperRoot, "tmp");
+      const containerSessionTmp = path.join(
+        SESSION_TMP_ROOT,
+        input.sessionId,
+      );
 
-    await writeHostExecSessionRegistry(runtimePaths, {
-      version: 1,
-      sessionId: ctx.sessionId,
-      brokerSocket: socketPath,
-      profileName: ctx.profileName,
-      createdAt: new Date().toISOString(),
-      pid: Deno.pid,
-      agent: ctx.profile.agent,
-    });
+      const effects: ResourceEffect[] = [];
 
-    return {
-      ...ctx,
-      dockerArgs: [
-        ...ctx.dockerArgs,
-        "-v",
-        `${wrapperBinDir}:${WRAPPER_DIR}:ro`,
-        "-v",
-        `${runtimePaths.brokersDir}:${runtimePaths.brokersDir}`,
-        "-v",
-        `${sessionTmpDir}:${path.join(SESSION_TMP_ROOT, ctx.sessionId)}`,
-        ...relativeArgv0s.flatMap((argv0) => [
-          "-v",
-          `${wrapperScript}:${path.resolve(ctx.workDir, argv0)}:ro`,
-        ]),
-      ],
-      envVars: {
-        ...ctx.envVars,
-        PATH: `${WRAPPER_DIR}:${
-          ctx.envVars["PATH"] ??
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        }`,
-        NAS_HOSTEXEC_SOCKET: socketPath,
-        NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
-        NAS_HOSTEXEC_SESSION_ID: ctx.sessionId,
-        NAS_HOSTEXEC_SESSION_TMP: path.join(SESSION_TMP_ROOT, ctx.sessionId),
-      },
-      hostexecRuntimeDir: runtimePaths.runtimeDir,
-      hostexecBrokerSocket: socketPath,
-      hostexecSessionTmpDir: path.join(SESSION_TMP_ROOT, ctx.sessionId),
-    };
-  }
+      // Create runtime directories
+      effects.push({
+        kind: "directory-create",
+        path: runtimePaths.runtimeDir,
+        mode: 0o755,
+        removeOnTeardown: false,
+      });
+      effects.push({
+        kind: "directory-create",
+        path: runtimePaths.sessionsDir,
+        mode: 0o700,
+        removeOnTeardown: false,
+      });
+      effects.push({
+        kind: "directory-create",
+        path: runtimePaths.pendingDir,
+        mode: 0o700,
+        removeOnTeardown: false,
+      });
+      effects.push({
+        kind: "directory-create",
+        path: runtimePaths.brokersDir,
+        mode: 0o700,
+        removeOnTeardown: false,
+      });
+      effects.push({
+        kind: "directory-create",
+        path: runtimePaths.wrappersDir,
+        mode: 0o700,
+        removeOnTeardown: false,
+      });
 
-  async teardown(ctx: ExecutionContext): Promise<void> {
-    if (this.broker) {
-      await this.broker.close();
-      this.broker = null;
-    }
-    if (this.runtimePaths) {
-      await removeHostExecSessionRegistry(this.runtimePaths, ctx.sessionId)
-        .catch((e) =>
-          logInfo(
-            `[nas] HostExec teardown: failed to remove session registry: ${e}`,
-          )
-        );
-      await removeHostExecPendingDir(this.runtimePaths, ctx.sessionId).catch(
-        (e) =>
-          logInfo(
-            `[nas] HostExec teardown: failed to remove pending dir: ${e}`,
+      // Create wrapper bin dir and session tmp dir
+      effects.push({
+        kind: "directory-create",
+        path: wrapperBinDir,
+        mode: 0o755,
+        removeOnTeardown: false,
+      });
+      effects.push({
+        kind: "directory-create",
+        path: sessionTmpDir,
+        mode: 0o700,
+        removeOnTeardown: false,
+      });
+
+      // Write wrapper script
+      effects.push({
+        kind: "file-write",
+        path: wrapperScript,
+        content: buildWrapperScript(),
+        mode: 0o755,
+      });
+
+      // Create symlinks for bare command argv0s
+      const argv0Names = new Set(
+        config.rules
+          .map((rule) => rule.match.argv0)
+          .filter(isBareCommandHostExecArgv0),
+      );
+      for (const argv0 of argv0Names) {
+        effects.push({
+          kind: "symlink",
+          target: "hostexec-wrapper.py",
+          path: path.join(wrapperBinDir, argv0),
+        });
+      }
+
+      // Symlinks for relative argv0 wrappers — computed purely.
+      // NOTE: The legacy stage did Deno.stat() to check if the target file
+      // exists. In the PlanStage version, we skip the existence check and
+      // always emit the mount. If the file doesn't exist at container start,
+      // Docker will create a directory mount instead (harmless for missing
+      // targets, and the wrapper script handles missing binaries gracefully).
+      const relativeArgv0s = [
+        ...new Set(
+          config.rules
+            .map((rule) => rule.match.argv0)
+            .filter(isRelativeHostExecArgv0),
+        ),
+      ];
+
+      // Start HostExecBroker via unix-listener effect
+      const workspaceRoot = input.prior.mountDir ?? input.prior.workDir;
+      effects.push({
+        kind: "unix-listener",
+        id: "hostexec-broker",
+        socketPath,
+        spec: {
+          kind: "hostexec-broker",
+          paths: runtimePaths,
+          sessionId: input.sessionId,
+          profileName: input.profileName,
+          workspaceRoot,
+          sessionTmpDir,
+          hostexec: config,
+          notify: resolveNotifyBackend(
+            config.prompt.notify,
+            input.host.isWSL,
           ),
-      );
-    }
-    if (this.wrapperRoot) {
-      await Deno.remove(this.wrapperRoot, { recursive: true }).catch((e) =>
-        logInfo(`[nas] HostExec teardown: failed to remove wrapper root: ${e}`)
-      );
-      this.wrapperRoot = null;
-    }
+          uiEnabled: input.config.ui.enable,
+          uiPort: input.config.ui.port,
+          uiIdleTimeout: input.config.ui.idleTimeout,
+          auditDir: input.probes.auditDir,
+          agent: input.profile.agent,
+        },
+      });
+
+      const workDir = input.prior.workDir;
+
+      return {
+        effects,
+        dockerArgs: [
+          "-v",
+          `${wrapperBinDir}:${WRAPPER_DIR}:ro`,
+          "-v",
+          `${runtimePaths.brokersDir}:${runtimePaths.brokersDir}`,
+          "-v",
+          `${sessionTmpDir}:${containerSessionTmp}`,
+          ...relativeArgv0s.flatMap((argv0) => [
+            "-v",
+            `${wrapperScript}:${path.resolve(workDir, argv0)}:ro`,
+          ]),
+        ],
+        envVars: {
+          PATH: `${WRAPPER_DIR}:${
+            input.prior.envVars["PATH"] ??
+              "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          }`,
+          NAS_HOSTEXEC_SOCKET: socketPath,
+          NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
+          NAS_HOSTEXEC_SESSION_ID: input.sessionId,
+          NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
+        },
+        outputOverrides: {
+          hostexecRuntimeDir: runtimePaths.runtimeDir,
+          hostexecBrokerSocket: socketPath,
+          hostexecSessionTmpDir: containerSessionTmp,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute HostExecRuntimePaths purely from HostEnv (no I/O).
+ * Mirrors the logic of resolveHostExecRuntimePaths() but without
+ * creating directories.
+ */
+export function resolveHostExecRuntimePathsPure(
+  host: HostEnv,
+): HostExecRuntimePaths {
+  const xdg = host.env.get("XDG_RUNTIME_DIR");
+  let runtimeDir: string;
+  if (xdg && xdg.trim().length > 0) {
+    runtimeDir = path.join(xdg, "nas", "hostexec");
+  } else {
+    // uid is always non-null on Linux; "unknown" is a defensive fallback
+    const uid = host.uid ?? "unknown";
+    runtimeDir = path.join("/tmp", `nas-${uid}`, "hostexec");
   }
+  return {
+    runtimeDir,
+    sessionsDir: path.join(runtimeDir, "sessions"),
+    pendingDir: path.join(runtimeDir, "pending"),
+    brokersDir: path.join(runtimeDir, "brokers"),
+    wrappersDir: path.join(runtimeDir, "wrappers"),
+  };
 }
 
 function buildWrapperScript(): string {

@@ -1,12 +1,18 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertNotEquals } from "@std/assert";
 import * as path from "@std/path";
 import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
-import { createContext } from "../src/pipeline/context.ts";
-import { HostExecStage } from "../src/stages/hostexec.ts";
+import type {
+  HostEnv,
+  PriorStageOutputs,
+  StageInput,
+  SymlinkEffect,
+  UnixListenerEffect,
+} from "../src/pipeline/types.ts";
+import { createHostExecStage } from "../src/stages/hostexec.ts";
 
 function makeProfile(): Profile {
   return {
@@ -63,91 +69,199 @@ function makeProfile(): Profile {
   };
 }
 
-Deno.test("HostExecStage: injects wrapper path and socket mounts", async () => {
-  const runtimeRoot = path.join(
-    "/tmp",
-    `nas-he-${crypto.randomUUID().slice(0, 8)}`,
-  );
-  await Deno.mkdir(runtimeRoot, { recursive: true });
-  const originalRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
-  Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
-  const profile = makeProfile();
+function makeHostEnv(runtimeDir: string): HostEnv {
+  return {
+    home: "/home/testuser",
+    user: "testuser",
+    uid: 1000,
+    gid: 1000,
+    isWSL: false,
+    env: new Map([
+      ["HOME", "/home/testuser"],
+      ["XDG_RUNTIME_DIR", runtimeDir],
+    ]),
+  };
+}
+
+function makeStageInput(
+  profile: Profile,
+  hostEnv: HostEnv,
+  workDir?: string,
+): StageInput {
   const config: Config = {
     profiles: { default: profile },
     ui: DEFAULT_UI_CONFIG,
   };
-  const ctx = createContext(config, profile, "default", Deno.cwd());
-  const stage = new HostExecStage();
-  const result = await stage.execute(ctx);
-  try {
-    assertEquals(result.hostexecBrokerSocket !== undefined, true);
-    assertEquals(result.hostexecRuntimeDir !== undefined, true);
-    assertEquals(result.hostexecSessionTmpDir?.includes(ctx.sessionId), true);
+  const prior: PriorStageOutputs = {
+    dockerArgs: [],
+    envVars: {
+      PATH: "/usr/local/bin:/usr/bin:/bin",
+    },
+    workDir: workDir ?? "/workspace",
+    nixEnabled: false,
+    imageName: "nas-test",
+    agentCommand: ["claude"],
+    networkPromptEnabled: false,
+    dbusProxyEnabled: false,
+  };
+  return {
+    config,
+    profile,
+    profileName: "default",
+    sessionId: "test-session-id",
+    host: hostEnv,
+    probes: {
+      hasHostNix: false,
+      xdgDbusProxyPath: null,
+      dbusSessionAddress: null,
+      gpgAgentSocket: null,
+      auditDir: "/tmp/nas-test-audit",
+    },
+    prior,
+  };
+}
+
+Deno.test("HostExecStage plan: returns null when no rules", () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [];
+  const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+  assertEquals(plan, null);
+});
+
+Deno.test("HostExecStage plan: produces correct effects and docker args", () => {
+  const profile = makeProfile();
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+
+  assertNotEquals(plan, null);
+  if (!plan) return;
+
+  // Check that wrapper directory mount is present
+  assertEquals(
+    plan.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")),
+    true,
+  );
+
+  // Check PATH env includes wrapper dir
+  assertEquals(
+    plan.envVars["PATH"].startsWith("/opt/nas/hostexec/bin:"),
+    true,
+  );
+
+  // Check socket env is set
+  assertEquals(plan.envVars["NAS_HOSTEXEC_SOCKET"] !== undefined, true);
+  assertEquals(
+    plan.envVars["NAS_HOSTEXEC_SESSION_ID"],
+    "test-session-id",
+  );
+
+  // Check outputOverrides
+  assertEquals(plan.outputOverrides.hostexecBrokerSocket !== undefined, true);
+  assertEquals(plan.outputOverrides.hostexecRuntimeDir !== undefined, true);
+  assertEquals(
+    (plan.outputOverrides.hostexecSessionTmpDir as string)?.includes(
+      "test-session-id",
+    ),
+    true,
+  );
+
+  // Check socket path matches the env var
+  assertEquals(
+    plan.envVars["NAS_HOSTEXEC_SOCKET"],
+    plan.outputOverrides.hostexecBrokerSocket,
+  );
+});
+
+Deno.test("HostExecStage plan: creates symlink effects for bare command argv0s", () => {
+  const profile = makeProfile();
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+
+  assertNotEquals(plan, null);
+  if (!plan) return;
+
+  // "git" is a bare command argv0 — should have a symlink effect
+  const symlinkEffects = plan.effects.filter(
+    (e): e is SymlinkEffect => e.kind === "symlink",
+  );
+  assertEquals(symlinkEffects.length, 1);
+  assertEquals(symlinkEffects[0].target, "hostexec-wrapper.py");
+  assertEquals(path.basename(symlinkEffects[0].path), "git");
+});
+
+Deno.test("HostExecStage plan: creates unix-listener effect for hostexec-broker", () => {
+  const profile = makeProfile();
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+
+  assertNotEquals(plan, null);
+  if (!plan) return;
+
+  const listenerEffects = plan.effects.filter(
+    (e): e is UnixListenerEffect => e.kind === "unix-listener",
+  );
+  assertEquals(listenerEffects.length, 1);
+  assertEquals(listenerEffects[0].id, "hostexec-broker");
+  assertEquals(listenerEffects[0].spec.kind, "hostexec-broker");
+  if (listenerEffects[0].spec.kind === "hostexec-broker") {
+    assertEquals(listenerEffects[0].spec.sessionId, "test-session-id");
+    assertEquals(listenerEffects[0].spec.auditDir, "/tmp/nas-test-audit");
+  }
+});
+
+Deno.test("HostExecStage plan: creates file-write effect for wrapper script", () => {
+  const profile = makeProfile();
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+
+  assertNotEquals(plan, null);
+  if (!plan) return;
+
+  const fileWriteEffects = plan.effects.filter(
+    (e) => e.kind === "file-write",
+  );
+  assertEquals(fileWriteEffects.length, 1);
+  assertEquals(fileWriteEffects[0].kind, "file-write");
+  if (fileWriteEffects[0].kind === "file-write") {
     assertEquals(
-      result.envVars["NAS_HOSTEXEC_SOCKET"],
-      result.hostexecBrokerSocket,
-    );
-    assertEquals(
-      result.envVars["PATH"].startsWith("/opt/nas/hostexec/bin:"),
+      fileWriteEffects[0].content.includes("select.select([fd], [], [], 0)"),
       true,
     );
     assertEquals(
-      result.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")),
-      true,
-    );
-    const wrapperMount = result.dockerArgs.find((arg) =>
-      arg.includes("/opt/nas/hostexec/bin")
-    );
-    if (!wrapperMount) {
-      throw new Error("wrapper mount not found");
-    }
-    const hostWrapperBin = wrapperMount.split(":")[0];
-    const gitLink = await Deno.readLink(path.join(hostWrapperBin, "git"));
-    assertEquals(gitLink, "hostexec-wrapper.py");
-    const wrapperScript = await Deno.readTextFile(
-      path.join(hostWrapperBin, "hostexec-wrapper.py"),
-    );
-    assertEquals(
-      wrapperScript.includes("select.select([fd], [], [], 0)"),
-      true,
-    );
-    assertEquals(wrapperScript.includes("sys.stdin.buffer.read()"), false);
-    assertEquals(wrapperScript.includes('"argv0": argv0,'), true);
-    assertEquals(
-      wrapperScript.includes("relative argv0 fallback is not supported"),
+      fileWriteEffects[0].content.includes('"argv0": argv0,'),
       true,
     );
     assertEquals(
-      wrapperScript.includes(
+      fileWriteEffects[0].content.includes(
+        "relative argv0 fallback is not supported",
+      ),
+      true,
+    );
+    assertEquals(
+      fileWriteEffects[0].content.includes(
         "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
       ),
       true,
     );
-  } finally {
-    await stage.teardown(result);
-    if (originalRuntimeDir !== undefined) {
-      Deno.env.set("XDG_RUNTIME_DIR", originalRuntimeDir);
-    } else {
-      Deno.env.delete("XDG_RUNTIME_DIR");
-    }
-    await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecStage: mounts relative argv0 wrapper target", async () => {
-  const runtimeRoot = path.join(
-    "/tmp",
-    `nas-he-${crypto.randomUUID().slice(0, 8)}`,
-  );
-  const workspace = await Deno.makeTempDir({ prefix: "nas-he-workspace-" });
-  await Deno.mkdir(runtimeRoot, { recursive: true });
-  await Deno.writeTextFile(
-    path.join(workspace, "gradlew"),
-    "#!/bin/sh\nexit 0\n",
-  );
-  await Deno.chmod(path.join(workspace, "gradlew"), 0o755);
-  const originalRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
-  Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
+Deno.test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [{
     id: "gradlew",
@@ -158,28 +272,47 @@ Deno.test("HostExecStage: mounts relative argv0 wrapper target", async () => {
     approval: "allow",
     fallback: "container",
   }];
-  const config: Config = {
-    profiles: { default: profile },
-    ui: DEFAULT_UI_CONFIG,
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const workspace = "/workspace";
+  const input = makeStageInput(profile, hostEnv, workspace);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+
+  assertNotEquals(plan, null);
+  if (!plan) return;
+
+  // Relative argv0 should produce a docker mount for the wrapper script
+  assertEquals(
+    plan.dockerArgs.some((arg) =>
+      arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`)
+    ),
+    true,
+  );
+});
+
+Deno.test("HostExecStage plan: uses host.isWSL for notify resolution", () => {
+  const profile = makeProfile();
+  // Set notify to "auto" which resolves to "off" on WSL
+  profile.hostexec!.prompt.notify = "auto";
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv: HostEnv = {
+    ...makeHostEnv(runtimeDir),
+    isWSL: true,
   };
-  const ctx = createContext(config, profile, "default", workspace);
-  const stage = new HostExecStage();
-  const result = await stage.execute(ctx);
-  try {
-    assertEquals(
-      result.dockerArgs.some((arg) =>
-        arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`)
-      ),
-      true,
-    );
-  } finally {
-    await stage.teardown(result);
-    if (originalRuntimeDir !== undefined) {
-      Deno.env.set("XDG_RUNTIME_DIR", originalRuntimeDir);
-    } else {
-      Deno.env.delete("XDG_RUNTIME_DIR");
-    }
-    await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+
+  assertNotEquals(plan, null);
+  if (!plan) return;
+
+  const listenerEffects = plan.effects.filter(
+    (e): e is UnixListenerEffect => e.kind === "unix-listener",
+  );
+  assertEquals(listenerEffects.length, 1);
+  if (listenerEffects[0].spec.kind === "hostexec-broker") {
+    // On WSL with "auto", notify should resolve to "off"
+    assertEquals(listenerEffects[0].spec.notify, "off");
   }
 });

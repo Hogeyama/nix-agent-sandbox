@@ -12,7 +12,7 @@ import { WorktreeStage } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { MountStage } from "./stages/mount.ts";
-import { HostExecStage } from "./stages/hostexec.ts";
+import { createHostExecStage } from "./stages/hostexec.ts";
 import { createDindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
@@ -196,7 +196,7 @@ export async function main(args: string[]): Promise<void> {
       // NixDetectStage is a PlanStage — added directly below
       // DbusProxyStage is a PlanStage — added directly below
       new MountStage(),
-      new HostExecStage(),
+      // HostExecStage is a PlanStage — added directly below
       // DindStage is a PlanStage — added directly below
       new ProxyStage(),
       new LaunchStage(agentExtraArgs),
@@ -206,14 +206,16 @@ export async function main(args: string[]): Promise<void> {
     const adapted = legacyStages.map((s) => adaptLegacyStage(s, ctx));
     // NixDetectStage を DockerBuildStage の後に挿入 (index 2)
     // DbusProxyStage を NixDetectStage の後に挿入 (index 3)
-    // DindStage を HostExecStage の後 (ProxyStage の前) に挿入 (index 7)
+    // HostExecStage を MountStage の後に挿入 (index 5)
+    // DindStage を HostExecStage の後 (ProxyStage の前) に挿入 (index 6)
     const stages = [
       ...adapted.slice(0, 2),
       NixDetectStage,
       createDbusProxyStage(),
-      ...adapted.slice(2, 4),
+      ...adapted.slice(2, 3),
+      createHostExecStage(),
       createDindStage(),
-      ...adapted.slice(4),
+      ...adapted.slice(3),
     ];
 
     // 初期 PriorStageOutputs を構築

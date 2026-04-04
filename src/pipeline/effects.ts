@@ -11,6 +11,8 @@ import type {
   ProcessSpawnEffect,
   ResourceEffect,
   StagePlan,
+  SymlinkEffect,
+  UnixListenerEffect,
   WaitForReadyEffect,
 } from "./types.ts";
 import {
@@ -26,6 +28,12 @@ import {
   dockerVolumeRemove,
 } from "../docker/client.ts";
 import { gcDbusRuntime } from "../dbus/registry.ts";
+import { HostExecBroker } from "../hostexec/broker.ts";
+import {
+  removeHostExecPendingDir,
+  removeHostExecSessionRegistry,
+  writeHostExecSessionRegistry,
+} from "../hostexec/registry.ts";
 import { logInfo, logWarn } from "../log.ts";
 
 // ---------------------------------------------------------------------------
@@ -59,11 +67,13 @@ export async function executeEffect(
       return await executeProcessSpawn(effect);
     case "wait-for-ready":
       return await executeWaitForReady(effect);
+    case "symlink":
+      return await executeSymlink(effect);
+    case "unix-listener":
+      return await executeUnixListener(effect);
     case "docker-container":
     case "docker-network":
     case "docker-volume":
-    case "symlink":
-    case "unix-listener":
     case "docker-run-interactive":
       throw new Error(`Effect not yet implemented: ${effect.kind}`);
   }
@@ -571,4 +581,117 @@ async function waitForFileExists(
   throw new Error(
     `[nas] Timed out waiting for file: ${filePath} (${timeoutMs}ms)`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// symlink effect
+// ---------------------------------------------------------------------------
+
+async function executeSymlink(
+  effect: SymlinkEffect,
+): Promise<ResourceHandle> {
+  // Remove old symlink if it exists
+  try {
+    await Deno.remove(effect.path);
+  } catch (e) {
+    if (!(e instanceof Deno.errors.NotFound)) {
+      throw e;
+    }
+  }
+  await Deno.symlink(effect.target, effect.path);
+  return {
+    kind: "symlink",
+    close: async () => {
+      try {
+        await Deno.remove(effect.path);
+      } catch (e) {
+        if (!(e instanceof Deno.errors.NotFound)) {
+          throw e;
+        }
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// unix-listener effect
+// ---------------------------------------------------------------------------
+
+async function executeUnixListener(
+  effect: UnixListenerEffect,
+): Promise<ResourceHandle> {
+  const { spec } = effect;
+
+  switch (spec.kind) {
+    case "hostexec-broker":
+      return await executeHostExecBrokerListener(effect);
+    case "session-broker":
+      throw new Error("unix-listener session-broker not yet implemented");
+  }
+}
+
+async function executeHostExecBrokerListener(
+  effect: UnixListenerEffect,
+): Promise<ResourceHandle> {
+  const spec = effect.spec;
+  if (spec.kind !== "hostexec-broker") {
+    throw new Error(`unexpected listener spec kind: ${spec.kind}`);
+  }
+
+  const broker = new HostExecBroker({
+    paths: spec.paths,
+    sessionId: spec.sessionId,
+    profileName: spec.profileName,
+    workspaceRoot: spec.workspaceRoot,
+    sessionTmpDir: spec.sessionTmpDir,
+    hostexec: spec.hostexec,
+    notify: spec.notify,
+    uiEnabled: spec.uiEnabled,
+    uiPort: spec.uiPort,
+    uiIdleTimeout: spec.uiIdleTimeout,
+    auditDir: spec.auditDir,
+  });
+  await broker.start(effect.socketPath);
+
+  // Write session registry entry. If this fails, close the broker
+  // to avoid leaking a dangling Unix socket listener.
+  try {
+    await writeHostExecSessionRegistry(spec.paths, {
+      version: 1,
+      sessionId: spec.sessionId,
+      brokerSocket: effect.socketPath,
+      profileName: spec.profileName,
+      createdAt: new Date().toISOString(),
+      pid: Deno.pid,
+      agent: spec.agent,
+    });
+  } catch (error) {
+    try {
+      await broker.close();
+    } catch (closeErr) {
+      logWarn(
+        `[nas] HostExec: failed to close broker after registry write failure: ${closeErr}`,
+      );
+    }
+    throw error;
+  }
+
+  return {
+    kind: "unix-listener",
+    close: async () => {
+      await broker.close();
+      await removeHostExecSessionRegistry(spec.paths, spec.sessionId)
+        .catch((e) =>
+          logInfo(
+            `[nas] HostExec teardown: failed to remove session registry: ${e}`,
+          )
+        );
+      await removeHostExecPendingDir(spec.paths, spec.sessionId).catch(
+        (e) =>
+          logInfo(
+            `[nas] HostExec teardown: failed to remove pending dir: ${e}`,
+          ),
+      );
+    },
+  };
 }

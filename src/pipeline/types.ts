@@ -5,7 +5,13 @@
  * ProceduralStage: 副作用を含む execute() を持つ（例外的）
  */
 
-import type { Config, HostExecConfig, Profile } from "../config/types.ts";
+import type {
+  AgentType,
+  Config,
+  HostExecConfig,
+  Profile,
+} from "../config/types.ts";
+import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 
@@ -116,7 +122,16 @@ export type ListenerSpec =
     kind: "hostexec-broker";
     paths: HostExecRuntimePaths;
     sessionId: string;
+    profileName: string;
+    workspaceRoot: string;
+    sessionTmpDir: string;
     hostexec: HostExecConfig;
+    notify: ResolvedNotifyBackend;
+    uiEnabled: boolean;
+    uiPort: number;
+    uiIdleTimeout: number;
+    auditDir: string;
+    agent: AgentType;
   };
 
 // ---------------------------------------------------------------------------

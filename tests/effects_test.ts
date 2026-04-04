@@ -138,28 +138,6 @@ Deno.test("executeEffect: unimplemented effects throw", async () => {
     },
     { kind: "docker-network", name: "n", connect: [] },
     { kind: "docker-volume", name: "v" },
-    { kind: "symlink", target: "t", path: "p" },
-    {
-      kind: "unix-listener",
-      id: "ul",
-      socketPath: "/tmp/s",
-      spec: {
-        kind: "session-broker",
-        paths: {
-          runtimeDir: "/tmp",
-          sessionsDir: "/tmp/sessions",
-          pendingDir: "/tmp/pending",
-          brokersDir: "/tmp/brokers",
-          authRouterSocket: "/tmp/auth.sock",
-          authRouterPidFile: "/tmp/auth.pid",
-          envoyConfigFile: "/tmp/envoy.yaml",
-        },
-        sessionId: "sid",
-        allowlist: [],
-        denylist: [],
-        promptEnabled: false,
-      },
-    },
     {
       kind: "docker-run-interactive",
       image: "img",
@@ -178,6 +156,34 @@ Deno.test("executeEffect: unimplemented effects throw", async () => {
       `Effect not yet implemented: ${effect.kind}`,
     );
   }
+
+  // unix-listener with session-broker spec throws a different message
+  await assertRejects(
+    () =>
+      executeEffect({
+        kind: "unix-listener",
+        id: "ul",
+        socketPath: "/tmp/s",
+        spec: {
+          kind: "session-broker",
+          paths: {
+            runtimeDir: "/tmp",
+            sessionsDir: "/tmp/sessions",
+            pendingDir: "/tmp/pending",
+            brokersDir: "/tmp/brokers",
+            authRouterSocket: "/tmp/auth.sock",
+            authRouterPidFile: "/tmp/auth.pid",
+            envoyConfigFile: "/tmp/envoy.yaml",
+          },
+          sessionId: "sid",
+          allowlist: [],
+          denylist: [],
+          promptEnabled: false,
+        },
+      }),
+    Error,
+    "unix-listener session-broker not yet implemented",
+  );
 });
 
 // ---------------------------------------------------------------------------
