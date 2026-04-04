@@ -43,3 +43,18 @@ suggestion: {どうすべきか}
 - コミットはしない（orchestrator が行う）
 - 計画と現実が合わない場合、勝手に判断せず `status: blocked` で報告する
 - code-reviewer からの指摘（reject findings）が渡された場合、その指摘のみ修正する。指摘以外の変更はしない
+
+## コーディングルール
+
+- **`catch {}` で全エラーを握りつぶさない。** `Deno.stat` や `Deno.Command` は `NotFound` 以外にも `PermissionDenied` 等を投げる。`NotFound` だけ catch して他は re-throw すること:
+  ```typescript
+  // NG
+  } catch { return null; }
+
+  // OK
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return null;
+    throw e;
+  }
+  ```
+- **cleanup 失敗で元のエラーをマスクしない。** catch ブロック内で cleanup (remove, teardown 等) を行う場合、cleanup 自体を try/catch で囲み、元のエラーを必ず throw すること
