@@ -18,11 +18,7 @@ import type {
   UnixListenerEffect,
   WaitForReadyEffect,
 } from "./types.ts";
-import {
-  ensureNetwork,
-  ensureSharedTmpWritable,
-  startDindSidecar,
-} from "../docker/dind.ts";
+import { ensureDindSidecar, teardownDindSidecar } from "../docker/dind.ts";
 import {
   dockerBuild,
   dockerContainerExists,
@@ -35,8 +31,6 @@ import {
   dockerRm,
   dockerRun,
   dockerRunDetached,
-  dockerStop,
-  dockerVolumeRemove,
 } from "../docker/client.ts";
 import * as path from "@std/path";
 import { gcDbusRuntime } from "../dbus/registry.ts";
@@ -233,116 +227,24 @@ async function executeDindSidecar(
     readinessTimeoutMs,
   } = effect;
 
-  const isReusingSharedSidecar = shared &&
-    await dockerIsRunning(containerName);
-
-  // 共有モード: 既に起動中ならサイドカー作成をスキップ
-  let sidecarStarted = false;
-  if (isReusingSharedSidecar) {
-    logInfo(`[nas] DinD: reusing shared sidecar (${containerName})`);
-  } else {
-    // 共有モードで停止済みコンテナが残っている場合は削除して再作成
-    if (shared) {
-      await dockerRm(containerName).catch((e: unknown) =>
-        logInfo(
-          `[nas] DinD: failed to remove stale shared container: ${e}`,
-        )
-      );
-    }
-
-    // DinD rootless サイドカーをデフォルト bridge で起動
-    await startDindSidecar(containerName, sharedTmpVolume, {
-      disableCache,
-      readinessTimeoutMs,
-    });
-    sidecarStarted = true;
-  }
-
-  try {
-    // 共有 tmp を全ユーザーから書き込み可能にする
-    await ensureSharedTmpWritable(containerName);
-
-    // カスタムネットワーク作成（既存ならスキップ）& サイドカー接続
-    await ensureNetwork(networkName, containerName);
-  } catch (error) {
-    // 途中で失敗した場合、起動済みサイドカーをクリーンアップしてから再 throw
-    if (sidecarStarted && !shared) {
-      try {
-        await dockerStop(containerName, { timeoutSeconds: 0 });
-      } catch (cleanupErr) {
-        logWarn(
-          `[nas] DinD: cleanup failed (stop): ${
-            cleanupErr instanceof Error
-              ? cleanupErr.message
-              : String(cleanupErr)
-          }`,
-        );
-      }
-      try {
-        await dockerRm(containerName);
-      } catch (cleanupErr) {
-        logWarn(
-          `[nas] DinD: cleanup failed (rm): ${
-            cleanupErr instanceof Error
-              ? cleanupErr.message
-              : String(cleanupErr)
-          }`,
-        );
-      }
-    }
-    throw error;
-  }
+  await ensureDindSidecar({
+    containerName,
+    sharedTmpVolume,
+    networkName,
+    shared,
+    disableCache,
+    readinessTimeoutMs,
+  });
 
   return {
     kind: "dind-sidecar",
-    close: async () => {
-      if (shared) {
-        logInfo(
-          `[nas] DinD: keeping shared sidecar (${containerName})`,
-        );
-        return;
-      }
-
-      try {
-        logInfo(`[nas] DinD: stopping sidecar ${containerName}`);
-        await dockerStop(containerName, { timeoutSeconds: 0 });
-      } catch (e: unknown) {
-        logWarn(
-          `[nas] DinD teardown: failed to stop container: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        );
-      }
-      try {
-        await dockerRm(containerName);
-      } catch (e: unknown) {
-        logWarn(
-          `[nas] DinD teardown: failed to remove container: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        );
-      }
-      try {
-        logInfo(`[nas] DinD: removing network ${networkName}`);
-        await dockerNetworkRemove(networkName);
-      } catch (e: unknown) {
-        logWarn(
-          `[nas] DinD teardown: failed to remove network: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        );
-      }
-      try {
-        logInfo(`[nas] DinD: removing volume ${sharedTmpVolume}`);
-        await dockerVolumeRemove(sharedTmpVolume);
-      } catch (e: unknown) {
-        logWarn(
-          `[nas] DinD teardown: failed to remove volume: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        );
-      }
-    },
+    close: () =>
+      teardownDindSidecar({
+        containerName,
+        networkName,
+        sharedTmpVolume,
+        shared,
+      }),
   };
 }
 

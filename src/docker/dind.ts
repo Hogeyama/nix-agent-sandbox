@@ -12,6 +12,7 @@ import {
   dockerLogs,
   dockerNetworkConnect,
   dockerNetworkCreateWithLabels,
+  dockerNetworkRemove,
   dockerRm,
   dockerRunDetached,
   dockerStop,
@@ -174,6 +175,171 @@ export async function startDindSidecar(
     logInfo("[nas] DinD: daemon is ready (without cache)");
 
     void e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration: ensureDindSidecar / teardownDindSidecar
+// ---------------------------------------------------------------------------
+
+/** Parameters for ensureDindSidecar (decoupled from effect types). */
+export interface EnsureDindSidecarParams {
+  containerName: string;
+  sharedTmpVolume: string;
+  networkName: string;
+  shared: boolean;
+  disableCache?: boolean;
+  readinessTimeoutMs?: number;
+}
+
+/** Result of ensureDindSidecar. */
+export interface EnsureDindSidecarResult {
+  /** Whether a new sidecar was started (false when reusing shared). */
+  sidecarStarted: boolean;
+}
+
+/**
+ * Ensure a DinD sidecar is running: reuse shared if applicable,
+ * start new if needed, configure shared tmp and network.
+ * On error during post-start setup, cleans up the started sidecar.
+ */
+export async function ensureDindSidecar(
+  params: EnsureDindSidecarParams,
+): Promise<EnsureDindSidecarResult> {
+  const {
+    containerName,
+    sharedTmpVolume,
+    networkName,
+    shared,
+    disableCache,
+    readinessTimeoutMs,
+  } = params;
+
+  const isReusingSharedSidecar = shared &&
+    await dockerIsRunning(containerName);
+
+  // 共有モード: 既に起動中ならサイドカー作成をスキップ
+  let sidecarStarted = false;
+  if (isReusingSharedSidecar) {
+    logInfo(`[nas] DinD: reusing shared sidecar (${containerName})`);
+  } else {
+    // 共有モードで停止済みコンテナが残っている場合は削除して再作成
+    if (shared) {
+      await dockerRm(containerName).catch((e: unknown) =>
+        logInfo(
+          `[nas] DinD: failed to remove stale shared container: ${e}`,
+        )
+      );
+    }
+
+    // DinD rootless サイドカーをデフォルト bridge で起動
+    await startDindSidecar(containerName, sharedTmpVolume, {
+      disableCache,
+      readinessTimeoutMs,
+    });
+    sidecarStarted = true;
+  }
+
+  try {
+    // 共有 tmp を全ユーザーから書き込み可能にする
+    await ensureSharedTmpWritable(containerName);
+
+    // カスタムネットワーク作成（既存ならスキップ）& サイドカー接続
+    await ensureNetwork(networkName, containerName);
+  } catch (error) {
+    // 途中で失敗した場合、起動済みサイドカーをクリーンアップしてから再 throw
+    if (sidecarStarted && !shared) {
+      try {
+        await dockerStop(containerName, { timeoutSeconds: 0 });
+      } catch (cleanupErr) {
+        logWarn(
+          `[nas] DinD: cleanup failed (stop): ${
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr)
+          }`,
+        );
+      }
+      try {
+        await dockerRm(containerName);
+      } catch (cleanupErr) {
+        logWarn(
+          `[nas] DinD: cleanup failed (rm): ${
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr)
+          }`,
+        );
+      }
+    }
+    throw error;
+  }
+
+  return { sidecarStarted };
+}
+
+/** Parameters for teardownDindSidecar (decoupled from effect types). */
+export interface TeardownDindSidecarParams {
+  containerName: string;
+  networkName: string;
+  sharedTmpVolume: string;
+  shared: boolean;
+}
+
+/**
+ * Tear down a DinD sidecar: stop/rm container, remove network and volume.
+ * Shared sidecars are kept alive.
+ */
+export async function teardownDindSidecar(
+  params: TeardownDindSidecarParams,
+): Promise<void> {
+  const { containerName, networkName, sharedTmpVolume, shared } = params;
+
+  if (shared) {
+    logInfo(
+      `[nas] DinD: keeping shared sidecar (${containerName})`,
+    );
+    return;
+  }
+
+  try {
+    logInfo(`[nas] DinD: stopping sidecar ${containerName}`);
+    await dockerStop(containerName, { timeoutSeconds: 0 });
+  } catch (e: unknown) {
+    logWarn(
+      `[nas] DinD teardown: failed to stop container: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
+  try {
+    await dockerRm(containerName);
+  } catch (e: unknown) {
+    logWarn(
+      `[nas] DinD teardown: failed to remove container: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
+  try {
+    logInfo(`[nas] DinD: removing network ${networkName}`);
+    await dockerNetworkRemove(networkName);
+  } catch (e: unknown) {
+    logWarn(
+      `[nas] DinD teardown: failed to remove network: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
+  try {
+    logInfo(`[nas] DinD: removing volume ${sharedTmpVolume}`);
+    await dockerVolumeRemove(sharedTmpVolume);
+  } catch (e: unknown) {
+    logWarn(
+      `[nas] DinD teardown: failed to remove volume: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
   }
 }
 
