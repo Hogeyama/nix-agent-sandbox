@@ -1,37 +1,25 @@
-import type { Stage } from "../pipeline/pipeline.ts";
-import type { ExecutionContext } from "../pipeline/context.ts";
-import { isWSL, resolveNotifyBackend } from "../lib/notify_utils.ts";
-import { resolveAuditDir } from "../audit/store.ts";
-import {
-  dockerContainerExists,
-  dockerIsRunning,
-  dockerLogs,
-  dockerNetworkConnect,
-  dockerNetworkCreateWithLabels,
-  dockerNetworkDisconnect,
-  dockerNetworkRemove,
-  dockerRm,
-  dockerRunDetached,
-} from "../docker/client.ts";
-import {
-  NAS_KIND_ENVOY,
-  NAS_KIND_LABEL,
-  NAS_KIND_SESSION_NETWORK,
-  NAS_MANAGED_LABEL,
-  NAS_MANAGED_VALUE,
-} from "../docker/nas_resources.ts";
-import { SessionBroker } from "../network/broker.ts";
-import { ensureAuthRouterDaemon } from "../network/envoy_auth_router.ts";
-import {
-  brokerSocketPath,
-  gcNetworkRuntime,
-  type NetworkRuntimePaths,
-  removePendingDir,
-  removeSessionRegistry,
-  resolveNetworkRuntimePaths,
-  writeSessionRegistry,
-} from "../network/registry.ts";
-import { generateSessionToken } from "../network/protocol.ts";
+/**
+ * ProxyStage (PlanStage)
+ *
+ * 共有 Envoy コンテナ + auth-router + session network + session broker を
+ * セットアップし、エージェントコンテナのネットワークトラフィックを
+ * allowlist/prompt ベースで制御する。
+ *
+ * plan() は skip 判定と設定の計算のみ行い、全ての副作用は
+ * proxy-session effect として executor に委譲する。
+ */
+
+import * as path from "@std/path";
+import type {
+  HostEnv,
+  PlanStage,
+  ResourceEffect,
+  StageInput,
+  StagePlan,
+} from "../pipeline/types.ts";
+import type { NetworkRuntimePaths } from "../network/registry.ts";
+import { resolveNotifyBackend } from "../lib/notify_utils.ts";
+import { generateSessionToken as defaultGenerateToken } from "../network/protocol.ts";
 import { logInfo } from "../log.ts";
 
 const ENVOY_IMAGE = "envoyproxy/envoy:v1.37.1";
@@ -41,161 +29,143 @@ const ENVOY_PROXY_PORT = 15001;
 const ENVOY_READY_TIMEOUT_MS = 15_000;
 export const LOCAL_PROXY_PORT = 18080;
 
-interface ProxyStageOptions {
+// ---------------------------------------------------------------------------
+// PlanStage
+// ---------------------------------------------------------------------------
+
+export interface ProxyStageOptions {
   envoyContainerName?: string;
+  /** Injectable token generator (defaults to CSPRNG-based generateSessionToken). */
+  generateSessionToken?: () => string;
 }
 
-export class ProxyStage implements Stage {
-  name = "ProxyStage";
+export function createProxyStage(
+  options: ProxyStageOptions = {},
+): PlanStage {
+  const envoyContainerName = options.envoyContainerName ??
+    ENVOY_CONTAINER_NAME;
+  const generateSessionToken = options.generateSessionToken ??
+    defaultGenerateToken;
 
-  private runtimePaths: NetworkRuntimePaths | null = null;
-  private networkName: string | null = null;
-  private dindContainerName: string | null = null;
-  private broker: SessionBroker | null = null;
-  private authRouterAbort: AbortController | null = null;
-  private readonly envoyContainerName: string;
+  return {
+    kind: "plan",
+    name: "ProxyStage",
 
-  constructor(options: ProxyStageOptions = {}) {
-    this.envoyContainerName = options.envoyContainerName ??
-      ENVOY_CONTAINER_NAME;
-  }
-
-  async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    if (!isProxyEnabled(ctx)) {
-      logInfo("[nas] Proxy: skipped (allowlist/prompt disabled)");
-      return ctx;
-    }
-
-    const runtimePaths = await resolveNetworkRuntimePaths();
-    this.runtimePaths = runtimePaths;
-    await gcNetworkRuntime(runtimePaths);
-    await renderEnvoyConfig(runtimePaths);
-
-    const brokerSocket = brokerSocketPath(runtimePaths, ctx.sessionId);
-    const prompt = ctx.profile.network.prompt;
-    const broker = new SessionBroker({
-      paths: runtimePaths,
-      sessionId: ctx.sessionId,
-      allowlist: ctx.profile.network.allowlist,
-      denylist: prompt.denylist,
-      promptEnabled: prompt.enable,
-      timeoutSeconds: prompt.timeoutSeconds,
-      defaultScope: prompt.defaultScope,
-      notify: resolveNotifyBackend(prompt.notify, isWSL()),
-      uiEnabled: ctx.config.ui.enable,
-      uiPort: ctx.config.ui.port,
-      uiIdleTimeout: ctx.config.ui.idleTimeout,
-      auditDir: resolveAuditDir(),
-    });
-    await broker.start(brokerSocket);
-    this.broker = broker;
-
-    const token = ctx.networkPromptToken ?? generateSessionToken();
-    await writeSessionRegistry(runtimePaths, {
-      version: 1,
-      sessionId: ctx.sessionId,
-      tokenHash: await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(token),
-      )
-        .then((digest) =>
-          "sha256:" + Array.from(new Uint8Array(digest))
-            .map((byte) => byte.toString(16).padStart(2, "0"))
-            .join("")
-        ),
-      brokerSocket,
-      profileName: ctx.profileName,
-      allowlist: ctx.profile.network.allowlist,
-      createdAt: new Date().toISOString(),
-      pid: Deno.pid,
-      promptEnabled: prompt.enable,
-      agent: ctx.profile.agent,
-    });
-
-    this.authRouterAbort = await ensureAuthRouterDaemon(runtimePaths);
-    await ensureSharedEnvoy(runtimePaths, this.envoyContainerName);
-
-    this.networkName = `nas-session-net-${ctx.sessionId}`;
-    await ensureSessionNetwork(this.networkName);
-    await dockerNetworkConnect(this.networkName, this.envoyContainerName, {
-      aliases: [ENVOY_ALIAS],
-    }).catch((e) =>
-      logInfo(`[nas] Proxy: failed to connect envoy to network: ${e}`)
-    );
-
-    this.dindContainerName = parseDindContainerName(ctx.envVars);
-    if (this.dindContainerName) {
-      await dockerNetworkConnect(this.networkName, this.dindContainerName)
-        .catch((e) =>
-          logInfo(`[nas] Proxy: failed to connect dind to network: ${e}`)
-        );
-    }
-
-    const proxyUrl =
-      `http://${ctx.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
-    const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
-    const noProxyEntries = ["localhost", "127.0.0.1"];
-    if (this.dindContainerName) {
-      noProxyEntries.push(this.dindContainerName);
-    }
-
-    return {
-      ...ctx,
-      dockerArgs: replaceNetwork(ctx.dockerArgs, this.networkName),
-      envVars: {
-        ...ctx.envVars,
-        NAS_UPSTREAM_PROXY: proxyUrl,
-        http_proxy: localProxyUrl,
-        https_proxy: localProxyUrl,
-        HTTP_PROXY: localProxyUrl,
-        HTTPS_PROXY: localProxyUrl,
-        no_proxy: noProxyEntries.join(","),
-        NO_PROXY: noProxyEntries.join(","),
-      },
-      networkRuntimeDir: runtimePaths.runtimeDir,
-      networkPromptToken: token,
-      networkPromptEnabled: prompt.enable,
-      networkBrokerSocket: brokerSocket,
-      networkProxyEndpoint: proxyUrl,
-    };
-  }
-
-  async teardown(ctx: ExecutionContext): Promise<void> {
-    if (!this.runtimePaths) return;
-
-    if (this.authRouterAbort) {
-      this.authRouterAbort.abort();
-      this.authRouterAbort = null;
-    }
-
-    if (this.broker) {
-      await this.broker.close();
-      this.broker = null;
-    }
-
-    await removeSessionRegistry(this.runtimePaths, ctx.sessionId);
-    await removePendingDir(this.runtimePaths, ctx.sessionId);
-
-    if (this.networkName) {
-      await dockerNetworkDisconnect(this.networkName, this.envoyContainerName)
-        .catch((e) =>
-          logInfo(
-            `[nas] Proxy teardown: failed to disconnect envoy from network: ${e}`,
-          )
-        );
-      if (this.dindContainerName) {
-        await dockerNetworkDisconnect(this.networkName, this.dindContainerName)
-          .catch((e) =>
-            logInfo(
-              `[nas] Proxy teardown: failed to disconnect dind from network: ${e}`,
-            )
-          );
+    plan(input: StageInput): StagePlan | null {
+      if (!isProxyEnabled(input)) {
+        logInfo("[nas] Proxy: skipped (allowlist/prompt disabled)");
+        return null;
       }
-      await dockerNetworkRemove(this.networkName).catch((e) =>
-        logInfo(`[nas] Proxy teardown: failed to remove network: ${e}`)
+
+      const runtimePaths = resolveNetworkRuntimePathsPure(input.host);
+      const brokerSocket = path.join(
+        runtimePaths.brokersDir,
+        `${input.sessionId}.sock`,
       );
-    }
+      const prompt = input.profile.network.prompt;
+      const token = input.prior.networkPromptToken ?? generateSessionToken();
+      const sessionNetworkName = `nas-session-net-${input.sessionId}`;
+
+      const dindContainerName = parseDindContainerName(input.prior.envVars);
+
+      const effects: ResourceEffect[] = [
+        {
+          kind: "proxy-session",
+          envoyContainerName,
+          envoyImage: ENVOY_IMAGE,
+          envoyAlias: ENVOY_ALIAS,
+          envoyProxyPort: ENVOY_PROXY_PORT,
+          envoyReadyTimeoutMs: ENVOY_READY_TIMEOUT_MS,
+          sessionId: input.sessionId,
+          sessionNetworkName,
+          profileName: input.profileName,
+          agent: input.profile.agent,
+          runtimePaths,
+          brokerSocket,
+          token,
+          allowlist: input.profile.network.allowlist,
+          denylist: prompt.denylist,
+          promptEnabled: prompt.enable,
+          timeoutSeconds: prompt.timeoutSeconds,
+          defaultScope: prompt.defaultScope,
+          notify: resolveNotifyBackend(prompt.notify, input.host.isWSL),
+          uiEnabled: input.config.ui.enable,
+          uiPort: input.config.ui.port,
+          uiIdleTimeout: input.config.ui.idleTimeout,
+          auditDir: input.probes.auditDir,
+          dindContainerName,
+        },
+      ];
+
+      const proxyUrl =
+        `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
+      const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
+      const noProxyEntries = ["localhost", "127.0.0.1"];
+      if (dindContainerName) {
+        noProxyEntries.push(dindContainerName);
+      }
+
+      return {
+        effects,
+        dockerArgs: replaceNetwork(
+          [...input.prior.dockerArgs],
+          sessionNetworkName,
+        ),
+        envVars: {
+          NAS_UPSTREAM_PROXY: proxyUrl,
+          http_proxy: localProxyUrl,
+          https_proxy: localProxyUrl,
+          HTTP_PROXY: localProxyUrl,
+          HTTPS_PROXY: localProxyUrl,
+          no_proxy: noProxyEntries.join(","),
+          NO_PROXY: noProxyEntries.join(","),
+        },
+        outputOverrides: {
+          networkRuntimeDir: runtimePaths.runtimeDir,
+          networkPromptToken: token,
+          networkPromptEnabled: prompt.enable,
+          networkBrokerSocket: brokerSocket,
+          networkProxyEndpoint: proxyUrl,
+        },
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
+function isProxyEnabled(input: StageInput): boolean {
+  return input.profile.network.allowlist.length > 0 ||
+    input.profile.network.prompt.enable;
+}
+
+/**
+ * Compute NetworkRuntimePaths purely from HostEnv (no I/O).
+ * Mirrors the logic of resolveNetworkRuntimePaths() but without
+ * creating directories.
+ */
+export function resolveNetworkRuntimePathsPure(
+  host: HostEnv,
+): NetworkRuntimePaths {
+  const xdg = host.env.get("XDG_RUNTIME_DIR");
+  let runtimeDir: string;
+  if (xdg && xdg.trim().length > 0) {
+    runtimeDir = path.join(xdg, "nas", "network");
+  } else {
+    const uid = host.uid ?? "unknown";
+    runtimeDir = path.join("/tmp", `nas-${uid}`, "network");
   }
+  return {
+    runtimeDir,
+    sessionsDir: path.join(runtimeDir, "sessions"),
+    pendingDir: path.join(runtimeDir, "pending"),
+    brokersDir: path.join(runtimeDir, "brokers"),
+    authRouterSocket: path.join(runtimeDir, "auth-router.sock"),
+    authRouterPidFile: path.join(runtimeDir, "auth-router.pid"),
+    envoyConfigFile: path.join(runtimeDir, "envoy.yaml"),
+  };
 }
 
 export function replaceNetwork(
@@ -213,7 +183,7 @@ export function replaceNetwork(
 }
 
 export function parseDindContainerName(
-  envVars: Record<string, string>,
+  envVars: Readonly<Record<string, string>>,
 ): string | null {
   const explicitName = envVars["NAS_DIND_CONTAINER_NAME"];
   if (explicitName && explicitName.trim() !== "") {
@@ -223,91 +193,4 @@ export function parseDindContainerName(
   if (!dockerHost) return null;
   const match = dockerHost.match(/^tcp:\/\/([^:]+):\d+$/);
   return match ? match[1] : null;
-}
-
-function isProxyEnabled(ctx: ExecutionContext): boolean {
-  return ctx.profile.network.allowlist.length > 0 ||
-    ctx.profile.network.prompt.enable;
-}
-
-async function renderEnvoyConfig(paths: NetworkRuntimePaths): Promise<void> {
-  const source = await Deno.readTextFile(
-    new URL("../docker/envoy/envoy.template.yaml", import.meta.url),
-  );
-  // Envoy runs as a non-owner user in the image, so the bind-mounted config
-  // must be world-readable even when an older file already exists.
-  await Deno.writeTextFile(paths.envoyConfigFile, source, {
-    create: true,
-    mode: 0o644,
-  });
-  await Deno.chmod(paths.envoyConfigFile, 0o644).catch((error) => {
-    if (!(error instanceof Deno.errors.NotSupported)) {
-      throw error;
-    }
-  });
-}
-
-async function ensureSessionNetwork(networkName: string): Promise<void> {
-  try {
-    await dockerNetworkCreateWithLabels(networkName, {
-      internal: true,
-      labels: {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
-      },
-    });
-  } catch {
-    // Already exists.
-  }
-}
-
-async function ensureSharedEnvoy(
-  paths: NetworkRuntimePaths,
-  envoyContainerName: string,
-): Promise<void> {
-  if (await dockerIsRunning(envoyContainerName)) {
-    return;
-  }
-  if (await dockerContainerExists(envoyContainerName)) {
-    await dockerRm(envoyContainerName).catch((e) =>
-      logInfo(`[nas] Proxy: failed to remove stale envoy container: ${e}`)
-    );
-  }
-  await dockerRunDetached({
-    name: envoyContainerName,
-    image: ENVOY_IMAGE,
-    args: ["--add-host=host.docker.internal:host-gateway"],
-    envVars: {},
-    mounts: [
-      {
-        source: paths.runtimeDir,
-        target: "/nas-network",
-        mode: "rw",
-      },
-    ],
-    labels: {
-      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
-    },
-    command: [
-      "-c",
-      "/nas-network/envoy.yaml",
-      "--log-level",
-      "info",
-    ],
-  });
-  await waitForEnvoyReady(envoyContainerName);
-}
-
-async function waitForEnvoyReady(envoyContainerName: string): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < ENVOY_READY_TIMEOUT_MS) {
-    if (await dockerIsRunning(envoyContainerName)) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(
-    `Envoy sidecar failed to start:\n${await dockerLogs(envoyContainerName)}`,
-  );
 }

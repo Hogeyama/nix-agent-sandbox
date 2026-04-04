@@ -14,7 +14,7 @@ import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { MountStage } from "./stages/mount.ts";
 import { createHostExecStage } from "./stages/hostexec.ts";
 import { createDindStage } from "./stages/dind.ts";
-import { ProxyStage } from "./stages/proxy.ts";
+import { createProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { setLogLevel } from "./log.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
@@ -198,7 +198,7 @@ export async function main(args: string[]): Promise<void> {
       new MountStage(),
       // HostExecStage is a PlanStage — added directly below
       // DindStage is a PlanStage — added directly below
-      new ProxyStage(),
+      // ProxyStage is a PlanStage — added directly below
       new LaunchStage(agentExtraArgs),
     ];
 
@@ -207,7 +207,8 @@ export async function main(args: string[]): Promise<void> {
     // NixDetectStage を DockerBuildStage の後に挿入 (index 2)
     // DbusProxyStage を NixDetectStage の後に挿入 (index 3)
     // HostExecStage を MountStage の後に挿入 (index 5)
-    // DindStage を HostExecStage の後 (ProxyStage の前) に挿入 (index 6)
+    // DindStage を HostExecStage の後に挿入 (index 6)
+    // ProxyStage を DindStage の後に挿入 (index 7)
     const stages = [
       ...adapted.slice(0, 2),
       NixDetectStage,
@@ -215,6 +216,7 @@ export async function main(args: string[]): Promise<void> {
       ...adapted.slice(2, 3),
       createHostExecStage(),
       createDindStage(),
+      createProxyStage(),
       ...adapted.slice(3),
     ];
 

@@ -12,6 +12,7 @@ import type {
   Profile,
 } from "../config/types.ts";
 import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
+import type { ApprovalScope } from "../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 
@@ -150,7 +151,8 @@ export type ResourceEffect =
   | WaitForReadyEffect
   | DindSidecarEffect
   | DbusProxyEffect
-  | DockerRunInteractiveEffect;
+  | DockerRunInteractiveEffect
+  | ProxySessionEffect;
 
 export interface DockerContainerEffect {
   kind: "docker-container";
@@ -247,6 +249,33 @@ export interface DockerRunInteractiveEffect {
   envVars: Record<string, string>;
   command: string[];
   labels: Record<string, string>;
+}
+
+export interface ProxySessionEffect {
+  kind: "proxy-session";
+  envoyContainerName: string;
+  envoyImage: string;
+  envoyAlias: string;
+  envoyProxyPort: number;
+  envoyReadyTimeoutMs: number;
+  sessionId: string;
+  sessionNetworkName: string;
+  profileName: string;
+  agent: AgentType;
+  runtimePaths: NetworkRuntimePaths;
+  brokerSocket: string;
+  token?: string;
+  allowlist: string[];
+  denylist: string[];
+  promptEnabled: boolean;
+  timeoutSeconds: number;
+  defaultScope: ApprovalScope;
+  notify: ResolvedNotifyBackend;
+  uiEnabled: boolean;
+  uiPort: number;
+  uiIdleTimeout: number;
+  auditDir: string;
+  dindContainerName: string | null;
 }
 
 // ---------------------------------------------------------------------------

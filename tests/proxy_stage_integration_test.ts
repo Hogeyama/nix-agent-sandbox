@@ -7,15 +7,23 @@
  */
 
 import { assertEquals, assertMatch } from "@std/assert";
-import { ProxyStage } from "../src/stages/proxy.ts";
+import {
+  createProxyStage,
+  resolveNetworkRuntimePathsPure,
+} from "../src/stages/proxy.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
-import { createContext } from "../src/pipeline/context.ts";
 import type { Config, Profile } from "../src/config/types.ts";
-import type { ExecutionContext } from "../src/pipeline/context.ts";
+import type {
+  HostEnv,
+  PriorStageOutputs,
+  ProbeResults,
+  StageInput,
+} from "../src/pipeline/types.ts";
+import { executePlan, teardownHandles } from "../src/pipeline/effects.ts";
 import {
   dockerIsRunning,
   dockerNetworkRemove,
@@ -70,10 +78,6 @@ function makeConfig(profile: Profile): Config {
   return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
 }
 
-function makeCtx(profile: Profile): ExecutionContext {
-  return createContext(makeConfig(profile), profile, "default", "/tmp");
-}
-
 async function canRunProxy(): Promise<boolean> {
   try {
     const result = await new Deno.Command("docker", {
@@ -113,7 +117,6 @@ Deno.test({
       crypto.randomUUID().slice(0, 8)
     }`;
     const runtimeRoot = await makeDockerBindableTempDir("nas-proxy-runtime-");
-    const runtimeDir = `${runtimeRoot}/nas/network`;
     const oldRuntimeDir = Deno.env.get("XDG_RUNTIME_DIR");
     Deno.env.set("XDG_RUNTIME_DIR", runtimeRoot);
 
@@ -122,39 +125,110 @@ Deno.test({
         allowlist: ["example.com"],
       },
     });
-    const ctx = makeCtx(profile);
-    const stage = new ProxyStage({ envoyContainerName });
+    const config = makeConfig(profile);
+    const sessionId = `sess_${crypto.randomUUID().slice(0, 12)}`;
 
+    const hostEnv: HostEnv = {
+      home: Deno.env.get("HOME") ?? "/home/test",
+      user: Deno.env.get("USER") ?? "test",
+      uid: typeof Deno.uid === "function" ? Deno.uid() : 1000,
+      gid: typeof Deno.gid === "function" ? Deno.gid() : 1000,
+      isWSL: false,
+      env: new Map([["XDG_RUNTIME_DIR", runtimeRoot]]),
+    };
+    const probes: ProbeResults = {
+      hasHostNix: false,
+      xdgDbusProxyPath: null,
+      dbusSessionAddress: null,
+      gpgAgentSocket: null,
+      auditDir: `${runtimeRoot}/audit`,
+    };
+    const prior: PriorStageOutputs = {
+      dockerArgs: [],
+      envVars: {},
+      workDir: "/tmp",
+      nixEnabled: false,
+      imageName: "test-image",
+      agentCommand: ["claude"],
+      networkPromptEnabled: false,
+      dbusProxyEnabled: false,
+    };
+
+    const input: StageInput = {
+      config,
+      profile,
+      profileName: "default",
+      sessionId,
+      host: hostEnv,
+      probes,
+      prior,
+    };
+
+    const stage = createProxyStage({ envoyContainerName });
+    const plan = stage.plan(input);
+    assertEquals(plan !== null, true);
+
+    const runtimePaths = resolveNetworkRuntimePathsPure(hostEnv);
+
+    const handles = [];
     try {
-      await Deno.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
-      await Deno.writeTextFile(`${runtimeDir}/envoy.yaml`, "# stale\n", {
+      // Ensure runtime dir exists for envoy config bind mount
+      await Deno.mkdir(runtimePaths.runtimeDir, {
+        recursive: true,
+        mode: 0o755,
+      });
+      await Deno.mkdir(runtimePaths.sessionsDir, {
+        recursive: true,
+        mode: 0o700,
+      });
+      await Deno.mkdir(runtimePaths.pendingDir, {
+        recursive: true,
+        mode: 0o700,
+      });
+      await Deno.mkdir(runtimePaths.brokersDir, {
+        recursive: true,
+        mode: 0o700,
+      });
+
+      // Write a stale envoy.yaml to verify it gets overwritten
+      await Deno.writeTextFile(runtimePaths.envoyConfigFile, "# stale\n", {
         create: true,
         mode: 0o600,
       });
 
-      const result = await stage.execute(ctx);
+      handles.push(...await executePlan(plan!));
+
       // http_proxy / https_proxy should point to local proxy
-      assertEquals(result.envVars["http_proxy"], "http://127.0.0.1:18080");
-      assertEquals(result.envVars["https_proxy"], "http://127.0.0.1:18080");
+      assertEquals(plan!.envVars["http_proxy"], "http://127.0.0.1:18080");
+      assertEquals(plan!.envVars["https_proxy"], "http://127.0.0.1:18080");
       // NAS_UPSTREAM_PROXY should contain the credentialed upstream URL
       assertMatch(
-        result.envVars["NAS_UPSTREAM_PROXY"],
+        plan!.envVars["NAS_UPSTREAM_PROXY"],
         /^http:\/\/sess_[a-f0-9]{12}:[A-Za-z0-9_-]+@nas-envoy:15001$/,
       );
-      assertEquals(result.networkBrokerSocket !== null, true);
-      assertEquals(result.networkRuntimeDir?.startsWith(runtimeRoot), true);
       assertEquals(
-        result.dockerArgs.includes(`nas-session-net-${ctx.sessionId}`),
+        typeof plan!.outputOverrides.networkBrokerSocket,
+        "string",
+      );
+      assertEquals(
+        plan!.outputOverrides.networkRuntimeDir?.startsWith(runtimeRoot),
         true,
       );
-      assertEquals(((await Deno.stat(runtimeDir)).mode ?? 0) & 0o777, 0o755);
       assertEquals(
-        ((await Deno.stat(`${runtimeDir}/envoy.yaml`)).mode ?? 0) & 0o777,
+        plan!.dockerArgs.includes(`nas-session-net-${sessionId}`),
+        true,
+      );
+      assertEquals(
+        ((await Deno.stat(runtimePaths.runtimeDir)).mode ?? 0) & 0o777,
+        0o755,
+      );
+      assertEquals(
+        ((await Deno.stat(runtimePaths.envoyConfigFile)).mode ?? 0) & 0o777,
         0o644,
       );
       assertEquals(await dockerIsRunning(envoyContainerName), true);
     } finally {
-      await stage.teardown(ctx);
+      await teardownHandles(handles).catch(() => {});
       await cleanupRuntime(runtimeRoot, envoyContainerName);
       if (oldRuntimeDir) {
         Deno.env.set("XDG_RUNTIME_DIR", oldRuntimeDir);
