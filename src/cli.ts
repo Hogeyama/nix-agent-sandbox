@@ -10,7 +10,7 @@ import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
-import { DbusProxyStage } from "./stages/dbus_proxy.ts";
+import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { MountStage } from "./stages/mount.ts";
 import { HostExecStage } from "./stages/hostexec.ts";
 import { createDindStage } from "./stages/dind.ts";
@@ -194,7 +194,7 @@ export async function main(args: string[]): Promise<void> {
       new WorktreeStage(),
       new DockerBuildStage(),
       // NixDetectStage is a PlanStage — added directly below
-      new DbusProxyStage(),
+      // DbusProxyStage is a PlanStage — added directly below
       new MountStage(),
       new HostExecStage(),
       // DindStage is a PlanStage — added directly below
@@ -205,13 +205,15 @@ export async function main(args: string[]): Promise<void> {
     // Legacy stage を adaptLegacyStage でラップし、PlanStage を直接挿入
     const adapted = legacyStages.map((s) => adaptLegacyStage(s, ctx));
     // NixDetectStage を DockerBuildStage の後に挿入 (index 2)
+    // DbusProxyStage を NixDetectStage の後に挿入 (index 3)
     // DindStage を HostExecStage の後 (ProxyStage の前) に挿入 (index 7)
     const stages = [
       ...adapted.slice(0, 2),
       NixDetectStage,
-      ...adapted.slice(2, 5),
+      createDbusProxyStage(),
+      ...adapted.slice(2, 4),
       createDindStage(),
-      ...adapted.slice(5),
+      ...adapted.slice(4),
     ];
 
     // 初期 PriorStageOutputs を構築

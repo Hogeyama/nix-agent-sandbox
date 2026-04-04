@@ -134,6 +134,7 @@ export type ResourceEffect =
   | UnixListenerEffect
   | WaitForReadyEffect
   | DindSidecarEffect
+  | DbusProxyEffect
   | DockerRunInteractiveEffect;
 
 export interface DockerContainerEffect {
@@ -207,6 +208,20 @@ export interface DindSidecarEffect {
   shared: boolean;
   disableCache: boolean;
   readinessTimeoutMs: number;
+}
+
+export interface DbusProxyEffect {
+  kind: "dbus-proxy";
+  proxyBinaryPath: string;
+  runtimeDir: string;
+  sessionsDir: string;
+  sessionDir: string;
+  socketPath: string;
+  pidFile: string;
+  sourceAddress: string;
+  args: string[];
+  timeoutMs: number;
+  pollIntervalMs: number;
 }
 
 export interface DockerRunInteractiveEffect {

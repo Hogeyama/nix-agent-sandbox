@@ -139,7 +139,6 @@ Deno.test("executeEffect: unimplemented effects throw", async () => {
     { kind: "docker-network", name: "n", connect: [] },
     { kind: "docker-volume", name: "v" },
     { kind: "symlink", target: "t", path: "p" },
-    { kind: "process-spawn", id: "ps", command: "cmd", args: [] },
     {
       kind: "unix-listener",
       id: "ul",
@@ -160,12 +159,6 @@ Deno.test("executeEffect: unimplemented effects throw", async () => {
         denylist: [],
         promptEnabled: false,
       },
-    },
-    {
-      kind: "wait-for-ready",
-      check: { kind: "file-exists", path: "/tmp/f" },
-      timeoutMs: 1000,
-      pollIntervalMs: 100,
     },
     {
       kind: "docker-run-interactive",

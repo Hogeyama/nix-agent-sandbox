@@ -1,177 +1,157 @@
-import type { Stage } from "../pipeline/pipeline.ts";
-import type { ExecutionContext } from "../pipeline/context.ts";
+/**
+ * D-Bus Proxy Stage (PlanStage)
+ *
+ * xdg-dbus-proxy を起動して、エージェントコンテナ内から
+ * ホストの D-Bus セッションバスにフィルタ付きでアクセスできるようにする。
+ */
+
+import type {
+  HostEnv,
+  PlanStage,
+  StageInput,
+  StagePlan,
+} from "../pipeline/types.ts";
 import type { DbusRuleConfig } from "../config/types.ts";
-import { logInfo, logWarn } from "../log.ts";
-import {
-  type DbusSessionPaths,
-  gcDbusRuntime,
-  resolveDbusRuntimePaths,
-  resolveDbusSessionPaths,
-} from "../dbus/registry.ts";
+import { logWarn } from "../log.ts";
 
 const SOCKET_READY_TIMEOUT_MS = 5_000;
 const SOCKET_READY_POLL_MS = 50;
 
-export class DbusProxyStage implements Stage {
-  name = "DbusProxyStage";
+// ---------------------------------------------------------------------------
+// PlanStage
+// ---------------------------------------------------------------------------
 
-  private sessionPaths: DbusSessionPaths | null = null;
-  private child: Deno.ChildProcess | null = null;
-  private stderrText = "";
-  private stderrCapture: Promise<void> | null = null;
+export function createDbusProxyStage(): PlanStage {
+  return {
+    kind: "plan",
+    name: "DbusProxyStage",
 
-  async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    if (!ctx.profile.dbus.session.enable) {
-      return ctx;
-    }
+    plan(input: StageInput): StagePlan | null {
+      if (!input.profile.dbus.session.enable) {
+        return null;
+      }
 
-    const skip = (reason: string) => {
-      logWarn(reason);
-      return { ...ctx, dbusProxyEnabled: false };
-    };
+      const uid = input.host.uid;
+      if (uid === null) {
+        logWarn(
+          "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID — skipping D-Bus proxy",
+        );
+        return {
+          effects: [],
+          dockerArgs: [],
+          envVars: {},
+          outputOverrides: { dbusProxyEnabled: false },
+        };
+      }
 
-    const uid = Deno.uid();
-    if (uid === null) {
-      return skip(
-        "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID — skipping D-Bus proxy",
+      const proxyBin = input.probes.xdgDbusProxyPath;
+      if (!proxyBin) {
+        logWarn(
+          "[nas] xdg-dbus-proxy not found on PATH — skipping D-Bus proxy (install xdg-dbus-proxy to enable)",
+        );
+        return {
+          effects: [],
+          dockerArgs: [],
+          envVars: {},
+          outputOverrides: { dbusProxyEnabled: false },
+        };
+      }
+
+      const sourceAddress = resolveSourceAddress(
+        input.profile.dbus.session.sourceAddress,
+        input.probes.dbusSessionAddress,
+        uid,
       );
-    }
+      if (!sourceAddress) {
+        logWarn(
+          "[nas] DBUS_SESSION_BUS_ADDRESS not set and /run/user/$UID/bus not found — skipping D-Bus proxy",
+        );
+        return {
+          effects: [],
+          dockerArgs: [],
+          envVars: {},
+          outputOverrides: { dbusProxyEnabled: false },
+        };
+      }
 
-    const proxyBin = await resolveProxyBinary();
-    if (!proxyBin) {
-      return skip(
-        "[nas] xdg-dbus-proxy not found on PATH — skipping D-Bus proxy (install xdg-dbus-proxy to enable)",
-      );
-    }
+      if (!sourceAddress.startsWith("unix:path=")) {
+        logWarn(
+          `[nas] Unsupported dbus source address: ${sourceAddress}. Only unix:path=... is supported — skipping D-Bus proxy`,
+        );
+        return {
+          effects: [],
+          dockerArgs: [],
+          envVars: {},
+          outputOverrides: { dbusProxyEnabled: false },
+        };
+      }
 
-    const sourceAddress = resolveSourceAddress(
-      ctx.profile.dbus.session.sourceAddress,
-      uid,
-    );
-    if (!sourceAddress) {
-      return skip(
-        "[nas] DBUS_SESSION_BUS_ADDRESS not set and /run/user/$UID/bus not found — skipping D-Bus proxy",
-      );
-    }
-
-    try {
-      validateSupportedSourceAddress(sourceAddress);
-      await ensureSourceReachable(sourceAddress);
-    } catch (e) {
-      return skip(
-        `[nas] D-Bus proxy precondition failed — skipping: ${
-          (e as Error).message
-        }`,
-      );
-    }
-
-    try {
-      const runtimePaths = await resolveDbusRuntimePaths();
-      await gcDbusRuntime(runtimePaths);
-
-      const sessionPaths = resolveDbusSessionPaths(runtimePaths, ctx.sessionId);
-      this.sessionPaths = sessionPaths;
-      await Deno.mkdir(sessionPaths.sessionDir, {
-        recursive: true,
-        mode: 0o700,
-      });
-      await Deno.chmod(sessionPaths.sessionDir, 0o700).catch((e) =>
-        logInfo(`[nas] DbusProxy: failed to chmod session dir: ${e}`)
-      );
+      // Compute session paths (pure computation).
+      const runtimeDir = resolveRuntimeDir(input.host);
+      const sessionsDir = `${runtimeDir}/sessions`;
+      const sessionDir = `${sessionsDir}/${input.sessionId}`;
+      const socketPath = `${sessionDir}/bus`;
+      const pidFile = `${sessionDir}/proxy.pid`;
 
       const commandArgs = buildProxyArgs(
         sourceAddress,
-        sessionPaths.socketPath,
-        ctx.profile.dbus.session.see,
-        ctx.profile.dbus.session.talk,
-        ctx.profile.dbus.session.own,
-        ctx.profile.dbus.session.calls,
-        ctx.profile.dbus.session.broadcasts,
-      );
-
-      const command = new Deno.Command(proxyBin, {
-        args: commandArgs,
-        stdout: "null",
-        stderr: "piped",
-      });
-      const child = command.spawn();
-      this.child = child;
-      this.stderrText = "";
-      this.stderrCapture = this.captureStderr(child);
-      await Deno.writeTextFile(sessionPaths.pidFile, `${child.pid}\n`, {
-        create: true,
-        mode: 0o600,
-      });
-
-      await waitForSocketReady(
-        sessionPaths.socketPath,
-        child,
-        () => this.stderrText,
+        socketPath,
+        input.profile.dbus.session.see,
+        input.profile.dbus.session.talk,
+        input.profile.dbus.session.own,
+        input.profile.dbus.session.calls,
+        input.profile.dbus.session.broadcasts,
       );
 
       return {
-        ...ctx,
-        dbusProxyEnabled: true,
-        dbusSessionRuntimeDir: sessionPaths.sessionDir,
-        dbusSessionSocket: sessionPaths.socketPath,
-        dbusSessionSourceAddress: sourceAddress,
+        effects: [
+          {
+            kind: "dbus-proxy",
+            proxyBinaryPath: proxyBin,
+            runtimeDir,
+            sessionsDir,
+            sessionDir,
+            socketPath,
+            pidFile,
+            sourceAddress,
+            args: commandArgs,
+            timeoutMs: SOCKET_READY_TIMEOUT_MS,
+            pollIntervalMs: SOCKET_READY_POLL_MS,
+          },
+        ],
+        dockerArgs: [],
+        envVars: {},
+        outputOverrides: {
+          dbusProxyEnabled: true,
+          dbusSessionRuntimeDir: sessionDir,
+          dbusSessionSocket: socketPath,
+          dbusSessionSourceAddress: sourceAddress,
+        },
       };
-    } catch (error) {
-      await this.teardown(ctx);
-      throw error;
-    }
-  }
-
-  async teardown(_ctx: ExecutionContext): Promise<void> {
-    if (this.child) {
-      try {
-        this.child.kill("SIGTERM");
-      } catch {
-        // noop
-      }
-      await this.child.status.catch((e) =>
-        logInfo(`[nas] DbusProxy teardown: failed to await child status: ${e}`)
-      );
-      this.child = null;
-    }
-    if (this.stderrCapture) {
-      await this.stderrCapture.catch((e) =>
-        logInfo(`[nas] DbusProxy teardown: failed to capture stderr: ${e}`)
-      );
-      this.stderrCapture = null;
-    }
-    if (this.sessionPaths) {
-      await Deno.remove(this.sessionPaths.sessionDir, { recursive: true })
-        .catch((e) =>
-          logInfo(
-            `[nas] DbusProxy teardown: failed to remove session dir: ${e}`,
-          )
-        );
-      this.sessionPaths = null;
-    }
-  }
-
-  private async captureStderr(child: Deno.ChildProcess): Promise<void> {
-    if (!child.stderr) return;
-    try {
-      this.stderrText = await new Response(child.stderr).text();
-    } catch {
-      this.stderrText = "";
-    } finally {
-      await child.stderr.cancel().catch((e) =>
-        logInfo(`[nas] DbusProxy: failed to cancel stderr stream: ${e}`)
-      );
-    }
-  }
+    },
+  };
 }
 
+// ---------------------------------------------------------------------------
+// Pure helper functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the D-Bus source address.
+ * Prefers configured address, then probe result (from env), then default path.
+ *
+ * Note: When both configuredAddress and probeAddress are absent, the function
+ * returns a default unix:path based on the uid. The caller validates whether
+ * the returned address is usable (e.g. starts with "unix:path="), so null
+ * is never actually returned in the current code path.
+ */
 export function resolveSourceAddress(
   configuredAddress: string | undefined,
+  probeAddress: string | null,
   uid: number,
 ): string | null {
   if (configuredAddress) return configuredAddress;
-  const fromEnv = Deno.env.get("DBUS_SESSION_BUS_ADDRESS")?.trim();
-  if (fromEnv) return fromEnv;
+  if (probeAddress) return probeAddress;
   return `unix:path=/run/user/${uid}/bus`;
 }
 
@@ -203,74 +183,15 @@ export function buildProxyArgs(
   return args;
 }
 
-async function resolveProxyBinary(): Promise<string | null> {
-  try {
-    const result = await new Deno.Command("which", {
-      args: ["xdg-dbus-proxy"],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    if (!result.success) return null;
-    const binary = new TextDecoder().decode(result.stdout).trim();
-    return binary === "" ? null : binary;
-  } catch {
-    return null;
+/**
+ * Resolve the dbus runtime directory path (pure, no I/O).
+ * Uses HostEnv instead of directly accessing Deno.env / Deno.uid().
+ */
+export function resolveRuntimeDir(host: HostEnv): string {
+  const xdg = host.env.get("XDG_RUNTIME_DIR");
+  if (xdg && xdg.trim().length > 0) {
+    return `${xdg}/nas/dbus`;
   }
-}
-
-function validateSupportedSourceAddress(address: string): void {
-  if (!address.startsWith("unix:path=")) {
-    throw new Error(
-      `[nas] Unsupported dbus source address: ${address}. Only unix:path=... is supported`,
-    );
-  }
-}
-
-async function ensureSourceReachable(address: string): Promise<void> {
-  const socketPath = address.slice("unix:path=".length);
-  const stat = await Deno.stat(socketPath).catch(() => null);
-  if (!stat) {
-    throw new Error(`[nas] DBus session bus socket not found: ${socketPath}`);
-  }
-  if (!stat.isSocket) {
-    throw new Error(
-      `[nas] DBus session bus path is not a socket: ${socketPath}`,
-    );
-  }
-}
-
-async function waitForSocketReady(
-  socketPath: string,
-  child: Deno.ChildProcess,
-  getStderr: () => string,
-): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < SOCKET_READY_TIMEOUT_MS) {
-    const stat = await Deno.stat(socketPath).catch(() => null);
-    if (stat?.isSocket) {
-      return;
-    }
-
-    const status = await Promise.race([
-      child.status.then((status) => ({ done: true as const, status })),
-      sleep(SOCKET_READY_POLL_MS).then(() => ({ done: false as const })),
-    ]);
-    if (status.done) {
-      const stderrText = getStderr().trim();
-      const detail = stderrText ? `\n${stderrText}` : "";
-      throw new Error(
-        `[nas] xdg-dbus-proxy exited before creating socket (${status.status.code})${detail}`,
-      );
-    }
-  }
-
-  const stderrText = getStderr().trim();
-  const detail = stderrText ? `\n${stderrText}` : "";
-  throw new Error(
-    `[nas] Timed out waiting for xdg-dbus-proxy socket: ${socketPath}${detail}`,
-  );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const uid = host.uid ?? "unknown";
+  return `/tmp/nas-${uid}/dbus`;
 }

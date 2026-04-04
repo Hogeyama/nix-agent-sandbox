@@ -5,7 +5,14 @@
  * Other effect kinds throw "not yet implemented" errors.
  */
 
-import type { DindSidecarEffect, ResourceEffect, StagePlan } from "./types.ts";
+import type {
+  DbusProxyEffect,
+  DindSidecarEffect,
+  ProcessSpawnEffect,
+  ResourceEffect,
+  StagePlan,
+  WaitForReadyEffect,
+} from "./types.ts";
 import {
   ensureNetwork,
   ensureSharedTmpWritable,
@@ -18,6 +25,7 @@ import {
   dockerStop,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import { gcDbusRuntime } from "../dbus/registry.ts";
 import { logInfo, logWarn } from "../log.ts";
 
 // ---------------------------------------------------------------------------
@@ -45,13 +53,17 @@ export async function executeEffect(
       return await executeFileWrite(effect);
     case "dind-sidecar":
       return await executeDindSidecar(effect);
+    case "dbus-proxy":
+      return await executeDbusProxy(effect);
+    case "process-spawn":
+      return await executeProcessSpawn(effect);
+    case "wait-for-ready":
+      return await executeWaitForReady(effect);
     case "docker-container":
     case "docker-network":
     case "docker-volume":
     case "symlink":
-    case "process-spawn":
     case "unix-listener":
-    case "wait-for-ready":
     case "docker-run-interactive":
       throw new Error(`Effect not yet implemented: ${effect.kind}`);
   }
@@ -71,8 +83,14 @@ export async function executePlan(plan: StagePlan): Promise<ResourceHandle[]> {
     } catch (error) {
       try {
         await teardownHandles(handles);
-      } catch {
-        // teardown failed, but we still want to throw the original error
+      } catch (teardownErr) {
+        logWarn(
+          `[nas] executePlan: teardown failed during error recovery: ${
+            teardownErr instanceof Error
+              ? teardownErr.message
+              : String(teardownErr)
+          }`,
+        );
       }
       throw error;
     }
@@ -135,8 +153,16 @@ async function executeFileWrite(
   } catch (error) {
     try {
       await Deno.remove(effect.path);
-    } catch {
-      // cleanup failed, but we still want to throw the original error
+    } catch (cleanupErr) {
+      if (!(cleanupErr instanceof Deno.errors.NotFound)) {
+        logWarn(
+          `[nas] file-write: cleanup failed after chmod error: ${
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr)
+          }`,
+        );
+      }
     }
     throw error;
   }
@@ -237,26 +263,312 @@ async function executeDindSidecar(
       try {
         logInfo(`[nas] DinD: stopping sidecar ${containerName}`);
         await dockerStop(containerName, { timeoutSeconds: 0 });
-      } catch {
-        // コンテナが既に停止している場合は無視
+      } catch (e: unknown) {
+        logWarn(
+          `[nas] DinD teardown: failed to stop container: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
       }
       try {
         await dockerRm(containerName);
-      } catch {
-        // コンテナが既に削除されている場合は無視
+      } catch (e: unknown) {
+        logWarn(
+          `[nas] DinD teardown: failed to remove container: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
       }
       try {
         logInfo(`[nas] DinD: removing network ${networkName}`);
         await dockerNetworkRemove(networkName);
-      } catch {
-        // ネットワークが既に削除されている場合は無視
+      } catch (e: unknown) {
+        logWarn(
+          `[nas] DinD teardown: failed to remove network: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
       }
       try {
         logInfo(`[nas] DinD: removing volume ${sharedTmpVolume}`);
         await dockerVolumeRemove(sharedTmpVolume);
-      } catch {
-        // ボリュームが既に削除されている場合は無視
+      } catch (e: unknown) {
+        logWarn(
+          `[nas] DinD teardown: failed to remove volume: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
       }
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// dbus-proxy effect
+// ---------------------------------------------------------------------------
+
+async function executeDbusProxy(
+  effect: DbusProxyEffect,
+): Promise<ResourceHandle> {
+  const {
+    proxyBinaryPath,
+    runtimeDir,
+    sessionsDir,
+    sessionDir,
+    socketPath,
+    pidFile,
+    args,
+    timeoutMs,
+    pollIntervalMs,
+  } = effect;
+
+  // GC stale sessions before starting
+  await gcDbusRuntime({ runtimeDir, sessionsDir }).catch((e: unknown) =>
+    logWarn(
+      `[nas] dbus-proxy: GC failed: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    )
+  );
+
+  // Create directories
+  await Deno.mkdir(runtimeDir, { recursive: true, mode: 0o755 });
+  await Deno.mkdir(sessionsDir, { recursive: true, mode: 0o700 });
+  await Deno.mkdir(sessionDir, { recursive: true, mode: 0o700 });
+
+  // Spawn xdg-dbus-proxy
+  const command = new Deno.Command(proxyBinaryPath, {
+    args,
+    stdout: "null",
+    stderr: "piped",
+  });
+  const child = command.spawn();
+
+  // Write PID file
+  await Deno.writeTextFile(pidFile, String(child.pid));
+  await Deno.chmod(pidFile, 0o600);
+
+  // Capture stderr in background for diagnostics
+  let stderrText = "";
+  const stderrCapture = (async () => {
+    if (!child.stderr) return;
+    try {
+      stderrText = await new Response(child.stderr).text();
+    } catch (e: unknown) {
+      logWarn(
+        `[nas] dbus-proxy: stderr capture failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+  })();
+
+  // Wait for socket with early exit detection via Promise.race
+  try {
+    await Promise.race([
+      waitForSocket(socketPath, timeoutMs, pollIntervalMs),
+      child.status.then((status) => {
+        if (!status.success) {
+          throw new Error(
+            `[nas] xdg-dbus-proxy exited early with code ${status.code}${
+              stderrText ? `: ${stderrText}` : ""
+            }`,
+          );
+        }
+      }),
+    ]);
+  } catch (error) {
+    // On failure, include stderr in the error message if available
+    // Wait briefly for stderr capture to complete
+    await stderrCapture.catch(() => {});
+    const enrichedMessage = stderrText
+      ? `${
+        error instanceof Error ? error.message : String(error)
+      } (stderr: ${stderrText})`
+      : (error instanceof Error ? error.message : String(error));
+
+    // Clean up on failure
+    try {
+      child.kill("SIGTERM");
+    } catch (e: unknown) {
+      if (!(e instanceof Deno.errors.NotFound)) {
+        logWarn(
+          `[nas] dbus-proxy: cleanup kill failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+    }
+    await child.status.catch(() => {});
+    await Deno.remove(sessionDir, { recursive: true }).catch((e: unknown) =>
+      logWarn(
+        `[nas] dbus-proxy: cleanup session dir failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      )
+    );
+    throw new Error(enrichedMessage);
+  }
+
+  return {
+    kind: "dbus-proxy",
+    close: async () => {
+      try {
+        child.kill("SIGTERM");
+      } catch (e: unknown) {
+        if (!(e instanceof Deno.errors.NotFound)) {
+          throw e;
+        }
+        // Process already exited
+      }
+      await child.status.catch((e: unknown) =>
+        logInfo(
+          `[nas] dbus-proxy teardown: failed to await child status: ${e}`,
+        )
+      );
+      await stderrCapture.catch((e: unknown) =>
+        logInfo(
+          `[nas] dbus-proxy teardown: failed to capture stderr: ${e}`,
+        )
+      );
+      await Deno.remove(sessionDir, { recursive: true }).catch((e: unknown) =>
+        logWarn(
+          `[nas] dbus-proxy teardown: failed to remove session dir: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        )
+      );
+    },
+  };
+}
+
+async function waitForSocket(
+  socketPath: string,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      await Deno.stat(socketPath);
+      return;
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) {
+        throw e;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  throw new Error(
+    `[nas] Timed out waiting for dbus proxy socket: ${socketPath} (${timeoutMs}ms)`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// process-spawn effect
+// ---------------------------------------------------------------------------
+
+function executeProcessSpawn(
+  effect: ProcessSpawnEffect,
+): Promise<ResourceHandle> {
+  const command = new Deno.Command(effect.command, {
+    args: effect.args,
+    stdout: "null",
+    stderr: "piped",
+  });
+  const child = command.spawn();
+
+  // Capture stderr in background for diagnostics
+  let stderrText = "";
+  const stderrCapture = (async () => {
+    if (!child.stderr) return;
+    try {
+      stderrText = await new Response(child.stderr).text();
+    } catch (e: unknown) {
+      logWarn(
+        `[nas] process-spawn (${effect.id}): stderr capture failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      stderrText = "";
+    }
+  })();
+
+  // Suppress unused variable warning — stderrText is captured for diagnostics
+  void stderrText;
+
+  return Promise.resolve({
+    kind: "process-spawn",
+    close: async () => {
+      try {
+        child.kill("SIGTERM");
+      } catch (e) {
+        if (!(e instanceof Deno.errors.NotFound)) {
+          throw e;
+        }
+        // Process already exited
+      }
+      await child.status.catch((e: unknown) =>
+        logInfo(
+          `[nas] process-spawn teardown (${effect.id}): failed to await child status: ${e}`,
+        )
+      );
+      await stderrCapture.catch((e: unknown) =>
+        logInfo(
+          `[nas] process-spawn teardown (${effect.id}): failed to capture stderr: ${e}`,
+        )
+      );
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// wait-for-ready effect
+// ---------------------------------------------------------------------------
+
+async function executeWaitForReady(
+  effect: WaitForReadyEffect,
+): Promise<ResourceHandle> {
+  const { check, timeoutMs, pollIntervalMs } = effect;
+
+  switch (check.kind) {
+    case "file-exists":
+      await waitForFileExists(check.path, timeoutMs, pollIntervalMs);
+      break;
+    case "tcp-port":
+    case "http-ok":
+    case "docker-healthy":
+      throw new Error(
+        `wait-for-ready check not yet implemented: ${check.kind}`,
+      );
+  }
+
+  return {
+    kind: "wait-for-ready",
+    close: async () => {
+      // No teardown needed for readiness checks
+    },
+  };
+}
+
+async function waitForFileExists(
+  filePath: string,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      await Deno.stat(filePath);
+      return;
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) {
+        throw e;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  throw new Error(
+    `[nas] Timed out waiting for file: ${filePath} (${timeoutMs}ms)`,
+  );
 }
