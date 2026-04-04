@@ -4,8 +4,11 @@
 
 import $ from "dax";
 import * as path from "@std/path";
-import type { Stage } from "../../pipeline/pipeline.ts";
-import type { ExecutionContext } from "../../pipeline/context.ts";
+import type {
+  ProceduralResult,
+  ProceduralStage,
+  StageInput,
+} from "../../pipeline/types.ts";
 import { logInfo } from "../../log.ts";
 import {
   findWorktreeForBranch,
@@ -27,7 +30,8 @@ import {
   stashDirtyWorktree,
 } from "./prompts.ts";
 
-export class WorktreeStage implements Stage {
+export class WorktreeStage implements ProceduralStage {
+  kind = "procedural" as const;
   name = "WorktreeStage";
 
   /** execute で作成/再利用した worktree のパス（teardown 用） */
@@ -36,14 +40,15 @@ export class WorktreeStage implements Stage {
   private branchName: string | null = null;
   private baseBranch: string | null = null;
 
-  async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    const wt = ctx.profile.worktree;
+  async execute(input: StageInput): Promise<ProceduralResult> {
+    const wt = input.profile.worktree;
     if (!wt) {
       logInfo("[nas] Worktree: skipped (not configured)");
-      return ctx;
+      return { outputOverrides: {} };
     }
 
-    const repoRoot = await getGitRoot(ctx.workDir);
+    const workDir = input.prior.workDir;
+    const repoRoot = await getGitRoot(workDir);
     this.repoRoot = repoRoot;
 
     const resolvedBase = await resolveBase(repoRoot, wt.base);
@@ -52,7 +57,7 @@ export class WorktreeStage implements Stage {
     await validateBaseBranch(repoRoot, resolvedBase);
 
     // 同じプロファイルの既存 worktree を検索
-    const existing = await findProfileWorktrees(repoRoot, ctx.profileName);
+    const existing = await findProfileWorktrees(repoRoot, input.profileName);
     if (existing.length > 0) {
       const reused = await promptReuseWorktree(existing);
       if (reused) {
@@ -61,12 +66,14 @@ export class WorktreeStage implements Stage {
           ? reused.branch.replace("refs/heads/", "")
           : null;
         logInfo(`[nas] Reusing worktree: ${reused.path}`);
-        return { ...ctx, workDir: reused.path, mountDir: repoRoot };
+        return {
+          outputOverrides: { workDir: reused.path, mountDir: repoRoot },
+        };
       }
     }
 
-    const worktreeName = generateWorktreeName(ctx.profileName);
-    const branchName = generateBranchName(ctx.profileName);
+    const worktreeName = generateWorktreeName(input.profileName);
+    const branchName = generateBranchName(input.profileName);
     // .git/nas-worktrees/ 内に作成 → 元リポのマウントだけで完結する
     const worktreePath = path.join(
       repoRoot,
@@ -93,10 +100,12 @@ export class WorktreeStage implements Stage {
     // worktree は元リポの .git/nas-worktrees/ 内に作成される。
     // mountDir に元リポを指定すれば 1 つのマウントで
     // working tree・git metadata・オブジェクト DB すべてが解決する。
-    return { ...ctx, workDir: worktreePath, mountDir: repoRoot };
+    return {
+      outputOverrides: { workDir: worktreePath, mountDir: repoRoot },
+    };
   }
 
-  async teardown(_ctx: ExecutionContext): Promise<void> {
+  async teardown(_input: StageInput): Promise<void> {
     if (!this.worktreePath || !this.repoRoot) return;
 
     // Show the current HEAD so the user can reference this commit later

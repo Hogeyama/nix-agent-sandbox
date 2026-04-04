@@ -8,7 +8,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
-import { createContext } from "../src/pipeline/context.ts";
+import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
 import { WorktreeStage } from "../src/stages/worktree.ts";
 
 const testProfile: Profile = {
@@ -32,6 +32,44 @@ const testConfig: Config = {
   profiles: { test: testProfile },
   ui: DEFAULT_UI_CONFIG,
 };
+
+function createTestInput(
+  config: Config,
+  profile: Profile,
+  workDir: string,
+): StageInput {
+  return {
+    config,
+    profile,
+    profileName: "test",
+    sessionId: "sess_test",
+    host: {
+      home: "/home/test",
+      user: "test",
+      uid: 1000,
+      gid: 1000,
+      isWSL: false,
+      env: new Map(),
+    },
+    probes: {
+      hasHostNix: false,
+      xdgDbusProxyPath: null,
+      dbusSessionAddress: null,
+      gpgAgentSocket: null,
+      auditDir: "/tmp/audit",
+    },
+    prior: {
+      dockerArgs: [],
+      envVars: {},
+      workDir,
+      nixEnabled: false,
+      imageName: "nas-sandbox",
+      agentCommand: [],
+      networkPromptEnabled: false,
+      dbusProxyEnabled: false,
+    } satisfies PriorStageOutputs,
+  };
+}
 
 async function withTempRepo(
   fn: (repoRoot: string) => Promise<void>,
@@ -85,13 +123,13 @@ Deno.test("WorktreeStage teardown stashes dirty changes before deleting", async 
   await withTempRepo(async (repoRoot) => {
     await withMockedPrompts(["1", "1", "1"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
 
       await Deno.writeTextFile(path.join(worktreePath, "draft.txt"), "hello");
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
@@ -116,15 +154,15 @@ Deno.test("WorktreeStage teardown can keep a dirty worktree from the stash promp
   await withTempRepo(async (repoRoot) => {
     await withMockedPrompts(["1", "3"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
       const branchName = (await $`git -C ${worktreePath} branch --show-current`
         .text()).trim();
 
       await Deno.writeTextFile(path.join(worktreePath, "draft.txt"), "hello");
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
@@ -153,13 +191,13 @@ Deno.test("WorktreeStage teardown keeps worktree when user chooses keep", async 
     // promptWorktreeAction → "2" (keep)
     await withMockedPrompts(["2"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
       const branchName =
         (await $`git -C ${worktreePath} branch --show-current`.text()).trim();
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       // worktree が残っている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
@@ -184,12 +222,12 @@ Deno.test("WorktreeStage teardown deletes clean worktree and branch", async () =
     // promptBranchAction → "1" (delete)
     await withMockedPrompts(["1", "1"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
 
       // worktree は clean (dirty ファイルなし)
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       // worktree が削除されている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
@@ -213,13 +251,13 @@ Deno.test("WorktreeStage teardown deletes dirty worktree without stashing", asyn
     // promptBranchAction → "1" (delete)
     await withMockedPrompts(["1", "2", "1"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
 
       await Deno.writeTextFile(path.join(worktreePath, "draft.txt"), "hello");
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       // worktree が削除されている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
@@ -243,11 +281,11 @@ Deno.test("WorktreeStage teardown renames branch and keeps it", async () => {
     // prompt for new name → "my-saved-branch"
     await withMockedPrompts(["1", "3", "my-saved-branch"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       // worktree は削除されている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
@@ -280,10 +318,10 @@ Deno.test("WorktreeStage teardown rename with empty name keeps original branch n
     // prompt for new name → "" (empty)
     await withMockedPrompts(["1", "3", ""], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      await stage.execute(input);
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       // worktree は削除されているがブランチ名はそのまま残る
       // (rename がスキップされ、worktree remove 後もブランチ削除されない)
@@ -305,9 +343,9 @@ Deno.test("WorktreeStage teardown cherry-picks commits to base branch", async ()
     // promptBranchAction → "2" (cherry-pick)
     await withMockedPrompts(["1", "2"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
 
       // worktree 内でコミットを作成
       await Deno.writeTextFile(
@@ -317,7 +355,7 @@ Deno.test("WorktreeStage teardown cherry-picks commits to base branch", async ()
       await $`git -C ${worktreePath} add feature.txt`.quiet("both");
       await $`git -C ${worktreePath} commit -m "add feature"`.quiet("both");
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       // base ブランチに cherry-pick されたコミットが入っている
       const baseBranch =
@@ -342,9 +380,9 @@ Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncom
     // promptBranchAction → "2" (cherry-pick)
     await withMockedPrompts(["1", "2"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
-      const worktreePath = next.workDir;
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
 
       await Deno.writeTextFile(
         path.join(worktreePath, "feature.txt"),
@@ -356,7 +394,7 @@ Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncom
       // base worktree 側に未コミット変更を残した状態で teardown
       await Deno.writeTextFile(path.join(repoRoot, "dirty.txt"), "dirty\n");
 
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       const baseBranch =
         (await $`git -C ${repoRoot} symbolic-ref --short HEAD`.text()).trim();
@@ -390,16 +428,17 @@ Deno.test("WorktreeStage teardown cherry-pick with no new commits succeeds", asy
     // promptBranchAction → "2" (cherry-pick)
     await withMockedPrompts(["1", "2"], async () => {
       const stage = new WorktreeStage();
-      const ctx = createContext(testConfig, testProfile, "test", repoRoot);
-      const next = await stage.execute(ctx);
+      const input = createTestInput(testConfig, testProfile, repoRoot);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
 
       // コミットせずに teardown
-      await stage.teardown(next);
+      await stage.teardown!(input);
 
       // エラーなく完了
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(next.workDir), false);
+      assertEquals(worktreeList.includes(worktreePath), false);
     });
   });
 });
@@ -417,9 +456,9 @@ Deno.test("WorktreeStage teardown without execute is a no-op", async () => {
     profiles: { test: profile },
     ui: DEFAULT_UI_CONFIG,
   };
-  const ctx = createContext(config, profile, "test", "/tmp/nonexistent");
+  const input = createTestInput(config, profile, "/tmp/nonexistent");
   // teardown should not throw
-  await stage.teardown(ctx);
+  await stage.teardown!(input);
 });
 
 // --- execute skips when worktree not configured ---
@@ -435,10 +474,10 @@ Deno.test("WorktreeStage execute skips when worktree is not configured", async (
     profiles: { test: profile },
     ui: DEFAULT_UI_CONFIG,
   };
-  const ctx = createContext(config, profile, "test", Deno.cwd());
-  const result = await stage.execute(ctx);
-  // workDir は変更されない
-  assertEquals(result.workDir, Deno.cwd());
+  const input = createTestInput(config, profile, Deno.cwd());
+  const result = await stage.execute(input);
+  // outputOverrides は空 (workDir は変更されない)
+  assertEquals(Object.keys(result.outputOverrides).length, 0);
 });
 
 // --- execute with invalid base branch ---
@@ -455,10 +494,10 @@ Deno.test("WorktreeStage execute throws on invalid base branch", async () => {
       ui: DEFAULT_UI_CONFIG,
     };
     const stage = new WorktreeStage();
-    const ctx = createContext(config, profile, "test", repoRoot);
+    const input = createTestInput(config, profile, repoRoot);
 
     try {
-      await stage.execute(ctx);
+      await stage.execute(input);
       assertEquals(true, false, "Should have thrown");
     } catch (err) {
       assertStringIncludes((err as Error).message, "not found");
@@ -472,19 +511,19 @@ Deno.test("WorktreeStage execute reuses existing worktree when user selects it",
   await withTempRepo(async (repoRoot) => {
     // まず worktree を 1 つ作成
     const stage1 = new WorktreeStage();
-    const ctx1 = createContext(testConfig, testProfile, "test", repoRoot);
-    const next1 = await stage1.execute(ctx1);
-    const firstWorktreePath = next1.workDir;
+    const input1 = createTestInput(testConfig, testProfile, repoRoot);
+    const result1 = await stage1.execute(input1);
+    const firstWorktreePath = result1.outputOverrides.workDir!;
 
     // 2 回目の execute: 既存 worktree が見つかる → "1" で再利用
     await withMockedPrompts(["1"], async () => {
       const stage2 = new WorktreeStage();
-      const ctx2 = createContext(testConfig, testProfile, "test", repoRoot);
-      const next2 = await stage2.execute(ctx2);
+      const input2 = createTestInput(testConfig, testProfile, repoRoot);
+      const result2 = await stage2.execute(input2);
 
       // 再利用された worktree のパスが一致
-      assertEquals(next2.workDir, firstWorktreePath);
-      assertEquals(next2.mountDir, repoRoot);
+      assertEquals(result2.outputOverrides.workDir, firstWorktreePath);
+      assertEquals(result2.outputOverrides.mountDir, repoRoot);
     });
 
     // cleanup
@@ -503,24 +542,29 @@ Deno.test("WorktreeStage execute creates new worktree when user declines reuse",
   await withTempRepo(async (repoRoot) => {
     // まず worktree を 1 つ作成
     const stage1 = new WorktreeStage();
-    const ctx1 = createContext(testConfig, testProfile, "test", repoRoot);
-    const next1 = await stage1.execute(ctx1);
-    const firstWorktreePath = next1.workDir;
+    const input1 = createTestInput(testConfig, testProfile, repoRoot);
+    const result1 = await stage1.execute(input1);
+    const firstWorktreePath = result1.outputOverrides.workDir!;
 
     // 2 回目の execute: "0" で新規作成
     await withMockedPrompts(["0"], async () => {
       const stage2 = new WorktreeStage();
-      const ctx2 = createContext(testConfig, testProfile, "test", repoRoot);
-      const next2 = await stage2.execute(ctx2);
+      const input2 = createTestInput(testConfig, testProfile, repoRoot);
+      const result2 = await stage2.execute(input2);
 
       // 異なるパスの worktree が作られた
-      assertEquals(next2.workDir !== firstWorktreePath, true);
-      assertEquals(next2.mountDir, repoRoot);
+      assertEquals(
+        result2.outputOverrides.workDir !== firstWorktreePath,
+        true,
+      );
+      assertEquals(result2.outputOverrides.mountDir, repoRoot);
 
       // cleanup: 2つ目
-      const branchName2 =
-        (await $`git -C ${next2.workDir} branch --show-current`.text()).trim();
-      await $`git -C ${repoRoot} worktree remove --force ${next2.workDir}`
+      const branchName2 = (await $`git -C ${result2.outputOverrides
+        .workDir!} branch --show-current`
+        .text()).trim();
+      await $`git -C ${repoRoot} worktree remove --force ${result2
+        .outputOverrides.workDir!}`
         .quiet("both");
       await $`git -C ${repoRoot} branch -D ${branchName2}`.quiet("both");
     });
@@ -549,19 +593,20 @@ Deno.test("WorktreeStage execute runs onCreate hook", async () => {
       ui: DEFAULT_UI_CONFIG,
     };
     const stage = new WorktreeStage();
-    const ctx = createContext(config, profile, "test", repoRoot);
-    const next = await stage.execute(ctx);
+    const input = createTestInput(config, profile, repoRoot);
+    const result = await stage.execute(input);
+    const workDir = result.outputOverrides.workDir!;
 
     // onCreate で作られたファイルが存在する
     const markerExists = await Deno.stat(
-      path.join(next.workDir, "on-create-marker.txt"),
+      path.join(workDir, "on-create-marker.txt"),
     ).then(() => true, () => false);
     assertEquals(markerExists, true);
 
     // cleanup
-    const branchName =
-      (await $`git -C ${next.workDir} branch --show-current`.text()).trim();
-    await $`git -C ${repoRoot} worktree remove --force ${next.workDir}`.quiet(
+    const branchName = (await $`git -C ${workDir} branch --show-current`.text())
+      .trim();
+    await $`git -C ${repoRoot} worktree remove --force ${workDir}`.quiet(
       "both",
     );
     await $`git -C ${repoRoot} branch -D ${branchName}`.quiet("both");

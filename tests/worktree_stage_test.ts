@@ -15,7 +15,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
 import type { Config, Profile } from "../src/config/types.ts";
-import { createContext } from "../src/pipeline/context.ts";
+import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
 import { WorktreeStage } from "../src/stages/worktree.ts";
 
 async function withTempRepo(
@@ -62,27 +62,67 @@ function createTestConfig(profile: Profile): Config {
   };
 }
 
+function createTestInput(
+  config: Config,
+  profile: Profile,
+  workDir: string,
+): StageInput {
+  return {
+    config,
+    profile,
+    profileName: "test",
+    sessionId: "sess_test",
+    host: {
+      home: "/home/test",
+      user: "test",
+      uid: 1000,
+      gid: 1000,
+      isWSL: false,
+      env: new Map(),
+    },
+    probes: {
+      hasHostNix: false,
+      xdgDbusProxyPath: null,
+      dbusSessionAddress: null,
+      gpgAgentSocket: null,
+      auditDir: "/tmp/audit",
+    },
+    prior: {
+      dockerArgs: [],
+      envVars: {},
+      workDir,
+      nixEnabled: false,
+      imageName: "nas-sandbox",
+      agentCommand: [],
+      networkPromptEnabled: false,
+      dbusProxyEnabled: false,
+    } satisfies PriorStageOutputs,
+  };
+}
+
 Deno.test("WorktreeStage: creates worktree under repo metadata and mounts repo root", async () => {
   await withTempRepo(async (repo) => {
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
     const stage = new WorktreeStage();
-    const ctx = createContext(config, profile, "test", repo);
+    const input = createTestInput(config, profile, repo);
 
-    const next = await stage.execute(ctx);
-    const branchName = (await $`git -C ${next.workDir} branch --show-current`
+    const result = await stage.execute(input);
+    const workDir = result.outputOverrides.workDir!;
+    const mountDir = result.outputOverrides.mountDir;
+    const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
 
-    assertEquals(next.mountDir, repo);
+    assertEquals(mountDir, repo);
     assertEquals(
-      next.workDir.startsWith(
+      workDir.startsWith(
         path.join(repo, ".git", "nas-worktrees", "nas-test-"),
       ),
       true,
     );
     assertEquals(branchName.startsWith("nas/test/"), true);
 
-    await $`git -C ${repo} worktree remove --force ${next.workDir}`.quiet(
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
       "both",
     );
     await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
@@ -94,21 +134,22 @@ Deno.test("WorktreeStage: worktree commits stay visible from the main repository
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
     const stage = new WorktreeStage();
-    const ctx = createContext(config, profile, "test", repo);
+    const input = createTestInput(config, profile, repo);
 
-    const next = await stage.execute(ctx);
-    const branchName = (await $`git -C ${next.workDir} branch --show-current`
+    const result = await stage.execute(input);
+    const workDir = result.outputOverrides.workDir!;
+    const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
 
-    await Deno.writeTextFile(path.join(next.workDir, "test.txt"), "hello");
-    await $`git -C ${next.workDir} add test.txt`.quiet("both");
-    await $`git -C ${next.workDir} commit -m "add test.txt"`.quiet("both");
+    await Deno.writeTextFile(path.join(workDir, "test.txt"), "hello");
+    await $`git -C ${workDir} add test.txt`.quiet("both");
+    await $`git -C ${workDir} commit -m "add test.txt"`.quiet("both");
 
     const log = (await $`git -C ${repo} log ${branchName} --oneline -1`.text())
       .trim();
     assertEquals(log.includes("add test.txt"), true);
 
-    await $`git -C ${repo} worktree remove --force ${next.workDir}`.quiet(
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
       "both",
     );
     await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
@@ -125,21 +166,22 @@ Deno.test("WorktreeStage: starts from the selected base commit", async () => {
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
     const stage = new WorktreeStage();
-    const ctx = createContext(config, profile, "test", repo);
+    const input = createTestInput(config, profile, repo);
 
-    const next = await stage.execute(ctx);
-    const branchName = (await $`git -C ${next.workDir} branch --show-current`
+    const result = await stage.execute(input);
+    const workDir = result.outputOverrides.workDir!;
+    const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
-    const worktreeHead = (await $`git -C ${next.workDir} rev-parse HEAD`.text())
+    const worktreeHead = (await $`git -C ${workDir} rev-parse HEAD`.text())
       .trim();
 
     assertEquals(worktreeHead, baseHead);
     assertEquals(
-      await Deno.readTextFile(path.join(next.workDir, "base.txt")),
+      await Deno.readTextFile(path.join(workDir, "base.txt")),
       "base content",
     );
 
-    await $`git -C ${repo} worktree remove --force ${next.workDir}`.quiet(
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
       "both",
     );
     await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
@@ -164,33 +206,34 @@ Deno.test("WorktreeStage: inherits dirty tracked, staged, and untracked changes 
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
     const stage = new WorktreeStage();
-    const ctx = createContext(config, profile, "test", repo);
+    const input = createTestInput(config, profile, repo);
 
-    const next = await stage.execute(ctx);
-    const branchName = (await $`git -C ${next.workDir} branch --show-current`
+    const result = await stage.execute(input);
+    const workDir = result.outputOverrides.workDir!;
+    const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
-    const status = (await $`git -C ${next.workDir} status --short`.text())
+    const status = (await $`git -C ${workDir} status --short`.text())
       .trim()
       .split("\n")
       .filter(Boolean);
 
     assertEquals(
-      await Deno.readTextFile(path.join(next.workDir, "tracked.txt")),
+      await Deno.readTextFile(path.join(workDir, "tracked.txt")),
       "base\nunstaged\n",
     );
     assertEquals(
-      await Deno.readTextFile(path.join(next.workDir, "staged.txt")),
+      await Deno.readTextFile(path.join(workDir, "staged.txt")),
       "base\nstaged\n",
     );
     assertEquals(
-      await Deno.readTextFile(path.join(next.workDir, "untracked.txt")),
+      await Deno.readTextFile(path.join(workDir, "untracked.txt")),
       "untracked\n",
     );
     assertEquals(status.includes(" M tracked.txt"), true);
     assertEquals(status.includes("M  staged.txt"), true);
     assertEquals(status.includes("?? untracked.txt"), true);
 
-    await $`git -C ${repo} worktree remove --force ${next.workDir}`.quiet(
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
       "both",
     );
     await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
@@ -206,22 +249,23 @@ Deno.test("WorktreeStage: leaves a clean base branch clean in the new worktree",
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
     const stage = new WorktreeStage();
-    const ctx = createContext(config, profile, "test", repo);
+    const input = createTestInput(config, profile, repo);
 
-    const next = await stage.execute(ctx);
-    const branchName = (await $`git -C ${next.workDir} branch --show-current`
+    const result = await stage.execute(input);
+    const workDir = result.outputOverrides.workDir!;
+    const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
 
     assertEquals(
-      (await $`git -C ${next.workDir} status --short`.text()).trim(),
+      (await $`git -C ${workDir} status --short`.text()).trim(),
       "",
     );
     assertEquals(
-      await Deno.readTextFile(path.join(next.workDir, "tracked.txt")),
+      await Deno.readTextFile(path.join(workDir, "tracked.txt")),
       "base\n",
     );
 
-    await $`git -C ${repo} worktree remove --force ${next.workDir}`.quiet(
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
       "both",
     );
     await $`git -C ${repo} branch -D ${branchName}`.quiet("both");

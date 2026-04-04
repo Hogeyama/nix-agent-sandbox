@@ -5,7 +5,6 @@
 import { loadConfig, resolveProfile } from "./config/load.ts";
 import { createContext } from "./pipeline/context.ts";
 import { runPipelineV2 } from "./pipeline/pipeline.ts";
-import { adaptLegacyStage } from "./pipeline/adapt.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
@@ -163,9 +162,8 @@ export async function main(args: string[]): Promise<void> {
     // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
     // propagate and abort the pipeline. This matches legacy stage behavior
     // where the same I/O happens inside each stage's execute().
-    // NOTE: During migration, probes are passed to StageInput but legacy
-    // stages (via adaptLegacyStage) ignore them. The probes will be consumed
-    // once stages are migrated to PlanStage.
+    // NOTE: Probes are passed to StageInput and consumed by PlanStage
+    // instances. ProceduralStage (WorktreeStage) does not use probes.
     const hostEnv = buildHostEnv();
     const probes = await resolveProbes(hostEnv);
 
@@ -205,22 +203,8 @@ export async function main(args: string[]): Promise<void> {
     // BuildProbes を事前解決
     const buildProbes = await resolveBuildProbes(ctx.imageName);
 
-    const legacyStages = [
-      new WorktreeStage(),
-      // DockerBuildStage is a PlanStage — added directly below
-      // NixDetectStage is a PlanStage — added directly below
-      // DbusProxyStage is a PlanStage — added directly below
-      // MountStage is a PlanStage — added directly below
-      // HostExecStage is a PlanStage — added directly below
-      // DindStage is a PlanStage — added directly below
-      // ProxyStage is a PlanStage — added directly below
-      // LaunchStage is a PlanStage — added directly below
-    ];
-
-    // Legacy stage を adaptLegacyStage でラップし、PlanStage を直接挿入
-    const adapted = legacyStages.map((s) => adaptLegacyStage(s, ctx));
     const stages = [
-      ...adapted,
+      new WorktreeStage(),
       createDockerBuildStage(buildProbes),
       NixDetectStage,
       createDbusProxyStage(),
