@@ -204,7 +204,7 @@ Deno.test({
       // NAS_UPSTREAM_PROXY should contain the credentialed upstream URL
       assertMatch(
         plan!.envVars["NAS_UPSTREAM_PROXY"],
-        /^http:\/\/sess_[a-f0-9]{12}:[A-Za-z0-9_-]+@nas-envoy:15001$/,
+        /^http:\/\/sess_[a-f0-9-]{12}:[A-Za-z0-9_-]+@nas-envoy:15001$/,
       );
       assertEquals(
         typeof plan!.outputOverrides.networkBrokerSocket,
