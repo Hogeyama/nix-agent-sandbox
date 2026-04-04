@@ -55,6 +55,54 @@ deno task test tests/config_test.ts # Run specific test file
 # Test writing guidelines: /test-policy skill
 ```
 
+## Stage Architecture — Effect Separation Design Rules
+
+Stages come in two kinds: **PlanStage** (default, pure) and **ProceduralStage** (exception, side-effectful).
+
+### PlanStage.plan() is pure
+
+- Input: immutable `StageInput`
+- Output: `StagePlan` (data description) or `null` (skip)
+- **No** `Deno.env.get`, `Deno.Command`, `Deno.stat`, `Deno.mkdir`, etc.
+- Side-effects are expressed as `ResourceEffect[]` in the returned `StagePlan`; the executor runs them
+
+### ProceduralStage is the exception
+
+- `kind: "procedural"` declares side-effects at the type level
+- Requires justification (user interaction, action-result branching, etc.)
+- Currently only `WorktreeStage`
+
+### Environment resolution
+
+- `HostEnv` is built once at CLI startup (`buildHostEnv()`)
+- `ProbeResults` are resolved once before the pipeline (`resolveProbes()`)
+- Stages read `input.host` / `input.probes` — never call `Deno.env.get` directly
+
+### Naming conventions for purity
+
+| Prefix | Meaning | Side-effects |
+|--------|---------|-------------|
+| `build*`, `format*`, `expand*`, `parse*`, `merge*`, `validate*` | Pure computation | **Forbidden** |
+| `resolve*` | I/O-based resolution | Allowed (probe resolver / executor) |
+| `ensure*` | Create if missing | Allowed (executor) |
+| `check*`, `probe*` | Probe | Allowed (probe resolver) |
+
+### Where side-effects are allowed
+
+| Location | Side-effects |
+|----------|-------------|
+| CLI entry (`cli.ts`) | HostEnv construction, probe resolution, pipeline launch |
+| Probe resolver (`host_env.ts`) | FS probe, env read, command execution |
+| Effect executor (`effects.ts`) | Docker ops, FS ops, process spawn |
+| ProceduralStage.execute() | Unavoidable side-effects (user interaction, etc.) |
+| **PlanStage.plan()** | **Forbidden** |
+| **build/format/expand helpers** | **Forbidden** |
+
+### No module-level side-effects or mutable state
+
+- Module-level `const`: true constants only
+- Module-level `let`: forbidden; use injectable classes for caches
+
 ## Important Notes
 
 - Tests should import from relative paths, not use import maps for internal modules
