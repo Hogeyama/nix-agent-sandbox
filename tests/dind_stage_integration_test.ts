@@ -12,10 +12,16 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
-import { DindStage } from "../src/stages/dind.ts";
-import { createContext } from "../src/pipeline/context.ts";
+import { createDindStage } from "../src/stages/dind.ts";
 import type { Config, Profile } from "../src/config/types.ts";
-import type { ExecutionContext } from "../src/pipeline/context.ts";
+import type {
+  DindSidecarEffect,
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../src/pipeline/types.ts";
+import { executeEffect, teardownHandles } from "../src/pipeline/effects.ts";
+import type { ResourceHandle } from "../src/pipeline/effects.ts";
 import {
   dockerIsRunning,
   dockerNetworkRemove,
@@ -63,8 +69,44 @@ function makeConfig(profile: Profile): Config {
   return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
 }
 
-function makeCtx(profile: Profile): ExecutionContext {
-  return createContext(makeConfig(profile), profile, "default", "/tmp");
+function makeStageInput(
+  profile: Profile,
+  sessionId = "test-session-1234",
+): StageInput {
+  const config = makeConfig(profile);
+  const hostEnv: HostEnv = {
+    home: "/home/test",
+    user: "test",
+    uid: 1000,
+    gid: 1000,
+    isWSL: false,
+    env: new Map(),
+  };
+  const probes: ProbeResults = {
+    hasHostNix: false,
+    xdgDbusProxyPath: null,
+    dbusSessionAddress: null,
+    gpgAgentSocket: null,
+    auditDir: "/tmp/audit",
+  };
+  return {
+    config,
+    profile,
+    profileName: "default",
+    sessionId,
+    host: hostEnv,
+    probes,
+    prior: {
+      dockerArgs: [],
+      envVars: {},
+      workDir: "/tmp",
+      nixEnabled: false,
+      imageName: "nas:latest",
+      agentCommand: ["claude"],
+      networkPromptEnabled: false,
+      dbusProxyEnabled: false,
+    },
+  };
 }
 
 /**
@@ -110,13 +152,6 @@ async function canRunDindRootless(): Promise<boolean> {
 const RUNNING_ON_HOST_DOCKER = !Deno.env.get("DOCKER_HOST");
 const dindAvailable = await canRunDindRootless();
 
-function makeStage(): DindStage {
-  return new DindStage({
-    disableCache: true,
-    readinessTimeoutMs: 20_000,
-  });
-}
-
 async function forceCleanup(
   containerName: string,
   networkName: string,
@@ -136,44 +171,53 @@ Deno.test({
   ignore: !dindAvailable || !RUNNING_ON_HOST_DOCKER,
   fn: async () => {
     const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const ctx = makeCtx(profile);
-    const stage = makeStage();
+    const input = makeStageInput(profile);
+    const stage = createDindStage({
+      disableCache: true,
+      readinessTimeoutMs: 20_000,
+    });
 
+    const plan = stage.plan(input);
+    assertEquals(plan !== null, true);
+
+    const effect = plan!.effects[0] as DindSidecarEffect;
+    const containerName = effect.containerName;
+    const networkName = effect.networkName;
+
+    let handle: ResourceHandle | null = null;
     try {
-      const result = await stage.execute(ctx);
+      handle = await executeEffect(effect);
 
-      assertEquals(typeof result.envVars["DOCKER_HOST"], "string");
-      assertEquals(result.envVars["DOCKER_HOST"].startsWith("tcp://"), true);
-      assertEquals(result.envVars["DOCKER_HOST"].endsWith(":2375"), true);
+      // Verify plan outputs
+      assertEquals(plan!.envVars["DOCKER_HOST"].startsWith("tcp://"), true);
+      assertEquals(plan!.envVars["DOCKER_HOST"].endsWith(":2375"), true);
       assertEquals(
-        typeof result.envVars["NAS_DIND_CONTAINER_NAME"],
+        typeof plan!.envVars["NAS_DIND_CONTAINER_NAME"],
         "string",
       );
+      assertEquals(typeof plan!.envVars["NAS_DIND_SHARED_TMP"], "string");
+
+      const networkIdx = plan!.dockerArgs.indexOf("--network");
+      assertEquals(networkIdx !== -1, true);
       assertEquals(
-        result.envVars["DOCKER_HOST"].includes(
-          result.envVars["NAS_DIND_CONTAINER_NAME"],
-        ),
+        plan!.dockerArgs[networkIdx + 1].startsWith("nas-dind-"),
         true,
       );
 
-      assertEquals(typeof result.envVars["NAS_DIND_SHARED_TMP"], "string");
-
-      const networkIdx = result.dockerArgs.indexOf("--network");
-      assertEquals(networkIdx !== -1, true);
-      const networkName = result.dockerArgs[networkIdx + 1];
-      assertEquals(networkName.startsWith("nas-dind-"), true);
-
-      const containerName = stage.getContainerName();
-      assertEquals(containerName !== null, true);
-
-      const running = await dockerIsRunning(containerName!);
+      // Verify container is actually running
+      const running = await dockerIsRunning(containerName);
       assertEquals(running, true);
     } finally {
-      const containerName = stage.getContainerName();
-      await stage.teardown(ctx);
-      if (containerName) {
+      if (handle) {
+        await teardownHandles([handle]);
         const afterRunning = await dockerIsRunning(containerName);
         assertEquals(afterRunning, false);
+      } else {
+        await forceCleanup(
+          containerName,
+          networkName,
+          effect.sharedTmpVolume,
+        );
       }
     }
   },

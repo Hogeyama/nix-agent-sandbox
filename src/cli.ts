@@ -13,7 +13,7 @@ import { NixDetectStage } from "./stages/nix_detect.ts";
 import { DbusProxyStage } from "./stages/dbus_proxy.ts";
 import { MountStage } from "./stages/mount.ts";
 import { HostExecStage } from "./stages/hostexec.ts";
-import { DindStage } from "./stages/dind.ts";
+import { createDindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { setLogLevel } from "./log.ts";
@@ -197,7 +197,7 @@ export async function main(args: string[]): Promise<void> {
       new DbusProxyStage(),
       new MountStage(),
       new HostExecStage(),
-      new DindStage(),
+      // DindStage is a PlanStage — added directly below
       new ProxyStage(),
       new LaunchStage(agentExtraArgs),
     ];
@@ -205,10 +205,13 @@ export async function main(args: string[]): Promise<void> {
     // Legacy stage を adaptLegacyStage でラップし、PlanStage を直接挿入
     const adapted = legacyStages.map((s) => adaptLegacyStage(s, ctx));
     // NixDetectStage を DockerBuildStage の後に挿入 (index 2)
+    // DindStage を HostExecStage の後 (ProxyStage の前) に挿入 (index 7)
     const stages = [
       ...adapted.slice(0, 2),
       NixDetectStage,
-      ...adapted.slice(2),
+      ...adapted.slice(2, 5),
+      createDindStage(),
+      ...adapted.slice(5),
     ];
 
     // 初期 PriorStageOutputs を構築

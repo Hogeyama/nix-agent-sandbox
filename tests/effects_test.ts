@@ -168,15 +168,6 @@ Deno.test("executeEffect: unimplemented effects throw", async () => {
       pollIntervalMs: 100,
     },
     {
-      kind: "dind-sidecar",
-      containerName: "dind",
-      sharedTmpVolume: "vol",
-      networkName: "net",
-      shared: false,
-      disableCache: false,
-      readinessTimeoutMs: 5000,
-    },
-    {
       kind: "docker-run-interactive",
       image: "img",
       name: "n",

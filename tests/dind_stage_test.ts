@@ -1,7 +1,7 @@
 /**
  * DindStage unit テスト（Docker 不要）
  *
- * fake docker script を使った共有モードテストと、引数生成の検証を行う。
+ * PlanStage 化された DindStage の plan() メソッドの検証と、引数生成の検証を行う。
  * 実 Docker を使う integration テストは dind_stage_integration_test.ts を参照。
  */
 
@@ -12,10 +12,14 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
-import { buildDindSidecarArgs, DindStage } from "../src/stages/dind.ts";
-import { createContext } from "../src/pipeline/context.ts";
+import { buildDindSidecarArgs, createDindStage } from "../src/stages/dind.ts";
 import type { Config, Profile } from "../src/config/types.ts";
-import type { ExecutionContext } from "../src/pipeline/context.ts";
+import type {
+  DindSidecarEffect,
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../src/pipeline/types.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;
@@ -56,29 +60,127 @@ function makeConfig(profile: Profile): Config {
   return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
 }
 
-function makeCtx(profile: Profile): ExecutionContext {
-  return createContext(makeConfig(profile), profile, "default", "/tmp");
-}
-
-function makeStage(): DindStage {
-  return new DindStage({
-    disableCache: true,
-    readinessTimeoutMs: 20_000,
-  });
+function makeStageInput(
+  profile: Profile,
+  sessionId = "test-session-1234",
+): StageInput {
+  const config = makeConfig(profile);
+  const hostEnv: HostEnv = {
+    home: "/home/test",
+    user: "test",
+    uid: 1000,
+    gid: 1000,
+    isWSL: false,
+    env: new Map(),
+  };
+  const probes: ProbeResults = {
+    hasHostNix: false,
+    xdgDbusProxyPath: null,
+    dbusSessionAddress: null,
+    gpgAgentSocket: null,
+    auditDir: "/tmp/audit",
+  };
+  return {
+    config,
+    profile,
+    profileName: "default",
+    sessionId,
+    host: hostEnv,
+    probes,
+    prior: {
+      dockerArgs: [],
+      envVars: {},
+      workDir: "/tmp",
+      nixEnabled: false,
+      imageName: "nas:latest",
+      agentCommand: ["claude"],
+      networkPromptEnabled: false,
+      dbusProxyEnabled: false,
+    },
+  };
 }
 
 // ============================================================
 // Unit tests (Docker 不要)
 // ============================================================
 
-Deno.test("DindStage: skip when disabled", async () => {
+Deno.test("DindStage: skip when disabled (plan returns null)", () => {
   const profile = makeProfile({ docker: { enable: false, shared: false } });
-  const ctx = makeCtx(profile);
-  const stage = new DindStage();
-  const result = await stage.execute(ctx);
-  assertEquals(result, ctx);
-  assertEquals(result.dockerArgs, []);
-  assertEquals(result.envVars, {});
+  const input = makeStageInput(profile);
+  const stage = createDindStage();
+  const plan = stage.plan(input);
+  assertEquals(plan, null);
+});
+
+Deno.test("DindStage: shared mode uses fixed names", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: true } });
+  const input = makeStageInput(profile);
+  const stage = createDindStage({
+    disableCache: true,
+    readinessTimeoutMs: 20_000,
+  });
+  const plan = stage.plan(input);
+
+  assertEquals(plan !== null, true);
+  assertEquals(plan!.effects.length, 1);
+
+  const effect = plan!.effects[0] as DindSidecarEffect;
+  assertEquals(effect.kind, "dind-sidecar");
+  assertEquals(effect.containerName, "nas-dind-shared");
+  assertEquals(effect.networkName, "nas-dind-shared");
+  assertEquals(effect.sharedTmpVolume, "nas-dind-shared-tmp");
+  assertEquals(effect.shared, true);
+  assertEquals(effect.disableCache, true);
+  assertEquals(effect.readinessTimeoutMs, 20_000);
+
+  // dockerArgs should contain --network and -v
+  assertEquals(plan!.dockerArgs, [
+    "--network",
+    "nas-dind-shared",
+    "-v",
+    "nas-dind-shared-tmp:/tmp/nas-shared",
+  ]);
+
+  // envVars
+  assertEquals(plan!.envVars["DOCKER_HOST"], "tcp://nas-dind-shared:2375");
+  assertEquals(plan!.envVars["NAS_DIND_CONTAINER_NAME"], "nas-dind-shared");
+  assertEquals(plan!.envVars["NAS_DIND_SHARED_TMP"], "/tmp/nas-shared");
+
+  // outputOverrides
+  assertEquals(plan!.outputOverrides.dindContainerName, "nas-dind-shared");
+  assertEquals(plan!.outputOverrides.networkName, "nas-dind-shared");
+});
+
+Deno.test("DindStage: non-shared mode uses session-based names", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+  const input = makeStageInput(profile, sessionId);
+  const stage = createDindStage();
+  const plan = stage.plan(input);
+
+  assertEquals(plan !== null, true);
+
+  const effect = plan!.effects[0] as DindSidecarEffect;
+  assertEquals(effect.kind, "dind-sidecar");
+  // sessionId の先頭 8 文字を使う
+  assertEquals(effect.containerName, "nas-dind-abcdef12");
+  assertEquals(effect.networkName, "nas-dind-abcdef12");
+  assertEquals(effect.sharedTmpVolume, "nas-dind-tmp-abcdef12");
+  assertEquals(effect.shared, false);
+
+  assertEquals(plan!.dockerArgs[1], "nas-dind-abcdef12");
+  assertEquals(plan!.envVars["DOCKER_HOST"], "tcp://nas-dind-abcdef12:2375");
+});
+
+Deno.test("DindStage: default options", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const input = makeStageInput(profile);
+  const stage = createDindStage();
+  const plan = stage.plan(input);
+
+  const effect = plan!.effects[0] as DindSidecarEffect;
+  assertEquals(effect.disableCache, false);
+  assertEquals(effect.readinessTimeoutMs, 30_000);
 });
 
 Deno.test("buildDindSidecarArgs: cache enabled keeps both volume specs valid", () => {
@@ -104,81 +206,3 @@ Deno.test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
     ],
   );
 });
-
-async function withFakeDockerForDind(
-  fn: (paths: { dir: string; logPath: string }) => Promise<void>,
-): Promise<void> {
-  const dir = await Deno.makeTempDir({ prefix: "nas-dind-test-" });
-  const logPath = `${dir}/docker.log`;
-  const originalPath = Deno.env.get("PATH") ?? "";
-
-  try {
-    // fake docker: inspect は running 状態を返し、その他は成功する
-    await Deno.writeTextFile(
-      `${dir}/docker`,
-      `#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "${logPath}"
-if [[ "\$1" == "inspect" ]]; then
-  # dockerIsRunning: --format={{.State.Running}}
-  if [[ "\$*" == *"State.Running"* ]]; then
-    printf 'true\\n'
-    exit 0
-  fi
-  # dockerContainerIp: --format=...IPAddress...
-  if [[ "\$*" == *"IPAddress"* ]]; then
-    printf '172.17.0.2\\n'
-    exit 0
-  fi
-  exit 0
-fi
-# exec, network create, network connect, volume create など全て成功
-exit 0
-`,
-    );
-    await Deno.chmod(`${dir}/docker`, 0o755);
-    Deno.env.set("PATH", `${dir}:${originalPath}`);
-    await fn({ dir, logPath });
-  } finally {
-    Deno.env.set("PATH", originalPath);
-    await Deno.remove(dir, { recursive: true }).catch(() => {});
-  }
-}
-
-Deno.test(
-  "DindStage: shared mode uses fixed name, reuses sidecar, and keeps it on teardown",
-  async () => {
-    await withFakeDockerForDind(async ({ logPath }) => {
-      const profile = makeProfile({ docker: { enable: true, shared: true } });
-      const ctx = makeCtx(profile);
-      const stage1 = makeStage();
-      const stage2 = makeStage();
-
-      const result1 = await stage1.execute(ctx);
-
-      assertEquals(
-        result1.envVars["DOCKER_HOST"],
-        "tcp://nas-dind-shared:2375",
-      );
-      assertEquals(
-        result1.envVars["NAS_DIND_CONTAINER_NAME"],
-        "nas-dind-shared",
-      );
-
-      const networkIdx = result1.dockerArgs.indexOf("--network");
-      assertEquals(result1.dockerArgs[networkIdx + 1], "nas-dind-shared");
-
-      const result2 = await stage2.execute(ctx);
-      assertEquals(
-        result2.envVars["DOCKER_HOST"],
-        "tcp://nas-dind-shared:2375",
-      );
-
-      // teardown 前のログを記録し、teardown 後に docker stop/rm が追加されていないことを確認
-      const logBeforeTeardown = await Deno.readTextFile(logPath);
-      await stage1.teardown(ctx);
-      const logAfterTeardown = await Deno.readTextFile(logPath);
-      assertEquals(logBeforeTeardown, logAfterTeardown);
-    });
-  },
-);
