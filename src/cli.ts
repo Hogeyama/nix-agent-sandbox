@@ -4,7 +4,10 @@
 
 import { loadConfig, resolveProfile } from "./config/load.ts";
 import { createContext } from "./pipeline/context.ts";
-import { runPipeline } from "./pipeline/pipeline.ts";
+import { runPipelineV2 } from "./pipeline/pipeline.ts";
+import { adaptLegacyStage } from "./pipeline/adapt.ts";
+import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
+import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { DbusProxyStage } from "./stages/dbus_proxy.ts";
@@ -14,11 +17,7 @@ import { DindStage } from "./stages/dind.ts";
 import { ProxyStage } from "./stages/proxy.ts";
 import { DockerBuildStage, LaunchStage } from "./stages/launch.ts";
 import { setLogLevel } from "./log.ts";
-import {
-  checkNotifySend,
-  isWSL,
-  resolveNotifyBackend,
-} from "./lib/notify_utils.ts";
+import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
@@ -156,16 +155,25 @@ export async function main(args: string[]): Promise<void> {
       logLevel,
     );
 
+    // HostEnv 構築と probe 解決
+    // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
+    // propagate and abort the pipeline. This matches legacy stage behavior
+    // where the same I/O happens inside each stage's execute().
+    // NOTE: During migration, probes are passed to StageInput but legacy
+    // stages (via adaptLegacyStage) ignore them. The probes will be consumed
+    // once stages are migrated to PlanStage.
+    const hostEnv = buildHostEnv();
+    const probes = await resolveProbes(hostEnv);
+
     // notify-send の存在チェック（必要な場合のみ）
     {
-      const wsl = isWSL();
       const networkNotify = resolveNotifyBackend(
         effectiveProfile.network.prompt.notify,
-        wsl,
+        hostEnv.isWSL,
       );
       const hostexecNotify = resolveNotifyBackend(
         effectiveProfile.hostexec?.prompt.notify ?? "auto",
-        wsl,
+        hostEnv.isWSL,
       );
       if (
         networkNotify === "desktop" ||
@@ -182,7 +190,7 @@ export async function main(args: string[]): Promise<void> {
       });
     }
 
-    const stages = [
+    const legacyStages = [
       new WorktreeStage(),
       new DockerBuildStage(),
       new NixDetectStage(),
@@ -194,7 +202,32 @@ export async function main(args: string[]): Promise<void> {
       new LaunchStage(agentExtraArgs),
     ];
 
-    await runPipeline(stages, ctx);
+    // 全 stage を adaptLegacyStage でラップ
+    const stages = legacyStages.map((s) => adaptLegacyStage(s, ctx));
+
+    // 初期 PriorStageOutputs を構築
+    const initialPrior: PriorStageOutputs = {
+      dockerArgs: ctx.dockerArgs,
+      envVars: ctx.envVars,
+      workDir: ctx.workDir,
+      mountDir: ctx.mountDir,
+      nixEnabled: ctx.nixEnabled,
+      imageName: ctx.imageName,
+      agentCommand: ctx.agentCommand,
+      networkPromptToken: ctx.networkPromptToken,
+      networkPromptEnabled: ctx.networkPromptEnabled,
+      dbusProxyEnabled: ctx.dbusProxyEnabled,
+    };
+
+    await runPipelineV2(stages, {
+      config,
+      profile: effectiveProfile,
+      profileName: name,
+      sessionId: ctx.sessionId,
+      host: hostEnv,
+      probes,
+      prior: initialPrior,
+    });
   } catch (err) {
     exitOnCliError(err);
   }
