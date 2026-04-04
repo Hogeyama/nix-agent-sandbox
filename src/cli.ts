@@ -193,7 +193,7 @@ export async function main(args: string[]): Promise<void> {
     const legacyStages = [
       new WorktreeStage(),
       new DockerBuildStage(),
-      new NixDetectStage(),
+      // NixDetectStage is a PlanStage — added directly below
       new DbusProxyStage(),
       new MountStage(),
       new HostExecStage(),
@@ -202,8 +202,14 @@ export async function main(args: string[]): Promise<void> {
       new LaunchStage(agentExtraArgs),
     ];
 
-    // 全 stage を adaptLegacyStage でラップ
-    const stages = legacyStages.map((s) => adaptLegacyStage(s, ctx));
+    // Legacy stage を adaptLegacyStage でラップし、PlanStage を直接挿入
+    const adapted = legacyStages.map((s) => adaptLegacyStage(s, ctx));
+    // NixDetectStage を DockerBuildStage の後に挿入 (index 2)
+    const stages = [
+      ...adapted.slice(0, 2),
+      NixDetectStage,
+      ...adapted.slice(2),
+    ];
 
     // 初期 PriorStageOutputs を構築
     const initialPrior: PriorStageOutputs = {

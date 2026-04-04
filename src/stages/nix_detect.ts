@@ -1,20 +1,20 @@
 /**
- * ホスト Nix 検出 + nix develop 統合
+ * ホスト Nix 検出 + nix develop 統合 (PlanStage)
  */
 
-import type { Stage } from "../pipeline/pipeline.ts";
-import type { ExecutionContext } from "../pipeline/context.ts";
+import type { PlanStage, StageInput, StagePlan } from "../pipeline/types.ts";
 import { logInfo } from "../log.ts";
 
-export class NixDetectStage implements Stage {
-  name = "NixDetectStage";
+export const NixDetectStage: PlanStage = {
+  kind: "plan",
+  name: "NixDetectStage",
 
-  async execute(ctx: ExecutionContext): Promise<ExecutionContext> {
-    const nixCfg = ctx.profile.nix;
+  plan(input: StageInput): StagePlan | null {
+    const nixCfg = input.profile.nix;
     let nixEnabled: boolean;
 
     if (nixCfg.enable === "auto") {
-      nixEnabled = await hasHostNix();
+      nixEnabled = input.probes.hasHostNix;
       logInfo(
         `[nas] Nix: auto-detected host nix → ${
           nixEnabled ? "enabled" : "disabled"
@@ -27,15 +27,11 @@ export class NixDetectStage implements Stage {
       );
     }
 
-    return { ...ctx, nixEnabled };
-  }
-}
-
-async function hasHostNix(): Promise<boolean> {
-  try {
-    await Deno.stat("/nix");
-    return true;
-  } catch {
-    return false;
-  }
-}
+    return {
+      effects: [],
+      dockerArgs: [],
+      envVars: {},
+      outputOverrides: { nixEnabled },
+    };
+  },
+};
