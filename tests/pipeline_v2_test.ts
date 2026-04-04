@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { mergeOutputs, runPipelineV2 } from "../src/pipeline/pipeline.ts";
+import { mergeOutputs, runPipeline } from "../src/pipeline/pipeline.ts";
 import type {
   AnyStage,
   PlanStage,
@@ -146,10 +146,10 @@ Deno.test("mergeOutputs: outputOverrides with dockerArgs/envVars are overridden 
 });
 
 // ---------------------------------------------------------------------------
-// runPipelineV2 — PlanStage
+// runPipeline — PlanStage
 // ---------------------------------------------------------------------------
 
-Deno.test("runPipelineV2: runs PlanStage and merges outputs", async () => {
+Deno.test("runPipeline: runs PlanStage and merges outputs", async () => {
   const stage: PlanStage = {
     kind: "plan",
     name: "plan-stage",
@@ -163,14 +163,14 @@ Deno.test("runPipelineV2: runs PlanStage and merges outputs", async () => {
     },
   };
 
-  const result = await runPipelineV2([stage], makeInput());
+  const result = await runPipeline([stage], makeInput());
 
   assertEquals(result.dockerArgs, ["--rm"]);
   assertEquals(result.envVars, { FOO: "bar" });
   assertEquals(result.nixEnabled, true);
 });
 
-Deno.test("runPipelineV2: skips PlanStage that returns null", async () => {
+Deno.test("runPipeline: skips PlanStage that returns null", async () => {
   const stage: PlanStage = {
     kind: "plan",
     name: "skip-stage",
@@ -180,16 +180,16 @@ Deno.test("runPipelineV2: skips PlanStage that returns null", async () => {
   };
 
   const input = makeInput({ prior: makePrior({ workDir: "/original" }) });
-  const result = await runPipelineV2([stage], input);
+  const result = await runPipeline([stage], input);
 
   assertEquals(result.workDir, "/original");
 });
 
 // ---------------------------------------------------------------------------
-// runPipelineV2 — ProceduralStage
+// runPipeline — ProceduralStage
 // ---------------------------------------------------------------------------
 
-Deno.test("runPipelineV2: runs ProceduralStage and merges overrides", async () => {
+Deno.test("runPipeline: runs ProceduralStage and merges overrides", async () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "proc-stage",
@@ -198,13 +198,13 @@ Deno.test("runPipelineV2: runs ProceduralStage and merges overrides", async () =
     },
   };
 
-  const result = await runPipelineV2([stage], makeInput());
+  const result = await runPipeline([stage], makeInput());
 
   assertEquals(result.workDir, "/changed");
   assertEquals(result.nixEnabled, true);
 });
 
-Deno.test("runPipelineV2: ProceduralStage appends dockerArgs and merges envVars", async () => {
+Deno.test("runPipeline: ProceduralStage appends dockerArgs and merges envVars", async () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "proc-append",
@@ -224,7 +224,7 @@ Deno.test("runPipelineV2: ProceduralStage appends dockerArgs and merges envVars"
       envVars: { OLD: "keep" },
     }),
   });
-  const result = await runPipelineV2([stage], input);
+  const result = await runPipeline([stage], input);
 
   // dockerArgs should be appended, not replaced
   assertEquals([...result.dockerArgs], ["--existing", "--new-arg"]);
@@ -233,10 +233,10 @@ Deno.test("runPipelineV2: ProceduralStage appends dockerArgs and merges envVars"
 });
 
 // ---------------------------------------------------------------------------
-// runPipelineV2 — mixed stages
+// runPipeline — mixed stages
 // ---------------------------------------------------------------------------
 
-Deno.test("runPipelineV2: runs mixed PlanStage and ProceduralStage in order", async () => {
+Deno.test("runPipeline: runs mixed PlanStage and ProceduralStage in order", async () => {
   const order: string[] = [];
 
   const planStage: PlanStage = {
@@ -264,7 +264,7 @@ Deno.test("runPipelineV2: runs mixed PlanStage and ProceduralStage in order", as
     },
   };
 
-  const result = await runPipelineV2([planStage, procStage], makeInput());
+  const result = await runPipeline([planStage, procStage], makeInput());
 
   assertEquals(order, ["plan-first", "proc-second"]);
   assertEquals(result.dockerArgs, ["--rm"]);
@@ -274,10 +274,10 @@ Deno.test("runPipelineV2: runs mixed PlanStage and ProceduralStage in order", as
 });
 
 // ---------------------------------------------------------------------------
-// runPipelineV2 — teardown
+// runPipeline — teardown
 // ---------------------------------------------------------------------------
 
-Deno.test("runPipelineV2: calls teardown in reverse order on success", async () => {
+Deno.test("runPipeline: calls teardown in reverse order on success", async () => {
   const order: string[] = [];
 
   const proc1: ProceduralStage = {
@@ -304,7 +304,7 @@ Deno.test("runPipelineV2: calls teardown in reverse order on success", async () 
     },
   };
 
-  await runPipelineV2([proc1, proc2], makeInput());
+  await runPipeline([proc1, proc2], makeInput());
 
   assertEquals(order, [
     "exec-proc1",
@@ -314,7 +314,7 @@ Deno.test("runPipelineV2: calls teardown in reverse order on success", async () 
   ]);
 });
 
-Deno.test("runPipelineV2: calls teardown on error (only completed stages)", async () => {
+Deno.test("runPipeline: calls teardown on error (only completed stages)", async () => {
   const order: string[] = [];
 
   const proc1: ProceduralStage = {
@@ -342,7 +342,7 @@ Deno.test("runPipelineV2: calls teardown on error (only completed stages)", asyn
   };
 
   await assertRejects(
-    () => runPipelineV2([proc1, proc2], makeInput()),
+    () => runPipeline([proc1, proc2], makeInput()),
     Error,
     "boom",
   );
@@ -351,7 +351,7 @@ Deno.test("runPipelineV2: calls teardown on error (only completed stages)", asyn
   assertEquals(order, ["exec-proc1", "exec-proc2", "teardown-proc1"]);
 });
 
-Deno.test("runPipelineV2: ProceduralStage without teardown is fine", async () => {
+Deno.test("runPipeline: ProceduralStage without teardown is fine", async () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "no-teardown",
@@ -361,22 +361,22 @@ Deno.test("runPipelineV2: ProceduralStage without teardown is fine", async () =>
   };
 
   // Should not throw
-  await runPipelineV2([stage], makeInput());
+  await runPipeline([stage], makeInput());
 });
 
-Deno.test("runPipelineV2: empty stages returns prior unchanged", async () => {
+Deno.test("runPipeline: empty stages returns prior unchanged", async () => {
   const prior = makePrior({ workDir: "/original", nixEnabled: true });
-  const result = await runPipelineV2([], makeInput({ prior }));
+  const result = await runPipeline([], makeInput({ prior }));
 
   assertEquals(result.workDir, "/original");
   assertEquals(result.nixEnabled, true);
 });
 
 // ---------------------------------------------------------------------------
-// runPipelineV2 — stages see accumulated prior
+// runPipeline — stages see accumulated prior
 // ---------------------------------------------------------------------------
 
-Deno.test("runPipelineV2: later stages see accumulated prior from earlier stages", async () => {
+Deno.test("runPipeline: later stages see accumulated prior from earlier stages", async () => {
   const stage1: PlanStage = {
     kind: "plan",
     name: "stage1",
@@ -407,7 +407,7 @@ Deno.test("runPipelineV2: later stages see accumulated prior from earlier stages
     },
   };
 
-  const result = await runPipelineV2([stage1, stage2], makeInput());
+  const result = await runPipeline([stage1, stage2], makeInput());
 
   assertEquals([...result.dockerArgs], ["--from-stage1", "--from-stage2"]);
   assertEquals(result.envVars, { S1: "v1", S2: "v2" });

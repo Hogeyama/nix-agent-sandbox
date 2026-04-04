@@ -2,9 +2,9 @@
  * CLI エントリポイント
  */
 
+import { encodeHex } from "@std/encoding/hex";
 import { loadConfig, resolveProfile } from "./config/load.ts";
-import { createContext } from "./pipeline/context.ts";
-import { runPipelineV2 } from "./pipeline/pipeline.ts";
+import { runPipeline } from "./pipeline/pipeline.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
@@ -150,13 +150,10 @@ export async function main(args: string[]): Promise<void> {
     const config = await loadConfig();
     const { name, profile } = resolveProfile(config, profileName);
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
-    const ctx = createContext(
-      config,
-      effectiveProfile,
-      name,
-      Deno.cwd(),
-      logLevel,
-    );
+    const sessionId = `sess_${randomHex(6)}`;
+    const imageName = "nas-sandbox";
+    const proxyEnabled = effectiveProfile.network.allowlist.length > 0 ||
+      effectiveProfile.network.prompt.enable;
 
     // HostEnv 構築と probe 解決
     // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
@@ -201,7 +198,7 @@ export async function main(args: string[]): Promise<void> {
     );
 
     // BuildProbes を事前解決
-    const buildProbes = await resolveBuildProbes(ctx.imageName);
+    const buildProbes = await resolveBuildProbes(imageName);
 
     const stages = [
       new WorktreeStage(),
@@ -217,23 +214,22 @@ export async function main(args: string[]): Promise<void> {
 
     // 初期 PriorStageOutputs を構築
     const initialPrior: PriorStageOutputs = {
-      dockerArgs: ctx.dockerArgs,
-      envVars: { ...ctx.envVars, NAS_LOG_LEVEL: logLevel },
-      workDir: ctx.workDir,
-      mountDir: ctx.mountDir,
-      nixEnabled: ctx.nixEnabled,
-      imageName: ctx.imageName,
-      agentCommand: ctx.agentCommand,
-      networkPromptToken: ctx.networkPromptToken,
-      networkPromptEnabled: ctx.networkPromptEnabled,
-      dbusProxyEnabled: ctx.dbusProxyEnabled,
+      dockerArgs: [],
+      envVars: { NAS_LOG_LEVEL: logLevel },
+      workDir: Deno.cwd(),
+      nixEnabled: false,
+      imageName,
+      agentCommand: [],
+      networkPromptToken: proxyEnabled ? randomHex(32) : undefined,
+      networkPromptEnabled: effectiveProfile.network.prompt.enable,
+      dbusProxyEnabled: effectiveProfile.dbus.session.enable,
     };
 
-    await runPipelineV2(stages, {
+    await runPipeline(stages, {
       config,
       profile: effectiveProfile,
       profileName: name,
-      sessionId: ctx.sessionId,
+      sessionId,
       host: hostEnv,
       probes,
       prior: initialPrior,
@@ -244,3 +240,8 @@ export async function main(args: string[]): Promise<void> {
 }
 
 export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
+
+function randomHex(bytes: number): string {
+  const data = crypto.getRandomValues(new Uint8Array(bytes));
+  return encodeHex(data);
+}

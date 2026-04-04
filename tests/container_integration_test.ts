@@ -24,9 +24,13 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../src/config/types.ts";
-import { createContext } from "../src/pipeline/context.ts";
-import { runPipeline } from "../src/pipeline/pipeline.ts";
-import { DockerBuildStage } from "../src/stages/launch.ts";
+import {
+  createDockerBuildStage,
+  resolveBuildProbes,
+} from "../src/stages/launch.ts";
+import { executePlan, teardownHandles } from "../src/pipeline/effects.ts";
+import { buildHostEnv, resolveProbes } from "../src/pipeline/host_env.ts";
+import type { PriorStageOutputs } from "../src/pipeline/types.ts";
 
 const IMAGE_NAME = "nas-sandbox";
 
@@ -94,6 +98,10 @@ const dockerAvailable = await isDockerAvailable();
 let imageBuilt = false;
 async function ensureImage(): Promise<void> {
   if (imageBuilt) return;
+  const imageName = IMAGE_NAME;
+  const buildProbes = await resolveBuildProbes(imageName);
+  const stage = createDockerBuildStage(buildProbes);
+
   const profile = {
     agent: "claude" as const,
     agentArgs: [],
@@ -113,8 +121,31 @@ async function ensureImage(): Promise<void> {
     profiles: { test: profile },
     ui: DEFAULT_UI_CONFIG,
   };
-  const ctx = createContext(config, profile, "test", "/tmp");
-  await runPipeline([new DockerBuildStage()], ctx);
+  const hostEnv = buildHostEnv();
+  const probes = await resolveProbes(hostEnv);
+  const prior: PriorStageOutputs = {
+    dockerArgs: [],
+    envVars: {},
+    workDir: "/tmp",
+    nixEnabled: false,
+    imageName,
+    agentCommand: [],
+    networkPromptEnabled: false,
+    dbusProxyEnabled: false,
+  };
+  const plan = stage.plan({
+    config,
+    profile,
+    profileName: "test",
+    sessionId: "sess_test",
+    host: hostEnv,
+    probes,
+    prior,
+  });
+  if (plan) {
+    const handles = await executePlan(plan);
+    await teardownHandles(handles);
+  }
   imageBuilt = true;
 }
 
