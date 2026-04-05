@@ -12,19 +12,19 @@ import {
   LOCAL_PROXY_PORT,
   parseDindContainerName,
   replaceNetwork,
-} from "../src/stages/proxy.ts";
+} from "./proxy.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
-import type { Config, Profile } from "../src/config/types.ts";
+} from "../config/types.ts";
+import type { Config, Profile } from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
   ProbeResults,
   StageInput,
-} from "../src/pipeline/types.ts";
+} from "../pipeline/types.ts";
 
 const DEFAULT_PROMPT = {
   enable: false,

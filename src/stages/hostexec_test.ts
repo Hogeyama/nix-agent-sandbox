@@ -3,16 +3,16 @@ import * as path from "@std/path";
 import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
-import type { Config, Profile } from "../src/config/types.ts";
+} from "../config/types.ts";
+import type { Config, Profile } from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
   StageInput,
   SymlinkEffect,
   UnixListenerEffect,
-} from "../src/pipeline/types.ts";
-import { createHostExecStage } from "../src/stages/hostexec.ts";
+} from "../pipeline/types.ts";
+import { createHostExecStage } from "./hostexec.ts";
 
 function makeProfile(): Profile {
   return {
