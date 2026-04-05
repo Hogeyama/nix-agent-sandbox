@@ -8,7 +8,7 @@ import { assertMatch } from "@std/assert/match";
 import { ConfigValidationError, validateConfig } from "./validate.ts";
 
 // ---------------------------------------------------------------------------
-// hostexec config tests (from tests/hostexec_config_test.ts)
+// hostexec config tests
 // ---------------------------------------------------------------------------
 
 Deno.test("hostexec config: validates secrets and rules", () => {

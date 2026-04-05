@@ -1,5 +1,5 @@
 /**
- * E2E tests: 設定ファイルの読み込み・検索・マージ
+ * 設定ファイルの読み込み・検索・マージの統合テスト
  *
  * 実際のファイルシステム上に YAML ファイルを配置して loadConfig / resolveProfile を検証する。
  */
@@ -531,7 +531,7 @@ Deno.test("resolveProfile: throws for nonexistent profile name", () => {
   );
 });
 
-// --- validateConfig: 追加のバリデーション E2E テスト ---
+// --- validateConfig: 追加のバリデーションテスト ---
 
 Deno.test("validateConfig: multiple profiles each independently validated", () => {
   const raw: RawConfig = {
@@ -604,9 +604,9 @@ Deno.test("validateConfig: nix.extra-packages preserved", () => {
   ]);
 });
 
-// --- loadConfig + resolveProfile E2E (ファイル → プロファイル解決) ---
+// --- loadConfig + resolveProfile 統合テスト (ファイル → プロファイル解決) ---
 
-Deno.test("E2E: load YAML and resolve default profile", async () => {
+Deno.test("loadConfig + resolveProfile: load YAML and resolve default profile", async () => {
   const yaml = `
 default: production
 profiles:
@@ -626,7 +626,7 @@ profiles:
   });
 });
 
-Deno.test("E2E: load YAML and resolve explicit profile", async () => {
+Deno.test("loadConfig + resolveProfile: load YAML and resolve explicit profile", async () => {
   const yaml = `
 default: production
 profiles:
@@ -646,7 +646,7 @@ profiles:
   });
 });
 
-Deno.test("E2E: load YAML with single profile auto-resolves", async () => {
+Deno.test("loadConfig + resolveProfile: load YAML with single profile auto-resolves", async () => {
   const yaml = `
 profiles:
   only:
@@ -660,7 +660,7 @@ profiles:
   });
 });
 
-Deno.test("E2E: load YAML from nested directory and resolve", async () => {
+Deno.test("loadConfig + resolveProfile: load YAML from nested directory and resolve", async () => {
   await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
     await Deno.writeTextFile(
       path.join(rootDir, ".agent-sandbox.yml"),
@@ -685,7 +685,7 @@ profiles:
   });
 });
 
-Deno.test("E2E: complex YAML with worktree, env, extra-mounts all together", async () => {
+Deno.test("loadConfig + resolveProfile: complex YAML with worktree, env, extra-mounts all together", async () => {
   const yaml = `
 default: full-stack
 profiles:

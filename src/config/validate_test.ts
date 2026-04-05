@@ -13,7 +13,7 @@ import { DEFAULT_DBUS_CONFIG, DEFAULT_DISPLAY_CONFIG } from "./types.ts";
 import type { RawConfig } from "./types.ts";
 
 // ---------------------------------------------------------------------------
-// validate tests (from tests/validate_test.ts)
+// validate tests
 // ---------------------------------------------------------------------------
 
 // --- profiles のバリデーション ---
@@ -858,7 +858,7 @@ Deno.test("validate: multiple valid profiles all validated", () => {
 });
 
 // ---------------------------------------------------------------------------
-// config tests (from tests/config_test.ts)
+// config tests
 // ---------------------------------------------------------------------------
 
 Deno.test("validateConfig: valid minimal config", () => {
