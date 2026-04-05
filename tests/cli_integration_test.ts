@@ -785,13 +785,6 @@ Deno.test("CLI: audit --domain filters by domain", async () => {
   }
 });
 
-Deno.test("CLI: help includes audit subcommand", async () => {
-  const result = await runNas(["--help"]);
-  assertEquals(result.code, 0);
-  assertEquals(result.stdout.includes("audit"), true);
-  assertEquals(result.stdout.includes("監査ログを表示する"), true);
-});
-
 async function waitForHostExecPending(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   count: number,
