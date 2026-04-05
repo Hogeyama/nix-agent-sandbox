@@ -5,8 +5,7 @@
   "tasks": {
     "dev": "deno run --allow-all main.ts",
     "build-ui": "deno run -A scripts/build_ui.ts",
-    "compile": "deno task build-ui && deno compile --allow-all --include src/docker/embed/ --include src/docker/envoy/ --include src/ui/dist/ --include scripts/notify-send-wsl --output nas main.ts",
-    "compile:cached": "deno run --cached-only -A scripts/build_ui.ts && deno compile --allow-all --cached-only --include src/docker/embed/ --include src/docker/envoy/ --include src/ui/dist/ --include scripts/notify-send-wsl --output nas main.ts",
+    "compile": "deno compile --allow-all --include src/docker/embed/ --include src/docker/envoy/ --include src/ui/dist/ --include scripts/notify-send-wsl --output nas main.ts",
     "test": "deno test --allow-all src/ tests/",
     "test:unit": "deno test $(find src -name '*_test.ts' ! -name '*_integration_test.ts')",
     "test:integration": "deno test --allow-all src/ tests/",

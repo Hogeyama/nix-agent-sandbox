@@ -92,7 +92,8 @@
             chmod -R u+w "$DENO_DIR"
 
             # Build UI + compile standalone binary (--cached-only, no network)
-            deno task compile:cached
+            deno task build-ui --cached-only
+            deno task compile  --cached-only
           '';
 
           installPhase = ''
