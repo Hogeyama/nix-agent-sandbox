@@ -1,7 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { mergeOutputs, runPipeline } from "./pipeline.ts";
 import type {
-  AnyStage,
   PlanStage,
   PriorStageOutputs,
   ProceduralResult,
@@ -193,6 +192,7 @@ Deno.test("runPipeline: runs ProceduralStage and merges overrides", async () => 
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "proc-stage",
+    // deno-lint-ignore require-await
     async execute(_input: StageInput): Promise<ProceduralResult> {
       return { outputOverrides: { workDir: "/changed", nixEnabled: true } };
     },
@@ -208,6 +208,7 @@ Deno.test("runPipeline: ProceduralStage appends dockerArgs and merges envVars", 
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "proc-append",
+    // deno-lint-ignore require-await
     async execute(_input: StageInput): Promise<ProceduralResult> {
       return {
         outputOverrides: {
@@ -256,6 +257,7 @@ Deno.test("runPipeline: runs mixed PlanStage and ProceduralStage in order", asyn
   const procStage: ProceduralStage = {
     kind: "procedural",
     name: "proc-second",
+    // deno-lint-ignore require-await
     async execute(input: StageInput): Promise<ProceduralResult> {
       order.push("proc-second");
       // Verify it sees prior from plan stage
@@ -283,10 +285,12 @@ Deno.test("runPipeline: calls teardown in reverse order on success", async () =>
   const proc1: ProceduralStage = {
     kind: "procedural",
     name: "proc1",
+    // deno-lint-ignore require-await
     async execute(): Promise<ProceduralResult> {
       order.push("exec-proc1");
       return { outputOverrides: {} };
     },
+    // deno-lint-ignore require-await
     async teardown(): Promise<void> {
       order.push("teardown-proc1");
     },
@@ -295,10 +299,12 @@ Deno.test("runPipeline: calls teardown in reverse order on success", async () =>
   const proc2: ProceduralStage = {
     kind: "procedural",
     name: "proc2",
+    // deno-lint-ignore require-await
     async execute(): Promise<ProceduralResult> {
       order.push("exec-proc2");
       return { outputOverrides: {} };
     },
+    // deno-lint-ignore require-await
     async teardown(): Promise<void> {
       order.push("teardown-proc2");
     },
@@ -320,10 +326,12 @@ Deno.test("runPipeline: calls teardown on error (only completed stages)", async 
   const proc1: ProceduralStage = {
     kind: "procedural",
     name: "proc1",
+    // deno-lint-ignore require-await
     async execute(): Promise<ProceduralResult> {
       order.push("exec-proc1");
       return { outputOverrides: {} };
     },
+    // deno-lint-ignore require-await
     async teardown(): Promise<void> {
       order.push("teardown-proc1");
     },
@@ -332,10 +340,12 @@ Deno.test("runPipeline: calls teardown on error (only completed stages)", async 
   const proc2: ProceduralStage = {
     kind: "procedural",
     name: "proc2",
+    // deno-lint-ignore require-await
     async execute(): Promise<ProceduralResult> {
       order.push("exec-proc2");
       throw new Error("boom");
     },
+    // deno-lint-ignore require-await
     async teardown(): Promise<void> {
       order.push("teardown-proc2");
     },
@@ -355,6 +365,7 @@ Deno.test("runPipeline: ProceduralStage without teardown is fine", async () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "no-teardown",
+    // deno-lint-ignore require-await
     async execute(): Promise<ProceduralResult> {
       return { outputOverrides: {} };
     },

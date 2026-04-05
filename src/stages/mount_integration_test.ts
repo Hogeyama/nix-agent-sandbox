@@ -12,12 +12,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import type { Config, Profile } from "../config/types.ts";
-import type {
-  HostEnv,
-  PriorStageOutputs,
-  ProbeResults,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 
 const baseProfile: Profile = {
@@ -137,7 +132,7 @@ Deno.test("MountStage: propagates log level from prior envVars", async () => {
     },
   });
   const stage = createMountStage(mountProbes);
-  const plan = stage.plan(input)!;
+  const _plan = stage.plan(input)!;
   // NAS_LOG_LEVEL is set in initialPrior, not by MountStage.
   // Verify it comes through from prior envVars (merged by pipeline).
   assertEquals(input.prior.envVars["NAS_LOG_LEVEL"], "warn");

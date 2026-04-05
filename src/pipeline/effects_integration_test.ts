@@ -301,18 +301,21 @@ Deno.test("teardownHandles: closes in reverse order", async () => {
   const handles = [
     {
       kind: "a",
+      // deno-lint-ignore require-await
       close: async () => {
         order.push(1);
       },
     },
     {
       kind: "b",
+      // deno-lint-ignore require-await
       close: async () => {
         order.push(2);
       },
     },
     {
       kind: "c",
+      // deno-lint-ignore require-await
       close: async () => {
         order.push(3);
       },
@@ -328,12 +331,14 @@ Deno.test("teardownHandles: aggregates errors from multiple handles", async () =
     { kind: "ok", close: async () => {} },
     {
       kind: "fail-a",
+      // deno-lint-ignore require-await
       close: async () => {
         throw new Error("err-a");
       },
     },
     {
       kind: "fail-b",
+      // deno-lint-ignore require-await
       close: async () => {
         throw new Error("err-b");
       },
@@ -354,12 +359,14 @@ Deno.test("teardownHandles: continues closing remaining handles after error", as
   const handles = [
     {
       kind: "first",
+      // deno-lint-ignore require-await
       close: async () => {
         closed.push("first");
       },
     },
     {
       kind: "middle",
+      // deno-lint-ignore require-await
       close: async () => {
         closed.push("middle");
         throw new Error("boom");
@@ -367,6 +374,7 @@ Deno.test("teardownHandles: continues closing remaining handles after error", as
     },
     {
       kind: "last",
+      // deno-lint-ignore require-await
       close: async () => {
         closed.push("last");
       },

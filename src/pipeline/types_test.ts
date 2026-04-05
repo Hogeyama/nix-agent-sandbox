@@ -236,6 +236,7 @@ Deno.test("ProceduralStage: can implement interface", () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "test-procedural-stage",
+    // deno-lint-ignore require-await
     async execute(_input: StageInput): Promise<ProceduralResult> {
       return { outputOverrides: { workDir: "/new/path" } };
     },
@@ -252,6 +253,7 @@ Deno.test("ProceduralStage: execute() returns ProceduralResult", async () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "exec-stage",
+    // deno-lint-ignore require-await
     async execute(_input: StageInput): Promise<ProceduralResult> {
       return { outputOverrides: { workDir: "/new/path", nixEnabled: true } };
     },
@@ -267,9 +269,11 @@ Deno.test("ProceduralStage: teardown() is callable when provided", async () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "teardown-stage",
+    // deno-lint-ignore require-await
     async execute(_input: StageInput): Promise<ProceduralResult> {
       return { outputOverrides: {} };
     },
+    // deno-lint-ignore require-await
     async teardown(_input: StageInput): Promise<void> {
       teardownCalled = true;
     },
@@ -284,6 +288,7 @@ Deno.test("ProceduralStage: teardown is optional and can be omitted", () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "no-teardown-stage",
+    // deno-lint-ignore require-await
     async execute(_input: StageInput): Promise<ProceduralResult> {
       return { outputOverrides: {} };
     },
