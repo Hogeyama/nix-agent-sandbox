@@ -20,7 +20,7 @@
           # FOD: needs network, output is hash-checked
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
-          outputHash = "sha256-ZrlXu1OwsYhVfyas8bhCqjhWIwRFHJzdBdZRkvGWrYM=";
+          outputHash = "sha256-qjdxUThheqR1Z1aIQ5iMIQkGr9tVGFKQl4y/3MdIVX4=";
 
           buildPhase = ''
             export DENO_DIR="$out"
