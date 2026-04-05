@@ -21,8 +21,8 @@ import type {
   SymlinkEffect,
   UnixListenerEffect,
   WaitForReadyEffect,
-} from "../src/pipeline/types.ts";
-import type { StageInput } from "../src/pipeline/types.ts";
+} from "./types.ts";
+import type { StageInput } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Type import verification — these tests confirm that types are importable

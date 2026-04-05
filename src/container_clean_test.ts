@@ -3,12 +3,12 @@ import type {
   DockerContainerDetails,
   DockerNetworkDetails,
   DockerVolumeDetails,
-} from "../src/docker/client.ts";
+} from "./docker/client.ts";
 import {
   cleanNasContainers,
   type ContainerCleanBackend,
   isUnusedNasSidecar,
-} from "../src/container_clean.ts";
+} from "./container_clean.ts";
 import {
   isNasManagedNetwork,
   isNasManagedSidecar,
@@ -20,7 +20,7 @@ import {
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
-} from "../src/docker/nas_resources.ts";
+} from "./docker/nas_resources.ts";
 
 Deno.test("isNasManagedSidecar: nas-sandbox is not a managed sidecar", () => {
   assertEquals(isNasManagedSidecar({}, "nas-sandbox"), false);

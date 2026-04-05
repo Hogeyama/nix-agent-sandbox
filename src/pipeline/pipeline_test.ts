@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { mergeOutputs, runPipeline } from "../src/pipeline/pipeline.ts";
+import { mergeOutputs, runPipeline } from "./pipeline.ts";
 import type {
   AnyStage,
   PlanStage,
@@ -8,7 +8,7 @@ import type {
   ProceduralStage,
   StageInput,
   StagePlan,
-} from "../src/pipeline/types.ts";
+} from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

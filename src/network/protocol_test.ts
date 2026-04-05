@@ -5,7 +5,7 @@ import {
   matchesAllowlist,
   normalizeHost,
   normalizeTarget,
-} from "../src/network/protocol.ts";
+} from "./protocol.ts";
 
 Deno.test("decodeProxyAuthorization: decodes Basic credentials", () => {
   const header = `Basic ${btoa("sess_abc:tok_xyz")}`;
