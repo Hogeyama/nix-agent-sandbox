@@ -176,3 +176,58 @@ super: {
     }
   },
 });
+
+Deno.test({
+  name: "nix super: handles config and temp paths with spaces",
+  async fn() {
+    const rootDir = await Deno.makeTempDir({ prefix: "nas-nix-super-space-" });
+    try {
+      const baseDir = path.join(rootDir, "dir with spaces");
+      const localDir = path.join(baseDir, "local config");
+      const tmpDir = path.join(baseDir, "tmp dir");
+      await Deno.mkdir(localDir, { recursive: true });
+      await Deno.mkdir(tmpDir, { recursive: true });
+
+      const globalPath = path.join(baseDir, "global config.yml");
+      await Deno.writeTextFile(
+        globalPath,
+        `
+profiles:
+  dev:
+    agent: claude
+`,
+      );
+      await Deno.writeTextFile(
+        path.join(localDir, ".agent-sandbox.nix"),
+        `
+super: {
+  profiles = super.profiles // {
+    dev = super.profiles.dev // {
+      agent-args = ["--from-space-path"];
+    };
+  };
+}
+`,
+      );
+
+      const previousTmpDir = Deno.env.get("TMPDIR");
+      Deno.env.set("TMPDIR", tmpDir);
+      try {
+        const config = await loadConfig({
+          startDir: localDir,
+          globalConfigPath: globalPath,
+        });
+        assertEquals(config.profiles.dev.agent, "claude");
+        assertEquals(config.profiles.dev.agentArgs, ["--from-space-path"]);
+      } finally {
+        if (previousTmpDir !== undefined) {
+          Deno.env.set("TMPDIR", previousTmpDir);
+        } else {
+          Deno.env.delete("TMPDIR");
+        }
+      }
+    } finally {
+      await Deno.remove(rootDir, { recursive: true });
+    }
+  },
+});

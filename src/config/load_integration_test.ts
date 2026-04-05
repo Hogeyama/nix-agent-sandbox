@@ -53,6 +53,27 @@ async function withNestedDirs(
   }
 }
 
+async function withMockedDenoStat(
+  mock: (path: string | URL) => Promise<Deno.FileInfo>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const originalStat = Deno.stat;
+  Object.defineProperty(Deno, "stat", {
+    configurable: true,
+    writable: true,
+    value: mock,
+  });
+  try {
+    await fn();
+  } finally {
+    Object.defineProperty(Deno, "stat", {
+      configurable: true,
+      writable: true,
+      value: originalStat,
+    });
+  }
+}
+
 // --- loadConfig: ファイルシステムからの読み込み ---
 
 Deno.test("loadConfig: loads minimal YAML file from directory", async () => {
@@ -220,6 +241,39 @@ profiles:
     });
     assertEquals("child-profile" in config.profiles, true);
     assertEquals("parent-profile" in config.profiles, false);
+  });
+});
+
+Deno.test("loadConfig: propagates config discovery stat errors", async () => {
+  await withNestedDirs(async (rootDir, childDir, grandchildDir) => {
+    await Deno.writeTextFile(
+      path.join(rootDir, ".agent-sandbox.yml"),
+      `
+profiles:
+  parent-profile:
+    agent: claude
+`,
+    );
+
+    const blockedPath = path.join(childDir, ".agent-sandbox.yml");
+    const originalStat = Deno.stat;
+    await withMockedDenoStat(async (target) => {
+      const targetPath = target instanceof URL ? target.pathname : target;
+      if (targetPath === blockedPath) {
+        throw new Deno.errors.PermissionDenied("blocked child config");
+      }
+      return await originalStat(target);
+    }, async () => {
+      await assertRejects(
+        () =>
+          loadConfig({
+            startDir: grandchildDir,
+            globalConfigPath: null,
+          }),
+        Deno.errors.PermissionDenied,
+        "blocked child config",
+      );
+    });
   });
 });
 

@@ -265,11 +265,14 @@ async function loadNixConfig(
   try {
     await Deno.writeTextFile(globalFile, globalJson);
 
+    const nixPathArg = buildNixJsonStringLiteral(nixPath);
+    const globalFileArg = buildNixJsonStringLiteral(globalFile);
+
     // Nix 式: 関数なら super を渡す、attrset ならそのまま返す
     const nixExpr = `
       let
-        local = import ${nixPath};
-        global = builtins.fromJSON (builtins.readFile ${globalFile});
+        local = import (builtins.fromJSON ${nixPathArg});
+        global = builtins.fromJSON (builtins.readFile (builtins.fromJSON ${globalFileArg}));
       in
         if builtins.isFunction local then
           { value = local global; __nixFunctionMerged = true; }
@@ -323,8 +326,11 @@ async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
       try {
         await Deno.stat(candidate);
         return { path: candidate, format };
-      } catch {
-        // not found, try next
+      } catch (error) {
+        if (error instanceof Deno.errors.NotFound) {
+          continue;
+        }
+        throw error;
       }
     }
     const parent = path.dirname(current);
@@ -333,6 +339,10 @@ async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
     }
     current = parent;
   }
+}
+
+function buildNixJsonStringLiteral(value: string): string {
+  return JSON.stringify(JSON.stringify(value));
 }
 
 /** プロファイルを解決 (名前指定 or default) */
