@@ -16,9 +16,9 @@ import { createDindStage } from "./stages/dind.ts";
 import { createProxyStage } from "./stages/proxy.ts";
 import {
   createDockerBuildStage,
-  createLaunchStage,
   resolveBuildProbes,
-} from "./stages/launch.ts";
+} from "./stages/docker_build.ts";
+import { createLaunchStage } from "./stages/launch.ts";
 import { setLogLevel } from "./log.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import {

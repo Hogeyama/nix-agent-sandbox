@@ -24,7 +24,7 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import { createDockerBuildStage, resolveBuildProbes } from "./launch.ts";
+import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
 import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
