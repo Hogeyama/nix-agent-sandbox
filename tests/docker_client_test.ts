@@ -5,15 +5,13 @@
  * Docker daemon を使う integration テストは docker_client_integration_test.ts を参照。
  */
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { computeEmbedHash } from "../src/docker/client.ts";
 import {
   dockerImageExists,
   dockerIsRunning,
   dockerLogs,
   getImageLabel,
-  InterruptedCommandError,
-  runInteractiveCommand,
 } from "../src/docker/client.ts";
 
 // --- computeEmbedHash ---
@@ -28,46 +26,6 @@ Deno.test("computeEmbedHash: returns valid SHA-256 hex string", async () => {
   const hash = await computeEmbedHash();
   assertEquals(hash.length, 64);
   assertEquals(/^[0-9a-f]{64}$/.test(hash), true);
-});
-
-Deno.test("runInteractiveCommand: SIGINT を静かな割り込みとして扱う", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "nas-interrupt-" });
-  const script = `${dir}/wait.sh`;
-  const handlers = new Map<"SIGINT" | "SIGTERM", () => void>();
-  try {
-    await Deno.writeTextFile(
-      script,
-      `#!/usr/bin/env bash
-trap 'exit 130' INT
-while true; do
-  sleep 1
-done
-`,
-    );
-    await Deno.chmod(script, 0o755);
-    const promise = runInteractiveCommand(script, [], {
-      stdin: "null",
-      stdout: "null",
-      stderr: "null",
-      signalTrap: {
-        add(signal, handler) {
-          handlers.set(signal, handler);
-        },
-        remove(signal) {
-          handlers.delete(signal);
-        },
-      },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    handlers.get("SIGINT")?.();
-    await assertRejects(
-      () => promise,
-      InterruptedCommandError,
-      "interrupted",
-    );
-  } finally {
-    await Deno.remove(dir, { recursive: true }).catch(() => {});
-  }
 });
 
 // --- embed hash は全埋め込みファイルから計算される ---

@@ -4,7 +4,7 @@
  * unit テスト（computeEmbedHash 等）は docker_client_test.ts を参照。
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   dockerBuild,
   dockerExec,
@@ -21,6 +21,8 @@ import {
   dockerStop,
   dockerVolumeRemove,
   getImageLabel,
+  InterruptedCommandError,
+  runInteractiveCommand,
 } from "../src/docker/client.ts";
 
 const TEST_IMAGE = "alpine:latest";
@@ -472,4 +474,46 @@ Deno.test({
     const result = await inspectCmd.output();
     assertEquals(result.success, false);
   },
+});
+
+// --- runInteractiveCommand: SIGINT ---
+
+Deno.test("runInteractiveCommand: SIGINT を静かな割り込みとして扱う", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "nas-interrupt-" });
+  const script = `${dir}/wait.sh`;
+  const handlers = new Map<"SIGINT" | "SIGTERM", () => void>();
+  try {
+    await Deno.writeTextFile(
+      script,
+      `#!/usr/bin/env bash
+trap 'exit 130' INT
+while true; do
+  sleep 1
+done
+`,
+    );
+    await Deno.chmod(script, 0o755);
+    const promise = runInteractiveCommand(script, [], {
+      stdin: "null",
+      stdout: "null",
+      stderr: "null",
+      signalTrap: {
+        add(signal, handler) {
+          handlers.set(signal, handler);
+        },
+        remove(signal) {
+          handlers.delete(signal);
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    handlers.get("SIGINT")?.();
+    await assertRejects(
+      () => promise,
+      InterruptedCommandError,
+      "interrupted",
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
 });
