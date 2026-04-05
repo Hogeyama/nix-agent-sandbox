@@ -168,11 +168,9 @@ export async function main(args: string[]): Promise<void> {
     {
       const networkNotify = resolveNotifyBackend(
         effectiveProfile.network.prompt.notify,
-        hostEnv.isWSL,
       );
       const hostexecNotify = resolveNotifyBackend(
         effectiveProfile.hostexec?.prompt.notify ?? "auto",
-        hostEnv.isWSL,
       );
       if (
         networkNotify === "desktop" ||

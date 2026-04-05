@@ -88,7 +88,7 @@ export function createProxyStage(
           promptEnabled: prompt.enable,
           timeoutSeconds: prompt.timeoutSeconds,
           defaultScope: prompt.defaultScope,
-          notify: resolveNotifyBackend(prompt.notify, input.host.isWSL),
+          notify: resolveNotifyBackend(prompt.notify),
           uiEnabled: input.config.ui.enable,
           uiPort: input.config.ui.port,
           uiIdleTimeout: input.config.ui.idleTimeout,

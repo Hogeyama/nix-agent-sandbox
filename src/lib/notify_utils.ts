@@ -11,17 +11,16 @@ export type ResolvedNotifyBackend = "desktop" | "off";
 
 /**
  * Resolve "auto" to a concrete backend.
- * On WSL, "auto" resolves to "off" (opt-in: set "desktop" explicitly).
- * On native Linux, "auto" resolves to "desktop".
+ * "auto" always resolves to "desktop". On WSL, the bundled notify-send-wsl
+ * shim bridges to Windows toast notifications; on native Linux, the system
+ * notify-send is used. If neither is available, tryDesktopNotification()
+ * warns once and gracefully falls back to no-op.
  */
 export function resolveNotifyBackend(
   backend: NotifyBackend,
-  isWSL: boolean,
 ): ResolvedNotifyBackend {
   if (backend === "off") return "off";
-  if (backend === "desktop") return "desktop";
-  // auto: off on WSL, desktop otherwise
-  return isWSL ? "off" : "desktop";
+  return "desktop";
 }
 
 // Module-level state for tracking the active desktop notification ID.

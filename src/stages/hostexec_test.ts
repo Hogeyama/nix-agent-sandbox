@@ -288,16 +288,10 @@ Deno.test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   );
 });
 
-Deno.test("HostExecStage plan: uses host.isWSL for notify resolution", () => {
+Deno.test("HostExecStage plan: auto notify resolves to desktop", () => {
   const profile = makeProfile();
-  // Set notify to "auto" which resolves to "off" on WSL
   profile.hostexec!.prompt.notify = "auto";
-  const runtimeDir = "/tmp/nas-test-runtime";
-  const hostEnv: HostEnv = {
-    ...makeHostEnv(runtimeDir),
-    isWSL: true,
-  };
-  const input = makeStageInput(profile, hostEnv);
+  const input = makeStageInput(profile, makeHostEnv("/tmp/nas-test-runtime"));
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
@@ -309,7 +303,6 @@ Deno.test("HostExecStage plan: uses host.isWSL for notify resolution", () => {
   );
   assertEquals(listenerEffects.length, 1);
   if (listenerEffects[0].spec.kind === "hostexec-broker") {
-    // On WSL with "auto", notify should resolve to "off"
-    assertEquals(listenerEffects[0].spec.notify, "off");
+    assertEquals(listenerEffects[0].spec.notify, "desktop");
   }
 });

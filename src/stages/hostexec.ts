@@ -155,10 +155,7 @@ export function createHostExecStage(): PlanStage {
           workspaceRoot,
           sessionTmpDir,
           hostexec: config,
-          notify: resolveNotifyBackend(
-            config.prompt.notify,
-            input.host.isWSL,
-          ),
+          notify: resolveNotifyBackend(config.prompt.notify),
           uiEnabled: input.config.ui.enable,
           uiPort: input.config.ui.port,
           uiIdleTimeout: input.config.ui.idleTimeout,
