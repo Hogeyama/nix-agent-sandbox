@@ -23,7 +23,7 @@ async function nodeAvailable(): Promise<boolean> {
 const hasNode = await nodeAvailable();
 
 const PROXY_SCRIPT = new URL(
-  "../src/docker/embed/local-proxy.mjs",
+  "./local-proxy.mjs",
   import.meta.url,
 ).pathname;
 

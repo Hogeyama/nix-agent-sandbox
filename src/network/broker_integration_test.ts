@@ -1,13 +1,13 @@
 import { assertEquals } from "@std/assert";
-import { sendBrokerRequest, SessionBroker } from "../src/network/broker.ts";
+import { sendBrokerRequest, SessionBroker } from "./broker.ts";
 import type {
   AuthorizeRequest,
   DecisionResponse,
   PendingEntry,
-} from "../src/network/protocol.ts";
-import { resolveNetworkRuntimePaths } from "../src/network/registry.ts";
-import { queryAuditLogs } from "../src/audit/store.ts";
-import { _resetNotifySendCache } from "../src/lib/notify_utils.ts";
+} from "./protocol.ts";
+import { resolveNetworkRuntimePaths } from "./registry.ts";
+import { queryAuditLogs } from "../audit/store.ts";
+import { _resetNotifySendCache } from "../lib/notify_utils.ts";
 
 Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });

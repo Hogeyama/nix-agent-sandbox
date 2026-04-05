@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
-import { notifyPendingRequest } from "../src/network/notify.ts";
-import type { PendingNotification } from "../src/network/notify.ts";
-import { _resetNotifySendCache } from "../src/lib/notify_utils.ts";
+import { notifyPendingRequest } from "./notify.ts";
+import type { PendingNotification } from "./notify.ts";
+import { _resetNotifySendCache } from "../lib/notify_utils.ts";
 
 Deno.test("notifyPendingRequest: desktop notification opens UI via xdg-open", async () => {
   await withFakeCommands(async ({ dir, healthServer }) => {

@@ -6,13 +6,13 @@
  */
 
 import { assertEquals } from "@std/assert";
-import { computeEmbedHash } from "../src/docker/client.ts";
+import { computeEmbedHash } from "./client.ts";
 import {
   dockerImageExists,
   dockerIsRunning,
   dockerLogs,
   getImageLabel,
-} from "../src/docker/client.ts";
+} from "./client.ts";
 
 // --- computeEmbedHash ---
 
@@ -35,11 +35,11 @@ Deno.test("computeEmbedHash: includes all embedded files", async () => {
   for (
     const [baseUrl, files] of [
       [
-        new URL("../src/docker/embed/", import.meta.url),
+        new URL("./embed/", import.meta.url),
         ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
       ],
       [
-        new URL("../src/docker/envoy/", import.meta.url),
+        new URL("./envoy/", import.meta.url),
         ["envoy.template.yaml"],
       ],
     ] as const

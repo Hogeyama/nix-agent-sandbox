@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { computeEmbedHash } from "../src/docker/client.ts";
+import { computeEmbedHash } from "./client.ts";
 
 Deno.test("computeEmbedHash returns consistent hash", async () => {
   const hash1 = await computeEmbedHash();
@@ -14,11 +14,11 @@ Deno.test("computeEmbedHash matches embed and envoy assets", async () => {
   for (
     const [baseUrl, files] of [
       [
-        new URL("../src/docker/embed/", import.meta.url),
+        new URL("./embed/", import.meta.url),
         ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
       ],
       [
-        new URL("../src/docker/envoy/", import.meta.url),
+        new URL("./envoy/", import.meta.url),
         ["envoy.template.yaml"],
       ],
     ] as const
@@ -38,7 +38,7 @@ Deno.test("computeEmbedHash matches embed and envoy assets", async () => {
 
 Deno.test("envoy template includes required proxy settings", async () => {
   const template = await Deno.readTextFile(
-    new URL("../src/docker/envoy/envoy.template.yaml", import.meta.url),
+    new URL("./envoy/envoy.template.yaml", import.meta.url),
   );
 
   for (

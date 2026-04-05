@@ -1,12 +1,12 @@
 import { assertEquals, assertMatch } from "@std/assert";
-import { SessionBroker } from "../src/network/broker.ts";
-import { serveAuthRouter } from "../src/network/envoy_auth_router.ts";
+import { SessionBroker } from "./broker.ts";
+import { serveAuthRouter } from "./envoy_auth_router.ts";
 import {
   brokerSocketPath,
   resolveNetworkRuntimePaths,
   writeSessionRegistry,
-} from "../src/network/registry.ts";
-import { hashToken } from "../src/network/protocol.ts";
+} from "./registry.ts";
+import { hashToken } from "./protocol.ts";
 
 interface RawHttpResponse {
   status: number;

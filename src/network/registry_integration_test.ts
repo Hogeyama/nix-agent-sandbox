@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { resolveNetworkRuntimePaths } from "../src/network/registry.ts";
+import { resolveNetworkRuntimePaths } from "./registry.ts";
 
 Deno.test("resolveNetworkRuntimePaths: normalizes existing directory modes", async () => {
   const rootDir = await Deno.makeTempDir({ prefix: "nas-registry-" });
