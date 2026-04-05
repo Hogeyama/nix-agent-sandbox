@@ -9,15 +9,9 @@
 
 import { assertEquals, assertThrows } from "@std/assert";
 import { assertMatch } from "@std/assert/match";
-import {
-  ConfigValidationError,
-  validateConfig,
-} from "./validate.ts";
+import { ConfigValidationError, validateConfig } from "./validate.ts";
 import { profileSchema } from "./schema.ts";
-import {
-  DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
-} from "./types.ts";
+import { DEFAULT_DBUS_CONFIG, DEFAULT_DISPLAY_CONFIG } from "./types.ts";
 import type { RawConfig } from "./types.ts";
 
 // ---------------------------------------------------------------------------

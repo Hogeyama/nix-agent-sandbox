@@ -4,10 +4,7 @@
  */
 
 import { assertEquals, assertThrows } from "@std/assert";
-import {
-  applyWorktreeOverride,
-  parseProfileAndWorktreeArgs,
-} from "./cli.ts";
+import { applyWorktreeOverride, parseProfileAndWorktreeArgs } from "./cli.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,

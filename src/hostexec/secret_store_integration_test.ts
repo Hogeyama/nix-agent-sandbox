@@ -1,9 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import {
-  parseDotEnv,
-  resolveSecret,
-  SecretStore,
-} from "./secret_store.ts";
+import { parseDotEnv, resolveSecret, SecretStore } from "./secret_store.ts";
 
 Deno.test("parseDotEnv: parses export and quoted values", () => {
   const parsed = parseDotEnv(

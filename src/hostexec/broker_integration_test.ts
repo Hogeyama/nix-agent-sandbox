@@ -1,9 +1,6 @@
 import { assertEquals, assertMatch } from "@std/assert";
 import type { HostExecConfig } from "../config/types.ts";
-import {
-  HostExecBroker,
-  sendHostExecBrokerRequest,
-} from "./broker.ts";
+import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
 import {
   hostExecBrokerSocketPath,
   listHostExecPendingEntries,

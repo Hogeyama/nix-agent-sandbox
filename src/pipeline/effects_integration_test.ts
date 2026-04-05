@@ -1,9 +1,5 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import {
-  executeEffect,
-  executePlan,
-  teardownHandles,
-} from "./effects.ts";
+import { executeEffect, executePlan, teardownHandles } from "./effects.ts";
 import type { ResourceEffect, StagePlan } from "./types.ts";
 
 // ---------------------------------------------------------------------------

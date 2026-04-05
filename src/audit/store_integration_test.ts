@@ -1,9 +1,5 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import {
-  appendAuditLog,
-  queryAuditLogs,
-  resolveAuditDir,
-} from "./store.ts";
+import { appendAuditLog, queryAuditLogs, resolveAuditDir } from "./store.ts";
 import type { AuditLogEntry } from "./types.ts";
 import * as path from "@std/path";
 

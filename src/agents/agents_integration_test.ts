@@ -6,10 +6,7 @@
 import { assertEquals } from "@std/assert";
 import { configureClaude, resolveClaudeProbes } from "./claude.ts";
 import type { ClaudeProbes } from "./claude.ts";
-import {
-  configureCopilot,
-  resolveCopilotProbes,
-} from "./copilot.ts";
+import { configureCopilot, resolveCopilotProbes } from "./copilot.ts";
 import type { CopilotProbes } from "./copilot.ts";
 import { configureCodex, resolveCodexProbes } from "./codex.ts";
 import type { CodexProbes } from "./codex.ts";

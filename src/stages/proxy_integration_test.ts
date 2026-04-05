@@ -7,10 +7,7 @@
  */
 
 import { assertEquals, assertMatch } from "@std/assert";
-import {
-  buildNetworkRuntimePaths,
-  createProxyStage,
-} from "./proxy.ts";
+import { buildNetworkRuntimePaths, createProxyStage } from "./proxy.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
