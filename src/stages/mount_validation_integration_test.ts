@@ -10,16 +10,16 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
+} from "../config/types.ts";
 import {
   createMountStage,
   resolveMountProbes,
   serializeNixExtraPackages,
-} from "../src/stages/mount.ts";
-import type { MountProbes } from "../src/stages/mount.ts";
-import type { Config, Profile } from "../src/config/types.ts";
-import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
-import { buildHostEnv, resolveProbes } from "../src/pipeline/host_env.ts";
+} from "./mount.ts";
+import type { MountProbes } from "./mount.ts";
+import type { Config, Profile } from "../config/types.ts";
+import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;

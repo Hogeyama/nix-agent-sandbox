@@ -10,26 +10,26 @@ import { assertEquals, assertMatch } from "@std/assert";
 import {
   buildNetworkRuntimePaths,
   createProxyStage,
-} from "../src/stages/proxy.ts";
+} from "./proxy.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
-import type { Config, Profile } from "../src/config/types.ts";
+} from "../config/types.ts";
+import type { Config, Profile } from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
   ProbeResults,
   StageInput,
-} from "../src/pipeline/types.ts";
-import { executePlan, teardownHandles } from "../src/pipeline/effects.ts";
+} from "../pipeline/types.ts";
+import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import {
   dockerIsRunning,
   dockerNetworkRemove,
   dockerRm,
   dockerStop,
-} from "../src/docker/client.ts";
+} from "../docker/client.ts";
 
 const DEFAULT_PROMPT = {
   enable: false,

@@ -11,24 +11,24 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
-import { createDindStage } from "../src/stages/dind.ts";
-import type { Config, Profile } from "../src/config/types.ts";
+} from "../config/types.ts";
+import { createDindStage } from "./dind.ts";
+import type { Config, Profile } from "../config/types.ts";
 import type {
   DindSidecarEffect,
   HostEnv,
   ProbeResults,
   StageInput,
-} from "../src/pipeline/types.ts";
-import { executeEffect, teardownHandles } from "../src/pipeline/effects.ts";
-import type { ResourceHandle } from "../src/pipeline/effects.ts";
+} from "../pipeline/types.ts";
+import { executeEffect, teardownHandles } from "../pipeline/effects.ts";
+import type { ResourceHandle } from "../pipeline/effects.ts";
 import {
   dockerIsRunning,
   dockerNetworkRemove,
   dockerRm,
   dockerStop,
   dockerVolumeRemove,
-} from "../src/docker/client.ts";
+} from "../docker/client.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;

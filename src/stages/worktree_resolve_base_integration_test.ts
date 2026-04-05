@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import $ from "dax";
-import { resolveBase } from "../src/stages/worktree.ts";
+import { resolveBase } from "./worktree.ts";
 
 /** 一時 git リポジトリを作成してコールバックを実行し、後片付けする */
 async function withTempRepo(

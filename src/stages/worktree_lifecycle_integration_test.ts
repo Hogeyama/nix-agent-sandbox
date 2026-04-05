@@ -4,7 +4,7 @@ import {
   cleanNasWorktrees,
   listNasWorktrees,
   listOrphanNasBranches,
-} from "../src/stages/worktree.ts";
+} from "./worktree.ts";
 
 /** 一時 git リポジトリを作成してコールバックを実行し、後片付けする */
 async function withTempRepo(

@@ -7,20 +7,20 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
-} from "../src/config/types.ts";
+} from "../config/types.ts";
 import {
   buildProxyArgs,
   createDbusProxyStage,
   resolveRuntimeDir,
   resolveSourceAddress,
-} from "../src/stages/dbus_proxy.ts";
+} from "./dbus_proxy.ts";
 import type {
   DbusProxyEffect,
   HostEnv,
   ProbeResults,
   StageInput,
-} from "../src/pipeline/types.ts";
-import { executePlan, teardownHandles } from "../src/pipeline/effects.ts";
+} from "../pipeline/types.ts";
+import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 
 function makeProfile(): Profile {
   return {

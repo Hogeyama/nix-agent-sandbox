@@ -13,10 +13,10 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
-import type { Config, Profile } from "../src/config/types.ts";
-import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
-import { WorktreeStage } from "../src/stages/worktree.ts";
+} from "../config/types.ts";
+import type { Config, Profile } from "../config/types.ts";
+import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import { WorktreeStage } from "./worktree.ts";
 
 async function withTempRepo(
   fn: (repoRoot: string) => Promise<void>,

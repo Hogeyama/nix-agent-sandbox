@@ -23,14 +23,14 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
+} from "../config/types.ts";
 import {
   createDockerBuildStage,
   resolveBuildProbes,
-} from "../src/stages/launch.ts";
-import { executePlan, teardownHandles } from "../src/pipeline/effects.ts";
-import { buildHostEnv, resolveProbes } from "../src/pipeline/host_env.ts";
-import type { PriorStageOutputs } from "../src/pipeline/types.ts";
+} from "./launch.ts";
+import { executePlan, teardownHandles } from "../pipeline/effects.ts";
+import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
+import type { PriorStageOutputs } from "../pipeline/types.ts";
 
 const IMAGE_NAME = "nas-sandbox";
 
