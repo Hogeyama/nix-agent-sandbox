@@ -11,11 +11,13 @@ const CONFIG_FILENAME_YML = ".agent-sandbox.yml";
 const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 
 /** グローバル設定ディレクトリ */
-const GLOBAL_CONFIG_DIR = path.join(
-  Deno.env.get("HOME") ?? "/",
-  ".config",
-  "nas",
-);
+function getGlobalConfigDir(): string {
+  return path.join(
+    Deno.env.get("HOME") ?? "/",
+    ".config",
+    "nas",
+  );
+}
 
 /** loadConfig のオプション */
 export interface LoadConfigOptions {
@@ -43,7 +45,7 @@ export async function loadConfig(
 
   if (!globalRaw && !localRaw) {
     throw new Error(
-      `${CONFIG_FILENAME_YML} (or ${CONFIG_FILENAME_NIX}) not found in current directory or parent directories, and no global config found in ${GLOBAL_CONFIG_DIR}`,
+      `${CONFIG_FILENAME_YML} (or ${CONFIG_FILENAME_NIX}) not found in current directory or parent directories, and no global config found in ${getGlobalConfigDir()}`,
     );
   }
 
@@ -72,7 +74,7 @@ export async function loadGlobalConfig(
       ["agent-sandbox.nix", "nix"],
     ] as const
   ) {
-    const candidate = path.join(GLOBAL_CONFIG_DIR, filename);
+    const candidate = path.join(getGlobalConfigDir(), filename);
     try {
       await Deno.stat(candidate);
       if (format === "yml") {

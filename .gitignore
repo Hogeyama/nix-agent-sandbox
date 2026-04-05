@@ -4,3 +4,4 @@ src/ui/dist/
 !src/ui/dist/.gitkeep
 .playwright/cli.config.json
 .playwright-cli/
+.direnv/

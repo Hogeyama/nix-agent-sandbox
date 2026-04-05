@@ -7,7 +7,7 @@ import { loadConfig, resolveProfile } from "../config/load.ts";
 import {
   createDockerBuildStage,
   resolveBuildProbes,
-} from "../stages/launch.ts";
+} from "../stages/docker_build.ts";
 import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
 import { logInfo } from "../log.ts";

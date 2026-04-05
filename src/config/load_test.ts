@@ -1,0 +1,319 @@
+import { assertEquals } from "@std/assert";
+import { mergeRawConfigs, mergeRawProfiles } from "./load.ts";
+import type { RawConfig, RawProfile } from "./types.ts";
+
+Deno.test("mergeRawConfigs: global only", () => {
+  const global: RawConfig = {
+    default: "dev",
+    profiles: { dev: { agent: "claude" } },
+  };
+  const result = mergeRawConfigs(global, null);
+  assertEquals(result, global);
+});
+
+Deno.test("mergeRawConfigs: local only", () => {
+  const local: RawConfig = {
+    default: "prod",
+    profiles: { prod: { agent: "copilot" } },
+  };
+  const result = mergeRawConfigs(null, local);
+  assertEquals(result, local);
+});
+
+Deno.test("mergeRawConfigs: local default overrides global", () => {
+  const global: RawConfig = {
+    default: "g",
+    profiles: { g: { agent: "claude" } },
+  };
+  const local: RawConfig = {
+    default: "l",
+    profiles: { l: { agent: "copilot" } },
+  };
+  const result = mergeRawConfigs(global, local);
+  assertEquals(result.default, "l");
+});
+
+Deno.test("mergeRawConfigs: global default used when local has none", () => {
+  const global: RawConfig = {
+    default: "g",
+    profiles: { g: { agent: "claude" } },
+  };
+  const local: RawConfig = { profiles: { l: { agent: "copilot" } } };
+  const result = mergeRawConfigs(global, local);
+  assertEquals(result.default, "g");
+});
+
+Deno.test("mergeRawConfigs: profiles from both sides are included", () => {
+  const global: RawConfig = { profiles: { a: { agent: "claude" } } };
+  const local: RawConfig = { profiles: { b: { agent: "copilot" } } };
+  const result = mergeRawConfigs(global, local);
+  assertEquals(Object.keys(result.profiles!).sort(), ["a", "b"]);
+});
+
+Deno.test("mergeRawConfigs: same-name profile fields are merged", () => {
+  const global: RawConfig = {
+    profiles: {
+      dev: {
+        agent: "claude",
+        nix: { enable: true, "mount-socket": false },
+      },
+    },
+  };
+  const local: RawConfig = {
+    profiles: {
+      dev: {
+        nix: { "mount-socket": true },
+      },
+    },
+  };
+  const result = mergeRawConfigs(global, local);
+  const p = result.profiles!["dev"];
+  assertEquals(p.agent, "claude"); // from global
+  assertEquals(p.nix?.enable, true); // from global
+  assertEquals(p.nix?.["mount-socket"], true); // overridden by local
+});
+
+Deno.test("mergeRawProfiles: nested object shallow merge", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    docker: { enable: true, shared: false },
+    gcloud: { "mount-config": true },
+  };
+  const local: RawProfile = {
+    docker: { enable: false, shared: false },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.agent, "claude");
+  assertEquals(result.docker?.enable, false);
+  assertEquals(result.gcloud?.["mount-config"], true); // from global
+});
+
+Deno.test("mergeRawProfiles: array fields use local replacement", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    "agent-args": ["--global-flag"],
+    env: [{ key: "G", val: "1" }],
+  };
+  const local: RawProfile = {
+    "agent-args": ["--local-flag"],
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result["agent-args"], ["--local-flag"]); // replaced, not merged
+  assertEquals(result.env, [{ key: "G", val: "1" }]); // env from global (local undefined)
+});
+
+Deno.test("mergeRawProfiles: local env replaces global env", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    env: [{ key: "G", val: "1" }],
+  };
+  const local: RawProfile = {
+    env: [{ key: "L", val: "2" }],
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.env, [{ key: "L", val: "2" }]);
+});
+
+Deno.test("mergeRawProfiles: worktree shallow merge", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    worktree: { base: "origin/main", "on-create": "npm ci" },
+  };
+  const local: RawProfile = {
+    worktree: { "on-create": "yarn install" },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.worktree?.base, "origin/main"); // from global
+  assertEquals(result.worktree?.["on-create"], "yarn install"); // overridden
+});
+
+Deno.test("mergeRawProfiles: aws shallow merge", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    aws: { "mount-config": true },
+  };
+  const local: RawProfile = {
+    aws: { "mount-config": false },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.aws?.["mount-config"], false);
+});
+
+Deno.test("mergeRawProfiles: display shallow merge", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    display: { enable: true },
+  };
+  const local: RawProfile = {};
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.display?.enable, true);
+
+  const result2 = mergeRawProfiles(local, global);
+  assertEquals(result2.display?.enable, true);
+});
+
+Deno.test("mergeRawProfiles: all RawProfile keys are preserved", () => {
+  // Guard against forgetting to add new fields to mergeRawProfiles.
+  // When a new field is added to RawProfile, add it here too.
+  const full: Required<RawProfile> = {
+    agent: "claude",
+    "agent-args": ["--flag"],
+    worktree: { base: "main" },
+    nix: { enable: true },
+    docker: { enable: true },
+    gcloud: { "mount-config": true },
+    aws: { "mount-config": true },
+    gpg: { "forward-agent": true },
+    display: { enable: true },
+    network: { allowlist: ["example.com"] },
+    dbus: { session: { enable: true } },
+    "extra-mounts": [{ src: "/a", dst: "/b" }],
+    env: [{ key: "K", val: "V" }],
+    hostexec: { rules: [] },
+  };
+  const result = mergeRawProfiles(full, {});
+  for (const key of Object.keys(full) as (keyof RawProfile)[]) {
+    assertEquals(
+      result[key] !== undefined,
+      true,
+      `mergeRawProfiles dropped field "${key}"`,
+    );
+  }
+});
+
+Deno.test("mergeRawProfiles: network.prompt subfields are preserved", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    network: {
+      allowlist: ["github.com"],
+      prompt: {
+        enable: true,
+        "timeout-seconds": 300,
+        "default-scope": "host-port",
+        notify: "auto",
+      },
+    },
+  };
+  const local: RawProfile = {
+    network: {
+      prompt: {
+        notify: "desktop",
+      },
+    },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.network?.allowlist, ["github.com"]);
+  assertEquals(result.network?.prompt, {
+    enable: true,
+    "timeout-seconds": 300,
+    "default-scope": "host-port",
+    notify: "desktop",
+  });
+});
+
+Deno.test("mergeRawProfiles: local agent overrides global", () => {
+  const global: RawProfile = { agent: "claude" };
+  const local: RawProfile = { agent: "copilot" };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.agent, "copilot");
+});
+
+Deno.test("mergeRawProfiles: local inherits global agent when not set", () => {
+  const global: RawProfile = { agent: "claude" };
+  const local: RawProfile = { "agent-args": ["--verbose"] };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.agent, "claude");
+  assertEquals(result["agent-args"], ["--verbose"]);
+});
+
+Deno.test("mergeRawProfiles: nix config is shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    nix: { enable: true, "mount-socket": false },
+  };
+  const local: RawProfile = {
+    nix: { "mount-socket": true },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.nix?.enable, true); // from global
+  assertEquals(result.nix?.["mount-socket"], true); // from local
+});
+
+Deno.test("mergeRawProfiles: gpg config is shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    gpg: { "forward-agent": false },
+  };
+  const local: RawProfile = {
+    gpg: { "forward-agent": true },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.gpg?.["forward-agent"], true);
+});
+
+Deno.test("mergeRawProfiles: dbus config is shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    dbus: {
+      session: {
+        enable: true,
+        see: ["org.freedesktop.secrets"],
+      },
+    },
+  };
+  const local: RawProfile = {
+    dbus: {
+      session: {
+        talk: ["org.freedesktop.secrets"],
+      },
+    },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.dbus?.session?.enable, true);
+  assertEquals(result.dbus?.session?.see, ["org.freedesktop.secrets"]);
+  assertEquals(result.dbus?.session?.talk, ["org.freedesktop.secrets"]);
+});
+
+Deno.test("mergeRawProfiles: hostexec secrets are shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    hostexec: {
+      secrets: {
+        github_token: {
+          from: "env:GITHUB_TOKEN",
+          required: true,
+        },
+      },
+    },
+  };
+  const local: RawProfile = {
+    hostexec: {
+      secrets: {
+        github_token: {
+          from: "env:OVERRIDE_GITHUB_TOKEN",
+          required: false,
+        },
+      },
+    },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.hostexec?.secrets, {
+    github_token: {
+      from: "env:OVERRIDE_GITHUB_TOKEN",
+      required: false,
+    },
+  });
+});
+
+Deno.test("mergeRawConfigs: local ui overrides global ui fields", () => {
+  const global: RawConfig = {
+    ui: { enable: true, port: 3939, "idle-timeout": 300 },
+    profiles: { dev: { agent: "claude" } },
+  };
+  const local: RawConfig = {
+    ui: { port: 8080 },
+    profiles: {},
+  };
+  const result = mergeRawConfigs(global, local);
+  assertEquals(result.ui, { enable: true, port: 8080, "idle-timeout": 300 });
+});

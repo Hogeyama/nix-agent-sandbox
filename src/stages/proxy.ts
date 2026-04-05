@@ -57,7 +57,7 @@ export function createProxyStage(
         return null;
       }
 
-      const runtimePaths = resolveNetworkRuntimePathsPure(input.host);
+      const runtimePaths = buildNetworkRuntimePaths(input.host);
       const brokerSocket = path.join(
         runtimePaths.brokersDir,
         `${input.sessionId}.sock`,
@@ -142,11 +142,10 @@ function isProxyEnabled(input: StageInput): boolean {
 }
 
 /**
- * Compute NetworkRuntimePaths purely from HostEnv (no I/O).
- * Mirrors the logic of resolveNetworkRuntimePaths() but without
- * creating directories.
+ * Compute NetworkRuntimePaths from HostEnv (pure, no I/O).
+ * Directory creation is handled by the effect executor.
  */
-export function resolveNetworkRuntimePathsPure(
+export function buildNetworkRuntimePaths(
   host: HostEnv,
 ): NetworkRuntimePaths {
   const xdg = host.env.get("XDG_RUNTIME_DIR");
