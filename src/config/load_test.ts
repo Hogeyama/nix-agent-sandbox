@@ -211,6 +211,100 @@ Deno.test("mergeRawProfiles: network.prompt subfields are preserved", () => {
   });
 });
 
+Deno.test("mergeRawProfiles: local agent overrides global", () => {
+  const global: RawProfile = { agent: "claude" };
+  const local: RawProfile = { agent: "copilot" };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.agent, "copilot");
+});
+
+Deno.test("mergeRawProfiles: local inherits global agent when not set", () => {
+  const global: RawProfile = { agent: "claude" };
+  const local: RawProfile = { "agent-args": ["--verbose"] };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.agent, "claude");
+  assertEquals(result["agent-args"], ["--verbose"]);
+});
+
+Deno.test("mergeRawProfiles: nix config is shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    nix: { enable: true, "mount-socket": false },
+  };
+  const local: RawProfile = {
+    nix: { "mount-socket": true },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.nix?.enable, true); // from global
+  assertEquals(result.nix?.["mount-socket"], true); // from local
+});
+
+Deno.test("mergeRawProfiles: gpg config is shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    gpg: { "forward-agent": false },
+  };
+  const local: RawProfile = {
+    gpg: { "forward-agent": true },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.gpg?.["forward-agent"], true);
+});
+
+Deno.test("mergeRawProfiles: dbus config is shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    dbus: {
+      session: {
+        enable: true,
+        see: ["org.freedesktop.secrets"],
+      },
+    },
+  };
+  const local: RawProfile = {
+    dbus: {
+      session: {
+        talk: ["org.freedesktop.secrets"],
+      },
+    },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.dbus?.session?.enable, true);
+  assertEquals(result.dbus?.session?.see, ["org.freedesktop.secrets"]);
+  assertEquals(result.dbus?.session?.talk, ["org.freedesktop.secrets"]);
+});
+
+Deno.test("mergeRawProfiles: hostexec secrets are shallow merged", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    hostexec: {
+      secrets: {
+        github_token: {
+          from: "env:GITHUB_TOKEN",
+          required: true,
+        },
+      },
+    },
+  };
+  const local: RawProfile = {
+    hostexec: {
+      secrets: {
+        github_token: {
+          from: "env:OVERRIDE_GITHUB_TOKEN",
+          required: false,
+        },
+      },
+    },
+  };
+  const result = mergeRawProfiles(global, local);
+  assertEquals(result.hostexec?.secrets, {
+    github_token: {
+      from: "env:OVERRIDE_GITHUB_TOKEN",
+      required: false,
+    },
+  });
+});
+
 Deno.test("mergeRawConfigs: local ui overrides global ui fields", () => {
   const global: RawConfig = {
     ui: { enable: true, port: 3939, "idle-timeout": 300 },

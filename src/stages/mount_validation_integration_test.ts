@@ -946,6 +946,58 @@ Deno.test("MountStage: codex agent mounts ~/.codex if exists", async () => {
   }
 });
 
+// --- MountStage 経由のエージェント選択 ---
+
+/** 一時的に PATH 上にダミーバイナリを配置してテストを実行する */
+async function withFakeBinary(
+  name: string,
+  fn: () => Promise<void> | void,
+): Promise<void> {
+  const origPath = Deno.env.get("PATH");
+  const tmpBinDir = await Deno.makeTempDir({ prefix: "nas-test-bin-" });
+  try {
+    await Deno.writeTextFile(`${tmpBinDir}/${name}`, "#!/bin/sh\nexit 0\n");
+    await Deno.chmod(`${tmpBinDir}/${name}`, 0o755);
+    Deno.env.set("PATH", `${tmpBinDir}:${origPath ?? ""}`);
+    await fn();
+  } finally {
+    if (origPath !== undefined) Deno.env.set("PATH", origPath);
+    else Deno.env.delete("PATH");
+    await Deno.remove(tmpBinDir, { recursive: true }).catch(() => {});
+  }
+}
+
+Deno.test("MountStage: dispatches to configureClaude for agent=claude", async () => {
+  const profile = makeProfile({ agent: "claude" });
+  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+  const plan = createMountStage(mountProbes).plan(input)!;
+
+  // Claude の特徴: PATH に .local/bin が入る
+  const containerHome = getContainerHome();
+  assertEquals(
+    plan.envVars["PATH"]?.includes(`${containerHome}/.local/bin`),
+    true,
+  );
+});
+
+Deno.test("MountStage: dispatches to configureCopilot for agent=copilot", async () => {
+  await withFakeBinary("copilot", async () => {
+    const profile = makeProfile({ agent: "copilot" });
+    const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+    const plan = createMountStage(mountProbes).plan(input)!;
+    assertEquals(plan.outputOverrides.agentCommand, ["copilot"]);
+  });
+});
+
+Deno.test("MountStage: dispatches to configureCodex for agent=codex", async () => {
+  await withFakeBinary("codex", async () => {
+    const profile = makeProfile({ agent: "codex" });
+    const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
+    const plan = createMountStage(mountProbes).plan(input)!;
+    assertEquals(plan.outputOverrides.agentCommand, ["codex"]);
+  });
+});
+
 // --- 空のプロファイルでの実行 ---
 
 Deno.test("MountStage: minimal profile produces valid docker args", async () => {

@@ -1,9 +1,5 @@
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
-import {
-  createMountStage,
-  resolveMountProbes,
-  serializeNixExtraPackages,
-} from "./mount.ts";
+import { assertEquals, assertRejects } from "@std/assert";
+import { createMountStage, resolveMountProbes } from "./mount.ts";
 import type { MountProbes } from "./mount.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -181,24 +177,6 @@ Deno.test("MountStage: mounts DBus proxy runtime and injects session env", async
   }
 });
 
-Deno.test("MountStage: invalid dynamic key throws", async () => {
-  const profile: Profile = {
-    ...baseProfile,
-    env: [{
-      keyCmd: "printf INVALID-KEY",
-      valCmd: "printf dynamic_value",
-      mode: "set" as const,
-    }],
-  };
-  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
-  const stage = createMountStage(mountProbes);
-  assertThrows(
-    () => stage.plan(input),
-    Error,
-    "Invalid env var name",
-  );
-});
-
 Deno.test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async () => {
   const profile: Profile = {
     ...baseProfile,
@@ -259,73 +237,6 @@ Deno.test("MountStage: applies extra-mounts with mode and ~ expansion", async ()
   assertEquals(
     plan.dockerArgs.includes(`${Deno.cwd()}:/tmp/nas-extra-rw`),
     true,
-  );
-});
-
-Deno.test("MountStage: skips missing extra-mounts src", async () => {
-  const profile: Profile = {
-    ...baseProfile,
-    extraMounts: [{
-      src: `/tmp/nas-missing-${crypto.randomUUID()}`,
-      dst: "/tmp/nas-missing-dst",
-      mode: "ro",
-    }],
-  };
-  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
-  const stage = createMountStage(mountProbes);
-  const plan = stage.plan(input)!;
-  assertEquals(
-    plan.dockerArgs.some((arg) => arg.includes(":/tmp/nas-missing-dst")),
-    false,
-  );
-});
-
-Deno.test("MountStage: relative extra-mount dst resolves from workDir", async () => {
-  const profile: Profile = {
-    ...baseProfile,
-    extraMounts: [{ src: "/dev/null", dst: ".env", mode: "ro" }],
-  };
-  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
-  const stage = createMountStage(mountProbes);
-  const plan = stage.plan(input)!;
-  assertEquals(
-    plan.dockerArgs.includes(`/dev/null:${Deno.cwd()}/.env:ro`),
-    true,
-  );
-});
-
-Deno.test("MountStage: relative extra-mount src resolves from workDir", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-relative-src-" });
-  const srcDir = "mount-src";
-  try {
-    await Deno.mkdir(`${tmpDir}/${srcDir}`);
-    const profile: Profile = {
-      ...baseProfile,
-      extraMounts: [{ src: srcDir, dst: "/tmp/mount-src", mode: "ro" }],
-    };
-    const { input, mountProbes } = await buildTestInput(profile, tmpDir);
-    const stage = createMountStage(mountProbes);
-    const plan = stage.plan(input)!;
-    assertEquals(
-      plan.dockerArgs.includes(`${tmpDir}/${srcDir}:/tmp/mount-src:ro`),
-      true,
-    );
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("MountStage: reserved extra-mount dst throws", async () => {
-  const profile: Profile = {
-    ...baseProfile,
-    extraMounts: [{ src: Deno.cwd(), dst: "/nix", mode: "ro" }],
-  };
-  const { input, mountProbes } = await buildTestInput(profile, Deno.cwd());
-  const stage = createMountStage(mountProbes);
-  assertThrows(
-    () => stage.plan(input),
-    Error,
-    "conflicts with existing mount destination",
   );
 });
 
@@ -428,18 +339,4 @@ Deno.test("MountStage: unknown agent type throws in resolveMountProbes", async (
     Error,
     "Unknown agent",
   );
-});
-
-Deno.test("serializeNixExtraPackages: returns newline-delimited list", () => {
-  const serialized = serializeNixExtraPackages([
-    "nixpkgs#gh",
-    "  nixpkgs#ripgrep  ",
-    "",
-    "   ",
-  ]);
-  assertEquals(serialized, "nixpkgs#gh\nnixpkgs#ripgrep");
-});
-
-Deno.test("serializeNixExtraPackages: returns null for empty list", () => {
-  assertEquals(serializeNixExtraPackages(["", "   "]), null);
 });
