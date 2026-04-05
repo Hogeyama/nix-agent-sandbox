@@ -1,7 +1,7 @@
 /**
  * Docker CLI ラッパー integration テスト（実 Docker daemon 必要）
  *
- * unit テスト（computeEmbedHash 等）は client_unit_integration_test.ts を参照。
+ * unit テスト（computeEmbedHash 等）は client_test.ts を参照。
  */
 
 import { assert, assertEquals, assertRejects } from "@std/assert";
