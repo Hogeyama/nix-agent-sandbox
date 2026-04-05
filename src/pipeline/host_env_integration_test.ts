@@ -1,6 +1,6 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
-import { buildHostEnv, resolveProbes } from "../src/pipeline/host_env.ts";
-import type { HostEnv } from "../src/pipeline/types.ts";
+import { buildHostEnv, resolveProbes } from "./host_env.ts";
+import type { HostEnv } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // buildHostEnv

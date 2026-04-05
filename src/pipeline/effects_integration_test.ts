@@ -3,8 +3,8 @@ import {
   executeEffect,
   executePlan,
   teardownHandles,
-} from "../src/pipeline/effects.ts";
-import type { ResourceEffect, StagePlan } from "../src/pipeline/types.ts";
+} from "./effects.ts";
+import type { ResourceEffect, StagePlan } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Helper: create a unique temp directory for test isolation

@@ -4,10 +4,10 @@
 
 import { assertEquals } from "@std/assert";
 import { Hono } from "hono";
-import { createApiRoutes } from "../src/ui/routes/api.ts";
-import type { UiDataContext } from "../src/ui/data.ts";
-import type { NetworkRuntimePaths } from "../src/network/registry.ts";
-import type { HostExecRuntimePaths } from "../src/hostexec/registry.ts";
+import { createApiRoutes } from "./api.ts";
+import type { UiDataContext } from "../data.ts";
+import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 
 /** テスト用のダミーコンテキストを作成 */
 function createTestContext(dir: string): UiDataContext {
