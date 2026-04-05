@@ -7,11 +7,11 @@
 
 import { assertEquals } from "@std/assert";
 import {
+  buildNetworkRuntimePaths,
   createProxyStage,
   LOCAL_PROXY_PORT,
   parseDindContainerName,
   replaceNetwork,
-  resolveNetworkRuntimePathsPure,
 } from "../src/stages/proxy.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -292,7 +292,7 @@ Deno.test("LOCAL_PROXY_PORT: is 18080", () => {
   assertEquals(LOCAL_PROXY_PORT, 18080);
 });
 
-Deno.test("resolveNetworkRuntimePathsPure: uses XDG_RUNTIME_DIR", () => {
+Deno.test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
   const host: HostEnv = {
     home: "/home/test",
     user: "test",
@@ -301,7 +301,7 @@ Deno.test("resolveNetworkRuntimePathsPure: uses XDG_RUNTIME_DIR", () => {
     isWSL: false,
     env: new Map([["XDG_RUNTIME_DIR", "/run/user/1000"]]),
   };
-  const paths = resolveNetworkRuntimePathsPure(host);
+  const paths = buildNetworkRuntimePaths(host);
   assertEquals(paths.runtimeDir, "/run/user/1000/nas/network");
   assertEquals(paths.sessionsDir, "/run/user/1000/nas/network/sessions");
   assertEquals(paths.brokersDir, "/run/user/1000/nas/network/brokers");
@@ -312,7 +312,7 @@ Deno.test("resolveNetworkRuntimePathsPure: uses XDG_RUNTIME_DIR", () => {
   assertEquals(paths.envoyConfigFile, "/run/user/1000/nas/network/envoy.yaml");
 });
 
-Deno.test("resolveNetworkRuntimePathsPure: falls back to /tmp when no XDG", () => {
+Deno.test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
   const host: HostEnv = {
     home: "/home/test",
     user: "test",
@@ -321,6 +321,6 @@ Deno.test("resolveNetworkRuntimePathsPure: falls back to /tmp when no XDG", () =
     isWSL: false,
     env: new Map(),
   };
-  const paths = resolveNetworkRuntimePathsPure(host);
+  const paths = buildNetworkRuntimePaths(host);
   assertEquals(paths.runtimeDir, "/tmp/nas-1000/network");
 });

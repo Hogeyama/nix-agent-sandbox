@@ -8,8 +8,8 @@
 
 import { assertEquals, assertMatch } from "@std/assert";
 import {
+  buildNetworkRuntimePaths,
   createProxyStage,
-  resolveNetworkRuntimePathsPure,
 } from "../src/stages/proxy.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -168,7 +168,7 @@ Deno.test({
     const plan = stage.plan(input);
     assertEquals(plan !== null, true);
 
-    const runtimePaths = resolveNetworkRuntimePathsPure(hostEnv);
+    const runtimePaths = buildNetworkRuntimePaths(hostEnv);
 
     const handles = [];
     try {
