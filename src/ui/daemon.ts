@@ -182,7 +182,9 @@ async function hasSetsid(): Promise<boolean> {
 
 async function readDaemonState(): Promise<DaemonState | null> {
   try {
-    return JSON.parse(await Deno.readTextFile(daemonStatePath())) as DaemonState;
+    return JSON.parse(
+      await Deno.readTextFile(daemonStatePath()),
+    ) as DaemonState;
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
       return null;
@@ -200,9 +202,13 @@ async function writeDaemonState(state: DaemonState): Promise<void> {
 }
 
 export function parseListeningPids(output: string): number[] {
-  return [...new Set(output.split("\n").map((line) => parseInt(line, 10)).filter(
-    (pid) => !Number.isNaN(pid),
-  ))];
+  return [
+    ...new Set(
+      output.split("\n").map((line) => parseInt(line, 10)).filter(
+        (pid) => !Number.isNaN(pid),
+      ),
+    ),
+  ];
 }
 
 async function listListeningPids(port: number): Promise<number[]> {

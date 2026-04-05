@@ -35,13 +35,15 @@ Deno.test("syncDaemonStatePid: writes the resolved listening pid back to state",
     | null = null;
 
   const pid = await syncDaemonStatePid(3939, {
-    readState: async () => ({
-      port: 3939,
-      startedAt: "2026-04-05T00:00:00.000Z",
-    }),
-    listListeningPids: async () => [789],
-    writeState: async (state) => {
+    readState: () =>
+      Promise.resolve({
+        port: 3939,
+        startedAt: "2026-04-05T00:00:00.000Z",
+      }),
+    listListeningPids: () => Promise.resolve([789]),
+    writeState: (state) => {
       writtenState = state;
+      return Promise.resolve();
     },
   });
 

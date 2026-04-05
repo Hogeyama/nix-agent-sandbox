@@ -13,20 +13,24 @@ Deno.test("createProxySessionNetworkHandle: tears down created network when envo
           envoyAlias: "nas-envoy",
         },
         {
-          createSessionNetwork: async (networkName) => {
+          createSessionNetwork: (networkName) => {
             calls.push(`create:${networkName}`);
+            return Promise.resolve();
           },
-          connectNetwork: async (_networkName, containerName) => {
+          connectNetwork: (_networkName, containerName) => {
             calls.push(`connect:${containerName}`);
             if (containerName === "envoy-a") {
-              throw new Error("envoy connect boom");
+              return Promise.reject(new Error("envoy connect boom"));
             }
+            return Promise.resolve();
           },
-          disconnectNetwork: async (networkName, containerName) => {
+          disconnectNetwork: (networkName, containerName) => {
             calls.push(`disconnect:${networkName}:${containerName}`);
+            return Promise.resolve();
           },
-          removeNetwork: async (networkName) => {
+          removeNetwork: (networkName) => {
             calls.push(`remove:${networkName}`);
+            return Promise.resolve();
           },
         },
       ),
@@ -54,20 +58,24 @@ Deno.test("createProxySessionNetworkHandle: disconnects envoy and removes networ
           dindContainerName: "dind-b",
         },
         {
-          createSessionNetwork: async (networkName) => {
+          createSessionNetwork: (networkName) => {
             calls.push(`create:${networkName}`);
+            return Promise.resolve();
           },
-          connectNetwork: async (_networkName, containerName) => {
+          connectNetwork: (_networkName, containerName) => {
             calls.push(`connect:${containerName}`);
             if (containerName === "dind-b") {
-              throw new Error("dind connect boom");
+              return Promise.reject(new Error("dind connect boom"));
             }
+            return Promise.resolve();
           },
-          disconnectNetwork: async (networkName, containerName) => {
+          disconnectNetwork: (networkName, containerName) => {
             calls.push(`disconnect:${networkName}:${containerName}`);
+            return Promise.resolve();
           },
-          removeNetwork: async (networkName) => {
+          removeNetwork: (networkName) => {
             calls.push(`remove:${networkName}`);
+            return Promise.resolve();
           },
         },
       ),
@@ -95,17 +103,21 @@ Deno.test("createProxySessionNetworkHandle: closes successful network attachment
       dindContainerName: "dind-c",
     },
     {
-      createSessionNetwork: async (networkName) => {
+      createSessionNetwork: (networkName) => {
         calls.push(`create:${networkName}`);
+        return Promise.resolve();
       },
-      connectNetwork: async (_networkName, containerName) => {
+      connectNetwork: (_networkName, containerName) => {
         calls.push(`connect:${containerName}`);
+        return Promise.resolve();
       },
-      disconnectNetwork: async (networkName, containerName) => {
+      disconnectNetwork: (networkName, containerName) => {
         calls.push(`disconnect:${networkName}:${containerName}`);
+        return Promise.resolve();
       },
-      removeNetwork: async (networkName) => {
+      removeNetwork: (networkName) => {
         calls.push(`remove:${networkName}`);
+        return Promise.resolve();
       },
     },
   );
