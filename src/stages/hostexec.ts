@@ -141,6 +141,16 @@ export function createHostExecStage(): PlanStage {
         ),
       ];
 
+      // Bind-mounts for absolute argv0 wrappers — replaces the container
+      // binary at that exact path so the wrapper intercepts the call.
+      const absoluteArgv0s = [
+        ...new Set(
+          config.rules
+            .map((rule) => rule.match.argv0)
+            .filter((argv0) => path.isAbsolute(argv0)),
+        ),
+      ];
+
       // Start HostExecBroker via unix-listener effect
       const workspaceRoot = input.prior.mountDir ?? input.prior.workDir;
       effects.push({
@@ -178,6 +188,10 @@ export function createHostExecStage(): PlanStage {
           ...relativeArgv0s.flatMap((argv0) => [
             "-v",
             `${wrapperScript}:${path.resolve(workDir, argv0)}:ro`,
+          ]),
+          ...absoluteArgv0s.flatMap((argv0) => [
+            "-v",
+            `${wrapperScript}:${argv0}:ro`,
           ]),
         ],
         envVars: {

@@ -458,6 +458,105 @@ Deno.test("HostExecBroker: relative rule executes original relative argv0", asyn
   }
 });
 
+Deno.test("HostExecBroker: absolute rule executes exact absolute binary path", async () => {
+  // Verify that a rule with an absolute argv0 executes that exact binary on
+  // the host and does not degrade to a basename/PATH lookup.
+  // We use a temp script at a known absolute path to avoid platform-specific
+  // assumptions about /usr/bin/true availability inside the test sandbox.
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  // Create a helper script inside workspace whose absolute path we control.
+  const helperScript = `${workspace}/helper.sh`;
+  await Deno.writeTextFile(helperScript, "#!/bin/sh\nprintf absolute-ok\n");
+  await Deno.chmod(helperScript, 0o755);
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [{
+        id: "helper-absolute",
+        match: { argv0: helperScript },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    // Request must use the exact absolute path — broker must execute it directly.
+    const response = await sendHostExecBrokerRequest(
+      socketPath,
+      request([], workspace, "req_helper_abs", helperScript),
+    );
+    assertEquals(response.type, "result");
+    if (response.type === "result") {
+      assertEquals(response.stdout, "absolute-ok");
+    }
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("HostExecBroker: absolute rule does not match bare-name invocation", async () => {
+  // A rule matching an absolute path should NOT intercept a bare-name invocation.
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await Deno.makeTempDir({
+    prefix: "nas-hostexec-workspace-",
+  });
+  const helperScript = `${workspace}/helper.sh`;
+  await Deno.writeTextFile(helperScript, "#!/bin/sh\nexit 0\n");
+  await Deno.chmod(helperScript, 0o755);
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [{
+        id: "helper-absolute",
+        match: { argv0: helperScript },
+        cwd: { mode: "workspace-only", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      }],
+    }),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  await broker.start(socketPath);
+  try {
+    const response = await sendHostExecBrokerRequest(
+      socketPath,
+      request([], workspace, "req_helper_bare", "helper.sh"),
+    );
+    // Bare 'helper.sh' should not match the absolute rule → fallback
+    assertEquals(response.type, "fallback");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+  }
+});
+
 Deno.test("HostExecBroker: argv0-only rule also matches no-args command", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
   const paths = await resolveHostExecRuntimePaths(runtimeDir);

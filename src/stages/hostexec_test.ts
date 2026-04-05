@@ -288,6 +288,33 @@ Deno.test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   );
 });
 
+Deno.test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path", () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [{
+    id: "usr-bin-git",
+    match: { argv0: "/usr/bin/git" },
+    cwd: { mode: "workspace-only", allow: [] },
+    env: {},
+    inheritEnv: { mode: "minimal", keys: [] },
+    approval: "allow",
+    fallback: "deny",
+  }];
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+  const plan = stage.plan(input);
+
+  assertNotEquals(plan, null);
+  if (!plan) return;
+
+  // Absolute argv0 should produce a docker mount at that exact path in the container
+  assertEquals(
+    plan.dockerArgs.some((arg) => arg.endsWith(":/usr/bin/git:ro")),
+    true,
+  );
+});
+
 Deno.test("HostExecStage plan: auto notify resolves to desktop", () => {
   const profile = makeProfile();
   profile.hostexec!.prompt.notify = "auto";

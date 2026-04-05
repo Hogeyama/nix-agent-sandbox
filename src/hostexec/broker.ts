@@ -474,8 +474,11 @@ export class HostExecBroker {
       envVars,
       capability: {
         ruleId: rule.id,
-        argv0: path.basename(argv0),
-        normalizedArgv: [path.basename(argv0), ...message.args],
+        argv0: path.isAbsolute(argv0) ? argv0 : path.basename(argv0),
+        normalizedArgv: [
+          path.isAbsolute(argv0) ? argv0 : path.basename(argv0),
+          ...message.args,
+        ],
         normalizedCwd: normalizedCwd,
         envBindings: Object.entries(rule.env)
           .map(([key, source]) => ({ key, source }))
@@ -516,7 +519,8 @@ export class HostExecBroker {
     request: ExecuteRequest,
     resolved: ResolvedExecution,
   ): Promise<HostExecBrokerResponse> {
-    const commandArgv0 = isRelativeHostExecArgv0(resolved.rule.match.argv0)
+    const commandArgv0 = isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
+        path.isAbsolute(resolved.rule.match.argv0)
       ? request.argv0
       : path.basename(request.argv0);
     const stdin = request.stdin

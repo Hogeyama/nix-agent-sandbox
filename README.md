@@ -452,7 +452,7 @@ session network
 - `bash -lc` / `sh -c` / `python -c` のような任意コード実行に繋がるルールは設定者の責任で避けてください
 - `unsafe-inherit-all` は互換性用の escape hatch であり、通常は `minimal` + `inherit-env.keys` を推奨します
 - `argv0` には bare name（`git`）、絶対パス（`/usr/bin/git`）、相対パス（`./gradlew`）を指定できます。
-  相対パスの場合、コンテナ内の該当ファイルがラッパースクリプトで bind-mount 置換されるため、`fallback: "container"` は使用できません（`"deny"` を指定してください）
+  絶対パスおよび相対パスの場合、コンテナ内の該当ファイルがラッパースクリプトで bind-mount 置換されるため、`fallback: "container"` は使用できません（`"deny"` を指定してください）
 - `arg-regex` は引数をスペースで join した文字列に対してマッチします。そのためスペースを含む単一引数（例: `git commit -m "hello world"` の `"hello world"`）と
   複数引数の区別はできません。実用上、コマンド識別に使う先頭引数やフラグにスペースが含まれることは少ないため問題になることは多くないですが、
   引数の値そのものに依存するマッチパターンを書く場合は留意してください
@@ -554,7 +554,7 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `hostexec.prompt.default-scope` | `"once"` \| `"capability"` | `"capability"` | hostexec 承認再利用の単位。`once`: そのリクエストのみ許可（キャッシュしない）、`capability`: 同じ capability（rule_id + argv0 + args 等）の組み合わせで再利用 |
 | `hostexec.prompt.notify` | `"auto"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`ui.enable: true` なら通知クリックでブラウザ UI を開く。`false` なら通知ボタンで直接 approve/deny |
 | `hostexec.rules[].id` | string | （必須） | 監査・承認 fingerprint に使う安定 ID |
-| `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名。bare name（`git`）、絶対パス（`/usr/bin/git`）、相対パス（`./gradlew`）を指定可能。相対パスの場合、コンテナ内の該当ファイルがラッパーで置換される |
+| `hostexec.rules[].match.argv0` | string | （必須） | host 実行へ委譲するコマンド名。bare name（`git`）、絶対パス（`/usr/bin/git`）、相対パス（`./gradlew`）を指定可能。絶対パス・相対パスの場合、コンテナ内の該当ファイルがラッパーで置換される |
 | `hostexec.rules[].match.arg-regex` | string | 省略可 | argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。省略時はその `argv0` の全コマンドにマッチ |
 | `hostexec.rules[].cwd.mode` | enum | `"workspace-or-session-tmp"` | `workspace-only` / `workspace-or-session-tmp` / `allowlist` / `any` |
 | `hostexec.rules[].cwd.allow` | string[] | `[]` | `cwd.mode: allowlist` 用。絶対パスまたは `workspace:` / `session_tmp:` プレフィクス |
@@ -562,4 +562,4 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `hostexec.rules[].inherit-env.mode` | enum | `"minimal"` | `minimal` / `unsafe-inherit-all` |
 | `hostexec.rules[].inherit-env.keys` | string[] | `[]` | `minimal` に追加で継承する host 環境変数 |
 | `hostexec.rules[].approval` | enum | `"prompt"` | `allow` / `prompt` / `deny` |
-| `hostexec.rules[].fallback` | enum | `"container"` | ルール不一致や不許可時にコンテナ実行へ戻すか即拒否するか。相対パス argv0（`./gradlew` 等）では `"container"` は使用不可（ラッパーで置換されるため）、`"deny"` のみ |
+| `hostexec.rules[].fallback` | enum | `"container"` | ルール不一致や不許可時にコンテナ実行へ戻すか即拒否するか。絶対パス・相対パス argv0（`/usr/bin/git`, `./gradlew` 等）では `"container"` は使用不可（ラッパーで置換されるため）、`"deny"` のみ |

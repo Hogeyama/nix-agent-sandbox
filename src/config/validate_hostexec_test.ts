@@ -359,6 +359,46 @@ Deno.test("hostexec config: allows relative argv0 with fallback deny", () => {
   assertEquals(config.profiles.test.hostexec?.rules[0].fallback, "deny");
 });
 
+Deno.test("hostexec config: rejects absolute argv0 with fallback container", () => {
+  assertThrows(
+    () =>
+      validateConfig({
+        profiles: {
+          test: {
+            agent: "claude",
+            hostexec: {
+              rules: [{
+                id: "usr-bin-git",
+                match: { argv0: "/usr/bin/git" },
+                fallback: "container",
+              }],
+            },
+          },
+        },
+      }),
+    ConfigValidationError,
+    "absolute argv0",
+  );
+});
+
+Deno.test("hostexec config: allows absolute argv0 with fallback deny", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        hostexec: {
+          rules: [{
+            id: "usr-bin-git",
+            match: { argv0: "/usr/bin/git" },
+            fallback: "deny",
+          }],
+        },
+      },
+    },
+  });
+  assertEquals(config.profiles.test.hostexec?.rules[0].fallback, "deny");
+});
+
 // ---------------------------------------------------------------------------
 // Error aggregation: hostexec env superRefine collects multiple issues
 // ---------------------------------------------------------------------------

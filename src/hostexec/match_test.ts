@@ -157,3 +157,27 @@ Deno.test("matchRule: relative argv0 rule does not match PATH invocation", () =>
   const result = matchRule(rules, "gradlew", ["test"]);
   assertEquals(result, null);
 });
+
+Deno.test("matchRule: absolute argv0 rule matches exact absolute invocation", () => {
+  const rules = [makeRule("usr-bin-git", { argv0: "/usr/bin/git" })];
+  const result = matchRule(rules, "/usr/bin/git", ["status"]);
+  assertEquals(result?.rule.id, "usr-bin-git");
+});
+
+Deno.test("matchRule: absolute argv0 rule does not match bare name invocation", () => {
+  const rules = [makeRule("usr-bin-git", { argv0: "/usr/bin/git" })];
+  const result = matchRule(rules, "git", ["status"]);
+  assertEquals(result, null);
+});
+
+Deno.test("matchRule: absolute argv0 rule does not match different absolute path", () => {
+  const rules = [makeRule("usr-bin-git", { argv0: "/usr/bin/git" })];
+  const result = matchRule(rules, "/usr/local/bin/git", ["status"]);
+  assertEquals(result, null);
+});
+
+Deno.test("matchRule: bare rule matches absolute invocation via basename", () => {
+  const rules = [makeRule("git-any", { argv0: "git" })];
+  const result = matchRule(rules, "/usr/bin/git", ["status"]);
+  assertEquals(result?.rule.id, "git-any");
+});
