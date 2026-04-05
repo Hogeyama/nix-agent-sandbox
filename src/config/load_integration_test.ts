@@ -11,8 +11,8 @@ import {
   mergeRawConfigs,
   mergeRawProfiles,
   resolveProfile,
-} from "../src/config/load.ts";
-import { validateConfig } from "../src/config/validate.ts";
+} from "./load.ts";
+import { validateConfig } from "./validate.ts";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -21,7 +21,7 @@ import {
   DEFAULT_UI_CONFIG,
   type RawConfig,
   type RawProfile,
-} from "../src/config/types.ts";
+} from "./types.ts";
 
 /** 一時ディレクトリに設定ファイルを配置してテストを実行するヘルパー */
 async function withTempConfig(

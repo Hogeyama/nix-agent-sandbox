@@ -6,7 +6,7 @@
 
 import { assertEquals } from "@std/assert";
 import * as path from "@std/path";
-import { loadConfig } from "../src/config/load.ts";
+import { loadConfig } from "./load.ts";
 
 /** 一時ディレクトリにグローバル(YAML) + ローカル(Nix) を配置してテスト */
 async function withNixLocalConfig(

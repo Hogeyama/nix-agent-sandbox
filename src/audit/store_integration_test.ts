@@ -3,8 +3,8 @@ import {
   appendAuditLog,
   queryAuditLogs,
   resolveAuditDir,
-} from "../src/audit/store.ts";
-import type { AuditLogEntry } from "../src/audit/types.ts";
+} from "./store.ts";
+import type { AuditLogEntry } from "./types.ts";
 import * as path from "@std/path";
 
 function makeEntry(

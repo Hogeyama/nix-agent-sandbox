@@ -4,22 +4,22 @@
  */
 
 import { assertEquals } from "@std/assert";
-import { configureClaude, resolveClaudeProbes } from "../src/agents/claude.ts";
-import type { ClaudeProbes } from "../src/agents/claude.ts";
+import { configureClaude, resolveClaudeProbes } from "./claude.ts";
+import type { ClaudeProbes } from "./claude.ts";
 import {
   configureCopilot,
   resolveCopilotProbes,
-} from "../src/agents/copilot.ts";
-import type { CopilotProbes } from "../src/agents/copilot.ts";
-import { configureCodex, resolveCodexProbes } from "../src/agents/codex.ts";
-import type { CodexProbes } from "../src/agents/codex.ts";
+} from "./copilot.ts";
+import type { CopilotProbes } from "./copilot.ts";
+import { configureCodex, resolveCodexProbes } from "./codex.ts";
+import type { CodexProbes } from "./codex.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
-import type { Config, Profile } from "../src/config/types.ts";
+} from "../config/types.ts";
+import type { Config, Profile } from "../config/types.ts";
 
 const baseProfile: Profile = {
   agent: "claude",
@@ -849,10 +849,10 @@ Deno.test("resolveCodexProbes: returns null when codex not on PATH", async () =>
 // MountStage 経由のエージェント選択テスト (統合)
 // ============================================================
 
-import { createMountStage, resolveMountProbes } from "../src/stages/mount.ts";
-import type { MountProbes } from "../src/stages/mount.ts";
-import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
-import { buildHostEnv, resolveProbes } from "../src/pipeline/host_env.ts";
+import { createMountStage, resolveMountProbes } from "../stages/mount.ts";
+import type { MountProbes } from "../stages/mount.ts";
+import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 
 async function buildMountTestInput(
   profile: Profile,

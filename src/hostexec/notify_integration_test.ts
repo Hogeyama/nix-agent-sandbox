@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
-import { notifyHostExecPendingRequest } from "../src/hostexec/notify.ts";
-import { _resetNotifySendCache } from "../src/lib/notify_utils.ts";
+import { notifyHostExecPendingRequest } from "./notify.ts";
+import { _resetNotifySendCache } from "../lib/notify_utils.ts";
 
 const TEST_PENDING = {
   version: 1 as const,

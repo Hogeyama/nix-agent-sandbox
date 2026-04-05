@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { isWSL, resolveNotifyBackend } from "../src/lib/notify_utils.ts";
+import { isWSL, resolveNotifyBackend } from "./notify_utils.ts";
 
 function withEnv(
   overrides: Record<string, string | undefined>,

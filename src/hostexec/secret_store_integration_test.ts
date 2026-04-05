@@ -3,11 +3,11 @@ import {
   parseDotEnv,
   resolveSecret,
   SecretStore,
-} from "../src/hostexec/secret_store.ts";
+} from "./secret_store.ts";
 
 Deno.test("parseDotEnv: parses export and quoted values", () => {
   const parsed = parseDotEnv(
-    `\n# comment\nexport FOO=bar\nBAR=\"baz\"\nBAZ='qux'\n`,
+    `\n# comment\nexport FOO=bar\nBAR="baz"\nBAZ='qux'\n`,
   );
   assertEquals(parsed, { FOO: "bar", BAR: "baz", BAZ: "qux" });
 });

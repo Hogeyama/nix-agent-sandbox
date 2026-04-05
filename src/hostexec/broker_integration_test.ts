@@ -1,20 +1,20 @@
 import { assertEquals, assertMatch } from "@std/assert";
-import type { HostExecConfig } from "../src/config/types.ts";
+import type { HostExecConfig } from "../config/types.ts";
 import {
   HostExecBroker,
   sendHostExecBrokerRequest,
-} from "../src/hostexec/broker.ts";
+} from "./broker.ts";
 import {
   hostExecBrokerSocketPath,
   listHostExecPendingEntries,
   resolveHostExecRuntimePaths,
-} from "../src/hostexec/registry.ts";
+} from "./registry.ts";
 import type {
   ExecuteRequest,
   HostExecBrokerResponse,
   PendingListResponse,
-} from "../src/hostexec/types.ts";
-import { queryAuditLogs } from "../src/audit/store.ts";
+} from "./types.ts";
+import { queryAuditLogs } from "../audit/store.ts";
 
 type HostExecConfigOverrides = Omit<Partial<HostExecConfig>, "prompt"> & {
   prompt?: Partial<HostExecConfig["prompt"]>;
