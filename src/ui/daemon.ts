@@ -13,7 +13,7 @@ const STARTUP_TIMEOUT_MS = 10_000;
 const STARTUP_POLL_MS = 200;
 
 interface DaemonState {
-  pid: number;
+  pid?: number;
   port: number;
   startedAt: string;
 }
@@ -54,6 +54,7 @@ export async function ensureUiDaemon(
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (await isUiDaemonRunning(port)) {
+      await syncDaemonStatePid(port);
       logInfo(`[nas] UI daemon ready at ${url}`);
       return url;
     }
@@ -84,7 +85,7 @@ export async function isUiDaemonRunning(port: number): Promise<boolean> {
 
 /**
  * Stop a running UI daemon. Reads daemon.json for port, confirms health,
- * then sends SIGTERM. Falls back to reading PID from state file.
+ * then sends SIGTERM to the validated listening PID(s).
  */
 export async function stopUiDaemon(
   options?: { port?: number },
@@ -96,39 +97,19 @@ export async function stopUiDaemon(
     return;
   }
 
-  // Try graceful shutdown via /api/shutdown first, fall back to PID
   let killed = false;
-  try {
-    const state: DaemonState = JSON.parse(
-      await Deno.readTextFile(daemonStatePath()),
-    );
-    Deno.kill(state.pid, "SIGTERM");
-    killed = true;
-  } catch {
-    // state file missing or stale — try to find PID via lsof
-  }
-
-  if (!killed) {
-    // Find PID by port as fallback
+  const [state, listeningPids] = await Promise.all([
+    readDaemonState(),
+    listListeningPids(port),
+  ]);
+  for (const pid of resolveDaemonPidsToStop(state, listeningPids)) {
     try {
-      const cmd = new Deno.Command("lsof", {
-        args: ["-ti", `tcp:${port}`, "-sTCP:LISTEN"],
-        stdout: "piped",
-        stderr: "null",
-      });
-      const { stdout } = await cmd.output();
-      const pids = new TextDecoder().decode(stdout).trim().split("\n").filter(
-        Boolean,
-      );
-      for (const pidStr of pids) {
-        const pid = parseInt(pidStr, 10);
-        if (!isNaN(pid)) {
-          Deno.kill(pid, "SIGTERM");
-          killed = true;
-        }
+      Deno.kill(pid, "SIGTERM");
+      killed = true;
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) {
+        throw error;
       }
-    } catch {
-      // lsof not available
     }
   }
 
@@ -180,17 +161,10 @@ async function startUiDaemon(
   }).spawn();
   child.unref();
 
-  const stateDir = daemonStateDir();
-  await Deno.mkdir(stateDir, { recursive: true });
-  const state: DaemonState = {
-    pid: child.pid,
+  await writeDaemonState({
     port,
     startedAt: new Date().toISOString(),
-  };
-  await Deno.writeTextFile(
-    daemonStatePath(),
-    JSON.stringify(state, null, 2),
-  );
+  });
 }
 
 async function hasSetsid(): Promise<boolean> {
@@ -204,4 +178,77 @@ async function hasSetsid(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function readDaemonState(): Promise<DaemonState | null> {
+  try {
+    return JSON.parse(await Deno.readTextFile(daemonStatePath())) as DaemonState;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeDaemonState(state: DaemonState): Promise<void> {
+  await Deno.mkdir(daemonStateDir(), { recursive: true });
+  await Deno.writeTextFile(
+    daemonStatePath(),
+    JSON.stringify(state, null, 2),
+  );
+}
+
+export function parseListeningPids(output: string): number[] {
+  return [...new Set(output.split("\n").map((line) => parseInt(line, 10)).filter(
+    (pid) => !Number.isNaN(pid),
+  ))];
+}
+
+async function listListeningPids(port: number): Promise<number[]> {
+  try {
+    const cmd = new Deno.Command("lsof", {
+      args: ["-ti", `tcp:${port}`, "-sTCP:LISTEN"],
+      stdout: "piped",
+      stderr: "null",
+    });
+    const { stdout } = await cmd.output();
+    return parseListeningPids(new TextDecoder().decode(stdout).trim());
+  } catch {
+    return [];
+  }
+}
+
+export function resolveDaemonPidsToStop(
+  state: DaemonState | null,
+  listeningPids: number[],
+): number[] {
+  if (state?.pid !== undefined) {
+    if (listeningPids.includes(state.pid)) {
+      return [state.pid];
+    }
+  }
+  return [...new Set(listeningPids)];
+}
+
+export async function syncDaemonStatePid(
+  port: number,
+  options: {
+    listListeningPids?: (port: number) => Promise<number[]>;
+    readState?: () => Promise<DaemonState | null>;
+    writeState?: (state: DaemonState) => Promise<void>;
+  } = {},
+): Promise<number | null> {
+  const readState = options.readState ?? readDaemonState;
+  const writeState = options.writeState ?? writeDaemonState;
+  const listPids = options.listListeningPids ?? listListeningPids;
+  const [state, listeningPids] = await Promise.all([
+    readState(),
+    listPids(port),
+  ]);
+  const resolvedPid = listeningPids[0] ?? null;
+  if (resolvedPid !== null && state && state.pid !== resolvedPid) {
+    await writeState({ ...state, pid: resolvedPid });
+  }
+  return resolvedPid;
 }
