@@ -1,5 +1,5 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { TtlLruCache } from "../src/lib/ttl_lru_cache.ts";
+import { TtlLruCache } from "./ttl_lru_cache.ts";
 
 // ---------------------------------------------------------------------------
 // Basic get / set

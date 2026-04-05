@@ -1,10 +1,10 @@
 import { assertEquals } from "@std/assert";
-import { matchRule } from "../src/hostexec/match.ts";
-import type { HostExecRule } from "../src/config/types.ts";
+import { matchRule } from "./match.ts";
+import type { HostExecRule } from "../config/types.ts";
 import {
   DEFAULT_HOSTEXEC_CWD_CONFIG,
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
-} from "../src/config/types.ts";
+} from "../config/types.ts";
 
 function makeRule(
   id: string,

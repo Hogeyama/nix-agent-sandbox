@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
-import { mergeRawConfigs, mergeRawProfiles } from "../src/config/load.ts";
-import type { RawConfig, RawProfile } from "../src/config/types.ts";
+import { mergeRawConfigs, mergeRawProfiles } from "./load.ts";
+import type { RawConfig, RawProfile } from "./types.ts";
 
 Deno.test("mergeRawConfigs: global only", () => {
   const global: RawConfig = {
