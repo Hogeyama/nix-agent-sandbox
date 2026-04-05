@@ -33,6 +33,24 @@ import {
 import { generateSessionToken, hashToken } from "../../network/protocol.ts";
 import { logInfo, logWarn } from "../../log.ts";
 
+interface ProxySessionNetworkHandle {
+  close(): Promise<void>;
+}
+
+interface ProxySessionNetworkDeps {
+  createSessionNetwork?: (networkName: string) => Promise<void>;
+  connectNetwork?: (
+    networkName: string,
+    containerName: string,
+    options?: { aliases?: string[] },
+  ) => Promise<void>;
+  disconnectNetwork?: (
+    networkName: string,
+    containerName: string,
+  ) => Promise<void>;
+  removeNetwork?: (networkName: string) => Promise<void>;
+}
+
 export async function executeProxySession(
   effect: ProxySessionEffect,
 ): Promise<ResourceHandle> {
@@ -98,6 +116,7 @@ export async function executeProxySession(
 
   // Remaining setup steps: if any fail, clean up broker + registry + auth-router
   let authRouterAbort: AbortController | null = null;
+  let sessionNetworkHandle: ProxySessionNetworkHandle | null = null;
   try {
     // Ensure auth-router daemon
     authRouterAbort = await ensureAuthRouterDaemon(runtimePaths);
@@ -110,21 +129,12 @@ export async function executeProxySession(
       envoyReadyTimeoutMs,
     );
 
-    // Create session network and connect envoy
-    await ensureSessionNetwork(sessionNetworkName);
-    await dockerNetworkConnect(sessionNetworkName, envoyContainerName, {
-      aliases: [effect.envoyAlias],
-    }).catch((e) =>
-      logInfo(`[nas] Proxy: failed to connect envoy to network: ${e}`)
-    );
-
-    // Connect DinD container if present
-    if (dindContainerName) {
-      await dockerNetworkConnect(sessionNetworkName, dindContainerName)
-        .catch((e) =>
-          logInfo(`[nas] Proxy: failed to connect dind to network: ${e}`)
-        );
-    }
+    sessionNetworkHandle = await createProxySessionNetworkHandle({
+      sessionNetworkName,
+      envoyContainerName,
+      envoyAlias: effect.envoyAlias,
+      dindContainerName,
+    });
   } catch (error) {
     // Clean up resources that were successfully created
     if (authRouterAbort) {
@@ -133,6 +143,19 @@ export async function executeProxySession(
       } catch (cleanupErr) {
         logWarn(
           `[nas] Proxy: failed to abort auth-router during error recovery: ${
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr)
+          }`,
+        );
+      }
+    }
+    if (sessionNetworkHandle) {
+      try {
+        await sessionNetworkHandle.close();
+      } catch (cleanupErr) {
+        logWarn(
+          `[nas] Proxy: failed to tear down session network during error recovery: ${
             cleanupErr instanceof Error
               ? cleanupErr.message
               : String(cleanupErr)
@@ -184,24 +207,13 @@ export async function executeProxySession(
         )
       );
 
-      // Disconnect and remove session network
-      await dockerNetworkDisconnect(sessionNetworkName, envoyContainerName)
-        .catch((e) =>
+      if (sessionNetworkHandle) {
+        await sessionNetworkHandle.close().catch((e) =>
           logInfo(
-            `[nas] Proxy teardown: failed to disconnect envoy from network: ${e}`,
+            `[nas] Proxy teardown: failed to tear down session network: ${e}`,
           )
         );
-      if (dindContainerName) {
-        await dockerNetworkDisconnect(sessionNetworkName, dindContainerName)
-          .catch((e) =>
-            logInfo(
-              `[nas] Proxy teardown: failed to disconnect dind from network: ${e}`,
-            )
-          );
       }
-      await dockerNetworkRemove(sessionNetworkName).catch((e) =>
-        logInfo(`[nas] Proxy teardown: failed to remove network: ${e}`)
-      );
     },
   };
 }
@@ -224,18 +236,190 @@ async function renderEnvoyConfig(
 }
 
 async function ensureSessionNetwork(networkName: string): Promise<void> {
+  await dockerNetworkCreateWithLabels(networkName, {
+    internal: true,
+    labels: {
+      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+      [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
+    },
+  });
+}
+
+export async function createProxySessionNetworkHandle(
+  options: {
+    sessionNetworkName: string;
+    envoyContainerName: string;
+    envoyAlias: string;
+    dindContainerName?: string | null;
+  },
+  deps: ProxySessionNetworkDeps = {},
+): Promise<ProxySessionNetworkHandle> {
+  const createSessionNetwork = deps.createSessionNetwork ??
+    ensureSessionNetwork;
+  const connectNetwork = deps.connectNetwork ?? dockerNetworkConnect;
+  const disconnectNetwork = deps.disconnectNetwork ?? dockerNetworkDisconnect;
+  const removeNetwork = deps.removeNetwork ?? dockerNetworkRemove;
+  let sessionNetworkCreated = false;
+  let envoyConnected = false;
+  let dindConnected = false;
+
   try {
-    await dockerNetworkCreateWithLabels(networkName, {
-      internal: true,
-      labels: {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
-      },
+    try {
+      await createSessionNetwork(options.sessionNetworkName);
+      sessionNetworkCreated = true;
+    } catch (error) {
+      throw new Error(
+        `[nas] Proxy: failed to create session network ${options.sessionNetworkName}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    try {
+      await connectNetwork(
+        options.sessionNetworkName,
+        options.envoyContainerName,
+        {
+          aliases: [options.envoyAlias],
+        },
+      );
+      envoyConnected = true;
+    } catch (error) {
+      throw new Error(
+        `[nas] Proxy: failed to connect envoy to session network ${options.sessionNetworkName}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    if (options.dindContainerName) {
+      try {
+        await connectNetwork(
+          options.sessionNetworkName,
+          options.dindContainerName,
+        );
+        dindConnected = true;
+      } catch (error) {
+        throw new Error(
+          `[nas] Proxy: failed to connect dind to session network ${options.sessionNetworkName}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  } catch (error) {
+    await rollbackProxySessionNetwork({
+      sessionNetworkName: options.sessionNetworkName,
+      envoyContainerName: options.envoyContainerName,
+      dindContainerName: options.dindContainerName ?? null,
+      sessionNetworkCreated,
+      envoyConnected,
+      dindConnected,
+      disconnectNetwork,
+      removeNetwork,
     });
-  } catch {
-    // Network may already exist; dax $`.quiet()` does not expose
-    // Docker's stderr in the error object, so we cannot distinguish
-    // "already exists" from other failures. Matches original behavior.
+    throw error;
+  }
+
+  return {
+    close: async () => {
+      await teardownProxySessionNetwork({
+        sessionNetworkName: options.sessionNetworkName,
+        envoyContainerName: options.envoyContainerName,
+        dindContainerName: options.dindContainerName ?? null,
+        sessionNetworkCreated,
+        envoyConnected,
+        dindConnected,
+        disconnectNetwork,
+        removeNetwork,
+      });
+    },
+  };
+}
+
+async function rollbackProxySessionNetwork(
+  options: {
+    sessionNetworkName: string;
+    envoyContainerName: string;
+    dindContainerName: string | null;
+    sessionNetworkCreated: boolean;
+    envoyConnected: boolean;
+    dindConnected: boolean;
+    disconnectNetwork: (
+      networkName: string,
+      containerName: string,
+    ) => Promise<void>;
+    removeNetwork: (networkName: string) => Promise<void>;
+  },
+): Promise<void> {
+  if (options.dindConnected && options.dindContainerName) {
+    await options.disconnectNetwork(
+      options.sessionNetworkName,
+      options.dindContainerName,
+    ).catch((error) =>
+      logWarn(
+        `[nas] Proxy: failed to disconnect dind during rollback: ${error}`,
+      )
+    );
+  }
+  if (options.envoyConnected) {
+    await options.disconnectNetwork(
+      options.sessionNetworkName,
+      options.envoyContainerName,
+    ).catch((error) =>
+      logWarn(
+        `[nas] Proxy: failed to disconnect envoy during rollback: ${error}`,
+      )
+    );
+  }
+  if (options.sessionNetworkCreated) {
+    await options.removeNetwork(options.sessionNetworkName).catch((error) =>
+      logWarn(
+        `[nas] Proxy: failed to remove session network during rollback: ${error}`,
+      )
+    );
+  }
+}
+
+async function teardownProxySessionNetwork(
+  options: {
+    sessionNetworkName: string;
+    envoyContainerName: string;
+    dindContainerName: string | null;
+    sessionNetworkCreated: boolean;
+    envoyConnected: boolean;
+    dindConnected: boolean;
+    disconnectNetwork: (
+      networkName: string,
+      containerName: string,
+    ) => Promise<void>;
+    removeNetwork: (networkName: string) => Promise<void>;
+  },
+): Promise<void> {
+  if (options.dindConnected && options.dindContainerName) {
+    await options.disconnectNetwork(
+      options.sessionNetworkName,
+      options.dindContainerName,
+    ).catch((error) =>
+      logInfo(
+        `[nas] Proxy teardown: failed to disconnect dind from network: ${error}`,
+      )
+    );
+  }
+  if (options.envoyConnected) {
+    await options.disconnectNetwork(
+      options.sessionNetworkName,
+      options.envoyContainerName,
+    ).catch((error) =>
+      logInfo(
+        `[nas] Proxy teardown: failed to disconnect envoy from network: ${error}`,
+      )
+    );
+  }
+  if (options.sessionNetworkCreated) {
+    await options.removeNetwork(options.sessionNetworkName).catch((error) =>
+      logInfo(`[nas] Proxy teardown: failed to remove network: ${error}`)
+    );
   }
 }
 
