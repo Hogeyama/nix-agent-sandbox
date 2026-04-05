@@ -6,18 +6,18 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
-} from "../src/config/types.ts";
+} from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
   StageInput,
-} from "../src/pipeline/types.ts";
+} from "../pipeline/types.ts";
 import {
   type BuildProbes,
   createDockerBuildStage,
   createLaunchStage,
   EMBED_HASH_LABEL,
-} from "../src/stages/launch.ts";
+} from "./launch.ts";
 
 Deno.test("DockerBuildStage: returns docker-image-build effect when image does not exist", () => {
   const buildProbes: BuildProbes = {

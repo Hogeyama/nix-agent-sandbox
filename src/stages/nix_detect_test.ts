@@ -4,10 +4,10 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../src/config/types.ts";
-import { NixDetectStage } from "../src/stages/nix_detect.ts";
-import type { Config, Profile } from "../src/config/types.ts";
-import type { PriorStageOutputs, StageInput } from "../src/pipeline/types.ts";
+} from "../config/types.ts";
+import { NixDetectStage } from "./nix_detect.ts";
+import type { Config, Profile } from "../config/types.ts";
+import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
 
 function makeProfile(nixEnable: boolean | "auto"): Profile {
   return {
