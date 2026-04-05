@@ -24,21 +24,27 @@ Subcommands:
   audit     監査ログを表示する
 
 Options:
+  (main command only — must appear before [profile-name])
   -h, --help      Show this help
   -V, --version   Show version
   -q, --quiet     Suppress info logs
-  -b, --worktree <branch>  Enable worktree and set base branch (use @ or HEAD for current HEAD)
-  --no-worktree   Disable worktree even if configured in profile
+  -b, --worktree <branch>  Create a git worktree for this session and base it on <branch>.
+                           Use @ or HEAD for the current HEAD.
+                           (This is a per-run option, not the same as the 'worktree' subcommand.)
+  --no-worktree   Disable worktree for this run even if the profile has worktree configured
 
 Main command notes:
   - nas options must appear before [profile-name]
   - args after [profile-name] are passed to the agent
   - if [profile-name] is omitted, use -- before agent args
+  - NOTE: '-b/--worktree' (option) creates a worktree for one session;
+          'nas worktree' (subcommand) lists/cleans worktrees left by past sessions
 
 Rebuild options:
   -f, --force     Force remove Docker image (docker rmi --force)
 
-Worktree options:
+Worktree subcommand options:
+  ('nas worktree' manages worktrees created by past sessions, distinct from the -b/--worktree run option)
   list            nas が作成した worktree を一覧表示（デフォルト）
   clean           nas が作成した worktree をすべて削除
   -f, --force     確認なしで削除
