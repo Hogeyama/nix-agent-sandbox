@@ -447,6 +447,62 @@ Deno.test("SessionBroker: approve after group already resolved returns error", a
   }
 });
 
+Deno.test(
+  "SessionBroker: deny-by-default targets blocked even when in allowlist",
+  async () => {
+    // Regression: allowlist used to be checked before denyReasonForTarget,
+    // allowing private/loopback addresses to bypass the deny-by-default rule.
+    const cases: Array<{ host: string; reason: string }> = [
+      { host: "localhost", reason: "blocked-special-host" },
+      { host: "127.0.0.1", reason: "blocked-private-ip" },
+      { host: "10.0.0.1", reason: "blocked-private-ip" },
+      { host: "172.16.0.1", reason: "blocked-private-ip" },
+      { host: "192.168.1.1", reason: "blocked-private-ip" },
+      { host: "169.254.0.1", reason: "blocked-private-ip" },
+      { host: "::1", reason: "blocked-private-ip" },
+      { host: "fc00::1", reason: "blocked-private-ip" },
+      { host: "fe80::1", reason: "blocked-private-ip" },
+    ];
+
+    for (const { host, reason } of cases) {
+      const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+      const paths = await resolveNetworkRuntimePaths(runtimeDir);
+      // Put the deny-by-default host directly in the allowlist.
+      const broker = new SessionBroker({
+        paths,
+        sessionId: "sess_test",
+        allowlist: [host],
+        denylist: [],
+        promptEnabled: true,
+        timeoutSeconds: 30,
+        defaultScope: "host-port",
+        notify: "off",
+      });
+      const socketPath = `${paths.brokersDir}/sess_test.sock`;
+      await broker.start(socketPath);
+      try {
+        const response = await sendBrokerRequest<DecisionResponse>(
+          socketPath,
+          authorize("sess_test", `req_${host.replace(/[:.]/g, "_")}`, host, 80),
+        );
+        assertEquals(
+          response.decision,
+          "deny",
+          `Expected deny for ${host} but got allow`,
+        );
+        assertEquals(
+          response.reason,
+          reason,
+          `Wrong deny reason for ${host}`,
+        );
+      } finally {
+        await broker.close();
+        await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+      }
+    }
+  },
+);
+
 async function waitForPending(
   socketPath: string,
   minCount = 1,

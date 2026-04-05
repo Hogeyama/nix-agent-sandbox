@@ -218,6 +218,15 @@ export class SessionBroker {
     message: AuthorizeRequest,
   ): Promise<DecisionResponse> {
     const targetStr = `${message.target.host}:${message.target.port}`;
+
+    // deny-by-default targets (localhost, loopback, RFC1918, link-local, ULA)
+    // are always blocked — even if they appear in the allowlist.
+    const denyReason = denyReasonForTarget(message.target);
+    if (denyReason) {
+      await this.recordAudit(message.requestId, "deny", denyReason, targetStr);
+      return denyDecision(message.requestId, denyReason);
+    }
+
     const allowlistHit = matchesAllowlist(
       message.target.host,
       this.allowlist,
@@ -239,12 +248,6 @@ export class SessionBroker {
     ) {
       await this.recordAudit(message.requestId, "allow", "approved", targetStr);
       return allowDecision(message.requestId, "approved");
-    }
-
-    const denyReason = denyReasonForTarget(message.target);
-    if (denyReason) {
-      await this.recordAudit(message.requestId, "deny", denyReason, targetStr);
-      return denyDecision(message.requestId, denyReason);
     }
 
     if (matchesAllowlist(message.target.host, this.denylist)) {
