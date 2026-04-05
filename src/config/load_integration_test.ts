@@ -6,7 +6,7 @@
 
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import * as path from "@std/path";
-import { loadConfig, resolveProfile } from "./load.ts";
+import { loadConfig, loadGlobalConfig, resolveProfile } from "./load.ts";
 import { validateConfig } from "./validate.ts";
 import {
   type Config,
@@ -881,3 +881,150 @@ Deno.test("loadConfig: throws for invalid nix expression", async () => {
     );
   });
 });
+
+// --- XDG_CONFIG_HOME サポート ---
+
+/** XDG_CONFIG_HOME を一時的に差し替えてテストを実行するヘルパー */
+async function withXdgConfigHome(
+  xdgDir: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const prev = Deno.env.get("XDG_CONFIG_HOME");
+  Deno.env.set("XDG_CONFIG_HOME", xdgDir);
+  try {
+    await fn();
+  } finally {
+    if (prev !== undefined) {
+      Deno.env.set("XDG_CONFIG_HOME", prev);
+    } else {
+      Deno.env.delete("XDG_CONFIG_HOME");
+    }
+  }
+}
+
+Deno.test(
+  "loadGlobalConfig: uses XDG_CONFIG_HOME when set",
+  async () => {
+    const tmpDir = await Deno.makeTempDir({ prefix: "nas-xdg-test-" });
+    try {
+      const nasDir = path.join(tmpDir, "nas");
+      await Deno.mkdir(nasDir);
+      await Deno.writeTextFile(
+        path.join(nasDir, "agent-sandbox.yml"),
+        `
+profiles:
+  xdg-profile:
+    agent: claude
+`,
+      );
+      await withXdgConfigHome(tmpDir, async () => {
+        const result = await loadGlobalConfig();
+        assertEquals(result?.profiles?.["xdg-profile"]?.agent, "claude");
+      });
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "loadGlobalConfig: falls back to HOME/.config/nas without XDG_CONFIG_HOME",
+  async () => {
+    const tmpDir = await Deno.makeTempDir({ prefix: "nas-home-test-" });
+    try {
+      const nasDir = path.join(tmpDir, ".config", "nas");
+      await Deno.mkdir(nasDir, { recursive: true });
+      await Deno.writeTextFile(
+        path.join(nasDir, "agent-sandbox.yml"),
+        `
+profiles:
+  home-profile:
+    agent: copilot
+`,
+      );
+      const prevHome = Deno.env.get("HOME");
+      const prevXdg = Deno.env.get("XDG_CONFIG_HOME");
+      Deno.env.set("HOME", tmpDir);
+      if (prevXdg !== undefined) Deno.env.delete("XDG_CONFIG_HOME");
+      try {
+        const result = await loadGlobalConfig();
+        assertEquals(result?.profiles?.["home-profile"]?.agent, "copilot");
+      } finally {
+        if (prevHome !== undefined) Deno.env.set("HOME", prevHome);
+        if (prevXdg !== undefined) Deno.env.set("XDG_CONFIG_HOME", prevXdg);
+      }
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+);
+
+// --- 明示パスのエラー伝播 ---
+
+Deno.test(
+  "loadGlobalConfig: throws for explicit path with malformed YAML",
+  async () => {
+    const tmpDir = await Deno.makeTempDir({ prefix: "nas-cfg-err-" });
+    try {
+      const cfgPath = path.join(tmpDir, "bad.yml");
+      await Deno.writeTextFile(cfgPath, "{{{{ : invalid yaml : }}}}");
+      await assertRejects(
+        () => loadGlobalConfig(cfgPath),
+        Error,
+      );
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "loadGlobalConfig: throws for explicit path that does not exist",
+  async () => {
+    await assertRejects(
+      () => loadGlobalConfig("/nonexistent/nas/config.yml"),
+      Deno.errors.NotFound,
+    );
+  },
+);
+
+// --- 自動検出グローバル設定のエラー伝播 ---
+
+Deno.test(
+  "loadGlobalConfig: throws for malformed YAML in discovered global config",
+  async () => {
+    const tmpDir = await Deno.makeTempDir({ prefix: "nas-xdg-err-" });
+    try {
+      const nasDir = path.join(tmpDir, "nas");
+      await Deno.mkdir(nasDir);
+      await Deno.writeTextFile(
+        path.join(nasDir, "agent-sandbox.yml"),
+        "{{{{ : invalid yaml : }}}}",
+      );
+      await withXdgConfigHome(tmpDir, async () => {
+        await assertRejects(
+          () => loadGlobalConfig(),
+          Error,
+        );
+      });
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "loadGlobalConfig: returns null when no global config file exists",
+  async () => {
+    const tmpDir = await Deno.makeTempDir({ prefix: "nas-xdg-empty-" });
+    try {
+      // nasDir 自体を作らない → stat で NotFound → fall through → null
+      await withXdgConfigHome(tmpDir, async () => {
+        const result = await loadGlobalConfig();
+        assertEquals(result, null);
+      });
+    } finally {
+      await Deno.remove(tmpDir, { recursive: true });
+    }
+  },
+);

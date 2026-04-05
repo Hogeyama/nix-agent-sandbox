@@ -10,13 +10,12 @@ import { validateConfig } from "./validate.ts";
 const CONFIG_FILENAME_YML = ".agent-sandbox.yml";
 const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 
-/** グローバル設定ディレクトリ */
+/** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
 function getGlobalConfigDir(): string {
-  return path.join(
-    Deno.env.get("HOME") ?? "/",
-    ".config",
-    "nas",
-  );
+  const xdgConfigHome = Deno.env.get("XDG_CONFIG_HOME");
+  const configBase = xdgConfigHome ??
+    path.join(Deno.env.get("HOME") ?? "/", ".config");
+  return path.join(configBase, "nas");
 }
 
 /** loadConfig のオプション */
@@ -64,7 +63,7 @@ export async function loadGlobalConfig(
   configPath?: string,
 ): Promise<RawConfig | null> {
   if (configPath) {
-    // 明示パス指定時はそのまま読む
+    // 明示パス指定時はそのまま読む（エラーはそのまま伝播）
     return await loadConfigByPath(configPath);
   }
   // .yml → .nix の順で探す
@@ -77,29 +76,27 @@ export async function loadGlobalConfig(
     const candidate = path.join(getGlobalConfigDir(), filename);
     try {
       await Deno.stat(candidate);
-      if (format === "yml") {
-        const text = await Deno.readTextFile(candidate);
-        return parseYaml(text) as RawConfig;
-      }
-      return await loadNixConfig(candidate);
-    } catch {
-      // not found, try next
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) continue;
+      throw e; // 予期しない stat エラー（権限不足など）は伝播
     }
+    // ファイルが存在する場合、読み込み・解析エラーは伝播させる
+    if (format === "yml") {
+      const text = await Deno.readTextFile(candidate);
+      return parseYaml(text) as RawConfig;
+    }
+    return await loadNixConfig(candidate);
   }
   return null;
 }
 
-/** パスから形式を判定して読み込む */
-async function loadConfigByPath(filePath: string): Promise<RawConfig | null> {
-  try {
-    if (filePath.endsWith(".nix")) {
-      return await loadNixConfig(filePath);
-    }
-    const text = await Deno.readTextFile(filePath);
-    return parseYaml(text) as RawConfig;
-  } catch {
-    return null;
+/** パスから形式を判定して読み込む（エラーはそのまま伝播） */
+async function loadConfigByPath(filePath: string): Promise<RawConfig> {
+  if (filePath.endsWith(".nix")) {
+    return await loadNixConfig(filePath);
   }
+  const text = await Deno.readTextFile(filePath);
+  return parseYaml(text) as RawConfig;
 }
 
 /** グローバルとローカルの RawConfig をマージする */
