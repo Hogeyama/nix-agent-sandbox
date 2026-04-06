@@ -4,17 +4,26 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    nix-bundle-elf = {
+      url = "github:Hogeyama/nix-bundle-elf";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
     deno2nix = {
       url = "github:aMOPel/deno2nix/deno-cli-fetcher";
       flake = false;
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, deno2nix }:
+  outputs = { self, nixpkgs, flake-utils, nix-bundle-elf, deno2nix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
         deno2nixLib = import deno2nix { inherit pkgs; };
+        hasBundleSupport = builtins.hasAttr system nix-bundle-elf.packages;
+        bundleTool = if hasBundleSupport
+          then nix-bundle-elf.packages.${system}.default
+          else null;
 
         # Read compile metadata from deno.json so flags aren't duplicated.
         denoJson = builtins.fromJSON (builtins.readFile "${self}/deno.json");
@@ -97,7 +106,33 @@
         };
       in
       {
-        packages.default = nas;
+        packages = {
+          default = nas;
+        } // pkgs.lib.optionalAttrs hasBundleSupport {
+          # For non-Nix users: a self-extracting binary with runtime libs bundled.
+          bundled = pkgs.runCommand "nas-bundled" {
+            nativeBuildInputs = [ bundleTool pkgs.patchelf ];
+          } ''
+            target="$TMPDIR/nas"
+            cp ${nas}/bin/nas "$target"
+            chmod +w "$target"
+            patchelf --set-interpreter "${pkgs.stdenv.cc.bintools.dynamicLinker}" "$target"
+
+            current_rpath="$(patchelf --print-rpath "$target")"
+            extra_rpath="${pkgs.glibc}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
+            if [ -n "$current_rpath" ]; then
+              patchelf --set-rpath "$extra_rpath:$current_rpath" "$target"
+            else
+              patchelf --set-rpath "$extra_rpath" "$target"
+            fi
+
+            nix-bundle-elf preload \
+              --no-nix-locate \
+              --extra-lib libdl.so.2 \
+              -o "$out" \
+              "$target"
+          '';
+        };
 
         devShells.default = pkgs.mkShell {
           packages = [
