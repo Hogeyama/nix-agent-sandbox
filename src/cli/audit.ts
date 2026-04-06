@@ -20,7 +20,7 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
       console.error(
         `[nas] Invalid domain: ${domain}. Must be "network" or "hostexec".`,
       );
-      Deno.exit(1);
+      process.exit(1);
     }
 
     const today = new Date().toISOString().slice(0, 10);

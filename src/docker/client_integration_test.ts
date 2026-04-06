@@ -1,3 +1,12 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * Docker CLI ラッパー integration テスト
  *
@@ -6,7 +15,16 @@
  * - unit テスト（Docker 不要・I/O 不要）は client_test.ts を参照
  */
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   computeEmbedHash,
   dockerBuild,
@@ -30,16 +48,15 @@ import {
 
 const TEST_IMAGE = "alpine:latest";
 const PREFIX = "nas-test-" + Date.now();
-const SHARED_TMP = Deno.env.get("NAS_DIND_SHARED_TMP");
-const DOCKER_HOST = Deno.env.get("DOCKER_HOST");
+const SHARED_TMP = process.env["NAS_DIND_SHARED_TMP"];
+const DOCKER_HOST = process.env["DOCKER_HOST"];
 const canBindMount = SHARED_TMP !== undefined || !DOCKER_HOST;
 const DOCKER_DAEMON_AVAILABLE = (() => {
   try {
-    return new Deno.Command("docker", {
-      args: ["info"],
-      stdout: "null",
-      stderr: "null",
-    }).outputSync().success;
+    return Bun.spawnSync(["docker", "info"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).success;
   } catch {
     return false;
   }
@@ -48,9 +65,9 @@ const DOCKER_DAEMON_AVAILABLE = (() => {
 async function makeDockerBindableTempDir(prefix: string): Promise<string> {
   const base = SHARED_TMP ?? "/tmp";
   const dir = `${base}/${prefix}${crypto.randomUUID().slice(0, 8)}`;
-  await Deno.mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true });
   if (SHARED_TMP) {
-    await Deno.chmod(dir, 0o1777);
+    await chmod(dir, 0o1777);
   }
   return dir;
 }
@@ -63,13 +80,18 @@ async function startLongRunningContainer(
   for (const [key, value] of Object.entries(envVars)) {
     envArgs.push("-e", `${key}=${value}`);
   }
-  const cmd = new Deno.Command("docker", {
-    args: ["run", "-d", "--name", name, ...envArgs, TEST_IMAGE, "sleep", "300"],
-    stdout: "null",
-    stderr: "null",
-  });
-  const result = await cmd.output();
-  if (!result.success) {
+  const exitCode = await Bun.spawn([
+    "docker",
+    "run",
+    "-d",
+    "--name",
+    name,
+    ...envArgs,
+    TEST_IMAGE,
+    "sleep",
+    "300",
+  ], { stdout: "ignore", stderr: "ignore" }).exited;
+  if (exitCode !== 0) {
     throw new Error(`Failed to start container ${name}`);
   }
 }
@@ -77,34 +99,35 @@ async function startLongRunningContainer(
 async function inspectDockerObject(
   ...args: string[]
 ): Promise<Record<string, unknown>> {
-  const cmd = new Deno.Command("docker", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
+  const proc = Bun.spawn(["docker", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  const result = await cmd.output();
-  if (!result.success) {
+  const [exitCode, stdoutText, stderrText] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
     throw new Error(
-      `docker ${args.join(" ")} failed: ${
-        new TextDecoder().decode(result.stderr).trim()
-      }`,
+      `docker ${args.join(" ")} failed: ${stderrText.trim()}`,
     );
   }
 
-  return JSON.parse(new TextDecoder().decode(result.stdout))[0];
+  return JSON.parse(stdoutText)[0];
 }
 
 // --- computeEmbedHash / envoy template (Docker daemon 不要) ---
 
-Deno.test("computeEmbedHash returns consistent hash", async () => {
+test("computeEmbedHash returns consistent hash", async () => {
   const hash1 = await computeEmbedHash();
   const hash2 = await computeEmbedHash();
-  assertEquals(hash1, hash2);
+  expect(hash1).toEqual(hash2);
   // SHA-256 hex is 64 chars
-  assertEquals(hash1.length, 64);
+  expect(hash1.length).toEqual(64);
 });
 
-Deno.test("computeEmbedHash matches embed and envoy assets", async () => {
+test("computeEmbedHash matches embed and envoy assets", async () => {
   const parts: string[] = [];
   for (
     const [baseUrl, files] of [
@@ -119,7 +142,7 @@ Deno.test("computeEmbedHash matches embed and envoy assets", async () => {
     ] as const
   ) {
     for (const name of files) {
-      parts.push(await Deno.readTextFile(new URL(name, baseUrl)));
+      parts.push(await readFile(new URL(name, baseUrl), "utf8"));
     }
   }
   const data = new TextEncoder().encode(parts.join("\n"));
@@ -128,12 +151,13 @@ Deno.test("computeEmbedHash matches embed and envoy assets", async () => {
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
-  assertEquals(await computeEmbedHash(), expected);
+  expect(await computeEmbedHash()).toEqual(expected);
 });
 
-Deno.test("envoy template includes required proxy settings", async () => {
-  const template = await Deno.readTextFile(
+test("envoy template includes required proxy settings", async () => {
+  const template = await readFile(
     new URL("./envoy/envoy.template.yaml", import.meta.url),
+    "utf8",
   );
 
   for (
@@ -157,55 +181,50 @@ Deno.test("envoy template includes required proxy settings", async () => {
       'handle:headers():remove("proxy-authorization")',
     ]
   ) {
-    assertEquals(template.includes(fragment), true);
+    expect(template.includes(fragment)).toEqual(true);
   }
 });
 
 // --- dockerImageExists ---
 
-Deno.test({
-  name: "dockerImageExists: returns true for existing image",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
-    const cmd = new Deno.Command("docker", {
-      args: ["pull", "-q", TEST_IMAGE],
-      stdout: "null",
-      stderr: "null",
-    });
-    await cmd.output();
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerImageExists: returns true for existing image",
+  async () => {
+    await Bun.spawn(["docker", "pull", "-q", TEST_IMAGE], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
 
     const exists = await dockerImageExists(TEST_IMAGE);
-    assertEquals(exists, true);
+    expect(exists).toEqual(true);
   },
-});
+);
 
 // --- dockerBuild with labels ---
 
-Deno.test({
-  name: "dockerBuild: builds image with labels and getImageLabel reads them",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerBuild: builds image with labels and getImageLabel reads them",
+  async () => {
     const tag = `${PREFIX}-build-label`;
-    const tmpDir = await Deno.makeTempDir();
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "tmp-"));
     try {
-      await Deno.writeTextFile(`${tmpDir}/Dockerfile`, "FROM alpine:latest\n");
+      await writeFile(`${tmpDir}/Dockerfile`, "FROM alpine:latest\n");
       await dockerBuild(tmpDir, tag, { "test.label": "hello-nas" });
 
       const labelValue = await getImageLabel(tag, "test.label");
-      assertEquals(labelValue, "hello-nas");
+      expect(labelValue).toEqual("hello-nas");
     } finally {
       await dockerRemoveImage(tag, { force: true }).catch(() => {});
-      await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   },
-});
+);
 
 // --- dockerRunDetached ---
 
-Deno.test({
-  name: "dockerRunDetached: starts container in detached mode",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerRunDetached: starts container in detached mode",
+  async () => {
     const containerName = `${PREFIX}-detached`;
     try {
       await dockerRunDetached({
@@ -214,29 +233,25 @@ Deno.test({
         args: [],
         envVars: { "TEST_VAR": "detached_value" },
       });
-      const inspectCmd = new Deno.Command("docker", {
-        args: ["inspect", containerName],
-        stdout: "null",
-        stderr: "null",
-      });
-      const result = await inspectCmd.output();
-      assertEquals(result.success, true);
+      const exitCode = await Bun.spawn(["docker", "inspect", containerName], {
+        stdout: "ignore",
+        stderr: "ignore",
+      }).exited;
+      expect(exitCode).toEqual(0);
     } finally {
       await dockerRm(containerName).catch(() => {});
     }
   },
-});
+);
 
-Deno.test({
-  name:
-    "dockerRunDetached: supports network, mounts, ports, labels, entrypoint, command",
-  ignore: !DOCKER_DAEMON_AVAILABLE || !canBindMount,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE || !canBindMount)(
+  "dockerRunDetached: supports network, mounts, ports, labels, entrypoint, command",
+  async () => {
     const networkName = `${PREFIX}-detached-net`;
     const containerName = `${PREFIX}-detached-extended`;
     const tmpDir = await makeDockerBindableTempDir("nas-docker-client-");
     try {
-      await Deno.writeTextFile(`${tmpDir}/hello.txt`, "hello");
+      await writeFile(`${tmpDir}/hello.txt`, "hello");
       await dockerNetworkCreate(networkName);
 
       await dockerRunDetached({
@@ -276,46 +291,40 @@ Deno.test({
         };
       };
 
-      assertEquals(inspected.HostConfig?.NetworkMode, networkName);
-      assertEquals(inspected.Config?.Entrypoint, ["/bin/sh"]);
-      assertEquals(inspected.Config?.Cmd, ["-c", "sleep 300"]);
-      assertEquals(inspected.Config?.Labels?.["test.label"], "extended");
-      assertEquals(
-        inspected.Config?.Env?.includes("TEST_VAR=detached_value"),
-        true,
-      );
-      assertEquals(
+      expect(inspected.HostConfig?.NetworkMode).toEqual(networkName);
+      expect(inspected.Config?.Entrypoint).toEqual(["/bin/sh"]);
+      expect(inspected.Config?.Cmd).toEqual(["-c", "sleep 300"]);
+      expect(inspected.Config?.Labels?.["test.label"]).toEqual("extended");
+      expect(inspected.Config?.Env?.includes("TEST_VAR=detached_value"))
+        .toEqual(true);
+      expect(
         inspected.Mounts?.some((mount) =>
           mount.Type === "bind" &&
           mount.Source === tmpDir &&
           mount.Destination === "/workspace" &&
           mount.RW === false
         ),
-        true,
-      );
-      assertEquals(
-        inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostIp,
-        "127.0.0.1",
-      );
-      assert(
+      ).toEqual(true);
+      expect(inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostIp)
+        .toEqual("127.0.0.1");
+      expect(
         (inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostPort ?? "")
           .length > 0,
-      );
+      ).toBeTruthy();
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
       await dockerNetworkRemove(networkName).catch(() => {});
-      await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   },
-});
+);
 
 // --- dockerIsRunning / dockerExec / dockerLogs / dockerStop / dockerRm ---
 
-Deno.test({
-  name: "container lifecycle: isRunning, exec, logs, stop, rm",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "container lifecycle: isRunning, exec, logs, stop, rm",
+  async () => {
     const containerName = `${PREFIX}-lifecycle`;
     try {
       await startLongRunningContainer(containerName, {
@@ -323,38 +332,38 @@ Deno.test({
       });
 
       const running = await dockerIsRunning(containerName);
-      assertEquals(running, true);
+      expect(running).toEqual(true);
 
       const execResult = await dockerExec(containerName, ["echo", "hello"]);
-      assertEquals(execResult.code, 0);
-      assertEquals(execResult.stdout, "hello");
+      expect(execResult.code).toEqual(0);
+      expect(execResult.stdout).toEqual("hello");
 
       const envResult = await dockerExec(containerName, [
         "sh",
         "-c",
         "echo $TEST_VAR",
       ]);
-      assertEquals(envResult.code, 0);
-      assertEquals(envResult.stdout, "test_value");
+      expect(envResult.code).toEqual(0);
+      expect(envResult.stdout).toEqual("test_value");
 
       const userResult = await dockerExec(
         containerName,
         ["id", "-u"],
         { user: "root" },
       );
-      assertEquals(userResult.code, 0);
-      assertEquals(userResult.stdout, "0");
+      expect(userResult.code).toEqual(0);
+      expect(userResult.stdout).toEqual("0");
 
       const logs = await dockerLogs(containerName);
-      assertEquals(typeof logs, "string");
+      expect(typeof logs).toEqual("string");
 
       const tailLogs = await dockerLogs(containerName, { tail: 1 });
-      assertEquals(typeof tailLogs, "string");
+      expect(typeof tailLogs).toEqual("string");
 
       await dockerStop(containerName, { timeoutSeconds: 0 });
 
       const stoppedRunning = await dockerIsRunning(containerName);
-      assertEquals(stoppedRunning, false);
+      expect(stoppedRunning).toEqual(false);
 
       await dockerRm(containerName);
     } catch (e) {
@@ -363,33 +372,31 @@ Deno.test({
       throw e;
     }
   },
-});
+);
 
 // --- dockerExec: failing command ---
 
-Deno.test({
-  name: "dockerExec: returns non-zero code for failing command",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerExec: returns non-zero code for failing command",
+  async () => {
     const containerName = `${PREFIX}-exec-fail`;
     try {
       await startLongRunningContainer(containerName);
 
       const result = await dockerExec(containerName, ["false"]);
-      assertEquals(result.code !== 0, true);
+      expect(result.code !== 0).toEqual(true);
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
     }
   },
-});
+);
 
 // --- dockerRun: non-interactive ---
 
-Deno.test({
-  name: "dockerRun: runs non-interactive command successfully",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerRun: runs non-interactive command successfully",
+  async () => {
     await dockerRun({
       image: TEST_IMAGE,
       args: [],
@@ -398,12 +405,11 @@ Deno.test({
       interactive: false,
     });
   },
-});
+);
 
-Deno.test({
-  name: "dockerRun: throws on non-zero exit",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerRun: throws on non-zero exit",
+  async () => {
     let threw = false;
     try {
       await dockerRun({
@@ -415,19 +421,16 @@ Deno.test({
       });
     } catch (e) {
       threw = true;
-      assertEquals(
-        (e as Error).message.includes("docker run exited with code"),
-        true,
-      );
+      expect((e as Error).message.includes("docker run exited with code"))
+        .toEqual(true);
     }
-    assertEquals(threw, true);
+    expect(threw).toEqual(true);
   },
-});
+);
 
-Deno.test({
-  name: "dockerRun: interactive mode without TTY uses -i only",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerRun: interactive mode without TTY uses -i only",
+  async () => {
     await dockerRun({
       image: TEST_IMAGE,
       args: [],
@@ -436,14 +439,13 @@ Deno.test({
       interactive: true,
     });
   },
-});
+);
 
 // --- dockerNetwork ---
 
-Deno.test({
-  name: "dockerNetwork: create, connect, remove",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerNetwork: create, connect, remove",
+  async () => {
     const networkName = `${PREFIX}-net`;
     const containerName = `${PREFIX}-net-container`;
     try {
@@ -458,12 +460,11 @@ Deno.test({
       await dockerNetworkRemove(networkName).catch(() => {});
     }
   },
-});
+);
 
-Deno.test({
-  name: "dockerNetworkConnect: supports aliases",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerNetworkConnect: supports aliases",
+  async () => {
     const networkName = `${PREFIX}-net-alias`;
     const containerName = `${PREFIX}-net-alias-container`;
     try {
@@ -484,76 +485,72 @@ Deno.test({
       };
       const network = inspected.NetworkSettings?.Networks?.[networkName];
 
-      assertEquals(Boolean(network), true);
-      assertEquals(network?.Aliases?.includes("svc-alias"), true);
-      assertEquals(network?.Aliases?.includes("svc-alt"), true);
+      expect(Boolean(network)).toEqual(true);
+      expect(network?.Aliases?.includes("svc-alias")).toEqual(true);
+      expect(network?.Aliases?.includes("svc-alt")).toEqual(true);
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
       await dockerNetworkRemove(networkName).catch(() => {});
     }
   },
-});
+);
 
 // --- dockerRemoveImage ---
 
-Deno.test({
-  name: "dockerRemoveImage: removes a tagged image",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerRemoveImage: removes a tagged image",
+  async () => {
     const tag = `${PREFIX}-rmi-test`;
-    const tmpDir = await Deno.makeTempDir();
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "tmp-"));
     try {
-      await Deno.writeTextFile(`${tmpDir}/Dockerfile`, "FROM alpine:latest\n");
+      await writeFile(`${tmpDir}/Dockerfile`, "FROM alpine:latest\n");
       await dockerBuild(tmpDir, tag);
 
       const beforeExists = await dockerImageExists(tag);
-      assertEquals(beforeExists, true);
+      expect(beforeExists).toEqual(true);
 
       await dockerRemoveImage(tag);
 
       const afterExists = await dockerImageExists(tag);
-      assertEquals(afterExists, false);
+      expect(afterExists).toEqual(false);
     } finally {
       await dockerRemoveImage(tag, { force: true }).catch(() => {});
-      await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   },
-});
+);
 
 // --- dockerVolumeRemove ---
 
-Deno.test({
-  name: "dockerVolumeRemove: removes a volume",
-  ignore: !DOCKER_DAEMON_AVAILABLE,
-  async fn() {
+test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
+  "dockerVolumeRemove: removes a volume",
+  async () => {
     const volumeName = `${PREFIX}-vol`;
-    const cmd = new Deno.Command("docker", {
-      args: ["volume", "create", volumeName],
-      stdout: "null",
-      stderr: "null",
-    });
-    await cmd.output();
+    await Bun.spawn(["docker", "volume", "create", volumeName], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
 
     await dockerVolumeRemove(volumeName);
-    const inspectCmd = new Deno.Command("docker", {
-      args: ["volume", "inspect", volumeName],
-      stdout: "null",
-      stderr: "null",
-    });
-    const result = await inspectCmd.output();
-    assertEquals(result.success, false);
+    const exitCode = await Bun.spawn([
+      "docker",
+      "volume",
+      "inspect",
+      volumeName,
+    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    expect(exitCode).not.toEqual(0);
   },
-});
+);
 
 // --- runInteractiveCommand: SIGINT ---
 
-Deno.test("runInteractiveCommand: SIGINT を静かな割り込みとして扱う", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "nas-interrupt-" });
+test("runInteractiveCommand: SIGINT を静かな割り込みとして扱う", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-interrupt-"));
   const script = `${dir}/wait.sh`;
   const handlers = new Map<"SIGINT" | "SIGTERM", () => void>();
   try {
-    await Deno.writeTextFile(
+    await writeFile(
       script,
       `#!/usr/bin/env bash
 trap 'exit 130' INT
@@ -562,7 +559,7 @@ while true; do
 done
 `,
     );
-    await Deno.chmod(script, 0o755);
+    await chmod(script, 0o755);
     const promise = runInteractiveCommand(script, [], {
       stdin: "null",
       stdout: "null",
@@ -578,12 +575,8 @@ done
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     handlers.get("SIGINT")?.();
-    await assertRejects(
-      () => promise,
-      InterruptedCommandError,
-      "interrupted",
-    );
+    await expect(promise).rejects.toThrow("interrupted");
   } finally {
-    await Deno.remove(dir, { recursive: true }).catch(() => {});
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 });

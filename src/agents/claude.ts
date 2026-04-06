@@ -86,19 +86,21 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
 // ---------------------------------------------------------------------------
 
 /** ディレクトリが存在するか判定 */
-function dirExistsSync(path: string): boolean {
+function dirExistsSync(p: string): boolean {
   try {
-    const stat = Deno.statSync(path);
-    return stat.isDirectory;
+    const { statSync } = require("node:fs");
+    const s = statSync(p);
+    return s.isDirectory();
   } catch {
     return false;
   }
 }
 
 /** ファイルが存在するか判定 */
-function fileExistsSync(path: string): boolean {
+function fileExistsSync(p: string): boolean {
   try {
-    Deno.statSync(path);
+    const { statSync } = require("node:fs");
+    statSync(p);
     return true;
   } catch {
     return false;
@@ -107,19 +109,12 @@ function fileExistsSync(path: string): boolean {
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
 function findBinaryResolved(name: string): string | null {
+  const which = Bun.which(name, { PATH: process.env["PATH"] ?? "" });
+  if (!which) return null;
   try {
-    const cmd = new Deno.Command("which", {
-      args: [name],
-      stdout: "piped",
-      stderr: "null",
-    });
-    const output = cmd.outputSync();
-    if (output.success) {
-      const binPath = new TextDecoder().decode(output.stdout).trim();
-      return Deno.realPathSync(binPath);
-    }
+    const fs = require("node:fs");
+    return fs.realpathSync(which);
   } catch {
-    // ignore
+    return null;
   }
-  return null;
 }

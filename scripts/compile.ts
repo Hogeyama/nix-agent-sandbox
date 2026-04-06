@@ -1,26 +1,30 @@
 /**
- * deno.json の "nix" フィールドからフラグを読み、deno compile を実行する。
- * tasks.compile と flake.nix の Single Source of Truth を deno.json に統一。
+ * Bun build script.
+ * Replaces the old deno compile workflow.
  */
 
-const ROOT = new URL("../", import.meta.url).pathname;
-const denoJson = JSON.parse(await Deno.readTextFile(`${ROOT}deno.json`));
-const { entrypoint, permissions, includes } = denoJson["x-compile"];
+import { readFile } from "node:fs/promises";
+import * as path from "node:path";
 
-const cmd = new Deno.Command("deno", {
-  args: [
-    "compile",
-    ...permissions,
-    ...includes.flatMap((p: string) => ["--include", p]),
-    "--output",
-    denoJson.name,
-    entrypoint,
-  ],
-  cwd: ROOT,
-  stdin: "inherit",
-  stdout: "inherit",
-  stderr: "inherit",
+const ROOT = path.resolve(new URL("../", import.meta.url).pathname);
+const pkgJson = JSON.parse(
+  await readFile(path.join(ROOT, "package.json"), "utf8"),
+);
+const name = pkgJson.name ?? "nas";
+
+const result = await Bun.build({
+  entrypoints: [path.join(ROOT, "main.ts")],
+  outdir: ROOT,
+  naming: name,
+  target: "bun",
 });
 
-const { code } = await cmd.output();
-Deno.exit(code);
+if (!result.success) {
+  console.error("Build failed:");
+  for (const log of result.logs) {
+    console.error(log);
+  }
+  process.exit(1);
+}
+
+console.log(`Built ${name} successfully`);

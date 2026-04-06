@@ -1,4 +1,12 @@
-import { assertEquals, assertMatch } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { SessionBroker } from "./broker.ts";
 import { serveAuthRouter } from "./envoy_auth_router.ts";
 import {
@@ -7,6 +15,10 @@ import {
   writeSessionRegistry,
 } from "./registry.ts";
 import { hashToken } from "./protocol.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import net from "node:net";
 
 interface RawHttpResponse {
   status: number;
@@ -14,111 +26,97 @@ interface RawHttpResponse {
   body: string;
 }
 
-Deno.test({
-  name: "AuthRouter: listens on unix socket and challenges missing credentials",
-  sanitizeOps: false,
-  sanitizeResources: false,
-  async fn() {
-    const runtimeDir = await Deno.makeTempDir({ prefix: "nas-auth-router-" });
-    const controller = new AbortController();
-    const server = serveAuthRouter(runtimeDir, { signal: controller.signal });
-    const paths = await resolveNetworkRuntimePaths(runtimeDir);
+test("AuthRouter: listens on unix socket and challenges missing credentials", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-auth-router-"));
+  const controller = new AbortController();
+  const server = serveAuthRouter(runtimeDir, { signal: controller.signal });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
 
-    try {
-      await waitForSocket(paths.authRouterSocket, 2_000);
-      const response = await sendUnixHttpRequest(
-        paths.authRouterSocket,
-        [
-          "GET /authorize HTTP/1.1",
-          "Host: auth-router",
-          "Connection: close",
-          "",
-          "",
-        ].join("\r\n"),
-      );
+  try {
+    await waitForSocket(paths.authRouterSocket, 2_000);
+    const response = await sendUnixHttpRequest(
+      paths.authRouterSocket,
+      [
+        "GET /authorize HTTP/1.1",
+        "Host: auth-router",
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n"),
+    );
 
-      assertEquals(response.status, 407);
-      assertEquals(
-        response.headers["proxy-authenticate"],
-        'Basic realm="nas"',
-      );
-      assertEquals(response.body, "missing proxy credentials");
-    } finally {
-      controller.abort();
-      await server;
-      await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    }
-  },
+    expect(response.status).toEqual(407);
+    expect(response.headers["proxy-authenticate"]).toEqual('Basic realm="nas"');
+    expect(response.body).toEqual("missing proxy credentials");
+  } finally {
+    controller.abort();
+    await server;
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
-Deno.test({
-  name: "AuthRouter: authorizes valid session credentials over unix socket",
-  sanitizeOps: false,
-  sanitizeResources: false,
-  async fn() {
-    const runtimeDir = await Deno.makeTempDir({ prefix: "nas-auth-router-" });
-    const paths = await resolveNetworkRuntimePaths(runtimeDir);
-    const controller = new AbortController();
-    const sessionId = "sess_auth_router";
-    const token = "secret-token";
-    const brokerSocket = brokerSocketPath(paths, sessionId);
-    const broker = new SessionBroker({
-      paths,
+test("AuthRouter: authorizes valid session credentials over unix socket", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-auth-router-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const controller = new AbortController();
+  const sessionId = "sess_auth_router";
+  const token = "secret-token";
+  const brokerSocket = brokerSocketPath(paths, sessionId);
+  const broker = new SessionBroker({
+    paths,
+    sessionId,
+    allowlist: ["example.org"],
+    denylist: [],
+    promptEnabled: false,
+    timeoutSeconds: 300,
+    defaultScope: "host-port",
+    notify: "off",
+  });
+  const server = serveAuthRouter(runtimeDir, { signal: controller.signal });
+
+  try {
+    await broker.start(brokerSocket);
+    await writeSessionRegistry(paths, {
+      version: 1,
       sessionId,
+      tokenHash: await hashToken(token),
+      brokerSocket,
+      profileName: "test",
       allowlist: ["example.org"],
-      denylist: [],
+      createdAt: new Date().toISOString(),
+      pid: process.pid,
       promptEnabled: false,
-      timeoutSeconds: 300,
-      defaultScope: "host-port",
-      notify: "off",
     });
-    const server = serveAuthRouter(runtimeDir, { signal: controller.signal });
 
-    try {
-      await broker.start(brokerSocket);
-      await writeSessionRegistry(paths, {
-        version: 1,
-        sessionId,
-        tokenHash: await hashToken(token),
-        brokerSocket,
-        profileName: "test",
-        allowlist: ["example.org"],
-        createdAt: new Date().toISOString(),
-        pid: Deno.pid,
-        promptEnabled: false,
-      });
+    await waitForSocket(paths.authRouterSocket, 2_000);
+    const proxyAuthorization = `Basic ${btoa(`${sessionId}:${token}`)}`;
+    const response = await sendUnixHttpRequest(
+      paths.authRouterSocket,
+      [
+        "POST /authorize HTTP/1.1",
+        "Host: auth-router",
+        `Proxy-Authorization: ${proxyAuthorization}`,
+        "x-nas-original-method: CONNECT",
+        "x-nas-original-authority: example.org:443",
+        "x-request-id: req_auth_router",
+        "Connection: close",
+        "Content-Length: 0",
+        "",
+        "",
+      ].join("\r\n"),
+    );
 
-      await waitForSocket(paths.authRouterSocket, 2_000);
-      const proxyAuthorization = `Basic ${btoa(`${sessionId}:${token}`)}`;
-      const response = await sendUnixHttpRequest(
-        paths.authRouterSocket,
-        [
-          "POST /authorize HTTP/1.1",
-          "Host: auth-router",
-          `Proxy-Authorization: ${proxyAuthorization}`,
-          "x-nas-original-method: CONNECT",
-          "x-nas-original-authority: example.org:443",
-          "x-request-id: req_auth_router",
-          "Connection: close",
-          "Content-Length: 0",
-          "",
-          "",
-        ].join("\r\n"),
-      );
-
-      assertEquals(response.status, 200);
-      assertEquals(
-        response.headers["x-envoy-auth-headers-to-remove"],
-        "proxy-authorization",
-      );
-      assertMatch(response.body, /^$/);
-    } finally {
-      controller.abort();
-      await server;
-      await broker.close().catch(() => {});
-      await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    }
-  },
+    expect(response.status).toEqual(200);
+    expect(response.headers["x-envoy-auth-headers-to-remove"]).toEqual(
+      "proxy-authorization",
+    );
+    expect(response.body).toMatch(/^$/);
+  } finally {
+    controller.abort();
+    await server;
+    await broker.close().catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 async function waitForSocket(
@@ -128,8 +126,14 @@ async function waitForSocket(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const conn = await Deno.connect({ transport: "unix", path: socketPath });
-      conn.close();
+      const conn = await new Promise<net.Socket>((resolve, reject) => {
+        const sock = net.createConnection(
+          { path: socketPath },
+          () => resolve(sock),
+        );
+        sock.on("error", reject);
+      });
+      conn.destroy();
       return;
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -142,21 +146,23 @@ async function sendUnixHttpRequest(
   socketPath: string,
   rawRequest: string,
 ): Promise<RawHttpResponse> {
-  const conn = await Deno.connect({ transport: "unix", path: socketPath });
-  try {
-    await conn.write(new TextEncoder().encode(rawRequest));
-    const decoder = new TextDecoder();
-    const chunk = new Uint8Array(1024);
+  return new Promise((resolve, reject) => {
+    const conn = net.createConnection({ path: socketPath }, () => {
+      conn.write(rawRequest);
+    });
     let response = "";
-    while (true) {
-      const size = await conn.read(chunk);
-      if (size === null) break;
-      response += decoder.decode(chunk.subarray(0, size));
-    }
-    return parseHttpResponse(response);
-  } finally {
-    conn.close();
-  }
+    conn.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    conn.on("end", () => {
+      conn.destroy();
+      resolve(parseHttpResponse(response));
+    });
+    conn.on("error", (err) => {
+      conn.destroy();
+      reject(err);
+    });
+  });
 }
 
 function parseHttpResponse(response: string): RawHttpResponse {

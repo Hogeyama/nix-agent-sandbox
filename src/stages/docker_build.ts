@@ -17,6 +17,7 @@ import {
   getImageLabel,
 } from "../docker/client.ts";
 import { logInfo, logWarn } from "../log.ts";
+import { resolveAssetDir } from "../lib/asset.ts";
 
 // ---------------------------------------------------------------------------
 // Embedded build asset groups
@@ -24,12 +25,20 @@ import { logInfo, logWarn } from "../log.ts";
 
 const EMBEDDED_BUILD_ASSET_GROUPS = [
   {
-    baseUrl: new URL("../docker/embed/", import.meta.url).href,
+    baseDir: resolveAssetDir(
+      "docker/embed",
+      import.meta.url,
+      "../docker/embed/",
+    ),
     outputDir: "",
     files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh", "local-proxy.mjs"],
   },
   {
-    baseUrl: new URL("../docker/envoy/", import.meta.url).href,
+    baseDir: resolveAssetDir(
+      "docker/envoy",
+      import.meta.url,
+      "../docker/envoy/",
+    ),
     outputDir: "envoy",
     files: ["envoy.template.yaml"],
   },

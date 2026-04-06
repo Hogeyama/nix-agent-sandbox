@@ -5,7 +5,9 @@
  * resolveProbes() は pipeline 開始時に 1 回だけ呼ばれ、probe を並列解決する。
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
+import { stat } from "node:fs/promises";
+import { userInfo } from "node:os";
 import type { HostEnv, ProbeResults } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -19,12 +21,13 @@ import type { HostEnv, ProbeResults } from "./types.ts";
  * CLI 層で 1 回だけ呼ぶ想定。
  */
 export function buildHostEnv(): HostEnv {
-  const envObj = Deno.env.toObject();
+  const envObj = { ...process.env } as Record<string, string>;
   const env = new Map(Object.entries(envObj));
   const home = envObj.HOME ?? "/root";
   const user = envObj.USER ?? "";
-  const uid = Deno.uid();
-  const gid = Deno.gid();
+  const info = userInfo();
+  const uid = info.uid;
+  const gid = info.gid >= 0 ? info.gid : null;
   const isWSL = Boolean(envObj.WSL_DISTRO_NAME);
 
   return { home, user, uid, gid, isWSL, env };
@@ -72,10 +75,10 @@ export async function resolveProbes(
 /** /nix ディレクトリの存在チェック (NixDetectStage 用) */
 async function probeHasHostNix(): Promise<boolean> {
   try {
-    await Deno.stat("/nix");
+    await stat("/nix");
     return true;
   } catch (e) {
-    if (e instanceof Deno.errors.NotFound) return false;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw e;
   }
 }
@@ -101,17 +104,16 @@ function resolveAuditDirFromEnv(hostEnv: HostEnv): string {
 /** xdg-dbus-proxy バイナリの探索 (which コマンド) */
 async function probeXdgDbusProxy(): Promise<string | null> {
   try {
-    const result = await new Deno.Command("which", {
-      args: ["xdg-dbus-proxy"],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    if (!result.success) return null;
-    const binary = new TextDecoder().decode(result.stdout).trim();
+    const proc = Bun.spawn(["which", "xdg-dbus-proxy"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const binary = (await new Response(proc.stdout).text()).trim();
+    const code = await proc.exited;
+    if (code !== 0) return null;
     return binary === "" ? null : binary;
-  } catch (e) {
-    if (e instanceof Deno.errors.NotFound) return null;
-    throw e;
+  } catch {
+    return null;
   }
 }
 
@@ -132,20 +134,16 @@ async function probeGpgAgentSocket(
   hostEnv: HostEnv,
 ): Promise<string | null> {
   try {
-    const cmd = new Deno.Command("gpgconf", {
-      args: ["--list-dir", "agent-socket"],
-      stdout: "piped",
-      stderr: "null",
+    const proc = Bun.spawn(["gpgconf", "--list-dir", "agent-socket"], {
+      stdout: "pipe",
+      stderr: "ignore",
     });
-    const { code, stdout } = await cmd.output();
+    const socketPath = (await new Response(proc.stdout).text()).trim();
+    const code = await proc.exited;
     if (code === 0) {
-      const socketPath = new TextDecoder().decode(stdout).trim();
       if (socketPath) return socketPath;
     }
-  } catch (e) {
-    if (!(e instanceof Deno.errors.NotFound)) {
-      throw e;
-    }
+  } catch {
     // gpgconf not available
   }
 
@@ -153,10 +151,10 @@ async function probeGpgAgentSocket(
   if (hostEnv.uid !== null) {
     const runUserSocket = `/run/user/${hostEnv.uid}/gnupg/S.gpg-agent`;
     try {
-      await Deno.stat(runUserSocket);
+      await stat(runUserSocket);
       return runUserSocket;
     } catch (e) {
-      if (!(e instanceof Deno.errors.NotFound)) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         throw e;
       }
     }

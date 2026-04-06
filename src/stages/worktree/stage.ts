@@ -2,8 +2,8 @@
  * WorktreeStage — git worktree のライフサイクル管理
  */
 
-import $ from "dax";
-import * as path from "@std/path";
+import { $ } from "bun";
+import * as path from "node:path";
 import type {
   ProceduralResult,
   ProceduralStage,
@@ -87,14 +87,17 @@ export class WorktreeStage implements ProceduralStage {
     logInfo(
       `[nas] Creating worktree: ${worktreePath} (branch: ${branchName}) from ${resolvedBase}`,
     );
-    await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`
-      .printCommand();
+    console.log(
+      `$ git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`,
+    );
+    await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`;
 
     await inheritDirtyBaseWorktree(repoRoot, resolvedBase, worktreePath);
 
     if (wt.onCreate) {
       logInfo(`[nas] Running on-create hook: ${wt.onCreate}`);
-      await $`bash -c ${wt.onCreate}`.cwd(worktreePath).printCommand();
+      console.log(`$ bash -c ${wt.onCreate} (cwd: ${worktreePath})`);
+      await $`bash -c ${wt.onCreate}`.cwd(worktreePath);
     }
 
     // worktree は元リポの .git/nas-worktrees/ 内に作成される。
@@ -230,13 +233,15 @@ export class WorktreeStage implements ProceduralStage {
       // ローカルブランチが存在するか確認、なければ作成
       try {
         await $`git -C ${this.repoRoot} rev-parse --verify refs/heads/${targetBranch}`
-          .quiet("both");
+          .quiet();
       } catch {
         console.log(
           `[nas] Creating local branch "${targetBranch}" from ${this.baseBranch}`,
         );
-        await $`git -C ${this.repoRoot} branch ${targetBranch} ${this.baseBranch}`
-          .printCommand();
+        console.log(
+          `$ git -C ${this.repoRoot} branch ${targetBranch} ${this.baseBranch}`,
+        );
+        await $`git -C ${this.repoRoot} branch ${targetBranch} ${this.baseBranch}`;
       }
 
       // targetBranch が既にどこかの worktree でチェックアウトされているか確認
@@ -281,8 +286,10 @@ export class WorktreeStage implements ProceduralStage {
         `[nas] Worktree for "${targetBranch}" has uncommitted changes; stashing temporarily before cherry-pick.`,
       );
       try {
-        await $`git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`
-          .printCommand();
+        console.log(
+          `$ git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`,
+        );
+        await $`git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`;
         stashed = true;
       } catch (err) {
         console.error(
@@ -298,7 +305,10 @@ export class WorktreeStage implements ProceduralStage {
     console.log(`[nas] Cherry-picking in worktree: ${worktreePath}`);
     let success = false;
     try {
-      await $`git -C ${worktreePath} cherry-pick ${commitList}`.printCommand();
+      console.log(
+        `$ git -C ${worktreePath} cherry-pick ${commitList.join(" ")}`,
+      );
+      await $`git -C ${worktreePath} cherry-pick ${commitList}`;
       success = true;
     } catch (cpErr) {
       console.error(
@@ -313,7 +323,7 @@ export class WorktreeStage implements ProceduralStage {
       } else {
         console.error("[nas] Cherry-pick failed with conflicts.");
         try {
-          await $`git -C ${worktreePath} cherry-pick --abort`.quiet("both");
+          await $`git -C ${worktreePath} cherry-pick --abort`.quiet();
         } catch { /* ignore */ }
       }
     }
@@ -321,7 +331,8 @@ export class WorktreeStage implements ProceduralStage {
     if (!success) {
       if (stashed) {
         try {
-          await $`git -C ${worktreePath} stash pop`.printCommand();
+          console.log(`$ git -C ${worktreePath} stash pop`);
+          await $`git -C ${worktreePath} stash pop`;
         } catch (err) {
           console.error(
             `[nas] Failed to restore stashed changes in "${targetBranch}" worktree: ${
@@ -335,7 +346,8 @@ export class WorktreeStage implements ProceduralStage {
 
     if (stashed) {
       try {
-        await $`git -C ${worktreePath} stash pop`.printCommand();
+        console.log(`$ git -C ${worktreePath} stash pop`);
+        await $`git -C ${worktreePath} stash pop`;
       } catch (err) {
         console.error(
           `[nas] Cherry-pick succeeded, but restoring stashed changes failed: ${
@@ -365,16 +377,23 @@ export class WorktreeStage implements ProceduralStage {
       "nas-worktrees",
       `nas-cherry-pick-tmp-${Date.now()}`,
     );
-    await $`git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`
-      .printCommand();
+    console.log(
+      `$ git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`,
+    );
+    await $`git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`;
     try {
-      await $`git -C ${tmpWorktree} cherry-pick ${commitList}`.printCommand();
+      console.log(
+        `$ git -C ${tmpWorktree} cherry-pick ${commitList.join(" ")}`,
+      );
+      await $`git -C ${tmpWorktree} cherry-pick ${commitList}`;
 
       const newHead = (
         await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
       ).trim();
-      await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
-        .printCommand();
+      console.log(
+        `$ git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`,
+      );
+      await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`;
       console.log("[nas] Cherry-pick completed successfully.");
       return true;
     } catch (cpErr) {
@@ -389,19 +408,21 @@ export class WorktreeStage implements ProceduralStage {
         const newHead = (
           await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
         ).trim();
-        await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`
-          .printCommand();
+        console.log(
+          `$ git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`,
+        );
+        await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`;
         return true;
       }
 
       console.error("[nas] Cherry-pick failed with conflicts.");
       try {
-        await $`git -C ${tmpWorktree} cherry-pick --abort`.quiet("both");
+        await $`git -C ${tmpWorktree} cherry-pick --abort`.quiet();
       } catch { /* ignore */ }
       return false;
     } finally {
       await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`
-        .quiet("both");
+        .quiet();
     }
   }
 
@@ -416,7 +437,7 @@ export class WorktreeStage implements ProceduralStage {
     for (let i = 0; i < maxAttempts; i++) {
       // CHERRY_PICK_HEAD が存在するか（cherry-pick 進行中か）
       try {
-        await $`git -C ${worktree} rev-parse CHERRY_PICK_HEAD`.quiet("both");
+        await $`git -C ${worktree} rev-parse CHERRY_PICK_HEAD`.quiet();
       } catch {
         // cherry-pick 進行中ではない → 完了済み
         console.log("[nas] Cherry-pick completed (empty commits skipped).");
@@ -424,9 +445,8 @@ export class WorktreeStage implements ProceduralStage {
       }
 
       // working tree がクリーンなら空コミット → skip
-      const status = await $`git -C ${worktree} status --porcelain`.quiet(
-        "both",
-      ).text();
+      const status = await $`git -C ${worktree} status --porcelain`.quiet()
+        .text();
       if (status.trim() === "") {
         console.log("[nas] Skipping empty cherry-pick (already applied).");
         try {
@@ -443,7 +463,7 @@ export class WorktreeStage implements ProceduralStage {
 
     // ループ終了後、まだ CHERRY_PICK_HEAD が残っているか確認
     try {
-      await $`git -C ${worktree} rev-parse CHERRY_PICK_HEAD`.quiet("both");
+      await $`git -C ${worktree} rev-parse CHERRY_PICK_HEAD`.quiet();
       return false; // まだ進行中 → 失敗
     } catch {
       console.log("[nas] Cherry-pick completed (empty commits skipped).");

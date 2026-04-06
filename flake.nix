@@ -9,147 +9,95 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
-    deno2nix = {
-      url = "github:aMOPel/deno2nix/deno-cli-fetcher";
-      flake = false;
+    bun2nix = {
+      url = "github:nix-community/bun2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, nix-bundle-elf, deno2nix }:
+  outputs = { self, nixpkgs, flake-utils, bun2nix, nix-bundle-elf, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        deno2nixLib = import deno2nix { inherit pkgs; };
-        hasBundleSupport = builtins.hasAttr system nix-bundle-elf.packages;
-        bundleTool = if hasBundleSupport
-          then nix-bundle-elf.packages.${system}.default
-          else null;
-
-        # Read compile metadata from deno.json so flags aren't duplicated.
-        denoJson = builtins.fromJSON (builtins.readFile "${self}/deno.json");
-        compileMeta = denoJson."x-compile";
-
-        # Pre-built denort binary from Deno GitHub releases.
-        # Must match pkgs.deno version exactly — deno compile looks up
-        # $DENO_DIR/dl/release/v<version>/denort-<target>.zip at build time.
-        denort = let
-          target = {
-            "x86_64-linux"  = "x86_64-unknown-linux-gnu";
-            "aarch64-linux" = "aarch64-unknown-linux-gnu";
-            "x86_64-darwin"  = "x86_64-apple-darwin";
-            "aarch64-darwin" = "aarch64-apple-darwin";
-          }.${system};
-          hash = {
-            "x86_64-linux" = "sha256-kvYW0T9L7avvgeKAA0AwPGpybit8jrNg0y2oIXMWclQ=";
-          }.${system};
-        in pkgs.stdenvNoCC.mkDerivation {
-          pname = "denort";
-          version = pkgs.deno.version;
-          src = pkgs.fetchurl {
-            url = "https://github.com/denoland/deno/releases/download/v${pkgs.deno.version}/denort-${target}.zip";
-            inherit hash;
-          };
-          nativeBuildInputs = [ pkgs.unzip ];
-          dontUnpack = true;
-          installPhase = ''
-            mkdir -p $out/bin
-            unzip $src -d $out/bin
-            chmod +x $out/bin/denort
-          '';
-          meta.mainProgram = "denort";
-        };
-
-        # sha256 of the fetchDenoDeps FOD — update when deno.lock changes:
-        # 1. Set to pkgs.lib.fakeHash, run `nix build`, copy the "got:" hash.
-        denoDepsHash = "sha256-ytQesLXu2HudkS+UXFzupkSclMEXDS+DzYAS8sEua7U=";
-
-        nasDeps = deno2nixLib.lib.fetchDenoDeps {
-          name = "nas-0.1.0-deno-deps";
-          src = self;
-          hash = denoDepsHash;
-          # deno caches HTTP response headers alongside each remote file in
-          # .deno/deps/**/*.metadata.json.  These files contain a `date` field
-          # that changes with every network request, making the FOD
-          # non-deterministic.  In vendor mode all HTTPS/JSR deps are already
-          # materialised in vendor/, so the metadata cache is not needed for
-          # the subsequent `deno install --cached-only` in buildDenoPackage.
-          postInstall = ''
-            find "$out/.deno/deps" -name "*.metadata.json" -type f -delete 2>/dev/null || true
-          '';
-        };
-
-        nas = deno2nixLib.lib.buildDenoPackage {
+        b2n = bun2nix.packages.${system}.default;
+        single-exe = nix-bundle-elf.lib.${system}.single-exe;
+        nasBin = b2n.mkDerivation {
           pname = "nas";
           version = "0.1.0";
           src = self;
-
-          denoDeps = nasDeps;
-
+          module = "main.ts";
+          bunDeps = b2n.fetchBunDeps { bunNix = ./bun.nix; };
           preBuild = ''
-            # Workaround: deno2nix build hook references $denoCompileFlags
-            # but buildDenoPackage exports denoCompileFlags_ (with underscore).
-            export denoCompileFlags="$denoCompileFlags_"
-            export denoFlags="$denoFlags_"
-
-            # Restore +x on esbuild native binary (stripped by cp --no-preserve=mode)
-            find node_modules -type f -path '*/bin/*' -exec chmod +x {} \;
-
-            # Build UI — native loader resolves npm:preact from node_modules
-            deno task build-ui
+            bun run build-ui
           '';
+          postInstall = ''
+            mkdir -p $out/share/nas
+            cp -r src/ui/dist $out/share/nas/dist
+          '';
+        };
 
-          binaryEntrypointPath = compileMeta.entrypoint;
-          denoCompileFlags = compileMeta.permissions
-            ++ builtins.concatMap (p: ["--include" p]) compileMeta.includes;
+        # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
+        # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
+        nasAssets = pkgs.runCommand "nas-assets" { } ''
+          mkdir -p $out/docker/embed $out/docker/envoy $out/scripts $out/ui
 
-          # Use pre-built denort from GitHub releases instead of the default
-          # deno2nix denort which compiles Deno from Rust source (very slow).
-          # The full pkgs.deno binary does NOT work as denort — the compiled
-          # binary retains CLI parsing and ignores the embedded script.
-          denortPackage = denort;
+          cp ${self}/src/docker/embed/Dockerfile $out/docker/embed/
+          cp ${self}/src/docker/embed/entrypoint.sh $out/docker/embed/
+          cp ${self}/src/docker/embed/osc52-clip.sh $out/docker/embed/
+          cp ${self}/src/docker/embed/local-proxy.mjs $out/docker/embed/
+          cp ${self}/src/docker/envoy/envoy.template.yaml $out/docker/envoy/
+          cp ${self}/scripts/notify-send-wsl $out/scripts/
+          cp -r ${nasBin}/share/nas/dist $out/ui/ || true
+        '';
 
-          # deno compile embeds JS in a custom ELF section; strip destroys it
-          dontStrip = true;
-          # patchelf --shrink-rpath corrupts the deno compile trailer
-          dontPatchELF = true;
+        nas = pkgs.runCommand "nas-wrapped" { } ''
+          mkdir -p $out/bin $out/share/nas
+
+          cp ${nasBin}/bin/nas $out/share/nas/nas
+
+          cp -r ${nasAssets} $out/share/nas/assets
+
+          cat > $out/bin/nas <<'WRAPPER'
+          #!/bin/sh
+          dir="$(cd "$(dirname "$0")/.." && pwd)"
+          export NAS_ASSET_DIR="$dir/share/nas/assets"
+          exec "$dir/share/nas/nas" "$@"
+          WRAPPER
+          chmod +x $out/bin/nas
+        '';
+
+        nasBundled = single-exe {
+          name = "nas";
+          target = "${nasBin}/bin/nas";
+          type = "preload";
+          extraFiles = { "share/nas/assets" = nasAssets; };
+          resolveWith = [
+            "${pkgs.glibc}/lib/libpthread.so.0"
+            "${pkgs.glibc}/lib/libdl.so.2"
+            "${pkgs.glibc}/lib/librt.so.1"
+            "${pkgs.glibc}/lib/libm.so.6"
+            "${pkgs.glibc}/lib/libc.so.6"
+            "${pkgs.gcc.cc.lib}/lib/libgcc_s.so.1"
+          ];
+          env = [
+            { key = "NAS_ASSET_DIR"; action = "replace"; value = "%ROOT/share/nas/assets"; }
+          ];
         };
       in
       {
         packages = {
           default = nas;
-        } // pkgs.lib.optionalAttrs hasBundleSupport {
-          # For non-Nix users: a self-extracting binary with runtime libs bundled.
-          bundled = pkgs.runCommand "nas-bundled" {
-            nativeBuildInputs = [ bundleTool pkgs.patchelf ];
-          } ''
-            target="$TMPDIR/nas"
-            cp ${nas}/bin/nas "$target"
-            chmod +w "$target"
-            patchelf --set-interpreter "${pkgs.stdenv.cc.bintools.dynamicLinker}" "$target"
-
-            current_rpath="$(patchelf --print-rpath "$target")"
-            extra_rpath="${pkgs.glibc}/lib:${pkgs.stdenv.cc.cc.lib}/lib"
-            if [ -n "$current_rpath" ]; then
-              patchelf --set-rpath "$extra_rpath:$current_rpath" "$target"
-            else
-              patchelf --set-rpath "$extra_rpath" "$target"
-            fi
-
-            nix-bundle-elf preload \
-              --no-nix-locate \
-              --extra-lib libdl.so.2 \
-              -o "$out" \
-              "$target"
-          '';
+          bundled = nasBundled;
         };
 
         devShells.default = pkgs.mkShell {
           packages = [
-            pkgs.deno
+            pkgs.bun
+            b2n
+            pkgs.nodejs
             pkgs.pnpm
             pkgs.chromium
           ];
-
           shellHook = ''
             if [ ! -f .playwright/cli.config.json ]; then
               mkdir -p .playwright

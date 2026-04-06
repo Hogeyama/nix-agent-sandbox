@@ -32,6 +32,8 @@ import {
 } from "../../network/registry.ts";
 import { generateSessionToken, hashToken } from "../../network/protocol.ts";
 import { logInfo, logWarn } from "../../log.ts";
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { resolveAsset } from "../../lib/asset.ts";
 
 interface ProxySessionNetworkHandle {
   close(): Promise<void>;
@@ -99,7 +101,7 @@ export async function executeProxySession(
       profileName: effect.profileName,
       allowlist: effect.allowlist,
       createdAt: new Date().toISOString(),
-      pid: Deno.pid,
+      pid: process.pid,
       promptEnabled: effect.promptEnabled,
       agent: effect.agent,
     });
@@ -221,15 +223,17 @@ export async function executeProxySession(
 async function renderEnvoyConfig(
   paths: import("../../network/registry.ts").NetworkRuntimePaths,
 ): Promise<void> {
-  const source = await Deno.readTextFile(
-    new URL("../../docker/envoy/envoy.template.yaml", import.meta.url),
+  const envoyTemplatePath = resolveAsset(
+    "docker/envoy/envoy.template.yaml",
+    import.meta.url,
+    "../../docker/envoy/envoy.template.yaml",
   );
-  await Deno.writeTextFile(paths.envoyConfigFile, source, {
-    create: true,
+  const source = await readFile(envoyTemplatePath, "utf8");
+  await writeFile(paths.envoyConfigFile, source, {
     mode: 0o644,
   });
-  await Deno.chmod(paths.envoyConfigFile, 0o644).catch((error) => {
-    if (!(error instanceof Deno.errors.NotSupported)) {
+  await chmod(paths.envoyConfigFile, 0o644).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOTSUP") {
       throw error;
     }
   });

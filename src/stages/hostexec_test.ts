@@ -1,5 +1,13 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
-import * as path from "@std/path";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import * as path from "node:path";
 import { DEFAULT_DISPLAY_CONFIG, DEFAULT_UI_CONFIG } from "../config/types.ts";
 import type { Config, Profile } from "../config/types.ts";
 import type {
@@ -118,17 +126,17 @@ function makeStageInput(
   };
 }
 
-Deno.test("HostExecStage plan: returns null when no rules", () => {
+test("HostExecStage plan: returns null when no rules", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const input = makeStageInput(profile, hostEnv);
   const stage = createHostExecStage();
   const plan = stage.plan(input);
-  assertEquals(plan, null);
+  expect(plan).toEqual(null);
 });
 
-Deno.test("HostExecStage plan: produces correct effects and docker args", () => {
+test("HostExecStage plan: produces correct effects and docker args", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
@@ -136,46 +144,38 @@ Deno.test("HostExecStage plan: produces correct effects and docker args", () => 
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
   if (!plan) return;
 
   // Check that wrapper directory mount is present
-  assertEquals(
-    plan.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")),
-    true,
-  );
+  expect(plan.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")))
+    .toEqual(true);
 
   // Check PATH env includes wrapper dir
-  assertEquals(
-    plan.envVars["PATH"].startsWith("/opt/nas/hostexec/bin:"),
+  expect(plan.envVars["PATH"].startsWith("/opt/nas/hostexec/bin:")).toEqual(
     true,
   );
 
   // Check socket env is set
-  assertEquals(plan.envVars["NAS_HOSTEXEC_SOCKET"] !== undefined, true);
-  assertEquals(
-    plan.envVars["NAS_HOSTEXEC_SESSION_ID"],
-    "test-session-id",
-  );
+  expect(plan.envVars["NAS_HOSTEXEC_SOCKET"] !== undefined).toEqual(true);
+  expect(plan.envVars["NAS_HOSTEXEC_SESSION_ID"]).toEqual("test-session-id");
 
   // Check outputOverrides
-  assertEquals(plan.outputOverrides.hostexecBrokerSocket !== undefined, true);
-  assertEquals(plan.outputOverrides.hostexecRuntimeDir !== undefined, true);
-  assertEquals(
+  expect(plan.outputOverrides.hostexecBrokerSocket !== undefined).toEqual(true);
+  expect(plan.outputOverrides.hostexecRuntimeDir !== undefined).toEqual(true);
+  expect(
     (plan.outputOverrides.hostexecSessionTmpDir as string)?.includes(
       "test-session-id",
     ),
-    true,
-  );
+  ).toEqual(true);
 
   // Check socket path matches the env var
-  assertEquals(
-    plan.envVars["NAS_HOSTEXEC_SOCKET"],
-    plan.outputOverrides.hostexecBrokerSocket,
+  expect(plan.envVars["NAS_HOSTEXEC_SOCKET"]).toEqual(
+    plan.outputOverrides.hostexecBrokerSocket!,
   );
 });
 
-Deno.test("HostExecStage plan: creates symlink effects for bare command argv0s", () => {
+test("HostExecStage plan: creates symlink effects for bare command argv0s", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
@@ -183,19 +183,19 @@ Deno.test("HostExecStage plan: creates symlink effects for bare command argv0s",
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
   if (!plan) return;
 
   // "git" is a bare command argv0 — should have a symlink effect
   const symlinkEffects = plan.effects.filter(
     (e): e is SymlinkEffect => e.kind === "symlink",
   );
-  assertEquals(symlinkEffects.length, 1);
-  assertEquals(symlinkEffects[0].target, "hostexec-wrapper.py");
-  assertEquals(path.basename(symlinkEffects[0].path), "git");
+  expect(symlinkEffects.length).toEqual(1);
+  expect(symlinkEffects[0].target).toEqual("hostexec-wrapper.py");
+  expect(path.basename(symlinkEffects[0].path)).toEqual("git");
 });
 
-Deno.test("HostExecStage plan: creates unix-listener effect for hostexec-broker", () => {
+test("HostExecStage plan: creates unix-listener effect for hostexec-broker", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
@@ -203,22 +203,22 @@ Deno.test("HostExecStage plan: creates unix-listener effect for hostexec-broker"
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
   if (!plan) return;
 
   const listenerEffects = plan.effects.filter(
     (e): e is UnixListenerEffect => e.kind === "unix-listener",
   );
-  assertEquals(listenerEffects.length, 1);
-  assertEquals(listenerEffects[0].id, "hostexec-broker");
-  assertEquals(listenerEffects[0].spec.kind, "hostexec-broker");
+  expect(listenerEffects.length).toEqual(1);
+  expect(listenerEffects[0].id).toEqual("hostexec-broker");
+  expect(listenerEffects[0].spec.kind).toEqual("hostexec-broker");
   if (listenerEffects[0].spec.kind === "hostexec-broker") {
-    assertEquals(listenerEffects[0].spec.sessionId, "test-session-id");
-    assertEquals(listenerEffects[0].spec.auditDir, "/tmp/nas-test-audit");
+    expect(listenerEffects[0].spec.sessionId).toEqual("test-session-id");
+    expect(listenerEffects[0].spec.auditDir).toEqual("/tmp/nas-test-audit");
   }
 });
 
-Deno.test("HostExecStage plan: creates file-write effect for wrapper script", () => {
+test("HostExecStage plan: creates file-write effect for wrapper script", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
@@ -226,39 +226,31 @@ Deno.test("HostExecStage plan: creates file-write effect for wrapper script", ()
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
   if (!plan) return;
 
   const fileWriteEffects = plan.effects.filter(
     (e) => e.kind === "file-write",
   );
-  assertEquals(fileWriteEffects.length, 1);
-  assertEquals(fileWriteEffects[0].kind, "file-write");
+  expect(fileWriteEffects.length).toEqual(1);
+  expect(fileWriteEffects[0].kind).toEqual("file-write");
   if (fileWriteEffects[0].kind === "file-write") {
-    assertEquals(
+    expect(
       fileWriteEffects[0].content.includes("select.select([fd], [], [], 0)"),
+    ).toEqual(true);
+    expect(fileWriteEffects[0].content.includes('"argv0": argv0,')).toEqual(
       true,
     );
-    assertEquals(
-      fileWriteEffects[0].content.includes('"argv0": argv0,'),
-      true,
-    );
-    assertEquals(
-      fileWriteEffects[0].content.includes(
-        "relative argv0 fallback is not supported",
-      ),
-      true,
-    );
-    assertEquals(
-      fileWriteEffects[0].content.includes(
-        "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
-      ),
-      true,
-    );
+    expect(fileWriteEffects[0].content.includes(
+      "relative argv0 fallback is not supported",
+    )).toEqual(true);
+    expect(fileWriteEffects[0].content.includes(
+      "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
+    )).toEqual(true);
   }
 });
 
-Deno.test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
+test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [{
     id: "gradlew",
@@ -276,19 +268,18 @@ Deno.test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
   if (!plan) return;
 
   // Relative argv0 should produce a docker mount for the wrapper script
-  assertEquals(
+  expect(
     plan.dockerArgs.some((arg) =>
       arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`)
     ),
-    true,
-  );
+  ).toEqual(true);
 });
 
-Deno.test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path", () => {
+test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [{
     id: "usr-bin-git",
@@ -305,31 +296,29 @@ Deno.test("HostExecStage plan: mounts absolute argv0 wrapper at exact container 
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
   if (!plan) return;
 
   // Absolute argv0 should produce a docker mount at that exact path in the container
-  assertEquals(
-    plan.dockerArgs.some((arg) => arg.endsWith(":/usr/bin/git:ro")),
-    true,
-  );
+  expect(plan.dockerArgs.some((arg) => arg.endsWith(":/usr/bin/git:ro")))
+    .toEqual(true);
 });
 
-Deno.test("HostExecStage plan: auto notify resolves to desktop", () => {
+test("HostExecStage plan: auto notify resolves to desktop", () => {
   const profile = makeProfile();
   profile.hostexec!.prompt.notify = "auto";
   const input = makeStageInput(profile, makeHostEnv("/tmp/nas-test-runtime"));
   const stage = createHostExecStage();
   const plan = stage.plan(input);
 
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
   if (!plan) return;
 
   const listenerEffects = plan.effects.filter(
     (e): e is UnixListenerEffect => e.kind === "unix-listener",
   );
-  assertEquals(listenerEffects.length, 1);
+  expect(listenerEffects.length).toEqual(1);
   if (listenerEffects[0].spec.kind === "hostexec-broker") {
-    assertEquals(listenerEffects[0].spec.notify, "desktop");
+    expect(listenerEffects[0].spec.notify).toEqual("desktop");
   }
 });

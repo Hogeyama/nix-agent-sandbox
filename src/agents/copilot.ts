@@ -20,8 +20,8 @@ export interface CopilotProbes {
 
 /** ホスト環境を調べて CopilotProbes を返す (副作用あり) */
 export function resolveCopilotProbes(hostHome: string): CopilotProbes {
-  const xdgConfigHome = Deno.env.get("XDG_CONFIG_HOME") ?? null;
-  const xdgStateHome = Deno.env.get("XDG_STATE_HOME") ?? null;
+  const xdgConfigHome = process.env["XDG_CONFIG_HOME"] ?? null;
+  const xdgStateHome = process.env["XDG_STATE_HOME"] ?? null;
 
   const hostCopilotConfigDir = xdgConfigHome
     ? `${xdgConfigHome}/.copilot`
@@ -172,9 +172,10 @@ function remapToContainer(
 // Internal helpers (side-effectful, used only by resolveCopilotProbes)
 // ---------------------------------------------------------------------------
 
-function pathExistsSync(path: string): boolean {
+function pathExistsSync(p: string): boolean {
   try {
-    Deno.statSync(path);
+    const { statSync } = require("node:fs");
+    statSync(p);
     return true;
   } catch {
     return false;
@@ -183,19 +184,12 @@ function pathExistsSync(path: string): boolean {
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
 function findBinaryResolved(name: string): string | null {
+  const which = Bun.which(name, { PATH: process.env["PATH"] ?? "" });
+  if (!which) return null;
   try {
-    const cmd = new Deno.Command("which", {
-      args: [name],
-      stdout: "piped",
-      stderr: "null",
-    });
-    const output = cmd.outputSync();
-    if (output.success) {
-      const binPath = new TextDecoder().decode(output.stdout).trim();
-      return Deno.realPathSync(binPath);
-    }
+    const fs = require("node:fs");
+    return fs.realpathSync(which);
   } catch {
-    // ignore
+    return null;
   }
-  return null;
 }

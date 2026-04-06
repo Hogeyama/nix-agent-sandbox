@@ -6,7 +6,7 @@
  * Docker daemon を使うテストは client_integration_test.ts を参照。
  */
 
-import { assertEquals } from "@std/assert";
+import { expect, test } from "bun:test";
 import {
   dockerImageExists,
   dockerIsRunning,
@@ -14,27 +14,27 @@ import {
   getImageLabel,
 } from "./client.ts";
 
-Deno.test("dockerImageExists: returns false for non-existing image", async () => {
+test("dockerImageExists: returns false for non-existing image", async () => {
   const exists = await dockerImageExists("no-such-image-xyz:never");
-  assertEquals(exists, false);
+  expect(exists).toEqual(false);
 });
 
-Deno.test("getImageLabel: returns null for non-existing image", async () => {
+test("getImageLabel: returns null for non-existing image", async () => {
   const label = await getImageLabel("no-such-image-xyz:never", "foo");
-  assertEquals(label, null);
+  expect(label).toEqual(null);
 });
 
-Deno.test("getImageLabel: returns null for non-existing label", async () => {
+test("getImageLabel: returns null for non-existing label", async () => {
   const label = await getImageLabel("alpine:latest", "no.such.label.xyz");
-  assertEquals(label, null);
+  expect(label).toEqual(null);
 });
 
-Deno.test("dockerIsRunning: returns false for non-existing container", async () => {
+test("dockerIsRunning: returns false for non-existing container", async () => {
   const result = await dockerIsRunning("no-such-container-xyz");
-  assertEquals(result, false);
+  expect(result).toEqual(false);
 });
 
-Deno.test("dockerLogs: returns fallback for non-existing container", async () => {
+test("dockerLogs: returns fallback for non-existing container", async () => {
   const logs = await dockerLogs("no-such-container-xyz");
-  assertEquals(logs, "(failed to retrieve container logs)");
+  expect(logs).toEqual("(failed to retrieve container logs)");
 });

@@ -2,8 +2,8 @@
  * worktree の一覧取得・クリーンアップ（サブコマンド用）
  */
 
-import $ from "dax";
-import * as path from "@std/path";
+import { $ } from "bun";
+import * as path from "node:path";
 import { getGitRoot } from "./git_helpers.ts";
 
 export interface WorktreeEntry {
@@ -67,9 +67,10 @@ export async function listOrphanNasBranches(
   const repoRoot = await getGitRoot(workDir);
 
   // stale な worktree 参照を先に片付ける
-  await $`git -C ${repoRoot} worktree prune`.quiet("both");
+  await $`git -C ${repoRoot} worktree prune`.quiet();
 
-  const branchOutput = await $`git -C ${repoRoot} branch --list nas/*`
+  const pattern = "nas/*";
+  const branchOutput = await $`git -C ${repoRoot} branch --list ${pattern}`
     .text();
   const allNasBranches = branchOutput
     .split("\n")

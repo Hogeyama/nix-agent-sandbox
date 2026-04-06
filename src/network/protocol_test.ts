@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "@std/assert";
+import { expect, test } from "bun:test";
 import {
   decodeProxyAuthorization,
   denyReasonForTarget,
@@ -8,211 +8,185 @@ import {
   parseAllowlistEntry,
 } from "./protocol.ts";
 
-Deno.test("decodeProxyAuthorization: decodes Basic credentials", () => {
+test("decodeProxyAuthorization: decodes Basic credentials", () => {
   const header = `Basic ${btoa("sess_abc:tok_xyz")}`;
-  assertEquals(decodeProxyAuthorization(header), {
+  expect(decodeProxyAuthorization(header)).toEqual({
     sessionId: "sess_abc",
     token: "tok_xyz",
   });
 });
 
-Deno.test("decodeProxyAuthorization: rejects malformed credentials", () => {
-  assertEquals(decodeProxyAuthorization("Bearer token"), null);
-  assertEquals(decodeProxyAuthorization(`Basic ${btoa("sess_only:")}`), null);
-  assertEquals(decodeProxyAuthorization("Basic !!!"), null);
+test("decodeProxyAuthorization: rejects malformed credentials", () => {
+  expect(decodeProxyAuthorization("Bearer token")).toEqual(null);
+  expect(decodeProxyAuthorization(`Basic ${btoa("sess_only:")}`)).toEqual(null);
+  expect(decodeProxyAuthorization("Basic !!!")).toEqual(null);
 });
 
-Deno.test("normalizeTarget: parses CONNECT authority", () => {
+test("normalizeTarget: parses CONNECT authority", () => {
   const target = normalizeTarget({
     method: "CONNECT",
     authority: "api.openai.com:443",
   });
-  assertEquals(target, { host: "api.openai.com", port: 443 });
+  expect(target).toEqual({ host: "api.openai.com", port: 443 });
 });
 
-Deno.test("normalizeTarget: parses absolute URI", () => {
+test("normalizeTarget: parses absolute URI", () => {
   const target = normalizeTarget({
     method: "GET",
     url: "https://example.com/path",
   });
-  assertEquals(target, { host: "example.com", port: 443 });
+  expect(target).toEqual({ host: "example.com", port: 443 });
 });
 
-Deno.test("normalizeTarget: CONNECT requires an explicit port", () => {
-  assertThrows(
+test("normalizeTarget: CONNECT requires an explicit port", () => {
+  expect(
     () =>
       normalizeTarget({
         method: "CONNECT",
         authority: "api.openai.com",
       }),
-    Error,
-    "explicit port",
-  );
+  ).toThrow("explicit port");
 });
 
-Deno.test("normalizeTarget: falls back to authority when URL is invalid", () => {
+test("normalizeTarget: falls back to authority when URL is invalid", () => {
   const target = normalizeTarget({
     method: "GET",
     url: "not a valid url",
     hostHeader: "Example.COM.",
   });
-  assertEquals(target, { host: "example.com", port: 80 });
+  expect(target).toEqual({ host: "example.com", port: 80 });
 });
 
-Deno.test("normalizeHost: trims brackets, dots, and case", () => {
-  assertEquals(normalizeHost("[2001:db8::1]"), "2001:db8::1");
-  assertEquals(normalizeHost("Example.COM..."), "example.com");
+test("normalizeHost: trims brackets, dots, and case", () => {
+  expect(normalizeHost("[2001:db8::1]")).toEqual("2001:db8::1");
+  expect(normalizeHost("Example.COM...")).toEqual("example.com");
 });
 
-Deno.test("parseAllowlistEntry: parses host only", () => {
-  assertEquals(parseAllowlistEntry("example.com"), {
+test("parseAllowlistEntry: parses host only", () => {
+  expect(parseAllowlistEntry("example.com")).toEqual({
     host: "example.com",
     port: null,
   });
-  assertEquals(parseAllowlistEntry("*.example.com"), {
+  expect(parseAllowlistEntry("*.example.com")).toEqual({
     host: "*.example.com",
     port: null,
   });
 });
 
-Deno.test("parseAllowlistEntry: parses host:port", () => {
-  assertEquals(parseAllowlistEntry("example.com:443"), {
+test("parseAllowlistEntry: parses host:port", () => {
+  expect(parseAllowlistEntry("example.com:443")).toEqual({
     host: "example.com",
     port: 443,
   });
-  assertEquals(parseAllowlistEntry("*.example.com:8080"), {
+  expect(parseAllowlistEntry("*.example.com:8080")).toEqual({
     host: "*.example.com",
     port: 8080,
   });
 });
 
-Deno.test("parseAllowlistEntry: parses IPv6 with brackets", () => {
-  assertEquals(parseAllowlistEntry("[2001:db8::1]"), {
+test("parseAllowlistEntry: parses IPv6 with brackets", () => {
+  expect(parseAllowlistEntry("[2001:db8::1]")).toEqual({
     host: "[2001:db8::1]",
     port: null,
   });
-  assertEquals(parseAllowlistEntry("[2001:db8::1]:443"), {
+  expect(parseAllowlistEntry("[2001:db8::1]:443")).toEqual({
     host: "[2001:db8::1]",
     port: 443,
   });
 });
 
-Deno.test("matchesAllowlist: supports wildcard subdomains", () => {
-  assertEquals(
+test("matchesAllowlist: supports wildcard subdomains", () => {
+  expect(
     matchesAllowlist({ host: "api.github.com", port: 443 }, ["*.github.com"]),
-    true,
-  );
-  assertEquals(
+  ).toEqual(true);
+  expect(
     matchesAllowlist({ host: "github.com", port: 443 }, ["*.github.com"]),
-    true,
-  );
-  assertEquals(
+  ).toEqual(true);
+  expect(
     matchesAllowlist({ host: "gitlab.com", port: 443 }, ["*.github.com"]),
-    false,
-  );
+  ).toEqual(false);
 });
 
-Deno.test("matchesAllowlist: port-qualified entries", () => {
-  assertEquals(
+test("matchesAllowlist: port-qualified entries", () => {
+  expect(
     matchesAllowlist({ host: "example.com", port: 443 }, ["example.com:443"]),
-    true,
-  );
-  assertEquals(
+  ).toEqual(true);
+  expect(
     matchesAllowlist({ host: "example.com", port: 80 }, ["example.com:443"]),
-    false,
-  );
-  assertEquals(
+  ).toEqual(false);
+  expect(
     matchesAllowlist({ host: "example.com", port: 80 }, ["example.com"]),
-    true,
-  );
-  assertEquals(
+  ).toEqual(true);
+  expect(
     matchesAllowlist({ host: "api.example.com", port: 443 }, [
       "*.example.com:443",
     ]),
-    true,
-  );
-  assertEquals(
+  ).toEqual(true);
+  expect(
     matchesAllowlist({ host: "api.example.com", port: 80 }, [
       "*.example.com:443",
     ]),
-    false,
-  );
+  ).toEqual(false);
 });
 
-Deno.test("denyReasonForTarget: blocks localhost and RFC1918", () => {
-  assertEquals(
+test("denyReasonForTarget: blocks localhost and RFC1918", () => {
+  expect(
     denyReasonForTarget({ host: "localhost", port: 80 }),
-    "blocked-special-host",
-  );
-  assertEquals(
+  ).toEqual("blocked-special-host");
+  expect(
     denyReasonForTarget({ host: "10.0.0.1", port: 443 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "127.0.0.1", port: 80 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "172.16.0.1", port: 80 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "172.31.255.255", port: 80 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "192.168.1.1", port: 80 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "169.254.0.1", port: 80 }),
-    "blocked-private-ip",
-  );
+  ).toEqual("blocked-private-ip");
   // Public addresses should pass
-  assertEquals(denyReasonForTarget({ host: "example.com", port: 443 }), null);
-  assertEquals(denyReasonForTarget({ host: "8.8.8.8", port: 443 }), null);
-  assertEquals(
+  expect(denyReasonForTarget({ host: "example.com", port: 443 })).toEqual(null);
+  expect(denyReasonForTarget({ host: "8.8.8.8", port: 443 })).toEqual(null);
+  expect(
     denyReasonForTarget({ host: "172.32.0.1", port: 80 }),
-    null,
-  );
+  ).toEqual(null);
 });
 
-Deno.test("denyReasonForTarget: blocks private and link-local IPv6", () => {
+test("denyReasonForTarget: blocks private and link-local IPv6", () => {
   // ULA (fc00::/7)
-  assertEquals(
+  expect(
     denyReasonForTarget({ host: "fc00::1", port: 443 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "fd00::1", port: 443 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "fdff::1", port: 443 }),
-    "blocked-private-ip",
-  );
+  ).toEqual("blocked-private-ip");
   // Link-local (fe80::/10)
-  assertEquals(
+  expect(
     denyReasonForTarget({ host: "fe80::1", port: 443 }),
-    "blocked-private-ip",
-  );
-  assertEquals(
+  ).toEqual("blocked-private-ip");
+  expect(
     denyReasonForTarget({ host: "febf::1", port: 443 }),
-    "blocked-private-ip",
-  );
+  ).toEqual("blocked-private-ip");
   // Loopback
-  assertEquals(
+  expect(
     denyReasonForTarget({ host: "::1", port: 443 }),
-    "blocked-private-ip",
-  );
+  ).toEqual("blocked-private-ip");
   // Public addresses should pass
-  assertEquals(
+  expect(
     denyReasonForTarget({ host: "2001:4860:4860::8888", port: 443 }),
-    null,
-  );
+  ).toEqual(null);
   // fec0:: is NOT link-local (outside fe80::/10)
-  assertEquals(
+  expect(
     denyReasonForTarget({ host: "fec0::1", port: 443 }),
-    null,
-  );
+  ).toEqual(null);
 });

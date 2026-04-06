@@ -40,7 +40,7 @@ export async function runContainerCommand(nasArgs: string[]): Promise<void> {
 
     console.error(`[nas] Unknown container subcommand: ${sub}`);
     console.error("  Usage: nas container clean");
-    Deno.exit(1);
+    process.exit(1);
   } catch (err) {
     exitOnCliError(err);
   }

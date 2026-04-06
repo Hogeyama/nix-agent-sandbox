@@ -9,7 +9,7 @@
  * proxy-session effect として executor に委譲する。
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
 import type {
   HostEnv,
   PlanStage,

@@ -1,3 +1,12 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * Integration tests for worktree functionality.
  *
@@ -5,9 +14,8 @@
  * lifecycle helpers (list / clean / orphan detection).
  */
 
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import $ from "dax";
-import * as path from "@std/path";
+import { $ } from "bun";
+import * as path from "node:path";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -16,6 +24,8 @@ import {
 } from "../config/types.ts";
 import type { Config, Profile } from "../config/types.ts";
 import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import {
   cleanNasWorktrees,
   listNasWorktrees,
@@ -31,18 +41,16 @@ import {
 async function withTempRepo(
   fn: (repoRoot: string) => Promise<void>,
 ): Promise<void> {
-  const tmpDir = await Deno.makeTempDir({ prefix: "wt-e2e-" });
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "wt-e2e-"));
   try {
-    await $`git init ${tmpDir}`.quiet("both");
-    await $`git -C ${tmpDir} config user.name nas-test`.quiet("both");
-    await $`git -C ${tmpDir} config user.email nas-test@example.com`.quiet(
-      "both",
-    );
-    await $`git -C ${tmpDir} config commit.gpgsign false`.quiet("both");
-    await $`git -C ${tmpDir} commit --allow-empty -m "init"`.quiet("both");
+    await $`git init ${tmpDir}`.quiet();
+    await $`git -C ${tmpDir} config user.name nas-test`.quiet();
+    await $`git -C ${tmpDir} config user.email nas-test@example.com`.quiet();
+    await $`git -C ${tmpDir} config commit.gpgsign false`.quiet();
+    await $`git -C ${tmpDir} commit --allow-empty -m "init"`.quiet();
     await fn(tmpDir);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 }
 
@@ -134,7 +142,7 @@ async function withMockedPrompts(
 
   try {
     await fn();
-    assertEquals(index, answers.length);
+    expect(index).toEqual(answers.length);
   } finally {
     Object.defineProperty(globalThis, "prompt", {
       configurable: true,
@@ -159,7 +167,7 @@ async function createTestWorktree(
     worktreeName,
   );
   await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} HEAD`
-    .quiet("both");
+    .quiet();
   return { worktreePath, branchName };
 }
 
@@ -167,7 +175,7 @@ async function createTestWorktree(
 // WorktreeStage execute
 // ===========================================================================
 
-Deno.test("WorktreeStage: creates worktree under repo metadata and mounts repo root", async () => {
+test("WorktreeStage: creates worktree under repo metadata and mounts repo root", async () => {
   await withTempRepo(async (repo) => {
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
@@ -180,23 +188,18 @@ Deno.test("WorktreeStage: creates worktree under repo metadata and mounts repo r
     const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
 
-    assertEquals(mountDir, repo);
-    assertEquals(
-      workDir.startsWith(
-        path.join(repo, ".git", "nas-worktrees", "nas-test-"),
-      ),
-      true,
-    );
-    assertEquals(branchName.startsWith("nas/test/"), true);
+    expect(mountDir).toEqual(repo);
+    expect(workDir.startsWith(
+      path.join(repo, ".git", "nas-worktrees", "nas-test-"),
+    )).toEqual(true);
+    expect(branchName.startsWith("nas/test/")).toEqual(true);
 
-    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
-      "both",
-    );
-    await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
+    await $`git -C ${repo} branch -D ${branchName}`.quiet();
   });
 });
 
-Deno.test("WorktreeStage: worktree commits stay visible from the main repository", async () => {
+test("WorktreeStage: worktree commits stay visible from the main repository", async () => {
   await withTempRepo(async (repo) => {
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
@@ -208,26 +211,24 @@ Deno.test("WorktreeStage: worktree commits stay visible from the main repository
     const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
 
-    await Deno.writeTextFile(path.join(workDir, "test.txt"), "hello");
-    await $`git -C ${workDir} add test.txt`.quiet("both");
-    await $`git -C ${workDir} commit -m "add test.txt"`.quiet("both");
+    await writeFile(path.join(workDir, "test.txt"), "hello");
+    await $`git -C ${workDir} add test.txt`.quiet();
+    await $`git -C ${workDir} commit -m "add test.txt"`.quiet();
 
     const log = (await $`git -C ${repo} log ${branchName} --oneline -1`.text())
       .trim();
-    assertEquals(log.includes("add test.txt"), true);
+    expect(log.includes("add test.txt")).toEqual(true);
 
-    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
-      "both",
-    );
-    await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
+    await $`git -C ${repo} branch -D ${branchName}`.quiet();
   });
 });
 
-Deno.test("WorktreeStage: starts from the selected base commit", async () => {
+test("WorktreeStage: starts from the selected base commit", async () => {
   await withTempRepo(async (repo) => {
-    await Deno.writeTextFile(path.join(repo, "base.txt"), "base content");
-    await $`git -C ${repo} add base.txt`.quiet("both");
-    await $`git -C ${repo} commit -m "base commit"`.quiet("both");
+    await writeFile(path.join(repo, "base.txt"), "base content");
+    await $`git -C ${repo} add base.txt`.quiet();
+    await $`git -C ${repo} commit -m "base commit"`.quiet();
     const baseHead = (await $`git -C ${repo} rev-parse HEAD`.text()).trim();
 
     const profile = createTestProfile("HEAD");
@@ -242,33 +243,30 @@ Deno.test("WorktreeStage: starts from the selected base commit", async () => {
     const worktreeHead = (await $`git -C ${workDir} rev-parse HEAD`.text())
       .trim();
 
-    assertEquals(worktreeHead, baseHead);
-    assertEquals(
-      await Deno.readTextFile(path.join(workDir, "base.txt")),
+    expect(worktreeHead).toEqual(baseHead);
+    expect(await readFile(path.join(workDir, "base.txt"), "utf8")).toEqual(
       "base content",
     );
 
-    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
-      "both",
-    );
-    await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
+    await $`git -C ${repo} branch -D ${branchName}`.quiet();
   });
 });
 
-Deno.test("WorktreeStage: inherits dirty tracked, staged, and untracked changes from the checked out base branch", async () => {
+test("WorktreeStage: inherits dirty tracked, staged, and untracked changes from the checked out base branch", async () => {
   await withTempRepo(async (repo) => {
-    await Deno.writeTextFile(path.join(repo, "tracked.txt"), "base\n");
-    await Deno.writeTextFile(path.join(repo, "staged.txt"), "base\n");
-    await $`git -C ${repo} add tracked.txt staged.txt`.quiet("both");
-    await $`git -C ${repo} commit -m "add base files"`.quiet("both");
+    await writeFile(path.join(repo, "tracked.txt"), "base\n");
+    await writeFile(path.join(repo, "staged.txt"), "base\n");
+    await $`git -C ${repo} add tracked.txt staged.txt`.quiet();
+    await $`git -C ${repo} commit -m "add base files"`.quiet();
 
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(repo, "tracked.txt"),
       "base\nunstaged\n",
     );
-    await Deno.writeTextFile(path.join(repo, "staged.txt"), "base\nstaged\n");
-    await $`git -C ${repo} add staged.txt`.quiet("both");
-    await Deno.writeTextFile(path.join(repo, "untracked.txt"), "untracked\n");
+    await writeFile(path.join(repo, "staged.txt"), "base\nstaged\n");
+    await $`git -C ${repo} add staged.txt`.quiet();
+    await writeFile(path.join(repo, "untracked.txt"), "untracked\n");
 
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
@@ -284,34 +282,29 @@ Deno.test("WorktreeStage: inherits dirty tracked, staged, and untracked changes 
       .split("\n")
       .filter(Boolean);
 
-    assertEquals(
-      await Deno.readTextFile(path.join(workDir, "tracked.txt")),
+    expect(await readFile(path.join(workDir, "tracked.txt"), "utf8")).toEqual(
       "base\nunstaged\n",
     );
-    assertEquals(
-      await Deno.readTextFile(path.join(workDir, "staged.txt")),
+    expect(await readFile(path.join(workDir, "staged.txt"), "utf8")).toEqual(
       "base\nstaged\n",
     );
-    assertEquals(
-      await Deno.readTextFile(path.join(workDir, "untracked.txt")),
+    expect(await readFile(path.join(workDir, "untracked.txt"), "utf8")).toEqual(
       "untracked\n",
     );
-    assertEquals(status.includes(" M tracked.txt"), true);
-    assertEquals(status.includes("M  staged.txt"), true);
-    assertEquals(status.includes("?? untracked.txt"), true);
+    expect(status.includes(" M tracked.txt")).toEqual(true);
+    expect(status.includes("M  staged.txt")).toEqual(true);
+    expect(status.includes("?? untracked.txt")).toEqual(true);
 
-    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
-      "both",
-    );
-    await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
+    await $`git -C ${repo} branch -D ${branchName}`.quiet();
   });
 });
 
-Deno.test("WorktreeStage: leaves a clean base branch clean in the new worktree", async () => {
+test("WorktreeStage: leaves a clean base branch clean in the new worktree", async () => {
   await withTempRepo(async (repo) => {
-    await Deno.writeTextFile(path.join(repo, "tracked.txt"), "base\n");
-    await $`git -C ${repo} add tracked.txt`.quiet("both");
-    await $`git -C ${repo} commit -m "add tracked file"`.quiet("both");
+    await writeFile(path.join(repo, "tracked.txt"), "base\n");
+    await $`git -C ${repo} add tracked.txt`.quiet();
+    await $`git -C ${repo} commit -m "add tracked file"`.quiet();
 
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
@@ -323,19 +316,15 @@ Deno.test("WorktreeStage: leaves a clean base branch clean in the new worktree",
     const branchName = (await $`git -C ${workDir} branch --show-current`
       .text()).trim();
 
-    assertEquals(
-      (await $`git -C ${workDir} status --short`.text()).trim(),
+    expect((await $`git -C ${workDir} status --short`.text()).trim()).toEqual(
       "",
     );
-    assertEquals(
-      await Deno.readTextFile(path.join(workDir, "tracked.txt")),
+    expect(await readFile(path.join(workDir, "tracked.txt"), "utf8")).toEqual(
       "base\n",
     );
 
-    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet(
-      "both",
-    );
-    await $`git -C ${repo} branch -D ${branchName}`.quiet("both");
+    await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
+    await $`git -C ${repo} branch -D ${branchName}`.quiet();
   });
 });
 
@@ -343,7 +332,7 @@ Deno.test("WorktreeStage: leaves a clean base branch clean in the new worktree",
 // WorktreeStage teardown
 // ===========================================================================
 
-Deno.test("WorktreeStage teardown stashes dirty changes before deleting", async () => {
+test("WorktreeStage teardown stashes dirty changes before deleting", async () => {
   await withTempRepo(async (repoRoot) => {
     await withMockedPrompts(["1", "1", "1"], async () => {
       const stage = new WorktreeStage();
@@ -351,30 +340,31 @@ Deno.test("WorktreeStage teardown stashes dirty changes before deleting", async 
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
 
-      await Deno.writeTextFile(path.join(worktreePath, "draft.txt"), "hello");
+      await writeFile(path.join(worktreePath, "draft.txt"), "hello");
 
       await stage.teardown!(input);
 
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(worktreePath), false);
+      expect(worktreeList.includes(worktreePath)).toEqual(false);
 
-      const branchList = (await $`git -C ${repoRoot} branch --list nas/test/*`
-        .text()).trim();
-      assertEquals(branchList, "");
+      const branchList =
+        (await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`
+          .text()).trim();
+      expect(branchList).toEqual("");
 
       const stashList = (await $`git -C ${repoRoot} stash list`.text()).trim();
-      assertStringIncludes(stashList, "nas teardown");
+      expect(stashList).toContain("nas teardown");
 
       const stashedFiles =
         await $`git -C ${repoRoot} stash show --name-only --include-untracked ${"stash@{0}"}`
           .text();
-      assertStringIncludes(stashedFiles, "draft.txt");
+      expect(stashedFiles).toContain("draft.txt");
     });
   });
 });
 
-Deno.test("WorktreeStage teardown can keep a dirty worktree from the stash prompt", async () => {
+test("WorktreeStage teardown can keep a dirty worktree from the stash prompt", async () => {
   await withTempRepo(async (repoRoot) => {
     await withMockedPrompts(["1", "3"], async () => {
       const stage = new WorktreeStage();
@@ -384,33 +374,32 @@ Deno.test("WorktreeStage teardown can keep a dirty worktree from the stash promp
       const branchName = (await $`git -C ${worktreePath} branch --show-current`
         .text()).trim();
 
-      await Deno.writeTextFile(path.join(worktreePath, "draft.txt"), "hello");
+      await writeFile(path.join(worktreePath, "draft.txt"), "hello");
 
       await stage.teardown!(input);
 
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertStringIncludes(worktreeList, worktreePath);
+      expect(worktreeList).toContain(worktreePath);
 
       const branchList =
         (await $`git -C ${repoRoot} branch --list ${branchName}`
           .text()).trim();
-      assertStringIncludes(branchList, branchName);
+      expect(branchList).toContain(branchName);
 
       const stashList = (await $`git -C ${repoRoot} stash list`.text()).trim();
-      assertEquals(stashList, "");
+      expect(stashList).toEqual("");
 
-      await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`.quiet(
-        "both",
-      );
-      await $`git -C ${repoRoot} branch -D ${branchName}`.quiet("both");
+      await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`
+        .quiet();
+      await $`git -C ${repoRoot} branch -D ${branchName}`.quiet();
     });
   });
 });
 
 // --- promptWorktreeAction: "keep" ---
 
-Deno.test("WorktreeStage teardown keeps worktree when user chooses keep", async () => {
+test("WorktreeStage teardown keeps worktree when user chooses keep", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "2" (keep)
     await withMockedPrompts(["2"], async () => {
@@ -426,20 +415,19 @@ Deno.test("WorktreeStage teardown keeps worktree when user chooses keep", async 
       // worktree が残っている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertStringIncludes(worktreeList, worktreePath);
+      expect(worktreeList).toContain(worktreePath);
 
       // cleanup
-      await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`.quiet(
-        "both",
-      );
-      await $`git -C ${repoRoot} branch -D ${branchName}`.quiet("both");
+      await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`
+        .quiet();
+      await $`git -C ${repoRoot} branch -D ${branchName}`.quiet();
     });
   });
 });
 
 // --- clean worktree delete (no dirty prompt) ---
 
-Deno.test("WorktreeStage teardown deletes clean worktree and branch", async () => {
+test("WorktreeStage teardown deletes clean worktree and branch", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
@@ -456,19 +444,20 @@ Deno.test("WorktreeStage teardown deletes clean worktree and branch", async () =
       // worktree が削除されている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(worktreePath), false);
+      expect(worktreeList.includes(worktreePath)).toEqual(false);
 
       // ブランチも削除されている
       const branchList =
-        (await $`git -C ${repoRoot} branch --list nas/test/*`.text()).trim();
-      assertEquals(branchList, "");
+        (await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`.text())
+          .trim();
+      expect(branchList).toEqual("");
     });
   });
 });
 
 // --- dirty worktree: delete without stashing ---
 
-Deno.test("WorktreeStage teardown deletes dirty worktree without stashing", async () => {
+test("WorktreeStage teardown deletes dirty worktree without stashing", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → "2" (delete without stash)
@@ -479,25 +468,25 @@ Deno.test("WorktreeStage teardown deletes dirty worktree without stashing", asyn
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
 
-      await Deno.writeTextFile(path.join(worktreePath, "draft.txt"), "hello");
+      await writeFile(path.join(worktreePath, "draft.txt"), "hello");
 
       await stage.teardown!(input);
 
       // worktree が削除されている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(worktreePath), false);
+      expect(worktreeList.includes(worktreePath)).toEqual(false);
 
       // stash に何もない
       const stashList = (await $`git -C ${repoRoot} stash list`.text()).trim();
-      assertEquals(stashList, "");
+      expect(stashList).toEqual("");
     });
   });
 });
 
 // --- branch rename ---
 
-Deno.test("WorktreeStage teardown renames branch and keeps it", async () => {
+test("WorktreeStage teardown renames branch and keeps it", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
@@ -514,27 +503,28 @@ Deno.test("WorktreeStage teardown renames branch and keeps it", async () => {
       // worktree は削除されている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(worktreePath), false);
+      expect(worktreeList.includes(worktreePath)).toEqual(false);
 
       // 元のブランチは消え、リネーム先が存在
       const oldBranch =
-        (await $`git -C ${repoRoot} branch --list nas/test/*`.text()).trim();
-      assertEquals(oldBranch, "");
+        (await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`.text())
+          .trim();
+      expect(oldBranch).toEqual("");
 
       const newBranch =
         (await $`git -C ${repoRoot} branch --list my-saved-branch`.text())
           .trim();
-      assertStringIncludes(newBranch, "my-saved-branch");
+      expect(newBranch).toContain("my-saved-branch");
 
       // cleanup
-      await $`git -C ${repoRoot} branch -D my-saved-branch`.quiet("both");
+      await $`git -C ${repoRoot} branch -D my-saved-branch`.quiet();
     });
   });
 });
 
 // --- branch rename with empty name (keeps original) ---
 
-Deno.test("WorktreeStage teardown rename with empty name keeps original branch name", async () => {
+test("WorktreeStage teardown rename with empty name keeps original branch name", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
@@ -555,12 +545,12 @@ Deno.test("WorktreeStage teardown rename with empty name keeps original branch n
 
 // --- cherry-pick to base ---
 
-Deno.test("WorktreeStage teardown cherry-picks commits to base branch", async () => {
+test("WorktreeStage teardown cherry-picks commits to base branch", async () => {
   await withTempRepo(async (repoRoot) => {
     // base ブランチにファイルを追加
-    await Deno.writeTextFile(path.join(repoRoot, "base.txt"), "base\n");
-    await $`git -C ${repoRoot} add base.txt`.quiet("both");
-    await $`git -C ${repoRoot} commit -m "base file"`.quiet("both");
+    await writeFile(path.join(repoRoot, "base.txt"), "base\n");
+    await $`git -C ${repoRoot} add base.txt`.quiet();
+    await $`git -C ${repoRoot} commit -m "base file"`.quiet();
 
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
@@ -572,12 +562,12 @@ Deno.test("WorktreeStage teardown cherry-picks commits to base branch", async ()
       const worktreePath = result.outputOverrides.workDir!;
 
       // worktree 内でコミットを作成
-      await Deno.writeTextFile(
+      await writeFile(
         path.join(worktreePath, "feature.txt"),
         "feature\n",
       );
-      await $`git -C ${worktreePath} add feature.txt`.quiet("both");
-      await $`git -C ${worktreePath} commit -m "add feature"`.quiet("both");
+      await $`git -C ${worktreePath} add feature.txt`.quiet();
+      await $`git -C ${worktreePath} commit -m "add feature"`.quiet();
 
       await stage.teardown!(input);
 
@@ -587,17 +577,17 @@ Deno.test("WorktreeStage teardown cherry-picks commits to base branch", async ()
       const log =
         (await $`git -C ${repoRoot} log ${baseBranch} --oneline -5`.text())
           .trim();
-      assertStringIncludes(log, "add feature");
+      expect(log).toContain("add feature");
 
       // worktree は削除されている
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(worktreePath), false);
+      expect(worktreeList.includes(worktreePath)).toEqual(false);
     });
   });
 });
 
-Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncommitted changes", async () => {
+test("WorktreeStage teardown cherry-picks even when base worktree has uncommitted changes", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
@@ -608,15 +598,15 @@ Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncom
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
 
-      await Deno.writeTextFile(
+      await writeFile(
         path.join(worktreePath, "feature.txt"),
         "feature\n",
       );
-      await $`git -C ${worktreePath} add feature.txt`.quiet("both");
-      await $`git -C ${worktreePath} commit -m "add feature"`.quiet("both");
+      await $`git -C ${worktreePath} add feature.txt`.quiet();
+      await $`git -C ${worktreePath} commit -m "add feature"`.quiet();
 
       // base worktree 側に未コミット変更を残した状態で teardown
-      await Deno.writeTextFile(path.join(repoRoot, "dirty.txt"), "dirty\n");
+      await writeFile(path.join(repoRoot, "dirty.txt"), "dirty\n");
 
       await stage.teardown!(input);
 
@@ -625,27 +615,29 @@ Deno.test("WorktreeStage teardown cherry-picks even when base worktree has uncom
       const log =
         (await $`git -C ${repoRoot} log ${baseBranch} --oneline -5`.text())
           .trim();
-      assertStringIncludes(log, "add feature");
+      expect(log).toContain("add feature");
 
-      const dirtyContent = await Deno.readTextFile(
+      const dirtyContent = await readFile(
         path.join(repoRoot, "dirty.txt"),
+        "utf8",
       );
-      assertEquals(dirtyContent, "dirty\n");
+      expect(dirtyContent).toEqual("dirty\n");
 
       const branchList =
-        (await $`git -C ${repoRoot} branch --list nas/test/*`.text()).trim();
-      assertEquals(branchList, "");
+        (await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`.text())
+          .trim();
+      expect(branchList).toEqual("");
 
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(worktreePath), false);
+      expect(worktreeList.includes(worktreePath)).toEqual(false);
     });
   });
 });
 
 // --- cherry-pick with no commits ---
 
-Deno.test("WorktreeStage teardown cherry-pick with no new commits succeeds", async () => {
+test("WorktreeStage teardown cherry-pick with no new commits succeeds", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
@@ -662,14 +654,14 @@ Deno.test("WorktreeStage teardown cherry-pick with no new commits succeeds", asy
       // エラーなく完了
       const worktreeList = await $`git -C ${repoRoot} worktree list --porcelain`
         .text();
-      assertEquals(worktreeList.includes(worktreePath), false);
+      expect(worktreeList.includes(worktreePath)).toEqual(false);
     });
   });
 });
 
 // --- teardown without execute (no worktree) ---
 
-Deno.test("WorktreeStage teardown without execute is a no-op", async () => {
+test("WorktreeStage teardown without execute is a no-op", async () => {
   const stage = new WorktreeStage();
   const profile: Profile = {
     ...testProfile,
@@ -687,7 +679,7 @@ Deno.test("WorktreeStage teardown without execute is a no-op", async () => {
 
 // --- execute skips when worktree not configured ---
 
-Deno.test("WorktreeStage execute skips when worktree is not configured", async () => {
+test("WorktreeStage execute skips when worktree is not configured", async () => {
   const stage = new WorktreeStage();
   const profile: Profile = {
     ...testProfile,
@@ -698,15 +690,15 @@ Deno.test("WorktreeStage execute skips when worktree is not configured", async (
     profiles: { test: profile },
     ui: DEFAULT_UI_CONFIG,
   };
-  const input = createTestInput(config, profile, Deno.cwd());
+  const input = createTestInput(config, profile, process.cwd());
   const result = await stage.execute(input);
   // outputOverrides は空 (workDir は変更されない)
-  assertEquals(Object.keys(result.outputOverrides).length, 0);
+  expect(Object.keys(result.outputOverrides).length).toEqual(0);
 });
 
 // --- execute with invalid base branch ---
 
-Deno.test("WorktreeStage execute throws on invalid base branch", async () => {
+test("WorktreeStage execute throws on invalid base branch", async () => {
   await withTempRepo(async (repoRoot) => {
     const profile: Profile = {
       ...testProfile,
@@ -722,16 +714,16 @@ Deno.test("WorktreeStage execute throws on invalid base branch", async () => {
 
     try {
       await stage.execute(input);
-      assertEquals(true, false, "Should have thrown");
+      expect(true).toEqual(false); // Should have thrown
     } catch (err) {
-      assertStringIncludes((err as Error).message, "not found");
+      expect((err as Error).message).toContain("not found");
     }
   });
 });
 
 // --- execute reuses existing worktree ---
 
-Deno.test("WorktreeStage execute reuses existing worktree when user selects it", async () => {
+test("WorktreeStage execute reuses existing worktree when user selects it", async () => {
   await withTempRepo(async (repoRoot) => {
     // まず worktree を 1 つ作成
     const stage1 = new WorktreeStage();
@@ -746,8 +738,8 @@ Deno.test("WorktreeStage execute reuses existing worktree when user selects it",
       const result2 = await stage2.execute(input2);
 
       // 再利用された worktree のパスが一致
-      assertEquals(result2.outputOverrides.workDir, firstWorktreePath);
-      assertEquals(result2.outputOverrides.mountDir, repoRoot);
+      expect(result2.outputOverrides.workDir).toEqual(firstWorktreePath);
+      expect(result2.outputOverrides.mountDir).toEqual(repoRoot);
     });
 
     // cleanup
@@ -755,14 +747,14 @@ Deno.test("WorktreeStage execute reuses existing worktree when user selects it",
       (await $`git -C ${firstWorktreePath} branch --show-current`.text())
         .trim();
     await $`git -C ${repoRoot} worktree remove --force ${firstWorktreePath}`
-      .quiet("both");
-    await $`git -C ${repoRoot} branch -D ${branchName}`.quiet("both");
+      .quiet();
+    await $`git -C ${repoRoot} branch -D ${branchName}`.quiet();
   });
 });
 
 // --- execute creates new worktree when user declines reuse ---
 
-Deno.test("WorktreeStage execute creates new worktree when user declines reuse", async () => {
+test("WorktreeStage execute creates new worktree when user declines reuse", async () => {
   await withTempRepo(async (repoRoot) => {
     // まず worktree を 1 つ作成
     const stage1 = new WorktreeStage();
@@ -777,11 +769,10 @@ Deno.test("WorktreeStage execute creates new worktree when user declines reuse",
       const result2 = await stage2.execute(input2);
 
       // 異なるパスの worktree が作られた
-      assertEquals(
-        result2.outputOverrides.workDir !== firstWorktreePath,
+      expect(result2.outputOverrides.workDir !== firstWorktreePath).toEqual(
         true,
       );
-      assertEquals(result2.outputOverrides.mountDir, repoRoot);
+      expect(result2.outputOverrides.mountDir).toEqual(repoRoot);
 
       // cleanup: 2つ目
       const branchName2 = (await $`git -C ${result2.outputOverrides
@@ -789,8 +780,8 @@ Deno.test("WorktreeStage execute creates new worktree when user declines reuse",
         .text()).trim();
       await $`git -C ${repoRoot} worktree remove --force ${result2
         .outputOverrides.workDir!}`
-        .quiet("both");
-      await $`git -C ${repoRoot} branch -D ${branchName2}`.quiet("both");
+        .quiet();
+      await $`git -C ${repoRoot} branch -D ${branchName2}`.quiet();
     });
 
     // cleanup: 1つ目
@@ -798,14 +789,14 @@ Deno.test("WorktreeStage execute creates new worktree when user declines reuse",
       (await $`git -C ${firstWorktreePath} branch --show-current`.text())
         .trim();
     await $`git -C ${repoRoot} worktree remove --force ${firstWorktreePath}`
-      .quiet("both");
-    await $`git -C ${repoRoot} branch -D ${branchName1}`.quiet("both");
+      .quiet();
+    await $`git -C ${repoRoot} branch -D ${branchName1}`.quiet();
   });
 });
 
 // --- execute with onCreate hook ---
 
-Deno.test("WorktreeStage execute runs onCreate hook", async () => {
+test("WorktreeStage execute runs onCreate hook", async () => {
   await withTempRepo(async (repoRoot) => {
     const profile: Profile = {
       ...testProfile,
@@ -822,18 +813,16 @@ Deno.test("WorktreeStage execute runs onCreate hook", async () => {
     const workDir = result.outputOverrides.workDir!;
 
     // onCreate で作られたファイルが存在する
-    const markerExists = await Deno.stat(
+    const markerExists = await stat(
       path.join(workDir, "on-create-marker.txt"),
     ).then(() => true, () => false);
-    assertEquals(markerExists, true);
+    expect(markerExists).toEqual(true);
 
     // cleanup
     const branchName = (await $`git -C ${workDir} branch --show-current`.text())
       .trim();
-    await $`git -C ${repoRoot} worktree remove --force ${workDir}`.quiet(
-      "both",
-    );
-    await $`git -C ${repoRoot} branch -D ${branchName}`.quiet("both");
+    await $`git -C ${repoRoot} worktree remove --force ${workDir}`.quiet();
+    await $`git -C ${repoRoot} branch -D ${branchName}`.quiet();
   });
 });
 
@@ -841,34 +830,32 @@ Deno.test("WorktreeStage execute runs onCreate hook", async () => {
 // resolveBase
 // ===========================================================================
 
-Deno.test("resolveBase: non-HEAD value is returned as-is", async () => {
+test("resolveBase: non-HEAD value is returned as-is", async () => {
   await withTempRepo(async (repo) => {
-    assertEquals(await resolveBase(repo, "origin/main"), "origin/main");
-    assertEquals(await resolveBase(repo, "develop"), "develop");
+    expect(await resolveBase(repo, "origin/main")).toEqual("origin/main");
+    expect(await resolveBase(repo, "develop")).toEqual("develop");
   });
 });
 
-Deno.test("resolveBase: HEAD resolves to current branch name", async () => {
+test("resolveBase: HEAD resolves to current branch name", async () => {
   await withTempRepo(async (repo) => {
     // デフォルトブランチ名を取得
     const defaultBranch =
       (await $`git -C ${repo} symbolic-ref --short HEAD`.text()).trim();
-    assertEquals(await resolveBase(repo, "HEAD"), defaultBranch);
+    expect(await resolveBase(repo, "HEAD")).toEqual(defaultBranch);
 
     // 別ブランチに切り替えてテスト
-    await $`git -C ${repo} checkout -b feature-test`.quiet("both");
-    assertEquals(await resolveBase(repo, "HEAD"), "feature-test");
+    await $`git -C ${repo} checkout -b feature-test`.quiet();
+    expect(await resolveBase(repo, "HEAD")).toEqual("feature-test");
   });
 });
 
-Deno.test("resolveBase: HEAD in detached state throws error", async () => {
+test("resolveBase: HEAD in detached state throws error", async () => {
   await withTempRepo(async (repo) => {
     const sha = (await $`git -C ${repo} rev-parse HEAD`.text()).trim();
-    await $`git -C ${repo} checkout ${sha}`.quiet("both");
+    await $`git -C ${repo} checkout ${sha}`.quiet();
 
-    await assertRejects(
-      () => resolveBase(repo, "HEAD"),
-      Error,
+    await expect(resolveBase(repo, "HEAD")).rejects.toThrow(
       "detached HEAD state",
     );
   });
@@ -880,59 +867,57 @@ Deno.test("resolveBase: HEAD in detached state throws error", async () => {
 
 // --- listNasWorktrees ---
 
-Deno.test("listNasWorktrees: returns empty list for fresh repo", async () => {
+test("listNasWorktrees: returns empty list for fresh repo", async () => {
   await withTempRepo(async (repo) => {
     const entries = await listNasWorktrees(repo);
-    assertEquals(entries.length, 0);
+    expect(entries.length).toEqual(0);
   });
 });
 
-Deno.test("listNasWorktrees: finds nas worktrees", async () => {
+test("listNasWorktrees: finds nas worktrees", async () => {
   await withTempRepo(async (repo) => {
     await createTestWorktree(repo, "myprofile", "2026-01-01T00-00-00");
     await createTestWorktree(repo, "myprofile", "2026-01-02T00-00-00");
 
     const entries = await listNasWorktrees(repo);
-    assertEquals(entries.length, 2);
-    assertEquals(
-      entries.every((e) => e.path.includes("nas-myprofile-")),
+    expect(entries.length).toEqual(2);
+    expect(entries.every((e) => e.path.includes("nas-myprofile-"))).toEqual(
       true,
     );
-    assertEquals(
-      entries.every((e) => e.branch.includes("nas/myprofile/")),
+    expect(entries.every((e) => e.branch.includes("nas/myprofile/"))).toEqual(
       true,
     );
   });
 });
 
-Deno.test("listNasWorktrees: ignores non-nas worktrees", async () => {
+test("listNasWorktrees: ignores non-nas worktrees", async () => {
   await withTempRepo(async (repo) => {
     // nas worktree
     await createTestWorktree(repo, "test", "2026-01-01T00-00-00");
     // non-nas worktree
     const otherPath = path.join(repo, ".git", "other-worktree");
     await $`git -C ${repo} worktree add -b other-branch ${otherPath} HEAD`
-      .quiet("both");
+      .quiet();
 
     const entries = await listNasWorktrees(repo);
-    assertEquals(entries.length, 1);
-    assertEquals(entries[0].path.includes("nas-test-"), true);
+    expect(entries.length).toEqual(1);
+    expect(entries[0].path.includes("nas-test-")).toEqual(true);
   });
 });
 
 // --- listOrphanNasBranches ---
 
-Deno.test("listOrphanNasBranches: returns empty when no orphans", async () => {
+test("listOrphanNasBranches: returns empty when no orphans", async () => {
   await withTempRepo(async (repo) => {
     // worktree に紐づいたブランチのみ
     await createTestWorktree(repo, "test", "2026-01-01T00-00-00");
 
     const orphans = await listOrphanNasBranches(repo);
-    assertEquals(orphans.length, 0);
+    expect(orphans.length).toEqual(0);
   });
 });
 
-Deno.test("listOrphanNasBranches: finds branches without worktrees", async () => {
+test("listOrphanNasBranches: finds branches without worktrees", async () => {
   await withTempRepo(async (repo) => {
     // worktree を作って削除（ブランチは残る）
     const { worktreePath, branchName } = await createTestWorktree(
@@ -940,40 +925,38 @@ Deno.test("listOrphanNasBranches: finds branches without worktrees", async () =>
       "test",
       "2026-01-01T00-00-00",
     );
-    await $`git -C ${repo} worktree remove --force ${worktreePath}`.quiet(
-      "both",
-    );
+    await $`git -C ${repo} worktree remove --force ${worktreePath}`.quiet();
 
     const orphans = await listOrphanNasBranches(repo);
-    assertEquals(orphans.length, 1);
-    assertEquals(orphans[0], branchName);
+    expect(orphans.length).toEqual(1);
+    expect(orphans[0]).toEqual(branchName);
   });
 });
 
 // --- cleanNasWorktrees ---
 
-Deno.test("cleanNasWorktrees: removes all nas worktrees with force", async () => {
+test("cleanNasWorktrees: removes all nas worktrees with force", async () => {
   await withTempRepo(async (repo) => {
     await createTestWorktree(repo, "prof1", "2026-01-01T00-00-00");
     await createTestWorktree(repo, "prof2", "2026-01-02T00-00-00");
 
     const result = await cleanNasWorktrees(repo, { force: true });
-    assertEquals(result.worktrees, 2);
+    expect(result.worktrees).toEqual(2);
 
     const remaining = await listNasWorktrees(repo);
-    assertEquals(remaining.length, 0);
+    expect(remaining.length).toEqual(0);
   });
 });
 
-Deno.test("cleanNasWorktrees: returns zero counts for empty repo", async () => {
+test("cleanNasWorktrees: returns zero counts for empty repo", async () => {
   await withTempRepo(async (repo) => {
     const result = await cleanNasWorktrees(repo, { force: true });
-    assertEquals(result.worktrees, 0);
-    assertEquals(result.orphanBranches, 0);
+    expect(result.worktrees).toEqual(0);
+    expect(result.orphanBranches).toEqual(0);
   });
 });
 
-Deno.test("cleanNasWorktrees: with deleteBranch removes orphan branches too", async () => {
+test("cleanNasWorktrees: with deleteBranch removes orphan branches too", async () => {
   await withTempRepo(async (repo) => {
     // worktree 付きブランチ
     await createTestWorktree(repo, "active", "2026-01-01T00-00-00");
@@ -984,21 +967,19 @@ Deno.test("cleanNasWorktrees: with deleteBranch removes orphan branches too", as
       "orphan",
       "2026-01-02T00-00-00",
     );
-    await $`git -C ${repo} worktree remove --force ${worktreePath}`.quiet(
-      "both",
-    );
+    await $`git -C ${repo} worktree remove --force ${worktreePath}`.quiet();
 
     const result = await cleanNasWorktrees(repo, {
       force: true,
       deleteBranch: true,
     });
-    assertEquals(result.worktrees, 1); // active のみ（orphan の worktree は既に削除済み）
-    assertEquals(result.orphanBranches, 1);
+    expect(result.worktrees).toEqual(1); // active のみ（orphan の worktree は既に削除済み）
+    expect(result.orphanBranches).toEqual(1);
 
     const remaining = await listNasWorktrees(repo);
-    assertEquals(remaining.length, 0);
+    expect(remaining.length).toEqual(0);
 
     const orphans = await listOrphanNasBranches(repo);
-    assertEquals(orphans.length, 0);
+    expect(orphans.length).toEqual(0);
   });
 });

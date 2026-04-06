@@ -36,12 +36,12 @@ export async function runUiCommand(nasArgs: string[]): Promise<void> {
 
   if (isNaN(port) || port < 1 || port > 65535) {
     console.error("[nas] Invalid port number");
-    Deno.exit(1);
+    process.exit(1);
   }
 
   if (isNaN(idleTimeout) || idleTimeout < 0) {
     console.error("[nas] Invalid idle-timeout value");
-    Deno.exit(1);
+    process.exit(1);
   }
 
   try {

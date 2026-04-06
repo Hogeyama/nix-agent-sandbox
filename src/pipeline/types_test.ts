@@ -1,4 +1,12 @@
-import { assertEquals } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import type {
   AnyStage,
   DindSidecarEffect,
@@ -62,7 +70,7 @@ const dummyStageInput: StageInput = {
   },
 };
 
-Deno.test("StagePlan: can construct a valid StagePlan object", () => {
+test("StagePlan: can construct a valid StagePlan object", () => {
   const plan: StagePlan = {
     effects: [],
     dockerArgs: ["--rm"],
@@ -70,13 +78,13 @@ Deno.test("StagePlan: can construct a valid StagePlan object", () => {
     outputOverrides: { nixEnabled: true },
   };
 
-  assertEquals(plan.effects.length, 0);
-  assertEquals(plan.dockerArgs, ["--rm"]);
-  assertEquals(plan.envVars.FOO, "bar");
-  assertEquals(plan.outputOverrides.nixEnabled, true);
+  expect(plan.effects.length).toEqual(0);
+  expect(plan.dockerArgs).toEqual(["--rm"]);
+  expect(plan.envVars.FOO).toEqual("bar");
+  expect(plan.outputOverrides.nixEnabled).toEqual(true);
 });
 
-Deno.test("StagePlan: can include various ResourceEffect kinds", () => {
+test("StagePlan: can include various ResourceEffect kinds", () => {
   const dirEffect: DirectoryCreateEffect = {
     kind: "directory-create",
     path: "/tmp/test",
@@ -157,30 +165,30 @@ Deno.test("StagePlan: can include various ResourceEffect kinds", () => {
     interactiveEffect,
   ];
 
-  assertEquals(effects.length, 10);
-  assertEquals(effects[0].kind, "directory-create");
-  assertEquals(effects[1].kind, "file-write");
-  assertEquals(effects[2].kind, "docker-container");
-  assertEquals(effects[3].kind, "docker-network");
-  assertEquals(effects[4].kind, "docker-volume");
-  assertEquals(effects[5].kind, "symlink");
-  assertEquals(effects[6].kind, "process-spawn");
-  assertEquals(effects[7].kind, "wait-for-ready");
-  assertEquals(effects[8].kind, "dind-sidecar");
-  assertEquals(effects[9].kind, "docker-run-interactive");
+  expect(effects.length).toEqual(10);
+  expect(effects[0].kind).toEqual("directory-create");
+  expect(effects[1].kind).toEqual("file-write");
+  expect(effects[2].kind).toEqual("docker-container");
+  expect(effects[3].kind).toEqual("docker-network");
+  expect(effects[4].kind).toEqual("docker-volume");
+  expect(effects[5].kind).toEqual("symlink");
+  expect(effects[6].kind).toEqual("process-spawn");
+  expect(effects[7].kind).toEqual("wait-for-ready");
+  expect(effects[8].kind).toEqual("dind-sidecar");
+  expect(effects[9].kind).toEqual("docker-run-interactive");
 });
 
-Deno.test("ReadinessCheck: all variants are assignable", () => {
+test("ReadinessCheck: all variants are assignable", () => {
   const checks: ReadinessCheck[] = [
     { kind: "tcp-port", host: "localhost", port: 8080 },
     { kind: "http-ok", url: "http://localhost:8080/health" },
     { kind: "docker-healthy", container: "envoy" },
     { kind: "file-exists", path: "/tmp/socket" },
   ];
-  assertEquals(checks.length, 4);
+  expect(checks.length).toEqual(4);
 });
 
-Deno.test("PlanStage: can implement interface", () => {
+test("PlanStage: can implement interface", () => {
   const stage: PlanStage = {
     kind: "plan",
     name: "test-plan-stage",
@@ -194,11 +202,11 @@ Deno.test("PlanStage: can implement interface", () => {
     },
   };
 
-  assertEquals(stage.kind, "plan");
-  assertEquals(stage.name, "test-plan-stage");
+  expect(stage.kind).toEqual("plan");
+  expect(stage.name).toEqual("test-plan-stage");
 });
 
-Deno.test("PlanStage: plan() returns StagePlan", () => {
+test("PlanStage: plan() returns StagePlan", () => {
   const stage: PlanStage = {
     kind: "plan",
     name: "returns-plan",
@@ -213,13 +221,13 @@ Deno.test("PlanStage: plan() returns StagePlan", () => {
   };
 
   const result = stage.plan(dummyStageInput);
-  assertEquals(result !== null, true);
-  assertEquals(result!.dockerArgs, ["--network=host"]);
-  assertEquals(result!.envVars, { MY_VAR: "value" });
-  assertEquals(result!.outputOverrides.nixEnabled, true);
+  expect(result !== null).toEqual(true);
+  expect(result!.dockerArgs).toEqual(["--network=host"]);
+  expect(result!.envVars).toEqual({ MY_VAR: "value" });
+  expect(result!.outputOverrides.nixEnabled).toEqual(true);
 });
 
-Deno.test("PlanStage: plan() returns null to skip stage", () => {
+test("PlanStage: plan() returns null to skip stage", () => {
   const stage: PlanStage = {
     kind: "plan",
     name: "skip-stage",
@@ -229,10 +237,10 @@ Deno.test("PlanStage: plan() returns null to skip stage", () => {
   };
 
   const result = stage.plan(dummyStageInput);
-  assertEquals(result, null);
+  expect(result).toEqual(null);
 });
 
-Deno.test("ProceduralStage: can implement interface", () => {
+test("ProceduralStage: can implement interface", () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "test-procedural-stage",
@@ -245,11 +253,11 @@ Deno.test("ProceduralStage: can implement interface", () => {
     },
   };
 
-  assertEquals(stage.kind, "procedural");
-  assertEquals(stage.name, "test-procedural-stage");
+  expect(stage.kind).toEqual("procedural");
+  expect(stage.name).toEqual("test-procedural-stage");
 });
 
-Deno.test("ProceduralStage: execute() returns ProceduralResult", async () => {
+test("ProceduralStage: execute() returns ProceduralResult", async () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "exec-stage",
@@ -260,11 +268,11 @@ Deno.test("ProceduralStage: execute() returns ProceduralResult", async () => {
   };
 
   const result = await stage.execute(dummyStageInput);
-  assertEquals(result.outputOverrides.workDir, "/new/path");
-  assertEquals(result.outputOverrides.nixEnabled, true);
+  expect(result.outputOverrides.workDir).toEqual("/new/path");
+  expect(result.outputOverrides.nixEnabled).toEqual(true);
 });
 
-Deno.test("ProceduralStage: teardown() is callable when provided", async () => {
+test("ProceduralStage: teardown() is callable when provided", async () => {
   let teardownCalled = false;
   const stage: ProceduralStage = {
     kind: "procedural",
@@ -279,12 +287,12 @@ Deno.test("ProceduralStage: teardown() is callable when provided", async () => {
     },
   };
 
-  assertEquals(stage.teardown !== undefined, true);
+  expect(stage.teardown !== undefined).toEqual(true);
   await stage.teardown!(dummyStageInput);
-  assertEquals(teardownCalled, true);
+  expect(teardownCalled).toEqual(true);
 });
 
-Deno.test("ProceduralStage: teardown is optional and can be omitted", () => {
+test("ProceduralStage: teardown is optional and can be omitted", () => {
   const stage: ProceduralStage = {
     kind: "procedural",
     name: "no-teardown-stage",
@@ -294,10 +302,10 @@ Deno.test("ProceduralStage: teardown is optional and can be omitted", () => {
     },
   };
 
-  assertEquals(stage.teardown, undefined);
+  expect(stage.teardown).toEqual(undefined);
 });
 
-Deno.test("AnyStage: discriminated union works with kind field", () => {
+test("AnyStage: discriminated union works with kind field", () => {
   const planStage: AnyStage = {
     kind: "plan",
     name: "plan",
@@ -311,14 +319,14 @@ Deno.test("AnyStage: discriminated union works with kind field", () => {
 
   // Discriminated union narrows correctly
   if (planStage.kind === "plan") {
-    assertEquals(typeof planStage.plan, "function");
+    expect(typeof planStage.plan).toEqual("function");
   }
   if (procStage.kind === "procedural") {
-    assertEquals(typeof procStage.execute, "function");
+    expect(typeof procStage.execute).toEqual("function");
   }
 });
 
-Deno.test("HostEnv: can construct with ReadonlyMap", () => {
+test("HostEnv: can construct with ReadonlyMap", () => {
   const env: HostEnv = {
     home: "/home/user",
     user: "user",
@@ -331,12 +339,12 @@ Deno.test("HostEnv: can construct with ReadonlyMap", () => {
     ]]),
   };
 
-  assertEquals(env.home, "/home/user");
-  assertEquals(env.uid, 1000);
-  assertEquals(env.env.get("HOME"), "/home/user");
+  expect(env.home).toEqual("/home/user");
+  expect(env.uid).toEqual(1000);
+  expect(env.env.get("HOME")).toEqual("/home/user");
 });
 
-Deno.test("ProbeResults: can construct with all fields", () => {
+test("ProbeResults: can construct with all fields", () => {
   const probes: ProbeResults = {
     hasHostNix: true,
     xdgDbusProxyPath: "/usr/bin/xdg-dbus-proxy",
@@ -345,11 +353,11 @@ Deno.test("ProbeResults: can construct with all fields", () => {
     auditDir: "/tmp/nas-audit",
   };
 
-  assertEquals(probes.hasHostNix, true);
-  assertEquals(probes.gpgAgentSocket, "/run/user/1000/gnupg/S.gpg-agent");
+  expect(probes.hasHostNix).toEqual(true);
+  expect(probes.gpgAgentSocket).toEqual("/run/user/1000/gnupg/S.gpg-agent");
 });
 
-Deno.test("PriorStageOutputs: can construct with required and optional fields", () => {
+test("PriorStageOutputs: can construct with required and optional fields", () => {
   const outputs: PriorStageOutputs = {
     dockerArgs: ["--rm"],
     envVars: { TERM: "xterm" },
@@ -362,11 +370,11 @@ Deno.test("PriorStageOutputs: can construct with required and optional fields", 
     // optional fields omitted
   };
 
-  assertEquals(outputs.workDir, "/workspace");
-  assertEquals(outputs.dindContainerName, undefined);
+  expect(outputs.workDir).toEqual("/workspace");
+  expect(outputs.dindContainerName).toEqual(undefined);
 });
 
-Deno.test("UnixListenerEffect: can use ListenerSpec variants", () => {
+test("UnixListenerEffect: can use ListenerSpec variants", () => {
   const _sessionBroker: UnixListenerEffect = {
     kind: "unix-listener",
     id: "session-broker",
@@ -389,6 +397,6 @@ Deno.test("UnixListenerEffect: can use ListenerSpec variants", () => {
     },
   };
 
-  assertEquals(_sessionBroker.kind, "unix-listener");
-  assertEquals(_sessionBroker.spec.kind, "session-broker");
+  expect(_sessionBroker.kind).toEqual("unix-listener");
+  expect(_sessionBroker.spec.kind).toEqual("session-broker");
 });

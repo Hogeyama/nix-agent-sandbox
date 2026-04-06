@@ -1,5 +1,5 @@
 /**
- * Hono app 定義 + Deno.serve 起動 + 静的ファイル配信
+ * Hono app 定義 + Bun.serve 起動 + 静的ファイル配信
  */
 
 import { Hono } from "hono";
@@ -12,8 +12,11 @@ import {
   listSessionRegistries,
 } from "../network/registry.ts";
 import { listHostExecPendingEntries } from "../hostexec/registry.ts";
+import { readFile } from "node:fs/promises";
+import * as path from "node:path";
+import { resolveAssetDir } from "../lib/asset.ts";
 
-const DIST_BASE = new URL("./dist/", import.meta.url);
+const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -40,9 +43,9 @@ export function createApp(ctx: UiDataContext): Hono {
 
   // Static file serving
   app.get("/assets/*", async (c) => {
-    const filePath = new URL(c.req.path.slice(1), DIST_BASE);
+    const filePath = path.join(DIST_BASE, c.req.path.slice(1));
     try {
-      const content = await Deno.readFile(filePath);
+      const content = await readFile(filePath);
       return new Response(content, {
         headers: { "Content-Type": contentType(c.req.path) },
       });
@@ -52,13 +55,13 @@ export function createApp(ctx: UiDataContext): Hono {
   });
 
   app.get("/", async (c) => {
-    const filePath = new URL("index.html", DIST_BASE);
+    const filePath = path.join(DIST_BASE, "index.html");
     try {
-      const content = await Deno.readTextFile(filePath);
+      const content = await readFile(filePath, "utf8");
       return c.html(content);
     } catch {
       return c.text(
-        "UI assets not found. Run 'deno task build-ui' first.",
+        "UI assets not found. Run 'bun run build-ui' first.",
         500,
       );
     }
@@ -83,25 +86,23 @@ export async function startServer(options: ServeOptions): Promise<void> {
   if (options.open) {
     // Fire and forget — best effort browser open
     try {
-      const cmd = new Deno.Command("xdg-open", {
-        args: [`http://localhost:${options.port}`],
-        stdout: "null",
-        stderr: "null",
+      Bun.spawn(["xdg-open", `http://localhost:${options.port}`], {
+        stdout: "ignore",
+        stderr: "ignore",
       });
-      cmd.spawn();
     } catch {
       // ignore if xdg-open not available
     }
   }
 
-  Deno.serve({
+  Bun.serve({
     port: options.port,
-    onListen() {
-      console.log(
-        `[nas] UI server listening on http://localhost:${options.port}`,
-      );
-    },
-  }, app.fetch);
+    fetch: app.fetch,
+  });
+
+  console.log(
+    `[nas] UI server listening on http://localhost:${options.port}`,
+  );
 
   if (options.idleTimeout && options.idleTimeout > 0) {
     startIdleWatcher(ctx, options.idleTimeout);
@@ -138,7 +139,7 @@ function startIdleWatcher(ctx: UiDataContext, idleTimeoutSec: number): void {
         console.log(
           `[nas] UI daemon idle for ${idleTimeoutSec}s, shutting down`,
         );
-        Deno.exit(0);
+        process.exit(0);
       }
     } catch {
       // registry read errors are non-fatal for the idle watcher

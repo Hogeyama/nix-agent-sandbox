@@ -1,73 +1,79 @@
-import { assertEquals, assertExists, assertRejects } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { buildHostEnv, resolveProbes } from "./host_env.ts";
 import type { HostEnv } from "./types.ts";
+import { stat } from "node:fs/promises";
 
 // ---------------------------------------------------------------------------
 // buildHostEnv
 // ---------------------------------------------------------------------------
 
-Deno.test("buildHostEnv: returns HostEnv with expected fields", () => {
+test("buildHostEnv: returns HostEnv with expected fields", () => {
   const env = buildHostEnv();
 
-  assertExists(env.home);
-  assertEquals(typeof env.home, "string");
-  assertEquals(typeof env.user, "string");
+  expect(env.home).toBeDefined();
+  expect(typeof env.home).toEqual("string");
+  expect(typeof env.user).toEqual("string");
   // uid/gid may be null on non-Unix platforms
   if (env.uid !== null) {
-    assertEquals(typeof env.uid, "number");
+    expect(typeof env.uid).toEqual("number");
   }
   if (env.gid !== null) {
-    assertEquals(typeof env.gid, "number");
+    expect(typeof env.gid).toEqual("number");
   }
-  assertEquals(typeof env.isWSL, "boolean");
-  assertEquals(env.env instanceof Map, true);
+  expect(typeof env.isWSL).toEqual("boolean");
+  expect(env.env instanceof Map).toEqual(true);
 });
 
-Deno.test("buildHostEnv: env map contains HOME", () => {
+test("buildHostEnv: env map contains HOME", () => {
   const env = buildHostEnv();
   // HOME should be present on any Unix-like system where tests run
   const homeFromMap = env.env.get("HOME");
-  assertExists(homeFromMap);
-  assertEquals(env.home, homeFromMap);
+  expect(homeFromMap).toBeDefined();
+  expect(env.home).toEqual(homeFromMap!);
 });
 
-Deno.test("buildHostEnv: isWSL reflects WSL_DISTRO_NAME", () => {
+test("buildHostEnv: isWSL reflects WSL_DISTRO_NAME", () => {
   const env = buildHostEnv();
-  const hasWslEnv = Boolean(Deno.env.get("WSL_DISTRO_NAME"));
-  assertEquals(env.isWSL, hasWslEnv);
+  const hasWslEnv = Boolean(process.env["WSL_DISTRO_NAME"]);
+  expect(env.isWSL).toEqual(hasWslEnv);
 });
 
 // ---------------------------------------------------------------------------
 // resolveProbes
 // ---------------------------------------------------------------------------
 
-Deno.test("resolveProbes: returns ProbeResults with expected fields", async () => {
+test("resolveProbes: returns ProbeResults with expected fields", async () => {
   const hostEnv = buildHostEnv();
   const probes = await resolveProbes(hostEnv);
 
-  assertEquals(typeof probes.hasHostNix, "boolean");
-  assertEquals(typeof probes.auditDir, "string");
+  expect(typeof probes.hasHostNix).toEqual("boolean");
+  expect(typeof probes.auditDir).toEqual("string");
   // xdgDbusProxyPath may or may not exist depending on system
-  assertEquals(
+  expect(
     probes.xdgDbusProxyPath === null ||
       typeof probes.xdgDbusProxyPath === "string",
-    true,
-  );
+  ).toEqual(true);
   // dbusSessionAddress may or may not exist
-  assertEquals(
+  expect(
     probes.dbusSessionAddress === null ||
       typeof probes.dbusSessionAddress === "string",
-    true,
-  );
+  ).toEqual(true);
   // gpgAgentSocket may or may not exist
-  assertEquals(
+  expect(
     probes.gpgAgentSocket === null ||
       typeof probes.gpgAgentSocket === "string",
-    true,
-  );
+  ).toEqual(true);
 });
 
-Deno.test("resolveProbes: auditDir uses XDG_DATA_HOME when set", async () => {
+test("resolveProbes: auditDir uses XDG_DATA_HOME when set", async () => {
   const hostEnv: HostEnv = {
     home: "/home/testuser",
     user: "testuser",
@@ -80,10 +86,10 @@ Deno.test("resolveProbes: auditDir uses XDG_DATA_HOME when set", async () => {
     ]),
   };
   const probes = await resolveProbes(hostEnv);
-  assertEquals(probes.auditDir, "/custom/data/nas/audit");
+  expect(probes.auditDir).toEqual("/custom/data/nas/audit");
 });
 
-Deno.test("resolveProbes: auditDir falls back to HOME/.local/share when XDG_DATA_HOME is unset", async () => {
+test("resolveProbes: auditDir falls back to HOME/.local/share when XDG_DATA_HOME is unset", async () => {
   const hostEnv: HostEnv = {
     home: "/home/testuser",
     user: "testuser",
@@ -93,10 +99,10 @@ Deno.test("resolveProbes: auditDir falls back to HOME/.local/share when XDG_DATA
     env: new Map([["HOME", "/home/testuser"]]),
   };
   const probes = await resolveProbes(hostEnv);
-  assertEquals(probes.auditDir, "/home/testuser/.local/share/nas/audit");
+  expect(probes.auditDir).toEqual("/home/testuser/.local/share/nas/audit");
 });
 
-Deno.test("resolveProbes: dbusSessionAddress reads DBUS_SESSION_BUS_ADDRESS", async () => {
+test("resolveProbes: dbusSessionAddress reads DBUS_SESSION_BUS_ADDRESS", async () => {
   const hostEnv: HostEnv = {
     home: "/home/testuser",
     user: "testuser",
@@ -109,10 +115,10 @@ Deno.test("resolveProbes: dbusSessionAddress reads DBUS_SESSION_BUS_ADDRESS", as
     ]),
   };
   const probes = await resolveProbes(hostEnv);
-  assertEquals(probes.dbusSessionAddress, "unix:path=/run/user/1000/bus");
+  expect(probes.dbusSessionAddress).toEqual("unix:path=/run/user/1000/bus");
 });
 
-Deno.test("resolveProbes: dbusSessionAddress is null when env not set", async () => {
+test("resolveProbes: dbusSessionAddress is null when env not set", async () => {
   const hostEnv: HostEnv = {
     home: "/home/testuser",
     user: "testuser",
@@ -122,33 +128,33 @@ Deno.test("resolveProbes: dbusSessionAddress is null when env not set", async ()
     env: new Map([["HOME", "/home/testuser"]]),
   };
   const probes = await resolveProbes(hostEnv);
-  assertEquals(probes.dbusSessionAddress, null);
+  expect(probes.dbusSessionAddress).toEqual(null);
 });
 
-Deno.test("resolveProbes: hasHostNix reflects /nix existence", async () => {
+test("resolveProbes: hasHostNix reflects /nix existence", async () => {
   const hostEnv = buildHostEnv();
   const probes = await resolveProbes(hostEnv);
 
   // Verify consistency: check /nix directly
   let nixExists = false;
   try {
-    await Deno.stat("/nix");
+    await stat("/nix");
     nixExists = true;
   } catch (e) {
-    if (e instanceof Deno.errors.NotFound) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
       nixExists = false;
     } else {
       throw e;
     }
   }
-  assertEquals(probes.hasHostNix, nixExists);
+  expect(probes.hasHostNix).toEqual(nixExists);
 });
 
 // ---------------------------------------------------------------------------
 // resolveAuditDirFromEnv error handling (C1)
 // ---------------------------------------------------------------------------
 
-Deno.test("resolveProbes: auditDir throws when neither XDG_DATA_HOME nor HOME is set", async () => {
+test("resolveProbes: auditDir throws when neither XDG_DATA_HOME nor HOME is set", async () => {
   const hostEnv: HostEnv = {
     home: "/root",
     user: "",
@@ -157,14 +163,12 @@ Deno.test("resolveProbes: auditDir throws when neither XDG_DATA_HOME nor HOME is
     isWSL: false,
     env: new Map(), // neither XDG_DATA_HOME nor HOME
   };
-  await assertRejects(
-    () => resolveProbes(hostEnv),
-    Error,
+  await expect(resolveProbes(hostEnv)).rejects.toThrow(
     "Cannot resolve audit directory: neither XDG_DATA_HOME nor HOME is set",
   );
 });
 
-Deno.test("resolveProbes: auditDir uses HOME from env map, not hostEnv.home", async () => {
+test("resolveProbes: auditDir uses HOME from env map, not hostEnv.home", async () => {
   const hostEnv: HostEnv = {
     home: "/root", // buildHostEnv fallback
     user: "testuser",
@@ -174,14 +178,14 @@ Deno.test("resolveProbes: auditDir uses HOME from env map, not hostEnv.home", as
     env: new Map([["HOME", "/home/realuser"]]),
   };
   const probes = await resolveProbes(hostEnv);
-  assertEquals(probes.auditDir, "/home/realuser/.local/share/nas/audit");
+  expect(probes.auditDir).toEqual("/home/realuser/.local/share/nas/audit");
 });
 
 // ---------------------------------------------------------------------------
 // dbusSessionAddress edge cases (W2)
 // ---------------------------------------------------------------------------
 
-Deno.test("resolveProbes: dbusSessionAddress is null when env value is whitespace-only", async () => {
+test("resolveProbes: dbusSessionAddress is null when env value is whitespace-only", async () => {
   const hostEnv: HostEnv = {
     home: "/home/testuser",
     user: "testuser",
@@ -194,10 +198,10 @@ Deno.test("resolveProbes: dbusSessionAddress is null when env value is whitespac
     ]),
   };
   const probes = await resolveProbes(hostEnv);
-  assertEquals(probes.dbusSessionAddress, null);
+  expect(probes.dbusSessionAddress).toEqual(null);
 });
 
-Deno.test("resolveProbes: dbusSessionAddress is null when env value is empty string", async () => {
+test("resolveProbes: dbusSessionAddress is null when env value is empty string", async () => {
   const hostEnv: HostEnv = {
     home: "/home/testuser",
     user: "testuser",
@@ -210,5 +214,5 @@ Deno.test("resolveProbes: dbusSessionAddress is null when env value is empty str
     ]),
   };
   const probes = await resolveProbes(hostEnv);
-  assertEquals(probes.dbusSessionAddress, null);
+  expect(probes.dbusSessionAddress).toEqual(null);
 });

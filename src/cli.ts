@@ -2,7 +2,6 @@
  * CLI エントリポイント
  */
 
-import { encodeHex } from "@std/encoding/hex";
 import { loadConfig, resolveProfile } from "./config/load.ts";
 import { runPipeline } from "./pipeline/pipeline.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
@@ -191,7 +190,7 @@ export async function main(args: string[]): Promise<void> {
     const mountProbes = await resolveMountProbes(
       hostEnv,
       effectiveProfile,
-      Deno.cwd(),
+      process.cwd(),
       probes.gpgAgentSocket,
     );
 
@@ -214,7 +213,7 @@ export async function main(args: string[]): Promise<void> {
     const initialPrior: PriorStageOutputs = {
       dockerArgs: [],
       envVars: { NAS_LOG_LEVEL: logLevel },
-      workDir: Deno.cwd(),
+      workDir: process.cwd(),
       nixEnabled: false,
       imageName,
       agentCommand: [],
@@ -241,5 +240,5 @@ export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
 
 function randomHex(bytes: number): string {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
-  return encodeHex(data);
+  return Buffer.from(data).toString("hex");
 }

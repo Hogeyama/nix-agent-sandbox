@@ -5,16 +5,15 @@
 import type { ProcessSpawnEffect, WaitForReadyEffect } from "../types.ts";
 import type { ResourceHandle } from "./types.ts";
 import { logInfo, logWarn } from "../../log.ts";
+import { stat } from "node:fs/promises";
 
 export function executeProcessSpawn(
   effect: ProcessSpawnEffect,
 ): Promise<ResourceHandle> {
-  const command = new Deno.Command(effect.command, {
-    args: effect.args,
-    stdout: "null",
-    stderr: "piped",
+  const child = Bun.spawn([effect.command, ...effect.args], {
+    stdout: "ignore",
+    stderr: "pipe",
   });
-  const child = command.spawn();
 
   // Capture stderr in background for diagnostics
   let stderrText = "";
@@ -39,14 +38,11 @@ export function executeProcessSpawn(
     kind: "process-spawn",
     close: async () => {
       try {
-        child.kill("SIGTERM");
-      } catch (e) {
-        if (!(e instanceof Deno.errors.NotFound)) {
-          throw e;
-        }
+        child.kill();
+      } catch {
         // Process already exited
       }
-      await child.status.catch((e: unknown) =>
+      await child.exited.catch((e: unknown) =>
         logInfo(
           `[nas] process-spawn teardown (${effect.id}): failed to await child status: ${e}`,
         )
@@ -93,10 +89,10 @@ async function waitForFileExists(
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
-      await Deno.stat(filePath);
+      await stat(filePath);
       return;
     } catch (e) {
-      if (!(e instanceof Deno.errors.NotFound)) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         throw e;
       }
     }

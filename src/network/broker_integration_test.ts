@@ -1,4 +1,12 @@
-import { assertEquals } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { sendBrokerRequest, SessionBroker } from "./broker.ts";
 import type {
   AuthorizeRequest,
@@ -8,10 +16,13 @@ import type {
 import { resolveNetworkRuntimePaths } from "./registry.ts";
 import { queryAuditLogs } from "../audit/store.ts";
 import { _resetNotifySendCache } from "../lib/notify_utils.ts";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
-  const auditDir = await Deno.makeTempDir({ prefix: "nas-broker-audit-" });
+test("SessionBroker: allowlist hit returns allow immediately", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -31,25 +42,25 @@ Deno.test("SessionBroker: allowlist hit returns allow immediately", async () => 
       socketPath,
       authorize("sess_test", "req_1", "example.com", 443),
     );
-    assertEquals(response.decision, "allow");
-    assertEquals(response.reason, "allowlist");
+    expect(response.decision).toEqual("allow");
+    expect(response.reason).toEqual("allowlist");
 
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
-    assertEquals(logs.length, 1);
-    assertEquals(logs[0].decision, "allow");
-    assertEquals(logs[0].reason, "allowlist");
-    assertEquals(logs[0].target, "example.com:443");
-    assertEquals(logs[0].requestId, "req_1");
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("allow");
+    expect(logs[0].reason).toEqual("allowlist");
+    expect(logs[0].target).toEqual("example.com:443");
+    expect(logs[0].requestId).toEqual("req_1");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: pending request resumes after approve", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
-  const auditDir = await Deno.makeTempDir({ prefix: "nas-broker-audit-" });
+test("SessionBroker: pending request resumes after approve", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -70,45 +81,48 @@ Deno.test("SessionBroker: pending request resumes after approve", async () => {
       authorize("sess_test", "req_approve", "api.openai.com", 443),
     );
     const pending = await waitForPending(socketPath);
-    assertEquals(pending.items.length, 1);
+    expect(pending.items.length).toEqual(1);
     await sendBrokerRequest(socketPath, {
       type: "approve",
       requestId: "req_approve",
       scope: "host-port",
     });
     const decision = await authorizePromise;
-    assertEquals(decision.decision, "allow");
-    assertEquals(decision.scope, "host-port");
+    expect(decision.decision).toEqual("allow");
+    expect(decision.scope).toEqual("host-port");
 
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
-    assertEquals(logs.length, 1);
-    assertEquals(logs[0].decision, "allow");
-    assertEquals(logs[0].reason, "approved-by-user");
-    assertEquals(logs[0].target, "api.openai.com:443");
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("allow");
+    expect(logs[0].reason).toEqual("approved-by-user");
+    expect(logs[0].target).toEqual("api.openai.com:443");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: close resolves pending request after aborting notifications", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
-  const notifyDir = await Deno.makeTempDir({ prefix: "nas-broker-notify-" });
+test("SessionBroker: close resolves pending request after aborting notifications", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const notifyDir = await mkdtemp(path.join(tmpdir(), "nas-broker-notify-"));
   const notifyStartFile = `${notifyDir}/notify-started`;
   const notifyExitFile = `${notifyDir}/notify-exited`;
-  const originalPath = Deno.env.get("PATH") ?? "";
+  const originalPath = process.env["PATH"] ?? "";
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
-  const healthServer = Deno.serve({ port: 0, onListen() {} }, (req) => {
-    if (new URL(req.url).pathname === "/api/health") {
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return new Response("Not Found", { status: 404 });
+  const healthServer = Bun.serve({
+    port: 0,
+    fetch: (req) => {
+      if (new URL(req.url).pathname === "/api/health") {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    },
   });
   try {
-    await Deno.writeTextFile(
+    await writeFile(
       `${notifyDir}/notify-send`,
       `#!/usr/bin/env bash
 set -eu
@@ -117,15 +131,15 @@ trap 'echo exited > "${notifyExitFile}"; exit 143' TERM
 while true; do sleep 0.05; done
 `,
     );
-    await Deno.writeTextFile(
+    await writeFile(
       `${notifyDir}/xdg-open`,
       `#!/usr/bin/env bash
 true
 `,
     );
-    await Deno.chmod(`${notifyDir}/notify-send`, 0o755);
-    await Deno.chmod(`${notifyDir}/xdg-open`, 0o755);
-    Deno.env.set("PATH", `${notifyDir}:${originalPath}`);
+    await chmod(`${notifyDir}/notify-send`, 0o755);
+    await chmod(`${notifyDir}/xdg-open`, 0o755);
+    process.env["PATH"] = `${notifyDir}:${originalPath}`;
     _resetNotifySendCache();
 
     const broker = new SessionBroker({
@@ -137,7 +151,7 @@ true
       timeoutSeconds: 30,
       defaultScope: "host-port",
       notify: "desktop",
-      uiPort: healthServer.addr.port,
+      uiPort: healthServer.port,
     });
     const socketPath = `${paths.brokersDir}/sess_test.sock`;
     await broker.start(socketPath);
@@ -153,18 +167,18 @@ true
       await broker.close();
 
       const decision = await authorizePromise;
-      assertEquals(decision.decision, "deny");
-      assertEquals(decision.reason, "broker closed");
+      expect(decision.decision).toEqual("deny");
+      expect(decision.reason).toEqual("broker closed");
       await waitForFile(notifyExitFile);
     } finally {
       await broker.close().catch(() => {});
     }
   } finally {
-    Deno.env.set("PATH", originalPath);
+    process.env["PATH"] = originalPath;
     _resetNotifySendCache();
-    await healthServer.shutdown();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(notifyDir, { recursive: true }).catch(() => {});
+    await healthServer.stop();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(notifyDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -186,9 +200,9 @@ function authorize(
   };
 }
 
-Deno.test("SessionBroker: denylist hit returns deny immediately", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
-  const auditDir = await Deno.makeTempDir({ prefix: "nas-broker-audit-" });
+test("SessionBroker: denylist hit returns deny immediately", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -208,23 +222,23 @@ Deno.test("SessionBroker: denylist hit returns deny immediately", async () => {
       socketPath,
       authorize("sess_test", "req_deny", "evil.com", 443),
     );
-    assertEquals(response.decision, "deny");
-    assertEquals(response.reason, "denylist");
+    expect(response.decision).toEqual("deny");
+    expect(response.reason).toEqual("denylist");
 
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
-    assertEquals(logs.length, 1);
-    assertEquals(logs[0].decision, "deny");
-    assertEquals(logs[0].reason, "denylist");
-    assertEquals(logs[0].target, "evil.com:443");
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].reason).toEqual("denylist");
+    expect(logs[0].target).toEqual("evil.com:443");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: allowlist=*.example.com allows sub.example.com even if denylist=sub.example.com", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+test("SessionBroker: allowlist=*.example.com allows sub.example.com even if denylist=sub.example.com", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -243,16 +257,16 @@ Deno.test("SessionBroker: allowlist=*.example.com allows sub.example.com even if
       socketPath,
       authorize("sess_test", "req_wild_allow", "sub.example.com", 443),
     );
-    assertEquals(response.decision, "allow");
-    assertEquals(response.reason, "allowlist");
+    expect(response.decision).toEqual("allow");
+    expect(response.reason).toEqual("allowlist");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: allowlist=sub.example.com, denylist=*.example.com denies other.example.com", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+test("SessionBroker: allowlist=sub.example.com, denylist=*.example.com denies other.example.com", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -272,24 +286,24 @@ Deno.test("SessionBroker: allowlist=sub.example.com, denylist=*.example.com deni
       socketPath,
       authorize("sess_test", "req_allow_sub", "sub.example.com", 443),
     );
-    assertEquals(allowResponse.decision, "allow");
-    assertEquals(allowResponse.reason, "allowlist");
+    expect(allowResponse.decision).toEqual("allow");
+    expect(allowResponse.reason).toEqual("allowlist");
 
     // other.example.com matches denylist *.example.com → deny
     const denyResponse = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_deny_other", "other.example.com", 443),
     );
-    assertEquals(denyResponse.decision, "deny");
-    assertEquals(denyResponse.reason, "denylist");
+    expect(denyResponse.decision).toEqual("deny");
+    expect(denyResponse.reason).toEqual("denylist");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: denied target is cached as recent-deny", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+test("SessionBroker: denied target is cached as recent-deny", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -315,24 +329,24 @@ Deno.test("SessionBroker: denied target is cached as recent-deny", async () => {
       requestId: "req_deny_cache",
     });
     const firstDecision = await authorizePromise;
-    assertEquals(firstDecision.decision, "deny");
-    assertEquals(firstDecision.reason, "denied-by-user");
+    expect(firstDecision.decision).toEqual("deny");
+    expect(firstDecision.reason).toEqual("denied-by-user");
 
     // Second request to the same target should be immediately denied
     const secondDecision = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_deny_cache_2", "cached.example.com", 443),
     );
-    assertEquals(secondDecision.decision, "deny");
-    assertEquals(secondDecision.reason, "recent-deny");
+    expect(secondDecision.decision).toEqual("deny");
+    expect(secondDecision.reason).toEqual("recent-deny");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: negative cache expires after TTL", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+test("SessionBroker: negative cache expires after TTL", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -365,8 +379,8 @@ Deno.test("SessionBroker: negative cache expires after TTL", async () => {
       socketPath,
       authorize("sess_test", "req_ttl_2", "ttl.example.com", 443),
     );
-    assertEquals(cachedDecision.decision, "deny");
-    assertEquals(cachedDecision.reason, "recent-deny");
+    expect(cachedDecision.decision).toEqual("deny");
+    expect(cachedDecision.reason).toEqual("recent-deny");
 
     // Wait for TTL to expire, then should go to prompt again
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -377,7 +391,7 @@ Deno.test("SessionBroker: negative cache expires after TTL", async () => {
     );
     // If the cache expired, the request goes to prompt (pending)
     const pending = await waitForPending(socketPath);
-    assertEquals(pending.items.length, 1);
+    expect(pending.items.length).toEqual(1);
 
     // Clean up: approve to resolve the pending request
     await sendBrokerRequest(socketPath, {
@@ -385,15 +399,15 @@ Deno.test("SessionBroker: negative cache expires after TTL", async () => {
       requestId: "req_ttl_3",
     });
     const decision = await afterTtlPromise;
-    assertEquals(decision.decision, "allow");
+    expect(decision.decision).toEqual("allow");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: deny with host-port scope persists beyond negative-cache TTL", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+test("SessionBroker: deny with host-port scope persists beyond negative-cache TTL", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -420,8 +434,8 @@ Deno.test("SessionBroker: deny with host-port scope persists beyond negative-cac
       scope: "host-port",
     });
     const firstDecision = await authorizePromise;
-    assertEquals(firstDecision.decision, "deny");
-    assertEquals(firstDecision.reason, "denied-by-user");
+    expect(firstDecision.decision).toEqual("deny");
+    expect(firstDecision.reason).toEqual("denied-by-user");
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -432,16 +446,16 @@ Deno.test("SessionBroker: deny with host-port scope persists beyond negative-cac
       ),
       500,
     );
-    assertEquals(secondDecision.decision, "deny");
-    assertEquals(secondDecision.reason, "denied-by-user");
+    expect(secondDecision.decision).toEqual("deny");
+    expect(secondDecision.reason).toEqual("denied-by-user");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SessionBroker: approve after group already resolved returns error", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+test("SessionBroker: approve after group already resolved returns error", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
@@ -477,8 +491,8 @@ Deno.test("SessionBroker: approve after group already resolved returns error", a
     });
     const decision1 = await auth1Promise;
     const decision2 = await auth2Promise;
-    assertEquals(decision1.decision, "allow");
-    assertEquals(decision2.decision, "allow");
+    expect(decision1.decision).toEqual("allow");
+    expect(decision2.decision).toEqual("allow");
 
     // Now approve the second requestId → group already gone, should not crash
     const ack = await sendBrokerRequest<
@@ -487,15 +501,15 @@ Deno.test("SessionBroker: approve after group already resolved returns error", a
       type: "approve",
       requestId: "req_group_b",
     });
-    assertEquals(ack.type, "error");
-    assertEquals(ack.requestId, "req_group_b");
+    expect(ack.type).toEqual("error");
+    expect(ack.requestId).toEqual("req_group_b");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test(
+test(
   "SessionBroker: deny-by-default targets blocked even when in allowlist",
   async () => {
     // Regression: allowlist used to be checked before denyReasonForTarget,
@@ -513,7 +527,7 @@ Deno.test(
     ];
 
     for (const { host, reason } of cases) {
-      const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+      const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
       const paths = await resolveNetworkRuntimePaths(runtimeDir);
       // Put the deny-by-default host directly in the allowlist.
       const broker = new SessionBroker({
@@ -533,19 +547,11 @@ Deno.test(
           socketPath,
           authorize("sess_test", `req_${host.replace(/[:.]/g, "_")}`, host, 80),
         );
-        assertEquals(
-          response.decision,
-          "deny",
-          `Expected deny for ${host} but got allow`,
-        );
-        assertEquals(
-          response.reason,
-          reason,
-          `Wrong deny reason for ${host}`,
-        );
+        expect(response.decision).toEqual("deny");
+        expect(response.reason).toEqual(reason);
       } finally {
         await broker.close();
-        await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+        await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
       }
     }
   },
@@ -574,7 +580,7 @@ async function waitForPending(
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const exists = await Deno.stat(path).then(() => true).catch(() => false);
+    const exists = await stat(path).then(() => true).catch(() => false);
     if (exists) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -585,7 +591,7 @@ async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
-  let timer: number | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,

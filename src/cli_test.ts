@@ -3,7 +3,7 @@
  * parseProfileAndWorktreeArgs / applyWorktreeOverride
  */
 
-import { assertEquals, assertThrows } from "@std/assert";
+import { expect, test } from "bun:test";
 import { applyWorktreeOverride, parseProfileAndWorktreeArgs } from "./cli.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -31,107 +31,107 @@ const baseProfile: Profile = {
 // parseProfileAndWorktreeArgs
 // ============================================================
 
-Deno.test("parseProfileAndWorktreeArgs: empty args", () => {
+test("parseProfileAndWorktreeArgs: empty args", () => {
   const result = parseProfileAndWorktreeArgs([]);
-  assertEquals(result.profileName, undefined);
-  assertEquals(result.profileIndex, undefined);
-  assertEquals(result.worktreeOverride, { type: "none" });
-  assertEquals(result.agentArgs, []);
+  expect(result.profileName).toEqual(undefined);
+  expect(result.profileIndex).toEqual(undefined);
+  expect(result.worktreeOverride).toEqual({ type: "none" });
+  expect(result.agentArgs).toEqual([]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: profile name only", () => {
+test("parseProfileAndWorktreeArgs: profile name only", () => {
   const result = parseProfileAndWorktreeArgs(["dev"]);
-  assertEquals(result.profileName, "dev");
-  assertEquals(result.profileIndex, 0);
-  assertEquals(result.worktreeOverride, { type: "none" });
-  assertEquals(result.agentArgs, []);
+  expect(result.profileName).toEqual("dev");
+  expect(result.profileIndex).toEqual(0);
+  expect(result.worktreeOverride).toEqual({ type: "none" });
+  expect(result.agentArgs).toEqual([]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: profile with agent args after it", () => {
+test("parseProfileAndWorktreeArgs: profile with agent args after it", () => {
   const result = parseProfileAndWorktreeArgs(["dev", "-p", "hello"]);
-  assertEquals(result.profileName, "dev");
-  assertEquals(result.profileIndex, 0);
-  assertEquals(result.agentArgs, ["-p", "hello"]);
+  expect(result.profileName).toEqual("dev");
+  expect(result.profileIndex).toEqual(0);
+  expect(result.agentArgs).toEqual(["-p", "hello"]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: --worktree with branch", () => {
+test("parseProfileAndWorktreeArgs: --worktree with branch", () => {
   const result = parseProfileAndWorktreeArgs(["--worktree", "main"]);
-  assertEquals(result.profileName, undefined);
-  assertEquals(result.worktreeOverride, { type: "enable", base: "main" });
+  expect(result.profileName).toEqual(undefined);
+  expect(result.worktreeOverride).toEqual({ type: "enable", base: "main" });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b with branch", () => {
+test("parseProfileAndWorktreeArgs: -b with branch", () => {
   const result = parseProfileAndWorktreeArgs(["-b", "feature/login"]);
-  assertEquals(result.worktreeOverride, {
+  expect(result.worktreeOverride).toEqual({
     type: "enable",
     base: "feature/login",
   });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b short form (no space)", () => {
+test("parseProfileAndWorktreeArgs: -b short form (no space)", () => {
   const result = parseProfileAndWorktreeArgs(["-bfeature/login"]);
-  assertEquals(result.worktreeOverride, {
+  expect(result.worktreeOverride).toEqual({
     type: "enable",
     base: "feature/login",
   });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b@ normalizes to HEAD", () => {
+test("parseProfileAndWorktreeArgs: -b@ normalizes to HEAD", () => {
   const result = parseProfileAndWorktreeArgs(["-b@"]);
-  assertEquals(result.profileName, undefined);
-  assertEquals(result.worktreeOverride, { type: "enable", base: "HEAD" });
-  assertEquals(result.agentArgs, []);
+  expect(result.profileName).toEqual(undefined);
+  expect(result.worktreeOverride).toEqual({ type: "enable", base: "HEAD" });
+  expect(result.agentArgs).toEqual([]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b @ normalizes to HEAD", () => {
+test("parseProfileAndWorktreeArgs: -b @ normalizes to HEAD", () => {
   const result = parseProfileAndWorktreeArgs(["-b", "@"]);
-  assertEquals(result.worktreeOverride, { type: "enable", base: "HEAD" });
+  expect(result.worktreeOverride).toEqual({ type: "enable", base: "HEAD" });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b HEAD stays HEAD", () => {
+test("parseProfileAndWorktreeArgs: -b HEAD stays HEAD", () => {
   const result = parseProfileAndWorktreeArgs(["-b", "HEAD"]);
-  assertEquals(result.worktreeOverride, { type: "enable", base: "HEAD" });
+  expect(result.worktreeOverride).toEqual({ type: "enable", base: "HEAD" });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: --no-worktree", () => {
+test("parseProfileAndWorktreeArgs: --no-worktree", () => {
   const result = parseProfileAndWorktreeArgs(["--no-worktree"]);
-  assertEquals(result.worktreeOverride, { type: "disable" });
+  expect(result.worktreeOverride).toEqual({ type: "disable" });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: --worktree before profile", () => {
+test("parseProfileAndWorktreeArgs: --worktree before profile", () => {
   const result = parseProfileAndWorktreeArgs([
     "--worktree",
     "main",
     "dev",
   ]);
-  assertEquals(result.profileName, "dev");
-  assertEquals(result.worktreeOverride, { type: "enable", base: "main" });
+  expect(result.profileName).toEqual("dev");
+  expect(result.worktreeOverride).toEqual({ type: "enable", base: "main" });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: --no-worktree before profile", () => {
+test("parseProfileAndWorktreeArgs: --no-worktree before profile", () => {
   const result = parseProfileAndWorktreeArgs(["--no-worktree", "dev"]);
-  assertEquals(result.profileName, "dev");
-  assertEquals(result.worktreeOverride, { type: "disable" });
+  expect(result.profileName).toEqual("dev");
+  expect(result.worktreeOverride).toEqual({ type: "disable" });
 });
 
-Deno.test("parseProfileAndWorktreeArgs: captures profile after worktree options", () => {
+test("parseProfileAndWorktreeArgs: captures profile after worktree options", () => {
   const result = parseProfileAndWorktreeArgs(["-b", "@", "my-profile"]);
-  assertEquals(result.profileName, "my-profile");
-  assertEquals(result.worktreeOverride, { type: "enable", base: "HEAD" });
-  assertEquals(result.agentArgs, []);
+  expect(result.profileName).toEqual("my-profile");
+  expect(result.worktreeOverride).toEqual({ type: "enable", base: "HEAD" });
+  expect(result.agentArgs).toEqual([]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: profile then agent args including flags", () => {
+test("parseProfileAndWorktreeArgs: profile then agent args including flags", () => {
   const result = parseProfileAndWorktreeArgs([
     "dev",
     "--resume=session-123",
     "-v",
   ]);
-  assertEquals(result.profileName, "dev");
-  assertEquals(result.agentArgs, ["--resume=session-123", "-v"]);
+  expect(result.profileName).toEqual("dev");
+  expect(result.agentArgs).toEqual(["--resume=session-123", "-v"]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: collects agent args after profile", () => {
+test("parseProfileAndWorktreeArgs: collects agent args after profile", () => {
   const result = parseProfileAndWorktreeArgs([
     "-b",
     "feature/base",
@@ -140,102 +140,92 @@ Deno.test("parseProfileAndWorktreeArgs: collects agent args after profile", () =
     "-p",
     "continue",
   ]);
-  assertEquals(result.profileName, "copilot");
-  assertEquals(result.worktreeOverride, {
+  expect(result.profileName).toEqual("copilot");
+  expect(result.worktreeOverride).toEqual({
     type: "enable",
     base: "feature/base",
   });
-  assertEquals(result.agentArgs, [
+  expect(result.agentArgs).toEqual([
     "--resume=2b2155c8-e59b-4c76-b1df-7f9d14aeecfb",
     "-p",
     "continue",
   ]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: treats nas-style flags after profile as agent args", () => {
+test("parseProfileAndWorktreeArgs: treats nas-style flags after profile as agent args", () => {
   const result = parseProfileAndWorktreeArgs([
     "copilot",
     "--no-worktree",
     "-b",
     "feature/agent-side",
   ]);
-  assertEquals(result.profileName, "copilot");
-  assertEquals(result.worktreeOverride, { type: "none" });
-  assertEquals(result.agentArgs, [
+  expect(result.profileName).toEqual("copilot");
+  expect(result.worktreeOverride).toEqual({ type: "none" });
+  expect(result.agentArgs).toEqual([
     "--no-worktree",
     "-b",
     "feature/agent-side",
   ]);
 });
 
-Deno.test("parseProfileAndWorktreeArgs: --worktree without branch throws", () => {
-  assertThrows(
+test("parseProfileAndWorktreeArgs: --worktree without branch throws", () => {
+  expect(
     () => parseProfileAndWorktreeArgs(["--worktree"]),
-    Error,
-    "requires a branch name",
-  );
+  ).toThrow("requires a branch name");
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b without branch throws", () => {
-  assertThrows(
+test("parseProfileAndWorktreeArgs: -b without branch throws", () => {
+  expect(
     () => parseProfileAndWorktreeArgs(["-b"]),
-    Error,
-    "requires a branch name",
-  );
+  ).toThrow("requires a branch name");
 });
 
-Deno.test("parseProfileAndWorktreeArgs: --worktree with flag-like branch throws", () => {
-  assertThrows(
+test("parseProfileAndWorktreeArgs: --worktree with flag-like branch throws", () => {
+  expect(
     () => parseProfileAndWorktreeArgs(["--worktree", "--something"]),
-    Error,
-    "requires a branch name",
-  );
+  ).toThrow("requires a branch name");
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b with flag-like value throws", () => {
-  assertThrows(
+test("parseProfileAndWorktreeArgs: -b with flag-like value throws", () => {
+  expect(
     () => parseProfileAndWorktreeArgs(["-b", "-x"]),
-    Error,
-    "requires a branch name",
-  );
+  ).toThrow("requires a branch name");
 });
 
-Deno.test("parseProfileAndWorktreeArgs: -b short form with flag-like value throws", () => {
-  assertThrows(
+test("parseProfileAndWorktreeArgs: -b short form with flag-like value throws", () => {
+  expect(
     () => parseProfileAndWorktreeArgs(["-b-x"]),
-    Error,
-    "requires a branch name",
-  );
+  ).toThrow("requires a branch name");
 });
 
 // ============================================================
 // applyWorktreeOverride
 // ============================================================
 
-Deno.test("applyWorktreeOverride: none returns profile unchanged", () => {
+test("applyWorktreeOverride: none returns profile unchanged", () => {
   const result = applyWorktreeOverride(baseProfile, { type: "none" });
-  assertEquals(result, baseProfile);
+  expect(result).toEqual(baseProfile);
 });
 
-Deno.test("applyWorktreeOverride: disable removes worktree", () => {
+test("applyWorktreeOverride: disable removes worktree", () => {
   const profile: Profile = {
     ...baseProfile,
     worktree: { base: "main", onCreate: "" },
   };
   const result = applyWorktreeOverride(profile, { type: "disable" });
-  assertEquals(result.worktree, undefined);
+  expect(result.worktree).toEqual(undefined);
 });
 
-Deno.test("applyWorktreeOverride: enable sets worktree with base", () => {
+test("applyWorktreeOverride: enable sets worktree with base", () => {
   const result = applyWorktreeOverride(baseProfile, {
     type: "enable",
     base: "feature/x",
   });
-  assertEquals(result.worktree?.base, "feature/x");
-  assertEquals(result.worktree?.onCreate, "");
+  expect(result.worktree?.base).toEqual("feature/x");
+  expect(result.worktree?.onCreate).toEqual("");
 });
 
-Deno.test("applyWorktreeOverride: enable preserves existing onCreate", () => {
+test("applyWorktreeOverride: enable preserves existing onCreate", () => {
   const profile: Profile = {
     ...baseProfile,
     worktree: { base: "main", onCreate: "npm install" },
@@ -244,14 +234,14 @@ Deno.test("applyWorktreeOverride: enable preserves existing onCreate", () => {
     type: "enable",
     base: "develop",
   });
-  assertEquals(result.worktree?.base, "develop");
-  assertEquals(result.worktree?.onCreate, "npm install");
+  expect(result.worktree?.base).toEqual("develop");
+  expect(result.worktree?.onCreate).toEqual("npm install");
 });
 
-Deno.test("applyWorktreeOverride: enable without existing worktree uses empty onCreate", () => {
+test("applyWorktreeOverride: enable without existing worktree uses empty onCreate", () => {
   const result = applyWorktreeOverride(baseProfile, {
     type: "enable",
     base: "main",
   });
-  assertEquals(result.worktree?.onCreate, "");
+  expect(result.worktree?.onCreate).toEqual("");
 });

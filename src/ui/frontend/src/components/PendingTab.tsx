@@ -126,7 +126,9 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
   return (
     <div>
       {networkItems.length > 0 && (
-        <section style={{ marginBottom: hostExecItems.length > 0 ? "24px" : 0 }}>
+        <section
+          style={{ marginBottom: hostExecItems.length > 0 ? "24px" : 0 }}
+        >
           <h3 style={sectionTitle}>
             Network
             <span style={countBadge}>{networkItems.length}</span>
@@ -250,7 +252,9 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
                     </td>
                     <td style={tdStyle}>
                       <div style={scrollCopyBox}>
-                        <div style={{ ...scrollBox, fontSize: "13px" }}>{shortenHome(item.cwd)}</div>
+                        <div style={{ ...scrollBox, fontSize: "13px" }}>
+                          {shortenHome(item.cwd)}
+                        </div>
                         <CopyButton text={item.cwd} />
                       </div>
                     </td>

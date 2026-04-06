@@ -1,4 +1,13 @@
+import { rm } from "node:fs/promises";
 import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
+import {
+  connectUnix,
+  createUnixServer,
+  readJsonLine,
+  type Server,
+  type Socket,
+  writeJsonLine,
+} from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
 import { appendAuditLog } from "../audit/store.ts";
 import type { AuditLogEntry } from "../audit/types.ts";
@@ -56,7 +65,7 @@ interface PendingGroup {
   target: AuthorizeRequest["target"];
   requests: Map<string, AuthorizeRequest>;
   waiters: Map<string, PendingWaiter>;
-  timer: number;
+  timer: ReturnType<typeof setTimeout>;
   notificationAbort: AbortController;
 }
 
@@ -86,7 +95,7 @@ export class SessionBroker {
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
   private socketPath: string | null = null;
-  private listener: Deno.Listener | null = null;
+  private server: Server | null = null;
   private closing = false;
   private readonly approvedTargets = new Set<string>();
   private readonly approvedHosts = new Set<string>();
@@ -95,7 +104,6 @@ export class SessionBroker {
   private readonly negativeCache: TtlLruCache<string, true>;
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestIndex = new Map<string, string>();
-  private acceptLoop: Promise<void> | null = null;
   private readonly notificationTasks = new Set<Promise<void>>();
 
   constructor(options: BrokerOptions) {
@@ -119,25 +127,18 @@ export class SessionBroker {
 
   async start(socketPath: string): Promise<void> {
     this.socketPath = socketPath;
-    try {
-      await Deno.remove(socketPath);
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-    }
-    this.listener = Deno.listen({ transport: "unix", path: socketPath });
-    this.acceptLoop = this.runAcceptLoop();
+    await rm(socketPath, { force: true });
+    this.server = await createUnixServer(
+      socketPath,
+      (socket) => void this.handleConnection(socket),
+    );
   }
 
   async close(): Promise<void> {
     this.closing = true;
-    if (this.listener) {
-      this.listener.close();
-      this.listener = null;
-    }
-    if (this.acceptLoop) {
-      await this.acceptLoop.catch((e) =>
-        logInfo(`[nas] NetworkBroker: accept loop error on close: ${e}`)
-      );
+    if (this.server) {
+      this.server.close();
+      this.server = null;
     }
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
@@ -163,8 +164,8 @@ export class SessionBroker {
     await removePendingDir(this.paths, this.sessionId);
     const sock = this.socketPath ??
       brokerSocketPath(this.paths, this.sessionId);
-    await Deno.remove(sock).catch((e) => {
-      if (!(e instanceof Deno.errors.NotFound)) {
+    await rm(sock, { force: true }).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`);
       }
     });
@@ -174,36 +175,22 @@ export class SessionBroker {
     return await listPendingEntries(this.paths, this.sessionId);
   }
 
-  private async runAcceptLoop(): Promise<void> {
-    while (!this.closing && this.listener) {
-      let conn: Deno.Conn;
-      try {
-        conn = await this.listener.accept();
-      } catch (error) {
-        if (this.closing) return;
-        throw error;
-      }
-      void this.handleConnection(conn);
-    }
-  }
-
-  private async handleConnection(conn: Deno.Conn): Promise<void> {
+  private async handleConnection(socket: Socket): Promise<void> {
     try {
-      const line = await readJsonLine(conn);
+      const line = await readJsonLine(socket);
       if (!line) return;
       const response = await this.handleMessage(
         JSON.parse(line) as BrokerMessage,
       );
       try {
-        await conn.write(
-          new TextEncoder().encode(JSON.stringify(response) + "\n"),
-        );
+        await writeJsonLine(socket, response);
       } catch (e) {
-        if (e instanceof Deno.errors.BrokenPipe) return;
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "EPIPE" || code === "ECONNRESET") return;
         throw e;
       }
     } finally {
-      conn.close();
+      socket.destroy();
     }
   }
 
@@ -479,18 +466,16 @@ export async function sendBrokerRequest<T extends BrokerResponse>(
   socketPath: string,
   message: BrokerMessage,
 ): Promise<T> {
-  const conn = await Deno.connect({ transport: "unix", path: socketPath });
+  const socket = await connectUnix(socketPath);
   try {
-    await conn.write(
-      new TextEncoder().encode(JSON.stringify(message) + "\n"),
-    );
-    const response = await readJsonLine(conn);
+    await writeJsonLine(socket, message);
+    const response = await readJsonLine(socket);
     if (!response) {
       throw new Error("empty broker response");
     }
     return JSON.parse(response) as T;
   } finally {
-    conn.close();
+    socket.destroy();
   }
 }
 
@@ -540,21 +525,4 @@ function denyDecision(
     scope,
     message: reason,
   };
-}
-
-async function readJsonLine(conn: Deno.Conn): Promise<string | null> {
-  const decoder = new TextDecoder();
-  let text = "";
-  const chunk = new Uint8Array(1024);
-  while (true) {
-    const size = await conn.read(chunk);
-    if (size === null) break;
-    text += decoder.decode(chunk.subarray(0, size));
-    const newlineIdx = text.indexOf("\n");
-    if (newlineIdx !== -1) {
-      return text.slice(0, newlineIdx);
-    }
-  }
-  const trimmed = text.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }

@@ -5,16 +5,17 @@
 import type { ResourceEffect } from "../types.ts";
 import type { ResourceHandle } from "./types.ts";
 import { logWarn } from "../../log.ts";
+import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 
 export async function executeDirectoryCreate(
   effect: Extract<ResourceEffect, { kind: "directory-create" }>,
 ): Promise<ResourceHandle> {
-  await Deno.mkdir(effect.path, { recursive: true, mode: effect.mode });
+  await mkdir(effect.path, { recursive: true, mode: effect.mode });
   return {
     kind: "directory-create",
     close: async () => {
       if (effect.removeOnTeardown) {
-        await Deno.remove(effect.path, { recursive: true });
+        await rm(effect.path, { recursive: true, force: true });
       }
     },
   };
@@ -23,14 +24,14 @@ export async function executeDirectoryCreate(
 export async function executeFileWrite(
   effect: Extract<ResourceEffect, { kind: "file-write" }>,
 ): Promise<ResourceHandle> {
-  await Deno.writeTextFile(effect.path, effect.content);
+  await writeFile(effect.path, effect.content);
   try {
-    await Deno.chmod(effect.path, effect.mode);
+    await chmod(effect.path, effect.mode);
   } catch (error) {
     try {
-      await Deno.remove(effect.path);
+      await rm(effect.path, { force: true });
     } catch (cleanupErr) {
-      if (!(cleanupErr instanceof Deno.errors.NotFound)) {
+      if ((cleanupErr as NodeJS.ErrnoException).code !== "ENOENT") {
         logWarn(
           `[nas] file-write: cleanup failed after chmod error: ${
             cleanupErr instanceof Error
@@ -45,7 +46,7 @@ export async function executeFileWrite(
   return {
     kind: "file-write",
     close: async () => {
-      await Deno.remove(effect.path);
+      await rm(effect.path);
     },
   };
 }
@@ -55,20 +56,20 @@ export async function executeSymlink(
 ): Promise<ResourceHandle> {
   // Remove old symlink if it exists
   try {
-    await Deno.remove(effect.path);
+    await rm(effect.path, { force: true });
   } catch (e) {
-    if (!(e instanceof Deno.errors.NotFound)) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
       throw e;
     }
   }
-  await Deno.symlink(effect.target, effect.path);
+  await symlink(effect.target, effect.path);
   return {
     kind: "symlink",
     close: async () => {
       try {
-        await Deno.remove(effect.path);
+        await rm(effect.path, { force: true });
       } catch (e) {
-        if (!(e instanceof Deno.errors.NotFound)) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
           throw e;
         }
       }

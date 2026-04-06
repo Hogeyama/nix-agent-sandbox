@@ -1,32 +1,30 @@
 /**
- * フロントエンドビルドスクリプト — esbuild + esbuild_deno_loader
+ * フロントエンドビルドスクリプト — esbuild
  *
- * Vite を使わず、esbuild で TSX → バンドル済み JS を生成し、
+ * esbuild で TSX → バンドル済み JS を生成し、
  * index.html と合わせて src/ui/dist/ に出力する。
  */
 
 import * as esbuild from "esbuild";
-import { denoPlugins } from "esbuild-deno-loader";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import * as path from "node:path";
 
-const ROOT = new URL("../", import.meta.url).pathname;
-const FRONTEND_DIR = `${ROOT}src/ui/frontend`;
-const DIST_DIR = `${ROOT}src/ui/dist`;
+const ROOT = path.resolve(import.meta.dir, "..");
+const FRONTEND_DIR = path.join(ROOT, "src/ui/frontend");
+const DIST_DIR = path.join(ROOT, "src/ui/dist");
 
 // Clean dist
 try {
-  await Deno.remove(DIST_DIR, { recursive: true });
+  await rm(DIST_DIR, { recursive: true });
 } catch (e) {
-  if (!(e instanceof Deno.errors.NotFound)) throw e;
+  if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
 }
-await Deno.mkdir(`${DIST_DIR}/assets`, { recursive: true });
+await mkdir(path.join(DIST_DIR, "assets"), { recursive: true });
 
 // Bundle TSX
 const result = await esbuild.build({
-  plugins: [
-    ...denoPlugins({ loader: "native", configPath: `${ROOT}deno.json` }),
-  ],
-  entryPoints: [`${FRONTEND_DIR}/src/main.tsx`],
-  outdir: `${DIST_DIR}/assets`,
+  entryPoints: [path.join(FRONTEND_DIR, "src/main.tsx")],
+  outdir: path.join(DIST_DIR, "assets"),
   bundle: true,
   format: "esm",
   minify: true,
@@ -40,7 +38,7 @@ const result = await esbuild.build({
 const outputs = Object.keys(result.metafile!.outputs);
 const jsFile = outputs.find((f) => f.endsWith(".js"));
 if (!jsFile) throw new Error("No JS output found");
-const jsBasename = jsFile.split("/").pop()!;
+const jsBasename = path.basename(jsFile);
 
 // Generate index.html with correct script path
 const html = `<!DOCTYPE html>
@@ -61,12 +59,12 @@ const html = `<!DOCTYPE html>
 </html>
 `;
 
-await Deno.writeTextFile(`${DIST_DIR}/index.html`, html);
+await writeFile(path.join(DIST_DIR, "index.html"), html);
 
 esbuild.stop();
 
 // Print summary
-const jsSize = (await Deno.stat(`${DIST_DIR}/assets/${jsBasename}`)).size;
+const jsSize = (await stat(path.join(DIST_DIR, "assets", jsBasename))).size;
 console.log(`dist/index.html`);
 console.log(
   `dist/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`,

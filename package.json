@@ -1,0 +1,31 @@
+{
+  "name": "nas",
+  "version": "0.1.0",
+  "type": "module",
+  "module": "main.ts",
+  "scripts": {
+    "dev": "bun run main.ts",
+    "build-ui": "bun run scripts/build_ui.ts",
+    "compile": "bun build --compile --outfile nas main.ts",
+    "test": "bun test src/ tests/",
+    "test:unit": "bun test --test-name-pattern '(?!.*integration)' src/",
+    "test:integration": "bun test --test-name-pattern 'integration' src/ tests/",
+    "lint": "bunx biome check src/ tests/ scripts/ main.ts",
+    "fmt": "bunx biome format --write src/ tests/ scripts/ main.ts",
+    "check": "bunx tsc --noEmit",
+    "bun2nix": "bun2nix -o bun.nix"
+  },
+  "dependencies": {
+    "hono": "^4",
+    "js-yaml": "^4",
+    "preact": "^10",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4",
+    "@types/node": "^22",
+    "bun-types": "latest",
+    "bun2nix": "latest",
+    "esbuild": "^0.24"
+  }
+}

@@ -8,8 +8,11 @@ import type {
 } from "../types.ts";
 import type { ResourceHandle } from "./types.ts";
 import { dockerBuild, dockerRun } from "../../docker/client.ts";
-import * as path from "@std/path";
+import * as path from "node:path";
 import { logInfo } from "../../log.ts";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 export async function executeDockerImageBuild(
   effect: DockerImageBuildEffect,
@@ -18,21 +21,22 @@ export async function executeDockerImageBuild(
 
   // deno compile 時は仮想FS上のパスになり docker デーモンからアクセスできないため、
   // 埋め込みファイルを一時ディレクトリに書き出してからビルドする
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-docker-build-" });
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-docker-build-"));
   try {
     for (const group of assetGroups) {
       for (const name of group.files) {
-        const content = await Deno.readTextFile(
-          new URL(name, group.baseUrl),
+        const content = await readFile(
+          path.join(group.baseDir, name),
+          "utf8",
         );
         const outputPath = path.join(tmpDir, group.outputDir, name);
-        await Deno.mkdir(path.dirname(outputPath), { recursive: true });
-        await Deno.writeTextFile(outputPath, content);
+        await mkdir(path.dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, content);
       }
     }
     await dockerBuild(tmpDir, imageName, labels);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true }).catch((e) =>
+    await rm(tmpDir, { recursive: true, force: true }).catch((e) =>
       logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`)
     );
   }

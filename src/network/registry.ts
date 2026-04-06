@@ -1,4 +1,4 @@
-import * as path from "@std/path";
+import * as path from "node:path";
 import type { PendingEntry, SessionRegistryEntry } from "./protocol.ts";
 import {
   defaultRuntimeDir,

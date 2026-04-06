@@ -5,7 +5,7 @@
  * エージェントコンテナ内からラッパースクリプト経由でアクセスできるようにする。
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
 import type {
   HostEnv,
   PlanStage,

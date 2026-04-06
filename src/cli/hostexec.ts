@@ -69,10 +69,10 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
     console.error(
       "  Usage: nas hostexec [pending|approve|deny|review|test] [--scope ...]",
     );
-    Deno.exit(1);
+    process.exit(1);
   } catch (err) {
     console.error(`[nas] Error: ${(err as Error).message}`);
-    Deno.exit(1);
+    process.exit(1);
   }
 }
 
@@ -83,7 +83,7 @@ async function runHostExecTestCommand(nasArgs: string[]): Promise<void> {
     console.error(
       "[nas] Usage: nas hostexec test --profile <profile> -- <command> [args...]",
     );
-    Deno.exit(1);
+    process.exit(1);
   }
   const commandArgs = nasArgs.slice(dashDashIdx + 1);
   const argv0 = commandArgs[0];
@@ -94,7 +94,7 @@ async function runHostExecTestCommand(nasArgs: string[]): Promise<void> {
   const hostexec = profile.hostexec;
   if (!hostexec) {
     console.error("[nas] No hostexec configuration found in profile.");
-    Deno.exit(1);
+    process.exit(1);
   }
 
   const argsStr = buildArgsString(args);

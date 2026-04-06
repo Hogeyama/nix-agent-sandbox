@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { expect, test } from "bun:test";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -18,7 +18,7 @@ import {
   EMBED_HASH_LABEL,
 } from "./docker_build.ts";
 
-Deno.test("DockerBuildStage: returns docker-image-build effect when image does not exist", () => {
+test("DockerBuildStage: returns docker-image-build effect when image does not exist", () => {
   const buildProbes: BuildProbes = {
     imageExists: false,
     currentEmbedHash: "abc123",
@@ -28,19 +28,19 @@ Deno.test("DockerBuildStage: returns docker-image-build effect when image does n
   const input = createTestInput();
 
   const plan = stage.plan(input);
-  assertEquals(plan !== null, true);
-  assertEquals(plan!.effects.length, 1);
-  assertEquals(plan!.effects[0].kind, "docker-image-build");
+  expect(plan !== null).toEqual(true);
+  expect(plan!.effects.length).toEqual(1);
+  expect(plan!.effects[0].kind).toEqual("docker-image-build");
   const effect = plan!.effects[0] as {
     kind: string;
     imageName: string;
     labels: Record<string, string>;
   };
-  assertEquals(effect.imageName, "nas-sandbox");
-  assertEquals(effect.labels[EMBED_HASH_LABEL], "abc123");
+  expect(effect.imageName).toEqual("nas-sandbox");
+  expect(effect.labels[EMBED_HASH_LABEL]).toEqual("abc123");
 });
 
-Deno.test("DockerBuildStage: returns empty effects when image exists and hash matches", () => {
+test("DockerBuildStage: returns empty effects when image exists and hash matches", () => {
   const buildProbes: BuildProbes = {
     imageExists: true,
     currentEmbedHash: "abc123",
@@ -50,11 +50,11 @@ Deno.test("DockerBuildStage: returns empty effects when image exists and hash ma
   const input = createTestInput();
 
   const plan = stage.plan(input);
-  assertEquals(plan !== null, true);
-  assertEquals(plan!.effects.length, 0);
+  expect(plan !== null).toEqual(true);
+  expect(plan!.effects.length).toEqual(0);
 });
 
-Deno.test("DockerBuildStage: warns when cached image embed hash is outdated", () => {
+test("DockerBuildStage: warns when cached image embed hash is outdated", () => {
   const buildProbes: BuildProbes = {
     imageExists: true,
     currentEmbedHash: "new-hash",
@@ -70,12 +70,11 @@ Deno.test("DockerBuildStage: warns when cached image embed hash is outdated", ()
   };
   try {
     const plan = stage.plan(input);
-    assertEquals(plan !== null, true);
-    assertEquals(plan!.effects.length, 0);
-    assertEquals(
+    expect(plan !== null).toEqual(true);
+    expect(plan!.effects.length).toEqual(0);
+    expect(
       logs.some((line) => line.includes("Docker image is outdated")),
-      true,
-    );
+    ).toEqual(true);
   } finally {
     console.log = originalLog;
   }

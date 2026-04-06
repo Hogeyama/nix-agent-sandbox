@@ -1,6 +1,23 @@
-import { assertEquals, assertMatch } from "@std/assert";
-import * as path from "@std/path";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import * as path from "node:path";
 import { Buffer } from "node:buffer";
+import {
+  mkdir,
+  mkdtemp,
+  readFile as readFileBytes,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 interface CommandResult {
   code: number;
@@ -39,12 +56,11 @@ const gitAvailable = await commandExists("git");
 
 async function commandExists(command: string): Promise<boolean> {
   try {
-    const output = await new Deno.Command(command, {
-      args: ["--version"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    return output.success;
+    const exitCode = await Bun.spawn([command, "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
+    return exitCode === 0;
   } catch {
     return false;
   }
@@ -58,29 +74,29 @@ async function runCommand(
     env?: Record<string, string>;
   } = {},
 ): Promise<CommandResult> {
-  const output = await new Deno.Command(command, {
-    args,
+  const proc = Bun.spawn([command, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
     cwd: options.cwd,
     env: options.env,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  return {
-    code: output.code,
-    stdout: new TextDecoder().decode(output.stdout),
-    stderr: new TextDecoder().decode(output.stderr),
-  };
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { code, stdout, stderr };
 }
 
 async function withProxyFixture(
   fn: (fixture: ProxyFixture) => Promise<void>,
 ): Promise<void> {
-  const rootDir = await Deno.makeTempDir({ prefix: "nas-client-compat-" });
+  const rootDir = await mkdtemp(path.join(tmpdir(), "nas-client-compat-"));
   const proxyRequests: RecordedRequest[] = [];
   const upstreamRequests: RecordedRequest[] = [];
 
   try {
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(rootDir, "hello.txt"),
       "hello through proxy\n",
     );
@@ -106,7 +122,7 @@ async function withProxyFixture(
       await closeServer(upstreamServer);
     }
   } finally {
-    await Deno.remove(rootDir, { recursive: true }).catch(() => {});
+    await rm(rootDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -114,8 +130,8 @@ async function createBareRepo(rootDir: string): Promise<void> {
   const workDir = path.join(rootDir, "work");
   const repoDir = path.join(rootDir, "repo.git");
   const gitHome = path.join(rootDir, "git-home");
-  await Deno.mkdir(workDir, { recursive: true });
-  await Deno.mkdir(gitHome, { recursive: true });
+  await mkdir(workDir, { recursive: true });
+  await mkdir(gitHome, { recursive: true });
   const gitEnv = isolatedGitEnv(gitHome);
 
   await runChecked("git", ["init", workDir], { env: gitEnv });
@@ -132,7 +148,7 @@ async function createBareRepo(rootDir: string): Promise<void> {
     "user.email",
     "nas-test@example.com",
   ], { env: gitEnv });
-  await Deno.writeTextFile(
+  await writeFile(
     path.join(workDir, "README.md"),
     "# nas client compat\n",
   );
@@ -250,14 +266,14 @@ async function handleUpstreamRequest(
   }
 
   try {
-    const info = await Deno.stat(filePath);
-    if (!info.isFile) {
+    const info = await stat(filePath);
+    if (!info.isFile()) {
       return new Response("not found", { status: 404 });
     }
-    const data = await Deno.readFile(filePath);
+    const data = await readFileBytes(filePath);
     return new Response(data, { status: 200 });
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return new Response("not found", { status: 404 });
     }
     return new Response((error as Error).message, { status: 500 });
@@ -295,21 +311,19 @@ function isPathInsideRoot(rootDir: string, target: string): boolean {
 function startServer(
   handler: (request: Request) => Response | Promise<Response>,
 ): RunningServer {
-  const abortController = new AbortController();
-  const server = Deno.serve({
+  const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    signal: abortController.signal,
-    onListen: () => {},
-  }, handler);
-  const address = server.addr;
-  if (address.transport !== "tcp") {
-    throw new Error("expected tcp server");
-  }
+    fetch: handler,
+  });
   return {
-    abortController,
-    port: address.port,
-    finished: server.finished.catch(() => {}),
+    abortController: {
+      abort() {
+        server.stop();
+      },
+    } as AbortController,
+    port: server.port!,
+    finished: Promise.resolve(),
   };
 }
 
@@ -322,7 +336,7 @@ function cleanClientEnv(
   extra: Record<string, string> = {},
 ): Record<string, string> {
   return {
-    ...Deno.env.toObject(),
+    ...process.env,
     HTTP_PROXY: "",
     HTTPS_PROXY: "",
     ALL_PROXY: "",
@@ -361,31 +375,19 @@ function assertRetriedWithProxyAuth(requests: RecordedRequest[]): void {
   const retried = Array.from(byUrl.values()).some((entry) =>
     entry.authorized > 0 && entry.unauthorized > 0
   );
-  assertEquals(
-    retried,
-    true,
-    `Expected proxy challenge and retry, saw ${
-      JSON.stringify(requests, null, 2)
-    }`,
-  );
+  expect(retried).toEqual(true);
 }
 
 function assertNoProxyAuthLeak(requests: RecordedRequest[]): void {
-  assertEquals(
-    requests.length > 0,
-    true,
-    "Expected upstream requests to be recorded",
-  );
+  expect(requests.length > 0).toEqual(true);
   for (const request of requests) {
-    assertEquals(request.headers["proxy-authorization"], undefined);
+    expect(request.headers["proxy-authorization"]).toBeUndefined();
   }
 }
 
-Deno.test({
-  name:
-    "Client compatibility: curl retries after 407 and does not leak proxy credentials upstream",
-  ignore: !curlAvailable,
-  async fn() {
+test.skipIf(!curlAvailable)(
+  "Client compatibility: curl retries after 407 and does not leak proxy credentials upstream",
+  async () => {
     await withProxyFixture(
       async ({ proxyPort, upstreamPort, proxyRequests, upstreamRequests }) => {
         const result = await runCommand(
@@ -406,23 +408,21 @@ Deno.test({
           { env: cleanClientEnv() },
         );
 
-        assertEquals(result.code, 0, result.stderr);
-        assertEquals(result.stdout.trim(), "hello through proxy");
+        expect(result.code).toEqual(0);
+        expect(result.stdout.trim()).toEqual("hello through proxy");
         assertRetriedWithProxyAuth(proxyRequests);
         assertNoProxyAuthLeak(upstreamRequests);
       },
     );
   },
-});
+);
 
-Deno.test({
-  name:
-    "Client compatibility: git retries after 407 and does not leak proxy credentials upstream",
-  ignore: !gitAvailable,
-  async fn() {
+test.skipIf(!gitAvailable)(
+  "Client compatibility: git retries after 407 and does not leak proxy credentials upstream",
+  async () => {
     await withProxyFixture(
       async ({ proxyPort, upstreamPort, proxyRequests, upstreamRequests }) => {
-        const homeDir = await Deno.makeTempDir({ prefix: "nas-git-home-" });
+        const homeDir = await mkdtemp(path.join(tmpdir(), "nas-git-home-"));
         try {
           const result = await runCommand(
             "git",
@@ -446,14 +446,14 @@ Deno.test({
             },
           );
 
-          assertEquals(result.code, 0, result.stderr);
-          assertMatch(result.stdout, /refs\/heads\/main/);
+          expect(result.code).toEqual(0);
+          expect(result.stdout).toMatch(/refs\/heads\/main/);
           assertRetriedWithProxyAuth(proxyRequests);
           assertNoProxyAuthLeak(upstreamRequests);
         } finally {
-          await Deno.remove(homeDir, { recursive: true }).catch(() => {});
+          await rm(homeDir, { recursive: true, force: true }).catch(() => {});
         }
       },
     );
   },
-});
+);

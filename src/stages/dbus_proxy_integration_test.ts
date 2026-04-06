@@ -1,5 +1,13 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
-import * as path from "@std/path";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import * as path from "node:path";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -21,6 +29,9 @@ import type {
   StageInput,
 } from "../pipeline/types.ts";
 import { executePlan, teardownHandles } from "../pipeline/effects.ts";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import net from "node:net";
 
 function makeProfile(): Profile {
   return {
@@ -41,12 +52,16 @@ function makeProfile(): Profile {
 
 function makeHostEnv(overrides?: Partial<HostEnv>): HostEnv {
   return {
-    home: Deno.env.get("HOME") ?? "/root",
-    user: Deno.env.get("USER") ?? "",
-    uid: Deno.uid(),
-    gid: Deno.gid(),
+    home: process.env["HOME"] ?? "/root",
+    user: process.env["USER"] ?? "",
+    uid: process.getuid!(),
+    gid: process.getgid!(),
     isWSL: false,
-    env: new Map(Object.entries(Deno.env.toObject())),
+    env: new Map(
+      Object.entries(process.env).filter((e): e is [string, string] =>
+        e[1] !== undefined
+      ),
+    ),
     ...overrides,
   };
 }
@@ -81,7 +96,7 @@ function makeInput(
     prior: {
       dockerArgs: [],
       envVars: {},
-      workDir: Deno.cwd(),
+      workDir: process.cwd(),
       nixEnabled: false,
       imageName: "nas:default",
       agentCommand: ["claude"],
@@ -91,36 +106,31 @@ function makeInput(
   };
 }
 
-Deno.test("resolveSourceAddress: prefers configured address, then probe, then default path", () => {
-  assertEquals(
-    resolveSourceAddress(
-      "unix:path=/tmp/from-config",
-      "unix:path=/tmp/from-env",
-      1000,
-    ),
+test("resolveSourceAddress: prefers configured address, then probe, then default path", () => {
+  expect(resolveSourceAddress(
+    "unix:path=/tmp/from-config",
+    "unix:path=/tmp/from-env",
+    1000,
+  )).toEqual(
     "unix:path=/tmp/from-config",
   );
-  assertEquals(
-    resolveSourceAddress(undefined, "unix:path=/tmp/from-env", 1000),
-    "unix:path=/tmp/from-env",
-  );
-  assertEquals(
-    resolveSourceAddress(undefined, null, 1000),
+  expect(resolveSourceAddress(undefined, "unix:path=/tmp/from-env", 1000))
+    .toEqual("unix:path=/tmp/from-env");
+  expect(resolveSourceAddress(undefined, null, 1000)).toEqual(
     "unix:path=/run/user/1000/bus",
   );
 });
 
-Deno.test("buildProxyArgs: serializes filter flags", () => {
-  assertEquals(
-    buildProxyArgs(
-      "unix:path=/run/user/1000/bus",
-      "/tmp/proxy/bus",
-      ["org.freedesktop.secrets"],
-      ["org.freedesktop.secrets"],
-      ["org.example.Owned"],
-      [{ name: "org.freedesktop.secrets", rule: "*" }],
-      [{ name: "org.freedesktop.secrets", rule: "*" }],
-    ),
+test("buildProxyArgs: serializes filter flags", () => {
+  expect(buildProxyArgs(
+    "unix:path=/run/user/1000/bus",
+    "/tmp/proxy/bus",
+    ["org.freedesktop.secrets"],
+    ["org.freedesktop.secrets"],
+    ["org.example.Owned"],
+    [{ name: "org.freedesktop.secrets", rule: "*" }],
+    [{ name: "org.freedesktop.secrets", rule: "*" }],
+  )).toEqual(
     [
       "unix:path=/run/user/1000/bus",
       "/tmp/proxy/bus",
@@ -134,15 +144,15 @@ Deno.test("buildProxyArgs: serializes filter flags", () => {
   );
 });
 
-Deno.test("DbusProxyStage: returns null when disabled", () => {
+test("DbusProxyStage: returns null when disabled", () => {
   const profile = makeProfile();
   const input = makeInput(profile);
   const stage = createDbusProxyStage();
   const plan = stage.plan(input);
-  assertEquals(plan, null);
+  expect(plan).toEqual(null);
 });
 
-Deno.test("DbusProxyStage: returns dbusProxyEnabled=false when uid is null", () => {
+test("DbusProxyStage: returns dbusProxyEnabled=false when uid is null", () => {
   const profile: Profile = {
     ...makeProfile(),
     dbus: {
@@ -155,12 +165,12 @@ Deno.test("DbusProxyStage: returns dbusProxyEnabled=false when uid is null", () 
   const input = makeInput(profile, { uid: null });
   const stage = createDbusProxyStage();
   const plan = stage.plan(input);
-  assertNotEquals(plan, null);
-  assertEquals(plan!.outputOverrides.dbusProxyEnabled, false);
-  assertEquals(plan!.effects.length, 0);
+  expect(plan).not.toEqual(null);
+  expect(plan!.outputOverrides.dbusProxyEnabled).toEqual(false);
+  expect(plan!.effects.length).toEqual(0);
 });
 
-Deno.test("DbusProxyStage: returns dbusProxyEnabled=false when xdg-dbus-proxy not found", () => {
+test("DbusProxyStage: returns dbusProxyEnabled=false when xdg-dbus-proxy not found", () => {
   const profile: Profile = {
     ...makeProfile(),
     dbus: {
@@ -174,12 +184,12 @@ Deno.test("DbusProxyStage: returns dbusProxyEnabled=false when xdg-dbus-proxy no
   const input = makeInput(profile, { uid: 1000 }, { xdgDbusProxyPath: null });
   const stage = createDbusProxyStage();
   const plan = stage.plan(input);
-  assertNotEquals(plan, null);
-  assertEquals(plan!.outputOverrides.dbusProxyEnabled, false);
-  assertEquals(plan!.effects.length, 0);
+  expect(plan).not.toEqual(null);
+  expect(plan!.outputOverrides.dbusProxyEnabled).toEqual(false);
+  expect(plan!.effects.length).toEqual(0);
 });
 
-Deno.test("DbusProxyStage: returns dbusProxyEnabled=false for unsupported address", () => {
+test("DbusProxyStage: returns dbusProxyEnabled=false for unsupported address", () => {
   const profile: Profile = {
     ...makeProfile(),
     dbus: {
@@ -197,13 +207,13 @@ Deno.test("DbusProxyStage: returns dbusProxyEnabled=false for unsupported addres
   );
   const stage = createDbusProxyStage();
   const plan = stage.plan(input);
-  assertNotEquals(plan, null);
-  assertEquals(plan!.outputOverrides.dbusProxyEnabled, false);
-  assertEquals(plan!.effects.length, 0);
+  expect(plan).not.toEqual(null);
+  expect(plan!.outputOverrides.dbusProxyEnabled).toEqual(false);
+  expect(plan!.effects.length).toEqual(0);
 });
 
-Deno.test("DbusProxyStage: produces correct effects and outputs when enabled", () => {
-  const uid = Deno.uid();
+test("DbusProxyStage: produces correct effects and outputs when enabled", () => {
+  const uid = process.getuid!();
   if (uid === null) return;
 
   const profile: Profile = {
@@ -227,68 +237,64 @@ Deno.test("DbusProxyStage: produces correct effects and outputs when enabled", (
   );
   const stage = createDbusProxyStage();
   const plan = stage.plan(input);
-  assertNotEquals(plan, null);
+  expect(plan).not.toEqual(null);
 
   // Check outputOverrides
-  assertEquals(plan!.outputOverrides.dbusProxyEnabled, true);
-  assertEquals(
-    plan!.outputOverrides.dbusSessionRuntimeDir?.includes(input.sessionId),
+  expect(plan!.outputOverrides.dbusProxyEnabled).toEqual(true);
+  expect(plan!.outputOverrides.dbusSessionRuntimeDir?.includes(input.sessionId))
+    .toEqual(true);
+  expect(plan!.outputOverrides.dbusSessionSocket?.endsWith("/bus")).toEqual(
     true,
   );
-  assertEquals(plan!.outputOverrides.dbusSessionSocket?.endsWith("/bus"), true);
-  assertEquals(
-    plan!.outputOverrides.dbusSessionSourceAddress,
+  expect(plan!.outputOverrides.dbusSessionSourceAddress).toEqual(
     `unix:path=/run/user/${uid}/bus`,
   );
 
   // Check effects structure: single dbus-proxy high-level effect
   const effectKinds = plan!.effects.map((e) => e.kind);
-  assertEquals(effectKinds, ["dbus-proxy"]);
+  expect(effectKinds).toEqual(["dbus-proxy"]);
 
   // Check dbus-proxy effect has correct fields
   const dbusEffect = plan!.effects[0] as DbusProxyEffect;
-  assertEquals(dbusEffect.proxyBinaryPath, "/usr/bin/xdg-dbus-proxy");
-  assertEquals(dbusEffect.args.includes("--filter"), true);
-  assertEquals(
-    dbusEffect.args.includes("--talk=org.freedesktop.secrets"),
+  expect(dbusEffect.proxyBinaryPath).toEqual("/usr/bin/xdg-dbus-proxy");
+  expect(dbusEffect.args.includes("--filter")).toEqual(true);
+  expect(dbusEffect.args.includes("--talk=org.freedesktop.secrets")).toEqual(
     true,
   );
 });
 
-Deno.test("resolveRuntimeDir: uses HostEnv instead of Deno.env directly", () => {
+test("resolveRuntimeDir: uses HostEnv instead of Deno.env directly", () => {
   const hostWithXdg = makeHostEnv({
     env: new Map([["XDG_RUNTIME_DIR", "/custom/runtime"]]),
   });
-  assertEquals(resolveRuntimeDir(hostWithXdg), "/custom/runtime/nas/dbus");
+  expect(resolveRuntimeDir(hostWithXdg)).toEqual("/custom/runtime/nas/dbus");
 
   const hostWithoutXdg = makeHostEnv({
     uid: 1234,
     env: new Map(),
   });
-  assertEquals(resolveRuntimeDir(hostWithoutXdg), "/tmp/nas-1234/dbus");
+  expect(resolveRuntimeDir(hostWithoutXdg)).toEqual("/tmp/nas-1234/dbus");
 
   const hostWithNullUid = makeHostEnv({
     uid: null,
     env: new Map(),
   });
-  assertEquals(resolveRuntimeDir(hostWithNullUid), "/tmp/nas-unknown/dbus");
+  expect(resolveRuntimeDir(hostWithNullUid)).toEqual("/tmp/nas-unknown/dbus");
 });
 
-Deno.test("DbusProxyStage: starts fake proxy via executePlan and exposes runtime paths", async () => {
-  const uid = Deno.uid();
+test("DbusProxyStage: starts fake proxy via executePlan and exposes runtime paths", async () => {
+  const uid = process.getuid!();
   if (uid === null) return;
 
-  const runtimeRoot = await Deno.makeTempDir({ prefix: "nas-dbus-runtime-" });
+  const runtimeRoot = await mkdtemp(path.join(tmpdir(), "nas-dbus-runtime-"));
   const sourceSocketPath = path.join(runtimeRoot, "source.sock");
   const fakeBinDir = path.join(runtimeRoot, "bin");
   const fakeProxyPath = path.join(fakeBinDir, "xdg-dbus-proxy");
-  const listener = Deno.listen({
-    transport: "unix",
-    path: sourceSocketPath,
-  });
+  const listener = net.createServer();
+  listener.listen(sourceSocketPath);
 
-  await Deno.mkdir(fakeBinDir, { recursive: true });
-  await Deno.writeTextFile(
+  await mkdir(fakeBinDir, { recursive: true });
+  await writeFile(
     fakeProxyPath,
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -328,11 +334,15 @@ PY
       mode: 0o755,
     },
   );
-  await Deno.chmod(fakeProxyPath, 0o755);
+  await chmod(fakeProxyPath, 0o755);
 
   try {
     // Pass XDG_RUNTIME_DIR through HostEnv instead of Deno.env
-    const hostEnvMap = new Map(Object.entries(Deno.env.toObject()));
+    const hostEnvMap = new Map(
+      Object.entries(process.env).filter((e): e is [string, string] =>
+        e[1] !== undefined
+      ),
+    );
     hostEnvMap.set("XDG_RUNTIME_DIR", runtimeRoot);
     const profile: Profile = {
       ...makeProfile(),
@@ -355,26 +365,24 @@ PY
     );
     const stage = createDbusProxyStage();
     const plan = stage.plan(input);
-    assertNotEquals(plan, null);
+    expect(plan).not.toEqual(null);
 
     const handles = await executePlan(plan!);
     try {
-      assertEquals(plan!.outputOverrides.dbusProxyEnabled, true);
-      assertEquals(
+      expect(plan!.outputOverrides.dbusProxyEnabled).toEqual(true);
+      expect(
         plan!.outputOverrides.dbusSessionRuntimeDir?.includes(input.sessionId),
+      ).toEqual(true);
+      expect(plan!.outputOverrides.dbusSessionSocket?.endsWith("/bus")).toEqual(
         true,
       );
-      assertEquals(
-        plan!.outputOverrides.dbusSessionSocket?.endsWith("/bus"),
-        true,
-      );
-      const stat = await Deno.stat(plan!.outputOverrides.dbusSessionSocket!);
-      assertEquals(stat.isSocket, true);
+      const st = await stat(plan!.outputOverrides.dbusSessionSocket!);
+      expect(st.isSocket()).toEqual(true);
     } finally {
       await teardownHandles(handles);
     }
   } finally {
     listener.close();
-    await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
+    await rm(runtimeRoot, { recursive: true, force: true }).catch(() => {});
   }
 });

@@ -5,7 +5,8 @@
  * plan() が純粋関数になるようにデータとして返す。
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
+import { stat } from "node:fs/promises";
 import type { HostEnv } from "../pipeline/types.ts";
 import type { EnvConfig, ExtraMountConfig, Profile } from "../config/types.ts";
 import { resolveClaudeProbes } from "../agents/claude.ts";
@@ -226,8 +227,8 @@ async function resolveExtraMounts(
       let srcIsDirectory = false;
       if (srcExists) {
         try {
-          const stat = await Deno.stat(normalizedSrc);
-          srcIsDirectory = stat.isDirectory;
+          const s = await stat(normalizedSrc);
+          srcIsDirectory = s.isDirectory();
         } catch {
           srcIsDirectory = false;
         }
@@ -271,7 +272,7 @@ async function resolveEnvEntries(
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
-    await Deno.stat(filePath);
+    await stat(filePath);
     return true;
   } catch {
     return false;
@@ -280,14 +281,13 @@ async function fileExists(filePath: string): Promise<boolean> {
 
 async function resolveRealPath(targetPath: string): Promise<string | null> {
   try {
-    const cmd = new Deno.Command("readlink", {
-      args: ["-f", targetPath],
-      stdout: "piped",
-      stderr: "null",
+    const proc = Bun.spawn(["readlink", "-f", targetPath], {
+      stdout: "pipe",
+      stderr: "ignore",
     });
-    const { code, stdout } = await cmd.output();
+    const resolved = (await new Response(proc.stdout).text()).trim();
+    const code = await proc.exited;
     if (code === 0) {
-      const resolved = new TextDecoder().decode(stdout).trim();
       if (resolved) return resolved;
     }
   } catch {
@@ -317,22 +317,24 @@ async function runCommandForEnv(
   command: string,
   sourceName: string,
 ): Promise<string> {
-  const cmd = new Deno.Command("sh", {
-    args: ["-c", command],
-    stdout: "piped",
-    stderr: "piped",
+  const proc = Bun.spawn(["sh", "-c", command], {
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  const { code, stdout, stderr } = await cmd.output();
+  const [stdoutText, stderrText] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const code = await proc.exited;
   if (code !== 0) {
-    const stderrText = new TextDecoder().decode(stderr).trim();
     throw new Error(
       `[nas] Failed to execute ${sourceName}: ${
-        stderrText || `exit code ${code}`
+        stderrText.trim() || `exit code ${code}`
       }`,
     );
   }
 
-  const output = new TextDecoder().decode(stdout).trim();
+  const output = stdoutText.trim();
   if (!output) {
     throw new Error(`[nas] ${sourceName} returned empty output`);
   }
