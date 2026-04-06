@@ -6,6 +6,7 @@ interface Props {
 }
 
 const SCOPES = ["once", "capability"] as const;
+const DEFAULT_SCOPE = "capability";
 
 export function HostExecTab({ items }: Props) {
   const [scopeMap, setScopeMap] = useState<Record<string, string>>({});
@@ -26,7 +27,7 @@ export function HostExecTab({ items }: Props) {
         await api.approveHostExec(
           item.sessionId,
           item.requestId,
-          scopeMap[key] || "once",
+          scopeMap[key] || DEFAULT_SCOPE,
         );
       } else {
         await api.denyHostExec(item.sessionId, item.requestId);
@@ -74,7 +75,7 @@ export function HostExecTab({ items }: Props) {
               <td style={tdStyle}>
                 <select
                   style={selectStyle}
-                  value={scopeMap[key] || "once"}
+                  value={scopeMap[key] || DEFAULT_SCOPE}
                   onChange={(e) =>
                     setScopeMap((m) => ({
                       ...m,

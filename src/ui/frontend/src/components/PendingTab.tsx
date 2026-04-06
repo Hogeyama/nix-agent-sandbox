@@ -39,6 +39,7 @@ interface Props {
 
 const NETWORK_SCOPES = ["once", "host-port", "host"] as const;
 const HOSTEXEC_SCOPES = ["once", "capability"] as const;
+const HOSTEXEC_DEFAULT_SCOPE = "capability";
 
 export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
   const [scopeMap, setScopeMap] = useState<Record<string, string>>({});
@@ -102,7 +103,7 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
         await api.approveHostExec(
           item.sessionId,
           item.requestId,
-          scopeMap[key] || "once",
+          scopeMap[key] || HOSTEXEC_DEFAULT_SCOPE,
         );
       } else {
         await api.denyHostExec(item.sessionId, item.requestId);
@@ -259,7 +260,7 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
                     <td style={tdStyle}>
                       <select
                         style={selectStyle}
-                        value={scopeMap[key] || "once"}
+                        value={scopeMap[key] || HOSTEXEC_DEFAULT_SCOPE}
                         onChange={(e) =>
                           setScope(
                             key,
