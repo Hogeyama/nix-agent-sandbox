@@ -48,6 +48,8 @@ let
 
         # GitHub
         "api.github.com"
+        "release-assets.githubusercontent.com"
+        "codeload.github.com"
         # ユーザーのやつ
         "github.com"
         "gist.github.com"
