@@ -29,7 +29,11 @@ export function NetworkTab({ items }: Props) {
           scopeMap[key] || "once",
         );
       } else {
-        await api.denyNetwork(item.sessionId, item.requestId);
+        await api.denyNetwork(
+          item.sessionId,
+          item.requestId,
+          scopeMap[key] || "once",
+        );
       }
     } catch (e) {
       console.error("Action failed:", e);

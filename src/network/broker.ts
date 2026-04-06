@@ -63,7 +63,7 @@ interface PendingGroup {
 type BrokerMessage =
   | AuthorizeRequest
   | { type: "approve"; requestId: string; scope?: ApprovalScope }
-  | { type: "deny"; requestId: string }
+  | { type: "deny"; requestId: string; scope?: ApprovalScope }
   | { type: "list_pending" };
 
 type BrokerResponse =
@@ -90,6 +90,8 @@ export class SessionBroker {
   private closing = false;
   private readonly approvedTargets = new Set<string>();
   private readonly approvedHosts = new Set<string>();
+  private readonly deniedTargets = new Set<string>();
+  private readonly deniedHosts = new Set<string>();
   private readonly negativeCache: TtlLruCache<string, true>;
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestIndex = new Map<string, string>();
@@ -153,6 +155,10 @@ export class SessionBroker {
     await Promise.allSettled(this.notificationTasks);
     this.groups.clear();
     this.requestIndex.clear();
+    this.approvedTargets.clear();
+    this.approvedHosts.clear();
+    this.deniedTargets.clear();
+    this.deniedHosts.clear();
     this.negativeCache.clear();
     await removePendingDir(this.paths, this.sessionId);
     const sock = this.socketPath ??
@@ -209,7 +215,7 @@ export class SessionBroker {
       return await this.approve(message.requestId, message.scope);
     }
     if (message.type === "deny") {
-      return await this.deny(message.requestId);
+      return await this.deny(message.requestId, message.scope);
     }
     return { type: "pending", items: await this.listPending() };
   }
@@ -242,17 +248,30 @@ export class SessionBroker {
     }
 
     const targetCacheKey = targetKey(message.target);
+    if (matchesAllowlist(message.target.host, this.denylist)) {
+      await this.recordAudit(message.requestId, "deny", "denylist", targetStr);
+      return denyDecision(message.requestId, "denylist");
+    }
+
+    if (
+      this.deniedTargets.has(targetCacheKey) ||
+      this.deniedHosts.has(message.target.host)
+    ) {
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        "denied-by-user",
+        targetStr,
+      );
+      return denyDecision(message.requestId, "denied-by-user");
+    }
+
     if (
       this.approvedTargets.has(targetCacheKey) ||
       this.approvedHosts.has(message.target.host)
     ) {
       await this.recordAudit(message.requestId, "allow", "approved", targetStr);
       return allowDecision(message.requestId, "approved");
-    }
-
-    if (matchesAllowlist(message.target.host, this.denylist)) {
-      await this.recordAudit(message.requestId, "deny", "denylist", targetStr);
-      return denyDecision(message.requestId, "denylist");
     }
 
     if (this.negativeCache.get(targetCacheKey) !== undefined) {
@@ -369,7 +388,10 @@ export class SessionBroker {
     return { type: "ack", requestId, decision: "approve" };
   }
 
-  private async deny(requestId: string): Promise<BrokerResponse> {
+  private async deny(
+    requestId: string,
+    scope?: ApprovalScope,
+  ): Promise<BrokerResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
       return {
@@ -378,10 +400,18 @@ export class SessionBroker {
         message: `Pending request not found: ${requestId}`,
       };
     }
+    if (scope === "host") {
+      this.deniedHosts.add(group.target.host);
+      this.approvedHosts.delete(group.target.host);
+    } else if (scope === "host-port") {
+      this.deniedTargets.add(targetKeyForScope(group.target, "host-port"));
+      this.approvedTargets.delete(targetKeyForScope(group.target, "host-port"));
+    }
     await this.resolveGroup(
       group.groupKey,
-      denyDecision(requestId, "denied-by-user"),
+      denyDecision(requestId, "denied-by-user", scope),
       "deny",
+      scope === undefined,
     );
     return { type: "ack", requestId, decision: "deny" };
   }
@@ -390,6 +420,7 @@ export class SessionBroker {
     groupKey: string,
     baseDecision: DecisionResponse,
     outcome: "allow" | "deny",
+    useNegativeCache = true,
   ): Promise<void> {
     const group = this.groups.get(groupKey);
     if (!group) return;
@@ -397,7 +428,7 @@ export class SessionBroker {
     this.groups.delete(groupKey);
     group.notificationAbort.abort();
     await closeNotification();
-    if (outcome === "deny") {
+    if (outcome === "deny" && useNegativeCache) {
       this.negativeCache.set(group.targetKey, true);
     }
 
@@ -501,6 +532,7 @@ function allowDecision(
 function denyDecision(
   requestId: string,
   reason: string,
+  scope?: ApprovalScope,
 ): DecisionResponse {
   return {
     version: 1,
@@ -508,6 +540,7 @@ function denyDecision(
     requestId,
     decision: "deny",
     reason,
+    scope,
     message: reason,
   };
 }

@@ -56,11 +56,11 @@ export function createApiRoutes(ctx: UiDataContext): Hono {
   api.post("/network/deny", async (c) => {
     try {
       const body = await c.req.json();
-      const { sessionId, requestId } = body;
+      const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
         return c.json({ error: "sessionId and requestId are required" }, 400);
       }
-      await denyNetwork(ctx, sessionId, requestId);
+      await denyNetwork(ctx, sessionId, requestId, scope);
       return c.json({ ok: true });
     } catch (e) {
       return c.json({ error: (e as Error).message }, 500);

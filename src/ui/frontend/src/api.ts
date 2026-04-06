@@ -22,8 +22,8 @@ export const api = {
     request<{ items: NetworkPendingItem[] }>("GET", "/api/network/pending"),
   approveNetwork: (sessionId: string, requestId: string, scope?: string) =>
     request("POST", "/api/network/approve", { sessionId, requestId, scope }),
-  denyNetwork: (sessionId: string, requestId: string) =>
-    request("POST", "/api/network/deny", { sessionId, requestId }),
+  denyNetwork: (sessionId: string, requestId: string, scope?: string) =>
+    request("POST", "/api/network/deny", { sessionId, requestId, scope }),
 
   getHostExecPending: () =>
     request<{ items: HostExecPendingItem[] }>("GET", "/api/hostexec/pending"),

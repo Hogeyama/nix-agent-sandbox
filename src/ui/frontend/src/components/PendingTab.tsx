@@ -74,7 +74,11 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
           scopeMap[key] || "host-port",
         );
       } else {
-        await api.denyNetwork(item.sessionId, item.requestId);
+        await api.denyNetwork(
+          item.sessionId,
+          item.requestId,
+          scopeMap[key] || "host-port",
+        );
       }
     } catch (e) {
       console.error("Action failed:", e);

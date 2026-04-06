@@ -102,6 +102,7 @@ export async function denyNetwork(
   ctx: UiDataContext,
   sessionId: string,
   requestId: string,
+  scope?: ApprovalScope,
 ): Promise<void> {
   await gcNetworkRuntime(ctx.networkPaths);
   const session = await readSessionRegistry(ctx.networkPaths, sessionId);
@@ -109,6 +110,7 @@ export async function denyNetwork(
   await sendBrokerRequest(session.brokerSocket, {
     type: "deny",
     requestId,
+    scope,
   });
 }
 

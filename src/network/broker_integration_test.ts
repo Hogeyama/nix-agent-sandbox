@@ -392,6 +392,54 @@ Deno.test("SessionBroker: negative cache expires after TTL", async () => {
   }
 });
 
+Deno.test("SessionBroker: deny with host-port scope persists beyond negative-cache TTL", async () => {
+  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: [],
+    denylist: [],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+    negativeCacheTtlMs: 50,
+  });
+  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  await broker.start(socketPath);
+  try {
+    const authorizePromise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_scope_deny_1", "persist.example.com", 443),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_scope_deny_1",
+      scope: "host-port",
+    });
+    const firstDecision = await authorizePromise;
+    assertEquals(firstDecision.decision, "deny");
+    assertEquals(firstDecision.reason, "denied-by-user");
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const secondDecision = await withTimeout(
+      sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        authorize("sess_test", "req_scope_deny_2", "persist.example.com", 443),
+      ),
+      500,
+    );
+    assertEquals(secondDecision.decision, "deny");
+    assertEquals(secondDecision.reason, "denied-by-user");
+  } finally {
+    await broker.close();
+    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+  }
+});
+
 Deno.test("SessionBroker: approve after group already resolved returns error", async () => {
   const runtimeDir = await Deno.makeTempDir({ prefix: "nas-broker-" });
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
@@ -531,4 +579,27 @@ async function waitForFile(path: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Timed out waiting for file: ${path}`);
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: number | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error(`Timed out waiting for result in ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
