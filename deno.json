@@ -5,7 +5,7 @@
   "tasks": {
     "dev": "deno run --allow-all main.ts",
     "build-ui": "deno run -A scripts/build_ui.ts",
-    "compile": "deno compile --allow-all --include src/docker/embed/ --include src/docker/envoy/ --include src/ui/dist/ --include scripts/notify-send-wsl --output nas main.ts",
+    "compile": "deno run -A scripts/compile.ts",
     "test": "deno test --allow-all src/ tests/",
     "test:unit": "deno test $(find src -name '*_test.ts' ! -name '*_integration_test.ts')",
     "test:integration": "deno test --allow-all $(find src -name '*_integration_test.ts') tests/",
@@ -35,13 +35,23 @@
     "hono": "jsr:@hono/hono",
     "esbuild": "npm:esbuild@0.24",
     "esbuild-deno-loader": "jsr:@luca/esbuild-deno-loader@0.11",
-    "preact": "https://esm.sh/preact@10",
-    "preact/": "https://esm.sh/preact@10/",
+    "preact": "npm:preact@10",
+    "preact/": "npm:/preact@10/",
     "zod": "npm:zod@3.24.4"
   },
   "compilerOptions": {
     "strict": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "https://esm.sh/preact@10"
+    "jsxImportSource": "preact"
+  },
+  "x-compile": {
+    "entrypoint": "main.ts",
+    "permissions": ["--allow-all"],
+    "includes": [
+      "src/docker/embed/",
+      "src/docker/envoy/",
+      "src/ui/dist/",
+      "scripts/notify-send-wsl"
+    ]
   }
 }

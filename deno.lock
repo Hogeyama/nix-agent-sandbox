@@ -14,9 +14,10 @@
     "jsr:@std/path@^1.0.6": "1.1.4",
     "jsr:@std/path@^1.1.4": "1.1.4",
     "jsr:@std/yaml@1": "1.0.11",
-    "npm:@preact/preset-vite@2": "2.10.5_@babel+core@7.29.0_vite@5.4.21__@types+node@24.2.0_@types+node@24.2.0",
+    "npm:@preact/preset-vite@2": "2.10.5_@babel+core@7.29.0_vite@5.4.21__@types+node@24.2.0_preact@10.29.0_@types+node@24.2.0",
     "npm:@types/node@*": "24.2.0",
     "npm:esbuild@0.24": "0.24.2",
+    "npm:preact@10": "10.29.0",
     "npm:vite@*": "5.4.21_@types+node@24.2.0",
     "npm:vite@5": "5.4.21_@types+node@24.2.0",
     "npm:zod@3.24.4": "3.24.4"
@@ -490,7 +491,7 @@
         "@jridgewell/sourcemap-codec"
       ]
     },
-    "@preact/preset-vite@2.10.5_@babel+core@7.29.0_vite@5.4.21__@types+node@24.2.0_@types+node@24.2.0": {
+    "@preact/preset-vite@2.10.5_@babel+core@7.29.0_vite@5.4.21__@types+node@24.2.0_preact@10.29.0_@types+node@24.2.0": {
       "integrity": "sha512-p0vJpxiVO7KWWazWny3LUZ+saXyZKWv6Ju0bYMWNJRp2YveufRPgSUB1C4MTqGJfz07EehMgfN+AJNwQy+w6Iw==",
       "dependencies": [
         "@babel/core",
@@ -1189,6 +1190,7 @@
       "jsr:@std/path@1",
       "jsr:@std/yaml@1",
       "npm:esbuild@0.24",
+      "npm:preact@10",
       "npm:zod@3.24.4"
     ]
   }

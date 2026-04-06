@@ -22,7 +22,9 @@ await Deno.mkdir(`${DIST_DIR}/assets`, { recursive: true });
 
 // Bundle TSX
 const result = await esbuild.build({
-  plugins: [...denoPlugins({ configPath: `${ROOT}deno.json` })],
+  plugins: [
+    ...denoPlugins({ loader: "native", configPath: `${ROOT}deno.json` }),
+  ],
   entryPoints: [`${FRONTEND_DIR}/src/main.tsx`],
   outdir: `${DIST_DIR}/assets`,
   bundle: true,
@@ -30,7 +32,7 @@ const result = await esbuild.build({
   minify: true,
   splitting: false,
   jsx: "automatic",
-  jsxImportSource: "https://esm.sh/preact@10",
+  jsxImportSource: "preact",
   metafile: true,
 });
 

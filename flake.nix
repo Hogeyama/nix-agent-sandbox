@@ -4,102 +4,96 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    deno2nix = {
+      url = "github:aMOPel/deno2nix/deno-cli-fetcher";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, deno2nix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        deno2nixLib = import deno2nix { inherit pkgs; };
 
-        # Phase 1: Fetch all dependencies into DENO_DIR (Fixed Output Derivation)
-        nas-deps = pkgs.stdenv.mkDerivation {
-          name = "nas-deps";
-          src = self;
-          nativeBuildInputs = [ pkgs.deno ];
+        # Read compile metadata from deno.json so flags aren't duplicated.
+        denoJson = builtins.fromJSON (builtins.readFile "${self}/deno.json");
+        compileMeta = denoJson."x-compile";
 
-          # FOD: needs network, output is hash-checked
-          outputHashAlgo = "sha256";
-          outputHashMode = "recursive";
-          outputHash = "sha256-qjdxUThheqR1Z1aIQ5iMIQkGr9tVGFKQl4y/3MdIVX4=";
-
-          buildPhase = ''
-            export DENO_DIR="$out"
-            export HOME=$(mktemp -d)
-
-            # Cache all source dependencies (main app + build script + frontend)
-            deno cache --lock=deno.lock main.ts
-            deno cache --lock=deno.lock scripts/build_ui.ts
-            deno cache --lock=deno.lock src/ui/frontend/src/main.tsx
-
-            # Pre-cache the denort runtime binary that deno compile needs
-            echo 'Deno.exit(0)' > /tmp/_dummy.ts
-            deno compile --output /tmp/_dummy /tmp/_dummy.ts
-
-            # Make DENO_DIR deterministic by normalizing volatile artifacts.
-            # WARNING: This is based on reverse-engineering Deno's internal
-            # cache format and may break on Deno version upgrades. If the FOD
-            # hash starts changing again or Phase 2 fails after a Deno update,
-            # inspect the new cache layout (see git log for the investigation).
-            #
-            # 1. Remote cached files have a trailing denoCacheMetadata comment
-            #    with per-request HTTP headers and timestamps. Normalize to
-            #    keep only url + content-type (needed for module resolution).
-            # 2. SQLite analysis caches have non-deterministic page metadata.
-            # 3. npm registry.json responses contain volatile fields.
-            deno eval '
-              for (const host of ["deno.land","jsr.io","esm.sh","dl.deno.land"]) {
-                const dir = Deno.args[0]+"/remote/https/"+host;
-                try { for (const e of Deno.readDirSync(dir)) {
-                  if (!e.isFile) continue;
-                  const p = dir+"/"+e.name;
-                  const t = Deno.readTextFileSync(p);
-                  const i = t.lastIndexOf("\n// denoCacheMetadata=");
-                  if (i < 0) continue;
-                  const j = JSON.parse(t.slice(i+22));
-                  const h = {};
-                  const ct = j.headers?.["content-type"];
-                  if (ct) h["content-type"] = ct;
-                  Deno.writeTextFileSync(p,
-                    t.slice(0,i)+"\n// denoCacheMetadata="+
-                    JSON.stringify({headers:h,time:0,url:j.url}));
-                } } catch {}
-              }
-            ' "$out"
-            find "$out" -name '*_cache_v2*' -delete
-            find "$out/npm" -name 'registry.json' -delete
+        # Pre-built denort binary from Deno GitHub releases.
+        # Must match pkgs.deno version exactly — deno compile looks up
+        # $DENO_DIR/dl/release/v<version>/denort-<target>.zip at build time.
+        denort = let
+          target = {
+            "x86_64-linux"  = "x86_64-unknown-linux-gnu";
+            "aarch64-linux" = "aarch64-unknown-linux-gnu";
+            "x86_64-darwin"  = "x86_64-apple-darwin";
+            "aarch64-darwin" = "aarch64-apple-darwin";
+          }.${system};
+          hash = {
+            "x86_64-linux" = "sha256-kvYW0T9L7avvgeKAA0AwPGpybit8jrNg0y2oIXMWclQ=";
+          }.${system};
+        in pkgs.stdenvNoCC.mkDerivation {
+          pname = "denort";
+          version = pkgs.deno.version;
+          src = pkgs.fetchurl {
+            url = "https://github.com/denoland/deno/releases/download/v${pkgs.deno.version}/denort-${target}.zip";
+            inherit hash;
+          };
+          nativeBuildInputs = [ pkgs.unzip ];
+          dontUnpack = true;
+          installPhase = ''
+            mkdir -p $out/bin
+            unzip $src -d $out/bin
+            chmod +x $out/bin/denort
           '';
-
-          # The output IS the DENO_DIR
-          installPhase = "true";
+          meta.mainProgram = "denort";
         };
 
-        # Phase 2: Build the binary using cached deps
-        nas = pkgs.stdenv.mkDerivation {
+        # sha256 of the fetchDenoDeps FOD — update when deno.lock changes:
+        # 1. Set to pkgs.lib.fakeHash, run `nix build`, copy the "got:" hash.
+        denoDepsHash = "sha256-4mEmkw20Ou4I7jO19NT+ewE922VDcsidIyRy0tfec1Y=";
+
+        nasDeps = deno2nixLib.lib.fetchDenoDeps {
+          name = "nas-0.1.0-deno-deps";
+          src = self;
+          hash = denoDepsHash;
+        };
+
+        nas = deno2nixLib.lib.buildDenoPackage {
           pname = "nas";
           version = "0.1.0";
           src = self;
-          nativeBuildInputs = [ pkgs.deno ];
+
+          denoDeps = nasDeps;
+
+          preBuild = ''
+            # Workaround: deno2nix build hook references $denoCompileFlags
+            # but buildDenoPackage exports denoCompileFlags_ (with underscore).
+            export denoCompileFlags="$denoCompileFlags_"
+            export denoFlags="$denoFlags_"
+
+            # Restore +x on esbuild native binary (stripped by cp --no-preserve=mode)
+            find node_modules -type f -path '*/bin/*' -exec chmod +x {} \;
+
+            # Build UI — native loader resolves npm:preact from node_modules
+            deno task build-ui
+          '';
+
+          binaryEntrypointPath = compileMeta.entrypoint;
+          denoCompileFlags = compileMeta.permissions
+            ++ builtins.concatMap (p: ["--include" p]) compileMeta.includes;
+
+          # Use pre-built denort from GitHub releases instead of the default
+          # deno2nix denort which compiles Deno from Rust source (very slow).
+          # The full pkgs.deno binary does NOT work as denort — the compiled
+          # binary retains CLI parsing and ignores the embedded script.
+          denortPackage = denort;
 
           # deno compile embeds JS in a custom ELF section; strip destroys it
           dontStrip = true;
-
-          buildPhase = ''
-            export DENO_DIR=$(mktemp -d)
-            export HOME=$(mktemp -d)
-
-            # Copy cached deps (read-only store → writable tmpdir)
-            cp -r ${nas-deps}/* "$DENO_DIR/"
-            chmod -R u+w "$DENO_DIR"
-
-            # Build UI + compile standalone binary (--cached-only, no network)
-            deno task build-ui --cached-only
-            deno task compile  --cached-only
-          '';
-
-          installPhase = ''
-            mkdir -p $out/bin
-            cp nas $out/bin/
-          '';
+          # patchelf --shrink-rpath corrupts the deno compile trailer
+          dontPatchELF = true;
         };
       in
       {
