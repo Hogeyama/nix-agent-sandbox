@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { expect, test } from "bun:test";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -76,43 +76,43 @@ function makeInput(
   };
 }
 
-Deno.test("NixDetectStage: enable=true sets nixEnabled to true", () => {
+test("NixDetectStage: enable=true sets nixEnabled to true", () => {
   const plan = NixDetectStage.plan(makeInput(true, false));
-  assertEquals(plan?.outputOverrides.nixEnabled, true);
+  expect(plan?.outputOverrides.nixEnabled).toEqual(true);
 });
 
-Deno.test("NixDetectStage: enable=false sets nixEnabled to false", () => {
+test("NixDetectStage: enable=false sets nixEnabled to false", () => {
   const plan = NixDetectStage.plan(makeInput(false, true));
-  assertEquals(plan?.outputOverrides.nixEnabled, false);
+  expect(plan?.outputOverrides.nixEnabled).toEqual(false);
 });
 
-Deno.test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", () => {
+test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", () => {
   const plan = NixDetectStage.plan(makeInput("auto", true));
-  assertEquals(plan?.outputOverrides.nixEnabled, true);
+  expect(plan?.outputOverrides.nixEnabled).toEqual(true);
 });
 
-Deno.test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", () => {
+test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", () => {
   const plan = NixDetectStage.plan(makeInput("auto", false));
-  assertEquals(plan?.outputOverrides.nixEnabled, false);
+  expect(plan?.outputOverrides.nixEnabled).toEqual(false);
 });
 
-Deno.test("NixDetectStage: returns empty effects, dockerArgs, envVars", () => {
+test("NixDetectStage: returns empty effects, dockerArgs, envVars", () => {
   const plan = NixDetectStage.plan(makeInput(true, false));
-  assertEquals(plan?.effects, []);
-  assertEquals(plan?.dockerArgs, []);
-  assertEquals(plan?.envVars, {});
+  expect(plan?.effects).toEqual([]);
+  expect(plan?.dockerArgs).toEqual([]);
+  expect(plan?.envVars).toEqual({});
 });
 
-Deno.test("NixDetectStage: kind is 'plan'", () => {
-  assertEquals(NixDetectStage.kind, "plan");
+test("NixDetectStage: kind is 'plan'", () => {
+  expect(NixDetectStage.kind).toEqual("plan");
 });
 
-Deno.test("NixDetectStage: plan() always returns non-null (never skips)", () => {
+test("NixDetectStage: plan() always returns non-null (never skips)", () => {
   // NixDetectStage always produces a plan regardless of inputs
   for (const enable of [true, false, "auto" as const]) {
     for (const hasNix of [true, false]) {
       const plan = NixDetectStage.plan(makeInput(enable, hasNix));
-      assertEquals(plan !== null, true, `enable=${enable}, hasNix=${hasNix}`);
+      expect(plan !== null).toEqual(true);
     }
   }
 });

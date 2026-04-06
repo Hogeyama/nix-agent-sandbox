@@ -1,4 +1,12 @@
-import { assertEquals } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { isWSL, resolveNotifyBackend } from "./notify_utils.ts";
 
 function withEnv(
@@ -7,48 +15,48 @@ function withEnv(
 ): void {
   const saved: Record<string, string | undefined> = {};
   for (const key of Object.keys(overrides)) {
-    saved[key] = Deno.env.get(key);
+    saved[key] = process.env[key];
   }
   try {
     for (const [key, value] of Object.entries(overrides)) {
       if (value === undefined) {
-        Deno.env.delete(key);
+        delete process.env[key];
       } else {
-        Deno.env.set(key, value);
+        process.env[key] = value;
       }
     }
     fn();
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) {
-        Deno.env.delete(key);
+        delete process.env[key];
       } else {
-        Deno.env.set(key, value);
+        process.env[key] = value;
       }
     }
   }
 }
 
-Deno.test("isWSL: returns true when WSL_DISTRO_NAME is set", () => {
+test("isWSL: returns true when WSL_DISTRO_NAME is set", () => {
   withEnv({ WSL_DISTRO_NAME: "Ubuntu" }, () => {
-    assertEquals(isWSL(), true);
+    expect(isWSL()).toEqual(true);
   });
 });
 
-Deno.test("isWSL: returns false when WSL_DISTRO_NAME is unset", () => {
+test("isWSL: returns false when WSL_DISTRO_NAME is unset", () => {
   withEnv({ WSL_DISTRO_NAME: undefined }, () => {
-    assertEquals(isWSL(), false);
+    expect(isWSL()).toEqual(false);
   });
 });
 
-Deno.test("resolveNotifyBackend: off stays off", () => {
-  assertEquals(resolveNotifyBackend("off"), "off");
+test("resolveNotifyBackend: off stays off", () => {
+  expect(resolveNotifyBackend("off")).toEqual("off");
 });
 
-Deno.test("resolveNotifyBackend: desktop stays desktop", () => {
-  assertEquals(resolveNotifyBackend("desktop"), "desktop");
+test("resolveNotifyBackend: desktop stays desktop", () => {
+  expect(resolveNotifyBackend("desktop")).toEqual("desktop");
 });
 
-Deno.test("resolveNotifyBackend: auto resolves to desktop", () => {
-  assertEquals(resolveNotifyBackend("auto"), "desktop");
+test("resolveNotifyBackend: auto resolves to desktop", () => {
+  expect(resolveNotifyBackend("auto")).toEqual("desktop");
 });

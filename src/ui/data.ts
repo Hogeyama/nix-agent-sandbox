@@ -2,6 +2,7 @@
  * データ取得ロジック — 既存レジストリ/ブローカーからの薄いラッパー
  */
 
+import { readdir } from "node:fs/promises";
 import {
   gcNetworkRuntime,
   listPendingEntries,
@@ -171,8 +172,12 @@ export async function getSessions(ctx: UiDataContext): Promise<SessionsData> {
   // hostexec has no listSessionRegistries, read from sessionsDir
   const hostexecSessions: HostExecSessionRegistryEntry[] = [];
   try {
-    for await (const entry of Deno.readDir(ctx.hostExecPaths.sessionsDir)) {
-      if (!entry.isFile || !entry.name.endsWith(".json")) continue;
+    for (
+      const entry of await readdir(ctx.hostExecPaths.sessionsDir, {
+        withFileTypes: true,
+      })
+    ) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const sessionId = entry.name.replace(/\.json$/, "");
       const reg = await readHostExecSessionRegistry(
         ctx.hostExecPaths,
@@ -181,7 +186,7 @@ export async function getSessions(ctx: UiDataContext): Promise<SessionsData> {
       if (reg) hostexecSessions.push(reg);
     }
   } catch (e) {
-    if (!(e instanceof Deno.errors.NotFound)) throw e;
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
   return { network: networkSessions, hostexec: hostexecSessions };

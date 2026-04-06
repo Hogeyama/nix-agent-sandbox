@@ -6,10 +6,10 @@ import { InterruptedCommandError } from "../docker/client.ts";
 
 export function exitOnCliError(err: unknown): never {
   if (err instanceof InterruptedCommandError) {
-    Deno.exit(err.exitCode);
+    process.exit(err.exitCode);
   }
   console.error(`[nas] Error: ${(err as Error).message}`);
-  Deno.exit(1);
+  process.exit(1);
 }
 
 export function removeFirstOccurrence(args: string[], value: string): string[] {

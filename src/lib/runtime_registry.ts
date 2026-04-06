@@ -4,7 +4,8 @@
  * Used by both network/registry.ts and hostexec/registry.ts.
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
+import { readdir } from "node:fs/promises";
 import {
   atomicWriteJson,
   ensureDir,
@@ -133,14 +134,16 @@ export async function listPendingEntries<P extends BasePendingEntry>(
   }
   const entries: P[] = [];
   try {
-    for await (const dirEntry of Deno.readDir(paths.pendingDir)) {
-      if (!dirEntry.isDirectory) continue;
+    for (
+      const dirEntry of await readdir(paths.pendingDir, { withFileTypes: true })
+    ) {
+      if (!dirEntry.isDirectory()) continue;
       entries.push(
         ...await readJsonDir<P>(path.join(paths.pendingDir, dirEntry.name)),
       );
     }
   } catch (e) {
-    if (!(e instanceof Deno.errors.NotFound)) throw e;
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
   return entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
@@ -178,19 +181,25 @@ export async function gcRuntime<S extends BaseSessionEntry>(
   );
 
   try {
-    for await (const dirEntry of Deno.readDir(paths.pendingDir)) {
-      if (!dirEntry.isDirectory) continue;
+    for (
+      const dirEntry of await readdir(paths.pendingDir, { withFileTypes: true })
+    ) {
+      if (!dirEntry.isDirectory()) continue;
       if (liveSessionIds.has(dirEntry.name)) continue;
       await removePendingDir(paths, dirEntry.name);
       removedPendingDirs.push(dirEntry.name);
     }
   } catch (e) {
-    if (!(e instanceof Deno.errors.NotFound)) throw e;
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
   try {
-    for await (const socketEntry of Deno.readDir(paths.brokersDir)) {
-      if (!socketEntry.isFile && !socketEntry.isSymlink) continue;
+    for (
+      const socketEntry of await readdir(paths.brokersDir, {
+        withFileTypes: true,
+      })
+    ) {
+      if (!socketEntry.isFile() && !socketEntry.isSymbolicLink()) continue;
       const socketPath = path.join(paths.brokersDir, socketEntry.name);
       const sessionId = socketEntry.name.replace(/\.sock$/, "");
       if (liveSessionIds.has(sessionId)) continue;
@@ -198,7 +207,7 @@ export async function gcRuntime<S extends BaseSessionEntry>(
       removedBrokerSockets.push(socketPath);
     }
   } catch (e) {
-    if (!(e instanceof Deno.errors.NotFound)) throw e;
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
   return { removedSessions, removedPendingDirs, removedBrokerSockets };

@@ -27,23 +27,23 @@ async function fzfSelect(
   const args = ["--prompt=" + prompt, "--no-sort"];
   if (header) args.push("--header=" + header);
 
-  const command = new Deno.Command("fzf", {
-    args,
-    stdin: "piped",
-    stdout: "piped",
+  const child = Bun.spawn(["fzf", ...args], {
+    stdin: "pipe",
+    stdout: "pipe",
     stderr: "inherit",
   });
-  const child = command.spawn();
 
-  const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(input));
-  await writer.close();
+  (child.stdin as import("bun").FileSink).write(
+    new TextEncoder().encode(input),
+  );
+  (child.stdin as import("bun").FileSink).end();
 
-  const output = await child.output();
-  if (output.code === 130 || output.code === 1) return null;
-  if (!output.success) throw new Error(`fzf exited with code ${output.code}`);
+  const stdoutText = await new Response(child.stdout as ReadableStream).text();
+  const code = await child.exited;
+  if (code === 130 || code === 1) return null;
+  if (code !== 0) throw new Error(`fzf exited with code ${code}`);
 
-  const result = new TextDecoder().decode(output.stdout).trimEnd();
+  const result = stdoutText.trimEnd();
   return result || null;
 }
 
@@ -70,43 +70,41 @@ export async function runFzfReview(
     lookup.set(item.displayLine, item);
   }
 
-  let child: Deno.ChildProcess;
+  let child: ReturnType<typeof Bun.spawn>;
   try {
-    const command = new Deno.Command("fzf", {
-      args: [
-        "--multi",
-        "--expect=enter,ctrl-d",
-        "--header=Tab: select | Enter: approve | Ctrl-D: deny | Esc: cancel",
-        "--prompt=review> ",
-        "--no-sort",
-      ],
-      stdin: "piped",
-      stdout: "piped",
+    child = Bun.spawn([
+      "fzf",
+      "--multi",
+      "--expect=enter,ctrl-d",
+      "--header=Tab: select | Enter: approve | Ctrl-D: deny | Esc: cancel",
+      "--prompt=review> ",
+      "--no-sort",
+    ], {
+      stdin: "pipe",
+      stdout: "pipe",
       stderr: "inherit",
     });
-    child = command.spawn();
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      throw new Error("fzf is not installed. Install it to use 'review'.");
-    }
-    throw error;
+  } catch {
+    throw new Error("fzf is not installed. Install it to use 'review'.");
   }
 
-  const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(input));
-  await writer.close();
+  (child.stdin as import("bun").FileSink).write(
+    new TextEncoder().encode(input),
+  );
+  (child.stdin as import("bun").FileSink).end();
 
-  const output = await child.output();
+  const stdoutText = await new Response(child.stdout as ReadableStream).text();
+  const code = await child.exited;
 
   // exit code 130 = Esc/Ctrl-C, 1 = no match
-  if (output.code === 130 || output.code === 1) {
+  if (code === 130 || code === 1) {
     return null;
   }
-  if (!output.success) {
-    throw new Error(`fzf exited with code ${output.code}`);
+  if (code !== 0) {
+    throw new Error(`fzf exited with code ${code}`);
   }
 
-  const lines = new TextDecoder().decode(output.stdout).trimEnd().split("\n");
+  const lines = stdoutText.trimEnd().split("\n");
   if (lines.length < 2) return null;
 
   const key = lines[0].trim();

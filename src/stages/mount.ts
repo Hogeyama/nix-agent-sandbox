@@ -5,7 +5,7 @@
  * plan() は純粋関数として dockerArgs/envVars/effects を返す。
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
 import type {
   DirectoryCreateEffect,
   PlanStage,

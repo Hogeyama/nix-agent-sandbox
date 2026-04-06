@@ -1,3 +1,12 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * Tests for validateConfig function: general config validation.
  * Split from the original monolithic file — covers "validate:" and "validateConfig:" test cases.
@@ -7,7 +16,6 @@
  *   - schema_test.ts — profileSchema tests
  */
 
-import { assertEquals, assertThrows } from "@std/assert";
 import { ConfigValidationError, validateConfig } from "./validate.ts";
 import { DEFAULT_DBUS_CONFIG, DEFAULT_DISPLAY_CONFIG } from "./types.ts";
 import type { RawConfig } from "./types.ts";
@@ -18,127 +26,105 @@ import type { RawConfig } from "./types.ts";
 
 // --- profiles のバリデーション ---
 
-Deno.test("validate: profiles is required", () => {
-  assertThrows(
-    () => validateConfig({} as RawConfig),
-    ConfigValidationError,
-    "at least one entry",
-  );
+test("validate: profiles is required", () => {
+  expect(() => validateConfig({} as RawConfig)).toThrow("at least one entry");
 });
 
-Deno.test("validate: empty profiles throws", () => {
-  assertThrows(
-    () => validateConfig({ profiles: {} }),
-    ConfigValidationError,
-    "at least one entry",
-  );
+test("validate: empty profiles throws", () => {
+  expect(() => validateConfig({ profiles: {} })).toThrow("at least one entry");
 });
 
-Deno.test("validate: profiles with null value throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: null as unknown as import("./types.ts").RawProfile,
-        },
-      }),
-  );
+test("validate: profiles with null value throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: null as unknown as import("./types.ts").RawProfile,
+      },
+    })
+  ).toThrow();
 });
 
 // --- agent バリデーション ---
 
-Deno.test("validate: agent=claude is valid", () => {
+test("validate: agent=claude is valid", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.agent, "claude");
+  expect(config.profiles.test.agent).toEqual("claude");
 });
 
-Deno.test("validate: agent=copilot is valid", () => {
+test("validate: agent=copilot is valid", () => {
   const config = validateConfig({
     profiles: { test: { agent: "copilot" } },
   });
-  assertEquals(config.profiles.test.agent, "copilot");
+  expect(config.profiles.test.agent).toEqual("copilot");
 });
 
-Deno.test("validate: agent=codex is valid", () => {
+test("validate: agent=codex is valid", () => {
   const config = validateConfig({
     profiles: { test: { agent: "codex" } },
   });
-  assertEquals(config.profiles.test.agent, "codex");
+  expect(config.profiles.test.agent).toEqual("codex");
 });
 
-Deno.test("validate: missing agent throws", () => {
-  assertThrows(
-    () => validateConfig({ profiles: { test: {} } }),
-    ConfigValidationError,
+test("validate: missing agent throws", () => {
+  expect(() => validateConfig({ profiles: { test: {} } })).toThrow(
     "agent must be one of",
   );
 });
 
-Deno.test("validate: agent='' throws", () => {
-  assertThrows(
-    () => validateConfig({ profiles: { test: { agent: "" } } }),
-    ConfigValidationError,
+test("validate: agent='' throws", () => {
+  expect(() => validateConfig({ profiles: { test: { agent: "" } } })).toThrow(
     "agent must be one of",
   );
 });
 
-Deno.test("validate: agent=gpt throws", () => {
-  assertThrows(
-    () => validateConfig({ profiles: { test: { agent: "gpt" } } }),
-    ConfigValidationError,
-    "agent must be one of",
-  );
+test("validate: agent=gpt throws", () => {
+  expect(() => validateConfig({ profiles: { test: { agent: "gpt" } } }))
+    .toThrow("agent must be one of");
 });
 
-Deno.test("validate: agent=Claude (case sensitive) throws", () => {
-  assertThrows(
-    () => validateConfig({ profiles: { test: { agent: "Claude" } } }),
-    ConfigValidationError,
-    "agent must be one of",
-  );
+test("validate: agent=Claude (case sensitive) throws", () => {
+  expect(() => validateConfig({ profiles: { test: { agent: "Claude" } } }))
+    .toThrow("agent must be one of");
 });
 
 // --- default profile バリデーション ---
 
-Deno.test("validate: default profile exists", () => {
+test("validate: default profile exists", () => {
   const config = validateConfig({
     default: "test",
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.default, "test");
+  expect(config.default).toEqual("test");
 });
 
-Deno.test("validate: default profile not in profiles throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        default: "missing",
-        profiles: { test: { agent: "claude" } },
-      }),
-    ConfigValidationError,
-    'default profile "missing" not found',
-  );
+test("validate: default profile not in profiles throws", () => {
+  expect(() =>
+    validateConfig({
+      default: "missing",
+      profiles: { test: { agent: "claude" } },
+    })
+  ).toThrow('default profile "missing" not found');
 });
 
-Deno.test("validate: no default is ok", () => {
+test("validate: no default is ok", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.default, undefined);
+  expect(config.default).toEqual(undefined);
 });
 
 // --- agent-args ---
 
-Deno.test("validate: agent-args defaults to empty array", () => {
+test("validate: agent-args defaults to empty array", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.agentArgs, []);
+  expect(config.profiles.test.agentArgs).toEqual([]);
 });
 
-Deno.test("validate: agent-args preserved", () => {
+test("validate: agent-args preserved", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -147,7 +133,7 @@ Deno.test("validate: agent-args preserved", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.agentArgs, [
+  expect(config.profiles.test.agentArgs).toEqual([
     "--flag1",
     "--flag2",
     "value",
@@ -156,22 +142,22 @@ Deno.test("validate: agent-args preserved", () => {
 
 // --- worktree バリデーション ---
 
-Deno.test("validate: worktree not present returns undefined", () => {
+test("validate: worktree not present returns undefined", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.worktree, undefined);
+  expect(config.profiles.test.worktree).toEqual(undefined);
 });
 
-Deno.test("validate: worktree empty object gets defaults", () => {
+test("validate: worktree empty object gets defaults", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude", worktree: {} } },
   });
-  assertEquals(config.profiles.test.worktree?.base, "origin/main");
-  assertEquals(config.profiles.test.worktree?.onCreate, "");
+  expect(config.profiles.test.worktree?.base).toEqual("origin/main");
+  expect(config.profiles.test.worktree?.onCreate).toEqual("");
 });
 
-Deno.test("validate: worktree with base only", () => {
+test("validate: worktree with base only", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -180,11 +166,11 @@ Deno.test("validate: worktree with base only", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.base, "develop");
-  assertEquals(config.profiles.test.worktree?.onCreate, "");
+  expect(config.profiles.test.worktree?.base).toEqual("develop");
+  expect(config.profiles.test.worktree?.onCreate).toEqual("");
 });
 
-Deno.test("validate: worktree with on-create only", () => {
+test("validate: worktree with on-create only", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -193,11 +179,11 @@ Deno.test("validate: worktree with on-create only", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.base, "origin/main");
-  assertEquals(config.profiles.test.worktree?.onCreate, "make build");
+  expect(config.profiles.test.worktree?.base).toEqual("origin/main");
+  expect(config.profiles.test.worktree?.onCreate).toEqual("make build");
 });
 
-Deno.test("validate: worktree with both fields", () => {
+test("validate: worktree with both fields", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -209,14 +195,13 @@ Deno.test("validate: worktree with both fields", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.base, "origin/develop");
-  assertEquals(
-    config.profiles.test.worktree?.onCreate,
+  expect(config.profiles.test.worktree?.base).toEqual("origin/develop");
+  expect(config.profiles.test.worktree?.onCreate).toEqual(
     "npm ci && npm run build",
   );
 });
 
-Deno.test("validate: worktree base=HEAD is valid", () => {
+test("validate: worktree base=HEAD is valid", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -225,42 +210,42 @@ Deno.test("validate: worktree base=HEAD is valid", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.base, "HEAD");
+  expect(config.profiles.test.worktree?.base).toEqual("HEAD");
 });
 
 // --- nix バリデーション ---
 
-Deno.test("validate: nix defaults", () => {
+test("validate: nix defaults", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.nix.enable, "auto");
-  assertEquals(config.profiles.test.nix.mountSocket, true);
-  assertEquals(config.profiles.test.nix.extraPackages, []);
+  expect(config.profiles.test.nix.enable).toEqual("auto");
+  expect(config.profiles.test.nix.mountSocket).toEqual(true);
+  expect(config.profiles.test.nix.extraPackages).toEqual([]);
 });
 
-Deno.test("validate: nix enable=true", () => {
+test("validate: nix enable=true", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude", nix: { enable: true } } },
   });
-  assertEquals(config.profiles.test.nix.enable, true);
+  expect(config.profiles.test.nix.enable).toEqual(true);
 });
 
-Deno.test("validate: nix enable=false", () => {
+test("validate: nix enable=false", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude", nix: { enable: false } } },
   });
-  assertEquals(config.profiles.test.nix.enable, false);
+  expect(config.profiles.test.nix.enable).toEqual(false);
 });
 
-Deno.test("validate: nix enable=auto", () => {
+test("validate: nix enable=auto", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude", nix: { enable: "auto" } } },
   });
-  assertEquals(config.profiles.test.nix.enable, "auto");
+  expect(config.profiles.test.nix.enable).toEqual("auto");
 });
 
-Deno.test("validate: nix mount-socket override", () => {
+test("validate: nix mount-socket override", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -269,10 +254,10 @@ Deno.test("validate: nix mount-socket override", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.nix.mountSocket, false);
+  expect(config.profiles.test.nix.mountSocket).toEqual(false);
 });
 
-Deno.test("validate: nix extra-packages", () => {
+test("validate: nix extra-packages", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -283,7 +268,7 @@ Deno.test("validate: nix extra-packages", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.nix.extraPackages, [
+  expect(config.profiles.test.nix.extraPackages).toEqual([
     "nixpkgs#gh",
     "nixpkgs#jq",
   ]);
@@ -291,15 +276,15 @@ Deno.test("validate: nix extra-packages", () => {
 
 // --- docker バリデーション ---
 
-Deno.test("validate: docker defaults", () => {
+test("validate: docker defaults", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.docker.enable, false);
-  assertEquals(config.profiles.test.docker.shared, false);
+  expect(config.profiles.test.docker.enable).toEqual(false);
+  expect(config.profiles.test.docker.shared).toEqual(false);
 });
 
-Deno.test("validate: docker enable=true", () => {
+test("validate: docker enable=true", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -308,10 +293,10 @@ Deno.test("validate: docker enable=true", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.docker.enable, true);
+  expect(config.profiles.test.docker.enable).toEqual(true);
 });
 
-Deno.test("validate: docker shared=true", () => {
+test("validate: docker shared=true", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -320,19 +305,19 @@ Deno.test("validate: docker shared=true", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.docker.shared, true);
+  expect(config.profiles.test.docker.shared).toEqual(true);
 });
 
 // --- gcloud バリデーション ---
 
-Deno.test("validate: gcloud defaults", () => {
+test("validate: gcloud defaults", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.gcloud.mountConfig, false);
+  expect(config.profiles.test.gcloud.mountConfig).toEqual(false);
 });
 
-Deno.test("validate: gcloud mount-config=true", () => {
+test("validate: gcloud mount-config=true", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -341,19 +326,19 @@ Deno.test("validate: gcloud mount-config=true", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.gcloud.mountConfig, true);
+  expect(config.profiles.test.gcloud.mountConfig).toEqual(true);
 });
 
 // --- aws バリデーション ---
 
-Deno.test("validate: aws defaults", () => {
+test("validate: aws defaults", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.aws.mountConfig, false);
+  expect(config.profiles.test.aws.mountConfig).toEqual(false);
 });
 
-Deno.test("validate: aws mount-config=true", () => {
+test("validate: aws mount-config=true", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -362,19 +347,19 @@ Deno.test("validate: aws mount-config=true", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.aws.mountConfig, true);
+  expect(config.profiles.test.aws.mountConfig).toEqual(true);
 });
 
 // --- gpg バリデーション ---
 
-Deno.test("validate: gpg defaults", () => {
+test("validate: gpg defaults", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.gpg.forwardAgent, false);
+  expect(config.profiles.test.gpg.forwardAgent).toEqual(false);
 });
 
-Deno.test("validate: gpg forward-agent=true", () => {
+test("validate: gpg forward-agent=true", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -383,19 +368,19 @@ Deno.test("validate: gpg forward-agent=true", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.gpg.forwardAgent, true);
+  expect(config.profiles.test.gpg.forwardAgent).toEqual(true);
 });
 
 // --- extra-mounts バリデーション ---
 
-Deno.test("validate: extra-mounts defaults to empty", () => {
+test("validate: extra-mounts defaults to empty", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.extraMounts, []);
+  expect(config.profiles.test.extraMounts).toEqual([]);
 });
 
-Deno.test("validate: extra-mounts with valid entries", () => {
+test("validate: extra-mounts with valid entries", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -407,20 +392,20 @@ Deno.test("validate: extra-mounts with valid entries", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.extraMounts.length, 2);
-  assertEquals(config.profiles.test.extraMounts[0], {
+  expect(config.profiles.test.extraMounts.length).toEqual(2);
+  expect(config.profiles.test.extraMounts[0]).toEqual({
     src: "/a",
     dst: "/b",
     mode: "ro",
   });
-  assertEquals(config.profiles.test.extraMounts[1], {
+  expect(config.profiles.test.extraMounts[1]).toEqual({
     src: "/c",
     dst: "/d",
     mode: "rw",
   });
 });
 
-Deno.test("validate: extra-mounts mode defaults to ro", () => {
+test("validate: extra-mounts mode defaults to ro", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -429,118 +414,100 @@ Deno.test("validate: extra-mounts mode defaults to ro", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.extraMounts[0].mode, "ro");
+  expect(config.profiles.test.extraMounts[0].mode).toEqual("ro");
 });
 
-Deno.test("validate: extra-mounts missing src throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [{ dst: "/b" }],
-          },
+test("validate: extra-mounts missing src throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [{ dst: "/b" }],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[0].src",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[0].src");
 });
 
-Deno.test("validate: extra-mounts empty src throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [{ src: "", dst: "/b" }],
-          },
+test("validate: extra-mounts empty src throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [{ src: "", dst: "/b" }],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[0].src",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[0].src");
 });
 
-Deno.test("validate: extra-mounts missing dst throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [{ src: "/a" }],
-          },
+test("validate: extra-mounts missing dst throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [{ src: "/a" }],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[0].dst",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[0].dst");
 });
 
-Deno.test("validate: extra-mounts empty dst throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [{ src: "/a", dst: "" }],
-          },
+test("validate: extra-mounts empty dst throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [{ src: "/a", dst: "" }],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[0].dst",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[0].dst");
 });
 
-Deno.test("validate: extra-mounts invalid mode throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [{ src: "/a", dst: "/b", mode: "rwx" }],
-          },
+test("validate: extra-mounts invalid mode throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [{ src: "/a", dst: "/b", mode: "rwx" }],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[0].mode",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[0].mode");
 });
 
-Deno.test("validate: extra-mounts second entry error references index 1", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [
-              { src: "/a", dst: "/b", mode: "ro" },
-              { src: "/c", dst: "", mode: "ro" },
-            ],
-          },
+test("validate: extra-mounts second entry error references index 1", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [
+            { src: "/a", dst: "/b", mode: "ro" },
+            { src: "/c", dst: "", mode: "ro" },
+          ],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[1].dst",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[1].dst");
 });
 
 // --- env バリデーション ---
 
-Deno.test("validate: env defaults to empty", () => {
+test("validate: env defaults to empty", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.env, []);
+  expect(config.profiles.test.env).toEqual([]);
 });
 
-Deno.test("validate: static env entry", () => {
+test("validate: static env entry", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -549,14 +516,14 @@ Deno.test("validate: static env entry", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0], {
+  expect(config.profiles.test.env[0]).toEqual({
     key: "FOO",
     val: "bar",
     mode: "set",
   });
 });
 
-Deno.test("validate: command env entry", () => {
+test("validate: command env entry", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -565,95 +532,81 @@ Deno.test("validate: command env entry", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0], {
+  expect(config.profiles.test.env[0]).toEqual({
     keyCmd: "echo KEY",
     valCmd: "echo VAL",
     mode: "set",
   });
 });
 
-Deno.test("validate: mixed static and command throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key: "K", val: "V", key_cmd: "echo K", val_cmd: "echo V" }],
-          },
+test("validate: mixed static and command throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key: "K", val: "V", key_cmd: "echo K", val_cmd: "echo V" }],
         },
-      }),
-    ConfigValidationError,
-    "must have exactly one of key or key_cmd",
-  );
+      },
+    })
+  ).toThrow("must have exactly one of key or key_cmd");
 });
 
-Deno.test("validate: static env missing key throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ val: "value" }],
-          },
+test("validate: static env missing key throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ val: "value" }],
         },
-      }),
-    ConfigValidationError,
-  );
+      },
+    })
+  ).toThrow();
 });
 
-Deno.test("validate: static env empty key throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key: "", val: "value" }],
-          },
+test("validate: static env empty key throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key: "", val: "value" }],
         },
-      }),
-    ConfigValidationError,
-    "env[0].key",
-  );
+      },
+    })
+  ).toThrow("env[0].key");
 });
 
-Deno.test("validate: command env empty key_cmd throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key_cmd: "", val_cmd: "echo val" }],
-          },
+test("validate: command env empty key_cmd throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key_cmd: "", val_cmd: "echo val" }],
         },
-      }),
-    ConfigValidationError,
-    "env[0].key_cmd",
-  );
+      },
+    })
+  ).toThrow("env[0].key_cmd");
 });
 
-Deno.test("validate: command env empty val_cmd throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key_cmd: "echo key", val_cmd: "" }],
-          },
+test("validate: command env empty val_cmd throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key_cmd: "echo key", val_cmd: "" }],
         },
-      }),
-    ConfigValidationError,
-    "env[0].val_cmd",
-  );
+      },
+    })
+  ).toThrow("env[0].val_cmd");
 });
 
 // --- env mode / separator バリデーション ---
 
-Deno.test("validate: env prefix mode with separator", () => {
+test("validate: env prefix mode with separator", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -662,7 +615,7 @@ Deno.test("validate: env prefix mode with separator", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0], {
+  expect(config.profiles.test.env[0]).toEqual({
     key: "PATH",
     val: "/opt/bin",
     mode: "prefix",
@@ -670,7 +623,7 @@ Deno.test("validate: env prefix mode with separator", () => {
   });
 });
 
-Deno.test("validate: env suffix mode with separator", () => {
+test("validate: env suffix mode with separator", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -686,7 +639,7 @@ Deno.test("validate: env suffix mode with separator", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0], {
+  expect(config.profiles.test.env[0]).toEqual({
     key: "LD_LIBRARY_PATH",
     val: "/opt/lib",
     mode: "suffix",
@@ -694,7 +647,7 @@ Deno.test("validate: env suffix mode with separator", () => {
   });
 });
 
-Deno.test("validate: env prefix mode with val_cmd", () => {
+test("validate: env prefix mode with val_cmd", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -710,7 +663,7 @@ Deno.test("validate: env prefix mode with val_cmd", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0], {
+  expect(config.profiles.test.env[0]).toEqual({
     key: "PYTHONPATH",
     valCmd: "echo /opt/py",
     mode: "prefix",
@@ -718,7 +671,7 @@ Deno.test("validate: env prefix mode with val_cmd", () => {
   });
 });
 
-Deno.test("validate: env mode defaults to set when omitted", () => {
+test("validate: env mode defaults to set when omitted", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -727,91 +680,77 @@ Deno.test("validate: env mode defaults to set when omitted", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0].mode, "set");
+  expect(config.profiles.test.env[0].mode).toEqual("set");
 });
 
-Deno.test("validate: env prefix without separator throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key: "PATH", val: "/opt/bin", mode: "prefix" }],
-          },
+test("validate: env prefix without separator throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key: "PATH", val: "/opt/bin", mode: "prefix" }],
         },
-      }),
-    ConfigValidationError,
-    "separator is required",
-  );
+      },
+    })
+  ).toThrow("separator is required");
 });
 
-Deno.test("validate: env suffix without separator throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key: "PATH", val: "/opt/bin", mode: "suffix" }],
-          },
+test("validate: env suffix without separator throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key: "PATH", val: "/opt/bin", mode: "suffix" }],
         },
-      }),
-    ConfigValidationError,
-    "separator is required",
-  );
+      },
+    })
+  ).toThrow("separator is required");
 });
 
-Deno.test("validate: env set mode with separator throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key: "FOO", val: "bar", mode: "set", separator: ":" }],
-          },
+test("validate: env set mode with separator throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key: "FOO", val: "bar", mode: "set", separator: ":" }],
         },
-      }),
-    ConfigValidationError,
-    "separator is only allowed",
-  );
+      },
+    })
+  ).toThrow("separator is only allowed");
 });
 
-Deno.test("validate: env omitted mode with separator throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key: "FOO", val: "bar", separator: ":" }],
-          },
+test("validate: env omitted mode with separator throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key: "FOO", val: "bar", separator: ":" }],
         },
-      }),
-    ConfigValidationError,
-    "separator is only allowed",
-  );
+      },
+    })
+  ).toThrow("separator is only allowed");
 });
 
-Deno.test("validate: env invalid mode throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [
-              { key: "FOO", val: "bar", mode: "prepend", separator: ":" },
-            ],
-          },
+test("validate: env invalid mode throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [
+            { key: "FOO", val: "bar", mode: "prepend", separator: ":" },
+          ],
         },
-      }),
-    ConfigValidationError,
-  );
+      },
+    })
+  ).toThrow();
 });
 
-Deno.test("validate: env prefix with empty separator allowed", () => {
+test("validate: env prefix with empty separator allowed", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -820,26 +759,23 @@ Deno.test("validate: env prefix with empty separator allowed", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.env[0].separator, "");
+  expect(config.profiles.test.env[0].separator).toEqual("");
 });
 
 // --- 複数プロファイルの独立バリデーション ---
 
-Deno.test("validate: error in second profile references correct name", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          valid: { agent: "claude" },
-          invalid: { agent: "bad" },
-        },
-      }),
-    ConfigValidationError,
-    'profile "invalid"',
-  );
+test("validate: error in second profile references correct name", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        valid: { agent: "claude" },
+        invalid: { agent: "bad" },
+      },
+    })
+  ).toThrow('profile "invalid"');
 });
 
-Deno.test("validate: multiple valid profiles all validated", () => {
+test("validate: multiple valid profiles all validated", () => {
   const config = validateConfig({
     profiles: {
       a: { agent: "claude", nix: { enable: true } },
@@ -851,17 +787,17 @@ Deno.test("validate: multiple valid profiles all validated", () => {
       },
     },
   });
-  assertEquals(config.profiles.a.nix.enable, true);
-  assertEquals(config.profiles.b.agentArgs, ["--yolo"]);
-  assertEquals(config.profiles.c.docker.enable, true);
-  assertEquals(config.profiles.c.gpg.forwardAgent, true);
+  expect(config.profiles.a.nix.enable).toEqual(true);
+  expect(config.profiles.b.agentArgs).toEqual(["--yolo"]);
+  expect(config.profiles.c.docker.enable).toEqual(true);
+  expect(config.profiles.c.gpg.forwardAgent).toEqual(true);
 });
 
 // ---------------------------------------------------------------------------
 // config tests
 // ---------------------------------------------------------------------------
 
-Deno.test("validateConfig: valid minimal config", () => {
+test("validateConfig: valid minimal config", () => {
   const raw: RawConfig = {
     default: "test",
     profiles: {
@@ -871,25 +807,25 @@ Deno.test("validateConfig: valid minimal config", () => {
     },
   };
   const config = validateConfig(raw);
-  assertEquals(config.default, "test");
-  assertEquals(config.profiles.test.agent, "claude");
-  assertEquals(config.profiles.test.nix.enable, "auto");
-  assertEquals(config.profiles.test.docker.enable, false);
-  assertEquals(config.profiles.test.docker.shared, false);
-  assertEquals(config.profiles.test.gpg.forwardAgent, false);
-  assertEquals(config.profiles.test.display, DEFAULT_DISPLAY_CONFIG);
-  assertEquals(config.profiles.test.network.allowlist, []);
-  assertEquals(config.profiles.test.network.prompt.enable, false);
-  assertEquals(config.profiles.test.network.prompt.denylist, []);
-  assertEquals(config.profiles.test.network.prompt.timeoutSeconds, 300);
-  assertEquals(config.profiles.test.network.prompt.defaultScope, "host-port");
-  assertEquals(config.profiles.test.network.prompt.notify, "auto");
-  assertEquals(config.profiles.test.dbus, DEFAULT_DBUS_CONFIG);
-  assertEquals(config.profiles.test.extraMounts, []);
-  assertEquals(config.profiles.test.env, []);
+  expect(config.default).toEqual("test");
+  expect(config.profiles.test.agent).toEqual("claude");
+  expect(config.profiles.test.nix.enable).toEqual("auto");
+  expect(config.profiles.test.docker.enable).toEqual(false);
+  expect(config.profiles.test.docker.shared).toEqual(false);
+  expect(config.profiles.test.gpg.forwardAgent).toEqual(false);
+  expect(config.profiles.test.display).toEqual(DEFAULT_DISPLAY_CONFIG);
+  expect(config.profiles.test.network.allowlist).toEqual([]);
+  expect(config.profiles.test.network.prompt.enable).toEqual(false);
+  expect(config.profiles.test.network.prompt.denylist).toEqual([]);
+  expect(config.profiles.test.network.prompt.timeoutSeconds).toEqual(300);
+  expect(config.profiles.test.network.prompt.defaultScope).toEqual("host-port");
+  expect(config.profiles.test.network.prompt.notify).toEqual("auto");
+  expect(config.profiles.test.dbus).toEqual(DEFAULT_DBUS_CONFIG);
+  expect(config.profiles.test.extraMounts).toEqual([]);
+  expect(config.profiles.test.env).toEqual([]);
 });
 
-Deno.test("validateConfig: full config", () => {
+test("validateConfig: full config", () => {
   const raw: RawConfig = {
     default: "claude-nix",
     profiles: {
@@ -920,46 +856,39 @@ Deno.test("validateConfig: full config", () => {
   };
   const config = validateConfig(raw);
   const p = config.profiles["claude-nix"];
-  assertEquals(p.agent, "claude");
-  assertEquals(p.worktree?.base, "origin/main");
-  assertEquals(p.worktree?.onCreate, "npm install");
-  assertEquals(p.nix.enable, true);
-  assertEquals(p.nix.mountSocket, true);
-  assertEquals(p.nix.extraPackages, ["nixpkgs.ripgrep"]);
-  assertEquals(p.docker.enable, true);
-  assertEquals(p.docker.shared, false);
-  assertEquals(p.extraMounts, [
+  expect(p.agent).toEqual("claude");
+  expect(p.worktree?.base).toEqual("origin/main");
+  expect(p.worktree?.onCreate).toEqual("npm install");
+  expect(p.nix.enable).toEqual(true);
+  expect(p.nix.mountSocket).toEqual(true);
+  expect(p.nix.extraPackages).toEqual(["nixpkgs.ripgrep"]);
+  expect(p.docker.enable).toEqual(true);
+  expect(p.docker.shared).toEqual(false);
+  expect(p.extraMounts).toEqual([
     { src: "~/.cabal", dst: "~/.cabal", mode: "ro" },
     { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
   ]);
-  assertEquals(p.env[0], { key: "FOO", val: "bar", mode: "set" });
-  assertEquals(p.env[1], {
+  expect(p.env[0]).toEqual({ key: "FOO", val: "bar", mode: "set" });
+  expect(p.env[1]).toEqual({
     keyCmd: "printf BAR",
     valCmd: "printf baz",
     mode: "set",
   });
 });
 
-Deno.test("validateConfig: missing profiles throws", () => {
-  assertThrows(
-    () => validateConfig({ profiles: {} }),
-    ConfigValidationError,
-    "at least one entry",
-  );
+test("validateConfig: missing profiles throws", () => {
+  expect(() => validateConfig({ profiles: {} })).toThrow("at least one entry");
 });
 
-Deno.test("validateConfig: invalid agent throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: { test: { agent: "invalid" } },
-      }),
-    ConfigValidationError,
-    "agent must be one of",
-  );
+test("validateConfig: invalid agent throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: { test: { agent: "invalid" } },
+    })
+  ).toThrow("agent must be one of");
 });
 
-Deno.test("validateConfig: codex agent is valid", () => {
+test("validateConfig: codex agent is valid", () => {
   const raw: RawConfig = {
     profiles: {
       test: {
@@ -968,10 +897,10 @@ Deno.test("validateConfig: codex agent is valid", () => {
     },
   };
   const config = validateConfig(raw);
-  assertEquals(config.profiles.test.agent, "codex");
+  expect(config.profiles.test.agent).toEqual("codex");
 });
 
-Deno.test("validateConfig: agent-args are parsed", () => {
+test("validateConfig: agent-args are parsed", () => {
   const raw: RawConfig = {
     profiles: {
       test: {
@@ -981,10 +910,10 @@ Deno.test("validateConfig: agent-args are parsed", () => {
     },
   };
   const config = validateConfig(raw);
-  assertEquals(config.profiles.test.agentArgs, ["--yolo"]);
+  expect(config.profiles.test.agentArgs).toEqual(["--yolo"]);
 });
 
-Deno.test("validateConfig: agent-args defaults to empty array", () => {
+test("validateConfig: agent-args defaults to empty array", () => {
   const raw: RawConfig = {
     profiles: {
       test: {
@@ -993,102 +922,87 @@ Deno.test("validateConfig: agent-args defaults to empty array", () => {
     },
   };
   const config = validateConfig(raw);
-  assertEquals(config.profiles.test.agentArgs, []);
+  expect(config.profiles.test.agentArgs).toEqual([]);
 });
 
-Deno.test("validateConfig: invalid default profile throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        default: "nonexistent",
-        profiles: { test: { agent: "claude" } },
-      }),
-    ConfigValidationError,
-    "not found in profiles",
-  );
+test("validateConfig: invalid default profile throws", () => {
+  expect(() =>
+    validateConfig({
+      default: "nonexistent",
+      profiles: { test: { agent: "claude" } },
+    })
+  ).toThrow("not found in profiles");
 });
 
-Deno.test("validateConfig: mixed env entry throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{
-              key: "A",
-              val: "B",
-              key_cmd: "echo C",
-              val_cmd: "echo D",
-            }],
-          },
+test("validateConfig: mixed env entry throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{
+            key: "A",
+            val: "B",
+            key_cmd: "echo C",
+            val_cmd: "echo D",
+          }],
         },
-      }),
-    ConfigValidationError,
-    "must have exactly one of key or key_cmd",
-  );
+      },
+    })
+  ).toThrow("must have exactly one of key or key_cmd");
 });
 
-Deno.test("validateConfig: invalid env command entry throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            env: [{ key_cmd: "", val_cmd: "echo x" }],
-          },
+test("validateConfig: invalid env command entry throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          env: [{ key_cmd: "", val_cmd: "echo x" }],
         },
-      }),
-    ConfigValidationError,
-    "env[0].key_cmd",
-  );
+      },
+    })
+  ).toThrow("env[0].key_cmd");
 });
 
-Deno.test("validateConfig: invalid extra-mounts mode throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [{
-              src: "/tmp/src",
-              dst: "/tmp/dst",
-              mode: "invalid",
-            }],
-          },
+test("validateConfig: invalid extra-mounts mode throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [{
+            src: "/tmp/src",
+            dst: "/tmp/dst",
+            mode: "invalid",
+          }],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[0].mode",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[0].mode");
 });
 
-Deno.test("validateConfig: missing extra-mounts src throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            "extra-mounts": [{ dst: "/tmp/dst", mode: "ro" }],
-          },
+test("validateConfig: missing extra-mounts src throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          "extra-mounts": [{ dst: "/tmp/dst", mode: "ro" }],
         },
-      }),
-    ConfigValidationError,
-    "extra-mounts[0].src",
-  );
+      },
+    })
+  ).toThrow("extra-mounts[0].src");
 });
 
-Deno.test("validateConfig: gpg.forward-agent defaults to false", () => {
+test("validateConfig: gpg.forward-agent defaults to false", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.gpg.forwardAgent, false);
+  expect(config.profiles.test.gpg.forwardAgent).toEqual(false);
 });
 
-Deno.test("validateConfig: gpg.forward-agent can be enabled", () => {
+test("validateConfig: gpg.forward-agent can be enabled", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1097,17 +1011,17 @@ Deno.test("validateConfig: gpg.forward-agent can be enabled", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.gpg.forwardAgent, true);
+  expect(config.profiles.test.gpg.forwardAgent).toEqual(true);
 });
 
-Deno.test("validateConfig: dbus.session defaults to disabled", () => {
+test("validateConfig: dbus.session defaults to disabled", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.dbus, DEFAULT_DBUS_CONFIG);
+  expect(config.profiles.test.dbus).toEqual(DEFAULT_DBUS_CONFIG);
 });
 
-Deno.test("validateConfig: dbus.session config is parsed", () => {
+test("validateConfig: dbus.session config is parsed", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1126,67 +1040,60 @@ Deno.test("validateConfig: dbus.session config is parsed", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.dbus.session.enable, true);
-  assertEquals(
-    config.profiles.test.dbus.session.sourceAddress,
+  expect(config.profiles.test.dbus.session.enable).toEqual(true);
+  expect(config.profiles.test.dbus.session.sourceAddress).toEqual(
     "unix:path=/run/user/1000/bus",
   );
-  assertEquals(config.profiles.test.dbus.session.see, [
+  expect(config.profiles.test.dbus.session.see).toEqual([
     "org.freedesktop.secrets",
   ]);
-  assertEquals(config.profiles.test.dbus.session.talk, [
+  expect(config.profiles.test.dbus.session.talk).toEqual([
     "org.freedesktop.secrets",
   ]);
-  assertEquals(config.profiles.test.dbus.session.own, ["org.example.Owned"]);
-  assertEquals(config.profiles.test.dbus.session.calls, [
+  expect(config.profiles.test.dbus.session.own).toEqual(["org.example.Owned"]);
+  expect(config.profiles.test.dbus.session.calls).toEqual([
     { name: "org.freedesktop.secrets", rule: "*" },
   ]);
-  assertEquals(config.profiles.test.dbus.session.broadcasts, [
+  expect(config.profiles.test.dbus.session.broadcasts).toEqual([
     { name: "org.freedesktop.secrets", rule: "*" },
   ]);
 });
 
-Deno.test("validateConfig: dbus.session invalid source-address throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            dbus: {
-              session: {
-                "source-address": "",
-              },
+test("validateConfig: dbus.session invalid source-address throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          dbus: {
+            session: {
+              "source-address": "",
             },
           },
         },
-      }),
-    ConfigValidationError,
-    "dbus.session.source-address",
-  );
+      },
+    })
+  ).toThrow("dbus.session.source-address");
 });
 
-Deno.test("validateConfig: dbus.session invalid call rule throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            dbus: {
-              session: {
-                calls: [{ name: "", rule: "*" }],
-              },
+test("validateConfig: dbus.session invalid call rule throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          dbus: {
+            session: {
+              calls: [{ name: "", rule: "*" }],
             },
           },
         },
-      }),
-    ConfigValidationError,
-    "dbus.session.calls[0].name",
-  );
+      },
+    })
+  ).toThrow("dbus.session.calls[0].name");
 });
 
-Deno.test("validateConfig: worktree defaults", () => {
+test("validateConfig: worktree defaults", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1195,11 +1102,11 @@ Deno.test("validateConfig: worktree defaults", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.base, "main");
-  assertEquals(config.profiles.test.worktree?.onCreate, "");
+  expect(config.profiles.test.worktree?.base).toEqual("main");
+  expect(config.profiles.test.worktree?.onCreate).toEqual("");
 });
 
-Deno.test("validateConfig: worktree on-create is preserved", () => {
+test("validateConfig: worktree on-create is preserved", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1208,22 +1115,22 @@ Deno.test("validateConfig: worktree on-create is preserved", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.worktree?.base, "origin/main");
-  assertEquals(config.profiles.test.worktree?.onCreate, "npm install");
+  expect(config.profiles.test.worktree?.base).toEqual("origin/main");
+  expect(config.profiles.test.worktree?.onCreate).toEqual("npm install");
 });
 
-Deno.test("validateConfig: network.allowlist defaults to empty array", () => {
+test("validateConfig: network.allowlist defaults to empty array", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.network.allowlist, []);
+  expect(config.profiles.test.network.allowlist).toEqual([]);
 });
 
-Deno.test("validateConfig: network.prompt defaults are applied", () => {
+test("validateConfig: network.prompt defaults are applied", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.network.prompt, {
+  expect(config.profiles.test.network.prompt).toEqual({
     enable: false,
     denylist: [],
     timeoutSeconds: 300,
@@ -1232,7 +1139,7 @@ Deno.test("validateConfig: network.prompt defaults are applied", () => {
   });
 });
 
-Deno.test("validateConfig: network.prompt accepts explicit values", () => {
+test("validateConfig: network.prompt accepts explicit values", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1248,7 +1155,7 @@ Deno.test("validateConfig: network.prompt accepts explicit values", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.network.prompt, {
+  expect(config.profiles.test.network.prompt).toEqual({
     enable: true,
     denylist: [],
     timeoutSeconds: 42,
@@ -1257,47 +1164,41 @@ Deno.test("validateConfig: network.prompt accepts explicit values", () => {
   });
 });
 
-Deno.test("validateConfig: network.prompt rejects invalid default-scope", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            network: {
-              prompt: {
-                "default-scope": "invalid" as "host",
-              },
+test("validateConfig: network.prompt rejects invalid default-scope", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          network: {
+            prompt: {
+              "default-scope": "invalid" as "host",
             },
           },
         },
-      }),
-    ConfigValidationError,
-    "network.prompt.default-scope must be one of",
-  );
+      },
+    })
+  ).toThrow("network.prompt.default-scope must be one of");
 });
 
-Deno.test("validateConfig: network.prompt rejects invalid notify", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            network: {
-              prompt: {
-                notify: "invalid" as "auto",
-              },
+test("validateConfig: network.prompt rejects invalid notify", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          network: {
+            prompt: {
+              notify: "invalid" as "auto",
             },
           },
         },
-      }),
-    ConfigValidationError,
-    "network.prompt.notify must be one of",
-  );
+      },
+    })
+  ).toThrow("network.prompt.notify must be one of");
 });
 
-Deno.test("validateConfig: network.allowlist is parsed correctly", () => {
+test("validateConfig: network.allowlist is parsed correctly", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1308,29 +1209,26 @@ Deno.test("validateConfig: network.allowlist is parsed correctly", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.network.allowlist, [
+  expect(config.profiles.test.network.allowlist).toEqual([
     "github.com",
     "api.anthropic.com",
   ]);
 });
 
-Deno.test("validateConfig: network.allowlist invalid entry throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            network: { allowlist: ["github.com", ""] },
-          },
+test("validateConfig: network.allowlist invalid entry throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          network: { allowlist: ["github.com", ""] },
         },
-      }),
-    ConfigValidationError,
-    "network.allowlist[1] must be a non-empty string",
-  );
+      },
+    })
+  ).toThrow("network.allowlist[1] must be a non-empty string");
 });
 
-Deno.test("validateConfig: network.allowlist accepts wildcard prefix", () => {
+test("validateConfig: network.allowlist accepts wildcard prefix", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1341,69 +1239,60 @@ Deno.test("validateConfig: network.allowlist accepts wildcard prefix", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.network.allowlist, [
+  expect(config.profiles.test.network.allowlist).toEqual([
     "*.github.com",
     "api.anthropic.com",
   ]);
 });
 
-Deno.test("validateConfig: network.allowlist rejects wildcard in middle", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            network: { allowlist: ["git*hub.com"] },
-          },
+test("validateConfig: network.allowlist rejects wildcard in middle", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          network: { allowlist: ["git*hub.com"] },
         },
-      }),
-    ConfigValidationError,
-    "contains wildcard",
-  );
+      },
+    })
+  ).toThrow("contains wildcard");
 });
 
-Deno.test("validateConfig: network.allowlist rejects trailing wildcard", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            network: { allowlist: ["github.*"] },
-          },
+test("validateConfig: network.allowlist rejects trailing wildcard", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          network: { allowlist: ["github.*"] },
         },
-      }),
-    ConfigValidationError,
-    "contains wildcard",
-  );
+      },
+    })
+  ).toThrow("contains wildcard");
 });
 
-Deno.test("validateConfig: network.allowlist non-array throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            // deno-lint-ignore no-explicit-any
-            network: { allowlist: "not-an-array" as any },
-          },
+test("validateConfig: network.allowlist non-array throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          // deno-lint-ignore no-explicit-any
+          network: { allowlist: "not-an-array" as any },
         },
-      }),
-    ConfigValidationError,
-    "network.allowlist must be a list",
-  );
+      },
+    })
+  ).toThrow("network.allowlist must be a list");
 });
 
-Deno.test("validateConfig: network.prompt.denylist defaults to empty array", () => {
+test("validateConfig: network.prompt.denylist defaults to empty array", () => {
   const config = validateConfig({
     profiles: { test: { agent: "claude" } },
   });
-  assertEquals(config.profiles.test.network.prompt.denylist, []);
+  expect(config.profiles.test.network.prompt.denylist).toEqual([]);
 });
 
-Deno.test("validateConfig: network.prompt.denylist is parsed correctly", () => {
+test("validateConfig: network.prompt.denylist is parsed correctly", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1414,48 +1303,42 @@ Deno.test("validateConfig: network.prompt.denylist is parsed correctly", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.network.prompt.denylist, [
+  expect(config.profiles.test.network.prompt.denylist).toEqual([
     "evil.com",
     "*.bad.org",
   ]);
 });
 
-Deno.test("validateConfig: network.prompt.denylist rejects wildcard in middle", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            network: { prompt: { denylist: ["ev*il.com"] } },
-          },
+test("validateConfig: network.prompt.denylist rejects wildcard in middle", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          network: { prompt: { denylist: ["ev*il.com"] } },
         },
-      }),
-    ConfigValidationError,
-    "network.prompt.denylist[0]",
-  );
+      },
+    })
+  ).toThrow("network.prompt.denylist[0]");
 });
 
-Deno.test("validateConfig: allowlist and denylist overlap throws", () => {
-  assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            network: {
-              allowlist: ["example.com"],
-              prompt: { denylist: ["example.com"] },
-            },
+test("validateConfig: allowlist and denylist overlap throws", () => {
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          network: {
+            allowlist: ["example.com"],
+            prompt: { denylist: ["example.com"] },
           },
         },
-      }),
-    ConfigValidationError,
-    "appears in both network.allowlist and network.prompt.denylist",
-  );
+      },
+    })
+  ).toThrow("appears in both network.allowlist and network.prompt.denylist");
 });
 
-Deno.test("validateConfig: allowlist=*.example.com and denylist=sub.example.com is allowed", () => {
+test("validateConfig: allowlist=*.example.com and denylist=sub.example.com is allowed", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1467,13 +1350,13 @@ Deno.test("validateConfig: allowlist=*.example.com and denylist=sub.example.com 
       },
     },
   });
-  assertEquals(config.profiles.test.network.allowlist, ["*.example.com"]);
-  assertEquals(config.profiles.test.network.prompt.denylist, [
+  expect(config.profiles.test.network.allowlist).toEqual(["*.example.com"]);
+  expect(config.profiles.test.network.prompt.denylist).toEqual([
     "sub.example.com",
   ]);
 });
 
-Deno.test("validateConfig: allowlist=sub.example.com and denylist=*.example.com is allowed", () => {
+test("validateConfig: allowlist=sub.example.com and denylist=*.example.com is allowed", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -1485,8 +1368,8 @@ Deno.test("validateConfig: allowlist=sub.example.com and denylist=*.example.com 
       },
     },
   });
-  assertEquals(config.profiles.test.network.allowlist, ["sub.example.com"]);
-  assertEquals(config.profiles.test.network.prompt.denylist, [
+  expect(config.profiles.test.network.allowlist).toEqual(["sub.example.com"]);
+  expect(config.profiles.test.network.prompt.denylist).toEqual([
     "*.example.com",
   ]);
 });
@@ -1495,126 +1378,108 @@ Deno.test("validateConfig: allowlist=sub.example.com and denylist=*.example.com 
 // UI config
 // ---------------------------------------------------------------------------
 
-Deno.test("validateConfig: ui defaults when omitted", () => {
+test("validateConfig: ui defaults when omitted", () => {
   const raw: RawConfig = {
     profiles: { test: { agent: "claude" } },
   };
   const config = validateConfig(raw);
-  assertEquals(config.ui.enable, true);
-  assertEquals(config.ui.port, 3939);
-  assertEquals(config.ui.idleTimeout, 300);
+  expect(config.ui.enable).toEqual(true);
+  expect(config.ui.port).toEqual(3939);
+  expect(config.ui.idleTimeout).toEqual(300);
 });
 
-Deno.test("validateConfig: ui explicit values", () => {
+test("validateConfig: ui explicit values", () => {
   const raw: RawConfig = {
     ui: { enable: false, port: 8080, "idle-timeout": 0 },
     profiles: { test: { agent: "claude" } },
   };
   const config = validateConfig(raw);
-  assertEquals(config.ui.enable, false);
-  assertEquals(config.ui.port, 8080);
-  assertEquals(config.ui.idleTimeout, 0);
+  expect(config.ui.enable).toEqual(false);
+  expect(config.ui.port).toEqual(8080);
+  expect(config.ui.idleTimeout).toEqual(0);
 });
 
-Deno.test("validateConfig: ui invalid port rejects", () => {
+test("validateConfig: ui invalid port rejects", () => {
   const raw: RawConfig = {
     ui: { port: 0 },
     profiles: { test: { agent: "claude" } },
   };
-  assertThrows(
-    () => validateConfig(raw),
-    ConfigValidationError,
-    "ui:",
-  );
+  expect(() => validateConfig(raw)).toThrow("ui:");
 });
 
-Deno.test("validateConfig: ui negative idle-timeout rejects", () => {
+test("validateConfig: ui negative idle-timeout rejects", () => {
   const raw: RawConfig = {
     ui: { "idle-timeout": -1 },
     profiles: { test: { agent: "claude" } },
   };
-  assertThrows(
-    () => validateConfig(raw),
-    ConfigValidationError,
-    "ui:",
-  );
+  expect(() => validateConfig(raw)).toThrow("ui:");
 });
 
 // ---------------------------------------------------------------------------
 // Error aggregation across profiles and fields
 // ---------------------------------------------------------------------------
 
-Deno.test("validateConfig: multiple errors in one profile are all reported", () => {
-  const err = assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            // deno-lint-ignore no-explicit-any
-            network: { allowlist: "not-an-array" as any },
-            "extra-mounts": [{ dst: "/tmp/dst", mode: "invalid" }],
-          },
+test("validateConfig: multiple errors in one profile are all reported", () => {
+  let err: ConfigValidationError | undefined;
+  try {
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          // deno-lint-ignore no-explicit-any
+          network: { allowlist: "not-an-array" as any },
+          "extra-mounts": [{ dst: "/tmp/dst", mode: "invalid" }],
         },
-      }),
-    ConfigValidationError,
-  );
-  const msg = (err as ConfigValidationError).message;
-  assertEquals(msg.includes("network.allowlist must be a list"), true);
-  assertEquals(msg.includes("extra-mounts[0].src"), true);
+      },
+    });
+  } catch (e) {
+    err = e as ConfigValidationError;
+  }
+  expect(err).toBeDefined();
+  const msg = err!.message;
+  expect(msg.includes("network.allowlist must be a list")).toEqual(true);
+  expect(msg.includes("extra-mounts[0].src")).toEqual(true);
 });
 
-Deno.test("validateConfig: errors from multiple profiles are reported together", () => {
-  const err = assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          alpha: { agent: "invalid" },
-          beta: { agent: "invalid" },
-        },
-      }),
-    ConfigValidationError,
-  );
-  const msg = (err as ConfigValidationError).message;
-  assertEquals(
-    msg.includes('profile "alpha"'),
-    true,
-    "alpha error missing",
-  );
-  assertEquals(
-    msg.includes('profile "beta"'),
-    true,
-    "beta error missing",
-  );
+test("validateConfig: errors from multiple profiles are reported together", () => {
+  let err: ConfigValidationError | undefined;
+  try {
+    validateConfig({
+      profiles: {
+        alpha: { agent: "invalid" },
+        beta: { agent: "invalid" },
+      },
+    });
+  } catch (e) {
+    err = e as ConfigValidationError;
+  }
+  expect(err).toBeDefined();
+  const msg = err!.message;
+  expect(msg.includes('profile "alpha"')).toEqual(true);
+  expect(msg.includes('profile "beta"')).toEqual(true);
 });
 
-Deno.test("validateConfig: hostexec rules errors are aggregated across rules", () => {
-  const err = assertThrows(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              rules: [
-                { id: "", match: { argv0: "git" } },
-                { id: "", match: { argv0: "curl" } },
-              ],
-            },
+test("validateConfig: hostexec rules errors are aggregated across rules", () => {
+  let err: ConfigValidationError | undefined;
+  try {
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              { id: "", match: { argv0: "git" } },
+              { id: "", match: { argv0: "curl" } },
+            ],
           },
         },
-      }),
-    ConfigValidationError,
-  );
-  const msg = (err as ConfigValidationError).message;
-  assertEquals(
-    msg.includes("hostexec.rules[0]"),
-    true,
-    "rules[0] error missing",
-  );
-  assertEquals(
-    msg.includes("hostexec.rules[1]"),
-    true,
-    "rules[1] error missing",
-  );
+      },
+    });
+  } catch (e) {
+    err = e as ConfigValidationError;
+  }
+  expect(err).toBeDefined();
+  const msg = err!.message;
+  expect(msg.includes("hostexec.rules[0]")).toEqual(true);
+  expect(msg.includes("hostexec.rules[1]")).toEqual(true);
 });

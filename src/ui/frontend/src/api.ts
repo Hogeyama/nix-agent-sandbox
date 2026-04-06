@@ -32,8 +32,7 @@ export const api = {
   denyHostExec: (sessionId: string, requestId: string) =>
     request("POST", "/api/hostexec/deny", { sessionId, requestId }),
 
-  getSessions: () =>
-    request<SessionsData>("GET", "/api/sessions"),
+  getSessions: () => request<SessionsData>("GET", "/api/sessions"),
 
   getContainers: () =>
     request<{ items: ContainerInfo[] }>("GET", "/api/containers"),

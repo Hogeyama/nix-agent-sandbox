@@ -1,3 +1,12 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * ProxyStage unit テスト（Docker 不要）
  *
@@ -5,7 +14,6 @@
  * Envoy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
-import { assertEquals } from "@std/assert";
 import {
   buildNetworkRuntimePaths,
   createProxyStage,
@@ -126,67 +134,63 @@ function makeInput(
   };
 }
 
-Deno.test("ProxyStage: skip when allowlist and prompt are disabled", () => {
+test("ProxyStage: skip when allowlist and prompt are disabled", () => {
   const profile = makeProfile();
   const input = makeInput(profile);
   const stage = createProxyStage();
   const result = stage.plan(input);
-  assertEquals(result, null);
+  expect(result).toEqual(null);
 });
 
-Deno.test("ProxyStage: returns plan when allowlist is non-empty", () => {
+test("ProxyStage: returns plan when allowlist is non-empty", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
   const input = makeInput(profile);
   const stage = createProxyStage();
   const result = stage.plan(input);
-  assertEquals(result !== null, true);
-  assertEquals(result!.effects.length, 1);
-  assertEquals(result!.effects[0].kind, "proxy-session");
+  expect(result !== null).toEqual(true);
+  expect(result!.effects.length).toEqual(1);
+  expect(result!.effects[0].kind).toEqual("proxy-session");
 });
 
-Deno.test("ProxyStage: returns plan when prompt is enabled", () => {
+test("ProxyStage: returns plan when prompt is enabled", () => {
   const profile = makeProfile({
     network: { prompt: { enable: true } },
   });
   const input = makeInput(profile);
   const stage = createProxyStage();
   const result = stage.plan(input);
-  assertEquals(result !== null, true);
-  assertEquals(result!.effects.length, 1);
-  assertEquals(result!.effects[0].kind, "proxy-session");
+  expect(result !== null).toEqual(true);
+  expect(result!.effects.length).toEqual(1);
+  expect(result!.effects[0].kind).toEqual("proxy-session");
 });
 
-Deno.test("ProxyStage: sets proxy env vars", () => {
+test("ProxyStage: sets proxy env vars", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
   const input = makeInput(profile);
   const stage = createProxyStage();
   const result = stage.plan(input)!;
-  assertEquals(
-    result.envVars["http_proxy"],
+  expect(result.envVars["http_proxy"]).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  assertEquals(
-    result.envVars["https_proxy"],
+  expect(result.envVars["https_proxy"]).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  assertEquals(
-    result.envVars["HTTP_PROXY"],
+  expect(result.envVars["HTTP_PROXY"]).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  assertEquals(
-    result.envVars["HTTPS_PROXY"],
+  expect(result.envVars["HTTPS_PROXY"]).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  assertEquals(result.envVars["no_proxy"], "localhost,127.0.0.1");
-  assertEquals(result.envVars["NO_PROXY"], "localhost,127.0.0.1");
-  assertEquals(typeof result.envVars["NAS_UPSTREAM_PROXY"], "string");
+  expect(result.envVars["no_proxy"]).toEqual("localhost,127.0.0.1");
+  expect(result.envVars["NO_PROXY"]).toEqual("localhost,127.0.0.1");
+  expect(typeof result.envVars["NAS_UPSTREAM_PROXY"]).toEqual("string");
 });
 
-Deno.test("ProxyStage: includes dind container in no_proxy", () => {
+test("ProxyStage: includes dind container in no_proxy", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
@@ -197,27 +201,26 @@ Deno.test("ProxyStage: includes dind container in no_proxy", () => {
   });
   const stage = createProxyStage();
   const result = stage.plan(input)!;
-  assertEquals(
-    result.envVars["no_proxy"],
+  expect(result.envVars["no_proxy"]).toEqual(
     "localhost,127.0.0.1,nas-dind-abc12345",
   );
 });
 
-Deno.test("ProxyStage: sets outputOverrides", () => {
+test("ProxyStage: sets outputOverrides", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
   const input = makeInput(profile);
   const stage = createProxyStage();
   const result = stage.plan(input)!;
-  assertEquals(typeof result.outputOverrides.networkRuntimeDir, "string");
-  assertEquals(typeof result.outputOverrides.networkPromptToken, "string");
-  assertEquals(result.outputOverrides.networkPromptEnabled, false);
-  assertEquals(typeof result.outputOverrides.networkBrokerSocket, "string");
-  assertEquals(typeof result.outputOverrides.networkProxyEndpoint, "string");
+  expect(typeof result.outputOverrides.networkRuntimeDir).toEqual("string");
+  expect(typeof result.outputOverrides.networkPromptToken).toEqual("string");
+  expect(result.outputOverrides.networkPromptEnabled).toEqual(false);
+  expect(typeof result.outputOverrides.networkBrokerSocket).toEqual("string");
+  expect(typeof result.outputOverrides.networkProxyEndpoint).toEqual("string");
 });
 
-Deno.test("ProxyStage: replaces existing --network in dockerArgs", () => {
+test("ProxyStage: replaces existing --network in dockerArgs", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
@@ -227,16 +230,14 @@ Deno.test("ProxyStage: replaces existing --network in dockerArgs", () => {
   const stage = createProxyStage();
   const result = stage.plan(input)!;
   const networkIdx = result.dockerArgs.indexOf("--network");
-  assertEquals(networkIdx !== -1, true);
-  assertEquals(
-    result.dockerArgs[networkIdx + 1].startsWith("nas-session-net-"),
-    true,
-  );
+  expect(networkIdx !== -1).toEqual(true);
+  expect(result.dockerArgs[networkIdx + 1].startsWith("nas-session-net-"))
+    .toEqual(true);
   // old-net should be replaced
-  assertEquals(result.dockerArgs.includes("old-net"), false);
+  expect(result.dockerArgs.includes("old-net")).toEqual(false);
 });
 
-Deno.test("ProxyStage: reuses existing networkPromptToken", () => {
+test("ProxyStage: reuses existing networkPromptToken", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
@@ -246,53 +247,52 @@ Deno.test("ProxyStage: reuses existing networkPromptToken", () => {
   });
   const stage = createProxyStage();
   const result = stage.plan(input)!;
-  assertEquals(result.outputOverrides.networkPromptToken, existingToken);
+  expect(result.outputOverrides.networkPromptToken).toEqual(existingToken);
   // The proxy URL should contain the existing token
-  assertEquals(
-    result.envVars["NAS_UPSTREAM_PROXY"].includes(existingToken),
+  expect(result.envVars["NAS_UPSTREAM_PROXY"].includes(existingToken)).toEqual(
     true,
   );
 });
 
-Deno.test("replaceNetwork: replaces existing --network", () => {
+test("replaceNetwork: replaces existing --network", () => {
   const args = ["--rm", "--network", "old-net", "-v", "/tmp:/tmp"];
   const result = replaceNetwork(args, "new-net");
-  assertEquals(result, ["--rm", "--network", "new-net", "-v", "/tmp:/tmp"]);
+  expect(result).toEqual(["--rm", "--network", "new-net", "-v", "/tmp:/tmp"]);
 });
 
-Deno.test("replaceNetwork: appends when no --network", () => {
+test("replaceNetwork: appends when no --network", () => {
   const args = ["--rm", "-v", "/tmp:/tmp"];
   const result = replaceNetwork(args, "new-net");
-  assertEquals(result, ["--rm", "-v", "/tmp:/tmp", "--network", "new-net"]);
+  expect(result).toEqual(["--rm", "-v", "/tmp:/tmp", "--network", "new-net"]);
 });
 
-Deno.test("parseDindContainerName: extracts from DOCKER_HOST", () => {
+test("parseDindContainerName: extracts from DOCKER_HOST", () => {
   const name = parseDindContainerName({
     DOCKER_HOST: "tcp://nas-dind-abc12345:2375",
   });
-  assertEquals(name, "nas-dind-abc12345");
+  expect(name).toEqual("nas-dind-abc12345");
 });
 
-Deno.test("parseDindContainerName: prefers explicit env var", () => {
+test("parseDindContainerName: prefers explicit env var", () => {
   const name = parseDindContainerName({
     NAS_DIND_CONTAINER_NAME: "nas-dind-explicit",
     DOCKER_HOST: "tcp://nas-dind-abc12345:2375",
   });
-  assertEquals(name, "nas-dind-explicit");
+  expect(name).toEqual("nas-dind-explicit");
 });
 
-Deno.test("parseDindContainerName: returns null for invalid format", () => {
+test("parseDindContainerName: returns null for invalid format", () => {
   const name = parseDindContainerName({
     DOCKER_HOST: "unix:///var/run/docker.sock",
   });
-  assertEquals(name, null);
+  expect(name).toEqual(null);
 });
 
-Deno.test("LOCAL_PROXY_PORT: is 18080", () => {
-  assertEquals(LOCAL_PROXY_PORT, 18080);
+test("LOCAL_PROXY_PORT: is 18080", () => {
+  expect(LOCAL_PROXY_PORT).toEqual(18080);
 });
 
-Deno.test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
+test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
   const host: HostEnv = {
     home: "/home/test",
     user: "test",
@@ -302,17 +302,18 @@ Deno.test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
     env: new Map([["XDG_RUNTIME_DIR", "/run/user/1000"]]),
   };
   const paths = buildNetworkRuntimePaths(host);
-  assertEquals(paths.runtimeDir, "/run/user/1000/nas/network");
-  assertEquals(paths.sessionsDir, "/run/user/1000/nas/network/sessions");
-  assertEquals(paths.brokersDir, "/run/user/1000/nas/network/brokers");
-  assertEquals(
-    paths.authRouterSocket,
+  expect(paths.runtimeDir).toEqual("/run/user/1000/nas/network");
+  expect(paths.sessionsDir).toEqual("/run/user/1000/nas/network/sessions");
+  expect(paths.brokersDir).toEqual("/run/user/1000/nas/network/brokers");
+  expect(paths.authRouterSocket).toEqual(
     "/run/user/1000/nas/network/auth-router.sock",
   );
-  assertEquals(paths.envoyConfigFile, "/run/user/1000/nas/network/envoy.yaml");
+  expect(paths.envoyConfigFile).toEqual(
+    "/run/user/1000/nas/network/envoy.yaml",
+  );
 });
 
-Deno.test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
+test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
   const host: HostEnv = {
     home: "/home/test",
     user: "test",
@@ -322,5 +323,5 @@ Deno.test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
     env: new Map(),
   };
   const paths = buildNetworkRuntimePaths(host);
-  assertEquals(paths.runtimeDir, "/tmp/nas-1000/network");
+  expect(paths.runtimeDir).toEqual("/tmp/nas-1000/network");
 });

@@ -2,18 +2,19 @@
  * Docker CLI ラッパー
  */
 
-import $ from "dax";
-import { crypto } from "@std/crypto";
-import { encodeHex } from "@std/encoding/hex";
+import { $ } from "bun";
 import type { DockerLabels } from "./nas_resources.ts";
+import { readFile } from "node:fs/promises";
+import * as path from "node:path";
+import { resolveAssetDir } from "../lib/asset.ts";
 
 const EMBEDDED_ASSET_GROUPS = [
   {
-    baseUrl: new URL("./embed/", import.meta.url),
+    baseDir: resolveAssetDir("docker/embed", import.meta.url, "./embed/"),
     files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
   },
   {
-    baseUrl: new URL("./envoy/", import.meta.url),
+    baseDir: resolveAssetDir("docker/envoy", import.meta.url, "./envoy/"),
     files: ["envoy.template.yaml"],
   },
 ] as const;
@@ -45,10 +46,10 @@ export interface InteractiveCommandOptions {
 
 const defaultSignalTrap: SignalTrap = {
   add(signal, handler) {
-    Deno.addSignalListener(signal, handler);
+    process.on(signal, handler);
   },
   remove(signal, handler) {
-    Deno.removeSignalListener(signal, handler);
+    process.off(signal, handler);
   },
 };
 
@@ -86,12 +87,12 @@ export async function computeEmbedHash(): Promise<string> {
   const parts: string[] = [];
   for (const group of EMBEDDED_ASSET_GROUPS) {
     for (const name of group.files) {
-      parts.push(await Deno.readTextFile(new URL(name, group.baseUrl)));
+      parts.push(await readFile(path.join(group.baseDir, name), "utf8"));
     }
   }
   const data = new TextEncoder().encode(parts.join("\n"));
   const hash = await crypto.subtle.digest("SHA-256", data);
-  return encodeHex(new Uint8Array(hash));
+  return Buffer.from(new Uint8Array(hash)).toString("hex");
 }
 
 /** docker image のラベル値を取得 */
@@ -104,7 +105,7 @@ export async function getImageLabel(
       '{{index .Config.Labels "' + label + '"}}'
     } ${tag}`
       .quiet();
-    const value = result.stdout.trim();
+    const value = result.stdout.toString().trim();
     return value || null;
   } catch {
     return null;
@@ -123,7 +124,8 @@ export async function dockerBuild(
       labelArgs.push("--label", `${key}=${value}`);
     }
   }
-  await $`docker build ${labelArgs} -t ${tag} ${contextDir}`.printCommand();
+  console.log(`$ docker build ${labelArgs.join(" ")} -t ${tag} ${contextDir}`);
+  await $`docker build ${labelArgs} -t ${tag} ${contextDir}`;
 }
 
 /** docker run を実行 */
@@ -139,7 +141,7 @@ export async function dockerRun(opts: DockerRunOptions): Promise<void> {
 
   if (opts.interactive) {
     // TTY がある場合のみ -t を付ける (非 TTY 環境では -i のみ)
-    const isTty = Deno.stdin.isTerminal();
+    const isTty = process.stdin.isTTY ?? false;
     if (isTty) {
       args.push("-it");
     } else {
@@ -165,12 +167,26 @@ export async function runInteractiveCommand(
   args: string[],
   options: InteractiveCommandOptions = {},
 ): Promise<void> {
-  const child = new Deno.Command(command, {
-    args,
-    stdin: options.stdin ?? "inherit",
-    stdout: options.stdout ?? "inherit",
-    stderr: options.stderr ?? "inherit",
-  }).spawn();
+  const stdinOpt = options.stdin ?? "inherit";
+  const stdoutOpt = options.stdout ?? "inherit";
+  const stderrOpt = options.stderr ?? "inherit";
+  const child = Bun.spawn([command, ...args], {
+    stdin: stdinOpt === "null"
+      ? "ignore"
+      : stdinOpt === "piped"
+      ? "pipe"
+      : stdinOpt,
+    stdout: stdoutOpt === "null"
+      ? "ignore"
+      : stdoutOpt === "piped"
+      ? "pipe"
+      : stdoutOpt,
+    stderr: stderrOpt === "null"
+      ? "ignore"
+      : stderrOpt === "piped"
+      ? "pipe"
+      : stderrOpt,
+  });
   const signalTrap = options.signalTrap ?? defaultSignalTrap;
   let interruptedBy: ForwardedSignal | null = null;
   const handlers = new Map<ForwardedSignal, () => void>();
@@ -179,9 +195,9 @@ export async function runInteractiveCommand(
     const handler = () => {
       interruptedBy = interruptedBy ?? signal;
       try {
-        child.kill(signal);
+        child.kill();
       } catch {
-        // 子プロセスが先に終了していても終了判定は status 側で扱う。
+        // 子プロセスが先に終了していても終了判定は exited 側で扱う。
       }
     };
     handlers.set(signal, handler);
@@ -189,13 +205,13 @@ export async function runInteractiveCommand(
   }
 
   try {
-    const status = await child.status;
+    const code = await child.exited;
     if (interruptedBy !== null) {
       throw new InterruptedCommandError(command);
     }
-    if (!status.success) {
+    if (code !== 0) {
       throw new Error(
-        `${options.errorLabel ?? command} exited with code ${status.code}`,
+        `${options.errorLabel ?? command} exited with code ${code}`,
       );
     }
   } finally {
@@ -211,7 +227,8 @@ export async function dockerRemoveImage(
   options?: { force?: boolean },
 ): Promise<void> {
   const forceArgs = options?.force ? ["--force"] : [];
-  await $`docker rmi ${forceArgs} ${tag}`.printCommand();
+  console.log(`$ docker rmi ${forceArgs.join(" ")} ${tag}`);
+  await $`docker rmi ${forceArgs} ${tag}`;
 }
 
 /** docker image が存在するか確認 */
@@ -340,18 +357,22 @@ export async function dockerRunDetached(
   args.push(...opts.args);
   args.push(opts.image);
   args.push(...(opts.command ?? []));
-  const result = await new Deno.Command("docker", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (!result.success) {
+  const proc = Bun.spawn(["docker", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).arrayBuffer().then((b) => new Uint8Array(b)),
+    new Response(proc.stderr).arrayBuffer().then((b) => new Uint8Array(b)),
+  ]);
+  const code = await proc.exited;
+  if (code !== 0) {
     throw new Error(
       formatDockerCommandFailure(
         args,
-        result.code,
-        result.stdout,
-        result.stderr,
+        code,
+        stdout,
+        stderr,
       ),
     );
   }
@@ -442,7 +463,7 @@ export async function dockerExec(
   try {
     const result = await $`docker exec ${userArgs} ${containerName} ${command}`
       .quiet();
-    return { code: 0, stdout: result.stdout.trim() };
+    return { code: 0, stdout: result.stdout.toString().trim() };
   } catch (err) {
     if (err && typeof err === "object" && "exitCode" in err) {
       return { code: (err as { exitCode: number }).exitCode, stdout: "" };
@@ -459,7 +480,7 @@ export async function dockerIsRunning(
     const fmt = "{{.State.Running}}";
     const result = await $`docker inspect --format=${fmt} ${containerName}`
       .quiet();
-    return result.stdout.trim() === "true";
+    return result.stdout.toString().trim() === "true";
   } catch {
     return false;
   }
@@ -472,11 +493,9 @@ export async function dockerLogs(
 ): Promise<string> {
   try {
     const tailArgs = options?.tail ? ["--tail", String(options.tail)] : [];
-    const result = await $`docker logs ${tailArgs} ${containerName}`.quiet(
-      "both",
-    );
+    const result = await $`docker logs ${tailArgs} ${containerName}`.quiet();
     // docker logs outputs to both stdout and stderr
-    return (result.stdout + result.stderr).trim();
+    return (result.stdout.toString() + result.stderr.toString()).trim();
   } catch {
     return "(failed to retrieve container logs)";
   }
@@ -486,21 +505,21 @@ export async function dockerLogs(
 export async function dockerListContainerNames(): Promise<string[]> {
   const fmt = "{{.Names}}";
   const result = await $`docker ps -a --format=${fmt}`.quiet();
-  return splitNonEmptyLines(result.stdout);
+  return splitNonEmptyLines(result.stdout.toString());
 }
 
 /** すべての network 名を取得 */
 export async function dockerListNetworkNames(): Promise<string[]> {
   const fmt = "{{.Name}}";
   const result = await $`docker network ls --format=${fmt}`.quiet();
-  return splitNonEmptyLines(result.stdout);
+  return splitNonEmptyLines(result.stdout.toString());
 }
 
 /** すべての volume 名を取得 */
 export async function dockerListVolumeNames(): Promise<string[]> {
   const fmt = "{{.Name}}";
   const result = await $`docker volume ls --format=${fmt}`.quiet();
-  return splitNonEmptyLines(result.stdout);
+  return splitNonEmptyLines(result.stdout.toString());
 }
 
 /** コンテナ inspect を取得 */
@@ -508,7 +527,7 @@ export async function dockerInspectContainer(
   containerName: string,
 ): Promise<DockerContainerDetails> {
   const result = await $`docker inspect ${containerName}`.quiet();
-  const parsed = JSON.parse(result.stdout)[0];
+  const parsed = JSON.parse(result.stdout.toString())[0];
   return {
     name: String(parsed.Name ?? containerName).replace(/^\//, ""),
     running: parsed.State?.Running === true,
@@ -526,7 +545,7 @@ export async function dockerContainerIp(
       "{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}}{{break}}{{end}}{{end}}";
     const result = await $`docker inspect --format=${fmt} ${containerName}`
       .quiet();
-    const ip = result.stdout.trim();
+    const ip = result.stdout.toString().trim();
     return ip.length > 0 ? ip : null;
   } catch {
     return null;
@@ -538,7 +557,7 @@ export async function dockerInspectNetwork(
   networkName: string,
 ): Promise<DockerNetworkDetails> {
   const result = await $`docker network inspect ${networkName}`.quiet();
-  const parsed = JSON.parse(result.stdout)[0];
+  const parsed = JSON.parse(result.stdout.toString())[0];
   const containers = Object.values(parsed.Containers ?? {}).map((entry) =>
     typeof entry === "object" && entry !== null && "Name" in entry
       ? String(entry.Name)
@@ -556,7 +575,7 @@ export async function dockerInspectVolume(
   volumeName: string,
 ): Promise<DockerVolumeDetails> {
   const result = await $`docker volume inspect ${volumeName}`.quiet();
-  const parsed = JSON.parse(result.stdout)[0];
+  const parsed = JSON.parse(result.stdout.toString())[0];
   return {
     name: String(parsed.Name ?? volumeName),
     labels: parsed.Labels ?? {},
@@ -572,7 +591,7 @@ export async function dockerListContainersUsingVolume(
   const result =
     await $`docker ps -a --filter volume=${volumeName} --format=${fmt}`
       .quiet();
-  return splitNonEmptyLines(result.stdout);
+  return splitNonEmptyLines(result.stdout.toString());
 }
 
 function splitNonEmptyLines(text: string): string[] {

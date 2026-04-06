@@ -1,12 +1,14 @@
-const apiToken = Deno.env.get("HOSTEXEC_DEMO_API_TOKEN");
+import { mkdir } from "node:fs/promises";
+
+const apiToken = process.env["HOSTEXEC_DEMO_API_TOKEN"];
 
 if (!apiToken) {
   console.error("missing required hostexec demo env vars");
-  Deno.exit(1);
+  process.exit(1);
 }
 
-const outputDir = `${Deno.cwd()}/.hostexec-demo`;
-await Deno.mkdir(outputDir, { recursive: true });
+const outputDir = `${process.cwd()}/.hostexec-demo`;
+await mkdir(outputDir, { recursive: true });
 
 console.log(`Running on host using .env secret`);
 console.log(`stdout is redacted to avoid leaking secrets`);

@@ -1,3 +1,12 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * DindStage integration テスト（実 Docker 使用, DinD rootless 必須）
  *
@@ -5,7 +14,6 @@
  * 対応していない環境では自動スキップする。
  */
 
-import { assertEquals } from "@std/assert";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -116,23 +124,19 @@ function makeStageInput(
 async function canRunDindRootless(): Promise<boolean> {
   const name = "nas-test-dind-probe";
   try {
-    const cmd = new Deno.Command("docker", {
-      args: [
-        "run",
-        "-d",
-        "--rm",
-        "--privileged",
-        "--name",
-        name,
-        "-e",
-        "DOCKER_TLS_CERTDIR=",
-        "docker:dind-rootless",
-      ],
-      stdout: "null",
-      stderr: "null",
-    });
-    const result = await cmd.output();
-    if (!result.success) return false;
+    const exitCode = await Bun.spawn([
+      "docker",
+      "run",
+      "-d",
+      "--rm",
+      "--privileged",
+      "--name",
+      name,
+      "-e",
+      "DOCKER_TLS_CERTDIR=",
+      "docker:dind-rootless",
+    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    if (exitCode !== 0) return false;
 
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
@@ -149,7 +153,7 @@ async function canRunDindRootless(): Promise<boolean> {
   }
 }
 
-const RUNNING_ON_HOST_DOCKER = !Deno.env.get("DOCKER_HOST");
+const RUNNING_ON_HOST_DOCKER = !process.env["DOCKER_HOST"];
 const dindAvailable = await canRunDindRootless();
 
 async function forceCleanup(
@@ -165,11 +169,10 @@ async function forceCleanup(
 
 void forceCleanup; // suppress unused warning (available for manual cleanup)
 
-Deno.test({
-  name:
-    "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
-  ignore: !dindAvailable || !RUNNING_ON_HOST_DOCKER,
-  fn: async () => {
+test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
+  "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
+  async () => {
+    // DinD readiness can take up to 20s; extend beyond the default 5s timeout
     const profile = makeProfile({ docker: { enable: true, shared: false } });
     const input = makeStageInput(profile);
     const stage = createDindStage({
@@ -178,7 +181,7 @@ Deno.test({
     });
 
     const plan = stage.plan(input);
-    assertEquals(plan !== null, true);
+    expect(plan !== null).toEqual(true);
 
     const effect = plan!.effects[0] as DindSidecarEffect;
     const containerName = effect.containerName;
@@ -189,29 +192,25 @@ Deno.test({
       handle = await executeEffect(effect);
 
       // Verify plan outputs
-      assertEquals(plan!.envVars["DOCKER_HOST"].startsWith("tcp://"), true);
-      assertEquals(plan!.envVars["DOCKER_HOST"].endsWith(":2375"), true);
-      assertEquals(
-        typeof plan!.envVars["NAS_DIND_CONTAINER_NAME"],
-        "string",
-      );
-      assertEquals(typeof plan!.envVars["NAS_DIND_SHARED_TMP"], "string");
+      expect(plan!.envVars["DOCKER_HOST"].startsWith("tcp://")).toEqual(true);
+      expect(plan!.envVars["DOCKER_HOST"].endsWith(":2375")).toEqual(true);
+      expect(typeof plan!.envVars["NAS_DIND_CONTAINER_NAME"]).toEqual("string");
+      expect(typeof plan!.envVars["NAS_DIND_SHARED_TMP"]).toEqual("string");
 
       const networkIdx = plan!.dockerArgs.indexOf("--network");
-      assertEquals(networkIdx !== -1, true);
-      assertEquals(
-        plan!.dockerArgs[networkIdx + 1].startsWith("nas-dind-"),
+      expect(networkIdx !== -1).toEqual(true);
+      expect(plan!.dockerArgs[networkIdx + 1].startsWith("nas-dind-")).toEqual(
         true,
       );
 
       // Verify container is actually running
       const running = await dockerIsRunning(containerName);
-      assertEquals(running, true);
+      expect(running).toEqual(true);
     } finally {
       if (handle) {
         await teardownHandles([handle]);
         const afterRunning = await dockerIsRunning(containerName);
-        assertEquals(afterRunning, false);
+        expect(afterRunning).toEqual(false);
       } else {
         await forceCleanup(
           containerName,
@@ -221,4 +220,5 @@ Deno.test({
       }
     }
   },
-});
+  30_000,
+);

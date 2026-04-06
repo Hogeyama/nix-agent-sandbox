@@ -441,11 +441,15 @@ async function canConnectTcp(
   hostname: string,
   port: number,
 ): Promise<boolean> {
-  try {
-    const conn = await Deno.connect({ hostname, port });
-    conn.close();
-    return true;
-  } catch {
-    return false;
-  }
+  const { createConnection } = await import("node:net");
+  return new Promise<boolean>((resolve) => {
+    const socket = createConnection({ host: hostname, port }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on("error", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
 }

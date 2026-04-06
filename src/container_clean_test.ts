@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { expect, test } from "bun:test";
 import type {
   DockerContainerDetails,
   DockerNetworkDetails,
@@ -22,49 +22,46 @@ import {
   NAS_MANAGED_VALUE,
 } from "./docker/nas_resources.ts";
 
-Deno.test("isNasManagedSidecar: nas-sandbox is not a managed sidecar", () => {
-  assertEquals(isNasManagedSidecar({}, "nas-sandbox"), false);
+test("isNasManagedSidecar: nas-sandbox is not a managed sidecar", () => {
+  expect(isNasManagedSidecar({}, "nas-sandbox")).toEqual(false);
 });
 
-Deno.test("isNasManagedSidecar: labeled sidecar is detected", () => {
-  assertEquals(
+test("isNasManagedSidecar: labeled sidecar is detected", () => {
+  expect(
     isNasManagedSidecar({
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_DIND,
     }, "custom-name"),
-    true,
-  );
+  ).toEqual(true);
 });
 
-Deno.test("isNasManagedSidecar: labeled envoy sidecar is detected", () => {
-  assertEquals(
+test("isNasManagedSidecar: labeled envoy sidecar is detected", () => {
+  expect(
     isNasManagedSidecar({
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
     }, "custom-envoy"),
-    true,
-  );
+  ).toEqual(true);
 });
 
-Deno.test("isNasManagedSidecar: legacy shared envoy name is detected", () => {
-  assertEquals(isNasManagedSidecar({}, "nas-envoy-shared"), true);
+test("isNasManagedSidecar: legacy shared envoy name is detected", () => {
+  expect(isNasManagedSidecar({}, "nas-envoy-shared")).toEqual(true);
 });
 
-Deno.test("isNasManagedNetwork: labeled session network is detected", () => {
-  assertEquals(
+test("isNasManagedNetwork: labeled session network is detected", () => {
+  expect(
     isNasManagedNetwork({
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
     }, "custom-session-network"),
-    true,
-  );
+  ).toEqual(true);
 });
 
-Deno.test("isNasManagedNetwork: legacy session network name is detected", () => {
-  assertEquals(isNasManagedNetwork({}, "nas-session-example"), true);
+test("isNasManagedNetwork: legacy session network name is detected", () => {
+  expect(isNasManagedNetwork({}, "nas-session-example")).toEqual(true);
 });
 
-Deno.test("isUnusedNasSidecar: active non-managed container keeps sidecar alive", () => {
+test("isUnusedNasSidecar: active non-managed container keeps sidecar alive", () => {
   const sidecar: DockerContainerDetails = {
     name: "nas-proxy-test",
     running: true,
@@ -85,7 +82,7 @@ Deno.test("isUnusedNasSidecar: active non-managed container keeps sidecar alive"
     containers: ["nas-proxy-test", "nas-sandbox"],
   };
 
-  assertEquals(
+  expect(
     isUnusedNasSidecar(
       sidecar,
       new Map([
@@ -94,11 +91,10 @@ Deno.test("isUnusedNasSidecar: active non-managed container keeps sidecar alive"
       ]),
       new Map([[network.name, network]]),
     ),
-    false,
-  );
+  ).toEqual(false);
 });
 
-Deno.test("isUnusedNasSidecar: only managed sidecars on network is unused", () => {
+test("isUnusedNasSidecar: only managed sidecars on network is unused", () => {
   const proxy: DockerContainerDetails = {
     name: "nas-proxy-test",
     running: true,
@@ -119,7 +115,7 @@ Deno.test("isUnusedNasSidecar: only managed sidecars on network is unused", () =
     containers: ["nas-proxy-test", "nas-dind-shared"],
   };
 
-  assertEquals(
+  expect(
     isUnusedNasSidecar(
       proxy,
       new Map([
@@ -128,11 +124,10 @@ Deno.test("isUnusedNasSidecar: only managed sidecars on network is unused", () =
       ]),
       new Map([[network.name, network]]),
     ),
-    true,
-  );
+  ).toEqual(true);
 });
 
-Deno.test("isUnusedNasSidecar: session network with active container keeps envoy alive", () => {
+test("isUnusedNasSidecar: session network with active container keeps envoy alive", () => {
   const envoy: DockerContainerDetails = {
     name: "nas-envoy-shared",
     running: true,
@@ -159,7 +154,7 @@ Deno.test("isUnusedNasSidecar: session network with active container keeps envoy
     containers: ["nas-envoy-shared", "nas-sandbox"],
   };
 
-  assertEquals(
+  expect(
     isUnusedNasSidecar(
       envoy,
       new Map([
@@ -168,8 +163,7 @@ Deno.test("isUnusedNasSidecar: session network with active container keeps envoy
       ]),
       new Map([[sessionNetwork.name, sessionNetwork]]),
     ),
-    false,
-  );
+  ).toEqual(false);
 });
 
 class FakeBackend implements ContainerCleanBackend {
@@ -279,7 +273,7 @@ function createManagedNetwork(
   };
 }
 
-Deno.test("cleanNasContainers: removes unused shared dind container, network, and tmp volume", async () => {
+test("cleanNasContainers: removes unused shared dind container, network, and tmp volume", async () => {
   const backend = new FakeBackend();
   backend.containers.set(
     "nas-dind-shared",
@@ -304,13 +298,13 @@ Deno.test("cleanNasContainers: removes unused shared dind container, network, an
 
   const result = await cleanNasContainers(backend);
 
-  assertEquals(result.removedContainers, ["nas-dind-shared"]);
-  assertEquals(result.removedNetworks, ["nas-dind-shared"]);
-  assertEquals(result.removedVolumes, ["nas-dind-shared-tmp"]);
-  assertEquals(backend.stopped, ["nas-dind-shared"]);
+  expect(result.removedContainers).toEqual(["nas-dind-shared"]);
+  expect(result.removedNetworks).toEqual(["nas-dind-shared"]);
+  expect(result.removedVolumes).toEqual(["nas-dind-shared-tmp"]);
+  expect(backend.stopped).toEqual(["nas-dind-shared"]);
 });
 
-Deno.test("cleanNasContainers: keeps sidecar when an active non-managed container shares the network", async () => {
+test("cleanNasContainers: keeps sidecar when an active non-managed container shares the network", async () => {
   const backend = new FakeBackend();
   backend.containers.set(
     "nas-proxy-sidecar",
@@ -335,12 +329,12 @@ Deno.test("cleanNasContainers: keeps sidecar when an active non-managed containe
 
   const result = await cleanNasContainers(backend);
 
-  assertEquals(result.removedContainers, []);
-  assertEquals(result.removedNetworks, []);
-  assertEquals(result.removedVolumes, []);
+  expect(result.removedContainers).toEqual([]);
+  expect(result.removedNetworks).toEqual([]);
+  expect(result.removedVolumes).toEqual([]);
 });
 
-Deno.test("cleanNasContainers: removes stopped sidecar and orphaned managed resources", async () => {
+test("cleanNasContainers: removes stopped sidecar and orphaned managed resources", async () => {
   const backend = new FakeBackend();
   backend.containers.set(
     "nas-envoy-shared",
@@ -358,8 +352,8 @@ Deno.test("cleanNasContainers: removes stopped sidecar and orphaned managed reso
 
   const result = await cleanNasContainers(backend);
 
-  assertEquals(result.removedContainers, ["nas-envoy-shared"]);
-  assertEquals(result.removedNetworks, ["nas-session-orphan"]);
-  assertEquals(result.removedVolumes, []);
-  assertEquals(backend.stopped, []);
+  expect(result.removedContainers).toEqual(["nas-envoy-shared"]);
+  expect(result.removedNetworks).toEqual(["nas-session-orphan"]);
+  expect(result.removedVolumes).toEqual([]);
+  expect(backend.stopped).toEqual([]);
 });

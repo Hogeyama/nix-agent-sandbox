@@ -2,8 +2,11 @@
  * YAML 設定ファイルの読み込み
  */
 
-import { parse as parseYaml } from "@std/yaml";
-import * as path from "@std/path";
+import yaml from "js-yaml";
+import * as path from "node:path";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -12,15 +15,15 @@ const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 
 /** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
 function getGlobalConfigDir(): string {
-  const xdgConfigHome = Deno.env.get("XDG_CONFIG_HOME");
+  const xdgConfigHome = process.env["XDG_CONFIG_HOME"];
   const configBase = xdgConfigHome ??
-    path.join(Deno.env.get("HOME") ?? "/", ".config");
+    path.join(process.env["HOME"] ?? "/", ".config");
   return path.join(configBase, "nas");
 }
 
 /** loadConfig のオプション */
 export interface LoadConfigOptions {
-  /** 開始ディレクトリ（デフォルト: Deno.cwd()） */
+  /** 開始ディレクトリ（デフォルト: process.cwd()） */
   startDir?: string;
   /** グローバル設定ファイルのパス（null でグローバル読み込みを無効化） */
   globalConfigPath?: string | null;
@@ -37,7 +40,7 @@ export async function loadConfig(
   const globalRaw = opts.globalConfigPath === null
     ? null
     : await loadGlobalConfig(opts.globalConfigPath);
-  const found = await findConfigFile(opts.startDir ?? Deno.cwd());
+  const found = await findConfigFile(opts.startDir ?? process.cwd());
 
   // Nix ローカル設定が関数の場合、グローバル設定を super として渡す
   const localRaw = found ? await loadLocalConfig(found, globalRaw) : null;
@@ -75,15 +78,15 @@ export async function loadGlobalConfig(
   ) {
     const candidate = path.join(getGlobalConfigDir(), filename);
     try {
-      await Deno.stat(candidate);
+      await stat(candidate);
     } catch (e) {
-      if (e instanceof Deno.errors.NotFound) continue;
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw e; // 予期しない stat エラー（権限不足など）は伝播
     }
     // ファイルが存在する場合、読み込み・解析エラーは伝播させる
     if (format === "yml") {
-      const text = await Deno.readTextFile(candidate);
-      return parseYaml(text) as RawConfig;
+      const text = await readFile(candidate, "utf8");
+      return yaml.load(text) as RawConfig;
     }
     return await loadNixConfig(candidate);
   }
@@ -95,8 +98,8 @@ async function loadConfigByPath(filePath: string): Promise<RawConfig> {
   if (filePath.endsWith(".nix")) {
     return await loadNixConfig(filePath);
   }
-  const text = await Deno.readTextFile(filePath);
-  return parseYaml(text) as RawConfig;
+  const text = await readFile(filePath, "utf8");
+  return yaml.load(text) as RawConfig;
 }
 
 /** グローバルとローカルの RawConfig をマージする */
@@ -219,7 +222,7 @@ async function loadLocalConfig(
   globalRaw?: RawConfig | null,
 ): Promise<RawConfig & { _nixFunctionMerged?: boolean }> {
   if (found.format === "yml") {
-    return parseYaml(await Deno.readTextFile(found.path)) as RawConfig;
+    return yaml.load(await readFile(found.path, "utf8")) as RawConfig;
   }
   return await loadNixConfig(found.path, globalRaw ?? undefined);
 }
@@ -227,12 +230,11 @@ async function loadLocalConfig(
 /** nix コマンドが PATH 上に存在するか確認する */
 async function nixCommandExists(): Promise<boolean> {
   try {
-    const cmd = new Deno.Command("nix", {
-      args: ["--version"],
-      stdout: "null",
-      stderr: "null",
+    const proc = Bun.spawn(["nix", "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
     });
-    const { code } = await cmd.output();
+    const code = await proc.exited;
     return code === 0;
   } catch {
     return false;
@@ -258,12 +260,10 @@ async function loadNixConfig(
   const globalJson = JSON.stringify(globalRaw ?? {});
 
   // グローバル設定を一時ファイルに書き出す
-  const globalFile = await Deno.makeTempFile({
-    prefix: "nas-global-",
-    suffix: ".json",
-  });
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-global-"));
+  const globalFile = path.join(tmpDir, "global.json");
   try {
-    await Deno.writeTextFile(globalFile, globalJson);
+    await writeFile(globalFile, globalJson);
 
     const nixPathArg = buildNixJsonStringLiteral(nixPath);
     const globalFileArg = buildNixJsonStringLiteral(globalFile);
@@ -279,19 +279,22 @@ async function loadNixConfig(
         else
           { value = local; __nixFunctionMerged = false; }
     `;
-    const cmd = new Deno.Command("nix", {
-      args: ["eval", "--impure", "--json", "--expr", nixExpr],
-      stdout: "piped",
-      stderr: "piped",
-    });
-    const { code, stdout, stderr } = await cmd.output();
+    const proc = Bun.spawn(
+      ["nix", "eval", "--impure", "--json", "--expr", nixExpr],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdoutText, stderrText] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const code = await proc.exited;
     if (code !== 0) {
-      const errMsg = new TextDecoder().decode(stderr).trim();
+      const errMsg = stderrText.trim();
       throw new Error(
         `Failed to evaluate ${nixPath}: nix eval exited with code ${code}\n${errMsg}`,
       );
     }
-    const json = new TextDecoder().decode(stdout);
+    const json = stdoutText;
     const result = JSON.parse(json) as {
       value: RawConfig;
       __nixFunctionMerged: boolean;
@@ -302,7 +305,7 @@ async function loadNixConfig(
     return result.value;
   } finally {
     try {
-      await Deno.remove(globalFile);
+      await rm(tmpDir, { recursive: true, force: true });
     } catch {
       // cleanup best-effort
     }
@@ -324,10 +327,10 @@ async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
     ) {
       const candidate = path.join(current, filename);
       try {
-        await Deno.stat(candidate);
+        await stat(candidate);
         return { path: candidate, format };
       } catch (error) {
-        if (error instanceof Deno.errors.NotFound) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           continue;
         }
         throw error;

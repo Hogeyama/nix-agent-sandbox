@@ -3,8 +3,10 @@
  * Used by both network/notify.ts and hostexec/notify.ts.
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
+import { statSync } from "node:fs";
 import { logWarn } from "../log.ts";
+import { resolveAsset } from "./asset.ts";
 
 export type NotifyBackend = "auto" | "desktop" | "off";
 export type ResolvedNotifyBackend = "desktop" | "off";
@@ -56,20 +58,21 @@ export async function tryDesktopNotification(
 ): Promise<boolean> {
   if (options.signal?.aborted) return false;
   const cmd = getNotifySendCommand();
-  let child: Deno.ChildProcess;
+  let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = new Deno.Command(cmd, {
-      args: [
-        "--print-id",
-        "--wait",
-        "--expire-time=0",
-        "--action=default=Open",
-        options.title,
-        options.body,
-      ],
-      stdout: "piped",
-      stderr: "null",
-    }).spawn();
+    child = Bun.spawn([
+      cmd,
+      "--print-id",
+      "--wait",
+      "--expire-time=0",
+      "--action=default=Open",
+      options.title,
+      options.body,
+    ], {
+      stdout: "pipe",
+      stderr: "ignore",
+      env: process.env,
+    });
   } catch {
     warnNotifySendMissing();
     return false;
@@ -77,25 +80,28 @@ export async function tryDesktopNotification(
 
   const onAbort = () => {
     try {
-      child.kill("SIGTERM");
+      child.kill();
     } catch { /* already exited */ }
   };
   options.signal?.addEventListener("abort", onAbort);
 
   try {
-    const { action } = await readNotifySendOutput(child.stdout);
-    const status = await child.status;
+    const { action } = await readNotifySendOutput(
+      child.stdout as ReadableStream<Uint8Array>,
+    );
+    const code = await child.exited;
     lastDesktopNotificationId = null;
 
-    if (!status.success) return false;
+    if (code !== 0) return false;
 
     if (action === "default") {
       try {
-        await new Deno.Command("xdg-open", {
-          args: [options.uiUrl],
-          stdout: "null",
-          stderr: "null",
-        }).output();
+        const xdgProc = Bun.spawn(["xdg-open", options.uiUrl], {
+          stdout: "ignore",
+          stderr: "ignore",
+          env: process.env,
+        });
+        await xdgProc.exited;
       } catch {
         if (!xdgOpenMissingWarned) {
           xdgOpenMissingWarned = true;
@@ -126,7 +132,7 @@ export async function closeNotification(): Promise<void> {
 }
 
 export function isWSL(): boolean {
-  return Boolean(Deno.env.get("WSL_DISTRO_NAME"));
+  return Boolean(process.env["WSL_DISTRO_NAME"]);
 }
 
 /**
@@ -134,11 +140,10 @@ export function isWSL(): boolean {
  * Used by CLI action notifications and daemon spawning.
  */
 export function resolveNasCommand(): { execPath: string; prefix: string[] } {
-  const execPath = Deno.execPath();
-  const isCompiled = !path.basename(execPath).startsWith("deno");
+  const execPath = process.execPath;
+  const isCompiled = !path.basename(execPath).startsWith("bun");
   const prefix = isCompiled ? [] : [
     "run",
-    "-A",
     new URL("../../main.ts", import.meta.url).pathname,
   ];
   return { execPath, prefix };
@@ -163,21 +168,22 @@ export async function tryCliActionNotification(
   options: CliActionNotificationOptions,
 ): Promise<boolean> {
   if (options.signal?.aborted) return false;
-  let child: Deno.ChildProcess;
+  let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = new Deno.Command(getNotifySendCommand(), {
-      args: [
-        "--print-id",
-        "--wait",
-        "--expire-time=0",
-        "--action=approve=Approve",
-        "--action=deny=Deny",
-        options.title,
-        options.body,
-      ],
-      stdout: "piped",
-      stderr: "null",
-    }).spawn();
+    child = Bun.spawn([
+      getNotifySendCommand(),
+      "--print-id",
+      "--wait",
+      "--expire-time=0",
+      "--action=approve=Approve",
+      "--action=deny=Deny",
+      options.title,
+      options.body,
+    ], {
+      stdout: "pipe",
+      stderr: "ignore",
+      env: process.env,
+    });
   } catch {
     warnNotifySendMissing();
     return false;
@@ -185,36 +191,40 @@ export async function tryCliActionNotification(
 
   const onAbort = () => {
     try {
-      child.kill("SIGTERM");
+      child.kill();
     } catch { /* already exited */ }
   };
   options.signal?.addEventListener("abort", onAbort);
 
   try {
-    const { action } = await readNotifySendOutput(child.stdout);
-    const status = await child.status;
+    const { action } = await readNotifySendOutput(
+      child.stdout as ReadableStream<Uint8Array>,
+    );
+    const code = await child.exited;
     lastDesktopNotificationId = null;
 
-    if (!status.success) return false;
+    if (code !== 0) return false;
 
     const { execPath, prefix } = resolveNasCommand();
     if (action === "approve") {
       try {
-        await new Deno.Command(execPath, {
-          args: [...prefix, ...options.approveArgs],
-          stdout: "null",
-          stderr: "null",
-        }).output();
+        const proc = Bun.spawn([execPath, ...prefix, ...options.approveArgs], {
+          stdout: "ignore",
+          stderr: "ignore",
+          env: process.env,
+        });
+        await proc.exited;
       } catch { /* command may not be resolvable */ }
       return true;
     }
     if (action === "deny") {
       try {
-        await new Deno.Command(execPath, {
-          args: [...prefix, ...options.denyArgs],
-          stdout: "null",
-          stderr: "null",
-        }).output();
+        const proc = Bun.spawn([execPath, ...prefix, ...options.denyArgs], {
+          stdout: "ignore",
+          stderr: "ignore",
+          env: process.env,
+        });
+        await proc.exited;
       } catch { /* command may not be resolvable */ }
       return true;
     }
@@ -251,9 +261,9 @@ function getNotifySendCommand(): string {
 }
 
 function findInPath(cmd: string): boolean {
-  for (const dir of (Deno.env.get("PATH") ?? "").split(":")) {
+  for (const dir of (process.env["PATH"] ?? "").split(":")) {
     try {
-      Deno.statSync(`${dir}/${cmd}`);
+      statSync(`${dir}/${cmd}`);
       return true;
     } catch {
       continue;
@@ -263,29 +273,16 @@ function findInPath(cmd: string): boolean {
 }
 
 /**
- * Read the bundled notify-send-wsl script and write it to a real file on disk
- * so it can be spawned as a subprocess. deno compile embeds --include'd files
- * in a virtual FS that is readable but not executable via spawn().
+ * Resolve the path to the bundled notify-send-wsl script.
+ * With Bun the file is always on a real filesystem (source tree or Nix store),
+ * so no extraction to a temp file is needed.
  */
 function extractWslShim(): string {
-  const embeddedUrl = new URL(
-    "../../scripts/notify-send-wsl",
+  return resolveAsset(
+    "scripts/notify-send-wsl",
     import.meta.url,
+    "../../scripts/notify-send-wsl",
   );
-  const embeddedPath = embeddedUrl.pathname;
-
-  // In dev (deno run) the file is already on disk — use it directly.
-  // In compiled mode import.meta.url is a virtual path under /tmp/deno-compile-*
-  // where Deno.statSync succeeds but the file cannot be spawned as a process.
-  const isCompiled = !path.basename(Deno.execPath()).startsWith("deno");
-  if (!isCompiled) return embeddedPath;
-
-  // deno compile: extract from virtual FS to a real temp file
-  const content = Deno.readTextFileSync(embeddedPath);
-  const tmpDir = Deno.makeTempDirSync({ prefix: "nas-wsl-shim-" });
-  const tmpPath = `${tmpDir}/notify-send-wsl`;
-  Deno.writeTextFileSync(tmpPath, content, { mode: 0o755 });
-  return tmpPath;
 }
 
 function warnNotifySendMissing(): void {
@@ -337,21 +334,23 @@ async function readNotifySendOutput(
 
 async function closeDesktopNotification(id: string): Promise<void> {
   try {
-    await new Deno.Command("gdbus", {
-      args: [
-        "call",
-        "--session",
-        "--dest",
-        "org.freedesktop.Notifications",
-        "--object-path",
-        "/org/freedesktop/Notifications",
-        "--method",
-        "org.freedesktop.Notifications.CloseNotification",
-        id,
-      ],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    const proc = Bun.spawn([
+      "gdbus",
+      "call",
+      "--session",
+      "--dest",
+      "org.freedesktop.Notifications",
+      "--object-path",
+      "/org/freedesktop/Notifications",
+      "--method",
+      "org.freedesktop.Notifications.CloseNotification",
+      id,
+    ], {
+      stdout: "ignore",
+      stderr: "ignore",
+      env: process.env,
+    });
+    await proc.exited;
   } catch {
     // gdbus may not be available (e.g. WSL without D-Bus)
   }

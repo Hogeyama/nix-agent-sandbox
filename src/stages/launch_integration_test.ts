@@ -1,3 +1,12 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * Container integration tests: Docker イメージと entrypoint の実起動
  *
@@ -16,8 +25,7 @@
  *   /tmp 直下を使用する。
  */
 
-import { assertEquals } from "@std/assert";
-import * as path from "@std/path";
+import * as path from "node:path";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -28,13 +36,23 @@ import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
 import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
+import {
+  chmod,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 
 const IMAGE_NAME = "nas-sandbox";
 
 // DinD 共有 tmp が利用可能なら bind mount テストで使う。
 // なければホスト Docker 前提で /tmp を使う。
-const SHARED_TMP = Deno.env.get("NAS_DIND_SHARED_TMP");
-const DOCKER_HOST = Deno.env.get("DOCKER_HOST");
+const SHARED_TMP = process.env["NAS_DIND_SHARED_TMP"];
+const DOCKER_HOST = process.env["DOCKER_HOST"];
 const USING_DIND = SHARED_TMP !== undefined && DOCKER_HOST !== undefined;
 const RUNNING_ON_HOST_DOCKER = !USING_DIND;
 
@@ -46,10 +64,10 @@ async function makeTempDir(prefix: string): Promise<string> {
   const base = SHARED_TMP ?? "/tmp";
   const name = `${prefix}${crypto.randomUUID().slice(0, 8)}`;
   const dir = `${base}/${name}`;
-  await Deno.mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true });
   if (SHARED_TMP) {
     // Deno.mkdir の mode では sticky bit が落ちるため、作成後に明示設定する。
-    await Deno.chmod(dir, 0o1777);
+    await chmod(dir, 0o1777);
   }
   return dir;
 }
@@ -57,19 +75,20 @@ async function makeTempDir(prefix: string): Promise<string> {
 async function makeTreeWritableForDind(root: string): Promise<void> {
   if (!USING_DIND) return;
 
-  for await (const entry of Deno.readDir(root)) {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
     const child = path.join(root, entry.name);
-    if (entry.isDirectory) {
+    if (entry.isDirectory()) {
       await makeTreeWritableForDind(child);
-      await Deno.chmod(child, 0o1777);
-    } else if (entry.isFile) {
-      const stat = await Deno.stat(child);
-      const mode = stat.mode ?? 0;
-      await Deno.chmod(child, (mode & 0o111) === 0 ? 0o666 : 0o777);
+      await chmod(child, 0o1777);
+    } else if (entry.isFile()) {
+      const s = await stat(child);
+      const mode = s.mode ?? 0;
+      await chmod(child, (mode & 0o111) === 0 ? 0o666 : 0o777);
     }
   }
 
-  await Deno.chmod(root, 0o1777);
+  await chmod(root, 0o1777);
 }
 
 // --- ヘルパー ---
@@ -77,13 +96,11 @@ async function makeTreeWritableForDind(root: string): Promise<void> {
 /** Docker が利用可能かチェック */
 async function isDockerAvailable(): Promise<boolean> {
   try {
-    const cmd = new Deno.Command("docker", {
-      args: ["info"],
-      stdout: "null",
-      stderr: "null",
-    });
-    const status = await cmd.output();
-    return status.success;
+    const exitCode = await Bun.spawn(["docker", "info"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
+    return exitCode === 0;
   } catch {
     return false;
   }
@@ -160,9 +177,9 @@ async function dockerRun(
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   await ensureImage();
 
-  const uid = Deno.uid() ?? 1000;
-  const gid = Deno.gid() ?? 1000;
-  const user = Deno.env.get("USER")?.trim() || "nas";
+  const uid = process.getuid!() ?? 1000;
+  const gid = process.getgid!() ?? 1000;
+  const user = process.env["USER"]?.trim() || "nas";
   const workDir = options.workDir ?? "/tmp";
 
   const args: string[] = [
@@ -194,127 +211,107 @@ async function dockerRun(
   args.push(IMAGE_NAME);
   args.push(...testCommand);
 
-  const cmd = new Deno.Command("docker", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
+  const proc = Bun.spawn(["docker", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  const output = await cmd.output();
-  return {
-    code: output.code,
-    stdout: new TextDecoder().decode(output.stdout),
-    stderr: new TextDecoder().decode(output.stderr),
-  };
+  const [code, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { code, stdout, stderr };
 }
 
 // ============================================================
 // 基本テスト (bind mount 不要 — DinD/ホストどちらでも動く)
 // ============================================================
 
-Deno.test({
-  name: "Integration: container runs command and exits 0",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: container runs command and exits 0",
+  async () => {
     const result = await dockerRun(["echo", "hello from nas"]);
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.trim(), "hello from nas");
+    expect(result.code).toEqual(0);
+    expect(result.stdout.trim()).toEqual("hello from nas");
   },
-});
+);
 
-Deno.test({
-  name: "Integration: non-zero exit code is propagated",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: non-zero exit code is propagated",
+  async () => {
     const result = await dockerRun(["bash", "-c", "exit 42"]);
-    assertEquals(result.code, 42);
+    expect(result.code).toEqual(42);
   },
-});
+);
 
-Deno.test({
-  name: "Integration: entrypoint drops to host UID/GID",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: entrypoint drops to host UID/GID",
+  async () => {
     const result = await dockerRun(["id"]);
-    assertEquals(result.code, 0);
+    expect(result.code).toEqual(0);
 
-    const hostUid = Deno.uid();
-    const hostGid = Deno.gid();
+    const hostUid = process.getuid!();
+    const hostGid = process.getgid!();
     if (hostUid !== null && hostGid !== null) {
-      assertEquals(
-        result.stdout.includes(`uid=${hostUid}`),
-        true,
-        `Expected uid=${hostUid} in: ${result.stdout}`,
-      );
-      assertEquals(
-        result.stdout.includes(`gid=${hostGid}`),
-        true,
-        `Expected gid=${hostGid} in: ${result.stdout}`,
-      );
+      expect(result.stdout.includes(`uid=${hostUid}`)).toEqual(true);
+      expect(result.stdout.includes(`gid=${hostGid}`)).toEqual(true);
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: USER and HOME are set correctly",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: USER and HOME are set correctly",
+  async () => {
     const result = await dockerRun(["bash", "-c", "echo $USER:$HOME"]);
-    assertEquals(result.code, 0);
+    expect(result.code).toEqual(0);
 
-    const hostUser = Deno.env.get("USER")?.trim() || "nas";
-    assertEquals(result.stdout.trim(), `${hostUser}:/home/${hostUser}`);
+    const hostUser = process.env["USER"]?.trim() || "nas";
+    expect(result.stdout.trim()).toEqual(`${hostUser}:/home/${hostUser}`);
   },
-});
+);
 
-Deno.test({
-  name: "Integration: home directory exists and is owned by user",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: home directory exists and is owned by user",
+  async () => {
     const result = await dockerRun([
       "bash",
       "-c",
       "stat -c '%U:%G' $HOME",
     ]);
-    assertEquals(result.code, 0);
+    expect(result.code).toEqual(0);
 
-    const hostUser = Deno.env.get("USER")?.trim() || "nas";
-    assertEquals(result.stdout.trim(), `${hostUser}:${hostUser}`);
+    const hostUser = process.env["USER"]?.trim() || "nas";
+    expect(result.stdout.trim()).toEqual(`${hostUser}:${hostUser}`);
   },
-});
+);
 
-Deno.test({
-  name: "Integration: custom env vars are passed to container",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: custom env vars are passed to container",
+  async () => {
     const result = await dockerRun(
       ["bash", "-c", "echo $MY_VAR:$OTHER_VAR"],
       { envVars: { MY_VAR: "hello", OTHER_VAR: "world" } },
     );
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.trim(), "hello:world");
+    expect(result.code).toEqual(0);
+    expect(result.stdout.trim()).toEqual("hello:world");
   },
-});
+);
 
-Deno.test({
-  name: "Integration: env var with special characters",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: env var with special characters",
+  async () => {
     const result = await dockerRun(
       ["bash", "-c", "echo $SPECIAL_VAR"],
       { envVars: { SPECIAL_VAR: "https://example.com?foo=bar&baz=qux" } },
     );
-    assertEquals(result.code, 0);
-    assertEquals(
-      result.stdout.trim(),
-      "https://example.com?foo=bar&baz=qux",
-    );
+    expect(result.code).toEqual(0);
+    expect(result.stdout.trim()).toEqual("https://example.com?foo=bar&baz=qux");
   },
-});
+);
 
-Deno.test({
-  name: "Integration: container has required tools installed",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: container has required tools installed",
+  async () => {
     const tools = [
       "git",
       "curl",
@@ -329,14 +326,11 @@ Deno.test({
     ];
     for (const tool of tools) {
       const result = await dockerRun(["which", tool]);
-      assertEquals(
-        result.code,
-        0,
-        `Expected ${tool} to be available, stderr: ${result.stderr}`,
-      );
+      expect(result.code).toEqual(0);
     }
   },
-});
+  30_000,
+);
 
 // ============================================================
 // bind mount テスト (共有 tmp 経由 — DinD/ホスト両対応)
@@ -345,15 +339,14 @@ Deno.test({
 // DinD 環境で共有ボリュームがない場合はスキップ。
 // ホスト Docker (DOCKER_HOST 未設定) の場合は /tmp が使えるので常に動く。
 const canBindMount = dockerAvailable &&
-  (SHARED_TMP !== undefined || !Deno.env.get("DOCKER_HOST"));
+  (SHARED_TMP !== undefined || !process.env["DOCKER_HOST"]);
 
-Deno.test({
-  name: "Integration: workspace is mounted and files are accessible",
-  ignore: !canBindMount,
-  async fn() {
+test.skipIf(!canBindMount)(
+  "Integration: workspace is mounted and files are accessible",
+  async () => {
     const tmpDir = await makeTempDir("nas-e2e-ws-");
     try {
-      await Deno.writeTextFile(
+      await writeFile(
         path.join(tmpDir, "testfile.txt"),
         "e2e-test-content",
       );
@@ -362,78 +355,75 @@ Deno.test({
         ["cat", path.join(tmpDir, "testfile.txt")],
         { workDir: tmpDir },
       );
-      assertEquals(result.code, 0);
-      assertEquals(result.stdout.trim(), "e2e-test-content");
+      expect(result.code).toEqual(0);
+      expect(result.stdout.trim()).toEqual("e2e-test-content");
     } finally {
-      await Deno.remove(tmpDir, { recursive: true });
+      await rm(tmpDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: working directory is set to workspace",
-  ignore: !canBindMount,
-  async fn() {
+test.skipIf(!canBindMount)(
+  "Integration: working directory is set to workspace",
+  async () => {
     const tmpDir = await makeTempDir("nas-e2e-pwd-");
     try {
       const result = await dockerRun(["pwd"], { workDir: tmpDir });
-      assertEquals(result.code, 0);
-      assertEquals(result.stdout.trim(), tmpDir);
+      expect(result.code).toEqual(0);
+      expect(result.stdout.trim()).toEqual(tmpDir);
     } finally {
-      await Deno.remove(tmpDir, { recursive: true });
+      await rm(tmpDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: files created in container are visible on host",
-  ignore: !canBindMount,
-  async fn() {
+test.skipIf(!canBindMount)(
+  "Integration: files created in container are visible on host",
+  async () => {
     const tmpDir = await makeTempDir("nas-e2e-write-");
     try {
       const result = await dockerRun(
         ["bash", "-c", "echo container-output > output.txt"],
         { workDir: tmpDir },
       );
-      assertEquals(result.code, 0);
+      expect(result.code).toEqual(0);
 
-      const content = await Deno.readTextFile(
+      const content = await readFile(
         path.join(tmpDir, "output.txt"),
+        "utf8",
       );
-      assertEquals(content.trim(), "container-output");
+      expect(content.trim()).toEqual("container-output");
     } finally {
-      await Deno.remove(tmpDir, { recursive: true });
+      await rm(tmpDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: file ownership in workspace matches host user",
-  ignore: !canBindMount,
-  async fn() {
+test.skipIf(!canBindMount)(
+  "Integration: file ownership in workspace matches host user",
+  async () => {
     const tmpDir = await makeTempDir("nas-e2e-own-");
     try {
       const result = await dockerRun(
         ["bash", "-c", "touch newfile.txt && stat -c '%u:%g' newfile.txt"],
         { workDir: tmpDir },
       );
-      assertEquals(result.code, 0);
+      expect(result.code).toEqual(0);
 
-      const hostUid = Deno.uid();
-      const hostGid = Deno.gid();
+      const hostUid = process.getuid!();
+      const hostGid = process.getgid!();
       if (hostUid !== null && hostGid !== null) {
-        assertEquals(result.stdout.trim(), `${hostUid}:${hostGid}`);
+        expect(result.stdout.trim()).toEqual(`${hostUid}:${hostGid}`);
       }
     } finally {
-      await Deno.remove(tmpDir, { recursive: true });
+      await rm(tmpDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: git safe.directory is configured for workspace",
-  ignore: !canBindMount,
-  async fn() {
+test.skipIf(!canBindMount)(
+  "Integration: git safe.directory is configured for workspace",
+  async () => {
     const tmpDir = await makeTempDir("nas-e2e-git-");
     try {
       for (
@@ -444,41 +434,35 @@ Deno.test({
           ["-C", tmpDir, "config", "commit.gpgsign", "false"],
         ]
       ) {
-        await new Deno.Command("git", {
-          args: gitArgs,
-          stdout: "null",
-          stderr: "null",
-        }).output();
+        await Bun.spawn(["git", ...gitArgs], {
+          stdout: "ignore",
+          stderr: "ignore",
+        }).exited;
       }
-      await Deno.writeTextFile(path.join(tmpDir, "hello.txt"), "hello");
-      await new Deno.Command("git", {
-        args: ["-C", tmpDir, "add", "."],
-        stdout: "null",
-        stderr: "null",
-      }).output();
-      await new Deno.Command("git", {
-        args: ["-C", tmpDir, "commit", "-m", "init"],
-        stdout: "null",
-        stderr: "null",
-      }).output();
+      await writeFile(path.join(tmpDir, "hello.txt"), "hello");
+      await Bun.spawn(["git", "-C", tmpDir, "add", "."], {
+        stdout: "ignore",
+        stderr: "ignore",
+      }).exited;
+      await Bun.spawn(["git", "-C", tmpDir, "commit", "-m", "init"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      }).exited;
 
       const result = await dockerRun(
         ["git", "status", "--porcelain"],
         { workDir: tmpDir },
       );
-      assertEquals(result.code, 0);
+      expect(result.code).toEqual(0);
     } finally {
-      await Deno.remove(tmpDir, { recursive: true });
+      await rm(tmpDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration [host-only]: git commit works inside container",
-  // rootless DinD 経由の bind mount では git object/index の新規作成が
-  // remapped UID + デフォルト権限に引っ張られ、host Docker と同じ挙動にならない。
-  ignore: !canBindMount || !RUNNING_ON_HOST_DOCKER,
-  async fn() {
+test.skipIf(!canBindMount || !RUNNING_ON_HOST_DOCKER)(
+  "Integration [host-only]: git commit works inside container",
+  async () => {
     const tmpDir = await makeTempDir("nas-e2e-gitc-");
     try {
       for (
@@ -489,17 +473,20 @@ Deno.test({
           ["-C", tmpDir, "config", "commit.gpgsign", "false"],
         ]
       ) {
-        await new Deno.Command("git", {
-          args: gitArgs,
-          stdout: "null",
-          stderr: "null",
-        }).output();
+        await Bun.spawn(["git", ...gitArgs], {
+          stdout: "ignore",
+          stderr: "ignore",
+        }).exited;
       }
-      await new Deno.Command("git", {
-        args: ["-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
-        stdout: "null",
-        stderr: "null",
-      }).output();
+      await Bun.spawn([
+        "git",
+        "-C",
+        tmpDir,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "init",
+      ], { stdout: "ignore", stderr: "ignore" }).exited;
       await makeTreeWritableForDind(tmpDir);
 
       const result = await dockerRun(
@@ -510,31 +497,29 @@ Deno.test({
         ],
         { workDir: tmpDir },
       );
-      assertEquals(result.code, 0);
-      assertEquals(result.stdout.includes("from container"), true);
+      expect(result.code).toEqual(0);
+      expect(result.stdout.includes("from container")).toEqual(true);
 
       // このコンテナからもコミットが見える
-      const logCmd = await new Deno.Command("git", {
-        args: ["-C", tmpDir, "log", "--oneline", "-1"],
-        stdout: "piped",
-        stderr: "null",
-      }).output();
-      const log = new TextDecoder().decode(logCmd.stdout).trim();
-      assertEquals(log.includes("from container"), true);
+      const logCmd = Bun.spawn(
+        ["git", "-C", tmpDir, "log", "--oneline", "-1"],
+        { stdout: "pipe", stderr: "ignore" },
+      );
+      const log = (await new Response(logCmd.stdout).text()).trim();
+      expect(log.includes("from container")).toEqual(true);
     } finally {
-      await Deno.remove(tmpDir, { recursive: true });
+      await rm(tmpDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: extra mount (ro) is accessible in container",
-  ignore: !canBindMount,
-  async fn() {
+test.skipIf(!canBindMount)(
+  "Integration: extra mount (ro) is accessible in container",
+  async () => {
     const mountSrc = await makeTempDir("nas-e2e-mnt-");
     const workDir = await makeTempDir("nas-e2e-ws-");
     try {
-      await Deno.writeTextFile(
+      await writeFile(
         path.join(mountSrc, "data.txt"),
         "mounted-content",
       );
@@ -546,19 +531,18 @@ Deno.test({
           extraArgs: ["-v", `${mountSrc}:/mnt/test:ro`],
         },
       );
-      assertEquals(result.code, 0);
-      assertEquals(result.stdout.trim(), "mounted-content");
+      expect(result.code).toEqual(0);
+      expect(result.stdout.trim()).toEqual("mounted-content");
     } finally {
-      await Deno.remove(mountSrc, { recursive: true });
-      await Deno.remove(workDir, { recursive: true });
+      await rm(mountSrc, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: extra mount (rw) allows writing from container",
-  ignore: !canBindMount,
-  async fn() {
+test.skipIf(!canBindMount)(
+  "Integration: extra mount (rw) allows writing from container",
+  async () => {
     const mountSrc = await makeTempDir("nas-e2e-rw-");
     const workDir = await makeTempDir("nas-e2e-ws-");
     try {
@@ -573,32 +557,31 @@ Deno.test({
           extraArgs: ["-v", `${mountSrc}:/mnt/rw`],
         },
       );
-      assertEquals(result.code, 0);
-      assertEquals(result.stdout.trim(), "written");
+      expect(result.code).toEqual(0);
+      expect(result.stdout.trim()).toEqual("written");
 
-      const content = await Deno.readTextFile(
+      const content = await readFile(
         path.join(mountSrc, "output.txt"),
+        "utf8",
       );
-      assertEquals(content.trim(), "written");
+      expect(content.trim()).toEqual("written");
     } finally {
-      await Deno.remove(mountSrc, { recursive: true });
-      await Deno.remove(workDir, { recursive: true });
+      await rm(mountSrc, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
     }
   },
-});
+);
 
 // ============================================================
 // Nix 統合 (ホスト Docker + /nix が必要)
 // ============================================================
 
-const hasHostNix = await Deno.stat("/nix").then(() => true, () => false);
+const hasHostNix = await stat("/nix").then(() => true, () => false);
 const canMountHostNix = hasHostNix && RUNNING_ON_HOST_DOCKER;
 
-Deno.test({
-  name:
-    "Integration [host-only]: nix enabled - /nix is accessible and nix --version works",
-  ignore: !canBindMount || !canMountHostNix,
-  async fn() {
+test.skipIf(!canBindMount || !canMountHostNix)(
+  "Integration [host-only]: nix enabled - /nix is accessible and nix --version works",
+  async () => {
     const workDir = await makeTempDir("nas-e2e-nix-");
     try {
       let nixBinPath: string | null = null;
@@ -609,7 +592,7 @@ Deno.test({
         ]
       ) {
         try {
-          const real = await Deno.realPath(p);
+          const real = await realpath(p);
           if (real.startsWith("/nix/store/")) {
             nixBinPath = real;
             break;
@@ -619,14 +602,16 @@ Deno.test({
 
       let nixConfPath: string | null = null;
       try {
-        const cmd = new Deno.Command("readlink", {
-          args: ["-f", "/etc/nix/nix.conf"],
-          stdout: "piped",
-          stderr: "null",
+        const proc = Bun.spawn(["readlink", "-f", "/etc/nix/nix.conf"], {
+          stdout: "pipe",
+          stderr: "ignore",
         });
-        const out = await cmd.output();
-        if (out.success) {
-          nixConfPath = new TextDecoder().decode(out.stdout).trim();
+        const [exitCode, stdoutText] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+        ]);
+        if (exitCode === 0) {
+          nixConfPath = stdoutText.trim();
         }
       } catch { /* ignore */ }
 
@@ -649,31 +634,30 @@ Deno.test({
         ["ls", "/nix"],
         { workDir, envVars, extraArgs },
       );
-      assertEquals(lsResult.code, 0);
-      assertEquals(lsResult.stdout.includes("store"), true);
+      expect(lsResult.code).toEqual(0);
+      expect(lsResult.stdout.includes("store")).toEqual(true);
 
       const nixResult = await dockerRun(
         ["nix", "--version"],
         { workDir, envVars, extraArgs },
       );
-      assertEquals(nixResult.code, 0);
-      assertEquals(nixResult.stdout.toLowerCase().includes("nix"), true);
+      expect(nixResult.code).toEqual(0);
+      expect(nixResult.stdout.toLowerCase().includes("nix")).toEqual(true);
     } finally {
-      await Deno.remove(workDir, { recursive: true });
+      await rm(workDir, { recursive: true, force: true });
     }
   },
-});
+);
 
-Deno.test({
-  name: "Integration: nix disabled - /nix/store is not accessible",
-  ignore: !dockerAvailable,
-  async fn() {
+test.skipIf(!dockerAvailable)(
+  "Integration: nix disabled - /nix/store is not accessible",
+  async () => {
     const result = await dockerRun([
       "bash",
       "-c",
       "test -d /nix/store && echo mounted || echo not-mounted",
     ]);
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.trim(), "not-mounted");
+    expect(result.code).toEqual(0);
+    expect(result.stdout.trim()).toEqual("not-mounted");
   },
-});
+);

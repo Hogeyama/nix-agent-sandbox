@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-all
+#!/usr/bin/env bun
 
 /**
  * nas - Nix Agent Sandbox
@@ -8,5 +8,8 @@
 import { main } from "./src/cli.ts";
 
 if (import.meta.main) {
-  await main(Deno.args);
+  main(process.argv.slice(2)).catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
 }

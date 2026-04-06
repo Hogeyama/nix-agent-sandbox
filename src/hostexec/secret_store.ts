@@ -1,4 +1,5 @@
-import * as path from "@std/path";
+import * as path from "node:path";
+import { readFile, stat } from "node:fs/promises";
 import type { SecretConfig } from "../config/types.ts";
 
 export interface SecretStoreOptions {
@@ -23,7 +24,8 @@ export class SecretStore {
     options: SecretStoreOptions = {},
   ) {
     this.secrets = secrets;
-    this.env = options.env ?? Deno.env.toObject();
+    this.env = options.env ??
+      ({ ...process.env } as Record<string, string | undefined>);
     this.keyringResolver = options.keyringResolver ?? defaultKeyringResolver;
   }
 
@@ -67,7 +69,7 @@ export async function resolveSecret(
   }
   if (source.startsWith("file:")) {
     const filePath = source.slice(5);
-    return (await Deno.readTextFile(filePath)).trimEnd();
+    return (await readFile(filePath, "utf8")).trimEnd();
   }
   if (source.startsWith("dotenv:")) {
     const target = source.slice(7);
@@ -77,7 +79,7 @@ export async function resolveSecret(
     }
     const filePath = target.slice(0, hashIndex);
     const key = target.slice(hashIndex + 1);
-    const parsed = parseDotEnv(await Deno.readTextFile(filePath));
+    const parsed = parseDotEnv(await readFile(filePath, "utf8"));
     return parsed[key] ?? null;
   }
   if (source.startsWith("keyring:")) {
@@ -119,7 +121,7 @@ async function defaultKeyringResolver(
   service: string,
   account: string,
 ): Promise<string | null> {
-  if (Deno.build.os === "linux") {
+  if (process.platform === "linux") {
     return await readKeyringViaCommand("secret-tool", [
       "lookup",
       "service",
@@ -128,7 +130,7 @@ async function defaultKeyringResolver(
       account,
     ]);
   }
-  if (Deno.build.os === "darwin") {
+  if (process.platform === "darwin") {
     return await readKeyringViaCommand("security", [
       "find-generic-password",
       "-s",
@@ -138,7 +140,7 @@ async function defaultKeyringResolver(
       "-w",
     ]);
   }
-  throw new Error(`keyring secrets are not supported on ${Deno.build.os}`);
+  throw new Error(`keyring secrets are not supported on ${process.platform}`);
 }
 
 async function readKeyringViaCommand(
@@ -149,25 +151,26 @@ async function readKeyringViaCommand(
   if (!resolved) {
     throw new Error(`keyring helper not found: ${command}`);
   }
-  const output = await new Deno.Command(resolved, {
-    args,
-    stdout: "piped",
-    stderr: "null",
-  }).output();
-  if (!output.success) {
+  const proc = Bun.spawn([resolved, ...args], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const code = await proc.exited;
+  if (code !== 0) {
     return null;
   }
-  return new TextDecoder().decode(output.stdout).trimEnd() || null;
+  return stdout.trimEnd() || null;
 }
 
 async function resolveCommand(name: string): Promise<string | null> {
-  const pathValue = Deno.env.get("PATH") ?? "";
+  const pathValue = process.env["PATH"] ?? "";
   for (const dir of pathValue.split(":")) {
     if (!dir) continue;
     const candidate = path.join(dir, name);
     try {
-      const stat = await Deno.stat(candidate);
-      if (stat.isFile) return candidate;
+      const s = await stat(candidate);
+      if (s.isFile()) return candidate;
     } catch {
       // ignore
     }

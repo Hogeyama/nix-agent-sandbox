@@ -3,7 +3,8 @@
  * Auto-starts the UI server when a notification needs to be sent.
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { logInfo, logWarn } from "../log.ts";
 import { resolveNasCommand } from "../lib/notify_utils.ts";
 
@@ -24,7 +25,7 @@ export interface EnsureUiDaemonOptions {
 }
 
 function daemonStateDir(): string {
-  const home = Deno.env.get("HOME") ?? "/tmp";
+  const home = process.env["HOME"] ?? "/tmp";
   return path.join(home, ".cache", "nas", "ui");
 }
 
@@ -104,10 +105,10 @@ export async function stopUiDaemon(
   ]);
   for (const pid of resolveDaemonPidsToStop(state, listeningPids)) {
     try {
-      Deno.kill(pid, "SIGTERM");
+      process.kill(pid, "SIGTERM");
       killed = true;
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
         throw error;
       }
     }
@@ -117,7 +118,7 @@ export async function stopUiDaemon(
     logInfo("[nas] UI daemon stopped");
     // Clean up state file
     try {
-      await Deno.remove(daemonStatePath());
+      await rm(daemonStatePath(), { force: true });
     } catch {
       // ignore
     }
@@ -153,12 +154,11 @@ async function startUiDaemon(
   const shellCmd = await hasSetsid()
     ? `setsid ${cmdLine} </dev/null >/dev/null 2>&1 &`
     : `(${cmdLine}) </dev/null >/dev/null 2>&1 &`;
-  const child = new Deno.Command("sh", {
-    args: ["-c", shellCmd],
-    stdin: "null",
-    stdout: "null",
-    stderr: "null",
-  }).spawn();
+  const child = Bun.spawn(["sh", "-c", shellCmd], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
   child.unref();
 
   await writeDaemonState({
@@ -169,12 +169,12 @@ async function startUiDaemon(
 
 async function hasSetsid(): Promise<boolean> {
   try {
-    const result = await new Deno.Command("sh", {
-      args: ["-c", "command -v setsid"],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    return result.success;
+    const proc = Bun.spawn(["sh", "-c", "command -v setsid"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const code = await proc.exited;
+    return code === 0;
   } catch {
     return false;
   }
@@ -183,10 +183,10 @@ async function hasSetsid(): Promise<boolean> {
 async function readDaemonState(): Promise<DaemonState | null> {
   try {
     return JSON.parse(
-      await Deno.readTextFile(daemonStatePath()),
+      await readFile(daemonStatePath(), "utf8"),
     ) as DaemonState;
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
     }
     throw error;
@@ -194,8 +194,8 @@ async function readDaemonState(): Promise<DaemonState | null> {
 }
 
 async function writeDaemonState(state: DaemonState): Promise<void> {
-  await Deno.mkdir(daemonStateDir(), { recursive: true });
-  await Deno.writeTextFile(
+  await mkdir(daemonStateDir(), { recursive: true });
+  await writeFile(
     daemonStatePath(),
     JSON.stringify(state, null, 2),
   );
@@ -213,13 +213,13 @@ export function parseListeningPids(output: string): number[] {
 
 async function listListeningPids(port: number): Promise<number[]> {
   try {
-    const cmd = new Deno.Command("lsof", {
-      args: ["-ti", `tcp:${port}`, "-sTCP:LISTEN"],
-      stdout: "piped",
-      stderr: "null",
+    const proc = Bun.spawn(["lsof", "-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      stdout: "pipe",
+      stderr: "ignore",
     });
-    const { stdout } = await cmd.output();
-    return parseListeningPids(new TextDecoder().decode(stdout).trim());
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+    return parseListeningPids(stdout.trim());
   } catch {
     return [];
   }

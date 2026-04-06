@@ -1,63 +1,77 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { parseDotEnv, resolveSecret, SecretStore } from "./secret_store.ts";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-Deno.test("parseDotEnv: parses export and quoted values", () => {
+test("parseDotEnv: parses export and quoted values", () => {
   const parsed = parseDotEnv(
     `\n# comment\nexport FOO=bar\nBAR="baz"\nBAZ='qux'\n`,
   );
-  assertEquals(parsed, { FOO: "bar", BAR: "baz", BAZ: "qux" });
+  expect(parsed).toEqual({ FOO: "bar", BAR: "baz", BAZ: "qux" });
 });
 
-Deno.test("parseDotEnv: handles escaped quotes in double-quoted values", () => {
+test("parseDotEnv: handles escaped quotes in double-quoted values", () => {
   const parsed = parseDotEnv(
     `SECRET="value with \\"escaped\\" quotes"\nBACKSLASH="a\\\\b"\n`,
   );
-  assertEquals(parsed.SECRET, 'value with "escaped" quotes');
-  assertEquals(parsed.BACKSLASH, "a\\b");
+  expect(parsed.SECRET).toEqual('value with "escaped" quotes');
+  expect(parsed.BACKSLASH).toEqual("a\\b");
 });
 
-Deno.test("resolveSecret: reads env/file/dotenv/keyring sources", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-secret-store-" });
+test("resolveSecret: reads env/file/dotenv/keyring sources", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-secret-store-"));
   try {
     const filePath = `${tmpDir}/secret.txt`;
     const dotenvPath = `${tmpDir}/.env`;
-    await Deno.writeTextFile(filePath, "file-secret\n");
-    await Deno.writeTextFile(dotenvPath, "TOKEN=dotenv-secret\n");
+    await writeFile(filePath, "file-secret\n");
+    await writeFile(dotenvPath, "TOKEN=dotenv-secret\n");
 
-    assertEquals(
+    expect(
       await resolveSecret(
         "env:MY_SECRET",
         { MY_SECRET: "env-secret" },
         () => Promise.resolve(null),
       ),
+    ).toEqual(
       "env-secret",
     );
-    assertEquals(
+    expect(
       await resolveSecret(`file:${filePath}`, {}, () => Promise.resolve(null)),
-      "file-secret",
-    );
-    assertEquals(
+    ).toEqual("file-secret");
+    expect(
       await resolveSecret(
         `dotenv:${dotenvPath}#TOKEN`,
         {},
         () => Promise.resolve(null),
       ),
+    ).toEqual(
       "dotenv-secret",
     );
-    assertEquals(
+    expect(
       await resolveSecret(
         "keyring:svc/account",
         {},
-        (service, account) => Promise.resolve(`${service}:${account}`),
+        (service: string, account: string) =>
+          Promise.resolve(`${service}:${account}`),
       ),
+    ).toEqual(
       "svc:account",
     );
   } finally {
-    await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("SecretStore: caches values and enforces required secrets", async () => {
+test("SecretStore: caches values and enforces required secrets", async () => {
   let calls = 0;
   const store = new SecretStore(
     {
@@ -74,17 +88,17 @@ Deno.test("SecretStore: caches values and enforces required secrets", async () =
     },
   );
 
-  assertEquals(await store.require("token"), "abc");
-  assertEquals(await store.get("optional"), null);
-  assertEquals(await store.require("keyring"), "from-keyring");
-  assertEquals(await store.require("keyring"), "from-keyring");
-  assertEquals(calls, 1);
-  await assertRejects(() => store.require("missing"), Error, "Unknown secret");
+  expect(await store.require("token")).toEqual("abc");
+  expect(await store.get("optional")).toEqual(null);
+  expect(await store.require("keyring")).toEqual("from-keyring");
+  expect(await store.require("keyring")).toEqual("from-keyring");
+  expect(calls).toEqual(1);
+  await expect(store.require("missing")).rejects.toThrow("Unknown secret");
 });
 
-Deno.test("SecretStore: rejects missing required secret", async () => {
+test("SecretStore: rejects missing required secret", async () => {
   const store = new SecretStore({
     token: { from: "env:TOKEN", required: true },
   }, { env: {} });
-  await assertRejects(() => store.require("token"), Error, "Required secret");
+  await expect(store.require("token")).rejects.toThrow("Required secret");
 });

@@ -79,7 +79,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
     console.error(
       "  Usage: nas network [pending|approve|deny|review|gc] [--scope ...]",
     );
-    Deno.exit(1);
+    process.exit(1);
   } catch (err) {
     exitOnCliError(err);
   }

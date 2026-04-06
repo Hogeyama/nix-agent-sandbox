@@ -1,15 +1,24 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * CLI E2E tests
  *
- * main() 関数を直接呼び出すのではなく、deno run でプロセスとして実行し
+ * main() 関数を直接呼び出すのではなく、bun run でプロセスとして実行し
  * 終了コード・stdout・stderr を検証する。
  *
  * Docker を使うテスト（パイプライン経由でエージェント起動）は
  * ignore: !dockerAvailable でガードされ、Docker 不在時はスキップされる。
  */
 
-import { assertEquals, assertMatch } from "@std/assert";
-import * as path from "@std/path";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   HostExecBroker,
   sendHostExecBrokerRequest,
@@ -28,6 +37,16 @@ import {
   writeSessionRegistry,
 } from "../src/network/registry.ts";
 import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import {
   type AuthorizeRequest,
   type DecisionResponse,
   hashToken,
@@ -39,24 +58,22 @@ import {
 // ============================================================
 
 const MAIN_TS = path.join(
-  path.dirname(path.fromFileUrl(import.meta.url)),
+  path.dirname(fileURLToPath(import.meta.url)),
   "..",
   "main.ts",
 );
 
-const SHARED_TMP = Deno.env.get("NAS_DIND_SHARED_TMP");
-const DOCKER_HOST = Deno.env.get("DOCKER_HOST");
+const SHARED_TMP = process.env["NAS_DIND_SHARED_TMP"];
+const DOCKER_HOST = process.env["DOCKER_HOST"];
 const canBindMount = SHARED_TMP !== undefined || !DOCKER_HOST;
 
 async function isDockerAvailable(): Promise<boolean> {
   try {
-    const cmd = new Deno.Command("docker", {
-      args: ["info"],
-      stdout: "null",
-      stderr: "null",
-    });
-    const status = await cmd.output();
-    return status.success;
+    const exitCode = await Bun.spawn(["docker", "info"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
+    return exitCode === 0;
   } catch {
     return false;
   }
@@ -72,26 +89,18 @@ async function runNas(
     env?: Record<string, string>;
   } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  const cmd = new Deno.Command("deno", {
-    args: ["run", "--allow-all", MAIN_TS, ...args],
+  const proc = Bun.spawn(["bun", "run", MAIN_TS, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
     cwd: options.cwd,
-    stdout: "piped",
-    stderr: "piped",
-    env: options.env
-      ? {
-        ...options.env,
-        ...(options.cwd
-          ? { DENO_COVERAGE: path.join(options.cwd, ".coverage") }
-          : {}),
-      }
-      : undefined,
+    env: options.env ? { ...process.env, ...options.env } : undefined,
   });
-  const output = await cmd.output();
-  return {
-    code: output.code,
-    stdout: new TextDecoder().decode(output.stdout),
-    stderr: new TextDecoder().decode(output.stderr),
-  };
+  const [code, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { code, stdout, stderr };
 }
 
 /** 一時ディレクトリに設定ファイルを配置するヘルパー */
@@ -99,45 +108,42 @@ async function withTempConfig(
   yaml: string,
   fn: (dir: string) => Promise<void>,
 ): Promise<void> {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-test-" });
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-test-"));
   try {
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(tmpDir, ".agent-sandbox.yml"),
       yaml,
     );
     await fn(tmpDir);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 }
 
 /** 一時 git リポジトリを初期化し、テストに必要なローカル設定を入れる */
 async function initGitRepo(dir: string): Promise<void> {
-  await new Deno.Command("git", {
-    args: ["init", dir],
-    stdout: "null",
-    stderr: "null",
-  }).output();
-  await new Deno.Command("git", {
-    args: ["-C", dir, "config", "user.name", "nas-test"],
-    stdout: "null",
-    stderr: "null",
-  }).output();
-  await new Deno.Command("git", {
-    args: ["-C", dir, "config", "user.email", "nas-test@example.com"],
-    stdout: "null",
-    stderr: "null",
-  }).output();
-  await new Deno.Command("git", {
-    args: ["-C", dir, "config", "commit.gpgsign", "false"],
-    stdout: "null",
-    stderr: "null",
-  }).output();
-  await new Deno.Command("git", {
-    args: ["-C", dir, "commit", "--allow-empty", "-m", "init"],
-    stdout: "null",
-    stderr: "null",
-  }).output();
+  await Bun.spawn(["git", "init", dir], { stdout: "ignore", stderr: "ignore" })
+    .exited;
+  await Bun.spawn(["git", "-C", dir, "config", "user.name", "nas-test"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  }).exited;
+  await Bun.spawn([
+    "git",
+    "-C",
+    dir,
+    "config",
+    "user.email",
+    "nas-test@example.com",
+  ], { stdout: "ignore", stderr: "ignore" }).exited;
+  await Bun.spawn(["git", "-C", dir, "config", "commit.gpgsign", "false"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  }).exited;
+  await Bun.spawn(["git", "-C", dir, "commit", "--allow-empty", "-m", "init"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  }).exited;
 }
 
 function makeTempDir(prefix: string): Promise<string> {
@@ -145,22 +151,22 @@ function makeTempDir(prefix: string): Promise<string> {
     return (async () => {
       const name = `${prefix}${crypto.randomUUID().slice(0, 8)}`;
       const dir = path.join(SHARED_TMP, name);
-      await Deno.mkdir(dir, { recursive: true });
-      await Deno.chmod(dir, 0o1777);
+      await mkdir(dir, { recursive: true });
+      await chmod(dir, 0o1777);
       return dir;
     })();
   }
-  return Deno.makeTempDir({ prefix });
+  return mkdtemp(path.join(tmpdir(), prefix));
 }
 
 async function makeWritableForDind(target: string): Promise<void> {
   if (!SHARED_TMP) return;
-  await Deno.chmod(target, 0o1777);
+  await chmod(target, 0o1777);
 }
 
 async function exists(targetPath: string): Promise<boolean> {
   try {
-    await Deno.stat(targetPath);
+    await stat(targetPath);
     return true;
   } catch {
     return false;
@@ -171,57 +177,59 @@ async function exists(targetPath: string): Promise<boolean> {
 // CLI: --help
 // ============================================================
 
-Deno.test("CLI: --help shows usage and exits 0", async () => {
+test("CLI: --help shows usage and exits 0", async () => {
   const result = await runNas(["--help"]);
-  assertEquals(result.code, 0);
-  assertEquals(result.stdout.includes("nas - Nix Agent Sandbox"), true);
-  assertEquals(result.stdout.includes("Usage:"), true);
-  assertEquals(result.stdout.includes("Subcommands:"), true);
-  assertEquals(result.stdout.includes("Options:"), true);
-  assertEquals(result.stdout.includes("container"), true);
+  expect(result.code).toEqual(0);
+  expect(result.stdout.includes("nas - Nix Agent Sandbox")).toEqual(true);
+  expect(result.stdout.includes("Usage:")).toEqual(true);
+  expect(result.stdout.includes("Subcommands:")).toEqual(true);
+  expect(result.stdout.includes("Options:")).toEqual(true);
+  expect(result.stdout.includes("container")).toEqual(true);
 });
 
-Deno.test("CLI: -h shows usage and exits 0", async () => {
+test("CLI: -h shows usage and exits 0", async () => {
   const result = await runNas(["-h"]);
-  assertEquals(result.code, 0);
-  assertEquals(result.stdout.includes("nas - Nix Agent Sandbox"), true);
+  expect(result.code).toEqual(0);
+  expect(result.stdout.includes("nas - Nix Agent Sandbox")).toEqual(true);
 });
 
-Deno.test("CLI: help includes quiet option", async () => {
+test("CLI: help includes quiet option", async () => {
   const result = await runNas(["--help"]);
-  assertEquals(result.code, 0);
-  assertEquals(result.stdout.includes("--quiet"), true);
+  expect(result.code).toEqual(0);
+  expect(result.stdout.includes("--quiet")).toEqual(true);
 });
 
-Deno.test("CLI: help includes all subcommands", async () => {
+test("CLI: help includes all subcommands", async () => {
   const result = await runNas(["--help"]);
-  assertEquals(result.stdout.includes("rebuild"), true);
-  assertEquals(result.stdout.includes("worktree"), true);
+  expect(result.stdout.includes("rebuild")).toEqual(true);
+  expect(result.stdout.includes("worktree")).toEqual(true);
 });
 
-Deno.test("CLI: help includes example commands", async () => {
+test("CLI: help includes example commands", async () => {
   const result = await runNas(["--help"]);
-  assertEquals(result.stdout.includes("nas rebuild"), true);
-  assertEquals(result.stdout.includes("nas worktree list"), true);
-  assertEquals(result.stdout.includes("nas worktree clean"), true);
-  assertEquals(result.stdout.includes('nas copilot-nix -p "list files"'), true);
-  assertEquals(result.stdout.includes('nas -- -p "list files"'), true);
+  expect(result.stdout.includes("nas rebuild")).toEqual(true);
+  expect(result.stdout.includes("nas worktree list")).toEqual(true);
+  expect(result.stdout.includes("nas worktree clean")).toEqual(true);
+  expect(result.stdout.includes('nas copilot-nix -p "list files"')).toEqual(
+    true,
+  );
+  expect(result.stdout.includes('nas -- -p "list files"')).toEqual(true);
 });
 
-Deno.test("CLI: --help with -- still shows help", async () => {
+test("CLI: --help with -- still shows help", async () => {
   const result = await runNas(["--help", "--", "extra", "args"]);
-  assertEquals(result.code, 0);
-  assertEquals(result.stdout.includes("nas - Nix Agent Sandbox"), true);
+  expect(result.code).toEqual(0);
+  expect(result.stdout.includes("nas - Nix Agent Sandbox")).toEqual(true);
 });
 
-Deno.test("CLI: --help takes precedence over missing config", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-help-" });
+test("CLI: --help takes precedence over missing config", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-help-"));
   try {
     const result = await runNas(["--help"], { cwd: tmpDir });
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("nas - Nix Agent Sandbox"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("nas - Nix Agent Sandbox")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -229,27 +237,27 @@ Deno.test("CLI: --help takes precedence over missing config", async () => {
 // CLI: --version
 // ============================================================
 
-Deno.test("CLI: --version shows version and exits 0", async () => {
+test("CLI: --version shows version and exits 0", async () => {
   const result = await runNas(["--version"]);
-  assertEquals(result.code, 0);
-  assertEquals(result.stdout.trim().startsWith("nas "), true);
-  assertEquals(/^nas \d+\.\d+\.\d+$/.test(result.stdout.trim()), true);
+  expect(result.code).toEqual(0);
+  expect(result.stdout.trim().startsWith("nas ")).toEqual(true);
+  expect(/^nas \d+\.\d+\.\d+$/.test(result.stdout.trim())).toEqual(true);
 });
 
-Deno.test("CLI: -V shows version and exits 0", async () => {
+test("CLI: -V shows version and exits 0", async () => {
   const result = await runNas(["-V"]);
-  assertEquals(result.code, 0);
-  assertEquals(result.stdout.trim().startsWith("nas "), true);
+  expect(result.code).toEqual(0);
+  expect(result.stdout.trim().startsWith("nas ")).toEqual(true);
 });
 
-Deno.test("CLI: --version takes precedence over missing config", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-ver-" });
+test("CLI: --version takes precedence over missing config", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-ver-"));
   try {
     const result = await runNas(["--version"], { cwd: tmpDir });
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.trim().startsWith("nas "), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.trim().startsWith("nas ")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -257,18 +265,21 @@ Deno.test("CLI: --version takes precedence over missing config", async () => {
 // CLI: config errors
 // ============================================================
 
-Deno.test("CLI: exits with error when no config file found", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-noconf-" });
+test("CLI: exits with error when no config file found", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-noconf-"));
   try {
-    const result = await runNas([], { cwd: tmpDir, env: { HOME: tmpDir } });
-    assertEquals(result.code, 1);
-    assertEquals(result.stderr.includes("not found"), true);
+    const result = await runNas([], {
+      cwd: tmpDir,
+      env: { HOME: tmpDir, XDG_CONFIG_HOME: path.join(tmpDir, ".config") },
+    });
+    expect(result.code).toEqual(1);
+    expect(result.stderr.includes("not found")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: exits with error for nonexistent profile", async () => {
+test("CLI: exits with error for nonexistent profile", async () => {
   const yaml = `
 profiles:
   dev:
@@ -276,12 +287,12 @@ profiles:
 `;
   await withTempConfig(yaml, async (dir) => {
     const result = await runNas(["nonexistent"], { cwd: dir });
-    assertEquals(result.code, 1);
-    assertEquals(result.stderr.includes("not found"), true);
+    expect(result.code).toEqual(1);
+    expect(result.stderr.includes("not found")).toEqual(true);
   });
 });
 
-Deno.test("CLI: exits with error for invalid YAML config", async () => {
+test("CLI: exits with error for invalid YAML config", async () => {
   const yaml = `
 profiles:
   test:
@@ -289,23 +300,26 @@ profiles:
 `;
   await withTempConfig(yaml, async (dir) => {
     const result = await runNas([], { cwd: dir });
-    assertEquals(result.code, 1);
-    assertEquals(result.stderr.includes("agent must be one of"), true);
+    expect(result.code).toEqual(1);
+    expect(result.stderr.includes("agent must be one of")).toEqual(true);
   });
 });
 
-Deno.test("CLI: exits with error for empty profiles", async () => {
+test("CLI: exits with error for empty profiles", async () => {
   const yaml = `
 profiles: {}
 `;
   await withTempConfig(yaml, async (dir) => {
-    const result = await runNas([], { cwd: dir, env: { HOME: dir } });
-    assertEquals(result.code, 1);
-    assertEquals(result.stderr.includes("at least one entry"), true);
+    const result = await runNas([], {
+      cwd: dir,
+      env: { HOME: dir, XDG_CONFIG_HOME: path.join(dir, ".config") },
+    });
+    expect(result.code).toEqual(1);
+    expect(result.stderr.includes("at least one entry")).toEqual(true);
   });
 });
 
-Deno.test("CLI: multiple profiles without default exits with error", async () => {
+test("CLI: multiple profiles without default exits with error", async () => {
   const yaml = `
 profiles:
   a:
@@ -314,12 +328,12 @@ profiles:
     agent: copilot
 `;
   await withTempConfig(yaml, async (dir) => {
-    const result = await runNas([], { cwd: dir, env: { HOME: dir } });
-    assertEquals(result.code, 1);
-    assertEquals(
-      result.stderr.includes("No profile specified"),
-      true,
-    );
+    const result = await runNas([], {
+      cwd: dir,
+      env: { HOME: dir, XDG_CONFIG_HOME: path.join(dir, ".config") },
+    });
+    expect(result.code).toEqual(1);
+    expect(result.stderr.includes("No profile specified")).toEqual(true);
   });
 });
 
@@ -327,49 +341,46 @@ profiles:
 // CLI: worktree subcommand
 // ============================================================
 
-Deno.test("CLI: worktree list works in a git repo", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-" });
+test("CLI: worktree list works in a git repo", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "clitest-wt-"));
   try {
     await initGitRepo(tmpDir);
     const result = await runNas(["worktree", "list"], { cwd: tmpDir });
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("No nas worktrees found"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("No nas worktrees found")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: worktree with unknown subcommand exits with error", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-unk-" });
+test("CLI: worktree with unknown subcommand exits with error", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "clitest-wt-unk-"));
   try {
     await initGitRepo(tmpDir);
     const result = await runNas(["worktree", "unknown"], { cwd: tmpDir });
-    assertEquals(result.code, 1);
-    assertEquals(
-      result.stderr.includes("Unknown worktree subcommand"),
-      true,
-    );
+    expect(result.code).toEqual(1);
+    expect(result.stderr.includes("Unknown worktree subcommand")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: worktree clean --force on empty repo", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-clean-" });
+test("CLI: worktree clean --force on empty repo", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "clitest-wt-clean-"));
   try {
     await initGitRepo(tmpDir);
     const result = await runNas(["worktree", "clean", "--force"], {
       cwd: tmpDir,
     });
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("No nas worktrees found"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("No nas worktrees found")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: worktree list shows existing nas worktrees", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-show-" });
+test("CLI: worktree list shows existing nas worktrees", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "clitest-wt-show-"));
   try {
     await initGitRepo(tmpDir);
     const wtPath = path.join(
@@ -378,35 +389,36 @@ Deno.test("CLI: worktree list shows existing nas worktrees", async () => {
       "nas-worktrees",
       "nas-test-2026-01-01T00-00-00",
     );
-    await Deno.mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
+    await mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
       recursive: true,
     });
-    await new Deno.Command("git", {
-      args: [
-        "-C",
-        tmpDir,
-        "worktree",
-        "add",
-        "-b",
-        "nas/test/2026-01-01T00-00-00",
-        wtPath,
-        "HEAD",
-      ],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await Bun.spawn([
+      "git",
+      "-C",
+      tmpDir,
+      "worktree",
+      "add",
+      "-b",
+      "nas/test/2026-01-01T00-00-00",
+      wtPath,
+      "HEAD",
+    ], { stdout: "ignore", stderr: "ignore" }).exited;
 
     const result = await runNas(["worktree", "list"], { cwd: tmpDir });
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("nas-test-2026-01-01T00-00-00"), true);
-    assertEquals(result.stdout.includes("nas/test/2026-01-01T00-00-00"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("nas-test-2026-01-01T00-00-00")).toEqual(
+      true,
+    );
+    expect(result.stdout.includes("nas/test/2026-01-01T00-00-00")).toEqual(
+      true,
+    );
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: worktree clean --force removes nas worktrees", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-rm-" });
+test("CLI: worktree clean --force removes nas worktrees", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "clitest-wt-rm-"));
   try {
     await initGitRepo(tmpDir);
     const wtPath = path.join(
@@ -415,39 +427,36 @@ Deno.test("CLI: worktree clean --force removes nas worktrees", async () => {
       "nas-worktrees",
       "nas-prof-2026-01-01T00-00-00",
     );
-    await Deno.mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
+    await mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
       recursive: true,
     });
-    await new Deno.Command("git", {
-      args: [
-        "-C",
-        tmpDir,
-        "worktree",
-        "add",
-        "-b",
-        "nas/prof/2026-01-01T00-00-00",
-        wtPath,
-        "HEAD",
-      ],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await Bun.spawn([
+      "git",
+      "-C",
+      tmpDir,
+      "worktree",
+      "add",
+      "-b",
+      "nas/prof/2026-01-01T00-00-00",
+      wtPath,
+      "HEAD",
+    ], { stdout: "ignore", stderr: "ignore" }).exited;
 
     const result = await runNas(["worktree", "clean", "--force"], {
       cwd: tmpDir,
     });
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("Removed"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("Removed")).toEqual(true);
 
     const listResult = await runNas(["worktree", "list"], { cwd: tmpDir });
-    assertEquals(listResult.stdout.includes("No nas worktrees found"), true);
+    expect(listResult.stdout.includes("No nas worktrees found")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: worktree clean -f -B removes worktrees and orphan branches", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-wt-fb-" });
+test("CLI: worktree clean -f -B removes worktrees and orphan branches", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "clitest-wt-fb-"));
   try {
     await initGitRepo(tmpDir);
     const wtPath = path.join(
@@ -456,52 +465,60 @@ Deno.test("CLI: worktree clean -f -B removes worktrees and orphan branches", asy
       "nas-worktrees",
       "nas-orphan-2026-01-01T00-00-00",
     );
-    await Deno.mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
+    await mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
       recursive: true,
     });
-    await new Deno.Command("git", {
-      args: [
-        "-C",
-        tmpDir,
-        "worktree",
-        "add",
-        "-b",
-        "nas/orphan/2026-01-01T00-00-00",
-        wtPath,
-        "HEAD",
-      ],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["-C", tmpDir, "worktree", "remove", "--force", wtPath],
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await Bun.spawn([
+      "git",
+      "-C",
+      tmpDir,
+      "worktree",
+      "add",
+      "-b",
+      "nas/orphan/2026-01-01T00-00-00",
+      wtPath,
+      "HEAD",
+    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    await Bun.spawn([
+      "git",
+      "-C",
+      tmpDir,
+      "worktree",
+      "remove",
+      "--force",
+      wtPath,
+    ], { stdout: "ignore", stderr: "ignore" }).exited;
 
-    const branchCheck = await new Deno.Command("git", {
-      args: ["-C", tmpDir, "branch", "--list", "nas/*"],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    const branches = new TextDecoder().decode(branchCheck.stdout).trim();
-    assertEquals(branches.includes("nas/orphan/2026-01-01T00-00-00"), true);
+    const branchCheck = await Bun.spawn([
+      "git",
+      "-C",
+      tmpDir,
+      "branch",
+      "--list",
+      "nas/*",
+    ], { stdout: "pipe", stderr: "ignore" });
+    const branches = (await new Response(branchCheck.stdout).text()).trim();
+    expect(branches.includes("nas/orphan/2026-01-01T00-00-00")).toEqual(true);
 
     const result = await runNas(["worktree", "clean", "-f", "-B"], {
       cwd: tmpDir,
     });
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("orphan branch"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("orphan branch")).toEqual(true);
 
-    const branchAfter = await new Deno.Command("git", {
-      args: ["-C", tmpDir, "branch", "--list", "nas/*"],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
-    const branchesAfter = new TextDecoder().decode(branchAfter.stdout).trim();
-    assertEquals(branchesAfter, "");
+    const branchAfter = await Bun.spawn([
+      "git",
+      "-C",
+      tmpDir,
+      "branch",
+      "--list",
+      "nas/*",
+    ], { stdout: "pipe", stderr: "ignore" });
+    const branchesAfter = (await new Response(branchAfter.stdout).text())
+      .trim();
+    expect(branchesAfter).toEqual("");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -509,17 +526,16 @@ Deno.test("CLI: worktree clean -f -B removes worktrees and orphan branches", asy
 // CLI: container subcommand
 // ============================================================
 
-Deno.test("CLI: container with unknown subcommand exits with error", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "clitest-container-unk-" });
+test("CLI: container with unknown subcommand exits with error", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "clitest-container-unk-"));
   try {
     const result = await runNas(["container", "unknown"], { cwd: tmpDir });
-    assertEquals(result.code, 1);
-    assertEquals(
-      result.stderr.includes("Unknown container subcommand"),
+    expect(result.code).toEqual(1);
+    expect(result.stderr.includes("Unknown container subcommand")).toEqual(
       true,
     );
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -527,14 +543,14 @@ Deno.test("CLI: container with unknown subcommand exits with error", async () =>
 // CLI: hostexec subcommand
 // ============================================================
 
-Deno.test("CLI: hostexec pending lists queued approvals", async () => {
-  const runtimeRoot = await Deno.makeTempDir({ prefix: "nas-cli-hostexec-" });
+test("CLI: hostexec pending lists queued approvals", async () => {
+  const runtimeRoot = await mkdtemp(path.join(tmpdir(), "nas-cli-hostexec-"));
   const runtimeDir = `${runtimeRoot}/nas/hostexec`;
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-cli-hostexec-work-",
-  });
-  const oldToken = Deno.env.get("HOSTEXEC_CLI_TOKEN");
-  Deno.env.set("HOSTEXEC_CLI_TOKEN", "cli-secret");
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-cli-hostexec-work-"),
+  );
+  const oldToken = process.env["HOSTEXEC_CLI_TOKEN"];
+  process.env["HOSTEXEC_CLI_TOKEN"] = "cli-secret";
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const broker = new HostExecBroker({
     paths,
@@ -572,7 +588,7 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
     brokerSocket: socketPath,
     profileName: "test",
     createdAt: new Date().toISOString(),
-    pid: Deno.pid,
+    pid: process.pid,
   });
   try {
     const execPromise = sendHostExecBrokerRequest(socketPath, {
@@ -581,7 +597,7 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
       sessionId: "sess_cli",
       requestId: "req_cli",
       argv0: "deno",
-      args: ["eval", "console.log(Deno.env.get('TOKEN'))"],
+      args: ["eval", "console.log(process.env['TOKEN'])"],
       cwd: workspace,
       tty: false,
     });
@@ -592,23 +608,23 @@ Deno.test("CLI: hostexec pending lists queued approvals", async () => {
       "--runtime-dir",
       runtimeDir,
     ]);
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("sess_cli req_cli deno-eval"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("sess_cli req_cli deno-eval")).toEqual(true);
     await sendHostExecBrokerRequest(socketPath, {
       type: "deny",
       requestId: "req_cli",
     });
     await execPromise;
   } finally {
-    if (oldToken !== undefined) Deno.env.set("HOSTEXEC_CLI_TOKEN", oldToken);
-    else Deno.env.delete("HOSTEXEC_CLI_TOKEN");
+    if (oldToken !== undefined) process.env["HOSTEXEC_CLI_TOKEN"] = oldToken;
+    else delete process.env["HOSTEXEC_CLI_TOKEN"];
     await broker.close().catch(() => {});
-    await Deno.remove(runtimeRoot, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeRoot, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("CLI: hostexec test forwards command args after --", async () => {
+test("CLI: hostexec test forwards command args after --", async () => {
   const yaml = `
 profiles:
   claude:
@@ -628,16 +644,14 @@ profiles:
       ["hostexec", "test", "--profile", "claude", "--", "gpg", "hoge"],
       { cwd: dir },
     );
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes('args string: "hoge"'), true);
-    assertEquals(
-      result.stdout.includes("Matched rule: gpg-sign (approval: allow)"),
-      true,
-    );
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes('args string: "hoge"')).toEqual(true);
+    expect(result.stdout.includes("Matched rule: gpg-sign (approval: allow)"))
+      .toEqual(true);
   });
 });
 
-Deno.test("CLI: hostexec test preserves positional args named like subcommand", async () => {
+test("CLI: hostexec test preserves positional args named like subcommand", async () => {
   const yaml = `
 profiles:
   claude:
@@ -657,12 +671,10 @@ profiles:
       ["hostexec", "test", "--profile", "claude", "--", "deno", "-A", "test"],
       { cwd: dir },
     );
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes('args string: "-A test"'), true);
-    assertEquals(
-      result.stdout.includes("Matched rule: deno-test (approval: allow)"),
-      true,
-    );
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes('args string: "-A test"')).toEqual(true);
+    expect(result.stdout.includes("Matched rule: deno-test (approval: allow)"))
+      .toEqual(true);
   });
 });
 
@@ -670,24 +682,24 @@ profiles:
 // CLI: audit subcommand
 // ============================================================
 
-Deno.test("CLI: audit with no logs shows empty message", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-empty-" });
+test("CLI: audit with no logs shows empty message", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-empty-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await Deno.mkdir(auditDir, { recursive: true });
+    await mkdir(auditDir, { recursive: true });
     const result = await runNas(["audit", "--audit-dir", auditDir]);
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("No audit log entries found"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("No audit log entries found")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: audit displays log entries in text format", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-text-" });
+test("CLI: audit displays log entries in text format", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-text-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await Deno.mkdir(auditDir, { recursive: true });
+    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
     const entry = {
       id: "uuid-1",
@@ -699,27 +711,27 @@ Deno.test("CLI: audit displays log entries in text format", async () => {
       reason: "allowlist match",
       target: "example.com:443",
     };
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(auditDir, `${today}.jsonl`),
       JSON.stringify(entry) + "\n",
     );
 
     const result = await runNas(["audit", "--audit-dir", auditDir]);
-    assertEquals(result.code, 0);
-    assertEquals(result.stdout.includes("sess_abc"), true);
-    assertEquals(result.stdout.includes("network"), true);
-    assertEquals(result.stdout.includes("allow"), true);
-    assertEquals(result.stdout.includes("example.com:443"), true);
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes("sess_abc")).toEqual(true);
+    expect(result.stdout.includes("network")).toEqual(true);
+    expect(result.stdout.includes("allow")).toEqual(true);
+    expect(result.stdout.includes("example.com:443")).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: audit --json outputs JSON array", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-json-" });
+test("CLI: audit --json outputs JSON array", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-json-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await Deno.mkdir(auditDir, { recursive: true });
+    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
     const entry = {
       id: "uuid-2",
@@ -731,28 +743,28 @@ Deno.test("CLI: audit --json outputs JSON array", async () => {
       reason: "no matching rule",
       command: "rm -rf /",
     };
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(auditDir, `${today}.jsonl`),
       JSON.stringify(entry) + "\n",
     );
 
     const result = await runNas(["audit", "--json", "--audit-dir", auditDir]);
-    assertEquals(result.code, 0);
+    expect(result.code).toEqual(0);
     const parsed = JSON.parse(result.stdout);
-    assertEquals(Array.isArray(parsed), true);
-    assertEquals(parsed.length, 1);
-    assertEquals(parsed[0].sessionId, "sess_def");
-    assertEquals(parsed[0].decision, "deny");
+    expect(Array.isArray(parsed)).toEqual(true);
+    expect(parsed.length).toEqual(1);
+    expect(parsed[0].sessionId).toEqual("sess_def");
+    expect(parsed[0].decision).toEqual("deny");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: audit --session filters by session", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-sess-" });
+test("CLI: audit --session filters by session", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-sess-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await Deno.mkdir(auditDir, { recursive: true });
+    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
     const entry1 = {
       id: "uuid-3",
@@ -774,7 +786,7 @@ Deno.test("CLI: audit --session filters by session", async () => {
       reason: "blocked",
       target: "b.com:80",
     };
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(auditDir, `${today}.jsonl`),
       JSON.stringify(entry1) + "\n" + JSON.stringify(entry2) + "\n",
     );
@@ -787,20 +799,20 @@ Deno.test("CLI: audit --session filters by session", async () => {
       "--audit-dir",
       auditDir,
     ]);
-    assertEquals(result.code, 0);
+    expect(result.code).toEqual(0);
     const parsed = JSON.parse(result.stdout);
-    assertEquals(parsed.length, 1);
-    assertEquals(parsed[0].sessionId, "sess_aaa");
+    expect(parsed.length).toEqual(1);
+    expect(parsed[0].sessionId).toEqual("sess_aaa");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("CLI: audit --domain filters by domain", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-cli-audit-dom-" });
+test("CLI: audit --domain filters by domain", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-dom-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await Deno.mkdir(auditDir, { recursive: true });
+    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
     const entry1 = {
       id: "uuid-5",
@@ -822,7 +834,7 @@ Deno.test("CLI: audit --domain filters by domain", async () => {
       reason: "blocked",
       command: "ls",
     };
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(auditDir, `${today}.jsonl`),
       JSON.stringify(entry1) + "\n" + JSON.stringify(entry2) + "\n",
     );
@@ -835,12 +847,12 @@ Deno.test("CLI: audit --domain filters by domain", async () => {
       "--audit-dir",
       auditDir,
     ]);
-    assertEquals(result.code, 0);
+    expect(result.code).toEqual(0);
     const parsed = JSON.parse(result.stdout);
-    assertEquals(parsed.length, 1);
-    assertEquals(parsed[0].domain, "hostexec");
+    expect(parsed.length).toEqual(1);
+    expect(parsed[0].domain).toEqual("hostexec");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -857,16 +869,16 @@ async function withFakeCodexProject(
     const homeDir = path.join(rootDir, "home");
     const binDir = path.join(rootDir, "bin");
 
-    await Deno.mkdir(projectDir, { recursive: true });
-    await Deno.mkdir(path.join(homeDir, ".codex"), { recursive: true });
-    await Deno.mkdir(binDir, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(path.join(homeDir, ".codex"), { recursive: true });
+    await mkdir(binDir, { recursive: true });
     await makeWritableForDind(projectDir);
     await makeWritableForDind(homeDir);
     await makeWritableForDind(path.join(homeDir, ".codex"));
     await makeWritableForDind(binDir);
 
     const fakeCodexPath = path.join(binDir, "codex");
-    await Deno.writeTextFile(
+    await writeFile(
       fakeCodexPath,
       [
         "#!/bin/sh",
@@ -876,9 +888,9 @@ async function withFakeCodexProject(
         'if [ "$1" = "write-file" ]; then printf "written-by-fake-codex\\n" > "./from-agent.txt"; fi',
       ].join("\n"),
     );
-    await Deno.chmod(fakeCodexPath, 0o755);
+    await chmod(fakeCodexPath, 0o755);
 
-    await Deno.writeTextFile(
+    await writeFile(
       path.join(projectDir, ".agent-sandbox.yml"),
       [
         "default: test",
@@ -905,37 +917,35 @@ async function withFakeCodexProject(
 
     const env = {
       HOME: homeDir,
-      PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+      PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
     };
 
     await fn(projectDir, env);
   } finally {
-    await Deno.remove(rootDir, { recursive: true }).catch(() => {});
+    await rm(rootDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-Deno.test({
-  name: "CLI E2E: launches agent through nas pipeline",
-  ignore: !dockerAvailable || !canBindMount,
-  async fn() {
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "CLI E2E: launches agent through nas pipeline",
+  async () => {
     await withFakeCodexProject(async (projectDir, env) => {
       const result = await runNas(["test", "--", "hello", "world"], {
         cwd: projectDir,
         env,
       });
 
-      assertEquals(result.code, 0);
-      assertEquals(result.stdout.includes(`PWD=${projectDir}`), true);
-      assertEquals(result.stdout.includes("ARGS=hello world"), true);
-      assertEquals(result.stdout.includes("MY_VAR=from-config"), true);
+      expect(result.code).toEqual(0);
+      expect(result.stdout.includes(`PWD=${projectDir}`)).toEqual(true);
+      expect(result.stdout.includes("ARGS=hello world")).toEqual(true);
+      expect(result.stdout.includes("MY_VAR=from-config")).toEqual(true);
     });
   },
-});
+);
 
-Deno.test({
-  name: "CLI E2E: agent writes into mounted workspace",
-  ignore: !dockerAvailable || !canBindMount,
-  async fn() {
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "CLI E2E: agent writes into mounted workspace",
+  async () => {
     await withFakeCodexProject(async (projectDir, env) => {
       const outputPath = path.join(projectDir, "from-agent.txt");
       const result = await runNas(["test", "--", "write-file"], {
@@ -943,12 +953,12 @@ Deno.test({
         env,
       });
 
-      assertEquals(result.code, 0);
-      const content = await Deno.readTextFile(outputPath);
-      assertEquals(content.trim(), "written-by-fake-codex");
+      expect(result.code).toEqual(0);
+      const content = await readFile(outputPath, "utf8");
+      expect(content.trim()).toEqual("written-by-fake-codex");
     });
   },
-});
+);
 
 // ============================================================
 // CLI E2E: network subcommand
@@ -994,14 +1004,14 @@ async function withBrokerFixture(
     allowlist: [],
     promptEnabled: options.promptEnabled ?? true,
     createdAt: new Date().toISOString(),
-    pid: Deno.pid,
+    pid: process.pid,
   });
 
   try {
     await fn({ runtimeDir, sessionId, socketPath, broker });
   } finally {
     await broker.close().catch(() => {});
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -1044,7 +1054,7 @@ async function waitForPending(
   throw new Error("Timed out waiting for pending CLI entry");
 }
 
-Deno.test("CLI E2E: network pending lists queued approvals", async () => {
+test("CLI E2E: network pending lists queued approvals", async () => {
   await withBrokerFixture({}, async ({ runtimeDir, sessionId, socketPath }) => {
     const authorizePromise = authorizeThroughBroker(
       socketPath,
@@ -1057,12 +1067,11 @@ Deno.test("CLI E2E: network pending lists queued approvals", async () => {
 
     const result = await runNas(
       ["network", "pending", "--runtime-dir", runtimeDir],
-      { cwd: Deno.cwd() },
+      { cwd: process.cwd() },
     );
 
-    assertEquals(result.code, 0);
-    assertMatch(
-      result.stdout,
+    expect(result.code).toEqual(0);
+    expect(result.stdout).toMatch(
       new RegExp(`${sessionId} req_pending api\\.openai\\.com:443 pending`),
     );
 
@@ -1071,11 +1080,11 @@ Deno.test("CLI E2E: network pending lists queued approvals", async () => {
       requestId: "req_pending",
     });
     const decision = await authorizePromise;
-    assertEquals(decision.decision, "deny");
+    expect(decision.decision).toEqual("deny");
   });
 });
 
-Deno.test("CLI E2E: network approve resumes pending request", async () => {
+test("CLI E2E: network approve resumes pending request", async () => {
   await withBrokerFixture({}, async ({ runtimeDir, sessionId, socketPath }) => {
     const authorizePromise = authorizeThroughBroker(
       socketPath,
@@ -1097,22 +1106,20 @@ Deno.test("CLI E2E: network approve resumes pending request", async () => {
         "--runtime-dir",
         runtimeDir,
       ],
-      { cwd: Deno.cwd() },
+      { cwd: process.cwd() },
     );
 
-    assertEquals(result.code, 0);
-    assertEquals(
-      result.stdout.includes(`Approved ${sessionId} req_approve_cli`),
-      true,
-    );
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes(`Approved ${sessionId} req_approve_cli`))
+      .toEqual(true);
 
     const decision = await authorizePromise;
-    assertEquals(decision.decision, "allow");
-    assertEquals(decision.scope, "host-port");
+    expect(decision.decision).toEqual("allow");
+    expect(decision.scope).toEqual("host-port");
   });
 });
 
-Deno.test("CLI E2E: network deny rejects pending request", async () => {
+test("CLI E2E: network deny rejects pending request", async () => {
   await withBrokerFixture({}, async ({ runtimeDir, sessionId, socketPath }) => {
     const authorizePromise = authorizeThroughBroker(
       socketPath,
@@ -1132,30 +1139,29 @@ Deno.test("CLI E2E: network deny rejects pending request", async () => {
         "--runtime-dir",
         runtimeDir,
       ],
-      { cwd: Deno.cwd() },
+      { cwd: process.cwd() },
     );
 
-    assertEquals(result.code, 0);
-    assertEquals(
-      result.stdout.includes(`Denied ${sessionId} req_deny_cli`),
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes(`Denied ${sessionId} req_deny_cli`)).toEqual(
       true,
     );
 
     const decision = await authorizePromise;
-    assertEquals(decision.decision, "deny");
+    expect(decision.decision).toEqual("deny");
   });
 });
 
-Deno.test("CLI E2E: network gc removes stale runtime state", async () => {
+test("CLI E2E: network gc removes stale runtime state", async () => {
   const runtimeDir = await makeTempDir("nas-network-gc-");
   try {
     const paths = await resolveNetworkRuntimePaths(runtimeDir);
     const sessionId = "sess_stale";
     const staleSocket = brokerSocketPath(paths, sessionId);
-    await Deno.mkdir(pendingSessionDir(paths, sessionId), { recursive: true });
-    await Deno.writeTextFile(staleSocket, "");
-    await Deno.writeTextFile(paths.authRouterSocket, "");
-    await Deno.writeTextFile(paths.authRouterPidFile, "999999\n");
+    await mkdir(pendingSessionDir(paths, sessionId), { recursive: true });
+    await writeFile(staleSocket, "");
+    await writeFile(paths.authRouterSocket, "");
+    await writeFile(paths.authRouterPidFile, "999999\n");
     await writeSessionRegistry(paths, {
       version: 1,
       sessionId,
@@ -1170,21 +1176,20 @@ Deno.test("CLI E2E: network gc removes stale runtime state", async () => {
 
     const result = await runNas(
       ["network", "gc", "--runtime-dir", runtimeDir],
-      { cwd: Deno.cwd() },
+      { cwd: process.cwd() },
     );
 
-    assertEquals(result.code, 0);
-    assertEquals(
-      result.stdout.includes(
-        "GC removed 1 session(s), 1 pending dir(s), 1 broker socket(s).",
-      ),
+    expect(result.code).toEqual(0);
+    expect(result.stdout.includes(
+      "GC removed 1 session(s), 1 pending dir(s), 1 broker socket(s).",
+    )).toEqual(
       true,
     );
-    assertEquals(await exists(paths.authRouterSocket), false);
-    assertEquals(await exists(paths.authRouterPidFile), false);
-    assertEquals(await exists(staleSocket), false);
+    expect(await exists(paths.authRouterSocket)).toEqual(false);
+    expect(await exists(paths.authRouterPidFile)).toEqual(false);
+    expect(await exists(staleSocket)).toEqual(false);
   } finally {
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

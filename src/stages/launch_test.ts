@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { expect, test } from "bun:test";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -14,7 +14,7 @@ import type {
 } from "../pipeline/types.ts";
 import { createLaunchStage } from "./launch.ts";
 
-Deno.test("LaunchStage: produces docker-run-interactive effect with composed command", () => {
+test("LaunchStage: produces docker-run-interactive effect with composed command", () => {
   const stage = createLaunchStage(["--user-arg"]);
   const input = createTestInput({
     imageName: "custom-image",
@@ -25,9 +25,9 @@ Deno.test("LaunchStage: produces docker-run-interactive effect with composed com
   input.profile.agentArgs = ["--profile-arg"];
 
   const plan = stage.plan(input);
-  assertEquals(plan !== null, true);
-  assertEquals(plan!.effects.length, 1);
-  assertEquals(plan!.effects[0].kind, "docker-run-interactive");
+  expect(plan !== null).toEqual(true);
+  expect(plan!.effects.length).toEqual(1);
+  expect(plan!.effects[0].kind).toEqual("docker-run-interactive");
 
   const effect = plan!.effects[0] as {
     kind: string;
@@ -37,21 +37,21 @@ Deno.test("LaunchStage: produces docker-run-interactive effect with composed com
     command: string[];
     name: string;
   };
-  assertEquals(effect.image, "custom-image");
-  assertEquals(effect.args, [
+  expect(effect.image).toEqual("custom-image");
+  expect(effect.args).toEqual([
     "--network",
     "sandbox-net",
     "-v",
     "/tmp:/workspace",
   ]);
-  assertEquals(effect.envVars, { TOKEN: "secret", MODE: "test" });
-  assertEquals(effect.command, [
+  expect(effect.envVars).toEqual({ TOKEN: "secret", MODE: "test" });
+  expect(effect.command).toEqual([
     "agent-bin",
     "serve",
     "--profile-arg",
     "--user-arg",
   ]);
-  assertEquals(effect.name.startsWith("nas-agent-"), true);
+  expect(effect.name.startsWith("nas-agent-")).toEqual(true);
 });
 
 function createTestInput(

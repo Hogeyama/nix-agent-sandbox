@@ -2,7 +2,7 @@
  * worktree teardown 時のインタラクティブプロンプト
  */
 
-import * as path from "@std/path";
+import * as path from "node:path";
 import { isWorktreeDirty } from "./git_helpers.ts";
 import type { WorktreeEntry } from "./management.ts";
 
@@ -66,10 +66,10 @@ export async function promptBranchAction(
   if (!branchName) return "delete";
 
   // ブランチ上のコミット数を表示（参考情報）
-  const { default: $ } = await import("dax");
+  const { $ } = await import("bun");
   try {
-    const log = await $`git log --oneline ${branchName} --not --remotes -10`
-      .text();
+    const log = (await $`git log --oneline ${branchName} --not --remotes -10`
+      .text()).toString();
     if (log.trim()) {
       console.log(`[nas] Recent commits on ${branchName}:`);
       for (const line of log.trim().split("\n")) {
@@ -125,11 +125,13 @@ export function promptReuseWorktree(
 export async function stashDirtyWorktree(
   worktreePath: string,
 ): Promise<void> {
-  const { default: $ } = await import("dax");
+  const { $ } = await import("bun");
   const stashMessage = `nas teardown ${path.basename(worktreePath)} ${
     new Date().toISOString()
   }`;
-  await $`git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`
-    .printCommand();
+  console.log(
+    `$ git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`,
+  );
+  await $`git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`;
   console.log(`[nas] Stashed worktree changes: ${stashMessage}`);
 }

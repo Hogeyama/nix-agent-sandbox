@@ -1,13 +1,24 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 /**
  * UI API ルートの単体テスト — Hono の app.request() でテスト
  */
 
-import { assertEquals } from "@std/assert";
 import { Hono } from "hono";
 import { createApiRoutes } from "./api.ts";
 import type { UiDataContext } from "../data.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 /** テスト用のダミーコンテキストを作成 */
 function createTestContext(dir: string): UiDataContext {
@@ -30,13 +41,13 @@ function createTestContext(dir: string): UiDataContext {
   return { networkPaths, hostExecPaths, auditDir: `${dir}/audit` };
 }
 
-Deno.test("GET /network/pending returns items array", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /network/pending returns items array", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
     // Create required dirs
-    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -44,22 +55,22 @@ Deno.test("GET /network/pending returns items array", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/network/pending");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(Array.isArray(body.items), true);
-    assertEquals(body.items.length, 0);
+    expect(Array.isArray(body.items)).toEqual(true);
+    expect(body.items.length).toEqual(0);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /hostexec/pending returns items array", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /hostexec/pending returns items array", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/hostexec/brokers`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/hostexec/wrappers`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/wrappers`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -67,23 +78,23 @@ Deno.test("GET /hostexec/pending returns items array", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/hostexec/pending");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(Array.isArray(body.items), true);
-    assertEquals(body.items.length, 0);
+    expect(Array.isArray(body.items)).toEqual(true);
+    expect(body.items.length).toEqual(0);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /sessions returns network and hostexec arrays", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /sessions returns network and hostexec arrays", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -91,21 +102,21 @@ Deno.test("GET /sessions returns network and hostexec arrays", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/sessions");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(Array.isArray(body.network), true);
-    assertEquals(Array.isArray(body.hostexec), true);
+    expect(Array.isArray(body.network)).toEqual(true);
+    expect(Array.isArray(body.hostexec)).toEqual(true);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("POST /network/approve returns 400 without required fields", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("POST /network/approve returns 400 without required fields", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -117,20 +128,20 @@ Deno.test("POST /network/approve returns 400 without required fields", async () 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    assertEquals(res.status, 400);
+    expect(res.status).toEqual(400);
     const body = await res.json();
-    assertEquals(body.error, "sessionId and requestId are required");
+    expect(body.error).toEqual("sessionId and requestId are required");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("POST /network/deny returns 400 without required fields", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("POST /network/deny returns 400 without required fields", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -142,17 +153,17 @@ Deno.test("POST /network/deny returns 400 without required fields", async () => 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    assertEquals(res.status, 400);
+    expect(res.status).toEqual(400);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("POST /hostexec/approve returns 400 without required fields", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("POST /hostexec/approve returns 400 without required fields", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -164,17 +175,17 @@ Deno.test("POST /hostexec/approve returns 400 without required fields", async ()
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    assertEquals(res.status, 400);
+    expect(res.status).toEqual(400);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("POST /hostexec/deny returns 400 without required fields", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("POST /hostexec/deny returns 400 without required fields", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -186,23 +197,23 @@ Deno.test("POST /hostexec/deny returns 400 without required fields", async () =>
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    assertEquals(res.status, 400);
+    expect(res.status).toEqual(400);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /network/pending with pending entry returns it", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /network/pending with pending entry returns it", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
     const sessionId = "test-session-001";
     const requestId = "req-001";
 
-    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/pending/${sessionId}`, {
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending/${sessionId}`, {
       recursive: true,
     });
-    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
 
     // Write a pending entry
     const entry = {
@@ -216,14 +227,14 @@ Deno.test("GET /network/pending with pending entry returns it", async () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    await Deno.writeTextFile(
+    await writeFile(
       `${tmpDir}/network/pending/${sessionId}/${requestId}.json`,
       JSON.stringify(entry),
     );
 
     // Create a fake broker socket file so GC doesn't remove the session
     const brokerSocketPath = `${tmpDir}/network/brokers/${sessionId}.sock`;
-    await Deno.writeTextFile(brokerSocketPath, "");
+    await writeFile(brokerSocketPath, "");
 
     // Write a session registry so GC doesn't remove it
     const session = {
@@ -234,10 +245,10 @@ Deno.test("GET /network/pending with pending entry returns it", async () => {
       profileName: "test",
       allowlist: [],
       createdAt: new Date().toISOString(),
-      pid: Deno.pid,
+      pid: process.pid,
       promptEnabled: true,
     };
-    await Deno.writeTextFile(
+    await writeFile(
       `${tmpDir}/network/sessions/${sessionId}.json`,
       JSON.stringify(session),
     );
@@ -248,23 +259,23 @@ Deno.test("GET /network/pending with pending entry returns it", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/network/pending");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(body.items.length, 1);
-    assertEquals(body.items[0].requestId, requestId);
-    assertEquals(body.items[0].target.host, "example.com");
+    expect(body.items.length).toEqual(1);
+    expect(body.items[0].requestId).toEqual(requestId);
+    expect(body.items[0].target.host).toEqual("example.com");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /audit returns empty items when no logs exist", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /audit returns empty items when no logs exist", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -272,22 +283,22 @@ Deno.test("GET /audit returns empty items when no logs exist", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/audit");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(Array.isArray(body.items), true);
-    assertEquals(body.items.length, 0);
+    expect(Array.isArray(body.items)).toEqual(true);
+    expect(body.items.length).toEqual(0);
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /audit returns audit log entries", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /audit returns audit log entries", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/network/sessions`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/pending`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/network/brokers`, { recursive: true });
-    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
 
     // Write a JSONL audit log file
     const entry = {
@@ -300,7 +311,7 @@ Deno.test("GET /audit returns audit log entries", async () => {
       reason: "allowlist match",
       target: "example.com:443",
     };
-    await Deno.writeTextFile(
+    await writeFile(
       `${tmpDir}/audit/2026-03-28.jsonl`,
       JSON.stringify(entry) + "\n",
     );
@@ -311,20 +322,20 @@ Deno.test("GET /audit returns audit log entries", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/audit");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(body.items.length, 1);
-    assertEquals(body.items[0].id, "test-id-001");
-    assertEquals(body.items[0].domain, "network");
+    expect(body.items.length).toEqual(1);
+    expect(body.items[0].id).toEqual("test-id-001");
+    expect(body.items[0].domain).toEqual("network");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /audit with invalid domain returns 400", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /audit with invalid domain returns 400", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -332,18 +343,20 @@ Deno.test("GET /audit with invalid domain returns 400", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/audit?domain=invalid");
-    assertEquals(res.status, 400);
+    expect(res.status).toEqual(400);
     const body = await res.json();
-    assertEquals(body.error, 'Invalid domain: must be "network" or "hostexec"');
+    expect(body.error).toEqual(
+      'Invalid domain: must be "network" or "hostexec"',
+    );
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /audit with invalid limit returns 400", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /audit with invalid limit returns 400", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -351,18 +364,18 @@ Deno.test("GET /audit with invalid limit returns 400", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/audit?limit=abc");
-    assertEquals(res.status, 400);
+    expect(res.status).toEqual(400);
     const body = await res.json();
-    assertEquals(body.error, "Invalid limit: must be a positive integer");
+    expect(body.error).toEqual("Invalid limit: must be a positive integer");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /audit respects limit parameter", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /audit respects limit parameter", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
 
     // Write 3 entries
     const entries = [1, 2, 3].map((i) =>
@@ -376,7 +389,7 @@ Deno.test("GET /audit respects limit parameter", async () => {
         reason: "test",
       })
     );
-    await Deno.writeTextFile(
+    await writeFile(
       `${tmpDir}/audit/2026-03-28.jsonl`,
       entries.join("\n") + "\n",
     );
@@ -387,21 +400,21 @@ Deno.test("GET /audit respects limit parameter", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/audit?limit=2");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(body.items.length, 2);
+    expect(body.items.length).toEqual(2);
     // Should return the last 2 entries
-    assertEquals(body.items[0].id, "id-2");
-    assertEquals(body.items[1].id, "id-3");
+    expect(body.items[0].id).toEqual("id-2");
+    expect(body.items[1].id).toEqual("id-3");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-Deno.test("GET /audit filters by session parameter", async () => {
-  const tmpDir = await Deno.makeTempDir({ prefix: "nas-ui-test-" });
+test("GET /audit filters by session parameter", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await Deno.mkdir(`${tmpDir}/audit`, { recursive: true });
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
 
     const entries = [
       JSON.stringify({
@@ -423,7 +436,7 @@ Deno.test("GET /audit filters by session parameter", async () => {
         reason: "test",
       }),
     ];
-    await Deno.writeTextFile(
+    await writeFile(
       `${tmpDir}/audit/2026-03-28.jsonl`,
       entries.join("\n") + "\n",
     );
@@ -434,11 +447,11 @@ Deno.test("GET /audit filters by session parameter", async () => {
     app.route("/api", api);
 
     const res = await app.request("/api/audit?session=sess-001");
-    assertEquals(res.status, 200);
+    expect(res.status).toEqual(200);
     const body = await res.json();
-    assertEquals(body.items.length, 1);
-    assertEquals(body.items[0].sessionId, "sess-001");
+    expect(body.items.length).toEqual(1);
+    expect(body.items[0].sessionId).toEqual("sess-001");
   } finally {
-    await Deno.remove(tmpDir, { recursive: true });
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,17 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { executeEffect, executePlan, teardownHandles } from "./effects.ts";
 import type { ResourceEffect, StagePlan } from "./types.ts";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 // ---------------------------------------------------------------------------
 // Helper: create a unique temp directory for test isolation
@@ -9,12 +20,12 @@ import type { ResourceEffect, StagePlan } from "./types.ts";
 async function withTempDir(
   fn: (dir: string) => Promise<void>,
 ): Promise<void> {
-  const dir = await Deno.makeTempDir({ prefix: "effects_test_" });
+  const dir = await mkdtemp(path.join(tmpdir(), "effects_test_"));
   try {
     await fn(dir);
   } finally {
     try {
-      await Deno.remove(dir, { recursive: true });
+      await rm(dir, { recursive: true, force: true });
     } catch {
       // best-effort cleanup
     }
@@ -25,7 +36,7 @@ async function withTempDir(
 // directory-create
 // ---------------------------------------------------------------------------
 
-Deno.test("executeEffect: directory-create creates directory", async () => {
+test("executeEffect: directory-create creates directory", async () => {
   await withTempDir(async (dir) => {
     const target = `${dir}/sub/nested`;
     const handle = await executeEffect({
@@ -35,18 +46,18 @@ Deno.test("executeEffect: directory-create creates directory", async () => {
       removeOnTeardown: false,
     });
 
-    assertEquals(handle.kind, "directory-create");
-    const stat = await Deno.stat(target);
-    assertEquals(stat.isDirectory, true);
+    expect(handle.kind).toEqual("directory-create");
+    const st = await stat(target);
+    expect(st.isDirectory()).toEqual(true);
 
     // close should be a no-op since removeOnTeardown=false
     await handle.close();
-    const statAfter = await Deno.stat(target);
-    assertEquals(statAfter.isDirectory, true);
+    const statAfter = await stat(target);
+    expect(statAfter.isDirectory()).toEqual(true);
   });
 });
 
-Deno.test("executeEffect: directory-create removeOnTeardown removes directory", async () => {
+test("executeEffect: directory-create removeOnTeardown removes directory", async () => {
   await withTempDir(async (dir) => {
     const target = `${dir}/removable`;
     const handle = await executeEffect({
@@ -56,15 +67,12 @@ Deno.test("executeEffect: directory-create removeOnTeardown removes directory", 
       removeOnTeardown: true,
     });
 
-    const stat = await Deno.stat(target);
-    assertEquals(stat.isDirectory, true);
+    const st = await stat(target);
+    expect(st.isDirectory()).toEqual(true);
 
     await handle.close();
 
-    await assertRejects(
-      () => Deno.stat(target),
-      Deno.errors.NotFound,
-    );
+    await expect(stat(target)).rejects.toThrow();
   });
 });
 
@@ -72,7 +80,7 @@ Deno.test("executeEffect: directory-create removeOnTeardown removes directory", 
 // file-write
 // ---------------------------------------------------------------------------
 
-Deno.test("executeEffect: file-write creates file with content and mode", async () => {
+test("executeEffect: file-write creates file with content and mode", async () => {
   await withTempDir(async (dir) => {
     const target = `${dir}/test.txt`;
     const handle = await executeEffect({
@@ -82,24 +90,21 @@ Deno.test("executeEffect: file-write creates file with content and mode", async 
       mode: 0o644,
     });
 
-    assertEquals(handle.kind, "file-write");
-    const content = await Deno.readTextFile(target);
-    assertEquals(content, "hello world");
+    expect(handle.kind).toEqual("file-write");
+    const content = await readFile(target, "utf8");
+    expect(content).toEqual("hello world");
 
-    const stat = await Deno.stat(target);
+    const st = await stat(target);
     // Check that file mode matches (mask with 0o777 to ignore file type bits)
-    assertEquals(stat.mode !== null && (stat.mode & 0o777) === 0o644, true);
+    expect(st.mode !== null && (st.mode & 0o777) === 0o644).toEqual(true);
 
     // teardown removes the file
     await handle.close();
-    await assertRejects(
-      () => Deno.stat(target),
-      Deno.errors.NotFound,
-    );
+    await expect(stat(target)).rejects.toThrow();
   });
 });
 
-Deno.test("executeEffect: file-write with executable mode", async () => {
+test("executeEffect: file-write with executable mode", async () => {
   await withTempDir(async (dir) => {
     const target = `${dir}/script.sh`;
     const handle = await executeEffect({
@@ -109,8 +114,8 @@ Deno.test("executeEffect: file-write with executable mode", async () => {
       mode: 0o755,
     });
 
-    const stat = await Deno.stat(target);
-    assertEquals(stat.mode !== null && (stat.mode & 0o777) === 0o755, true);
+    const st = await stat(target);
+    expect(st.mode !== null && (st.mode & 0o777) === 0o755).toEqual(true);
 
     await handle.close();
   });
@@ -120,7 +125,7 @@ Deno.test("executeEffect: file-write with executable mode", async () => {
 // Unimplemented effects
 // ---------------------------------------------------------------------------
 
-Deno.test("executeEffect: unimplemented effects throw", async () => {
+test("executeEffect: unimplemented effects throw", async () => {
   const unimplementedKinds: ResourceEffect[] = [
     {
       kind: "docker-container",
@@ -137,47 +142,40 @@ Deno.test("executeEffect: unimplemented effects throw", async () => {
   ];
 
   for (const effect of unimplementedKinds) {
-    await assertRejects(
-      () => executeEffect(effect),
-      Error,
+    await expect(executeEffect(effect)).rejects.toThrow(
       `Effect not yet implemented: ${effect.kind}`,
     );
   }
 
   // unix-listener with session-broker spec throws a different message
-  await assertRejects(
-    () =>
-      executeEffect({
-        kind: "unix-listener",
-        id: "ul",
-        socketPath: "/tmp/s",
-        spec: {
-          kind: "session-broker",
-          paths: {
-            runtimeDir: "/tmp",
-            sessionsDir: "/tmp/sessions",
-            pendingDir: "/tmp/pending",
-            brokersDir: "/tmp/brokers",
-            authRouterSocket: "/tmp/auth.sock",
-            authRouterPidFile: "/tmp/auth.pid",
-            envoyConfigFile: "/tmp/envoy.yaml",
-          },
-          sessionId: "sid",
-          allowlist: [],
-          denylist: [],
-          promptEnabled: false,
-        },
-      }),
-    Error,
-    "unix-listener session-broker not yet implemented",
-  );
+  await expect(executeEffect({
+    kind: "unix-listener",
+    id: "ul",
+    socketPath: "/tmp/s",
+    spec: {
+      kind: "session-broker",
+      paths: {
+        runtimeDir: "/tmp",
+        sessionsDir: "/tmp/sessions",
+        pendingDir: "/tmp/pending",
+        brokersDir: "/tmp/brokers",
+        authRouterSocket: "/tmp/auth.sock",
+        authRouterPidFile: "/tmp/auth.pid",
+        envoyConfigFile: "/tmp/envoy.yaml",
+      },
+      sessionId: "sid",
+      allowlist: [],
+      denylist: [],
+      promptEnabled: false,
+    },
+  })).rejects.toThrow("unix-listener session-broker not yet implemented");
 });
 
 // ---------------------------------------------------------------------------
 // executePlan
 // ---------------------------------------------------------------------------
 
-Deno.test("executePlan: executes effects in order and returns handles", async () => {
+test("executePlan: executes effects in order and returns handles", async () => {
   await withTempDir(async (dir) => {
     const plan: StagePlan = {
       effects: [
@@ -200,20 +198,20 @@ Deno.test("executePlan: executes effects in order and returns handles", async ()
     };
 
     const handles = await executePlan(plan);
-    assertEquals(handles.length, 2);
-    assertEquals(handles[0].kind, "directory-create");
-    assertEquals(handles[1].kind, "file-write");
+    expect(handles.length).toEqual(2);
+    expect(handles[0].kind).toEqual("directory-create");
+    expect(handles[1].kind).toEqual("file-write");
 
     // Verify side effects occurred
-    const content = await Deno.readTextFile(`${dir}/plandir/file.txt`);
-    assertEquals(content, "plan content");
+    const content = await readFile(`${dir}/plandir/file.txt`, "utf8");
+    expect(content).toEqual("plan content");
 
     // Clean up via teardown
     await teardownHandles(handles);
   });
 });
 
-Deno.test("executePlan: tears down prior handles when Nth effect fails", async () => {
+test("executePlan: tears down prior handles when Nth effect fails", async () => {
   await withTempDir(async (dir) => {
     const target = `${dir}/created`;
     const plan: StagePlan = {
@@ -242,21 +240,16 @@ Deno.test("executePlan: tears down prior handles when Nth effect fails", async (
     };
 
     // The plan should fail on the 2nd effect
-    await assertRejects(
-      () => executePlan(plan),
-      Error,
+    await expect(executePlan(plan)).rejects.toThrow(
       "Effect not yet implemented: docker-container",
     );
 
     // The directory created by the 1st effect should have been torn down
-    await assertRejects(
-      () => Deno.stat(target),
-      Deno.errors.NotFound,
-    );
+    await expect(stat(target)).rejects.toThrow();
   });
 });
 
-Deno.test("executePlan: empty effects returns empty handles", async () => {
+test("executePlan: empty effects returns empty handles", async () => {
   const plan: StagePlan = {
     effects: [],
     dockerArgs: [],
@@ -264,14 +257,14 @@ Deno.test("executePlan: empty effects returns empty handles", async () => {
     outputOverrides: {},
   };
   const handles = await executePlan(plan);
-  assertEquals(handles.length, 0);
+  expect(handles.length).toEqual(0);
 });
 
 // ---------------------------------------------------------------------------
 // file-write close() edge cases
 // ---------------------------------------------------------------------------
 
-Deno.test("executeEffect: file-write close() throws when file already deleted", async () => {
+test("executeEffect: file-write close() throws when file already deleted", async () => {
   await withTempDir(async (dir) => {
     const target = `${dir}/will-be-deleted.txt`;
     const handle = await executeEffect({
@@ -282,13 +275,10 @@ Deno.test("executeEffect: file-write close() throws when file already deleted", 
     });
 
     // Remove the file before close()
-    await Deno.remove(target);
+    await rm(target, { force: true });
 
     // close() should throw because the file no longer exists
-    await assertRejects(
-      () => handle.close(),
-      Deno.errors.NotFound,
-    );
+    await expect(handle.close()).rejects.toThrow();
   });
 });
 
@@ -296,7 +286,7 @@ Deno.test("executeEffect: file-write close() throws when file already deleted", 
 // teardownHandles
 // ---------------------------------------------------------------------------
 
-Deno.test("teardownHandles: closes in reverse order", async () => {
+test("teardownHandles: closes in reverse order", async () => {
   const order: number[] = [];
   const handles = [
     {
@@ -323,10 +313,10 @@ Deno.test("teardownHandles: closes in reverse order", async () => {
   ];
 
   await teardownHandles(handles);
-  assertEquals(order, [3, 2, 1]);
+  expect(order).toEqual([3, 2, 1]);
 });
 
-Deno.test("teardownHandles: aggregates errors from multiple handles", async () => {
+test("teardownHandles: aggregates errors from multiple handles", async () => {
   const handles = [
     { kind: "ok", close: async () => {} },
     {
@@ -345,16 +335,19 @@ Deno.test("teardownHandles: aggregates errors from multiple handles", async () =
     },
   ];
 
-  const err = await assertRejects(
-    () => teardownHandles(handles),
-    Error,
-  );
-  assertStringIncludes((err as Error).message, "2 handle(s)");
-  assertStringIncludes((err as Error).message, "[fail-b]");
-  assertStringIncludes((err as Error).message, "[fail-a]");
+  let err: Error | undefined;
+  try {
+    await teardownHandles(handles);
+  } catch (e) {
+    err = e as Error;
+  }
+  expect(err).toBeDefined();
+  expect(err!.message).toContain("2 handle(s)");
+  expect(err!.message).toContain("[fail-b]");
+  expect(err!.message).toContain("[fail-a]");
 });
 
-Deno.test("teardownHandles: continues closing remaining handles after error", async () => {
+test("teardownHandles: continues closing remaining handles after error", async () => {
   const closed: string[] = [];
   const handles = [
     {
@@ -381,11 +374,11 @@ Deno.test("teardownHandles: continues closing remaining handles after error", as
     },
   ];
 
-  await assertRejects(() => teardownHandles(handles), Error);
+  await expect(teardownHandles(handles)).rejects.toThrow();
   // All three should have been attempted (in reverse order)
-  assertEquals(closed, ["last", "middle", "first"]);
+  expect(closed).toEqual(["last", "middle", "first"]);
 });
 
-Deno.test("teardownHandles: empty handles is a no-op", async () => {
+test("teardownHandles: empty handles is a no-op", async () => {
   await teardownHandles([]);
 });

@@ -13,7 +13,7 @@ export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
 
   try {
     if (sub === "list" || sub === undefined) {
-      const entries = await listNasWorktrees(Deno.cwd());
+      const entries = await listNasWorktrees(process.cwd());
       if (entries.length === 0) {
         console.log("[nas] No nas worktrees found.");
         return;
@@ -25,7 +25,7 @@ export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
         console.log(`  ${e.path}  [${branch}]  ${e.head.slice(0, 8)}`);
       }
     } else if (sub === "clean") {
-      const result = await cleanNasWorktrees(Deno.cwd(), {
+      const result = await cleanNasWorktrees(process.cwd(), {
         force,
         deleteBranch,
       });
@@ -44,7 +44,7 @@ export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
       console.error(
         "  Usage: nas worktree [list|clean] [--force] [--delete-branch]",
       );
-      Deno.exit(1);
+      process.exit(1);
     }
   } catch (err) {
     exitOnCliError(err);

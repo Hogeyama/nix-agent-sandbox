@@ -1,4 +1,13 @@
-import * as path from "@std/path";
+import * as path from "node:path";
+import { rm } from "node:fs/promises";
+import {
+  connectUnix,
+  createUnixServer,
+  readJsonLine,
+  type Server,
+  type Socket,
+  writeJsonLine,
+} from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
 import { appendAuditLog } from "../audit/store.ts";
 import type { AuditLogEntry } from "../audit/types.ts";
@@ -64,7 +73,7 @@ interface PendingGroup {
     string,
     { request: ExecuteRequest; resolved: ResolvedExecution }
   >;
-  timer: number;
+  timer: ReturnType<typeof setTimeout>;
   notificationAbort: AbortController;
 }
 
@@ -86,8 +95,7 @@ export class HostExecBroker {
   private readonly auditDir?: string;
   private readonly secretStore: SecretStore;
   private socketPath: string | null = null;
-  private listener: Deno.Listener | null = null;
-  private acceptLoop: Promise<void> | null = null;
+  private server: Server | null = null;
   private closing = false;
   private readonly approvedKeys = new Set<string>();
   private readonly groups = new Map<string, PendingGroup>();
@@ -111,25 +119,18 @@ export class HostExecBroker {
 
   async start(socketPath: string): Promise<void> {
     this.socketPath = socketPath;
-    try {
-      await Deno.remove(socketPath);
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-    }
-    this.listener = Deno.listen({ transport: "unix", path: socketPath });
-    this.acceptLoop = this.runAcceptLoop();
+    await rm(socketPath, { force: true });
+    this.server = await createUnixServer(
+      socketPath,
+      (socket) => void this.handleConnection(socket),
+    );
   }
 
   async close(): Promise<void> {
     this.closing = true;
-    if (this.listener) {
-      this.listener.close();
-      this.listener = null;
-    }
-    if (this.acceptLoop) {
-      await this.acceptLoop.catch((e) =>
-        logInfo(`[nas] HostExecBroker: accept loop error on close: ${e}`)
-      );
+    if (this.server) {
+      this.server.close();
+      this.server = null;
     }
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
@@ -149,8 +150,8 @@ export class HostExecBroker {
     await removeHostExecSessionRegistry(this.paths, this.sessionId);
     const target = this.socketPath ??
       hostExecBrokerSocketPath(this.paths, this.sessionId);
-    await Deno.remove(target).catch((e) => {
-      if (!(e instanceof Deno.errors.NotFound)) {
+    await rm(target, { force: true }).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         logInfo(`[nas] HostExecBroker: failed to remove socket: ${e}`);
       }
     });
@@ -160,37 +161,23 @@ export class HostExecBroker {
     return await listHostExecPendingEntries(this.paths, this.sessionId);
   }
 
-  private async runAcceptLoop(): Promise<void> {
-    while (!this.closing && this.listener) {
-      let conn: Deno.Conn;
-      try {
-        conn = await this.listener.accept();
-      } catch (error) {
-        if (this.closing) return;
-        throw error;
-      }
-      void this.handleConnection(conn);
-    }
-  }
-
-  private async handleConnection(conn: Deno.Conn): Promise<void> {
+  private async handleConnection(socket: Socket): Promise<void> {
     try {
-      const line = await readJsonLine(conn);
+      const line = await readJsonLine(socket);
       if (!line) return;
       const message = JSON.parse(line) as HostExecBrokerMessage;
       const response = await this.handleMessage(message).catch((error) =>
         toErrorResponse(message, (error as Error).message)
       );
       try {
-        await conn.write(
-          new TextEncoder().encode(JSON.stringify(response) + "\n"),
-        );
+        await writeJsonLine(socket, response);
       } catch (e) {
-        if (e instanceof Deno.errors.BrokenPipe) return;
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "EPIPE" || code === "ECONNRESET") return;
         throw e;
       }
     } finally {
-      conn.close();
+      socket.destroy();
     }
   }
 
@@ -492,7 +479,7 @@ export class HostExecBroker {
   }
 
   private async buildEnv(rule: HostExecRule): Promise<Record<string, string>> {
-    const hostEnv = Deno.env.toObject();
+    const hostEnv = process.env;
     const envVars: Record<string, string> = {};
     if (rule.inheritEnv.mode === "unsafe-inherit-all") {
       Object.assign(envVars, hostEnv);
@@ -526,48 +513,41 @@ export class HostExecBroker {
     const stdin = request.stdin
       ? Uint8Array.from(atob(request.stdin), (c) => c.charCodeAt(0))
       : undefined;
-    let output: Deno.ChildProcess;
+    let proc: ReturnType<typeof Bun.spawn>;
     try {
-      output = await new Deno.Command(commandArgv0, {
-        args: request.args,
+      proc = Bun.spawn([commandArgv0, ...request.args], {
         cwd: resolved.cwd,
         env: resolved.envVars,
-        stdin: stdin ? "piped" : "null",
-        stdout: "piped",
-        stderr: "piped",
-      }).spawn();
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) {
-        const searchedPath = resolved.envVars["PATH"] ?? "(unset)";
-        throw new Error(
-          `Command '${commandArgv0}' not found on host. PATH=${searchedPath}`,
-        );
-      }
-      throw error;
+        stdin: stdin ? "pipe" : "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    } catch {
+      const searchedPath = resolved.envVars["PATH"] ?? "(unset)";
+      throw new Error(
+        `Command '${commandArgv0}' not found on host. PATH=${searchedPath}`,
+      );
     }
-    if (stdin) {
-      const writer = output.stdin.getWriter();
-      await writer.write(stdin);
-      await writer.close();
+    if (stdin && proc.stdin) {
+      (proc.stdin as import("bun").FileSink).write(stdin);
+      (proc.stdin as import("bun").FileSink).end();
     }
-    const status = await output.output();
+    const [stdoutText, stderrText] = await Promise.all([
+      new Response(proc.stdout as ReadableStream).text(),
+      new Response(proc.stderr as ReadableStream).text(),
+    ]);
+    const exitCode = await proc.exited;
     const secretValues = Object.keys(resolved.rule.env)
       .map((key) => resolved.envVars[key])
       .filter((value): value is string =>
         typeof value === "string" && value !== ""
       );
-    const stdout = redactSecrets(
-      new TextDecoder().decode(status.stdout),
-      secretValues,
-    );
-    const stderr = redactSecrets(
-      new TextDecoder().decode(status.stderr),
-      secretValues,
-    );
+    const stdout = redactSecrets(stdoutText, secretValues);
+    const stderr = redactSecrets(stderrText, secretValues);
     return {
       type: "result",
       requestId: request.requestId,
-      exitCode: status.code,
+      exitCode,
       stdout,
       stderr,
     };
@@ -580,14 +560,14 @@ export async function sendHostExecBrokerRequest<
   socketPath: string,
   message: HostExecBrokerMessage,
 ): Promise<T> {
-  const conn = await Deno.connect({ transport: "unix", path: socketPath });
+  const socket = await connectUnix(socketPath);
   try {
-    await conn.write(new TextEncoder().encode(JSON.stringify(message) + "\n"));
-    const response = await readJsonLine(conn);
+    await writeJsonLine(socket, message);
+    const response = await readJsonLine(socket);
     if (!response) throw new Error("empty broker response");
     return JSON.parse(response) as T;
   } finally {
-    conn.close();
+    socket.destroy();
   }
 }
 
@@ -597,7 +577,8 @@ async function normalizeAllowedCwd(
   sessionTmpDir: string,
   rule: HostExecRule,
 ): Promise<string> {
-  const normalized = await Deno.realPath(cwd).catch(() => path.resolve(cwd));
+  const { realpath } = await import("node:fs/promises");
+  const normalized = await realpath(cwd).catch(() => path.resolve(cwd));
   const withinWorkspace = isWithin(normalized, workspaceRoot);
   const withinSessionTmp = isWithin(normalized, sessionTmpDir);
   switch (rule.cwd.mode) {
@@ -633,13 +614,14 @@ async function resolveAllowEntry(
   workspaceRoot: string,
   sessionTmpDir: string,
 ): Promise<string> {
+  const { realpath } = await import("node:fs/promises");
   if (entry.startsWith("workspace:")) {
     return path.resolve(workspaceRoot, entry.slice("workspace:".length));
   }
   if (entry.startsWith("session_tmp:")) {
     return path.resolve(sessionTmpDir, entry.slice("session_tmp:".length));
   }
-  return await Deno.realPath(entry).catch(() => path.resolve(entry));
+  return await realpath(entry).catch(() => path.resolve(entry));
 }
 
 function isWithin(target: string, root: string): boolean {
@@ -698,23 +680,6 @@ function toPendingEntry(
     createdAt,
     updatedAt: new Date().toISOString(),
   };
-}
-
-async function readJsonLine(conn: Deno.Conn): Promise<string | null> {
-  const decoder = new TextDecoder();
-  let text = "";
-  const chunk = new Uint8Array(1024);
-  while (true) {
-    const size = await conn.read(chunk);
-    if (size === null) break;
-    text += decoder.decode(chunk.subarray(0, size));
-    const newlineIndex = text.indexOf("\n");
-    if (newlineIndex !== -1) {
-      return text.slice(0, newlineIndex);
-    }
-  }
-  const trimmed = text.trim();
-  return trimmed === "" ? null : trimmed;
 }
 
 function redactSecrets(text: string, secrets: string[]): string {

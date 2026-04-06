@@ -57,7 +57,7 @@ async function executeHostExecBrokerListener(
       brokerSocket: effect.socketPath,
       profileName: spec.profileName,
       createdAt: new Date().toISOString(),
-      pid: Deno.pid,
+      pid: process.pid,
       agent: spec.agent,
     });
   } catch (error) {

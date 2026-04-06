@@ -7,6 +7,7 @@
 
 import { gcDbusRuntime } from "./registry.ts";
 import { logInfo, logWarn } from "../log.ts";
+import { chmod, mkdir, rm, stat, writeFile } from "node:fs/promises";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,21 +61,19 @@ export async function startDbusProxy(
   );
 
   // Create directories
-  await Deno.mkdir(runtimeDir, { recursive: true, mode: 0o755 });
-  await Deno.mkdir(sessionsDir, { recursive: true, mode: 0o700 });
-  await Deno.mkdir(sessionDir, { recursive: true, mode: 0o700 });
+  await mkdir(runtimeDir, { recursive: true, mode: 0o755 });
+  await mkdir(sessionsDir, { recursive: true, mode: 0o700 });
+  await mkdir(sessionDir, { recursive: true, mode: 0o700 });
 
   // Spawn xdg-dbus-proxy
-  const command = new Deno.Command(proxyBinaryPath, {
-    args,
-    stdout: "null",
-    stderr: "piped",
+  const child = Bun.spawn([proxyBinaryPath, ...args], {
+    stdout: "ignore",
+    stderr: "pipe",
   });
-  const child = command.spawn();
 
   // Write PID file
-  await Deno.writeTextFile(pidFile, String(child.pid));
-  await Deno.chmod(pidFile, 0o600);
+  await writeFile(pidFile, String(child.pid));
+  await chmod(pidFile, 0o600);
 
   // Capture stderr in background for diagnostics
   let stderrText = "";
@@ -95,10 +94,10 @@ export async function startDbusProxy(
   try {
     await Promise.race([
       waitForSocket(socketPath, timeoutMs, pollIntervalMs),
-      child.status.then((status) => {
-        if (!status.success) {
+      child.exited.then((code) => {
+        if (code !== 0) {
           throw new Error(
-            `[nas] xdg-dbus-proxy exited early with code ${status.code}${
+            `[nas] xdg-dbus-proxy exited early with code ${code}${
               stderrText ? `: ${stderrText}` : ""
             }`,
           );
@@ -117,18 +116,16 @@ export async function startDbusProxy(
 
     // Clean up on failure
     try {
-      child.kill("SIGTERM");
+      child.kill();
     } catch (e: unknown) {
-      if (!(e instanceof Deno.errors.NotFound)) {
-        logWarn(
-          `[nas] dbus-proxy: cleanup kill failed: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        );
-      }
+      logWarn(
+        `[nas] dbus-proxy: cleanup kill failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
     }
-    await child.status.catch(() => {});
-    await Deno.remove(sessionDir, { recursive: true }).catch((e: unknown) =>
+    await child.exited.catch(() => {});
+    await rm(sessionDir, { recursive: true, force: true }).catch((e: unknown) =>
       logWarn(
         `[nas] dbus-proxy: cleanup session dir failed: ${
           e instanceof Error ? e.message : String(e)
@@ -141,14 +138,11 @@ export async function startDbusProxy(
   return {
     close: async () => {
       try {
-        child.kill("SIGTERM");
-      } catch (e: unknown) {
-        if (!(e instanceof Deno.errors.NotFound)) {
-          throw e;
-        }
+        child.kill();
+      } catch {
         // Process already exited
       }
-      await child.status.catch((e: unknown) =>
+      await child.exited.catch((e: unknown) =>
         logInfo(
           `[nas] dbus-proxy teardown: failed to await child status: ${e}`,
         )
@@ -158,7 +152,9 @@ export async function startDbusProxy(
           `[nas] dbus-proxy teardown: failed to capture stderr: ${e}`,
         )
       );
-      await Deno.remove(sessionDir, { recursive: true }).catch((e: unknown) =>
+      await rm(sessionDir, { recursive: true, force: true }).catch((
+        e: unknown,
+      ) =>
         logWarn(
           `[nas] dbus-proxy teardown: failed to remove session dir: ${
             e instanceof Error ? e.message : String(e)
@@ -182,10 +178,10 @@ export async function waitForSocket(
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
-      await Deno.stat(socketPath);
+      await stat(socketPath);
       return;
     } catch (e) {
-      if (!(e instanceof Deno.errors.NotFound)) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         throw e;
       }
     }

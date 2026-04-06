@@ -2,7 +2,6 @@
  * nas rebuild サブコマンド
  */
 
-import { encodeHex } from "@std/encoding/hex";
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import {
   createDockerBuildStage,
@@ -42,7 +41,7 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
     const prior: PriorStageOutputs = {
       dockerArgs: [],
       envVars: {},
-      workDir: Deno.cwd(),
+      workDir: process.cwd(),
       nixEnabled: false,
       imageName,
       agentCommand: [],
@@ -69,5 +68,5 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
 
 function randomHex(bytes: number): string {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
-  return encodeHex(data);
+  return Buffer.from(data).toString("hex");
 }

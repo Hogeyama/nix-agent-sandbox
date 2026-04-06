@@ -1,3 +1,12 @@
+import { writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
+import { chmod } from "node:fs/promises";
+import {
+  connectUnix,
+  createUnixServer,
+  type Server,
+  type Socket,
+} from "../lib/unix_socket.ts";
 import {
   type AuthorizeRequest,
   type DecisionResponse,
@@ -28,8 +37,7 @@ export async function ensureAuthRouterDaemon(
     logInfo(`[nas] AuthRouter: daemon exited with error: ${e}`)
   );
 
-  await Deno.writeTextFile(paths.authRouterPidFile, `${Deno.pid}\n`, {
-    create: true,
+  await writeFile(paths.authRouterPidFile, `${process.pid}\n`, {
     mode: 0o600,
   });
   await waitForSocket(paths.authRouterSocket, 10_000);
@@ -42,43 +50,69 @@ export async function serveAuthRouter(
 ): Promise<void> {
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   await removeSocketIfExists(paths.authRouterSocket);
-  const listener = Deno.listen({
-    transport: "unix",
-    path: paths.authRouterSocket,
-  });
-  // Envoy runs as uid 101 inside its container and needs write access.
-  await Deno.chmod(paths.authRouterSocket, 0o777);
 
-  const abortHandler = () => listener.close();
-  options.signal?.addEventListener("abort", abortHandler);
-
+  let server: Server;
   try {
-    for await (const conn of listener) {
-      void handleConnection(paths, conn);
-    }
+    server = await createUnixServer(
+      paths.authRouterSocket,
+      (socket) => void handleConnection(paths, socket),
+    );
   } catch (error) {
     if (options.signal?.aborted) return;
     throw error;
   }
+
+  // Envoy runs as uid 101 inside its container and needs write access.
+  await chmod(paths.authRouterSocket, 0o777);
+
+  const abortHandler = () => server.close();
+  options.signal?.addEventListener("abort", abortHandler);
+
+  // Keep alive until the server closes
+  await new Promise<void>((resolve) => {
+    server.on("close", resolve);
+  });
 }
 
 async function handleConnection(
   paths: NetworkRuntimePaths,
-  conn: Deno.UnixConn,
+  socket: Socket,
 ): Promise<void> {
   try {
-    const buf = new Uint8Array(8192);
     let raw = "";
     // Read until we have a complete HTTP request (headers end with \r\n\r\n).
-    while (!raw.includes("\r\n\r\n")) {
-      const n = await conn.read(buf);
-      if (n === null) return;
-      raw += new TextDecoder().decode(buf.subarray(0, n));
-    }
+    await new Promise<void>((resolve, reject) => {
+      const onData = (chunk: Buffer) => {
+        raw += chunk.toString();
+        if (raw.includes("\r\n\r\n")) {
+          socket.off("data", onData);
+          socket.off("end", onEnd);
+          socket.off("error", onError);
+          resolve();
+        }
+      };
+      const onEnd = () => {
+        socket.off("data", onData);
+        socket.off("end", onEnd);
+        socket.off("error", onError);
+        resolve();
+      };
+      const onError = (err: Error) => {
+        socket.off("data", onData);
+        socket.off("end", onEnd);
+        socket.off("error", onError);
+        reject(err);
+      };
+      socket.on("data", onData);
+      socket.on("end", onEnd);
+      socket.on("error", onError);
+    });
+
+    if (!raw.includes("\r\n\r\n")) return;
 
     const parsed = parseHttpRequest(raw);
     if (!parsed) {
-      await writeResponse(conn, 400, "Bad Request", {})
+      await writeResponse(socket, 400, "Bad Request", {})
         .catch(() => {});
       return;
     }
@@ -91,11 +125,11 @@ async function handleConnection(
     if (result.challenge) {
       responseHeaders["Proxy-Authenticate"] = 'Basic realm="nas"';
     }
-    await writeResponse(conn, result.status, result.message, responseHeaders)
+    await writeResponse(socket, result.status, result.message, responseHeaders)
       .catch(() => {/* peer closed early (BrokenPipe) — ignore */});
   } finally {
     try {
-      conn.close();
+      socket.destroy();
     } catch { /* already closed */ }
   }
 }
@@ -132,35 +166,43 @@ function parseHttpRequest(raw: string): ParsedRequest | null {
   return { method, path: requestPath, headers };
 }
 
-async function writeResponse(
-  conn: Deno.UnixConn,
+function writeResponse(
+  socket: Socket,
   status: number,
   body: string,
   headers: Record<string, string>,
 ): Promise<void> {
-  const statusText = HTTP_STATUS_TEXT[status] ?? "Unknown";
-  const bodyBytes = new TextEncoder().encode(body);
-  const allHeaders: Record<string, string> = {
-    "content-type": "text/plain",
-    "content-length": String(bodyBytes.length),
-    "connection": "close",
-    ...headers,
-  };
-  let response = `HTTP/1.1 ${status} ${statusText}\r\n`;
-  for (const [key, value] of Object.entries(allHeaders)) {
-    response += `${key}: ${value}\r\n`;
-  }
-  response += `\r\n`;
-  const headerBytes = new TextEncoder().encode(response);
-  const fullResponse = new Uint8Array(headerBytes.length + bodyBytes.length);
-  fullResponse.set(headerBytes);
-  fullResponse.set(bodyBytes, headerBytes.length);
-  try {
-    await conn.write(fullResponse);
-  } catch (e) {
-    if (e instanceof Deno.errors.BrokenPipe) return;
-    throw e;
-  }
+  return new Promise((resolve, reject) => {
+    const statusText = HTTP_STATUS_TEXT[status] ?? "Unknown";
+    const bodyBytes = new TextEncoder().encode(body);
+    const allHeaders: Record<string, string> = {
+      "content-type": "text/plain",
+      "content-length": String(bodyBytes.length),
+      "connection": "close",
+      ...headers,
+    };
+    let response = `HTTP/1.1 ${status} ${statusText}\r\n`;
+    for (const [key, value] of Object.entries(allHeaders)) {
+      response += `${key}: ${value}\r\n`;
+    }
+    response += `\r\n`;
+    const headerBytes = new TextEncoder().encode(response);
+    const fullResponse = new Uint8Array(headerBytes.length + bodyBytes.length);
+    fullResponse.set(headerBytes);
+    fullResponse.set(bodyBytes, headerBytes.length);
+    socket.write(fullResponse, (err) => {
+      if (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EPIPE" || code === "ECONNRESET") {
+          resolve();
+          return;
+        }
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
 }
 
 const HTTP_STATUS_TEXT: Record<number, string> = {
@@ -298,8 +340,8 @@ async function waitForSocket(
 
 async function canConnect(socketPath: string): Promise<boolean> {
   try {
-    const conn = await Deno.connect({ transport: "unix", path: socketPath });
-    conn.close();
+    const socket = await connectUnix(socketPath);
+    socket.destroy();
     return true;
   } catch {
     return false;
@@ -307,9 +349,5 @@ async function canConnect(socketPath: string): Promise<boolean> {
 }
 
 async function removeSocketIfExists(socketPath: string): Promise<void> {
-  try {
-    await Deno.remove(socketPath);
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
+  await rm(socketPath, { force: true });
 }

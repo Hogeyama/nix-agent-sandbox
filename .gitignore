@@ -5,3 +5,5 @@ src/ui/dist/
 .playwright/cli.config.json
 .playwright-cli/
 .direnv/
+node_modules/
+result

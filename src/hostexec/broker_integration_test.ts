@@ -1,4 +1,12 @@
-import { assertEquals, assertMatch } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import type { HostExecConfig } from "../config/types.ts";
 import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
 import {
@@ -12,6 +20,9 @@ import type {
   PendingListResponse,
 } from "./types.ts";
 import { queryAuditLogs } from "../audit/store.ts";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 type HostExecConfigOverrides = Omit<Partial<HostExecConfig>, "prompt"> & {
   prompt?: Partial<HostExecConfig["prompt"]>;
@@ -35,7 +46,7 @@ function request(
   args: string[],
   cwd: string,
   requestId = `req_${crypto.randomUUID()}`,
-  argv0 = "deno",
+  argv0 = "node",
 ): ExecuteRequest {
   return {
     version: 1,
@@ -49,15 +60,15 @@ function request(
   };
 }
 
-Deno.test("HostExecBroker: falls back when no rule matches", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: falls back when no rule matches", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
     profileName: "test",
     notify: "off",
-    workspaceRoot: Deno.cwd(),
+    workspaceRoot: process.cwd(),
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig(),
   });
@@ -66,24 +77,24 @@ Deno.test("HostExecBroker: falls back when no rule matches", async () => {
   try {
     const response = await sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('x')"], Deno.cwd()),
+      request(["-e", "console.log('x')"], process.cwd()),
     );
-    assertEquals(response.type, "fallback");
+    expect(response.type).toEqual("fallback");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
-  const auditDir = await Deno.makeTempDir({ prefix: "nas-hostexec-audit-" });
+test("HostExecBroker: prompts and resumes after approve", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
-  const oldToken = Deno.env.get("HOSTEXEC_TEST_TOKEN");
-  Deno.env.set("HOSTEXEC_TEST_TOKEN", "super-secret-value");
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const oldToken = process.env["HOSTEXEC_TEST_TOKEN"];
+  process.env["HOSTEXEC_TEST_TOKEN"] = "super-secret-value";
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -97,8 +108,8 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
         test_token: { from: "env:HOSTEXEC_TEST_TOKEN", required: true },
       },
       rules: [{
-        id: "deno-eval",
-        match: { argv0: "deno", argRegex: "^eval\\b" },
+        id: "node-eval",
+        match: { argv0: "node", argRegex: "^-e\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: { TOKEN: "secret:test_token" },
         inheritEnv: { mode: "minimal", keys: [] },
@@ -113,7 +124,7 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
     const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
       socketPath,
       request(
-        ["eval", "console.log(Deno.env.get('TOKEN'))"],
+        ["-e", "console.log(process.env['TOKEN'])"],
         workspace,
         "req_approve",
       ),
@@ -128,42 +139,42 @@ Deno.test("HostExecBroker: prompts and resumes after approve", async () => {
       );
     }
     const pending = await waitForPendingEntries(paths, 1);
-    assertEquals(pending.length, 1);
-    assertEquals(pending[0].ruleId, "deno-eval");
+    expect(pending.length).toEqual(1);
+    expect(pending[0].ruleId).toEqual("node-eval");
     await sendHostExecBrokerRequest(socketPath, {
       type: "approve",
       requestId: "req_approve",
     });
     const response = await execPromise;
-    assertEquals(response.type, "result");
+    expect(response.type).toEqual("result");
     if (response.type !== "result") {
       throw new Error(`unexpected response type: ${response.type}`);
     }
-    assertEquals(response.stdout.trim(), "[REDACTED]");
+    expect(response.stdout.trim()).toEqual("[REDACTED]");
 
     const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
-    assertEquals(logs.length, 1);
-    assertEquals(logs[0].decision, "allow");
-    assertEquals(logs[0].reason, "approved-by-user");
-    assertEquals(logs[0].requestId, "req_approve");
-    assertMatch(logs[0].command!, /^deno eval /);
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("allow");
+    expect(logs[0].reason).toEqual("approved-by-user");
+    expect(logs[0].requestId).toEqual("req_approve");
+    expect(logs[0].command!).toMatch(/^node -e /);
   } finally {
-    if (oldToken !== undefined) Deno.env.set("HOSTEXEC_TEST_TOKEN", oldToken);
-    else Deno.env.delete("HOSTEXEC_TEST_TOKEN");
+    if (oldToken !== undefined) process.env["HOSTEXEC_TEST_TOKEN"] = oldToken;
+    else delete process.env["HOSTEXEC_TEST_TOKEN"];
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
-    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: pending request can be denied via broker", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
-  const auditDir = await Deno.makeTempDir({ prefix: "nas-hostexec-audit-" });
+test("HostExecBroker: pending request can be denied via broker", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
 
   const broker = new HostExecBroker({
     paths,
@@ -181,8 +192,8 @@ Deno.test("HostExecBroker: pending request can be denied via broker", async () =
         notify: "off",
       },
       rules: [{
-        id: "deno-eval",
-        match: { argv0: "deno", argRegex: "^eval\\b" },
+        id: "node-eval",
+        match: { argv0: "node", argRegex: "^-e\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -196,43 +207,43 @@ Deno.test("HostExecBroker: pending request can be denied via broker", async () =
   try {
     const executePromise = sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('x')"], workspace, "req_deny"),
+      request(["-e", "console.log('x')"], workspace, "req_deny"),
     );
     const pending = await waitForPendingEntries(paths, 1);
-    assertEquals(pending.length, 1);
+    expect(pending.length).toEqual(1);
     await sendHostExecBrokerRequest(socketPath, {
       type: "deny",
       requestId: "req_deny",
     });
     const response = await executePromise;
-    assertEquals(response.type, "error");
+    expect(response.type).toEqual("error");
     if (response.type === "error") {
-      assertEquals(response.message, "permission denied by user");
+      expect(response.message).toEqual("permission denied by user");
     }
 
     const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
-    assertEquals(logs.length, 1);
-    assertEquals(logs[0].decision, "deny");
-    assertEquals(logs[0].reason, "denied-by-user");
-    assertEquals(logs[0].requestId, "req_deny");
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].reason).toEqual("denied-by-user");
+    expect(logs[0].requestId).toEqual("req_deny");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
-    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: capability key differs by secret reference and cwd", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: capability key differs by secret reference and cwd", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
-  const oldTokenA = Deno.env.get("TOKEN_A");
-  const oldTokenB = Deno.env.get("TOKEN_B");
-  Deno.env.set("TOKEN_A", "token-a");
-  Deno.env.set("TOKEN_B", "token-b");
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const oldTokenA = process.env["TOKEN_A"];
+  const oldTokenB = process.env["TOKEN_B"];
+  process.env["TOKEN_A"] = "token-a";
+  process.env["TOKEN_B"] = "token-b";
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -248,7 +259,7 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
       rules: [
         {
           id: "deno-secret-a",
-          match: { argv0: "deno", argRegex: "^eval\\b" },
+          match: { argv0: "node", argRegex: "^-e\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: { TOKEN: "secret:token_a" },
           inheritEnv: { mode: "minimal", keys: [] },
@@ -257,7 +268,7 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
         },
         {
           id: "deno-secret-b",
-          match: { argv0: "deno", argRegex: "^fmt\\b" },
+          match: { argv0: "node", argRegex: "^fmt\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: { TOKEN: "secret:token_b" },
           inheritEnv: { mode: "minimal", keys: [] },
@@ -272,10 +283,10 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
   try {
     const firstPromise = sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('a')"], workspace, "req_a"),
+      request(["-e", "console.log('a')"], workspace, "req_a"),
     );
     const nested = `${workspace}/nested`;
-    await Deno.mkdir(nested, { recursive: true });
+    await mkdir(nested, { recursive: true });
     const secondPromise = sendHostExecBrokerRequest(
       socketPath,
       request(["fmt", "--help"], nested, "req_b"),
@@ -296,9 +307,9 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
       );
     }
     const entries = await waitForPendingCount(paths, 2);
-    assertMatch(entries[0].approvalKey, /^[0-9a-f]{64}$/);
-    assertMatch(entries[1].approvalKey, /^[0-9a-f]{64}$/);
-    assertEquals(entries[0].approvalKey === entries[1].approvalKey, false);
+    expect(entries[0].approvalKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(entries[1].approvalKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(entries[0].approvalKey === entries[1].approvalKey).toEqual(false);
     await sendHostExecBrokerRequest(socketPath, {
       type: "deny",
       requestId: "req_a",
@@ -307,25 +318,25 @@ Deno.test("HostExecBroker: capability key differs by secret reference and cwd", 
       type: "deny",
       requestId: "req_b",
     });
-    assertEquals((await firstPromise).type, "error");
-    assertEquals((await secondPromise).type, "error");
+    expect((await firstPromise).type).toEqual("error");
+    expect((await secondPromise).type).toEqual("error");
   } finally {
-    if (oldTokenA !== undefined) Deno.env.set("TOKEN_A", oldTokenA);
-    else Deno.env.delete("TOKEN_A");
-    if (oldTokenB !== undefined) Deno.env.set("TOKEN_B", oldTokenB);
-    else Deno.env.delete("TOKEN_B");
+    if (oldTokenA !== undefined) process.env["TOKEN_A"] = oldTokenA;
+    else delete process.env["TOKEN_A"];
+    if (oldTokenB !== undefined) process.env["TOKEN_B"] = oldTokenB;
+    else delete process.env["TOKEN_B"];
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: argv0-only rule matches any args", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: argv0-only rule matches any args", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -336,7 +347,7 @@ Deno.test("HostExecBroker: argv0-only rule matches any args", async () => {
     hostexec: makeConfig({
       rules: [{
         id: "deno-any",
-        match: { argv0: "deno" },
+        match: { argv0: "node" },
         cwd: { mode: "workspace-only", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -350,26 +361,26 @@ Deno.test("HostExecBroker: argv0-only rule matches any args", async () => {
   try {
     const response = await sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('ok')"], workspace, "req_any"),
+      request(["-e", "console.log('ok')"], workspace, "req_any"),
     );
-    assertEquals(response.type, "result");
+    expect(response.type).toEqual("result");
     if (response.type !== "result") {
       throw new Error(`unexpected response type: ${response.type}`);
     }
-    assertEquals(response.stdout.trim(), "ok");
+    expect(response.stdout.trim()).toEqual("ok");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper path", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper path", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -401,26 +412,26 @@ Deno.test("HostExecBroker: PATH rule executes basename when request argv0 is wra
         "/opt/nas/hostexec/bin/sh",
       ),
     );
-    assertEquals(response.type, "result");
+    expect(response.type).toEqual("result");
     if (response.type === "result") {
-      assertEquals(response.stdout, "ok");
+      expect(response.stdout).toEqual("ok");
     }
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: relative rule executes original relative argv0", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: relative rule executes original relative argv0", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const scriptPath = `${workspace}/gradlew`;
-  await Deno.writeTextFile(scriptPath, "#!/bin/sh\nprintf gradle-ok\n");
-  await Deno.chmod(scriptPath, 0o755);
+  await writeFile(scriptPath, "#!/bin/sh\nprintf gradle-ok\n");
+  await chmod(scriptPath, 0o755);
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -447,31 +458,31 @@ Deno.test("HostExecBroker: relative rule executes original relative argv0", asyn
       socketPath,
       request([], workspace, "req_gradlew", "./gradlew"),
     );
-    assertEquals(response.type, "result");
+    expect(response.type).toEqual("result");
     if (response.type === "result") {
-      assertEquals(response.stdout, "gradle-ok");
+      expect(response.stdout).toEqual("gradle-ok");
     }
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: absolute rule executes exact absolute binary path", async () => {
+test("HostExecBroker: absolute rule executes exact absolute binary path", async () => {
   // Verify that a rule with an absolute argv0 executes that exact binary on
   // the host and does not degrade to a basename/PATH lookup.
   // We use a temp script at a known absolute path to avoid platform-specific
   // assumptions about /usr/bin/true availability inside the test sandbox.
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   // Create a helper script inside workspace whose absolute path we control.
   const helperScript = `${workspace}/helper.sh`;
-  await Deno.writeTextFile(helperScript, "#!/bin/sh\nprintf absolute-ok\n");
-  await Deno.chmod(helperScript, 0o755);
+  await writeFile(helperScript, "#!/bin/sh\nprintf absolute-ok\n");
+  await chmod(helperScript, 0o755);
 
   const broker = new HostExecBroker({
     paths,
@@ -500,27 +511,27 @@ Deno.test("HostExecBroker: absolute rule executes exact absolute binary path", a
       socketPath,
       request([], workspace, "req_helper_abs", helperScript),
     );
-    assertEquals(response.type, "result");
+    expect(response.type).toEqual("result");
     if (response.type === "result") {
-      assertEquals(response.stdout, "absolute-ok");
+      expect(response.stdout).toEqual("absolute-ok");
     }
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: absolute rule does not match bare-name invocation", async () => {
+test("HostExecBroker: absolute rule does not match bare-name invocation", async () => {
   // A rule matching an absolute path should NOT intercept a bare-name invocation.
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const helperScript = `${workspace}/helper.sh`;
-  await Deno.writeTextFile(helperScript, "#!/bin/sh\nexit 0\n");
-  await Deno.chmod(helperScript, 0o755);
+  await writeFile(helperScript, "#!/bin/sh\nexit 0\n");
+  await chmod(helperScript, 0o755);
 
   const broker = new HostExecBroker({
     paths,
@@ -549,20 +560,20 @@ Deno.test("HostExecBroker: absolute rule does not match bare-name invocation", a
       request([], workspace, "req_helper_bare", "helper.sh"),
     );
     // Bare 'helper.sh' should not match the absolute rule → fallback
-    assertEquals(response.type, "fallback");
+    expect(response.type).toEqual("fallback");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: argv0-only rule also matches no-args command", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: argv0-only rule also matches no-args command", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -589,26 +600,26 @@ Deno.test("HostExecBroker: argv0-only rule also matches no-args command", async 
       socketPath,
       request([], workspace, "req_true_noargs", "true"),
     );
-    assertEquals(response.type, "result");
+    expect(response.type).toEqual("result");
     if (response.type === "result") {
-      assertEquals(response.exitCode, 0);
+      expect(response.exitCode).toEqual(0);
     }
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: rejects cwd outside workspace with workspace-only mode", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: rejects cwd outside workspace with workspace-only mode", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
-  const outsideDir = await Deno.makeTempDir({
-    prefix: "nas-hostexec-outside-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const outsideDir = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-outside-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -619,7 +630,7 @@ Deno.test("HostExecBroker: rejects cwd outside workspace with workspace-only mod
     hostexec: makeConfig({
       rules: [{
         id: "deno-ws-only",
-        match: { argv0: "deno" },
+        match: { argv0: "node" },
         cwd: { mode: "workspace-only", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -633,28 +644,28 @@ Deno.test("HostExecBroker: rejects cwd outside workspace with workspace-only mod
   try {
     const response = await sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('x')"], outsideDir, "req_cwd"),
+      request(["-e", "console.log('x')"], outsideDir, "req_cwd"),
     );
-    assertEquals(response.type, "error");
+    expect(response.type).toEqual("error");
     if (response.type === "error") {
-      assertMatch(response.message, /outside workspace/);
+      expect(response.message).toMatch(/outside workspace/);
     }
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
-    await Deno.remove(outsideDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    await rm(outsideDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: allows cwd in session tmp with workspace-or-session-tmp mode", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: allows cwd in session tmp with workspace-or-session-tmp mode", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const sessionTmpDir = `${runtimeDir}/tmp`;
-  await Deno.mkdir(sessionTmpDir, { recursive: true });
+  await mkdir(sessionTmpDir, { recursive: true });
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -665,7 +676,7 @@ Deno.test("HostExecBroker: allows cwd in session tmp with workspace-or-session-t
     hostexec: makeConfig({
       rules: [{
         id: "deno-ws-tmp",
-        match: { argv0: "deno" },
+        match: { argv0: "node" },
         cwd: { mode: "workspace-or-session-tmp", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -679,35 +690,35 @@ Deno.test("HostExecBroker: allows cwd in session tmp with workspace-or-session-t
   try {
     const response = await sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('ok')"], sessionTmpDir, "req_tmp"),
+      request(["-e", "console.log('ok')"], sessionTmpDir, "req_tmp"),
     );
-    assertEquals(response.type, "result");
+    expect(response.type).toEqual("result");
     if (response.type === "result") {
-      assertEquals(response.stdout.trim(), "ok");
+      expect(response.stdout.trim()).toEqual("ok");
     }
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: fallback deny returns error for unmatched command", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
-  const auditDir = await Deno.makeTempDir({ prefix: "nas-hostexec-audit-" });
+test("HostExecBroker: fallback deny returns error for unmatched command", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
     profileName: "test",
     notify: "off",
-    workspaceRoot: Deno.cwd(),
+    workspaceRoot: process.cwd(),
     sessionTmpDir: `${runtimeDir}/tmp`,
     auditDir,
     hostexec: makeConfig({
       rules: [{
         id: "deno-deny",
-        match: { argv0: "deno", argRegex: "^eval\\b" },
+        match: { argv0: "node", argRegex: "^-e\\b" },
         cwd: { mode: "any", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -722,38 +733,38 @@ Deno.test("HostExecBroker: fallback deny returns error for unmatched command", a
     // Unmatched command: no rule for "fmt"
     const fallbackResponse = await sendHostExecBrokerRequest(
       socketPath,
-      request(["fmt", "--help"], Deno.cwd(), "req_unmatched"),
+      request(["fmt", "--help"], process.cwd(), "req_unmatched"),
     );
-    assertEquals(fallbackResponse.type, "fallback");
+    expect(fallbackResponse.type).toEqual("fallback");
 
     // Matched command with approval: deny
     const denyResponse = await sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('x')"], Deno.cwd(), "req_deny"),
+      request(["-e", "console.log('x')"], process.cwd(), "req_deny"),
     );
-    assertEquals(denyResponse.type, "error");
+    expect(denyResponse.type).toEqual("error");
     if (denyResponse.type === "error") {
-      assertMatch(denyResponse.message, /permission denied/);
+      expect(denyResponse.message).toMatch(/permission denied/);
     }
 
     const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
-    assertEquals(logs.length, 1);
-    assertEquals(logs[0].decision, "deny");
-    assertEquals(logs[0].reason, "policy-deny");
-    assertEquals(logs[0].requestId, "req_deny");
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].reason).toEqual("policy-deny");
+    expect(logs[0].requestId).toEqual("req_deny");
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(auditDir, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: capability key differs by inheritEnv", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -765,7 +776,7 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
       rules: [
         {
           id: "deno-minimal",
-          match: { argv0: "deno", argRegex: "^eval\\b" },
+          match: { argv0: "node", argRegex: "^-e\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: {},
           inheritEnv: { mode: "minimal", keys: [] },
@@ -774,7 +785,7 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
         },
         {
           id: "deno-with-keys",
-          match: { argv0: "deno", argRegex: "^fmt\\b" },
+          match: { argv0: "node", argRegex: "^fmt\\b" },
           cwd: { mode: "workspace-only", allow: [] },
           env: {},
           inheritEnv: { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },
@@ -789,7 +800,7 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
   try {
     const firstPromise = sendHostExecBrokerRequest(
       socketPath,
-      request(["eval", "console.log('a')"], workspace, "req_ie_a"),
+      request(["-e", "console.log('a')"], workspace, "req_ie_a"),
     );
     const secondPromise = sendHostExecBrokerRequest(
       socketPath,
@@ -804,7 +815,7 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 100)),
     ]);
     const entries = await waitForPendingCount(paths, 2);
-    assertEquals(entries[0].approvalKey === entries[1].approvalKey, false);
+    expect(entries[0].approvalKey === entries[1].approvalKey).toEqual(false);
     // Clean up
     await sendHostExecBrokerRequest(socketPath, {
       type: "deny",
@@ -818,17 +829,17 @@ Deno.test("HostExecBroker: capability key differs by inheritEnv", async () => {
     await secondPromise;
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: scope once does not cache approval key", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: scope once does not cache approval key", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -838,8 +849,8 @@ Deno.test("HostExecBroker: scope once does not cache approval key", async () => 
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
       rules: [{
-        id: "deno-eval",
-        match: { argv0: "deno", argRegex: "^eval\\b" },
+        id: "node-eval",
+        match: { argv0: "node", argRegex: "^-e\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -854,7 +865,7 @@ Deno.test("HostExecBroker: scope once does not cache approval key", async () => 
     // First request: approve with scope "once"
     const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
       socketPath,
-      request(["eval", "console.log('first')"], workspace, "req_once_1"),
+      request(["-e", "console.log('first')"], workspace, "req_once_1"),
     );
     await waitForPendingEntries(paths, 1);
     await sendHostExecBrokerRequest(socketPath, {
@@ -863,25 +874,21 @@ Deno.test("HostExecBroker: scope once does not cache approval key", async () => 
       scope: "once",
     });
     const firstResponse = await firstPromise;
-    assertEquals(firstResponse.type, "result");
+    expect(firstResponse.type).toEqual("result");
     if (firstResponse.type === "result") {
-      assertEquals(firstResponse.stdout.trim(), "first");
+      expect(firstResponse.stdout.trim()).toEqual("first");
     }
 
     // Second identical request (same args) should go to pending again (not auto-approved)
     const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
       socketPath,
-      request(["eval", "console.log('first')"], workspace, "req_once_2"),
+      request(["-e", "console.log('first')"], workspace, "req_once_2"),
     );
     const earlyResponse = await Promise.race([
       secondPromise,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
     ]);
-    assertEquals(
-      earlyResponse,
-      null,
-      "second request should be pending, not auto-approved",
-    );
+    expect(earlyResponse).toEqual(null);
 
     // Clean up
     await sendHostExecBrokerRequest(socketPath, {
@@ -891,17 +898,17 @@ Deno.test("HostExecBroker: scope once does not cache approval key", async () => 
     await secondPromise;
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: scope capability caches approval key", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: scope capability caches approval key", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -911,8 +918,8 @@ Deno.test("HostExecBroker: scope capability caches approval key", async () => {
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
       rules: [{
-        id: "deno-eval",
-        match: { argv0: "deno", argRegex: "^eval\\b" },
+        id: "node-eval",
+        match: { argv0: "node", argRegex: "^-e\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -927,7 +934,7 @@ Deno.test("HostExecBroker: scope capability caches approval key", async () => {
     // First request: approve with scope "capability"
     const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
       socketPath,
-      request(["eval", "console.log('first')"], workspace, "req_cap_1"),
+      request(["-e", "console.log('first')"], workspace, "req_cap_1"),
     );
     await waitForPendingEntries(paths, 1);
     await sendHostExecBrokerRequest(socketPath, {
@@ -936,32 +943,32 @@ Deno.test("HostExecBroker: scope capability caches approval key", async () => {
       scope: "capability",
     });
     const firstResponse = await firstPromise;
-    assertEquals(firstResponse.type, "result");
+    expect(firstResponse.type).toEqual("result");
 
     // Second identical request (same args) should be auto-approved (not pending)
     const secondResponse = await sendHostExecBrokerRequest<
       HostExecBrokerResponse
     >(
       socketPath,
-      request(["eval", "console.log('first')"], workspace, "req_cap_2"),
+      request(["-e", "console.log('first')"], workspace, "req_cap_2"),
     );
-    assertEquals(secondResponse.type, "result");
+    expect(secondResponse.type).toEqual("result");
     if (secondResponse.type === "result") {
-      assertEquals(secondResponse.stdout.trim(), "first");
+      expect(secondResponse.stdout.trim()).toEqual("first");
     }
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-Deno.test("HostExecBroker: defaultScope once used when no explicit scope", async () => {
-  const runtimeDir = await Deno.makeTempDir({ prefix: "nas-hostexec-" });
+test("HostExecBroker: defaultScope once used when no explicit scope", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await Deno.makeTempDir({
-    prefix: "nas-hostexec-workspace-",
-  });
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -972,8 +979,8 @@ Deno.test("HostExecBroker: defaultScope once used when no explicit scope", async
     hostexec: makeConfig({
       prompt: { defaultScope: "once" },
       rules: [{
-        id: "deno-eval",
-        match: { argv0: "deno", argRegex: "^eval\\b" },
+        id: "node-eval",
+        match: { argv0: "node", argRegex: "^-e\\b" },
         cwd: { mode: "workspace-only", allow: [] },
         env: {},
         inheritEnv: { mode: "minimal", keys: [] },
@@ -988,7 +995,7 @@ Deno.test("HostExecBroker: defaultScope once used when no explicit scope", async
     // First request: approve without explicit scope (defaultScope = "once")
     const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
       socketPath,
-      request(["eval", "console.log('first')"], workspace, "req_def_1"),
+      request(["-e", "console.log('first')"], workspace, "req_def_1"),
     );
     await waitForPendingEntries(paths, 1);
     await sendHostExecBrokerRequest(socketPath, {
@@ -996,22 +1003,18 @@ Deno.test("HostExecBroker: defaultScope once used when no explicit scope", async
       requestId: "req_def_1",
     });
     const firstResponse = await firstPromise;
-    assertEquals(firstResponse.type, "result");
+    expect(firstResponse.type).toEqual("result");
 
     // Second request (same args) should go to pending (defaultScope was "once", so not cached)
     const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
       socketPath,
-      request(["eval", "console.log('first')"], workspace, "req_def_2"),
+      request(["-e", "console.log('first')"], workspace, "req_def_2"),
     );
     const earlyResponse = await Promise.race([
       secondPromise,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 200)),
     ]);
-    assertEquals(
-      earlyResponse,
-      null,
-      "second request should be pending with defaultScope once",
-    );
+    expect(earlyResponse).toEqual(null);
 
     await sendHostExecBrokerRequest(socketPath, {
       type: "deny",
@@ -1020,8 +1023,8 @@ Deno.test("HostExecBroker: defaultScope once used when no explicit scope", async
     await secondPromise;
   } finally {
     await broker.close();
-    await Deno.remove(runtimeDir, { recursive: true }).catch(() => {});
-    await Deno.remove(workspace, { recursive: true }).catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 

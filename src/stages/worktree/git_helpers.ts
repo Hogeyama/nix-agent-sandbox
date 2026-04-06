@@ -2,8 +2,11 @@
  * git worktree 関連のヘルパー関数
  */
 
-import $ from "dax";
-import * as path from "@std/path";
+import { $ } from "bun";
+import * as path from "node:path";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 export async function getGitRoot(dir: string): Promise<string> {
   try {
@@ -41,7 +44,7 @@ export async function validateBaseBranch(
   base: string,
 ): Promise<void> {
   try {
-    await $`git -C ${repoRoot} rev-parse --verify ${base}`.quiet("both");
+    await $`git -C ${repoRoot} rev-parse --verify ${base}`.quiet();
   } catch {
     throw new Error(
       `Base ref "${base}" not found. Run "git fetch" to update remote refs.`,
@@ -137,17 +140,21 @@ async function applyPatchFile(
   patch: string,
   extraArgs: string[] = [],
 ): Promise<void> {
-  const patchFile = await Deno.makeTempFile({
-    prefix: "nas-worktree-",
-    suffix: ".patch",
-  });
+  const tmpDirPath = await mkdtemp(path.join(tmpdir(), "nas-worktree-"));
+  const patchFile = path.join(tmpDirPath, "patch.patch");
   try {
     const normalizedPatch = patch.endsWith("\n") ? patch : `${patch}\n`;
-    await Deno.writeTextFile(patchFile, normalizedPatch);
-    await $`git -C ${targetWorktreePath} apply --binary --allow-empty ${extraArgs} ${patchFile}`
-      .printCommand();
+    await writeFile(patchFile, normalizedPatch);
+    console.log(
+      `$ git -C ${targetWorktreePath} apply --binary --allow-empty ${
+        extraArgs.join(" ")
+      } ${patchFile}`,
+    );
+    await $`git -C ${targetWorktreePath} apply --binary --allow-empty ${extraArgs} ${patchFile}`;
   } finally {
-    await Deno.remove(patchFile).catch(() => undefined);
+    await rm(tmpDirPath, { recursive: true, force: true }).catch(() =>
+      undefined
+    );
   }
 }
 
@@ -167,8 +174,8 @@ async function copyUntrackedFiles(
   for (const relativePath of untrackedFiles) {
     const sourcePath = path.join(sourceWorktreePath, relativePath);
     const targetPath = path.join(targetWorktreePath, relativePath);
-    await Deno.mkdir(path.dirname(targetPath), { recursive: true });
-    await Deno.copyFile(sourcePath, targetPath);
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    await copyFile(sourcePath, targetPath);
   }
 }
 

@@ -1,38 +1,38 @@
-import { assertEquals } from "@std/assert";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import {
   parseListeningPids,
   resolveDaemonPidsToStop,
   syncDaemonStatePid,
 } from "./daemon.ts";
 
-Deno.test("parseListeningPids: filters invalid lines and deduplicates", () => {
-  assertEquals(parseListeningPids("123\nbad\n123\n456\n"), [123, 456]);
+test("parseListeningPids: filters invalid lines and deduplicates", () => {
+  expect(parseListeningPids("123\nbad\n123\n456\n")).toEqual([123, 456]);
 });
 
-Deno.test("resolveDaemonPidsToStop: prefers validated state pid", () => {
-  assertEquals(
-    resolveDaemonPidsToStop(
-      { pid: 321, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
-      [321, 654],
-    ),
-    [321],
-  );
+test("resolveDaemonPidsToStop: prefers validated state pid", () => {
+  expect(resolveDaemonPidsToStop(
+    { pid: 321, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
+    [321, 654],
+  )).toEqual([321]);
 });
 
-Deno.test("resolveDaemonPidsToStop: falls back to listening pids when state pid is stale", () => {
-  assertEquals(
-    resolveDaemonPidsToStop(
-      { pid: 111, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
-      [222, 333, 222],
-    ),
-    [222, 333],
-  );
+test("resolveDaemonPidsToStop: falls back to listening pids when state pid is stale", () => {
+  expect(resolveDaemonPidsToStop(
+    { pid: 111, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
+    [222, 333, 222],
+  )).toEqual([222, 333]);
 });
 
-Deno.test("syncDaemonStatePid: writes the resolved listening pid back to state", async () => {
-  let writtenState:
-    | { pid?: number; port: number; startedAt: string }
-    | null = null;
+test("syncDaemonStatePid: writes the resolved listening pid back to state", async () => {
+  let writtenState: unknown = null;
 
   const pid = await syncDaemonStatePid(3939, {
     readState: () =>
@@ -47,8 +47,8 @@ Deno.test("syncDaemonStatePid: writes the resolved listening pid back to state",
     },
   });
 
-  assertEquals(pid, 789);
-  assertEquals(writtenState, {
+  expect(pid).toEqual(789);
+  expect(writtenState).toEqual({
     pid: 789,
     port: 3939,
     startedAt: "2026-04-05T00:00:00.000Z",

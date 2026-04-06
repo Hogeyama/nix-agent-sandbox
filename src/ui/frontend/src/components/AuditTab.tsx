@@ -31,9 +31,7 @@ export function AuditTab({ items, sessions }: AuditTabProps) {
       result = result.filter((e) => e.sessionId.toLowerCase().includes(q));
     }
     // Sort by timestamp descending (newest first)
-    result = [...result].sort((a, b) =>
-      b.timestamp.localeCompare(a.timestamp)
-    );
+    result = [...result].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
     return result;
   }, [items, domainFilter, sessionFilter, activeOnly, activeSessionIds]);
 
@@ -89,7 +87,9 @@ export function AuditTab({ items, sessions }: AuditTabProps) {
           />
           Active sessions only
         </label>
-        <span style={{ color: "#64748b", fontSize: "12px", marginLeft: "auto" }}>
+        <span
+          style={{ color: "#64748b", fontSize: "12px", marginLeft: "auto" }}
+        >
           {filtered.length} / {items.length} entries
         </span>
       </div>
@@ -133,7 +133,10 @@ export function AuditTab({ items, sessions }: AuditTabProps) {
                   <td style={tdReasonStyle} title={entry.reason}>
                     {entry.reason}
                   </td>
-                  <td style={tdTargetStyle} title={entry.target || entry.command}>
+                  <td
+                    style={tdTargetStyle}
+                    title={entry.target || entry.command}
+                  >
                     {entry.target || entry.command || "-"}
                   </td>
                 </tr>

@@ -1,5 +1,7 @@
-import * as path from "@std/path";
+import * as path from "node:path";
+import { readdir } from "node:fs/promises";
 import { logInfo } from "../log.ts";
+import { rm } from "node:fs/promises";
 import {
   defaultRuntimeDir,
   ensureDir,
@@ -47,18 +49,22 @@ export async function gcDbusRuntime(
   runtimePaths: DbusRuntimePaths,
 ): Promise<void> {
   try {
-    for await (const entry of Deno.readDir(runtimePaths.sessionsDir)) {
-      if (!entry.isDirectory) continue;
+    for (
+      const entry of await readdir(runtimePaths.sessionsDir, {
+        withFileTypes: true,
+      })
+    ) {
+      if (!entry.isDirectory()) continue;
       const sessionDir = path.join(runtimePaths.sessionsDir, entry.name);
       const pidFile = path.join(sessionDir, "proxy.pid");
       const pid = await readPid(pidFile);
       const alive = pid !== null && await isPidAlive(pid);
       if (alive) continue;
-      await Deno.remove(sessionDir, { recursive: true }).catch((e) =>
+      await rm(sessionDir, { recursive: true, force: true }).catch((e) =>
         logInfo(`[nas] DbusRegistry GC: failed to remove session dir: ${e}`)
       );
     }
   } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }

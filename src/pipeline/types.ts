@@ -247,7 +247,7 @@ export interface DockerImageBuildEffect {
   imageName: string;
   /** Embedded asset groups to extract to a temp dir before building */
   assetGroups: readonly {
-    baseUrl: string;
+    baseDir: string;
     outputDir: string;
     files: readonly string[];
   }[];

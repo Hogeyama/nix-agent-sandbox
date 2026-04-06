@@ -1,4 +1,5 @@
-import * as path from "@std/path";
+import * as path from "node:path";
+import { appendFile, readdir, readFile } from "node:fs/promises";
 import { ensureDir } from "../lib/fs_utils.ts";
 import type { AuditLogEntry, AuditLogFilter } from "./types.ts";
 
@@ -9,11 +10,11 @@ import type { AuditLogEntry, AuditLogFilter } from "./types.ts";
  * `~/.local/share/nas/audit/`.
  */
 export function resolveAuditDir(): string {
-  const xdgData = Deno.env.get("XDG_DATA_HOME");
+  const xdgData = process.env["XDG_DATA_HOME"];
   if (xdgData && xdgData.trim().length > 0) {
     return path.join(xdgData, "nas", "audit");
   }
-  const home = Deno.env.get("HOME");
+  const home = process.env["HOME"];
   if (!home) {
     throw new Error(
       "Cannot resolve audit directory: neither XDG_DATA_HOME nor HOME is set",
@@ -49,18 +50,7 @@ export async function appendAuditLog(
   const filePath = path.join(dir, fileForDate(date));
   const line = JSON.stringify(entry) + "\n";
 
-  const file = await Deno.open(filePath, {
-    write: true,
-    create: true,
-    append: true,
-    mode: 0o600,
-  });
-  try {
-    const encoder = new TextEncoder();
-    await file.write(encoder.encode(line));
-  } finally {
-    file.close();
-  }
+  await appendFile(filePath, line, { mode: 0o600 });
 }
 
 /**
@@ -98,13 +88,13 @@ export async function queryAuditLogs(
 async function listJsonlFiles(dir: string): Promise<string[]> {
   const names: string[] = [];
   try {
-    for await (const entry of Deno.readDir(dir)) {
-      if (entry.isFile && entry.name.endsWith(".jsonl")) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith(".jsonl")) {
         names.push(entry.name);
       }
     }
   } catch (e) {
-    if (e instanceof Deno.errors.NotFound) return [];
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw e;
   }
   return names.sort();
@@ -113,7 +103,7 @@ async function listJsonlFiles(dir: string): Promise<string[]> {
 /** Parse all JSON lines in a single JSONL file, skipping blank or malformed lines. */
 async function readJsonlFile(filePath: string): Promise<AuditLogEntry[]> {
   try {
-    const text = await Deno.readTextFile(filePath);
+    const text = await readFile(filePath, "utf8");
     const entries: AuditLogEntry[] = [];
     for (const line of text.split("\n")) {
       if (line.trim().length === 0) continue;
@@ -125,7 +115,7 @@ async function readJsonlFile(filePath: string): Promise<AuditLogEntry[]> {
     }
     return entries;
   } catch (e) {
-    if (e instanceof Deno.errors.NotFound) return [];
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw e;
   }
 }

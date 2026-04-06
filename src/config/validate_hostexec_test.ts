@@ -3,15 +3,14 @@
  * Split from validate_test.ts — covers all "hostexec config:" test cases.
  */
 
-import { assertEquals, assertThrows } from "@std/assert";
-import { assertMatch } from "@std/assert/match";
+import { expect, test } from "bun:test";
 import { ConfigValidationError, validateConfig } from "./validate.ts";
 
 // ---------------------------------------------------------------------------
 // hostexec config tests
 // ---------------------------------------------------------------------------
 
-Deno.test("hostexec config: validates secrets and rules", () => {
+test("hostexec config: validates secrets and rules", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -42,22 +41,20 @@ Deno.test("hostexec config: validates secrets and rules", () => {
     },
   });
 
-  assertEquals(
+  expect(
     config.profiles.test.hostexec?.secrets.github_token.from,
-    "env:GITHUB_TOKEN",
-  );
-  assertEquals(config.profiles.test.hostexec?.rules[0].inheritEnv.keys, [
+  ).toEqual("env:GITHUB_TOKEN");
+  expect(config.profiles.test.hostexec?.rules[0].inheritEnv.keys).toEqual([
     "SSH_AUTH_SOCK",
   ]);
-  assertEquals(config.profiles.test.hostexec?.prompt.notify, "desktop");
-  assertEquals(
+  expect(config.profiles.test.hostexec?.prompt.notify).toEqual("desktop");
+  expect(
     config.profiles.test.hostexec?.rules[0].match.argRegex,
-    "^(pull|fetch)\\b",
-  );
+  ).toEqual("^(pull|fetch)\\b");
 });
 
-Deno.test("hostexec config: rejects unknown secret references", () => {
-  assertThrows(
+test("hostexec config: rejects unknown secret references", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -73,13 +70,11 @@ Deno.test("hostexec config: rejects unknown secret references", () => {
           },
         },
       }),
-    ConfigValidationError,
-    "unknown secret",
-  );
+  ).toThrow("unknown secret");
 });
 
-Deno.test("hostexec config: rejects legacy profile secrets", () => {
-  assertThrows(
+test("hostexec config: rejects legacy profile secrets", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -91,13 +86,11 @@ Deno.test("hostexec config: rejects legacy profile secrets", () => {
           } as never,
         },
       }),
-    ConfigValidationError,
-    "secrets has moved to hostexec.secrets",
-  );
+  ).toThrow("secrets has moved to hostexec.secrets");
 });
 
-Deno.test("hostexec config: rejects missing rule id", () => {
-  assertThrows(
+test("hostexec config: rejects missing rule id", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -111,13 +104,11 @@ Deno.test("hostexec config: rejects missing rule id", () => {
           },
         },
       }),
-    ConfigValidationError,
-    "hostexec.rules[0].id",
-  );
+  ).toThrow("hostexec.rules[0].id");
 });
 
-Deno.test("hostexec config: rejects invalid inherit-env mode", () => {
-  assertThrows(
+test("hostexec config: rejects invalid inherit-env mode", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -133,13 +124,11 @@ Deno.test("hostexec config: rejects invalid inherit-env mode", () => {
           },
         },
       }),
-    ConfigValidationError,
-    "inherit-env.mode",
-  );
+  ).toThrow("inherit-env.mode");
 });
 
-Deno.test("hostexec config: rejects invalid notify backend", () => {
-  assertThrows(
+test("hostexec config: rejects invalid notify backend", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -153,12 +142,10 @@ Deno.test("hostexec config: rejects invalid notify backend", () => {
           },
         },
       }),
-    ConfigValidationError,
-    "hostexec.prompt.notify must be one of",
-  );
+  ).toThrow("hostexec.prompt.notify must be one of");
 });
 
-Deno.test("hostexec config: allows argv0-only match for catch-all", () => {
+test("hostexec config: allows argv0-only match for catch-all", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -173,13 +160,12 @@ Deno.test("hostexec config: allows argv0-only match for catch-all", () => {
     },
   });
 
-  assertEquals(
+  expect(
     config.profiles.test.hostexec?.rules[0].match.argRegex,
-    undefined,
-  );
+  ).toEqual(undefined);
 });
 
-Deno.test("hostexec config: accepts once as default-scope", () => {
+test("hostexec config: accepts once as default-scope", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -192,11 +178,11 @@ Deno.test("hostexec config: accepts once as default-scope", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.hostexec?.prompt.defaultScope, "once");
+  expect(config.profiles.test.hostexec?.prompt.defaultScope).toEqual("once");
 });
 
-Deno.test("hostexec config: rejects invalid default-scope", () => {
-  assertThrows(
+test("hostexec config: rejects invalid default-scope", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -210,13 +196,11 @@ Deno.test("hostexec config: rejects invalid default-scope", () => {
           },
         },
       }),
-    ConfigValidationError,
-    "hostexec.prompt.default-scope must be one of",
-  );
+  ).toThrow("hostexec.prompt.default-scope must be one of");
 });
 
-Deno.test("hostexec config: rejects invalid arg-regex", () => {
-  assertThrows(
+test("hostexec config: rejects invalid arg-regex", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -231,12 +215,10 @@ Deno.test("hostexec config: rejects invalid arg-regex", () => {
           },
         },
       }),
-    ConfigValidationError,
-    "arg-regex is not a valid regular expression",
-  );
+  ).toThrow("arg-regex is not a valid regular expression");
 });
 
-Deno.test("hostexec config: warns on identical match rules", () => {
+test("hostexec config: warns on identical match rules", () => {
   const warnings: string[] = [];
   const origLog = console.log;
   console.log = (msg: string) => warnings.push(msg);
@@ -257,11 +239,11 @@ Deno.test("hostexec config: warns on identical match rules", () => {
   } finally {
     console.log = origLog;
   }
-  assertEquals(warnings.length, 1);
-  assertMatch(warnings[0], /git-a.*git-b.*identical match/);
+  expect(warnings.length).toEqual(1);
+  expect(warnings[0]).toMatch(/git-a.*git-b.*identical match/);
 });
 
-Deno.test("hostexec config: warns when catch-all shadows specific rule", () => {
+test("hostexec config: warns when catch-all shadows specific rule", () => {
   const warnings: string[] = [];
   const origLog = console.log;
   console.log = (msg: string) => warnings.push(msg);
@@ -285,13 +267,12 @@ Deno.test("hostexec config: warns when catch-all shadows specific rule", () => {
   } finally {
     console.log = origLog;
   }
-  assertMatch(
+  expect(
     warnings.find((w) => /shadows/.test(w)) ?? "",
-    /git-any.*shadows.*git-pull/,
-  );
+  ).toMatch(/git-any.*shadows.*git-pull/);
 });
 
-Deno.test("hostexec config: no warning when specific rule comes before catch-all", () => {
+test("hostexec config: no warning when specific rule comes before catch-all", () => {
   const warnings: string[] = [];
   const origLog = console.log;
   console.log = (msg: string) => warnings.push(msg);
@@ -316,11 +297,11 @@ Deno.test("hostexec config: no warning when specific rule comes before catch-all
     console.log = origLog;
   }
   const shadowWarnings = warnings.filter((w) => /shadows/.test(w));
-  assertEquals(shadowWarnings.length, 0);
+  expect(shadowWarnings.length).toEqual(0);
 });
 
-Deno.test("hostexec config: rejects relative argv0 with fallback container", () => {
-  assertThrows(
+test("hostexec config: rejects relative argv0 with fallback container", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -336,12 +317,10 @@ Deno.test("hostexec config: rejects relative argv0 with fallback container", () 
           },
         },
       }),
-    ConfigValidationError,
-    "relative argv0",
-  );
+  ).toThrow("relative argv0");
 });
 
-Deno.test("hostexec config: allows relative argv0 with fallback deny", () => {
+test("hostexec config: allows relative argv0 with fallback deny", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -356,11 +335,11 @@ Deno.test("hostexec config: allows relative argv0 with fallback deny", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.hostexec?.rules[0].fallback, "deny");
+  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("deny");
 });
 
-Deno.test("hostexec config: rejects absolute argv0 with fallback container", () => {
-  assertThrows(
+test("hostexec config: rejects absolute argv0 with fallback container", () => {
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -376,12 +355,10 @@ Deno.test("hostexec config: rejects absolute argv0 with fallback container", () 
           },
         },
       }),
-    ConfigValidationError,
-    "absolute argv0",
-  );
+  ).toThrow("absolute argv0");
 });
 
-Deno.test("hostexec config: allows absolute argv0 with fallback deny", () => {
+test("hostexec config: allows absolute argv0 with fallback deny", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -396,18 +373,18 @@ Deno.test("hostexec config: allows absolute argv0 with fallback deny", () => {
       },
     },
   });
-  assertEquals(config.profiles.test.hostexec?.rules[0].fallback, "deny");
+  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("deny");
 });
 
 // ---------------------------------------------------------------------------
 // Error aggregation: hostexec env superRefine collects multiple issues
 // ---------------------------------------------------------------------------
 
-Deno.test("hostexec config: collects multiple env errors in a single rule", () => {
+test("hostexec config: collects multiple env errors in a single rule", () => {
   // hostexecSchema's transform calls ruleSchema.parse() and wraps ZodError
   // into ConfigValidationError, so only the first env issue surfaces.
   // But the env superRefine itself now collects all issues within a rule.
-  assertThrows(
+  expect(
     () =>
       validateConfig({
         profiles: {
@@ -428,7 +405,5 @@ Deno.test("hostexec config: collects multiple env errors in a single rule", () =
           },
         },
       }),
-    ConfigValidationError,
-    "BAD-KEY",
-  );
+  ).toThrow("BAD-KEY");
 });
