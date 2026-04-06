@@ -159,13 +159,54 @@ export function normalizeHost(host: string): string {
   return value;
 }
 
-export function matchesAllowlist(host: string, allowlist: string[]): boolean {
-  const normalizedHost = normalizeHost(host);
+/**
+ * Parses an allowlist/denylist entry into its host and optional port parts.
+ * Supports: "example.com", "example.com:443", "*.example.com", "*.example.com:443",
+ * "[::1]", "[::1]:8080"
+ */
+export function parseAllowlistEntry(
+  entry: string,
+): { host: string; port: number | null } {
+  const withoutWildcard = entry.startsWith("*.") ? entry.slice(2) : entry;
+  const wildcardPrefix = entry.startsWith("*.") ? "*." : "";
+
+  if (withoutWildcard.startsWith("[")) {
+    const end = withoutWildcard.indexOf("]");
+    if (end === -1) throw new Error(`invalid entry: ${entry}`);
+    const host = wildcardPrefix + withoutWildcard.slice(0, end + 1);
+    const rest = withoutWildcard.slice(end + 1);
+    if (!rest) return { host, port: null };
+    if (!rest.startsWith(":")) throw new Error(`invalid entry: ${entry}`);
+    return { host, port: parsePort(rest.slice(1)) };
+  }
+
+  const colonIdx = withoutWildcard.lastIndexOf(":");
+  if (colonIdx <= 0) return { host: entry, port: null };
+
+  // Check if everything after the last colon looks like a port number.
+  // If not, treat the whole thing as a host (e.g., bare IPv6 without brackets).
+  const maybePart = withoutWildcard.slice(colonIdx + 1);
+  if (!/^\d+$/.test(maybePart)) return { host: entry, port: null };
+
+  const port = parsePort(maybePart);
+  const hostPart = withoutWildcard.slice(0, colonIdx);
+  return { host: wildcardPrefix + hostPart, port };
+}
+
+export function matchesAllowlist(
+  target: NormalizedTarget,
+  allowlist: string[],
+): boolean {
+  const normalizedHost = normalizeHost(target.host);
   return allowlist.some((entry) => {
+    const parsed = parseAllowlistEntry(entry);
+    // If the entry specifies a port, both host and port must match.
+    if (parsed.port !== null && parsed.port !== target.port) return false;
+    const hostEntry = parsed.host;
     const candidate = normalizeHost(
-      entry.startsWith("*.") ? entry.slice(2) : entry,
+      hostEntry.startsWith("*.") ? hostEntry.slice(2) : hostEntry,
     );
-    if (entry.startsWith("*.")) {
+    if (hostEntry.startsWith("*.")) {
       return normalizedHost === candidate ||
         normalizedHost.endsWith(`.${candidate}`);
     }

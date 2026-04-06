@@ -233,10 +233,7 @@ export class SessionBroker {
       return denyDecision(message.requestId, denyReason);
     }
 
-    const allowlistHit = matchesAllowlist(
-      message.target.host,
-      this.allowlist,
-    );
+    const allowlistHit = matchesAllowlist(message.target, this.allowlist);
     if (allowlistHit) {
       await this.recordAudit(
         message.requestId,
@@ -248,7 +245,7 @@ export class SessionBroker {
     }
 
     const targetCacheKey = targetKey(message.target);
-    if (matchesAllowlist(message.target.host, this.denylist)) {
+    if (matchesAllowlist(message.target, this.denylist)) {
       await this.recordAudit(message.requestId, "deny", "denylist", targetStr);
       return denyDecision(message.requestId, "denylist");
     }

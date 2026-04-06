@@ -73,3 +73,44 @@ Deno.test("profileSchema: network collects multiple allowlist/denylist overlaps"
     );
   }
 });
+
+Deno.test("profileSchema: network.allowlist accepts host:port entries", () => {
+  const schema = profileSchema("test");
+  const result = schema.safeParse({
+    agent: "claude",
+    network: {
+      allowlist: ["example.com:443", "*.api.com:8080", "plain.com"],
+    },
+  });
+  assertEquals(result.success, true);
+  if (result.success) {
+    assertEquals(result.data.network.allowlist, [
+      "example.com:443",
+      "*.api.com:8080",
+      "plain.com",
+    ]);
+  }
+});
+
+Deno.test("profileSchema: network allowlist/denylist overlap with matching port", () => {
+  const schema = profileSchema("test");
+  // same host:port in both → overlap
+  const portSame = schema.safeParse({
+    agent: "claude",
+    network: {
+      allowlist: ["example.com:443"],
+      prompt: { denylist: ["example.com:443"] },
+    },
+  });
+  assertEquals(portSame.success, false);
+
+  // same host but different ports → no overlap
+  const portDiff = schema.safeParse({
+    agent: "claude",
+    network: {
+      allowlist: ["example.com:443"],
+      prompt: { denylist: ["example.com:80"] },
+    },
+  });
+  assertEquals(portDiff.success, true);
+});

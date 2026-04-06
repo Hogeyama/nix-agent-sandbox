@@ -5,6 +5,7 @@ import {
   matchesAllowlist,
   normalizeHost,
   normalizeTarget,
+  parseAllowlistEntry,
 } from "./protocol.ts";
 
 Deno.test("decodeProxyAuthorization: decodes Basic credentials", () => {
@@ -63,10 +64,79 @@ Deno.test("normalizeHost: trims brackets, dots, and case", () => {
   assertEquals(normalizeHost("Example.COM..."), "example.com");
 });
 
+Deno.test("parseAllowlistEntry: parses host only", () => {
+  assertEquals(parseAllowlistEntry("example.com"), {
+    host: "example.com",
+    port: null,
+  });
+  assertEquals(parseAllowlistEntry("*.example.com"), {
+    host: "*.example.com",
+    port: null,
+  });
+});
+
+Deno.test("parseAllowlistEntry: parses host:port", () => {
+  assertEquals(parseAllowlistEntry("example.com:443"), {
+    host: "example.com",
+    port: 443,
+  });
+  assertEquals(parseAllowlistEntry("*.example.com:8080"), {
+    host: "*.example.com",
+    port: 8080,
+  });
+});
+
+Deno.test("parseAllowlistEntry: parses IPv6 with brackets", () => {
+  assertEquals(parseAllowlistEntry("[2001:db8::1]"), {
+    host: "[2001:db8::1]",
+    port: null,
+  });
+  assertEquals(parseAllowlistEntry("[2001:db8::1]:443"), {
+    host: "[2001:db8::1]",
+    port: 443,
+  });
+});
+
 Deno.test("matchesAllowlist: supports wildcard subdomains", () => {
-  assertEquals(matchesAllowlist("api.github.com", ["*.github.com"]), true);
-  assertEquals(matchesAllowlist("github.com", ["*.github.com"]), true);
-  assertEquals(matchesAllowlist("gitlab.com", ["*.github.com"]), false);
+  assertEquals(
+    matchesAllowlist({ host: "api.github.com", port: 443 }, ["*.github.com"]),
+    true,
+  );
+  assertEquals(
+    matchesAllowlist({ host: "github.com", port: 443 }, ["*.github.com"]),
+    true,
+  );
+  assertEquals(
+    matchesAllowlist({ host: "gitlab.com", port: 443 }, ["*.github.com"]),
+    false,
+  );
+});
+
+Deno.test("matchesAllowlist: port-qualified entries", () => {
+  assertEquals(
+    matchesAllowlist({ host: "example.com", port: 443 }, ["example.com:443"]),
+    true,
+  );
+  assertEquals(
+    matchesAllowlist({ host: "example.com", port: 80 }, ["example.com:443"]),
+    false,
+  );
+  assertEquals(
+    matchesAllowlist({ host: "example.com", port: 80 }, ["example.com"]),
+    true,
+  );
+  assertEquals(
+    matchesAllowlist({ host: "api.example.com", port: 443 }, [
+      "*.example.com:443",
+    ]),
+    true,
+  );
+  assertEquals(
+    matchesAllowlist({ host: "api.example.com", port: 80 }, [
+      "*.example.com:443",
+    ]),
+    false,
+  );
 });
 
 Deno.test("denyReasonForTarget: blocks localhost and RFC1918", () => {

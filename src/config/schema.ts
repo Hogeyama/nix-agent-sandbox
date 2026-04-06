@@ -5,7 +5,11 @@
  */
 
 import { z } from "zod";
-import { type ApprovalScope, normalizeHost } from "../network/protocol.ts";
+import {
+  type ApprovalScope,
+  normalizeHost,
+  parseAllowlistEntry,
+} from "../network/protocol.ts";
 import type { EnvConfig, EnvMode, HostExecRule, Profile } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
@@ -64,7 +68,20 @@ function hostListSchema(fieldPath: string) {
         });
         continue;
       }
-      const domain = entry.startsWith("*.") ? entry.slice(2) : entry;
+      let parsed: { host: string; port: number | null };
+      try {
+        parsed = parseAllowlistEntry(entry);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [i],
+          message: `("${entry}") is not a valid host or host:port entry`,
+        });
+        continue;
+      }
+      const domain = parsed.host.startsWith("*.")
+        ? parsed.host.slice(2)
+        : parsed.host;
       if (domain.includes("*")) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -364,8 +381,11 @@ export function networkSchema(_profileName: string) {
       return;
     }
     const normalizeEntry = (e: string) => {
-      if (e.startsWith("*.")) return `*.${normalizeHost(e.slice(2))}`;
-      return normalizeHost(e);
+      const parsed = parseAllowlistEntry(e);
+      const host = parsed.host.startsWith("*.")
+        ? `*.${normalizeHost(parsed.host.slice(2))}`
+        : normalizeHost(parsed.host);
+      return parsed.port !== null ? `${host}:${parsed.port}` : host;
     };
     const normalizedAllowSet = new Set(val.allowlist.map(normalizeEntry));
     for (const entry of val.prompt.denylist) {

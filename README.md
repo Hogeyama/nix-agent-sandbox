@@ -89,7 +89,7 @@ DinD サイドカーを起動して、エージェントコンテナから隔離
 
 ### ネットワーク制御
 
-通信先ドメインを allowlist で指定できます。allowlist 外の通信はデスクトップ通知経由で approve / deny できます（`ui.enable: true` の場合はブラウザ UI、`false` の場合は通知のアクションボタン）。
+通信先ドメインを allowlist で指定できます。`"example.com"` のようなホスト名のほか `"api.example.com:443"` や `"*.cdn.com:8080"` のようにポートを含む形式も使えます。allowlist 外の通信はデスクトップ通知経由で approve / deny できます（`ui.enable: true` の場合はブラウザ UI、`false` の場合は通知のアクションボタン）。
 
 ![network prompt](./images/network-prompt.png)
 
@@ -187,9 +187,10 @@ profiles:
       enable: false         # DinD rootless サイドカーを起動して隔離された Docker 環境を提供する
       shared: false         # true にするとサイドカーをセッション間で共有する
     network:
-      allowlist:            # 即時許可するドメインのリスト
-        - api.anthropic.com
-        - github.com
+      allowlist:            # 即時許可するドメインのリスト（ポート指定も可能）
+        - api.anthropic.com       # ホスト名のみ（全ポート許可）
+        - github.com:443          # ポート指定（443 のみ許可）
+        - "*.githubusercontent.com:443"  # ワイルドカード + ポート指定
       prompt:
         enable: true        # allowlist 外通信を pending にして手動承認する
         timeout-seconds: 300
@@ -551,7 +552,7 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `nix.extra-packages` | string[] | `[]` | `nix shell` で追加するパッケージ（`nix develop` 前に適用） |
 | `docker.enable` | bool | `false` | DinD rootless サイドカーを起動して隔離された Docker 環境を提供 |
 | `docker.shared` | bool | `false` | サイドカーをセッション間で共有（起動が速い。`false` ではセッションごとに起動・破棄） |
-| `network.allowlist` | string[] | `[]` | 即時許可する外部ドメインのリスト。allowlist 外通信は `network.prompt.enable` が無効なら拒否、有効なら pending になる |
+| `network.allowlist` | string[] | `[]` | 即時許可する外部ドメインのリスト。`"example.com"`（全ポート）または `"example.com:443"`（ポート指定）形式、`"*.example.com:443"` のようなワイルドカード + ポート指定も可能。allowlist 外通信は `network.prompt.enable` が無効なら拒否、有効なら pending になる |
 | `network.prompt.enable` | bool | `false` | allowlist 外通信を session ごとの承認キューに入れる |
 | `network.prompt.timeout-seconds` | number | `300` | pending 承認の待機秒数。タイムアウト時は deny |
 | `network.prompt.default-scope` | `"once"` \| `"host-port"` \| `"host"` | `"host-port"` | `nas network approve` の既定 scope。`once`: そのリクエストのみ、`host-port`: 同じホスト+ポートへの通信を以降許可、`host`: 同じホストへの全ポート通信を以降許可 |
