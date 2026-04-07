@@ -8,10 +8,10 @@ import {
   test,
 } from "bun:test";
 /**
- * UI API ルートの単体テスト — Hono の app.request() でテスト
+ * UI API ルートの単体テスト — Router.request() でテスト
  */
 
-import { Hono } from "hono";
+import { Router } from "../router.ts";
 import { createApiRoutes } from "./api.ts";
 import type { UiDataContext } from "../data.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
@@ -51,7 +51,7 @@ test("GET /network/pending returns items array", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/network/pending");
@@ -74,7 +74,7 @@ test("GET /hostexec/pending returns items array", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/hostexec/pending");
@@ -98,7 +98,7 @@ test("GET /sessions returns network and hostexec arrays", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/sessions");
@@ -120,7 +120,7 @@ test("POST /network/approve returns 400 without required fields", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/network/approve", {
@@ -145,7 +145,7 @@ test("POST /network/deny returns 400 without required fields", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/network/deny", {
@@ -167,7 +167,7 @@ test("POST /hostexec/approve returns 400 without required fields", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/hostexec/approve", {
@@ -189,7 +189,7 @@ test("POST /hostexec/deny returns 400 without required fields", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/hostexec/deny", {
@@ -255,7 +255,7 @@ test("GET /network/pending with pending entry returns it", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/network/pending");
@@ -279,7 +279,7 @@ test("GET /audit returns empty items when no logs exist", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/audit");
@@ -318,7 +318,7 @@ test("GET /audit returns audit log entries", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/audit");
@@ -339,7 +339,7 @@ test("GET /audit with invalid domain returns 400", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/audit?domain=invalid");
@@ -360,7 +360,7 @@ test("GET /audit with invalid limit returns 400", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/audit?limit=abc");
@@ -396,7 +396,7 @@ test("GET /audit respects limit parameter", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/audit?limit=2");
@@ -443,7 +443,7 @@ test("GET /audit filters by session parameter", async () => {
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
-    const app = new Hono();
+    const app = new Router();
     app.route("/api", api);
 
     const res = await app.request("/api/audit?session=sess-001");

@@ -16,7 +16,6 @@
     "bun2nix": "bun2nix -o bun.nix"
   },
   "dependencies": {
-    "hono": "^4",
     "js-yaml": "^4",
     "preact": "^10",
     "zod": "^3.24.4"

@@ -1,8 +1,8 @@
 /**
- * REST API ルート (Hono)
+ * REST API ルート
  */
 
-import { Hono } from "hono";
+import { Router, json } from "../router.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   approveHostExec,
@@ -19,146 +19,145 @@ import {
 } from "../data.ts";
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
 
-export function createApiRoutes(ctx: UiDataContext): Hono {
-  const api = new Hono();
+export function createApiRoutes(ctx: UiDataContext): Router {
+  const api = new Router();
 
   // --- Health ---
 
-  api.get("/health", (c) => {
-    return c.json({ ok: true });
+  api.get("/health", () => {
+    return json({ ok: true });
   });
 
   // --- Network ---
 
-  api.get("/network/pending", async (c) => {
+  api.get("/network/pending", async () => {
     try {
       const items = await getNetworkPending(ctx);
-      return c.json({ items });
+      return json({ items });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
-  api.post("/network/approve", async (c) => {
+  api.post("/network/approve", async ({ req }) => {
     try {
-      const body = await c.req.json();
+      const body = await req.json();
       const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
-        return c.json({ error: "sessionId and requestId are required" }, 400);
+        return json({ error: "sessionId and requestId are required" }, 400);
       }
       await approveNetwork(ctx, sessionId, requestId, scope);
-      return c.json({ ok: true });
+      return json({ ok: true });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
-  api.post("/network/deny", async (c) => {
+  api.post("/network/deny", async ({ req }) => {
     try {
-      const body = await c.req.json();
+      const body = await req.json();
       const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
-        return c.json({ error: "sessionId and requestId are required" }, 400);
+        return json({ error: "sessionId and requestId are required" }, 400);
       }
       await denyNetwork(ctx, sessionId, requestId, scope);
-      return c.json({ ok: true });
+      return json({ ok: true });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
   // --- HostExec ---
 
-  api.get("/hostexec/pending", async (c) => {
+  api.get("/hostexec/pending", async () => {
     try {
       const items = await getHostExecPending(ctx);
-      return c.json({ items });
+      return json({ items });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
-  api.post("/hostexec/approve", async (c) => {
+  api.post("/hostexec/approve", async ({ req }) => {
     try {
-      const body = await c.req.json();
+      const body = await req.json();
       const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
-        return c.json({ error: "sessionId and requestId are required" }, 400);
+        return json({ error: "sessionId and requestId are required" }, 400);
       }
       await approveHostExec(ctx, sessionId, requestId, scope);
-      return c.json({ ok: true });
+      return json({ ok: true });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
-  api.post("/hostexec/deny", async (c) => {
+  api.post("/hostexec/deny", async ({ req }) => {
     try {
-      const body = await c.req.json();
+      const body = await req.json();
       const { sessionId, requestId } = body;
       if (!sessionId || !requestId) {
-        return c.json({ error: "sessionId and requestId are required" }, 400);
+        return json({ error: "sessionId and requestId are required" }, 400);
       }
       await denyHostExec(ctx, sessionId, requestId);
-      return c.json({ ok: true });
+      return json({ ok: true });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
   // --- Sessions ---
 
-  api.get("/sessions", async (c) => {
+  api.get("/sessions", async () => {
     try {
       const sessions = await getSessions(ctx);
-      return c.json(sessions);
+      return json(sessions);
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
   // --- Containers ---
 
-  api.get("/containers", async (c) => {
+  api.get("/containers", async () => {
     try {
       const containers = await getNasContainers();
-      return c.json({ items: containers });
+      return json({ items: containers });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
-  api.post("/containers/:name/stop", async (c) => {
+  api.post("/containers/:name/stop", async ({ params }) => {
     try {
-      const name = c.req.param("name");
-      await stopContainer(name);
-      return c.json({ ok: true });
+      await stopContainer(params.name);
+      return json({ ok: true });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
-  api.post("/containers/clean", async (c) => {
+  api.post("/containers/clean", async () => {
     try {
       const result = await cleanContainers();
-      return c.json(result);
+      return json(result);
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
   // --- Audit ---
 
-  api.get("/audit", async (c) => {
+  api.get("/audit", async ({ url }) => {
     try {
-      const since = c.req.query("since");
-      const session = c.req.query("session");
-      const domain = c.req.query("domain");
-      const limitStr = c.req.query("limit");
+      const since = url.searchParams.get("since");
+      const session = url.searchParams.get("session");
+      const domain = url.searchParams.get("domain");
+      const limitStr = url.searchParams.get("limit");
 
       // Validate domain parameter
       if (domain && domain !== "network" && domain !== "hostexec") {
-        return c.json(
+        return json(
           { error: 'Invalid domain: must be "network" or "hostexec"' },
           400,
         );
@@ -169,7 +168,7 @@ export function createApiRoutes(ctx: UiDataContext): Hono {
       if (limitStr) {
         limit = parseInt(limitStr, 10);
         if (isNaN(limit) || limit < 1) {
-          return c.json(
+          return json(
             { error: "Invalid limit: must be a positive integer" },
             400,
           );
@@ -182,9 +181,9 @@ export function createApiRoutes(ctx: UiDataContext): Hono {
       if (domain) filter.domain = domain as AuditDomain;
 
       const items = await getAuditLogs(ctx, filter, limit);
-      return c.json({ items });
+      return json({ items });
     } catch (e) {
-      return c.json({ error: (e as Error).message }, 500);
+      return json({ error: (e as Error).message }, 500);
     }
   });
 
