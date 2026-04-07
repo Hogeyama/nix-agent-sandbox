@@ -25,7 +25,6 @@
     "@types/js-yaml": "^4",
     "@types/node": "^22",
     "bun-types": "latest",
-    "bun2nix": "latest",
-    "esbuild": "^0.24"
+    "bun2nix": "latest"
   }
 }

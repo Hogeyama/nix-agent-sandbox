@@ -1,11 +1,10 @@
 /**
- * フロントエンドビルドスクリプト — esbuild
+ * フロントエンドビルドスクリプト — Bun bundler
  *
- * esbuild で TSX → バンドル済み JS を生成し、
+ * Bun.build() で TSX → バンドル済み JS を生成し、
  * index.html と合わせて src/ui/dist/ に出力する。
  */
 
-import * as esbuild from "esbuild";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
@@ -22,23 +21,23 @@ try {
 await mkdir(path.join(DIST_DIR, "assets"), { recursive: true });
 
 // Bundle TSX
-const result = await esbuild.build({
-  entryPoints: [path.join(FRONTEND_DIR, "src/main.tsx")],
+const result = await Bun.build({
+  entrypoints: [path.join(FRONTEND_DIR, "src/main.tsx")],
   outdir: path.join(DIST_DIR, "assets"),
-  bundle: true,
   format: "esm",
   minify: true,
   splitting: false,
-  jsx: "automatic",
-  jsxImportSource: "preact",
-  metafile: true,
 });
 
+if (!result.success) {
+  for (const msg of result.logs) console.error(msg);
+  throw new Error("Build failed");
+}
+
 // Find the output JS filename
-const outputs = Object.keys(result.metafile!.outputs);
-const jsFile = outputs.find((f) => f.endsWith(".js"));
-if (!jsFile) throw new Error("No JS output found");
-const jsBasename = path.basename(jsFile);
+const jsOutput = result.outputs.find((o) => o.path.endsWith(".js"));
+if (!jsOutput) throw new Error("No JS output found");
+const jsBasename = path.basename(jsOutput.path);
 
 // Generate index.html with correct script path
 const html = `<!DOCTYPE html>
@@ -60,8 +59,6 @@ const html = `<!DOCTYPE html>
 `;
 
 await writeFile(path.join(DIST_DIR, "index.html"), html);
-
-esbuild.stop();
 
 // Print summary
 const jsSize = (await stat(path.join(DIST_DIR, "assets", jsBasename))).size;
