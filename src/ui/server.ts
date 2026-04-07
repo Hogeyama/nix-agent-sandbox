@@ -1,5 +1,9 @@
 /**
  * Router 定義 + Bun.serve 起動 + 静的ファイル配信
+ *
+ * 静的アセットは起動時にメモリへプリロードする。
+ * nix-bundle-elf (single-exe) では親プロセス終了時に /tmp の展開物が
+ * trap で削除されるが、fork されたデーモンはプリロード済みデータで配信を続けられる。
  */
 
 import { Router, html, text } from "./router.ts";
@@ -12,7 +16,7 @@ import {
   listSessionRegistries,
 } from "../network/registry.ts";
 import { listHostExecPendingEntries } from "../hostexec/registry.ts";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import * as path from "node:path";
 import { resolveAssetDir } from "../lib/asset.ts";
 
@@ -34,37 +38,61 @@ function contentType(p: string): string {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
-export function createApp(ctx: UiDataContext): Router {
+export interface PreloadedAssets {
+  indexHtml: string | null;
+  /** pathname → Blob (contentType 込み) */
+  files: Map<string, Blob>;
+}
+
+export async function preloadAssets(): Promise<PreloadedAssets> {
+  const files = new Map<string, Blob>();
+  let indexHtml: string | null = null;
+
+  try {
+    indexHtml = await readFile(path.join(DIST_BASE, "index.html"), "utf8");
+  } catch {
+    // index.html not found — will return 500 at request time
+  }
+
+  try {
+    const assetsDir = path.join(DIST_BASE, "assets");
+    const entries = await readdir(assetsDir);
+    for (const entry of entries) {
+      const filePath = path.join(assetsDir, entry);
+      const buf = await readFile(filePath);
+      files.set(`/assets/${entry}`, new Blob([buf], { type: contentType(entry) }));
+    }
+  } catch {
+    // assets dir not found — will return 404 at request time
+  }
+
+  return { indexHtml, files };
+}
+
+export function createApp(ctx: UiDataContext, assets: PreloadedAssets): Router {
   const app = new Router();
 
   // API routes
   app.route("/api", createApiRoutes(ctx));
   app.route("/api", createSseRoutes(ctx));
 
-  // Static file serving
-  app.get("/assets/*", async ({ url }) => {
-    const filePath = path.join(DIST_BASE, url.pathname.slice(1));
-    try {
-      const content = await readFile(filePath);
-      return new Response(content, {
-        headers: { "Content-Type": contentType(url.pathname) },
-      });
-    } catch {
-      return new Response("404 Not Found", { status: 404 });
+  // Static file serving (from preloaded memory)
+  app.get("/assets/*", ({ url }) => {
+    const blob = assets.files.get(url.pathname);
+    if (blob) {
+      return new Response(blob);
     }
+    return new Response("404 Not Found", { status: 404 });
   });
 
-  app.get("/", async () => {
-    const filePath = path.join(DIST_BASE, "index.html");
-    try {
-      const content = await readFile(filePath, "utf8");
-      return html(content);
-    } catch {
-      return text(
-        "UI assets not found. Run 'bun run build-ui' first.",
-        500,
-      );
+  app.get("/", () => {
+    if (assets.indexHtml !== null) {
+      return html(assets.indexHtml);
     }
+    return text(
+      "UI assets not found. Run 'bun run build-ui' first.",
+      500,
+    );
   });
 
   return app;
@@ -79,7 +107,8 @@ export interface ServeOptions {
 
 export async function startServer(options: ServeOptions): Promise<void> {
   const ctx = await createDataContext(options.runtimeDir);
-  const app = createApp(ctx);
+  const assets = await preloadAssets();
+  const app = createApp(ctx, assets);
 
   console.log(`[nas] UI server starting on http://localhost:${options.port}`);
 
