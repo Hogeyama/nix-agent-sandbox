@@ -33,7 +33,7 @@ import { ConfigValidationError } from "./validate.ts";
 
 function zodEnum<const T extends readonly [string, ...string[]]>(values: T) {
   return z.enum(values, {
-    errorMap: () => ({ message: `must be one of: ${values.join(", ")}` }),
+    error: `must be one of: ${values.join(", ")}`,
   });
 }
 
@@ -56,8 +56,8 @@ function parsePositiveInt(_fieldName: string) {
 
 function hostListSchema(fieldPath: string) {
   return z.array(
-    z.string({ invalid_type_error: "must be a non-empty string" }),
-    { invalid_type_error: `${fieldPath} must be a list` },
+    z.string({ error: "must be a non-empty string" }),
+    { error: `${fieldPath} must be a list` },
   ).default([]).superRefine((arr, ctx) => {
     for (const [i, entry] of arr.entries()) {
       if (typeof entry !== "string" || entry.trim() === "") {
@@ -113,7 +113,7 @@ export const nixSchema = z.object({
   "extra-packages": z.array(z.string()).default(
     DEFAULT_NIX_CONFIG.extraPackages,
   ),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   enable: r.enable,
   mountSocket: r["mount-socket"],
   extraPackages: r["extra-packages"],
@@ -122,23 +122,23 @@ export const nixSchema = z.object({
 export const dockerSchema = z.object({
   enable: z.boolean().default(DEFAULT_DOCKER_CONFIG.enable),
   shared: z.boolean().default(DEFAULT_DOCKER_CONFIG.shared),
-}).default({});
+}).prefault({});
 
 export const gcloudSchema = z.object({
   "mount-config": z.boolean().default(DEFAULT_GCLOUD_CONFIG.mountConfig),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   mountConfig: r["mount-config"],
 }));
 
 export const awsSchema = z.object({
   "mount-config": z.boolean().default(DEFAULT_AWS_CONFIG.mountConfig),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   mountConfig: r["mount-config"],
 }));
 
 export const gpgSchema = z.object({
   "forward-agent": z.boolean().default(DEFAULT_GPG_CONFIG.forwardAgent),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   forwardAgent: r["forward-agent"],
 }));
 
@@ -148,7 +148,7 @@ export const gpgSchema = z.object({
 
 export const displaySchema = z.object({
   enable: z.boolean().default(DEFAULT_DISPLAY_CONFIG.enable),
-}).default({});
+}).prefault({});
 
 // ---------------------------------------------------------------------------
 // Extra mounts
@@ -160,12 +160,12 @@ const extraMountEntrySchema = z.object(
     dst: nonEmptyString,
     mode: zodEnum(["ro", "rw"] as const).default("ro"),
   },
-  { invalid_type_error: "must be an object" },
+  { error: "must be an object" },
 );
 
 export const extraMountsSchema = z.array(
   extraMountEntrySchema,
-  { invalid_type_error: "extra-mounts must be a list" },
+  { error: "extra-mounts must be a list" },
 ).default([]);
 
 // ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ const envEntrySchema = z.object(
     mode: z.enum(["set", "prefix", "suffix"]).optional(),
     separator: z.string().optional(),
   },
-  { invalid_type_error: "must be an object" },
+  { error: "must be an object" },
 ).superRefine((entry, ctx) => {
   const hasKey = entry.key !== undefined;
   const hasKeyCmd = entry.key_cmd !== undefined;
@@ -272,7 +272,7 @@ const envEntrySchema = z.object(
 
 export const envSchema = z.array(
   envEntrySchema,
-  { invalid_type_error: "env must be a list" },
+  { error: "env must be a list" },
 ).default([]);
 
 // ---------------------------------------------------------------------------
@@ -282,7 +282,7 @@ export const envSchema = z.array(
 function dbusNameListSchema(field: string) {
   return z.array(
     nonEmptyString,
-    { invalid_type_error: `${field} must be a list` },
+    { error: `${field} must be a list` },
   ).default([]);
 }
 
@@ -291,13 +291,13 @@ const dbusRuleSchema = z.object(
     name: nonEmptyString,
     rule: nonEmptyString,
   },
-  { invalid_type_error: "must be an object" },
+  { error: "must be an object" },
 );
 
 function dbusRulesSchema(field: string) {
   return z.array(
     dbusRuleSchema,
-    { invalid_type_error: `${field} must be a list` },
+    { error: `${field} must be a list` },
   ).default([]);
 }
 
@@ -309,7 +309,7 @@ export const dbusSessionSchema = z.object({
   own: dbusNameListSchema("dbus.session.own"),
   calls: dbusRulesSchema("dbus.session.calls"),
   broadcasts: dbusRulesSchema("dbus.session.broadcasts"),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   enable: r.enable,
   sourceAddress: r["source-address"],
   see: r.see,
@@ -321,7 +321,7 @@ export const dbusSessionSchema = z.object({
 
 export const dbusSchema = z.object({
   session: dbusSessionSchema,
-}).default({});
+}).prefault({});
 
 // ---------------------------------------------------------------------------
 // Secret config
@@ -337,14 +337,14 @@ const secretEntrySchema = z.object(
     ),
     required: z.boolean().default(true),
   },
-  { invalid_type_error: "must be an object" },
+  { error: "must be an object" },
 );
 
 export const secretsSchema = z.record(
   z.string(),
   secretEntrySchema,
-  { invalid_type_error: "hostexec.secrets must be an object" },
-).default({});
+  { error: "hostexec.secrets must be an object" },
+).prefault({});
 
 // ---------------------------------------------------------------------------
 // Network
@@ -359,7 +359,7 @@ export const networkPromptSchema = z.object({
     .default(DEFAULT_NETWORK_PROMPT_CONFIG.defaultScope),
   notify: zodEnum(["auto", "desktop", "off"] as const)
     .default(DEFAULT_NETWORK_PROMPT_CONFIG.notify),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   enable: r.enable,
   denylist: r.denylist,
   timeoutSeconds: r["timeout-seconds"],
@@ -373,8 +373,8 @@ export function networkSchema(_profileName: string) {
       allowlist: hostListSchema("network.allowlist"),
       prompt: networkPromptSchema,
     },
-    { invalid_type_error: "network must be an object" },
-  ).default({}).superRefine((val, ctx) => {
+    { error: "network must be an object" },
+  ).prefault({}).superRefine((val, ctx) => {
     // Skip overlap check if any entries are invalid (empty strings would crash normalizeHost)
     const allEntries = [...val.allowlist, ...val.prompt.denylist];
     if (allEntries.some((e) => typeof e !== "string" || e.trim() === "")) {
@@ -412,7 +412,7 @@ export const hostexecPromptSchema = z.object({
     .default(DEFAULT_HOSTEXEC_PROMPT_CONFIG.defaultScope),
   notify: zodEnum(["auto", "desktop", "off"] as const)
     .default(DEFAULT_HOSTEXEC_PROMPT_CONFIG.notify),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   enable: r.enable,
   timeoutSeconds: r["timeout-seconds"],
   defaultScope: r["default-scope"],
@@ -429,7 +429,7 @@ const hostexecCwdSchema = z.object({
     ] as const,
   ).default(DEFAULT_HOSTEXEC_CWD_CONFIG.mode),
   allow: z.array(z.string()).default([]),
-}).default({}).superRefine((val, ctx) => {
+}).prefault({}).superRefine((val, ctx) => {
   if (
     !Array.isArray(val.allow) ||
     val.allow.some((v) => typeof v !== "string" || v.trim() === "")
@@ -454,7 +454,7 @@ const hostexecInheritEnvSchema = z.object({
   mode: zodEnum(["minimal", "unsafe-inherit-all"] as const)
     .default(DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG.mode),
   keys: z.array(z.string()).default([]),
-}).default({}).superRefine((val, ctx) => {
+}).prefault({}).superRefine((val, ctx) => {
   if (
     !Array.isArray(val.keys) ||
     val.keys.some((v) => typeof v !== "string" || v.trim() === "")
@@ -479,7 +479,7 @@ function hostexecRuleSchema(
           argv0: nonEmptyString,
           "arg-regex": nonEmptyString.optional(),
         },
-        { invalid_type_error: "must be an object" },
+        { error: "must be an object" },
       ).superRefine((val, ctx) => {
         if (val["arg-regex"] !== undefined) {
           try {
@@ -495,8 +495,8 @@ function hostexecRuleSchema(
       }),
       cwd: hostexecCwdSchema,
       env: z.record(z.string(), z.string(), {
-        invalid_type_error: "must be an object",
-      }).default({}).superRefine((val, ctx) => {
+        error: "must be an object",
+      }).prefault({}).superRefine((val, ctx) => {
         for (const [key, value] of Object.entries(val)) {
           if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
             ctx.addIssue({
@@ -538,7 +538,7 @@ function hostexecRuleSchema(
       ),
       fallback: zodEnum(["container", "deny"] as const).default("container"),
     },
-    { invalid_type_error: "must be an object" },
+    { error: "must be an object" },
   ).transform((r): HostExecRule => ({
     id: r.id,
     match: {
@@ -578,8 +578,8 @@ export function hostexecSchema(_profileName: string) {
       secrets: secretsSchema,
       rules: z.array(z.unknown()).default([]),
     },
-    { invalid_type_error: "hostexec must be an object" },
-  ).default({}).transform((val) => {
+    { error: "hostexec must be an object" },
+  ).prefault({}).transform((val) => {
     const secretNames = new Set(Object.keys(val.secrets));
     const rules: HostExecRule[] = [];
     const errors: string[] = [];
@@ -616,7 +616,7 @@ export const uiSchema = z.object({
   port: parsePositiveInt("ui.port").default(DEFAULT_UI_CONFIG.port),
   "idle-timeout": z.number().int().min(0, { message: "must be >= 0" })
     .default(DEFAULT_UI_CONFIG.idleTimeout),
-}).default({}).transform((r) => ({
+}).prefault({}).transform((r) => ({
   enable: r.enable,
   port: r.port,
   idleTimeout: r["idle-timeout"],
@@ -675,10 +675,10 @@ export function formatZodError(err: z.ZodError): string {
     .join("\n  ");
 }
 
-function formatPath(segments: (string | number)[]): string {
+function formatPath(segments: PropertyKey[]): string {
   return segments
     .map((seg, i) =>
-      typeof seg === "number" ? `[${seg}]` : (i === 0 ? seg : `.${seg}`)
+      typeof seg === "number" ? `[${seg}]` : (i === 0 ? String(seg) : `.${String(seg)}`)
     )
     .join("");
 }
