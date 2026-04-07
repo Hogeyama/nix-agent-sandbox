@@ -2,7 +2,7 @@
  * SSE エンドポイント — 2秒間隔ポーリングで差分送出
  */
 
-import { Hono } from "hono";
+import { Router } from "../router.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   getAuditLogs,
@@ -11,10 +11,10 @@ import {
   getSessions,
 } from "../data.ts";
 
-export function createSseRoutes(ctx: UiDataContext): Hono {
-  const app = new Hono();
+export function createSseRoutes(ctx: UiDataContext): Router {
+  const app = new Router();
 
-  app.get("/events", (_c) => {
+  app.get("/events", () => {
     let closed = false;
     let timerId: number | undefined;
 

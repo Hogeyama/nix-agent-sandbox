@@ -1,8 +1,8 @@
 /**
- * Hono app 定義 + Bun.serve 起動 + 静的ファイル配信
+ * Router 定義 + Bun.serve 起動 + 静的ファイル配信
  */
 
-import { Hono } from "hono";
+import { Router, html, text } from "./router.ts";
 import { createApiRoutes } from "./routes/api.ts";
 import { createSseRoutes } from "./routes/sse.ts";
 import { createDataContext } from "./data.ts";
@@ -29,38 +29,38 @@ const CONTENT_TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
-function contentType(path: string): string {
-  const ext = path.slice(path.lastIndexOf("."));
+function contentType(p: string): string {
+  const ext = p.slice(p.lastIndexOf("."));
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
-export function createApp(ctx: UiDataContext): Hono {
-  const app = new Hono();
+export function createApp(ctx: UiDataContext): Router {
+  const app = new Router();
 
   // API routes
   app.route("/api", createApiRoutes(ctx));
   app.route("/api", createSseRoutes(ctx));
 
   // Static file serving
-  app.get("/assets/*", async (c) => {
-    const filePath = path.join(DIST_BASE, c.req.path.slice(1));
+  app.get("/assets/*", async ({ url }) => {
+    const filePath = path.join(DIST_BASE, url.pathname.slice(1));
     try {
       const content = await readFile(filePath);
       return new Response(content, {
-        headers: { "Content-Type": contentType(c.req.path) },
+        headers: { "Content-Type": contentType(url.pathname) },
       });
     } catch {
-      return c.notFound();
+      return new Response("404 Not Found", { status: 404 });
     }
   });
 
-  app.get("/", async (c) => {
+  app.get("/", async () => {
     const filePath = path.join(DIST_BASE, "index.html");
     try {
       const content = await readFile(filePath, "utf8");
-      return c.html(content);
+      return html(content);
     } catch {
-      return c.text(
+      return text(
         "UI assets not found. Run 'bun run build-ui' first.",
         500,
       );
