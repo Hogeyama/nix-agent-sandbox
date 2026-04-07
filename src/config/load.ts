@@ -2,7 +2,6 @@
  * YAML 設定ファイルの読み込み
  */
 
-import yaml from "js-yaml";
 import * as path from "node:path";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
@@ -86,7 +85,7 @@ export async function loadGlobalConfig(
     // ファイルが存在する場合、読み込み・解析エラーは伝播させる
     if (format === "yml") {
       const text = await readFile(candidate, "utf8");
-      return yaml.load(text) as RawConfig;
+      return Bun.YAML.parse(text) as RawConfig;
     }
     return await loadNixConfig(candidate);
   }
@@ -99,7 +98,7 @@ async function loadConfigByPath(filePath: string): Promise<RawConfig> {
     return await loadNixConfig(filePath);
   }
   const text = await readFile(filePath, "utf8");
-  return yaml.load(text) as RawConfig;
+  return Bun.YAML.parse(text) as RawConfig;
 }
 
 /** グローバルとローカルの RawConfig をマージする */
@@ -222,7 +221,7 @@ async function loadLocalConfig(
   globalRaw?: RawConfig | null,
 ): Promise<RawConfig & { _nixFunctionMerged?: boolean }> {
   if (found.format === "yml") {
-    return yaml.load(await readFile(found.path, "utf8")) as RawConfig;
+    return Bun.YAML.parse(await readFile(found.path, "utf8")) as RawConfig;
   }
   return await loadNixConfig(found.path, globalRaw ?? undefined);
 }
