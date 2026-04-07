@@ -128,26 +128,26 @@ test("mergeOutputs: outputOverrides don't clobber dockerArgs/envVars merge", () 
   expect(result.imageName).toEqual("custom");
 });
 
-test("mergeOutputs: outputOverrides with dockerArgs/envVars are overridden by append/merge", () => {
+test("mergeOutputs: outputOverrides.dockerArgs replaces prior as base, plan.dockerArgs appended", () => {
   const prior = makePrior({
     dockerArgs: ["--rm"],
     envVars: { A: "1" },
   });
-  // Even if outputOverrides contains dockerArgs/envVars, the explicit
-  // append/merge from plan.dockerArgs and plan.envVars takes precedence.
+  // outputOverrides.dockerArgs replaces prior.dockerArgs as the base,
+  // then plan.dockerArgs is appended on top.
   const plan: StagePlan = {
     effects: [],
     dockerArgs: ["--new"],
     envVars: { B: "2" },
     outputOverrides: {
-      dockerArgs: ["--should-be-overridden"],
+      dockerArgs: ["--replaced-base"],
       envVars: { C: "should-be-overridden" },
     },
   };
 
   const result = mergeOutputs(prior, plan);
-  // dockerArgs: spread of outputOverrides is overridden by the append logic
-  expect(result.dockerArgs).toEqual(["--rm", "--new"]);
+  // dockerArgs: outputOverrides.dockerArgs is the new base, plan.dockerArgs appended
+  expect(result.dockerArgs).toEqual(["--replaced-base", "--new"]);
   // envVars: spread of outputOverrides is overridden by the merge logic
   expect(result.envVars).toEqual({ A: "1", B: "2" });
 });

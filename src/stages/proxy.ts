@@ -107,10 +107,7 @@ export function createProxyStage(
 
       return {
         effects,
-        dockerArgs: replaceNetwork(
-          [...input.prior.dockerArgs],
-          sessionNetworkName,
-        ),
+        dockerArgs: [],
         envVars: {
           NAS_UPSTREAM_PROXY: proxyUrl,
           http_proxy: localProxyUrl,
@@ -121,6 +118,10 @@ export function createProxyStage(
           NO_PROXY: noProxyEntries.join(","),
         },
         outputOverrides: {
+          dockerArgs: replaceNetwork(
+            [...input.prior.dockerArgs],
+            sessionNetworkName,
+          ),
           networkRuntimeDir: runtimePaths.runtimeDir,
           networkPromptToken: token,
           networkPromptEnabled: prompt.enable,

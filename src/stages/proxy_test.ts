@@ -220,7 +220,7 @@ test("ProxyStage: sets outputOverrides", () => {
   expect(typeof result.outputOverrides.networkProxyEndpoint).toEqual("string");
 });
 
-test("ProxyStage: replaces existing --network in dockerArgs", () => {
+test("ProxyStage: replaces existing --network in outputOverrides.dockerArgs", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
@@ -229,12 +229,18 @@ test("ProxyStage: replaces existing --network in dockerArgs", () => {
   });
   const stage = createProxyStage();
   const result = stage.plan(input)!;
-  const networkIdx = result.dockerArgs.indexOf("--network");
+  // plan.dockerArgs should be empty (no duplication of prior args)
+  expect(result.dockerArgs).toEqual([]);
+  // network replacement is done via outputOverrides.dockerArgs
+  const overriddenArgs = result.outputOverrides.dockerArgs as string[];
+  const networkIdx = overriddenArgs.indexOf("--network");
   expect(networkIdx !== -1).toEqual(true);
-  expect(result.dockerArgs[networkIdx + 1].startsWith("nas-session-net-"))
+  expect(overriddenArgs[networkIdx + 1].startsWith("nas-session-net-"))
     .toEqual(true);
-  // old-net should be replaced
-  expect(result.dockerArgs.includes("old-net")).toEqual(false);
+  // old-net should be replaced, other args preserved
+  expect(overriddenArgs.includes("old-net")).toEqual(false);
+  expect(overriddenArgs.includes("--rm")).toEqual(true);
+  expect(overriddenArgs.includes("-v")).toEqual(true);
 });
 
 test("ProxyStage: reuses existing networkPromptToken", () => {

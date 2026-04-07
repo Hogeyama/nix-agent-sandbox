@@ -16,15 +16,22 @@ import type { ResourceHandle } from "./effects.ts";
 // Pipeline — AnyStage runner
 // ---------------------------------------------------------------------------
 
-/** Merge a StagePlan's outputs into PriorStageOutputs. */
+/** Merge a StagePlan's outputs into PriorStageOutputs.
+ *
+ * dockerArgs: If outputOverrides.dockerArgs is set, it replaces prior.dockerArgs
+ * (then plan.dockerArgs is appended). This allows stages like ProxyStage to
+ * modify existing args (e.g. replace --network) without duplicating the entire
+ * prior args in plan.dockerArgs.
+ */
 export function mergeOutputs(
   prior: PriorStageOutputs,
   plan: StagePlan,
 ): PriorStageOutputs {
+  const baseDockerArgs = plan.outputOverrides.dockerArgs ?? prior.dockerArgs;
   return {
     ...prior,
     ...plan.outputOverrides,
-    dockerArgs: [...prior.dockerArgs, ...plan.dockerArgs],
+    dockerArgs: [...baseDockerArgs, ...plan.dockerArgs],
     envVars: { ...prior.envVars, ...plan.envVars },
   };
 }
