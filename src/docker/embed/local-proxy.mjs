@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // local-proxy.mjs — Container-local forward proxy that adds Proxy-Authorization
 // to an upstream authenticated proxy.
 //

@@ -135,7 +135,7 @@ git config --system safe.directory "$WORKSPACE"
 # NAS_UPSTREAM_PROXY が設定されている場合、認証代行ローカルプロキシを起動し
 # http_proxy/https_proxy を localhost:18080 に書き換える。
 if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
-  node /usr/local/bin/local-proxy.mjs &
+  bun /usr/local/bin/local-proxy.mjs &
   LOCAL_PROXY_PID=$!
 
   # ヘルスチェック: localhost:18080 に接続可能になるまで待機
