@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@b66b36319cc6fde4ea85edd583b088c65d6b8710
+
+      - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a
+
+      - name: Build bundled binary
+        run: nix build .#bundled --print-build-logs
+
+      - name: Prepare artifact
+        run: |
+          cp -L result nas
+          chmod 755 nas
+          tar czf nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz nas
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nas-${{ github.ref_name }}_${{ matrix.system }}
+          path: nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes \
+            "nas-${TAG}_x86_64-linux.tar.gz" \
+            "nas-${TAG}_aarch64-linux.tar.gz"
