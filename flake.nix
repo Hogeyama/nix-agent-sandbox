@@ -61,12 +61,21 @@
 
         # sha256 of the fetchDenoDeps FOD — update when deno.lock changes:
         # 1. Set to pkgs.lib.fakeHash, run `nix build`, copy the "got:" hash.
-        denoDepsHash = "sha256-4mEmkw20Ou4I7jO19NT+ewE922VDcsidIyRy0tfec1Y=";
+        denoDepsHash = "sha256-ytQesLXu2HudkS+UXFzupkSclMEXDS+DzYAS8sEua7U=";
 
         nasDeps = deno2nixLib.lib.fetchDenoDeps {
           name = "nas-0.1.0-deno-deps";
           src = self;
           hash = denoDepsHash;
+          # deno caches HTTP response headers alongside each remote file in
+          # .deno/deps/**/*.metadata.json.  These files contain a `date` field
+          # that changes with every network request, making the FOD
+          # non-deterministic.  In vendor mode all HTTPS/JSR deps are already
+          # materialised in vendor/, so the metadata cache is not needed for
+          # the subsequent `deno install --cached-only` in buildDenoPackage.
+          postInstall = ''
+            find "$out/.deno/deps" -name "*.metadata.json" -type f -delete 2>/dev/null || true
+          '';
         };
 
         nas = deno2nixLib.lib.buildDenoPackage {
