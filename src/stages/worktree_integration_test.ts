@@ -334,7 +334,10 @@ test("WorktreeStage: leaves a clean base branch clean in the new worktree", asyn
 
 test("WorktreeStage teardown stashes dirty changes before deleting", async () => {
   await withTempRepo(async (repoRoot) => {
-    await withMockedPrompts(["1", "1", "1"], async () => {
+    // promptWorktreeAction → "1" (delete)
+    // promptDirtyWorktreeAction → "1" (stash)
+    // promptBranchAction → skipped (no unique commits → auto-delete)
+    await withMockedPrompts(["1", "1"], async () => {
       const stage = new WorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
@@ -431,8 +434,8 @@ test("WorktreeStage teardown deletes clean worktree and branch", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
-    // promptBranchAction → "1" (delete)
-    await withMockedPrompts(["1", "1"], async () => {
+    // promptBranchAction → skipped (no unique commits → auto-delete)
+    await withMockedPrompts(["1"], async () => {
       const stage = new WorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
@@ -461,8 +464,8 @@ test("WorktreeStage teardown deletes dirty worktree without stashing", async () 
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → "2" (delete without stash)
-    // promptBranchAction → "1" (delete)
-    await withMockedPrompts(["1", "2", "1"], async () => {
+    // promptBranchAction → skipped (no unique commits → auto-delete)
+    await withMockedPrompts(["1", "2"], async () => {
       const stage = new WorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
@@ -497,6 +500,11 @@ test("WorktreeStage teardown renames branch and keeps it", async () => {
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
+
+      // ブランチにコミットを追加して promptBranchAction が表示されるようにする
+      await writeFile(path.join(worktreePath, "feature.txt"), "feature\n");
+      await $`git -C ${worktreePath} add feature.txt`.quiet();
+      await $`git -C ${worktreePath} commit -m "add feature"`.quiet();
 
       await stage.teardown!(input);
 
@@ -533,7 +541,13 @@ test("WorktreeStage teardown rename with empty name keeps original branch name",
     await withMockedPrompts(["1", "3", ""], async () => {
       const stage = new WorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
-      await stage.execute(input);
+      const result = await stage.execute(input);
+      const worktreePath = result.outputOverrides.workDir!;
+
+      // ブランチにコミットを追加して promptBranchAction が表示されるようにする
+      await writeFile(path.join(worktreePath, "feature.txt"), "feature\n");
+      await $`git -C ${worktreePath} add feature.txt`.quiet();
+      await $`git -C ${worktreePath} commit -m "add feature"`.quiet();
 
       await stage.teardown!(input);
 
@@ -637,12 +651,12 @@ test("WorktreeStage teardown cherry-picks even when base worktree has uncommitte
 
 // --- cherry-pick with no commits ---
 
-test("WorktreeStage teardown cherry-pick with no new commits succeeds", async () => {
+test("WorktreeStage teardown auto-deletes branch with no new commits", async () => {
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "1" (delete)
     // promptDirtyWorktreeAction → skipped (clean)
-    // promptBranchAction → "2" (cherry-pick)
-    await withMockedPrompts(["1", "2"], async () => {
+    // promptBranchAction → skipped (no unique commits → auto-delete)
+    await withMockedPrompts(["1"], async () => {
       const stage = new WorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);

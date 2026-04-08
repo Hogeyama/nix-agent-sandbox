@@ -148,7 +148,7 @@ export class WorktreeStage implements ProceduralStage {
     }
 
     // worktree を削除する場合、ブランチをどうするか聞く
-    const branchAction = await promptBranchAction(this.branchName);
+    const branchAction = await promptBranchAction(this.branchName, this.baseBranch, this.repoRoot);
 
     let shouldDeleteBranch = branchAction !== "rename";
 

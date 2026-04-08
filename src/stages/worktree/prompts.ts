@@ -63,20 +63,31 @@ export async function promptDirtyWorktreeAction(
 
 export async function promptBranchAction(
   branchName: string | null,
+  baseBranch: string | null,
+  repoRoot: string | null,
 ): Promise<BranchAction> {
   if (!branchName) return "delete";
 
-  // ブランチ上のコミット数を表示（参考情報）
+  // ベースブランチからの差分コミットを表示
+  let hasCommits = false;
+  const gitDir = repoRoot ? ["-C", repoRoot] : [];
   try {
-    const log = (await $`git log --oneline ${branchName} --not --remotes -10`
-      .text()).toString();
+    const log = baseBranch
+      ? (await $`git ${gitDir} log --oneline ${baseBranch}..${branchName} -10`.text())
+      : (await $`git ${gitDir} log --oneline ${branchName} --not --remotes -10`.text());
     if (log.trim()) {
+      hasCommits = true;
       console.log(`[nas] Recent commits on ${branchName}:`);
       for (const line of log.trim().split("\n")) {
         console.log(`  ${line}`);
       }
     }
   } catch { /* ignore */ }
+
+  if (!hasCommits) {
+    console.log(`[nas] No unique commits on ${branchName}; deleting branch.`);
+    return "delete";
+  }
 
   console.log("[nas] What to do with the branch?");
   console.log("  1. Delete");
