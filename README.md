@@ -40,29 +40,25 @@ curl -fsSL https://claude.ai/install.sh | bash
 
 ## インストール
 
+### GitHub Releases からインストール
+
+GitHub Releases からビルド済みバイナリをダウンロードできます（x86_64-linux / aarch64-linux）。
+
+```sh
+# x86_64-linux
+gh release download --repo Hogeyama/nix-agent-sandbox --pattern 'nas-*_x86_64-linux.tar.gz' -O - | tar xz -C ~/.local/bin
+
+# aarch64-linux
+gh release download --repo Hogeyama/nix-agent-sandbox --pattern 'nas-*_aarch64-linux.tar.gz' -O - | tar xz -C ~/.local/bin
+```
+
+> [!NOTE]
+> aarch64-linux 版は動作未確認です。
+
+### ローカルでビルドしてインストール
+
 ```sh
 nix profile install github:Hogeyama/nix-agent-sandbox
-```
-
-## 非Nixユーザー向けバイナリ配布
-
-`nix-bundle-elf` を使うと、Linux の非 Nix 環境でも実行できる単一バイナリを作れます。
-
-```sh
-# x86_64-linux 向け
-nix build .#packages.x86_64-linux.bundled
-cp ./result ./nas-x86_64-linux
-
-# aarch64-linux 向け
-nix build .#packages.aarch64-linux.bundled
-cp ./result ./nas-aarch64-linux
-```
-
-配布先では Nix は不要です。
-
-```sh
-chmod +x ./nas-x86_64-linux
-./nas-x86_64-linux --help
 ```
 
 ## クイックスタート
