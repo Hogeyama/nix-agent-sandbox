@@ -2,6 +2,7 @@
  * worktree teardown 時のインタラクティブプロンプト
  */
 
+import { $ } from "bun";
 import * as path from "node:path";
 import { isWorktreeDirty } from "./git_helpers.ts";
 import type { WorktreeEntry } from "./management.ts";
@@ -66,7 +67,6 @@ export async function promptBranchAction(
   if (!branchName) return "delete";
 
   // ブランチ上のコミット数を表示（参考情報）
-  const { $ } = await import("bun");
   try {
     const log = (await $`git log --oneline ${branchName} --not --remotes -10`
       .text()).toString();
@@ -125,7 +125,6 @@ export function promptReuseWorktree(
 export async function stashDirtyWorktree(
   worktreePath: string,
 ): Promise<void> {
-  const { $ } = await import("bun");
   const stashMessage = `nas teardown ${path.basename(worktreePath)} ${
     new Date().toISOString()
   }`;
