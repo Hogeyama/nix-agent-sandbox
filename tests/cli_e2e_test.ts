@@ -385,11 +385,11 @@ test("CLI: worktree list shows existing nas worktrees", async () => {
     await initGitRepo(tmpDir);
     const wtPath = path.join(
       tmpDir,
-      ".git",
-      "nas-worktrees",
+      ".nas",
+      "worktrees",
       "nas-test-2026-01-01T00-00-00",
     );
-    await mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
+    await mkdir(path.join(tmpDir, ".nas", "worktrees"), {
       recursive: true,
     });
     await Bun.spawn([
@@ -423,11 +423,11 @@ test("CLI: worktree clean --force removes nas worktrees", async () => {
     await initGitRepo(tmpDir);
     const wtPath = path.join(
       tmpDir,
-      ".git",
-      "nas-worktrees",
+      ".nas",
+      "worktrees",
       "nas-prof-2026-01-01T00-00-00",
     );
-    await mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
+    await mkdir(path.join(tmpDir, ".nas", "worktrees"), {
       recursive: true,
     });
     await Bun.spawn([
@@ -461,11 +461,11 @@ test("CLI: worktree clean -f -B removes worktrees and orphan branches", async ()
     await initGitRepo(tmpDir);
     const wtPath = path.join(
       tmpDir,
-      ".git",
-      "nas-worktrees",
+      ".nas",
+      "worktrees",
       "nas-orphan-2026-01-01T00-00-00",
     );
-    await mkdir(path.join(tmpDir, ".git", "nas-worktrees"), {
+    await mkdir(path.join(tmpDir, ".nas", "worktrees"), {
       recursive: true,
     });
     await Bun.spawn([

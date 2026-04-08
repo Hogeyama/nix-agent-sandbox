@@ -162,8 +162,8 @@ async function createTestWorktree(
   const branchName = `nas/${profileName}/${suffix}`;
   const worktreePath = path.join(
     repoRoot,
-    ".git",
-    "nas-worktrees",
+    ".nas",
+    "worktrees",
     worktreeName,
   );
   await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} HEAD`
@@ -190,7 +190,7 @@ test("WorktreeStage: creates worktree under repo metadata and mounts repo root",
 
     expect(mountDir).toEqual(repo);
     expect(workDir.startsWith(
-      path.join(repo, ".git", "nas-worktrees", "nas-test-"),
+      path.join(repo, ".nas", "worktrees", "nas-test-"),
     )).toEqual(true);
     expect(branchName.startsWith("nas/test/")).toEqual(true);
 

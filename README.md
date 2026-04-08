@@ -123,7 +123,7 @@ DinD サイドカーを起動して、エージェントコンテナから隔離
 ```
 $ nas --worktree HEAD claude
 [nas] Resolved HEAD to current branch: main
-> git -C '/home/hogeyama/repo/nix-agent-sandbox' worktree add -b 'nas/claude/2026-03-17T14-01-57-692Z' '/home/hogeyama/repo/nix-agent-sandbox/.git/nas-worktrees/nas-claude-2026-03-17T14-01-57-692Z' main
+> git -C '/home/hogeyama/repo/nix-agent-sandbox' worktree add -b 'nas/claude/2026-03-17T14-01-57-692Z' '/home/hogeyama/repo/nix-agent-sandbox/.nas/worktrees/nas-claude-2026-03-17T14-01-57-692Z' main
 Preparing worktree (new branch 'nas/claude/2026-03-17T14-01-57-692Z')
 HEAD is now at d79dcfc
 
@@ -141,7 +141,7 @@ HEAD is now at d79dcfc
   2. Delete without stashing
   3. Keep
 [nas] Choose [1/2/3]: 1
-> git -C '/home/hogeyama/repo/nix-agent-sandbox/.git/nas-worktrees/nas-claude-2026-03-17T13-35-20-819Z' stash push --include-untracked -m 'nas teardown nas-claude-2026-03-17T13-35-20-819Z 2026-03-17T13:35:33.117Z'
+> git -C '/home/hogeyama/repo/nix-agent-sandbox/.nas/worktrees/nas-claude-2026-03-17T13-35-20-819Z' stash push --include-untracked -m 'nas teardown nas-claude-2026-03-17T13-35-20-819Z 2026-03-17T13:35:33.117Z'
 Saved working directory and index state On nas/claude/2026-03-17T13-35-20-819Z: nas teardown nas-claude-2026-03-17T13-35-20-819Z 2026-03-17T13:35:33.117Z
 [nas] Stashed worktree changes: nas teardown nas-claude-2026-03-17T13-35-20-819Z 2026-03-17T13:35:33.117Z
 [nas] What to do with the branch?
@@ -150,7 +150,7 @@ Saved working directory and index state On nas/claude/2026-03-17T13-35-20-819Z: 
   3. Rename and keep
 [nas] Choose [1/2/3]: 2
 [nas] No commits to cherry-pick.
-[nas] Removing worktree: /home/hogeyama/repo/nix-agent-sandbox/.git/nas-worktrees/nas-claude-2026-03-17T13-35-20-819Z
+[nas] Removing worktree: /home/hogeyama/repo/nix-agent-sandbox/.nas/worktrees/nas-claude-2026-03-17T13-35-20-819Z
 Deleted branch nas/claude/2026-03-17T13-35-20-819Z (was 48be913).
 [nas] Deleted branch: nas/claude/2026-03-17T13-35-20-819Z
 ```

@@ -4,6 +4,7 @@
 
 import { $ } from "bun";
 import * as path from "node:path";
+import { stat, writeFile } from "node:fs/promises";
 import type {
   ProceduralResult,
   ProceduralStage,
@@ -74,13 +75,15 @@ export class WorktreeStage implements ProceduralStage {
 
     const worktreeName = generateWorktreeName(input.profileName);
     const branchName = generateBranchName(input.profileName);
-    // .git/nas-worktrees/ 内に作成 → 元リポのマウントだけで完結する
+    // .nas/worktrees/ 内に作成 → 元リポのマウントだけで完結する
     const worktreePath = path.join(
       repoRoot,
-      ".git",
-      "nas-worktrees",
+      ".nas",
+      "worktrees",
       worktreeName,
     );
+
+    await ensureNasGitignore(repoRoot);
     this.worktreePath = worktreePath;
     this.branchName = branchName;
 
@@ -100,7 +103,7 @@ export class WorktreeStage implements ProceduralStage {
       await $`bash -c ${wt.onCreate}`.cwd(worktreePath);
     }
 
-    // worktree は元リポの .git/nas-worktrees/ 内に作成される。
+    // worktree は元リポの .nas/worktrees/ 内に作成される。
     // mountDir に元リポを指定すれば 1 つのマウントで
     // working tree・git metadata・オブジェクト DB すべてが解決する。
     return {
@@ -373,8 +376,8 @@ export class WorktreeStage implements ProceduralStage {
     ).trim();
     const tmpWorktree = path.join(
       this.repoRoot!,
-      ".git",
-      "nas-worktrees",
+      ".nas",
+      "worktrees",
       `nas-cherry-pick-tmp-${Date.now()}`,
     );
     console.log(
@@ -469,5 +472,17 @@ export class WorktreeStage implements ProceduralStage {
       console.log("[nas] Cherry-pick completed (empty commits skipped).");
       return true;
     }
+  }
+}
+
+/** .nas/.gitignore が存在しなければ作成する */
+async function ensureNasGitignore(repoRoot: string): Promise<void> {
+  const gitignorePath = path.join(repoRoot, ".nas", ".gitignore");
+  try {
+    await stat(gitignorePath);
+  } catch {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(path.join(repoRoot, ".nas"), { recursive: true });
+    await writeFile(gitignorePath, "*\n");
   }
 }
