@@ -39,8 +39,9 @@ import { runHostExecCommand } from "./cli/hostexec.ts";
 import { runUiCommand } from "./cli/ui.ts";
 import { runAuditCommand } from "./cli/audit.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
+import pkg from "../package.json";
 
-const VERSION = "0.1.0";
+const VERSION: string = pkg.version;
 
 export async function main(args: string[]): Promise<void> {
   // `--` 以降は常にエージェントに渡す引数。profile 名の後ろも同様に agent 引数として扱う。

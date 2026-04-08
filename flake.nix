@@ -23,7 +23,7 @@
         single-exe = nix-bundle-elf.lib.${system}.single-exe;
         nasBin = b2n.mkDerivation {
           pname = "nas";
-          version = "0.1.0";
+          version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
           src = self;
           module = "main.ts";
           bunDeps = b2n.fetchBunDeps { bunNix = ./bun.nix; };
