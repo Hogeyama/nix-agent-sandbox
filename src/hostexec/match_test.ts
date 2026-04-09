@@ -8,6 +8,7 @@ import {
   test,
 } from "bun:test";
 import { matchRule } from "./match.ts";
+import type { MatchContext } from "./match.ts";
 import type { HostExecRule } from "../config/types.ts";
 import {
   DEFAULT_HOSTEXEC_CWD_CONFIG,
@@ -188,4 +189,46 @@ test("matchRule: bare rule matches absolute invocation via basename", () => {
   const rules = [makeRule("git-any", { argv0: "git" })];
   const result = matchRule(rules, "/usr/bin/git", ["status"]);
   expect(result?.rule.id).toEqual("git-any");
+});
+
+test("matchRule: relative argv0 matches via cwd resolution (cd backend && ./gradlew)", () => {
+  const rules = [makeRule("gradlew", { argv0: "./backend/gradlew" })];
+  const context: MatchContext = {
+    cwd: "/workspace/backend",
+    workspaceRoot: "/workspace",
+  };
+  const result = matchRule(rules, "./gradlew", ["spotlessApply"], context);
+  expect(result?.rule.id).toEqual("gradlew");
+});
+
+test("matchRule: relative argv0 still matches directly without context", () => {
+  const rules = [makeRule("gradlew", { argv0: "./gradlew" })];
+  const result = matchRule(rules, "./gradlew", ["test"]);
+  expect(result?.rule.id).toEqual("gradlew");
+});
+
+test("matchRule: relative argv0 does not match when cwd resolves outside workspace", () => {
+  const rules = [makeRule("gradlew", { argv0: "./backend/gradlew" })];
+  const context: MatchContext = {
+    cwd: "/other",
+    workspaceRoot: "/workspace",
+  };
+  const result = matchRule(rules, "./gradlew", ["test"], context);
+  expect(result).toEqual(null);
+});
+
+test("matchRule: relative argv0 no match without context when paths differ", () => {
+  const rules = [makeRule("gradlew", { argv0: "./backend/gradlew" })];
+  const result = matchRule(rules, "./gradlew", ["test"]);
+  expect(result).toEqual(null);
+});
+
+test("matchRule: nested relative argv0 matches via cwd resolution", () => {
+  const rules = [makeRule("mvnw", { argv0: "./services/api/mvnw" })];
+  const context: MatchContext = {
+    cwd: "/workspace/services/api",
+    workspaceRoot: "/workspace",
+  };
+  const result = matchRule(rules, "./mvnw", ["clean"], context);
+  expect(result?.rule.id).toEqual("mvnw");
 });

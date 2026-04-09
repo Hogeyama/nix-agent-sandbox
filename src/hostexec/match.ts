@@ -5,6 +5,13 @@ export interface MatchResult {
   rule: HostExecRule;
 }
 
+export interface MatchContext {
+  /** コンテナ内での実行時 cwd（絶対パス） */
+  cwd: string;
+  /** コンテナ内でのワークスペースルート（絶対パス） */
+  workspaceRoot: string;
+}
+
 /**
  * ルール配列から最初にマッチするルールを返す。
  * マッチしなければ null。
@@ -13,11 +20,12 @@ export function matchRule(
   rules: HostExecRule[],
   argv0: string,
   args: string[],
+  context?: MatchContext,
 ): MatchResult | null {
   const argsString = args.join(" ");
 
   for (const rule of rules) {
-    if (!argv0MatchesRule(rule.match.argv0, argv0)) continue;
+    if (!argv0MatchesRule(rule.match.argv0, argv0, context)) continue;
 
     // arg-regex チェック
     if (rule.match.argRegex !== undefined) {
@@ -39,10 +47,25 @@ export function isBareCommandHostExecArgv0(argv0: string): boolean {
   return !path.isAbsolute(argv0) && !argv0.includes("/");
 }
 
-function argv0MatchesRule(ruleArgv0: string, actualArgv0: string): boolean {
+function argv0MatchesRule(
+  ruleArgv0: string,
+  actualArgv0: string,
+  context?: MatchContext,
+): boolean {
   if (isRelativeHostExecArgv0(ruleArgv0)) {
-    return isRelativeHostExecArgv0(actualArgv0) &&
-      path.normalize(ruleArgv0) === path.normalize(actualArgv0);
+    if (!isRelativeHostExecArgv0(actualArgv0)) return false;
+    // 直接比較（同じ相対パス同士）
+    if (path.normalize(ruleArgv0) === path.normalize(actualArgv0)) return true;
+    // CWD考慮: 実際の argv0 を cwd 基準で解決し、ワークスペースルートからの相対パスで比較
+    if (context) {
+      const absActual = path.resolve(context.cwd, actualArgv0);
+      const relToWorkspace = path.relative(context.workspaceRoot, absActual);
+      if (!relToWorkspace.startsWith("..")) {
+        return path.normalize(ruleArgv0) ===
+          path.normalize("./" + relToWorkspace);
+      }
+    }
+    return false;
   }
   if (path.isAbsolute(ruleArgv0)) {
     return path.normalize(ruleArgv0) === path.normalize(actualArgv0);

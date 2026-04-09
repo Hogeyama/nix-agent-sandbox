@@ -33,6 +33,7 @@ import {
   writeHostExecPendingEntry,
 } from "./registry.ts";
 import { isRelativeHostExecArgv0, matchRule } from "./match.ts";
+import type { MatchContext } from "./match.ts";
 import type {
   ExecuteRequest,
   HostExecBrokerMessage,
@@ -440,10 +441,15 @@ export class HostExecBroker {
     message: ExecuteRequest,
   ): Promise<ResolvedExecution | null> {
     const argv0 = message.argv0;
+    const matchContext: MatchContext = {
+      cwd: message.cwd,
+      workspaceRoot: this.workspaceRoot,
+    };
     const result = matchRule(
       this.config.rules,
       argv0,
       message.args,
+      matchContext,
     );
     if (!result) return null;
     const { rule } = result;
