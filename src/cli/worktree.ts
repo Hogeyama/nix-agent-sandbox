@@ -21,6 +21,7 @@ export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
           branch: e.branch
             ? e.branch.replace("refs/heads/", "")
             : null,
+          base: e.base,
           head: e.head,
         }));
         console.log(JSON.stringify(items));
@@ -34,7 +35,10 @@ export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
         const branch = e.branch
           ? e.branch.replace("refs/heads/", "")
           : "(detached)";
-        console.log(`  ${e.path}  [${branch}]  ${e.head.slice(0, 8)}`);
+        const base = e.base ? ` (base: ${e.base})` : "";
+        console.log(
+          `  ${e.path}  [${branch}]${base}  ${e.head.slice(0, 8)}`,
+        );
       }
     } else if (sub === "clean") {
       const result = await cleanNasWorktrees(process.cwd(), {

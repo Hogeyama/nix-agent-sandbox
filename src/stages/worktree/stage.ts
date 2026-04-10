@@ -95,6 +95,10 @@ export class WorktreeStage implements ProceduralStage {
     );
     await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`;
 
+    // nas worktree list で base を表示できるよう、branch に base ref を記録しておく
+    await $`git -C ${repoRoot} config ${`branch.${branchName}.nasBase`} ${resolvedBase}`
+      .quiet();
+
     await inheritDirtyBaseWorktree(repoRoot, resolvedBase, worktreePath);
 
     if (wt.onCreate) {

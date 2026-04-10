@@ -10,6 +10,8 @@ export interface WorktreeEntry {
   path: string;
   head: string;
   branch: string;
+  /** branch 作成時に記録された base ref。不明な場合は null。 */
+  base: string | null;
 }
 
 export interface CleanResult {
@@ -26,6 +28,17 @@ export async function listNasWorktrees(
   const entries: WorktreeEntry[] = [];
   let current: Partial<WorktreeEntry> = {};
 
+  const finalize = (entry: Partial<WorktreeEntry>): void => {
+    if (!entry.path) return;
+    if (!path.basename(entry.path).startsWith("nas-")) return;
+    entries.push({
+      path: entry.path,
+      head: entry.head ?? "",
+      branch: entry.branch ?? "",
+      base: null,
+    });
+  };
+
   for (const line of output.split("\n")) {
     if (line.startsWith("worktree ")) {
       current = { path: line.slice("worktree ".length) };
@@ -34,20 +47,39 @@ export async function listNasWorktrees(
     } else if (line.startsWith("branch ")) {
       current.branch = line.slice("branch ".length);
     } else if (line === "" && current.path) {
-      const dirName = path.basename(current.path);
-      if (dirName.startsWith("nas-")) {
-        entries.push(current as WorktreeEntry);
-      }
+      finalize(current);
       current = {};
     }
   }
 
   // last entry (git worktree list doesn't always end with blank line)
-  if (current.path && path.basename(current.path).startsWith("nas-")) {
-    entries.push(current as WorktreeEntry);
+  finalize(current);
+
+  // 各エントリについて branch 作成時に保存した base ref を読み出す
+  for (const entry of entries) {
+    if (!entry.branch) continue;
+    const branchName = entry.branch.replace("refs/heads/", "");
+    entry.base = await readBranchBase(repoRoot, branchName);
   }
 
   return entries;
+}
+
+/** branch 作成時に git config へ保存した base ref を取得 */
+async function readBranchBase(
+  repoRoot: string,
+  branchName: string,
+): Promise<string | null> {
+  try {
+    const value = await $`git -C ${repoRoot} config --get ${
+      `branch.${branchName}.nasBase`
+    }`.quiet().text();
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    // exit code 1 = key not found — 過去に作成した worktree には記録がない
+    return null;
+  }
 }
 
 /** プロファイル名にマッチする既存 worktree を検索 */
