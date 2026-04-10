@@ -19,6 +19,8 @@ import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { appendAuditLog } from "../../audit/store.ts";
+import type { AuditLogEntry } from "../../audit/types.ts";
 
 /** テスト用のダミーコンテキストを作成 */
 function createTestContext(dir: string): UiDataContext {
@@ -298,22 +300,19 @@ test("GET /audit returns audit log entries", async () => {
     await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
     await mkdir(`${tmpDir}/network/pending`, { recursive: true });
     await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
-    await mkdir(`${tmpDir}/audit`, { recursive: true });
-
-    // Write a JSONL audit log file
-    const entry = {
-      id: "test-id-001",
-      timestamp: "2026-03-28T12:00:00Z",
-      domain: "network",
-      sessionId: "sess-001",
-      requestId: "req-001",
-      decision: "allow",
-      reason: "allowlist match",
-      target: "example.com:443",
-    };
-    await writeFile(
-      `${tmpDir}/audit/2026-03-28.jsonl`,
-      JSON.stringify(entry) + "\n",
+    const auditDir = `${tmpDir}/audit`;
+    await appendAuditLog(
+      {
+        id: "test-id-001",
+        timestamp: "2026-03-28T12:00:00Z",
+        domain: "network",
+        sessionId: "sess-001",
+        requestId: "req-001",
+        decision: "allow",
+        reason: "allowlist match",
+        target: "example.com:443",
+      },
+      auditDir,
     );
 
     const ctx = createTestContext(tmpDir);
@@ -356,20 +355,22 @@ test("GET /audit with invalid domain returns 400", async () => {
 test("GET /audit with before cursor returns only older entries", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await mkdir(`${tmpDir}/audit`, { recursive: true });
-
-    const base = {
+    const auditDir = `${tmpDir}/audit`;
+    const base: Omit<AuditLogEntry, "id" | "timestamp" | "requestId"> = {
       domain: "network",
       sessionId: "sess-001",
       decision: "allow",
       reason: "allowlist match",
     };
-    const lines = [
-      { ...base, id: "a", timestamp: "2026-03-28T09:00:00Z", requestId: "a" },
-      { ...base, id: "b", timestamp: "2026-03-28T10:00:00Z", requestId: "b" },
-      { ...base, id: "c", timestamp: "2026-03-28T11:00:00Z", requestId: "c" },
-    ].map((e) => JSON.stringify(e)).join("\n") + "\n";
-    await writeFile(`${tmpDir}/audit/2026-03-28.jsonl`, lines);
+    for (
+      const e of [
+        { ...base, id: "a", timestamp: "2026-03-28T09:00:00Z", requestId: "a" },
+        { ...base, id: "b", timestamp: "2026-03-28T10:00:00Z", requestId: "b" },
+        { ...base, id: "c", timestamp: "2026-03-28T11:00:00Z", requestId: "c" },
+      ]
+    ) {
+      await appendAuditLog(e, auditDir);
+    }
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -431,24 +432,22 @@ test("GET /audit with invalid limit returns 400", async () => {
 test("GET /audit respects limit parameter", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await mkdir(`${tmpDir}/audit`, { recursive: true });
-
-    // Write 3 entries
-    const entries = [1, 2, 3].map((i) =>
-      JSON.stringify({
-        id: `id-${i}`,
-        timestamp: `2026-03-28T12:0${i}:00Z`,
-        domain: "network",
-        sessionId: "sess-001",
-        requestId: `req-${i}`,
-        decision: "allow",
-        reason: "test",
-      })
-    );
-    await writeFile(
-      `${tmpDir}/audit/2026-03-28.jsonl`,
-      entries.join("\n") + "\n",
-    );
+    const auditDir = `${tmpDir}/audit`;
+    // Three entries, appended oldest-first.
+    for (const i of [1, 2, 3]) {
+      await appendAuditLog(
+        {
+          id: `id-${i}`,
+          timestamp: `2026-03-28T12:0${i}:00Z`,
+          domain: "network",
+          sessionId: "sess-001",
+          requestId: `req-${i}`,
+          decision: "allow",
+          reason: "test",
+        },
+        auditDir,
+      );
+    }
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -470,10 +469,9 @@ test("GET /audit respects limit parameter", async () => {
 test("GET /audit filters by sessions set and sessionContains", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    await mkdir(`${tmpDir}/audit`, { recursive: true });
-
-    const entries = [
-      JSON.stringify({
+    const auditDir = `${tmpDir}/audit`;
+    const seed: AuditLogEntry[] = [
+      {
         id: "id-1",
         timestamp: "2026-03-28T12:00:00Z",
         domain: "network",
@@ -481,8 +479,8 @@ test("GET /audit filters by sessions set and sessionContains", async () => {
         requestId: "req-1",
         decision: "allow",
         reason: "test",
-      }),
-      JSON.stringify({
+      },
+      {
         id: "id-2",
         timestamp: "2026-03-28T12:01:00Z",
         domain: "network",
@@ -490,8 +488,8 @@ test("GET /audit filters by sessions set and sessionContains", async () => {
         requestId: "req-2",
         decision: "deny",
         reason: "test",
-      }),
-      JSON.stringify({
+      },
+      {
         id: "id-3",
         timestamp: "2026-03-28T12:02:00Z",
         domain: "network",
@@ -499,12 +497,9 @@ test("GET /audit filters by sessions set and sessionContains", async () => {
         requestId: "req-3",
         decision: "allow",
         reason: "test",
-      }),
+      },
     ];
-    await writeFile(
-      `${tmpDir}/audit/2026-03-28.jsonl`,
-      entries.join("\n") + "\n",
-    );
+    for (const e of seed) await appendAuditLog(e, auditDir);
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);

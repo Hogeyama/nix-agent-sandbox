@@ -52,6 +52,7 @@ import {
   hashToken,
   type PendingEntry,
 } from "../src/network/protocol.ts";
+import { appendAuditLog } from "../src/audit/store.ts";
 
 // ============================================================
 // Shared helpers
@@ -699,21 +700,19 @@ test("CLI: audit displays log entries in text format", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-text-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
-    const entry = {
-      id: "uuid-1",
-      timestamp: `${today}T10:00:00.000Z`,
-      domain: "network",
-      sessionId: "sess_abc",
-      requestId: "req_1",
-      decision: "allow",
-      reason: "allowlist match",
-      target: "example.com:443",
-    };
-    await writeFile(
-      path.join(auditDir, `${today}.jsonl`),
-      JSON.stringify(entry) + "\n",
+    await appendAuditLog(
+      {
+        id: "uuid-1",
+        timestamp: `${today}T10:00:00.000Z`,
+        domain: "network",
+        sessionId: "sess_abc",
+        requestId: "req_1",
+        decision: "allow",
+        reason: "allowlist match",
+        target: "example.com:443",
+      },
+      auditDir,
     );
 
     const result = await runNas(["audit", "--audit-dir", auditDir]);
@@ -731,21 +730,19 @@ test("CLI: audit --json outputs JSON array", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-json-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
-    const entry = {
-      id: "uuid-2",
-      timestamp: `${today}T11:00:00.000Z`,
-      domain: "hostexec",
-      sessionId: "sess_def",
-      requestId: "req_2",
-      decision: "deny",
-      reason: "no matching rule",
-      command: "rm -rf /",
-    };
-    await writeFile(
-      path.join(auditDir, `${today}.jsonl`),
-      JSON.stringify(entry) + "\n",
+    await appendAuditLog(
+      {
+        id: "uuid-2",
+        timestamp: `${today}T11:00:00.000Z`,
+        domain: "hostexec",
+        sessionId: "sess_def",
+        requestId: "req_2",
+        decision: "deny",
+        reason: "no matching rule",
+        command: "rm -rf /",
+      },
+      auditDir,
     );
 
     const result = await runNas(["audit", "--json", "--audit-dir", auditDir]);
@@ -764,31 +761,32 @@ test("CLI: audit --session filters by session", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-sess-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
-    const entry1 = {
-      id: "uuid-3",
-      timestamp: `${today}T10:00:00.000Z`,
-      domain: "network",
-      sessionId: "sess_aaa",
-      requestId: "req_3",
-      decision: "allow",
-      reason: "ok",
-      target: "a.com:80",
-    };
-    const entry2 = {
-      id: "uuid-4",
-      timestamp: `${today}T10:01:00.000Z`,
-      domain: "network",
-      sessionId: "sess_bbb",
-      requestId: "req_4",
-      decision: "deny",
-      reason: "blocked",
-      target: "b.com:80",
-    };
-    await writeFile(
-      path.join(auditDir, `${today}.jsonl`),
-      JSON.stringify(entry1) + "\n" + JSON.stringify(entry2) + "\n",
+    await appendAuditLog(
+      {
+        id: "uuid-3",
+        timestamp: `${today}T10:00:00.000Z`,
+        domain: "network",
+        sessionId: "sess_aaa",
+        requestId: "req_3",
+        decision: "allow",
+        reason: "ok",
+        target: "a.com:80",
+      },
+      auditDir,
+    );
+    await appendAuditLog(
+      {
+        id: "uuid-4",
+        timestamp: `${today}T10:01:00.000Z`,
+        domain: "network",
+        sessionId: "sess_bbb",
+        requestId: "req_4",
+        decision: "deny",
+        reason: "blocked",
+        target: "b.com:80",
+      },
+      auditDir,
     );
 
     const result = await runNas([
@@ -812,31 +810,32 @@ test("CLI: audit --domain filters by domain", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-dom-"));
   try {
     const auditDir = path.join(tmpDir, "audit");
-    await mkdir(auditDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
-    const entry1 = {
-      id: "uuid-5",
-      timestamp: `${today}T10:00:00.000Z`,
-      domain: "network",
-      sessionId: "sess_x",
-      requestId: "req_5",
-      decision: "allow",
-      reason: "ok",
-      target: "x.com:443",
-    };
-    const entry2 = {
-      id: "uuid-6",
-      timestamp: `${today}T10:01:00.000Z`,
-      domain: "hostexec",
-      sessionId: "sess_x",
-      requestId: "req_6",
-      decision: "deny",
-      reason: "blocked",
-      command: "ls",
-    };
-    await writeFile(
-      path.join(auditDir, `${today}.jsonl`),
-      JSON.stringify(entry1) + "\n" + JSON.stringify(entry2) + "\n",
+    await appendAuditLog(
+      {
+        id: "uuid-5",
+        timestamp: `${today}T10:00:00.000Z`,
+        domain: "network",
+        sessionId: "sess_x",
+        requestId: "req_5",
+        decision: "allow",
+        reason: "ok",
+        target: "x.com:443",
+      },
+      auditDir,
+    );
+    await appendAuditLog(
+      {
+        id: "uuid-6",
+        timestamp: `${today}T10:01:00.000Z`,
+        domain: "hostexec",
+        sessionId: "sess_x",
+        requestId: "req_6",
+        decision: "deny",
+        reason: "blocked",
+        command: "ls",
+      },
+      auditDir,
     );
 
     const result = await runNas([

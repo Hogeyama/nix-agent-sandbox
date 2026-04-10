@@ -1,16 +1,8 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { appendAuditLog, queryAuditLogs, resolveAuditDir } from "./store.ts";
 import type { AuditLogEntry } from "./types.ts";
 import * as path from "node:path";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 function makeEntry(
@@ -43,7 +35,7 @@ test("appendAuditLog: writes and reads back entries", async () => {
   }
 });
 
-test("appendAuditLog: multiple entries go to same date file", async () => {
+test("appendAuditLog: multiple entries coexist", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
   try {
     const e1 = makeEntry({ requestId: "req-1" });
@@ -58,7 +50,7 @@ test("appendAuditLog: multiple entries go to same date file", async () => {
   }
 });
 
-test("appendAuditLog: different dates go to different files", async () => {
+test("queryAuditLogs: per-day filter with multi-day entries", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
   try {
     const e1 = makeEntry({ timestamp: "2026-03-27T10:00:00Z" });
@@ -228,24 +220,6 @@ test("queryAuditLogs: non-existent directory returns empty array", async () => {
   expect(results).toEqual([]);
 });
 
-test("readJsonlFile: skips malformed JSON lines", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
-  try {
-    const entry = makeEntry();
-    await appendAuditLog(entry, dir);
-
-    // Append a malformed line to the JSONL file
-    const filePath = path.join(dir, "2026-03-28.jsonl");
-    await writeFile(filePath, "NOT VALID JSON\n", { flag: "a" });
-
-    const results = await queryAuditLogs({}, dir);
-    expect(results.length).toEqual(1);
-    expect(results[0].id).toEqual(entry.id);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-});
-
 test("resolveAuditDir: uses XDG_DATA_HOME when set", () => {
   const originalXdg = process.env["XDG_DATA_HOME"];
   try {
@@ -301,6 +275,53 @@ test("resolveAuditDir: throws when neither XDG_DATA_HOME nor HOME is set", () =>
     } else {
       delete process.env["HOME"];
     }
+  }
+});
+
+test("appendAuditLog: concurrent writes all land", async () => {
+  // Drive a handful of simultaneous inserts to exercise the WAL writer
+  // lock. With the previous JSONL store, large concurrent entries could
+  // interleave; with SQLite every row has to come through cleanly.
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
+  try {
+    const N = 50;
+    // Include a big payload so a write would span multiple kernel writes
+    // if we were still appending to a plain file — this is the scenario
+    // the old store got wrong.
+    const bigTarget = "x".repeat(8192);
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        appendAuditLog(
+          makeEntry({
+            requestId: `req-${i}`,
+            target: bigTarget,
+          }),
+          dir,
+        )),
+    );
+    const results = await queryAuditLogs({}, dir);
+    expect(results.length).toEqual(N);
+    for (const r of results) {
+      expect(r.target).toEqual(bigTarget);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("appendAuditLog: duplicate id is idempotent", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
+  try {
+    const entry = makeEntry();
+    await appendAuditLog(entry, dir);
+    // Same id, different reason — INSERT OR REPLACE keeps a single row.
+    await appendAuditLog({ ...entry, reason: "updated" }, dir);
+
+    const results = await queryAuditLogs({}, dir);
+    expect(results.length).toEqual(1);
+    expect(results[0].reason).toEqual("updated");
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
