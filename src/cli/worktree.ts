@@ -3,17 +3,29 @@
  */
 
 import { cleanNasWorktrees, listNasWorktrees } from "../stages/worktree.ts";
-import { exitOnCliError } from "./helpers.ts";
+import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 
 export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((a) => !a.startsWith("-"));
   const force = nasArgs.includes("--force") || nasArgs.includes("-f");
   const deleteBranch = nasArgs.includes("--delete-branch") ||
     nasArgs.includes("-B");
+  const formatJson = hasFormatJson(nasArgs);
 
   try {
     if (sub === "list" || sub === undefined) {
       const entries = await listNasWorktrees(process.cwd());
+      if (formatJson) {
+        const items = entries.map((e) => ({
+          path: e.path,
+          branch: e.branch
+            ? e.branch.replace("refs/heads/", "")
+            : null,
+          head: e.head,
+        }));
+        console.log(JSON.stringify(items));
+        return;
+      }
       if (entries.length === 0) {
         console.log("[nas] No nas worktrees found.");
         return;

@@ -39,6 +39,14 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
             requestId: item.requestId,
             displayLine:
               `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}`,
+            structured: {
+              sessionId: item.sessionId,
+              requestId: item.requestId,
+              ruleId: item.ruleId,
+              cwd: item.cwd,
+              argv0: item.argv0,
+              args: item.args,
+            },
           };
         });
       },

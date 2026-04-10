@@ -4,13 +4,19 @@
 
 import { runFzfReview } from "../fzf_review.ts";
 import type { ReviewItem } from "../fzf_review.ts";
-import { getFlagValue, positionalArgsAfterSubcommand } from "./helpers.ts";
+import {
+  getFlagValue,
+  hasFormatJson,
+  positionalArgsAfterSubcommand,
+} from "./helpers.ts";
 
 /** pending 一覧の各アイテム */
 export interface PendingItem {
   sessionId: string;
   requestId: string;
   displayLine: string;
+  /** JSON 出力用の構造化データ */
+  structured?: Record<string, unknown>;
 }
 
 /** approve/deny メッセージ */
@@ -45,6 +51,16 @@ export async function handleApprovalSubcommand(
 ): Promise<boolean> {
   if (sub === "pending" || sub === undefined) {
     const items = await adapter.listPending();
+    if (hasFormatJson(nasArgs)) {
+      const jsonItems = items.map((item) =>
+        item.structured ?? {
+          sessionId: item.sessionId,
+          requestId: item.requestId,
+        }
+      );
+      console.log(JSON.stringify(jsonItems));
+      return true;
+    }
     if (items.length === 0) {
       console.log(`[nas] No pending ${adapter.domain} approvals.`);
       return true;

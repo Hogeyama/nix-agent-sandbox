@@ -48,6 +48,14 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
             requestId: item.requestId,
             displayLine:
               `${item.sessionId} ${item.requestId} ${target} ${item.state} ${item.createdAt}`,
+            structured: {
+              sessionId: item.sessionId,
+              requestId: item.requestId,
+              host: item.target.host,
+              port: item.target.port,
+              state: item.state,
+              createdAt: item.createdAt,
+            },
           };
         });
       },

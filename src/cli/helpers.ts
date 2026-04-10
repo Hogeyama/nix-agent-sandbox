@@ -47,6 +47,12 @@ export function positionalArgsAfterSubcommand(
 
 export type LogLevel = "info" | "warn";
 
+export function hasFormatJson(args: string[]): boolean {
+  return args.includes("--format=json") ||
+    (args.includes("--format") &&
+      args[args.indexOf("--format") + 1] === "json");
+}
+
 export function parseLogLevel(args: string[]): LogLevel {
   return args.includes("--quiet") || args.includes("-q") ? "warn" : "info";
 }
@@ -61,7 +67,7 @@ export function findFirstNonFlagArg(args: string[]): string | undefined {
     if (
       arg === "--scope" || arg === "--runtime-dir" || arg === "--port" ||
       arg === "--since" || arg === "--session" || arg === "--domain" ||
-      arg === "--audit-dir"
+      arg === "--audit-dir" || arg === "--format"
     ) {
       i++;
       continue;
