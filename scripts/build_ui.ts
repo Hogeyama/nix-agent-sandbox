@@ -5,7 +5,7 @@
  * index.html と合わせて src/ui/dist/ に出力する。
  */
 
-import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -39,6 +39,12 @@ const jsOutput = result.outputs.find((o) => o.path.endsWith(".js"));
 if (!jsOutput) throw new Error("No JS output found");
 const jsBasename = path.basename(jsOutput.path);
 
+// Inline CSS so the app ships as two files only
+const css = await readFile(
+  path.join(FRONTEND_DIR, "src/styles.css"),
+  "utf8",
+);
+
 // Generate index.html with correct script path
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -47,8 +53,7 @@ const html = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>nas — Dashboard</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+${css}
   </style>
 </head>
 <body>

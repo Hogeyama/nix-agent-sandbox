@@ -38,6 +38,7 @@ export function App() {
     network: [],
     hostexec: [],
   });
+  const [connected, setConnected] = useState(false);
 
   const deepLink = useMemo<DeepLink | null>(() => {
     const params = new URLSearchParams(globalThis.location?.search ?? "");
@@ -64,6 +65,7 @@ export function App() {
 
   const handleSSE = useCallback(
     (event: string, data: unknown) => {
+      setConnected(true);
       const d = data as Record<string, unknown>;
       switch (event) {
         case "network:pending":
@@ -86,43 +88,39 @@ export function App() {
   useSSE("/api/events", handleSSE);
 
   return (
-    <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "20px" }}>
-      <h1 style={{ marginBottom: "20px", fontSize: "24px" }}>
-        nas Dashboard
-      </h1>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true"></div>
+          <span class="name">nas</span>
+          <span class="sub">· dashboard</span>
+        </div>
+        <div class="status-dot" title={connected ? "Live" : "Connecting…"}>
+          {connected ? "live" : "connecting"}
+        </div>
+      </header>
 
-      <div style={{ display: "flex", gap: "4px", marginBottom: "20px" }}>
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            style={{
-              padding: "8px 20px",
-              border: "none",
-              borderRadius: "6px 6px 0 0",
-              cursor: "pointer",
-              background: activeTab === tab.id ? "#1e293b" : "#0f172a",
-              color: activeTab === tab.id ? "#38bdf8" : "#94a3b8",
-              fontWeight: activeTab === tab.id ? "bold" : "normal",
-              fontSize: "14px",
-            }}
-          >
-            {tab.label}
-            {tab.id === "pending" && totalPending > 0 && (
-              <span style={badgeStyle}>{totalPending}</span>
-            )}
-          </button>
-        ))}
-      </div>
+      <nav class="tabs" role="tablist">
+        {TABS.map((tab) => {
+          const isActive = activeTab === tab.id;
+          const showBadge = tab.id === "pending" && totalPending > 0;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              class={`tab${isActive ? " active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+              {showBadge && <span class="count">{totalPending}</span>}
+            </button>
+          );
+        })}
+      </nav>
 
-      <div
-        style={{
-          background: "#1e293b",
-          borderRadius: "0 8px 8px 8px",
-          padding: "20px",
-          minHeight: "400px",
-        }}
-      >
+      <div class="panel">
         {activeTab === "pending" && (
           <PendingTab
             networkItems={networkPending}
@@ -138,12 +136,3 @@ export function App() {
     </div>
   );
 }
-
-const badgeStyle = {
-  marginLeft: "6px",
-  background: "#ef4444",
-  color: "white",
-  borderRadius: "10px",
-  padding: "1px 7px",
-  fontSize: "12px",
-};

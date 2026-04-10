@@ -37,106 +37,89 @@ export function AuditTab({ items, sessions }: AuditTabProps) {
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          gap: "12px",
-          marginBottom: "16px",
-          alignItems: "center",
-        }}
-      >
-        <label style={{ color: "#94a3b8", fontSize: "13px" }}>
-          Domain:
+      <div class="filter-bar">
+        <label>
+          Domain
           <select
+            class="select"
             value={domainFilter}
             onChange={(e) =>
               setDomainFilter((e.target as HTMLSelectElement).value)}
-            style={selectStyle}
           >
             <option value="all">All</option>
             <option value="network">network</option>
             <option value="hostexec">hostexec</option>
           </select>
         </label>
-        <label style={{ color: "#94a3b8", fontSize: "13px" }}>
-          Session:
+        <label>
+          Session
           <input
             type="text"
-            placeholder="filter by session ID"
+            class="input"
+            placeholder="filter by id…"
             value={sessionFilter}
             onInput={(e) =>
               setSessionFilter((e.target as HTMLInputElement).value)}
-            style={inputStyle}
+            style="width:180px"
           />
         </label>
-        <label
-          style={{
-            color: "#94a3b8",
-            fontSize: "13px",
-            display: "flex",
-            alignItems: "center",
-            gap: "4px",
-            cursor: "pointer",
-          }}
-        >
+        <label class="checkbox">
           <input
             type="checkbox"
             checked={activeOnly}
             onChange={(e) =>
               setActiveOnly((e.target as HTMLInputElement).checked)}
           />
-          Active sessions only
+          Active only
         </label>
-        <span
-          style={{ color: "#64748b", fontSize: "12px", marginLeft: "auto" }}
-        >
-          {filtered.length} / {items.length} entries
+        <span class="counter">
+          {filtered.length} / {items.length}
         </span>
       </div>
 
       {filtered.length === 0
-        ? <p style={{ color: "#94a3b8" }}>No audit log entries.</p>
+        ? (
+          <div class="empty">
+            <div class="icon">○</div>
+            <div class="msg">No audit entries</div>
+            <div class="sub">Nothing matches the current filters.</div>
+          </div>
+        )
         : (
-          <table style={tableStyle}>
+          <table class="table">
+            <colgroup>
+              <col style="width:14%" />
+              <col style="width:10%" />
+              <col style="width:10%" />
+              <col style="width:10%" />
+              <col style="width:30%" />
+              <col style="width:26%" />
+            </colgroup>
             <thead>
               <tr>
-                <th style={thStyle}>Timestamp</th>
-                <th style={thStyle}>Session</th>
-                <th style={thStyle}>Domain</th>
-                <th style={thStyle}>Decision</th>
-                <th style={thStyle}>Reason</th>
-                <th style={thStyle}>Target / Command</th>
+                <th>Timestamp</th>
+                <th>Session</th>
+                <th>Domain</th>
+                <th>Decision</th>
+                <th>Reason</th>
+                <th>Target / Command</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((entry) => (
                 <tr key={entry.id}>
-                  <td style={tdStyle}>
-                    {formatTimestamp(entry.timestamp)}
-                  </td>
-                  <td style={tdSessionStyle} title={entry.sessionId}>
+                  <td class="time">{formatTimestamp(entry.timestamp)}</td>
+                  <td class="session" title={entry.sessionId}>
                     {entry.sessionId.slice(0, 8)}
                   </td>
-                  <td style={tdStyle}>{entry.domain}</td>
-                  <td style={tdStyle}>
-                    <span
-                      style={{
-                        color: entry.decision === "allow"
-                          ? "#22c55e"
-                          : "#ef4444",
-                        fontWeight: "bold",
-                      }}
-                    >
+                  <td><span class="chip">{entry.domain}</span></td>
+                  <td>
+                    <span class={`decision ${entry.decision}`}>
                       {entry.decision}
                     </span>
                   </td>
-                  <td style={tdReasonStyle} title={entry.reason}>
-                    {entry.reason}
-                  </td>
-                  <td
-                    style={tdTargetStyle}
-                    title={entry.target || entry.command}
-                  >
+                  <td title={entry.reason}>{entry.reason}</td>
+                  <td class="mono" title={entry.target || entry.command}>
                     {entry.target || entry.command || "-"}
                   </td>
                 </tr>
@@ -164,56 +147,3 @@ function formatTimestamp(iso: string): string {
     return iso;
   }
 }
-
-const tableStyle = { width: "100%", borderCollapse: "collapse" as const };
-const thStyle = {
-  textAlign: "left" as const,
-  padding: "8px",
-  borderBottom: "1px solid #334155",
-  color: "#94a3b8",
-  fontSize: "12px",
-  textTransform: "uppercase" as const,
-};
-const tdStyle = { padding: "8px", borderBottom: "1px solid #1e293b" };
-const tdSessionStyle = {
-  ...tdStyle,
-  fontFamily: "monospace",
-  fontSize: "13px",
-  color: "#94a3b8",
-};
-const tdReasonStyle = {
-  ...tdStyle,
-  maxWidth: "250px",
-  overflow: "hidden" as const,
-  textOverflow: "ellipsis" as const,
-  whiteSpace: "nowrap" as const,
-  fontSize: "13px",
-};
-const tdTargetStyle = {
-  ...tdStyle,
-  maxWidth: "200px",
-  overflow: "hidden" as const,
-  textOverflow: "ellipsis" as const,
-  whiteSpace: "nowrap" as const,
-  fontSize: "13px",
-  color: "#94a3b8",
-};
-const selectStyle = {
-  marginLeft: "6px",
-  background: "#0f172a",
-  color: "#e2e8f0",
-  border: "1px solid #334155",
-  borderRadius: "4px",
-  padding: "4px 8px",
-  fontSize: "13px",
-};
-const inputStyle = {
-  marginLeft: "6px",
-  background: "#0f172a",
-  color: "#e2e8f0",
-  border: "1px solid #334155",
-  borderRadius: "4px",
-  padding: "4px 8px",
-  fontSize: "13px",
-  width: "180px",
-};

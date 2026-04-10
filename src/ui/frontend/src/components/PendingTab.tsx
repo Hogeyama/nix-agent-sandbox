@@ -18,15 +18,16 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
-      style={copyBtnStyle}
-      title="Copy"
+      type="button"
+      class="btn-icon"
+      title={copied ? "Copied!" : "Copy"}
       onClick={() => {
         navigator.clipboard.writeText(text);
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
     >
-      {copied ? "\u2713" : "\u2398"}
+      {copied ? "✓" : "⎘"}
     </button>
   );
 }
@@ -120,85 +121,109 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
   }
 
   if (empty) {
-    return <p style={{ color: "#94a3b8" }}>No pending approvals.</p>;
+    return (
+      <div class="empty">
+        <div class="icon">✓</div>
+        <div class="msg">All clear</div>
+        <div class="sub">No approvals waiting.</div>
+      </div>
+    );
   }
 
   return (
     <div>
       {networkItems.length > 0 && (
-        <section
-          style={{ marginBottom: hostExecItems.length > 0 ? "24px" : 0 }}
-        >
-          <h3 style={sectionTitle}>
-            Network
-            <span style={countBadge}>{networkItems.length}</span>
-          </h3>
-          <table style={tableStyle}>
+        <section class="section">
+          <div class="panel-header">
+            <span class="panel-title warn">
+              Network
+              <span class="count">{networkItems.length}</span>
+            </span>
+          </div>
+          <table class="table">
+            <colgroup>
+              <col style="width:10%" />
+              <col style="width:26%" />
+              <col style="width:9%" />
+              <col style="width:10%" />
+              <col style="width:10%" />
+              <col style="width:11%" />
+              <col style="width:24%" />
+            </colgroup>
             <thead>
               <tr>
-                <th style={{ ...thStyle, width: "10%" }}>Session</th>
-                <th style={{ ...thStyle, width: "25%" }}>Target</th>
-                <th style={{ ...thStyle, width: "10%" }}>Method</th>
-                <th style={{ ...thStyle, width: "10%" }}>Kind</th>
-                <th style={{ ...thStyle, width: "10%" }}>Created</th>
-                <th style={{ ...thStyle, width: "10%" }}>Scope</th>
-                <th style={{ ...thStyle, width: "25%" }}>Actions</th>
+                <th>Session</th>
+                <th>Target</th>
+                <th>Method</th>
+                <th>Kind</th>
+                <th>Created</th>
+                <th>Scope</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {networkItems.map((item) => {
                 const key = `net:${item.sessionId}:${item.requestId}`;
                 const disabled = busy.has(key);
-                const isHighlighted = deepLink?.type === "network" &&
+                const isHighlighted =
+                  deepLink?.type === "network" &&
                   deepLink.sessionId === item.sessionId &&
                   deepLink.requestId === item.requestId;
                 return (
                   <tr
                     key={key}
                     ref={isHighlighted ? highlightRef : undefined}
-                    style={isHighlighted ? highlightRowStyle : undefined}
+                    class={isHighlighted ? "highlight" : undefined}
                   >
-                    <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
-                    <td style={tdStyle}>
-                      <div style={scrollBox}>
+                    <td class="session">{item.sessionId.slice(0, 8)}</td>
+                    <td class="mono">
+                      <div class="scroll-x">
                         {item.target.host}:{item.target.port}
                       </div>
                     </td>
-                    <td style={tdStyle}>{item.method}</td>
-                    <td style={tdStyle}>{item.requestKind}</td>
-                    <td style={tdStyle}>
+                    <td>
+                      <span class="chip">{item.method}</span>
+                    </td>
+                    <td>
+                      <span class="chip">{item.requestKind}</span>
+                    </td>
+                    <td class="time">
                       {new Date(item.createdAt).toLocaleTimeString()}
                     </td>
-                    <td style={tdStyle}>
+                    <td>
                       <select
-                        style={selectStyle}
+                        class="select"
                         value={scopeMap[key] || "host-port"}
                         onChange={(e) =>
-                          setScope(
-                            key,
-                            (e.target as HTMLSelectElement).value,
-                          )}
+                          setScope(key, (e.target as HTMLSelectElement).value)
+                        }
                       >
                         {NETWORK_SCOPES.map((s) => (
-                          <option key={s} value={s}>{s}</option>
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
                         ))}
                       </select>
                     </td>
-                    <td style={tdActionsStyle}>
-                      <button
-                        style={approveBtnStyle}
-                        disabled={disabled}
-                        onClick={() => handleNetworkAction(item, "approve")}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        style={denyBtnStyle}
-                        disabled={disabled}
-                        onClick={() => handleNetworkAction(item, "deny")}
-                      >
-                        Deny
-                      </button>
+                    <td>
+                      <div class="actions">
+                        <button
+                          type="button"
+                          class="btn btn-approve"
+                          disabled={disabled}
+                          onClick={() => handleNetworkAction(item, "approve")}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-deny"
+                          disabled={disabled}
+                          onClick={() => handleNetworkAction(item, "deny")}
+                        >
+                          Deny
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -209,21 +234,32 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
       )}
 
       {hostExecItems.length > 0 && (
-        <section>
-          <h3 style={sectionTitle}>
-            HostExec
-            <span style={countBadge}>{hostExecItems.length}</span>
-          </h3>
-          <table style={tableStyle}>
+        <section class="section">
+          <div class="panel-header">
+            <span class="panel-title warn">
+              HostExec
+              <span class="count">{hostExecItems.length}</span>
+            </span>
+          </div>
+          <table class="table">
+            <colgroup>
+              <col style="width:9%" />
+              <col style="width:10%" />
+              <col style="width:32%" />
+              <col style="width:16%" />
+              <col style="width:9%" />
+              <col style="width:10%" />
+              <col style="width:14%" />
+            </colgroup>
             <thead>
               <tr>
-                <th style={{ ...thStyle, width: "10%" }}>Session</th>
-                <th style={{ ...thStyle, width: "10%" }}>Rule</th>
-                <th style={{ ...thStyle, width: "30%" }}>Command</th>
-                <th style={{ ...thStyle, width: "15%" }}>CWD</th>
-                <th style={{ ...thStyle, width: "10%" }}>Created</th>
-                <th style={{ ...thStyle, width: "10%" }}>Scope</th>
-                <th style={{ ...thStyle, width: "15%" }}>Actions</th>
+                <th>Session</th>
+                <th>Rule</th>
+                <th>Command</th>
+                <th>CWD</th>
+                <th>Created</th>
+                <th>Scope</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -231,66 +267,71 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
                 const key = `he:${item.sessionId}:${item.requestId}`;
                 const disabled = busy.has(key);
                 const cmd = [item.argv0, ...item.args].join(" ");
-                const isHighlighted = deepLink?.type === "hostexec" &&
+                const isHighlighted =
+                  deepLink?.type === "hostexec" &&
                   deepLink.sessionId === item.sessionId &&
                   deepLink.requestId === item.requestId;
                 return (
                   <tr
                     key={key}
                     ref={isHighlighted ? highlightRef : undefined}
-                    style={isHighlighted ? highlightRowStyle : undefined}
+                    class={isHighlighted ? "highlight" : undefined}
                   >
-                    <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
-                    <td style={tdStyle}>{item.ruleId}</td>
-                    <td style={tdStyle}>
-                      <div style={scrollCopyBox}>
-                        <div style={scrollBox}>
-                          <code style={cmdStyle} title={cmd}>{cmd}</code>
+                    <td class="session">{item.sessionId.slice(0, 8)}</td>
+                    <td>
+                      <span class="chip">{item.ruleId}</span>
+                    </td>
+                    <td>
+                      <div class="cmd-cell">
+                        <div class="scroll-x">
+                          <code title={cmd}>{cmd}</code>
                         </div>
                         <CopyButton text={cmd} />
                       </div>
                     </td>
-                    <td style={tdStyle}>
-                      <div style={scrollCopyBox}>
-                        <div style={{ ...scrollBox, fontSize: "13px" }}>
-                          {shortenHome(item.cwd)}
-                        </div>
+                    <td>
+                      <div class="cmd-cell">
+                        <div class="scroll-x mono">{shortenHome(item.cwd)}</div>
                         <CopyButton text={item.cwd} />
                       </div>
                     </td>
-                    <td style={tdStyle}>
+                    <td class="time">
                       {new Date(item.createdAt).toLocaleTimeString()}
                     </td>
-                    <td style={tdStyle}>
+                    <td>
                       <select
-                        style={selectStyle}
+                        class="select"
                         value={scopeMap[key] || HOSTEXEC_DEFAULT_SCOPE}
                         onChange={(e) =>
-                          setScope(
-                            key,
-                            (e.target as HTMLSelectElement).value,
-                          )}
+                          setScope(key, (e.target as HTMLSelectElement).value)
+                        }
                       >
                         {HOSTEXEC_SCOPES.map((s) => (
-                          <option key={s} value={s}>{s}</option>
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
                         ))}
                       </select>
                     </td>
-                    <td style={tdStyle}>
-                      <button
-                        style={approveBtnStyle}
-                        disabled={disabled}
-                        onClick={() => handleHostExecAction(item, "approve")}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        style={denyBtnStyle}
-                        disabled={disabled}
-                        onClick={() => handleHostExecAction(item, "deny")}
-                      >
-                        Deny
-                      </button>
+                    <td>
+                      <div class="actions">
+                        <button
+                          type="button"
+                          class="btn btn-approve"
+                          disabled={disabled}
+                          onClick={() => handleHostExecAction(item, "approve")}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-deny"
+                          disabled={disabled}
+                          onClick={() => handleHostExecAction(item, "deny")}
+                        >
+                          Deny
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -302,98 +343,3 @@ export function PendingTab({ networkItems, hostExecItems, deepLink }: Props) {
     </div>
   );
 }
-
-const sectionTitle = {
-  fontSize: "14px",
-  color: "#94a3b8",
-  marginBottom: "8px",
-  textTransform: "uppercase" as const,
-  letterSpacing: "0.05em",
-};
-const countBadge = {
-  marginLeft: "8px",
-  background: "#ef4444",
-  color: "white",
-  borderRadius: "10px",
-  padding: "1px 7px",
-  fontSize: "12px",
-  fontWeight: "normal" as const,
-};
-const tableStyle = {
-  width: "100%",
-  borderCollapse: "collapse" as const,
-  tableLayout: "fixed" as const,
-};
-const thStyle = {
-  textAlign: "left" as const,
-  padding: "8px",
-  borderBottom: "1px solid #334155",
-  color: "#94a3b8",
-  fontSize: "12px",
-  textTransform: "uppercase" as const,
-};
-const tdStyle = {
-  padding: "8px",
-  borderBottom: "1px solid #1e293b",
-  overflow: "hidden" as const,
-  textOverflow: "ellipsis" as const,
-  whiteSpace: "nowrap" as const,
-};
-const scrollCopyBox = {
-  display: "flex" as const,
-  alignItems: "center" as const,
-  gap: "4px",
-};
-const scrollBox = {
-  overflowX: "auto" as const,
-  whiteSpace: "nowrap" as const,
-  flex: "1",
-  minWidth: "0",
-};
-const copyBtnStyle = {
-  flexShrink: 0,
-  background: "none",
-  border: "1px solid #334155",
-  borderRadius: "4px",
-  color: "#94a3b8",
-  cursor: "pointer",
-  padding: "2px 5px",
-  fontSize: "12px",
-  lineHeight: "1",
-};
-const tdActionsStyle = {
-  padding: "8px",
-  borderBottom: "1px solid #1e293b",
-  whiteSpace: "nowrap" as const,
-};
-const cmdStyle = {
-  fontSize: "13px",
-};
-const selectStyle = {
-  background: "#0f172a",
-  color: "#e2e8f0",
-  border: "1px solid #334155",
-  borderRadius: "4px",
-  padding: "4px",
-};
-const approveBtnStyle = {
-  background: "#22c55e",
-  color: "white",
-  border: "none",
-  borderRadius: "4px",
-  padding: "4px 12px",
-  cursor: "pointer",
-  marginRight: "4px",
-};
-const denyBtnStyle = {
-  background: "#ef4444",
-  color: "white",
-  border: "none",
-  borderRadius: "4px",
-  padding: "4px 12px",
-  cursor: "pointer",
-};
-const highlightRowStyle = {
-  background: "rgba(56, 189, 248, 0.15)",
-  outline: "1px solid #38bdf8",
-};

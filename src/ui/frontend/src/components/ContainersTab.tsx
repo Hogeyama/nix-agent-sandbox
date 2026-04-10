@@ -86,42 +86,57 @@ export function ContainersTab() {
   }
 
   if (loading) {
-    return <p style={{ color: "#94a3b8" }}>Loading containers...</p>;
+    return (
+      <div class="empty">
+        <div class="icon">◐</div>
+        <div class="msg">Loading containers…</div>
+      </div>
+    );
   }
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          marginBottom: "16px",
-        }}
-      >
-        <h3 style={{ fontSize: "16px", color: "#cbd5e1" }}>
-          NAS Managed Containers ({containers.length})
+      <div class="toolbar">
+        <h3>
+          Managed Containers
+          <span class="badge">{containers.length}</span>
         </h3>
         <button
-          style={cleanBtnStyle}
+          type="button"
+          class="btn btn-primary"
           disabled={cleaning}
           onClick={handleCleanAll}
         >
-          {cleaning ? "Cleaning..." : "Clean All"}
+          {cleaning ? "Cleaning…" : "Clean All"}
         </button>
       </div>
 
       {containers.length === 0
-        ? <p style={{ color: "#94a3b8" }}>No nas-managed containers found.</p>
+        ? (
+          <div class="empty">
+            <div class="icon">∅</div>
+            <div class="msg">No nas-managed containers</div>
+            <div class="sub">Launch an agent with <span class="kbd">nas run</span> to get started.</div>
+          </div>
+        )
         : (
-          <table style={tableStyle}>
+          <table class="table">
+            <colgroup>
+              <col style="width:28%" />
+              <col style="width:11%" />
+              <col style="width:10%" />
+              <col style="width:13%" />
+              <col style="width:26%" />
+              <col style="width:12%" />
+            </colgroup>
             <thead>
               <tr>
-                <th style={thStyle}>Name</th>
-                <th style={thStyle}>Status</th>
-                <th style={thStyle}>Kind</th>
-                <th style={thStyle}>Uptime</th>
-                <th style={thStyle}>PWD</th>
-                <th style={thStyle}>Actions</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Kind</th>
+                <th>Uptime</th>
+                <th>PWD</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -132,27 +147,26 @@ export function ContainersTab() {
                   : "";
                 return (
                   <tr key={c.name}>
-                    <td style={tdStyle}>{c.name}</td>
-                    <td style={tdStyle}>
+                    <td class="mono" title={c.name}>{c.name}</td>
+                    <td>
                       <span
-                        style={{
-                          color: c.running ? "#22c55e" : "#94a3b8",
-                        }}
+                        class={`chip ${c.running ? "chip-good" : "chip-muted"}`}
                       >
                         {c.running ? "running" : "stopped"}
                       </span>
                     </td>
-                    <td style={tdStyle}>{kind}</td>
-                    <td style={tdStyle}>
+                    <td><span class="chip">{kind}</span></td>
+                    <td class="time">
                       {c.running && c.startedAt
                         ? formatRelativeTime(c.startedAt)
                         : "-"}
                     </td>
-                    <td style={tdPwdStyle}>{pwd}</td>
-                    <td style={tdStyle}>
+                    <td class="mono" title={pwd}>{pwd}</td>
+                    <td>
                       {c.running && (
                         <button
-                          style={stopBtnStyle}
+                          type="button"
+                          class="btn btn-warn"
                           disabled={busy.has(c.name)}
                           onClick={() => handleStop(c.name)}
                         >
@@ -169,40 +183,3 @@ export function ContainersTab() {
     </div>
   );
 }
-
-const tableStyle = { width: "100%", borderCollapse: "collapse" as const };
-const thStyle = {
-  textAlign: "left" as const,
-  padding: "8px",
-  borderBottom: "1px solid #334155",
-  color: "#94a3b8",
-  fontSize: "12px",
-  textTransform: "uppercase" as const,
-};
-const tdStyle = { padding: "8px", borderBottom: "1px solid #1e293b" };
-const tdPwdStyle = {
-  ...tdStyle,
-  maxWidth: "200px",
-  overflow: "hidden" as const,
-  textOverflow: "ellipsis" as const,
-  whiteSpace: "nowrap" as const,
-  fontSize: "13px",
-  color: "#94a3b8",
-};
-const stopBtnStyle = {
-  background: "#f59e0b",
-  color: "white",
-  border: "none",
-  borderRadius: "4px",
-  padding: "4px 12px",
-  cursor: "pointer",
-};
-const cleanBtnStyle = {
-  background: "#6366f1",
-  color: "white",
-  border: "none",
-  borderRadius: "6px",
-  padding: "6px 16px",
-  cursor: "pointer",
-  fontSize: "14px",
-};
