@@ -317,7 +317,7 @@ test.skipIf(!dockerAvailable)(
       "curl",
       "bash",
       "python3",
-      "node",
+      "bun",
       "gh",
       "rg",
       "fd",

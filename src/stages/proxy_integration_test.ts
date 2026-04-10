@@ -217,9 +217,12 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       );
       expect(plan!.outputOverrides.networkRuntimeDir?.startsWith(runtimeRoot))
         .toEqual(true);
-      expect(plan!.dockerArgs.includes(`nas-session-net-${sessionId}`)).toEqual(
-        true,
-      );
+      expect(plan!.dockerArgs).toEqual([]);
+      expect(
+        (plan!.outputOverrides.dockerArgs as string[] | undefined)?.includes(
+          `nas-session-net-${sessionId}`,
+        ),
+      ).toEqual(true);
       expect(((await stat(runtimePaths.runtimeDir)).mode ?? 0) & 0o777).toEqual(
         0o755,
       );
