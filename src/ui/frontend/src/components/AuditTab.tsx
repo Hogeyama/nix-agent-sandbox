@@ -299,8 +299,8 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
               <col style="width:10%" />
               <col style="width:10%" />
               <col style="width:10%" />
-              <col style="width:28%" />
-              <col style="width:26%" />
+              <col style="width:12%" />
+              <col style="width:42%" />
             </colgroup>
             <thead>
               <tr>
