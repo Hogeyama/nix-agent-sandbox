@@ -189,6 +189,15 @@ code {
   animation: pulse 2s ease-in-out infinite;
 }
 
+.status-dot.offline {
+  color: var(--bad);
+}
+
+.status-dot.offline::before {
+  background: var(--bad);
+  box-shadow: 0 0 10px var(--bad);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.85); }

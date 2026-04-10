@@ -38,7 +38,6 @@ export function App() {
     network: [],
     hostexec: [],
   });
-  const [connected, setConnected] = useState(false);
 
   const deepLink = useMemo<DeepLink | null>(() => {
     const params = new URLSearchParams(globalThis.location?.search ?? "");
@@ -65,7 +64,6 @@ export function App() {
 
   const handleSSE = useCallback(
     (event: string, data: unknown) => {
-      setConnected(true);
       const d = data as Record<string, unknown>;
       switch (event) {
         case "network:pending":
@@ -85,7 +83,7 @@ export function App() {
     [],
   );
 
-  useSSE("/api/events", handleSSE);
+  const { connected } = useSSE("/api/events", handleSSE);
 
   return (
     <div class="shell">
@@ -95,8 +93,11 @@ export function App() {
           <span class="name">nas</span>
           <span class="sub">· dashboard</span>
         </div>
-        <div class="status-dot" title={connected ? "Live" : "Connecting…"}>
-          {connected ? "live" : "connecting"}
+        <div
+          class={`status-dot${connected ? "" : " offline"}`}
+          title={connected ? "Live" : "Disconnected — retrying…"}
+        >
+          {connected ? "live" : "offline"}
         </div>
       </header>
 
