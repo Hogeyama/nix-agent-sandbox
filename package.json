@@ -10,8 +10,8 @@
     "test": "bun test src/ tests/",
     "test:unit": "bash -c 'bun test $(find src -name \"*_test.ts\" ! -name \"*_integration_test.ts\")'",
     "test:integration": "bash -c 'bun test $(find src tests -name \"*_integration_test.ts\") tests/'",
-    "lint": "bunx biome check src/ tests/ scripts/ main.ts",
-    "fmt": "bunx biome format --write src/ tests/ scripts/ main.ts",
+    "lint": "biome check src/ tests/ scripts/ main.ts",
+    "fmt": "biome format --write src/ tests/ scripts/ main.ts",
     "check": "bunx tsc --noEmit",
     "bun2nix": "bun2nix -o bun.nix"
   },
@@ -20,6 +20,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.11",
     "@types/node": "^22",
     "bun-types": "latest",
     "bun2nix": "latest"
