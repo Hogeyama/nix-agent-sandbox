@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-04-10
+
+### Added
+
+- `nas worktree list` now shows the base branch each worktree was branched off of ([b8bd152])
+- `--format json` output for `nas worktree list`, `nas hostexec pending`, and `nas network pending` ([2a0cdd9])
+- `nas container list` subcommand (with optional `--format json`) ([2a0cdd9])
+- GitHub Actions test workflows ([403ac8e])
+
+### Fixed
+
+- `hostexec`: resolve relative `argv0` against cwd when matching rules, so commands like `cd backend && ./gradlew ...` match workspace-root-relative rules ([ed1a01d])
+- CI: split `test:unit` by file name instead of test name pattern so `*_integration_test.ts` files are reliably excluded ([8484efe])
+
 ## [0.2.0] - 2026-04-08
 
 ### Changed
@@ -36,5 +50,6 @@ Initial release.
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix + nix-bundle-elf
 
+[0.3.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Hogeyama/nix-agent-sandbox/releases/tag/v0.1.0
