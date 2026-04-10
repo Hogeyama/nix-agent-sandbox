@@ -295,11 +295,11 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
         : (
           <table class="table">
             <colgroup>
-              <col style="width:14%" />
+              <col style="width:16%" />
               <col style="width:10%" />
               <col style="width:10%" />
               <col style="width:10%" />
-              <col style="width:30%" />
+              <col style="width:28%" />
               <col style="width:26%" />
             </colgroup>
             <thead>
@@ -372,15 +372,14 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
 function formatTimestamp(iso: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }) + " " + d.toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    });
+    if (Number.isNaN(d.getTime())) return iso;
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    return `${yyyy}/${mm}/${dd} ${hh}:${mi}:${ss}`;
   } catch {
     return iso;
   }
