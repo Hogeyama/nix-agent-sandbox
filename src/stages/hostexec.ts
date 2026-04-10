@@ -195,10 +195,6 @@ export function createHostExecStage(): PlanStage {
           ]),
         ],
         envVars: {
-          PATH: `${WRAPPER_DIR}:${
-            input.prior.envVars["PATH"] ??
-              "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-          }`,
           NAS_HOSTEXEC_SOCKET: socketPath,
           NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
           NAS_HOSTEXEC_SESSION_ID: input.sessionId,

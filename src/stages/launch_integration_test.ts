@@ -460,6 +460,48 @@ test.skipIf(!canBindMount)(
   },
 );
 
+test.skipIf(!canBindMount)(
+  "Integration: hostexec wrapper is activated for agent command, not entrypoint bootstrap",
+  async () => {
+    const wrapperDir = await makeTempDir("nas-e2e-hostexec-");
+    const workDir = await makeTempDir("nas-e2e-hostexec-ws-");
+    const containerWrapperDir = "/tmp/nas-hostexec-wrapper";
+    try {
+      await writeFile(
+        path.join(wrapperDir, "git"),
+        `#!/bin/sh
+if [ "$1" = "config" ] && [ "$2" = "--system" ] && [ "$3" = "safe.directory" ]; then
+  echo "entrypoint should bypass hostexec wrapper" >&2
+  exit 88
+fi
+echo wrapped-git
+`,
+      );
+      await chmod(path.join(wrapperDir, "git"), 0o755);
+
+      const result = await dockerRun(
+        ["git"],
+        {
+          workDir,
+          envVars: {
+            NAS_HOSTEXEC_WRAPPER_DIR: containerWrapperDir,
+          },
+          extraArgs: ["-v", `${wrapperDir}:${containerWrapperDir}:ro`],
+        },
+      );
+
+      expect(result.code).toEqual(0);
+      expect(result.stdout.trim()).toEqual("wrapped-git");
+      expect(result.stderr.includes(
+        "entrypoint should bypass hostexec wrapper",
+      )).toEqual(false);
+    } finally {
+      await rm(wrapperDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
 test.skipIf(!canBindMount || !RUNNING_ON_HOST_DOCKER)(
   "Integration [host-only]: git commit works inside container",
   async () => {

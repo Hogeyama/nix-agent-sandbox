@@ -151,9 +151,10 @@ test("HostExecStage plan: produces correct effects and docker args", () => {
   expect(plan.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")))
     .toEqual(true);
 
-  // Check PATH env includes wrapper dir
-  expect(plan.envVars["PATH"].startsWith("/opt/nas/hostexec/bin:")).toEqual(
-    true,
+  // Wrapper PATH activation is deferred to entrypoint agent exec.
+  expect(plan.envVars["PATH"]).toBeUndefined();
+  expect(plan.envVars["NAS_HOSTEXEC_WRAPPER_DIR"]).toEqual(
+    "/opt/nas/hostexec/bin",
   );
 
   // Check socket env is set
