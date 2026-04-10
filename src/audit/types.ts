@@ -34,8 +34,22 @@ export interface AuditLogFilter {
   startDate?: string;
   /** Inclusive end date (YYYY-MM-DD). */
   endDate?: string;
-  /** Filter by session. */
-  sessionId?: string;
+  /**
+   * Exclusive upper-bound cursor (ISO-8601 timestamp). Returns entries
+   * with `timestamp < before`. Used by the UI's infinite scroll to page
+   * into older history.
+   */
+  before?: string;
+  /**
+   * Restrict to entries whose `sessionId` is a member of this set.
+   * Empty array means "match nothing" (use `undefined` to skip the filter).
+   */
+  sessionIds?: string[];
+  /**
+   * Restrict to entries whose `sessionId` contains this substring
+   * (case-insensitive). Composed with `sessionIds` (both must match).
+   */
+  sessionContains?: string;
   /** Filter by domain. */
   domain?: AuditDomain;
 }

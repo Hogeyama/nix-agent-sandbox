@@ -151,7 +151,9 @@ export function createApiRoutes(ctx: UiDataContext): Router {
   api.get("/audit", async ({ url }) => {
     try {
       const since = url.searchParams.get("since");
-      const session = url.searchParams.get("session");
+      const before = url.searchParams.get("before");
+      const sessionsParam = url.searchParams.get("sessions");
+      const sessionContains = url.searchParams.get("sessionContains");
       const domain = url.searchParams.get("domain");
       const limitStr = url.searchParams.get("limit");
 
@@ -159,6 +161,14 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (domain && domain !== "network" && domain !== "hostexec") {
         return json(
           { error: 'Invalid domain: must be "network" or "hostexec"' },
+          400,
+        );
+      }
+
+      // Validate `before` is a parseable ISO timestamp
+      if (before && Number.isNaN(Date.parse(before))) {
+        return json(
+          { error: "Invalid before: must be an ISO-8601 timestamp" },
           400,
         );
       }
@@ -177,7 +187,16 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
       const filter: AuditLogFilter = {};
       if (since) filter.startDate = since;
-      if (session) filter.sessionId = session;
+      if (before) filter.before = before;
+      if (sessionsParam !== null) {
+        // Comma-separated set membership. An explicit empty value means
+        // "no session IDs match" — return nothing rather than everything.
+        filter.sessionIds = sessionsParam
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      }
+      if (sessionContains) filter.sessionContains = sessionContains;
       if (domain) filter.domain = domain as AuditDomain;
 
       const items = await getAuditLogs(ctx, filter, limit);

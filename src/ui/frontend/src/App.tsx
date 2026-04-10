@@ -131,7 +131,7 @@ export function App() {
         )}
         {activeTab === "containers" && <ContainersTab />}
         {activeTab === "audit" && (
-          <AuditTab items={auditLogs} sessions={sessions} />
+          <AuditTab liveItems={auditLogs} sessions={sessions} />
         )}
       </div>
     </div>

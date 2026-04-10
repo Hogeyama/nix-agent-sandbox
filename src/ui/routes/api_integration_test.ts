@@ -353,6 +353,62 @@ test("GET /audit with invalid domain returns 400", async () => {
   }
 });
 
+test("GET /audit with before cursor returns only older entries", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    const base = {
+      domain: "network",
+      sessionId: "sess-001",
+      decision: "allow",
+      reason: "allowlist match",
+    };
+    const lines = [
+      { ...base, id: "a", timestamp: "2026-03-28T09:00:00Z", requestId: "a" },
+      { ...base, id: "b", timestamp: "2026-03-28T10:00:00Z", requestId: "b" },
+      { ...base, id: "c", timestamp: "2026-03-28T11:00:00Z", requestId: "c" },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n";
+    await writeFile(`${tmpDir}/audit/2026-03-28.jsonl`, lines);
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request(
+      "/api/audit?before=2026-03-28T11:00:00Z",
+    );
+    expect(res.status).toEqual(200);
+    const body = await res.json();
+    const ids = body.items.map((e: { id: string }) => e.id);
+    expect(ids).toEqual(["a", "b"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /audit with invalid before returns 400", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/audit?before=not-a-date");
+    expect(res.status).toEqual(400);
+    const body = await res.json();
+    expect(body.error).toEqual(
+      "Invalid before: must be an ISO-8601 timestamp",
+    );
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("GET /audit with invalid limit returns 400", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
@@ -411,7 +467,7 @@ test("GET /audit respects limit parameter", async () => {
   }
 });
 
-test("GET /audit filters by session parameter", async () => {
+test("GET /audit filters by sessions set and sessionContains", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
     await mkdir(`${tmpDir}/audit`, { recursive: true });
@@ -435,6 +491,15 @@ test("GET /audit filters by session parameter", async () => {
         decision: "deny",
         reason: "test",
       }),
+      JSON.stringify({
+        id: "id-3",
+        timestamp: "2026-03-28T12:02:00Z",
+        domain: "network",
+        sessionId: "other-003",
+        requestId: "req-3",
+        decision: "allow",
+        reason: "test",
+      }),
     ];
     await writeFile(
       `${tmpDir}/audit/2026-03-28.jsonl`,
@@ -446,11 +511,32 @@ test("GET /audit filters by session parameter", async () => {
     const app = new Router();
     app.route("/api", api);
 
-    const res = await app.request("/api/audit?session=sess-001");
-    expect(res.status).toEqual(200);
-    const body = await res.json();
-    expect(body.items.length).toEqual(1);
-    expect(body.items[0].sessionId).toEqual("sess-001");
+    // Set membership (comma-separated)
+    const setRes = await app.request(
+      "/api/audit?sessions=sess-001,sess-002",
+    );
+    expect(setRes.status).toEqual(200);
+    const setBody = await setRes.json();
+    expect(setBody.items.length).toEqual(2);
+    const ids = new Set(
+      setBody.items.map((e: { sessionId: string }) => e.sessionId),
+    );
+    expect(ids.has("sess-001")).toEqual(true);
+    expect(ids.has("sess-002")).toEqual(true);
+
+    // Substring match
+    const subRes = await app.request(
+      "/api/audit?sessionContains=sess",
+    );
+    expect(subRes.status).toEqual(200);
+    const subBody = await subRes.json();
+    expect(subBody.items.length).toEqual(2);
+
+    // Empty sessions set returns nothing
+    const emptyRes = await app.request("/api/audit?sessions=");
+    expect(emptyRes.status).toEqual(200);
+    const emptyBody = await emptyRes.json();
+    expect(emptyBody.items.length).toEqual(0);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

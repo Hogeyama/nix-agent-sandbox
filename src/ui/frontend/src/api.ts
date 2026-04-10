@@ -43,13 +43,24 @@ export const api = {
 
   getAuditLogs: (params?: {
     domain?: string;
-    session?: string;
+    /** Restrict to entries whose sessionId is a member of this set. */
+    sessionIds?: string[];
+    /** Substring match on sessionId (case-insensitive). */
+    sessionContains?: string;
     limit?: number;
+    /** ISO-8601 timestamp cursor — return entries strictly older than this. */
+    before?: string;
   }) => {
     const q = new URLSearchParams();
     if (params?.domain) q.set("domain", params.domain);
-    if (params?.session) q.set("session", params.session);
+    if (params?.sessionIds !== undefined) {
+      q.set("sessions", params.sessionIds.join(","));
+    }
+    if (params?.sessionContains) {
+      q.set("sessionContains", params.sessionContains);
+    }
     if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.before) q.set("before", params.before);
     const qs = q.toString();
     return request<{ items: AuditLogEntry[] }>(
       "GET",

@@ -29,7 +29,7 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
     const entries = await queryAuditLogs(
       {
         startDate,
-        sessionId: sessionId ?? undefined,
+        sessionIds: sessionId ? [sessionId] : undefined,
         domain: domain ?? undefined,
       },
       auditDirOverride ?? undefined,

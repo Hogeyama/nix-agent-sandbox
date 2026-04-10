@@ -87,15 +87,51 @@ test("appendAuditLog: different dates go to different files", async () => {
   }
 });
 
-test("queryAuditLogs: filter by sessionId", async () => {
+test("queryAuditLogs: filter by sessionIds set", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
   try {
     await appendAuditLog(makeEntry({ sessionId: "sess-a" }), dir);
     await appendAuditLog(makeEntry({ sessionId: "sess-b" }), dir);
+    await appendAuditLog(makeEntry({ sessionId: "sess-c" }), dir);
 
-    const results = await queryAuditLogs({ sessionId: "sess-a" }, dir);
-    expect(results.length).toEqual(1);
-    expect(results[0].sessionId).toEqual("sess-a");
+    // Single-element set matches only that session
+    const single = await queryAuditLogs(
+      { sessionIds: ["sess-a"] },
+      dir,
+    );
+    expect(single.length).toEqual(1);
+    expect(single[0].sessionId).toEqual("sess-a");
+
+    // Multi-element set matches any member
+    const multi = await queryAuditLogs(
+      { sessionIds: ["sess-a", "sess-c"] },
+      dir,
+    );
+    const ids = new Set(multi.map((e) => e.sessionId));
+    expect(ids.size).toEqual(2);
+    expect(ids.has("sess-a")).toEqual(true);
+    expect(ids.has("sess-c")).toEqual(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("queryAuditLogs: filter by sessionContains substring", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
+  try {
+    await appendAuditLog(makeEntry({ sessionId: "alpha-42" }), dir);
+    await appendAuditLog(makeEntry({ sessionId: "beta-17" }), dir);
+    await appendAuditLog(makeEntry({ sessionId: "ALPHA-99" }), dir);
+
+    // Case-insensitive substring match
+    const results = await queryAuditLogs(
+      { sessionContains: "alpha" },
+      dir,
+    );
+    const ids = new Set(results.map((e) => e.sessionId));
+    expect(ids.size).toEqual(2);
+    expect(ids.has("alpha-42")).toEqual(true);
+    expect(ids.has("ALPHA-99")).toEqual(true);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -114,6 +150,46 @@ test("queryAuditLogs: filter by domain", async () => {
     const hostexecOnly = await queryAuditLogs({ domain: "hostexec" }, dir);
     expect(hostexecOnly.length).toEqual(1);
     expect(hostexecOnly[0].domain).toEqual("hostexec");
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("queryAuditLogs: filter by before cursor", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
+  try {
+    // Three entries spread across two days
+    await appendAuditLog(
+      makeEntry({ timestamp: "2026-03-26T10:00:00Z", requestId: "a" }),
+      dir,
+    );
+    await appendAuditLog(
+      makeEntry({ timestamp: "2026-03-27T09:00:00Z", requestId: "b" }),
+      dir,
+    );
+    await appendAuditLog(
+      makeEntry({ timestamp: "2026-03-27T12:00:00Z", requestId: "c" }),
+      dir,
+    );
+
+    // Cursor in the middle of day 27 should include a and b but not c
+    // (before is exclusive).
+    const olderThanNoon = await queryAuditLogs(
+      { before: "2026-03-27T12:00:00Z" },
+      dir,
+    );
+    expect(olderThanNoon.length).toEqual(2);
+    const ids = new Set(olderThanNoon.map((e) => e.requestId));
+    expect(ids.has("a")).toEqual(true);
+    expect(ids.has("b")).toEqual(true);
+    expect(ids.has("c")).toEqual(false);
+
+    // Cursor before all entries yields nothing
+    const empty = await queryAuditLogs(
+      { before: "2026-03-26T00:00:00Z" },
+      dir,
+    );
+    expect(empty.length).toEqual(0);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -228,7 +304,7 @@ test("resolveAuditDir: throws when neither XDG_DATA_HOME nor HOME is set", () =>
   }
 });
 
-test("queryAuditLogs: compound filter with sessionId and domain", async () => {
+test("queryAuditLogs: compound filter with sessionIds and domain", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-"));
   try {
     await appendAuditLog(
@@ -245,7 +321,7 @@ test("queryAuditLogs: compound filter with sessionId and domain", async () => {
     );
 
     const results = await queryAuditLogs(
-      { sessionId: "sess-a", domain: "network" },
+      { sessionIds: ["sess-a"], domain: "network" },
       dir,
     );
     expect(results.length).toEqual(1);

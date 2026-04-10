@@ -68,15 +68,28 @@ export async function queryAuditLogs(
   const files = await listJsonlFiles(dir);
   const results: AuditLogEntry[] = [];
 
+  // When `before` is set we can skip whole files whose date is strictly
+  // after the cursor's date. ISO-8601 timestamps are lexicographically
+  // comparable, so this is a safe optimisation.
+  const beforeDate = filter.before ? dateOfTimestamp(filter.before) : undefined;
+  const sessionIdSet = filter.sessionIds ? new Set(filter.sessionIds) : undefined;
+  const sessionNeedle = filter.sessionContains?.toLowerCase();
+
   for (const fileName of files) {
     const date = fileName.replace(/\.jsonl$/, "");
     if (filter.startDate && date < filter.startDate) continue;
     if (filter.endDate && date > filter.endDate) continue;
+    if (beforeDate && date > beforeDate) continue;
 
     const entries = await readJsonlFile(path.join(dir, fileName));
     for (const entry of entries) {
-      if (filter.sessionId && entry.sessionId !== filter.sessionId) continue;
+      if (sessionIdSet && !sessionIdSet.has(entry.sessionId)) continue;
+      if (
+        sessionNeedle &&
+        !entry.sessionId.toLowerCase().includes(sessionNeedle)
+      ) continue;
       if (filter.domain && entry.domain !== filter.domain) continue;
+      if (filter.before && entry.timestamp >= filter.before) continue;
       results.push(entry);
     }
   }

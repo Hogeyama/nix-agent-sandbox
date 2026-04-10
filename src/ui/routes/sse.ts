@@ -1,6 +1,12 @@
 /**
  * SSE エンドポイント — 2秒間隔ポーリングで差分送出
+ *
+ * 監査ログは容易に数万件まで膨らむので、ライブストリームは直近
+ * `AUDIT_STREAM_LIMIT` 件だけに制限する。それ以上掘りたいときは
+ * フィルタ付きで REST (/api/audit) を叩く想定。
  */
+
+const AUDIT_STREAM_LIMIT = 500;
 
 import { Router } from "../router.ts";
 import type { UiDataContext } from "../data.ts";
@@ -69,9 +75,11 @@ export function createSseRoutes(ctx: UiDataContext): Router {
               send("sessions", sessions);
             }
 
-            // Audit logs — send delta since last poll
+            // Audit logs — stream only the tail to keep the payload bounded.
+            // Older history is fetched on demand by the frontend via
+            // GET /api/audit?before=<cursor>.
             try {
-              const auditLogs = await getAuditLogs(ctx);
+              const auditLogs = await getAuditLogs(ctx, {}, AUDIT_STREAM_LIMIT);
               const auditJson = JSON.stringify(auditLogs);
               if (auditJson !== prevAuditJson) {
                 prevAuditJson = auditJson;
