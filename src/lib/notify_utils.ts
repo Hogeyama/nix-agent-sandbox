@@ -71,7 +71,10 @@ export async function tryDesktopNotification(
     ], {
       stdout: "pipe",
       stderr: "ignore",
-      env: process.env,
+      // NAS_NOTIFY_UI_URL is consumed by the WSL shim (scripts/notify-send-wsl)
+      // so it can open `nas ui` in the Windows browser on click. Native Linux
+      // notify-send ignores unknown env vars, so this is harmless there.
+      env: { ...process.env, NAS_NOTIFY_UI_URL: options.uiUrl },
     });
   } catch {
     warnNotifySendMissing();

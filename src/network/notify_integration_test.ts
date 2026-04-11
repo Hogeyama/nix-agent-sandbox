@@ -93,6 +93,31 @@ test("notifyPendingRequest: desktop backend sends notification", async () => {
   });
 });
 
+test("notifyPendingRequest: propagates uiUrl via NAS_NOTIFY_UI_URL env", async () => {
+  await withFakeCommands(async ({ dir, healthServer }) => {
+    const envLog = `${dir}/notify-env.log`;
+    process.env["NAS_NOTIFY_ENV_LOG"] = envLog;
+    process.env["NAS_NOTIFY_EXIT"] = "0";
+    process.env["NAS_NOTIFY_STDOUT"] = "";
+    process.env["NAS_XDG_LOG"] = `${dir}/xdg-open.log`;
+
+    await notifyPendingRequest({
+      backend: "desktop",
+      sessionId: "sess_test",
+      requestId: "req_test",
+      target: { host: "api.openai.com", port: 443 },
+      uiPort: healthServer.port,
+    });
+
+    const captured = (await readFile(envLog, "utf8")).trim();
+    expect(captured.startsWith("http://")).toEqual(true);
+    expect(captured.includes(`:${healthServer.port}`)).toEqual(true);
+    expect(captured.includes("type=network")).toEqual(true);
+    expect(captured.includes("sessionId=sess_test")).toEqual(true);
+    expect(captured.includes("requestId=req_test")).toEqual(true);
+  });
+});
+
 test("notifyPendingRequest: uiEnabled=false shows approve/deny actions", async () => {
   await withFakeCommands(async ({ dir }) => {
     const argsLog = `${dir}/notify-args.log`;
@@ -147,6 +172,7 @@ async function withFakeCommands(
   const dir = await mkdtemp(path.join(tmpdir(), "nas-notify-test-"));
   const originalPath = process.env["PATH"] ?? "";
   const originalNotifyArgsLog = process.env["NAS_NOTIFY_ARGS_LOG"];
+  const originalNotifyEnvLog = process.env["NAS_NOTIFY_ENV_LOG"];
   const originalNotifyExit = process.env["NAS_NOTIFY_EXIT"];
   const originalNotifyStdout = process.env["NAS_NOTIFY_STDOUT"];
   const originalXdgLog = process.env["NAS_XDG_LOG"];
@@ -159,6 +185,9 @@ async function withFakeCommands(
 set -euo pipefail
 if [[ -n "\${NAS_NOTIFY_ARGS_LOG:-}" ]]; then
   printf '%s\n' "$@" > "\${NAS_NOTIFY_ARGS_LOG}"
+fi
+if [[ -n "\${NAS_NOTIFY_ENV_LOG:-}" ]]; then
+  printf '%s\n' "\${NAS_NOTIFY_UI_URL:-}" > "\${NAS_NOTIFY_ENV_LOG}"
 fi
 printf '42\n'
 printf '%s' "\${NAS_NOTIFY_STDOUT:-}"
@@ -183,6 +212,7 @@ fi
     process.env["PATH"] = originalPath;
     _resetNotifySendCache();
     restoreEnv("NAS_NOTIFY_ARGS_LOG", originalNotifyArgsLog);
+    restoreEnv("NAS_NOTIFY_ENV_LOG", originalNotifyEnvLog);
     restoreEnv("NAS_NOTIFY_EXIT", originalNotifyExit);
     restoreEnv("NAS_NOTIFY_STDOUT", originalNotifyStdout);
     restoreEnv("NAS_XDG_LOG", originalXdgLog);
