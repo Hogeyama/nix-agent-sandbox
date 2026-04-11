@@ -7,6 +7,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { appendAuditLog } from "../../audit/store.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import type { SessionRuntimePaths } from "../../sessions/store.ts";
@@ -303,23 +304,20 @@ test("GET /audit returns audit log entries", async () => {
     await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
     await mkdir(`${tmpDir}/audit`, { recursive: true });
 
-    // Write a JSONL audit log file
-    const entry = {
-      id: "test-id-001",
-      timestamp: "2026-03-28T12:00:00Z",
-      domain: "network",
-      sessionId: "sess-001",
-      requestId: "req-001",
-      decision: "allow",
-      reason: "allowlist match",
-      target: "example.com:443",
-    };
-    await writeFile(
-      `${tmpDir}/audit/2026-03-28.jsonl`,
-      `${JSON.stringify(entry)}\n`,
-    );
-
     const ctx = createTestContext(tmpDir);
+    await appendAuditLog(
+      {
+        id: "test-id-001",
+        timestamp: "2026-03-28T12:00:00Z",
+        domain: "network",
+        sessionId: "sess-001",
+        requestId: "req-001",
+        decision: "allow",
+        reason: "allowlist match",
+        target: "example.com:443",
+      },
+      ctx.auditDir,
+    );
     const api = createApiRoutes(ctx);
     const app = new Router();
     app.route("/api", api);
@@ -380,24 +378,21 @@ test("GET /audit respects limit parameter", async () => {
   try {
     await mkdir(`${tmpDir}/audit`, { recursive: true });
 
-    // Write 3 entries
-    const entries = [1, 2, 3].map((i) =>
-      JSON.stringify({
-        id: `id-${i}`,
-        timestamp: `2026-03-28T12:0${i}:00Z`,
-        domain: "network",
-        sessionId: "sess-001",
-        requestId: `req-${i}`,
-        decision: "allow",
-        reason: "test",
-      }),
-    );
-    await writeFile(
-      `${tmpDir}/audit/2026-03-28.jsonl`,
-      `${entries.join("\n")}\n`,
-    );
-
     const ctx = createTestContext(tmpDir);
+    for (const i of [1, 2, 3]) {
+      await appendAuditLog(
+        {
+          id: `id-${i}`,
+          timestamp: `2026-03-28T12:0${i}:00Z`,
+          domain: "network",
+          sessionId: "sess-001",
+          requestId: `req-${i}`,
+          decision: "allow",
+          reason: "test",
+        },
+        ctx.auditDir,
+      );
+    }
     const api = createApiRoutes(ctx);
     const app = new Router();
     app.route("/api", api);
@@ -419,8 +414,9 @@ test("GET /audit filters by session parameter", async () => {
   try {
     await mkdir(`${tmpDir}/audit`, { recursive: true });
 
-    const entries = [
-      JSON.stringify({
+    const ctx = createTestContext(tmpDir);
+    await appendAuditLog(
+      {
         id: "id-1",
         timestamp: "2026-03-28T12:00:00Z",
         domain: "network",
@@ -428,8 +424,11 @@ test("GET /audit filters by session parameter", async () => {
         requestId: "req-1",
         decision: "allow",
         reason: "test",
-      }),
-      JSON.stringify({
+      },
+      ctx.auditDir,
+    );
+    await appendAuditLog(
+      {
         id: "id-2",
         timestamp: "2026-03-28T12:01:00Z",
         domain: "network",
@@ -437,19 +436,14 @@ test("GET /audit filters by session parameter", async () => {
         requestId: "req-2",
         decision: "deny",
         reason: "test",
-      }),
-    ];
-    await writeFile(
-      `${tmpDir}/audit/2026-03-28.jsonl`,
-      `${entries.join("\n")}\n`,
+      },
+      ctx.auditDir,
     );
-
-    const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
     const app = new Router();
     app.route("/api", api);
 
-    const res = await app.request("/api/audit?session=sess-001");
+    const res = await app.request("/api/audit?sessions=sess-001");
     expect(res.status).toEqual(200);
     const body = await res.json();
     expect(body.items.length).toEqual(1);
