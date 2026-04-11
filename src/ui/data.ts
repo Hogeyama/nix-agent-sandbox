@@ -36,25 +36,40 @@ import {
   dockerStop,
 } from "../docker/client.ts";
 import type { DockerContainerDetails } from "../docker/client.ts";
-import { isNasManagedContainer } from "../docker/nas_resources.ts";
+import {
+  isNasManagedContainer,
+  NAS_SESSION_ID_LABEL,
+} from "../docker/nas_resources.ts";
 import { cleanNasContainers } from "../container_clean.ts";
 import type { ContainerCleanResult } from "../container_clean.ts";
 import { queryAuditLogs, resolveAuditDir } from "../audit/store.ts";
 import type { AuditLogEntry } from "../audit/types.ts";
 import type { AuditLogFilter } from "../audit/types.ts";
+import {
+  listSessions,
+  resolveSessionRuntimePaths,
+} from "../sessions/store.ts";
+import type {
+  SessionEventKind,
+  SessionRecord,
+  SessionRuntimePaths,
+  SessionTurn,
+} from "../sessions/store.ts";
 
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
   hostExecPaths: HostExecRuntimePaths;
+  sessionPaths: SessionRuntimePaths;
   auditDir: string;
 }
 
 export async function createDataContext(
   runtimeDir?: string,
 ): Promise<UiDataContext> {
-  const [networkPaths, hostExecPaths] = await Promise.all([
+  const [networkPaths, hostExecPaths, sessionPaths] = await Promise.all([
     resolveNetworkRuntimePaths(runtimeDir),
     resolveHostExecRuntimePaths(runtimeDir),
+    resolveSessionRuntimePaths(),
   ]);
   // 起動時に stale な session/pending を掃除
   const [netGc, hexGc] = await Promise.all([
@@ -71,7 +86,7 @@ export async function createDataContext(
     );
   }
   const auditDir = resolveAuditDir();
-  return { networkPaths, hostExecPaths, auditDir };
+  return { networkPaths, hostExecPaths, sessionPaths, auditDir };
 }
 
 // --- Network ---
@@ -199,9 +214,56 @@ export interface NasContainerInfo {
   running: boolean;
   labels: Record<string, string>;
   startedAt: string;
+  // Session-derived fields — populated by joinSessionsToContainers when a
+  // container carries a `nas.session_id` label matching a live record.
+  sessionId?: string;
+  turn?: SessionTurn;
+  sessionAgent?: string;
+  sessionProfile?: string;
+  worktree?: string;
+  sessionStartedAt?: string;
+  lastEventAt?: string;
+  lastEventKind?: SessionEventKind;
+  lastEventMessage?: string;
 }
 
-export async function getNasContainers(): Promise<NasContainerInfo[]> {
+/**
+ * Pure function: overlay session record data onto containers via the
+ * `nas.session_id` label. Containers without a label, or with a label
+ * that has no matching record, are returned unchanged (shallow-copied).
+ */
+export function joinSessionsToContainers(
+  containers: NasContainerInfo[],
+  sessions: SessionRecord[],
+): NasContainerInfo[] {
+  const bySessionId = new Map<string, SessionRecord>();
+  for (const record of sessions) {
+    bySessionId.set(record.sessionId, record);
+  }
+
+  return containers.map((container) => {
+    const sessionId = container.labels[NAS_SESSION_ID_LABEL];
+    if (!sessionId) return { ...container };
+    const record = bySessionId.get(sessionId);
+    if (!record) return { ...container };
+    return {
+      ...container,
+      sessionId: record.sessionId,
+      turn: record.turn,
+      sessionAgent: record.agent,
+      sessionProfile: record.profile,
+      worktree: record.worktree,
+      sessionStartedAt: record.startedAt,
+      lastEventAt: record.lastEventAt,
+      lastEventKind: record.lastEventKind,
+      lastEventMessage: record.lastEventMessage,
+    };
+  });
+}
+
+export async function getNasContainers(
+  ctx: UiDataContext,
+): Promise<NasContainerInfo[]> {
   const names = await dockerListContainerNames();
   const containers: NasContainerInfo[] = [];
 
@@ -222,7 +284,8 @@ export async function getNasContainers(): Promise<NasContainerInfo[]> {
     }
   }
 
-  return containers;
+  const sessions = await listSessions(ctx.sessionPaths);
+  return joinSessionsToContainers(containers, sessions);
 }
 
 export async function stopContainer(name: string): Promise<void> {

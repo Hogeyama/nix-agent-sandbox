@@ -16,6 +16,7 @@ import { createApiRoutes } from "./api.ts";
 import type { UiDataContext } from "../data.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
+import type { SessionRuntimePaths } from "../../sessions/store.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -38,7 +39,16 @@ function createTestContext(dir: string): UiDataContext {
     brokersDir: `${dir}/hostexec/brokers`,
     wrappersDir: `${dir}/hostexec/wrappers`,
   };
-  return { networkPaths, hostExecPaths, auditDir: `${dir}/audit` };
+  const sessionPaths: SessionRuntimePaths = {
+    runtimeDir: `${dir}/sessions-root`,
+    sessionsDir: `${dir}/sessions-root/sessions`,
+  };
+  return {
+    networkPaths,
+    hostExecPaths,
+    sessionPaths,
+    auditDir: `${dir}/audit`,
+  };
 }
 
 test("GET /network/pending returns items array", async () => {

@@ -7,6 +7,7 @@ import type { UiDataContext } from "../data.ts";
 import {
   getAuditLogs,
   getHostExecPending,
+  getNasContainers,
   getNetworkPending,
   getSessions,
 } from "../data.ts";
@@ -38,17 +39,19 @@ export function createSseRoutes(ctx: UiDataContext): Router {
         let prevNetworkJson = "";
         let prevHostExecJson = "";
         let prevSessionsJson = "";
+        let prevContainersJson = "";
         let prevAuditJson = "";
 
         async function poll(): Promise<void> {
           if (closed) return;
 
           try {
-            const [networkPending, hostExecPending, sessions] = await Promise
-              .all([
+            const [networkPending, hostExecPending, sessions, containers] =
+              await Promise.all([
                 getNetworkPending(ctx).catch(() => []),
                 getHostExecPending(ctx).catch(() => []),
                 getSessions(ctx).catch(() => ({ network: [], hostexec: [] })),
+                getNasContainers(ctx).catch(() => []),
               ]);
 
             const networkJson = JSON.stringify(networkPending);
@@ -67,6 +70,12 @@ export function createSseRoutes(ctx: UiDataContext): Router {
             if (sessionsJson !== prevSessionsJson) {
               prevSessionsJson = sessionsJson;
               send("sessions", sessions);
+            }
+
+            const containersJson = JSON.stringify(containers);
+            if (containersJson !== prevContainersJson) {
+              prevContainersJson = containersJson;
+              send("containers", { items: containers });
             }
 
             // Audit logs — send delta since last poll
