@@ -62,7 +62,7 @@ function argv0MatchesRule(
       const relToWorkspace = path.relative(context.workspaceRoot, absActual);
       if (!relToWorkspace.startsWith("..")) {
         return (
-          path.normalize(ruleArgv0) === path.normalize("./" + relToWorkspace)
+          path.normalize(ruleArgv0) === path.normalize(`./${relToWorkspace}`)
         );
       }
     }

@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -44,7 +36,7 @@ const baseConfig: Config = {
 };
 
 function getContainerHome(): string {
-  const user = process.env["USER"]?.trim();
+  const user = process.env.USER?.trim();
   return `/home/${user || "nas"}`;
 }
 
@@ -106,8 +98,8 @@ test("MountStage: resolves static and command env", async () => {
   const stage = createMountStage(mountProbes);
   const plan = stage.plan(input);
   expect(plan !== null).toEqual(true);
-  expect(plan!.envVars["STATIC_KEY"]).toEqual("static_value");
-  expect(plan!.envVars["DYNAMIC_KEY"]).toEqual("dynamic_value");
+  expect(plan!.envVars.STATIC_KEY).toEqual("static_value");
+  expect(plan!.envVars.DYNAMIC_KEY).toEqual("dynamic_value");
 });
 
 test("MountStage: workspace mount keeps full absolute path", async () => {
@@ -126,7 +118,7 @@ test("MountStage: workspace mount keeps full absolute path", async () => {
   expect(
     workDirIndex >= 1 && plan.dockerArgs[workDirIndex - 1] === "-w",
   ).toEqual(true);
-  expect(plan.envVars["WORKSPACE"]).toEqual(workDir);
+  expect(plan.envVars.WORKSPACE).toEqual(workDir);
 });
 
 test("MountStage: propagates log level from prior envVars", async () => {
@@ -140,7 +132,7 @@ test("MountStage: propagates log level from prior envVars", async () => {
   const _plan = stage.plan(input)!;
   // NAS_LOG_LEVEL is set in initialPrior, not by MountStage.
   // Verify it comes through from prior envVars (merged by pipeline).
-  expect(input.prior.envVars["NAS_LOG_LEVEL"]).toEqual("warn");
+  expect(input.prior.envVars.NAS_LOG_LEVEL).toEqual("warn");
 });
 
 test("MountStage: mounts DBus proxy runtime and injects session env", async () => {
@@ -179,8 +171,8 @@ test("MountStage: mounts DBus proxy runtime and injects session env", async () =
     expect(plan.dockerArgs.includes(`${runtimeDir}:/run/user/${uid}`)).toEqual(
       true,
     );
-    expect(plan.envVars["XDG_RUNTIME_DIR"]).toEqual(`/run/user/${uid}`);
-    expect(plan.envVars["DBUS_SESSION_BUS_ADDRESS"]).toEqual(
+    expect(plan.envVars.XDG_RUNTIME_DIR).toEqual(`/run/user/${uid}`);
+    expect(plan.envVars.DBUS_SESSION_BUS_ADDRESS).toEqual(
       `unix:path=/run/user/${uid}/bus`,
     );
   } finally {
@@ -197,7 +189,7 @@ test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async () => {
   const stage = createMountStage(mountProbes);
   const plan = stage.plan(input)!;
 
-  const home = process.env["HOME"] ?? "/root";
+  const home = process.env.HOME ?? "/root";
   const containerHome = getContainerHome();
 
   // Check pubring.kbx mount if file exists on host
@@ -226,7 +218,7 @@ test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async () => {
 });
 
 test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
-  const home = process.env["HOME"] ?? "/root";
+  const home = process.env.HOME ?? "/root";
   const containerHome = getContainerHome();
   const profile: Profile = {
     ...baseProfile,
@@ -248,9 +240,9 @@ test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
 });
 
 test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () => {
-  const origDisplay = process.env["DISPLAY"];
+  const origDisplay = process.env.DISPLAY;
   try {
-    process.env["DISPLAY"] = ":42";
+    process.env.DISPLAY = ":42";
     const profile: Profile = {
       ...baseProfile,
       display: { enable: true },
@@ -265,7 +257,7 @@ test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () =
       .then(() => true)
       .catch(() => false);
     if (x11Exists) {
-      expect(plan.envVars["DISPLAY"]).toEqual(":42");
+      expect(plan.envVars.DISPLAY).toEqual(":42");
       const mountArg = "/tmp/.X11-unix:/tmp/.X11-unix:ro";
       const mountIndex = plan.dockerArgs.indexOf(mountArg);
       expect(
@@ -273,16 +265,14 @@ test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () =
       ).toEqual(true);
 
       // Xauthority should be forwarded if the file exists on host
-      const home = process.env["HOME"] ?? "/root";
-      const xauthority = process.env["XAUTHORITY"] ?? `${home}/.Xauthority`;
+      const home = process.env.HOME ?? "/root";
+      const xauthority = process.env.XAUTHORITY ?? `${home}/.Xauthority`;
       const xauthExists = await stat(xauthority)
         .then(() => true)
         .catch(() => false);
       if (xauthExists) {
         const containerHome = getContainerHome();
-        expect(plan.envVars["XAUTHORITY"]).toEqual(
-          `${containerHome}/.Xauthority`,
-        );
+        expect(plan.envVars.XAUTHORITY).toEqual(`${containerHome}/.Xauthority`);
         const xauthMount = `${xauthority}:${containerHome}/.Xauthority:ro`;
         expect(plan.dockerArgs.includes(xauthMount)).toEqual(true);
       }
@@ -295,9 +285,9 @@ test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () =
     }
   } finally {
     if (origDisplay !== undefined) {
-      process.env["DISPLAY"] = origDisplay;
+      process.env.DISPLAY = origDisplay;
     } else {
-      delete process.env["DISPLAY"];
+      delete process.env.DISPLAY;
     }
   }
 });
@@ -310,13 +300,13 @@ test("MountStage: display.enable=false does not set DISPLAY", async () => {
   const { input, mountProbes } = await buildTestInput(profile, process.cwd());
   const stage = createMountStage(mountProbes);
   const plan = stage.plan(input)!;
-  expect(plan.envVars["DISPLAY"]).toBeUndefined();
+  expect(plan.envVars.DISPLAY).toBeUndefined();
 });
 
 test("MountStage: display.enable skips when host DISPLAY unset", async () => {
-  const origDisplay = process.env["DISPLAY"];
+  const origDisplay = process.env.DISPLAY;
   try {
-    delete process.env["DISPLAY"];
+    delete process.env.DISPLAY;
     const profile: Profile = {
       ...baseProfile,
       display: { enable: true },
@@ -324,10 +314,10 @@ test("MountStage: display.enable skips when host DISPLAY unset", async () => {
     const { input, mountProbes } = await buildTestInput(profile, process.cwd());
     const stage = createMountStage(mountProbes);
     const plan = stage.plan(input)!;
-    expect(plan.envVars["DISPLAY"]).toBeUndefined();
+    expect(plan.envVars.DISPLAY).toBeUndefined();
   } finally {
     if (origDisplay !== undefined) {
-      process.env["DISPLAY"] = origDisplay;
+      process.env.DISPLAY = origDisplay;
     }
   }
 });

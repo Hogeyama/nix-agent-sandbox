@@ -181,11 +181,11 @@ export function replaceNetwork(
 export function parseDindContainerName(
   envVars: Readonly<Record<string, string>>,
 ): string | null {
-  const explicitName = envVars["NAS_DIND_CONTAINER_NAME"];
+  const explicitName = envVars.NAS_DIND_CONTAINER_NAME;
   if (explicitName && explicitName.trim() !== "") {
     return explicitName;
   }
-  const dockerHost = envVars["DOCKER_HOST"];
+  const dockerHost = envVars.DOCKER_HOST;
   if (!dockerHost) return null;
   const match = dockerHost.match(/^tcp:\/\/([^:]+):\d+$/);
   return match ? match[1] : null;

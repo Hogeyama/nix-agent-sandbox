@@ -96,7 +96,7 @@ export function App() {
         </div>
       </header>
 
-      <nav class="tabs" role="tablist">
+      <nav class="tabs">
         {TABS.map((tab) => {
           const isActive = activeTab === tab.id;
           const showBadge = tab.id === "pending" && totalPending > 0;

@@ -53,8 +53,8 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
   const envVars = { ...priorEnvVars };
   const containerLocalBin = `${containerHome}/.local/bin`;
 
-  envVars["PATH"] = `${containerLocalBin}:${
-    envVars["PATH"] ?? DEFAULT_CONTAINER_PATH
+  envVars.PATH = `${containerLocalBin}:${
+    envVars.PATH ?? DEFAULT_CONTAINER_PATH
   }`;
 
   // ~/.claude/ をマウント（認証情報 + セッション履歴）
@@ -111,7 +111,7 @@ function fileExistsSync(p: string): boolean {
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
 function findBinaryResolved(name: string): string | null {
-  const which = Bun.which(name, { PATH: process.env["PATH"] ?? "" });
+  const which = Bun.which(name, { PATH: process.env.PATH ?? "" });
   if (!which) return null;
   try {
     const fs = require("node:fs");

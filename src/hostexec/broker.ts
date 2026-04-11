@@ -97,7 +97,6 @@ export class HostExecBroker {
   private readonly secretStore: SecretStore;
   private socketPath: string | null = null;
   private server: Server | null = null;
-  private closing = false;
   private readonly approvedKeys = new Set<string>();
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestToApprovalKey = new Map<string, string>();
@@ -492,7 +491,7 @@ export class HostExecBroker {
         const value = hostEnv[key];
         if (value !== undefined) envVars[key] = value;
       }
-      envVars["PATH"] = envVars["PATH"] ?? DEFAULT_PATH;
+      envVars.PATH = envVars.PATH ?? DEFAULT_PATH;
     }
     for (const key of rule.inheritEnv.keys) {
       const value = hostEnv[key];
@@ -502,7 +501,7 @@ export class HostExecBroker {
       const secretName = ref.slice("secret:".length);
       envVars[key] = await this.secretStore.require(secretName);
     }
-    envVars["GIT_TERMINAL_PROMPT"] = envVars["GIT_TERMINAL_PROMPT"] ?? "0";
+    envVars.GIT_TERMINAL_PROMPT = envVars.GIT_TERMINAL_PROMPT ?? "0";
     return envVars;
   }
 
@@ -528,7 +527,7 @@ export class HostExecBroker {
         stderr: "pipe",
       });
     } catch {
-      const searchedPath = resolved.envVars["PATH"] ?? "(unset)";
+      const searchedPath = resolved.envVars.PATH ?? "(unset)";
       throw new Error(
         `Command '${commandArgv0}' not found on host. PATH=${searchedPath}`,
       );

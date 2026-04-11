@@ -177,7 +177,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       let limit: number | undefined;
       if (limitStr) {
         limit = parseInt(limitStr, 10);
-        if (isNaN(limit) || limit < 1) {
+        if (Number.isNaN(limit) || limit < 1) {
           return json(
             { error: "Invalid limit: must be a positive integer" },
             400,

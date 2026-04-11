@@ -4,7 +4,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { ConfigValidationError, validateConfig } from "./validate.ts";
+import { validateConfig } from "./validate.ts";
 
 // ---------------------------------------------------------------------------
 // hostexec config tests

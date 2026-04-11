@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 /**
  * Docker CLI ラッパー integration テスト
  *
@@ -42,14 +34,13 @@ import {
   dockerStop,
   dockerVolumeRemove,
   getImageLabel,
-  InterruptedCommandError,
   runInteractiveCommand,
 } from "./client.ts";
 
 const TEST_IMAGE = "alpine:latest";
-const PREFIX = "nas-test-" + Date.now();
-const SHARED_TMP = process.env["NAS_DIND_SHARED_TMP"];
-const DOCKER_HOST = process.env["DOCKER_HOST"];
+const PREFIX = `nas-test-${Date.now()}`;
+const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
+const DOCKER_HOST = process.env.DOCKER_HOST;
 const canBindMount = SHARED_TMP !== undefined || !DOCKER_HOST;
 const DOCKER_DAEMON_AVAILABLE = (() => {
   try {

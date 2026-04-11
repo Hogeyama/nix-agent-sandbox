@@ -67,7 +67,7 @@ test("mergeRawConfigs: same-name profile fields are merged", () => {
     },
   };
   const result = mergeRawConfigs(global, local);
-  const p = result.profiles!["dev"];
+  const p = result.profiles!.dev;
   expect(p.agent).toEqual("claude"); // from global
   expect(p.nix?.enable).toEqual(true); // from global
   expect(p.nix?.["mount-socket"]).toEqual(true); // overridden by local

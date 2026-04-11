@@ -10,11 +10,11 @@ import type { AuditLogEntry, AuditLogFilter } from "./types.ts";
  * `~/.local/share/nas/audit/`.
  */
 export function resolveAuditDir(): string {
-  const xdgData = process.env["XDG_DATA_HOME"];
+  const xdgData = process.env.XDG_DATA_HOME;
   if (xdgData && xdgData.trim().length > 0) {
     return path.join(xdgData, "nas", "audit");
   }
-  const home = process.env["HOME"];
+  const home = process.env.HOME;
   if (!home) {
     throw new Error(
       "Cannot resolve audit directory: neither XDG_DATA_HOME nor HOME is set",

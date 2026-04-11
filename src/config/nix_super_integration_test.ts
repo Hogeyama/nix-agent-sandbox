@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * Integration tests: Nix ローカル設定が関数の場合に super でグローバル設定を受け取れる
@@ -199,8 +191,8 @@ super: {
 `,
     );
 
-    const previousTmpDir = process.env["TMPDIR"];
-    process.env["TMPDIR"] = tmpDir;
+    const previousTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = tmpDir;
     try {
       const config = await loadConfig({
         startDir: localDir,
@@ -210,9 +202,9 @@ super: {
       expect(config.profiles.dev.agentArgs).toEqual(["--from-space-path"]);
     } finally {
       if (previousTmpDir !== undefined) {
-        process.env["TMPDIR"] = previousTmpDir;
+        process.env.TMPDIR = previousTmpDir;
       } else {
-        delete process.env["TMPDIR"];
+        delete process.env.TMPDIR;
       }
     }
   } finally {

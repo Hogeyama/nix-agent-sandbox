@@ -164,7 +164,7 @@ async function readKeyringViaCommand(
 }
 
 async function resolveCommand(name: string): Promise<string | null> {
-  const pathValue = process.env["PATH"] ?? "";
+  const pathValue = process.env.PATH ?? "";
   for (const dir of pathValue.split(":")) {
     if (!dir) continue;
     const candidate = path.join(dir, name);

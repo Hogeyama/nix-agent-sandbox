@@ -23,9 +23,9 @@ async function fzfSelect(
   prompt: string,
   header?: string,
 ): Promise<string | null> {
-  const input = options.join("\n") + "\n";
-  const args = ["--prompt=" + prompt, "--no-sort"];
-  if (header) args.push("--header=" + header);
+  const input = `${options.join("\n")}\n`;
+  const args = [`--prompt=${prompt}`, "--no-sort"];
+  if (header) args.push(`--header=${header}`);
 
   const child = Bun.spawn(["fzf", ...args], {
     stdin: "pipe",
@@ -63,7 +63,7 @@ export async function runFzfReview(
   items: ReviewItem[],
   scopeOptions?: string[],
 ): Promise<ReviewResult | null> {
-  const input = items.map((i) => i.displayLine).join("\n") + "\n";
+  const input = `${items.map((i) => i.displayLine).join("\n")}\n`;
 
   const lookup = new Map<string, ReviewItem>();
   for (const item of items) {

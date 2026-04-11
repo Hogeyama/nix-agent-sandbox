@@ -34,7 +34,7 @@ const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Shell-safe single-quoting (escape embedded single quotes) */
 function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
+  return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
 /** Encode prefix/suffix ops as shell commands for container-runtime evaluation */
@@ -100,8 +100,8 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
 
   const containerUser = resolveContainerUser(host.user);
   const containerHome = `/home/${containerUser}`;
-  envVars["NAS_USER"] = containerUser;
-  envVars["NAS_HOME"] = containerHome;
+  envVars.NAS_USER = containerUser;
+  envVars.NAS_HOME = containerHome;
   // NAS_LOG_LEVEL is set in initialPrior.envVars by cli.ts
 
   // ワークスペースマウント
@@ -109,7 +109,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
   const containerWorkDir = path.resolve(prior.workDir);
   args.push("-v", `${mountSource}:${mountSource}`);
   args.push("-w", containerWorkDir);
-  envVars["WORKSPACE"] = containerWorkDir;
+  envVars.WORKSPACE = containerWorkDir;
 
   const extraMountDestinations: RegisteredMountDestination[] = [
     ...RESERVED_EXTRA_MOUNT_DESTINATIONS.map((reservedPath) => ({
@@ -128,8 +128,8 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
   const uid = host.uid;
   const gid = host.gid;
   if (uid !== null && gid !== null) {
-    envVars["NAS_UID"] = String(uid);
-    envVars["NAS_GID"] = String(gid);
+    envVars.NAS_UID = String(uid);
+    envVars.NAS_GID = String(gid);
   }
   if (prior.dbusProxyEnabled) {
     if (uid === null) {
@@ -157,13 +157,13 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
             "-v",
             `${probes.nixConfRealPath}:${containerNixConfPath}:ro`,
           );
-          envVars["NIX_CONF_PATH"] = containerNixConfPath;
+          envVars.NIX_CONF_PATH = containerNixConfPath;
         } else {
-          envVars["NIX_CONF_PATH"] = probes.nixConfRealPath;
+          envVars.NIX_CONF_PATH = probes.nixConfRealPath;
         }
       }
-      envVars["NIX_REMOTE"] = "daemon";
-      envVars["NIX_ENABLED"] = "true";
+      envVars.NIX_REMOTE = "daemon";
+      envVars.NIX_ENABLED = "true";
 
       // nix print-dev-env キャッシュ用ディレクトリ
       const xdgCache = host.env.get("XDG_CACHE_HOME") || `${host.home}/.cache`;
@@ -190,12 +190,12 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
         profile.nix.extraPackages,
       );
       if (nixExtraPackages) {
-        envVars["NIX_EXTRA_PACKAGES"] = nixExtraPackages;
+        envVars.NIX_EXTRA_PACKAGES = nixExtraPackages;
       }
 
       // nix バイナリの実体パス
       if (probes.nixBinPath) {
-        envVars["NIX_BIN_PATH"] = probes.nixBinPath;
+        envVars.NIX_BIN_PATH = probes.nixBinPath;
       }
     }
   }
@@ -218,7 +218,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
     const gpgSocketPath = input.probes.gpgAgentSocket;
     if (gpgSocketPath && probes.gpgSocketExists) {
       args.push("-v", `${gpgSocketPath}:${containerHome}/.gnupg/S.gpg-agent`);
-      envVars["GPG_AGENT_INFO"] = `${containerHome}/.gnupg/S.gpg-agent`;
+      envVars.GPG_AGENT_INFO = `${containerHome}/.gnupg/S.gpg-agent`;
     }
     if (probes.gpgConfExists) {
       args.push(
@@ -354,7 +354,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
   }
 
   if (dynamicEnvOps.length > 0) {
-    envVars["NAS_ENV_OPS"] = encodeDynamicEnvOps(dynamicEnvOps);
+    envVars.NAS_ENV_OPS = encodeDynamicEnvOps(dynamicEnvOps);
   }
 
   // DBus proxy runtime マウント
@@ -366,9 +366,8 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
     }
     const containerRuntimeDir = `/run/user/${uid}`;
     args.push("-v", `${prior.dbusSessionRuntimeDir}:${containerRuntimeDir}`);
-    envVars["XDG_RUNTIME_DIR"] = containerRuntimeDir;
-    envVars["DBUS_SESSION_BUS_ADDRESS"] =
-      `unix:path=${containerRuntimeDir}/bus`;
+    envVars.XDG_RUNTIME_DIR = containerRuntimeDir;
+    envVars.DBUS_SESSION_BUS_ADDRESS = `unix:path=${containerRuntimeDir}/bus`;
   }
 
   // X11 ディスプレイ転送
@@ -377,13 +376,13 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
     if (hostDisplay) {
       if (probes.x11SocketDirExists) {
         args.push("-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro");
-        envVars["DISPLAY"] = hostDisplay;
+        envVars.DISPLAY = hostDisplay;
 
         // Xauthority
         if (probes.xauthorityExists) {
           const containerXauthority = `${containerHome}/.Xauthority`;
           args.push("-v", `${probes.xauthorityPath}:${containerXauthority}:ro`);
-          envVars["XAUTHORITY"] = containerXauthority;
+          envVars.XAUTHORITY = containerXauthority;
         }
 
         args.push("--shm-size", "2g");
@@ -402,7 +401,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
   // tmux 検出
   const hostTmux = host.env.get("TMUX");
   if (hostTmux) {
-    envVars["NAS_HOST_TMUX"] = "1";
+    envVars.NAS_HOST_TMUX = "1";
   }
 
   // エージェント固有の設定

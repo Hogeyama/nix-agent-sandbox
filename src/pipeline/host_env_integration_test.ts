@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
 import { buildHostEnv, resolveProbes } from "./host_env.ts";
 import type { HostEnv } from "./types.ts";
@@ -42,7 +34,7 @@ test("buildHostEnv: env map contains HOME", () => {
 
 test("buildHostEnv: isWSL reflects WSL_DISTRO_NAME", () => {
   const env = buildHostEnv();
-  const hasWslEnv = Boolean(process.env["WSL_DISTRO_NAME"]);
+  const hasWslEnv = Boolean(process.env.WSL_DISTRO_NAME);
   expect(env.isWSL).toEqual(hasWslEnv);
 });
 

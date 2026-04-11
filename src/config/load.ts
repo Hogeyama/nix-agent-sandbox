@@ -13,9 +13,9 @@ const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 
 /** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
 function getGlobalConfigDir(): string {
-  const xdgConfigHome = process.env["XDG_CONFIG_HOME"];
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
   const configBase =
-    xdgConfigHome ?? path.join(process.env["HOME"] ?? "/", ".config");
+    xdgConfigHome ?? path.join(process.env.HOME ?? "/", ".config");
   return path.join(configBase, "nas");
 }
 

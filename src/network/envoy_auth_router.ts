@@ -264,9 +264,9 @@ async function authorize(
     headers["x-nas-original-method"] ??
     headers["x-forwarded-method"] ??
     requestMethod;
-  const authority = headers["x-nas-original-authority"] ?? headers["host"];
+  const authority = headers["x-nas-original-authority"] ?? headers.host;
   const url = headers["x-nas-original-url"];
-  const hostHeader = headers["host"];
+  const hostHeader = headers.host;
 
   let target;
   try {

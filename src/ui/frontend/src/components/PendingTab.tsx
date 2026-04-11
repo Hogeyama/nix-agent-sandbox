@@ -11,7 +11,7 @@ function shortenHome(path: string): string {
   const m = path.match(/^\/home\/[^/]+/);
   if (!m) return path;
   if (path === m[0]) return "~";
-  return "~" + path.slice(m[0].length);
+  return `~${path.slice(m[0].length)}`;
 }
 
 function CopyButton({ text }: { text: string }) {

@@ -20,8 +20,8 @@ export interface CopilotProbes {
 
 /** ホスト環境を調べて CopilotProbes を返す (副作用あり) */
 export function resolveCopilotProbes(hostHome: string): CopilotProbes {
-  const xdgConfigHome = process.env["XDG_CONFIG_HOME"] ?? null;
-  const xdgStateHome = process.env["XDG_STATE_HOME"] ?? null;
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? null;
+  const xdgStateHome = process.env.XDG_STATE_HOME ?? null;
 
   const hostCopilotConfigDir = xdgConfigHome
     ? `${xdgConfigHome}/.copilot`
@@ -96,7 +96,7 @@ export function configureCopilot(input: CopilotConfigInput): AgentConfigResult {
 
   // XDG_CONFIG_HOME をコンテナに渡す（ホストで設定されている場合のみ）
   if (xdgConfigHome) {
-    envVars["XDG_CONFIG_HOME"] = remapToContainer(
+    envVars.XDG_CONFIG_HOME = remapToContainer(
       xdgConfigHome,
       hostHome,
       containerHome,
@@ -105,7 +105,7 @@ export function configureCopilot(input: CopilotConfigInput): AgentConfigResult {
 
   // XDG_STATE_HOME をコンテナに渡す（ホストで設定されている場合のみ）
   if (xdgStateHome) {
-    envVars["XDG_STATE_HOME"] = remapToContainer(
+    envVars.XDG_STATE_HOME = remapToContainer(
       xdgStateHome,
       hostHome,
       containerHome,
@@ -161,8 +161,8 @@ function remapToContainer(
   hostHome: string,
   containerHome: string,
 ): string {
-  if (hostPath.startsWith(hostHome + "/")) {
-    return `${containerHome}/` + hostPath.slice(hostHome.length + 1);
+  if (hostPath.startsWith(`${hostHome}/`)) {
+    return `${containerHome}/${hostPath.slice(hostHome.length + 1)}`;
   }
   return hostPath;
 }
@@ -183,7 +183,7 @@ function pathExistsSync(p: string): boolean {
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
 function findBinaryResolved(name: string): string | null {
-  const which = Bun.which(name, { PATH: process.env["PATH"] ?? "" });
+  const which = Bun.which(name, { PATH: process.env.PATH ?? "" });
   if (!which) return null;
   try {
     const fs = require("node:fs");

@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import * as path from "node:path";
 import type { Config, Profile } from "../config/types.ts";
 import { DEFAULT_DISPLAY_CONFIG, DEFAULT_UI_CONFIG } from "../config/types.ts";
@@ -155,14 +147,14 @@ test("HostExecStage plan: produces correct effects and docker args", () => {
   ).toEqual(true);
 
   // Wrapper PATH activation is deferred to entrypoint agent exec.
-  expect(plan.envVars["PATH"]).toBeUndefined();
-  expect(plan.envVars["NAS_HOSTEXEC_WRAPPER_DIR"]).toEqual(
+  expect(plan.envVars.PATH).toBeUndefined();
+  expect(plan.envVars.NAS_HOSTEXEC_WRAPPER_DIR).toEqual(
     "/opt/nas/hostexec/bin",
   );
 
   // Check socket env is set
-  expect(plan.envVars["NAS_HOSTEXEC_SOCKET"] !== undefined).toEqual(true);
-  expect(plan.envVars["NAS_HOSTEXEC_SESSION_ID"]).toEqual("test-session-id");
+  expect(plan.envVars.NAS_HOSTEXEC_SOCKET !== undefined).toEqual(true);
+  expect(plan.envVars.NAS_HOSTEXEC_SESSION_ID).toEqual("test-session-id");
 
   // Check outputOverrides
   expect(plan.outputOverrides.hostexecBrokerSocket !== undefined).toEqual(true);
@@ -174,7 +166,7 @@ test("HostExecStage plan: produces correct effects and docker args", () => {
   ).toEqual(true);
 
   // Check socket path matches the env var
-  expect(plan.envVars["NAS_HOSTEXEC_SOCKET"]).toEqual(
+  expect(plan.envVars.NAS_HOSTEXEC_SOCKET).toEqual(
     plan.outputOverrides.hostexecBrokerSocket!,
   );
 });

@@ -3,7 +3,7 @@ import { api, type ContainerInfo } from "../api.ts";
 
 function formatRelativeTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
-  if (ms < 0 || isNaN(ms)) return "-";
+  if (ms < 0 || Number.isNaN(ms)) return "-";
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return `${sec}s ago`;
   const min = Math.floor(sec / 60);

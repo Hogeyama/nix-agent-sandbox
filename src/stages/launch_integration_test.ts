@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * Container integration tests: Docker イメージと entrypoint の実起動
@@ -52,8 +44,8 @@ const IMAGE_NAME = "nas-sandbox";
 
 // DinD 共有 tmp が利用可能なら bind mount テストで使う。
 // なければホスト Docker 前提で /tmp を使う。
-const SHARED_TMP = process.env["NAS_DIND_SHARED_TMP"];
-const DOCKER_HOST = process.env["DOCKER_HOST"];
+const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
+const DOCKER_HOST = process.env.DOCKER_HOST;
 const USING_DIND = SHARED_TMP !== undefined && DOCKER_HOST !== undefined;
 const RUNNING_ON_HOST_DOCKER = !USING_DIND;
 
@@ -180,7 +172,7 @@ async function dockerRun(
 
   const uid = process.getuid!() ?? 1000;
   const gid = process.getgid!() ?? 1000;
-  const user = process.env["USER"]?.trim() || "nas";
+  const user = process.env.USER?.trim() || "nas";
   const workDir = options.workDir ?? "/tmp";
 
   const args: string[] = [
@@ -266,7 +258,7 @@ test.skipIf(!dockerAvailable)(
     const result = await dockerRun(["bash", "-c", "echo $USER:$HOME"]);
     expect(result.code).toEqual(0);
 
-    const hostUser = process.env["USER"]?.trim() || "nas";
+    const hostUser = process.env.USER?.trim() || "nas";
     expect(result.stdout.trim()).toEqual(`${hostUser}:/home/${hostUser}`);
   },
 );
@@ -277,7 +269,7 @@ test.skipIf(!dockerAvailable)(
     const result = await dockerRun(["bash", "-c", "stat -c '%U:%G' $HOME"]);
     expect(result.code).toEqual(0);
 
-    const hostUser = process.env["USER"]?.trim() || "nas";
+    const hostUser = process.env.USER?.trim() || "nas";
     expect(result.stdout.trim()).toEqual(`${hostUser}:${hostUser}`);
   },
 );
@@ -334,7 +326,7 @@ test.skipIf(!dockerAvailable)(
 // DinD 環境で共有ボリュームがない場合はスキップ。
 // ホスト Docker (DOCKER_HOST 未設定) の場合は /tmp が使えるので常に動く。
 const canBindMount =
-  dockerAvailable && (SHARED_TMP !== undefined || !process.env["DOCKER_HOST"]);
+  dockerAvailable && (SHARED_TMP !== undefined || !process.env.DOCKER_HOST);
 
 test.skipIf(!canBindMount)(
   "Integration: workspace is mounted and files are accessible",
@@ -634,13 +626,13 @@ test.skipIf(!canBindMount || !canMountHostNix)(
         NIX_REMOTE: "daemon",
         NIX_ENABLED: "true",
       };
-      if (nixBinPath) envVars["NIX_BIN_PATH"] = nixBinPath;
+      if (nixBinPath) envVars.NIX_BIN_PATH = nixBinPath;
       if (nixConfPath) {
         if (nixConfPath.startsWith("/nix/")) {
-          envVars["NIX_CONF_PATH"] = nixConfPath;
+          envVars.NIX_CONF_PATH = nixConfPath;
         } else {
           extraArgs.push("-v", `${nixConfPath}:/tmp/nas-host-nix.conf:ro`);
-          envVars["NIX_CONF_PATH"] = "/tmp/nas-host-nix.conf";
+          envVars.NIX_CONF_PATH = "/tmp/nas-host-nix.conf";
         }
       }
 

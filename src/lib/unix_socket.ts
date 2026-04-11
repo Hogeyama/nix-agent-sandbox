@@ -64,7 +64,7 @@ export async function readJsonLine(socket: Socket): Promise<string | null> {
 
 export function writeJsonLine(socket: Socket, data: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
-    socket.write(JSON.stringify(data) + "\n", (err) => {
+    socket.write(`${JSON.stringify(data)}\n`, (err) => {
       if (err) reject(err);
       else resolve();
     });

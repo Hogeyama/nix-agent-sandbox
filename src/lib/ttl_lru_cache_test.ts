@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { TtlLruCache } from "./ttl_lru_cache.ts";
 
 // ---------------------------------------------------------------------------

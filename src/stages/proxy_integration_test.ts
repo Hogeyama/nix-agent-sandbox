@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * ProxyStage integration テスト（実 Docker daemon 必要）
@@ -107,14 +99,13 @@ async function canRunProxy(): Promise<boolean> {
 
 const proxyAvailable = await canRunProxy();
 const canBindMount =
-  process.env["NAS_DIND_SHARED_TMP"] !== undefined ||
-  !process.env["DOCKER_HOST"];
+  process.env.NAS_DIND_SHARED_TMP !== undefined || !process.env.DOCKER_HOST;
 
 async function makeDockerBindableTempDir(prefix: string): Promise<string> {
-  const base = process.env["NAS_DIND_SHARED_TMP"] ?? "/tmp";
+  const base = process.env.NAS_DIND_SHARED_TMP ?? "/tmp";
   const dir = `${base}/${prefix}${crypto.randomUUID().slice(0, 8)}`;
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  if (process.env["NAS_DIND_SHARED_TMP"]) {
+  if (process.env.NAS_DIND_SHARED_TMP) {
     await chmod(dir, 0o1777);
   }
   return dir;
@@ -127,8 +118,8 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       .randomUUID()
       .slice(0, 8)}`;
     const runtimeRoot = await makeDockerBindableTempDir("nas-proxy-runtime-");
-    const oldRuntimeDir = process.env["XDG_RUNTIME_DIR"];
-    process.env["XDG_RUNTIME_DIR"] = runtimeRoot;
+    const oldRuntimeDir = process.env.XDG_RUNTIME_DIR;
+    process.env.XDG_RUNTIME_DIR = runtimeRoot;
 
     const profile = makeProfile({
       network: {
@@ -139,8 +130,8 @@ test.skipIf(!proxyAvailable || !canBindMount)(
     const sessionId = `sess_${crypto.randomUUID().slice(0, 12)}`;
 
     const hostEnv: HostEnv = {
-      home: process.env["HOME"] ?? "/home/test",
-      user: process.env["USER"] ?? "test",
+      home: process.env.HOME ?? "/home/test",
+      user: process.env.USER ?? "test",
       uid: process.getuid?.() ?? 1000,
       gid: process.getgid?.() ?? 1000,
       isWSL: false,
@@ -208,10 +199,10 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       handles.push(...(await executePlan(plan!)));
 
       // http_proxy / https_proxy should point to local proxy
-      expect(plan!.envVars["http_proxy"]).toEqual("http://127.0.0.1:18080");
-      expect(plan!.envVars["https_proxy"]).toEqual("http://127.0.0.1:18080");
+      expect(plan!.envVars.http_proxy).toEqual("http://127.0.0.1:18080");
+      expect(plan!.envVars.https_proxy).toEqual("http://127.0.0.1:18080");
       // NAS_UPSTREAM_PROXY should contain the credentialed upstream URL
-      expect(plan!.envVars["NAS_UPSTREAM_PROXY"]).toMatch(
+      expect(plan!.envVars.NAS_UPSTREAM_PROXY).toMatch(
         /^http:\/\/sess_[a-f0-9-]{12}:[A-Za-z0-9_-]+@nas-envoy:15001$/,
       );
       expect(typeof plan!.outputOverrides.networkBrokerSocket).toEqual(
@@ -237,9 +228,9 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       await teardownHandles(handles).catch(() => {});
       await cleanupRuntime(runtimeRoot, envoyContainerName);
       if (oldRuntimeDir) {
-        process.env["XDG_RUNTIME_DIR"] = oldRuntimeDir;
+        process.env.XDG_RUNTIME_DIR = oldRuntimeDir;
       } else {
-        delete process.env["XDG_RUNTIME_DIR"];
+        delete process.env.XDG_RUNTIME_DIR;
       }
     }
   },

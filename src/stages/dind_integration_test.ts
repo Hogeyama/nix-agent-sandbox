@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * DindStage integration テスト（実 Docker 使用, DinD rootless 必須）
@@ -157,7 +149,7 @@ async function canRunDindRootless(): Promise<boolean> {
   }
 }
 
-const RUNNING_ON_HOST_DOCKER = !process.env["DOCKER_HOST"];
+const RUNNING_ON_HOST_DOCKER = !process.env.DOCKER_HOST;
 const dindAvailable = await canRunDindRootless();
 
 async function forceCleanup(
@@ -196,10 +188,10 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       handle = await executeEffect(effect);
 
       // Verify plan outputs
-      expect(plan!.envVars["DOCKER_HOST"].startsWith("tcp://")).toEqual(true);
-      expect(plan!.envVars["DOCKER_HOST"].endsWith(":2375")).toEqual(true);
-      expect(typeof plan!.envVars["NAS_DIND_CONTAINER_NAME"]).toEqual("string");
-      expect(typeof plan!.envVars["NAS_DIND_SHARED_TMP"]).toEqual("string");
+      expect(plan!.envVars.DOCKER_HOST.startsWith("tcp://")).toEqual(true);
+      expect(plan!.envVars.DOCKER_HOST.endsWith(":2375")).toEqual(true);
+      expect(typeof plan!.envVars.NAS_DIND_CONTAINER_NAME).toEqual("string");
+      expect(typeof plan!.envVars.NAS_DIND_SHARED_TMP).toEqual("string");
 
       const networkIdx = plan!.dockerArgs.indexOf("--network");
       expect(networkIdx !== -1).toEqual(true);

@@ -39,7 +39,7 @@ export async function atomicWriteJson(
     dir,
     `.${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
   );
-  await writeFile(tempPath, JSON.stringify(value, null, 2) + "\n", {
+  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
     mode: 0o600,
   });
   await rename(tempPath, filePath);
@@ -121,7 +121,7 @@ export async function isPidAlive(pid: number): Promise<boolean> {
 }
 
 export function defaultRuntimeDir(subsystem: string): string {
-  const xdg = process.env["XDG_RUNTIME_DIR"];
+  const xdg = process.env.XDG_RUNTIME_DIR;
   if (xdg && xdg.trim().length > 0) {
     return path.join(xdg, "nas", subsystem);
   }

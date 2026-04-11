@@ -18,7 +18,7 @@ export function resolveAsset(
   importMetaUrl: string,
   sourceRelative: string,
 ): string {
-  const assetDir = process.env["NAS_ASSET_DIR"];
+  const assetDir = process.env.NAS_ASSET_DIR;
   if (assetDir) {
     return path.join(assetDir, relativePath);
   }
@@ -34,7 +34,7 @@ export function resolveAssetDir(
   importMetaUrl: string,
   sourceRelative: string,
 ): string {
-  const assetDir = process.env["NAS_ASSET_DIR"];
+  const assetDir = process.env.NAS_ASSET_DIR;
   if (assetDir) {
     return path.join(assetDir, relativePath);
   }

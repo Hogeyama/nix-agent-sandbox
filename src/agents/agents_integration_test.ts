@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { statSync } from "node:fs";
 
 /**
@@ -14,7 +6,7 @@ import { statSync } from "node:fs";
  * configureClaude / configureCopilot / configureCodex
  */
 
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ClaudeProbes } from "./claude.ts";
@@ -32,14 +24,14 @@ import { configureCopilot, resolveCopilotProbes } from "./copilot.ts";
 async function withTempHome(
   fn: (tmpHome: string) => Promise<void> | void,
 ): Promise<void> {
-  const origHome = process.env["HOME"];
+  const origHome = process.env.HOME;
   const tmpHome = await mkdtemp(path.join(tmpdir(), "nas-test-home-"));
   try {
-    process.env["HOME"] = tmpHome;
+    process.env.HOME = tmpHome;
     await fn(tmpHome);
   } finally {
-    if (origHome !== undefined) process.env["HOME"] = origHome;
-    else delete process.env["HOME"];
+    if (origHome !== undefined) process.env.HOME = origHome;
+    else delete process.env.HOME;
     await rm(tmpHome, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -49,16 +41,16 @@ async function withFakeBinary(
   name: string,
   fn: () => Promise<void> | void,
 ): Promise<void> {
-  const origPath = process.env["PATH"];
+  const origPath = process.env.PATH;
   const tmpBinDir = await mkdtemp(path.join(tmpdir(), "nas-test-bin-"));
   try {
     await writeFile(`${tmpBinDir}/${name}`, "#!/bin/sh\nexit 0\n");
     await chmod(`${tmpBinDir}/${name}`, 0o755);
-    process.env["PATH"] = `${tmpBinDir}:${origPath ?? ""}`;
+    process.env.PATH = `${tmpBinDir}:${origPath ?? ""}`;
     await fn();
   } finally {
-    if (origPath !== undefined) process.env["PATH"] = origPath;
-    else delete process.env["PATH"];
+    if (origPath !== undefined) process.env.PATH = origPath;
+    else delete process.env.PATH;
     await rm(tmpBinDir, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -68,7 +60,7 @@ async function withoutBinary(
   name: string,
   fn: () => Promise<void> | void,
 ): Promise<void> {
-  const origPath = process.env["PATH"];
+  const origPath = process.env.PATH;
   const filteredPath = (origPath ?? "")
     .split(":")
     .filter((dir) => {
@@ -80,12 +72,12 @@ async function withoutBinary(
       }
     })
     .join(":");
-  process.env["PATH"] = filteredPath;
+  process.env.PATH = filteredPath;
   try {
     await fn();
   } finally {
-    if (origPath !== undefined) process.env["PATH"] = origPath;
-    else delete process.env["PATH"];
+    if (origPath !== undefined) process.env.PATH = origPath;
+    else delete process.env.PATH;
   }
 }
 
@@ -108,7 +100,7 @@ test("configureClaude: sets PATH with .local/bin prepended", () => {
     priorEnvVars: {},
   });
   expect(
-    result.envVars["PATH"]?.startsWith(`${containerHome}/.local/bin:`),
+    result.envVars.PATH?.startsWith(`${containerHome}/.local/bin:`),
   ).toEqual(true);
 });
 
@@ -255,7 +247,7 @@ test("configureClaude: preserves existing envVars", () => {
     priorDockerArgs: [],
     priorEnvVars: { EXISTING: "value" },
   });
-  expect(result.envVars["EXISTING"]).toEqual("value");
+  expect(result.envVars.EXISTING).toEqual("value");
 });
 
 // ============================================================
@@ -406,7 +398,7 @@ test("configureCopilot: preserves existing dockerArgs and envVars", () => {
     priorEnvVars: { KEEP_ME: "yes" },
   });
   expect(result.dockerArgs[0]).toEqual("--pre-existing");
-  expect(result.envVars["KEEP_ME"]).toEqual("yes");
+  expect(result.envVars.KEEP_ME).toEqual("yes");
 });
 
 test("configureCopilot: passes XDG_CONFIG_HOME when set", () => {
@@ -425,7 +417,7 @@ test("configureCopilot: passes XDG_CONFIG_HOME when set", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.envVars["XDG_CONFIG_HOME"] !== undefined).toEqual(true);
+  expect(result.envVars.XDG_CONFIG_HOME !== undefined).toEqual(true);
 });
 
 test("configureCopilot: passes XDG_STATE_HOME when set", () => {
@@ -444,7 +436,7 @@ test("configureCopilot: passes XDG_STATE_HOME when set", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.envVars["XDG_STATE_HOME"] !== undefined).toEqual(true);
+  expect(result.envVars.XDG_STATE_HOME !== undefined).toEqual(true);
 });
 
 test("configureCopilot: remaps XDG paths under HOME to containerHome", () => {
@@ -464,7 +456,7 @@ test("configureCopilot: remaps XDG paths under HOME to containerHome", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.envVars["XDG_CONFIG_HOME"]).toEqual("/home/testuser/.config");
+  expect(result.envVars.XDG_CONFIG_HOME).toEqual("/home/testuser/.config");
 });
 
 test("configureCopilot: does not remap XDG paths outside HOME", () => {
@@ -483,7 +475,7 @@ test("configureCopilot: does not remap XDG paths outside HOME", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.envVars["XDG_CONFIG_HOME"]).toEqual("/opt/custom-config");
+  expect(result.envVars.XDG_CONFIG_HOME).toEqual("/opt/custom-config");
 });
 
 test("configureCopilot: does not set XDG vars when not set on host", () => {
@@ -502,8 +494,8 @@ test("configureCopilot: does not set XDG vars when not set on host", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.envVars["XDG_CONFIG_HOME"]).toBeUndefined();
-  expect(result.envVars["XDG_STATE_HOME"]).toBeUndefined();
+  expect(result.envVars.XDG_CONFIG_HOME).toBeUndefined();
+  expect(result.envVars.XDG_STATE_HOME).toBeUndefined();
 });
 
 // ============================================================
@@ -512,31 +504,31 @@ test("configureCopilot: does not set XDG vars when not set on host", () => {
 
 test("resolveCopilotProbes: detects existing config dir", async () => {
   await withTempHome(async (tmpHome) => {
-    const origXdg = process.env["XDG_CONFIG_HOME"];
+    const origXdg = process.env.XDG_CONFIG_HOME;
     try {
-      delete process.env["XDG_CONFIG_HOME"];
+      delete process.env.XDG_CONFIG_HOME;
       await mkdir(`${tmpHome}/.copilot`, { recursive: true });
       const probes = resolveCopilotProbes(tmpHome);
       expect(probes.copilotConfigDirExists).toEqual(true);
     } finally {
-      if (origXdg !== undefined) process.env["XDG_CONFIG_HOME"] = origXdg;
+      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
     }
   });
 });
 
 test("resolveCopilotProbes: detects missing config dir", async () => {
   await withTempHome((tmpHome) => {
-    const origXdg = process.env["XDG_CONFIG_HOME"];
-    const origXdgState = process.env["XDG_STATE_HOME"];
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    const origXdgState = process.env.XDG_STATE_HOME;
     try {
-      delete process.env["XDG_CONFIG_HOME"];
-      delete process.env["XDG_STATE_HOME"];
+      delete process.env.XDG_CONFIG_HOME;
+      delete process.env.XDG_STATE_HOME;
       const probes = resolveCopilotProbes(tmpHome);
       expect(probes.copilotConfigDirExists).toEqual(false);
     } finally {
-      if (origXdg !== undefined) process.env["XDG_CONFIG_HOME"] = origXdg;
+      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
       if (origXdgState !== undefined) {
-        process.env["XDG_STATE_HOME"] = origXdgState;
+        process.env.XDG_STATE_HOME = origXdgState;
       }
     }
   });
@@ -558,19 +550,19 @@ test("resolveCopilotProbes: returns null when copilot not on PATH", async () => 
 
 test("resolveCopilotProbes: detects existing state dir", async () => {
   await withTempHome(async (tmpHome) => {
-    const origXdg = process.env["XDG_CONFIG_HOME"];
-    const origXdgState = process.env["XDG_STATE_HOME"];
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    const origXdgState = process.env.XDG_STATE_HOME;
     try {
-      delete process.env["XDG_CONFIG_HOME"];
-      delete process.env["XDG_STATE_HOME"];
+      delete process.env.XDG_CONFIG_HOME;
+      delete process.env.XDG_STATE_HOME;
       // XDG 未設定時は state dir = config dir = $HOME/.copilot
       await mkdir(`${tmpHome}/.copilot`, { recursive: true });
       const probes = resolveCopilotProbes(tmpHome);
       expect(probes.copilotStateDirExists).toEqual(true);
     } finally {
-      if (origXdg !== undefined) process.env["XDG_CONFIG_HOME"] = origXdg;
+      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
       if (origXdgState !== undefined) {
-        process.env["XDG_STATE_HOME"] = origXdgState;
+        process.env.XDG_STATE_HOME = origXdgState;
       }
     }
   });
@@ -578,17 +570,17 @@ test("resolveCopilotProbes: detects existing state dir", async () => {
 
 test("resolveCopilotProbes: detects missing state dir", async () => {
   await withTempHome((tmpHome) => {
-    const origXdg = process.env["XDG_CONFIG_HOME"];
-    const origXdgState = process.env["XDG_STATE_HOME"];
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    const origXdgState = process.env.XDG_STATE_HOME;
     try {
-      delete process.env["XDG_CONFIG_HOME"];
-      delete process.env["XDG_STATE_HOME"];
+      delete process.env.XDG_CONFIG_HOME;
+      delete process.env.XDG_STATE_HOME;
       const probes = resolveCopilotProbes(tmpHome);
       expect(probes.copilotStateDirExists).toEqual(false);
     } finally {
-      if (origXdg !== undefined) process.env["XDG_CONFIG_HOME"] = origXdg;
+      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
       if (origXdgState !== undefined) {
-        process.env["XDG_STATE_HOME"] = origXdgState;
+        process.env.XDG_STATE_HOME = origXdgState;
       }
     }
   });
@@ -596,23 +588,23 @@ test("resolveCopilotProbes: detects missing state dir", async () => {
 
 test("resolveCopilotProbes: detects existing legacy dir when XDG paths differ", async () => {
   await withTempHome(async (tmpHome) => {
-    const origXdg = process.env["XDG_CONFIG_HOME"];
-    const origXdgState = process.env["XDG_STATE_HOME"];
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    const origXdgState = process.env.XDG_STATE_HOME;
     const xdgConfigDir = await mkdtemp(path.join(tmpdir(), "nas-test-xdg-"));
     const xdgStateDir = await mkdtemp(path.join(tmpdir(), "nas-test-xdg-"));
     try {
-      process.env["XDG_CONFIG_HOME"] = xdgConfigDir;
-      process.env["XDG_STATE_HOME"] = xdgStateDir;
+      process.env.XDG_CONFIG_HOME = xdgConfigDir;
+      process.env.XDG_STATE_HOME = xdgStateDir;
       // legacy dir は $HOME/.copilot (XDG とは異なるパス)
       await mkdir(`${tmpHome}/.copilot`, { recursive: true });
       const probes = resolveCopilotProbes(tmpHome);
       expect(probes.copilotLegacyDirExists).toEqual(true);
     } finally {
-      if (origXdg !== undefined) process.env["XDG_CONFIG_HOME"] = origXdg;
-      else delete process.env["XDG_CONFIG_HOME"];
+      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
+      else delete process.env.XDG_CONFIG_HOME;
       if (origXdgState !== undefined) {
-        process.env["XDG_STATE_HOME"] = origXdgState;
-      } else delete process.env["XDG_STATE_HOME"];
+        process.env.XDG_STATE_HOME = origXdgState;
+      } else delete process.env.XDG_STATE_HOME;
       await rm(xdgConfigDir, { recursive: true, force: true }).catch(() => {});
       await rm(xdgStateDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -621,39 +613,39 @@ test("resolveCopilotProbes: detects existing legacy dir when XDG paths differ", 
 
 test("resolveCopilotProbes: legacy dir is false when it does not exist", async () => {
   await withTempHome((_tmpHome) => {
-    const origXdg = process.env["XDG_CONFIG_HOME"];
-    const origXdgState = process.env["XDG_STATE_HOME"];
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    const origXdgState = process.env.XDG_STATE_HOME;
     try {
-      process.env["XDG_CONFIG_HOME"] = "/tmp/nas-nonexistent-xdg-config";
-      process.env["XDG_STATE_HOME"] = "/tmp/nas-nonexistent-xdg-state";
+      process.env.XDG_CONFIG_HOME = "/tmp/nas-nonexistent-xdg-config";
+      process.env.XDG_STATE_HOME = "/tmp/nas-nonexistent-xdg-state";
       // $HOME/.copilot does not exist
       const probes = resolveCopilotProbes(_tmpHome);
       expect(probes.copilotLegacyDirExists).toEqual(false);
     } finally {
-      if (origXdg !== undefined) process.env["XDG_CONFIG_HOME"] = origXdg;
-      else delete process.env["XDG_CONFIG_HOME"];
+      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
+      else delete process.env.XDG_CONFIG_HOME;
       if (origXdgState !== undefined) {
-        process.env["XDG_STATE_HOME"] = origXdgState;
-      } else delete process.env["XDG_STATE_HOME"];
+        process.env.XDG_STATE_HOME = origXdgState;
+      } else delete process.env.XDG_STATE_HOME;
     }
   });
 });
 
 test("resolveCopilotProbes: legacy dir is false when XDG not set (same as config dir)", async () => {
   await withTempHome(async (tmpHome) => {
-    const origXdg = process.env["XDG_CONFIG_HOME"];
-    const origXdgState = process.env["XDG_STATE_HOME"];
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    const origXdgState = process.env.XDG_STATE_HOME;
     try {
-      delete process.env["XDG_CONFIG_HOME"];
-      delete process.env["XDG_STATE_HOME"];
+      delete process.env.XDG_CONFIG_HOME;
+      delete process.env.XDG_STATE_HOME;
       // XDG 未設定時は legacy dir == config dir なので常に false
       await mkdir(`${tmpHome}/.copilot`, { recursive: true });
       const probes = resolveCopilotProbes(tmpHome);
       expect(probes.copilotLegacyDirExists).toEqual(false);
     } finally {
-      if (origXdg !== undefined) process.env["XDG_CONFIG_HOME"] = origXdg;
+      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
       if (origXdgState !== undefined) {
-        process.env["XDG_STATE_HOME"] = origXdgState;
+        process.env.XDG_STATE_HOME = origXdgState;
       }
     }
   });
@@ -761,7 +753,7 @@ test("configureCodex: preserves existing dockerArgs and envVars", () => {
     priorEnvVars: { KEEP_ME: "yes" },
   });
   expect(result.dockerArgs[0]).toEqual("--pre-existing");
-  expect(result.envVars["KEEP_ME"]).toEqual("yes");
+  expect(result.envVars.KEEP_ME).toEqual("yes");
 });
 
 // ============================================================

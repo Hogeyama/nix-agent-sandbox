@@ -81,7 +81,7 @@ function dirExistsSync(p: string): boolean {
 
 /** ホスト上のバイナリの実体パスを取得 (シンボリックリンク解決) */
 function findBinaryResolved(name: string): string | null {
-  const which = Bun.which(name, { PATH: process.env["PATH"] ?? "" });
+  const which = Bun.which(name, { PATH: process.env.PATH ?? "" });
   if (!which) return null;
   try {
     const fs = require("node:fs");

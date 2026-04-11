@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -108,7 +100,7 @@ test("SessionBroker: close resolves pending request after aborting notifications
   const notifyDir = await mkdtemp(path.join(tmpdir(), "nas-broker-notify-"));
   const notifyStartFile = `${notifyDir}/notify-started`;
   const notifyExitFile = `${notifyDir}/notify-exited`;
-  const originalPath = process.env["PATH"] ?? "";
+  const originalPath = process.env.PATH ?? "";
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const healthServer = Bun.serve({
     port: 0,
@@ -139,7 +131,7 @@ true
     );
     await chmod(`${notifyDir}/notify-send`, 0o755);
     await chmod(`${notifyDir}/xdg-open`, 0o755);
-    process.env["PATH"] = `${notifyDir}:${originalPath}`;
+    process.env.PATH = `${notifyDir}:${originalPath}`;
     _resetNotifySendCache();
 
     const broker = new SessionBroker({
@@ -174,7 +166,7 @@ true
       await broker.close().catch(() => {});
     }
   } finally {
-    process.env["PATH"] = originalPath;
+    process.env.PATH = originalPath;
     _resetNotifySendCache();
     await healthServer.stop();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});

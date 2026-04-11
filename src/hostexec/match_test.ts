@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import type { HostExecRule } from "../config/types.ts";
 import {
   DEFAULT_HOSTEXEC_CWD_CONFIG,

@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * CLI E2E tests
@@ -65,8 +57,8 @@ const MAIN_TS = path.join(
   "main.ts",
 );
 
-const SHARED_TMP = process.env["NAS_DIND_SHARED_TMP"];
-const DOCKER_HOST = process.env["DOCKER_HOST"];
+const SHARED_TMP = process.env.NAS_DIND_SHARED_TMP;
+const DOCKER_HOST = process.env.DOCKER_HOST;
 const canBindMount = SHARED_TMP !== undefined || !DOCKER_HOST;
 
 async function isDockerAvailable(): Promise<boolean> {
@@ -541,8 +533,8 @@ test("CLI: hostexec pending lists queued approvals", async () => {
   const workspace = await mkdtemp(
     path.join(tmpdir(), "nas-cli-hostexec-work-"),
   );
-  const oldToken = process.env["HOSTEXEC_CLI_TOKEN"];
-  process.env["HOSTEXEC_CLI_TOKEN"] = "cli-secret";
+  const oldToken = process.env.HOSTEXEC_CLI_TOKEN;
+  process.env.HOSTEXEC_CLI_TOKEN = "cli-secret";
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const broker = new HostExecBroker({
     paths,
@@ -610,8 +602,8 @@ test("CLI: hostexec pending lists queued approvals", async () => {
     });
     await execPromise;
   } finally {
-    if (oldToken !== undefined) process.env["HOSTEXEC_CLI_TOKEN"] = oldToken;
-    else delete process.env["HOSTEXEC_CLI_TOKEN"];
+    if (oldToken !== undefined) process.env.HOSTEXEC_CLI_TOKEN = oldToken;
+    else delete process.env.HOSTEXEC_CLI_TOKEN;
     await broker.close().catch(() => {});
     await rm(runtimeRoot, { recursive: true, force: true }).catch(() => {});
     await rm(workspace, { recursive: true, force: true }).catch(() => {});
@@ -911,7 +903,7 @@ async function withFakeCodexProject(
 
     const env = {
       HOME: homeDir,
-      PATH: `${binDir}:${process.env["PATH"] ?? ""}`,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
     };
 
     await fn(projectDir, env);

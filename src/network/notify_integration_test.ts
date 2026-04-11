@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import {
   chmod,
   mkdtemp,
@@ -25,10 +17,10 @@ test("notifyPendingRequest: desktop notification opens UI via xdg-open", async (
   await withFakeCommands(async ({ dir, healthServer }) => {
     const argsLog = `${dir}/notify-args.log`;
     const xdgLog = `${dir}/xdg-open.log`;
-    process.env["NAS_NOTIFY_ARGS_LOG"] = argsLog;
-    process.env["NAS_NOTIFY_EXIT"] = "0";
-    process.env["NAS_NOTIFY_STDOUT"] = "default";
-    process.env["NAS_XDG_LOG"] = xdgLog;
+    process.env.NAS_NOTIFY_ARGS_LOG = argsLog;
+    process.env.NAS_NOTIFY_EXIT = "0";
+    process.env.NAS_NOTIFY_STDOUT = "default";
+    process.env.NAS_XDG_LOG = xdgLog;
 
     const notification: PendingNotification = {
       backend: "desktop",
@@ -55,9 +47,9 @@ test("notifyPendingRequest: desktop notification opens UI via xdg-open", async (
 test("notifyPendingRequest: dismiss does not open browser", async () => {
   await withFakeCommands(async ({ dir, healthServer }) => {
     const xdgLog = `${dir}/xdg-open.log`;
-    process.env["NAS_NOTIFY_EXIT"] = "0";
-    process.env["NAS_NOTIFY_STDOUT"] = "";
-    process.env["NAS_XDG_LOG"] = xdgLog;
+    process.env.NAS_NOTIFY_EXIT = "0";
+    process.env.NAS_NOTIFY_STDOUT = "";
+    process.env.NAS_XDG_LOG = xdgLog;
 
     await notifyPendingRequest({
       backend: "desktop",
@@ -77,10 +69,10 @@ test("notifyPendingRequest: dismiss does not open browser", async () => {
 test("notifyPendingRequest: desktop backend sends notification", async () => {
   await withFakeCommands(async ({ dir, healthServer }) => {
     const argsLog = `${dir}/notify-args.log`;
-    process.env["NAS_NOTIFY_ARGS_LOG"] = argsLog;
-    process.env["NAS_NOTIFY_EXIT"] = "0";
-    process.env["NAS_NOTIFY_STDOUT"] = "default";
-    process.env["NAS_XDG_LOG"] = `${dir}/xdg-open.log`;
+    process.env.NAS_NOTIFY_ARGS_LOG = argsLog;
+    process.env.NAS_NOTIFY_EXIT = "0";
+    process.env.NAS_NOTIFY_STDOUT = "default";
+    process.env.NAS_XDG_LOG = `${dir}/xdg-open.log`;
 
     await notifyPendingRequest({
       backend: "desktop",
@@ -98,9 +90,9 @@ test("notifyPendingRequest: desktop backend sends notification", async () => {
 test("notifyPendingRequest: uiEnabled=false shows approve/deny actions", async () => {
   await withFakeCommands(async ({ dir }) => {
     const argsLog = `${dir}/notify-args.log`;
-    process.env["NAS_NOTIFY_ARGS_LOG"] = argsLog;
-    process.env["NAS_NOTIFY_EXIT"] = "0";
-    process.env["NAS_NOTIFY_STDOUT"] = "approve";
+    process.env.NAS_NOTIFY_ARGS_LOG = argsLog;
+    process.env.NAS_NOTIFY_EXIT = "0";
+    process.env.NAS_NOTIFY_STDOUT = "approve";
 
     await notifyPendingRequest({
       backend: "desktop",
@@ -147,11 +139,11 @@ async function withFakeCommands(
   fn: (ctx: { dir: string; healthServer: HealthServer }) => Promise<void>,
 ): Promise<void> {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-notify-test-"));
-  const originalPath = process.env["PATH"] ?? "";
-  const originalNotifyArgsLog = process.env["NAS_NOTIFY_ARGS_LOG"];
-  const originalNotifyExit = process.env["NAS_NOTIFY_EXIT"];
-  const originalNotifyStdout = process.env["NAS_NOTIFY_STDOUT"];
-  const originalXdgLog = process.env["NAS_XDG_LOG"];
+  const originalPath = process.env.PATH ?? "";
+  const originalNotifyArgsLog = process.env.NAS_NOTIFY_ARGS_LOG;
+  const originalNotifyExit = process.env.NAS_NOTIFY_EXIT;
+  const originalNotifyStdout = process.env.NAS_NOTIFY_STDOUT;
+  const originalXdgLog = process.env.NAS_XDG_LOG;
   const healthServer = startHealthServer();
 
   try {
@@ -178,11 +170,11 @@ fi
     );
     await chmod(`${dir}/notify-send`, 0o755);
     await chmod(`${dir}/xdg-open`, 0o755);
-    process.env["PATH"] = `${dir}:${originalPath}`;
+    process.env.PATH = `${dir}:${originalPath}`;
     _resetNotifySendCache();
     await fn({ dir, healthServer });
   } finally {
-    process.env["PATH"] = originalPath;
+    process.env.PATH = originalPath;
     _resetNotifySendCache();
     restoreEnv("NAS_NOTIFY_ARGS_LOG", originalNotifyArgsLog);
     restoreEnv("NAS_NOTIFY_EXIT", originalNotifyExit);

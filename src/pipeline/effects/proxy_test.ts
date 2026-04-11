@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { createProxySessionNetworkHandle } from "./proxy.ts";
 
 test("createProxySessionNetworkHandle: tears down created network when envoy connect fails", async () => {

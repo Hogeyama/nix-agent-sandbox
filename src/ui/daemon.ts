@@ -25,7 +25,7 @@ export interface EnsureUiDaemonOptions {
 }
 
 function daemonStateDir(): string {
-  const home = process.env["HOME"] ?? "/tmp";
+  const home = process.env.HOME ?? "/tmp";
   return path.join(home, ".cache", "nas", "ui");
 }
 

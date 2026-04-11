@@ -137,7 +137,7 @@ export async function closeNotification(): Promise<void> {
 }
 
 export function isWSL(): boolean {
-  return Boolean(process.env["WSL_DISTRO_NAME"]);
+  return Boolean(process.env.WSL_DISTRO_NAME);
 }
 
 /**
@@ -274,7 +274,7 @@ function getNotifySendCommand(): string {
 }
 
 function findInPath(cmd: string): boolean {
-  for (const dir of (process.env["PATH"] ?? "").split(":")) {
+  for (const dir of (process.env.PATH ?? "").split(":")) {
     try {
       statSync(`${dir}/${cmd}`);
       return true;

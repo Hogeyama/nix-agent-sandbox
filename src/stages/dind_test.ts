@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * DindStage unit テスト（Docker 不要）
@@ -151,9 +143,9 @@ test("DindStage: shared mode uses fixed names", () => {
   ]);
 
   // envVars
-  expect(plan!.envVars["DOCKER_HOST"]).toEqual("tcp://nas-dind-shared:2375");
-  expect(plan!.envVars["NAS_DIND_CONTAINER_NAME"]).toEqual("nas-dind-shared");
-  expect(plan!.envVars["NAS_DIND_SHARED_TMP"]).toEqual("/tmp/nas-shared");
+  expect(plan!.envVars.DOCKER_HOST).toEqual("tcp://nas-dind-shared:2375");
+  expect(plan!.envVars.NAS_DIND_CONTAINER_NAME).toEqual("nas-dind-shared");
+  expect(plan!.envVars.NAS_DIND_SHARED_TMP).toEqual("/tmp/nas-shared");
 
   // outputOverrides
   expect(plan!.outputOverrides.dindContainerName).toEqual("nas-dind-shared");
@@ -178,7 +170,7 @@ test("DindStage: non-shared mode uses session-based names", () => {
   expect(effect.shared).toEqual(false);
 
   expect(plan!.dockerArgs[1]).toEqual("nas-dind-abcdef12");
-  expect(plan!.envVars["DOCKER_HOST"]).toEqual("tcp://nas-dind-abcdef12:2375");
+  expect(plan!.envVars.DOCKER_HOST).toEqual("tcp://nas-dind-abcdef12:2375");
 });
 
 test("DindStage: default options", () => {

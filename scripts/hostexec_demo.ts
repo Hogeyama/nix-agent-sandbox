@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 
-const apiToken = process.env["HOSTEXEC_DEMO_API_TOKEN"];
+const apiToken = process.env.HOSTEXEC_DEMO_API_TOKEN;
 
 if (!apiToken) {
   console.error("missing required hostexec demo env vars");

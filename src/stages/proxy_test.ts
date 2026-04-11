@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * ProxyStage unit テスト（Docker 不要）
@@ -174,21 +166,21 @@ test("ProxyStage: sets proxy env vars", () => {
   const input = makeInput(profile);
   const stage = createProxyStage();
   const result = stage.plan(input)!;
-  expect(result.envVars["http_proxy"]).toEqual(
+  expect(result.envVars.http_proxy).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  expect(result.envVars["https_proxy"]).toEqual(
+  expect(result.envVars.https_proxy).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  expect(result.envVars["HTTP_PROXY"]).toEqual(
+  expect(result.envVars.HTTP_PROXY).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  expect(result.envVars["HTTPS_PROXY"]).toEqual(
+  expect(result.envVars.HTTPS_PROXY).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
-  expect(result.envVars["no_proxy"]).toEqual("localhost,127.0.0.1");
-  expect(result.envVars["NO_PROXY"]).toEqual("localhost,127.0.0.1");
-  expect(typeof result.envVars["NAS_UPSTREAM_PROXY"]).toEqual("string");
+  expect(result.envVars.no_proxy).toEqual("localhost,127.0.0.1");
+  expect(result.envVars.NO_PROXY).toEqual("localhost,127.0.0.1");
+  expect(typeof result.envVars.NAS_UPSTREAM_PROXY).toEqual("string");
 });
 
 test("ProxyStage: includes dind container in no_proxy", () => {
@@ -202,7 +194,7 @@ test("ProxyStage: includes dind container in no_proxy", () => {
   });
   const stage = createProxyStage();
   const result = stage.plan(input)!;
-  expect(result.envVars["no_proxy"]).toEqual(
+  expect(result.envVars.no_proxy).toEqual(
     "localhost,127.0.0.1,nas-dind-abc12345",
   );
 });
@@ -257,7 +249,7 @@ test("ProxyStage: reuses existing networkPromptToken", () => {
   const result = stage.plan(input)!;
   expect(result.outputOverrides.networkPromptToken).toEqual(existingToken);
   // The proxy URL should contain the existing token
-  expect(result.envVars["NAS_UPSTREAM_PROXY"].includes(existingToken)).toEqual(
+  expect(result.envVars.NAS_UPSTREAM_PROXY.includes(existingToken)).toEqual(
     true,
   );
 });

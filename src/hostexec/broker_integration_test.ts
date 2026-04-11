@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -93,8 +85,8 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
   const workspace = await mkdtemp(
     path.join(tmpdir(), "nas-hostexec-workspace-"),
   );
-  const oldToken = process.env["HOSTEXEC_TEST_TOKEN"];
-  process.env["HOSTEXEC_TEST_TOKEN"] = "super-secret-value";
+  const oldToken = process.env.HOSTEXEC_TEST_TOKEN;
+  process.env.HOSTEXEC_TEST_TOKEN = "super-secret-value";
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -161,8 +153,8 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
     expect(logs[0].requestId).toEqual("req_approve");
     expect(logs[0].command!).toMatch(/^node -e /);
   } finally {
-    if (oldToken !== undefined) process.env["HOSTEXEC_TEST_TOKEN"] = oldToken;
-    else delete process.env["HOSTEXEC_TEST_TOKEN"];
+    if (oldToken !== undefined) process.env.HOSTEXEC_TEST_TOKEN = oldToken;
+    else delete process.env.HOSTEXEC_TEST_TOKEN;
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(workspace, { recursive: true, force: true }).catch(() => {});
@@ -244,10 +236,10 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
   const workspace = await mkdtemp(
     path.join(tmpdir(), "nas-hostexec-workspace-"),
   );
-  const oldTokenA = process.env["TOKEN_A"];
-  const oldTokenB = process.env["TOKEN_B"];
-  process.env["TOKEN_A"] = "token-a";
-  process.env["TOKEN_B"] = "token-b";
+  const oldTokenA = process.env.TOKEN_A;
+  const oldTokenB = process.env.TOKEN_B;
+  process.env.TOKEN_A = "token-a";
+  process.env.TOKEN_B = "token-b";
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -326,10 +318,10 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
     expect((await firstPromise).type).toEqual("error");
     expect((await secondPromise).type).toEqual("error");
   } finally {
-    if (oldTokenA !== undefined) process.env["TOKEN_A"] = oldTokenA;
-    else delete process.env["TOKEN_A"];
-    if (oldTokenB !== undefined) process.env["TOKEN_B"] = oldTokenB;
-    else delete process.env["TOKEN_B"];
+    if (oldTokenA !== undefined) process.env.TOKEN_A = oldTokenA;
+    else delete process.env.TOKEN_A;
+    if (oldTokenB !== undefined) process.env.TOKEN_B = oldTokenB;
+    else delete process.env.TOKEN_B;
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(workspace, { recursive: true, force: true }).catch(() => {});

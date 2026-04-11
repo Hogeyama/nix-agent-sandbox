@@ -1,14 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 /**
  * 設定ファイルの読み込み・検索・マージの統合テスト
@@ -16,7 +6,7 @@ import {
  * 実際のファイルシステム上に YAML ファイルを配置して loadConfig / resolveProfile を検証する。
  */
 
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { loadConfig, loadGlobalConfig, resolveProfile } from "./load.ts";
@@ -924,15 +914,15 @@ async function withXdgConfigHome(
   xdgDir: string,
   fn: () => Promise<void>,
 ): Promise<void> {
-  const prev = process.env["XDG_CONFIG_HOME"];
-  process.env["XDG_CONFIG_HOME"] = xdgDir;
+  const prev = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdgDir;
   try {
     await fn();
   } finally {
     if (prev !== undefined) {
-      process.env["XDG_CONFIG_HOME"] = prev;
+      process.env.XDG_CONFIG_HOME = prev;
     } else {
-      delete process.env["XDG_CONFIG_HOME"];
+      delete process.env.XDG_CONFIG_HOME;
     }
   }
 }
@@ -972,16 +962,16 @@ profiles:
     agent: copilot
 `,
     );
-    const prevHome = process.env["HOME"];
-    const prevXdg = process.env["XDG_CONFIG_HOME"];
-    process.env["HOME"] = tmpDir;
-    if (prevXdg !== undefined) delete process.env["XDG_CONFIG_HOME"];
+    const prevHome = process.env.HOME;
+    const prevXdg = process.env.XDG_CONFIG_HOME;
+    process.env.HOME = tmpDir;
+    if (prevXdg !== undefined) delete process.env.XDG_CONFIG_HOME;
     try {
       const result = await loadGlobalConfig();
       expect(result?.profiles?.["home-profile"]?.agent).toEqual("copilot");
     } finally {
-      if (prevHome !== undefined) process.env["HOME"] = prevHome;
-      if (prevXdg !== undefined) process.env["XDG_CONFIG_HOME"] = prevXdg;
+      if (prevHome !== undefined) process.env.HOME = prevHome;
+      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
     }
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

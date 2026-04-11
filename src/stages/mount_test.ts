@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 
 /**
  * MountStage の純粋ロジックテスト (unit test)
@@ -210,10 +202,10 @@ test("MountStage: valid env var names accepted", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["SIMPLE"]).toEqual("value");
-  expect(plan.envVars["_UNDERSCORE_START"]).toEqual("value");
-  expect(plan.envVars["WITH_123_NUMBERS"]).toEqual("value");
-  expect(plan.envVars["A"]).toEqual("single-char");
+  expect(plan.envVars.SIMPLE).toEqual("value");
+  expect(plan.envVars._UNDERSCORE_START).toEqual("value");
+  expect(plan.envVars.WITH_123_NUMBERS).toEqual("value");
+  expect(plan.envVars.A).toEqual("single-char");
 });
 
 test("MountStage: static env var with special chars in value", () => {
@@ -229,12 +221,10 @@ test("MountStage: static env var with special chars in value", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["URL"]).toEqual(
-    "https://example.com/path?foo=bar&baz=qux",
-  );
-  expect(plan.envVars["JSON"]).toEqual('{"key": "value"}');
-  expect(plan.envVars["SPACES"]).toEqual("hello world");
-  expect(plan.envVars["EMPTY"]).toEqual("");
+  expect(plan.envVars.URL).toEqual("https://example.com/path?foo=bar&baz=qux");
+  expect(plan.envVars.JSON).toEqual('{"key": "value"}');
+  expect(plan.envVars.SPACES).toEqual("hello world");
+  expect(plan.envVars.EMPTY).toEqual("");
 });
 
 test("MountStage: invalid static env key (starts with number)", () => {
@@ -290,10 +280,10 @@ test("MountStage: multiple env vars including both static and dynamic", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["STATIC_A"]).toEqual("a");
-  expect(plan.envVars["DYNAMIC_B"]).toEqual("b");
-  expect(plan.envVars["STATIC_C"]).toEqual("c");
-  expect(plan.envVars["DYNAMIC_D"]).toEqual("d");
+  expect(plan.envVars.STATIC_A).toEqual("a");
+  expect(plan.envVars.DYNAMIC_B).toEqual("b");
+  expect(plan.envVars.STATIC_C).toEqual("c");
+  expect(plan.envVars.DYNAMIC_D).toEqual("d");
 });
 
 // ============================================================
@@ -309,7 +299,7 @@ test("MountStage: prefix mode prepends to existing var", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["MY_PATH"]).toEqual("/opt/bin:/usr/bin");
+  expect(plan.envVars.MY_PATH).toEqual("/opt/bin:/usr/bin");
 });
 
 test("MountStage: suffix mode appends to existing var", () => {
@@ -321,7 +311,7 @@ test("MountStage: suffix mode appends to existing var", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["MY_PATH"]).toEqual("/usr/bin:/opt/lib");
+  expect(plan.envVars.MY_PATH).toEqual("/usr/bin:/opt/lib");
 });
 
 test("MountStage: prefix on unset var generates NAS_ENV_OPS", () => {
@@ -332,8 +322,8 @@ test("MountStage: prefix on unset var generates NAS_ENV_OPS", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NEW_VAR"]).toBeUndefined();
-  expect(plan.envVars["NAS_ENV_OPS"]).toEqual(
+  expect(plan.envVars.NEW_VAR).toBeUndefined();
+  expect(plan.envVars.NAS_ENV_OPS).toEqual(
     "__nas_pfx 'NEW_VAR' '/opt/bin' ':'",
   );
 });
@@ -346,8 +336,8 @@ test("MountStage: suffix on unset var generates NAS_ENV_OPS", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NEW_VAR"]).toBeUndefined();
-  expect(plan.envVars["NAS_ENV_OPS"]).toEqual(
+  expect(plan.envVars.NEW_VAR).toBeUndefined();
+  expect(plan.envVars.NAS_ENV_OPS).toEqual(
     "__nas_sfx 'NEW_VAR' '/opt/lib' ':'",
   );
 });
@@ -361,8 +351,8 @@ test("MountStage: multiple prefix entries generate ordered NAS_ENV_OPS", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["MY_PATH"]).toBeUndefined();
-  expect(plan.envVars["NAS_ENV_OPS"]).toEqual(
+  expect(plan.envVars.MY_PATH).toBeUndefined();
+  expect(plan.envVars.NAS_ENV_OPS).toEqual(
     "__nas_pfx 'MY_PATH' '/opt/a' ':'\n__nas_pfx 'MY_PATH' '/opt/b' ':'",
   );
 });
@@ -376,7 +366,7 @@ test("MountStage: suffix with empty separator concatenates directly", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["FLAGS"]).toEqual("-O2 -Wall");
+  expect(plan.envVars.FLAGS).toEqual("-O2 -Wall");
 });
 
 test("MountStage: prefix with dynamic val", () => {
@@ -391,7 +381,7 @@ test("MountStage: prefix with dynamic val", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["MY_PATH"]).toEqual("/opt/dynamic:/usr/bin");
+  expect(plan.envVars.MY_PATH).toEqual("/opt/dynamic:/usr/bin");
 });
 
 test("MountStage: set after prefix replaces entire value", () => {
@@ -403,8 +393,8 @@ test("MountStage: set after prefix replaces entire value", () => {
   });
   const { input } = makeInput({ mountProbes });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["MY_PATH"]).toEqual("/only/this");
-  expect(plan.envVars["NAS_ENV_OPS"]).toBeUndefined();
+  expect(plan.envVars.MY_PATH).toEqual("/only/this");
+  expect(plan.envVars.NAS_ENV_OPS).toBeUndefined();
 });
 
 // ============================================================
@@ -812,7 +802,7 @@ test("MountStage: GPG socket mounted when enabled and socket exists", () => {
   expect(
     plan.dockerArgs.some((a: string) => a.includes("S.gpg-agent")),
   ).toEqual(true);
-  expect(plan.envVars["GPG_AGENT_INFO"]).toEqual(
+  expect(plan.envVars.GPG_AGENT_INFO).toEqual(
     `${CONTAINER_HOME}/.gnupg/S.gpg-agent`,
   );
   expect(plan.dockerArgs.some((a: string) => a.includes("gpg.conf"))).toEqual(
@@ -851,15 +841,15 @@ test("MountStage: workspace uses absolute path", () => {
 test("MountStage: NAS_USER and NAS_HOME are set", () => {
   const { input, mountProbes } = makeInput();
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NAS_USER"]).toEqual(TEST_USER);
-  expect(plan.envVars["NAS_HOME"]).toEqual(CONTAINER_HOME);
+  expect(plan.envVars.NAS_USER).toEqual(TEST_USER);
+  expect(plan.envVars.NAS_HOME).toEqual(CONTAINER_HOME);
 });
 
 test("MountStage: NAS_UID and NAS_GID are set when host provides them", () => {
   const { input, mountProbes } = makeInput();
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NAS_UID"]).toEqual("1000");
-  expect(plan.envVars["NAS_GID"]).toEqual("1000");
+  expect(plan.envVars.NAS_UID).toEqual("1000");
+  expect(plan.envVars.NAS_GID).toEqual("1000");
 });
 
 test("MountStage: NAS_UID and NAS_GID absent when uid/gid null", () => {
@@ -910,8 +900,8 @@ test("MountStage: nix enabled with mountSocket mounts /nix when host has nix", (
   });
   const plan = createMountStage(mountProbes).plan(input)!;
   expect(plan.dockerArgs.includes("/nix:/nix")).toEqual(true);
-  expect(plan.envVars["NIX_REMOTE"]).toEqual("daemon");
-  expect(plan.envVars["NIX_ENABLED"]).toEqual("true");
+  expect(plan.envVars.NIX_REMOTE).toEqual("daemon");
+  expect(plan.envVars.NIX_ENABLED).toEqual("true");
 });
 
 test("MountStage: nix enabled but host has no nix does not mount /nix", () => {
@@ -943,7 +933,7 @@ test("MountStage: nix extra-packages set when nix enabled and host has nix", () 
     prior: { nixEnabled: true },
   });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NIX_EXTRA_PACKAGES"]).toEqual("nixpkgs#gh\nnixpkgs#jq");
+  expect(plan.envVars.NIX_EXTRA_PACKAGES).toEqual("nixpkgs#gh\nnixpkgs#jq");
 });
 
 test("MountStage: nix conf outside /nix is mounted to temp path", () => {
@@ -961,7 +951,7 @@ test("MountStage: nix conf outside /nix is mounted to temp path", () => {
     prior: { nixEnabled: true },
   });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NIX_CONF_PATH"]).toEqual("/tmp/nas-host-nix.conf");
+  expect(plan.envVars.NIX_CONF_PATH).toEqual("/tmp/nas-host-nix.conf");
   expect(
     plan.dockerArgs.some((a: string) =>
       a.includes("/etc/static/nix.conf:/tmp/nas-host-nix.conf:ro"),
@@ -984,7 +974,7 @@ test("MountStage: nix conf under /nix uses original path", () => {
     prior: { nixEnabled: true },
   });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NIX_CONF_PATH"]).toEqual("/nix/store/xxx/etc/nix.conf");
+  expect(plan.envVars.NIX_CONF_PATH).toEqual("/nix/store/xxx/etc/nix.conf");
 });
 
 // ============================================================
@@ -1060,9 +1050,9 @@ test("MountStage: claude agent sets agentCommand and PATH", () => {
   const plan = createMountStage(mountProbes).plan(input)!;
   const agentCommand = plan.outputOverrides.agentCommand as string[];
   expect(agentCommand.length > 0).toEqual(true);
-  expect(
-    plan.envVars["PATH"]?.includes(`${CONTAINER_HOME}/.local/bin`),
-  ).toEqual(true);
+  expect(plan.envVars.PATH?.includes(`${CONTAINER_HOME}/.local/bin`)).toEqual(
+    true,
+  );
 });
 
 test("MountStage: copilot agent sets agentCommand", () => {
@@ -1110,8 +1100,8 @@ test("MountStage: dbus proxy mounts runtime dir", () => {
   expect(plan.dockerArgs.includes(`/tmp/nas-dbus-123:/run/user/1000`)).toEqual(
     true,
   );
-  expect(plan.envVars["XDG_RUNTIME_DIR"]).toEqual("/run/user/1000");
-  expect(plan.envVars["DBUS_SESSION_BUS_ADDRESS"]).toEqual(
+  expect(plan.envVars.XDG_RUNTIME_DIR).toEqual("/run/user/1000");
+  expect(plan.envVars.DBUS_SESSION_BUS_ADDRESS).toEqual(
     "unix:path=/run/user/1000/bus",
   );
 });
@@ -1149,8 +1139,8 @@ test("MountStage: X11 forwarding when display enabled and socket exists", () => 
   expect(
     plan.dockerArgs.some((a: string) => a.includes("/tmp/.X11-unix")),
   ).toEqual(true);
-  expect(plan.envVars["DISPLAY"]).toEqual(":0");
-  expect(plan.envVars["XAUTHORITY"]).toEqual(`${CONTAINER_HOME}/.Xauthority`);
+  expect(plan.envVars.DISPLAY).toEqual(":0");
+  expect(plan.envVars.XAUTHORITY).toEqual(`${CONTAINER_HOME}/.Xauthority`);
   expect(plan.dockerArgs.includes("--shm-size")).toEqual(true);
 });
 
@@ -1176,7 +1166,7 @@ test("MountStage: NAS_HOST_TMUX set when TMUX env exists", () => {
   };
   const { input, mountProbes } = makeInput({ hostEnv });
   const plan = createMountStage(mountProbes).plan(input)!;
-  expect(plan.envVars["NAS_HOST_TMUX"]).toEqual("1");
+  expect(plan.envVars.NAS_HOST_TMUX).toEqual("1");
 });
 
 test("MountStage: NAS_HOST_TMUX not set when TMUX absent", () => {

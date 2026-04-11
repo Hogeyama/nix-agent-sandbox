@@ -96,7 +96,6 @@ export class SessionBroker {
   private readonly auditDir?: string;
   private socketPath: string | null = null;
   private server: Server | null = null;
-  private closing = false;
   private readonly approvedTargets = new Set<string>();
   private readonly approvedHosts = new Set<string>();
   private readonly deniedTargets = new Set<string>();

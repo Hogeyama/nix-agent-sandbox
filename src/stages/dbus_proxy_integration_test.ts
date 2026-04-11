@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -52,8 +44,8 @@ function makeProfile(): Profile {
 
 function makeHostEnv(overrides?: Partial<HostEnv>): HostEnv {
   return {
-    home: process.env["HOME"] ?? "/root",
-    user: process.env["USER"] ?? "",
+    home: process.env.HOME ?? "/root",
+    user: process.env.USER ?? "",
     uid: process.getuid!(),
     gid: process.getgid!(),
     isWSL: false,

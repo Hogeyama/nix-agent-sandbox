@@ -210,59 +210,59 @@ test("queryAuditLogs: non-existent directory returns empty array", async () => {
 });
 
 test("resolveAuditDir: uses XDG_DATA_HOME when set", () => {
-  const originalXdg = process.env["XDG_DATA_HOME"];
+  const originalXdg = process.env.XDG_DATA_HOME;
   try {
-    process.env["XDG_DATA_HOME"] = "/tmp/custom-data";
+    process.env.XDG_DATA_HOME = "/tmp/custom-data";
     const result = resolveAuditDir();
     expect(result).toEqual("/tmp/custom-data/nas/audit");
   } finally {
     if (originalXdg !== undefined) {
-      process.env["XDG_DATA_HOME"] = originalXdg;
+      process.env.XDG_DATA_HOME = originalXdg;
     } else {
-      delete process.env["XDG_DATA_HOME"];
+      delete process.env.XDG_DATA_HOME;
     }
   }
 });
 
 test("resolveAuditDir: falls back to HOME/.local/share when XDG_DATA_HOME is unset", () => {
-  const originalXdg = process.env["XDG_DATA_HOME"];
-  const originalHome = process.env["HOME"];
+  const originalXdg = process.env.XDG_DATA_HOME;
+  const originalHome = process.env.HOME;
   try {
-    delete process.env["XDG_DATA_HOME"];
-    process.env["HOME"] = "/tmp/fakehome";
+    delete process.env.XDG_DATA_HOME;
+    process.env.HOME = "/tmp/fakehome";
     const result = resolveAuditDir();
     expect(result).toEqual("/tmp/fakehome/.local/share/nas/audit");
   } finally {
     if (originalXdg !== undefined) {
-      process.env["XDG_DATA_HOME"] = originalXdg;
+      process.env.XDG_DATA_HOME = originalXdg;
     } else {
-      delete process.env["XDG_DATA_HOME"];
+      delete process.env.XDG_DATA_HOME;
     }
     if (originalHome !== undefined) {
-      process.env["HOME"] = originalHome;
+      process.env.HOME = originalHome;
     } else {
-      delete process.env["HOME"];
+      delete process.env.HOME;
     }
   }
 });
 
 test("resolveAuditDir: throws when neither XDG_DATA_HOME nor HOME is set", () => {
-  const originalXdg = process.env["XDG_DATA_HOME"];
-  const originalHome = process.env["HOME"];
+  const originalXdg = process.env.XDG_DATA_HOME;
+  const originalHome = process.env.HOME;
   try {
-    delete process.env["XDG_DATA_HOME"];
-    delete process.env["HOME"];
+    delete process.env.XDG_DATA_HOME;
+    delete process.env.HOME;
     expect(() => resolveAuditDir()).toThrow("Cannot resolve audit directory");
   } finally {
     if (originalXdg !== undefined) {
-      process.env["XDG_DATA_HOME"] = originalXdg;
+      process.env.XDG_DATA_HOME = originalXdg;
     } else {
-      delete process.env["XDG_DATA_HOME"];
+      delete process.env.XDG_DATA_HOME;
     }
     if (originalHome !== undefined) {
-      process.env["HOME"] = originalHome;
+      process.env.HOME = originalHome;
     } else {
-      delete process.env["HOME"];
+      delete process.env.HOME;
     }
   }
 });
