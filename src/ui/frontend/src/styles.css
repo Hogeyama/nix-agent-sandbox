@@ -320,6 +320,23 @@ code {
   }
 }
 
+.tab .count.warn {
+  background: #fbbf24;
+  color: #1f2937;
+  box-shadow: 0 0 14px -2px rgba(251, 191, 36, 0.55);
+  animation: badgePulseWarn 2.2s ease-in-out infinite;
+}
+
+@keyframes badgePulseWarn {
+  0%,
+  100% {
+    box-shadow: 0 0 14px -2px rgba(251, 191, 36, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 22px 0 rgba(251, 191, 36, 0.8);
+  }
+}
+
 /* ──────────────── Panel ──────────────── */
 
 .panel {

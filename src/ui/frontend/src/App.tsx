@@ -75,6 +75,7 @@ export function App() {
   }, [deepLink]);
 
   const totalPending = networkPending.length + hostExecPending.length;
+  const userTurnCount = containers.filter((c) => c.turn === "user-turn").length;
 
   useFaviconBadge(totalPending);
 
@@ -120,7 +121,12 @@ export function App() {
       <nav class="tabs">
         {TABS.map((tab) => {
           const isActive = activeTab === tab.id;
-          const showBadge = tab.id === "pending" && totalPending > 0;
+          const badge: { count: number; warn?: boolean } | null =
+            tab.id === "pending" && totalPending > 0
+              ? { count: totalPending }
+              : tab.id === "containers" && userTurnCount > 0
+                ? { count: userTurnCount, warn: true }
+                : null;
           return (
             <button
               key={tab.id}
@@ -131,7 +137,11 @@ export function App() {
               onClick={() => setActiveTab(tab.id)}
             >
               {tab.label}
-              {showBadge && <span class="count">{totalPending}</span>}
+              {badge && (
+                <span class={`count${badge.warn ? " warn" : ""}`}>
+                  {badge.count}
+                </span>
+              )}
             </button>
           );
         })}
