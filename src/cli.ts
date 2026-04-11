@@ -18,6 +18,7 @@ import {
   resolveBuildProbes,
 } from "./stages/docker_build.ts";
 import { createLaunchStage } from "./stages/launch.ts";
+import { SessionStoreStage } from "./stages/session_store.ts";
 import { setLogLevel } from "./log.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import {
@@ -200,6 +201,7 @@ export async function main(args: string[]): Promise<void> {
 
     const stages = [
       new WorktreeStage(),
+      new SessionStoreStage(),
       createDockerBuildStage(buildProbes),
       NixDetectStage,
       createDbusProxyStage(),
@@ -213,7 +215,10 @@ export async function main(args: string[]): Promise<void> {
     // 初期 PriorStageOutputs を構築
     const initialPrior: PriorStageOutputs = {
       dockerArgs: [],
-      envVars: { NAS_LOG_LEVEL: logLevel },
+      envVars: {
+        NAS_LOG_LEVEL: logLevel,
+        NAS_SESSION_ID: sessionId,
+      },
       workDir: process.cwd(),
       nixEnabled: false,
       imageName,

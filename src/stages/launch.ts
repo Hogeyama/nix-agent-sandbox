@@ -16,6 +16,7 @@ import {
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
   NAS_PWD_LABEL,
+  NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
 import { logInfo } from "../log.ts";
 
@@ -53,6 +54,7 @@ export function createLaunchStage(
           [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
           [NAS_KIND_LABEL]: NAS_KIND_AGENT,
           [NAS_PWD_LABEL]: input.prior.workDir,
+          [NAS_SESSION_ID_LABEL]: input.sessionId,
         },
       };
 
