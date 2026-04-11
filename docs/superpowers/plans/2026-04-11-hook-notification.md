@@ -169,10 +169,13 @@ Execute in order. Each step is independently committable.
 - [ ] **Step 4: Add `nas hook notification` command**
       New file `src/cli/hook.ts` registered in `src/cli.ts`. Subcommand
       `notification` takes `--kind start|attention|stop`, reads
-      `NAS_SESSION_ID` from env, reads hook payload JSON from stdin
-      (best-effort), updates the session store, fires a desktop notification
-      on `attention` (and optionally `stop`). Unit tests for the arg parser
-      and state transition; integration test that writes to the store.
+      `NAS_SESSION_ID` from env (no `--session` override — the command is
+      only intended to be called from inside the sandbox), reads hook
+      payload JSON from stdin (best-effort), updates the session store,
+      and fires a desktop notification **only** on `--kind attention`
+      (`start` and `stop` update state silently). Unit tests for the arg
+      parser and state transition; integration test that writes to the
+      store.
 
 - [ ] **Step 5: Enrich `/api/containers` with turn data**
       In `src/ui/data.ts` (and/or the containers route), join the session
@@ -195,13 +198,14 @@ Execute in order. Each step is independently committable.
 
 ---
 
-## Open Questions
+## Resolved Decisions
 
-- Should `--kind stop` pop a desktop notification by default, or only with an
-  opt-in flag? Leaning: off by default, `--notify-on-stop` opt-in, because
-  most stops are expected and not interesting.
-- Do we want `nas hook notification` to also be callable from outside the
-  sandbox (for testing / scripting)? If yes, accept `--session <id>`
-  explicitly. Probably yes for test ergonomics.
-- Where should the `nas.session_id` label be stamped — in the launch stage,
-  or is there a more central point? Decide during Step 3.
+- **Desktop notification on `stop`:** No. Only `--kind attention` pops a
+  notification. Add an opt-in flag later if it turns out to be needed.
+- **Callable from outside the sandbox:** No. The command reads
+  `NAS_SESSION_ID` from the environment and has no `--session` override.
+  Tests that need to exercise the command can set `NAS_SESSION_ID`
+  directly.
+- **Where to stamp `nas.session_id`:** Implementer's choice during Step 3.
+  Start wherever is most natural (likely the launch stage) and move it
+  later if a better location appears.
