@@ -13,7 +13,7 @@ Usage:
   nas network [pending|approve|deny|review|gc]
   nas ui [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
-  nas hook notification --kind start|attention|stop
+  nas hook notification --kind start|attention|stop [--when path=value ...]
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする

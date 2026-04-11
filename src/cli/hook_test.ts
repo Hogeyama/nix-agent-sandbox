@@ -160,6 +160,55 @@ test("runHookNotification --kind attention with stdin message transitions to use
   expect(record?.lastEventMessage).toBe("hello");
 });
 
+test("runHookNotification applies --when toolName=ask_user", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-when-tool";
+  const { createSession, updateSessionTurn } = await import(
+    "../sessions/store.ts"
+  );
+  await createSession(paths, {
+    sessionId: "sess-hook-when-tool",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+  await updateSessionTurn(paths, "sess-hook-when-tool", "start");
+
+  await runHookNotification(
+    ["--kind", "attention", "--when", "toolName=ask_user"],
+    {
+      stdinReader: makeStdin('{"toolName":"ask_user","message":"hello"}'),
+    },
+  );
+
+  const record = await readSession(paths, "sess-hook-when-tool");
+  expect(record?.turn).toBe("user-turn");
+  expect(record?.lastEventKind).toBe("attention");
+  expect(record?.lastEventMessage).toBe("hello");
+});
+
+test("runHookNotification applies --when stopReason=end_turn", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-when-stop";
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-when-stop",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookNotification(
+    ["--kind", "attention", "--when", "stopReason=end_turn"],
+    {
+      stdinReader: makeStdin('{"stopReason":"end_turn","message":"done"}'),
+    },
+  );
+
+  const record = await readSession(paths, "sess-hook-when-stop");
+  expect(record?.turn).toBe("user-turn");
+  expect(record?.lastEventKind).toBe("attention");
+  expect(record?.lastEventMessage).toBe("done");
+});
+
 test("runHookNotification --kind attention without message leaves lastEventMessage empty", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-2b";
   const { createSession, updateSessionTurn } = await import(
@@ -181,6 +230,31 @@ test("runHookNotification --kind attention without message leaves lastEventMessa
   expect(record?.turn).toBe("user-turn");
   expect(record?.lastEventKind).toBe("attention");
   expect(record?.lastEventMessage).toBeUndefined();
+});
+
+test("runHookNotification with mismatched --when leaves the store untouched", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-when-mismatch";
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-when-mismatch",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  const before = await readSession(paths, "sess-hook-when-mismatch");
+
+  await runHookNotification(
+    ["--kind", "attention", "--when", "toolResult.resultType=success"],
+    {
+      stdinReader: makeStdin(
+        '{"toolResult":{"resultType":"failure"},"message":"ignored"}',
+      ),
+    },
+  );
+
+  const after = await readSession(paths, "sess-hook-when-mismatch");
+  expect(after).toEqual(before);
 });
 
 test("runHookNotification --kind stop transitions to done", async () => {
@@ -275,6 +349,76 @@ test("runHookNotification tolerates malformed stdin JSON and still updates the s
 
   const record = await readSession(paths, "sess-hook-bad-json");
   expect(record?.turn).toBe("agent-turn");
+});
+
+test("runHookNotification with malformed --when warns and is a no-op", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-bad-when";
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-bad-when",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  const before = await readSession(paths, "sess-hook-bad-when");
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.join(" "));
+  };
+
+  let threw: unknown;
+  try {
+    await runHookNotification(["--kind", "attention", "--when", "toolName"], {
+      stdinReader: makeStdin('{"toolName":"ask_user"}'),
+    });
+  } catch (err) {
+    threw = err;
+  } finally {
+    console.error = originalError;
+  }
+
+  const after = await readSession(paths, "sess-hook-bad-when");
+  expect(threw).toBeUndefined();
+  expect(after).toEqual(before);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toContain("invalid --when");
+});
+
+test("runHookNotification with missing --when value warns and is a no-op", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-missing-when";
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-missing-when",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  const before = await readSession(paths, "sess-hook-missing-when");
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.join(" "));
+  };
+
+  let threw: unknown;
+  try {
+    await runHookNotification(["--kind", "attention", "--when"], {
+      stdinReader: makeStdin('{"toolName":"ask_user"}'),
+    });
+  } catch (err) {
+    threw = err;
+  } finally {
+    console.error = originalError;
+  }
+
+  const after = await readSession(paths, "sess-hook-missing-when");
+  expect(threw).toBeUndefined();
+  expect(after).toEqual(before);
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toContain("missing value for --when");
 });
 
 test("runHookNotification: store update failure is swallowed", async () => {
