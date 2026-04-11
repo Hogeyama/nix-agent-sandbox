@@ -15,6 +15,7 @@ import {
   parseLogLevel,
   removeFirstOccurrence,
 } from "./cli/helpers.ts";
+import { runHookCommand } from "./cli/hook.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
 import { runNetworkCommand } from "./cli/network.ts";
 import { runRebuild } from "./cli/rebuild.ts";
@@ -63,7 +64,8 @@ export async function main(args: string[]): Promise<void> {
     subcommand === "network" ||
     subcommand === "hostexec" ||
     subcommand === "ui" ||
-    subcommand === "audit"
+    subcommand === "audit" ||
+    subcommand === "hook"
   ) {
     if (
       argsBeforeDashDash.includes("--help") ||
@@ -119,6 +121,11 @@ export async function main(args: string[]): Promise<void> {
 
   if (subcommand === "audit") {
     await runAuditCommand(removeFirstOccurrence(argsBeforeDashDash, "audit"));
+    return;
+  }
+
+  if (subcommand === "hook") {
+    await runHookCommand(removeFirstOccurrence(argsBeforeDashDash, "hook"));
     return;
   }
 
