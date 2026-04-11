@@ -430,7 +430,7 @@ nas hostexec test --profile <profile> -- <command> [args...]
 
 ### セッション通知（エージェントフック経由）
 
-`nas hook notification --kind start|attention|stop` をエージェントのフックから呼び出すと、
+`nas hook notification --kind start|attention|stop [--when path=value ...]` をエージェントのフックから呼び出すと、
 そのセッションが今「エージェントが作業中（`agent-turn`）」「ユーザーの入力待ち（`user-turn`）」「終了済み（`done`）」のどれにあるかを nas UI に伝えられます。
 
 Claude Code のフック設定は `~/.claude/settings.json`（ユーザー共通）またはプロジェクト直下の `.claude/settings.json` に書きます。設定例:
@@ -454,9 +454,7 @@ Claude Code のフック設定は `~/.claude/settings.json`（ユーザー共通
 }
 ```
 
-GitHub Copilot CLI では、リポジトリ直下の `.github/hooks/*.json` を読み込みます。たとえば
-`.github/hooks/nas-notification.json` に次をそのまま保存すれば使えます（`notification` フックは
-v1.0.18 以降。v1.0.17 以前では `notification` エントリを削除してください）:
+GitHub Copilot CLI では、リポジトリ直下の `.github/hooks/*.json` を読み込みます。設定例:
 
 ```json
 {
@@ -476,10 +474,17 @@ v1.0.18 以降。v1.0.17 以前では `notification` エントリを削除して
         "timeoutSec": 10
       }
     ],
-    "notification": [
+    "preToolUse": [
       {
         "type": "command",
-        "bash": "nas hook notification --kind attention",
+        "bash": "nas hook notification --kind attention --when toolName=ask_user",
+        "timeoutSec": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind start --when toolName=ask_user",
         "timeoutSec": 10
       }
     ],
@@ -493,6 +498,10 @@ v1.0.18 以降。v1.0.17 以前では `notification` エントリを削除して
   }
 }
 ```
+
+`notification` フックを無条件に `attention` へつなぐと `permission_prompt` なども拾ってしまうため、
+この用途では設定しないでください。`--when` はドット区切りの JSON パスに対する完全一致です
+（例: `toolResult.resultType=success`）。
 
 ![ui containers tab](./images/ui-containers.png)
 

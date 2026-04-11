@@ -31,6 +31,11 @@ export interface RunHookNotificationDeps {
   stdinReader?: StdinReader;
 }
 
+interface HookMatcher {
+  path: string[];
+  expected: string;
+}
+
 /**
  * Top-level `nas hook ...` dispatcher. Only `notification` is defined
  * today. Unknown subcommands print a usage line to stderr and exit 0.
@@ -44,7 +49,8 @@ export async function runHookCommand(nasArgs: string[]): Promise<void> {
   }
   console.error(
     `[nas] Unknown hook subcommand: ${sub ?? "(none)"}. ` +
-      `Usage: nas hook notification --kind start|attention|stop`,
+      `Usage: nas hook notification --kind start|attention|stop ` +
+      `[--when path=value ...]`,
   );
   // Never fail a hook, even on a typo.
   return;
@@ -69,6 +75,9 @@ export async function runHookNotification(
     );
     return;
   }
+
+  const whenMatchers = parseHookMatchers(args);
+  if (whenMatchers === null) return;
 
   const sessionId = process.env.NAS_SESSION_ID;
   if (!sessionId || sessionId.length === 0) {
@@ -104,6 +113,7 @@ export async function runHookNotification(
   }
 
   const message = extractHookMessage(payload);
+  if (!payloadMatchesAll(payload, whenMatchers)) return;
 
   // Update the session store. Any failure is non-fatal.
   try {
@@ -116,6 +126,71 @@ export async function runHookNotification(
       }`,
     );
   }
+}
+
+function parseHookMatchers(args: string[]): HookMatcher[] | null {
+  const matchers: HookMatcher[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "--when") continue;
+
+    if (i + 1 >= args.length) {
+      console.error(
+        "[nas] hook notification: missing value for --when " +
+          "(expected path=value)",
+      );
+      return null;
+    }
+
+    const raw = args[i + 1];
+    const matcher = parseHookMatcher(raw);
+    if (matcher === null) {
+      console.error(
+        `[nas] hook notification: invalid --when ${JSON.stringify(raw)} ` +
+          `(expected path=value)`,
+      );
+      return null;
+    }
+    matchers.push(matcher);
+    i++;
+  }
+  return matchers;
+}
+
+function parseHookMatcher(raw: string): HookMatcher | null {
+  const equalsIndex = raw.indexOf("=");
+  if (equalsIndex <= 0) return null;
+
+  const path = raw.slice(0, equalsIndex).split(".");
+  if (path.some((segment) => segment.length === 0)) return null;
+
+  return {
+    path,
+    expected: raw.slice(equalsIndex + 1),
+  };
+}
+
+function payloadMatchesAll(payload: unknown, matchers: HookMatcher[]): boolean {
+  return matchers.every((matcher) => payloadMatches(payload, matcher));
+}
+
+function payloadMatches(payload: unknown, matcher: HookMatcher): boolean {
+  const value = readMatcherValue(payload, matcher.path);
+  return typeof value === "string" && value === matcher.expected;
+}
+
+function readMatcherValue(value: unknown, path: string[]): unknown {
+  let current: unknown = value;
+  for (const segment of path) {
+    if (
+      current === null ||
+      typeof current !== "object" ||
+      Array.isArray(current)
+    ) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
 }
 
 /**
