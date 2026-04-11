@@ -428,6 +428,47 @@ nas hostexec test --profile <profile> -- <command> [args...]
 - `review` は fzf で pending を対話的に選択し approve / deny できます
 - `test` はルールマッチングを試行し、マッチしたルールの id・approval・env keys を表示します。regex パターンの試行錯誤に便利です
 
+### セッション通知（エージェントフック経由）
+
+`nas hook notification --kind start|attention|stop` をエージェントのフックから呼び出すと、
+そのセッションが今「エージェントが作業中（`agent-turn`）」「ユーザーの入力待ち（`user-turn`）」「終了済み（`done`）」のどれにあるかを nas UI に伝えられます。
+コマンドはサンドボックス内で実行され、環境変数 `NAS_SESSION_ID` からセッションを判別するため、引数でセッション ID を渡す必要はありません。
+
+Claude Code の `~/.claude/hooks.json` 設定例:
+
+```jsonc
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "nas hook notification --kind start" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "nas hook notification --kind attention" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "nas hook notification --kind stop" }] }
+    ]
+  }
+}
+```
+
+GitHub Copilot CLI のフック設定（`notification` フックは v1.0.18 以降で利用可能）:
+
+```jsonc
+// Copilot CLI のフック設定ファイルに以下のコマンドを割り当てます。
+// 正確な JSON スキーマは公式ドキュメントを参照してください:
+//   https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-hooks
+//
+// sessionStart         -> nas hook notification --kind start
+// userPromptSubmitted  -> nas hook notification --kind start
+// notification         -> nas hook notification --kind attention   (v1.0.18+)
+// sessionEnd           -> nas hook notification --kind stop
+```
+
+デスクトップ通知は `--kind attention`（＝ユーザーの入力が必要になったイベント）でのみ発火します。
+それ以外の `start` / `stop` は UI の状態更新にのみ使われます。主な確認手段は `nas ui` の Containers タブで、
+`You're up` になっている行は上に pin 表示されるため、どのセッションが自分の番かを一目で把握できます。
+
 ## セキュリティについて
 
 nas はコンテナ内のファイルシステム変更をホストから隔離しますが、**設定次第ではホストの認証情報やデーモンへのアクセスを許可します**。各機能のリスクを理解した上で有効化してください。
