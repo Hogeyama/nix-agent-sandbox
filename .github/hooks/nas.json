@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind start",
+        "powershell": "nas hook notification --kind start",
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind start",
+        "powershell": "nas hook notification --kind start",
+        "timeoutSec": 10
+      }
+    ],
+    "notification": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind attention",
+        "powershell": "nas hook notification --kind attention",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind stop",
+        "powershell": "nas hook notification --kind stop",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

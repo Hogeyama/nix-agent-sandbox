@@ -1,8 +1,37 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "nas hook notification --kind start" }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nas hook notification --kind attention"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
-        "hooks": []
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nas hook notification --kind attention"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "nas hook notification --kind stop" }
+        ]
       }
     ]
   }
