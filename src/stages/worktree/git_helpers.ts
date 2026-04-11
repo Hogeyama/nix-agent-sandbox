@@ -28,8 +28,9 @@ export async function resolveBase(
 ): Promise<string> {
   if (base !== "HEAD") return base;
   try {
-    const branch =
-      (await $`git -C ${repoRoot} symbolic-ref --short HEAD`.text()).trim();
+    const branch = (
+      await $`git -C ${repoRoot} symbolic-ref --short HEAD`.text()
+    ).trim();
     console.log(`[nas] Resolved HEAD to current branch: ${branch}`);
     return branch;
   } catch {
@@ -52,9 +53,7 @@ export async function validateBaseBranch(
   }
 }
 
-export async function isWorktreeDirty(
-  worktreePath: string,
-): Promise<boolean> {
+export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   const status = await $`git -C ${worktreePath} status --porcelain`.text();
   return status.trim().length > 0;
 }
@@ -106,7 +105,7 @@ export async function inheritDirtyBaseWorktree(
   );
   if (!sourceWorktreePath || sourceWorktreePath === targetWorktreePath) return;
 
-  if (!await isWorktreeDirty(sourceWorktreePath)) return;
+  if (!(await isWorktreeDirty(sourceWorktreePath))) return;
 
   console.log(
     `[nas] Inheriting dirty changes from ${sourceWorktreePath} (${localBaseBranch})`,
@@ -121,15 +120,13 @@ async function applyTrackedDiff(
   targetWorktreePath: string,
 ): Promise<void> {
   const stagedPatch =
-    await $`git -C ${sourceWorktreePath} diff --no-ext-diff --binary --cached`
-      .text();
+    await $`git -C ${sourceWorktreePath} diff --no-ext-diff --binary --cached`.text();
   if (stagedPatch.trim().length > 0) {
     await applyPatchFile(targetWorktreePath, stagedPatch, ["--index"]);
   }
 
   const unstagedPatch =
-    await $`git -C ${sourceWorktreePath} diff --no-ext-diff --binary`
-      .text();
+    await $`git -C ${sourceWorktreePath} diff --no-ext-diff --binary`.text();
   if (unstagedPatch.trim().length > 0) {
     await applyPatchFile(targetWorktreePath, unstagedPatch);
   }
@@ -146,14 +143,14 @@ async function applyPatchFile(
     const normalizedPatch = patch.endsWith("\n") ? patch : `${patch}\n`;
     await writeFile(patchFile, normalizedPatch);
     console.log(
-      `$ git -C ${targetWorktreePath} apply --binary --allow-empty ${
-        extraArgs.join(" ")
-      } ${patchFile}`,
+      `$ git -C ${targetWorktreePath} apply --binary --allow-empty ${extraArgs.join(
+        " ",
+      )} ${patchFile}`,
     );
     await $`git -C ${targetWorktreePath} apply --binary --allow-empty ${extraArgs} ${patchFile}`;
   } finally {
-    await rm(tmpDirPath, { recursive: true, force: true }).catch(() =>
-      undefined
+    await rm(tmpDirPath, { recursive: true, force: true }).catch(
+      () => undefined,
     );
   }
 }
@@ -163,13 +160,10 @@ async function copyUntrackedFiles(
   targetWorktreePath: string,
 ): Promise<void> {
   const output =
-    await $`git -C ${sourceWorktreePath} ls-files --others --exclude-standard -z`
-      .text();
+    await $`git -C ${sourceWorktreePath} ls-files --others --exclude-standard -z`.text();
   if (output.length === 0) return;
 
-  const untrackedFiles = output
-    .split("\0")
-    .filter((file) => file.length > 0);
+  const untrackedFiles = output.split("\0").filter((file) => file.length > 0);
 
   for (const relativePath of untrackedFiles) {
     const sourcePath = path.join(sourceWorktreePath, relativePath);

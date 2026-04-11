@@ -47,9 +47,9 @@ interface RunningServer {
 
 const PROXY_USER = "nas";
 const PROXY_PASSWORD = "secret";
-const EXPECTED_PROXY_AUTH = `Basic ${
-  Buffer.from(`${PROXY_USER}:${PROXY_PASSWORD}`).toString("base64")
-}`;
+const EXPECTED_PROXY_AUTH = `Basic ${Buffer.from(
+  `${PROXY_USER}:${PROXY_PASSWORD}`,
+).toString("base64")}`;
 
 const curlAvailable = await commandExists("curl");
 const gitAvailable = await commandExists("git");
@@ -96,18 +96,15 @@ async function withProxyFixture(
   const upstreamRequests: RecordedRequest[] = [];
 
   try {
-    await writeFile(
-      path.join(rootDir, "hello.txt"),
-      "hello through proxy\n",
-    );
+    await writeFile(path.join(rootDir, "hello.txt"), "hello through proxy\n");
     await createBareRepo(rootDir);
 
     const upstreamServer = startServer((request) =>
-      handleUpstreamRequest(rootDir, upstreamRequests, request)
+      handleUpstreamRequest(rootDir, upstreamRequests, request),
     );
 
     const proxyServer = startServer((request) =>
-      handleProxyRequest(proxyRequests, request)
+      handleProxyRequest(proxyRequests, request),
     );
 
     try {
@@ -141,46 +138,33 @@ async function createBareRepo(rootDir: string): Promise<void> {
   await runChecked("git", ["-C", workDir, "config", "user.name", "nas-test"], {
     env: gitEnv,
   });
-  await runChecked("git", [
-    "-C",
-    workDir,
-    "config",
-    "user.email",
-    "nas-test@example.com",
-  ], { env: gitEnv });
-  await writeFile(
-    path.join(workDir, "README.md"),
-    "# nas client compat\n",
+  await runChecked(
+    "git",
+    ["-C", workDir, "config", "user.email", "nas-test@example.com"],
+    { env: gitEnv },
   );
+  await writeFile(path.join(workDir, "README.md"), "# nas client compat\n");
   await runChecked("git", ["-C", workDir, "add", "README.md"], { env: gitEnv });
-  await runChecked("git", [
-    "-C",
-    workDir,
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-m",
-    "init",
-  ], { env: gitEnv });
+  await runChecked(
+    "git",
+    ["-C", workDir, "-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    { env: gitEnv },
+  );
 
   await runChecked("git", ["init", "--bare", repoDir], { env: gitEnv });
   await runChecked("git", ["-C", workDir, "remote", "add", "origin", repoDir], {
     env: gitEnv,
   });
-  await runChecked("git", [
-    "-C",
-    workDir,
-    "push",
-    "origin",
-    "HEAD:refs/heads/main",
-  ], { env: gitEnv });
-  await runChecked("git", [
-    "--git-dir",
-    repoDir,
-    "symbolic-ref",
-    "HEAD",
-    "refs/heads/main",
-  ], { env: gitEnv });
+  await runChecked(
+    "git",
+    ["-C", workDir, "push", "origin", "HEAD:refs/heads/main"],
+    { env: gitEnv },
+  );
+  await runChecked(
+    "git",
+    ["--git-dir", repoDir, "symbolic-ref", "HEAD", "refs/heads/main"],
+    { env: gitEnv },
+  );
   await runChecked("git", ["--git-dir", repoDir, "update-server-info"], {
     env: gitEnv,
   });
@@ -197,9 +181,9 @@ async function runChecked(
   const result = await runCommand(command, args, options);
   if (result.code !== 0) {
     throw new Error(
-      `${command} ${
-        args.join(" ")
-      } failed with ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      `${command} ${args.join(
+        " ",
+      )} failed with ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
   }
 }
@@ -291,9 +275,7 @@ function parseTargetUrl(request: Request): URL {
   return new URL(`http://${host}${request.url}`);
 }
 
-function normalizeHeaders(
-  headers: Headers,
-): Record<string, string> {
+function normalizeHeaders(headers: Headers): Record<string, string> {
   const normalized: Record<string, string> = {};
   for (const [key, value] of headers.entries()) {
     normalized[key] = value;
@@ -303,9 +285,12 @@ function normalizeHeaders(
 
 function isPathInsideRoot(rootDir: string, target: string): boolean {
   const relative = path.relative(rootDir, target);
-  return target === rootDir ||
-    (relative !== "" && !relative.startsWith("..") &&
-      !path.isAbsolute(relative));
+  return (
+    target === rootDir ||
+    (relative !== "" &&
+      !relative.startsWith("..") &&
+      !path.isAbsolute(relative))
+  );
 }
 
 function startServer(
@@ -372,8 +357,8 @@ function assertRetriedWithProxyAuth(requests: RecordedRequest[]): void {
     byUrl.set(request.url, entry);
   }
 
-  const retried = Array.from(byUrl.values()).some((entry) =>
-    entry.authorized > 0 && entry.unauthorized > 0
+  const retried = Array.from(byUrl.values()).some(
+    (entry) => entry.authorized > 0 && entry.unauthorized > 0,
   );
   expect(retried).toEqual(true);
 }

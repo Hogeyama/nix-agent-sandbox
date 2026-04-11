@@ -71,9 +71,8 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
   // Cursor for the next batch: oldest matching entry currently in view.
   // Using `filtered` (not `allItems`) means the server-side cursor matches
   // the user's filter, so we never ask for entries that would be discarded.
-  const oldestTimestamp = filtered.length > 0
-    ? filtered[filtered.length - 1].timestamp
-    : undefined;
+  const oldestTimestamp =
+    filtered.length > 0 ? filtered[filtered.length - 1].timestamp : undefined;
 
   // Build the server-side filter payload from the current UI state. When
   // `activeOnly` is on we push the live active session set to the server so
@@ -238,7 +237,8 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
             class="select"
             value={domainFilter}
             onChange={(e) =>
-              setDomainFilter((e.target as HTMLSelectElement).value)}
+              setDomainFilter((e.target as HTMLSelectElement).value)
+            }
           >
             <option value="all">All</option>
             <option value="network">network</option>
@@ -253,7 +253,8 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
             placeholder="filter by id…"
             value={sessionFilter}
             onInput={(e) =>
-              setSessionFilter((e.target as HTMLInputElement).value)}
+              setSessionFilter((e.target as HTMLInputElement).value)
+            }
             style="width:180px"
           />
         </label>
@@ -262,7 +263,8 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
             type="checkbox"
             checked={activeOnly}
             onChange={(e) =>
-              setActiveOnly((e.target as HTMLInputElement).checked)}
+              setActiveOnly((e.target as HTMLInputElement).checked)
+            }
           />
           Active only
         </label>
@@ -274,68 +276,64 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
         </span>
       </div>
 
-      {allItems.length === 0
-        ? (
-          <div class="empty">
-            <div class="icon">○</div>
-            <div class="msg">No audit entries</div>
+      {allItems.length === 0 ? (
+        <div class="empty">
+          <div class="icon">○</div>
+          <div class="msg">No audit entries</div>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div class="empty">
+          <div class="icon">○</div>
+          <div class="msg">No matches</div>
+          <div class="sub">
+            Nothing matches the current filters.
+            {hasMore && " Scroll down to load older entries."}
           </div>
-        )
-        : filtered.length === 0
-        ? (
-          <div class="empty">
-            <div class="icon">○</div>
-            <div class="msg">No matches</div>
-            <div class="sub">
-              Nothing matches the current filters.
-              {hasMore && " Scroll down to load older entries."}
-            </div>
-          </div>
-        )
-        : (
-          <table class="table">
-            <colgroup>
-              <col style="width:16%" />
-              <col style="width:10%" />
-              <col style="width:10%" />
-              <col style="width:10%" />
-              <col style="width:12%" />
-              <col style="width:42%" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Session</th>
-                <th>Domain</th>
-                <th>Decision</th>
-                <th>Reason</th>
-                <th>Target / Command</th>
+        </div>
+      ) : (
+        <table class="table">
+          <colgroup>
+            <col style="width:16%" />
+            <col style="width:10%" />
+            <col style="width:10%" />
+            <col style="width:10%" />
+            <col style="width:12%" />
+            <col style="width:42%" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Session</th>
+              <th>Domain</th>
+              <th>Decision</th>
+              <th>Reason</th>
+              <th>Target / Command</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((entry) => (
+              <tr key={entry.id}>
+                <td class="time">{formatTimestamp(entry.timestamp)}</td>
+                <td class="session" title={entry.sessionId}>
+                  {entry.sessionId.slice(0, 8)}
+                </td>
+                <td>
+                  <span class="chip">{entry.domain}</span>
+                </td>
+                <td>
+                  <span class={`decision ${entry.decision}`}>
+                    {entry.decision}
+                  </span>
+                </td>
+                <td title={entry.reason}>{entry.reason}</td>
+                <td class="mono" title={entry.target || entry.command}>
+                  {entry.target || entry.command || "-"}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {filtered.map((entry) => (
-                <tr key={entry.id}>
-                  <td class="time">{formatTimestamp(entry.timestamp)}</td>
-                  <td class="session" title={entry.sessionId}>
-                    {entry.sessionId.slice(0, 8)}
-                  </td>
-                  <td>
-                    <span class="chip">{entry.domain}</span>
-                  </td>
-                  <td>
-                    <span class={`decision ${entry.decision}`}>
-                      {entry.decision}
-                    </span>
-                  </td>
-                  <td title={entry.reason}>{entry.reason}</td>
-                  <td class="mono" title={entry.target || entry.command}>
-                    {entry.target || entry.command || "-"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+            ))}
+          </tbody>
+        </table>
+      )}
 
       {/*
         Sentinel is rendered whenever there's more to load, independent of
@@ -345,19 +343,19 @@ export function AuditTab({ liveItems, sessions }: AuditTabProps) {
       */}
       {showSentinel && (
         <div ref={sentinelCallbackRef} class="scroll-sentinel">
-          {loadError
-            ? (
-              <button
-                type="button"
-                class="btn btn-ghost"
-                onClick={() => void loadOlder()}
-              >
-                Retry — {loadError}
-              </button>
-            )
-            : loadingMore
-            ? <span class="scroll-sentinel-msg">Loading older…</span>
-            : <span class="scroll-sentinel-msg">Scroll for more</span>}
+          {loadError ? (
+            <button
+              type="button"
+              class="btn btn-ghost"
+              onClick={() => void loadOlder()}
+            >
+              Retry — {loadError}
+            </button>
+          ) : loadingMore ? (
+            <span class="scroll-sentinel-msg">Loading older…</span>
+          ) : (
+            <span class="scroll-sentinel-msg">Scroll for more</span>
+          )}
         </div>
       )}
       {!hasMore && !loadError && allItems.length > 0 && (

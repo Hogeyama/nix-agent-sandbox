@@ -50,8 +50,8 @@ export function createSseRoutes(ctx: UiDataContext): Router {
           if (closed) return;
 
           try {
-            const [networkPending, hostExecPending, sessions] = await Promise
-              .all([
+            const [networkPending, hostExecPending, sessions] =
+              await Promise.all([
                 getNetworkPending(ctx).catch(() => []),
                 getHostExecPending(ctx).catch(() => []),
                 getSessions(ctx).catch(() => ({ network: [], hostexec: [] })),
@@ -110,7 +110,7 @@ export function createSseRoutes(ctx: UiDataContext): Router {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
       },
     });
   });

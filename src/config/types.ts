@@ -153,10 +153,11 @@ export type EnvValSpec = { val: string } | { valCmd: string };
 export type EnvMode = "set" | "prefix" | "suffix";
 
 /** 環境変数エントリ (key/key_cmd × val/val_cmd × mode の組み合わせ) */
-export type EnvConfig = EnvKeySpec & EnvValSpec & {
-  mode: EnvMode;
-  separator?: string;
-};
+export type EnvConfig = EnvKeySpec &
+  EnvValSpec & {
+    mode: EnvMode;
+    separator?: string;
+  };
 
 /** プロファイル */
 export interface Profile {
@@ -276,10 +277,13 @@ export interface RawProfile {
       "default-scope"?: HostExecPromptScope;
       notify?: HostExecPromptNotify;
     };
-    secrets?: Record<string, {
-      from?: string;
-      required?: boolean;
-    }>;
+    secrets?: Record<
+      string,
+      {
+        from?: string;
+        required?: boolean;
+      }
+    >;
     rules?: Array<{
       id?: string;
       match?: {

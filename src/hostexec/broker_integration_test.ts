@@ -107,15 +107,17 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
       secrets: {
         test_token: { from: "env:HOSTEXEC_TEST_TOKEN", required: true },
       },
-      rules: [{
-        id: "node-eval",
-        match: { argv0: "node", argRegex: "^-e\\b" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: { TOKEN: "secret:test_token" },
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "prompt",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: { TOKEN: "secret:test_token" },
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -191,15 +193,17 @@ test("HostExecBroker: pending request can be denied via broker", async () => {
         defaultScope: "capability",
         notify: "off",
       },
-      rules: [{
-        id: "node-eval",
-        match: { argv0: "node", argRegex: "^-e\\b" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "prompt",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -301,9 +305,10 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
     ]);
     if (earlyFirst !== null || earlySecond !== null) {
       throw new Error(
-        `request resolved too early: ${
-          JSON.stringify([earlyFirst, earlySecond])
-        }`,
+        `request resolved too early: ${JSON.stringify([
+          earlyFirst,
+          earlySecond,
+        ])}`,
       );
     }
     const entries = await waitForPendingCount(paths, 2);
@@ -345,15 +350,17 @@ test("HostExecBroker: argv0-only rule matches any args", async () => {
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "deno-any",
-        match: { argv0: "node" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "deno-any",
+          match: { argv0: "node" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -389,15 +396,17 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "sh-any",
-        match: { argv0: "sh" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "sh-any",
+          match: { argv0: "sh" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -440,15 +449,17 @@ test("HostExecBroker: relative rule executes original relative argv0", async () 
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "gradlew-any",
-        match: { argv0: "./gradlew" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "gradlew-any",
+          match: { argv0: "./gradlew" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -492,15 +503,17 @@ test("HostExecBroker: absolute rule executes exact absolute binary path", async 
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "helper-absolute",
-        match: { argv0: helperScript },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "deny",
-      }],
+      rules: [
+        {
+          id: "helper-absolute",
+          match: { argv0: helperScript },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -541,15 +554,17 @@ test("HostExecBroker: absolute rule does not match bare-name invocation", async 
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "helper-absolute",
-        match: { argv0: helperScript },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "deny",
-      }],
+      rules: [
+        {
+          id: "helper-absolute",
+          match: { argv0: helperScript },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -582,15 +597,17 @@ test("HostExecBroker: argv0-only rule also matches no-args command", async () =>
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "true-any",
-        match: { argv0: "true" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "true-any",
+          match: { argv0: "true" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -628,15 +645,17 @@ test("HostExecBroker: rejects cwd outside workspace with workspace-only mode", a
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "deno-ws-only",
-        match: { argv0: "node" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "deno-ws-only",
+          match: { argv0: "node" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -674,15 +693,17 @@ test("HostExecBroker: allows cwd in session tmp with workspace-or-session-tmp mo
     workspaceRoot: workspace,
     sessionTmpDir,
     hostexec: makeConfig({
-      rules: [{
-        id: "deno-ws-tmp",
-        match: { argv0: "node" },
-        cwd: { mode: "workspace-or-session-tmp", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "allow",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "deno-ws-tmp",
+          match: { argv0: "node" },
+          cwd: { mode: "workspace-or-session-tmp", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -716,15 +737,17 @@ test("HostExecBroker: fallback deny returns error for unmatched command", async 
     sessionTmpDir: `${runtimeDir}/tmp`,
     auditDir,
     hostexec: makeConfig({
-      rules: [{
-        id: "deno-deny",
-        match: { argv0: "node", argRegex: "^-e\\b" },
-        cwd: { mode: "any", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "deny",
-        fallback: "deny",
-      }],
+      rules: [
+        {
+          id: "deno-deny",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "any", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "deny",
+          fallback: "deny",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -848,15 +871,17 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "node-eval",
-        match: { argv0: "node", argRegex: "^-e\\b" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "prompt",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -917,15 +942,17 @@ test("HostExecBroker: scope capability caches approval key", async () => {
     workspaceRoot: workspace,
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
-      rules: [{
-        id: "node-eval",
-        match: { argv0: "node", argRegex: "^-e\\b" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "prompt",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
@@ -946,12 +973,11 @@ test("HostExecBroker: scope capability caches approval key", async () => {
     expect(firstResponse.type).toEqual("result");
 
     // Second identical request (same args) should be auto-approved (not pending)
-    const secondResponse = await sendHostExecBrokerRequest<
-      HostExecBrokerResponse
-    >(
-      socketPath,
-      request(["-e", "console.log('first')"], workspace, "req_cap_2"),
-    );
+    const secondResponse =
+      await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+        socketPath,
+        request(["-e", "console.log('first')"], workspace, "req_cap_2"),
+      );
     expect(secondResponse.type).toEqual("result");
     if (secondResponse.type === "result") {
       expect(secondResponse.stdout.trim()).toEqual("first");
@@ -978,15 +1004,17 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig({
       prompt: { defaultScope: "once" },
-      rules: [{
-        id: "node-eval",
-        match: { argv0: "node", argRegex: "^-e\\b" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: {},
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "prompt",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
     }),
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_test");

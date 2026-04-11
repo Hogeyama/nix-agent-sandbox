@@ -11,10 +11,7 @@ import {
 } from "node:fs/promises";
 import { userInfo } from "node:os";
 
-export async function ensureDir(
-  dirPath: string,
-  mode = 0o700,
-): Promise<void> {
+export async function ensureDir(dirPath: string, mode = 0o700): Promise<void> {
   await mkdir(dirPath, { recursive: true, mode });
   await chmodIfSupported(dirPath, mode);
 }
@@ -84,7 +81,7 @@ export async function safeRemove(
 }
 
 export async function removeIfExists(targetPath: string): Promise<boolean> {
-  if (!await pathExists(targetPath)) return false;
+  if (!(await pathExists(targetPath))) return false;
   await safeRemove(targetPath);
   return true;
 }

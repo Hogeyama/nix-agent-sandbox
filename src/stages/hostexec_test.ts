@@ -61,15 +61,17 @@ function makeProfile(): Profile {
       secrets: {
         token: { from: "env:TOKEN", required: false },
       },
-      rules: [{
-        id: "git-readonly",
-        match: { argv0: "git", argRegex: "^pull\\b" },
-        cwd: { mode: "workspace-or-session-tmp", allow: [] },
-        env: { GITHUB_TOKEN: "secret:token" },
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "prompt",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "git-readonly",
+          match: { argv0: "git", argRegex: "^pull\\b" },
+          cwd: { mode: "workspace-or-session-tmp", allow: [] },
+          env: { GITHUB_TOKEN: "secret:token" },
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
     },
   };
 }
@@ -148,8 +150,9 @@ test("HostExecStage plan: produces correct effects and docker args", () => {
   if (!plan) return;
 
   // Check that wrapper directory mount is present
-  expect(plan.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")))
-    .toEqual(true);
+  expect(
+    plan.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")),
+  ).toEqual(true);
 
   // Wrapper PATH activation is deferred to entrypoint agent exec.
   expect(plan.envVars["PATH"]).toBeUndefined();
@@ -230,9 +233,7 @@ test("HostExecStage plan: creates file-write effect for wrapper script", () => {
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  const fileWriteEffects = plan.effects.filter(
-    (e) => e.kind === "file-write",
-  );
+  const fileWriteEffects = plan.effects.filter((e) => e.kind === "file-write");
   expect(fileWriteEffects.length).toEqual(1);
   expect(fileWriteEffects[0].kind).toEqual("file-write");
   if (fileWriteEffects[0].kind === "file-write") {
@@ -242,26 +243,32 @@ test("HostExecStage plan: creates file-write effect for wrapper script", () => {
     expect(fileWriteEffects[0].content.includes('"argv0": argv0,')).toEqual(
       true,
     );
-    expect(fileWriteEffects[0].content.includes(
-      "relative argv0 fallback is not supported",
-    )).toEqual(true);
-    expect(fileWriteEffects[0].content.includes(
-      "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
-    )).toEqual(true);
+    expect(
+      fileWriteEffects[0].content.includes(
+        "relative argv0 fallback is not supported",
+      ),
+    ).toEqual(true);
+    expect(
+      fileWriteEffects[0].content.includes(
+        "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
+      ),
+    ).toEqual(true);
   }
 });
 
 test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   const profile = makeProfile();
-  profile.hostexec!.rules = [{
-    id: "gradlew",
-    match: { argv0: "./gradlew" },
-    cwd: { mode: "workspace-only", allow: [] },
-    env: {},
-    inheritEnv: { mode: "minimal", keys: [] },
-    approval: "allow",
-    fallback: "container",
-  }];
+  profile.hostexec!.rules = [
+    {
+      id: "gradlew",
+      match: { argv0: "./gradlew" },
+      cwd: { mode: "workspace-only", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "container",
+    },
+  ];
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const workspace = "/workspace";
@@ -275,22 +282,24 @@ test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   // Relative argv0 should produce a docker mount for the wrapper script
   expect(
     plan.dockerArgs.some((arg) =>
-      arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`)
+      arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`),
     ),
   ).toEqual(true);
 });
 
 test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path", () => {
   const profile = makeProfile();
-  profile.hostexec!.rules = [{
-    id: "usr-bin-git",
-    match: { argv0: "/usr/bin/git" },
-    cwd: { mode: "workspace-only", allow: [] },
-    env: {},
-    inheritEnv: { mode: "minimal", keys: [] },
-    approval: "allow",
-    fallback: "deny",
-  }];
+  profile.hostexec!.rules = [
+    {
+      id: "usr-bin-git",
+      match: { argv0: "/usr/bin/git" },
+      cwd: { mode: "workspace-only", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "deny",
+    },
+  ];
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = makeStageInput(profile, hostEnv);
@@ -301,8 +310,9 @@ test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path"
   if (!plan) return;
 
   // Absolute argv0 should produce a docker mount at that exact path in the container
-  expect(plan.dockerArgs.some((arg) => arg.endsWith(":/usr/bin/git:ro")))
-    .toEqual(true);
+  expect(
+    plan.dockerArgs.some((arg) => arg.endsWith(":/usr/bin/git:ro")),
+  ).toEqual(true);
 });
 
 test("HostExecStage plan: auto notify resolves to desktop", () => {

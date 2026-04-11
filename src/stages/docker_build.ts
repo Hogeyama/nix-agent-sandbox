@@ -79,9 +79,7 @@ export async function resolveBuildProbes(
 // DockerBuildStage (PlanStage)
 // ---------------------------------------------------------------------------
 
-export function createDockerBuildStage(
-  buildProbes: BuildProbes,
-): PlanStage {
+export function createDockerBuildStage(buildProbes: BuildProbes): PlanStage {
   return {
     kind: "plan",
     name: "DockerBuildStage",

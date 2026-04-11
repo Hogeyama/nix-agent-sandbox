@@ -111,10 +111,7 @@ async function withTempConfig(
 ): Promise<void> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-test-"));
   try {
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.yml"),
-      yaml,
-    );
+    await writeFile(path.join(tmpDir, ".agent-sandbox.yml"), yaml);
     await fn(tmpDir);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -129,14 +126,10 @@ async function initGitRepo(dir: string): Promise<void> {
     stdout: "ignore",
     stderr: "ignore",
   }).exited;
-  await Bun.spawn([
-    "git",
-    "-C",
-    dir,
-    "config",
-    "user.email",
-    "nas-test@example.com",
-  ], { stdout: "ignore", stderr: "ignore" }).exited;
+  await Bun.spawn(
+    ["git", "-C", dir, "config", "user.email", "nas-test@example.com"],
+    { stdout: "ignore", stderr: "ignore" },
+  ).exited;
   await Bun.spawn(["git", "-C", dir, "config", "commit.gpgsign", "false"], {
     stdout: "ignore",
     stderr: "ignore",
@@ -393,17 +386,20 @@ test("CLI: worktree list shows existing nas worktrees", async () => {
     await mkdir(path.join(tmpDir, ".nas", "worktrees"), {
       recursive: true,
     });
-    await Bun.spawn([
-      "git",
-      "-C",
-      tmpDir,
-      "worktree",
-      "add",
-      "-b",
-      "nas/test/2026-01-01T00-00-00",
-      wtPath,
-      "HEAD",
-    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    await Bun.spawn(
+      [
+        "git",
+        "-C",
+        tmpDir,
+        "worktree",
+        "add",
+        "-b",
+        "nas/test/2026-01-01T00-00-00",
+        wtPath,
+        "HEAD",
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    ).exited;
 
     const result = await runNas(["worktree", "list"], { cwd: tmpDir });
     expect(result.code).toEqual(0);
@@ -431,17 +427,20 @@ test("CLI: worktree clean --force removes nas worktrees", async () => {
     await mkdir(path.join(tmpDir, ".nas", "worktrees"), {
       recursive: true,
     });
-    await Bun.spawn([
-      "git",
-      "-C",
-      tmpDir,
-      "worktree",
-      "add",
-      "-b",
-      "nas/prof/2026-01-01T00-00-00",
-      wtPath,
-      "HEAD",
-    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    await Bun.spawn(
+      [
+        "git",
+        "-C",
+        tmpDir,
+        "worktree",
+        "add",
+        "-b",
+        "nas/prof/2026-01-01T00-00-00",
+        wtPath,
+        "HEAD",
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    ).exited;
 
     const result = await runNas(["worktree", "clean", "--force"], {
       cwd: tmpDir,
@@ -469,35 +468,29 @@ test("CLI: worktree clean -f -B removes worktrees and orphan branches", async ()
     await mkdir(path.join(tmpDir, ".nas", "worktrees"), {
       recursive: true,
     });
-    await Bun.spawn([
-      "git",
-      "-C",
-      tmpDir,
-      "worktree",
-      "add",
-      "-b",
-      "nas/orphan/2026-01-01T00-00-00",
-      wtPath,
-      "HEAD",
-    ], { stdout: "ignore", stderr: "ignore" }).exited;
-    await Bun.spawn([
-      "git",
-      "-C",
-      tmpDir,
-      "worktree",
-      "remove",
-      "--force",
-      wtPath,
-    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    await Bun.spawn(
+      [
+        "git",
+        "-C",
+        tmpDir,
+        "worktree",
+        "add",
+        "-b",
+        "nas/orphan/2026-01-01T00-00-00",
+        wtPath,
+        "HEAD",
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    ).exited;
+    await Bun.spawn(
+      ["git", "-C", tmpDir, "worktree", "remove", "--force", wtPath],
+      { stdout: "ignore", stderr: "ignore" },
+    ).exited;
 
-    const branchCheck = await Bun.spawn([
-      "git",
-      "-C",
-      tmpDir,
-      "branch",
-      "--list",
-      "nas/*",
-    ], { stdout: "pipe", stderr: "ignore" });
+    const branchCheck = await Bun.spawn(
+      ["git", "-C", tmpDir, "branch", "--list", "nas/*"],
+      { stdout: "pipe", stderr: "ignore" },
+    );
     const branches = (await new Response(branchCheck.stdout).text()).trim();
     expect(branches.includes("nas/orphan/2026-01-01T00-00-00")).toEqual(true);
 
@@ -507,16 +500,13 @@ test("CLI: worktree clean -f -B removes worktrees and orphan branches", async ()
     expect(result.code).toEqual(0);
     expect(result.stdout.includes("orphan branch")).toEqual(true);
 
-    const branchAfter = await Bun.spawn([
-      "git",
-      "-C",
-      tmpDir,
-      "branch",
-      "--list",
-      "nas/*",
-    ], { stdout: "pipe", stderr: "ignore" });
-    const branchesAfter = (await new Response(branchAfter.stdout).text())
-      .trim();
+    const branchAfter = await Bun.spawn(
+      ["git", "-C", tmpDir, "branch", "--list", "nas/*"],
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    const branchesAfter = (
+      await new Response(branchAfter.stdout).text()
+    ).trim();
     expect(branchesAfter).toEqual("");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -570,15 +560,17 @@ test("CLI: hostexec pending lists queued approvals", async () => {
       secrets: {
         cli_token: { from: "env:HOSTEXEC_CLI_TOKEN", required: true },
       },
-      rules: [{
-        id: "deno-eval",
-        match: { argv0: "deno", argRegex: "^eval\\b" },
-        cwd: { mode: "workspace-only", allow: [] },
-        env: { TOKEN: "secret:cli_token" },
-        inheritEnv: { mode: "minimal", keys: [] },
-        approval: "prompt",
-        fallback: "container",
-      }],
+      rules: [
+        {
+          id: "deno-eval",
+          match: { argv0: "deno", argRegex: "^eval\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: { TOKEN: "secret:cli_token" },
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
     },
   });
   const socketPath = hostExecBrokerSocketPath(paths, "sess_cli");
@@ -647,8 +639,9 @@ profiles:
     );
     expect(result.code).toEqual(0);
     expect(result.stdout.includes('args string: "hoge"')).toEqual(true);
-    expect(result.stdout.includes("Matched rule: gpg-sign (approval: allow)"))
-      .toEqual(true);
+    expect(
+      result.stdout.includes("Matched rule: gpg-sign (approval: allow)"),
+    ).toEqual(true);
   });
 });
 
@@ -674,8 +667,9 @@ profiles:
     );
     expect(result.code).toEqual(0);
     expect(result.stdout.includes('args string: "-A test"')).toEqual(true);
-    expect(result.stdout.includes("Matched rule: deno-test (approval: allow)"))
-      .toEqual(true);
+    expect(
+      result.stdout.includes("Matched rule: deno-test (approval: allow)"),
+    ).toEqual(true);
   });
 });
 
@@ -978,9 +972,10 @@ async function withBrokerFixture(
   fn: (fixture: BrokerFixture) => Promise<void>,
 ): Promise<void> {
   const runtimeDir = await makeTempDir("nas-network-e2e-");
-  const sessionId = `sess_${
-    crypto.randomUUID().replaceAll("-", "").slice(0, 12)
-  }`;
+  const sessionId = `sess_${crypto
+    .randomUUID()
+    .replaceAll("-", "")
+    .slice(0, 12)}`;
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const socketPath = brokerSocketPath(paths, sessionId);
   const broker = new SessionBroker({
@@ -1039,12 +1034,10 @@ async function waitForPending(
 ): Promise<{ type: "pending"; items: PendingEntry[] }> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const pending = await sendBrokerRequest<
-      { type: "pending"; items: PendingEntry[] }
-    >(
-      socketPath,
-      { type: "list_pending" },
-    );
+    const pending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
     if (pending.items.length > 0) {
       return pending;
     }
@@ -1109,8 +1102,9 @@ test("CLI E2E: network approve resumes pending request", async () => {
     );
 
     expect(result.code).toEqual(0);
-    expect(result.stdout.includes(`Approved ${sessionId} req_approve_cli`))
-      .toEqual(true);
+    expect(
+      result.stdout.includes(`Approved ${sessionId} req_approve_cli`),
+    ).toEqual(true);
 
     const decision = await authorizePromise;
     expect(decision.decision).toEqual("allow");
@@ -1179,11 +1173,11 @@ test("CLI E2E: network gc removes stale runtime state", async () => {
     );
 
     expect(result.code).toEqual(0);
-    expect(result.stdout.includes(
-      "GC removed 1 session(s), 1 pending dir(s), 1 broker socket(s).",
-    )).toEqual(
-      true,
-    );
+    expect(
+      result.stdout.includes(
+        "GC removed 1 session(s), 1 pending dir(s), 1 broker socket(s).",
+      ),
+    ).toEqual(true);
     expect(await exists(paths.authRouterSocket)).toEqual(false);
     expect(await exists(paths.authRouterPidFile)).toEqual(false);
     expect(await exists(staleSocket)).toEqual(false);

@@ -42,9 +42,7 @@ export function buildHostEnv(): HostEnv {
  *
  * 各 probe は独立しているため Promise.all で並列実行する。
  */
-export async function resolveProbes(
-  hostEnv: HostEnv,
-): Promise<ProbeResults> {
+export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
   const [
     hasHostNix,
     auditDir,
@@ -130,9 +128,7 @@ function probeDbusSessionAddress(hostEnv: HostEnv): string | null {
 }
 
 /** gpgconf --list-dir agent-socket でソケットパスを解決する */
-async function probeGpgAgentSocket(
-  hostEnv: HostEnv,
-): Promise<string | null> {
+async function probeGpgAgentSocket(hostEnv: HostEnv): Promise<string | null> {
   try {
     const proc = Bun.spawn(["gpgconf", "--list-dir", "agent-socket"], {
       stdout: "pipe",

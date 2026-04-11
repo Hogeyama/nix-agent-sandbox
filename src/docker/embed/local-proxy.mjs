@@ -23,14 +23,15 @@ if (!upstreamUrl) {
 const upstream = new URL(upstreamUrl);
 const upstreamHost = upstream.hostname;
 const upstreamPort = Number(upstream.port) || 80;
-const upstreamAuth = upstream.username && upstream.password
-  ? "Basic " +
-    Buffer.from(
-      `${decodeURIComponent(upstream.username)}:${
-        decodeURIComponent(upstream.password)
-      }`,
-    ).toString("base64")
-  : null;
+const upstreamAuth =
+  upstream.username && upstream.password
+    ? "Basic " +
+      Buffer.from(
+        `${decodeURIComponent(upstream.username)}:${decodeURIComponent(
+          upstream.password,
+        )}`,
+      ).toString("base64")
+    : null;
 
 const server = createServer((clientReq, clientRes) => {
   // HTTP forward proxy: relay request to upstream proxy
@@ -64,8 +65,7 @@ const server = createServer((clientReq, clientRes) => {
 server.on("connect", (clientReq, clientSocket, head) => {
   // HTTPS CONNECT tunnel: establish tunnel through upstream proxy
   const upstreamSocket = netConnect(upstreamPort, upstreamHost, () => {
-    let connectReq =
-      `CONNECT ${clientReq.url} HTTP/1.1\r\nHost: ${clientReq.url}\r\n`;
+    let connectReq = `CONNECT ${clientReq.url} HTTP/1.1\r\nHost: ${clientReq.url}\r\n`;
     if (upstreamAuth) {
       connectReq += `Proxy-Authorization: ${upstreamAuth}\r\n`;
     }

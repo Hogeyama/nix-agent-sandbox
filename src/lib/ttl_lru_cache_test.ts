@@ -115,13 +115,15 @@ test("TtlLruCache: clear removes all entries", () => {
 // ---------------------------------------------------------------------------
 
 test("TtlLruCache: throws RangeError when maxSize < 1", () => {
-  expect(() => new TtlLruCache<string, number>({ maxSize: 0, ttlMs: 1000 }))
-    .toThrow("maxSize must be >= 1");
+  expect(
+    () => new TtlLruCache<string, number>({ maxSize: 0, ttlMs: 1000 }),
+  ).toThrow("maxSize must be >= 1");
 });
 
 test("TtlLruCache: throws RangeError when ttlMs < 0", () => {
-  expect(() => new TtlLruCache<string, number>({ maxSize: 1, ttlMs: -1 }))
-    .toThrow("ttlMs must be >= 0");
+  expect(
+    () => new TtlLruCache<string, number>({ maxSize: 1, ttlMs: -1 }),
+  ).toThrow("ttlMs must be >= 0");
 });
 
 test("TtlLruCache: size reflects current entry count", () => {

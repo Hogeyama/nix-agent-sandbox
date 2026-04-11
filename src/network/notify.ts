@@ -84,8 +84,9 @@ function formatMessage(
   const target = `${notification.target.host}:${notification.target.port}`;
   return {
     title: `[nas] Pending network approval: ${notification.sessionId}`,
-    body: notification.uiEnabled === false
-      ? target
-      : [target, "クリックでUIを開く"].join("\n"),
+    body:
+      notification.uiEnabled === false
+        ? target
+        : [target, "クリックでUIを開く"].join("\n"),
   };
 }

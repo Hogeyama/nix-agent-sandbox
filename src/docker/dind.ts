@@ -55,11 +55,11 @@ export interface DindStageOptions {
 export async function ensureSharedTmpWritable(
   containerName: string,
 ): Promise<void> {
-  const result = await dockerExec(containerName, [
-    "chmod",
-    "1777",
-    SHARED_TMP_MOUNT_PATH,
-  ], { user: "0" });
+  const result = await dockerExec(
+    containerName,
+    ["chmod", "1777", SHARED_TMP_MOUNT_PATH],
+    { user: "0" },
+  );
   if (result.code !== 0) {
     throw new Error(
       `Failed to make shared tmp writable: ${SHARED_TMP_MOUNT_PATH}`,
@@ -108,7 +108,7 @@ export async function startDindSidecar(
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
     [NAS_KIND_LABEL]: NAS_KIND_DIND_TMP,
   }).catch((e) =>
-    logInfo(`[nas] DinD: failed to create shared tmp volume: ${e}`)
+    logInfo(`[nas] DinD: failed to create shared tmp volume: ${e}`),
   );
 
   await runDindSidecar(containerName, sharedTmpVolume, options);
@@ -129,13 +129,13 @@ export async function startDindSidecar(
     // rootless DinD の状態ディレクトリが壊れていると起動できないため、
     // まずキャッシュ volume を作り直してから再試行する。
     await dockerStop(containerName, { timeoutSeconds: 0 }).catch((e) =>
-      logInfo(`[nas] DinD: failed to stop container for cache reset: ${e}`)
+      logInfo(`[nas] DinD: failed to stop container for cache reset: ${e}`),
     );
     await dockerRm(containerName).catch((e) =>
-      logInfo(`[nas] DinD: failed to remove container for cache reset: ${e}`)
+      logInfo(`[nas] DinD: failed to remove container for cache reset: ${e}`),
     );
     await dockerVolumeRemove(DIND_CACHE_VOLUME).catch((e) =>
-      logInfo(`[nas] DinD: failed to remove cache volume: ${e}`)
+      logInfo(`[nas] DinD: failed to remove cache volume: ${e}`),
     );
 
     await runDindSidecar(containerName, sharedTmpVolume, options);
@@ -154,12 +154,14 @@ export async function startDindSidecar(
         }), retrying without cache...`,
       );
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch((e) =>
-        logInfo(`[nas] DinD: failed to stop container for no-cache retry: ${e}`)
+        logInfo(
+          `[nas] DinD: failed to stop container for no-cache retry: ${e}`,
+        ),
       );
       await dockerRm(containerName).catch((e) =>
         logInfo(
           `[nas] DinD: failed to remove container for no-cache retry: ${e}`,
-        )
+        ),
       );
     }
 
@@ -215,8 +217,8 @@ export async function ensureDindSidecar(
     readinessTimeoutMs,
   } = params;
 
-  const isReusingSharedSidecar = shared &&
-    await dockerIsRunning(containerName);
+  const isReusingSharedSidecar =
+    shared && (await dockerIsRunning(containerName));
 
   // 共有モード: 既に起動中ならサイドカー作成をスキップ
   let sidecarStarted = false;
@@ -226,9 +228,7 @@ export async function ensureDindSidecar(
     // 共有モードで停止済みコンテナが残っている場合は削除して再作成
     if (shared) {
       await dockerRm(containerName).catch((e: unknown) =>
-        logInfo(
-          `[nas] DinD: failed to remove stale shared container: ${e}`,
-        )
+        logInfo(`[nas] DinD: failed to remove stale shared container: ${e}`),
       );
     }
 
@@ -296,9 +296,7 @@ export async function teardownDindSidecar(
   const { containerName, networkName, sharedTmpVolume, shared } = params;
 
   if (shared) {
-    logInfo(
-      `[nas] DinD: keeping shared sidecar (${containerName})`,
-    );
+    logInfo(`[nas] DinD: keeping shared sidecar (${containerName})`);
     return;
   }
 
@@ -412,10 +410,7 @@ async function waitForDindReady(
     }
 
     // Detect daemon listen via TCP on bridge IP, then verify with docker info
-    if (
-      containerIp &&
-      await canConnectTcp(containerIp, DIND_INTERNAL_PORT)
-    ) {
+    if (containerIp && (await canConnectTcp(containerIp, DIND_INTERNAL_PORT))) {
       const result = await dockerExec(containerName, [
         "docker",
         "-H",
@@ -437,10 +432,7 @@ async function waitForDindReady(
   );
 }
 
-async function canConnectTcp(
-  hostname: string,
-  port: number,
-): Promise<boolean> {
+async function canConnectTcp(hostname: string, port: number): Promise<boolean> {
   const { createConnection } = await import("node:net");
   return new Promise<boolean>((resolve) => {
     const socket = createConnection({ host: hostname, port }, () => {

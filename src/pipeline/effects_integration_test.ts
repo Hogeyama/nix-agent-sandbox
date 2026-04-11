@@ -17,9 +17,7 @@ import path from "node:path";
 // Helper: create a unique temp directory for test isolation
 // ---------------------------------------------------------------------------
 
-async function withTempDir(
-  fn: (dir: string) => Promise<void>,
-): Promise<void> {
+async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(path.join(tmpdir(), "effects_test_"));
   try {
     await fn(dir);
@@ -148,27 +146,29 @@ test("executeEffect: unimplemented effects throw", async () => {
   }
 
   // unix-listener with session-broker spec throws a different message
-  await expect(executeEffect({
-    kind: "unix-listener",
-    id: "ul",
-    socketPath: "/tmp/s",
-    spec: {
-      kind: "session-broker",
-      paths: {
-        runtimeDir: "/tmp",
-        sessionsDir: "/tmp/sessions",
-        pendingDir: "/tmp/pending",
-        brokersDir: "/tmp/brokers",
-        authRouterSocket: "/tmp/auth.sock",
-        authRouterPidFile: "/tmp/auth.pid",
-        envoyConfigFile: "/tmp/envoy.yaml",
+  await expect(
+    executeEffect({
+      kind: "unix-listener",
+      id: "ul",
+      socketPath: "/tmp/s",
+      spec: {
+        kind: "session-broker",
+        paths: {
+          runtimeDir: "/tmp",
+          sessionsDir: "/tmp/sessions",
+          pendingDir: "/tmp/pending",
+          brokersDir: "/tmp/brokers",
+          authRouterSocket: "/tmp/auth.sock",
+          authRouterPidFile: "/tmp/auth.pid",
+          envoyConfigFile: "/tmp/envoy.yaml",
+        },
+        sessionId: "sid",
+        allowlist: [],
+        denylist: [],
+        promptEnabled: false,
       },
-      sessionId: "sid",
-      allowlist: [],
-      denylist: [],
-      promptEnabled: false,
-    },
-  })).rejects.toThrow("unix-listener session-broker not yet implemented");
+    }),
+  ).rejects.toThrow("unix-listener session-broker not yet implemented");
 });
 
 // ---------------------------------------------------------------------------

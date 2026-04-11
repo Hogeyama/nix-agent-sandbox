@@ -11,9 +11,7 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
     const jsonMode = nasArgs.includes("--json");
     const since = getFlagValue(nasArgs, "--since");
     const sessionId = getFlagValue(nasArgs, "--session");
-    const domain = getFlagValue(nasArgs, "--domain") as
-      | AuditDomain
-      | null;
+    const domain = getFlagValue(nasArgs, "--domain") as AuditDomain | null;
     const auditDirOverride = getFlagValue(nasArgs, "--audit-dir");
 
     if (domain !== null && domain !== "network" && domain !== "hostexec") {
@@ -54,9 +52,8 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
 }
 
 function formatEntry(entry: AuditLogEntry): string {
-  const target = entry.domain === "network"
-    ? (entry.target ?? "")
-    : (entry.command ?? "");
+  const target =
+    entry.domain === "network" ? (entry.target ?? "") : (entry.command ?? "");
   return `${entry.timestamp} ${entry.sessionId} ${entry.domain} ${entry.decision} ${entry.reason} ${target}`;
 }
 

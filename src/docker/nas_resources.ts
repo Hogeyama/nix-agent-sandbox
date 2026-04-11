@@ -24,9 +24,11 @@ export function isNasManagedSidecar(
   name: string,
 ): boolean {
   if (isNasManagedLabel(labels)) {
-    return labels[NAS_KIND_LABEL] === NAS_KIND_DIND ||
+    return (
+      labels[NAS_KIND_LABEL] === NAS_KIND_DIND ||
       labels[NAS_KIND_LABEL] === NAS_KIND_PROXY ||
-      labels[NAS_KIND_LABEL] === NAS_KIND_ENVOY;
+      labels[NAS_KIND_LABEL] === NAS_KIND_ENVOY
+    );
   }
   return isLegacyNasSidecarName(name);
 }
@@ -36,9 +38,11 @@ export function isNasManagedNetwork(
   name: string,
 ): boolean {
   if (isNasManagedLabel(labels)) {
-    return labels[NAS_KIND_LABEL] === NAS_KIND_DIND_NETWORK ||
+    return (
+      labels[NAS_KIND_LABEL] === NAS_KIND_DIND_NETWORK ||
       labels[NAS_KIND_LABEL] === NAS_KIND_PROXY_NETWORK ||
-      labels[NAS_KIND_LABEL] === NAS_KIND_SESSION_NETWORK;
+      labels[NAS_KIND_LABEL] === NAS_KIND_SESSION_NETWORK
+    );
   }
   return isLegacyNasNetworkName(name);
 }
@@ -54,8 +58,7 @@ export function isNasManagedTmpVolume(
 }
 
 export function isNasManagedAgent(labels: DockerLabels): boolean {
-  return isNasManagedLabel(labels) &&
-    labels[NAS_KIND_LABEL] === NAS_KIND_AGENT;
+  return isNasManagedLabel(labels) && labels[NAS_KIND_LABEL] === NAS_KIND_AGENT;
 }
 
 /** nas.managed なコンテナすべて (sidecar + agent) */
@@ -67,18 +70,22 @@ export function isNasManagedContainer(
 }
 
 export function isLegacyNasSidecarName(name: string): boolean {
-  return name === "nas-dind-shared" ||
+  return (
+    name === "nas-dind-shared" ||
     name === "nas-envoy-shared" ||
     (name.startsWith("nas-dind-") && !name.endsWith("-tmp")) ||
     name.startsWith("nas-envoy-") ||
-    name.startsWith("nas-proxy-");
+    name.startsWith("nas-proxy-")
+  );
 }
 
 export function isLegacyNasNetworkName(name: string): boolean {
-  return name === "nas-dind-shared" ||
+  return (
+    name === "nas-dind-shared" ||
     name.startsWith("nas-dind-") ||
     name.startsWith("nas-session-") ||
-    name.startsWith("nas-proxy-");
+    name.startsWith("nas-proxy-")
+  );
 }
 
 export function isLegacyNasTmpVolumeName(name: string): boolean {

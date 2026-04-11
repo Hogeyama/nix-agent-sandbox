@@ -40,11 +40,11 @@ export function mergeOutputs(
 type TeardownEntry =
   | { kind: "plan"; name: string; handles: ResourceHandle[] }
   | {
-    kind: "procedural";
-    name: string;
-    stage: AnyStage & { kind: "procedural" };
-    input: StageInput;
-  };
+      kind: "procedural";
+      name: string;
+      stage: AnyStage & { kind: "procedural" };
+      input: StageInput;
+    };
 
 /**
  * Run a pipeline of AnyStage[] (PlanStage or ProceduralStage).

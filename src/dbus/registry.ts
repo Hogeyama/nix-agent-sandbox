@@ -49,19 +49,17 @@ export async function gcDbusRuntime(
   runtimePaths: DbusRuntimePaths,
 ): Promise<void> {
   try {
-    for (
-      const entry of await readdir(runtimePaths.sessionsDir, {
-        withFileTypes: true,
-      })
-    ) {
+    for (const entry of await readdir(runtimePaths.sessionsDir, {
+      withFileTypes: true,
+    })) {
       if (!entry.isDirectory()) continue;
       const sessionDir = path.join(runtimePaths.sessionsDir, entry.name);
       const pidFile = path.join(sessionDir, "proxy.pid");
       const pid = await readPid(pidFile);
-      const alive = pid !== null && await isPidAlive(pid);
+      const alive = pid !== null && (await isPidAlive(pid));
       if (alive) continue;
       await rm(sessionDir, { recursive: true, force: true }).catch((e) =>
-        logInfo(`[nas] DbusRegistry GC: failed to remove session dir: ${e}`)
+        logInfo(`[nas] DbusRegistry GC: failed to remove session dir: ${e}`),
       );
     }
   } catch (error) {

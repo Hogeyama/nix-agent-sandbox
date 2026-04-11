@@ -43,11 +43,7 @@ test("createProxySessionNetworkHandle: tears down created network when envoy con
     ),
   ).rejects.toThrow("failed to connect envoy");
 
-  expect(calls).toEqual([
-    "create:net-a",
-    "connect:envoy-a",
-    "remove:net-a",
-  ]);
+  expect(calls).toEqual(["create:net-a", "connect:envoy-a", "remove:net-a"]);
 });
 
 test("createProxySessionNetworkHandle: disconnects envoy and removes network when dind connect fails", async () => {

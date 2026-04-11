@@ -202,10 +202,7 @@ test("buildDindSidecarArgs: cache enabled keeps both volume specs valid", () => 
 });
 
 test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
-  expect(buildDindSidecarArgs("nas-dind-shared-tmp", { disableCache: true }))
-    .toEqual([
-      "--privileged",
-      "-v",
-      "nas-dind-shared-tmp:/tmp/nas-shared",
-    ]);
+  expect(
+    buildDindSidecarArgs("nas-dind-shared-tmp", { disableCache: true }),
+  ).toEqual(["--privileged", "-v", "nas-dind-shared-tmp:/tmp/nas-shared"]);
 });

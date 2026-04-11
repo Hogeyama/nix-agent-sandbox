@@ -362,13 +362,11 @@ test("GET /audit with before cursor returns only older entries", async () => {
       decision: "allow",
       reason: "allowlist match",
     };
-    for (
-      const e of [
-        { ...base, id: "a", timestamp: "2026-03-28T09:00:00Z", requestId: "a" },
-        { ...base, id: "b", timestamp: "2026-03-28T10:00:00Z", requestId: "b" },
-        { ...base, id: "c", timestamp: "2026-03-28T11:00:00Z", requestId: "c" },
-      ]
-    ) {
+    for (const e of [
+      { ...base, id: "a", timestamp: "2026-03-28T09:00:00Z", requestId: "a" },
+      { ...base, id: "b", timestamp: "2026-03-28T10:00:00Z", requestId: "b" },
+      { ...base, id: "c", timestamp: "2026-03-28T11:00:00Z", requestId: "c" },
+    ]) {
       await appendAuditLog(e, auditDir);
     }
 
@@ -377,9 +375,7 @@ test("GET /audit with before cursor returns only older entries", async () => {
     const app = new Router();
     app.route("/api", api);
 
-    const res = await app.request(
-      "/api/audit?before=2026-03-28T11:00:00Z",
-    );
+    const res = await app.request("/api/audit?before=2026-03-28T11:00:00Z");
     expect(res.status).toEqual(200);
     const body = await res.json();
     const ids = body.items.map((e: { id: string }) => e.id);
@@ -402,9 +398,7 @@ test("GET /audit with invalid before returns 400", async () => {
     const res = await app.request("/api/audit?before=not-a-date");
     expect(res.status).toEqual(400);
     const body = await res.json();
-    expect(body.error).toEqual(
-      "Invalid before: must be an ISO-8601 timestamp",
-    );
+    expect(body.error).toEqual("Invalid before: must be an ISO-8601 timestamp");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -507,9 +501,7 @@ test("GET /audit filters by sessions set and sessionContains", async () => {
     app.route("/api", api);
 
     // Set membership (comma-separated)
-    const setRes = await app.request(
-      "/api/audit?sessions=sess-001,sess-002",
-    );
+    const setRes = await app.request("/api/audit?sessions=sess-001,sess-002");
     expect(setRes.status).toEqual(200);
     const setBody = await setRes.json();
     expect(setBody.items.length).toEqual(2);
@@ -520,9 +512,7 @@ test("GET /audit filters by sessions set and sessionContains", async () => {
     expect(ids.has("sess-002")).toEqual(true);
 
     // Substring match
-    const subRes = await app.request(
-      "/api/audit?sessionContains=sess",
-    );
+    const subRes = await app.request("/api/audit?sessionContains=sess");
     expect(subRes.status).toEqual(200);
     const subBody = await subRes.json();
     expect(subBody.items.length).toEqual(2);

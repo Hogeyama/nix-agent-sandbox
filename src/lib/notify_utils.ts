@@ -60,19 +60,22 @@ export async function tryDesktopNotification(
   const cmd = getNotifySendCommand();
   let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = Bun.spawn([
-      cmd,
-      "--print-id",
-      "--wait",
-      "--expire-time=0",
-      "--action=default=Open",
-      options.title,
-      options.body,
-    ], {
-      stdout: "pipe",
-      stderr: "ignore",
-      env: process.env,
-    });
+    child = Bun.spawn(
+      [
+        cmd,
+        "--print-id",
+        "--wait",
+        "--expire-time=0",
+        "--action=default=Open",
+        options.title,
+        options.body,
+      ],
+      {
+        stdout: "pipe",
+        stderr: "ignore",
+        env: process.env,
+      },
+    );
   } catch {
     warnNotifySendMissing();
     return false;
@@ -81,7 +84,9 @@ export async function tryDesktopNotification(
   const onAbort = () => {
     try {
       child.kill();
-    } catch { /* already exited */ }
+    } catch {
+      /* already exited */
+    }
   };
   options.signal?.addEventListener("abort", onAbort);
 
@@ -142,10 +147,9 @@ export function isWSL(): boolean {
 export function resolveNasCommand(): { execPath: string; prefix: string[] } {
   const execPath = process.execPath;
   const isCompiled = !path.basename(execPath).startsWith("bun");
-  const prefix = isCompiled ? [] : [
-    "run",
-    new URL("../../main.ts", import.meta.url).pathname,
-  ];
+  const prefix = isCompiled
+    ? []
+    : ["run", new URL("../../main.ts", import.meta.url).pathname];
   return { execPath, prefix };
 }
 
@@ -170,20 +174,23 @@ export async function tryCliActionNotification(
   if (options.signal?.aborted) return false;
   let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = Bun.spawn([
-      getNotifySendCommand(),
-      "--print-id",
-      "--wait",
-      "--expire-time=0",
-      "--action=approve=Approve",
-      "--action=deny=Deny",
-      options.title,
-      options.body,
-    ], {
-      stdout: "pipe",
-      stderr: "ignore",
-      env: process.env,
-    });
+    child = Bun.spawn(
+      [
+        getNotifySendCommand(),
+        "--print-id",
+        "--wait",
+        "--expire-time=0",
+        "--action=approve=Approve",
+        "--action=deny=Deny",
+        options.title,
+        options.body,
+      ],
+      {
+        stdout: "pipe",
+        stderr: "ignore",
+        env: process.env,
+      },
+    );
   } catch {
     warnNotifySendMissing();
     return false;
@@ -192,7 +199,9 @@ export async function tryCliActionNotification(
   const onAbort = () => {
     try {
       child.kill();
-    } catch { /* already exited */ }
+    } catch {
+      /* already exited */
+    }
   };
   options.signal?.addEventListener("abort", onAbort);
 
@@ -214,7 +223,9 @@ export async function tryCliActionNotification(
           env: process.env,
         });
         await proc.exited;
-      } catch { /* command may not be resolvable */ }
+      } catch {
+        /* command may not be resolvable */
+      }
       return true;
     }
     if (action === "deny") {
@@ -225,7 +236,9 @@ export async function tryCliActionNotification(
           env: process.env,
         });
         await proc.exited;
-      } catch { /* command may not be resolvable */ }
+      } catch {
+        /* command may not be resolvable */
+      }
       return true;
     }
     // Dismiss → do nothing
@@ -334,22 +347,25 @@ async function readNotifySendOutput(
 
 async function closeDesktopNotification(id: string): Promise<void> {
   try {
-    const proc = Bun.spawn([
-      "gdbus",
-      "call",
-      "--session",
-      "--dest",
-      "org.freedesktop.Notifications",
-      "--object-path",
-      "/org/freedesktop/Notifications",
-      "--method",
-      "org.freedesktop.Notifications.CloseNotification",
-      id,
-    ], {
-      stdout: "ignore",
-      stderr: "ignore",
-      env: process.env,
-    });
+    const proc = Bun.spawn(
+      [
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.freedesktop.Notifications",
+        "--object-path",
+        "/org/freedesktop/Notifications",
+        "--method",
+        "org.freedesktop.Notifications.CloseNotification",
+        id,
+      ],
+      {
+        stdout: "ignore",
+        stderr: "ignore",
+        env: process.env,
+      },
+    );
     await proc.exited;
   } catch {
     // gdbus may not be available (e.g. WSL without D-Bus)

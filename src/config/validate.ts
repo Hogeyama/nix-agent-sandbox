@@ -84,9 +84,7 @@ function parseProfile(name: string, raw: RawProfile): Profile {
     return parsed;
   } catch (err) {
     if (err instanceof ConfigValidationError) {
-      throw new ConfigValidationError(
-        `profile "${name}": ${err.message}`,
-      );
+      throw new ConfigValidationError(`profile "${name}": ${err.message}`);
     }
     if (err instanceof ZodError) {
       throw new ConfigValidationError(

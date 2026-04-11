@@ -105,7 +105,8 @@ async function canRunProxy(): Promise<boolean> {
 }
 
 const proxyAvailable = await canRunProxy();
-const canBindMount = process.env["NAS_DIND_SHARED_TMP"] !== undefined ||
+const canBindMount =
+  process.env["NAS_DIND_SHARED_TMP"] !== undefined ||
   !process.env["DOCKER_HOST"];
 
 async function makeDockerBindableTempDir(prefix: string): Promise<string> {
@@ -121,9 +122,9 @@ async function makeDockerBindableTempDir(prefix: string): Promise<string> {
 test.skipIf(!proxyAvailable || !canBindMount)(
   "ProxyStage: starts shared Envoy and injects credentialed proxy env",
   async () => {
-    const envoyContainerName = `nas-envoy-test-${
-      crypto.randomUUID().slice(0, 8)
-    }`;
+    const envoyContainerName = `nas-envoy-test-${crypto
+      .randomUUID()
+      .slice(0, 8)}`;
     const runtimeRoot = await makeDockerBindableTempDir("nas-proxy-runtime-");
     const oldRuntimeDir = process.env["XDG_RUNTIME_DIR"];
     process.env["XDG_RUNTIME_DIR"] = runtimeRoot;
@@ -139,8 +140,8 @@ test.skipIf(!proxyAvailable || !canBindMount)(
     const hostEnv: HostEnv = {
       home: process.env["HOME"] ?? "/home/test",
       user: process.env["USER"] ?? "test",
-      uid: (process.getuid?.() ?? 1000),
-      gid: (process.getgid?.() ?? 1000),
+      uid: process.getuid?.() ?? 1000,
+      gid: process.getgid?.() ?? 1000,
       isWSL: false,
       env: new Map([["XDG_RUNTIME_DIR", runtimeRoot]]),
     };
@@ -203,7 +204,7 @@ test.skipIf(!proxyAvailable || !canBindMount)(
         mode: 0o600,
       });
 
-      handles.push(...await executePlan(plan!));
+      handles.push(...(await executePlan(plan!)));
 
       // http_proxy / https_proxy should point to local proxy
       expect(plan!.envVars["http_proxy"]).toEqual("http://127.0.0.1:18080");
@@ -215,8 +216,9 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       expect(typeof plan!.outputOverrides.networkBrokerSocket).toEqual(
         "string",
       );
-      expect(plan!.outputOverrides.networkRuntimeDir?.startsWith(runtimeRoot))
-        .toEqual(true);
+      expect(
+        plan!.outputOverrides.networkRuntimeDir?.startsWith(runtimeRoot),
+      ).toEqual(true);
       expect(plan!.dockerArgs).toEqual([]);
       expect(
         (plan!.outputOverrides.dockerArgs as string[] | undefined)?.includes(
@@ -226,8 +228,9 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       expect(((await stat(runtimePaths.runtimeDir)).mode ?? 0) & 0o777).toEqual(
         0o755,
       );
-      expect(((await stat(runtimePaths.envoyConfigFile)).mode ?? 0) & 0o777)
-        .toEqual(0o644);
+      expect(
+        ((await stat(runtimePaths.envoyConfigFile)).mode ?? 0) & 0o777,
+      ).toEqual(0o644);
       expect(await dockerIsRunning(envoyContainerName)).toEqual(true);
     } finally {
       await teardownHandles(handles).catch(() => {});

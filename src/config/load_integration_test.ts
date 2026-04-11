@@ -36,10 +36,7 @@ async function withTempConfig(
 ): Promise<void> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-test-"));
   try {
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.yml"),
-      yaml,
-    );
+    await writeFile(path.join(tmpDir, ".agent-sandbox.yml"), yaml);
     await fn(tmpDir);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -256,22 +253,21 @@ profiles:
     const blockedPath = path.join(childDir, ".agent-sandbox.yml");
     const originalStat = nodeFs.stat;
     const statSpy = spyOn(nodeFs, "stat");
-    statSpy.mockImplementation(
-      (async (target: any, ...rest: any[]) => {
-        const targetPath = target instanceof URL
-          ? target.pathname
-          : String(target);
-        if (targetPath === blockedPath) {
-          throw new Error("blocked child config");
-        }
-        return await originalStat(target, ...rest);
-      }) as typeof nodeFs.stat,
-    );
+    statSpy.mockImplementation((async (target: any, ...rest: any[]) => {
+      const targetPath =
+        target instanceof URL ? target.pathname : String(target);
+      if (targetPath === blockedPath) {
+        throw new Error("blocked child config");
+      }
+      return await originalStat(target, ...rest);
+    }) as typeof nodeFs.stat);
     try {
-      await expect(loadConfig({
-        startDir: grandchildDir,
-        globalConfigPath: null,
-      })).rejects.toThrow("blocked child config");
+      await expect(
+        loadConfig({
+          startDir: grandchildDir,
+          globalConfigPath: null,
+        }),
+      ).rejects.toThrow("blocked child config");
     } finally {
       statSpy.mockRestore();
     }
@@ -281,8 +277,9 @@ profiles:
 test("loadConfig: throws when no config file found", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-empty-"));
   try {
-    await expect(loadConfig({ startDir: tmpDir, globalConfigPath: null }))
-      .rejects.toThrow("not found");
+    await expect(
+      loadConfig({ startDir: tmpDir, globalConfigPath: null }),
+    ).rejects.toThrow("not found");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -293,8 +290,9 @@ test("loadConfig: throws for empty profiles", async () => {
 profiles: {}
 `;
   await withTempConfig(yaml, async (dir) => {
-    await expect(loadConfig({ startDir: dir, globalConfigPath: null })).rejects
-      .toThrow("at least one entry");
+    await expect(
+      loadConfig({ startDir: dir, globalConfigPath: null }),
+    ).rejects.toThrow("at least one entry");
   });
 });
 
@@ -305,8 +303,9 @@ profiles:
     agent: invalid_agent
 `;
   await withTempConfig(yaml, async (dir) => {
-    await expect(loadConfig({ startDir: dir, globalConfigPath: null })).rejects
-      .toThrow("agent must be one of");
+    await expect(
+      loadConfig({ startDir: dir, globalConfigPath: null }),
+    ).rejects.toThrow("agent must be one of");
   });
 });
 
@@ -318,8 +317,9 @@ profiles:
       enable: true
 `;
   await withTempConfig(yaml, async (dir) => {
-    await expect(loadConfig({ startDir: dir, globalConfigPath: null })).rejects
-      .toThrow("agent must be one of");
+    await expect(
+      loadConfig({ startDir: dir, globalConfigPath: null }),
+    ).rejects.toThrow("agent must be one of");
   });
 });
 
@@ -507,7 +507,7 @@ test("resolveProfile: auto-selects when only one profile and no default", () => 
 test("resolveProfile: throws when multiple profiles and no default", () => {
   const config: Config = {
     profiles: {
-      "a": {
+      a: {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
@@ -521,7 +521,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
         extraMounts: [],
         env: [],
       },
-      "b": {
+      b: {
         agent: "copilot",
         agentArgs: [],
         nix: { enable: false, mountSocket: false, extraPackages: [] },
@@ -547,7 +547,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
 test("resolveProfile: throws for nonexistent profile name", () => {
   const config: Config = {
     profiles: {
-      "exists": {
+      exists: {
         agent: "claude",
         agentArgs: [],
         nix: { enable: "auto", mountSocket: true, extraPackages: [] },
@@ -785,10 +785,7 @@ async function withTempNixConfig(
 ): Promise<void> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-nix-test-"));
   try {
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.nix"),
-      nixExpr,
-    );
+    await writeFile(path.join(tmpDir, ".agent-sandbox.nix"), nixExpr);
     await fn(tmpDir);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -913,8 +910,9 @@ test("loadConfig: searches upward for .nix config file", async () => {
 test("loadConfig: throws for invalid nix expression", async () => {
   const nixExpr = `{ invalid syntax !!!`;
   await withTempNixConfig(nixExpr, async (dir) => {
-    await expect(loadConfig({ startDir: dir, globalConfigPath: null })).rejects
-      .toThrow("Failed to evaluate");
+    await expect(
+      loadConfig({ startDir: dir, globalConfigPath: null }),
+    ).rejects.toThrow("Failed to evaluate");
   });
 });
 
@@ -938,121 +936,104 @@ async function withXdgConfigHome(
   }
 }
 
-test(
-  "loadGlobalConfig: uses XDG_CONFIG_HOME when set",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-test-"));
-    try {
-      const nasDir = path.join(tmpDir, "nas");
-      await mkdir(nasDir);
-      await writeFile(
-        path.join(nasDir, "agent-sandbox.yml"),
-        `
+test("loadGlobalConfig: uses XDG_CONFIG_HOME when set", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-test-"));
+  try {
+    const nasDir = path.join(tmpDir, "nas");
+    await mkdir(nasDir);
+    await writeFile(
+      path.join(nasDir, "agent-sandbox.yml"),
+      `
 profiles:
   xdg-profile:
     agent: claude
 `,
-      );
-      await withXdgConfigHome(tmpDir, async () => {
-        const result = await loadGlobalConfig();
-        expect(result?.profiles?.["xdg-profile"]?.agent).toEqual("claude");
-      });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
+    );
+    await withXdgConfigHome(tmpDir, async () => {
+      const result = await loadGlobalConfig();
+      expect(result?.profiles?.["xdg-profile"]?.agent).toEqual("claude");
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
 
-test(
-  "loadGlobalConfig: falls back to HOME/.config/nas without XDG_CONFIG_HOME",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-home-test-"));
-    try {
-      const nasDir = path.join(tmpDir, ".config", "nas");
-      await mkdir(nasDir, { recursive: true });
-      await writeFile(
-        path.join(nasDir, "agent-sandbox.yml"),
-        `
+test("loadGlobalConfig: falls back to HOME/.config/nas without XDG_CONFIG_HOME", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-home-test-"));
+  try {
+    const nasDir = path.join(tmpDir, ".config", "nas");
+    await mkdir(nasDir, { recursive: true });
+    await writeFile(
+      path.join(nasDir, "agent-sandbox.yml"),
+      `
 profiles:
   home-profile:
     agent: copilot
 `,
-      );
-      const prevHome = process.env["HOME"];
-      const prevXdg = process.env["XDG_CONFIG_HOME"];
-      process.env["HOME"] = tmpDir;
-      if (prevXdg !== undefined) delete process.env["XDG_CONFIG_HOME"];
-      try {
-        const result = await loadGlobalConfig();
-        expect(result?.profiles?.["home-profile"]?.agent).toEqual("copilot");
-      } finally {
-        if (prevHome !== undefined) process.env["HOME"] = prevHome;
-        if (prevXdg !== undefined) process.env["XDG_CONFIG_HOME"] = prevXdg;
-      }
+    );
+    const prevHome = process.env["HOME"];
+    const prevXdg = process.env["XDG_CONFIG_HOME"];
+    process.env["HOME"] = tmpDir;
+    if (prevXdg !== undefined) delete process.env["XDG_CONFIG_HOME"];
+    try {
+      const result = await loadGlobalConfig();
+      expect(result?.profiles?.["home-profile"]?.agent).toEqual("copilot");
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      if (prevHome !== undefined) process.env["HOME"] = prevHome;
+      if (prevXdg !== undefined) process.env["XDG_CONFIG_HOME"] = prevXdg;
     }
-  },
-);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
 
 // --- 明示パスのエラー伝播 ---
 
-test(
-  "loadGlobalConfig: throws for explicit path with malformed YAML",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-err-"));
-    try {
-      const cfgPath = path.join(tmpDir, "bad.yml");
-      await writeFile(cfgPath, "{{{{ : invalid yaml : }}}}");
-      await expect(loadGlobalConfig(cfgPath)).rejects.toThrow();
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
+test("loadGlobalConfig: throws for explicit path with malformed YAML", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-err-"));
+  try {
+    const cfgPath = path.join(tmpDir, "bad.yml");
+    await writeFile(cfgPath, "{{{{ : invalid yaml : }}}}");
+    await expect(loadGlobalConfig(cfgPath)).rejects.toThrow();
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
 
-test(
-  "loadGlobalConfig: throws for explicit path that does not exist",
-  async () => {
-    await expect(loadGlobalConfig("/nonexistent/nas/config.yml")).rejects
-      .toThrow();
-  },
-);
+test("loadGlobalConfig: throws for explicit path that does not exist", async () => {
+  await expect(
+    loadGlobalConfig("/nonexistent/nas/config.yml"),
+  ).rejects.toThrow();
+});
 
 // --- 自動検出グローバル設定のエラー伝播 ---
 
-test(
-  "loadGlobalConfig: throws for malformed YAML in discovered global config",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-err-"));
-    try {
-      const nasDir = path.join(tmpDir, "nas");
-      await mkdir(nasDir);
-      await writeFile(
-        path.join(nasDir, "agent-sandbox.yml"),
-        "{{{{ : invalid yaml : }}}}",
-      );
-      await withXdgConfigHome(tmpDir, async () => {
-        await expect(loadGlobalConfig()).rejects.toThrow();
-      });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
+test("loadGlobalConfig: throws for malformed YAML in discovered global config", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-err-"));
+  try {
+    const nasDir = path.join(tmpDir, "nas");
+    await mkdir(nasDir);
+    await writeFile(
+      path.join(nasDir, "agent-sandbox.yml"),
+      "{{{{ : invalid yaml : }}}}",
+    );
+    await withXdgConfigHome(tmpDir, async () => {
+      await expect(loadGlobalConfig()).rejects.toThrow();
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
 
-test(
-  "loadGlobalConfig: returns null when no global config file exists",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-empty-"));
-    try {
-      // nasDir 自体を作らない → stat で NotFound → fall through → null
-      await withXdgConfigHome(tmpDir, async () => {
-        const result = await loadGlobalConfig();
-        expect(result).toEqual(null);
-      });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
+test("loadGlobalConfig: returns null when no global config file exists", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-empty-"));
+  try {
+    // nasDir 自体を作らない → stat で NotFound → fall through → null
+    await withXdgConfigHome(tmpDir, async () => {
+      const result = await loadGlobalConfig();
+      expect(result).toEqual(null);
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

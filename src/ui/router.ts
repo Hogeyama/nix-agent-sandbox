@@ -8,9 +8,7 @@ export interface RouteContext {
   url: URL;
 }
 
-export type RouteHandler = (
-  ctx: RouteContext,
-) => Response | Promise<Response>;
+export type RouteHandler = (ctx: RouteContext) => Response | Promise<Response>;
 
 export function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });

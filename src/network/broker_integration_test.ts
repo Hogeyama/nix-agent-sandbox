@@ -495,9 +495,11 @@ test("SessionBroker: approve after group already resolved returns error", async 
     expect(decision2.decision).toEqual("allow");
 
     // Now approve the second requestId → group already gone, should not crash
-    const ack = await sendBrokerRequest<
-      { type: "error"; requestId: string; message: string }
-    >(socketPath, {
+    const ack = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, {
       type: "approve",
       requestId: "req_group_b",
     });
@@ -509,53 +511,50 @@ test("SessionBroker: approve after group already resolved returns error", async 
   }
 });
 
-test(
-  "SessionBroker: deny-by-default targets blocked even when in allowlist",
-  async () => {
-    // Regression: allowlist used to be checked before denyReasonForTarget,
-    // allowing private/loopback addresses to bypass the deny-by-default rule.
-    const cases: Array<{ host: string; reason: string }> = [
-      { host: "localhost", reason: "blocked-special-host" },
-      { host: "127.0.0.1", reason: "blocked-private-ip" },
-      { host: "10.0.0.1", reason: "blocked-private-ip" },
-      { host: "172.16.0.1", reason: "blocked-private-ip" },
-      { host: "192.168.1.1", reason: "blocked-private-ip" },
-      { host: "169.254.0.1", reason: "blocked-private-ip" },
-      { host: "::1", reason: "blocked-private-ip" },
-      { host: "fc00::1", reason: "blocked-private-ip" },
-      { host: "fe80::1", reason: "blocked-private-ip" },
-    ];
+test("SessionBroker: deny-by-default targets blocked even when in allowlist", async () => {
+  // Regression: allowlist used to be checked before denyReasonForTarget,
+  // allowing private/loopback addresses to bypass the deny-by-default rule.
+  const cases: Array<{ host: string; reason: string }> = [
+    { host: "localhost", reason: "blocked-special-host" },
+    { host: "127.0.0.1", reason: "blocked-private-ip" },
+    { host: "10.0.0.1", reason: "blocked-private-ip" },
+    { host: "172.16.0.1", reason: "blocked-private-ip" },
+    { host: "192.168.1.1", reason: "blocked-private-ip" },
+    { host: "169.254.0.1", reason: "blocked-private-ip" },
+    { host: "::1", reason: "blocked-private-ip" },
+    { host: "fc00::1", reason: "blocked-private-ip" },
+    { host: "fe80::1", reason: "blocked-private-ip" },
+  ];
 
-    for (const { host, reason } of cases) {
-      const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
-      const paths = await resolveNetworkRuntimePaths(runtimeDir);
-      // Put the deny-by-default host directly in the allowlist.
-      const broker = new SessionBroker({
-        paths,
-        sessionId: "sess_test",
-        allowlist: [host],
-        denylist: [],
-        promptEnabled: true,
-        timeoutSeconds: 30,
-        defaultScope: "host-port",
-        notify: "off",
-      });
-      const socketPath = `${paths.brokersDir}/sess_test.sock`;
-      await broker.start(socketPath);
-      try {
-        const response = await sendBrokerRequest<DecisionResponse>(
-          socketPath,
-          authorize("sess_test", `req_${host.replace(/[:.]/g, "_")}`, host, 80),
-        );
-        expect(response.decision).toEqual("deny");
-        expect(response.reason).toEqual(reason);
-      } finally {
-        await broker.close();
-        await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
-      }
+  for (const { host, reason } of cases) {
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+    const paths = await resolveNetworkRuntimePaths(runtimeDir);
+    // Put the deny-by-default host directly in the allowlist.
+    const broker = new SessionBroker({
+      paths,
+      sessionId: "sess_test",
+      allowlist: [host],
+      denylist: [],
+      promptEnabled: true,
+      timeoutSeconds: 30,
+      defaultScope: "host-port",
+      notify: "off",
+    });
+    const socketPath = `${paths.brokersDir}/sess_test.sock`;
+    await broker.start(socketPath);
+    try {
+      const response = await sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        authorize("sess_test", `req_${host.replace(/[:.]/g, "_")}`, host, 80),
+      );
+      expect(response.decision).toEqual("deny");
+      expect(response.reason).toEqual(reason);
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     }
-  },
-);
+  }
+});
 
 async function waitForPending(
   socketPath: string,
@@ -563,12 +562,10 @@ async function waitForPending(
 ): Promise<{ type: "pending"; items: PendingEntry[] }> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const pending = await sendBrokerRequest<
-      { type: "pending"; items: PendingEntry[] }
-    >(
-      socketPath,
-      { type: "list_pending" },
-    );
+    const pending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
     if (pending.items.length >= minCount) {
       return pending;
     }
@@ -580,7 +577,9 @@ async function waitForPending(
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const exists = await stat(path).then(() => true).catch(() => false);
+    const exists = await stat(path)
+      .then(() => true)
+      .catch(() => false);
     if (exists) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }

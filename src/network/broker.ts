@@ -162,8 +162,8 @@ export class SessionBroker {
     this.deniedHosts.clear();
     this.negativeCache.clear();
     await removePendingDir(this.paths, this.sessionId);
-    const sock = this.socketPath ??
-      brokerSocketPath(this.paths, this.sessionId);
+    const sock =
+      this.socketPath ?? brokerSocketPath(this.paths, this.sessionId);
     await rm(sock, { force: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`);
@@ -279,10 +279,9 @@ export class SessionBroker {
     }
 
     const groupKey = `${this.sessionId}:${targetCacheKey}`;
-    const group = this.groups.get(groupKey) ?? await this.createPendingGroup(
-      groupKey,
-      message,
-    );
+    const group =
+      this.groups.get(groupKey) ??
+      (await this.createPendingGroup(groupKey, message));
 
     if (!group.requests.has(message.requestId)) {
       group.requests.set(message.requestId, message);
@@ -337,7 +336,7 @@ export class SessionBroker {
       uiIdleTimeout: this.uiIdleTimeout,
       signal: notificationAbort.signal,
     }).catch((e) =>
-      logInfo(`[nas] NetworkBroker: failed to send notification: ${e}`)
+      logInfo(`[nas] NetworkBroker: failed to send notification: ${e}`),
     );
     this.notificationTasks.add(notificationTask);
     void notificationTask.finally(() => {

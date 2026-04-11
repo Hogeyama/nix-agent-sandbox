@@ -273,11 +273,7 @@ test.skipIf(!dockerAvailable)(
 test.skipIf(!dockerAvailable)(
   "Integration: home directory exists and is owned by user",
   async () => {
-    const result = await dockerRun([
-      "bash",
-      "-c",
-      "stat -c '%U:%G' $HOME",
-    ]);
+    const result = await dockerRun(["bash", "-c", "stat -c '%U:%G' $HOME"]);
     expect(result.code).toEqual(0);
 
     const hostUser = process.env["USER"]?.trim() || "nas";
@@ -288,10 +284,9 @@ test.skipIf(!dockerAvailable)(
 test.skipIf(!dockerAvailable)(
   "Integration: custom env vars are passed to container",
   async () => {
-    const result = await dockerRun(
-      ["bash", "-c", "echo $MY_VAR:$OTHER_VAR"],
-      { envVars: { MY_VAR: "hello", OTHER_VAR: "world" } },
-    );
+    const result = await dockerRun(["bash", "-c", "echo $MY_VAR:$OTHER_VAR"], {
+      envVars: { MY_VAR: "hello", OTHER_VAR: "world" },
+    });
     expect(result.code).toEqual(0);
     expect(result.stdout.trim()).toEqual("hello:world");
   },
@@ -300,10 +295,9 @@ test.skipIf(!dockerAvailable)(
 test.skipIf(!dockerAvailable)(
   "Integration: env var with special characters",
   async () => {
-    const result = await dockerRun(
-      ["bash", "-c", "echo $SPECIAL_VAR"],
-      { envVars: { SPECIAL_VAR: "https://example.com?foo=bar&baz=qux" } },
-    );
+    const result = await dockerRun(["bash", "-c", "echo $SPECIAL_VAR"], {
+      envVars: { SPECIAL_VAR: "https://example.com?foo=bar&baz=qux" },
+    });
     expect(result.code).toEqual(0);
     expect(result.stdout.trim()).toEqual("https://example.com?foo=bar&baz=qux");
   },
@@ -338,18 +332,15 @@ test.skipIf(!dockerAvailable)(
 
 // DinD 環境で共有ボリュームがない場合はスキップ。
 // ホスト Docker (DOCKER_HOST 未設定) の場合は /tmp が使えるので常に動く。
-const canBindMount = dockerAvailable &&
-  (SHARED_TMP !== undefined || !process.env["DOCKER_HOST"]);
+const canBindMount =
+  dockerAvailable && (SHARED_TMP !== undefined || !process.env["DOCKER_HOST"]);
 
 test.skipIf(!canBindMount)(
   "Integration: workspace is mounted and files are accessible",
   async () => {
     const tmpDir = await makeTempDir("nas-e2e-ws-");
     try {
-      await writeFile(
-        path.join(tmpDir, "testfile.txt"),
-        "e2e-test-content",
-      );
+      await writeFile(path.join(tmpDir, "testfile.txt"), "e2e-test-content");
 
       const result = await dockerRun(
         ["cat", path.join(tmpDir, "testfile.txt")],
@@ -388,10 +379,7 @@ test.skipIf(!canBindMount)(
       );
       expect(result.code).toEqual(0);
 
-      const content = await readFile(
-        path.join(tmpDir, "output.txt"),
-        "utf8",
-      );
+      const content = await readFile(path.join(tmpDir, "output.txt"), "utf8");
       expect(content.trim()).toEqual("container-output");
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -426,14 +414,12 @@ test.skipIf(!canBindMount)(
   async () => {
     const tmpDir = await makeTempDir("nas-e2e-git-");
     try {
-      for (
-        const gitArgs of [
-          ["init", tmpDir],
-          ["-C", tmpDir, "config", "user.name", "test"],
-          ["-C", tmpDir, "config", "user.email", "test@test.com"],
-          ["-C", tmpDir, "config", "commit.gpgsign", "false"],
-        ]
-      ) {
+      for (const gitArgs of [
+        ["init", tmpDir],
+        ["-C", tmpDir, "config", "user.name", "test"],
+        ["-C", tmpDir, "config", "user.email", "test@test.com"],
+        ["-C", tmpDir, "config", "commit.gpgsign", "false"],
+      ]) {
         await Bun.spawn(["git", ...gitArgs], {
           stdout: "ignore",
           stderr: "ignore",
@@ -449,10 +435,9 @@ test.skipIf(!canBindMount)(
         stderr: "ignore",
       }).exited;
 
-      const result = await dockerRun(
-        ["git", "status", "--porcelain"],
-        { workDir: tmpDir },
-      );
+      const result = await dockerRun(["git", "status", "--porcelain"], {
+        workDir: tmpDir,
+      });
       expect(result.code).toEqual(0);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -479,22 +464,19 @@ echo wrapped-git
       );
       await chmod(path.join(wrapperDir, "git"), 0o755);
 
-      const result = await dockerRun(
-        ["git"],
-        {
-          workDir,
-          envVars: {
-            NAS_HOSTEXEC_WRAPPER_DIR: containerWrapperDir,
-          },
-          extraArgs: ["-v", `${wrapperDir}:${containerWrapperDir}:ro`],
+      const result = await dockerRun(["git"], {
+        workDir,
+        envVars: {
+          NAS_HOSTEXEC_WRAPPER_DIR: containerWrapperDir,
         },
-      );
+        extraArgs: ["-v", `${wrapperDir}:${containerWrapperDir}:ro`],
+      });
 
       expect(result.code).toEqual(0);
       expect(result.stdout.trim()).toEqual("wrapped-git");
-      expect(result.stderr.includes(
-        "entrypoint should bypass hostexec wrapper",
-      )).toEqual(false);
+      expect(
+        result.stderr.includes("entrypoint should bypass hostexec wrapper"),
+      ).toEqual(false);
     } finally {
       await rm(wrapperDir, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
@@ -507,28 +489,21 @@ test.skipIf(!canBindMount || !RUNNING_ON_HOST_DOCKER)(
   async () => {
     const tmpDir = await makeTempDir("nas-e2e-gitc-");
     try {
-      for (
-        const gitArgs of [
-          ["init", tmpDir],
-          ["-C", tmpDir, "config", "user.name", "test"],
-          ["-C", tmpDir, "config", "user.email", "test@test.com"],
-          ["-C", tmpDir, "config", "commit.gpgsign", "false"],
-        ]
-      ) {
+      for (const gitArgs of [
+        ["init", tmpDir],
+        ["-C", tmpDir, "config", "user.name", "test"],
+        ["-C", tmpDir, "config", "user.email", "test@test.com"],
+        ["-C", tmpDir, "config", "commit.gpgsign", "false"],
+      ]) {
         await Bun.spawn(["git", ...gitArgs], {
           stdout: "ignore",
           stderr: "ignore",
         }).exited;
       }
-      await Bun.spawn([
-        "git",
-        "-C",
-        tmpDir,
-        "commit",
-        "--allow-empty",
-        "-m",
-        "init",
-      ], { stdout: "ignore", stderr: "ignore" }).exited;
+      await Bun.spawn(
+        ["git", "-C", tmpDir, "commit", "--allow-empty", "-m", "init"],
+        { stdout: "ignore", stderr: "ignore" },
+      ).exited;
       await makeTreeWritableForDind(tmpDir);
 
       const result = await dockerRun(
@@ -561,18 +536,12 @@ test.skipIf(!canBindMount)(
     const mountSrc = await makeTempDir("nas-e2e-mnt-");
     const workDir = await makeTempDir("nas-e2e-ws-");
     try {
-      await writeFile(
-        path.join(mountSrc, "data.txt"),
-        "mounted-content",
-      );
+      await writeFile(path.join(mountSrc, "data.txt"), "mounted-content");
 
-      const result = await dockerRun(
-        ["cat", "/mnt/test/data.txt"],
-        {
-          workDir,
-          extraArgs: ["-v", `${mountSrc}:/mnt/test:ro`],
-        },
-      );
+      const result = await dockerRun(["cat", "/mnt/test/data.txt"], {
+        workDir,
+        extraArgs: ["-v", `${mountSrc}:/mnt/test:ro`],
+      });
       expect(result.code).toEqual(0);
       expect(result.stdout.trim()).toEqual("mounted-content");
     } finally {
@@ -602,10 +571,7 @@ test.skipIf(!canBindMount)(
       expect(result.code).toEqual(0);
       expect(result.stdout.trim()).toEqual("written");
 
-      const content = await readFile(
-        path.join(mountSrc, "output.txt"),
-        "utf8",
-      );
+      const content = await readFile(path.join(mountSrc, "output.txt"), "utf8");
       expect(content.trim()).toEqual("written");
     } finally {
       await rm(mountSrc, { recursive: true, force: true });
@@ -618,7 +584,10 @@ test.skipIf(!canBindMount)(
 // Nix 統合 (ホスト Docker + /nix が必要)
 // ============================================================
 
-const hasHostNix = await stat("/nix").then(() => true, () => false);
+const hasHostNix = await stat("/nix").then(
+  () => true,
+  () => false,
+);
 const canMountHostNix = hasHostNix && RUNNING_ON_HOST_DOCKER;
 
 test.skipIf(!canBindMount || !canMountHostNix)(
@@ -627,19 +596,19 @@ test.skipIf(!canBindMount || !canMountHostNix)(
     const workDir = await makeTempDir("nas-e2e-nix-");
     try {
       let nixBinPath: string | null = null;
-      for (
-        const p of [
-          "/nix/var/nix/profiles/default/bin/nix",
-          "/run/current-system/sw/bin/nix",
-        ]
-      ) {
+      for (const p of [
+        "/nix/var/nix/profiles/default/bin/nix",
+        "/run/current-system/sw/bin/nix",
+      ]) {
         try {
           const real = await realpath(p);
           if (real.startsWith("/nix/store/")) {
             nixBinPath = real;
             break;
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
 
       let nixConfPath: string | null = null;
@@ -655,7 +624,9 @@ test.skipIf(!canBindMount || !canMountHostNix)(
         if (exitCode === 0) {
           nixConfPath = stdoutText.trim();
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
 
       const extraArgs = ["-v", "/nix:/nix"];
       const envVars: Record<string, string> = {
@@ -672,17 +643,19 @@ test.skipIf(!canBindMount || !canMountHostNix)(
         }
       }
 
-      const lsResult = await dockerRun(
-        ["ls", "/nix"],
-        { workDir, envVars, extraArgs },
-      );
+      const lsResult = await dockerRun(["ls", "/nix"], {
+        workDir,
+        envVars,
+        extraArgs,
+      });
       expect(lsResult.code).toEqual(0);
       expect(lsResult.stdout.includes("store")).toEqual(true);
 
-      const nixResult = await dockerRun(
-        ["nix", "--version"],
-        { workDir, envVars, extraArgs },
-      );
+      const nixResult = await dockerRun(["nix", "--version"], {
+        workDir,
+        envVars,
+        extraArgs,
+      });
       expect(nixResult.code).toEqual(0);
       expect(nixResult.stdout.toLowerCase().includes("nix")).toEqual(true);
     } finally {

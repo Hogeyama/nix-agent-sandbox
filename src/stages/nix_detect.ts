@@ -22,9 +22,7 @@ export const NixDetectStage: PlanStage = {
       );
     } else {
       nixEnabled = nixCfg.enable;
-      logInfo(
-        `[nas] Nix: explicitly ${nixEnabled ? "enabled" : "disabled"}`,
-      );
+      logInfo(`[nas] Nix: explicitly ${nixEnabled ? "enabled" : "disabled"}`);
     }
 
     return {

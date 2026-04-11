@@ -35,10 +35,11 @@ export function resolveCopilotProbes(hostHome: string): CopilotProbes {
     copilotBinPath: findBinaryResolved("copilot"),
     copilotConfigDirExists: pathExistsSync(hostCopilotConfigDir),
     copilotStateDirExists: pathExistsSync(hostCopilotStateDir),
-    copilotLegacyDirExists: (hostLegacyCopilotDir !== hostCopilotConfigDir &&
-        hostLegacyCopilotDir !== hostCopilotStateDir)
-      ? pathExistsSync(hostLegacyCopilotDir)
-      : false,
+    copilotLegacyDirExists:
+      hostLegacyCopilotDir !== hostCopilotConfigDir &&
+      hostLegacyCopilotDir !== hostCopilotStateDir
+        ? pathExistsSync(hostLegacyCopilotDir)
+        : false,
     xdgConfigHome,
     xdgStateHome,
   };
@@ -65,9 +66,7 @@ export interface AgentConfigResult {
 }
 
 /** Copilot CLI 固有のマウントと環境変数を決定する (純粋関数) */
-export function configureCopilot(
-  input: CopilotConfigInput,
-): AgentConfigResult {
+export function configureCopilot(input: CopilotConfigInput): AgentConfigResult {
   const { containerHome, hostHome, probes, priorDockerArgs, priorEnvVars } =
     input;
   const args = [...priorDockerArgs];

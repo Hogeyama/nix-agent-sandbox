@@ -36,26 +36,18 @@ test("resolveSecret: reads env/file/dotenv/keyring sources", async () => {
     await writeFile(dotenvPath, "TOKEN=dotenv-secret\n");
 
     expect(
-      await resolveSecret(
-        "env:MY_SECRET",
-        { MY_SECRET: "env-secret" },
-        () => Promise.resolve(null),
+      await resolveSecret("env:MY_SECRET", { MY_SECRET: "env-secret" }, () =>
+        Promise.resolve(null),
       ),
-    ).toEqual(
-      "env-secret",
-    );
+    ).toEqual("env-secret");
     expect(
       await resolveSecret(`file:${filePath}`, {}, () => Promise.resolve(null)),
     ).toEqual("file-secret");
     expect(
-      await resolveSecret(
-        `dotenv:${dotenvPath}#TOKEN`,
-        {},
-        () => Promise.resolve(null),
+      await resolveSecret(`dotenv:${dotenvPath}#TOKEN`, {}, () =>
+        Promise.resolve(null),
       ),
-    ).toEqual(
-      "dotenv-secret",
-    );
+    ).toEqual("dotenv-secret");
     expect(
       await resolveSecret(
         "keyring:svc/account",
@@ -63,9 +55,7 @@ test("resolveSecret: reads env/file/dotenv/keyring sources", async () => {
         (service: string, account: string) =>
           Promise.resolve(`${service}:${account}`),
       ),
-    ).toEqual(
-      "svc:account",
-    );
+    ).toEqual("svc:account");
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -97,8 +87,11 @@ test("SecretStore: caches values and enforces required secrets", async () => {
 });
 
 test("SecretStore: rejects missing required secret", async () => {
-  const store = new SecretStore({
-    token: { from: "env:TOKEN", required: true },
-  }, { env: {} });
+  const store = new SecretStore(
+    {
+      token: { from: "env:TOKEN", required: true },
+    },
+    { env: {} },
+  );
   await expect(store.require("token")).rejects.toThrow("Required secret");
 });

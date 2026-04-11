@@ -80,17 +80,20 @@ async function startLongRunningContainer(
   for (const [key, value] of Object.entries(envVars)) {
     envArgs.push("-e", `${key}=${value}`);
   }
-  const exitCode = await Bun.spawn([
-    "docker",
-    "run",
-    "-d",
-    "--name",
-    name,
-    ...envArgs,
-    TEST_IMAGE,
-    "sleep",
-    "300",
-  ], { stdout: "ignore", stderr: "ignore" }).exited;
+  const exitCode = await Bun.spawn(
+    [
+      "docker",
+      "run",
+      "-d",
+      "--name",
+      name,
+      ...envArgs,
+      TEST_IMAGE,
+      "sleep",
+      "300",
+    ],
+    { stdout: "ignore", stderr: "ignore" },
+  ).exited;
   if (exitCode !== 0) {
     throw new Error(`Failed to start container ${name}`);
   }
@@ -109,9 +112,7 @@ async function inspectDockerObject(
     new Response(proc.stderr).text(),
   ]);
   if (exitCode !== 0) {
-    throw new Error(
-      `docker ${args.join(" ")} failed: ${stderrText.trim()}`,
-    );
+    throw new Error(`docker ${args.join(" ")} failed: ${stderrText.trim()}`);
   }
 
   return JSON.parse(stdoutText)[0];
@@ -129,18 +130,13 @@ test("computeEmbedHash returns consistent hash", async () => {
 
 test("computeEmbedHash matches embed and envoy assets", async () => {
   const parts: string[] = [];
-  for (
-    const [baseUrl, files] of [
-      [
-        new URL("./embed/", import.meta.url),
-        ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
-      ],
-      [
-        new URL("./envoy/", import.meta.url),
-        ["envoy.template.yaml"],
-      ],
-    ] as const
-  ) {
+  for (const [baseUrl, files] of [
+    [
+      new URL("./embed/", import.meta.url),
+      ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
+    ],
+    [new URL("./envoy/", import.meta.url), ["envoy.template.yaml"]],
+  ] as const) {
     for (const name of files) {
       parts.push(await readFile(new URL(name, baseUrl), "utf8"));
     }
@@ -160,27 +156,25 @@ test("envoy template includes required proxy settings", async () => {
     "utf8",
   );
 
-  for (
-    const fragment of [
-      "0.0.0.0:15001",
-      "envoy.filters.http.dynamic_forward_proxy",
-      "envoy.filters.http.lua",
-      "request_timeout: 0s",
-      "timeout: 0s",
-      "access_log:",
-      "envoy.access_loggers.stdout",
-      "pipe: { path: /nas-network/auth-router.sock }",
-      "/authorize",
-      "proxy-authorization",
-      "host",
-      "x-request-id",
-      "x-nas-original-method",
-      "x-nas-original-authority",
-      "x-nas-original-url",
-      "300000",
-      'handle:headers():remove("proxy-authorization")',
-    ]
-  ) {
+  for (const fragment of [
+    "0.0.0.0:15001",
+    "envoy.filters.http.dynamic_forward_proxy",
+    "envoy.filters.http.lua",
+    "request_timeout: 0s",
+    "timeout: 0s",
+    "access_log:",
+    "envoy.access_loggers.stdout",
+    "pipe: { path: /nas-network/auth-router.sock }",
+    "/authorize",
+    "proxy-authorization",
+    "host",
+    "x-request-id",
+    "x-nas-original-method",
+    "x-nas-original-authority",
+    "x-nas-original-url",
+    "300000",
+    'handle:headers():remove("proxy-authorization")',
+  ]) {
     expect(template.includes(fragment)).toEqual(true);
   }
 });
@@ -231,7 +225,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
         name: containerName,
         image: TEST_IMAGE,
         args: [],
-        envVars: { "TEST_VAR": "detached_value" },
+        envVars: { TEST_VAR: "detached_value" },
       });
       const exitCode = await Bun.spawn(["docker", "inspect", containerName], {
         stdout: "ignore",
@@ -258,7 +252,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE || !canBindMount)(
         name: containerName,
         image: TEST_IMAGE,
         args: [],
-        envVars: { "TEST_VAR": "detached_value" },
+        envVars: { TEST_VAR: "detached_value" },
         network: networkName,
         mounts: [`type=bind,src=${tmpDir},dst=/workspace,readonly`],
         publishedPorts: ["127.0.0.1::8080"],
@@ -267,7 +261,10 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE || !canBindMount)(
         command: ["-c", "sleep 300"],
       });
 
-      const inspected = await inspectDockerObject("inspect", containerName) as {
+      const inspected = (await inspectDockerObject(
+        "inspect",
+        containerName,
+      )) as {
         Config?: {
           Cmd?: string[];
           Entrypoint?: string[];
@@ -284,10 +281,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE || !canBindMount)(
           Type?: string;
         }>;
         NetworkSettings?: {
-          Ports?: Record<
-            string,
-            Array<{ HostIp?: string; HostPort?: string }>
-          >;
+          Ports?: Record<string, Array<{ HostIp?: string; HostPort?: string }>>;
         };
       };
 
@@ -295,18 +289,21 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE || !canBindMount)(
       expect(inspected.Config?.Entrypoint).toEqual(["/bin/sh"]);
       expect(inspected.Config?.Cmd).toEqual(["-c", "sleep 300"]);
       expect(inspected.Config?.Labels?.["test.label"]).toEqual("extended");
-      expect(inspected.Config?.Env?.includes("TEST_VAR=detached_value"))
-        .toEqual(true);
       expect(
-        inspected.Mounts?.some((mount) =>
-          mount.Type === "bind" &&
-          mount.Source === tmpDir &&
-          mount.Destination === "/workspace" &&
-          mount.RW === false
+        inspected.Config?.Env?.includes("TEST_VAR=detached_value"),
+      ).toEqual(true);
+      expect(
+        inspected.Mounts?.some(
+          (mount) =>
+            mount.Type === "bind" &&
+            mount.Source === tmpDir &&
+            mount.Destination === "/workspace" &&
+            mount.RW === false,
         ),
       ).toEqual(true);
-      expect(inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostIp)
-        .toEqual("127.0.0.1");
+      expect(
+        inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostIp,
+      ).toEqual("127.0.0.1");
       expect(
         (inspected.NetworkSettings?.Ports?.["8080/tcp"]?.[0]?.HostPort ?? "")
           .length > 0,
@@ -328,7 +325,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
     const containerName = `${PREFIX}-lifecycle`;
     try {
       await startLongRunningContainer(containerName, {
-        "TEST_VAR": "test_value",
+        TEST_VAR: "test_value",
       });
 
       const running = await dockerIsRunning(containerName);
@@ -346,11 +343,9 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
       expect(envResult.code).toEqual(0);
       expect(envResult.stdout).toEqual("test_value");
 
-      const userResult = await dockerExec(
-        containerName,
-        ["id", "-u"],
-        { user: "root" },
-      );
+      const userResult = await dockerExec(containerName, ["id", "-u"], {
+        user: "root",
+      });
       expect(userResult.code).toEqual(0);
       expect(userResult.stdout).toEqual("0");
 
@@ -400,7 +395,7 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
     await dockerRun({
       image: TEST_IMAGE,
       args: [],
-      envVars: { "GREETING": "world" },
+      envVars: { GREETING: "world" },
       command: ["sh", "-c", "echo hello $GREETING"],
       interactive: false,
     });
@@ -421,8 +416,9 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
       });
     } catch (e) {
       threw = true;
-      expect((e as Error).message.includes("docker run exited with code"))
-        .toEqual(true);
+      expect(
+        (e as Error).message.includes("docker run exited with code"),
+      ).toEqual(true);
     }
     expect(threw).toEqual(true);
   },
@@ -475,7 +471,10 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
         aliases: ["svc-alias", "svc-alt"],
       });
 
-      const inspected = await inspectDockerObject("inspect", containerName) as {
+      const inspected = (await inspectDockerObject(
+        "inspect",
+        containerName,
+      )) as {
         NetworkSettings?: {
           Networks?: Record<
             string,
@@ -533,12 +532,10 @@ test.skipIf(!DOCKER_DAEMON_AVAILABLE)(
     }).exited;
 
     await dockerVolumeRemove(volumeName);
-    const exitCode = await Bun.spawn([
-      "docker",
-      "volume",
-      "inspect",
-      volumeName,
-    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    const exitCode = await Bun.spawn(
+      ["docker", "volume", "inspect", volumeName],
+      { stdout: "ignore", stderr: "ignore" },
+    ).exited;
     expect(exitCode).not.toEqual(0);
   },
 );

@@ -68,14 +68,17 @@ async function withoutBinary(
   fn: () => Promise<void> | void,
 ): Promise<void> {
   const origPath = process.env["PATH"];
-  const filteredPath = (origPath ?? "").split(":").filter((dir) => {
-    try {
-      statSync(`${dir}/${name}`);
-      return false;
-    } catch {
-      return true;
-    }
-  }).join(":");
+  const filteredPath = (origPath ?? "")
+    .split(":")
+    .filter((dir) => {
+      try {
+        statSync(`${dir}/${name}`);
+        return false;
+      } catch {
+        return true;
+      }
+    })
+    .join(":");
   process.env["PATH"] = filteredPath;
   try {
     await fn();
@@ -103,8 +106,9 @@ test("configureClaude: sets PATH with .local/bin prepended", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  expect(result.envVars["PATH"]?.startsWith(`${containerHome}/.local/bin:`))
-    .toEqual(true);
+  expect(
+    result.envVars["PATH"]?.startsWith(`${containerHome}/.local/bin:`),
+  ).toEqual(true);
 });
 
 test("configureClaude: mounts ~/.claude when directory exists", () => {
@@ -197,7 +201,7 @@ test("configureClaude: mounts binary and uses ['claude'] when binary found", () 
   });
   expect(result.agentCommand).toEqual(["claude"]);
   const hasBinaryMount = result.dockerArgs.some((a) =>
-    a.endsWith("/claude:ro")
+    a.endsWith("/claude:ro"),
   );
   expect(hasBinaryMount).toEqual(true);
 });
@@ -316,7 +320,7 @@ test("configureCopilot: uses ['copilot'] when binary found", () => {
   });
   expect(result.agentCommand).toEqual(["copilot"]);
   const hasBinaryMount = result.dockerArgs.some((a) =>
-    a.includes("/copilot:ro")
+    a.includes("/copilot:ro"),
   );
   expect(hasBinaryMount).toEqual(true);
 });

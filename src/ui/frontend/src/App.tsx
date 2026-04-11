@@ -30,9 +30,9 @@ export function App() {
   const [networkPending, setNetworkPending] = useState<NetworkPendingItem[]>(
     [],
   );
-  const [hostExecPending, setHostExecPending] = useState<
-    HostExecPendingItem[]
-  >([]);
+  const [hostExecPending, setHostExecPending] = useState<HostExecPendingItem[]>(
+    [],
+  );
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [sessions, setSessions] = useState<SessionsData>({
     network: [],
@@ -44,9 +44,7 @@ export function App() {
     const type = params.get("type");
     const sessionId = params.get("sessionId");
     const requestId = params.get("requestId");
-    if (
-      (type === "network" || type === "hostexec") && sessionId && requestId
-    ) {
+    if ((type === "network" || type === "hostexec") && sessionId && requestId) {
       return { type, sessionId, requestId };
     }
     return null;
@@ -62,26 +60,23 @@ export function App() {
 
   useFaviconBadge(totalPending);
 
-  const handleSSE = useCallback(
-    (event: string, data: unknown) => {
-      const d = data as Record<string, unknown>;
-      switch (event) {
-        case "network:pending":
-          setNetworkPending(d.items as NetworkPendingItem[]);
-          break;
-        case "hostexec:pending":
-          setHostExecPending(d.items as HostExecPendingItem[]);
-          break;
-        case "sessions":
-          setSessions(d as unknown as SessionsData);
-          break;
-        case "audit:logs":
-          setAuditLogs(d.items as AuditLogEntry[]);
-          break;
-      }
-    },
-    [],
-  );
+  const handleSSE = useCallback((event: string, data: unknown) => {
+    const d = data as Record<string, unknown>;
+    switch (event) {
+      case "network:pending":
+        setNetworkPending(d.items as NetworkPendingItem[]);
+        break;
+      case "hostexec:pending":
+        setHostExecPending(d.items as HostExecPendingItem[]);
+        break;
+      case "sessions":
+        setSessions(d as unknown as SessionsData);
+        break;
+      case "audit:logs":
+        setAuditLogs(d.items as AuditLogEntry[]);
+        break;
+    }
+  }, []);
 
   const { connected } = useSSE("/api/events", handleSSE);
 

@@ -21,9 +21,7 @@ import type {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makePrior(
-  overrides?: Partial<PriorStageOutputs>,
-): PriorStageOutputs {
+function makePrior(overrides?: Partial<PriorStageOutputs>): PriorStageOutputs {
   return {
     dockerArgs: [],
     envVars: {},
@@ -37,9 +35,7 @@ function makePrior(
   };
 }
 
-function makeInput(
-  overrides?: Partial<StageInput>,
-): StageInput {
+function makeInput(overrides?: Partial<StageInput>): StageInput {
   return {
     config: { profiles: {} } as StageInput["config"],
     profile: { agent: "claude" } as StageInput["profile"],

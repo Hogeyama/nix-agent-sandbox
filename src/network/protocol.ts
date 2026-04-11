@@ -73,7 +73,8 @@ export function generateSessionId(): string {
 
 export function generateSessionToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
-  const binary = Array.from(bytes).map((byte) => String.fromCharCode(byte))
+  const binary = Array.from(bytes)
+    .map((byte) => String.fromCharCode(byte))
     .join("");
   return btoa(binary)
     .replaceAll("+", "-")
@@ -111,9 +112,7 @@ export function decodeProxyAuthorization(
   }
 }
 
-export function normalizeTarget(
-  input: NormalizeTargetInput,
-): NormalizedTarget {
+export function normalizeTarget(input: NormalizeTargetInput): NormalizedTarget {
   const method = input.method.toUpperCase();
   if (method === "CONNECT") {
     const authority = parseAuthority(input.authority ?? input.hostHeader ?? "");
@@ -164,9 +163,10 @@ export function normalizeHost(host: string): string {
  * Supports: "example.com", "example.com:443", "*.example.com", "*.example.com:443",
  * "[::1]", "[::1]:8080"
  */
-export function parseAllowlistEntry(
-  entry: string,
-): { host: string; port: number | null } {
+export function parseAllowlistEntry(entry: string): {
+  host: string;
+  port: number | null;
+} {
   const withoutWildcard = entry.startsWith("*.") ? entry.slice(2) : entry;
   const wildcardPrefix = entry.startsWith("*.") ? "*." : "";
 
@@ -207,8 +207,9 @@ export function matchesAllowlist(
       hostEntry.startsWith("*.") ? hostEntry.slice(2) : hostEntry,
     );
     if (hostEntry.startsWith("*.")) {
-      return normalizedHost === candidate ||
-        normalizedHost.endsWith(`.${candidate}`);
+      return (
+        normalizedHost === candidate || normalizedHost.endsWith(`.${candidate}`)
+      );
     }
     return normalizedHost === candidate;
   });
@@ -244,9 +245,10 @@ export function denyReasonForTarget(target: NormalizedTarget): string | null {
   return null;
 }
 
-function parseAuthority(
-  authority: string,
-): { host: string; port: number | null } {
+function parseAuthority(authority: string): {
+  host: string;
+  port: number | null;
+} {
   const value = authority.trim();
   if (value.length === 0) {
     throw new Error("authority is required");
@@ -267,7 +269,10 @@ function parseAuthority(
   }
 
   const colonIdx = value.lastIndexOf(":");
-  if (colonIdx <= 0 || value.includes(":") && value.indexOf(":") !== colonIdx) {
+  if (
+    colonIdx <= 0 ||
+    (value.includes(":") && value.indexOf(":") !== colonIdx)
+  ) {
     return { host: value, port: null };
   }
   return {

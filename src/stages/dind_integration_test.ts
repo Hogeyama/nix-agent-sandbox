@@ -124,18 +124,21 @@ function makeStageInput(
 async function canRunDindRootless(): Promise<boolean> {
   const name = "nas-test-dind-probe";
   try {
-    const exitCode = await Bun.spawn([
-      "docker",
-      "run",
-      "-d",
-      "--rm",
-      "--privileged",
-      "--name",
-      name,
-      "-e",
-      "DOCKER_TLS_CERTDIR=",
-      "docker:dind-rootless",
-    ], { stdout: "ignore", stderr: "ignore" }).exited;
+    const exitCode = await Bun.spawn(
+      [
+        "docker",
+        "run",
+        "-d",
+        "--rm",
+        "--privileged",
+        "--name",
+        name,
+        "-e",
+        "DOCKER_TLS_CERTDIR=",
+        "docker:dind-rootless",
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    ).exited;
     if (exitCode !== 0) return false;
 
     const deadline = Date.now() + 5_000;
@@ -212,11 +215,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
         const afterRunning = await dockerIsRunning(containerName);
         expect(afterRunning).toEqual(false);
       } else {
-        await forceCleanup(
-          containerName,
-          networkName,
-          effect.sharedTmpVolume,
-        );
+        await forceCleanup(containerName, networkName, effect.sharedTmpVolume);
       }
     }
   },

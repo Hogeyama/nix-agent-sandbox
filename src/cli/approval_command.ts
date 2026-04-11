@@ -52,11 +52,12 @@ export async function handleApprovalSubcommand(
   if (sub === "pending" || sub === undefined) {
     const items = await adapter.listPending();
     if (hasFormatJson(nasArgs)) {
-      const jsonItems = items.map((item) =>
-        item.structured ?? {
-          sessionId: item.sessionId,
-          requestId: item.requestId,
-        }
+      const jsonItems = items.map(
+        (item) =>
+          item.structured ?? {
+            sessionId: item.sessionId,
+            requestId: item.requestId,
+          },
       );
       console.log(JSON.stringify(jsonItems));
       return true;
@@ -72,10 +73,7 @@ export async function handleApprovalSubcommand(
   }
 
   if (sub === "approve") {
-    const [sessionId, requestId] = positionalArgsAfterSubcommand(
-      nasArgs,
-      sub,
-    );
+    const [sessionId, requestId] = positionalArgsAfterSubcommand(nasArgs, sub);
     const scope = getFlagValue(nasArgs, "--scope") ?? undefined;
     await adapter.sendDecision(sessionId, requestId, {
       type: "approve",
@@ -87,10 +85,7 @@ export async function handleApprovalSubcommand(
   }
 
   if (sub === "deny") {
-    const [sessionId, requestId] = positionalArgsAfterSubcommand(
-      nasArgs,
-      sub,
-    );
+    const [sessionId, requestId] = positionalArgsAfterSubcommand(nasArgs, sub);
     await adapter.sendDecision(sessionId, requestId, {
       type: "deny",
       requestId,
@@ -113,13 +108,14 @@ export async function handleApprovalSubcommand(
     const result = await runFzfReview(reviewItems, adapter.scopeOptions);
     if (!result) return true;
     for (const selected of result.items) {
-      const message: DecisionMessage = result.action === "approve"
-        ? {
-          type: "approve",
-          requestId: selected.requestId,
-          scope: result.scope,
-        }
-        : { type: "deny", requestId: selected.requestId };
+      const message: DecisionMessage =
+        result.action === "approve"
+          ? {
+              type: "approve",
+              requestId: selected.requestId,
+              scope: result.scope,
+            }
+          : { type: "deny", requestId: selected.requestId };
       try {
         await adapter.sendDecision(
           selected.sessionId,

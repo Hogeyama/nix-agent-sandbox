@@ -92,11 +92,14 @@ export async function teardownHandles(
     }
   }
   if (errors.length > 0) {
-    const messages = errors.map((e) =>
-      `[${e.kind}] ${
-        e.error instanceof Error ? e.error.message : String(e.error)
-      }`
-    ).join("; ");
+    const messages = errors
+      .map(
+        (e) =>
+          `[${e.kind}] ${
+            e.error instanceof Error ? e.error.message : String(e.error)
+          }`,
+      )
+      .join("; ");
     throw new Error(
       `Teardown failed for ${errors.length} handle(s): ${messages}`,
     );

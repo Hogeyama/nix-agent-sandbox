@@ -76,7 +76,9 @@ test("notifyHostExecPendingRequest: dismiss does not open browser", async () => 
       uiPort: healthServer.port,
     });
 
-    const xdgExists = await stat(xdgLog).then(() => true).catch(() => false);
+    const xdgExists = await stat(xdgLog)
+      .then(() => true)
+      .catch(() => false);
     expect(xdgExists).toEqual(false);
   });
 });

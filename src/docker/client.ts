@@ -103,8 +103,7 @@ export async function getImageLabel(
   try {
     const result = await $`docker inspect --format ${
       '{{index .Config.Labels "' + label + '"}}'
-    } ${tag}`
-      .quiet();
+    } ${tag}`.quiet();
     const value = result.stdout.toString().trim();
     return value || null;
   } catch {
@@ -171,21 +170,20 @@ export async function runInteractiveCommand(
   const stdoutOpt = options.stdout ?? "inherit";
   const stderrOpt = options.stderr ?? "inherit";
   const child = Bun.spawn([command, ...args], {
-    stdin: stdinOpt === "null"
-      ? "ignore"
-      : stdinOpt === "piped"
-      ? "pipe"
-      : stdinOpt,
-    stdout: stdoutOpt === "null"
-      ? "ignore"
-      : stdoutOpt === "piped"
-      ? "pipe"
-      : stdoutOpt,
-    stderr: stderrOpt === "null"
-      ? "ignore"
-      : stderrOpt === "piped"
-      ? "pipe"
-      : stderrOpt,
+    stdin:
+      stdinOpt === "null" ? "ignore" : stdinOpt === "piped" ? "pipe" : stdinOpt,
+    stdout:
+      stdoutOpt === "null"
+        ? "ignore"
+        : stdoutOpt === "piped"
+          ? "pipe"
+          : stdoutOpt,
+    stderr:
+      stderrOpt === "null"
+        ? "ignore"
+        : stderrOpt === "piped"
+          ? "pipe"
+          : stderrOpt,
   });
   const signalTrap = options.signalTrap ?? defaultSignalTrap;
   let interruptedBy: ForwardedSignal | null = null;
@@ -247,9 +245,7 @@ export async function dockerNetworkCreate(name: string): Promise<void> {
 }
 
 /** docker network を --internal フラグ付きで作成（外部アクセス不可） */
-export async function dockerNetworkCreateInternal(
-  name: string,
-): Promise<void> {
+export async function dockerNetworkCreateInternal(name: string): Promise<void> {
   await dockerNetworkCreateWithLabels(name, { internal: true });
 }
 
@@ -287,8 +283,7 @@ export async function dockerNetworkConnect(
   for (const alias of options?.aliases ?? []) {
     aliasArgs.push("--alias", alias);
   }
-  await $`docker network connect ${aliasArgs} ${networkName} ${containerName}`
-    .quiet();
+  await $`docker network connect ${aliasArgs} ${networkName} ${containerName}`.quiet();
 }
 
 /** docker network を削除 */
@@ -305,11 +300,11 @@ export interface DockerRunDetachedOptions {
   mounts?: Array<
     | string
     | {
-      source: string;
-      target: string;
-      mode?: string;
-      type?: "bind" | "volume";
-    }
+        source: string;
+        target: string;
+        mode?: string;
+        type?: "bind" | "volume";
+      }
   >;
   publishedPorts?: string[];
   labels?: DockerLabels;
@@ -367,14 +362,7 @@ export async function dockerRunDetached(
   ]);
   const code = await proc.exited;
   if (code !== 0) {
-    throw new Error(
-      formatDockerCommandFailure(
-        args,
-        code,
-        stdout,
-        stderr,
-      ),
-    );
+    throw new Error(formatDockerCommandFailure(args, code, stdout, stderr));
   }
 }
 
@@ -461,8 +449,8 @@ export async function dockerExec(
 ): Promise<{ code: number; stdout: string }> {
   const userArgs = options?.user ? ["-u", options.user] : [];
   try {
-    const result = await $`docker exec ${userArgs} ${containerName} ${command}`
-      .quiet();
+    const result =
+      await $`docker exec ${userArgs} ${containerName} ${command}`.quiet();
     return { code: 0, stdout: result.stdout.toString().trim() };
   } catch (err) {
     if (err && typeof err === "object" && "exitCode" in err) {
@@ -473,13 +461,11 @@ export async function dockerExec(
 }
 
 /** コンテナが実行中かどうかを確認 */
-export async function dockerIsRunning(
-  containerName: string,
-): Promise<boolean> {
+export async function dockerIsRunning(containerName: string): Promise<boolean> {
   try {
     const fmt = "{{.State.Running}}";
-    const result = await $`docker inspect --format=${fmt} ${containerName}`
-      .quiet();
+    const result =
+      await $`docker inspect --format=${fmt} ${containerName}`.quiet();
     return result.stdout.toString().trim() === "true";
   } catch {
     return false;
@@ -543,8 +529,8 @@ export async function dockerContainerIp(
   try {
     const fmt =
       "{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}}{{break}}{{end}}{{end}}";
-    const result = await $`docker inspect --format=${fmt} ${containerName}`
-      .quiet();
+    const result =
+      await $`docker inspect --format=${fmt} ${containerName}`.quiet();
     const ip = result.stdout.toString().trim();
     return ip.length > 0 ? ip : null;
   } catch {
@@ -558,11 +544,13 @@ export async function dockerInspectNetwork(
 ): Promise<DockerNetworkDetails> {
   const result = await $`docker network inspect ${networkName}`.quiet();
   const parsed = JSON.parse(result.stdout.toString())[0];
-  const containers = Object.values(parsed.Containers ?? {}).map((entry) =>
-    typeof entry === "object" && entry !== null && "Name" in entry
-      ? String(entry.Name)
-      : ""
-  ).filter((name) => name.length > 0);
+  const containers = Object.values(parsed.Containers ?? {})
+    .map((entry) =>
+      typeof entry === "object" && entry !== null && "Name" in entry
+        ? String(entry.Name)
+        : "",
+    )
+    .filter((name) => name.length > 0);
   return {
     name: String(parsed.Name ?? networkName),
     labels: parsed.Labels ?? {},
@@ -589,13 +577,13 @@ export async function dockerListContainersUsingVolume(
 ): Promise<string[]> {
   const fmt = "{{.Names}}";
   const result =
-    await $`docker ps -a --filter volume=${volumeName} --format=${fmt}`
-      .quiet();
+    await $`docker ps -a --filter volume=${volumeName} --format=${fmt}`.quiet();
   return splitNonEmptyLines(result.stdout.toString());
 }
 
 function splitNonEmptyLines(text: string): string[] {
-  return text.split("\n").map((line) => line.trim()).filter((line) =>
-    line.length > 0
-  );
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 }

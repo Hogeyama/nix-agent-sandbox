@@ -40,7 +40,7 @@ test("validate: profiles with null value throws", () => {
       profiles: {
         test: null as unknown as import("./types.ts").RawProfile,
       },
-    })
+    }),
   ).toThrow();
 });
 
@@ -80,13 +80,15 @@ test("validate: agent='' throws", () => {
 });
 
 test("validate: agent=gpt throws", () => {
-  expect(() => validateConfig({ profiles: { test: { agent: "gpt" } } }))
-    .toThrow("agent must be one of");
+  expect(() =>
+    validateConfig({ profiles: { test: { agent: "gpt" } } }),
+  ).toThrow("agent must be one of");
 });
 
 test("validate: agent=Claude (case sensitive) throws", () => {
-  expect(() => validateConfig({ profiles: { test: { agent: "Claude" } } }))
-    .toThrow("agent must be one of");
+  expect(() =>
+    validateConfig({ profiles: { test: { agent: "Claude" } } }),
+  ).toThrow("agent must be one of");
 });
 
 // --- default profile バリデーション ---
@@ -104,7 +106,7 @@ test("validate: default profile not in profiles throws", () => {
     validateConfig({
       default: "missing",
       profiles: { test: { agent: "claude" } },
-    })
+    }),
   ).toThrow('default profile "missing" not found');
 });
 
@@ -426,7 +428,7 @@ test("validate: extra-mounts missing src throws", () => {
           "extra-mounts": [{ dst: "/b" }],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[0].src");
 });
 
@@ -439,7 +441,7 @@ test("validate: extra-mounts empty src throws", () => {
           "extra-mounts": [{ src: "", dst: "/b" }],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[0].src");
 });
 
@@ -452,7 +454,7 @@ test("validate: extra-mounts missing dst throws", () => {
           "extra-mounts": [{ src: "/a" }],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[0].dst");
 });
 
@@ -465,7 +467,7 @@ test("validate: extra-mounts empty dst throws", () => {
           "extra-mounts": [{ src: "/a", dst: "" }],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[0].dst");
 });
 
@@ -478,7 +480,7 @@ test("validate: extra-mounts invalid mode throws", () => {
           "extra-mounts": [{ src: "/a", dst: "/b", mode: "rwx" }],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[0].mode");
 });
 
@@ -494,7 +496,7 @@ test("validate: extra-mounts second entry error references index 1", () => {
           ],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[1].dst");
 });
 
@@ -548,7 +550,7 @@ test("validate: mixed static and command throws", () => {
           env: [{ key: "K", val: "V", key_cmd: "echo K", val_cmd: "echo V" }],
         },
       },
-    })
+    }),
   ).toThrow("must have exactly one of key or key_cmd");
 });
 
@@ -561,7 +563,7 @@ test("validate: static env missing key throws", () => {
           env: [{ val: "value" }],
         },
       },
-    })
+    }),
   ).toThrow();
 });
 
@@ -574,7 +576,7 @@ test("validate: static env empty key throws", () => {
           env: [{ key: "", val: "value" }],
         },
       },
-    })
+    }),
   ).toThrow("env[0].key");
 });
 
@@ -587,7 +589,7 @@ test("validate: command env empty key_cmd throws", () => {
           env: [{ key_cmd: "", val_cmd: "echo val" }],
         },
       },
-    })
+    }),
   ).toThrow("env[0].key_cmd");
 });
 
@@ -600,7 +602,7 @@ test("validate: command env empty val_cmd throws", () => {
           env: [{ key_cmd: "echo key", val_cmd: "" }],
         },
       },
-    })
+    }),
   ).toThrow("env[0].val_cmd");
 });
 
@@ -692,7 +694,7 @@ test("validate: env prefix without separator throws", () => {
           env: [{ key: "PATH", val: "/opt/bin", mode: "prefix" }],
         },
       },
-    })
+    }),
   ).toThrow("separator is required");
 });
 
@@ -705,7 +707,7 @@ test("validate: env suffix without separator throws", () => {
           env: [{ key: "PATH", val: "/opt/bin", mode: "suffix" }],
         },
       },
-    })
+    }),
   ).toThrow("separator is required");
 });
 
@@ -718,7 +720,7 @@ test("validate: env set mode with separator throws", () => {
           env: [{ key: "FOO", val: "bar", mode: "set", separator: ":" }],
         },
       },
-    })
+    }),
   ).toThrow("separator is only allowed");
 });
 
@@ -731,7 +733,7 @@ test("validate: env omitted mode with separator throws", () => {
           env: [{ key: "FOO", val: "bar", separator: ":" }],
         },
       },
-    })
+    }),
   ).toThrow("separator is only allowed");
 });
 
@@ -741,12 +743,10 @@ test("validate: env invalid mode throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          env: [
-            { key: "FOO", val: "bar", mode: "prepend", separator: ":" },
-          ],
+          env: [{ key: "FOO", val: "bar", mode: "prepend", separator: ":" }],
         },
       },
-    })
+    }),
   ).toThrow();
 });
 
@@ -771,7 +771,7 @@ test("validate: error in second profile references correct name", () => {
         valid: { agent: "claude" },
         invalid: { agent: "bad" },
       },
-    })
+    }),
   ).toThrow('profile "invalid"');
 });
 
@@ -884,7 +884,7 @@ test("validateConfig: invalid agent throws", () => {
   expect(() =>
     validateConfig({
       profiles: { test: { agent: "invalid" } },
-    })
+    }),
   ).toThrow("agent must be one of");
 });
 
@@ -930,7 +930,7 @@ test("validateConfig: invalid default profile throws", () => {
     validateConfig({
       default: "nonexistent",
       profiles: { test: { agent: "claude" } },
-    })
+    }),
   ).toThrow("not found in profiles");
 });
 
@@ -940,15 +940,17 @@ test("validateConfig: mixed env entry throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          env: [{
-            key: "A",
-            val: "B",
-            key_cmd: "echo C",
-            val_cmd: "echo D",
-          }],
+          env: [
+            {
+              key: "A",
+              val: "B",
+              key_cmd: "echo C",
+              val_cmd: "echo D",
+            },
+          ],
         },
       },
-    })
+    }),
   ).toThrow("must have exactly one of key or key_cmd");
 });
 
@@ -961,7 +963,7 @@ test("validateConfig: invalid env command entry throws", () => {
           env: [{ key_cmd: "", val_cmd: "echo x" }],
         },
       },
-    })
+    }),
   ).toThrow("env[0].key_cmd");
 });
 
@@ -971,14 +973,16 @@ test("validateConfig: invalid extra-mounts mode throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [{
-            src: "/tmp/src",
-            dst: "/tmp/dst",
-            mode: "invalid",
-          }],
+          "extra-mounts": [
+            {
+              src: "/tmp/src",
+              dst: "/tmp/dst",
+              mode: "invalid",
+            },
+          ],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[0].mode");
 });
 
@@ -991,7 +995,7 @@ test("validateConfig: missing extra-mounts src throws", () => {
           "extra-mounts": [{ dst: "/tmp/dst", mode: "ro" }],
         },
       },
-    })
+    }),
   ).toThrow("extra-mounts[0].src");
 });
 
@@ -1072,7 +1076,7 @@ test("validateConfig: dbus.session invalid source-address throws", () => {
           },
         },
       },
-    })
+    }),
   ).toThrow("dbus.session.source-address");
 });
 
@@ -1089,7 +1093,7 @@ test("validateConfig: dbus.session invalid call rule throws", () => {
           },
         },
       },
-    })
+    }),
   ).toThrow("dbus.session.calls[0].name");
 });
 
@@ -1177,7 +1181,7 @@ test("validateConfig: network.prompt rejects invalid default-scope", () => {
           },
         },
       },
-    })
+    }),
   ).toThrow("network.prompt.default-scope must be one of");
 });
 
@@ -1194,7 +1198,7 @@ test("validateConfig: network.prompt rejects invalid notify", () => {
           },
         },
       },
-    })
+    }),
   ).toThrow("network.prompt.notify must be one of");
 });
 
@@ -1224,7 +1228,7 @@ test("validateConfig: network.allowlist invalid entry throws", () => {
           network: { allowlist: ["github.com", ""] },
         },
       },
-    })
+    }),
   ).toThrow("network.allowlist[1] must be a non-empty string");
 });
 
@@ -1254,7 +1258,7 @@ test("validateConfig: network.allowlist rejects wildcard in middle", () => {
           network: { allowlist: ["git*hub.com"] },
         },
       },
-    })
+    }),
   ).toThrow("contains wildcard");
 });
 
@@ -1267,7 +1271,7 @@ test("validateConfig: network.allowlist rejects trailing wildcard", () => {
           network: { allowlist: ["github.*"] },
         },
       },
-    })
+    }),
   ).toThrow("contains wildcard");
 });
 
@@ -1281,7 +1285,7 @@ test("validateConfig: network.allowlist non-array throws", () => {
           network: { allowlist: "not-an-array" as any },
         },
       },
-    })
+    }),
   ).toThrow("network.allowlist must be a list");
 });
 
@@ -1318,7 +1322,7 @@ test("validateConfig: network.prompt.denylist rejects wildcard in middle", () =>
           network: { prompt: { denylist: ["ev*il.com"] } },
         },
       },
-    })
+    }),
   ).toThrow("network.prompt.denylist[0]");
 });
 
@@ -1334,7 +1338,7 @@ test("validateConfig: allowlist and denylist overlap throws", () => {
           },
         },
       },
-    })
+    }),
   ).toThrow("appears in both network.allowlist and network.prompt.denylist");
 });
 

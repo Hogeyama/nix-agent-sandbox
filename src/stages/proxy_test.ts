@@ -235,8 +235,9 @@ test("ProxyStage: replaces existing --network in outputOverrides.dockerArgs", ()
   const overriddenArgs = result.outputOverrides.dockerArgs as string[];
   const networkIdx = overriddenArgs.indexOf("--network");
   expect(networkIdx !== -1).toEqual(true);
-  expect(overriddenArgs[networkIdx + 1].startsWith("nas-session-net-"))
-    .toEqual(true);
+  expect(overriddenArgs[networkIdx + 1].startsWith("nas-session-net-")).toEqual(
+    true,
+  );
   // old-net should be replaced, other args preserved
   expect(overriddenArgs.includes("old-net")).toEqual(false);
   expect(overriddenArgs.includes("--rm")).toEqual(true);

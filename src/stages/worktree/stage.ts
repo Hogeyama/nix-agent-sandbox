@@ -76,12 +76,7 @@ export class WorktreeStage implements ProceduralStage {
     const worktreeName = generateWorktreeName(input.profileName);
     const branchName = generateBranchName(input.profileName);
     // .nas/worktrees/ 内に作成 → 元リポのマウントだけで完結する
-    const worktreePath = path.join(
-      repoRoot,
-      ".nas",
-      "worktrees",
-      worktreeName,
-    );
+    const worktreePath = path.join(repoRoot, ".nas", "worktrees", worktreeName);
 
     await ensureNasGitignore(repoRoot);
     this.worktreePath = worktreePath;
@@ -96,8 +91,7 @@ export class WorktreeStage implements ProceduralStage {
     await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${resolvedBase}`;
 
     // nas worktree list で base を表示できるよう、branch に base ref を記録しておく
-    await $`git -C ${repoRoot} config ${`branch.${branchName}.nasBase`} ${resolvedBase}`
-      .quiet();
+    await $`git -C ${repoRoot} config ${`branch.${branchName}.nasBase`} ${resolvedBase}`.quiet();
 
     await inheritDirtyBaseWorktree(repoRoot, resolvedBase, worktreePath);
 
@@ -120,10 +114,13 @@ export class WorktreeStage implements ProceduralStage {
 
     // Show the current HEAD so the user can reference this commit later
     try {
-      const head = (await $`git -C ${this.worktreePath} rev-parse HEAD`.text())
-        .trim();
+      const head = (
+        await $`git -C ${this.worktreePath} rev-parse HEAD`.text()
+      ).trim();
       console.log(`[nas] Worktree HEAD: ${head}`);
-    } catch { /* ignore – worktree may already be gone */ }
+    } catch {
+      /* ignore – worktree may already be gone */
+    }
 
     const worktreeAction = await promptWorktreeAction(this.worktreePath);
 
@@ -152,7 +149,11 @@ export class WorktreeStage implements ProceduralStage {
     }
 
     // worktree を削除する場合、ブランチをどうするか聞く
-    const branchAction = await promptBranchAction(this.branchName, this.baseBranch, this.repoRoot);
+    const branchAction = await promptBranchAction(
+      this.branchName,
+      this.baseBranch,
+      this.repoRoot,
+    );
 
     let shouldDeleteBranch = branchAction !== "rename";
 
@@ -197,8 +198,7 @@ export class WorktreeStage implements ProceduralStage {
     if (!this.branchName || !this.repoRoot) return;
     const newName = prompt(
       `[nas] New branch name (current: ${this.branchName}):`,
-    )
-      ?.trim();
+    )?.trim();
     if (!newName) {
       console.log("[nas] No name entered, keeping original branch name.");
       return;
@@ -208,9 +208,7 @@ export class WorktreeStage implements ProceduralStage {
       console.log(`[nas] Renamed branch: ${this.branchName} → ${newName}`);
       this.branchName = newName;
     } catch (err) {
-      console.error(
-        `[nas] Failed to rename branch: ${(err as Error).message}`,
-      );
+      console.error(`[nas] Failed to rename branch: ${(err as Error).message}`);
     }
   }
 
@@ -219,8 +217,7 @@ export class WorktreeStage implements ProceduralStage {
 
     // base ブランチ上にないコミット一覧を取得
     const commits = (
-      await $`git -C ${this.repoRoot} log ${this.baseBranch}..${this.branchName} --format=%H --reverse`
-        .text()
+      await $`git -C ${this.repoRoot} log ${this.baseBranch}..${this.branchName} --format=%H --reverse`.text()
     ).trim();
 
     if (!commits) {
@@ -239,8 +236,7 @@ export class WorktreeStage implements ProceduralStage {
     try {
       // ローカルブランチが存在するか確認、なければ作成
       try {
-        await $`git -C ${this.repoRoot} rev-parse --verify refs/heads/${targetBranch}`
-          .quiet();
+        await $`git -C ${this.repoRoot} rev-parse --verify refs/heads/${targetBranch}`.quiet();
       } catch {
         console.log(
           `[nas] Creating local branch "${targetBranch}" from ${this.baseBranch}`,
@@ -284,9 +280,7 @@ export class WorktreeStage implements ProceduralStage {
   ): Promise<boolean> {
     const dirty = await isWorktreeDirty(worktreePath);
     let stashed = false;
-    const stashMessage = `nas cherry-pick ${targetBranch} ${
-      new Date().toISOString()
-    }`;
+    const stashMessage = `nas cherry-pick ${targetBranch} ${new Date().toISOString()}`;
 
     if (dirty) {
       console.log(
@@ -331,7 +325,9 @@ export class WorktreeStage implements ProceduralStage {
         console.error("[nas] Cherry-pick failed with conflicts.");
         try {
           await $`git -C ${worktreePath} cherry-pick --abort`.quiet();
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
     }
 
@@ -375,8 +371,7 @@ export class WorktreeStage implements ProceduralStage {
     targetBranch: string,
   ): Promise<boolean> {
     const targetRef = (
-      await $`git -C ${this.repoRoot} rev-parse refs/heads/${targetBranch}`
-        .text()
+      await $`git -C ${this.repoRoot} rev-parse refs/heads/${targetBranch}`.text()
     ).trim();
     const tmpWorktree = path.join(
       this.repoRoot!,
@@ -425,11 +420,12 @@ export class WorktreeStage implements ProceduralStage {
       console.error("[nas] Cherry-pick failed with conflicts.");
       try {
         await $`git -C ${tmpWorktree} cherry-pick --abort`.quiet();
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       return false;
     } finally {
-      await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`
-        .quiet();
+      await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`.quiet();
     }
   }
 
@@ -452,7 +448,8 @@ export class WorktreeStage implements ProceduralStage {
       }
 
       // working tree がクリーンなら空コミット → skip
-      const status = await $`git -C ${worktree} status --porcelain`.quiet()
+      const status = await $`git -C ${worktree} status --porcelain`
+        .quiet()
         .text();
       if (status.trim() === "") {
         console.log("[nas] Skipping empty cherry-pick (already applied).");

@@ -57,7 +57,7 @@ export async function startDbusProxy(
       `[nas] dbus-proxy: GC failed: ${
         e instanceof Error ? e.message : String(e)
       }`,
-    )
+    ),
   );
 
   // Create directories
@@ -110,9 +110,11 @@ export async function startDbusProxy(
     await stderrCapture.catch(() => {});
     const enrichedMessage = stderrText
       ? `${
-        error instanceof Error ? error.message : String(error)
-      } (stderr: ${stderrText})`
-      : (error instanceof Error ? error.message : String(error));
+          error instanceof Error ? error.message : String(error)
+        } (stderr: ${stderrText})`
+      : error instanceof Error
+        ? error.message
+        : String(error);
 
     // Clean up on failure
     try {
@@ -130,7 +132,7 @@ export async function startDbusProxy(
         `[nas] dbus-proxy: cleanup session dir failed: ${
           e instanceof Error ? e.message : String(e)
         }`,
-      )
+      ),
     );
     throw new Error(enrichedMessage);
   }
@@ -145,21 +147,18 @@ export async function startDbusProxy(
       await child.exited.catch((e: unknown) =>
         logInfo(
           `[nas] dbus-proxy teardown: failed to await child status: ${e}`,
-        )
+        ),
       );
       await stderrCapture.catch((e: unknown) =>
-        logInfo(
-          `[nas] dbus-proxy teardown: failed to capture stderr: ${e}`,
-        )
+        logInfo(`[nas] dbus-proxy teardown: failed to capture stderr: ${e}`),
       );
-      await rm(sessionDir, { recursive: true, force: true }).catch((
-        e: unknown,
-      ) =>
-        logWarn(
-          `[nas] dbus-proxy teardown: failed to remove session dir: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        )
+      await rm(sessionDir, { recursive: true, force: true }).catch(
+        (e: unknown) =>
+          logWarn(
+            `[nas] dbus-proxy teardown: failed to remove session dir: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          ),
       );
     },
   };

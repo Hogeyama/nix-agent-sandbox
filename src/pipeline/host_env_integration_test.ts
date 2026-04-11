@@ -68,8 +68,7 @@ test("resolveProbes: returns ProbeResults with expected fields", async () => {
   ).toEqual(true);
   // gpgAgentSocket may or may not exist
   expect(
-    probes.gpgAgentSocket === null ||
-      typeof probes.gpgAgentSocket === "string",
+    probes.gpgAgentSocket === null || typeof probes.gpgAgentSocket === "string",
   ).toEqual(true);
 });
 

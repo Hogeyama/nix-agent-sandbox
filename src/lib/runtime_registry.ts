@@ -134,12 +134,12 @@ export async function listPendingEntries<P extends BasePendingEntry>(
   }
   const entries: P[] = [];
   try {
-    for (
-      const dirEntry of await readdir(paths.pendingDir, { withFileTypes: true })
-    ) {
+    for (const dirEntry of await readdir(paths.pendingDir, {
+      withFileTypes: true,
+    })) {
       if (!dirEntry.isDirectory()) continue;
       entries.push(
-        ...await readJsonDir<P>(path.join(paths.pendingDir, dirEntry.name)),
+        ...(await readJsonDir<P>(path.join(paths.pendingDir, dirEntry.name))),
       );
     }
   } catch (e) {
@@ -181,9 +181,9 @@ export async function gcRuntime<S extends BaseSessionEntry>(
   );
 
   try {
-    for (
-      const dirEntry of await readdir(paths.pendingDir, { withFileTypes: true })
-    ) {
+    for (const dirEntry of await readdir(paths.pendingDir, {
+      withFileTypes: true,
+    })) {
       if (!dirEntry.isDirectory()) continue;
       if (liveSessionIds.has(dirEntry.name)) continue;
       await removePendingDir(paths, dirEntry.name);
@@ -194,11 +194,9 @@ export async function gcRuntime<S extends BaseSessionEntry>(
   }
 
   try {
-    for (
-      const socketEntry of await readdir(paths.brokersDir, {
-        withFileTypes: true,
-      })
-    ) {
+    for (const socketEntry of await readdir(paths.brokersDir, {
+      withFileTypes: true,
+    })) {
       if (!socketEntry.isFile() && !socketEntry.isSymbolicLink()) continue;
       const socketPath = path.join(paths.brokersDir, socketEntry.name);
       const sessionId = socketEntry.name.replace(/\.sock$/, "");

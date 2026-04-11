@@ -88,9 +88,7 @@ export async function isUiDaemonRunning(port: number): Promise<boolean> {
  * Stop a running UI daemon. Reads daemon.json for port, confirms health,
  * then sends SIGTERM to the validated listening PID(s).
  */
-export async function stopUiDaemon(
-  options?: { port?: number },
-): Promise<void> {
+export async function stopUiDaemon(options?: { port?: number }): Promise<void> {
   const port = options?.port ?? DEFAULT_UI_PORT;
 
   if (!(await isUiDaemonRunning(port))) {
@@ -133,13 +131,7 @@ async function startUiDaemon(
 ): Promise<void> {
   const { execPath, prefix } = resolveNasCommand();
 
-  const args = [
-    ...prefix,
-    "ui",
-    "--no-open",
-    "--port",
-    String(port),
-  ];
+  const args = [...prefix, "ui", "--no-open", "--port", String(port)];
   if (idleTimeout !== undefined) {
     args.push("--idle-timeout", String(idleTimeout));
   }
@@ -151,7 +143,7 @@ async function startUiDaemon(
   const cmdLine = [execPath, ...args]
     .map((a) => `'${a.replaceAll("'", "'\\''")}'`)
     .join(" ");
-  const shellCmd = await hasSetsid()
+  const shellCmd = (await hasSetsid())
     ? `setsid ${cmdLine} </dev/null >/dev/null 2>&1 &`
     : `(${cmdLine}) </dev/null >/dev/null 2>&1 &`;
   const child = Bun.spawn(["sh", "-c", shellCmd], {
@@ -182,9 +174,7 @@ async function hasSetsid(): Promise<boolean> {
 
 async function readDaemonState(): Promise<DaemonState | null> {
   try {
-    return JSON.parse(
-      await readFile(daemonStatePath(), "utf8"),
-    ) as DaemonState;
+    return JSON.parse(await readFile(daemonStatePath(), "utf8")) as DaemonState;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -195,18 +185,16 @@ async function readDaemonState(): Promise<DaemonState | null> {
 
 async function writeDaemonState(state: DaemonState): Promise<void> {
   await mkdir(daemonStateDir(), { recursive: true });
-  await writeFile(
-    daemonStatePath(),
-    JSON.stringify(state, null, 2),
-  );
+  await writeFile(daemonStatePath(), JSON.stringify(state, null, 2));
 }
 
 export function parseListeningPids(output: string): number[] {
   return [
     ...new Set(
-      output.split("\n").map((line) => parseInt(line, 10)).filter(
-        (pid) => !Number.isNaN(pid),
-      ),
+      output
+        .split("\n")
+        .map((line) => parseInt(line, 10))
+        .filter((pid) => !Number.isNaN(pid)),
     ),
   ];
 }

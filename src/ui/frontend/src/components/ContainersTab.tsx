@@ -111,75 +111,80 @@ export function ContainersTab() {
         </button>
       </div>
 
-      {containers.length === 0
-        ? (
-          <div class="empty">
-            <div class="icon">∅</div>
-            <div class="msg">No nas-managed containers</div>
-            <div class="sub">Launch an agent with <span class="kbd">nas run</span> to get started.</div>
+      {containers.length === 0 ? (
+        <div class="empty">
+          <div class="icon">∅</div>
+          <div class="msg">No nas-managed containers</div>
+          <div class="sub">
+            Launch an agent with <span class="kbd">nas run</span> to get
+            started.
           </div>
-        )
-        : (
-          <table class="table">
-            <colgroup>
-              <col style="width:28%" />
-              <col style="width:11%" />
-              <col style="width:10%" />
-              <col style="width:13%" />
-              <col style="width:26%" />
-              <col style="width:12%" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Kind</th>
-                <th>Uptime</th>
-                <th>PWD</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {containers.map((c) => {
-                const kind = c.labels["nas.kind"] || "-";
-                const pwd = kind === "agent"
-                  ? (c.labels["nas.pwd"] || "-")
-                  : "";
-                return (
-                  <tr key={c.name}>
-                    <td class="mono" title={c.name}>{c.name}</td>
-                    <td>
-                      <span
-                        class={`chip ${c.running ? "chip-good" : "chip-muted"}`}
+        </div>
+      ) : (
+        <table class="table">
+          <colgroup>
+            <col style="width:28%" />
+            <col style="width:11%" />
+            <col style="width:10%" />
+            <col style="width:13%" />
+            <col style="width:26%" />
+            <col style="width:12%" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Kind</th>
+              <th>Uptime</th>
+              <th>PWD</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {containers.map((c) => {
+              const kind = c.labels["nas.kind"] || "-";
+              const pwd = kind === "agent" ? c.labels["nas.pwd"] || "-" : "";
+              return (
+                <tr key={c.name}>
+                  <td class="mono" title={c.name}>
+                    {c.name}
+                  </td>
+                  <td>
+                    <span
+                      class={`chip ${c.running ? "chip-good" : "chip-muted"}`}
+                    >
+                      {c.running ? "running" : "stopped"}
+                    </span>
+                  </td>
+                  <td>
+                    <span class="chip">{kind}</span>
+                  </td>
+                  <td class="time">
+                    {c.running && c.startedAt
+                      ? formatRelativeTime(c.startedAt)
+                      : "-"}
+                  </td>
+                  <td class="mono" title={pwd}>
+                    {pwd}
+                  </td>
+                  <td>
+                    {c.running && (
+                      <button
+                        type="button"
+                        class="btn btn-warn"
+                        disabled={busy.has(c.name)}
+                        onClick={() => handleStop(c.name)}
                       >
-                        {c.running ? "running" : "stopped"}
-                      </span>
-                    </td>
-                    <td><span class="chip">{kind}</span></td>
-                    <td class="time">
-                      {c.running && c.startedAt
-                        ? formatRelativeTime(c.startedAt)
-                        : "-"}
-                    </td>
-                    <td class="mono" title={pwd}>{pwd}</td>
-                    <td>
-                      {c.running && (
-                        <button
-                          type="button"
-                          class="btn btn-warn"
-                          disabled={busy.has(c.name)}
-                          onClick={() => handleStop(c.name)}
-                        >
-                          Stop
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+                        Stop
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

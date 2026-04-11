@@ -99,11 +99,7 @@ test("parseProfileAndWorktreeArgs: --no-worktree", () => {
 });
 
 test("parseProfileAndWorktreeArgs: --worktree before profile", () => {
-  const result = parseProfileAndWorktreeArgs([
-    "--worktree",
-    "main",
-    "dev",
-  ]);
+  const result = parseProfileAndWorktreeArgs(["--worktree", "main", "dev"]);
   expect(result.profileName).toEqual("dev");
   expect(result.worktreeOverride).toEqual({ type: "enable", base: "main" });
 });
@@ -169,33 +165,33 @@ test("parseProfileAndWorktreeArgs: treats nas-style flags after profile as agent
 });
 
 test("parseProfileAndWorktreeArgs: --worktree without branch throws", () => {
-  expect(
-    () => parseProfileAndWorktreeArgs(["--worktree"]),
-  ).toThrow("requires a branch name");
+  expect(() => parseProfileAndWorktreeArgs(["--worktree"])).toThrow(
+    "requires a branch name",
+  );
 });
 
 test("parseProfileAndWorktreeArgs: -b without branch throws", () => {
-  expect(
-    () => parseProfileAndWorktreeArgs(["-b"]),
-  ).toThrow("requires a branch name");
+  expect(() => parseProfileAndWorktreeArgs(["-b"])).toThrow(
+    "requires a branch name",
+  );
 });
 
 test("parseProfileAndWorktreeArgs: --worktree with flag-like branch throws", () => {
-  expect(
-    () => parseProfileAndWorktreeArgs(["--worktree", "--something"]),
+  expect(() =>
+    parseProfileAndWorktreeArgs(["--worktree", "--something"]),
   ).toThrow("requires a branch name");
 });
 
 test("parseProfileAndWorktreeArgs: -b with flag-like value throws", () => {
-  expect(
-    () => parseProfileAndWorktreeArgs(["-b", "-x"]),
-  ).toThrow("requires a branch name");
+  expect(() => parseProfileAndWorktreeArgs(["-b", "-x"])).toThrow(
+    "requires a branch name",
+  );
 });
 
 test("parseProfileAndWorktreeArgs: -b short form with flag-like value throws", () => {
-  expect(
-    () => parseProfileAndWorktreeArgs(["-b-x"]),
-  ).toThrow("requires a branch name");
+  expect(() => parseProfileAndWorktreeArgs(["-b-x"])).toThrow(
+    "requires a branch name",
+  );
 });
 
 // ============================================================

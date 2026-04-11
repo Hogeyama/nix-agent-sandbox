@@ -18,17 +18,21 @@ test("parseListeningPids: filters invalid lines and deduplicates", () => {
 });
 
 test("resolveDaemonPidsToStop: prefers validated state pid", () => {
-  expect(resolveDaemonPidsToStop(
-    { pid: 321, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
-    [321, 654],
-  )).toEqual([321]);
+  expect(
+    resolveDaemonPidsToStop(
+      { pid: 321, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
+      [321, 654],
+    ),
+  ).toEqual([321]);
 });
 
 test("resolveDaemonPidsToStop: falls back to listening pids when state pid is stale", () => {
-  expect(resolveDaemonPidsToStop(
-    { pid: 111, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
-    [222, 333, 222],
-  )).toEqual([222, 333]);
+  expect(
+    resolveDaemonPidsToStop(
+      { pid: 111, port: 3939, startedAt: "2026-04-05T00:00:00.000Z" },
+      [222, 333, 222],
+    ),
+  ).toEqual([222, 333]);
 });
 
 test("syncDaemonStatePid: writes the resolved listening pid back to state", async () => {

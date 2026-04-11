@@ -73,8 +73,8 @@ export async function promptBranchAction(
   const gitDir = repoRoot ? ["-C", repoRoot] : [];
   try {
     const log = baseBranch
-      ? (await $`git ${gitDir} log --oneline ${baseBranch}..${branchName} -10`.text())
-      : (await $`git ${gitDir} log --oneline ${branchName} --not --remotes -10`.text());
+      ? await $`git ${gitDir} log --oneline ${baseBranch}..${branchName} -10`.text()
+      : await $`git ${gitDir} log --oneline ${branchName} --not --remotes -10`.text();
     if (log.trim()) {
       hasCommits = true;
       console.log(`[nas] Recent commits on ${branchName}:`);
@@ -82,7 +82,9 @@ export async function promptBranchAction(
         console.log(`  ${line}`);
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   if (!hasCommits) {
     console.log(`[nas] No unique commits on ${branchName}; deleting branch.`);
@@ -133,12 +135,8 @@ export function promptReuseWorktree(
   }
 }
 
-export async function stashDirtyWorktree(
-  worktreePath: string,
-): Promise<void> {
-  const stashMessage = `nas teardown ${path.basename(worktreePath)} ${
-    new Date().toISOString()
-  }`;
+export async function stashDirtyWorktree(worktreePath: string): Promise<void> {
+  const stashMessage = `nas teardown ${path.basename(worktreePath)} ${new Date().toISOString()}`;
   console.log(
     `$ git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`,
   );

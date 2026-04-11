@@ -249,15 +249,15 @@ async function resolveEnvEntries(
 ): Promise<ResolvedEnvEntry[]> {
   const results: ResolvedEnvEntry[] = [];
   for (const [index, entry] of envEntries.entries()) {
-    const key = "key" in entry ? entry.key : await runCommandForEnv(
-      entry.keyCmd,
-      `profile.env[${index}].key_cmd`,
-    );
+    const key =
+      "key" in entry
+        ? entry.key
+        : await runCommandForEnv(entry.keyCmd, `profile.env[${index}].key_cmd`);
     const keySource: "key" | "key_cmd" = "key" in entry ? "key" : "key_cmd";
-    const value = "val" in entry ? entry.val : await runCommandForEnv(
-      entry.valCmd,
-      `profile.env[${index}].val_cmd`,
-    );
+    const value =
+      "val" in entry
+        ? entry.val
+        : await runCommandForEnv(entry.valCmd, `profile.env[${index}].val_cmd`);
     results.push({
       key,
       value,
@@ -302,12 +302,10 @@ async function resolveNixBinPath(): Promise<string | null> {
   if (resolved?.startsWith("/nix/store/")) return resolved;
 
   // fallback: check common profile paths
-  for (
-    const p of [
-      "/nix/var/nix/profiles/default/bin/nix",
-      "/root/.nix-profile/bin/nix",
-    ]
-  ) {
+  for (const p of [
+    "/nix/var/nix/profiles/default/bin/nix",
+    "/root/.nix-profile/bin/nix",
+  ]) {
     if (await fileExists(p)) return p;
   }
   return null;

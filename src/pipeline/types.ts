@@ -112,28 +112,28 @@ export type ReadinessCheck =
 
 export type ListenerSpec =
   | {
-    kind: "session-broker";
-    paths: NetworkRuntimePaths;
-    sessionId: string;
-    allowlist: string[];
-    denylist: string[];
-    promptEnabled: boolean;
-  }
+      kind: "session-broker";
+      paths: NetworkRuntimePaths;
+      sessionId: string;
+      allowlist: string[];
+      denylist: string[];
+      promptEnabled: boolean;
+    }
   | {
-    kind: "hostexec-broker";
-    paths: HostExecRuntimePaths;
-    sessionId: string;
-    profileName: string;
-    workspaceRoot: string;
-    sessionTmpDir: string;
-    hostexec: HostExecConfig;
-    notify: ResolvedNotifyBackend;
-    uiEnabled: boolean;
-    uiPort: number;
-    uiIdleTimeout: number;
-    auditDir: string;
-    agent: AgentType;
-  };
+      kind: "hostexec-broker";
+      paths: HostExecRuntimePaths;
+      sessionId: string;
+      profileName: string;
+      workspaceRoot: string;
+      sessionTmpDir: string;
+      hostexec: HostExecConfig;
+      notify: ResolvedNotifyBackend;
+      uiEnabled: boolean;
+      uiPort: number;
+      uiIdleTimeout: number;
+      auditDir: string;
+      agent: AgentType;
+    };
 
 // ---------------------------------------------------------------------------
 // Resource effects

@@ -67,7 +67,7 @@ export async function cleanNasContainers(
   );
 
   const managedSidecars = containers.filter((container) =>
-    isNasManagedSidecar(container.labels, container.name)
+    isNasManagedSidecar(container.labels, container.name),
   );
 
   const removedContainers: string[] = [];
@@ -137,7 +137,7 @@ async function loadNetworks(
     names.map((name) => backend.inspectNetwork(name)),
   );
   return networks.filter((network) =>
-    isNasManagedNetwork(network.labels, network.name)
+    isNasManagedNetwork(network.labels, network.name),
   );
 }
 

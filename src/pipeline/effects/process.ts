@@ -45,12 +45,12 @@ export function executeProcessSpawn(
       await child.exited.catch((e: unknown) =>
         logInfo(
           `[nas] process-spawn teardown (${effect.id}): failed to await child status: ${e}`,
-        )
+        ),
       );
       await stderrCapture.catch((e: unknown) =>
         logInfo(
           `[nas] process-spawn teardown (${effect.id}): failed to capture stderr: ${e}`,
-        )
+        ),
       );
     },
   });

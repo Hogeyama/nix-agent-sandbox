@@ -72,18 +72,21 @@ export async function runFzfReview(
 
   let child: ReturnType<typeof Bun.spawn>;
   try {
-    child = Bun.spawn([
-      "fzf",
-      "--multi",
-      "--expect=enter,ctrl-d",
-      "--header=Tab: select | Enter: approve | Ctrl-D: deny | Esc: cancel",
-      "--prompt=review> ",
-      "--no-sort",
-    ], {
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "inherit",
-    });
+    child = Bun.spawn(
+      [
+        "fzf",
+        "--multi",
+        "--expect=enter,ctrl-d",
+        "--header=Tab: select | Enter: approve | Ctrl-D: deny | Esc: cancel",
+        "--prompt=review> ",
+        "--no-sort",
+      ],
+      {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "inherit",
+      },
+    );
   } catch {
     throw new Error("fzf is not installed. Install it to use 'review'.");
   }

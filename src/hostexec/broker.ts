@@ -149,8 +149,8 @@ export class HostExecBroker {
     this.requestToApprovalKey.clear();
     await removeHostExecPendingDir(this.paths, this.sessionId);
     await removeHostExecSessionRegistry(this.paths, this.sessionId);
-    const target = this.socketPath ??
-      hostExecBrokerSocketPath(this.paths, this.sessionId);
+    const target =
+      this.socketPath ?? hostExecBrokerSocketPath(this.paths, this.sessionId);
     await rm(target, { force: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         logInfo(`[nas] HostExecBroker: failed to remove socket: ${e}`);
@@ -168,7 +168,7 @@ export class HostExecBroker {
       if (!line) return;
       const message = JSON.parse(line) as HostExecBrokerMessage;
       const response = await this.handleMessage(message).catch((error) =>
-        toErrorResponse(message, (error as Error).message)
+        toErrorResponse(message, (error as Error).message),
       );
       try {
         await writeJsonLine(socket, response);
@@ -238,18 +238,15 @@ export class HostExecBroker {
           message: "hostexec prompt is disabled",
         };
       }
-      const reason = resolved.rule.approval === "allow"
-        ? "rule-allow"
-        : "approved-cached";
+      const reason =
+        resolved.rule.approval === "allow" ? "rule-allow" : "approved-cached";
       await this.recordAudit(message.requestId, "allow", reason, commandStr);
       return await this.runResolved(message, resolved);
     }
 
-    const group = this.groups.get(approvalKey) ?? await this.createPendingGroup(
-      approvalKey,
-      message,
-      resolved,
-    );
+    const group =
+      this.groups.get(approvalKey) ??
+      (await this.createPendingGroup(approvalKey, message, resolved));
     if (!group.requests.has(message.requestId)) {
       group.requestIds.add(message.requestId);
       group.requests.set(message.requestId, { request: message, resolved });
@@ -309,7 +306,7 @@ export class HostExecBroker {
       uiIdleTimeout: this.uiIdleTimeout,
       signal: notificationAbort.signal,
     }).catch((e) =>
-      logInfo(`[nas] HostExecBroker: failed to send notification: ${e}`)
+      logInfo(`[nas] HostExecBroker: failed to send notification: ${e}`),
     );
     this.notificationTasks.add(notificationTask);
     void notificationTask.finally(() => {
@@ -376,10 +373,11 @@ export class HostExecBroker {
       const waiter = group.waiters.get(requestId);
       if (!waiter) continue;
       if (mode === "deny") {
-        const reason = denyResponse?.type === "error" &&
-            denyResponse.message === "pending approval timed out"
-          ? "prompt-timeout"
-          : "denied-by-user";
+        const reason =
+          denyResponse?.type === "error" &&
+          denyResponse.message === "pending approval timed out"
+            ? "prompt-timeout"
+            : "denied-by-user";
         await this.recordAudit(requestId, "deny", reason, commandStr);
         waiter.resolve({
           ...(denyResponse ?? {
@@ -512,10 +510,11 @@ export class HostExecBroker {
     request: ExecuteRequest,
     resolved: ResolvedExecution,
   ): Promise<HostExecBrokerResponse> {
-    const commandArgv0 = isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
-        path.isAbsolute(resolved.rule.match.argv0)
-      ? request.argv0
-      : path.basename(request.argv0);
+    const commandArgv0 =
+      isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
+      path.isAbsolute(resolved.rule.match.argv0)
+        ? request.argv0
+        : path.basename(request.argv0);
     const stdin = request.stdin
       ? Uint8Array.from(atob(request.stdin), (c) => c.charCodeAt(0))
       : undefined;
@@ -545,8 +544,8 @@ export class HostExecBroker {
     const exitCode = await proc.exited;
     const secretValues = Object.keys(resolved.rule.env)
       .map((key) => resolved.envVars[key])
-      .filter((value): value is string =>
-        typeof value === "string" && value !== ""
+      .filter(
+        (value): value is string => typeof value === "string" && value !== "",
       );
     const stdout = redactSecrets(stdoutText, secretValues);
     const stderr = redactSecrets(stderrText, secretValues);
@@ -562,10 +561,7 @@ export class HostExecBroker {
 
 export async function sendHostExecBrokerRequest<
   T extends HostExecBrokerResponse,
->(
-  socketPath: string,
-  message: HostExecBrokerMessage,
-): Promise<T> {
+>(socketPath: string, message: HostExecBrokerMessage): Promise<T> {
   const socket = await connectUnix(socketPath);
   try {
     await writeJsonLine(socket, message);
@@ -601,7 +597,7 @@ async function normalizeAllowedCwd(
     case "allowlist": {
       const allowed = await Promise.all(
         rule.cwd.allow.map((entry) =>
-          resolveAllowEntry(entry, workspaceRoot, sessionTmpDir)
+          resolveAllowEntry(entry, workspaceRoot, sessionTmpDir),
         ),
       );
       if (!allowed.some((entry) => isWithin(normalized, entry))) {
@@ -632,8 +628,10 @@ async function resolveAllowEntry(
 
 function isWithin(target: string, root: string): boolean {
   const relative = path.relative(root, target);
-  return relative === "" ||
-    (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 async function buildApprovalKey(
@@ -644,9 +642,9 @@ async function buildApprovalKey(
     "SHA-256",
     new TextEncoder().encode(data),
   );
-  return Array.from(new Uint8Array(digest)).map((byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function canonicalJson(value: unknown): string {

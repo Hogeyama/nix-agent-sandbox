@@ -39,13 +39,10 @@ export interface ProxyStageOptions {
   generateSessionToken?: () => string;
 }
 
-export function createProxyStage(
-  options: ProxyStageOptions = {},
-): PlanStage {
-  const envoyContainerName = options.envoyContainerName ??
-    ENVOY_CONTAINER_NAME;
-  const generateSessionToken = options.generateSessionToken ??
-    defaultGenerateToken;
+export function createProxyStage(options: ProxyStageOptions = {}): PlanStage {
+  const envoyContainerName = options.envoyContainerName ?? ENVOY_CONTAINER_NAME;
+  const generateSessionToken =
+    options.generateSessionToken ?? defaultGenerateToken;
 
   return {
     kind: "plan",
@@ -97,8 +94,7 @@ export function createProxyStage(
         },
       ];
 
-      const proxyUrl =
-        `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
+      const proxyUrl = `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
       const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
       const noProxyEntries = ["localhost", "127.0.0.1"];
       if (dindContainerName) {
@@ -138,17 +134,17 @@ export function createProxyStage(
 // ---------------------------------------------------------------------------
 
 function isProxyEnabled(input: StageInput): boolean {
-  return input.profile.network.allowlist.length > 0 ||
-    input.profile.network.prompt.enable;
+  return (
+    input.profile.network.allowlist.length > 0 ||
+    input.profile.network.prompt.enable
+  );
 }
 
 /**
  * Compute NetworkRuntimePaths from HostEnv (pure, no I/O).
  * Directory creation is handled by the effect executor.
  */
-export function buildNetworkRuntimePaths(
-  host: HostEnv,
-): NetworkRuntimePaths {
+export function buildNetworkRuntimePaths(host: HostEnv): NetworkRuntimePaths {
   const xdg = host.env.get("XDG_RUNTIME_DIR");
   let runtimeDir: string;
   if (xdg && xdg.trim().length > 0) {

@@ -28,19 +28,25 @@ test("isNasManagedSidecar: nas-sandbox is not a managed sidecar", () => {
 
 test("isNasManagedSidecar: labeled sidecar is detected", () => {
   expect(
-    isNasManagedSidecar({
-      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_DIND,
-    }, "custom-name"),
+    isNasManagedSidecar(
+      {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_DIND,
+      },
+      "custom-name",
+    ),
   ).toEqual(true);
 });
 
 test("isNasManagedSidecar: labeled envoy sidecar is detected", () => {
   expect(
-    isNasManagedSidecar({
-      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
-    }, "custom-envoy"),
+    isNasManagedSidecar(
+      {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
+      },
+      "custom-envoy",
+    ),
   ).toEqual(true);
 });
 
@@ -50,10 +56,13 @@ test("isNasManagedSidecar: legacy shared envoy name is detected", () => {
 
 test("isNasManagedNetwork: labeled session network is detected", () => {
   expect(
-    isNasManagedNetwork({
-      [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
-    }, "custom-session-network"),
+    isNasManagedNetwork(
+      {
+        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+        [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
+      },
+      "custom-session-network",
+    ),
   ).toEqual(true);
 });
 

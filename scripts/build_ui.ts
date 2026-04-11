@@ -40,10 +40,7 @@ if (!jsOutput) throw new Error("No JS output found");
 const jsBasename = path.basename(jsOutput.path);
 
 // Inline CSS so the app ships as two files only
-const css = await readFile(
-  path.join(FRONTEND_DIR, "src/styles.css"),
-  "utf8",
-);
+const css = await readFile(path.join(FRONTEND_DIR, "src/styles.css"), "utf8");
 
 // Generate index.html with correct script path
 const html = `<!DOCTYPE html>
@@ -68,6 +65,4 @@ await writeFile(path.join(DIST_DIR, "index.html"), html);
 // Print summary
 const jsSize = (await stat(path.join(DIST_DIR, "assets", jsBasename))).size;
 console.log(`dist/index.html`);
-console.log(
-  `dist/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`,
-);
+console.log(`dist/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`);

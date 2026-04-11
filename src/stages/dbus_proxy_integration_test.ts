@@ -58,8 +58,8 @@ function makeHostEnv(overrides?: Partial<HostEnv>): HostEnv {
     gid: process.getgid!(),
     isWSL: false,
     env: new Map(
-      Object.entries(process.env).filter((e): e is [string, string] =>
-        e[1] !== undefined
+      Object.entries(process.env).filter(
+        (e): e is [string, string] => e[1] !== undefined,
       ),
     ),
     ...overrides,
@@ -107,41 +107,42 @@ function makeInput(
 }
 
 test("resolveSourceAddress: prefers configured address, then probe, then default path", () => {
-  expect(resolveSourceAddress(
-    "unix:path=/tmp/from-config",
-    "unix:path=/tmp/from-env",
-    1000,
-  )).toEqual(
-    "unix:path=/tmp/from-config",
-  );
-  expect(resolveSourceAddress(undefined, "unix:path=/tmp/from-env", 1000))
-    .toEqual("unix:path=/tmp/from-env");
+  expect(
+    resolveSourceAddress(
+      "unix:path=/tmp/from-config",
+      "unix:path=/tmp/from-env",
+      1000,
+    ),
+  ).toEqual("unix:path=/tmp/from-config");
+  expect(
+    resolveSourceAddress(undefined, "unix:path=/tmp/from-env", 1000),
+  ).toEqual("unix:path=/tmp/from-env");
   expect(resolveSourceAddress(undefined, null, 1000)).toEqual(
     "unix:path=/run/user/1000/bus",
   );
 });
 
 test("buildProxyArgs: serializes filter flags", () => {
-  expect(buildProxyArgs(
-    "unix:path=/run/user/1000/bus",
-    "/tmp/proxy/bus",
-    ["org.freedesktop.secrets"],
-    ["org.freedesktop.secrets"],
-    ["org.example.Owned"],
-    [{ name: "org.freedesktop.secrets", rule: "*" }],
-    [{ name: "org.freedesktop.secrets", rule: "*" }],
-  )).toEqual(
-    [
+  expect(
+    buildProxyArgs(
       "unix:path=/run/user/1000/bus",
       "/tmp/proxy/bus",
-      "--filter",
-      "--see=org.freedesktop.secrets",
-      "--talk=org.freedesktop.secrets",
-      "--own=org.example.Owned",
-      "--call=org.freedesktop.secrets=*",
-      "--broadcast=org.freedesktop.secrets=*",
-    ],
-  );
+      ["org.freedesktop.secrets"],
+      ["org.freedesktop.secrets"],
+      ["org.example.Owned"],
+      [{ name: "org.freedesktop.secrets", rule: "*" }],
+      [{ name: "org.freedesktop.secrets", rule: "*" }],
+    ),
+  ).toEqual([
+    "unix:path=/run/user/1000/bus",
+    "/tmp/proxy/bus",
+    "--filter",
+    "--see=org.freedesktop.secrets",
+    "--talk=org.freedesktop.secrets",
+    "--own=org.example.Owned",
+    "--call=org.freedesktop.secrets=*",
+    "--broadcast=org.freedesktop.secrets=*",
+  ]);
 });
 
 test("DbusProxyStage: returns null when disabled", () => {
@@ -241,8 +242,9 @@ test("DbusProxyStage: produces correct effects and outputs when enabled", () => 
 
   // Check outputOverrides
   expect(plan!.outputOverrides.dbusProxyEnabled).toEqual(true);
-  expect(plan!.outputOverrides.dbusSessionRuntimeDir?.includes(input.sessionId))
-    .toEqual(true);
+  expect(
+    plan!.outputOverrides.dbusSessionRuntimeDir?.includes(input.sessionId),
+  ).toEqual(true);
   expect(plan!.outputOverrides.dbusSessionSocket?.endsWith("/bus")).toEqual(
     true,
   );
@@ -339,8 +341,8 @@ PY
   try {
     // Pass XDG_RUNTIME_DIR through HostEnv instead of Deno.env
     const hostEnvMap = new Map(
-      Object.entries(process.env).filter((e): e is [string, string] =>
-        e[1] !== undefined
+      Object.entries(process.env).filter(
+        (e): e is [string, string] => e[1] !== undefined,
       ),
     );
     hostEnvMap.set("XDG_RUNTIME_DIR", runtimeRoot);

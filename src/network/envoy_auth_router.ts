@@ -34,7 +34,7 @@ export async function ensureAuthRouterDaemon(
 
   const ac = new AbortController();
   void serveAuthRouter(paths.runtimeDir, { signal: ac.signal }).catch((e) =>
-    logInfo(`[nas] AuthRouter: daemon exited with error: ${e}`)
+    logInfo(`[nas] AuthRouter: daemon exited with error: ${e}`),
   );
 
   await writeFile(paths.authRouterPidFile, `${process.pid}\n`, {
@@ -112,8 +112,7 @@ async function handleConnection(
 
     const parsed = parseHttpRequest(raw);
     if (!parsed) {
-      await writeResponse(socket, 400, "Bad Request", {})
-        .catch(() => {});
+      await writeResponse(socket, 400, "Bad Request", {}).catch(() => {});
       return;
     }
 
@@ -125,12 +124,20 @@ async function handleConnection(
     if (result.challenge) {
       responseHeaders["Proxy-Authenticate"] = 'Basic realm="nas"';
     }
-    await writeResponse(socket, result.status, result.message, responseHeaders)
-      .catch(() => {/* peer closed early (BrokenPipe) — ignore */});
+    await writeResponse(
+      socket,
+      result.status,
+      result.message,
+      responseHeaders,
+    ).catch(() => {
+      /* peer closed early (BrokenPipe) — ignore */
+    });
   } finally {
     try {
       socket.destroy();
-    } catch { /* already closed */ }
+    } catch {
+      /* already closed */
+    }
   }
 }
 
@@ -178,7 +185,7 @@ function writeResponse(
     const allHeaders: Record<string, string> = {
       "content-type": "text/plain",
       "content-length": String(bodyBytes.length),
-      "connection": "close",
+      connection: "close",
       ...headers,
     };
     let response = `HTTP/1.1 ${status} ${statusText}\r\n`;
@@ -255,11 +262,11 @@ async function authorize(
     };
   }
 
-  const method = headers["x-nas-original-method"] ??
+  const method =
+    headers["x-nas-original-method"] ??
     headers["x-forwarded-method"] ??
     requestMethod;
-  const authority = headers["x-nas-original-authority"] ??
-    headers["host"];
+  const authority = headers["x-nas-original-authority"] ?? headers["host"];
   const url = headers["x-nas-original-url"];
   const hostHeader = headers["host"];
 

@@ -80,9 +80,14 @@ export function HostExecTab({ items }: Props) {
                     setScopeMap((m) => ({
                       ...m,
                       [key]: (e.target as HTMLSelectElement).value,
-                    }))}
+                    }))
+                  }
                 >
-                  {SCOPES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {SCOPES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
                 </select>
               </td>
               <td style={tdStyle}>

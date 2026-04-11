@@ -24,8 +24,8 @@ export class SecretStore {
     options: SecretStoreOptions = {},
   ) {
     this.secrets = secrets;
-    this.env = options.env ??
-      ({ ...process.env } as Record<string, string | undefined>);
+    this.env =
+      options.env ?? ({ ...process.env } as Record<string, string | undefined>);
     this.keyringResolver = options.keyringResolver ?? defaultKeyringResolver;
   }
 

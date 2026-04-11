@@ -72,11 +72,13 @@ export function configureClaude(input: ClaudeConfigInput): AgentConfigResult {
     args.push("-v", `${probes.claudeBinPath}:${containerLocalBin}/claude:ro`);
   }
 
-  const agentCommand: string[] = probes.claudeBinPath ? ["claude"] : [
-    "bash",
-    "-c",
-    "curl -fsSL https://claude.ai/install.sh | bash && claude",
-  ];
+  const agentCommand: string[] = probes.claudeBinPath
+    ? ["claude"]
+    : [
+        "bash",
+        "-c",
+        "curl -fsSL https://claude.ai/install.sh | bash && claude",
+      ];
 
   return { dockerArgs: [...args], envVars, agentCommand };
 }

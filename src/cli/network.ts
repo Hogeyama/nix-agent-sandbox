@@ -46,8 +46,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
           return {
             sessionId: item.sessionId,
             requestId: item.requestId,
-            displayLine:
-              `${item.sessionId} ${item.requestId} ${target} ${item.state} ${item.createdAt}`,
+            displayLine: `${item.sessionId} ${item.requestId} ${target} ${item.state} ${item.createdAt}`,
             structured: {
               sessionId: item.sessionId,
               requestId: item.requestId,
@@ -71,11 +70,13 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
         }
         await sendBrokerRequest(
           session.brokerSocket,
-          message as {
-            type: "approve";
-            requestId: string;
-            scope?: ApprovalScope;
-          } | { type: "deny"; requestId: string },
+          message as
+            | {
+                type: "approve";
+                requestId: string;
+                scope?: ApprovalScope;
+              }
+            | { type: "deny"; requestId: string },
         );
       },
     };

@@ -46,9 +46,8 @@ const VERSION: string = pkg.version;
 export async function main(args: string[]): Promise<void> {
   // `--` 以降は常にエージェントに渡す引数。profile 名の後ろも同様に agent 引数として扱う。
   const dashDashIdx = args.indexOf("--");
-  const argsBeforeDashDash = dashDashIdx >= 0
-    ? args.slice(0, dashDashIdx)
-    : args;
+  const argsBeforeDashDash =
+    dashDashIdx >= 0 ? args.slice(0, dashDashIdx) : args;
   const explicitAgentArgs = dashDashIdx >= 0 ? args.slice(dashDashIdx + 1) : [];
   const logLevel = parseLogLevel(argsBeforeDashDash);
   setLogLevel(logLevel);
@@ -57,13 +56,17 @@ export async function main(args: string[]): Promise<void> {
   const subcommand = findFirstNonFlagArg(argsBeforeDashDash);
 
   if (
-    subcommand === "rebuild" || subcommand === "worktree" ||
-    subcommand === "container" || subcommand === "network" ||
-    subcommand === "hostexec" || subcommand === "ui" ||
+    subcommand === "rebuild" ||
+    subcommand === "worktree" ||
+    subcommand === "container" ||
+    subcommand === "network" ||
+    subcommand === "hostexec" ||
+    subcommand === "ui" ||
     subcommand === "audit"
   ) {
     if (
-      argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
+      argsBeforeDashDash.includes("--help") ||
+      argsBeforeDashDash.includes("-h")
     ) {
       printUsage();
       return;
@@ -104,37 +107,26 @@ export async function main(args: string[]): Promise<void> {
   }
 
   if (subcommand === "hostexec") {
-    await runHostExecCommand(
-      removeFirstOccurrence(args, "hostexec"),
-    );
+    await runHostExecCommand(removeFirstOccurrence(args, "hostexec"));
     return;
   }
 
   if (subcommand === "ui") {
-    await runUiCommand(
-      removeFirstOccurrence(argsBeforeDashDash, "ui"),
-    );
+    await runUiCommand(removeFirstOccurrence(argsBeforeDashDash, "ui"));
     return;
   }
 
   if (subcommand === "audit") {
-    await runAuditCommand(
-      removeFirstOccurrence(argsBeforeDashDash, "audit"),
-    );
+    await runAuditCommand(removeFirstOccurrence(argsBeforeDashDash, "audit"));
     return;
   }
 
-  const {
-    profileName,
-    profileIndex,
-    worktreeOverride,
-    agentArgs,
-  } = parseProfileAndWorktreeArgs(
-    argsBeforeDashDash,
-  );
-  const nasControlArgs = profileIndex === undefined
-    ? argsBeforeDashDash
-    : argsBeforeDashDash.slice(0, profileIndex);
+  const { profileName, profileIndex, worktreeOverride, agentArgs } =
+    parseProfileAndWorktreeArgs(argsBeforeDashDash);
+  const nasControlArgs =
+    profileIndex === undefined
+      ? argsBeforeDashDash
+      : argsBeforeDashDash.slice(0, profileIndex);
   const agentExtraArgs = [...agentArgs, ...explicitAgentArgs];
 
   if (nasControlArgs.includes("--help") || nasControlArgs.includes("-h")) {
@@ -152,7 +144,8 @@ export async function main(args: string[]): Promise<void> {
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
     const sessionId = `sess_${randomHex(6)}`;
     const imageName = "nas-sandbox";
-    const proxyEnabled = effectiveProfile.network.allowlist.length > 0 ||
+    const proxyEnabled =
+      effectiveProfile.network.allowlist.length > 0 ||
       effectiveProfile.network.prompt.enable;
 
     // HostEnv 構築と probe 解決
@@ -172,10 +165,7 @@ export async function main(args: string[]): Promise<void> {
       const hostexecNotify = resolveNotifyBackend(
         effectiveProfile.hostexec?.prompt.notify ?? "auto",
       );
-      if (
-        networkNotify === "desktop" ||
-        hostexecNotify === "desktop"
-      ) {
+      if (networkNotify === "desktop" || hostexecNotify === "desktop") {
         checkNotifySend();
       }
     }

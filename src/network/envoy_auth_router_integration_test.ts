@@ -127,9 +127,8 @@ async function waitForSocket(
   while (Date.now() < deadline) {
     try {
       const conn = await new Promise<net.Socket>((resolve, reject) => {
-        const sock = net.createConnection(
-          { path: socketPath },
-          () => resolve(sock),
+        const sock = net.createConnection({ path: socketPath }, () =>
+          resolve(sock),
         );
         sock.on("error", reject);
       });
@@ -178,9 +177,9 @@ function parseHttpResponse(response: string): RawHttpResponse {
   for (const line of lines) {
     const separator = line.indexOf(":");
     if (separator === -1) continue;
-    headers[line.slice(0, separator).trim().toLowerCase()] = line.slice(
-      separator + 1,
-    ).trim();
+    headers[line.slice(0, separator).trim().toLowerCase()] = line
+      .slice(separator + 1)
+      .trim();
   }
 
   return {

@@ -7,7 +7,10 @@ import {
   dockerInspectContainer,
   dockerListContainerNames,
 } from "../docker/client.ts";
-import { isNasManagedContainer, NAS_KIND_LABEL } from "../docker/nas_resources.ts";
+import {
+  isNasManagedContainer,
+  NAS_KIND_LABEL,
+} from "../docker/nas_resources.ts";
 import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 
 export async function runContainerCommand(nasArgs: string[]): Promise<void> {
@@ -21,7 +24,7 @@ export async function runContainerCommand(nasArgs: string[]): Promise<void> {
         names.map((name) => dockerInspectContainer(name)),
       );
       const managed = details.filter((c) =>
-        isNasManagedContainer(c.labels, c.name)
+        isNasManagedContainer(c.labels, c.name),
       );
       if (formatJson) {
         const items = managed.map((c) => ({

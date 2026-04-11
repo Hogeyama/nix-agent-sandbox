@@ -75,17 +75,14 @@ async function executeHostExecBrokerListener(
     kind: "unix-listener",
     close: async () => {
       await broker.close();
-      await removeHostExecSessionRegistry(spec.paths, spec.sessionId)
-        .catch((e) =>
-          logInfo(
-            `[nas] HostExec teardown: failed to remove session registry: ${e}`,
-          )
-        );
-      await removeHostExecPendingDir(spec.paths, spec.sessionId).catch(
+      await removeHostExecSessionRegistry(spec.paths, spec.sessionId).catch(
         (e) =>
           logInfo(
-            `[nas] HostExec teardown: failed to remove pending dir: ${e}`,
+            `[nas] HostExec teardown: failed to remove session registry: ${e}`,
           ),
+      );
+      await removeHostExecPendingDir(spec.paths, spec.sessionId).catch((e) =>
+        logInfo(`[nas] HostExec teardown: failed to remove pending dir: ${e}`),
       );
     },
   };

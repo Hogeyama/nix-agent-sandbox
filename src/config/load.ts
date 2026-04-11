@@ -15,8 +15,8 @@ const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 /** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
 function getGlobalConfigDir(): string {
   const xdgConfigHome = process.env["XDG_CONFIG_HOME"];
-  const configBase = xdgConfigHome ??
-    path.join(process.env["HOME"] ?? "/", ".config");
+  const configBase =
+    xdgConfigHome ?? path.join(process.env["HOME"] ?? "/", ".config");
   return path.join(configBase, "nas");
 }
 
@@ -32,13 +32,15 @@ export interface LoadConfigOptions {
 export async function loadConfig(
   startDirOrOpts?: string | LoadConfigOptions,
 ): Promise<Config> {
-  const opts: LoadConfigOptions = typeof startDirOrOpts === "string"
-    ? { startDir: startDirOrOpts }
-    : startDirOrOpts ?? {};
+  const opts: LoadConfigOptions =
+    typeof startDirOrOpts === "string"
+      ? { startDir: startDirOrOpts }
+      : (startDirOrOpts ?? {});
 
-  const globalRaw = opts.globalConfigPath === null
-    ? null
-    : await loadGlobalConfig(opts.globalConfigPath);
+  const globalRaw =
+    opts.globalConfigPath === null
+      ? null
+      : await loadGlobalConfig(opts.globalConfigPath);
   const found = await findConfigFile(opts.startDir ?? process.cwd());
 
   // Nix ローカル設定が関数の場合、グローバル設定を super として渡す
@@ -69,12 +71,10 @@ export async function loadGlobalConfig(
     return await loadConfigByPath(configPath);
   }
   // .yml → .nix の順で探す
-  for (
-    const [filename, format] of [
-      ["agent-sandbox.yml", "yml"],
-      ["agent-sandbox.nix", "nix"],
-    ] as const
-  ) {
+  for (const [filename, format] of [
+    ["agent-sandbox.yml", "yml"],
+    ["agent-sandbox.nix", "nix"],
+  ] as const) {
     const candidate = path.join(getGlobalConfigDir(), filename);
     try {
       await stat(candidate);
@@ -250,7 +250,7 @@ async function loadNixConfig(
   nixPath: string,
   globalRaw?: RawConfig,
 ): Promise<RawConfig & { _nixFunctionMerged?: boolean }> {
-  if (!await nixCommandExists()) {
+  if (!(await nixCommandExists())) {
     throw new Error(
       `Found ${CONFIG_FILENAME_NIX} at ${nixPath}, but 'nix' command is not available on PATH. Install Nix or use ${CONFIG_FILENAME_YML} instead.`,
     );
@@ -318,12 +318,10 @@ async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
 
   while (true) {
     // .yml を優先
-    for (
-      const [filename, format] of [
-        [CONFIG_FILENAME_YML, "yml"],
-        [CONFIG_FILENAME_NIX, "nix"],
-      ] as const
-    ) {
+    for (const [filename, format] of [
+      [CONFIG_FILENAME_YML, "yml"],
+      [CONFIG_FILENAME_NIX, "nix"],
+    ] as const) {
       const candidate = path.join(current, filename);
       try {
         await stat(candidate);
@@ -364,9 +362,9 @@ export function resolveProfile(config: Config, profileName?: string) {
   const profile = config.profiles[name];
   if (!profile) {
     throw new Error(
-      `Profile "${name}" not found. Available: ${
-        Object.keys(config.profiles).join(", ")
-      }`,
+      `Profile "${name}" not found. Available: ${Object.keys(
+        config.profiles,
+      ).join(", ")}`,
     );
   }
   return { name, profile };

@@ -46,12 +46,14 @@ export function encodeDynamicEnvOps(
     separator: string;
   }>,
 ): string {
-  return ops.map((op) => {
-    const fn = op.mode === "prefix" ? "__nas_pfx" : "__nas_sfx";
-    return `${fn} ${shellQuote(op.key)} ${shellQuote(op.value)} ${
-      shellQuote(op.separator)
-    }`;
-  }).join("\n");
+  return ops
+    .map((op) => {
+      const fn = op.mode === "prefix" ? "__nas_pfx" : "__nas_sfx";
+      return `${fn} ${shellQuote(op.key)} ${shellQuote(op.value)} ${shellQuote(
+        op.separator,
+      )}`;
+    })
+    .join("\n");
 }
 
 const DEFAULT_CONTAINER_USER = "nas";
@@ -166,26 +168,22 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
       // nix print-dev-env キャッシュ用ディレクトリ
       const xdgCache = host.env.get("XDG_CACHE_HOME") || `${host.home}/.cache`;
       const nasCacheDir = `${xdgCache}/nas`;
-      effects.push(
-        {
-          kind: "directory-create",
-          path: nasCacheDir,
-          mode: 0o755,
-          removeOnTeardown: false,
-        } satisfies DirectoryCreateEffect,
-      );
+      effects.push({
+        kind: "directory-create",
+        path: nasCacheDir,
+        mode: 0o755,
+        removeOnTeardown: false,
+      } satisfies DirectoryCreateEffect);
       args.push("-v", `${nasCacheDir}:${containerHome}/.cache/nas`);
 
       // ホストの ~/.cache/nix
       const hostNixCache = `${xdgCache}/nix`;
-      effects.push(
-        {
-          kind: "directory-create",
-          path: hostNixCache,
-          mode: 0o755,
-          removeOnTeardown: false,
-        } satisfies DirectoryCreateEffect,
-      );
+      effects.push({
+        kind: "directory-create",
+        path: hostNixCache,
+        mode: 0o755,
+        removeOnTeardown: false,
+      } satisfies DirectoryCreateEffect);
       args.push("-v", `${hostNixCache}:${containerHome}/.cache/nix`);
 
       const nixExtraPackages = serializeNixExtraPackages(
@@ -340,7 +338,8 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
           });
         }
         break;
-      default: { // "set"
+      default: {
+        // "set"
         envVars[resolved.key] = value;
         mergedEnvVars[resolved.key] = value;
         // set はそれ以前の dynamic ops を上書きする
@@ -383,10 +382,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
         // Xauthority
         if (probes.xauthorityExists) {
           const containerXauthority = `${containerHome}/.Xauthority`;
-          args.push(
-            "-v",
-            `${probes.xauthorityPath}:${containerXauthority}:ro`,
-          );
+          args.push("-v", `${probes.xauthorityPath}:${containerXauthority}:ro`);
           envVars["XAUTHORITY"] = containerXauthority;
         }
 
@@ -434,31 +430,37 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
 
   switch (profile.agent) {
     case "claude":
-      applyAgentResult(configureClaude({
-        containerHome,
-        hostHome: host.home,
-        probes: probes.agentProbes as ClaudeProbes,
-        priorDockerArgs,
-        priorEnvVars,
-      }));
+      applyAgentResult(
+        configureClaude({
+          containerHome,
+          hostHome: host.home,
+          probes: probes.agentProbes as ClaudeProbes,
+          priorDockerArgs,
+          priorEnvVars,
+        }),
+      );
       break;
     case "copilot":
-      applyAgentResult(configureCopilot({
-        containerHome,
-        hostHome: host.home,
-        probes: probes.agentProbes as CopilotProbes,
-        priorDockerArgs,
-        priorEnvVars,
-      }));
+      applyAgentResult(
+        configureCopilot({
+          containerHome,
+          hostHome: host.home,
+          probes: probes.agentProbes as CopilotProbes,
+          priorDockerArgs,
+          priorEnvVars,
+        }),
+      );
       break;
     case "codex":
-      applyAgentResult(configureCodex({
-        containerHome,
-        hostHome: host.home,
-        probes: probes.agentProbes as CodexProbes,
-        priorDockerArgs,
-        priorEnvVars,
-      }));
+      applyAgentResult(
+        configureCodex({
+          containerHome,
+          hostHome: host.home,
+          probes: probes.agentProbes as CodexProbes,
+          priorDockerArgs,
+          priorEnvVars,
+        }),
+      );
       break;
   }
 
@@ -524,8 +526,12 @@ function findConflictingMountDestination(
 
 function isParentPath(parentPath: string, childPath: string): boolean {
   const relative = path.relative(parentPath, childPath);
-  return relative !== "" && relative !== "." && !relative.startsWith("..") &&
-    !path.isAbsolute(relative);
+  return (
+    relative !== "" &&
+    relative !== "." &&
+    !relative.startsWith("..") &&
+    !path.isAbsolute(relative)
+  );
 }
 
 export function serializeNixExtraPackages(packages: string[]): string | null {

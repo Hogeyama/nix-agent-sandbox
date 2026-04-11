@@ -30,10 +30,7 @@ async function withNixLocalConfig(
   try {
     const globalPath = path.join(tmpDir, "global.yml");
     await writeFile(globalPath, globalYaml);
-    await writeFile(
-      path.join(localDir, ".agent-sandbox.nix"),
-      localNix,
-    );
+    await writeFile(path.join(localDir, ".agent-sandbox.nix"), localNix);
     await fn(localDir, globalPath);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -159,10 +156,7 @@ super: {
   };
 }
 `;
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.nix"),
-      localNix,
-    );
+    await writeFile(path.join(tmpDir, ".agent-sandbox.nix"), localNix);
     const config = await loadConfig({
       startDir: tmpDir,
       globalConfigPath: null,

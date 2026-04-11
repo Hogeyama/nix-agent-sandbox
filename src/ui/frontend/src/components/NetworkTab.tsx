@@ -65,9 +65,7 @@ export function NetworkTab({ items }: Props) {
           const disabled = busy.has(key);
           return (
             <tr key={key}>
-              <td style={tdStyle}>
-                {item.sessionId.slice(0, 8)}
-              </td>
+              <td style={tdStyle}>{item.sessionId.slice(0, 8)}</td>
               <td style={tdStyle}>
                 {item.target.host}:{item.target.port}
               </td>
@@ -84,9 +82,14 @@ export function NetworkTab({ items }: Props) {
                     setScopeMap((m) => ({
                       ...m,
                       [key]: (e.target as HTMLSelectElement).value,
-                    }))}
+                    }))
+                  }
                 >
-                  {SCOPES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {SCOPES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
                 </select>
               </td>
               <td style={tdStyle}>

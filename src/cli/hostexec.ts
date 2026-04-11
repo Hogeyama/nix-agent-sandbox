@@ -37,8 +37,7 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
           return {
             sessionId: item.sessionId,
             requestId: item.requestId,
-            displayLine:
-              `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}`,
+            displayLine: `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}`,
             structured: {
               sessionId: item.sessionId,
               requestId: item.requestId,
@@ -61,11 +60,13 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
         }
         await sendHostExecBrokerRequest(
           session.brokerSocket,
-          message as {
-            type: "approve";
-            requestId: string;
-            scope?: HostExecPromptScope;
-          } | { type: "deny"; requestId: string },
+          message as
+            | {
+                type: "approve";
+                requestId: string;
+                scope?: HostExecPromptScope;
+              }
+            | { type: "deny"; requestId: string },
         );
       },
     };

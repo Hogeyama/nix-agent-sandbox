@@ -94,8 +94,8 @@ export async function gcNetworkRuntime(
   let removedAuthRouterSocket = false;
   let removedAuthRouterPidFile = false;
   const authRouterPid = await readPid(paths.authRouterPidFile);
-  const authRouterAlive = authRouterPid !== null &&
-    await isPidAlive(authRouterPid);
+  const authRouterAlive =
+    authRouterPid !== null && (await isPidAlive(authRouterPid));
   if (!authRouterAlive) {
     removedAuthRouterSocket = await removeIfExists(paths.authRouterSocket);
     removedAuthRouterPidFile = await removeIfExists(paths.authRouterPidFile);

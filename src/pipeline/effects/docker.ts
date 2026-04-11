@@ -25,10 +25,7 @@ export async function executeDockerImageBuild(
   try {
     for (const group of assetGroups) {
       for (const name of group.files) {
-        const content = await readFile(
-          path.join(group.baseDir, name),
-          "utf8",
-        );
+        const content = await readFile(path.join(group.baseDir, name), "utf8");
         const outputPath = path.join(tmpDir, group.outputDir, name);
         await mkdir(path.dirname(outputPath), { recursive: true });
         await writeFile(outputPath, content);
@@ -37,7 +34,7 @@ export async function executeDockerImageBuild(
     await dockerBuild(tmpDir, imageName, labels);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch((e) =>
-      logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`)
+      logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`),
     );
   }
 

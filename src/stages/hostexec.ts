@@ -34,8 +34,8 @@ export function createHostExecStage(): PlanStage {
     name: "HostExecStage",
 
     plan(input: StageInput): StagePlan | null {
-      const config = input.profile.hostexec ??
-        structuredClone(DEFAULT_HOSTEXEC_CONFIG);
+      const config =
+        input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
       if (config.rules.length === 0) {
         return null;
       }
@@ -45,17 +45,11 @@ export function createHostExecStage(): PlanStage {
         runtimePaths.brokersDir,
         `${input.sessionId}.sock`,
       );
-      const wrapperRoot = path.join(
-        runtimePaths.wrappersDir,
-        input.sessionId,
-      );
+      const wrapperRoot = path.join(runtimePaths.wrappersDir, input.sessionId);
       const wrapperBinDir = path.join(wrapperRoot, "bin");
       const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
       const sessionTmpDir = path.join(wrapperRoot, "tmp");
-      const containerSessionTmp = path.join(
-        SESSION_TMP_ROOT,
-        input.sessionId,
-      );
+      const containerSessionTmp = path.join(SESSION_TMP_ROOT, input.sessionId);
 
       const effects: ResourceEffect[] = [];
 

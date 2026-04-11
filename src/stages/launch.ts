@@ -23,9 +23,7 @@ import { logInfo } from "../log.ts";
 // LaunchStage (PlanStage)
 // ---------------------------------------------------------------------------
 
-export function createLaunchStage(
-  extraArgs: string[] = [],
-): PlanStage {
+export function createLaunchStage(extraArgs: string[] = []): PlanStage {
   return {
     kind: "plan",
     name: "LaunchStage",

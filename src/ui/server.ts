@@ -60,7 +60,10 @@ export async function preloadAssets(): Promise<PreloadedAssets> {
     for (const entry of entries) {
       const filePath = path.join(assetsDir, entry);
       const buf = await readFile(filePath);
-      files.set(`/assets/${entry}`, new Blob([buf], { type: contentType(entry) }));
+      files.set(
+        `/assets/${entry}`,
+        new Blob([buf], { type: contentType(entry) }),
+      );
     }
   } catch {
     // assets dir not found — will return 404 at request time
@@ -89,10 +92,7 @@ export function createApp(ctx: UiDataContext, assets: PreloadedAssets): Router {
     if (assets.indexHtml !== null) {
       return html(assets.indexHtml);
     }
-    return text(
-      "UI assets not found. Run 'bun run build-ui' first.",
-      500,
-    );
+    return text("UI assets not found. Run 'bun run build-ui' first.", 500);
   });
 
   return app;
@@ -129,9 +129,7 @@ export async function startServer(options: ServeOptions): Promise<void> {
     fetch: app.fetch,
   });
 
-  console.log(
-    `[nas] UI server listening on http://localhost:${options.port}`,
-  );
+  console.log(`[nas] UI server listening on http://localhost:${options.port}`);
 
   if (options.idleTimeout && options.idleTimeout > 0) {
     startIdleWatcher(ctx, options.idleTimeout);
@@ -151,8 +149,8 @@ function startIdleWatcher(ctx: UiDataContext, idleTimeoutSec: number): void {
         listPendingEntries(ctx.networkPaths),
         listHostExecPendingEntries(ctx.hostExecPaths),
       ]);
-      const hasActivity = sessions.length > 0 || netPending.length > 0 ||
-        hePending.length > 0;
+      const hasActivity =
+        sessions.length > 0 || netPending.length > 0 || hePending.length > 0;
 
       if (hasActivity) {
         idleSince = null;

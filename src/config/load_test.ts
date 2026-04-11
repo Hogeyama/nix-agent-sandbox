@@ -173,9 +173,7 @@ test("mergeRawProfiles: all RawProfile keys are preserved", () => {
   };
   const result = mergeRawProfiles(full, {});
   for (const key of Object.keys(full) as (keyof RawProfile)[]) {
-    expect(
-      result[key] !== undefined,
-    ).toEqual(true);
+    expect(result[key] !== undefined).toEqual(true);
   }
 });
 

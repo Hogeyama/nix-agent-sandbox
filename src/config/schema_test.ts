@@ -15,10 +15,7 @@ test("profileSchema: env collects errors from multiple entries", () => {
   const schema = profileSchema("test");
   const result = schema.safeParse({
     agent: "claude",
-    env: [
-      { key: "A", key_cmd: "echo A", val: "x" },
-      { val: "y" },
-    ],
+    env: [{ key: "A", key_cmd: "echo A", val: "x" }, { val: "y" }],
   });
   expect(result.success).toEqual(false);
   if (!result.success) {
@@ -32,16 +29,12 @@ test("profileSchema: env reports both key and val errors in same entry", () => {
   const schema = profileSchema("test");
   const result = schema.safeParse({
     agent: "claude",
-    env: [
-      { key: "A", key_cmd: "echo A", val: "x", val_cmd: "echo x" },
-    ],
+    env: [{ key: "A", key_cmd: "echo A", val: "x", val_cmd: "echo x" }],
   });
   expect(result.success).toEqual(false);
   if (!result.success) {
     const messages = result.error.issues.map((i) => i.message);
-    expect(
-      messages.some((m) => m.includes("key or key_cmd")),
-    ).toEqual(true);
+    expect(messages.some((m) => m.includes("key or key_cmd"))).toEqual(true);
     // key error triggers early return, so val error is not reached (by design)
     // — the key/val checks are sequential within one entry
   }
@@ -59,15 +52,15 @@ test("profileSchema: network collects multiple allowlist/denylist overlaps", () 
   expect(result.success).toEqual(false);
   if (!result.success) {
     const overlapMessages = result.error.issues.filter((i) =>
-      i.message.includes("appears in both")
+      i.message.includes("appears in both"),
     );
     expect(overlapMessages.length).toEqual(2);
-    expect(
-      overlapMessages.some((i) => i.message.includes('"a.com"')),
-    ).toEqual(true);
-    expect(
-      overlapMessages.some((i) => i.message.includes('"c.com"')),
-    ).toEqual(true);
+    expect(overlapMessages.some((i) => i.message.includes('"a.com"'))).toEqual(
+      true,
+    );
+    expect(overlapMessages.some((i) => i.message.includes('"c.com"'))).toEqual(
+      true,
+    );
   }
 });
 

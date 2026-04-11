@@ -61,10 +61,14 @@ export async function createDataContext(
     gcNetworkRuntime(networkPaths),
     gcHostExecRuntime(hostExecPaths),
   ]);
-  const netRemoved = netGc.removedSessions.length +
-    netGc.removedPendingDirs.length + netGc.removedBrokerSockets.length;
-  const hexRemoved = hexGc.removedSessions.length +
-    hexGc.removedPendingDirs.length + hexGc.removedBrokerSockets.length;
+  const netRemoved =
+    netGc.removedSessions.length +
+    netGc.removedPendingDirs.length +
+    netGc.removedBrokerSockets.length;
+  const hexRemoved =
+    hexGc.removedSessions.length +
+    hexGc.removedPendingDirs.length +
+    hexGc.removedBrokerSockets.length;
   if (netRemoved > 0 || hexRemoved > 0) {
     console.log(
       `[nas] GC: removed ${netGc.removedSessions.length} network session(s), ${hexGc.removedSessions.length} hostexec session(s)`,
@@ -172,11 +176,9 @@ export async function getSessions(ctx: UiDataContext): Promise<SessionsData> {
   // hostexec has no listSessionRegistries, read from sessionsDir
   const hostexecSessions: HostExecSessionRegistryEntry[] = [];
   try {
-    for (
-      const entry of await readdir(ctx.hostExecPaths.sessionsDir, {
-        withFileTypes: true,
-      })
-    ) {
+    for (const entry of await readdir(ctx.hostExecPaths.sessionsDir, {
+      withFileTypes: true,
+    })) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const sessionId = entry.name.replace(/\.json$/, "");
       const reg = await readHostExecSessionRegistry(

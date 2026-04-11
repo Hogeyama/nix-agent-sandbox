@@ -123,8 +123,9 @@ test("MountStage: workspace mount keeps full absolute path", async () => {
   );
 
   const workDirIndex = plan.dockerArgs.indexOf(workDir);
-  expect(workDirIndex >= 1 && plan.dockerArgs[workDirIndex - 1] === "-w")
-    .toEqual(true);
+  expect(
+    workDirIndex >= 1 && plan.dockerArgs[workDirIndex - 1] === "-w",
+  ).toEqual(true);
   expect(plan.envVars["WORKSPACE"]).toEqual(workDir);
 });
 
@@ -238,10 +239,12 @@ test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
   const stage = createMountStage(mountProbes);
   const plan = stage.plan(input)!;
 
-  expect(plan.dockerArgs.includes(`${home}:${containerHome}/.cabal:ro`))
-    .toEqual(true);
-  expect(plan.dockerArgs.includes(`${process.cwd()}:/tmp/nas-extra-rw`))
-    .toEqual(true);
+  expect(
+    plan.dockerArgs.includes(`${home}:${containerHome}/.cabal:ro`),
+  ).toEqual(true);
+  expect(
+    plan.dockerArgs.includes(`${process.cwd()}:/tmp/nas-extra-rw`),
+  ).toEqual(true);
 });
 
 test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () => {
@@ -258,22 +261,23 @@ test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () =
     const plan = stage.plan(input)!;
 
     // DISPLAY should be passed through if /tmp/.X11-unix exists
-    const x11Exists = await stat("/tmp/.X11-unix").then(() => true).catch(
-      () => false,
-    );
+    const x11Exists = await stat("/tmp/.X11-unix")
+      .then(() => true)
+      .catch(() => false);
     if (x11Exists) {
       expect(plan.envVars["DISPLAY"]).toEqual(":42");
       const mountArg = "/tmp/.X11-unix:/tmp/.X11-unix:ro";
       const mountIndex = plan.dockerArgs.indexOf(mountArg);
-      expect(mountIndex >= 1 && plan.dockerArgs[mountIndex - 1] === "-v")
-        .toEqual(true);
+      expect(
+        mountIndex >= 1 && plan.dockerArgs[mountIndex - 1] === "-v",
+      ).toEqual(true);
 
       // Xauthority should be forwarded if the file exists on host
       const home = process.env["HOME"] ?? "/root";
       const xauthority = process.env["XAUTHORITY"] ?? `${home}/.Xauthority`;
-      const xauthExists = await stat(xauthority).then(() => true).catch(
-        () => false,
-      );
+      const xauthExists = await stat(xauthority)
+        .then(() => true)
+        .catch(() => false);
       if (xauthExists) {
         const containerHome = getContainerHome();
         expect(plan.envVars["XAUTHORITY"]).toEqual(
@@ -285,8 +289,9 @@ test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () =
 
       // --shm-size should be set for GUI apps (Chromium etc.)
       const shmIndex = plan.dockerArgs.indexOf("2g");
-      expect(shmIndex >= 1 && plan.dockerArgs[shmIndex - 1] === "--shm-size")
-        .toEqual(true);
+      expect(
+        shmIndex >= 1 && plan.dockerArgs[shmIndex - 1] === "--shm-size",
+      ).toEqual(true);
     }
   } finally {
     if (origDisplay !== undefined) {
@@ -333,6 +338,7 @@ test("MountStage: unknown agent type throws in resolveMountProbes", async () => 
     agent: "unknown-agent" as Profile["agent"],
   };
   const hostEnv = buildHostEnv();
-  await expect(resolveMountProbes(hostEnv, profile, process.cwd(), null))
-    .rejects.toThrow("Unknown agent");
+  await expect(
+    resolveMountProbes(hostEnv, profile, process.cwd(), null),
+  ).rejects.toThrow("Unknown agent");
 });

@@ -39,12 +39,11 @@ test("normalizeTarget: parses absolute URI", () => {
 });
 
 test("normalizeTarget: CONNECT requires an explicit port", () => {
-  expect(
-    () =>
-      normalizeTarget({
-        method: "CONNECT",
-        authority: "api.openai.com",
-      }),
+  expect(() =>
+    normalizeTarget({
+      method: "CONNECT",
+      authority: "api.openai.com",
+    }),
   ).toThrow("explicit port");
 });
 
@@ -130,63 +129,59 @@ test("matchesAllowlist: port-qualified entries", () => {
 });
 
 test("denyReasonForTarget: blocks localhost and RFC1918", () => {
-  expect(
-    denyReasonForTarget({ host: "localhost", port: 80 }),
-  ).toEqual("blocked-special-host");
-  expect(
-    denyReasonForTarget({ host: "10.0.0.1", port: 443 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "127.0.0.1", port: 80 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "172.16.0.1", port: 80 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "172.31.255.255", port: 80 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "192.168.1.1", port: 80 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "169.254.0.1", port: 80 }),
-  ).toEqual("blocked-private-ip");
+  expect(denyReasonForTarget({ host: "localhost", port: 80 })).toEqual(
+    "blocked-special-host",
+  );
+  expect(denyReasonForTarget({ host: "10.0.0.1", port: 443 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "127.0.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "172.16.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "172.31.255.255", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "192.168.1.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "169.254.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
   // Public addresses should pass
   expect(denyReasonForTarget({ host: "example.com", port: 443 })).toEqual(null);
   expect(denyReasonForTarget({ host: "8.8.8.8", port: 443 })).toEqual(null);
-  expect(
-    denyReasonForTarget({ host: "172.32.0.1", port: 80 }),
-  ).toEqual(null);
+  expect(denyReasonForTarget({ host: "172.32.0.1", port: 80 })).toEqual(null);
 });
 
 test("denyReasonForTarget: blocks private and link-local IPv6", () => {
   // ULA (fc00::/7)
-  expect(
-    denyReasonForTarget({ host: "fc00::1", port: 443 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "fd00::1", port: 443 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "fdff::1", port: 443 }),
-  ).toEqual("blocked-private-ip");
+  expect(denyReasonForTarget({ host: "fc00::1", port: 443 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "fd00::1", port: 443 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "fdff::1", port: 443 })).toEqual(
+    "blocked-private-ip",
+  );
   // Link-local (fe80::/10)
-  expect(
-    denyReasonForTarget({ host: "fe80::1", port: 443 }),
-  ).toEqual("blocked-private-ip");
-  expect(
-    denyReasonForTarget({ host: "febf::1", port: 443 }),
-  ).toEqual("blocked-private-ip");
+  expect(denyReasonForTarget({ host: "fe80::1", port: 443 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "febf::1", port: 443 })).toEqual(
+    "blocked-private-ip",
+  );
   // Loopback
-  expect(
-    denyReasonForTarget({ host: "::1", port: 443 }),
-  ).toEqual("blocked-private-ip");
+  expect(denyReasonForTarget({ host: "::1", port: 443 })).toEqual(
+    "blocked-private-ip",
+  );
   // Public addresses should pass
   expect(
     denyReasonForTarget({ host: "2001:4860:4860::8888", port: 443 }),
   ).toEqual(null);
   // fec0:: is NOT link-local (outside fe80::/10)
-  expect(
-    denyReasonForTarget({ host: "fec0::1", port: 443 }),
-  ).toEqual(null);
+  expect(denyReasonForTarget({ host: "fec0::1", port: 443 })).toEqual(null);
 });

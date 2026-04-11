@@ -333,10 +333,10 @@ test("HostEnv: can construct with ReadonlyMap", () => {
     uid: 1000,
     gid: 1000,
     isWSL: false,
-    env: new Map([["HOME", "/home/user"], [
-      "XDG_CACHE_HOME",
-      "/home/user/.cache",
-    ]]),
+    env: new Map([
+      ["HOME", "/home/user"],
+      ["XDG_CACHE_HOME", "/home/user/.cache"],
+    ]),
   };
 
   expect(env.home).toEqual("/home/user");

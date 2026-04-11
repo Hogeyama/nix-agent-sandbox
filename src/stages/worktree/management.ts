@@ -71,9 +71,10 @@ async function readBranchBase(
   branchName: string,
 ): Promise<string | null> {
   try {
-    const value = await $`git -C ${repoRoot} config --get ${
-      `branch.${branchName}.nasBase`
-    }`.quiet().text();
+    const value =
+      await $`git -C ${repoRoot} config --get ${`branch.${branchName}.nasBase`}`
+        .quiet()
+        .text();
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   } catch {
@@ -102,8 +103,8 @@ export async function listOrphanNasBranches(
   await $`git -C ${repoRoot} worktree prune`.quiet();
 
   const pattern = "nas/*";
-  const branchOutput = await $`git -C ${repoRoot} branch --list ${pattern}`
-    .text();
+  const branchOutput =
+    await $`git -C ${repoRoot} branch --list ${pattern}`.text();
   const allNasBranches = branchOutput
     .split("\n")
     .map((l) => l.trim().replace(/^[*+] /, ""))

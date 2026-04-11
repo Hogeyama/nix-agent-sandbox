@@ -16,9 +16,7 @@ export interface ParsedMainArgs {
   agentArgs: string[];
 }
 
-export function parseProfileAndWorktreeArgs(
-  nasArgs: string[],
-): ParsedMainArgs {
+export function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
   let profileName: string | undefined;
   let profileIndex: number | undefined;
   let worktreeOverride: WorktreeOverride = { type: "none" };

@@ -109,12 +109,7 @@ test("matchRule: multi-level subcommand via arg-regex", () => {
     }),
     makeRule("deno-any", { argv0: "deno" }),
   ];
-  const result = matchRule(rules, "deno", [
-    "task",
-    "test",
-    "--filter",
-    "foo",
-  ]);
+  const result = matchRule(rules, "deno", ["task", "test", "--filter", "foo"]);
   expect(result?.rule.id).toEqual("deno-task-test");
 });
 

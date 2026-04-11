@@ -41,107 +41,108 @@ test("hostexec config: validates secrets and rules", () => {
     },
   });
 
-  expect(
-    config.profiles.test.hostexec?.secrets.github_token.from,
-  ).toEqual("env:GITHUB_TOKEN");
+  expect(config.profiles.test.hostexec?.secrets.github_token.from).toEqual(
+    "env:GITHUB_TOKEN",
+  );
   expect(config.profiles.test.hostexec?.rules[0].inheritEnv.keys).toEqual([
     "SSH_AUTH_SOCK",
   ]);
   expect(config.profiles.test.hostexec?.prompt.notify).toEqual("desktop");
-  expect(
-    config.profiles.test.hostexec?.rules[0].match.argRegex,
-  ).toEqual("^(pull|fetch)\\b");
+  expect(config.profiles.test.hostexec?.rules[0].match.argRegex).toEqual(
+    "^(pull|fetch)\\b",
+  );
 });
 
 test("hostexec config: rejects unknown secret references", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              rules: [{
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
                 id: "git-readonly",
                 match: { argv0: "git" },
                 env: { GITHUB_TOKEN: "secret:missing" },
-              }],
-            },
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
   ).toThrow("unknown secret");
 });
 
 test("hostexec config: rejects legacy profile secrets", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            secrets: {
-              github_token: { from: "env:GITHUB_TOKEN", required: true },
-            },
-          } as never,
-        },
-      }),
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          secrets: {
+            github_token: { from: "env:GITHUB_TOKEN", required: true },
+          },
+        } as never,
+      },
+    }),
   ).toThrow("secrets has moved to hostexec.secrets");
 });
 
 test("hostexec config: rejects missing rule id", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              rules: [{
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
                 match: { argv0: "git" },
-              }],
-            },
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
   ).toThrow("hostexec.rules[0].id");
 });
 
 test("hostexec config: rejects invalid inherit-env mode", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              rules: [{
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
                 id: "git-readonly",
                 match: { argv0: "git" },
                 "inherit-env": { mode: "all" as never },
-              }],
-            },
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
   ).toThrow("inherit-env.mode");
 });
 
 test("hostexec config: rejects invalid notify backend", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              prompt: {
-                notify: "dbus" as never,
-              },
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            prompt: {
+              notify: "dbus" as never,
             },
           },
         },
-      }),
+      },
+    }),
   ).toThrow("hostexec.prompt.notify must be one of");
 });
 
@@ -151,18 +152,20 @@ test("hostexec config: allows argv0-only match for catch-all", () => {
       test: {
         agent: "claude",
         hostexec: {
-          rules: [{
-            id: "git-any",
-            match: { argv0: "git" },
-          }],
+          rules: [
+            {
+              id: "git-any",
+              match: { argv0: "git" },
+            },
+          ],
         },
       },
     },
   });
 
-  expect(
-    config.profiles.test.hostexec?.rules[0].match.argRegex,
-  ).toEqual(undefined);
+  expect(config.profiles.test.hostexec?.rules[0].match.argRegex).toEqual(
+    undefined,
+  );
 });
 
 test("hostexec config: accepts once as default-scope", () => {
@@ -182,39 +185,39 @@ test("hostexec config: accepts once as default-scope", () => {
 });
 
 test("hostexec config: rejects invalid default-scope", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              prompt: {
-                "default-scope": "session" as never,
-              },
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            prompt: {
+              "default-scope": "session" as never,
             },
           },
         },
-      }),
+      },
+    }),
   ).toThrow("hostexec.prompt.default-scope must be one of");
 });
 
 test("hostexec config: rejects invalid arg-regex", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              rules: [{
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
                 id: "git-any",
                 match: { argv0: "git", "arg-regex": "[invalid" },
-              }],
-            },
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
   ).toThrow("arg-regex is not a valid regular expression");
 });
 
@@ -267,9 +270,9 @@ test("hostexec config: warns when catch-all shadows specific rule", () => {
   } finally {
     console.log = origLog;
   }
-  expect(
-    warnings.find((w) => /shadows/.test(w)) ?? "",
-  ).toMatch(/git-any.*shadows.*git-pull/);
+  expect(warnings.find((w) => /shadows/.test(w)) ?? "").toMatch(
+    /git-any.*shadows.*git-pull/,
+  );
 });
 
 test("hostexec config: no warning when specific rule comes before catch-all", () => {
@@ -301,22 +304,23 @@ test("hostexec config: no warning when specific rule comes before catch-all", ()
 });
 
 test("hostexec config: rejects relative argv0 with fallback container", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              rules: [{
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
                 id: "gradlew",
                 match: { argv0: "./gradlew" },
                 fallback: "container",
-              }],
-            },
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
   ).toThrow("relative argv0");
 });
 
@@ -326,11 +330,13 @@ test("hostexec config: allows relative argv0 with fallback deny", () => {
       test: {
         agent: "claude",
         hostexec: {
-          rules: [{
-            id: "gradlew",
-            match: { argv0: "./gradlew" },
-            fallback: "deny",
-          }],
+          rules: [
+            {
+              id: "gradlew",
+              match: { argv0: "./gradlew" },
+              fallback: "deny",
+            },
+          ],
         },
       },
     },
@@ -339,22 +345,23 @@ test("hostexec config: allows relative argv0 with fallback deny", () => {
 });
 
 test("hostexec config: rejects absolute argv0 with fallback container", () => {
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              rules: [{
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
                 id: "usr-bin-git",
                 match: { argv0: "/usr/bin/git" },
                 fallback: "container",
-              }],
-            },
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
   ).toThrow("absolute argv0");
 });
 
@@ -364,11 +371,13 @@ test("hostexec config: allows absolute argv0 with fallback deny", () => {
       test: {
         agent: "claude",
         hostexec: {
-          rules: [{
-            id: "usr-bin-git",
-            match: { argv0: "/usr/bin/git" },
-            fallback: "deny",
-          }],
+          rules: [
+            {
+              id: "usr-bin-git",
+              match: { argv0: "/usr/bin/git" },
+              fallback: "deny",
+            },
+          ],
         },
       },
     },
@@ -384,26 +393,27 @@ test("hostexec config: collects multiple env errors in a single rule", () => {
   // hostexecSchema's transform calls ruleSchema.parse() and wraps ZodError
   // into ConfigValidationError, so only the first env issue surfaces.
   // But the env superRefine itself now collects all issues within a rule.
-  expect(
-    () =>
-      validateConfig({
-        profiles: {
-          test: {
-            agent: "claude",
-            hostexec: {
-              secrets: { tok: { from: "env:TOK" } },
-              rules: [{
+  expect(() =>
+    validateConfig({
+      profiles: {
+        test: {
+          agent: "claude",
+          hostexec: {
+            secrets: { tok: { from: "env:TOK" } },
+            rules: [
+              {
                 id: "r1",
                 match: { argv0: "git" },
                 env: {
                   "BAD-KEY": "secret:tok",
-                  "NO_PREFIX": "plain-value",
-                  "UNKNOWN": "secret:nope",
+                  NO_PREFIX: "plain-value",
+                  UNKNOWN: "secret:nope",
                 },
-              }],
-            },
+              },
+            ],
           },
         },
-      }),
+      },
+    }),
   ).toThrow("BAD-KEY");
 });

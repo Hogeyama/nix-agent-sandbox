@@ -8,8 +8,8 @@ import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((a) => !a.startsWith("-"));
   const force = nasArgs.includes("--force") || nasArgs.includes("-f");
-  const deleteBranch = nasArgs.includes("--delete-branch") ||
-    nasArgs.includes("-B");
+  const deleteBranch =
+    nasArgs.includes("--delete-branch") || nasArgs.includes("-B");
   const formatJson = hasFormatJson(nasArgs);
 
   try {
@@ -18,9 +18,7 @@ export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
       if (formatJson) {
         const items = entries.map((e) => ({
           path: e.path,
-          branch: e.branch
-            ? e.branch.replace("refs/heads/", "")
-            : null,
+          branch: e.branch ? e.branch.replace("refs/heads/", "") : null,
           base: e.base,
           head: e.head,
         }));
@@ -36,9 +34,7 @@ export async function runWorktreeCommand(nasArgs: string[]): Promise<void> {
           ? e.branch.replace("refs/heads/", "")
           : "(detached)";
         const base = e.base ? ` (base: ${e.base})` : "";
-        console.log(
-          `  ${e.path}  [${branch}]${base}  ${e.head.slice(0, 8)}`,
-        );
+        console.log(`  ${e.path}  [${branch}]${base}  ${e.head.slice(0, 8)}`);
       }
     } else if (sub === "clean") {
       const result = await cleanNasWorktrees(process.cwd(), {

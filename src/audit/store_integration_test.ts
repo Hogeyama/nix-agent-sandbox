@@ -5,9 +5,7 @@ import * as path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-function makeEntry(
-  overrides: Partial<AuditLogEntry> = {},
-): AuditLogEntry {
+function makeEntry(overrides: Partial<AuditLogEntry> = {}): AuditLogEntry {
   return {
     id: crypto.randomUUID(),
     timestamp: "2026-03-28T12:00:00Z",
@@ -87,10 +85,7 @@ test("queryAuditLogs: filter by sessionIds set", async () => {
     await appendAuditLog(makeEntry({ sessionId: "sess-c" }), dir);
 
     // Single-element set matches only that session
-    const single = await queryAuditLogs(
-      { sessionIds: ["sess-a"] },
-      dir,
-    );
+    const single = await queryAuditLogs({ sessionIds: ["sess-a"] }, dir);
     expect(single.length).toEqual(1);
     expect(single[0].sessionId).toEqual("sess-a");
 
@@ -116,10 +111,7 @@ test("queryAuditLogs: filter by sessionContains substring", async () => {
     await appendAuditLog(makeEntry({ sessionId: "ALPHA-99" }), dir);
 
     // Case-insensitive substring match
-    const results = await queryAuditLogs(
-      { sessionContains: "alpha" },
-      dir,
-    );
+    const results = await queryAuditLogs({ sessionContains: "alpha" }, dir);
     const ids = new Set(results.map((e) => e.sessionId));
     expect(ids.size).toEqual(2);
     expect(ids.has("alpha-42")).toEqual(true);
@@ -177,10 +169,7 @@ test("queryAuditLogs: filter by before cursor", async () => {
     expect(ids.has("c")).toEqual(false);
 
     // Cursor before all entries yields nothing
-    const empty = await queryAuditLogs(
-      { before: "2026-03-26T00:00:00Z" },
-      dir,
-    );
+    const empty = await queryAuditLogs({ before: "2026-03-26T00:00:00Z" }, dir);
     expect(empty.length).toEqual(0);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -297,7 +286,8 @@ test("appendAuditLog: concurrent writes all land", async () => {
             target: bigTarget,
           }),
           dir,
-        )),
+        ),
+      ),
     );
     const results = await queryAuditLogs({}, dir);
     expect(results.length).toEqual(N);

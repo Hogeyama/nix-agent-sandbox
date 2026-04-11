@@ -201,20 +201,20 @@ export async function executeProxySession(
       await removeSessionRegistry(runtimePaths, sessionId).catch((e) =>
         logInfo(
           `[nas] Proxy teardown: failed to remove session registry: ${e}`,
-        )
+        ),
       );
       await removePendingDir(runtimePaths, sessionId).catch((e) =>
-        logInfo(
-          `[nas] Proxy teardown: failed to remove pending dir: ${e}`,
-        )
+        logInfo(`[nas] Proxy teardown: failed to remove pending dir: ${e}`),
       );
 
       if (sessionNetworkHandle) {
-        await sessionNetworkHandle.close().catch((e) =>
-          logInfo(
-            `[nas] Proxy teardown: failed to tear down session network: ${e}`,
-          )
-        );
+        await sessionNetworkHandle
+          .close()
+          .catch((e) =>
+            logInfo(
+              `[nas] Proxy teardown: failed to tear down session network: ${e}`,
+            ),
+          );
       }
     },
   };
@@ -258,8 +258,8 @@ export async function createProxySessionNetworkHandle(
   },
   deps: ProxySessionNetworkDeps = {},
 ): Promise<ProxySessionNetworkHandle> {
-  const createSessionNetwork = deps.createSessionNetwork ??
-    ensureSessionNetwork;
+  const createSessionNetwork =
+    deps.createSessionNetwork ?? ensureSessionNetwork;
   const connectNetwork = deps.connectNetwork ?? dockerNetworkConnect;
   const disconnectNetwork = deps.disconnectNetwork ?? dockerNetworkDisconnect;
   const removeNetwork = deps.removeNetwork ?? dockerNetworkRemove;
@@ -341,89 +341,85 @@ export async function createProxySessionNetworkHandle(
   };
 }
 
-async function rollbackProxySessionNetwork(
-  options: {
-    sessionNetworkName: string;
-    envoyContainerName: string;
-    dindContainerName: string | null;
-    sessionNetworkCreated: boolean;
-    envoyConnected: boolean;
-    dindConnected: boolean;
-    disconnectNetwork: (
-      networkName: string,
-      containerName: string,
-    ) => Promise<void>;
-    removeNetwork: (networkName: string) => Promise<void>;
-  },
-): Promise<void> {
+async function rollbackProxySessionNetwork(options: {
+  sessionNetworkName: string;
+  envoyContainerName: string;
+  dindContainerName: string | null;
+  sessionNetworkCreated: boolean;
+  envoyConnected: boolean;
+  dindConnected: boolean;
+  disconnectNetwork: (
+    networkName: string,
+    containerName: string,
+  ) => Promise<void>;
+  removeNetwork: (networkName: string) => Promise<void>;
+}): Promise<void> {
   if (options.dindConnected && options.dindContainerName) {
-    await options.disconnectNetwork(
-      options.sessionNetworkName,
-      options.dindContainerName,
-    ).catch((error) =>
-      logWarn(
-        `[nas] Proxy: failed to disconnect dind during rollback: ${error}`,
-      )
-    );
+    await options
+      .disconnectNetwork(options.sessionNetworkName, options.dindContainerName)
+      .catch((error) =>
+        logWarn(
+          `[nas] Proxy: failed to disconnect dind during rollback: ${error}`,
+        ),
+      );
   }
   if (options.envoyConnected) {
-    await options.disconnectNetwork(
-      options.sessionNetworkName,
-      options.envoyContainerName,
-    ).catch((error) =>
-      logWarn(
-        `[nas] Proxy: failed to disconnect envoy during rollback: ${error}`,
-      )
-    );
+    await options
+      .disconnectNetwork(options.sessionNetworkName, options.envoyContainerName)
+      .catch((error) =>
+        logWarn(
+          `[nas] Proxy: failed to disconnect envoy during rollback: ${error}`,
+        ),
+      );
   }
   if (options.sessionNetworkCreated) {
-    await options.removeNetwork(options.sessionNetworkName).catch((error) =>
-      logWarn(
-        `[nas] Proxy: failed to remove session network during rollback: ${error}`,
-      )
-    );
+    await options
+      .removeNetwork(options.sessionNetworkName)
+      .catch((error) =>
+        logWarn(
+          `[nas] Proxy: failed to remove session network during rollback: ${error}`,
+        ),
+      );
   }
 }
 
-async function teardownProxySessionNetwork(
-  options: {
-    sessionNetworkName: string;
-    envoyContainerName: string;
-    dindContainerName: string | null;
-    sessionNetworkCreated: boolean;
-    envoyConnected: boolean;
-    dindConnected: boolean;
-    disconnectNetwork: (
-      networkName: string,
-      containerName: string,
-    ) => Promise<void>;
-    removeNetwork: (networkName: string) => Promise<void>;
-  },
-): Promise<void> {
+async function teardownProxySessionNetwork(options: {
+  sessionNetworkName: string;
+  envoyContainerName: string;
+  dindContainerName: string | null;
+  sessionNetworkCreated: boolean;
+  envoyConnected: boolean;
+  dindConnected: boolean;
+  disconnectNetwork: (
+    networkName: string,
+    containerName: string,
+  ) => Promise<void>;
+  removeNetwork: (networkName: string) => Promise<void>;
+}): Promise<void> {
   if (options.dindConnected && options.dindContainerName) {
-    await options.disconnectNetwork(
-      options.sessionNetworkName,
-      options.dindContainerName,
-    ).catch((error) =>
-      logInfo(
-        `[nas] Proxy teardown: failed to disconnect dind from network: ${error}`,
-      )
-    );
+    await options
+      .disconnectNetwork(options.sessionNetworkName, options.dindContainerName)
+      .catch((error) =>
+        logInfo(
+          `[nas] Proxy teardown: failed to disconnect dind from network: ${error}`,
+        ),
+      );
   }
   if (options.envoyConnected) {
-    await options.disconnectNetwork(
-      options.sessionNetworkName,
-      options.envoyContainerName,
-    ).catch((error) =>
-      logInfo(
-        `[nas] Proxy teardown: failed to disconnect envoy from network: ${error}`,
-      )
-    );
+    await options
+      .disconnectNetwork(options.sessionNetworkName, options.envoyContainerName)
+      .catch((error) =>
+        logInfo(
+          `[nas] Proxy teardown: failed to disconnect envoy from network: ${error}`,
+        ),
+      );
   }
   if (options.sessionNetworkCreated) {
-    await options.removeNetwork(options.sessionNetworkName).catch((error) =>
-      logInfo(`[nas] Proxy teardown: failed to remove network: ${error}`)
-    );
+    await options
+      .removeNetwork(options.sessionNetworkName)
+      .catch((error) =>
+        logInfo(`[nas] Proxy teardown: failed to remove network: ${error}`),
+      );
   }
 }
 
@@ -438,7 +434,7 @@ async function ensureSharedEnvoy(
   }
   if (await dockerContainerExists(envoyContainerName)) {
     await dockerRm(envoyContainerName).catch((e) =>
-      logInfo(`[nas] Proxy: failed to remove stale envoy container: ${e}`)
+      logInfo(`[nas] Proxy: failed to remove stale envoy container: ${e}`),
     );
   }
   await dockerRunDetached({
@@ -457,12 +453,7 @@ async function ensureSharedEnvoy(
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
     },
-    command: [
-      "-c",
-      "/nas-network/envoy.yaml",
-      "--log-level",
-      "info",
-    ],
+    command: ["-c", "/nas-network/envoy.yaml", "--log-level", "info"],
   });
   await waitForEnvoyReady(envoyContainerName, readyTimeoutMs);
 }

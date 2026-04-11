@@ -26,9 +26,7 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
   };
 }
 
-function makePrior(
-  overrides?: Partial<PriorStageOutputs>,
-): PriorStageOutputs {
+function makePrior(overrides?: Partial<PriorStageOutputs>): PriorStageOutputs {
   return {
     dockerArgs: [],
     envVars: {},
