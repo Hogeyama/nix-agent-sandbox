@@ -8,6 +8,7 @@
  * host-side UI.
  */
 
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { logInfo } from "../log.ts";
 import type {
   ProceduralResult,
@@ -23,6 +24,52 @@ import {
 
 /** Canonical path the in-container hook uses to reach the session store. */
 export const IN_CONTAINER_SESSION_STORE_DIR = "/run/nas/sessions";
+
+/** Canonical in-container path for the mounted `nas` binary. Already on PATH. */
+export const IN_CONTAINER_NAS_BIN_PATH = "/usr/local/bin/nas";
+
+/**
+ * Locate the host `nas` artifact to bind-mount into the sandbox so agent
+ * hooks can call `nas hook notification ...`. Only trusts an explicit
+ * `NAS_BIN_PATH` — auto-detection (`process.execPath`, `Bun.which`) is
+ * unsafe because the common distribution shapes are not self-contained:
+ *
+ * - The nix non-bundled wrapper (`$out/bin/nas`) is a shell script that
+ *   `exec`s a sibling path under the host nix store; mounting it into the
+ *   container breaks because that sibling does not exist there.
+ * - The nix `single-exe` self-extracting script decompresses itself into
+ *   `$TMPDIR` at runtime, so `process.execPath` points at the extracted
+ *   `orig/nas` with LD_LIBRARY_PATH / LD_PRELOAD deps that were extracted
+ *   alongside it — also not mountable.
+ *
+ * Only the pre-extraction self-extracting script OR a pure
+ * `bun build --compile` output is safely mountable, and we cannot
+ * distinguish those from the unsafe shapes at runtime. Require the user
+ * (or packaging) to tell us explicitly via `NAS_BIN_PATH`.
+ */
+export function resolveNasBinPath(): string | null {
+  const envPath = process.env.NAS_BIN_PATH;
+  if (envPath && isRegularFile(envPath)) {
+    return safeRealpath(envPath);
+  }
+  return null;
+}
+
+function isRegularFile(p: string): boolean {
+  try {
+    return existsSync(p) && statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function safeRealpath(p: string): string | null {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
 
 export class SessionStoreStage implements ProceduralStage {
   kind = "procedural" as const;
@@ -53,12 +100,23 @@ export class SessionStoreStage implements ProceduralStage {
       `[nas] Session store: created record ${input.sessionId} at ${paths.sessionsDir}`,
     );
 
+    const dockerArgs: string[] = [
+      "-v",
+      `${paths.sessionsDir}:${IN_CONTAINER_SESSION_STORE_DIR}`,
+    ];
+
+    const nasBinPath = resolveNasBinPath();
+    if (nasBinPath) {
+      dockerArgs.push("-v", `${nasBinPath}:${IN_CONTAINER_NAS_BIN_PATH}:ro`);
+    } else {
+      logInfo(
+        "[nas] hook notification: NAS_BIN_PATH is not set — in-sandbox agent hooks that call `nas hook notification` will fail with 'command not found'. Point NAS_BIN_PATH at a self-contained nas artifact (a `bun build --compile` output or the nix `single-exe` self-extracting script).",
+      );
+    }
+
     return {
       outputOverrides: {
-        dockerArgs: [
-          "-v",
-          `${paths.sessionsDir}:${IN_CONTAINER_SESSION_STORE_DIR}`,
-        ],
+        dockerArgs,
         envVars: {
           NAS_SESSION_STORE_DIR: IN_CONTAINER_SESSION_STORE_DIR,
         },
