@@ -7,10 +7,9 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { appendAuditLog } from "../../audit/store.ts";
-import type { AuditLogEntry } from "../../audit/types.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import type { SessionRuntimePaths } from "../../sessions/store.ts";
 import type { UiDataContext } from "../data.ts";
 import { Router } from "../router.ts";
 import { createApiRoutes } from "./api.ts";
@@ -33,7 +32,16 @@ function createTestContext(dir: string): UiDataContext {
     brokersDir: `${dir}/hostexec/brokers`,
     wrappersDir: `${dir}/hostexec/wrappers`,
   };
-  return { networkPaths, hostExecPaths, auditDir: `${dir}/audit` };
+  const sessionPaths: SessionRuntimePaths = {
+    runtimeDir: `${dir}/sessions-root`,
+    sessionsDir: `${dir}/sessions-root/sessions`,
+  };
+  return {
+    networkPaths,
+    hostExecPaths,
+    sessionPaths,
+    auditDir: `${dir}/audit`,
+  };
 }
 
 test("GET /network/pending returns items array", async () => {
@@ -293,19 +301,22 @@ test("GET /audit returns audit log entries", async () => {
     await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
     await mkdir(`${tmpDir}/network/pending`, { recursive: true });
     await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
-    const auditDir = `${tmpDir}/audit`;
-    await appendAuditLog(
-      {
-        id: "test-id-001",
-        timestamp: "2026-03-28T12:00:00Z",
-        domain: "network",
-        sessionId: "sess-001",
-        requestId: "req-001",
-        decision: "allow",
-        reason: "allowlist match",
-        target: "example.com:443",
-      },
-      auditDir,
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    // Write a JSONL audit log file
+    const entry = {
+      id: "test-id-001",
+      timestamp: "2026-03-28T12:00:00Z",
+      domain: "network",
+      sessionId: "sess-001",
+      requestId: "req-001",
+      decision: "allow",
+      reason: "allowlist match",
+      target: "example.com:443",
+    };
+    await writeFile(
+      `${tmpDir}/audit/2026-03-28.jsonl`,
+      `${JSON.stringify(entry)}\n`,
     );
 
     const ctx = createTestContext(tmpDir);
@@ -345,58 +356,6 @@ test("GET /audit with invalid domain returns 400", async () => {
   }
 });
 
-test("GET /audit with before cursor returns only older entries", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
-  try {
-    const auditDir = `${tmpDir}/audit`;
-    const base: Omit<AuditLogEntry, "id" | "timestamp" | "requestId"> = {
-      domain: "network",
-      sessionId: "sess-001",
-      decision: "allow",
-      reason: "allowlist match",
-    };
-    for (const e of [
-      { ...base, id: "a", timestamp: "2026-03-28T09:00:00Z", requestId: "a" },
-      { ...base, id: "b", timestamp: "2026-03-28T10:00:00Z", requestId: "b" },
-      { ...base, id: "c", timestamp: "2026-03-28T11:00:00Z", requestId: "c" },
-    ]) {
-      await appendAuditLog(e, auditDir);
-    }
-
-    const ctx = createTestContext(tmpDir);
-    const api = createApiRoutes(ctx);
-    const app = new Router();
-    app.route("/api", api);
-
-    const res = await app.request("/api/audit?before=2026-03-28T11:00:00Z");
-    expect(res.status).toEqual(200);
-    const body = await res.json();
-    const ids = body.items.map((e: { id: string }) => e.id);
-    expect(ids).toEqual(["a", "b"]);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("GET /audit with invalid before returns 400", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
-  try {
-    await mkdir(`${tmpDir}/audit`, { recursive: true });
-
-    const ctx = createTestContext(tmpDir);
-    const api = createApiRoutes(ctx);
-    const app = new Router();
-    app.route("/api", api);
-
-    const res = await app.request("/api/audit?before=not-a-date");
-    expect(res.status).toEqual(400);
-    const body = await res.json();
-    expect(body.error).toEqual("Invalid before: must be an ISO-8601 timestamp");
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
 test("GET /audit with invalid limit returns 400", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
@@ -419,22 +378,24 @@ test("GET /audit with invalid limit returns 400", async () => {
 test("GET /audit respects limit parameter", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    const auditDir = `${tmpDir}/audit`;
-    // Three entries, appended oldest-first.
-    for (const i of [1, 2, 3]) {
-      await appendAuditLog(
-        {
-          id: `id-${i}`,
-          timestamp: `2026-03-28T12:0${i}:00Z`,
-          domain: "network",
-          sessionId: "sess-001",
-          requestId: `req-${i}`,
-          decision: "allow",
-          reason: "test",
-        },
-        auditDir,
-      );
-    }
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    // Write 3 entries
+    const entries = [1, 2, 3].map((i) =>
+      JSON.stringify({
+        id: `id-${i}`,
+        timestamp: `2026-03-28T12:0${i}:00Z`,
+        domain: "network",
+        sessionId: "sess-001",
+        requestId: `req-${i}`,
+        decision: "allow",
+        reason: "test",
+      }),
+    );
+    await writeFile(
+      `${tmpDir}/audit/2026-03-28.jsonl`,
+      `${entries.join("\n")}\n`,
+    );
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
@@ -453,12 +414,13 @@ test("GET /audit respects limit parameter", async () => {
   }
 });
 
-test("GET /audit filters by sessions set and sessionContains", async () => {
+test("GET /audit filters by session parameter", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
-    const auditDir = `${tmpDir}/audit`;
-    const seed: AuditLogEntry[] = [
-      {
+    await mkdir(`${tmpDir}/audit`, { recursive: true });
+
+    const entries = [
+      JSON.stringify({
         id: "id-1",
         timestamp: "2026-03-28T12:00:00Z",
         domain: "network",
@@ -466,8 +428,8 @@ test("GET /audit filters by sessions set and sessionContains", async () => {
         requestId: "req-1",
         decision: "allow",
         reason: "test",
-      },
-      {
+      }),
+      JSON.stringify({
         id: "id-2",
         timestamp: "2026-03-28T12:01:00Z",
         domain: "network",
@@ -475,46 +437,23 @@ test("GET /audit filters by sessions set and sessionContains", async () => {
         requestId: "req-2",
         decision: "deny",
         reason: "test",
-      },
-      {
-        id: "id-3",
-        timestamp: "2026-03-28T12:02:00Z",
-        domain: "network",
-        sessionId: "other-003",
-        requestId: "req-3",
-        decision: "allow",
-        reason: "test",
-      },
+      }),
     ];
-    for (const e of seed) await appendAuditLog(e, auditDir);
+    await writeFile(
+      `${tmpDir}/audit/2026-03-28.jsonl`,
+      `${entries.join("\n")}\n`,
+    );
 
     const ctx = createTestContext(tmpDir);
     const api = createApiRoutes(ctx);
     const app = new Router();
     app.route("/api", api);
 
-    // Set membership (comma-separated)
-    const setRes = await app.request("/api/audit?sessions=sess-001,sess-002");
-    expect(setRes.status).toEqual(200);
-    const setBody = await setRes.json();
-    expect(setBody.items.length).toEqual(2);
-    const ids = new Set(
-      setBody.items.map((e: { sessionId: string }) => e.sessionId),
-    );
-    expect(ids.has("sess-001")).toEqual(true);
-    expect(ids.has("sess-002")).toEqual(true);
-
-    // Substring match
-    const subRes = await app.request("/api/audit?sessionContains=sess");
-    expect(subRes.status).toEqual(200);
-    const subBody = await subRes.json();
-    expect(subBody.items.length).toEqual(2);
-
-    // Empty sessions set returns nothing
-    const emptyRes = await app.request("/api/audit?sessions=");
-    expect(emptyRes.status).toEqual(200);
-    const emptyBody = await emptyRes.json();
-    expect(emptyBody.items.length).toEqual(0);
+    const res = await app.request("/api/audit?session=sess-001");
+    expect(res.status).toEqual(200);
+    const body = await res.json();
+    expect(body.items.length).toEqual(1);
+    expect(body.items[0].sessionId).toEqual("sess-001");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

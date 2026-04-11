@@ -1,17 +1,12 @@
 /**
  * SSE エンドポイント — 2秒間隔ポーリングで差分送出
- *
- * 監査ログは容易に数万件まで膨らむので、ライブストリームは直近
- * `AUDIT_STREAM_LIMIT` 件だけに制限する。それ以上掘りたいときは
- * フィルタ付きで REST (/api/audit) を叩く想定。
  */
-
-const AUDIT_STREAM_LIMIT = 500;
 
 import type { UiDataContext } from "../data.ts";
 import {
   getAuditLogs,
   getHostExecPending,
+  getNasContainers,
   getNetworkPending,
   getSessions,
 } from "../data.ts";
@@ -44,17 +39,19 @@ export function createSseRoutes(ctx: UiDataContext): Router {
         let prevNetworkJson = "";
         let prevHostExecJson = "";
         let prevSessionsJson = "";
+        let prevContainersJson = "";
         let prevAuditJson = "";
 
         async function poll(): Promise<void> {
           if (closed) return;
 
           try {
-            const [networkPending, hostExecPending, sessions] =
+            const [networkPending, hostExecPending, sessions, containers] =
               await Promise.all([
                 getNetworkPending(ctx).catch(() => []),
                 getHostExecPending(ctx).catch(() => []),
                 getSessions(ctx).catch(() => ({ network: [], hostexec: [] })),
+                getNasContainers(ctx).catch(() => []),
               ]);
 
             const networkJson = JSON.stringify(networkPending);
@@ -75,11 +72,15 @@ export function createSseRoutes(ctx: UiDataContext): Router {
               send("sessions", sessions);
             }
 
-            // Audit logs — stream only the tail to keep the payload bounded.
-            // Older history is fetched on demand by the frontend via
-            // GET /api/audit?before=<cursor>.
+            const containersJson = JSON.stringify(containers);
+            if (containersJson !== prevContainersJson) {
+              prevContainersJson = containersJson;
+              send("containers", { items: containers });
+            }
+
+            // Audit logs — send delta since last poll
             try {
-              const auditLogs = await getAuditLogs(ctx, {}, AUDIT_STREAM_LIMIT);
+              const auditLogs = await getAuditLogs(ctx);
               const auditJson = JSON.stringify(auditLogs);
               if (auditJson !== prevAuditJson) {
                 prevAuditJson = auditJson;

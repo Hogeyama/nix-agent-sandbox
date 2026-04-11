@@ -121,7 +121,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.get("/containers", async () => {
     try {
-      const containers = await getNasContainers();
+      const containers = await getNasContainers(ctx);
       return json({ items: containers });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
