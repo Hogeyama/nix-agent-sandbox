@@ -21,8 +21,16 @@
 #   WinRT ToastNotificationManager は AppUserModelId の登録が必要で
 #   WSL から呼ぶと表示されないケースがあるため、BalloonTip を採用。
 #
+#   クリック時に nas ui を開く処理:
+#     呼び出し側 (src/lib/notify_utils.ts の tryDesktopNotification) が
+#     NAS_NOTIFY_UI_URL 環境変数で対象 URL を渡してきた場合、
+#     BalloonTipClicked を購読し、クリック検知時に PowerShell の
+#     Start-Process で Windows 側ブラウザに URL を開かせる。
+#     呼び出し側へは従来通り "wsl-notify-only" を返すので、親プロセスの
+#     xdg-open 分岐は発火せず二重オープンにならない。
+#
 # 制限事項:
-#   - アクションボタン（Allow/Deny）は非対応（通知表示のみ）
+#   - アクションボタン（Allow/Deny）は非対応（クリック=Open のみ）
 #   - --expire-time は反映されない（BalloonTip は OS のタイムアウトに従う）
 #   - 通知のプログラム的な閉鎖（gdbus 相当）は非対応
 set -euo pipefail
@@ -45,7 +53,8 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --wait)
-      # WSL シムでは待機せず即終了する
+      # PowerShell 側の待機ループがユーザー操作 or タイムアウトまで block するため、
+      # --wait は暗黙的に尊重される。フラグ自体はここでは単に受け流す。
       shift
       ;;
     --expire-time=*)
@@ -146,11 +155,19 @@ xml_escape() {
 
 escaped_title="$(xml_escape "$title")"
 escaped_body="$(xml_escape "$body")"
+# URL is not XML content; we only need to defend against PowerShell single-quote
+# injection when interpolating into the script below.
+ui_url="${NAS_NOTIFY_UI_URL:-}"
 
 # --- Build PowerShell command for Windows balloon notification ---
 # Uses System.Windows.Forms.NotifyIcon BalloonTip (works reliably in all WSL setups).
 # WinRT ToastNotificationManager requires AppUserModelId registration and may silently
 # fail in WSL, so BalloonTip is the safer default.
+#
+# If $url is non-empty, BalloonTipClicked is subscribed and Start-Process is used to
+# launch the Windows default browser at the nas ui URL on click. The event loop pumps
+# Application::DoEvents() until the user clicks / dismisses the balloon, or a safety
+# timeout elapses. The parent process can also terminate us via AbortSignal.
 ps_script=$(cat <<'PSEOF'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -160,27 +177,47 @@ $n.Visible = $true
 $n.BalloonTipTitle = 'TITLE_PLACEHOLDER'
 $n.BalloonTipText = 'BODY_PLACEHOLDER'
 $n.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+$url = 'URL_PLACEHOLDER'
+$script:clicked = $false
+$script:done = $false
+$n.add_BalloonTipClicked({
+    $script:clicked = $true
+    $script:done = $true
+})
+$n.add_BalloonTipClosed({
+    $script:done = $true
+})
 $n.ShowBalloonTip(10000)
-Start-Sleep -Seconds 3
+# Wait for click / close / safety timeout. BalloonTips are OS-dismissed after
+# ~10s so 60s is plenty; the parent process can kill us earlier via AbortSignal.
+$deadline = (Get-Date).AddSeconds(60)
+while (-not $script:done -and (Get-Date) -lt $deadline) {
+    [System.Windows.Forms.Application]::DoEvents()
+    Start-Sleep -Milliseconds 100
+}
+if ($script:clicked -and $url.Length -gt 0) {
+    try { Start-Process $url } catch { }
+}
+$n.Visible = $false
 $n.Dispose()
+Write-Output 'wsl-notify-only'
 PSEOF
 )
 
-# Inject escaped title and body into the PowerShell script.
+# Inject escaped title, body, and URL into the PowerShell script.
 # Single-quotes in the PS script are used for placeholders, so we need to
-# escape any single-quotes that snuck through XML escaping.
+# escape any single-quotes that snuck through XML escaping (or that live
+# inside the URL).
 safe_title="${escaped_title//\'/\'\'}"
 safe_body="${escaped_body//\'/\'\'}"
+safe_url="${ui_url//\'/\'\'}"
 ps_script="${ps_script//TITLE_PLACEHOLDER/$safe_title}"
 ps_script="${ps_script//BODY_PLACEHOLDER/$safe_body}"
+ps_script="${ps_script//URL_PLACEHOLDER/$safe_url}"
 
 # --- Show the balloon notification ---
-powershell.exe -NoProfile -NonInteractive -Command "$ps_script" 2>/dev/null || true
-
-# --- Output special action string ---
-# "wsl-notify-only" is not recognized by tryDesktopNotification() in notify_utils.ts,
-# so it falls through to `return status.success` without sending approve/deny.
-# The pending request stays in "pending" state for CLI-based approval.
-echo "wsl-notify-only"
-
-exit 0
+# exec replaces this shell process with powershell.exe so that if the parent
+# process aborts (AbortSignal), the signal reaches powershell.exe directly and
+# terminates the balloon process. powershell.exe emits "wsl-notify-only" on
+# stdout before exiting (see Write-Output in the script above).
+exec powershell.exe -NoProfile -NonInteractive -Command "$ps_script" 2>/dev/null
