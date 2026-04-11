@@ -34,20 +34,19 @@ export interface ResolvedExtraMount {
 }
 
 /** 環境変数エントリの事前解決結果 */
-export interface ResolvedEnvEntry {
+interface ResolvedEnvEntryBase {
   /** 解決済みキー */
   key: string;
   /** 解決済み値 */
   value: string;
-  /** モード */
-  mode: "set" | "prefix" | "suffix";
-  /** separator (prefix/suffix モード用) */
-  separator?: string;
   /** 元の index (エラーメッセージ用) */
   index: number;
   /** key の出典 ("key" | "key_cmd") */
   keySource: "key" | "key_cmd";
 }
+export type ResolvedEnvEntry =
+  | (ResolvedEnvEntryBase & { mode: "set"; separator?: undefined })
+  | (ResolvedEnvEntryBase & { mode: "prefix" | "suffix"; separator: string });
 
 /** MountStage が必要とする全ての I/O 結果 */
 export interface MountProbes {
@@ -258,14 +257,23 @@ async function resolveEnvEntries(
       "val" in entry
         ? entry.val
         : await runCommandForEnv(entry.valCmd, `profile.env[${index}].val_cmd`);
-    results.push({
-      key,
-      value,
-      mode: entry.mode,
-      separator: entry.separator,
-      index,
-      keySource,
-    });
+    if (entry.mode === "set") {
+      results.push({ key, value, mode: "set", index, keySource });
+    } else {
+      if (entry.separator === undefined) {
+        throw new Error(
+          `profile.env[${index}]: separator is required when mode is "${entry.mode}"`,
+        );
+      }
+      results.push({
+        key,
+        value,
+        mode: entry.mode,
+        separator: entry.separator,
+        index,
+        keySource,
+      });
+    }
   }
   return results;
 }

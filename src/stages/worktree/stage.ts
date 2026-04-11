@@ -370,19 +370,23 @@ export class WorktreeStage implements ProceduralStage {
     commitList: string[],
     targetBranch: string,
   ): Promise<boolean> {
+    const repoRoot = this.repoRoot;
+    if (!repoRoot) {
+      throw new Error("cherryPickDetached: repoRoot not initialized");
+    }
     const targetRef = (
-      await $`git -C ${this.repoRoot} rev-parse refs/heads/${targetBranch}`.text()
+      await $`git -C ${repoRoot} rev-parse refs/heads/${targetBranch}`.text()
     ).trim();
     const tmpWorktree = path.join(
-      this.repoRoot!,
+      repoRoot,
       ".nas",
       "worktrees",
       `nas-cherry-pick-tmp-${Date.now()}`,
     );
     console.log(
-      `$ git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`,
+      `$ git -C ${repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`,
     );
-    await $`git -C ${this.repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`;
+    await $`git -C ${repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`;
     try {
       console.log(
         `$ git -C ${tmpWorktree} cherry-pick ${commitList.join(" ")}`,
@@ -392,10 +396,8 @@ export class WorktreeStage implements ProceduralStage {
       const newHead = (
         await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
       ).trim();
-      console.log(
-        `$ git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`,
-      );
-      await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`;
+      console.log(`$ git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`);
+      await $`git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`;
       console.log("[nas] Cherry-pick completed successfully.");
       return true;
     } catch (cpErr) {
@@ -411,9 +413,9 @@ export class WorktreeStage implements ProceduralStage {
           await $`git -C ${tmpWorktree} rev-parse HEAD`.text()
         ).trim();
         console.log(
-          `$ git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`,
+          `$ git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`,
         );
-        await $`git -C ${this.repoRoot} branch -f ${targetBranch} ${newHead}`;
+        await $`git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`;
         return true;
       }
 
@@ -425,7 +427,7 @@ export class WorktreeStage implements ProceduralStage {
       }
       return false;
     } finally {
-      await $`git -C ${this.repoRoot} worktree remove --force ${tmpWorktree}`.quiet();
+      await $`git -C ${repoRoot} worktree remove --force ${tmpWorktree}`.quiet();
     }
   }
 

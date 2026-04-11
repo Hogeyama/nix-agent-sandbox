@@ -105,7 +105,12 @@ export function mergeRawConfigs(
   global: RawConfig | null,
   local: RawConfig | null,
 ): RawConfig {
-  if (!global) return local!;
+  if (!global) {
+    if (!local) {
+      throw new Error("mergeRawConfigs: both global and local are null");
+    }
+    return local;
+  }
   if (!local) return global;
 
   // プロファイルをマージ
@@ -122,9 +127,12 @@ export function mergeRawConfigs(
     const lp = localProfiles[name];
     if (gp && lp) {
       mergedProfiles[name] = mergeRawProfiles(gp, lp);
-    } else {
-      mergedProfiles[name] = (lp ?? gp)!;
+    } else if (lp) {
+      mergedProfiles[name] = lp;
+    } else if (gp) {
+      mergedProfiles[name] = gp;
     }
+    // unreachable: name came from the union of both keysets
   }
 
   return {

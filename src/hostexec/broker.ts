@@ -127,7 +127,6 @@ export class HostExecBroker {
   }
 
   async close(): Promise<void> {
-    this.closing = true;
     if (this.server) {
       this.server.close();
       this.server = null;

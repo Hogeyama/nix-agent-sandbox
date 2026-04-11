@@ -94,6 +94,7 @@ export function NetworkTab({ items }: Props) {
               </td>
               <td style={tdStyle}>
                 <button
+                  type="button"
                   style={approveBtnStyle}
                   disabled={disabled}
                   onClick={() => handleAction(item, "approve")}
@@ -101,6 +102,7 @@ export function NetworkTab({ items }: Props) {
                   Approve
                 </button>
                 <button
+                  type="button"
                   style={denyBtnStyle}
                   disabled={disabled}
                   onClick={() => handleAction(item, "deny")}

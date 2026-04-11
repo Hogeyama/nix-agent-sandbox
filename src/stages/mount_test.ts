@@ -177,14 +177,16 @@ function envEntry(
     keySource?: "key" | "key_cmd";
   } = {},
 ): ResolvedEnvEntry {
-  return {
+  const base = {
     key,
     value,
-    mode,
-    separator: opts.separator,
     index: opts.index ?? 0,
-    keySource: opts.keySource ?? "key",
+    keySource: opts.keySource ?? ("key" as const),
   };
+  if (mode === "set") {
+    return { ...base, mode: "set" };
+  }
+  return { ...base, mode, separator: opts.separator ?? "" };
 }
 
 // ============================================================

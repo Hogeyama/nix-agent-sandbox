@@ -319,7 +319,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
             mode: "prefix",
             key: resolved.key,
             value,
-            separator: resolved.separator!,
+            separator: resolved.separator,
           });
         }
         break;
@@ -334,7 +334,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
             mode: "suffix",
             key: resolved.key,
             value,
-            separator: resolved.separator!,
+            separator: resolved.separator,
           });
         }
         break;

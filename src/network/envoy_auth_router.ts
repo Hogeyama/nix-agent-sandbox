@@ -268,7 +268,7 @@ async function authorize(
   const url = headers["x-nas-original-url"];
   const hostHeader = headers.host;
 
-  let target;
+  let target: ReturnType<typeof normalizeTarget>;
   try {
     target = normalizeTarget({
       method,

@@ -2,7 +2,7 @@
  * .agent-sandbox.yml のバリデーション
  */
 
-import { ZodError } from "zod";
+import { ZodError, type z } from "zod";
 import { logWarn } from "../log.ts";
 import { formatZodError, profileSchema, uiSchema } from "./schema.ts";
 import type {
@@ -28,7 +28,7 @@ export function validateConfig(raw: RawConfig): Config {
 
   const errors: string[] = [];
 
-  let ui;
+  let ui: z.infer<typeof uiSchema> | undefined;
   try {
     ui = uiSchema.parse(raw.ui ?? {});
   } catch (err) {
@@ -62,9 +62,14 @@ export function validateConfig(raw: RawConfig): Config {
     );
   }
 
+  if (ui === undefined) {
+    // Unreachable: ui errors are pushed to `errors` and thrown above.
+    throw new ConfigValidationError("ui: failed to parse");
+  }
+
   return {
     default: raw.default,
-    ui: ui!,
+    ui,
     profiles,
   };
 }

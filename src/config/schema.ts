@@ -275,10 +275,25 @@ const envEntrySchema = z
     }
   })
   .transform((entry) => {
-    const keySpec =
-      entry.key !== undefined ? { key: entry.key } : { keyCmd: entry.key_cmd! };
-    const valSpec =
-      entry.val !== undefined ? { val: entry.val } : { valCmd: entry.val_cmd! };
+    // superRefine above guarantees exactly-one-of and string types,
+    // but narrow at runtime so the transform is type-safe on its own.
+    let keySpec: { key: string } | { keyCmd: string };
+    if (typeof entry.key === "string") {
+      keySpec = { key: entry.key };
+    } else if (typeof entry.key_cmd === "string") {
+      keySpec = { keyCmd: entry.key_cmd };
+    } else {
+      throw new Error("env entry: missing key/key_cmd after refine");
+    }
+
+    let valSpec: { val: string } | { valCmd: string };
+    if (typeof entry.val === "string") {
+      valSpec = { val: entry.val };
+    } else if (typeof entry.val_cmd === "string") {
+      valSpec = { valCmd: entry.val_cmd };
+    } else {
+      throw new Error("env entry: missing val/val_cmd after refine");
+    }
     const mode = (entry.mode ?? "set") as EnvMode;
     return {
       ...keySpec,
