@@ -25,12 +25,12 @@ import type {
   ProcessSpawnEffect,
   ReadinessCheck,
   ResourceEffect,
+  StageInput,
   StagePlan,
   SymlinkEffect,
   UnixListenerEffect,
   WaitForReadyEffect,
 } from "./types.ts";
-import type { StageInput } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Type import verification — these tests confirm that types are importable

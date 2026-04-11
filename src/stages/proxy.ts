@@ -10,6 +10,10 @@
  */
 
 import * as path from "node:path";
+import { resolveNotifyBackend } from "../lib/notify_utils.ts";
+import { logInfo } from "../log.ts";
+import { generateSessionToken as defaultGenerateToken } from "../network/protocol.ts";
+import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type {
   HostEnv,
   PlanStage,
@@ -17,10 +21,6 @@ import type {
   StageInput,
   StagePlan,
 } from "../pipeline/types.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
-import { resolveNotifyBackend } from "../lib/notify_utils.ts";
-import { generateSessionToken as defaultGenerateToken } from "../network/protocol.ts";
-import { logInfo } from "../log.ts";
 
 const ENVOY_IMAGE = "envoyproxy/envoy:v1.37.1";
 const ENVOY_CONTAINER_NAME = "nas-envoy-shared";

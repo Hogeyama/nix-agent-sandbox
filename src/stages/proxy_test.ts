@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * ProxyStage unit テスト（Docker 不要）
  *
@@ -14,6 +15,18 @@ import {
  * Envoy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
+import type { Config, Profile } from "../config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "../config/types.ts";
+import type {
+  HostEnv,
+  PriorStageOutputs,
+  ProbeResults,
+  StageInput,
+} from "../pipeline/types.ts";
 import {
   buildNetworkRuntimePaths,
   createProxyStage,
@@ -21,18 +34,6 @@ import {
   parseDindContainerName,
   replaceNetwork,
 } from "./proxy.ts";
-import {
-  DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
-  DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import type { Config, Profile } from "../config/types.ts";
-import type {
-  HostEnv,
-  PriorStageOutputs,
-  ProbeResults,
-  StageInput,
-} from "../pipeline/types.ts";
 
 const DEFAULT_PROMPT = {
   enable: false,

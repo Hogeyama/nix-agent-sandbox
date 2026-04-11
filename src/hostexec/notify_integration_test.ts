@@ -7,8 +7,6 @@ import {
   expect,
   test,
 } from "bun:test";
-import { notifyHostExecPendingRequest } from "./notify.ts";
-import { _resetNotifySendCache } from "../lib/notify_utils.ts";
 import {
   chmod,
   mkdtemp,
@@ -19,6 +17,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { _resetNotifySendCache } from "../lib/notify_utils.ts";
+import { notifyHostExecPendingRequest } from "./notify.ts";
 
 const TEST_PENDING = {
   version: 1 as const,

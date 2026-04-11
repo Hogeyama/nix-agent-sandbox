@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
+import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import { NixDetectStage } from "./nix_detect.ts";
-import type { Config, Profile } from "../config/types.ts";
 import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import { NixDetectStage } from "./nix_detect.ts";
 
 function makeProfile(nixEnable: boolean | "auto"): Profile {
   return {

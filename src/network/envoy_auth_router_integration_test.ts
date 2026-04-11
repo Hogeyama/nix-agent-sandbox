@@ -7,18 +7,18 @@ import {
   expect,
   test,
 } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import net from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { SessionBroker } from "./broker.ts";
 import { serveAuthRouter } from "./envoy_auth_router.ts";
+import { hashToken } from "./protocol.ts";
 import {
   brokerSocketPath,
   resolveNetworkRuntimePaths,
   writeSessionRegistry,
 } from "./registry.ts";
-import { hashToken } from "./protocol.ts";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import net from "node:net";
 
 interface RawHttpResponse {
   status: number;

@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * Tests for validateConfig function: general config validation.
  * Split from the original monolithic file — covers "validate:" and "validateConfig:" test cases.
@@ -16,9 +17,9 @@ import {
  *   - schema_test.ts — profileSchema tests
  */
 
-import { ConfigValidationError, validateConfig } from "./validate.ts";
-import { DEFAULT_DBUS_CONFIG, DEFAULT_DISPLAY_CONFIG } from "./types.ts";
 import type { RawConfig } from "./types.ts";
+import { DEFAULT_DBUS_CONFIG, DEFAULT_DISPLAY_CONFIG } from "./types.ts";
+import { type ConfigValidationError, validateConfig } from "./validate.ts";
 
 // ---------------------------------------------------------------------------
 // validate tests

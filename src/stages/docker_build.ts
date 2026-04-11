@@ -5,19 +5,19 @@
  * ビルドは docker-image-build effect。
  */
 
+import {
+  computeEmbedHash,
+  dockerImageExists,
+  getImageLabel,
+} from "../docker/client.ts";
+import { resolveAssetDir } from "../lib/asset.ts";
+import { logInfo, logWarn } from "../log.ts";
 import type {
   DockerImageBuildEffect,
   PlanStage,
   StageInput,
   StagePlan,
 } from "../pipeline/types.ts";
-import {
-  computeEmbedHash,
-  dockerImageExists,
-  getImageLabel,
-} from "../docker/client.ts";
-import { logInfo, logWarn } from "../log.ts";
-import { resolveAssetDir } from "../lib/asset.ts";
 
 // ---------------------------------------------------------------------------
 // Embedded build asset groups

@@ -1,8 +1,4 @@
 import * as path from "node:path";
-import type {
-  HostExecPendingEntry,
-  HostExecSessionRegistryEntry,
-} from "./types.ts";
 import { defaultRuntimeDir, ensureDir } from "../lib/fs_utils.ts";
 import {
   type BaseRuntimePaths,
@@ -11,6 +7,10 @@ import {
   listPendingEntries as genericListPendingEntries,
   readSessionRegistry as genericReadSessionRegistry,
 } from "../lib/runtime_registry.ts";
+import type {
+  HostExecPendingEntry,
+  HostExecSessionRegistryEntry,
+} from "./types.ts";
 
 // Re-export generic functions with domain-specific names.
 export {

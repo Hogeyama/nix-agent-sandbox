@@ -3,16 +3,16 @@
  */
 
 import { loadConfig, resolveProfile } from "../config/load.ts";
+import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
+import { logInfo } from "../log.ts";
+import { executePlan, teardownHandles } from "../pipeline/effects.ts";
+import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
+import type { PriorStageOutputs } from "../pipeline/types.ts";
 import {
   createDockerBuildStage,
   resolveBuildProbes,
 } from "../stages/docker_build.ts";
-import { executePlan, teardownHandles } from "../pipeline/effects.ts";
-import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
-import { logInfo } from "../log.ts";
 import { exitOnCliError } from "./helpers.ts";
-import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
-import type { PriorStageOutputs } from "../pipeline/types.ts";
 
 export async function runRebuild(nasArgs: string[]): Promise<void> {
   const force = nasArgs.includes("--force") || nasArgs.includes("-f");

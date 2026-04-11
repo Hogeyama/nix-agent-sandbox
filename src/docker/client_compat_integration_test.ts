@@ -7,7 +7,6 @@ import {
   expect,
   test,
 } from "bun:test";
-import * as path from "node:path";
 import { Buffer } from "node:buffer";
 import {
   mkdir,
@@ -18,6 +17,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 
 interface CommandResult {
   code: number;

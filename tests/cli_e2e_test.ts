@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * CLI E2E tests
  *
@@ -17,25 +18,6 @@ import {
  * ignore: !dockerAvailable でガードされ、Docker 不在時はスキップされる。
  */
 
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  HostExecBroker,
-  sendHostExecBrokerRequest,
-} from "../src/hostexec/broker.ts";
-import {
-  hostExecBrokerSocketPath,
-  resolveHostExecRuntimePaths,
-  writeHostExecSessionRegistry,
-} from "../src/hostexec/registry.ts";
-import type { PendingListResponse } from "../src/hostexec/types.ts";
-import { sendBrokerRequest, SessionBroker } from "../src/network/broker.ts";
-import {
-  brokerSocketPath,
-  pendingSessionDir,
-  resolveNetworkRuntimePaths,
-  writeSessionRegistry,
-} from "../src/network/registry.ts";
 import {
   chmod,
   mkdir,
@@ -46,13 +28,32 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { appendAuditLog } from "../src/audit/store.ts";
+import {
+  HostExecBroker,
+  sendHostExecBrokerRequest,
+} from "../src/hostexec/broker.ts";
+import {
+  hostExecBrokerSocketPath,
+  resolveHostExecRuntimePaths,
+  writeHostExecSessionRegistry,
+} from "../src/hostexec/registry.ts";
+import type { PendingListResponse } from "../src/hostexec/types.ts";
+import { SessionBroker, sendBrokerRequest } from "../src/network/broker.ts";
 import {
   type AuthorizeRequest,
   type DecisionResponse,
   hashToken,
   type PendingEntry,
 } from "../src/network/protocol.ts";
-import { appendAuditLog } from "../src/audit/store.ts";
+import {
+  brokerSocketPath,
+  pendingSessionDir,
+  resolveNetworkRuntimePaths,
+  writeSessionRegistry,
+} from "../src/network/registry.ts";
 
 // ============================================================
 // Shared helpers

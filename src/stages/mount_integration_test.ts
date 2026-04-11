@@ -7,20 +7,20 @@ import {
   expect,
   test,
 } from "bun:test";
-import { createMountStage, resolveMountProbes } from "./mount.ts";
-import type { MountProbes } from "./mount.ts";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import type { Config, Profile } from "../config/types.ts";
-import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
-import { mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import type { MountProbes } from "./mount.ts";
+import { createMountStage, resolveMountProbes } from "./mount.ts";
 
 const baseProfile: Profile = {
   agent: "claude",

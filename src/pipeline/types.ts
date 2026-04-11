@@ -11,10 +11,10 @@ import type {
   HostExecConfig,
   Profile,
 } from "../config/types.ts";
+import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
 import type { ApprovalScope } from "../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
-import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 
 // ---------------------------------------------------------------------------
 // Host environment & probes

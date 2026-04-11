@@ -1,12 +1,12 @@
 import {
   type DockerContainerDetails,
+  type DockerNetworkDetails,
   dockerInspectContainer,
   dockerInspectNetwork,
   dockerInspectVolume,
   dockerListContainerNames,
   dockerListNetworkNames,
   dockerListVolumeNames,
-  type DockerNetworkDetails,
   dockerNetworkRemove,
   dockerRm,
   dockerStop,

@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * DindStage integration テスト（実 Docker 使用, DinD rootless 必須）
  *
@@ -14,22 +15,13 @@ import {
  * 対応していない環境では自動スキップする。
  */
 
+import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import { createDindStage } from "./dind.ts";
-import type { Config, Profile } from "../config/types.ts";
-import type {
-  DindSidecarEffect,
-  HostEnv,
-  ProbeResults,
-  StageInput,
-} from "../pipeline/types.ts";
-import { executeEffect, teardownHandles } from "../pipeline/effects.ts";
-import type { ResourceHandle } from "../pipeline/effects.ts";
 import {
   dockerIsRunning,
   dockerNetworkRemove,
@@ -37,6 +29,15 @@ import {
   dockerStop,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import type { ResourceHandle } from "../pipeline/effects.ts";
+import { executeEffect, teardownHandles } from "../pipeline/effects.ts";
+import type {
+  DindSidecarEffect,
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../pipeline/types.ts";
+import { createDindStage } from "./dind.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;

@@ -2,17 +2,16 @@
  * Docker effects: docker-image-build, docker-run-interactive.
  */
 
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { dockerBuild, dockerRun } from "../../docker/client.ts";
+import { logInfo } from "../../log.ts";
 import type {
   DockerImageBuildEffect,
   DockerRunInteractiveEffect,
 } from "../types.ts";
 import type { ResourceHandle } from "./types.ts";
-import { dockerBuild, dockerRun } from "../../docker/client.ts";
-import * as path from "node:path";
-import { logInfo } from "../../log.ts";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 
 export async function executeDockerImageBuild(
   effect: DockerImageBuildEffect,

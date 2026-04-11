@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * ProxyStage integration テスト（実 Docker daemon 必要）
  *
@@ -15,20 +16,6 @@ import {
  * proxy_stage_test.ts を参照。
  */
 
-import { buildNetworkRuntimePaths, createProxyStage } from "./proxy.ts";
-import {
-  DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
-  DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import type { Config, Profile } from "../config/types.ts";
-import type {
-  HostEnv,
-  PriorStageOutputs,
-  ProbeResults,
-  StageInput,
-} from "../pipeline/types.ts";
-import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import {
   chmod,
   mkdir,
@@ -38,12 +25,26 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import type { Config, Profile } from "../config/types.ts";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "../config/types.ts";
 import {
   dockerIsRunning,
   dockerNetworkRemove,
   dockerRm,
   dockerStop,
 } from "../docker/client.ts";
+import { executePlan, teardownHandles } from "../pipeline/effects.ts";
+import type {
+  HostEnv,
+  PriorStageOutputs,
+  ProbeResults,
+  StageInput,
+} from "../pipeline/types.ts";
+import { buildNetworkRuntimePaths, createProxyStage } from "./proxy.ts";
 
 const DEFAULT_PROMPT = {
   enable: false,

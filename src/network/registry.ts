@@ -1,5 +1,4 @@
 import * as path from "node:path";
-import type { PendingEntry, SessionRegistryEntry } from "./protocol.ts";
 import {
   defaultRuntimeDir,
   ensureDir,
@@ -15,6 +14,7 @@ import {
   listSessionRegistries as genericListSessionRegistries,
   readSessionRegistry as genericReadSessionRegistry,
 } from "../lib/runtime_registry.ts";
+import type { PendingEntry, SessionRegistryEntry } from "./protocol.ts";
 
 // Re-export generic functions that don't need return-type narrowing.
 export {

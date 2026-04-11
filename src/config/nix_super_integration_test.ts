@@ -7,16 +7,17 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * Integration tests: Nix ローカル設定が関数の場合に super でグローバル設定を受け取れる
  *
  * nix コマンドが必要。
  */
 
-import * as path from "node:path";
-import { loadConfig } from "./load.ts";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { loadConfig } from "./load.ts";
 
 /** 一時ディレクトリにグローバル(YAML) + ローカル(Nix) を配置してテスト */
 async function withNixLocalConfig(

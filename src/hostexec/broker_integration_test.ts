@@ -7,6 +7,10 @@ import {
   expect,
   test,
 } from "bun:test";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { queryAuditLogs } from "../audit/store.ts";
 import type { HostExecConfig } from "../config/types.ts";
 import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
 import {
@@ -19,10 +23,6 @@ import type {
   HostExecBrokerResponse,
   PendingListResponse,
 } from "./types.ts";
-import { queryAuditLogs } from "../audit/store.ts";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 
 type HostExecConfigOverrides = Omit<Partial<HostExecConfig>, "prompt"> & {
   prompt?: Partial<HostExecConfig["prompt"]>;

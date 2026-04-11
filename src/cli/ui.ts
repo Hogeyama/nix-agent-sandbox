@@ -2,15 +2,15 @@
  * nas ui サブコマンド
  */
 
-import { startServer } from "../ui/server.ts";
+import { loadConfig } from "../config/load.ts";
+import { DEFAULT_UI_CONFIG } from "../config/types.ts";
 import { stopUiDaemon } from "../ui/daemon.ts";
+import { startServer } from "../ui/server.ts";
 import {
   exitOnCliError,
   findFirstNonFlagArg,
   getFlagValue,
 } from "./helpers.ts";
-import { loadConfig } from "../config/load.ts";
-import { DEFAULT_UI_CONFIG } from "../config/types.ts";
 
 export async function runUiCommand(nasArgs: string[]): Promise<void> {
   const config = await loadConfig().catch(() => null);

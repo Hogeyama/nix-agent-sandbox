@@ -2,10 +2,9 @@
  * YAML 設定ファイルの読み込み
  */
 
-import * as path from "node:path";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 

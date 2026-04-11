@@ -1,5 +1,13 @@
-import * as path from "node:path";
 import { rm } from "node:fs/promises";
+import * as path from "node:path";
+import { appendAuditLog } from "../audit/store.ts";
+import type { AuditLogEntry } from "../audit/types.ts";
+import type {
+  HostExecConfig,
+  HostExecPromptScope,
+  HostExecRule,
+} from "../config/types.ts";
+import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import {
   connectUnix,
   createUnixServer,
@@ -9,31 +17,23 @@ import {
   writeJsonLine,
 } from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
-import { appendAuditLog } from "../audit/store.ts";
-import type { AuditLogEntry } from "../audit/types.ts";
-import type {
-  HostExecConfig,
-  HostExecPromptScope,
-  HostExecRule,
-} from "../config/types.ts";
-import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
-import { SecretStore } from "./secret_store.ts";
+import type { MatchContext } from "./match.ts";
+import { isRelativeHostExecArgv0, matchRule } from "./match.ts";
 import {
   closeNotification,
   notifyHostExecPendingRequest,
   type ResolvedNotifyBackend,
 } from "./notify.ts";
 import {
-  hostExecBrokerSocketPath,
   type HostExecRuntimePaths,
+  hostExecBrokerSocketPath,
   listHostExecPendingEntries,
   removeHostExecPendingDir,
   removeHostExecPendingEntry,
   removeHostExecSessionRegistry,
   writeHostExecPendingEntry,
 } from "./registry.ts";
-import { isRelativeHostExecArgv0, matchRule } from "./match.ts";
-import type { MatchContext } from "./match.ts";
+import { SecretStore } from "./secret_store.ts";
 import type {
   ExecuteRequest,
   HostExecBrokerMessage,

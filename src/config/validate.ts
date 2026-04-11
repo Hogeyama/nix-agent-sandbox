@@ -3,6 +3,8 @@
  */
 
 import { ZodError } from "zod";
+import { logWarn } from "../log.ts";
+import { formatZodError, profileSchema, uiSchema } from "./schema.ts";
 import type {
   Config,
   HostExecRule,
@@ -10,8 +12,6 @@ import type {
   RawConfig,
   RawProfile,
 } from "./types.ts";
-import { formatZodError, profileSchema, uiSchema } from "./schema.ts";
-import { logWarn } from "../log.ts";
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {

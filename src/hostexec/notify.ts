@@ -1,4 +1,3 @@
-import type { HostExecPendingEntry } from "./types.ts";
 import {
   type CliActionNotificationOptions,
   closeNotification,
@@ -8,6 +7,7 @@ import {
   tryDesktopNotification,
 } from "../lib/notify_utils.ts";
 import { ensureUiDaemon } from "../ui/daemon.ts";
+import type { HostExecPendingEntry } from "./types.ts";
 
 export type { ResolvedNotifyBackend };
 export { closeNotification };

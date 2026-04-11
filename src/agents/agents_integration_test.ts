@@ -8,20 +8,21 @@ import {
   test,
 } from "bun:test";
 import { statSync } from "node:fs";
+
 /**
  * エージェント設定関数のユニットテスト
  * configureClaude / configureCopilot / configureCodex
  */
 
-import { configureClaude, resolveClaudeProbes } from "./claude.ts";
-import type { ClaudeProbes } from "./claude.ts";
-import { configureCopilot, resolveCopilotProbes } from "./copilot.ts";
-import type { CopilotProbes } from "./copilot.ts";
-import { configureCodex, resolveCodexProbes } from "./codex.ts";
-import type { CodexProbes } from "./codex.ts";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ClaudeProbes } from "./claude.ts";
+import { configureClaude, resolveClaudeProbes } from "./claude.ts";
+import type { CodexProbes } from "./codex.ts";
+import { configureCodex, resolveCodexProbes } from "./codex.ts";
+import type { CopilotProbes } from "./copilot.ts";
+import { configureCopilot, resolveCopilotProbes } from "./copilot.ts";
 
 // ============================================================
 // テスト用ヘルパー

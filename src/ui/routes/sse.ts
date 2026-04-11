@@ -8,7 +8,6 @@
 
 const AUDIT_STREAM_LIMIT = 500;
 
-import { Router } from "../router.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   getAuditLogs,
@@ -16,6 +15,7 @@ import {
   getNetworkPending,
   getSessions,
 } from "../data.ts";
+import { Router } from "../router.ts";
 
 export function createSseRoutes(ctx: UiDataContext): Router {
   const app = new Router();

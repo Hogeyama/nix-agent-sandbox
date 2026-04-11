@@ -5,6 +5,7 @@
  * runtime helpers live in separate modules.
  */
 
+import { logInfo, logWarn } from "../log.ts";
 import {
   dockerContainerIp,
   dockerExec,
@@ -28,7 +29,6 @@ import {
   NAS_MANAGED_VALUE,
   NAS_SHARED_LABEL,
 } from "./nas_resources.ts";
-import { logInfo, logWarn } from "../log.ts";
 
 // ---------------------------------------------------------------------------
 // Constants

@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from "preact/hooks";
-import { api, type AuditLogEntry, type SessionsData } from "../api.ts";
+import { type AuditLogEntry, api, type SessionsData } from "../api.ts";
 
 export interface AuditTabProps {
   /** Latest entries pushed by the SSE stream (most-recent window). */

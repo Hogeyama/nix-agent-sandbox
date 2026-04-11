@@ -3,8 +3,8 @@
  * Used by both network/notify.ts and hostexec/notify.ts.
  */
 
-import * as path from "node:path";
 import { statSync } from "node:fs";
+import * as path from "node:path";
 import { logWarn } from "../log.ts";
 import { resolveAsset } from "./asset.ts";
 
@@ -278,9 +278,7 @@ function findInPath(cmd: string): boolean {
     try {
       statSync(`${dir}/${cmd}`);
       return true;
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   return false;
 }

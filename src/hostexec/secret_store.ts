@@ -1,5 +1,5 @@
-import * as path from "node:path";
 import { readFile, stat } from "node:fs/promises";
+import * as path from "node:path";
 import type { SecretConfig } from "../config/types.ts";
 
 export interface SecretStoreOptions {

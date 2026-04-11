@@ -5,12 +5,12 @@
 
 import { expect, test } from "bun:test";
 import { applyWorktreeOverride, parseProfileAndWorktreeArgs } from "./cli.ts";
+import type { Profile } from "./config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
 } from "./config/types.ts";
-import type { Profile } from "./config/types.ts";
 
 const baseProfile: Profile = {
   agent: "claude",

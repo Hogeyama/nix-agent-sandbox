@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
-import { PendingTab } from "./components/PendingTab.tsx";
-import { ContainersTab } from "./components/ContainersTab.tsx";
-import { AuditTab } from "./components/AuditTab.tsx";
-import { useSSE } from "./hooks/useSSE.ts";
-import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import type {
   AuditLogEntry,
   HostExecPendingItem,
   NetworkPendingItem,
   SessionsData,
 } from "./api.ts";
+import { AuditTab } from "./components/AuditTab.tsx";
+import { ContainersTab } from "./components/ContainersTab.tsx";
+import { PendingTab } from "./components/PendingTab.tsx";
+import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
+import { useSSE } from "./hooks/useSSE.ts";
 
 type TabId = "pending" | "containers" | "audit";
 

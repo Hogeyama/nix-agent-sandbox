@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { DeepLink } from "../App.tsx";
 import {
   api,
   type HostExecPendingItem,
   type NetworkPendingItem,
 } from "../api.ts";
-import type { DeepLink } from "../App.tsx";
 
 // FIXME: バックエンドからHOMEを渡すようにして正確に判定する
 function shortenHome(path: string): string {

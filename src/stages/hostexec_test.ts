@@ -8,8 +8,8 @@ import {
   test,
 } from "bun:test";
 import * as path from "node:path";
-import { DEFAULT_DISPLAY_CONFIG, DEFAULT_UI_CONFIG } from "../config/types.ts";
 import type { Config, Profile } from "../config/types.ts";
+import { DEFAULT_DISPLAY_CONFIG, DEFAULT_UI_CONFIG } from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,

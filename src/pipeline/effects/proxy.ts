@@ -2,8 +2,7 @@
  * Proxy session effect.
  */
 
-import type { ProxySessionEffect } from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import {
   dockerContainerExists,
   dockerIsRunning,
@@ -22,18 +21,19 @@ import {
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
 } from "../../docker/nas_resources.ts";
+import { resolveAsset } from "../../lib/asset.ts";
+import { logInfo, logWarn } from "../../log.ts";
 import { SessionBroker } from "../../network/broker.ts";
 import { ensureAuthRouterDaemon } from "../../network/envoy_auth_router.ts";
+import { generateSessionToken, hashToken } from "../../network/protocol.ts";
 import {
   gcNetworkRuntime,
   removePendingDir,
   removeSessionRegistry,
   writeSessionRegistry,
 } from "../../network/registry.ts";
-import { generateSessionToken, hashToken } from "../../network/protocol.ts";
-import { logInfo, logWarn } from "../../log.ts";
-import { chmod, readFile, writeFile } from "node:fs/promises";
-import { resolveAsset } from "../../lib/asset.ts";
+import type { ProxySessionEffect } from "../types.ts";
+import type { ResourceHandle } from "./types.ts";
 
 interface ProxySessionNetworkHandle {
   close(): Promise<void>;

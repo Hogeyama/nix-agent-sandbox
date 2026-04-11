@@ -4,12 +4,6 @@
  * docker-run-interactive effect を返す。
  */
 
-import type {
-  DockerRunInteractiveEffect,
-  PlanStage,
-  StageInput,
-  StagePlan,
-} from "../pipeline/types.ts";
 import {
   NAS_KIND_AGENT,
   NAS_KIND_LABEL,
@@ -18,6 +12,12 @@ import {
   NAS_PWD_LABEL,
 } from "../docker/nas_resources.ts";
 import { logInfo } from "../log.ts";
+import type {
+  DockerRunInteractiveEffect,
+  PlanStage,
+  StageInput,
+  StagePlan,
+} from "../pipeline/types.ts";
 
 // ---------------------------------------------------------------------------
 // LaunchStage (PlanStage)

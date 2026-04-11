@@ -2,11 +2,11 @@
  * Docker CLI ラッパー
  */
 
-import { $ } from "bun";
-import type { DockerLabels } from "./nas_resources.ts";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
+import { $ } from "bun";
 import { resolveAssetDir } from "../lib/asset.ts";
+import type { DockerLabels } from "./nas_resources.ts";
 
 const EMBEDDED_ASSET_GROUPS = [
   {

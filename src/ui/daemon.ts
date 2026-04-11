@@ -3,10 +3,10 @@
  * Auto-starts the UI server when a notification needs to be sent.
  */
 
-import * as path from "node:path";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { logInfo, logWarn } from "../log.ts";
+import * as path from "node:path";
 import { resolveNasCommand } from "../lib/notify_utils.ts";
+import { logInfo, logWarn } from "../log.ts";
 
 const DEFAULT_UI_PORT = 3939;
 const HEALTH_TIMEOUT_MS = 2000;

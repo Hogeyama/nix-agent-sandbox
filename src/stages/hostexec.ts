@@ -6,6 +6,13 @@
  */
 
 import * as path from "node:path";
+import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
+import {
+  isBareCommandHostExecArgv0,
+  isRelativeHostExecArgv0,
+} from "../hostexec/match.ts";
+import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
+import { resolveNotifyBackend } from "../lib/notify_utils.ts";
 import type {
   HostEnv,
   PlanStage,
@@ -13,13 +20,6 @@ import type {
   StageInput,
   StagePlan,
 } from "../pipeline/types.ts";
-import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
-import { resolveNotifyBackend } from "../lib/notify_utils.ts";
-import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
-import {
-  isBareCommandHostExecArgv0,
-  isRelativeHostExecArgv0,
-} from "../hostexec/match.ts";
 
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";

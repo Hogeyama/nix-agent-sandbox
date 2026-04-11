@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { appendAuditLog, queryAuditLogs, resolveAuditDir } from "./store.ts";
-import type { AuditLogEntry } from "./types.ts";
-import * as path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { appendAuditLog, queryAuditLogs, resolveAuditDir } from "./store.ts";
+import type { AuditLogEntry } from "./types.ts";
 
 function makeEntry(overrides: Partial<AuditLogEntry> = {}): AuditLogEntry {
   return {

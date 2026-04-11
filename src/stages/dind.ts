@@ -16,13 +16,13 @@
  * 4. エージェントコンテナをカスタムネットワーク上で起動し、DNS でサイドカーに接続
  */
 
-import type { PlanStage, StageInput, StagePlan } from "../pipeline/types.ts";
 import {
   DIND_INTERNAL_PORT,
   SHARED_CONTAINER_NAME,
   SHARED_TMP_MOUNT_PATH,
 } from "../docker/dind.ts";
 import { logInfo } from "../log.ts";
+import type { PlanStage, StageInput, StagePlan } from "../pipeline/types.ts";
 
 const SHARED_NETWORK_NAME = "nas-dind-shared";
 const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";

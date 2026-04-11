@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * DindStage unit テスト（Docker 不要）
  *
@@ -14,20 +15,20 @@ import {
  * 実 Docker を使う integration テストは dind_stage_integration_test.ts を参照。
  */
 
+import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import { buildDindSidecarArgs, createDindStage } from "./dind.ts";
-import type { Config, Profile } from "../config/types.ts";
 import type {
   DindSidecarEffect,
   HostEnv,
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
+import { buildDindSidecarArgs, createDindStage } from "./dind.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;

@@ -2,11 +2,10 @@
  * git worktree 関連のヘルパー関数
  */
 
-import { $ } from "bun";
-import * as path from "node:path";
-import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
-import { mkdtemp } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { $ } from "bun";
 
 export async function getGitRoot(dir: string): Promise<string> {
   try {

@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * Container integration tests: Docker イメージと entrypoint の実起動
  *
@@ -25,17 +26,6 @@ import {
  *   /tmp 直下を使用する。
  */
 
-import * as path from "node:path";
-import {
-  DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
-  DEFAULT_NETWORK_CONFIG,
-  DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
-import { executePlan, teardownHandles } from "../pipeline/effects.ts";
-import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
-import type { PriorStageOutputs } from "../pipeline/types.ts";
 import {
   chmod,
   mkdir,
@@ -46,6 +36,17 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import * as path from "node:path";
+import {
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "../config/types.ts";
+import { executePlan, teardownHandles } from "../pipeline/effects.ts";
+import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
+import type { PriorStageOutputs } from "../pipeline/types.ts";
+import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
 
 const IMAGE_NAME = "nas-sandbox";
 

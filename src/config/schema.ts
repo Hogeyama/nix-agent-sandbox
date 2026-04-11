@@ -42,11 +42,9 @@ const nonEmptyString = z
   .refine((s) => s.trim() !== "", { message: "must be a non-empty string" });
 
 function parsePositiveInt(_fieldName: string) {
-  return z
-    .number()
-    .refine((n) => Number.isInteger(n) && n > 0, {
-      message: "must be a positive integer",
-    });
+  return z.number().refine((n) => Number.isInteger(n) && n > 0, {
+    message: "must be a positive integer",
+  });
 }
 
 // ---------------------------------------------------------------------------

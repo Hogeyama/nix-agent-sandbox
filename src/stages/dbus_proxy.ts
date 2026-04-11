@@ -5,14 +5,14 @@
  * ホストの D-Bus セッションバスにフィルタ付きでアクセスできるようにする。
  */
 
+import type { DbusRuleConfig } from "../config/types.ts";
+import { logWarn } from "../log.ts";
 import type {
   HostEnv,
   PlanStage,
   StageInput,
   StagePlan,
 } from "../pipeline/types.ts";
-import type { DbusRuleConfig } from "../config/types.ts";
-import { logWarn } from "../log.ts";
 
 const SOCKET_READY_TIMEOUT_MS = 5_000;
 const SOCKET_READY_POLL_MS = 50;

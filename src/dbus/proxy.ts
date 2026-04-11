@@ -5,9 +5,9 @@
  * proxy socket to become ready before returning a handle.
  */
 
-import { gcDbusRuntime } from "./registry.ts";
-import { logInfo, logWarn } from "../log.ts";
 import { chmod, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { logInfo, logWarn } from "../log.ts";
+import { gcDbusRuntime } from "./registry.ts";
 
 // ---------------------------------------------------------------------------
 // Types

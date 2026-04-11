@@ -2,15 +2,15 @@
  * WorktreeStage — git worktree のライフサイクル管理
  */
 
-import { $ } from "bun";
-import * as path from "node:path";
 import { stat, writeFile } from "node:fs/promises";
+import * as path from "node:path";
+import { $ } from "bun";
+import { logInfo } from "../../log.ts";
 import type {
   ProceduralResult,
   ProceduralStage,
   StageInput,
 } from "../../pipeline/types.ts";
-import { logInfo } from "../../log.ts";
 import {
   findWorktreeForBranch,
   generateBranchName,
@@ -455,10 +455,7 @@ export class WorktreeStage implements ProceduralStage {
         console.log("[nas] Skipping empty cherry-pick (already applied).");
         try {
           await $`git -C ${worktree} cherry-pick --skip`;
-        } catch {
-          // --skip 後にまた空コミットが来る場合があるのでループを続行
-          continue;
-        }
+        } catch {}
       } else {
         // 変更がある = 実際のコンフリクト
         return false;

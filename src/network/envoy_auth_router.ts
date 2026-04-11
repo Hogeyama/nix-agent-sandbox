@@ -1,12 +1,12 @@
-import { writeFile } from "node:fs/promises";
-import { rm } from "node:fs/promises";
-import { chmod } from "node:fs/promises";
+import { chmod, rm, writeFile } from "node:fs/promises";
 import {
   connectUnix,
   createUnixServer,
   type Server,
   type Socket,
 } from "../lib/unix_socket.ts";
+import { logInfo } from "../log.ts";
+import { sendBrokerRequest } from "./broker.ts";
 import {
   type AuthorizeRequest,
   type DecisionResponse,
@@ -21,8 +21,6 @@ import {
   readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "./registry.ts";
-import { sendBrokerRequest } from "./broker.ts";
-import { logInfo } from "../log.ts";
 
 export async function ensureAuthRouterDaemon(
   paths: NetworkRuntimePaths,

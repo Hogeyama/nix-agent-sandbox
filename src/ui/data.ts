@@ -3,6 +3,37 @@
  */
 
 import { readdir } from "node:fs/promises";
+import { queryAuditLogs, resolveAuditDir } from "../audit/store.ts";
+import type { AuditLogEntry, AuditLogFilter } from "../audit/types.ts";
+import type { HostExecPromptScope } from "../config/types.ts";
+import type { ContainerCleanResult } from "../container_clean.ts";
+import { cleanNasContainers } from "../container_clean.ts";
+import type { DockerContainerDetails } from "../docker/client.ts";
+import {
+  dockerInspectContainer,
+  dockerListContainerNames,
+  dockerStop,
+} from "../docker/client.ts";
+import { isNasManagedContainer } from "../docker/nas_resources.ts";
+import { sendHostExecBrokerRequest } from "../hostexec/broker.ts";
+import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
+import {
+  gcHostExecRuntime,
+  listHostExecPendingEntries,
+  readHostExecSessionRegistry,
+  resolveHostExecRuntimePaths,
+} from "../hostexec/registry.ts";
+import type {
+  HostExecPendingEntry,
+  HostExecSessionRegistryEntry,
+} from "../hostexec/types.ts";
+import { sendBrokerRequest } from "../network/broker.ts";
+import type {
+  ApprovalScope,
+  PendingEntry,
+  SessionRegistryEntry,
+} from "../network/protocol.ts";
+import type { NetworkRuntimePaths } from "../network/registry.ts";
 import {
   gcNetworkRuntime,
   listPendingEntries,
@@ -10,38 +41,6 @@ import {
   readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
-import type {
-  ApprovalScope,
-  PendingEntry,
-  SessionRegistryEntry,
-} from "../network/protocol.ts";
-import { sendBrokerRequest } from "../network/broker.ts";
-import {
-  gcHostExecRuntime,
-  listHostExecPendingEntries,
-  readHostExecSessionRegistry,
-  resolveHostExecRuntimePaths,
-} from "../hostexec/registry.ts";
-import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
-import type {
-  HostExecPendingEntry,
-  HostExecSessionRegistryEntry,
-} from "../hostexec/types.ts";
-import { sendHostExecBrokerRequest } from "../hostexec/broker.ts";
-import type { HostExecPromptScope } from "../config/types.ts";
-import {
-  dockerInspectContainer,
-  dockerListContainerNames,
-  dockerStop,
-} from "../docker/client.ts";
-import type { DockerContainerDetails } from "../docker/client.ts";
-import { isNasManagedContainer } from "../docker/nas_resources.ts";
-import { cleanNasContainers } from "../container_clean.ts";
-import type { ContainerCleanResult } from "../container_clean.ts";
-import { queryAuditLogs, resolveAuditDir } from "../audit/store.ts";
-import type { AuditLogEntry } from "../audit/types.ts";
-import type { AuditLogFilter } from "../audit/types.ts";
 
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;

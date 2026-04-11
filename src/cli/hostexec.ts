@@ -3,6 +3,7 @@
  */
 
 import { loadConfig, resolveProfile } from "../config/load.ts";
+import type { HostExecPromptScope } from "../config/types.ts";
 import { sendHostExecBrokerRequest } from "../hostexec/broker.ts";
 import { buildArgsString, matchRule } from "../hostexec/match.ts";
 import {
@@ -10,10 +11,9 @@ import {
   readHostExecSessionRegistry,
   resolveHostExecRuntimePaths,
 } from "../hostexec/registry.ts";
-import type { HostExecPromptScope } from "../config/types.ts";
-import { getFlagValue, removeFirstOccurrence } from "./helpers.ts";
 import type { ApprovalAdapter, DecisionMessage } from "./approval_command.ts";
 import { handleApprovalSubcommand } from "./approval_command.ts";
+import { getFlagValue, removeFirstOccurrence } from "./helpers.ts";
 
 export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((arg) => !arg.startsWith("-"));

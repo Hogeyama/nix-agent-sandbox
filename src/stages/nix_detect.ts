@@ -2,8 +2,8 @@
  * ホスト Nix 検出 + nix develop 統合 (PlanStage)
  */
 
-import type { PlanStage, StageInput, StagePlan } from "../pipeline/types.ts";
 import { logInfo } from "../log.ts";
+import type { PlanStage, StageInput, StagePlan } from "../pipeline/types.ts";
 
 export const NixDetectStage: PlanStage = {
   kind: "plan",

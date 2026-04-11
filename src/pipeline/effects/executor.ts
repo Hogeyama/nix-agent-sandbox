@@ -2,23 +2,23 @@
  * Effect executor: executeEffect, executePlan, teardownHandles.
  */
 
+import { logWarn } from "../../log.ts";
 import type { ResourceEffect, StagePlan } from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+import { executeDbusProxy } from "./dbus.ts";
+import { executeDindSidecar } from "./dind.ts";
+import {
+  executeDockerImageBuild,
+  executeDockerRunInteractive,
+} from "./docker.ts";
 import {
   executeDirectoryCreate,
   executeFileWrite,
   executeSymlink,
 } from "./fs.ts";
-import { executeDindSidecar } from "./dind.ts";
-import { executeDbusProxy } from "./dbus.ts";
 import { executeProcessSpawn, executeWaitForReady } from "./process.ts";
-import { executeUnixListener } from "./unix_listener.ts";
 import { executeProxySession } from "./proxy.ts";
-import {
-  executeDockerImageBuild,
-  executeDockerRunInteractive,
-} from "./docker.ts";
-import { logWarn } from "../../log.ts";
+import type { ResourceHandle } from "./types.ts";
+import { executeUnixListener } from "./unix_listener.ts";
 
 /** Execute a single ResourceEffect and return a handle for teardown. */
 export async function executeEffect(

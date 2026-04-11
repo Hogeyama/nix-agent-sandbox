@@ -2,44 +2,44 @@
  * CLI エントリポイント
  */
 
-import { loadConfig, resolveProfile } from "./config/load.ts";
-import { runPipeline } from "./pipeline/pipeline.ts";
-import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
-import type { PriorStageOutputs } from "./pipeline/types.ts";
-import { WorktreeStage } from "./stages/worktree.ts";
-import { NixDetectStage } from "./stages/nix_detect.ts";
-import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
-import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
-import { createHostExecStage } from "./stages/hostexec.ts";
-import { createDindStage } from "./stages/dind.ts";
-import { createProxyStage } from "./stages/proxy.ts";
-import {
-  createDockerBuildStage,
-  resolveBuildProbes,
-} from "./stages/docker_build.ts";
-import { createLaunchStage } from "./stages/launch.ts";
-import { setLogLevel } from "./log.ts";
-import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
+import pkg from "../package.json";
 import {
   applyWorktreeOverride,
   parseProfileAndWorktreeArgs,
 } from "./cli/args.ts";
+import { runAuditCommand } from "./cli/audit.ts";
+import { runContainerCommand } from "./cli/container.ts";
 import {
   exitOnCliError,
   findFirstNonFlagArg,
   parseLogLevel,
   removeFirstOccurrence,
 } from "./cli/helpers.ts";
-import { printUsage } from "./cli/usage.ts";
-import { runRebuild } from "./cli/rebuild.ts";
-import { runWorktreeCommand } from "./cli/worktree.ts";
-import { runContainerCommand } from "./cli/container.ts";
-import { runNetworkCommand } from "./cli/network.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
+import { runNetworkCommand } from "./cli/network.ts";
+import { runRebuild } from "./cli/rebuild.ts";
 import { runUiCommand } from "./cli/ui.ts";
-import { runAuditCommand } from "./cli/audit.ts";
+import { printUsage } from "./cli/usage.ts";
+import { runWorktreeCommand } from "./cli/worktree.ts";
+import { loadConfig, resolveProfile } from "./config/load.ts";
+import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
+import { setLogLevel } from "./log.ts";
+import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
+import { runPipeline } from "./pipeline/pipeline.ts";
+import type { PriorStageOutputs } from "./pipeline/types.ts";
+import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
+import { createDindStage } from "./stages/dind.ts";
+import {
+  createDockerBuildStage,
+  resolveBuildProbes,
+} from "./stages/docker_build.ts";
+import { createHostExecStage } from "./stages/hostexec.ts";
+import { createLaunchStage } from "./stages/launch.ts";
+import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
+import { NixDetectStage } from "./stages/nix_detect.ts";
+import { createProxyStage } from "./stages/proxy.ts";
+import { WorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
-import pkg from "../package.json";
 
 const VERSION: string = pkg.version;
 

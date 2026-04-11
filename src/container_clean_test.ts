@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
+import {
+  type ContainerCleanBackend,
+  cleanNasContainers,
+  isUnusedNasSidecar,
+} from "./container_clean.ts";
 import type {
   DockerContainerDetails,
   DockerNetworkDetails,
   DockerVolumeDetails,
 } from "./docker/client.ts";
-import {
-  cleanNasContainers,
-  type ContainerCleanBackend,
-  isUnusedNasSidecar,
-} from "./container_clean.ts";
 import {
   isNasManagedNetwork,
   isNasManagedSidecar,

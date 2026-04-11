@@ -6,6 +6,13 @@
  */
 
 import * as path from "node:path";
+import type { ClaudeProbes } from "../agents/claude.ts";
+import { configureClaude } from "../agents/claude.ts";
+import type { CodexProbes } from "../agents/codex.ts";
+import { configureCodex } from "../agents/codex.ts";
+import type { CopilotProbes } from "../agents/copilot.ts";
+import { configureCopilot } from "../agents/copilot.ts";
+import { logWarn } from "../log.ts";
 import type {
   DirectoryCreateEffect,
   PlanStage,
@@ -13,22 +20,15 @@ import type {
   StageInput,
   StagePlan,
 } from "../pipeline/types.ts";
-import { logWarn } from "../log.ts";
-import { configureClaude } from "../agents/claude.ts";
-import { configureCopilot } from "../agents/copilot.ts";
-import { configureCodex } from "../agents/codex.ts";
-import type { ClaudeProbes } from "../agents/claude.ts";
-import type { CopilotProbes } from "../agents/copilot.ts";
-import type { CodexProbes } from "../agents/codex.ts";
 import type { MountProbes } from "./mount_probes.ts";
 
-// Re-export probe types and resolver for backward compatibility
-export { resolveMountProbes } from "./mount_probes.ts";
 export type {
   MountProbes,
   ResolvedEnvEntry,
   ResolvedExtraMount,
 } from "./mount_probes.ts";
+// Re-export probe types and resolver for backward compatibility
+export { resolveMountProbes } from "./mount_probes.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

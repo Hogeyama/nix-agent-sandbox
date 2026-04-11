@@ -1,13 +1,12 @@
+import { readdir, rm } from "node:fs/promises";
 import * as path from "node:path";
-import { readdir } from "node:fs/promises";
-import { logInfo } from "../log.ts";
-import { rm } from "node:fs/promises";
 import {
   defaultRuntimeDir,
   ensureDir,
   isPidAlive,
   readPid,
 } from "../lib/fs_utils.ts";
+import { logInfo } from "../log.ts";
 
 export interface DbusRuntimePaths {
   runtimeDir: string;

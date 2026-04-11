@@ -7,10 +7,10 @@ import {
   expect,
   test,
 } from "bun:test";
-import { resolveNetworkRuntimePaths } from "./registry.ts";
 import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolveNetworkRuntimePaths } from "./registry.ts";
 
 test("resolveNetworkRuntimePaths: normalizes existing directory modes", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "nas-registry-"));

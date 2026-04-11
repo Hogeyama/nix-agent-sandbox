@@ -7,11 +7,11 @@ import {
   expect,
   test,
 } from "bun:test";
-import { executeEffect, executePlan, teardownHandles } from "./effects.ts";
-import type { ResourceEffect, StagePlan } from "./types.ts";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { executeEffect, executePlan, teardownHandles } from "./effects.ts";
+import type { ResourceEffect, StagePlan } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Helper: create a unique temp directory for test isolation

@@ -4,8 +4,8 @@
  * Used by both network/registry.ts and hostexec/registry.ts.
  */
 
-import * as path from "node:path";
 import { readdir } from "node:fs/promises";
+import * as path from "node:path";
 import {
   atomicWriteJson,
   ensureDir,

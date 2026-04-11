@@ -2,10 +2,10 @@
  * Filesystem effects: directory-create, file-write, symlink.
  */
 
+import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { logWarn } from "../../log.ts";
 import type { ResourceEffect } from "../types.ts";
 import type { ResourceHandle } from "./types.ts";
-import { logWarn } from "../../log.ts";
-import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 
 export async function executeDirectoryCreate(
   effect: Extract<ResourceEffect, { kind: "directory-create" }>,

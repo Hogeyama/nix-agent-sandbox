@@ -9,17 +9,17 @@ import {
   spyOn,
   test,
 } from "bun:test";
+
 /**
  * 設定ファイルの読み込み・検索・マージの統合テスト
  *
  * 実際のファイルシステム上に YAML ファイルを配置して loadConfig / resolveProfile を検証する。
  */
 
-import * as path from "node:path";
-import { loadConfig, loadGlobalConfig, resolveProfile } from "./load.ts";
-import { validateConfig } from "./validate.ts";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { loadConfig, loadGlobalConfig, resolveProfile } from "./load.ts";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -28,6 +28,7 @@ import {
   DEFAULT_UI_CONFIG,
   type RawConfig,
 } from "./types.ts";
+import { validateConfig } from "./validate.ts";
 
 /** 一時ディレクトリに設定ファイルを配置してテストを実行するヘルパー */
 async function withTempConfig(

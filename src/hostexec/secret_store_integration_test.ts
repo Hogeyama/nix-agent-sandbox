@@ -7,10 +7,10 @@ import {
   expect,
   test,
 } from "bun:test";
-import { parseDotEnv, resolveSecret, SecretStore } from "./secret_store.ts";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseDotEnv, resolveSecret, SecretStore } from "./secret_store.ts";
 
 test("parseDotEnv: parses export and quoted values", () => {
   const parsed = parseDotEnv(

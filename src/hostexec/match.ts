@@ -1,5 +1,5 @@
-import type { HostExecRule } from "../config/types.ts";
 import * as path from "node:path";
+import type { HostExecRule } from "../config/types.ts";
 
 export interface MatchResult {
   rule: HostExecRule;

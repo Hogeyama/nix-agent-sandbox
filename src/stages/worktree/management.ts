@@ -2,8 +2,8 @@
  * worktree の一覧取得・クリーンアップ（サブコマンド用）
  */
 
-import { $ } from "bun";
 import * as path from "node:path";
+import { $ } from "bun";
 import { getGitRoot } from "./git_helpers.ts";
 
 export interface WorktreeEntry {

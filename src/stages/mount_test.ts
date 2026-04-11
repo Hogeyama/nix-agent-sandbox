@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * MountStage の純粋ロジックテスト (unit test)
  *
@@ -14,28 +15,28 @@ import {
  * リテラルで組み立てて渡す。実行環境に依存しない。
  */
 
+import type { ClaudeProbes } from "../agents/claude.ts";
+import type { CodexProbes } from "../agents/codex.ts";
+import type { CopilotProbes } from "../agents/copilot.ts";
+import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import {
-  createMountStage,
-  encodeDynamicEnvOps,
-  serializeNixExtraPackages,
-} from "./mount.ts";
-import type { MountProbes, ResolvedEnvEntry } from "./mount_probes.ts";
-import type { Config, Profile } from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
-import type { ClaudeProbes } from "../agents/claude.ts";
-import type { CopilotProbes } from "../agents/copilot.ts";
-import type { CodexProbes } from "../agents/codex.ts";
+import {
+  createMountStage,
+  encodeDynamicEnvOps,
+  serializeNixExtraPackages,
+} from "./mount.ts";
+import type { MountProbes, ResolvedEnvEntry } from "./mount_probes.ts";
 
 // ============================================================
 // テスト用ヘルパー — 全て純粋なリテラル構築

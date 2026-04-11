@@ -5,9 +5,9 @@
  * resolveProbes() は pipeline 開始時に 1 回だけ呼ばれ、probe を並列解決する。
  */
 
-import * as path from "node:path";
 import { stat } from "node:fs/promises";
 import { userInfo } from "node:os";
+import * as path from "node:path";
 import type { HostEnv, ProbeResults } from "./types.ts";
 
 // ---------------------------------------------------------------------------

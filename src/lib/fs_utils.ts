@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import {
   chmod,
   lstat,
@@ -10,6 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { userInfo } from "node:os";
+import * as path from "node:path";
 
 export async function ensureDir(dirPath: string, mode = 0o700): Promise<void> {
   await mkdir(dirPath, { recursive: true, mode });

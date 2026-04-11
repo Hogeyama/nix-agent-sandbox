@@ -3,14 +3,14 @@
  */
 
 import { logInfo } from "../log.ts";
+import type { ResourceHandle } from "./effects.ts";
+import { executePlan, teardownHandles } from "./effects.ts";
 import type {
   AnyStage,
   PriorStageOutputs,
   StageInput,
   StagePlan,
 } from "./types.ts";
-import { executePlan, teardownHandles } from "./effects.ts";
-import type { ResourceHandle } from "./effects.ts";
 
 // ---------------------------------------------------------------------------
 // Pipeline — AnyStage runner

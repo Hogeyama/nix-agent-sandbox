@@ -7,13 +7,13 @@ import {
   expect,
   test,
 } from "bun:test";
-import { matchRule } from "./match.ts";
-import type { MatchContext } from "./match.ts";
 import type { HostExecRule } from "../config/types.ts";
 import {
   DEFAULT_HOSTEXEC_CWD_CONFIG,
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
 } from "../config/types.ts";
+import type { MatchContext } from "./match.ts";
+import { matchRule } from "./match.ts";
 
 function makeRule(
   id: string,

@@ -7,9 +7,6 @@ import {
   expect,
   test,
 } from "bun:test";
-import { notifyPendingRequest } from "./notify.ts";
-import type { PendingNotification } from "./notify.ts";
-import { _resetNotifySendCache } from "../lib/notify_utils.ts";
 import {
   chmod,
   mkdtemp,
@@ -20,6 +17,9 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { _resetNotifySendCache } from "../lib/notify_utils.ts";
+import type { PendingNotification } from "./notify.ts";
+import { notifyPendingRequest } from "./notify.ts";
 
 test("notifyPendingRequest: desktop notification opens UI via xdg-open", async () => {
   await withFakeCommands(async ({ dir, healthServer }) => {

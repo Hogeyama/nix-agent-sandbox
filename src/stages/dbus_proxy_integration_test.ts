@@ -7,6 +7,9 @@ import {
   expect,
   test,
 } from "bun:test";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import net from "node:net";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   type Config,
@@ -16,22 +19,19 @@ import {
   DEFAULT_UI_CONFIG,
   type Profile,
 } from "../config/types.ts";
-import {
-  buildProxyArgs,
-  createDbusProxyStage,
-  resolveRuntimeDir,
-  resolveSourceAddress,
-} from "./dbus_proxy.ts";
+import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import type {
   DbusProxyEffect,
   HostEnv,
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
-import { executePlan, teardownHandles } from "../pipeline/effects.ts";
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import net from "node:net";
+import {
+  buildProxyArgs,
+  createDbusProxyStage,
+  resolveRuntimeDir,
+  resolveSourceAddress,
+} from "./dbus_proxy.ts";
 
 function makeProfile(): Profile {
   return {

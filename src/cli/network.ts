@@ -4,16 +4,16 @@
 
 import { sendBrokerRequest } from "../network/broker.ts";
 import { serveAuthRouter } from "../network/envoy_auth_router.ts";
+import type { ApprovalScope } from "../network/protocol.ts";
 import {
   gcNetworkRuntime,
   listPendingEntries,
   readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
-import type { ApprovalScope } from "../network/protocol.ts";
-import { exitOnCliError, getFlagValue } from "./helpers.ts";
 import type { ApprovalAdapter, DecisionMessage } from "./approval_command.ts";
 import { handleApprovalSubcommand } from "./approval_command.ts";
+import { exitOnCliError, getFlagValue } from "./helpers.ts";
 
 export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((arg) => !arg.startsWith("-"));

@@ -7,6 +7,7 @@ import {
   expect,
   test,
 } from "bun:test";
+
 /**
  * Integration tests for worktree functionality.
  *
@@ -14,18 +15,18 @@ import {
  * lifecycle helpers (list / clean / orphan detection).
  */
 
-import { $ } from "bun";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { $ } from "bun";
+import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import type { Config, Profile } from "../config/types.ts";
 import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import {
   cleanNasWorktrees,
   listNasWorktrees,

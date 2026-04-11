@@ -1,4 +1,6 @@
 import { rm } from "node:fs/promises";
+import { appendAuditLog } from "../audit/store.ts";
+import type { AuditLogEntry } from "../audit/types.ts";
 import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
 import {
   connectUnix,
@@ -9,8 +11,11 @@ import {
   writeJsonLine,
 } from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
-import { appendAuditLog } from "../audit/store.ts";
-import type { AuditLogEntry } from "../audit/types.ts";
+import {
+  closeNotification,
+  notifyPendingRequest,
+  type ResolvedNotifyBackend,
+} from "./notify.ts";
 import {
   type ApprovalScope,
   type AuthorizeRequest,
@@ -29,11 +34,6 @@ import {
   removePendingEntry,
   writePendingEntry,
 } from "./registry.ts";
-import {
-  closeNotification,
-  notifyPendingRequest,
-  type ResolvedNotifyBackend,
-} from "./notify.ts";
 
 interface BrokerOptions {
   paths: NetworkRuntimePaths;

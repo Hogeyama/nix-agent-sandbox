@@ -2,9 +2,9 @@
  * D-Bus proxy effect.
  */
 
+import { startDbusProxy } from "../../dbus/proxy.ts";
 import type { DbusProxyEffect } from "../types.ts";
 import type { ResourceHandle } from "./types.ts";
-import { startDbusProxy } from "../../dbus/proxy.ts";
 
 export async function executeDbusProxy(
   effect: DbusProxyEffect,

@@ -2,8 +2,8 @@
  * network / hostexec 共通の approve/deny/pending/review フロー
  */
 
-import { runFzfReview } from "../fzf_review.ts";
 import type { ReviewItem } from "../fzf_review.ts";
+import { runFzfReview } from "../fzf_review.ts";
 import {
   getFlagValue,
   hasFormatJson,

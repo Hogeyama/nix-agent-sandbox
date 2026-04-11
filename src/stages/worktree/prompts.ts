@@ -2,8 +2,8 @@
  * worktree teardown 時のインタラクティブプロンプト
  */
 
-import { $ } from "bun";
 import * as path from "node:path";
+import { $ } from "bun";
 import { isWorktreeDirty } from "./git_helpers.ts";
 import type { WorktreeEntry } from "./management.ts";
 

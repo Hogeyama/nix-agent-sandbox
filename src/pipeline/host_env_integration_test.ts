@@ -7,9 +7,9 @@ import {
   expect,
   test,
 } from "bun:test";
+import { stat } from "node:fs/promises";
 import { buildHostEnv, resolveProbes } from "./host_env.ts";
 import type { HostEnv } from "./types.ts";
-import { stat } from "node:fs/promises";
 
 // ---------------------------------------------------------------------------
 // buildHostEnv
