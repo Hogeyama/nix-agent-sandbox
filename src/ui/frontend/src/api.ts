@@ -123,6 +123,17 @@ export interface ContainerInfo {
   running: boolean;
   labels: Record<string, string>;
   startedAt: string;
+  // Session-derived fields — populated by the backend when a container
+  // carries a `nas.session_id` label matching a live session record.
+  sessionId?: string;
+  turn?: "user-turn" | "agent-turn" | "done";
+  sessionAgent?: string;
+  sessionProfile?: string;
+  worktree?: string;
+  sessionStartedAt?: string;
+  lastEventAt?: string;
+  lastEventKind?: "start" | "attention" | "stop";
+  lastEventMessage?: string;
 }
 
 export interface ContainerCleanResult {

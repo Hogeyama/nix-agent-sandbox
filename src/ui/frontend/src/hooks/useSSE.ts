@@ -71,6 +71,7 @@ export function useSSE(
         "hostexec:pending",
         "sessions",
         "audit:logs",
+        "containers",
       ];
       for (const eventName of events) {
         es.addEventListener(eventName, (e: MessageEvent) => {
