@@ -428,6 +428,74 @@ nas hostexec test --profile <profile> -- <command> [args...]
 - `review` は fzf で pending を対話的に選択し approve / deny できます
 - `test` はルールマッチングを試行し、マッチしたルールの id・approval・env keys を表示します。regex パターンの試行錯誤に便利です
 
+### セッション通知（エージェントフック経由）
+
+`nas hook notification --kind start|attention|stop` をエージェントのフックから呼び出すと、
+そのセッションが今「エージェントが作業中（`agent-turn`）」「ユーザーの入力待ち（`user-turn`）」「終了済み（`done`）」のどれにあるかを nas UI に伝えられます。
+
+Claude Code のフック設定は `~/.claude/settings.json`（ユーザー共通）またはプロジェクト直下の `.claude/settings.json` に書きます。設定例:
+
+```jsonc
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "nas hook notification --kind start" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "nas hook notification --kind attention" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "nas hook notification --kind attention" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "nas hook notification --kind stop" }] }
+    ]
+  }
+}
+```
+
+GitHub Copilot CLI では、リポジトリ直下の `.github/hooks/*.json` を読み込みます。たとえば
+`.github/hooks/nas-notification.json` に次をそのまま保存すれば使えます（`notification` フックは
+v1.0.18 以降。v1.0.17 以前では `notification` エントリを削除してください）:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind start",
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind start",
+        "timeoutSec": 10
+      }
+    ],
+    "notification": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind attention",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "nas hook notification --kind stop",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+```
+
+![ui containers tab](./images/ui-containers.png)
+
 ## セキュリティについて
 
 nas はコンテナ内のファイルシステム変更をホストから隔離しますが、**設定次第ではホストの認証情報やデーモンへのアクセスを許可します**。各機能のリスクを理解した上で有効化してください。
