@@ -1,3 +1,4 @@
+import { Fragment } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, type ContainerInfo } from "../api.ts";
 
@@ -34,6 +35,13 @@ function tieBreakTimestamp(c: ContainerInfo): number {
   return isNaN(t) ? 0 : t;
 }
 
+function formatDateTime(iso: string | undefined): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "-";
+  return d.toLocaleString();
+}
+
 export function sortContainers(items: ContainerInfo[]): ContainerInfo[] {
   return [...items].sort((a, b) => {
     const pa = turnPriority(a.turn);
@@ -61,6 +69,74 @@ function TurnCell({ turn }: TurnCellProps) {
   return <span style={{ color: "#64748b" }}>-</span>;
 }
 
+interface ContainerDetailPanelProps {
+  container: ContainerInfo;
+}
+
+function ContainerDetailPanel({ container: c }: ContainerDetailPanelProps) {
+  if (c.turn === undefined) {
+    return (
+      <div style={detailPanelStyle}>
+        <div style={detailMutedStyle}>
+          No session data (sidecar container).
+        </div>
+      </div>
+    );
+  }
+
+  const rawSession = {
+    sessionId: c.sessionId,
+    turn: c.turn,
+    sessionAgent: c.sessionAgent,
+    sessionProfile: c.sessionProfile,
+    worktree: c.worktree,
+    sessionStartedAt: c.sessionStartedAt,
+    lastEventAt: c.lastEventAt,
+    lastEventKind: c.lastEventKind,
+    lastEventMessage: c.lastEventMessage,
+  };
+
+  const lastEventLabel = c.lastEventKind
+    ? `${c.lastEventKind}${
+      c.lastEventAt ? ` (${formatRelativeTime(c.lastEventAt)})` : ""
+    }`
+    : "-";
+
+  return (
+    <div style={detailPanelStyle}>
+      {c.lastEventMessage
+        ? <div style={lastMessageStyle}>{c.lastEventMessage}</div>
+        : <div style={detailMutedStyle}>No recent message.</div>}
+
+      <div style={kvGridStyle}>
+        <div style={kvLabelStyle}>Session ID</div>
+        <div style={kvValueStyle}>{c.sessionId ?? "-"}</div>
+        <div style={kvLabelStyle}>Agent</div>
+        <div style={kvValueStyle}>{c.sessionAgent ?? "-"}</div>
+        <div style={kvLabelStyle}>Profile</div>
+        <div style={kvValueStyle}>{c.sessionProfile ?? "-"}</div>
+        {c.worktree && (
+          <>
+            <div style={kvLabelStyle}>Worktree</div>
+            <div style={kvValueStyle}>{c.worktree}</div>
+          </>
+        )}
+        <div style={kvLabelStyle}>Turn</div>
+        <div style={kvValueStyle}>{c.turn}</div>
+        <div style={kvLabelStyle}>Started at</div>
+        <div style={kvValueStyle}>{formatDateTime(c.sessionStartedAt)}</div>
+        <div style={kvLabelStyle}>Last event</div>
+        <div style={kvValueStyle}>{lastEventLabel}</div>
+      </div>
+
+      <details style={rawDetailsStyle}>
+        <summary style={rawSummaryStyle}>Raw session</summary>
+        <pre style={rawPreStyle}>{JSON.stringify(rawSession, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
 interface ContainersTabProps {
   containers: ContainerInfo[];
   onContainersChange: (items: ContainerInfo[]) => void;
@@ -71,7 +147,12 @@ export function ContainersTab(
 ) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
+  const [expandedName, setExpandedName] = useState<string | null>(null);
   const [, setTick] = useState(0);
+
+  function toggleExpand(name: string) {
+    setExpandedName((cur) => (cur === name ? null : name));
+  }
 
   async function refresh() {
     try {
@@ -173,40 +254,56 @@ export function ContainersTab(
                 const pwd = kind === "agent"
                   ? (c.labels["nas.pwd"] || "-")
                   : "";
+                const isExpanded = expandedName === c.name;
                 return (
-                  <tr key={c.name}>
-                    <td style={tdStyle}>
-                      <TurnCell turn={c.turn} />
-                    </td>
-                    <td style={tdStyle}>{c.name}</td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          color: c.running ? "#22c55e" : "#94a3b8",
-                        }}
-                      >
-                        {c.running ? "running" : "stopped"}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>{kind}</td>
-                    <td style={tdStyle}>
-                      {c.running && c.startedAt
-                        ? formatRelativeTime(c.startedAt)
-                        : "-"}
-                    </td>
-                    <td style={tdPwdStyle}>{pwd}</td>
-                    <td style={tdStyle}>
-                      {c.running && (
-                        <button
-                          style={stopBtnStyle}
-                          disabled={busy.has(c.name)}
-                          onClick={() => handleStop(c.name)}
+                  <Fragment key={c.name}>
+                    <tr
+                      style={rowStyle}
+                      onClick={() => toggleExpand(c.name)}
+                    >
+                      <td style={tdStyle}>
+                        <TurnCell turn={c.turn} />
+                      </td>
+                      <td style={tdStyle}>{c.name}</td>
+                      <td style={tdStyle}>
+                        <span
+                          style={{
+                            color: c.running ? "#22c55e" : "#94a3b8",
+                          }}
                         >
-                          Stop
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                          {c.running ? "running" : "stopped"}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>{kind}</td>
+                      <td style={tdStyle}>
+                        {c.running && c.startedAt
+                          ? formatRelativeTime(c.startedAt)
+                          : "-"}
+                      </td>
+                      <td style={tdPwdStyle}>{pwd}</td>
+                      <td style={tdStyle}>
+                        {c.running && (
+                          <button
+                            style={stopBtnStyle}
+                            disabled={busy.has(c.name)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStop(c.name);
+                            }}
+                          >
+                            Stop
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={7} style={detailCellStyle}>
+                          <ContainerDetailPanel container={c} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -225,7 +322,64 @@ const thStyle = {
   fontSize: "12px",
   textTransform: "uppercase" as const,
 };
+const rowStyle = { cursor: "pointer" as const };
 const tdStyle = { padding: "8px", borderBottom: "1px solid #1e293b" };
+const detailCellStyle = {
+  padding: "0",
+  borderBottom: "1px solid #1e293b",
+  background: "#0f172a",
+};
+const detailPanelStyle = {
+  padding: "12px 16px",
+  display: "flex",
+  flexDirection: "column" as const,
+  gap: "12px",
+};
+const detailMutedStyle = { color: "#64748b", fontStyle: "italic" as const };
+const lastMessageStyle = {
+  fontSize: "15px",
+  color: "#e2e8f0",
+  padding: "8px 12px",
+  background: "#1e293b",
+  borderLeft: "3px solid #6366f1",
+  borderRadius: "4px",
+  whiteSpace: "pre-wrap" as const,
+};
+const kvGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "140px 1fr",
+  rowGap: "4px",
+  columnGap: "12px",
+  fontSize: "13px",
+};
+const kvLabelStyle = {
+  color: "#94a3b8",
+  textTransform: "uppercase" as const,
+  fontSize: "11px",
+};
+const kvValueStyle = {
+  color: "#cbd5e1",
+  wordBreak: "break-all" as const,
+};
+const rawDetailsStyle = {
+  marginTop: "4px",
+  fontSize: "12px",
+};
+const rawSummaryStyle = {
+  color: "#64748b",
+  cursor: "pointer" as const,
+  userSelect: "none" as const,
+};
+const rawPreStyle = {
+  marginTop: "6px",
+  padding: "8px",
+  background: "#020617",
+  color: "#94a3b8",
+  fontSize: "11px",
+  borderRadius: "4px",
+  overflow: "auto" as const,
+  maxHeight: "200px",
+};
 const tdPwdStyle = {
   ...tdStyle,
   maxWidth: "200px",
