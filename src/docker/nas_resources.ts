@@ -12,6 +12,7 @@ export const NAS_KIND_SESSION_NETWORK = "session-network";
 export const NAS_KIND_DIND_TMP = "dind-tmp";
 export const NAS_KIND_AGENT = "agent";
 export const NAS_PWD_LABEL = "nas.pwd";
+export const NAS_SESSION_ID_LABEL = "nas.session_id";
 
 export type DockerLabels = Record<string, string>;
 

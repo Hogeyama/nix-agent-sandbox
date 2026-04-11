@@ -38,6 +38,7 @@ import { createLaunchStage } from "./stages/launch.ts";
 import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
+import { SessionStoreStage } from "./stages/session_store.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
@@ -190,6 +191,7 @@ export async function main(args: string[]): Promise<void> {
 
     const stages = [
       new WorktreeStage(),
+      new SessionStoreStage(),
       createDockerBuildStage(buildProbes),
       NixDetectStage,
       createDbusProxyStage(),
@@ -203,7 +205,10 @@ export async function main(args: string[]): Promise<void> {
     // 初期 PriorStageOutputs を構築
     const initialPrior: PriorStageOutputs = {
       dockerArgs: [],
-      envVars: { NAS_LOG_LEVEL: logLevel },
+      envVars: {
+        NAS_LOG_LEVEL: logLevel,
+        NAS_SESSION_ID: sessionId,
+      },
       workDir: process.cwd(),
       nixEnabled: false,
       imageName,
