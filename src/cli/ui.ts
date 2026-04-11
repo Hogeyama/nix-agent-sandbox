@@ -28,7 +28,6 @@ export async function runUiCommand(nasArgs: string[]): Promise<void> {
   const portStr = getFlagValue(nasArgs, "--port");
   const port = portStr ? parseInt(portStr, 10) : uiDefaults.port;
   const noOpen = nasArgs.includes("--no-open");
-  const runtimeDir = getFlagValue(nasArgs, "--runtime-dir") ?? undefined;
   const idleTimeoutStr = getFlagValue(nasArgs, "--idle-timeout");
   const idleTimeout = idleTimeoutStr
     ? parseInt(idleTimeoutStr, 10)
@@ -45,7 +44,7 @@ export async function runUiCommand(nasArgs: string[]): Promise<void> {
   }
 
   try {
-    await startServer({ port, open: !noOpen, runtimeDir, idleTimeout });
+    await startServer({ port, open: !noOpen, idleTimeout });
   } catch (err) {
     exitOnCliError(err);
   }

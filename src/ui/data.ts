@@ -48,12 +48,10 @@ export interface UiDataContext {
   auditDir: string;
 }
 
-export async function createDataContext(
-  runtimeDir?: string,
-): Promise<UiDataContext> {
+export async function createDataContext(): Promise<UiDataContext> {
   const [networkPaths, hostExecPaths] = await Promise.all([
-    resolveNetworkRuntimePaths(runtimeDir),
-    resolveHostExecRuntimePaths(runtimeDir),
+    resolveNetworkRuntimePaths(),
+    resolveHostExecRuntimePaths(),
   ]);
   // 起動時に stale な session/pending を掃除
   const [netGc, hexGc] = await Promise.all([

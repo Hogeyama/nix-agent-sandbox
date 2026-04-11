@@ -11,7 +11,7 @@ Usage:
   nas worktree [list|clean] [options]
   nas container clean
   nas network [pending|approve|deny|review|gc]
-  nas ui [--port PORT] [--no-open] [--runtime-dir DIR]
+  nas ui [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
 
 Subcommands:

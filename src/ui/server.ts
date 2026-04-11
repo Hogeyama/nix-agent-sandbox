@@ -101,12 +101,11 @@ export function createApp(ctx: UiDataContext, assets: PreloadedAssets): Router {
 export interface ServeOptions {
   port: number;
   open: boolean;
-  runtimeDir?: string;
   idleTimeout?: number;
 }
 
 export async function startServer(options: ServeOptions): Promise<void> {
-  const ctx = await createDataContext(options.runtimeDir);
+  const ctx = await createDataContext();
   const assets = await preloadAssets();
   const app = createApp(ctx, assets);
 
