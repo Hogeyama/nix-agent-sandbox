@@ -4,11 +4,13 @@ import { ContainersTab } from "./components/ContainersTab.tsx";
 import { AuditTab } from "./components/AuditTab.tsx";
 import { useSSE } from "./hooks/useSSE.ts";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
-import type {
-  AuditLogEntry,
-  HostExecPendingItem,
-  NetworkPendingItem,
-  SessionsData,
+import {
+  api,
+  type AuditLogEntry,
+  type ContainerInfo,
+  type HostExecPendingItem,
+  type NetworkPendingItem,
+  type SessionsData,
 } from "./api.ts";
 
 type TabId = "pending" | "containers" | "audit";
@@ -38,6 +40,21 @@ export function App() {
     network: [],
     hostexec: [],
   });
+  const [containers, setContainers] = useState<ContainerInfo[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getContainers()
+      .then((res) => {
+        if (!cancelled) setContainers(res.items);
+      })
+      .catch((e) => {
+        console.error("Failed to fetch containers:", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const deepLink = useMemo<DeepLink | null>(() => {
     const params = new URLSearchParams(globalThis.location?.search ?? "");
@@ -77,6 +94,9 @@ export function App() {
           break;
         case "audit:logs":
           setAuditLogs(d.items as AuditLogEntry[]);
+          break;
+        case "containers":
+          setContainers(d.items as ContainerInfo[]);
           break;
       }
     },
@@ -130,7 +150,12 @@ export function App() {
             deepLink={deepLink}
           />
         )}
-        {activeTab === "containers" && <ContainersTab />}
+        {activeTab === "containers" && (
+          <ContainersTab
+            containers={containers}
+            onContainersChange={setContainers}
+          />
+        )}
         {activeTab === "audit" && (
           <AuditTab items={auditLogs} sessions={sessions} />
         )}

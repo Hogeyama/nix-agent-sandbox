@@ -21,6 +21,7 @@ export function useSSE(url: string, onEvent: SSEHandler): void {
         "hostexec:pending",
         "sessions",
         "audit:logs",
+        "containers",
       ];
       for (const eventName of events) {
         es.addEventListener(eventName, (e: MessageEvent) => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, type ContainerInfo } from "../api.ts";
 
 function formatRelativeTime(iso: string): string {
@@ -14,9 +14,61 @@ function formatRelativeTime(iso: string): string {
   return `${day}d ${hr % 24}h ago`;
 }
 
-export function ContainersTab() {
-  const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+// Sort priority: user-turn (0) → agent-turn (1) → done (2) → absent (3).
+function turnPriority(turn: ContainerInfo["turn"]): number {
+  switch (turn) {
+    case "user-turn":
+      return 0;
+    case "agent-turn":
+      return 1;
+    case "done":
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+function tieBreakTimestamp(c: ContainerInfo): number {
+  const iso = c.lastEventAt ?? c.startedAt;
+  const t = iso ? new Date(iso).getTime() : NaN;
+  return isNaN(t) ? 0 : t;
+}
+
+export function sortContainers(items: ContainerInfo[]): ContainerInfo[] {
+  return [...items].sort((a, b) => {
+    const pa = turnPriority(a.turn);
+    const pb = turnPriority(b.turn);
+    if (pa !== pb) return pa - pb;
+    // Most-recently-updated first within the same bucket.
+    return tieBreakTimestamp(b) - tieBreakTimestamp(a);
+  });
+}
+
+interface TurnCellProps {
+  turn: ContainerInfo["turn"];
+}
+
+function TurnCell({ turn }: TurnCellProps) {
+  if (turn === "user-turn") {
+    return <span style={turnBadgeUserStyle}>You're up</span>;
+  }
+  if (turn === "agent-turn") {
+    return <span style={turnBadgeAgentStyle}>Working</span>;
+  }
+  if (turn === "done") {
+    return <span style={turnBadgeDoneStyle}>Done</span>;
+  }
+  return <span style={{ color: "#64748b" }}>-</span>;
+}
+
+interface ContainersTabProps {
+  containers: ContainerInfo[];
+  onContainersChange: (items: ContainerInfo[]) => void;
+}
+
+export function ContainersTab(
+  { containers, onContainersChange }: ContainersTabProps,
+) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
   const [, setTick] = useState(0);
@@ -24,25 +76,19 @@ export function ContainersTab() {
   async function refresh() {
     try {
       const res = await api.getContainers();
-      setContainers(res.items);
+      onContainersChange(res.items);
     } catch (e) {
       console.error("Failed to fetch containers:", e);
-    } finally {
-      setLoading(false);
     }
   }
-
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 5000);
-    return () => clearInterval(id);
-  }, []);
 
   // Update relative times every 30s
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 30000);
     return () => clearInterval(id);
   }, []);
+
+  const sorted = useMemo(() => sortContainers(containers), [containers]);
 
   async function handleStop(name: string) {
     setBusy((s) => new Set(s).add(name));
@@ -85,10 +131,6 @@ export function ContainersTab() {
     }
   }
 
-  if (loading) {
-    return <p style={{ color: "#94a3b8" }}>Loading containers...</p>;
-  }
-
   return (
     <div>
       <div
@@ -99,7 +141,7 @@ export function ContainersTab() {
         }}
       >
         <h3 style={{ fontSize: "16px", color: "#cbd5e1" }}>
-          NAS Managed Containers ({containers.length})
+          NAS Managed Containers ({sorted.length})
         </h3>
         <button
           style={cleanBtnStyle}
@@ -110,12 +152,13 @@ export function ContainersTab() {
         </button>
       </div>
 
-      {containers.length === 0
+      {sorted.length === 0
         ? <p style={{ color: "#94a3b8" }}>No nas-managed containers found.</p>
         : (
           <table style={tableStyle}>
             <thead>
               <tr>
+                <th style={thStyle}>Turn</th>
                 <th style={thStyle}>Name</th>
                 <th style={thStyle}>Status</th>
                 <th style={thStyle}>Kind</th>
@@ -125,13 +168,16 @@ export function ContainersTab() {
               </tr>
             </thead>
             <tbody>
-              {containers.map((c) => {
+              {sorted.map((c) => {
                 const kind = c.labels["nas.kind"] || "-";
                 const pwd = kind === "agent"
                   ? (c.labels["nas.pwd"] || "-")
                   : "";
                 return (
                   <tr key={c.name}>
+                    <td style={tdStyle}>
+                      <TurnCell turn={c.turn} />
+                    </td>
                     <td style={tdStyle}>{c.name}</td>
                     <td style={tdStyle}>
                       <span
@@ -205,4 +251,31 @@ const cleanBtnStyle = {
   padding: "6px 16px",
   cursor: "pointer",
   fontSize: "14px",
+};
+
+const turnBadgeBaseStyle = {
+  display: "inline-block",
+  padding: "2px 8px",
+  borderRadius: "10px",
+  fontSize: "12px",
+  lineHeight: "16px",
+  whiteSpace: "nowrap" as const,
+};
+const turnBadgeUserStyle = {
+  ...turnBadgeBaseStyle,
+  background: "#fbbf24",
+  color: "#1f2937",
+  fontWeight: "bold" as const,
+};
+const turnBadgeAgentStyle = {
+  ...turnBadgeBaseStyle,
+  background: "#334155",
+  color: "#cbd5e1",
+};
+const turnBadgeDoneStyle = {
+  ...turnBadgeBaseStyle,
+  background: "transparent",
+  color: "#64748b",
+  fontSize: "11px",
+  padding: "2px 6px",
 };
