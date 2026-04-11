@@ -39,6 +39,7 @@ import { runNetworkCommand } from "./cli/network.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
 import { runUiCommand } from "./cli/ui.ts";
 import { runAuditCommand } from "./cli/audit.ts";
+import { runHookCommand } from "./cli/hook.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 import pkg from "../package.json";
 
@@ -61,7 +62,7 @@ export async function main(args: string[]): Promise<void> {
     subcommand === "rebuild" || subcommand === "worktree" ||
     subcommand === "container" || subcommand === "network" ||
     subcommand === "hostexec" || subcommand === "ui" ||
-    subcommand === "audit"
+    subcommand === "audit" || subcommand === "hook"
   ) {
     if (
       argsBeforeDashDash.includes("--help") || argsBeforeDashDash.includes("-h")
@@ -121,6 +122,13 @@ export async function main(args: string[]): Promise<void> {
   if (subcommand === "audit") {
     await runAuditCommand(
       removeFirstOccurrence(argsBeforeDashDash, "audit"),
+    );
+    return;
+  }
+
+  if (subcommand === "hook") {
+    await runHookCommand(
+      removeFirstOccurrence(argsBeforeDashDash, "hook"),
     );
     return;
   }
