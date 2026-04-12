@@ -170,7 +170,7 @@ export async function main(args: string[]): Promise<void> {
     const config = await loadConfig();
     const { name, profile } = resolveProfile(config, profileName);
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
-    const sessionId = `sess_${randomHex(6)}`;
+    const sessionId = process.env.NAS_SESSION_ID || `sess_${randomHex(6)}`;
 
     // session.enable かつ dtach 内でなければ、nas 自体を dtach でラップして再実行
     if (effectiveProfile.session.enable && !process.env.NAS_INSIDE_DTACH) {
@@ -338,6 +338,7 @@ async function runInsideDtach(
     env: {
       ...process.env,
       NAS_INSIDE_DTACH: "1",
+      NAS_SESSION_ID: sessionId,
     },
   });
   await proc.exited;
