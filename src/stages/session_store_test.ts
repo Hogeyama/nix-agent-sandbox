@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { Effect, Exit, type Layer, Scope } from "effect";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -11,15 +12,22 @@ import {
   type Profile,
 } from "../config/types.ts";
 import type {
+  EffectStageResult,
   HostEnv,
   PriorStageOutputs,
   StageInput,
 } from "../pipeline/types.ts";
+import {
+  type CreateSessionInput,
+  makeSessionStoreServiceFake,
+  SessionStoreServiceLive,
+} from "../services/session_store_service.ts";
+import type { SessionRuntimePaths } from "../sessions/store.ts";
 import { readSession, resolveSessionRuntimePaths } from "../sessions/store.ts";
 import {
+  createSessionStoreStage,
   IN_CONTAINER_NAS_BIN_PATH,
   IN_CONTAINER_SESSION_STORE_DIR,
-  SessionStoreStage,
 } from "./session_store.ts";
 
 let tmpRoot: string;
@@ -60,11 +68,27 @@ afterEach(async () => {
   }
 });
 
-test("SessionStoreStage.execute writes a SessionRecord to the store dir", async () => {
-  const stage = new SessionStoreStage();
+/** Run the EffectStage, returning the result and a close handle for the scope. */
+async function runStage(
+  input: StageInput,
+  layer: Layer.Layer<
+    import("../services/session_store_service.ts").SessionStoreService
+  > = SessionStoreServiceLive,
+): Promise<{ result: EffectStageResult; closeScope: Effect.Effect<void> }> {
+  const stage = createSessionStoreStage();
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
+  );
+  return { result, closeScope: Scope.close(scope, Exit.void) };
+}
+
+test("SessionStoreStage run writes a SessionRecord to the store dir", async () => {
   const input = createTestInput({ sessionId: "sess_abc123" });
 
-  await stage.execute(input);
+  await runStage(input);
 
   const paths = await resolveSessionRuntimePaths(undefined);
   const record = await readSession(paths, "sess_abc123");
@@ -77,65 +101,60 @@ test("SessionStoreStage.execute writes a SessionRecord to the store dir", async 
   expect(typeof record!.startedAt).toBe("string");
 });
 
-test("SessionStoreStage.execute outputs bind-mount dockerArgs and store env var", async () => {
-  const stage = new SessionStoreStage();
+test("SessionStoreStage run outputs bind-mount dockerArgs and store env var", async () => {
   const input = createTestInput({ sessionId: "sess_xyz" });
 
-  const result = await stage.execute(input);
+  const { result } = await runStage(input);
 
   const paths = await resolveSessionRuntimePaths(undefined);
-  expect(result.outputOverrides.dockerArgs).toEqual([
+  expect(result.dockerArgs).toEqual([
     "-v",
     `${paths.sessionsDir}:${IN_CONTAINER_SESSION_STORE_DIR}`,
   ]);
-  expect(result.outputOverrides.envVars).toEqual({
+  expect(result.envVars).toEqual({
     NAS_SESSION_STORE_DIR: IN_CONTAINER_SESSION_STORE_DIR,
   });
   // Must NOT set NAS_SESSION_ID — cli.ts owns that.
-  expect(result.outputOverrides.envVars?.NAS_SESSION_ID).toBeUndefined();
+  expect(result.envVars?.NAS_SESSION_ID).toBeUndefined();
 });
 
-test("SessionStoreStage.execute appends the nas binary mount when NAS_BIN_PATH is set", async () => {
+test("SessionStoreStage run appends the nas binary mount when NAS_BIN_PATH is set", async () => {
   const fakeNas = path.join(tmpRoot, "nas");
   await writeFile(fakeNas, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   process.env.NAS_BIN_PATH = fakeNas;
 
-  const stage = new SessionStoreStage();
-  const result = await stage.execute(createTestInput({ sessionId: "sess_n1" }));
+  const { result } = await runStage(createTestInput({ sessionId: "sess_n1" }));
 
-  expect(result.outputOverrides.dockerArgs).toContain(
+  expect(result.dockerArgs).toContain(
     `${fakeNas}:${IN_CONTAINER_NAS_BIN_PATH}:ro`,
   );
 });
 
-test("SessionStoreStage.execute omits the nas binary mount when no binary is available", async () => {
+test("SessionStoreStage run omits the nas binary mount when no binary is available", async () => {
   // beforeEach already unset NAS_BIN_PATH and pointed PATH at an empty dir.
-  const stage = new SessionStoreStage();
-  const result = await stage.execute(createTestInput({ sessionId: "sess_n2" }));
+  const { result } = await runStage(createTestInput({ sessionId: "sess_n2" }));
 
-  const hasNasMount = (result.outputOverrides.dockerArgs ?? []).some((a) =>
+  const hasNasMount = (result.dockerArgs ?? []).some((a) =>
     a.endsWith(`:${IN_CONTAINER_NAS_BIN_PATH}:ro`),
   );
   expect(hasNasMount).toBe(false);
 });
 
-test("SessionStoreStage.teardown removes the record", async () => {
-  const stage = new SessionStoreStage();
+test("SessionStoreStage finalizer removes the record on scope close", async () => {
   const input = createTestInput({ sessionId: "sess_to_delete" });
 
-  await stage.execute(input);
+  const { closeScope } = await runStage(input);
   const paths = await resolveSessionRuntimePaths(undefined);
   expect(await readSession(paths, "sess_to_delete")).not.toBeNull();
 
-  await stage.teardown(input);
+  await Effect.runPromise(closeScope);
   expect(await readSession(paths, "sess_to_delete")).toBeNull();
 });
 
-test("SessionStoreStage.teardown on an already-missing record does not throw", async () => {
-  const stage = new SessionStoreStage();
+test("SessionStoreStage finalizer on an already-missing record does not throw", async () => {
   const input = createTestInput({ sessionId: "sess_gone" });
 
-  await stage.execute(input);
+  const { closeScope } = await runStage(input);
   const paths = await resolveSessionRuntimePaths(undefined);
 
   // Delete the file out-of-band, simulating something else cleaning up.
@@ -143,8 +162,38 @@ test("SessionStoreStage.teardown on an already-missing record does not throw", a
   await deleteSession(paths, "sess_gone");
 
   // Must complete without throwing.
-  await stage.teardown(input);
+  await Effect.runPromise(closeScope);
   expect(await readSession(paths, "sess_gone")).toBeNull();
+});
+
+test("SessionStoreStage run invokes SessionStoreService methods", async () => {
+  const calls: string[] = [];
+  const fakePaths: SessionRuntimePaths = {
+    runtimeDir: "/tmp/nas-fake",
+    sessionsDir: "/tmp/nas-fake/sessions",
+  };
+  const fakeLayer = makeSessionStoreServiceFake({
+    ensurePaths: () => {
+      calls.push("ensurePaths");
+      return Effect.succeed(fakePaths);
+    },
+    create: (_paths: SessionRuntimePaths, _record: CreateSessionInput) => {
+      calls.push("create");
+      return Effect.void;
+    },
+    delete: (_paths: SessionRuntimePaths, _sessionId: string) => {
+      calls.push("delete");
+      return Effect.void;
+    },
+  });
+
+  const input = createTestInput({ sessionId: "sess_fake" });
+  const { closeScope } = await runStage(input, fakeLayer);
+
+  expect(calls).toEqual(["ensurePaths", "create"]);
+
+  await Effect.runPromise(closeScope);
+  expect(calls).toEqual(["ensurePaths", "create", "delete"]);
 });
 
 // ---------------------------------------------------------------------------
