@@ -16,11 +16,13 @@ import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
 import type { ApprovalScope } from "../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
+import type { AuthRouterService } from "../services/auth_router.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
 import type { FsService } from "../services/fs.ts";
 import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
 import type { ProcessService } from "../services/process.ts";
+import type { SessionBrokerService } from "../services/session_broker.ts";
 import type { PromptService } from "../stages/worktree/prompt_service.ts";
 
 // ---------------------------------------------------------------------------
@@ -331,7 +333,9 @@ export type StageServices =
   | HostExecBrokerService
   | ProcessService
   | DockerService
-  | PromptService;
+  | PromptService
+  | SessionBrokerService
+  | AuthRouterService;
 
 // A stage that runs as an Effect
 export interface EffectStage<R extends StageServices = never> {

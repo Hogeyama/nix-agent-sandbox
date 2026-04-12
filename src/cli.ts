@@ -30,11 +30,13 @@ import { effectStageAdapter } from "./pipeline/effect_adapter.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { runPipeline } from "./pipeline/pipeline.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
+import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
 import { ProcessServiceLive } from "./services/process.ts";
+import { SessionBrokerServiceLive } from "./services/session_broker.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
 import {
@@ -205,12 +207,14 @@ export async function main(args: string[]): Promise<void> {
     const buildProbes = await resolveBuildProbes(imageName);
 
     const liveLayer = Layer.mergeAll(
+      AuthRouterServiceLive,
       DindServiceLive,
       FsServiceLive,
       HostExecBrokerServiceLive,
       ProcessServiceLive,
       DockerServiceLive,
       PromptServiceLive,
+      SessionBrokerServiceLive,
     );
 
     const stages = [
@@ -222,7 +226,7 @@ export async function main(args: string[]): Promise<void> {
       effectStageAdapter(createMountStage(mountProbes), liveLayer),
       effectStageAdapter(createHostExecStage(), liveLayer),
       effectStageAdapter(createDindStage(), liveLayer),
-      createProxyStage(),
+      effectStageAdapter(createProxyStage(), liveLayer),
       effectStageAdapter(createLaunchStage(agentExtraArgs), liveLayer),
     ];
 
