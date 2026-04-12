@@ -1,7 +1,7 @@
 /**
  * DinD (Docker-in-Docker) side-effect functions.
  *
- * Extracted from stages/dind.ts so that PlanStage (pure) and side-effectful
+ * Extracted from stages/dind.ts so that stage logic and side-effectful
  * runtime helpers live in separate modules.
  */
 

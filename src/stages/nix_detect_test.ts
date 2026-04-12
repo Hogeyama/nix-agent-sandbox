@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Effect } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -74,43 +75,45 @@ function makeInput(
   };
 }
 
-test("NixDetectStage: enable=true sets nixEnabled to true", () => {
-  const plan = NixDetectStage.plan(makeInput(true, false));
-  expect(plan?.outputOverrides.nixEnabled).toEqual(true);
+test("NixDetectStage: enable=true sets nixEnabled to true", async () => {
+  const result = await Effect.runPromise(
+    Effect.scoped(NixDetectStage.run(makeInput(true, false))),
+  );
+  expect(result.nixEnabled).toEqual(true);
 });
 
-test("NixDetectStage: enable=false sets nixEnabled to false", () => {
-  const plan = NixDetectStage.plan(makeInput(false, true));
-  expect(plan?.outputOverrides.nixEnabled).toEqual(false);
+test("NixDetectStage: enable=false sets nixEnabled to false", async () => {
+  const result = await Effect.runPromise(
+    Effect.scoped(NixDetectStage.run(makeInput(false, true))),
+  );
+  expect(result.nixEnabled).toEqual(false);
 });
 
-test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", () => {
-  const plan = NixDetectStage.plan(makeInput("auto", true));
-  expect(plan?.outputOverrides.nixEnabled).toEqual(true);
+test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", async () => {
+  const result = await Effect.runPromise(
+    Effect.scoped(NixDetectStage.run(makeInput("auto", true))),
+  );
+  expect(result.nixEnabled).toEqual(true);
 });
 
-test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", () => {
-  const plan = NixDetectStage.plan(makeInput("auto", false));
-  expect(plan?.outputOverrides.nixEnabled).toEqual(false);
+test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", async () => {
+  const result = await Effect.runPromise(
+    Effect.scoped(NixDetectStage.run(makeInput("auto", false))),
+  );
+  expect(result.nixEnabled).toEqual(false);
 });
 
-test("NixDetectStage: returns empty effects, dockerArgs, envVars", () => {
-  const plan = NixDetectStage.plan(makeInput(true, false));
-  expect(plan?.effects).toEqual([]);
-  expect(plan?.dockerArgs).toEqual([]);
-  expect(plan?.envVars).toEqual({});
+test("NixDetectStage: kind is 'effect'", () => {
+  expect(NixDetectStage.kind).toEqual("effect");
 });
 
-test("NixDetectStage: kind is 'plan'", () => {
-  expect(NixDetectStage.kind).toEqual("plan");
-});
-
-test("NixDetectStage: plan() always returns non-null (never skips)", () => {
-  // NixDetectStage always produces a plan regardless of inputs
+test("NixDetectStage: run() always returns a result (never skips)", async () => {
   for (const enable of [true, false, "auto" as const]) {
     for (const hasNix of [true, false]) {
-      const plan = NixDetectStage.plan(makeInput(enable, hasNix));
-      expect(plan !== null).toEqual(true);
+      const result = await Effect.runPromise(
+        Effect.scoped(NixDetectStage.run(makeInput(enable, hasNix))),
+      );
+      expect(result.nixEnabled).toBeDefined();
     }
   }
 });

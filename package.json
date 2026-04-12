@@ -16,6 +16,7 @@
     "bun2nix": "bun2nix -o bun.nix"
   },
   "dependencies": {
+    "effect": "^3.21.0",
     "preact": "^10",
     "zod": "^4.3.6"
   },

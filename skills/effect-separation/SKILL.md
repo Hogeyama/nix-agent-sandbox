@@ -1,120 +1,292 @@
 ---
 name: effect-separation
-description: Stage Architecture — Effect Separation Design Rules. Use when adding new stages, modifying existing stages, creating helper functions, or refactoring pipeline code. Always consult when touching stages/, pipeline/, or agents/ directories, or when design questions arise about where to place side-effects.
+description: Stage Architecture — Effect-based Design Rules. Use when adding new stages, modifying existing stages, creating helper functions, or refactoring pipeline code. Always consult when touching stages/, pipeline/, services/, or agents/ directories, or when design questions arise about where to place side-effects.
 ---
 
-# Effect Separation Design Rules
+# Effect-based Stage Architecture
 
-The pipeline consists of two stage kinds: **PlanStage** (pure, default) and **ProceduralStage** (side-effectful, exception). When writing new stages or helpers, follow these rules to determine where side-effects belong.
+> **Non-negotiable:** A stage is an orchestration boundary, not an I/O implementation site.
+> - Never call `node:fs`, `node:child_process`, `Bun.spawn`, Docker CLI helpers, socket APIs, or ad-hoc cleanup code from a stage.
+> - Do not script low-level setup or teardown in `run()`, even if the calls happen to go through `FsService`, `ProcessService`, or `DockerService`.
+> - `run()` may only do three things: call pure planners, call stage-facing service methods, and return `EffectStageResult`.
+> - `FsService.readFile()` or `docker.inspect()` do not get a special exemption just because they are single calls. Put primitive I/O in probes or services, not in the stage.
+> - If you feel tempted to write `mkdir`, `writeFile`, `spawn`, `exec`, `rm`, `networkCreate`, or similar steps in a stage, stop and extract a service first.
 
-## PlanStage — The Default Choice
+All pipeline stages use a single type: `EffectStage<R>`. A stage declares its required services via `R`, computes pure data when helpful, and orchestrates service calls inside a shared `Scope`.
+
+## EffectStage<R>
 
 ```typescript
-export interface PlanStage {
-  kind: "plan";
+export interface EffectStage<R extends StageServices = never> {
+  kind: "effect";
   name: string;
-  plan(input: StageInput): StagePlan | null;
+  run(input: StageInput): Effect.Effect<EffectStageResult, unknown, Scope.Scope | R>;
+}
+
+export type AnyStage = EffectStage<StageServices>;
+```
+
+- `R` lists the services this stage requires.
+- Prefer stage-facing services in `R`. Primitive services should usually stay behind probes or domain services.
+- `Scope.Scope` is always present for resource management but is not part of `R`.
+- `EffectStageResult` is `Partial<PriorStageOutputs>` -- each stage returns only the fields it modifies.
+
+## Service Inventory
+
+### Primitive Services (src/services/, usually not stage-facing)
+
+Thin adapters over OS or Docker primitives. Treat these as implementation details of probes and domain services, not as the normal interface of stage code.
+
+| Service | Purpose | Key methods |
+|---|---|---|
+| `FsService` | Filesystem primitives | `mkdir`, `writeFile`, `readFile`, `chmod`, `symlink`, `rm`, `rename`, `stat`, `exists` |
+| `ProcessService` | Process primitives | `spawn`, `exec`, `waitForFileExists` |
+| `DockerService` | Docker CLI primitives | `build`, `runInteractive`, `runDetached`, `isRunning`, `stop`, `exec`, `logs`, `containerIp`, `volumeCreate`, `networkCreate`, ... |
+
+If a stage needs a file read, process exec, or Docker query, the default answer is still "move that primitive behind a probe or a domain service." Do not create stage-level exceptions just because the I/O sequence is short.
+
+### Interaction Services (src/services/, stage-facing)
+
+These are generic, but the interaction itself is often the stage behavior, so direct stage use is acceptable.
+
+| Service | Purpose | Key methods |
+|---|---|---|
+| `PromptService` | Interactive prompts | `worktreeAction`, `dirtyWorktreeAction`, `branchAction`, `reuseWorktree`, `renameBranchPrompt` |
+
+### Domain Services (src/services/)
+
+Preferred stage-facing boundaries for named workflows and lifecycles.
+
+| Service | Purpose |
+|---|---|
+| `DindService` | Docker-in-Docker sidecar lifecycle (`ensureSidecar` / `teardownSidecar`) |
+| `SessionBrokerService` | Network session broker lifecycle (`start` -> handle with `close`) |
+| `HostExecBrokerService` | Host-exec broker lifecycle (`start` -> handle with `close`) |
+| `AuthRouterService` | Envoy auth router daemon lifecycle (`ensureDaemon` -> handle with `abort`) |
+| `SessionStoreService` | Session record persistence (`ensurePaths`, `create`, `delete`) |
+
+Each service file exports three things:
+- **Tag**: `FsService` (the `Context.Tag`)
+- **Live layer**: `FsServiceLive` (real implementation)
+- **Fake factory**: `makeFsServiceFake()` (for testing)
+
+Fake factories are not all identical: some return only a layer, others return a layer plus test state. Follow the existing pattern of the service you are touching.
+
+### When to introduce a domain service
+
+Create or reuse a domain service when any of these are true:
+
+- One conceptual action would otherwise require multiple low-level I/O steps.
+- Resource ownership and cleanup must stay paired.
+- The logic should be reusable across stages or easy to fake in tests.
+- The operation needs invariants, retries, idempotency, or structured teardown.
+- Your plan starts talking about directories, files, commands, temp paths, or teardown steps instead of a named capability.
+- The stage would otherwise need a primitive service such as `FsService`, `ProcessService`, or `DockerService`.
+
+If the work is only pure data shaping, keep it as a pure function instead of inventing a service.
+
+## Writing a New Stage
+
+### 1. Add a pure planner only when the plan itself deserves tests
+
+A "stage-local plan type" is just the typed return value of `planXxx()`: a pure data object computed from `StageInput` and later handed to services. Introduce it only when that pure decision-making has enough branching or invariants to deserve focused unit tests. If `run()` is already trivial, or the pure logic is obvious, keep it inline or extract smaller pure helpers instead of introducing `planXxx()`.
+
+```typescript
+interface MyPlan {
+  readonly workspace: {
+    readonly sessionId: string;
+    readonly runtimeDir: string;
+  };
+  readonly envVars: Record<string, string>;
+  readonly outputOverrides: EffectStageResult;
+}
+
+function planMyStage(input: StageInput): MyPlan | null {
+  // Pure computation only -- no I/O allowed
 }
 ```
 
-- `plan()` is a **pure function**. Takes `StageInput`, returns `StagePlan` (dockerArgs, envVars, effects, etc.) or `null` (skip).
-- No `Deno.env.get`, `Deno.Command`, `Deno.stat`, `Deno.mkdir`, or any I/O.
-- Side-effects are described as `ResourceEffect[]` data; the executor runs them.
+- Good plan fields describe intent (`workspace`, `outputOverrides`).
+- If you would not write focused tests against `planXxx()`, you probably do not need `planXxx()`.
+- If the plan starts listing `directories`, `files`, `commands`, or teardown work, that is usually a sign a service boundary is missing.
 
-Typical pattern (from `createMountStage`):
+### 2. Put I/O behind a service before writing `run()`
+
+If executing the plan would require filesystem, process, network, or Docker steps, create or reuse a service first. The stage should talk in named capabilities such as `prepareWorkspace`, `ensureDaemon`, `start`, or `syncState`, not in primitives such as `mkdir`, `readFile`, `writeFile`, `spawn`, `exec`, or `rm`.
+
 ```typescript
-export function createMountStage(mountProbes: MountProbes): PlanStage {
+// Bad: low-level workflow in the stage
+// yield* fs.mkdir(...);
+// yield* fs.writeFile(...);
+// yield* proc.spawn(...);
+
+// Good: one intentful service call
+yield* workspaceService.prepareWorkspace(plan.workspace);
+```
+
+### 3. Create the stage factory
+
+```typescript
+export function createMyStage(): EffectStage<MyStageService> {
   return {
-    kind: "plan",
-    name: "MountStage",
-    plan(input: StageInput): StagePlan {
-      return planMount(input, mountProbes);  // calls a pure function
+    kind: "effect",
+    name: "MyStage",
+    run(input) {
+      const plan = planMyStage(input);
+      if (!plan) return Effect.succeed({});
+
+      return Effect.gen(function* () {
+        const myStageService = yield* MyStageService;
+
+        yield* Effect.acquireRelease(
+          myStageService.prepareWorkspace(plan.workspace),
+          (handle) => handle.close().pipe(
+            Effect.catchAll(() => Effect.logWarning("MyStage cleanup failed")),
+          ),
+        );
+
+        return {
+          envVars: { ...input.prior.envVars, ...plan.envVars },
+          ...plan.outputOverrides,
+        } satisfies EffectStageResult;
+      });
     },
   };
 }
 ```
 
-When I/O is needed, resolve it as a probe beforehand and pass via factory argument or `input.probes`.
+The stage composes pure planning, service calls, and output merging. It does not describe low-level I/O steps itself.
 
-## ProceduralStage — The Exception
+### 4. Use Scope only for service-owned lifecycles
+
+`Scope` in stage code is for pairing cleanup with a handle returned by a service. It is **not** permission to create temp directories, files, networks, or daemons directly in the stage and then delete them manually.
+
+Prefer `Effect.acquireRelease` when the acquire/release pair is local:
 
 ```typescript
-export interface ProceduralStage {
-  kind: "procedural";
-  name: string;
-  execute(input: StageInput): Promise<ProceduralResult>;
-  teardown?(input: StageInput): Promise<void>;
-}
+yield* Effect.acquireRelease(
+  authRouterService.ensureDaemon(runtimePaths),
+  (handle) => handle.abort().pipe(
+    Effect.catchAll(() => Effect.logWarning("auth-router cleanup failed")),
+  ),
+);
 ```
 
-- `kind: "procedural"` declares side-effects at the type level.
-- Only for cases where plan/execute separation is impossible: user interaction, action-result branching, etc.
-- Requires justification. Currently only `WorktreeStage` uses this.
+Use `Effect.addFinalizer` only when you already have a handle from a service call:
 
-## Environment Resolution
+```typescript
+const handle = yield* sessionBrokerService.start(config);
+yield* Effect.addFinalizer(() =>
+  handle.close().pipe(
+    Effect.catchAll(() => Effect.logWarning("session broker cleanup failed")),
+  ),
+);
+```
 
-- `HostEnv`: built once at CLI startup via `buildHostEnv()`.
-- `ProbeResults`: resolved once before the pipeline via `resolveProbes()`.
-- Stages read `input.host` / `input.probes` — never call `Deno.env.get` directly.
+Finalizer rules:
+- Prefer `Effect.acquireRelease`; use `Effect.addFinalizer` only for an already-acquired service handle.
+- Register cleanup immediately after acquisition. Do not place fallible operations between acquire and finalizer registration.
+- Finalizers must never fail. Wrap them with `Effect.catchAll(() => Effect.logWarning(...))`.
+- If the cleanup body would need `fs.rm`, `docker.stop`, `proc.exec`, or similar low-level operations, that cleanup belongs in a service, not the stage.
 
-## Naming Conventions for Purity
+## Pipeline Execution
 
-| Prefix | Meaning | Side-effects |
-|---|---|---|
-| `build*`, `format*`, `expand*`, `parse*`, `merge*`, `validate*` | Pure computation | **Forbidden** |
-| `resolve*` | I/O-based resolution | Allowed (probe resolver / executor) |
-| `ensure*` | Create if missing | Allowed (executor) |
-| `check*`, `probe*` | Probe | Allowed (probe resolver) |
+### runPipeline
 
-A function's name signals whether it may have side-effects. If you name it `build*`, it must be pure.
+```typescript
+function runPipeline<const TStages extends readonly AnyStage[]>(
+  stages: TStages,
+  input: StageInput,
+): Effect.Effect<PriorStageOutputs, unknown, PipelineRequirements<TStages>>
+```
 
-## Where Side-Effects Are Allowed
+Runs stages sequentially. Each stage receives cumulative `prior` outputs from all preceding stages. The return type `PipelineRequirements<TStages>` is the union of all stages' `R` plus `Scope.Scope`.
 
-| Location | Role |
-|---|---|
-| CLI entry (`cli.ts`) | HostEnv construction, probe resolution, pipeline launch |
-| Probe resolver (`host_env.ts`, `mount_probes.ts`, `agents/*.ts` の `resolve*Probes`) | FS probe, env read, command execution |
-| Effect executor (`effects/`) | Docker ops, FS ops, process spawn |
-| `ProceduralStage.execute()` | Unavoidable side-effects (user interaction, etc.) |
-| **`PlanStage.plan()`** | **Forbidden** |
-| **`configure*()` (agents)** | **Forbidden** |
-| **`build*/format*/expand*` helpers** | **Forbidden** |
+### cli.ts (entry point)
+
+```typescript
+const exit = await Effect.runPromiseExit(
+  runPipeline(stages, input).pipe(
+    Effect.scoped,
+    Effect.provide(Layer.mergeAll(
+      FsServiceLive,
+      ProcessServiceLive,
+      DockerServiceLive,
+      PromptServiceLive,
+      DindServiceLive,
+      SessionBrokerServiceLive,
+      HostExecBrokerServiceLive,
+      AuthRouterServiceLive,
+      SessionStoreServiceLive,
+    )),
+  ),
+);
+```
+
+`Effect.scoped` creates a single `Scope` for the entire pipeline. All finalizers registered by stages and services run when the scope closes (in reverse order).
+
+## Testing
+
+### Pure planner tests
+
+Only add these when you intentionally extracted `planXxx()` because the pure branching is worth testing directly. No Effect runtime needed:
+
+```typescript
+const plan = planMount(input, probes);
+expect(plan?.envVars.NAS_USER).toBe("nas");
+```
+
+### Stage tests with fake services
+
+Provide fake layers for the services the stage orchestrates and run the stage in a scoped Effect:
+
+```typescript
+const calls: Array<{ sessionId: string; runtimeDir: string }> = [];
+
+const fakeMyStageService = Layer.succeed(
+  MyStageService,
+  MyStageService.of({
+    prepareWorkspace: (workspace) =>
+      Effect.sync(() => {
+        calls.push(workspace);
+        return { close: () => Effect.void };
+      }),
+  }),
+);
+
+const result = await Effect.runPromise(
+  Effect.scoped(
+    stage.run(input).pipe(
+      Effect.provide(fakeMyStageService),
+    ),
+  ),
+);
+
+expect(calls).toEqual([{ sessionId: input.sessionId, runtimeDir: "/tmp/nas" }]);
+expect(result.envVars.NAS_SESSION_ID).toBe(input.sessionId);
+```
+
+## Agents use the same split
+
+Agent modules are not stages, but they follow the same separation rule.
+
+- `resolve*Probes()` is the side-effectful boundary that inspects the host environment.
+- `configure*()` is pure. It translates probes plus inputs into `dockerArgs`, `envVars`, and `agentCommand`.
+- Stages such as `mount.ts` should call the pure `configure*()` functions, not re-run host inspection inline.
+- If agent-specific behavior grows from "derive config" into a lifecycle or multi-step setup/teardown workflow, move that I/O behind a service instead of teaching `configure*()` to do effects.
 
 ## Module-Level Constraints
 
 - Module-level `const`: true constants only (literals, regexes, etc.).
-- Module-level `let`: forbidden. Use injectable classes for caches.
-- Module-level side-effects (file reads, env access, etc.): forbidden.
-
-## Agent Configuration (`agents/`)
-
-Agent files (`agents/claude.ts`, `agents/copilot.ts`, `agents/codex.ts`) follow the same probe/pure-configurator split:
-
-```typescript
-// 1. Probe types — plain data
-export interface ClaudeProbes {
-  readonly claudeDirExists: boolean;
-  readonly claudeBinPath: string | null;
-}
-
-// 2. Resolver — side-effectful, called once at CLI startup
-export function resolveClaudeProbes(hostHome: string): ClaudeProbes { ... }
-
-// 3. Pure configurator — no I/O, called from PlanStage.plan()
-export function configureClaude(input: ClaudeConfigInput): AgentConfigResult { ... }
-```
-
-Rules:
-- `resolve*Probes()` — I/O allowed. Called from `resolveMountProbes()` before the pipeline starts.
-- `configure*()` — **pure**. Receives pre-resolved probes via input, returns docker args / env vars / agent command.
-- Environment variables must come from `HostEnv` (passed as argument), not from `Deno.env.get()` directly.
+- Module-level `let`: forbidden.
+- Module-level side-effects (file reads, env access): forbidden.
 
 ## Design Decision Flowchart
 
-When adding new functionality:
-
-1. **Need a stage?** — If adding Docker args, env vars, or effects, use PlanStage.
-2. **Need I/O?** — Move it outside `plan()`. Pre-resolve as a probe, or describe as `ResourceEffect` for the executor.
-3. **Can't separate plan/execute?** — Only if user interaction or result-dependent branching is required, consider ProceduralStage. Document the justification.
-4. **Adding/modifying an agent?** — I/O goes in `resolve*Probes()`, pure logic in `configure*()`.
-5. **Naming helpers** — Pure: `build*/format*/expand*`. I/O: `resolve*/ensure*/check*`.
+1. **Need a stage?** -- Create an `EffectStage<R>` with the smallest set of service requirements that express the capability.
+2. **Is there pure decision logic worth testing on its own?** -- Extract `planXxx()` and an optional plan type. Otherwise keep the pure logic inline or in smaller pure helpers.
+3. **Would execution require primitive filesystem/process/Docker I/O or manual cleanup?** -- Create or reuse a domain service first. Do not call primitive services directly from the stage.
+4. **Is there already an intentful service method for the job?** -- Call that service from the stage and keep the stage focused on orchestration.
+5. **Does the service return a long-lived handle?** -- Register cleanup with `Effect.acquireRelease` or `Effect.addFinalizer`.
+6. **Adding a new service?** -- Define Tag + Live + Fake in `src/services/`. Add the service to the `StageServices` union in `types.ts`.
+7. **Adding/modifying an agent?** -- Follow the same split: I/O in `resolve*Probes()`, pure logic in `configure*()`, lifecycle work in services.

@@ -1,20 +1,18 @@
 /**
- * 新 Stage アーキテクチャの型定義
- *
- * PlanStage: 純粋な plan() でデータ記述を返す（デフォルト）
- * ProceduralStage: 副作用を含む execute() を持つ（例外的）
+ * Stage アーキテクチャの型定義
  */
 
-import type {
-  AgentType,
-  Config,
-  HostExecConfig,
-  Profile,
-} from "../config/types.ts";
-import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
-import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
-import type { ApprovalScope } from "../network/protocol.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
+import type { Effect, Scope } from "effect";
+import type { Config, Profile } from "../config/types.ts";
+import type { AuthRouterService } from "../services/auth_router.ts";
+import type { DindService } from "../services/dind.ts";
+import type { DockerService } from "../services/docker.ts";
+import type { FsService } from "../services/fs.ts";
+import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
+import type { ProcessService } from "../services/process.ts";
+import type { SessionBrokerService } from "../services/session_broker.ts";
+import type { SessionStoreService } from "../services/session_store_service.ts";
+import type { PromptService } from "../stages/worktree/prompt_service.ts";
 
 // ---------------------------------------------------------------------------
 // Host environment & probes
@@ -80,235 +78,41 @@ export interface PriorStageOutputs {
 }
 
 // ---------------------------------------------------------------------------
-// Stage plan
+// Effect-based stage types
 // ---------------------------------------------------------------------------
 
-/** PlanStage.plan() の返り値 */
-export interface StagePlan {
-  effects: ResourceEffect[];
-  dockerArgs: string[];
-  envVars: Record<string, string>;
-  outputOverrides: Partial<PriorStageOutputs>;
-}
+// Effect stage result — partial outputs to merge into prior
+export type EffectStageResult = Partial<PriorStageOutputs>;
 
-/** ProceduralStage.execute() の返り値 */
-export interface ProceduralResult {
-  outputOverrides: Partial<PriorStageOutputs>;
-}
+// Union of all service tags that stages can depend on
+export type StageServices =
+  | DindService
+  | FsService
+  | HostExecBrokerService
+  | ProcessService
+  | DockerService
+  | PromptService
+  | SessionBrokerService
+  | SessionStoreService
+  | AuthRouterService;
 
-// ---------------------------------------------------------------------------
-// Readiness checks
-// ---------------------------------------------------------------------------
-
-export type ReadinessCheck =
-  | { kind: "tcp-port"; host: string; port: number }
-  | { kind: "http-ok"; url: string }
-  | { kind: "docker-healthy"; container: string }
-  | { kind: "file-exists"; path: string };
-
-// ---------------------------------------------------------------------------
-// Listener specs
-// ---------------------------------------------------------------------------
-
-export type ListenerSpec =
-  | {
-      kind: "session-broker";
-      paths: NetworkRuntimePaths;
-      sessionId: string;
-      allowlist: string[];
-      denylist: string[];
-      promptEnabled: boolean;
-    }
-  | {
-      kind: "hostexec-broker";
-      paths: HostExecRuntimePaths;
-      sessionId: string;
-      profileName: string;
-      workspaceRoot: string;
-      sessionTmpDir: string;
-      hostexec: HostExecConfig;
-      notify: ResolvedNotifyBackend;
-      uiEnabled: boolean;
-      uiPort: number;
-      uiIdleTimeout: number;
-      auditDir: string;
-      agent: AgentType;
-    };
-
-// ---------------------------------------------------------------------------
-// Resource effects
-// ---------------------------------------------------------------------------
-
-export type ResourceEffect =
-  | DockerContainerEffect
-  | DockerNetworkEffect
-  | DockerVolumeEffect
-  | DirectoryCreateEffect
-  | FileWriteEffect
-  | SymlinkEffect
-  | ProcessSpawnEffect
-  | UnixListenerEffect
-  | WaitForReadyEffect
-  | DindSidecarEffect
-  | DbusProxyEffect
-  | DockerImageBuildEffect
-  | DockerRunInteractiveEffect
-  | ProxySessionEffect;
-
-export interface DockerContainerEffect {
-  kind: "docker-container";
+// A stage that runs as an Effect
+export interface EffectStage<R extends StageServices = never> {
+  kind: "effect";
   name: string;
-  image: string;
-  reuseIfRunning: boolean;
-  keepOnTeardown: boolean;
-  args: string[];
-  envVars: Record<string, string>;
-  labels: Record<string, string>;
+  run(
+    input: StageInput,
+  ): Effect.Effect<EffectStageResult, unknown, Scope.Scope | R>;
 }
 
-export interface DockerNetworkEffect {
-  kind: "docker-network";
-  name: string;
-  connect: { container: string; aliases?: string[] }[];
-}
+// Extract service requirements from a stage
+export type StageServicesOf<TStage extends EffectStage<StageServices>> =
+  TStage extends EffectStage<infer R extends StageServices> ? R : never;
 
-export interface DockerVolumeEffect {
-  kind: "docker-volume";
-  name: string;
-}
-
-export interface DirectoryCreateEffect {
-  kind: "directory-create";
-  path: string;
-  mode: number;
-  removeOnTeardown: boolean;
-}
-
-export interface FileWriteEffect {
-  kind: "file-write";
-  path: string;
-  content: string;
-  mode: number;
-}
-
-export interface SymlinkEffect {
-  kind: "symlink";
-  target: string;
-  path: string;
-}
-
-export interface ProcessSpawnEffect {
-  kind: "process-spawn";
-  id: string;
-  command: string;
-  args: string[];
-}
-
-export interface UnixListenerEffect {
-  kind: "unix-listener";
-  id: string;
-  socketPath: string;
-  spec: ListenerSpec;
-}
-
-export interface WaitForReadyEffect {
-  kind: "wait-for-ready";
-  check: ReadinessCheck;
-  timeoutMs: number;
-  pollIntervalMs: number;
-}
-
-export interface DindSidecarEffect {
-  kind: "dind-sidecar";
-  containerName: string;
-  sharedTmpVolume: string;
-  networkName: string;
-  shared: boolean;
-  disableCache: boolean;
-  readinessTimeoutMs: number;
-}
-
-export interface DbusProxyEffect {
-  kind: "dbus-proxy";
-  proxyBinaryPath: string;
-  runtimeDir: string;
-  sessionsDir: string;
-  sessionDir: string;
-  socketPath: string;
-  pidFile: string;
-  sourceAddress: string;
-  args: string[];
-  timeoutMs: number;
-  pollIntervalMs: number;
-}
-
-export interface DockerImageBuildEffect {
-  kind: "docker-image-build";
-  imageName: string;
-  /** Embedded asset groups to extract to a temp dir before building */
-  assetGroups: readonly {
-    baseDir: string;
-    outputDir: string;
-    files: readonly string[];
-  }[];
-  labels: Record<string, string>;
-}
-
-export interface DockerRunInteractiveEffect {
-  kind: "docker-run-interactive";
-  image: string;
-  name: string;
-  args: string[];
-  envVars: Record<string, string>;
-  command: string[];
-  labels: Record<string, string>;
-}
-
-export interface ProxySessionEffect {
-  kind: "proxy-session";
-  envoyContainerName: string;
-  envoyImage: string;
-  envoyAlias: string;
-  envoyProxyPort: number;
-  envoyReadyTimeoutMs: number;
-  sessionId: string;
-  sessionNetworkName: string;
-  profileName: string;
-  agent: AgentType;
-  runtimePaths: NetworkRuntimePaths;
-  brokerSocket: string;
-  token?: string;
-  allowlist: string[];
-  denylist: string[];
-  promptEnabled: boolean;
-  timeoutSeconds: number;
-  defaultScope: ApprovalScope;
-  notify: ResolvedNotifyBackend;
-  uiEnabled: boolean;
-  uiPort: number;
-  uiIdleTimeout: number;
-  auditDir: string;
-  dindContainerName: string | null;
-}
-
-// ---------------------------------------------------------------------------
-// Stage interfaces
-// ---------------------------------------------------------------------------
-
-/** 純粋な plan() でデータ記述を返す stage（デフォルト） */
-export interface PlanStage {
-  kind: "plan";
-  name: string;
-  plan(input: StageInput): StagePlan | null;
-}
-
-/** 副作用を含む execute() を持つ stage（例外的） */
-export interface ProceduralStage {
-  kind: "procedural";
-  name: string;
-  execute(input: StageInput): Promise<ProceduralResult>;
-  teardown?(input: StageInput): Promise<void>;
-}
+// Compute pipeline requirements from a tuple of stages
+export type PipelineRequirements<
+  TStages extends readonly EffectStage<StageServices>[],
+> = Scope.Scope | StageServicesOf<TStages[number]>;
 
 /** すべての stage の union type */
-export type AnyStage = PlanStage | ProceduralStage;
+export type AnyStage = EffectStage<StageServices>;

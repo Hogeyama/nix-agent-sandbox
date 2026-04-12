@@ -2,6 +2,7 @@
  * CLI エントリポイント
  */
 
+import { Cause, Effect, Exit, Layer } from "effect";
 import pkg from "../package.json";
 import {
   applyWorktreeOverride,
@@ -26,8 +27,16 @@ import { loadConfig, resolveProfile } from "./config/load.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import { setLogLevel } from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
-import { runPipeline } from "./pipeline/pipeline.ts";
+import { runPipelineEffect } from "./pipeline/pipeline.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
+import { AuthRouterServiceLive } from "./services/auth_router.ts";
+import { DindServiceLive } from "./services/dind.ts";
+import { DockerServiceLive } from "./services/docker.ts";
+import { FsServiceLive } from "./services/fs.ts";
+import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
+import { ProcessServiceLive } from "./services/process.ts";
+import { SessionBrokerServiceLive } from "./services/session_broker.ts";
+import { SessionStoreServiceLive } from "./services/session_store_service.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
 import {
@@ -39,8 +48,9 @@ import { createLaunchStage } from "./stages/launch.ts";
 import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
-import { SessionStoreStage } from "./stages/session_store.ts";
-import { WorktreeStage } from "./stages/worktree.ts";
+import { createSessionStoreStage } from "./stages/session_store.ts";
+import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
+import { createWorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
 const VERSION: string = pkg.version;
@@ -160,8 +170,7 @@ export async function main(args: string[]): Promise<void> {
     // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
     // propagate and abort the pipeline. This matches legacy stage behavior
     // where the same I/O happens inside each stage's execute().
-    // NOTE: Probes are passed to StageInput and consumed by PlanStage
-    // instances. ProceduralStage (WorktreeStage) does not use probes.
+    // NOTE: Probes are passed to StageInput and consumed by stages.
     const hostEnv = buildHostEnv();
     const probes = await resolveProbes(hostEnv);
 
@@ -196,9 +205,21 @@ export async function main(args: string[]): Promise<void> {
     // BuildProbes を事前解決
     const buildProbes = await resolveBuildProbes(imageName);
 
+    const liveLayer = Layer.mergeAll(
+      AuthRouterServiceLive,
+      DindServiceLive,
+      FsServiceLive,
+      HostExecBrokerServiceLive,
+      ProcessServiceLive,
+      DockerServiceLive,
+      PromptServiceLive,
+      SessionBrokerServiceLive,
+      SessionStoreServiceLive,
+    );
+
     const stages = [
-      new WorktreeStage(),
-      new SessionStoreStage(),
+      createWorktreeStage(),
+      createSessionStoreStage(),
       createDockerBuildStage(buildProbes),
       NixDetectStage,
       createDbusProxyStage(),
@@ -207,7 +228,7 @@ export async function main(args: string[]): Promise<void> {
       createDindStage(),
       createProxyStage(),
       createLaunchStage(agentExtraArgs),
-    ];
+    ] as const;
 
     // 初期 PriorStageOutputs を構築
     const initialPrior: PriorStageOutputs = {
@@ -225,15 +246,22 @@ export async function main(args: string[]): Promise<void> {
       dbusProxyEnabled: effectiveProfile.dbus.session.enable,
     };
 
-    await runPipeline(stages, {
-      config,
-      profile: effectiveProfile,
-      profileName: name,
-      sessionId,
-      host: hostEnv,
-      probes,
-      prior: initialPrior,
-    });
+    const exit = await Effect.runPromiseExit(
+      runPipelineEffect(stages, {
+        config,
+        profile: effectiveProfile,
+        profileName: name,
+        sessionId,
+        host: hostEnv,
+        probes,
+        prior: initialPrior,
+      }).pipe(Effect.scoped, Effect.provide(liveLayer)),
+    );
+
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause);
+      exitOnCliError(error);
+    }
   } catch (err) {
     exitOnCliError(err);
   }

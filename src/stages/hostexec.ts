@@ -1,11 +1,12 @@
 /**
- * HostExec Stage (PlanStage)
+ * HostExec Stage (EffectStage)
  *
  * ホスト上のコマンド実行を仲介する HostExecBroker を起動し、
  * エージェントコンテナ内からラッパースクリプト経由でアクセスできるようにする。
  */
 
 import * as path from "node:path";
+import { Effect, type Scope } from "effect";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
 import {
   isBareCommandHostExecArgv0,
@@ -14,205 +15,254 @@ import {
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../lib/notify_utils.ts";
 import type {
+  EffectStage,
+  EffectStageResult,
   HostEnv,
-  PlanStage,
-  ResourceEffect,
   StageInput,
-  StagePlan,
 } from "../pipeline/types.ts";
+import { FsService } from "../services/fs.ts";
+import { HostExecBrokerService } from "../services/hostexec_broker.ts";
 
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
 
 // ---------------------------------------------------------------------------
-// PlanStage
+// HostExecPlan
 // ---------------------------------------------------------------------------
 
-export function createHostExecStage(): PlanStage {
+export interface HostExecPlan {
+  readonly directories: ReadonlyArray<{ path: string; mode: number }>;
+  readonly files: ReadonlyArray<{
+    path: string;
+    content: string;
+    mode: number;
+  }>;
+  readonly symlinks: ReadonlyArray<{ target: string; path: string }>;
+  readonly dockerArgs: string[];
+  readonly envVars: Record<string, string>;
+  readonly outputOverrides: EffectStageResult;
+  readonly broker: {
+    readonly socketPath: string;
+    readonly paths: HostExecRuntimePaths;
+    readonly sessionId: string;
+    readonly profileName: string;
+    readonly workspaceRoot: string;
+    readonly sessionTmpDir: string;
+    readonly hostexec: StageInput["profile"]["hostexec"];
+    readonly notify: ReturnType<typeof resolveNotifyBackend>;
+    readonly uiEnabled: boolean;
+    readonly uiPort: number;
+    readonly uiIdleTimeout: number;
+    readonly auditDir: string | undefined;
+    readonly agent: StageInput["profile"]["agent"];
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EffectStage
+// ---------------------------------------------------------------------------
+
+export function createHostExecStage(): EffectStage<
+  FsService | HostExecBrokerService
+> {
   return {
-    kind: "plan",
+    kind: "effect",
     name: "HostExecStage",
 
-    plan(input: StageInput): StagePlan | null {
-      const config =
-        input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
-      if (config.rules.length === 0) {
-        return null;
+    run(
+      input: StageInput,
+    ): Effect.Effect<
+      EffectStageResult,
+      unknown,
+      Scope.Scope | FsService | HostExecBrokerService
+    > {
+      const plan = planHostExec(input);
+      if (plan === null) {
+        return Effect.succeed({});
       }
-
-      const runtimePaths = resolveHostExecRuntimePathsPure(input.host);
-      const socketPath = path.join(
-        runtimePaths.brokersDir,
-        `${input.sessionId}.sock`,
-      );
-      const wrapperRoot = path.join(runtimePaths.wrappersDir, input.sessionId);
-      const wrapperBinDir = path.join(wrapperRoot, "bin");
-      const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
-      const sessionTmpDir = path.join(wrapperRoot, "tmp");
-      const containerSessionTmp = path.join(SESSION_TMP_ROOT, input.sessionId);
-
-      const effects: ResourceEffect[] = [];
-
-      // Create runtime directories
-      effects.push({
-        kind: "directory-create",
-        path: runtimePaths.runtimeDir,
-        mode: 0o755,
-        removeOnTeardown: false,
-      });
-      effects.push({
-        kind: "directory-create",
-        path: runtimePaths.sessionsDir,
-        mode: 0o700,
-        removeOnTeardown: false,
-      });
-      effects.push({
-        kind: "directory-create",
-        path: runtimePaths.pendingDir,
-        mode: 0o700,
-        removeOnTeardown: false,
-      });
-      effects.push({
-        kind: "directory-create",
-        path: runtimePaths.brokersDir,
-        mode: 0o700,
-        removeOnTeardown: false,
-      });
-      effects.push({
-        kind: "directory-create",
-        path: runtimePaths.wrappersDir,
-        mode: 0o700,
-        removeOnTeardown: false,
-      });
-
-      // Create wrapper bin dir and session tmp dir
-      effects.push({
-        kind: "directory-create",
-        path: wrapperBinDir,
-        mode: 0o755,
-        removeOnTeardown: false,
-      });
-      effects.push({
-        kind: "directory-create",
-        path: sessionTmpDir,
-        mode: 0o700,
-        removeOnTeardown: false,
-      });
-
-      // Write wrapper script
-      effects.push({
-        kind: "file-write",
-        path: wrapperScript,
-        content: buildWrapperScript(),
-        mode: 0o755,
-      });
-
-      // Create symlinks for bare command argv0s
-      const argv0Names = new Set(
-        config.rules
-          .map((rule) => rule.match.argv0)
-          .filter(isBareCommandHostExecArgv0),
-      );
-      for (const argv0 of argv0Names) {
-        effects.push({
-          kind: "symlink",
-          target: "hostexec-wrapper.py",
-          path: path.join(wrapperBinDir, argv0),
-        });
-      }
-
-      // Symlinks for relative argv0 wrappers — computed purely.
-      // NOTE: The legacy stage did Deno.stat() to check if the target file
-      // exists. In the PlanStage version, we skip the existence check and
-      // always emit the mount. If the file doesn't exist at container start,
-      // Docker will create a directory mount instead (harmless for missing
-      // targets, and the wrapper script handles missing binaries gracefully).
-      const relativeArgv0s = [
-        ...new Set(
-          config.rules
-            .map((rule) => rule.match.argv0)
-            .filter(isRelativeHostExecArgv0),
-        ),
-      ];
-
-      // Bind-mounts for absolute argv0 wrappers — replaces the container
-      // binary at that exact path so the wrapper intercepts the call.
-      const absoluteArgv0s = [
-        ...new Set(
-          config.rules
-            .map((rule) => rule.match.argv0)
-            .filter((argv0) => path.isAbsolute(argv0)),
-        ),
-      ];
-
-      // Start HostExecBroker via unix-listener effect
-      const workspaceRoot = input.prior.mountDir ?? input.prior.workDir;
-      effects.push({
-        kind: "unix-listener",
-        id: "hostexec-broker",
-        socketPath,
-        spec: {
-          kind: "hostexec-broker",
-          paths: runtimePaths,
-          sessionId: input.sessionId,
-          profileName: input.profileName,
-          workspaceRoot,
-          sessionTmpDir,
-          hostexec: config,
-          notify: resolveNotifyBackend(config.prompt.notify),
-          uiEnabled: input.config.ui.enable,
-          uiPort: input.config.ui.port,
-          uiIdleTimeout: input.config.ui.idleTimeout,
-          auditDir: input.probes.auditDir,
-          agent: input.profile.agent,
-        },
-      });
-
-      const workDir = input.prior.workDir;
-
-      return {
-        effects,
-        dockerArgs: [
-          "-v",
-          `${wrapperBinDir}:${WRAPPER_DIR}:ro`,
-          "-v",
-          `${runtimePaths.brokersDir}:${runtimePaths.brokersDir}`,
-          "-v",
-          `${sessionTmpDir}:${containerSessionTmp}`,
-          ...relativeArgv0s.flatMap((argv0) => [
-            "-v",
-            `${wrapperScript}:${path.resolve(workDir, argv0)}:ro`,
-          ]),
-          ...absoluteArgv0s.flatMap((argv0) => [
-            "-v",
-            `${wrapperScript}:${argv0}:ro`,
-          ]),
-        ],
-        envVars: {
-          NAS_HOSTEXEC_SOCKET: socketPath,
-          NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
-          NAS_HOSTEXEC_SESSION_ID: input.sessionId,
-          NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
-        },
-        outputOverrides: {
-          hostexecRuntimeDir: runtimePaths.runtimeDir,
-          hostexecBrokerSocket: socketPath,
-          hostexecSessionTmpDir: containerSessionTmp,
-        },
-      };
+      return runHostExec(plan, input);
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Planner (pure)
+// ---------------------------------------------------------------------------
+
+export function planHostExec(input: StageInput): HostExecPlan | null {
+  const config =
+    input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
+  if (config.rules.length === 0) {
+    return null;
+  }
+
+  const runtimePaths = resolveHostExecRuntimePathsPure(input.host);
+  const socketPath = path.join(
+    runtimePaths.brokersDir,
+    `${input.sessionId}.sock`,
+  );
+  const wrapperRoot = path.join(runtimePaths.wrappersDir, input.sessionId);
+  const wrapperBinDir = path.join(wrapperRoot, "bin");
+  const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
+  const sessionTmpDir = path.join(wrapperRoot, "tmp");
+  const containerSessionTmp = path.join(SESSION_TMP_ROOT, input.sessionId);
+
+  const directories: HostExecPlan["directories"] = [
+    { path: runtimePaths.runtimeDir, mode: 0o755 },
+    { path: runtimePaths.sessionsDir, mode: 0o700 },
+    { path: runtimePaths.pendingDir, mode: 0o700 },
+    { path: runtimePaths.brokersDir, mode: 0o700 },
+    { path: runtimePaths.wrappersDir, mode: 0o700 },
+    { path: wrapperBinDir, mode: 0o755 },
+    { path: sessionTmpDir, mode: 0o700 },
+  ];
+
+  const files: HostExecPlan["files"] = [
+    { path: wrapperScript, content: buildWrapperScript(), mode: 0o755 },
+  ];
+
+  const symlinks: Array<{ target: string; path: string }> = [];
+  const argv0Names = new Set(
+    config.rules
+      .map((rule) => rule.match.argv0)
+      .filter(isBareCommandHostExecArgv0),
+  );
+  for (const argv0 of argv0Names) {
+    symlinks.push({
+      target: "hostexec-wrapper.py",
+      path: path.join(wrapperBinDir, argv0),
+    });
+  }
+
+  const relativeArgv0s = [
+    ...new Set(
+      config.rules
+        .map((rule) => rule.match.argv0)
+        .filter(isRelativeHostExecArgv0),
+    ),
+  ];
+
+  const absoluteArgv0s = [
+    ...new Set(
+      config.rules
+        .map((rule) => rule.match.argv0)
+        .filter((argv0) => path.isAbsolute(argv0)),
+    ),
+  ];
+
+  const workDir = input.prior.workDir;
+  const workspaceRoot = input.prior.mountDir ?? input.prior.workDir;
+
+  return {
+    directories,
+    files,
+    symlinks,
+    dockerArgs: [
+      "-v",
+      `${wrapperBinDir}:${WRAPPER_DIR}:ro`,
+      "-v",
+      `${runtimePaths.brokersDir}:${runtimePaths.brokersDir}`,
+      "-v",
+      `${sessionTmpDir}:${containerSessionTmp}`,
+      ...relativeArgv0s.flatMap((argv0) => [
+        "-v",
+        `${wrapperScript}:${path.resolve(workDir, argv0)}:ro`,
+      ]),
+      ...absoluteArgv0s.flatMap((argv0) => [
+        "-v",
+        `${wrapperScript}:${argv0}:ro`,
+      ]),
+    ],
+    envVars: {
+      NAS_HOSTEXEC_SOCKET: socketPath,
+      NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
+      NAS_HOSTEXEC_SESSION_ID: input.sessionId,
+      NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
+    },
+    outputOverrides: {
+      hostexecRuntimeDir: runtimePaths.runtimeDir,
+      hostexecBrokerSocket: socketPath,
+      hostexecSessionTmpDir: containerSessionTmp,
+    },
+    broker: {
+      socketPath,
+      paths: runtimePaths,
+      sessionId: input.sessionId,
+      profileName: input.profileName,
+      workspaceRoot,
+      sessionTmpDir,
+      hostexec: config,
+      notify: resolveNotifyBackend(config.prompt.notify),
+      uiEnabled: input.config.ui.enable,
+      uiPort: input.config.ui.port,
+      uiIdleTimeout: input.config.ui.idleTimeout,
+      auditDir: input.probes.auditDir,
+      agent: input.profile.agent,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Effect runner
+// ---------------------------------------------------------------------------
+
+function runHostExec(
+  plan: HostExecPlan,
+  input: StageInput,
+): Effect.Effect<
+  EffectStageResult,
+  unknown,
+  Scope.Scope | FsService | HostExecBrokerService
+> {
+  return Effect.gen(function* () {
+    const fs = yield* FsService;
+    const brokerService = yield* HostExecBrokerService;
+
+    for (const dir of plan.directories) {
+      yield* fs.mkdir(dir.path, { recursive: true, mode: dir.mode });
+    }
+
+    for (const file of plan.files) {
+      yield* fs.writeFile(file.path, file.content, { mode: file.mode });
+    }
+
+    for (const link of plan.symlinks) {
+      yield* fs.symlink(link.target, link.path);
+    }
+
+    const spec = plan.broker;
+
+    yield* Effect.acquireRelease(
+      brokerService.start({
+        paths: spec.paths,
+        sessionId: spec.sessionId,
+        socketPath: spec.socketPath,
+        profileName: spec.profileName,
+        workspaceRoot: spec.workspaceRoot,
+        sessionTmpDir: spec.sessionTmpDir,
+        hostexec: spec.hostexec,
+        notify: spec.notify,
+        uiEnabled: spec.uiEnabled,
+        uiPort: spec.uiPort,
+        uiIdleTimeout: spec.uiIdleTimeout,
+        auditDir: spec.auditDir,
+        agent: spec.agent,
+      }),
+      (handle) => handle.close(),
+    );
+
+    return {
+      ...plan.outputOverrides,
+      dockerArgs: [...input.prior.dockerArgs, ...plan.dockerArgs],
+      envVars: { ...input.prior.envVars, ...plan.envVars },
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Compute HostExecRuntimePaths purely from HostEnv (no I/O).
- * Mirrors the logic of resolveHostExecRuntimePaths() but without
- * creating directories.
- */
 export function resolveHostExecRuntimePathsPure(
   host: HostEnv,
 ): HostExecRuntimePaths {
@@ -221,7 +271,6 @@ export function resolveHostExecRuntimePathsPure(
   if (xdg && xdg.trim().length > 0) {
     runtimeDir = path.join(xdg, "nas", "hostexec");
   } else {
-    // uid is always non-null on Linux; "unknown" is a defensive fallback
     const uid = host.uid ?? "unknown";
     runtimeDir = path.join("/tmp", `nas-${uid}`, "hostexec");
   }

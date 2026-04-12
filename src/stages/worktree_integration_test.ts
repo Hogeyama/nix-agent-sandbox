@@ -11,6 +11,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
+import { Effect, Exit, Layer, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -18,18 +19,77 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import type {
+  EffectStageResult,
+  PriorStageOutputs,
+  StageInput,
+} from "../pipeline/types.ts";
+import { AuthRouterServiceLive } from "../services/auth_router.ts";
+import { DindServiceLive } from "../services/dind.ts";
+import { DockerServiceLive } from "../services/docker.ts";
+import { FsServiceLive } from "../services/fs.ts";
+import { HostExecBrokerServiceLive } from "../services/hostexec_broker.ts";
+import { ProcessServiceLive } from "../services/process.ts";
+import { SessionBrokerServiceLive } from "../services/session_broker.ts";
+import { SessionStoreServiceLive } from "../services/session_store_service.ts";
+import { PromptServiceLive } from "./worktree/prompt_service.ts";
 import {
   cleanNasWorktrees,
+  createWorktreeStage,
   listNasWorktrees,
   listOrphanNasBranches,
   resolveBase,
-  WorktreeStage,
 } from "./worktree.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+const liveLayer = Layer.mergeAll(
+  AuthRouterServiceLive,
+  DindServiceLive,
+  FsServiceLive,
+  HostExecBrokerServiceLive,
+  ProcessServiceLive,
+  DockerServiceLive,
+  PromptServiceLive,
+  SessionBrokerServiceLive,
+  SessionStoreServiceLive,
+);
+
+interface WorktreeStageAdapter {
+  name: string;
+  execute(input: StageInput): Promise<{ outputOverrides: EffectStageResult }>;
+  teardown(input?: StageInput): Promise<void>;
+}
+
+function makeWorktreeStage(): WorktreeStageAdapter {
+  const stage = createWorktreeStage();
+  let closeScope: Effect.Effect<void> | undefined;
+
+  return {
+    name: stage.name,
+    async execute(input: StageInput) {
+      const scope = Effect.runSync(Scope.make());
+      closeScope = Scope.close(scope, Exit.void);
+
+      const effect = stage
+        .run(input)
+        .pipe(
+          Effect.provideService(Scope.Scope, scope),
+          Effect.provide(liveLayer),
+        );
+      const outputOverrides = await Effect.runPromise(effect);
+      return { outputOverrides };
+    },
+    async teardown() {
+      if (closeScope) {
+        await Effect.runPromise(closeScope);
+        closeScope = undefined;
+      }
+    },
+  };
+}
 
 async function withTempRepo(
   fn: (repoRoot: string) => Promise<void>,
@@ -166,7 +226,7 @@ test("WorktreeStage: creates worktree under repo metadata and mounts repo root",
   await withTempRepo(async (repo) => {
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
-    const stage = new WorktreeStage();
+    const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
@@ -191,7 +251,7 @@ test("WorktreeStage: worktree commits stay visible from the main repository", as
   await withTempRepo(async (repo) => {
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
-    const stage = new WorktreeStage();
+    const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
@@ -223,7 +283,7 @@ test("WorktreeStage: starts from the selected base commit", async () => {
 
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
-    const stage = new WorktreeStage();
+    const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
@@ -259,7 +319,7 @@ test("WorktreeStage: inherits dirty tracked, staged, and untracked changes from 
 
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
-    const stage = new WorktreeStage();
+    const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
@@ -298,7 +358,7 @@ test("WorktreeStage: leaves a clean base branch clean in the new worktree", asyn
 
     const profile = createTestProfile("HEAD");
     const config = createTestConfig(profile);
-    const stage = new WorktreeStage();
+    const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
@@ -329,7 +389,7 @@ test("WorktreeStage teardown stashes dirty changes before deleting", async () =>
     // promptDirtyWorktreeAction → "1" (stash)
     // promptBranchAction → skipped (no unique commits → auto-delete)
     await withMockedPrompts(["1", "1"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -360,7 +420,7 @@ test("WorktreeStage teardown stashes dirty changes before deleting", async () =>
 test("WorktreeStage teardown can keep a dirty worktree from the stash prompt", async () => {
   await withTempRepo(async (repoRoot) => {
     await withMockedPrompts(["1", "3"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -396,7 +456,7 @@ test("WorktreeStage teardown keeps worktree when user chooses keep", async () =>
   await withTempRepo(async (repoRoot) => {
     // promptWorktreeAction → "2" (keep)
     await withMockedPrompts(["2"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -426,7 +486,7 @@ test("WorktreeStage teardown deletes clean worktree and branch", async () => {
     // promptDirtyWorktreeAction → skipped (clean)
     // promptBranchAction → skipped (no unique commits → auto-delete)
     await withMockedPrompts(["1"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -456,7 +516,7 @@ test("WorktreeStage teardown deletes dirty worktree without stashing", async () 
     // promptDirtyWorktreeAction → "2" (delete without stash)
     // promptBranchAction → skipped (no unique commits → auto-delete)
     await withMockedPrompts(["1", "2"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -486,7 +546,7 @@ test("WorktreeStage teardown renames branch and keeps it", async () => {
     // promptBranchAction → "3" (rename)
     // prompt for new name → "my-saved-branch"
     await withMockedPrompts(["1", "3", "my-saved-branch"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -529,7 +589,7 @@ test("WorktreeStage teardown rename with empty name keeps original branch name",
     // promptBranchAction → "3" (rename)
     // prompt for new name → "" (empty)
     await withMockedPrompts(["1", "3", ""], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -560,7 +620,7 @@ test("WorktreeStage teardown cherry-picks commits to base branch", async () => {
     // promptDirtyWorktreeAction → skipped (clean)
     // promptBranchAction → "2" (cherry-pick)
     await withMockedPrompts(["1", "2"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -595,7 +655,7 @@ test("WorktreeStage teardown cherry-picks even when base worktree has uncommitte
     // promptDirtyWorktreeAction → skipped (clean)
     // promptBranchAction → "2" (cherry-pick)
     await withMockedPrompts(["1", "2"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -643,7 +703,7 @@ test("WorktreeStage teardown auto-deletes branch with no new commits", async () 
     // promptDirtyWorktreeAction → skipped (clean)
     // promptBranchAction → skipped (no unique commits → auto-delete)
     await withMockedPrompts(["1"], async () => {
-      const stage = new WorktreeStage();
+      const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
       const worktreePath = result.outputOverrides.workDir!;
@@ -662,7 +722,7 @@ test("WorktreeStage teardown auto-deletes branch with no new commits", async () 
 // --- teardown without execute (no worktree) ---
 
 test("WorktreeStage teardown without execute is a no-op", async () => {
-  const stage = new WorktreeStage();
+  const stage = makeWorktreeStage();
   const profile: Profile = {
     ...testProfile,
     worktree: undefined,
@@ -680,7 +740,7 @@ test("WorktreeStage teardown without execute is a no-op", async () => {
 // --- execute skips when worktree not configured ---
 
 test("WorktreeStage execute skips when worktree is not configured", async () => {
-  const stage = new WorktreeStage();
+  const stage = makeWorktreeStage();
   const profile: Profile = {
     ...testProfile,
     worktree: undefined,
@@ -709,7 +769,7 @@ test("WorktreeStage execute throws on invalid base branch", async () => {
       profiles: { test: profile },
       ui: DEFAULT_UI_CONFIG,
     };
-    const stage = new WorktreeStage();
+    const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repoRoot);
 
     try {
@@ -726,14 +786,14 @@ test("WorktreeStage execute throws on invalid base branch", async () => {
 test("WorktreeStage execute reuses existing worktree when user selects it", async () => {
   await withTempRepo(async (repoRoot) => {
     // まず worktree を 1 つ作成
-    const stage1 = new WorktreeStage();
+    const stage1 = makeWorktreeStage();
     const input1 = createTestInput(testConfig, testProfile, repoRoot);
     const result1 = await stage1.execute(input1);
     const firstWorktreePath = result1.outputOverrides.workDir!;
 
     // 2 回目の execute: 既存 worktree が見つかる → "1" で再利用
     await withMockedPrompts(["1"], async () => {
-      const stage2 = new WorktreeStage();
+      const stage2 = makeWorktreeStage();
       const input2 = createTestInput(testConfig, testProfile, repoRoot);
       const result2 = await stage2.execute(input2);
 
@@ -756,14 +816,14 @@ test("WorktreeStage execute reuses existing worktree when user selects it", asyn
 test("WorktreeStage execute creates new worktree when user declines reuse", async () => {
   await withTempRepo(async (repoRoot) => {
     // まず worktree を 1 つ作成
-    const stage1 = new WorktreeStage();
+    const stage1 = makeWorktreeStage();
     const input1 = createTestInput(testConfig, testProfile, repoRoot);
     const result1 = await stage1.execute(input1);
     const firstWorktreePath = result1.outputOverrides.workDir!;
 
     // 2 回目の execute: "0" で新規作成
     await withMockedPrompts(["0"], async () => {
-      const stage2 = new WorktreeStage();
+      const stage2 = makeWorktreeStage();
       const input2 = createTestInput(testConfig, testProfile, repoRoot);
       const result2 = await stage2.execute(input2);
 
@@ -805,7 +865,7 @@ test("WorktreeStage execute runs onCreate hook", async () => {
       profiles: { test: profile },
       ui: DEFAULT_UI_CONFIG,
     };
-    const stage = new WorktreeStage();
+    const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repoRoot);
     const result = await stage.execute(input);
     const workDir = result.outputOverrides.workDir!;
