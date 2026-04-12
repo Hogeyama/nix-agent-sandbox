@@ -1,11 +1,13 @@
 /**
- * マウント構成の組み立てステージ (PlanStage)
+ * マウント構成の組み立てステージ (EffectStage<FsService>)
  *
  * resolveMountProbes() で全ての I/O を事前解決し、
- * plan() は純粋関数として dockerArgs/envVars/effects を返す。
+ * planMount() は純粋関数として MountPlan を返す。
+ * run() は FsService を使ってディレクトリ作成等を実行する。
  */
 
 import * as path from "node:path";
+import { Effect } from "effect";
 import type { ClaudeProbes } from "../agents/claude.ts";
 import { configureClaude } from "../agents/claude.ts";
 import type { CodexProbes } from "../agents/codex.ts";
@@ -14,12 +16,11 @@ import type { CopilotProbes } from "../agents/copilot.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 import { logWarn } from "../log.ts";
 import type {
-  DirectoryCreateEffect,
-  PlanStage,
-  ResourceEffect,
+  EffectStage,
+  EffectStageResult,
   StageInput,
-  StagePlan,
 } from "../pipeline/types.ts";
+import { FsService } from "../services/fs.ts";
 import type { MountProbes } from "./mount_probes.ts";
 
 export type {
@@ -68,22 +69,49 @@ interface RegisteredMountDestination {
 }
 
 // ---------------------------------------------------------------------------
-// PlanStage factory
+// MountPlan — pure data description returned by planMount()
 // ---------------------------------------------------------------------------
 
-/**
- * MountStage の PlanStage を作成する。
- *
- * mountProbes は cli.ts で事前解決された I/O 結果。
- * plan() は純粋関数。
- */
-export function createMountStage(mountProbes: MountProbes): PlanStage {
+export interface MountPlanDirectory {
+  readonly path: string;
+  readonly mode: number;
+  readonly removeOnTeardown: boolean;
+}
+
+export interface MountPlan {
+  readonly directories: readonly MountPlanDirectory[];
+  readonly dockerArgs: readonly string[];
+  readonly envVars: Readonly<Record<string, string>>;
+  readonly outputOverrides: Partial<EffectStageResult>;
+}
+
+// ---------------------------------------------------------------------------
+// EffectStage factory
+// ---------------------------------------------------------------------------
+
+export function createMountStage(
+  mountProbes: MountProbes,
+): EffectStage<FsService> {
   return {
-    kind: "plan",
+    kind: "effect",
     name: "MountStage",
 
-    plan(input: StageInput): StagePlan {
-      return planMount(input, mountProbes);
+    run(input: StageInput) {
+      const plan = planMount(input, mountProbes);
+
+      return Effect.gen(function* () {
+        const fs = yield* FsService;
+
+        for (const dir of plan.directories) {
+          yield* fs.mkdir(dir.path, { recursive: true, mode: dir.mode });
+        }
+
+        return {
+          dockerArgs: [...plan.dockerArgs],
+          envVars: { ...plan.envVars },
+          ...plan.outputOverrides,
+        } satisfies EffectStageResult;
+      });
     },
   };
 }
@@ -92,9 +120,9 @@ export function createMountStage(mountProbes: MountProbes): PlanStage {
 // Pure plan function
 // ---------------------------------------------------------------------------
 
-function planMount(input: StageInput, probes: MountProbes): StagePlan {
+export function planMount(input: StageInput, probes: MountProbes): MountPlan {
   const { host, profile, prior } = input;
-  const effects: ResourceEffect[] = [];
+  const directories: MountPlanDirectory[] = [];
   const args: string[] = [];
   const envVars: Record<string, string> = {};
 
@@ -168,22 +196,20 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
       // nix print-dev-env キャッシュ用ディレクトリ
       const xdgCache = host.env.get("XDG_CACHE_HOME") || `${host.home}/.cache`;
       const nasCacheDir = `${xdgCache}/nas`;
-      effects.push({
-        kind: "directory-create",
+      directories.push({
         path: nasCacheDir,
         mode: 0o755,
         removeOnTeardown: false,
-      } satisfies DirectoryCreateEffect);
+      });
       args.push("-v", `${nasCacheDir}:${containerHome}/.cache/nas`);
 
       // ホストの ~/.cache/nix
       const hostNixCache = `${xdgCache}/nix`;
-      effects.push({
-        kind: "directory-create",
+      directories.push({
         path: hostNixCache,
         mode: 0o755,
         removeOnTeardown: false,
-      } satisfies DirectoryCreateEffect);
+      });
       args.push("-v", `${hostNixCache}:${containerHome}/.cache/nix`);
 
       const nixExtraPackages = serializeNixExtraPackages(
@@ -464,7 +490,7 @@ function planMount(input: StageInput, probes: MountProbes): StagePlan {
   }
 
   return {
-    effects,
+    directories,
     dockerArgs: args,
     envVars,
     outputOverrides: { agentCommand },
