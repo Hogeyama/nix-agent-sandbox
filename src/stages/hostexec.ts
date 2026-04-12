@@ -8,19 +8,12 @@
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
-import { HostExecBroker } from "../hostexec/broker.ts";
 import {
   isBareCommandHostExecArgv0,
   isRelativeHostExecArgv0,
 } from "../hostexec/match.ts";
-import {
-  type HostExecRuntimePaths,
-  removeHostExecPendingDir,
-  removeHostExecSessionRegistry,
-  writeHostExecSessionRegistry,
-} from "../hostexec/registry.ts";
+import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../lib/notify_utils.ts";
-import { logInfo, logWarn } from "../log.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -28,6 +21,8 @@ import type {
   StageInput,
 } from "../pipeline/types.ts";
 import { FsService } from "../services/fs.ts";
+// biome-ignore lint/style/useImportType: used as value for yield*
+import { HostExecBrokerService } from "../services/hostexec_broker.ts";
 
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
@@ -68,14 +63,20 @@ export interface HostExecPlan {
 // EffectStage
 // ---------------------------------------------------------------------------
 
-export function createHostExecStage(): EffectStage<FsService> {
+export function createHostExecStage(): EffectStage<
+  FsService | HostExecBrokerService
+> {
   return {
     kind: "effect",
     name: "HostExecStage",
 
     run(
       input: StageInput,
-    ): Effect.Effect<EffectStageResult, unknown, Scope.Scope | FsService> {
+    ): Effect.Effect<
+      EffectStageResult,
+      unknown,
+      Scope.Scope | FsService | HostExecBrokerService
+    > {
       const plan = planHostExec(input);
       if (plan === null) {
         return Effect.succeed({});
@@ -208,9 +209,14 @@ export function planHostExec(input: StageInput): HostExecPlan | null {
 
 function runHostExec(
   plan: HostExecPlan,
-): Effect.Effect<EffectStageResult, unknown, Scope.Scope | FsService> {
+): Effect.Effect<
+  EffectStageResult,
+  unknown,
+  Scope.Scope | FsService | HostExecBrokerService
+> {
   return Effect.gen(function* () {
     const fs = yield* FsService;
+    const brokerService = yield* HostExecBrokerService;
 
     for (const dir of plan.directories) {
       yield* fs.mkdir(dir.path, { recursive: true, mode: dir.mode });
@@ -227,67 +233,22 @@ function runHostExec(
     const spec = plan.broker;
 
     yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        try: async () => {
-          const broker = new HostExecBroker({
-            paths: spec.paths,
-            sessionId: spec.sessionId,
-            profileName: spec.profileName,
-            workspaceRoot: spec.workspaceRoot,
-            sessionTmpDir: spec.sessionTmpDir,
-            hostexec: spec.hostexec,
-            notify: spec.notify,
-            uiEnabled: spec.uiEnabled,
-            uiPort: spec.uiPort,
-            uiIdleTimeout: spec.uiIdleTimeout,
-            auditDir: spec.auditDir,
-          });
-          await broker.start(spec.socketPath);
-          try {
-            await writeHostExecSessionRegistry(spec.paths, {
-              version: 1,
-              sessionId: spec.sessionId,
-              brokerSocket: spec.socketPath,
-              profileName: spec.profileName,
-              createdAt: new Date().toISOString(),
-              pid: process.pid,
-              agent: spec.agent,
-            });
-          } catch (error) {
-            try {
-              await broker.close();
-            } catch (closeErr) {
-              logWarn(
-                `[nas] HostExec: failed to close broker after registry write failure: ${closeErr}`,
-              );
-            }
-            throw error;
-          }
-          return broker;
-        },
-        catch: (e) => e,
+      brokerService.start({
+        paths: spec.paths,
+        sessionId: spec.sessionId,
+        socketPath: spec.socketPath,
+        profileName: spec.profileName,
+        workspaceRoot: spec.workspaceRoot,
+        sessionTmpDir: spec.sessionTmpDir,
+        hostexec: spec.hostexec,
+        notify: spec.notify,
+        uiEnabled: spec.uiEnabled,
+        uiPort: spec.uiPort,
+        uiIdleTimeout: spec.uiIdleTimeout,
+        auditDir: spec.auditDir,
+        agent: spec.agent,
       }),
-      (broker) =>
-        Effect.tryPromise({
-          try: async () => {
-            await broker.close();
-            await removeHostExecSessionRegistry(
-              spec.paths,
-              spec.sessionId,
-            ).catch((e) =>
-              logInfo(
-                `[nas] HostExec teardown: failed to remove session registry: ${e}`,
-              ),
-            );
-            await removeHostExecPendingDir(spec.paths, spec.sessionId).catch(
-              (e) =>
-                logInfo(
-                  `[nas] HostExec teardown: failed to remove pending dir: ${e}`,
-                ),
-            );
-          },
-          catch: (e) => e,
-        }).pipe(Effect.ignoreLogged),
+      (handle) => handle.close(),
     );
 
     return {

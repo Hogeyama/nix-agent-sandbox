@@ -9,6 +9,7 @@ import type {
   StageInput,
 } from "../pipeline/types.ts";
 import { makeFsServiceFake } from "../services/fs.ts";
+import { makeHostExecBrokerServiceFake } from "../services/hostexec_broker.ts";
 import { createHostExecStage, planHostExec } from "./hostexec.ts";
 
 function makeProfile(): Profile {
@@ -301,12 +302,17 @@ test("HostExecStage: run returns empty when no rules", async () => {
   const input = makeStageInput(profile, hostEnv);
   const stage = createHostExecStage();
 
-  const { layer } = makeFsServiceFake();
+  const { layer: fsLayer } = makeFsServiceFake();
+  const brokerLayer = makeHostExecBrokerServiceFake();
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
       .run(input)
-      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(fsLayer),
+        Effect.provide(brokerLayer),
+      ),
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
@@ -320,21 +326,22 @@ test("HostExecStage: run creates directories, files, and symlinks via FsService"
   const input = makeStageInput(profile, hostEnv);
   const plan = planHostExec(input)!;
 
-  const { layer, store } = makeFsServiceFake();
+  const { layer: fsLayer, store } = makeFsServiceFake();
+  const brokerLayer = makeHostExecBrokerServiceFake();
 
   const stage = createHostExecStage();
   const scope = Effect.runSync(Scope.make());
 
-  // run() will fail at broker.start() since there's no real broker,
-  // but we can verify the fs operations by catching the error
   await Effect.runPromiseExit(
     stage
       .run(input)
-      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(fsLayer),
+        Effect.provide(brokerLayer),
+      ),
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
-
-  // Broker start will fail, but directories and files should have been created
   for (const dir of plan.directories) {
     expect(store.has(dir.path)).toEqual(true);
   }

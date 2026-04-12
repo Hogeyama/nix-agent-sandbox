@@ -29,6 +29,7 @@ import { AuthRouterServiceLive } from "../services/auth_router.ts";
 import { DindServiceLive } from "../services/dind.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { FsServiceLive } from "../services/fs.ts";
+import { HostExecBrokerServiceLive } from "../services/hostexec_broker.ts";
 import { ProcessServiceLive } from "../services/process.ts";
 import { SessionBrokerServiceLive } from "../services/session_broker.ts";
 import { PromptServiceLive } from "./worktree/prompt_service.ts";
@@ -48,6 +49,7 @@ const liveLayer = Layer.mergeAll(
   AuthRouterServiceLive,
   DindServiceLive,
   FsServiceLive,
+  HostExecBrokerServiceLive,
   ProcessServiceLive,
   DockerServiceLive,
   PromptServiceLive,
