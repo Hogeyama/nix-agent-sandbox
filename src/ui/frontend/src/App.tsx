@@ -77,7 +77,7 @@ export function App() {
   const totalPending = networkPending.length + hostExecPending.length;
   const userTurnCount = containers.filter((c) => c.turn === "user-turn").length;
 
-  useFaviconBadge(totalPending);
+  useFaviconBadge(totalPending, userTurnCount);
 
   const handleSSE = useCallback((event: string, data: unknown) => {
     const d = data as Record<string, unknown>;

@@ -1,10 +1,12 @@
 import { useEffect } from "preact/hooks";
 
 /**
- * Dynamically sets the favicon to show a red notification dot
- * when there are pending items (like Slack does).
+ * Dynamically sets the favicon to show a notification dot:
+ * - Red dot when there are pending approvals (pendingCount > 0)
+ * - Yellow dot when containers await user turn (userTurnCount > 0)
+ * Red takes priority over yellow.
  */
-export function useFaviconBadge(count: number) {
+export function useFaviconBadge(pendingCount: number, userTurnCount: number) {
   useEffect(() => {
     const SIZE = 32;
     const canvas = document.createElement("canvas");
@@ -23,9 +25,11 @@ export function useFaviconBadge(count: number) {
     ctx.textBaseline = "middle";
     ctx.fillText("N", SIZE / 2, SIZE / 2 + 1);
 
-    // Red badge dot when count > 0
-    if (count > 0) {
-      ctx.fillStyle = "#ef4444";
+    // Badge dot: red for pending (priority), yellow for user-turn
+    const badgeColor =
+      pendingCount > 0 ? "#ef4444" : userTurnCount > 0 ? "#eab308" : null;
+    if (badgeColor) {
+      ctx.fillStyle = badgeColor;
       ctx.beginPath();
       ctx.arc(SIZE - 6, 6, 6, 0, Math.PI * 2);
       ctx.fill();
@@ -39,7 +43,7 @@ export function useFaviconBadge(count: number) {
       document.head.appendChild(link);
     }
     link.href = url;
-  }, [count]);
+  }, [pendingCount, userTurnCount]);
 }
 
 function roundRect(
