@@ -4,35 +4,35 @@
     "sessionStart": [
       {
         "type": "command",
-        "bash": "nas hook notification --kind start",
+        "bash": "nas hook --kind start",
         "timeoutSec": 10
       }
     ],
     "userPromptSubmitted": [
       {
         "type": "command",
-        "bash": "nas hook notification --kind start",
+        "bash": "nas hook --kind start",
         "timeoutSec": 10
       }
     ],
     "preToolUse": [
       {
         "type": "command",
-        "bash": "nas hook notification --kind attention --when toolName=ask_user",
+        "bash": "nas hook --kind attention --when toolName=ask_user",
         "timeoutSec": 10
       }
     ],
     "postToolUse": [
       {
         "type": "command",
-        "bash": "nas hook notification --kind start --when toolName=ask_user",
+        "bash": "nas hook --kind start --when toolName=ask_user",
         "timeoutSec": 10
       }
     ],
     "sessionEnd": [
       {
         "type": "command",
-        "bash": "nas hook notification --kind stop",
+        "bash": "nas hook --kind stop",
         "timeoutSec": 10
       }
     ]

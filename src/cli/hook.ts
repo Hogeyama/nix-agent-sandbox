@@ -23,7 +23,7 @@ import {
   type SessionRuntimePaths,
   updateSessionTurn,
 } from "../sessions/store.ts";
-import { getFlagValue, removeFirstOccurrence } from "./helpers.ts";
+import { getFlagValue } from "./helpers.ts";
 
 /** Maximum length of the `message` field surfaced to the store. */
 const MAX_MESSAGE_LEN = 200;
@@ -33,7 +33,7 @@ const STDIN_TIMEOUT_MS = 50;
 
 type StdinReader = () => Promise<string>;
 
-export interface RunHookNotificationDeps {
+export interface RunHookDeps {
   /** Override stdin reader — tests feed a synchronous string. */
   stdinReader?: StdinReader;
   /** Override notification sender — tests capture calls instead of spawning. */
@@ -46,40 +46,20 @@ interface HookMatcher {
 }
 
 /**
- * Top-level `nas hook ...` dispatcher. Only `notification` is defined
- * today. Unknown subcommands print a usage line to stderr and exit 0.
- */
-export async function runHookCommand(nasArgs: string[]): Promise<void> {
-  const sub = nasArgs.find((arg) => !arg.startsWith("-"));
-  if (sub === "notification") {
-    const rest = removeFirstOccurrence(nasArgs, "notification");
-    await runHookNotification(rest);
-    return;
-  }
-  console.error(
-    `[nas] Unknown hook subcommand: ${sub ?? "(none)"}. ` +
-      `Usage: nas hook notification --kind start|attention|stop ` +
-      `[--when path=value ...]`,
-  );
-  // Never fail a hook, even on a typo.
-  return;
-}
-
-/**
- * Implement `nas hook notification --kind ...`.
+ * Top-level `nas hook ...` handler.
  *
  * Exported for unit tests via the `deps` parameter. Callers in production
- * (via `runHookCommand`) should pass no deps and get the real stdin reader.
+ * should pass no deps and get the real stdin reader.
  */
-export async function runHookNotification(
+export async function runHookCommand(
   args: string[],
-  deps: RunHookNotificationDeps = {},
+  deps: RunHookDeps = {},
 ): Promise<void> {
   const kindArg = getFlagValue(args, "--kind");
   const kind = parseHookKind(kindArg ?? undefined);
   if (kind === null) {
     console.error(
-      `[nas] hook notification: invalid or missing --kind ` +
+      `[nas] hook: invalid or missing --kind ` +
         `(expected start|attention|stop, got ${JSON.stringify(kindArg)})`,
     );
     return;
@@ -90,15 +70,13 @@ export async function runHookNotification(
 
   const sessionId = process.env.NAS_SESSION_ID;
   if (!sessionId || sessionId.length === 0) {
-    console.error(
-      "[nas] hook notification: NAS_SESSION_ID is not set; skipping.",
-    );
+    console.error("[nas] hook: NAS_SESSION_ID is not set; skipping.");
     return;
   }
 
   if (!isSafeSessionId(sessionId)) {
     console.error(
-      `[nas] hook notification: refusing unsafe NAS_SESSION_ID ` +
+      `[nas] hook: refusing unsafe NAS_SESSION_ID ` +
         `${JSON.stringify(sessionId)} (path traversal guard).`,
     );
     return;
@@ -115,9 +93,7 @@ export async function runHookNotification(
   } catch (err) {
     // Malformed JSON or stdin read failure — not fatal.
     console.error(
-      `[nas] hook notification: ignoring stdin parse error: ${
-        (err as Error).message
-      }`,
+      `[nas] hook: ignoring stdin parse error: ${(err as Error).message}`,
     );
   }
 
@@ -130,9 +106,7 @@ export async function runHookNotification(
     await updateSessionTurn(paths, sessionId, kind, message);
   } catch (err) {
     console.error(
-      `[nas] hook notification: session store update failed: ${
-        (err as Error).message
-      }`,
+      `[nas] hook: session store update failed: ${(err as Error).message}`,
     );
   }
 
@@ -149,8 +123,7 @@ function parseHookMatchers(args: string[]): HookMatcher[] | null {
 
     if (i + 1 >= args.length) {
       console.error(
-        "[nas] hook notification: missing value for --when " +
-          "(expected path=value)",
+        "[nas] hook: missing value for --when " + "(expected path=value)",
       );
       return null;
     }
@@ -159,7 +132,7 @@ function parseHookMatchers(args: string[]): HookMatcher[] | null {
     const matcher = parseHookMatcher(raw);
     if (matcher === null) {
       console.error(
-        `[nas] hook notification: invalid --when ${JSON.stringify(raw)} ` +
+        `[nas] hook: invalid --when ${JSON.stringify(raw)} ` +
           `(expected path=value)`,
       );
       return null;

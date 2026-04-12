@@ -89,7 +89,7 @@ export function createHostExecStage(): EffectStage<
 // Planner (pure)
 // ---------------------------------------------------------------------------
 
-/** Internal rule: route `nas hook notification` to the host via HostExec. */
+/** Internal rule: route `nas hook` to the host via HostExec. */
 const NAS_HOOK_RULE: HostExecRule = {
   id: "__nas_hook",
   match: { argv0: "nas", argRegex: "^hook\\b" },

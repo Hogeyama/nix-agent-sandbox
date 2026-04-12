@@ -13,7 +13,7 @@ Usage:
   nas network [pending|approve|deny|review|gc]
   nas ui [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
-  nas hook notification --kind start|attention|stop [--when path=value ...]
+  nas hook --kind start|attention|stop [--when path=value ...]
 
 Subcommands:
   rebuild   Docker イメージを削除して再ビルドする
@@ -23,7 +23,7 @@ Subcommands:
   hostexec  hostexec 承認キューの管理
   ui        Web ダッシュボードを起動する
   audit     監査ログを表示する
-  hook notification    Report a session event from an agent hook (internal use)
+  hook              Report a session event from an agent hook (internal use)
 
 Options:
   (main command only — must appear before [profile-name])

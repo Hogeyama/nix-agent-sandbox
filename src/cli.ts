@@ -230,7 +230,7 @@ export async function main(args: string[]): Promise<void> {
       createLaunchStage(agentExtraArgs),
     ] as const;
 
-    // HostExec broker が nas hook notification を実行する際に参照する
+    // HostExec broker が nas hook を実行する際に参照する
     process.env.NAS_SESSION_ID = sessionId;
 
     // 初期 PriorStageOutputs ���構築

@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { SessionRuntimePaths } from "../sessions/store.ts";
 import { ensureSessionRuntimePaths, readSession } from "../sessions/store.ts";
-import {
-  extractHookMessage,
-  parseHookKind,
-  runHookNotification,
-} from "./hook.ts";
+import { extractHookMessage, parseHookKind, runHookCommand } from "./hook.ts";
 
 const savedEnv = {
   sessionId: process.env.NAS_SESSION_ID,
@@ -109,7 +105,7 @@ test("extractHookMessage: prefers top-level message over nested", () => {
   ).toBe("top");
 });
 
-// --- runHookNotification: end-to-end over a temp store dir ---
+// --- runHookCommand: end-to-end over a temp store dir ---
 
 async function emptyStdin(): Promise<string> {
   return "";
@@ -119,7 +115,7 @@ function makeStdin(raw: string): () => Promise<string> {
   return async () => raw;
 }
 
-test("runHookNotification --kind start transitions pre-created record to agent-turn", async () => {
+test("runHookCommand --kind start transitions pre-created record to agent-turn", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-1";
   // Seed the store with a user-turn record via the store module directly.
   const { createSession } = await import("../sessions/store.ts");
@@ -130,14 +126,14 @@ test("runHookNotification --kind start transitions pre-created record to agent-t
     startedAt: new Date(Date.now() - 60_000).toISOString(),
   });
 
-  await runHookNotification(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
 
   const record = await readSession(paths, "sess-hook-1");
   expect(record?.turn).toBe("agent-turn");
   expect(record?.lastEventKind).toBe("start");
 });
 
-test("runHookNotification --kind attention with stdin message transitions to user-turn and records message", async () => {
+test("runHookCommand --kind attention with stdin message transitions to user-turn and records message", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-2";
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
@@ -150,7 +146,7 @@ test("runHookNotification --kind attention with stdin message transitions to use
   const { updateSessionTurn } = await import("../sessions/store.ts");
   await updateSessionTurn(paths, "sess-hook-2", "start");
 
-  await runHookNotification(["--kind", "attention"], {
+  await runHookCommand(["--kind", "attention"], {
     stdinReader: makeStdin('{"message":"hello"}'),
   });
 
@@ -160,7 +156,7 @@ test("runHookNotification --kind attention with stdin message transitions to use
   expect(record?.lastEventMessage).toBe("hello");
 });
 
-test("runHookNotification applies --when toolName=ask_user", async () => {
+test("runHookCommand applies --when toolName=ask_user", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-when-tool";
   const { createSession, updateSessionTurn } = await import(
     "../sessions/store.ts"
@@ -173,12 +169,9 @@ test("runHookNotification applies --when toolName=ask_user", async () => {
   });
   await updateSessionTurn(paths, "sess-hook-when-tool", "start");
 
-  await runHookNotification(
-    ["--kind", "attention", "--when", "toolName=ask_user"],
-    {
-      stdinReader: makeStdin('{"toolName":"ask_user","message":"hello"}'),
-    },
-  );
+  await runHookCommand(["--kind", "attention", "--when", "toolName=ask_user"], {
+    stdinReader: makeStdin('{"toolName":"ask_user","message":"hello"}'),
+  });
 
   const record = await readSession(paths, "sess-hook-when-tool");
   expect(record?.turn).toBe("user-turn");
@@ -186,7 +179,7 @@ test("runHookNotification applies --when toolName=ask_user", async () => {
   expect(record?.lastEventMessage).toBe("hello");
 });
 
-test("runHookNotification applies --when stopReason=end_turn", async () => {
+test("runHookCommand applies --when stopReason=end_turn", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-when-stop";
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
@@ -196,7 +189,7 @@ test("runHookNotification applies --when stopReason=end_turn", async () => {
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  await runHookNotification(
+  await runHookCommand(
     ["--kind", "attention", "--when", "stopReason=end_turn"],
     {
       stdinReader: makeStdin('{"stopReason":"end_turn","message":"done"}'),
@@ -209,7 +202,7 @@ test("runHookNotification applies --when stopReason=end_turn", async () => {
   expect(record?.lastEventMessage).toBe("done");
 });
 
-test("runHookNotification --kind attention without message leaves lastEventMessage empty", async () => {
+test("runHookCommand --kind attention without message leaves lastEventMessage empty", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-2b";
   const { createSession, updateSessionTurn } = await import(
     "../sessions/store.ts"
@@ -222,7 +215,7 @@ test("runHookNotification --kind attention without message leaves lastEventMessa
   });
   await updateSessionTurn(paths, "sess-hook-2b", "start");
 
-  await runHookNotification(["--kind", "attention"], {
+  await runHookCommand(["--kind", "attention"], {
     stdinReader: emptyStdin,
   });
 
@@ -232,7 +225,7 @@ test("runHookNotification --kind attention without message leaves lastEventMessa
   expect(record?.lastEventMessage).toBeUndefined();
 });
 
-test("runHookNotification with mismatched --when leaves the store untouched", async () => {
+test("runHookCommand with mismatched --when leaves the store untouched", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-when-mismatch";
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
@@ -244,7 +237,7 @@ test("runHookNotification with mismatched --when leaves the store untouched", as
 
   const before = await readSession(paths, "sess-hook-when-mismatch");
 
-  await runHookNotification(
+  await runHookCommand(
     ["--kind", "attention", "--when", "toolResult.resultType=success"],
     {
       stdinReader: makeStdin(
@@ -257,7 +250,7 @@ test("runHookNotification with mismatched --when leaves the store untouched", as
   expect(after).toEqual(before);
 });
 
-test("runHookNotification --kind stop transitions to done", async () => {
+test("runHookCommand --kind stop transitions to done", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-3";
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
@@ -267,73 +260,73 @@ test("runHookNotification --kind stop transitions to done", async () => {
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  await runHookNotification(["--kind", "stop"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "stop"], { stdinReader: emptyStdin });
 
   const record = await readSession(paths, "sess-hook-3");
   expect(record?.turn).toBe("done");
 });
 
-test("runHookNotification without NAS_SESSION_ID exits cleanly and writes nothing", async () => {
+test("runHookCommand without NAS_SESSION_ID exits cleanly and writes nothing", async () => {
   delete process.env.NAS_SESSION_ID;
 
-  await runHookNotification(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
 
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
-test("runHookNotification with empty NAS_SESSION_ID exits cleanly and writes nothing", async () => {
+test("runHookCommand with empty NAS_SESSION_ID exits cleanly and writes nothing", async () => {
   process.env.NAS_SESSION_ID = "";
 
-  await runHookNotification(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
 
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
-test("runHookNotification with invalid --kind exits cleanly and writes nothing", async () => {
+test("runHookCommand with invalid --kind exits cleanly and writes nothing", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-bad-kind";
 
-  await runHookNotification(["--kind", "bogus"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "bogus"], { stdinReader: emptyStdin });
   // Also test missing --kind entirely.
-  await runHookNotification([], { stdinReader: emptyStdin });
+  await runHookCommand([], { stdinReader: emptyStdin });
 
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
-test("runHookNotification rejects NAS_SESSION_ID with path traversal and writes nothing", async () => {
+test("runHookCommand rejects NAS_SESSION_ID with path traversal and writes nothing", async () => {
   process.env.NAS_SESSION_ID = "../etc/passwd";
 
-  await runHookNotification(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
 
   // Nothing should have been written in our temp sessions dir.
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
-test("runHookNotification rejects NAS_SESSION_ID containing slash", async () => {
+test("runHookCommand rejects NAS_SESSION_ID containing slash", async () => {
   process.env.NAS_SESSION_ID = "foo/bar";
-  await runHookNotification(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
-test("runHookNotification rejects NAS_SESSION_ID containing backslash", async () => {
+test("runHookCommand rejects NAS_SESSION_ID containing backslash", async () => {
   process.env.NAS_SESSION_ID = "foo\\bar";
-  await runHookNotification(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
-test("runHookNotification rejects NAS_SESSION_ID starting with dot", async () => {
+test("runHookCommand rejects NAS_SESSION_ID starting with dot", async () => {
   process.env.NAS_SESSION_ID = ".hidden";
-  await runHookNotification(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
-test("runHookNotification tolerates malformed stdin JSON and still updates the store", async () => {
+test("runHookCommand tolerates malformed stdin JSON and still updates the store", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-bad-json";
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
@@ -343,7 +336,7 @@ test("runHookNotification tolerates malformed stdin JSON and still updates the s
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  await runHookNotification(["--kind", "start"], {
+  await runHookCommand(["--kind", "start"], {
     stdinReader: makeStdin("{not valid json"),
   });
 
@@ -351,7 +344,7 @@ test("runHookNotification tolerates malformed stdin JSON and still updates the s
   expect(record?.turn).toBe("agent-turn");
 });
 
-test("runHookNotification with malformed --when warns and is a no-op", async () => {
+test("runHookCommand with malformed --when warns and is a no-op", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-bad-when";
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
@@ -370,7 +363,7 @@ test("runHookNotification with malformed --when warns and is a no-op", async () 
 
   let threw: unknown;
   try {
-    await runHookNotification(["--kind", "attention", "--when", "toolName"], {
+    await runHookCommand(["--kind", "attention", "--when", "toolName"], {
       stdinReader: makeStdin('{"toolName":"ask_user"}'),
     });
   } catch (err) {
@@ -386,7 +379,7 @@ test("runHookNotification with malformed --when warns and is a no-op", async () 
   expect(errors[0]).toContain("invalid --when");
 });
 
-test("runHookNotification with missing --when value warns and is a no-op", async () => {
+test("runHookCommand with missing --when value warns and is a no-op", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-missing-when";
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
@@ -405,7 +398,7 @@ test("runHookNotification with missing --when value warns and is a no-op", async
 
   let threw: unknown;
   try {
-    await runHookNotification(["--kind", "attention", "--when"], {
+    await runHookCommand(["--kind", "attention", "--when"], {
       stdinReader: makeStdin('{"toolName":"ask_user"}'),
     });
   } catch (err) {
@@ -421,7 +414,7 @@ test("runHookNotification with missing --when value warns and is a no-op", async
   expect(errors[0]).toContain("missing value for --when");
 });
 
-test("runHookNotification: store update failure is swallowed", async () => {
+test("runHookCommand: store update failure is swallowed", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-store-fail";
 
   // Force the store write to throw by pointing
@@ -435,7 +428,7 @@ test("runHookNotification: store update failure is swallowed", async () => {
 
   let threw: unknown;
   try {
-    await runHookNotification(["--kind", "attention"], {
+    await runHookCommand(["--kind", "attention"], {
       stdinReader: makeStdin('{"message":"should-not-notify"}'),
     });
   } catch (err) {
@@ -466,7 +459,7 @@ test("attention hook fires desktop notification by default", async () => {
   await updateSessionTurn(paths, "sess-hook-notify-default", "start");
 
   const calls: { title: string; body: string }[] = [];
-  await runHookNotification(["--kind", "attention"], {
+  await runHookCommand(["--kind", "attention"], {
     stdinReader: makeStdin('{"message":"please review"}'),
     notifySender: (title, body) => calls.push({ title, body }),
   });
@@ -493,7 +486,7 @@ test("attention hook fires notification with fallback body when no message", asy
   await updateSessionTurn(paths, "sess-hook-notify-no-msg", "start");
 
   const calls: { title: string; body: string }[] = [];
-  await runHookNotification(["--kind", "attention"], {
+  await runHookCommand(["--kind", "attention"], {
     stdinReader: emptyStdin,
     notifySender: (title, body) => calls.push({ title, body }),
   });
@@ -519,7 +512,7 @@ test("attention hook suppressed when hookNotify is off", async () => {
   await updateSessionTurn(paths, "sess-hook-notify-off", "start");
 
   const calls: { title: string; body: string }[] = [];
-  await runHookNotification(["--kind", "attention"], {
+  await runHookCommand(["--kind", "attention"], {
     stdinReader: makeStdin('{"message":"hello"}'),
     notifySender: (title, body) => calls.push({ title, body }),
   });
@@ -545,26 +538,9 @@ test("start/stop hooks do not fire notification", async () => {
     notifySender: (title: string, body: string) => calls.push({ title, body }),
   };
 
-  await runHookNotification(["--kind", "start"], deps);
-  await runHookNotification(["--kind", "stop"], deps);
+  await runHookCommand(["--kind", "start"], deps);
+  await runHookCommand(["--kind", "stop"], deps);
   await Bun.sleep(50);
 
   expect(calls).toHaveLength(0);
-});
-
-// --- runHookCommand dispatcher ---
-
-test("runHookCommand: unknown subcommand is non-fatal (writes nothing)", async () => {
-  process.env.NAS_SESSION_ID = "sess-hook-dispatch";
-  const { runHookCommand } = await import("./hook.ts");
-  await runHookCommand(["bogus-sub"]);
-  const entries = await readdir(sessionsDir);
-  expect(entries.length).toBe(0);
-});
-
-test("runHookCommand: no subcommand is non-fatal (writes nothing)", async () => {
-  const { runHookCommand } = await import("./hook.ts");
-  await runHookCommand([]);
-  const entries = await readdir(sessionsDir);
-  expect(entries.length).toBe(0);
 });

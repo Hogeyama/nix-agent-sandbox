@@ -2,7 +2,7 @@
  * SessionStoreStage (EffectStage)
  *
  * Creates a runtime session record on pipeline startup and deletes
- * it on teardown (via Effect.addFinalizer). Hook notifications from
+ * it on teardown (via Effect.addFinalizer). Hook events from
  * inside the container reach the host session store via HostExec
  * (the __nas_hook rule), so no bind-mounts are needed here.
  */

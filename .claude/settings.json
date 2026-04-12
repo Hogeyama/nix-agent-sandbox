@@ -3,14 +3,14 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "nas hook notification --kind start" }
+          { "type": "command", "command": "nas hook --kind start" }
         ]
       }
     ],
     "PreToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "nas hook notification --kind start" }
+          { "type": "command", "command": "nas hook --kind start" }
         ]
       }
     ],
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nas hook notification --kind attention"
+            "command": "nas hook --kind attention"
           }
         ]
       }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nas hook notification --kind attention"
+            "command": "nas hook --kind attention"
           }
         ]
       }
@@ -37,7 +37,7 @@
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "nas hook notification --kind stop" }
+          { "type": "command", "command": "nas hook --kind stop" }
         ]
       }
     ],
