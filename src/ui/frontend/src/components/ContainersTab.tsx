@@ -148,11 +148,16 @@ export function ContainersTab({
 }: ContainersTabProps) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
-  const [expandedName, setExpandedName] = useState<string | null>(null);
+  const [expandedNames, setExpandedNames] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
 
   function toggleExpand(name: string) {
-    setExpandedName((cur) => (cur === name ? null : name));
+    setExpandedNames((cur) => {
+      const next = new Set(cur);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
   }
 
   async function refresh() {
@@ -254,7 +259,7 @@ export function ContainersTab({
             {sorted.map((c) => {
               const kind = c.labels["nas.kind"] || "-";
               const pwd = kind === "agent" ? c.labels["nas.pwd"] || "-" : "";
-              const isExpanded = expandedName === c.name;
+              const isExpanded = expandedNames.has(c.name);
               return (
                 <Fragment key={c.name}>
                   <tr style={rowStyle} onClick={() => toggleExpand(c.name)}>
