@@ -29,6 +29,20 @@
         "timeoutSec": 10
       }
     ],
+    "notification": [
+      {
+        "type": "command",
+        "bash": "nas hook --kind attention --when notification_type=agent_idle",
+        "timeoutSec": 10
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "nas hook --kind attention",
+        "timeoutSec": 10
+      }
+    ],
     "sessionEnd": [
       {
         "type": "command",
