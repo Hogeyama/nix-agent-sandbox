@@ -217,7 +217,7 @@ export async function main(args: string[]): Promise<void> {
       effectStageAdapter(createDbusProxyStage(), liveLayer),
       effectStageAdapter(createMountStage(mountProbes), liveLayer),
       createHostExecStage(),
-      createDindStage(),
+      effectStageAdapter(createDindStage(), liveLayer),
       createProxyStage(),
       effectStageAdapter(createLaunchStage(agentExtraArgs), liveLayer),
     ];

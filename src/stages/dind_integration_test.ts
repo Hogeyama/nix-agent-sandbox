@@ -7,6 +7,7 @@ import { expect, test } from "bun:test";
  * 対応していない環境では自動スキップする。
  */
 
+import { Effect, Exit, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -21,15 +22,8 @@ import {
   dockerStop,
   dockerVolumeRemove,
 } from "../docker/client.ts";
-import type { ResourceHandle } from "../pipeline/effects.ts";
-import { executeEffect, teardownHandles } from "../pipeline/effects.ts";
-import type {
-  DindSidecarEffect,
-  HostEnv,
-  ProbeResults,
-  StageInput,
-} from "../pipeline/types.ts";
-import { createDindStage } from "./dind.ts";
+import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
+import { createDindStage, planDind } from "./dind.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;
@@ -168,48 +162,43 @@ void forceCleanup; // suppress unused warning (available for manual cleanup)
 test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
   "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
   async () => {
-    // DinD readiness can take up to 20s; extend beyond the default 5s timeout
     const profile = makeProfile({ docker: { enable: true, shared: false } });
     const input = makeStageInput(profile);
-    const stage = createDindStage({
+    const plan = planDind(input, {
       disableCache: true,
       readinessTimeoutMs: 20_000,
     });
+    expect(plan).not.toBeNull();
 
-    const plan = stage.plan(input);
-    expect(plan !== null).toEqual(true);
+    const containerName = plan!.containerName;
 
-    const effect = plan!.effects[0] as DindSidecarEffect;
-    const containerName = effect.containerName;
-    const networkName = effect.networkName;
-
-    let handle: ResourceHandle | null = null;
+    const scope = Effect.runSync(Scope.make());
     try {
-      handle = await executeEffect(effect);
-
-      // Verify plan outputs
-      expect(plan!.envVars.DOCKER_HOST.startsWith("tcp://")).toEqual(true);
-      expect(plan!.envVars.DOCKER_HOST.endsWith(":2375")).toEqual(true);
-      expect(typeof plan!.envVars.NAS_DIND_CONTAINER_NAME).toEqual("string");
-      expect(typeof plan!.envVars.NAS_DIND_SHARED_TMP).toEqual("string");
-
-      const networkIdx = plan!.dockerArgs.indexOf("--network");
-      expect(networkIdx !== -1).toEqual(true);
-      expect(plan!.dockerArgs[networkIdx + 1].startsWith("nas-dind-")).toEqual(
-        true,
+      const stage = createDindStage({
+        disableCache: true,
+        readinessTimeoutMs: 20_000,
+      });
+      const result = await Effect.runPromise(
+        stage.run(input).pipe(Effect.provideService(Scope.Scope, scope)),
       );
 
-      // Verify container is actually running
+      expect(result.envVars!.DOCKER_HOST.startsWith("tcp://")).toEqual(true);
+      expect(result.envVars!.DOCKER_HOST.endsWith(":2375")).toEqual(true);
+      expect(typeof result.envVars!.NAS_DIND_CONTAINER_NAME).toEqual("string");
+      expect(typeof result.envVars!.NAS_DIND_SHARED_TMP).toEqual("string");
+
+      const networkIdx = result.dockerArgs!.indexOf("--network");
+      expect(networkIdx !== -1).toEqual(true);
+      expect(
+        result.dockerArgs![networkIdx + 1].startsWith("nas-dind-"),
+      ).toEqual(true);
+
       const running = await dockerIsRunning(containerName);
       expect(running).toEqual(true);
     } finally {
-      if (handle) {
-        await teardownHandles([handle]);
-        const afterRunning = await dockerIsRunning(containerName);
-        expect(afterRunning).toEqual(false);
-      } else {
-        await forceCleanup(containerName, networkName, effect.sharedTmpVolume);
-      }
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+      const afterRunning = await dockerIsRunning(containerName);
+      expect(afterRunning).toEqual(false);
     }
   },
   30_000,
