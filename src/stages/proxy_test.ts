@@ -24,6 +24,7 @@ import {
   createProxyStage,
   LOCAL_PROXY_PORT,
   parseDindContainerName,
+  planProxy,
   replaceNetwork,
 } from "./proxy.ts";
 
@@ -130,8 +131,7 @@ function makeInput(
 test("ProxyStage: skip when allowlist and prompt are disabled", () => {
   const profile = makeProfile();
   const input = makeInput(profile);
-  const stage = createProxyStage();
-  const result = stage.plan(input);
+  const result = planProxy(input);
   expect(result).toEqual(null);
 });
 
@@ -140,11 +140,11 @@ test("ProxyStage: returns plan when allowlist is non-empty", () => {
     network: { allowlist: ["example.com"] },
   });
   const input = makeInput(profile);
-  const stage = createProxyStage();
-  const result = stage.plan(input);
+  const result = planProxy(input);
   expect(result !== null).toEqual(true);
-  expect(result!.effects.length).toEqual(1);
-  expect(result!.effects[0].kind).toEqual("proxy-session");
+  expect(result!.sessionNetworkName).toEqual(
+    "nas-session-net-test-session-123",
+  );
 });
 
 test("ProxyStage: returns plan when prompt is enabled", () => {
@@ -152,11 +152,9 @@ test("ProxyStage: returns plan when prompt is enabled", () => {
     network: { prompt: { enable: true } },
   });
   const input = makeInput(profile);
-  const stage = createProxyStage();
-  const result = stage.plan(input);
+  const result = planProxy(input);
   expect(result !== null).toEqual(true);
-  expect(result!.effects.length).toEqual(1);
-  expect(result!.effects[0].kind).toEqual("proxy-session");
+  expect(result!.promptEnabled).toEqual(true);
 });
 
 test("ProxyStage: sets proxy env vars", () => {
@@ -164,8 +162,7 @@ test("ProxyStage: sets proxy env vars", () => {
     network: { allowlist: ["example.com"] },
   });
   const input = makeInput(profile);
-  const stage = createProxyStage();
-  const result = stage.plan(input)!;
+  const result = planProxy(input)!;
   expect(result.envVars.http_proxy).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
@@ -192,8 +189,7 @@ test("ProxyStage: includes dind container in no_proxy", () => {
       envVars: { NAS_DIND_CONTAINER_NAME: "nas-dind-abc12345" },
     },
   });
-  const stage = createProxyStage();
-  const result = stage.plan(input)!;
+  const result = planProxy(input)!;
   expect(result.envVars.no_proxy).toEqual(
     "localhost,127.0.0.1,nas-dind-abc12345",
   );
@@ -204,8 +200,7 @@ test("ProxyStage: sets outputOverrides", () => {
     network: { allowlist: ["example.com"] },
   });
   const input = makeInput(profile);
-  const stage = createProxyStage();
-  const result = stage.plan(input)!;
+  const result = planProxy(input)!;
   expect(typeof result.outputOverrides.networkRuntimeDir).toEqual("string");
   expect(typeof result.outputOverrides.networkPromptToken).toEqual("string");
   expect(result.outputOverrides.networkPromptEnabled).toEqual(false);
@@ -220,18 +215,13 @@ test("ProxyStage: replaces existing --network in outputOverrides.dockerArgs", ()
   const input = makeInput(profile, {
     prior: { dockerArgs: ["--rm", "--network", "old-net", "-v", "/tmp:/tmp"] },
   });
-  const stage = createProxyStage();
-  const result = stage.plan(input)!;
-  // plan.dockerArgs should be empty (no duplication of prior args)
-  expect(result.dockerArgs).toEqual([]);
-  // network replacement is done via outputOverrides.dockerArgs
+  const result = planProxy(input)!;
   const overriddenArgs = result.outputOverrides.dockerArgs as string[];
   const networkIdx = overriddenArgs.indexOf("--network");
   expect(networkIdx !== -1).toEqual(true);
   expect(overriddenArgs[networkIdx + 1].startsWith("nas-session-net-")).toEqual(
     true,
   );
-  // old-net should be replaced, other args preserved
   expect(overriddenArgs.includes("old-net")).toEqual(false);
   expect(overriddenArgs.includes("--rm")).toEqual(true);
   expect(overriddenArgs.includes("-v")).toEqual(true);
@@ -245,13 +235,17 @@ test("ProxyStage: reuses existing networkPromptToken", () => {
   const input = makeInput(profile, {
     prior: { networkPromptToken: existingToken },
   });
-  const stage = createProxyStage();
-  const result = stage.plan(input)!;
+  const result = planProxy(input)!;
   expect(result.outputOverrides.networkPromptToken).toEqual(existingToken);
-  // The proxy URL should contain the existing token
   expect(result.envVars.NAS_UPSTREAM_PROXY.includes(existingToken)).toEqual(
     true,
   );
+});
+
+test("ProxyStage: EffectStage kind is effect", () => {
+  const stage = createProxyStage();
+  expect(stage.kind).toEqual("effect");
+  expect(stage.name).toEqual("ProxyStage");
 });
 
 test("replaceNetwork: replaces existing --network", () => {

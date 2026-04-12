@@ -29,14 +29,14 @@ import {
   dockerRm,
   dockerStop,
 } from "../docker/client.ts";
-import { executePlan, teardownHandles } from "../pipeline/effects.ts";
+import { executeProxySession } from "../pipeline/effects/proxy.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
-import { buildNetworkRuntimePaths, createProxyStage } from "./proxy.ts";
+import { buildNetworkRuntimePaths, planProxy } from "./proxy.ts";
 
 const DEFAULT_PROMPT = {
   enable: false,
@@ -165,13 +165,12 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       prior,
     };
 
-    const stage = createProxyStage({ envoyContainerName });
-    const plan = stage.plan(input);
+    const plan = planProxy(input, { envoyContainerName });
     expect(plan !== null).toEqual(true);
 
     const runtimePaths = buildNetworkRuntimePaths(hostEnv);
 
-    const handles = [];
+    let handle: { close(): Promise<void> } | null = null;
     try {
       // Ensure runtime dir exists for envoy config bind mount
       await mkdir(runtimePaths.runtimeDir, {
@@ -196,7 +195,32 @@ test.skipIf(!proxyAvailable || !canBindMount)(
         mode: 0o600,
       });
 
-      handles.push(...(await executePlan(plan!)));
+      handle = await executeProxySession({
+        kind: "proxy-session",
+        envoyContainerName: plan!.envoyContainerName,
+        envoyImage: plan!.envoyImage,
+        envoyAlias: plan!.envoyAlias,
+        envoyProxyPort: plan!.envoyProxyPort,
+        envoyReadyTimeoutMs: plan!.envoyReadyTimeoutMs,
+        sessionId: plan!.sessionId,
+        sessionNetworkName: plan!.sessionNetworkName,
+        profileName: plan!.profileName,
+        agent: plan!.agent,
+        runtimePaths: plan!.runtimePaths,
+        brokerSocket: plan!.brokerSocket,
+        token: plan!.token,
+        allowlist: plan!.allowlist,
+        denylist: plan!.denylist,
+        promptEnabled: plan!.promptEnabled,
+        timeoutSeconds: plan!.timeoutSeconds,
+        defaultScope: plan!.defaultScope,
+        notify: plan!.notify,
+        uiEnabled: plan!.uiEnabled,
+        uiPort: plan!.uiPort,
+        uiIdleTimeout: plan!.uiIdleTimeout,
+        auditDir: plan!.auditDir,
+        dindContainerName: plan!.dindContainerName,
+      });
 
       // http_proxy / https_proxy should point to local proxy
       expect(plan!.envVars.http_proxy).toEqual("http://127.0.0.1:18080");
@@ -211,7 +235,6 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       expect(
         plan!.outputOverrides.networkRuntimeDir?.startsWith(runtimeRoot),
       ).toEqual(true);
-      expect(plan!.dockerArgs).toEqual([]);
       expect(
         (plan!.outputOverrides.dockerArgs as string[] | undefined)?.includes(
           `nas-session-net-${sessionId}`,
@@ -225,7 +248,9 @@ test.skipIf(!proxyAvailable || !canBindMount)(
       ).toEqual(0o644);
       expect(await dockerIsRunning(envoyContainerName)).toEqual(true);
     } finally {
-      await teardownHandles(handles).catch(() => {});
+      if (handle) {
+        await handle.close().catch(() => {});
+      }
       await cleanupRuntime(runtimeRoot, envoyContainerName);
       if (oldRuntimeDir) {
         process.env.XDG_RUNTIME_DIR = oldRuntimeDir;

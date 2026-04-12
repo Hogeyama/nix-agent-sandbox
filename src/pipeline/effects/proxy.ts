@@ -220,7 +220,7 @@ export async function executeProxySession(
   };
 }
 
-async function renderEnvoyConfig(
+export async function renderEnvoyConfig(
   paths: import("../../network/registry.ts").NetworkRuntimePaths,
 ): Promise<void> {
   const envoyTemplatePath = resolveAsset(
@@ -423,7 +423,7 @@ async function teardownProxySessionNetwork(options: {
   }
 }
 
-async function ensureSharedEnvoy(
+export async function ensureSharedEnvoy(
   paths: import("../../network/registry.ts").NetworkRuntimePaths,
   envoyContainerName: string,
   envoyImage: string,
