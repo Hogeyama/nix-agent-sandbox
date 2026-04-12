@@ -23,6 +23,7 @@ import {
   dockerVolumeRemove,
 } from "../docker/client.ts";
 import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
+import { DindServiceLive } from "../services/dind.ts";
 import { createDindStage, planDind } from "./dind.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
@@ -179,7 +180,12 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
         readinessTimeoutMs: 20_000,
       });
       const result = await Effect.runPromise(
-        stage.run(input).pipe(Effect.provideService(Scope.Scope, scope)),
+        stage
+          .run(input)
+          .pipe(
+            Effect.provideService(Scope.Scope, scope),
+            Effect.provide(DindServiceLive),
+          ),
       );
 
       expect(result.envVars!.DOCKER_HOST.startsWith("tcp://")).toEqual(true);

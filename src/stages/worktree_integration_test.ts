@@ -25,6 +25,7 @@ import type {
   ProceduralStage,
   StageInput,
 } from "../pipeline/types.ts";
+import { DindServiceLive } from "../services/dind.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import { ProcessServiceLive } from "../services/process.ts";
@@ -46,6 +47,7 @@ const liveLayer = Layer.mergeAll(
   ProcessServiceLive,
   DockerServiceLive,
   PromptServiceLive,
+  DindServiceLive,
 );
 
 function makeWorktreeStage(): ProceduralStage {

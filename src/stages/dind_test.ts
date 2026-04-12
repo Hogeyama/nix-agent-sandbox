@@ -16,6 +16,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
+import { type DindSidecarOpts, makeDindServiceFake } from "../services/dind.ts";
 import {
   buildDindSidecarArgs,
   createDindStage,
@@ -183,14 +184,80 @@ test("DindStage: run returns empty when disabled", async () => {
   const profile = makeProfile({ docker: { enable: false, shared: false } });
   const input = makeStageInput(profile);
   const stage = createDindStage();
+  const fakeLayer = makeDindServiceFake();
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
-    stage.run(input).pipe(Effect.provideService(Scope.Scope, scope)),
+    stage
+      .run(input)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(fakeLayer),
+      ),
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
   expect(result).toEqual({});
+});
+
+test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", async () => {
+  const ensureCalls: DindSidecarOpts[] = [];
+  const teardownCalls: Array<{
+    containerName: string;
+    networkName: string;
+    sharedTmpVolume: string;
+    shared: boolean;
+  }> = [];
+
+  const fakeLayer = makeDindServiceFake({
+    ensureSidecar: (opts) => {
+      ensureCalls.push(opts);
+      return Effect.void;
+    },
+    teardownSidecar: (opts) => {
+      teardownCalls.push(opts);
+      return Effect.void;
+    },
+  });
+
+  const profile = makeProfile({ docker: { enable: true, shared: true } });
+  const input = makeStageInput(profile);
+  const stage = createDindStage({
+    disableCache: true,
+    readinessTimeoutMs: 5000,
+  });
+
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(fakeLayer),
+      ),
+  );
+
+  expect(ensureCalls.length).toEqual(1);
+  expect(ensureCalls[0].containerName).toEqual("nas-dind-shared");
+  expect(ensureCalls[0].networkName).toEqual("nas-dind-shared");
+  expect(ensureCalls[0].sharedTmpVolume).toEqual("nas-dind-shared-tmp");
+  expect(ensureCalls[0].shared).toEqual(true);
+  expect(ensureCalls[0].disableCache).toEqual(true);
+  expect(ensureCalls[0].readinessTimeoutMs).toEqual(5000);
+
+  expect(result.envVars!.DOCKER_HOST).toEqual("tcp://nas-dind-shared:2375");
+  expect(result.dindContainerName).toEqual("nas-dind-shared");
+  expect(result.networkName).toEqual("nas-dind-shared");
+
+  expect(teardownCalls.length).toEqual(0);
+
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(teardownCalls.length).toEqual(1);
+  expect(teardownCalls[0].containerName).toEqual("nas-dind-shared");
+  expect(teardownCalls[0].networkName).toEqual("nas-dind-shared");
+  expect(teardownCalls[0].sharedTmpVolume).toEqual("nas-dind-shared-tmp");
+  expect(teardownCalls[0].shared).toEqual(true);
 });
 
 // ============================================================

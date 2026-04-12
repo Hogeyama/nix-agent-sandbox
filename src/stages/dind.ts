@@ -19,10 +19,8 @@
 import { Effect, type Scope } from "effect";
 import {
   DIND_INTERNAL_PORT,
-  ensureDindSidecar,
   SHARED_CONTAINER_NAME,
   SHARED_TMP_MOUNT_PATH,
-  teardownDindSidecar,
 } from "../docker/dind.ts";
 import { logInfo } from "../log.ts";
 import type {
@@ -30,6 +28,7 @@ import type {
   EffectStageResult,
   StageInput,
 } from "../pipeline/types.ts";
+import { DindService } from "../services/dind.ts";
 
 const SHARED_NETWORK_NAME = "nas-dind-shared";
 const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
@@ -113,14 +112,14 @@ export function planDind(
 
 export function createDindStage(
   options: { disableCache?: boolean; readinessTimeoutMs?: number } = {},
-): EffectStage<never> {
+): EffectStage<DindService> {
   return {
     kind: "effect",
     name: "DindStage",
 
     run(
       input: StageInput,
-    ): Effect.Effect<EffectStageResult, unknown, Scope.Scope> {
+    ): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DindService> {
       const plan = planDind(input, options);
       if (plan === null) {
         return Effect.succeed({});
@@ -136,38 +135,28 @@ export function createDindStage(
 
 function runDind(
   plan: DindPlan,
-): Effect.Effect<EffectStageResult, unknown, Scope.Scope> {
+): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DindService> {
   return Effect.gen(function* () {
+    const dind = yield* DindService;
+
     yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        try: () =>
-          ensureDindSidecar({
-            containerName: plan.containerName,
-            sharedTmpVolume: plan.sharedTmpVolume,
-            networkName: plan.networkName,
-            shared: plan.shared,
-            disableCache: plan.disableCache,
-            readinessTimeoutMs: plan.readinessTimeoutMs,
-          }),
-        catch: (e) =>
-          new Error(
-            `DinD sidecar setup failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
+      dind.ensureSidecar({
+        containerName: plan.containerName,
+        sharedTmpVolume: plan.sharedTmpVolume,
+        networkName: plan.networkName,
+        shared: plan.shared,
+        disableCache: plan.disableCache,
+        readinessTimeoutMs: plan.readinessTimeoutMs,
       }),
       () =>
-        Effect.tryPromise({
-          try: () =>
-            teardownDindSidecar({
-              containerName: plan.containerName,
-              networkName: plan.networkName,
-              sharedTmpVolume: plan.sharedTmpVolume,
-              shared: plan.shared,
-            }),
-          catch: (e) =>
-            new Error(
-              `DinD sidecar teardown failed: ${e instanceof Error ? e.message : String(e)}`,
-            ),
-        }).pipe(Effect.ignoreLogged),
+        dind
+          .teardownSidecar({
+            containerName: plan.containerName,
+            networkName: plan.networkName,
+            sharedTmpVolume: plan.sharedTmpVolume,
+            shared: plan.shared,
+          })
+          .pipe(Effect.ignoreLogged),
     );
 
     return plan.outputOverrides;
