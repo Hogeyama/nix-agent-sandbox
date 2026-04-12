@@ -9,4 +9,4 @@ export {
   listNasWorktrees,
   listOrphanNasBranches,
 } from "./worktree/management.ts";
-export { WorktreeStage } from "./worktree/stage.ts";
+export { createWorktreeStage } from "./worktree/stage.ts";
