@@ -11,7 +11,7 @@ bun test                   # Run all tests
 bun test src/              # Unit tests only (no Docker needed)
 bun test tests/            # Integration/e2e tests (Docker required)
 bun test --test-name-pattern 'config' # Run specific test pattern
-bunx tsc --noEmit          # Type check (uses strict mode)
+bun run check              # Type check (uses strict mode)
 
 # Building
 bun run build-ui           # Build frontend UI
