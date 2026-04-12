@@ -24,6 +24,16 @@ rules:
     stop_when: no_findings # セキュリティは warning でも差し戻す
     description: "SQLインジェクション、XSS、コマンドインジェクション等の脆弱性がないか"
 
+  - name: design
+    severity: warning
+    stop_when: no_findings # 設計上の warning も差し戻す
+    description: "責務分離、副作用の置き場、抽象境界、依存関係、データフローに無理がないか"
+
+  - name: tombstone-comments
+    severity: warning
+    stop_when: no_findings # tombstone comment の warning も差し戻す
+    description: "比較対象や作業履歴がないと意味が通らないコメントが残っていないか。例: 『新』『旧』『legacy』『移行後』『rewrite』『Commit 3では』など"
+
   - name: test-coverage
     severity: warning
     stop_when: no_findings # テスト不足の warning も差し戻す
