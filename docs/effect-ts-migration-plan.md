@@ -33,18 +33,19 @@
 - `runPipeline` は `Effect.Effect<PriorStageOutputs, unknown, PipelineRequirements<TStages>>` を返す
 - teardown 管理は Effect の `Scope` に完全委譲（手動 `teardowns[]` 配列は廃止）
 - 汎用 `StagePlan` / `fromStagePlan` は削除し、planner は stage-local plan 型 (`MountPlan`, `ProxyPlan` など) を返す
-- I/O は `FsService` / `ProcessService` / `DockerService` / `PromptService` 経由
+- I/O は **すべて** Service 経由。stage の `run()` から `node:fs/promises`, `Bun.spawn`, docker CLI 関数, broker クラス等を直接呼ばない
+- 汎用 Service: `FsService` / `ProcessService` / `DockerService` / `PromptService`
+- ドメイン固有 Service: `DindService` / `SessionBrokerService` / `HostExecBrokerService` / `AuthRouterService` / `SessionStoreService`
 
 ## 設計決定
 
 | # | 項目 | 決定 | 理由 |
 |---|---|---|---|
 | 1 | Scope の持ち方 | `runPipeline` を Effect 化、`cli.ts` で `Effect.scoped` | pipeline 全体が単一 Scope |
-| 2 | Service 粒度 | Fs / Process / Docker の 3 汎用 Service + 既存 PromptService | I/O ドメイン境界で分割。stage 固有の複雑操作 (broker, envoy 等) は Service にしない |
+| 2 | Service 粒度 | 汎用 Service (Fs / Process / Docker / Prompt) + ドメイン固有 Service (DindService, SessionBrokerService, HostExecBrokerService, AuthRouterService, SessionStoreService) | 汎用 I/O はドメイン境界で分割。broker・sidecar 等の複合ライフサイクルは専用 Service で抽象化し、stage から直接 I/O を呼ばない。テストで fake 注入を保証する |
 | 3 | 純粋 planner | 維持。返り値を stage-local 型に変更 (effects 除去) | テスタビリティ維持。planner テストは Effect 不要 |
-| 4 | HostExecDeps | constructor-param DI のまま維持 | stage 専用。既にテストで fake が効いている |
-| 5 | エラーチャンネル | `unknown` で開始 | 将来 `Data.TaggedError` に狭める余地を残す |
-| 6 | Scope の見せ方 | `Scope.Scope` は `run()` の Effect 環境側だけに出し、stage の型引数 `R` には含めない | finalizer 用の共通基盤と stage 固有 service を分離し、`EffectStage<R>` を読めば依存 service が分かるようにする |
+| 4 | エラーチャンネル | `unknown` で開始 | 将来 `Data.TaggedError` に狭める余地を残す |
+| 5 | Scope の見せ方 | `Scope.Scope` は `run()` の Effect 環境側だけに出し、stage の型引数 `R` には含めない | finalizer 用の共通基盤と stage 固有 service を分離し、`EffectStage<R>` を読めば依存 service が分かるようにする |
 
 ## Service 定義
 
@@ -57,16 +58,18 @@ export class FsService extends Context.Tag("nas/FsService")<
   {
     readonly mkdir: (path: string, opts: { recursive?: boolean; mode?: number }) => Effect.Effect<void>;
     readonly writeFile: (path: string, content: string, opts?: { mode?: number }) => Effect.Effect<void>;
+    readonly readFile: (path: string) => Effect.Effect<string>;
     readonly chmod: (path: string, mode: number) => Effect.Effect<void>;
     readonly symlink: (target: string, path: string) => Effect.Effect<void>;
     readonly rm: (path: string, opts?: { recursive?: boolean; force?: boolean }) => Effect.Effect<void>;
+    readonly rename: (oldPath: string, newPath: string) => Effect.Effect<void>;
     readonly stat: (path: string) => Effect.Effect<import("node:fs").Stats>;
     readonly exists: (path: string) => Effect.Effect<boolean>;
   }
 >() {}
 ```
 
-使用 stage: Mount, DbusProxy, Proxy, HostExec, Worktree, SessionStore
+使用 stage: Mount, DbusProxy, Proxy, HostExec, Worktree, SessionStore, DockerBuild
 
 ### ProcessService
 
@@ -102,7 +105,12 @@ export class DockerService extends Context.Tag("nas/DockerService")<
     readonly isRunning: (name: string) => Effect.Effect<boolean>;
     readonly containerExists: (name: string) => Effect.Effect<boolean>;
     readonly rm: (name: string) => Effect.Effect<void>;
-    readonly logs: (name: string) => Effect.Effect<string>;
+    readonly stop: (name: string, opts?: { timeoutSeconds?: number }) => Effect.Effect<void>;
+    readonly exec: (container: string, cmd: string[], opts?: { user?: string }) => Effect.Effect<string>;
+    readonly logs: (name: string, opts?: { tail?: number }) => Effect.Effect<string>;
+    readonly containerIp: (name: string) => Effect.Effect<string>;
+    readonly volumeCreate: (name: string, opts?: { labels?: Record<string, string> }) => Effect.Effect<void>;
+    readonly volumeRemove: (name: string) => Effect.Effect<void>;
     readonly networkCreate: (name: string, opts: { internal?: boolean; labels?: Record<string, string> }) => Effect.Effect<void>;
     readonly networkConnect: (network: string, container: string, opts?: { aliases?: string[] }) => Effect.Effect<void>;
     readonly networkDisconnect: (network: string, container: string) => Effect.Effect<void>;
@@ -131,6 +139,105 @@ export class PromptService extends Context.Tag("nas/PromptService")<
 
 使用 stage: Worktree
 
+### DindService (新設)
+
+```typescript
+// src/services/dind.ts
+export interface DindSidecarOpts {
+  readonly containerName: string;
+  readonly sharedTmpVolume: string;
+  readonly networkName: string;
+  readonly shared: boolean;
+  readonly disableCache: boolean;
+  readonly readinessTimeoutMs: number;
+}
+
+export class DindService extends Context.Tag("nas/DindService")<
+  DindService,
+  {
+    readonly ensureSidecar: (opts: DindSidecarOpts) => Effect.Effect<void>;
+    readonly teardownSidecar: (opts: { containerName: string; networkName: string; sharedTmpVolume: string; shared: boolean }) => Effect.Effect<void>;
+  }
+>() {}
+```
+
+Live 実装は既存の `docker/dind.ts` の `ensureDindSidecar` / `teardownDindSidecar` に委譲。
+使用 stage: Dind
+
+### SessionBrokerService (新設)
+
+```typescript
+// src/services/session_broker.ts
+export interface SessionBrokerHandle {
+  readonly close: () => Effect.Effect<void>;
+}
+
+export class SessionBrokerService extends Context.Tag("nas/SessionBrokerService")<
+  SessionBrokerService,
+  {
+    readonly start: (socketPath: string, config: SessionBrokerConfig) => Effect.Effect<SessionBrokerHandle>;
+  }
+>() {}
+```
+
+Live 実装は既存の `network/broker.ts` の `SessionBroker` に委譲。
+使用 stage: Proxy
+
+### HostExecBrokerService (新設)
+
+```typescript
+// src/services/hostexec_broker.ts
+export interface HostExecBrokerHandle {
+  readonly close: () => Effect.Effect<void>;
+}
+
+export class HostExecBrokerService extends Context.Tag("nas/HostExecBrokerService")<
+  HostExecBrokerService,
+  {
+    readonly start: (socketPath: string, config: HostExecBrokerConfig) => Effect.Effect<HostExecBrokerHandle>;
+  }
+>() {}
+```
+
+Live 実装は既存の `hostexec/broker.ts` の `HostExecBroker` に委譲。
+使用 stage: HostExec
+
+### AuthRouterService (新設)
+
+```typescript
+// src/services/auth_router.ts
+export interface AuthRouterHandle {
+  readonly abort: () => Effect.Effect<void>;
+}
+
+export class AuthRouterService extends Context.Tag("nas/AuthRouterService")<
+  AuthRouterService,
+  {
+    readonly ensureDaemon: (runtimePaths: NetworkRuntimePaths) => Effect.Effect<AuthRouterHandle>;
+  }
+>() {}
+```
+
+Live 実装は既存の `network/envoy_auth_router.ts` の `ensureAuthRouterDaemon` に委譲。
+使用 stage: Proxy
+
+### SessionStoreService (新設)
+
+```typescript
+// src/services/session_store.ts
+export interface SessionStoreService extends Context.Tag("nas/SessionStoreService")<
+  SessionStoreService,
+  {
+    readonly ensurePaths: () => Effect.Effect<SessionRuntimePaths>;
+    readonly create: (paths: SessionRuntimePaths, record: SessionRecord) => Effect.Effect<void>;
+    readonly delete: (paths: SessionRuntimePaths, sessionId: string) => Effect.Effect<void>;
+  }
+>() {}
+```
+
+Live 実装は既存の `session/store.ts` の `ensureSessionRuntimePaths` / `createSession` / `deleteSession` に委譲。
+使用 stage: SessionStore
+
 ## 型定義の変更
 
 ### pipeline/types.ts
@@ -152,7 +259,12 @@ export type StageServices =
   | PromptService
   | FsService
   | ProcessService
-  | DockerService;
+  | DockerService
+  | DindService
+  | SessionBrokerService
+  | HostExecBrokerService
+  | AuthRouterService
+  | SessionStoreService;
 
 // --- Stage interface ---
 
@@ -246,9 +358,9 @@ const exit = await Effect.runPromiseExit(
 - `planMount` の返り値を `MountPlan` に変更: `effects: ResourceEffect[]` → `directories`, `files`, `symlinks`。
 - `run()` 内で `FsService.mkdir` / `writeFile` / `symlink` を呼び、`dockerArgs` / `envVars` は `input.prior` をベースに次状態をそのまま返す。teardown 必要なものは `Effect.addFinalizer`。
 
-**DockerBuildStage (`EffectStage<DockerService>`)**:
+**DockerBuildStage (`EffectStage<FsService | DockerService>`)**:
 - `planDockerBuild` は `DockerBuildPlan | null` を返す。`docker-image-build` effect 除去。
-- `run()` 内で `DockerService.build()` を呼ぶ (冪等、teardown 不要)。
+- `run()` 内で一時ディレクトリ操作は `FsService` (`readFile`, `mkdir`, `writeFile`, `rm`) 経由、ビルドは `DockerService.build()` を呼ぶ。
 
 **LaunchStage (`EffectStage<DockerService>`)**:
 - `planLaunch` は `LaunchPlan` を返す。`docker-run-interactive` effect 除去。
@@ -258,13 +370,18 @@ const exit = await Effect.runPromiseExit(
 - `planDbusProxy` は `DbusProxyPlan | null` を返す。`dbus-proxy` / `process-spawn` / `wait-for-ready` effects 除去。
 - `run()` 内で `FsService.mkdir` / `writeFile` と `ProcessService.spawn` / `waitForFileExists` を `Effect.acquireRelease` で組み立て。
 
-**DindStage (`EffectStage<DockerService>`)**:
+**DindStage (`EffectStage<DindService>`)**:
 - `planDind` は `DindPlan | null` を返す。`dind-sidecar` effect 除去。
-- `run()` 内で `ensureDindSidecar` / `teardownDindSidecar` を `Effect.acquireRelease` で直接呼ぶ。
+- `run()` 内で `DindService.ensureSidecar` / `DindService.teardownSidecar` を `Effect.acquireRelease` で使う。stage は Docker CLI の詳細を知らない。
 
-**ProxyStage (`EffectStage<FsService | DockerService>`)**:
+**ProxyStage (`EffectStage<FsService | DockerService | SessionBrokerService | AuthRouterService>`)**:
 - `planProxy` は `ProxyPlan | null` を返す。`proxy-session` effect 除去。
-- `run()` 内で envoy config / registry などの file I/O は `FsService`、container/network 操作は `DockerService` を使い、broker → auth-router → envoy → session network を `Effect.acquireRelease` チェーンで組み立てる。network 差し替え後の `dockerArgs` もここで完成形を返す。
+- `run()` 内で:
+  - envoy config 描画・registry 操作は `FsService` (`readFile`, `writeFile`, `rm`)
+  - broker は `SessionBrokerService.start` → `Effect.acquireRelease`
+  - auth-router は `AuthRouterService.ensureDaemon` → `Effect.acquireRelease`
+  - envoy container / network は `DockerService` の各メソッド
+  - network 差し替え後の `dockerArgs` もここで完成形を返す。
 
 ### ProceduralStage 系 (Effect.gen で書き直し)
 
@@ -274,14 +391,15 @@ const exit = await Effect.runPromiseExit(
 - git 操作は `ProcessService.exec` 経由。
 - teardown は `Effect.acquireRelease` / `Effect.addFinalizer` で Scope に委譲。
 
-**SessionStoreStage (`EffectStage<FsService>`)**:
+**SessionStoreStage (`EffectStage<SessionStoreService>`)**:
 - class 廃止 → plain object `EffectStage`。
-- `FsService` 経由で session record の create/delete を行い、mount 用の `dockerArgs` と `envVars` も完成形で返す。
+- `SessionStoreService` 経由で session record の create/delete を行い、mount 用の `dockerArgs` と `envVars` も完成形で返す。
 - `Effect.acquireRelease` で Scope に載せる。
 
-**HostExecStage (`EffectStage<FsService>`)**:
-- `HostExecDeps` は constructor-param DI のまま維持。
-- wrapper / symlink / runtime path の file I/O は `FsService` へ寄せ、broker 起動や registry 操作は既存 `HostExecDeps` helper を継続利用する。
+**HostExecStage (`EffectStage<FsService | HostExecBrokerService>`)**:
+- wrapper / symlink / runtime path ��� file I/O は `FsService`。
+- broker ライフサイクルは `HostExecBrokerService.start` → `Effect.acquireRelease`。
+- registry 操作 (JSON write/delete) は `FsService.writeFile` / `FsService.rm`。
 
 ### cli/rebuild.ts
 
@@ -310,6 +428,11 @@ const exit = await Effect.runPromiseExit(
 | `src/services/process.ts` | ProcessService Tag, ProcessServiceLive, makeProcessServiceFake |
 | `src/services/docker.ts` | DockerService Tag, DockerServiceLive, makeDockerServiceFake |
 | `src/stages/worktree/prompt_service.ts` | PromptService Tag, Live, Fake |
+| `src/services/dind.ts` | DindService Tag, DindServiceLive, makeDindServiceFake |
+| `src/services/session_broker.ts` | SessionBrokerService Tag, Live, Fake |
+| `src/services/hostexec_broker.ts` | HostExecBrokerService Tag, Live, Fake |
+| `src/services/auth_router.ts` | AuthRouterService Tag, Live, Fake |
+| `src/services/session_store.ts` | SessionStoreService Tag, Live, Fake |
 
 ## 移行順序
 
@@ -325,32 +448,54 @@ const exit = await Effect.runPromiseExit(
 
 ### Phase 2: Stage 移行 (1 stage 1 commit、簡単な順)
 
-8. NixDetectStage → `EffectStage<never>`
-9. DockerBuildStage → `EffectStage<DockerService>`
-10. LaunchStage → `EffectStage<DockerService>`
-11. MountStage → `EffectStage<FsService>`
-12. DbusProxyStage → `EffectStage<FsService | ProcessService>`
-13. DindStage → `EffectStage<DockerService>` + acquireRelease
-14. ProxyStage → `EffectStage<FsService | DockerService>` + acquireRelease
-15. SessionStoreStage → `EffectStage<FsService>`
-16. HostExecStage → `EffectStage<FsService>` (HostExecDeps 維持)
-17. WorktreeStage → `EffectStage<PromptService | FsService | ProcessService>`
+8. NixDetectStage → `EffectStage<never>` ✅
+9. DockerBuildStage → `EffectStage<DockerService>` ✅ (Phase 2.5 で FsService 追加)
+10. LaunchStage → `EffectStage<DockerService>` ✅
+11. MountStage → `EffectStage<FsService>` ✅
+12. DbusProxyStage → `EffectStage<FsService | ProcessService>` ✅
+13. DindStage → `EffectStage<never>` ✅ (Phase 2.5 で DindService に変更)
+14. ProxyStage → `EffectStage<FsService | DockerService>` ✅ (Phase 2.5 で broker/auth-router service 追加)
+15. SessionStoreStage → `EffectStage<never>` ✅ (Phase 2.5 で SessionStoreService に変更)
+16. HostExecStage → `EffectStage<FsService>` ✅ (Phase 2.5 で HostExecBrokerService 追加)
+17. WorktreeStage → `EffectStage<PromptService | FsService | ProcessService>` ✅
+
+### Phase 2.5: Service 完全化 (stage から直接 I/O を排除)
+
+Phase 2 で EffectStage の形にはなったが、一部の stage が Service を経由せず直接 I/O 関数を呼んでいる問題を修正する。
+
+#### 既存 Service 拡張
+18. FsService に `readFile`, `rename` を追加
+19. DockerService に `stop`, `exec`, `containerIp`, `volumeCreate`, `volumeRemove` を追加
+
+#### 新 Service 作成
+20. DindService — `ensureSidecar` / `teardownSidecar`。Live は `docker/dind.ts` に委譲
+21. SessionBrokerService — `start` → `SessionBrokerHandle`。Live は `network/broker.ts` に委譲
+22. HostExecBrokerService — `start` → `HostExecBrokerHandle`。Live は `hostexec/broker.ts` に委譲
+23. AuthRouterService — `ensureDaemon` → `AuthRouterHandle`。Live は `network/envoy_auth_router.ts` に委譲
+24. SessionStoreService — `ensurePaths` / `create` / `delete`。Live は `session/store.ts` に委譲
+
+#### Stage 修正 (Service 経由に書き換え)
+25. DockerBuildStage — `node:fs/promises` → FsService
+26. DindStage — `ensureDindSidecar` / `teardownDindSidecar` → DindService
+27. ProxyStage — SessionBroker → SessionBrokerService, AuthRouter → AuthRouterService, envoy config → FsService
+28. HostExecStage — HostExecBroker → HostExecBrokerService, registry → FsService
+29. SessionStoreStage — `createSession` / `deleteSession` → SessionStoreService
 
 ### Phase 3: 切り替え・削除
 
-18. `cli.ts` — Effect.scoped + Layer.mergeAll で起動
-19. `cli/rebuild.ts` — Effect 実行に書き換え
-20. 旧型 (`PlanStage` / `ProceduralStage` / `ResourceEffect`) 削除
-21. `src/pipeline/effects/` ディレクトリ削除
-22. `src/pipeline/effects.ts` barrel 削除
-23. integration test の `executePlan`/`teardownHandles` 依存を除去
-24. 旧 `runPipeline` (Promise 版) 削除
+30. `cli.ts` — Effect.scoped + Layer.mergeAll で起動 (新 Service の Live Layer も追加)
+31. `cli/rebuild.ts` — Effect 実行に書き換え
+32. 旧型 (`PlanStage` / `ProceduralStage` / `ResourceEffect`) 削除
+33. `src/pipeline/effects/` ディレクトリ削除
+34. `src/pipeline/effects.ts` barrel 削除
+35. integration test の `executePlan`/`teardownHandles` 依存を除去
+36. 旧 `runPipeline` (Promise 版) 削除
 
 ## テスト方針
 
 - **純粋 planner テスト**: 変更なし。`planMount(input)` を呼んで返り値を検査。Effect 不要。
-- **Stage テスト**: `makeFsServiceFake()` 等で Fake Layer を provide → `Effect.runPromise(Effect.scoped(stage.run(input)))`。
-- **HostExecStage テスト**: HostExecDeps fake (既存パターン) + Service fake Layer の併用。
+- **Stage テスト**: すべての Service を Fake Layer で provide → `Effect.runPromise(Effect.scoped(stage.run(input)))`。stage の `run()` から直接 I/O を呼ぶコードがあってはならない。
+- **Fake で検証すべきこと**: Service メソッドが正しい引数で呼ばれたか（spy パターン）、acquireRelease の release が呼ばれるか。
 - **WorktreeStage テスト**: `makePromptServiceFake()` + Service fake Layer で決定的応答を注入。
 - **Integration test**: Live Layer で実行。既存の Docker 前提テストはそのまま。
 

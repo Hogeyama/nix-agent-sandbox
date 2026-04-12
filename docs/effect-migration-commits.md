@@ -89,233 +89,278 @@
 
 ---
 
-## Phase 2: Stage Migration (1 stage 1 commit)
+## Phase 2: Stage Migration (1 stage 1 commit) ✅ Done
 
-Each commit: migrate stage + update tests + wrap with `effectStageAdapter` in cli.ts.
-
-### Commit 7: refactor(stage): migrate NixDetectStage to EffectStage<never>
-
-**Scope**: Pure logic stays in `planNixDetect()`. `run()` wraps result in `Effect.succeed`.
-
-**Files**:
-| File | Action | Description |
-|------|--------|-------------|
-| `src/stages/nix_detect.ts` | modify | PlanStage → EffectStage<never>. run() calls existing pure planner, returns Effect.succeed(result). |
-| `src/stages/nix_detect_test.ts` | modify | Tests call `Effect.runPromise(Effect.scoped(stage.run(input)))`. |
-| `src/cli.ts` | modify | Wrap NixDetectStage with `effectStageAdapter()`. Import Layer.mergeAll for live layer. |
-
-**Dependencies**: commit 5 (adapter), commit 6
-**Risks**: low — no I/O effects
+Commits 7-16 完了。全 stage を EffectStage の形に変換済み。
+ただし一部の stage が Service を経由せず直接 I/O 関数を呼んでいる問題あり → Phase 2.5 で修正。
 
 ---
 
-### Commit 8: refactor(stage): migrate DockerBuildStage to EffectStage<DockerService>
+## Phase 2.5: Service 完全化 (stage から直接 I/O を排除)
 
-**Scope**: Pure planner returns `DockerBuildPlan` (no effects array). `run()` calls `DockerService.build()`. Also updates `rebuild.ts`.
+Phase 2 で EffectStage の形にはなったが、以下の stage が Service を経由せず直接 I/O を呼んでいる:
+- **docker_build**: `node:fs/promises` を直接使用 (temp dir 操作)
+- **dind**: `ensureDindSidecar`/`teardownDindSidecar` を直接呼出
+- **proxy**: `SessionBroker`, `ensureAuthRouterDaemon`, `renderEnvoyConfig`, `gcNetworkRuntime`, `ensureSharedEnvoy` を直接呼出
+- **hostexec**: `HostExecBroker`, `writeHostExecSessionRegistry` 等を直接呼出
+- **session_store**: `createSession`/`deleteSession`/`ensureSessionRuntimePaths` を直接呼出
+
+### Commit 17: feat(services): extend FsService with readFile, rename, mkdtemp
+
+**Scope**: FsService に不足メソッドを追加。`readFile` は envoy template 読込や asset 読込に必要。`rename` は atomic write に必要。`mkdtemp` は一時ディレクトリ作成に必要。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/docker_build.ts` | modify | Add DockerBuildPlan type. Factory returns EffectStage<DockerService>. run() calls planDockerBuild then DockerService.build. |
-| `src/stages/docker_build_test.ts` | modify | Planner tests check DockerBuildPlan. Add run() test with DockerService fake layer. |
-| `src/cli.ts` | modify | Wrap with effectStageAdapter. |
-| `src/cli/rebuild.ts` | modify | Call stage.run() via Effect.scoped + Effect.provide(DockerServiceLive) instead of executePlan/teardownHandles. |
+| `src/services/fs.ts` | modify | Tag に `readFile`, `rename`, `mkdtemp` を追加。Live/Fake も対応更新 |
 
-**Dependencies**: commit 5, commit 3
-**Risks**: rebuild.ts changes direct executePlan usage — verify rebuild subcommand
+**Dependencies**: なし
+**Risks**: 低 — 既存メソッドに影響なし
 
 ---
 
-### Commit 9: refactor(stage): migrate LaunchStage to EffectStage<DockerService>
+### Commit 18: feat(services): extend DockerService with stop, exec, containerIp, volumeCreate, volumeRemove
+
+**Scope**: DockerService に DinD / Proxy で必要な Docker 操作メソッドを追加。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/launch.ts` | modify | LaunchPlan type. Factory returns EffectStage<DockerService>. run() calls DockerService.runInteractive. |
-| `src/stages/launch_test.ts` | modify | Update tests for LaunchPlan and EffectStage. |
-| `src/cli.ts` | modify | Wrap with effectStageAdapter. |
+| `src/services/docker.ts` | modify | Tag に `stop`, `exec`, `containerIp`, `volumeCreate`, `volumeRemove` を追加。Live は `docker/client.ts` に委譲。Fake も対応更新 |
 
-**Dependencies**: commit 5, commit 3
+**Dependencies**: なし
+**Risks**: 低 — `exec` の返り値型は `string` (stdout)。exit code は Live 内で非 0 なら throw
 
 ---
 
-### Commit 10: refactor(stage): migrate MountStage to EffectStage<FsService>
+### Commit 19: feat(services): create DindService
 
-**Scope**: Pure planner returns `MountPlan` with directories/files/symlinks instead of `ResourceEffect[]`. `run()` calls FsService operations + `Effect.addFinalizer` for cleanup.
+**Scope**: DinD sidecar ライフサイクルを抽象化。Live は `docker/dind.ts` の `ensureDindSidecar`/`teardownDindSidecar` に委譲。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/mount.ts` | modify | MountPlan type (directories, files, symlinks, dockerArgs, envVars, outputOverrides). run() executes via FsService with Effect.addFinalizer. |
-| `src/stages/mount_test.ts` | modify | Planner tests check MountPlan. Add run() test with FsService fake. |
-| `src/cli.ts` | modify | Wrap with effectStageAdapter. |
+| `src/services/dind.ts` | create | `DindService` Tag (`ensureSidecar`, `teardownSidecar`), `DindServiceLive`, `makeDindServiceFake()` |
 
-**Dependencies**: commit 5, commit 1
-**Risks**: MountStage has many effects — careful mapping needed
+**Dependencies**: なし
+**Risks**: 低 — 既存関数の薄いラッパー
 
 ---
 
-### Commit 11: refactor(stage): migrate DbusProxyStage to EffectStage<FsService | ProcessService>
+### Commit 20: feat(services): create SessionBrokerService
+
+**Scope**: Proxy の SessionBroker ライフサイクル + registry 操作を抽象化。`start()` は broker 起動 + registry 書込を行い、`SessionBrokerHandle` を返す。Handle の `close()` は broker 停止 + registry/pending 削除。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/dbus_proxy.ts` | modify | DbusProxyPlan type. run() uses FsService for dirs, ProcessService.spawn + Effect.acquireRelease for proxy process, ProcessService.waitForFileExists for readiness. |
-| `src/cli.ts` | modify | Wrap with effectStageAdapter. |
+| `src/services/session_broker.ts` | create | `SessionBrokerService` Tag, `SessionBrokerHandle`, `SessionBrokerConfig`, Live, Fake |
 
-**Dependencies**: commit 5, commits 1-2
-**Risks**: Process lifecycle — ensure acquireRelease correctly kills process on scope close
+**Dependencies**: なし
+**Risks**: 中 — Live の `start` 内で registry 書込失敗時の broker 巻き戻しが必要 (現在 proxy.ts にあるロジック)
 
 ---
 
-### Commit 12: refactor(stage): migrate DindStage to EffectStage<DockerService>
+### Commit 21: feat(services): create HostExecBrokerService
+
+**Scope**: HostExec の broker ライフサイクル + registry 操作を抽象化。SessionBrokerService と同パターン。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/dind.ts` | modify | DindPlan type. run() wraps ensureDindSidecar/teardownDindSidecar in Effect.acquireRelease. |
-| `src/stages/dind_test.ts` | modify | Update tests. |
-| `src/cli.ts` | modify | Wrap with effectStageAdapter. |
+| `src/services/hostexec_broker.ts` | create | `HostExecBrokerService` Tag, `HostExecBrokerHandle`, `HostExecBrokerConfig`, Live, Fake |
 
-**Dependencies**: commit 5, commit 3
-**Risks**: shared vs non-shared sidecar teardown logic
+**Dependencies**: なし
+**Risks**: 低 — Commit 20 と同パターン
 
 ---
 
-### Commit 13: refactor(stage): migrate HostExecStage to EffectStage<FsService>
+### Commit 22: feat(services): create AuthRouterService
 
-**Scope**: Unix-listener effect (HostExecBroker lifecycle) replaced by direct broker management inside `run()` using `Effect.acquireRelease`. No HostExecDeps pattern.
-
-**Broker lifecycle (from src/pipeline/effects/unix_listener.ts)**:
-- **acquire**: `new HostExecBroker({...})` → `broker.start(socketPath)` → `writeHostExecSessionRegistry()`. If registry write fails, close broker.
-- **release**: `broker.close()` → `removeHostExecSessionRegistry()` → `removeHostExecPendingDir()`.
+**Scope**: Proxy の auth-router daemon ライフサイクルを抽象化。`ensureDaemon()` は daemon 起動 (既に起動中なら再利用) し、`AuthRouterHandle` を返す。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/hostexec.ts` | modify | HostExecPlan type (directories, files, symlinks, dockerArgs, envVars — no effects[]). run() calls FsService for dirs/files/symlinks, then Effect.acquireRelease for HostExecBroker lifecycle. |
-| `src/stages/hostexec_test.ts` | modify | Planner tests for HostExecPlan. run() test with FsService fake verifying broker lifecycle. |
-| `src/cli.ts` | modify | Wrap with effectStageAdapter. |
+| `src/services/auth_router.ts` | create | `AuthRouterService` Tag, `AuthRouterHandle` (`abort`), Live (→ `network/envoy_auth_router.ts` 委譲), Fake |
 
-**Dependencies**: commit 5, commit 1
-**Risks**: Broker lifecycle must exactly match unix_listener.ts behavior including partial-failure recovery
+**Dependencies**: なし
+**Risks**: 低 — `ensureAuthRouterDaemon` が null を返す場合 (既に起動中) は handle.abort が no-op
 
 ---
 
-### Commit 14: refactor(stage): migrate ProxyStage to EffectStage<FsService | DockerService>
+### Commit 23: feat(services): create SessionStoreService
 
-**Scope**: Proxy-session effect decomposed into 5 chained `Effect.acquireRelease` calls.
-
-**Sub-resources (from src/pipeline/effects/proxy.ts)**:
-1. `gcNetworkRuntime` + `renderEnvoyConfig` via FsService
-2. `SessionBroker.start()` + `writeSessionRegistry()` (release: broker.close + registry remove)
-3. `ensureAuthRouterDaemon` (release: process kill)
-4. `ensureSharedEnvoy` via DockerService (release: container rm if not shared)
-5. Session network create + envoy/dind connect via DockerService (release: network disconnect + remove)
+**Scope**: Session record の CRUD を抽象化。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/proxy.ts` | modify | ProxyPlan type (pure config data). run() chains acquireRelease for 5 sub-resources. |
-| `src/stages/proxy_test.ts` | modify | Planner tests for ProxyPlan. run() test verifying lifecycle. |
-| `src/cli.ts` | modify | Wrap with effectStageAdapter. |
+| `src/services/session_store.ts` | create | `SessionStoreService` Tag (`ensurePaths`, `create`, `delete`), Live (→ `session/store.ts` 委譲), Fake |
 
-**Dependencies**: commit 5, commits 1, 3
-**Risks**: Most complex stage — many sub-resources with intricate rollback. Must replicate error-recovery logic from effects/proxy.ts.
+**Dependencies**: なし
+**Risks**: 低
 
 ---
 
-### Commit 15: refactor(stage): migrate SessionStoreStage to EffectStage<FsService>
+### Commit 24: refactor(stage): DockerBuildStage — node:fs/promises → FsService
 
-**Scope**: ProceduralStage class → plain object. `resolveNasBinPath` stays as direct sync I/O (probe-like check).
+**Scope**: `extractAssetsToTempDir` を FsService 経由に書き換え。stage 型を `EffectStage<FsService | DockerService>` に変更。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/session_store.ts` | modify | Class → createSessionStoreStage() factory. run() uses Effect.addFinalizer for deleteSession. |
-| `src/stages/session_store_test.ts` | modify | Update for EffectStage interface. |
-| `src/cli.ts` | modify | Replace `new SessionStoreStage()` with factory + adapter. |
+| `src/stages/docker_build.ts` | modify | `node:fs/promises` import 削除。`mkdtemp`/`readFile`/`mkdir`/`writeFile`/`rm` → FsService |
+| `src/stages/docker_build_test.ts` | modify | run() テストで FsService fake + DockerService fake を注入し、各メソッド呼出を検証 |
+| `src/pipeline/types.ts` | modify | StageServices に追加不要 (FsService, DockerService は既存) |
+| `src/cli.ts` | modify | 変更不要 (liveLayer に FsService は既存) |
 
-**Dependencies**: commit 5, commit 1
+**Dependencies**: Commit 17 (FsService readFile, mkdtemp)
+**Risks**: 低
 
 ---
 
-### Commit 16: refactor(stage): migrate WorktreeStage to EffectStage<PromptService | FsService | ProcessService>
+### Commit 25: refactor(stage): DindStage — ensureDindSidecar → DindService
 
-**Scope**: ProceduralStage class → plain object. Prompts via PromptService, git via ProcessService.exec, files via FsService. Cherry-pick temp worktree via nested `Effect.acquireRelease`.
+**Scope**: 直接呼出を DindService 経由に置換。stage 型を `EffectStage<DindService>` に変更。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/stages/worktree/stage.ts` | modify | Class → createWorktreeStage() factory. Effect.gen body replaces execute() logic. |
-| `src/stages/worktree.ts` | modify | Update barrel export. |
-| `src/cli.ts` | modify | Replace `new WorktreeStage()` with factory + adapter. |
+| `src/stages/dind.ts` | modify | `docker/dind.ts` import 削除。DindService を yield* で取得し acquireRelease 内で使用 |
+| `src/stages/dind_test.ts` | modify | run() テストで DindService fake を注入。ensureSidecar の引数検証、scope close 時の teardownSidecar 呼出検証 |
+| `src/pipeline/types.ts` | modify | StageServices に `DindService` を追加 |
+| `src/cli.ts` | modify | liveLayer に `DindServiceLive` を追加 |
 
-**Dependencies**: commit 5, commits 1-2, 4
-**Risks**: Most complex ProceduralStage — extensive branching, error recovery
+**Dependencies**: Commit 19 (DindService)
+**Risks**: 低
+
+---
+
+### Commit 26: refactor(stage): ProxyStage — 全直接 I/O を Service 経由に
+
+**Scope**: 最も大きな書き換え。5 つの sub-resource すべてを Service 経由にする:
+1. `gcNetworkRuntime` → FsService (PID 読込 + ファイル削除) + ProcessService (プロセス生存確認)
+2. `renderEnvoyConfig` → FsService (`readFile` + `writeFile`)
+3. `SessionBroker` → SessionBrokerService
+4. `ensureAuthRouterDaemon` → AuthRouterService
+5. `ensureSharedEnvoy` + session network → DockerService
+
+**Files**:
+| File | Action | Description |
+|------|--------|-------------|
+| `src/stages/proxy.ts` | modify | `SessionBroker`, `ensureAuthRouterDaemon`, `renderEnvoyConfig`, `gcNetworkRuntime`, `ensureSharedEnvoy`, `createProxySessionNetworkHandle`, registry 関数の直接 import を全削除。各 Service 経由に書き換え |
+| `src/stages/proxy_test.ts` | modify | run() テストで全 Service の fake を注入。各 sub-resource の Service 呼出を検証 |
+| `src/pipeline/types.ts` | modify | StageServices に `SessionBrokerService`, `AuthRouterService` を追加 |
+| `src/cli.ts` | modify | liveLayer に `SessionBrokerServiceLive`, `AuthRouterServiceLive` を追加 |
+
+**Dependencies**: Commits 17-18 (FsService/DockerService 拡張), 20 (SessionBrokerService), 22 (AuthRouterService)
+**Risks**: 高 — 最複雑 stage。gcNetworkRuntime の FsService + ProcessService 分解が最も手間
+
+---
+
+### Commit 27: refactor(stage): HostExecStage — HostExecBroker → HostExecBrokerService
+
+**Scope**: broker ライフサイクルを HostExecBrokerService 経由に。registry 操作は Service 内に吸収済み。stage 型を `EffectStage<FsService | HostExecBrokerService>` に変更。
+
+**Files**:
+| File | Action | Description |
+|------|--------|-------------|
+| `src/stages/hostexec.ts` | modify | `HostExecBroker`, `writeHostExecSessionRegistry`, `removeHostExecSessionRegistry`, `removeHostExecPendingDir` の直接 import 削除。HostExecBrokerService 経由に |
+| `src/stages/hostexec_test.ts` | modify | run() テストで FsService fake + HostExecBrokerService fake を注入。broker start 呼出・handle close 呼出を検証 |
+| `src/pipeline/types.ts` | modify | StageServices に `HostExecBrokerService` を追加 |
+| `src/cli.ts` | modify | liveLayer に `HostExecBrokerServiceLive` を追加 |
+
+**Dependencies**: Commit 21 (HostExecBrokerService)
+**Risks**: 低 — broker lifecycle ロジックは Service Live に移動するだけ
+
+---
+
+### Commit 28: refactor(stage): SessionStoreStage — createSession/deleteSession → SessionStoreService
+
+**Scope**: session CRUD を SessionStoreService 経由に。stage 型を `EffectStage<SessionStoreService>` に変更。
+
+**Files**:
+| File | Action | Description |
+|------|--------|-------------|
+| `src/stages/session_store.ts` | modify | `session/store.ts` の直接 import 削除。SessionStoreService 経由に。`resolveNasBinPath` はそのまま維持 (env var probe) |
+| `src/stages/session_store_test.ts` | modify | run() テストで SessionStoreService fake を注入。create/delete 呼出を検証 |
+| `src/pipeline/types.ts` | modify | StageServices に `SessionStoreService` を追加 |
+| `src/cli.ts` | modify | liveLayer に `SessionStoreServiceLive` を追加 |
+
+**Dependencies**: Commit 23 (SessionStoreService)
+**Risks**: 低
+
+---
+
+### Commit 29: chore: verify no direct I/O remains in stages
+
+**Scope**: grep で全 stage ファイルから直接 I/O import が残っていないことを確認。問題があれば修正。
+
+**確認項目**:
+- `node:fs/promises` — stage ファイルから消えていること
+- `ensureDindSidecar` / `teardownDindSidecar` — dind.ts から消えていること
+- `SessionBroker` (from network/broker) — proxy.ts から消えていること
+- `HostExecBroker` (from hostexec/broker) — hostexec.ts から消えていること
+- `ensureAuthRouterDaemon` — proxy.ts から消えていること
+- `createSession` / `deleteSession` (from session/store) — session_store.ts から消えていること
+- `renderEnvoyConfig` / `gcNetworkRuntime` / `ensureSharedEnvoy` — proxy.ts から消えていること
+
+**Risks**: なし — 検証のみ
 
 ---
 
 ## Phase 3: Switchover & Cleanup
 
-### Commit 17: refactor(cli): switch to Effect-based pipeline execution
+### Commit 30: refactor(cli): switch to Effect-based pipeline execution
 
-**Scope**: Replace adapter-based runPipeline with `runPipelineEffect` + `Effect.scoped` + `Layer.mergeAll`. Use `Effect.runPromiseExit` for `exitOnCliError` compatibility.
+**Scope**: adapter 経由の runPipeline を `runPipelineEffect` + `Effect.scoped` + `Layer.mergeAll` に置換。全 Live Layer (汎用 4 + ドメイン固有 5) を provide。
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/cli.ts` | modify | Remove effectStageAdapter wrapping. Use runPipelineEffect directly with Effect.scoped + Layer.mergeAll(FsServiceLive, ProcessServiceLive, DockerServiceLive, PromptServiceLive). |
-| `src/cli/rebuild.ts` | modify | Verify consistency with cli.ts pattern. |
+| `src/cli.ts` | modify | effectStageAdapter 除去。runPipelineEffect + Effect.scoped + Layer.mergeAll で直接実行 |
+| `src/cli/rebuild.ts` | modify | 同様に Effect 実行に統一 |
 
-**Dependencies**: commits 7-16
+**Dependencies**: commits 17-29
 
 ---
 
-### Commit 18: refactor(pipeline): delete old runPipeline and adapter
+### Commit 31: refactor(pipeline): delete old runPipeline and adapter
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/pipeline/pipeline.ts` | modify | Remove old runPipeline, mergeOutputs, TeardownEntry. Keep only runPipelineEffect. |
-| `src/pipeline/effect_adapter.ts` | delete | Adapter shim no longer needed. |
-| `src/pipeline/pipeline_test.ts` | modify | Remove old runPipeline tests. |
+| `src/pipeline/pipeline.ts` | modify | 旧 runPipeline, mergeOutputs, TeardownEntry 削除。runPipelineEffect のみ残す |
+| `src/pipeline/effect_adapter.ts` | delete | adapter shim 不要 |
+| `src/pipeline/pipeline_test.ts` | modify | 旧 runPipeline テスト削除 |
 
 ---
 
-### Commit 19: refactor(types): remove PlanStage, ProceduralStage, ResourceEffect
+### Commit 32: refactor(types): remove PlanStage, ProceduralStage, ResourceEffect
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/pipeline/types.ts` | modify | Delete PlanStage, ProceduralStage, ProceduralResult, StagePlan, ResourceEffect (all 14 subtypes), ReadinessCheck, ListenerSpec. AnyStage = EffectStage<StageServices>. |
-| `src/pipeline/types_test.ts` | modify | Remove tests for old types. |
+| `src/pipeline/types.ts` | modify | PlanStage, ProceduralStage, ProceduralResult, StagePlan, ResourceEffect (14 subtypes), ReadinessCheck, ListenerSpec 削除。AnyStage = EffectStage<StageServices> |
+| `src/pipeline/types_test.ts` | modify | 旧型テスト削除 |
 
 ---
 
-### Commit 20: chore: delete src/pipeline/effects/ directory and barrel
+### Commit 33: chore: delete src/pipeline/effects/ directory and barrel
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `src/pipeline/effects/executor.ts` | delete | Replaced by stages calling services directly. |
-| `src/pipeline/effects/fs.ts` | delete | Replaced by FsService. |
-| `src/pipeline/effects/process.ts` | delete | Replaced by ProcessService. |
-| `src/pipeline/effects/docker.ts` | delete | Replaced by DockerService. |
-| `src/pipeline/effects/unix_listener.ts` | delete | Replaced by acquireRelease in HostExecStage. |
-| `src/pipeline/effects/proxy.ts` | delete | Replaced by acquireRelease in ProxyStage. |
-| `src/pipeline/effects/proxy_test.ts` | delete | Moved to stage-level tests. |
-| `src/pipeline/effects/dind.ts` | delete | Replaced by DockerService in DindStage. |
-| `src/pipeline/effects/dbus.ts` | delete | Replaced by services in DbusProxyStage. |
-| `src/pipeline/effects/types.ts` | delete | ResourceHandle no longer needed. |
-| `src/pipeline/effects.ts` | delete | Barrel re-export. |
-| `src/pipeline/effects_integration_test.ts` | modify | Migrate or remove. |
+| `src/pipeline/effects/` | delete | ディレクトリごと削除 (executor, fs, process, docker, unix_listener, proxy, dind, dbus, types) |
+| `src/pipeline/effects.ts` | delete | barrel re-export |
+| `src/pipeline/effects_integration_test.ts` | modify | 移行 or 削除 |
 
 ---
 
-### Commit 21: docs(skill): update SKILL.md for new architecture
+### Commit 34: docs(skill): update SKILL.md for new architecture
 
 **Files**:
 | File | Action | Description |
 |------|--------|-------------|
-| `skills/effect-separation/SKILL.md` | modify | Replace PlanStage/ProceduralStage docs with EffectStage<R> pattern, Service usage, Effect.acquireRelease pattern. |
+| `skills/effect-separation/SKILL.md` | modify | PlanStage/ProceduralStage → EffectStage<R> + Service パターン + acquireRelease パターンに更新 |
