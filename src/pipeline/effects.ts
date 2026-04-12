@@ -9,4 +9,4 @@ export {
   executePlan,
   teardownHandles,
 } from "./effects/executor.ts";
-export type { ResourceHandle } from "./effects/types.ts";
+export type { ResourceEffect, ResourceHandle } from "./effects/types.ts";

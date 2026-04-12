@@ -10,8 +10,8 @@ import { logInfo } from "../../log.ts";
 import type {
   DockerImageBuildEffect,
   DockerRunInteractiveEffect,
-} from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+  ResourceHandle,
+} from "./types.ts";
 
 export async function executeDockerImageBuild(
   effect: DockerImageBuildEffect,

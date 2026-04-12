@@ -9,8 +9,7 @@ import {
   writeHostExecSessionRegistry,
 } from "../../hostexec/registry.ts";
 import { logInfo, logWarn } from "../../log.ts";
-import type { UnixListenerEffect } from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+import type { ResourceHandle, UnixListenerEffect } from "./types.ts";
 
 export async function executeUnixListener(
   effect: UnixListenerEffect,

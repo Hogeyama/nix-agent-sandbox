@@ -20,8 +20,8 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import type {
+  EffectStageResult,
   PriorStageOutputs,
-  ProceduralStage,
   StageInput,
 } from "../pipeline/types.ts";
 import { AuthRouterServiceLive } from "../services/auth_router.ts";
@@ -57,12 +57,17 @@ const liveLayer = Layer.mergeAll(
   SessionStoreServiceLive,
 );
 
-function makeWorktreeStage(): ProceduralStage {
+interface WorktreeStageAdapter {
+  name: string;
+  execute(input: StageInput): Promise<{ outputOverrides: EffectStageResult }>;
+  teardown(input?: StageInput): Promise<void>;
+}
+
+function makeWorktreeStage(): WorktreeStageAdapter {
   const stage = createWorktreeStage();
   let closeScope: Effect.Effect<void> | undefined;
 
   return {
-    kind: "procedural",
     name: stage.name,
     async execute(input: StageInput) {
       const scope = Effect.runSync(Scope.make());

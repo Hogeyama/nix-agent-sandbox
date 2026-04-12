@@ -3,7 +3,15 @@
  */
 
 import { logWarn } from "../../log.ts";
-import type { ResourceEffect, StagePlan } from "../types.ts";
+import type { ResourceEffect } from "./types.ts";
+
+interface StagePlan {
+  effects: ResourceEffect[];
+  dockerArgs: string[];
+  envVars: Record<string, string>;
+  outputOverrides: Record<string, unknown>;
+}
+
 import { executeDbusProxy } from "./dbus.ts";
 import { executeDindSidecar } from "./dind.ts";
 import {

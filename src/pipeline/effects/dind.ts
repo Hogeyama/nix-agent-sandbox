@@ -3,8 +3,7 @@
  */
 
 import { ensureDindSidecar, teardownDindSidecar } from "../../docker/dind.ts";
-import type { DindSidecarEffect } from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+import type { DindSidecarEffect, ResourceHandle } from "./types.ts";
 
 export async function executeDindSidecar(
   effect: DindSidecarEffect,

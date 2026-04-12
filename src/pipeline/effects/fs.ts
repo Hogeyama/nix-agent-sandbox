@@ -4,11 +4,15 @@
 
 import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { logWarn } from "../../log.ts";
-import type { ResourceEffect } from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+import type {
+  DirectoryCreateEffect,
+  FileWriteEffect,
+  ResourceHandle,
+  SymlinkEffect,
+} from "./types.ts";
 
 export async function executeDirectoryCreate(
-  effect: Extract<ResourceEffect, { kind: "directory-create" }>,
+  effect: DirectoryCreateEffect,
 ): Promise<ResourceHandle> {
   await mkdir(effect.path, { recursive: true, mode: effect.mode });
   return {
@@ -22,7 +26,7 @@ export async function executeDirectoryCreate(
 }
 
 export async function executeFileWrite(
-  effect: Extract<ResourceEffect, { kind: "file-write" }>,
+  effect: FileWriteEffect,
 ): Promise<ResourceHandle> {
   await writeFile(effect.path, effect.content);
   try {
@@ -52,7 +56,7 @@ export async function executeFileWrite(
 }
 
 export async function executeSymlink(
-  effect: Extract<ResourceEffect, { kind: "symlink" }>,
+  effect: SymlinkEffect,
 ): Promise<ResourceHandle> {
   // Remove old symlink if it exists
   try {

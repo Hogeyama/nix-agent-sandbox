@@ -170,8 +170,7 @@ export async function main(args: string[]): Promise<void> {
     // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
     // propagate and abort the pipeline. This matches legacy stage behavior
     // where the same I/O happens inside each stage's execute().
-    // NOTE: Probes are passed to StageInput and consumed by PlanStage
-    // instances. ProceduralStage (WorktreeStage) does not use probes.
+    // NOTE: Probes are passed to StageInput and consumed by stages.
     const hostEnv = buildHostEnv();
     const probes = await resolveProbes(hostEnv);
 
