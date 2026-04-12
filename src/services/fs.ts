@@ -29,6 +29,9 @@ export class FsService extends Context.Tag("nas/FsService")<
     ) => Effect.Effect<void>;
     readonly stat: (path: string) => Effect.Effect<Stats>;
     readonly exists: (path: string) => Effect.Effect<boolean>;
+    readonly readFile: (path: string) => Effect.Effect<string>;
+    readonly rename: (oldPath: string, newPath: string) => Effect.Effect<void>;
+    readonly mkdtemp: (prefix: string) => Effect.Effect<string>;
   }
 >() {}
 
@@ -68,6 +71,15 @@ export const FsServiceLive = Layer.succeed(FsService, {
         },
       ),
     ).pipe(Effect.orDie),
+
+  readFile: (path) =>
+    Effect.tryPromise(() => fs.readFile(path, "utf8")).pipe(Effect.orDie),
+
+  rename: (oldPath, newPath) =>
+    Effect.tryPromise(() => fs.rename(oldPath, newPath)).pipe(Effect.orDie),
+
+  mkdtemp: (prefix) =>
+    Effect.tryPromise(() => fs.mkdtemp(prefix)).pipe(Effect.orDie),
 });
 
 // ---------------------------------------------------------------------------
@@ -157,6 +169,37 @@ export function makeFsServiceFake(): {
       }),
 
     exists: (path) => Effect.sync(() => store.has(path)),
+
+    readFile: (path) =>
+      Effect.sync(() => {
+        const entry = store.get(path);
+        if (!entry) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return entry.content;
+      }),
+
+    rename: (oldPath, newPath) =>
+      Effect.sync(() => {
+        const entry = store.get(oldPath);
+        if (!entry) {
+          throw new Error(`ENOENT: ${oldPath}`);
+        }
+        store.delete(oldPath);
+        store.set(newPath, entry);
+      }),
+
+    mkdtemp: (prefix) =>
+      Effect.sync(() => {
+        let counter = 0;
+        let path: string;
+        do {
+          path = `${prefix}${counter.toString().padStart(6, "0")}`;
+          counter++;
+        } while (store.has(path));
+        store.set(path, { content: "", mode: 0o700, isDirectory: true });
+        return path;
+      }),
   });
 
   return { layer, store };

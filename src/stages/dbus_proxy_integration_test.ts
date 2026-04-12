@@ -264,6 +264,9 @@ test("DbusProxyStage: produces correct outputs when enabled", async () => {
         rm: () => Effect.void,
         stat: () => Effect.die("not implemented"),
         exists: () => Effect.succeed(false),
+        readFile: () => Effect.die("not implemented"),
+        rename: () => Effect.void,
+        mkdtemp: () => Effect.die("not implemented"),
       }),
     ),
     Layer.succeed(
