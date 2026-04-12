@@ -19,6 +19,7 @@ import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
 import type { FsService } from "../services/fs.ts";
+import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { PromptService } from "../stages/worktree/prompt_service.ts";
 
@@ -327,6 +328,7 @@ export type EffectStageResult = Partial<PriorStageOutputs>;
 export type StageServices =
   | DindService
   | FsService
+  | HostExecBrokerService
   | ProcessService
   | DockerService
   | PromptService;

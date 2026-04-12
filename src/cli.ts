@@ -33,6 +33,7 @@ import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { FsServiceLive } from "./services/fs.ts";
+import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
@@ -206,6 +207,7 @@ export async function main(args: string[]): Promise<void> {
     const liveLayer = Layer.mergeAll(
       DindServiceLive,
       FsServiceLive,
+      HostExecBrokerServiceLive,
       ProcessServiceLive,
       DockerServiceLive,
       PromptServiceLive,
@@ -218,7 +220,7 @@ export async function main(args: string[]): Promise<void> {
       effectStageAdapter(NixDetectStage, liveLayer),
       effectStageAdapter(createDbusProxyStage(), liveLayer),
       effectStageAdapter(createMountStage(mountProbes), liveLayer),
-      createHostExecStage(),
+      effectStageAdapter(createHostExecStage(), liveLayer),
       effectStageAdapter(createDindStage(), liveLayer),
       createProxyStage(),
       effectStageAdapter(createLaunchStage(agentExtraArgs), liveLayer),
