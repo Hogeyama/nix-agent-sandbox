@@ -44,7 +44,7 @@ import { createLaunchStage } from "./stages/launch.ts";
 import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
-import { SessionStoreStage } from "./stages/session_store.ts";
+import { createSessionStoreStage } from "./stages/session_store.ts";
 import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
@@ -211,7 +211,7 @@ export async function main(args: string[]): Promise<void> {
 
     const stages = [
       new WorktreeStage(),
-      new SessionStoreStage(),
+      effectStageAdapter(createSessionStoreStage(), liveLayer),
       effectStageAdapter(createDockerBuildStage(buildProbes), liveLayer),
       effectStageAdapter(NixDetectStage, liveLayer),
       effectStageAdapter(createDbusProxyStage(), liveLayer),

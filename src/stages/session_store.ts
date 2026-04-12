@@ -1,25 +1,25 @@
 /**
- * SessionStoreStage (ProceduralStage)
+ * SessionStoreStage (EffectStage)
  *
  * Creates a runtime session record on pipeline startup and deletes
- * it on teardown. Also injects a bind-mount of the host session
- * runtime directory onto a canonical in-container path so hooks
- * running inside the sandbox land on the same on-disk store as the
- * host-side UI.
+ * it on teardown (via Effect.addFinalizer). Also injects a bind-mount
+ * of the host session runtime directory onto a canonical in-container
+ * path so hooks running inside the sandbox land on the same on-disk
+ * store as the host-side UI.
  */
 
 import { existsSync, realpathSync, statSync } from "node:fs";
+import { Effect, type Scope } from "effect";
 import { logInfo } from "../log.ts";
 import type {
-  ProceduralResult,
-  ProceduralStage,
+  EffectStage,
+  EffectStageResult,
   StageInput,
 } from "../pipeline/types.ts";
 import {
   createSession,
   deleteSession,
   ensureSessionRuntimePaths,
-  type SessionRuntimePaths,
 } from "../sessions/store.ts";
 
 /** Canonical path the in-container hook uses to reach the session store. */
@@ -71,73 +71,83 @@ function safeRealpath(p: string): string | null {
   }
 }
 
-export class SessionStoreStage implements ProceduralStage {
-  kind = "procedural" as const;
-  name = "SessionStoreStage";
+export function createSessionStoreStage(): EffectStage<never> {
+  return {
+    kind: "effect",
+    name: "SessionStoreStage",
 
-  /** Resolved host paths — remembered for teardown. */
-  private paths: SessionRuntimePaths | null = null;
-  /** Session id — remembered for teardown (also available via input). */
-  private sessionId: string | null = null;
+    run(
+      input: StageInput,
+    ): Effect.Effect<EffectStageResult, unknown, Scope.Scope> {
+      return Effect.gen(function* () {
+        // Resolve the host runtime directory. Passing `undefined` lets the
+        // helper honor NAS_SESSION_STORE_DIR on the host side (mainly useful
+        // in tests) and otherwise fall back to the XDG-aware default.
+        const paths = yield* Effect.tryPromise({
+          try: () => ensureSessionRuntimePaths(undefined),
+          catch: (e) =>
+            new Error(
+              `Session store setup failed: ${e instanceof Error ? e.message : String(e)}`,
+            ),
+        });
 
-  async execute(input: StageInput): Promise<ProceduralResult> {
-    // Resolve the host runtime directory. Passing `undefined` lets the
-    // helper honor NAS_SESSION_STORE_DIR on the host side (mainly useful
-    // in tests) and otherwise fall back to the XDG-aware default.
-    const paths = await ensureSessionRuntimePaths(undefined);
-    this.paths = paths;
-    this.sessionId = input.sessionId;
+        yield* Effect.tryPromise({
+          try: () =>
+            createSession(paths, {
+              sessionId: input.sessionId,
+              agent: input.profile.agent,
+              profile: input.profileName,
+              worktree: input.prior.workDir,
+              startedAt: new Date().toISOString(),
+            }),
+          catch: (e) =>
+            new Error(
+              `Session creation failed: ${e instanceof Error ? e.message : String(e)}`,
+            ),
+        });
 
-    await createSession(paths, {
-      sessionId: input.sessionId,
-      agent: input.profile.agent,
-      profile: input.profileName,
-      worktree: input.prior.workDir,
-      startedAt: new Date().toISOString(),
-    });
+        logInfo(
+          `[nas] Session store: created record ${input.sessionId} at ${paths.sessionsDir}`,
+        );
 
-    logInfo(
-      `[nas] Session store: created record ${input.sessionId} at ${paths.sessionsDir}`,
-    );
+        // Best-effort cleanup: a missing record (e.g. already deleted by
+        // something else) must not surface as a teardown error.
+        yield* Effect.addFinalizer(() =>
+          Effect.tryPromise({
+            try: () => deleteSession(paths, input.sessionId),
+            catch: (e) =>
+              new Error(
+                `SessionStoreStage teardown: failed to delete record ${input.sessionId}: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+              ),
+          }).pipe(Effect.ignoreLogged),
+        );
 
-    const dockerArgs: string[] = [
-      "-v",
-      `${paths.sessionsDir}:${IN_CONTAINER_SESSION_STORE_DIR}`,
-    ];
+        const dockerArgs: string[] = [
+          "-v",
+          `${paths.sessionsDir}:${IN_CONTAINER_SESSION_STORE_DIR}`,
+        ];
 
-    const nasBinPath = resolveNasBinPath();
-    if (nasBinPath) {
-      dockerArgs.push("-v", `${nasBinPath}:${IN_CONTAINER_NAS_BIN_PATH}:ro`);
-    } else {
-      logInfo(
-        "[nas] hook notification: NAS_BIN_PATH is not set — in-sandbox agent hooks that call `nas hook notification` will fail with 'command not found'. Point NAS_BIN_PATH at a self-contained nas artifact (a `bun build --compile` output or the nix `single-exe` self-extracting script).",
-      );
-    }
+        const nasBinPath = resolveNasBinPath();
+        if (nasBinPath) {
+          dockerArgs.push(
+            "-v",
+            `${nasBinPath}:${IN_CONTAINER_NAS_BIN_PATH}:ro`,
+          );
+        } else {
+          logInfo(
+            "[nas] hook notification: NAS_BIN_PATH is not set — in-sandbox agent hooks that call `nas hook notification` will fail with 'command not found'. Point NAS_BIN_PATH at a self-contained nas artifact (a `bun build --compile` output or the nix `single-exe` self-extracting script).",
+          );
+        }
 
-    return {
-      outputOverrides: {
-        dockerArgs,
-        envVars: {
-          NAS_SESSION_STORE_DIR: IN_CONTAINER_SESSION_STORE_DIR,
-        },
-      },
-    };
-  }
-
-  async teardown(input: StageInput): Promise<void> {
-    // Best-effort cleanup: a missing record (e.g. already deleted by
-    // something else) must not surface as a teardown error.
-    const paths = this.paths;
-    const sessionId = this.sessionId ?? input.sessionId;
-    if (!paths) return;
-    try {
-      await deleteSession(paths, sessionId);
-    } catch (err) {
-      console.error(
-        `[nas] SessionStoreStage teardown: failed to delete record ${sessionId}: ${
-          (err as Error).message
-        }`,
-      );
-    }
-  }
+        return {
+          dockerArgs,
+          envVars: {
+            NAS_SESSION_STORE_DIR: IN_CONTAINER_SESSION_STORE_DIR,
+          },
+        };
+      });
+    },
+  };
 }
