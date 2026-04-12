@@ -9,6 +9,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
 } from "../config/types.ts";
@@ -157,6 +158,7 @@ function createTestInput(opts: { sessionId: string }): StageInput {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    session: DEFAULT_SESSION_CONFIG,
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),

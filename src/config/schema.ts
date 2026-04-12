@@ -24,6 +24,7 @@ import {
   DEFAULT_HOSTEXEC_PROMPT_CONFIG,
   DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
+  DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "./types.ts";
 import { ConfigValidationError } from "./validate.ts";
@@ -105,6 +106,17 @@ export const worktreeSchema = z
   .transform((r) => ({
     base: r.base,
     onCreate: r["on-create"],
+  }));
+
+export const sessionSchema = z
+  .object({
+    enable: z.boolean().default(DEFAULT_SESSION_CONFIG.enable),
+    "detach-key": z.string().default(DEFAULT_SESSION_CONFIG.detachKey),
+  })
+  .prefault({})
+  .transform((r) => ({
+    enable: r.enable,
+    detachKey: r["detach-key"],
   }));
 
 export const nixSchema = z
@@ -722,6 +734,7 @@ export function profileSchema(profileName: string) {
       agent: zodEnum(VALID_AGENTS),
       "agent-args": z.array(z.string()).default([]),
       worktree: worktreeSchema.optional(),
+      session: sessionSchema,
       nix: nixSchema,
       docker: dockerSchema,
       gcloud: gcloudSchema,
@@ -741,6 +754,7 @@ export function profileSchema(profileName: string) {
           agent: r.agent,
           agentArgs: r["agent-args"],
           worktree: r.worktree,
+          session: r.session,
           nix: r.nix,
           docker: r.docker,
           gcloud: r.gcloud,

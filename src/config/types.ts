@@ -45,6 +45,12 @@ export interface SecretConfig {
   required: boolean;
 }
 
+/** Session 設定 */
+export interface SessionConfig {
+  enable: boolean;
+  detachKey: string;
+}
+
 /** Hook 設定 */
 export type HookNotify = "auto" | "desktop" | "off";
 
@@ -171,6 +177,7 @@ export interface Profile {
   agent: AgentType;
   agentArgs: string[];
   worktree?: WorktreeConfig;
+  session: SessionConfig;
   nix: NixConfig;
   docker: DockerConfig;
   gcloud: GcloudConfig;
@@ -216,6 +223,10 @@ export interface RawProfile {
   worktree?: {
     base?: string;
     "on-create"?: string;
+  };
+  session?: {
+    enable?: boolean;
+    "detach-key"?: string;
   };
   nix?: {
     enable?: boolean | "auto";
@@ -375,6 +386,11 @@ export const DEFAULT_DBUS_SESSION_CONFIG: DbusSessionConfig = {
 
 export const DEFAULT_DBUS_CONFIG: DbusConfig = {
   session: DEFAULT_DBUS_SESSION_CONFIG,
+};
+
+export const DEFAULT_SESSION_CONFIG: SessionConfig = {
+  enable: false,
+  detachKey: "^\\",
 };
 
 export const DEFAULT_HOOK_CONFIG: HookConfig = {

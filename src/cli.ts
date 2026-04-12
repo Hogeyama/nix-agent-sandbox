@@ -20,10 +20,12 @@ import { runHookCommand } from "./cli/hook.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
 import { runNetworkCommand } from "./cli/network.ts";
 import { runRebuild } from "./cli/rebuild.ts";
+import { runSessionCommand } from "./cli/session.ts";
 import { runUiCommand } from "./cli/ui.ts";
 import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
+import { dtachIsAvailable, socketPathFor } from "./dtach/client.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import { setLogLevel } from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
@@ -71,6 +73,7 @@ export async function main(args: string[]): Promise<void> {
     subcommand === "rebuild" ||
     subcommand === "worktree" ||
     subcommand === "container" ||
+    subcommand === "session" ||
     subcommand === "network" ||
     subcommand === "hostexec" ||
     subcommand === "ui" ||
@@ -108,6 +111,13 @@ export async function main(args: string[]): Promise<void> {
   if (subcommand === "container") {
     await runContainerCommand(
       removeFirstOccurrence(argsBeforeDashDash, "container"),
+    );
+    return;
+  }
+
+  if (subcommand === "session") {
+    await runSessionCommand(
+      removeFirstOccurrence(argsBeforeDashDash, "session"),
     );
     return;
   }
@@ -161,6 +171,13 @@ export async function main(args: string[]): Promise<void> {
     const { name, profile } = resolveProfile(config, profileName);
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
     const sessionId = `sess_${randomHex(6)}`;
+
+    // session.enable かつ dtach 内でなければ、nas 自体を dtach でラップして再実行
+    if (effectiveProfile.session.enable && !process.env.NAS_INSIDE_DTACH) {
+      await runInsideDtach(sessionId, effectiveProfile.session.detachKey, args);
+      return;
+    }
+
     const imageName = "nas-sandbox";
     const proxyEnabled =
       effectiveProfile.network.allowlist.length > 0 ||
@@ -275,4 +292,55 @@ export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
 function randomHex(bytes: number): string {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return Buffer.from(data).toString("hex");
+}
+
+/**
+ * nas プロセス全体を dtach 内で再実行する。
+ * dtach -c でソケットを作成し、中で NAS_INSIDE_DTACH=1 付きで nas を起動。
+ * デタッチすると dtach -c が戻り、この関数も戻る（中の nas は生き続ける）。
+ */
+async function runInsideDtach(
+  sessionId: string,
+  detachKey: string,
+  originalArgs: string[],
+): Promise<void> {
+  if (!(await dtachIsAvailable())) {
+    throw new Error(
+      "dtach is required for session.enable but was not found. Install dtach or disable session.enable.",
+    );
+  }
+
+  const socketPath = socketPathFor(sessionId);
+
+  // ソケットディレクトリを作成
+  const dir = await import("node:path").then((p) => p.dirname(socketPath));
+  await Bun.spawn(["mkdir", "-p", dir], {
+    stdout: "ignore",
+    stderr: "ignore",
+  }).exited;
+
+  // dtach -c <socket> -e <key> -z <nas ...>
+  // NAS_INSIDE_DTACH=1 を渡して再帰を防止
+  // process.execPath で実際のバイナリパスを使う（Bun コンパイル済みだと
+  // process.argv[0] が仮想パス /$bunfs/... になるため）。
+  // originalArgs は main() に渡されたユーザー引数のみ。
+  const nasCommand = [process.execPath, ...originalArgs];
+  const dtachArgs = ["-c", socketPath, "-e", detachKey, "-z", ...nasCommand];
+
+  console.log(
+    `[nas] Starting dtach session: ${sessionId} (detach: ${detachKey})`,
+  );
+
+  const proc = Bun.spawn(["dtach", ...dtachArgs], {
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+    env: {
+      ...process.env,
+      NAS_INSIDE_DTACH: "1",
+    },
+  });
+  await proc.exited;
+
+  console.log(`[nas] Detached. Reattach with: nas session attach ${sessionId}`);
 }

@@ -35,6 +35,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
@@ -120,6 +121,7 @@ async function ensureImage(): Promise<void> {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    session: DEFAULT_SESSION_CONFIG,
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),

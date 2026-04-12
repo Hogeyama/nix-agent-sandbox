@@ -2,6 +2,8 @@
  * コンテナ起動ステージ (EffectStage)
  *
  * DockerService.runInteractive を呼び出してコンテナを起動する。
+ * session.enable が有効な場合、CLI 層が dtach でラップ済みなので
+ * このステージは常に直接実行する。
  */
 
 import { Effect } from "effect";

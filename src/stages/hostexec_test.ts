@@ -5,6 +5,7 @@ import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
+  DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import type {
@@ -25,6 +26,7 @@ function makeProfile(): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    session: DEFAULT_SESSION_CONFIG,
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: {
       allowlist: [],

@@ -151,6 +151,7 @@ export function mergeRawProfiles(
     agent: local.agent ?? global.agent,
     "agent-args": local["agent-args"] ?? global["agent-args"],
     worktree: shallowMerge(global.worktree, local.worktree),
+    session: shallowMerge(global.session, local.session),
     nix: shallowMerge(global.nix, local.nix),
     docker: shallowMerge(global.docker, local.docker),
     gcloud: shallowMerge(global.gcloud, local.gcloud),

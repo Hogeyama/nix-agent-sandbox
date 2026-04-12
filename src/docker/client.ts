@@ -126,8 +126,8 @@ export async function dockerBuild(
   await $`docker build ${labelArgs} -t ${tag} ${contextDir}`;
 }
 
-/** docker run を実行 */
-export async function dockerRun(opts: DockerRunOptions): Promise<void> {
+/** docker run の引数リストを構築（docker コマンド自体を含む） */
+export function buildDockerRunArgs(opts: DockerRunOptions): string[] {
   const args: string[] = ["docker", "run", "--rm"];
 
   if (opts.name) {
@@ -154,6 +154,13 @@ export async function dockerRun(opts: DockerRunOptions): Promise<void> {
   args.push(...opts.args);
   args.push(opts.image);
   args.push(...opts.command);
+
+  return args;
+}
+
+/** docker run を実行 */
+export async function dockerRun(opts: DockerRunOptions): Promise<void> {
+  const args = buildDockerRunArgs(opts);
 
   await runInteractiveCommand(args[0], args.slice(1), {
     errorLabel: "docker run",
