@@ -2,7 +2,7 @@
  * CLI エントリポイント
  */
 
-import { Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import pkg from "../package.json";
 import {
   applyWorktreeOverride,
@@ -26,9 +26,8 @@ import { runWorktreeCommand } from "./cli/worktree.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import { setLogLevel } from "./log.ts";
-import { effectStageAdapter } from "./pipeline/effect_adapter.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
-import { runPipeline } from "./pipeline/pipeline.ts";
+import { runPipelineEffect } from "./pipeline/pipeline.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { DindServiceLive } from "./services/dind.ts";
@@ -220,17 +219,17 @@ export async function main(args: string[]): Promise<void> {
     );
 
     const stages = [
-      effectStageAdapter(createWorktreeStage(), liveLayer),
-      effectStageAdapter(createSessionStoreStage(), liveLayer),
-      effectStageAdapter(createDockerBuildStage(buildProbes), liveLayer),
-      effectStageAdapter(NixDetectStage, liveLayer),
-      effectStageAdapter(createDbusProxyStage(), liveLayer),
-      effectStageAdapter(createMountStage(mountProbes), liveLayer),
-      effectStageAdapter(createHostExecStage(), liveLayer),
-      effectStageAdapter(createDindStage(), liveLayer),
-      effectStageAdapter(createProxyStage(), liveLayer),
-      effectStageAdapter(createLaunchStage(agentExtraArgs), liveLayer),
-    ];
+      createWorktreeStage(),
+      createSessionStoreStage(),
+      createDockerBuildStage(buildProbes),
+      NixDetectStage,
+      createDbusProxyStage(),
+      createMountStage(mountProbes),
+      createHostExecStage(),
+      createDindStage(),
+      createProxyStage(),
+      createLaunchStage(agentExtraArgs),
+    ] as const;
 
     // 初期 PriorStageOutputs を構築
     const initialPrior: PriorStageOutputs = {
@@ -248,15 +247,22 @@ export async function main(args: string[]): Promise<void> {
       dbusProxyEnabled: effectiveProfile.dbus.session.enable,
     };
 
-    await runPipeline(stages, {
-      config,
-      profile: effectiveProfile,
-      profileName: name,
-      sessionId,
-      host: hostEnv,
-      probes,
-      prior: initialPrior,
-    });
+    const exit = await Effect.runPromiseExit(
+      runPipelineEffect(stages, {
+        config,
+        profile: effectiveProfile,
+        profileName: name,
+        sessionId,
+        host: hostEnv,
+        probes,
+        prior: initialPrior,
+      }).pipe(Effect.scoped, Effect.provide(liveLayer)),
+    );
+
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause);
+      exitOnCliError(error);
+    }
   } catch (err) {
     exitOnCliError(err);
   }
