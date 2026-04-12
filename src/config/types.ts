@@ -45,6 +45,13 @@ export interface SecretConfig {
   required: boolean;
 }
 
+/** Hook 設定 */
+export type HookNotify = "auto" | "desktop" | "off";
+
+export interface HookConfig {
+  notify: HookNotify;
+}
+
 /** HostExec 設定 */
 export type HostExecApproval = "allow" | "prompt" | "deny";
 export type HostExecFallback = "container" | "deny";
@@ -174,6 +181,7 @@ export interface Profile {
   dbus: DbusConfig;
   extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
+  hook: HookConfig;
   hostexec?: HostExecConfig;
 }
 
@@ -270,6 +278,9 @@ export interface RawProfile {
     mode?: string;
     separator?: string;
   }>;
+  hook?: {
+    notify?: HookNotify;
+  };
   hostexec?: {
     prompt?: {
       enable?: boolean;
@@ -364,6 +375,10 @@ export const DEFAULT_DBUS_SESSION_CONFIG: DbusSessionConfig = {
 
 export const DEFAULT_DBUS_CONFIG: DbusConfig = {
   session: DEFAULT_DBUS_SESSION_CONFIG,
+};
+
+export const DEFAULT_HOOK_CONFIG: HookConfig = {
+  notify: "auto",
 };
 
 export const DEFAULT_HOSTEXEC_PROMPT_CONFIG: HostExecPromptConfig = {

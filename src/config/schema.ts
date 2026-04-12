@@ -18,6 +18,7 @@ import {
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
+  DEFAULT_HOOK_CONFIG,
   DEFAULT_HOSTEXEC_CWD_CONFIG,
   DEFAULT_HOSTEXEC_INHERIT_ENV_CONFIG,
   DEFAULT_HOSTEXEC_PROMPT_CONFIG,
@@ -446,6 +447,18 @@ export function networkSchema(_profileName: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
+export const hookSchema = z
+  .object({
+    notify: zodEnum(["auto", "desktop", "off"] as const).default(
+      DEFAULT_HOOK_CONFIG.notify,
+    ),
+  })
+  .prefault({});
+
+// ---------------------------------------------------------------------------
 // HostExec
 // ---------------------------------------------------------------------------
 
@@ -719,6 +732,7 @@ export function profileSchema(profileName: string) {
       dbus: dbusSchema,
       "extra-mounts": extraMountsSchema,
       env: envSchema,
+      hook: hookSchema,
       hostexec: hostexecSchema(profileName),
     })
     .transform(
@@ -737,6 +751,7 @@ export function profileSchema(profileName: string) {
           dbus: r.dbus,
           extraMounts: r["extra-mounts"],
           env: r.env,
+          hook: r.hook,
           hostexec: r.hostexec,
         }) satisfies Profile,
     );

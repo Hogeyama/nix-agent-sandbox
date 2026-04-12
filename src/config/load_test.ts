@@ -170,6 +170,7 @@ test("mergeRawProfiles: all RawProfile keys are preserved", () => {
     "extra-mounts": [{ src: "/a", dst: "/b" }],
     env: [{ key: "K", val: "V" }],
     hostexec: { rules: [] },
+    hook: { notify: "auto" },
   };
   const result = mergeRawProfiles(full, {});
   for (const key of Object.keys(full) as (keyof RawProfile)[]) {

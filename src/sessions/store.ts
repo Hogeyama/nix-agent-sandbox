@@ -35,6 +35,8 @@ export interface SessionRecord {
   lastEventAt: string; // ISO 8601
   lastEventKind?: SessionEventKind;
   lastEventMessage?: string;
+  /** Hook notification preference from profile config. */
+  hookNotify?: "auto" | "desktop" | "off";
 }
 
 export interface SessionRuntimePaths {
@@ -110,6 +112,7 @@ export async function createSession(
     lastEventAt: record.startedAt,
     lastEventKind: record.lastEventKind,
     lastEventMessage: record.lastEventMessage,
+    hookNotify: record.hookNotify,
   };
   await atomicWriteJson(sessionRecordPath(paths, full.sessionId), full);
   return full;

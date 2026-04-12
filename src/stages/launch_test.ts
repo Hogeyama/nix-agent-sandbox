@@ -4,6 +4,7 @@ import {
   type Config,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
@@ -95,6 +96,7 @@ function createTestInput(
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+    hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
   };

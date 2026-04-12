@@ -11,6 +11,7 @@ import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_HOOK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import type {
@@ -65,6 +66,7 @@ function makeProfile(
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network,
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+    hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
     ...rest,

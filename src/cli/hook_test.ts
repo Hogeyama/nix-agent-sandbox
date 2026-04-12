@@ -450,6 +450,108 @@ test("runHookNotification: store update failure is swallowed", async () => {
   expect(entries.length).toBe(0);
 });
 
+// --- fireAttentionNotification (via notifySender dep) ---
+
+test("attention hook fires desktop notification by default", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-notify-default";
+  const { createSession, updateSessionTurn } = await import(
+    "../sessions/store.ts"
+  );
+  await createSession(paths, {
+    sessionId: "sess-hook-notify-default",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+  await updateSessionTurn(paths, "sess-hook-notify-default", "start");
+
+  const calls: { title: string; body: string }[] = [];
+  await runHookNotification(["--kind", "attention"], {
+    stdinReader: makeStdin('{"message":"please review"}'),
+    notifySender: (title, body) => calls.push({ title, body }),
+  });
+
+  // Allow the fire-and-forget async to settle.
+  await Bun.sleep(50);
+
+  expect(calls).toHaveLength(1);
+  expect(calls[0].title).toContain("sess-hook-notify-default");
+  expect(calls[0].body).toBe("please review");
+});
+
+test("attention hook fires notification with fallback body when no message", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-notify-no-msg";
+  const { createSession, updateSessionTurn } = await import(
+    "../sessions/store.ts"
+  );
+  await createSession(paths, {
+    sessionId: "sess-hook-notify-no-msg",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+  await updateSessionTurn(paths, "sess-hook-notify-no-msg", "start");
+
+  const calls: { title: string; body: string }[] = [];
+  await runHookNotification(["--kind", "attention"], {
+    stdinReader: emptyStdin,
+    notifySender: (title, body) => calls.push({ title, body }),
+  });
+
+  await Bun.sleep(50);
+
+  expect(calls).toHaveLength(1);
+  expect(calls[0].body).toBe("Agent is waiting for input.");
+});
+
+test("attention hook suppressed when hookNotify is off", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-notify-off";
+  const { createSession, updateSessionTurn } = await import(
+    "../sessions/store.ts"
+  );
+  await createSession(paths, {
+    sessionId: "sess-hook-notify-off",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+    hookNotify: "off",
+  });
+  await updateSessionTurn(paths, "sess-hook-notify-off", "start");
+
+  const calls: { title: string; body: string }[] = [];
+  await runHookNotification(["--kind", "attention"], {
+    stdinReader: makeStdin('{"message":"hello"}'),
+    notifySender: (title, body) => calls.push({ title, body }),
+  });
+
+  await Bun.sleep(50);
+
+  expect(calls).toHaveLength(0);
+});
+
+test("start/stop hooks do not fire notification", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-notify-start";
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-notify-start",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  const calls: { title: string; body: string }[] = [];
+  const deps = {
+    stdinReader: emptyStdin,
+    notifySender: (title: string, body: string) => calls.push({ title, body }),
+  };
+
+  await runHookNotification(["--kind", "start"], deps);
+  await runHookNotification(["--kind", "stop"], deps);
+  await Bun.sleep(50);
+
+  expect(calls).toHaveLength(0);
+});
+
 // --- runHookCommand dispatcher ---
 
 test("runHookCommand: unknown subcommand is non-fatal (writes nothing)", async () => {

@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import * as path from "node:path";
 import { Effect, Exit, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
-import { DEFAULT_DISPLAY_CONFIG, DEFAULT_UI_CONFIG } from "../config/types.ts";
+import {
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_HOOK_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
@@ -42,6 +46,7 @@ function makeProfile(): Profile {
         broadcasts: [],
       },
     },
+    hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
     hostexec: {

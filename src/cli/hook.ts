@@ -12,8 +12,15 @@
  */
 
 import {
+  checkNotifySend,
+  type NotifyBackend,
+  resolveNotifyBackend,
+} from "../lib/notify_utils.ts";
+import {
+  readSession,
   resolveSessionRuntimePaths,
   type SessionEventKind,
+  type SessionRuntimePaths,
   updateSessionTurn,
 } from "../sessions/store.ts";
 import { getFlagValue, removeFirstOccurrence } from "./helpers.ts";
@@ -29,6 +36,8 @@ type StdinReader = () => Promise<string>;
 export interface RunHookNotificationDeps {
   /** Override stdin reader — tests feed a synchronous string. */
   stdinReader?: StdinReader;
+  /** Override notification sender — tests capture calls instead of spawning. */
+  notifySender?: (title: string, body: string) => void;
 }
 
 interface HookMatcher {
@@ -116,8 +125,8 @@ export async function runHookNotification(
   if (!payloadMatchesAll(payload, whenMatchers)) return;
 
   // Update the session store. Any failure is non-fatal.
+  const paths = resolveSessionRuntimePaths();
   try {
-    const paths = resolveSessionRuntimePaths();
     await updateSessionTurn(paths, sessionId, kind, message);
   } catch (err) {
     console.error(
@@ -125,6 +134,11 @@ export async function runHookNotification(
         (err as Error).message
       }`,
     );
+  }
+
+  // Fire-and-forget desktop notification on attention (user-turn).
+  if (kind === "attention") {
+    fireAttentionNotification(paths, sessionId, message, deps.notifySender);
   }
 }
 
@@ -253,6 +267,48 @@ function isSafeSessionId(sessionId: string): boolean {
   if (sessionId.includes("\\")) return false;
   if (sessionId.includes("..")) return false;
   return true;
+}
+
+/**
+ * Best-effort, fire-and-forget desktop notification when an agent
+ * signals "attention" (user-turn). Reads the session record to check
+ * the `hookNotify` preference; defaults to "auto" for records that
+ * predate the field. Never throws, never blocks the hook exit.
+ */
+function fireAttentionNotification(
+  paths: SessionRuntimePaths,
+  sessionId: string,
+  message: string | undefined,
+  notifySender?: (title: string, body: string) => void,
+): void {
+  // Intentionally not awaited — the hook must exit fast.
+  void (async () => {
+    try {
+      const record = await readSession(paths, sessionId);
+      const backend = resolveNotifyBackend(
+        (record?.hookNotify as NotifyBackend) ?? "auto",
+      );
+      if (backend === "off") return;
+
+      const title = `[nas] Your turn: ${sessionId}`;
+      const body = message ?? "Agent is waiting for input.";
+
+      if (notifySender) {
+        notifySender(title, body);
+        return;
+      }
+
+      checkNotifySend();
+      // Simple fire-and-forget: no --wait, no --print-id.
+      Bun.spawn(["notify-send", title, body], {
+        stdout: "ignore",
+        stderr: "ignore",
+        env: process.env,
+      });
+    } catch {
+      // Never fail a hook.
+    }
+  })();
 }
 
 /**

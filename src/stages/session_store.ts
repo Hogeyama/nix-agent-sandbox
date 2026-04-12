@@ -42,6 +42,7 @@ export function createSessionStoreStage(): EffectStage<SessionStoreService> {
           profile: input.profileName,
           worktree: input.prior.workDir,
           startedAt: new Date().toISOString(),
+          hookNotify: input.profile.hook.notify,
         });
 
         logInfo(
