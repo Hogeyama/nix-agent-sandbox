@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(nix run:*)",
+      "Bash(wc -l /home/hogeyama/repo/nix-agent-sandbox/src/stages/*.ts)",
+      "Bash(find /home/hogeyama/repo/nix-agent-sandbox/src/ui -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) -exec grep -l \"link\\\\|favicon\\\\|head\\\\|meta\" {} \\\\;)"
+    ]
+  }
+}
