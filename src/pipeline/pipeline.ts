@@ -76,7 +76,7 @@ export async function runPipeline(
         const handles = await executePlan(plan);
         teardowns.push({ kind: "plan", name: stage.name, handles });
         prior = mergeOutputs(prior, plan);
-      } else {
+      } else if (stage.kind === "procedural") {
         // ProceduralStage
         // NOTE: If execute() throws, the stage is NOT added to teardowns.
         // This matches PlanStage behavior and means partially-executed stages
@@ -105,6 +105,11 @@ export async function runPipeline(
           dockerArgs: newDockerArgs,
           envVars: newEnvVars,
         };
+      } else {
+        // EffectStage should be adapted via adaptStages() before reaching here
+        throw new Error(
+          `EffectStage "${stage.name}" passed to runPipeline without adaptation. Use adaptStages() first.`,
+        );
       }
     }
     return prior;
