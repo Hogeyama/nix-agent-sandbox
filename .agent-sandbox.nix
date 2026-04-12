@@ -4,6 +4,9 @@ let
       enable = "auto";
       mount-socket = true;
     };
+    session = {
+      enable = true;
+    };
     docker = {
       enable = true;
       shared = true;
@@ -190,6 +193,17 @@ in
       {
         agent = "claude";
         agent-args = [ "--dangerously-skip-permissions" ];
+      }
+      common_env
+      common_infra
+      common_network
+      common_hostexec
+    ];
+
+    claude-remote = mkProfile [
+      {
+        agent = "claude";
+        agent-args = [ "remote" ];
       }
       common_env
       common_infra
