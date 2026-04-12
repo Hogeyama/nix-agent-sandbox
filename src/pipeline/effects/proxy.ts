@@ -32,8 +32,7 @@ import {
   removeSessionRegistry,
   writeSessionRegistry,
 } from "../../network/registry.ts";
-import type { ProxySessionEffect } from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+import type { ProxySessionEffect, ResourceHandle } from "./types.ts";
 
 interface ProxySessionNetworkHandle {
   close(): Promise<void>;

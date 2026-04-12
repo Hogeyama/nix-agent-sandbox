@@ -2,8 +2,15 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ResourceEffect } from "./effects/types.ts";
 import { executeEffect, executePlan, teardownHandles } from "./effects.ts";
-import type { ResourceEffect, StagePlan } from "./types.ts";
+
+interface StagePlan {
+  effects: ResourceEffect[];
+  dockerArgs: string[];
+  envVars: Record<string, string>;
+  outputOverrides: Record<string, unknown>;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: create a unique temp directory for test isolation

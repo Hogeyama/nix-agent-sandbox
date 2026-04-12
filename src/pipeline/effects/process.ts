@@ -4,8 +4,11 @@
 
 import { stat } from "node:fs/promises";
 import { logInfo, logWarn } from "../../log.ts";
-import type { ProcessSpawnEffect, WaitForReadyEffect } from "../types.ts";
-import type { ResourceHandle } from "./types.ts";
+import type {
+  ProcessSpawnEffect,
+  ResourceHandle,
+  WaitForReadyEffect,
+} from "./types.ts";
 
 export function executeProcessSpawn(
   effect: ProcessSpawnEffect,
