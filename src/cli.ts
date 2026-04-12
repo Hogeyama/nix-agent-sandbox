@@ -46,7 +46,7 @@ import { NixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
 import { createSessionStoreStage } from "./stages/session_store.ts";
 import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
-import { WorktreeStage } from "./stages/worktree.ts";
+import { createWorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
 const VERSION: string = pkg.version;
@@ -210,7 +210,7 @@ export async function main(args: string[]): Promise<void> {
     );
 
     const stages = [
-      new WorktreeStage(),
+      effectStageAdapter(createWorktreeStage(), liveLayer),
       effectStageAdapter(createSessionStoreStage(), liveLayer),
       effectStageAdapter(createDockerBuildStage(buildProbes), liveLayer),
       effectStageAdapter(NixDetectStage, liveLayer),
