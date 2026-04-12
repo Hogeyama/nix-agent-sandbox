@@ -1,15 +1,15 @@
 import { expect, test } from "bun:test";
 import * as path from "node:path";
+import { Effect, Exit, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import { DEFAULT_DISPLAY_CONFIG, DEFAULT_UI_CONFIG } from "../config/types.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
   StageInput,
-  SymlinkEffect,
-  UnixListenerEffect,
 } from "../pipeline/types.ts";
-import { createHostExecStage } from "./hostexec.ts";
+import { makeFsServiceFake } from "../services/fs.ts";
+import { createHostExecStage, planHostExec } from "./hostexec.ts";
 
 function makeProfile(): Profile {
   return {
@@ -120,43 +120,41 @@ function makeStageInput(
   };
 }
 
+// ============================================================
+// planHostExec tests
+// ============================================================
+
 test("HostExecStage plan: returns null when no rules", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const input = makeStageInput(profile, hostEnv);
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
   expect(plan).toEqual(null);
 });
 
-test("HostExecStage plan: produces correct effects and docker args", () => {
+test("HostExecStage plan: produces correct docker args and env vars", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = makeStageInput(profile, hostEnv);
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  // Check that wrapper directory mount is present
   expect(
     plan.dockerArgs.some((arg) => arg.includes("/opt/nas/hostexec/bin")),
   ).toEqual(true);
 
-  // Wrapper PATH activation is deferred to entrypoint agent exec.
   expect(plan.envVars.PATH).toBeUndefined();
   expect(plan.envVars.NAS_HOSTEXEC_WRAPPER_DIR).toEqual(
     "/opt/nas/hostexec/bin",
   );
 
-  // Check socket env is set
   expect(plan.envVars.NAS_HOSTEXEC_SOCKET !== undefined).toEqual(true);
   expect(plan.envVars.NAS_HOSTEXEC_SESSION_ID).toEqual("test-session-id");
 
-  // Check outputOverrides
   expect(plan.outputOverrides.hostexecBrokerSocket !== undefined).toEqual(true);
   expect(plan.outputOverrides.hostexecRuntimeDir !== undefined).toEqual(true);
   expect(
@@ -165,87 +163,64 @@ test("HostExecStage plan: produces correct effects and docker args", () => {
     ),
   ).toEqual(true);
 
-  // Check socket path matches the env var
   expect(plan.envVars.NAS_HOSTEXEC_SOCKET).toEqual(
     plan.outputOverrides.hostexecBrokerSocket!,
   );
 });
 
-test("HostExecStage plan: creates symlink effects for bare command argv0s", () => {
+test("HostExecStage plan: creates symlinks for bare command argv0s", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = makeStageInput(profile, hostEnv);
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  // "git" is a bare command argv0 — should have a symlink effect
-  const symlinkEffects = plan.effects.filter(
-    (e): e is SymlinkEffect => e.kind === "symlink",
-  );
-  expect(symlinkEffects.length).toEqual(1);
-  expect(symlinkEffects[0].target).toEqual("hostexec-wrapper.py");
-  expect(path.basename(symlinkEffects[0].path)).toEqual("git");
+  expect(plan.symlinks.length).toEqual(1);
+  expect(plan.symlinks[0].target).toEqual("hostexec-wrapper.py");
+  expect(path.basename(plan.symlinks[0].path)).toEqual("git");
 });
 
-test("HostExecStage plan: creates unix-listener effect for hostexec-broker", () => {
+test("HostExecStage plan: creates file entry for wrapper script", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = makeStageInput(profile, hostEnv);
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  const listenerEffects = plan.effects.filter(
-    (e): e is UnixListenerEffect => e.kind === "unix-listener",
-  );
-  expect(listenerEffects.length).toEqual(1);
-  expect(listenerEffects[0].id).toEqual("hostexec-broker");
-  expect(listenerEffects[0].spec.kind).toEqual("hostexec-broker");
-  if (listenerEffects[0].spec.kind === "hostexec-broker") {
-    expect(listenerEffects[0].spec.sessionId).toEqual("test-session-id");
-    expect(listenerEffects[0].spec.auditDir).toEqual("/tmp/nas-test-audit");
-  }
+  expect(plan.files.length).toEqual(1);
+  expect(
+    plan.files[0].content.includes("select.select([fd], [], [], 0)"),
+  ).toEqual(true);
+  expect(plan.files[0].content.includes('"argv0": argv0,')).toEqual(true);
+  expect(
+    plan.files[0].content.includes("relative argv0 fallback is not supported"),
+  ).toEqual(true);
+  expect(
+    plan.files[0].content.includes(
+      "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
+    ),
+  ).toEqual(true);
 });
 
-test("HostExecStage plan: creates file-write effect for wrapper script", () => {
+test("HostExecStage plan: broker spec contains correct fields", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = makeStageInput(profile, hostEnv);
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  const fileWriteEffects = plan.effects.filter((e) => e.kind === "file-write");
-  expect(fileWriteEffects.length).toEqual(1);
-  expect(fileWriteEffects[0].kind).toEqual("file-write");
-  if (fileWriteEffects[0].kind === "file-write") {
-    expect(
-      fileWriteEffects[0].content.includes("select.select([fd], [], [], 0)"),
-    ).toEqual(true);
-    expect(fileWriteEffects[0].content.includes('"argv0": argv0,')).toEqual(
-      true,
-    );
-    expect(
-      fileWriteEffects[0].content.includes(
-        "relative argv0 fallback is not supported",
-      ),
-    ).toEqual(true);
-    expect(
-      fileWriteEffects[0].content.includes(
-        "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
-      ),
-    ).toEqual(true);
-  }
+  expect(plan.broker.sessionId).toEqual("test-session-id");
+  expect(plan.broker.auditDir).toEqual("/tmp/nas-test-audit");
+  expect(plan.broker.notify).toEqual("off");
 });
 
 test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
@@ -265,13 +240,11 @@ test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   const hostEnv = makeHostEnv(runtimeDir);
   const workspace = "/workspace";
   const input = makeStageInput(profile, hostEnv, workspace);
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  // Relative argv0 should produce a docker mount for the wrapper script
   expect(
     plan.dockerArgs.some((arg) =>
       arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`),
@@ -295,13 +268,11 @@ test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path"
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = makeStageInput(profile, hostEnv);
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  // Absolute argv0 should produce a docker mount at that exact path in the container
   expect(
     plan.dockerArgs.some((arg) => arg.endsWith(":/usr/bin/git:ro")),
   ).toEqual(true);
@@ -311,17 +282,72 @@ test("HostExecStage plan: auto notify resolves to desktop", () => {
   const profile = makeProfile();
   profile.hostexec!.prompt.notify = "auto";
   const input = makeStageInput(profile, makeHostEnv("/tmp/nas-test-runtime"));
-  const stage = createHostExecStage();
-  const plan = stage.plan(input);
+  const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  const listenerEffects = plan.effects.filter(
-    (e): e is UnixListenerEffect => e.kind === "unix-listener",
+  expect(plan.broker.notify).toEqual("desktop");
+});
+
+// ============================================================
+// EffectStage run() tests
+// ============================================================
+
+test("HostExecStage: run returns empty when no rules", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [];
+  const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
+  const input = makeStageInput(profile, hostEnv);
+  const stage = createHostExecStage();
+
+  const { layer } = makeFsServiceFake();
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
   );
-  expect(listenerEffects.length).toEqual(1);
-  if (listenerEffects[0].spec.kind === "hostexec-broker") {
-    expect(listenerEffects[0].spec.notify).toEqual("desktop");
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(result).toEqual({});
+});
+
+test("HostExecStage: run creates directories, files, and symlinks via FsService", async () => {
+  const profile = makeProfile();
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = makeStageInput(profile, hostEnv);
+  const plan = planHostExec(input)!;
+
+  const { layer, store } = makeFsServiceFake();
+
+  const stage = createHostExecStage();
+  const scope = Effect.runSync(Scope.make());
+
+  // run() will fail at broker.start() since there's no real broker,
+  // but we can verify the fs operations by catching the error
+  await Effect.runPromiseExit(
+    stage
+      .run(input)
+      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  // Broker start will fail, but directories and files should have been created
+  for (const dir of plan.directories) {
+    expect(store.has(dir.path)).toEqual(true);
+  }
+
+  for (const file of plan.files) {
+    const entry = store.get(file.path);
+    expect(entry).toBeDefined();
+    expect(entry!.content).toEqual(file.content);
+  }
+
+  for (const link of plan.symlinks) {
+    const entry = store.get(link.path);
+    expect(entry).toBeDefined();
+    expect(entry!.symlinkTarget).toEqual(link.target);
   }
 });
