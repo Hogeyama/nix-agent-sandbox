@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import { Layer } from "effect";
+import { Effect, Exit, Layer, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -19,7 +19,6 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import { effectStageAdapter } from "../pipeline/effect_adapter.ts";
 import type {
   PriorStageOutputs,
   ProceduralStage,
@@ -59,7 +58,32 @@ const liveLayer = Layer.mergeAll(
 );
 
 function makeWorktreeStage(): ProceduralStage {
-  return effectStageAdapter(createWorktreeStage(), liveLayer);
+  const stage = createWorktreeStage();
+  let closeScope: Effect.Effect<void> | undefined;
+
+  return {
+    kind: "procedural",
+    name: stage.name,
+    async execute(input: StageInput) {
+      const scope = Effect.runSync(Scope.make());
+      closeScope = Scope.close(scope, Exit.void);
+
+      const effect = stage
+        .run(input)
+        .pipe(
+          Effect.provideService(Scope.Scope, scope),
+          Effect.provide(liveLayer),
+        );
+      const outputOverrides = await Effect.runPromise(effect);
+      return { outputOverrides };
+    },
+    async teardown() {
+      if (closeScope) {
+        await Effect.runPromise(closeScope);
+        closeScope = undefined;
+      }
+    },
+  };
 }
 
 async function withTempRepo(
