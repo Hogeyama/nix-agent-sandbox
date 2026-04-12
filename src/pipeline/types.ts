@@ -16,6 +16,7 @@ import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
 import type { ApprovalScope } from "../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
+import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
 import type { FsService } from "../services/fs.ts";
 import type { ProcessService } from "../services/process.ts";
@@ -324,6 +325,7 @@ export type EffectStageResult = Partial<PriorStageOutputs>;
 
 // Union of all service tags that stages can depend on
 export type StageServices =
+  | DindService
   | FsService
   | ProcessService
   | DockerService

@@ -30,6 +30,7 @@ import { effectStageAdapter } from "./pipeline/effect_adapter.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { runPipeline } from "./pipeline/pipeline.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
+import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { ProcessServiceLive } from "./services/process.ts";
@@ -203,6 +204,7 @@ export async function main(args: string[]): Promise<void> {
     const buildProbes = await resolveBuildProbes(imageName);
 
     const liveLayer = Layer.mergeAll(
+      DindServiceLive,
       FsServiceLive,
       ProcessServiceLive,
       DockerServiceLive,
@@ -217,7 +219,7 @@ export async function main(args: string[]): Promise<void> {
       effectStageAdapter(createDbusProxyStage(), liveLayer),
       effectStageAdapter(createMountStage(mountProbes), liveLayer),
       createHostExecStage(),
-      createDindStage(),
+      effectStageAdapter(createDindStage(), liveLayer),
       createProxyStage(),
       effectStageAdapter(createLaunchStage(agentExtraArgs), liveLayer),
     ];

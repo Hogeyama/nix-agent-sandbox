@@ -16,13 +16,19 @@
  * 4. エージェントコンテナをカスタムネットワーク上で起動し、DNS でサイドカーに接続
  */
 
+import { Effect, type Scope } from "effect";
 import {
   DIND_INTERNAL_PORT,
   SHARED_CONTAINER_NAME,
   SHARED_TMP_MOUNT_PATH,
 } from "../docker/dind.ts";
 import { logInfo } from "../log.ts";
-import type { PlanStage, StageInput, StagePlan } from "../pipeline/types.ts";
+import type {
+  EffectStage,
+  EffectStageResult,
+  StageInput,
+} from "../pipeline/types.ts";
+import { DindService } from "../services/dind.ts";
 
 const SHARED_NETWORK_NAME = "nas-dind-shared";
 const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
@@ -30,72 +36,139 @@ const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
 export type { DindStageOptions } from "../docker/dind.ts";
 
 // ---------------------------------------------------------------------------
-// PlanStage
+// DindPlan
+// ---------------------------------------------------------------------------
+
+export interface DindPlan {
+  readonly containerName: string;
+  readonly sharedTmpVolume: string;
+  readonly networkName: string;
+  readonly shared: boolean;
+  readonly disableCache: boolean;
+  readonly readinessTimeoutMs: number;
+  readonly outputOverrides: EffectStageResult;
+}
+
+// ---------------------------------------------------------------------------
+// Planner (pure)
+// ---------------------------------------------------------------------------
+
+export function planDind(
+  input: StageInput,
+  options: { disableCache?: boolean; readinessTimeoutMs?: number } = {},
+): DindPlan | null {
+  if (!input.profile.docker.enable) {
+    logInfo("[nas] DinD: skipped (not enabled)");
+    return null;
+  }
+
+  const disableCache = options.disableCache ?? false;
+  const readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
+  const shared = input.profile.docker.shared;
+
+  let networkName: string;
+  let containerName: string;
+  let sharedTmpVolume: string;
+
+  if (shared) {
+    networkName = SHARED_NETWORK_NAME;
+    containerName = SHARED_CONTAINER_NAME;
+    sharedTmpVolume = SHARED_TMP_VOLUME;
+  } else {
+    const sessionId = input.sessionId.slice(0, 8);
+    networkName = `nas-dind-${sessionId}`;
+    containerName = `nas-dind-${sessionId}`;
+    sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
+  }
+
+  return {
+    containerName,
+    sharedTmpVolume,
+    networkName,
+    shared,
+    disableCache,
+    readinessTimeoutMs,
+    outputOverrides: {
+      dindContainerName: containerName,
+      networkName,
+      dockerArgs: [
+        "--network",
+        networkName,
+        "-v",
+        `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
+      ],
+      envVars: {
+        DOCKER_HOST: `tcp://${containerName}:${DIND_INTERNAL_PORT}`,
+        NAS_DIND_CONTAINER_NAME: containerName,
+        NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EffectStage
 // ---------------------------------------------------------------------------
 
 export function createDindStage(
   options: { disableCache?: boolean; readinessTimeoutMs?: number } = {},
-): PlanStage {
-  const disableCache = options.disableCache ?? false;
-  const readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
-
+): EffectStage<DindService> {
   return {
-    kind: "plan",
+    kind: "effect",
     name: "DindStage",
 
-    plan(input: StageInput): StagePlan | null {
-      if (!input.profile.docker.enable) {
-        logInfo("[nas] DinD: skipped (not enabled)");
-        return null;
+    run(
+      input: StageInput,
+    ): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DindService> {
+      const plan = planDind(input, options);
+      if (plan === null) {
+        return Effect.succeed({});
       }
-
-      const shared = input.profile.docker.shared;
-
-      let networkName: string;
-      let containerName: string;
-      let sharedTmpVolume: string;
-
-      if (shared) {
-        networkName = SHARED_NETWORK_NAME;
-        containerName = SHARED_CONTAINER_NAME;
-        sharedTmpVolume = SHARED_TMP_VOLUME;
-      } else {
-        const sessionId = input.sessionId.slice(0, 8);
-        networkName = `nas-dind-${sessionId}`;
-        containerName = `nas-dind-${sessionId}`;
-        sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
-      }
-
-      return {
-        effects: [
-          {
-            kind: "dind-sidecar",
-            containerName,
-            sharedTmpVolume,
-            networkName,
-            shared,
-            disableCache,
-            readinessTimeoutMs,
-          },
-        ],
-        dockerArgs: [
-          "--network",
-          networkName,
-          "-v",
-          `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
-        ],
-        envVars: {
-          DOCKER_HOST: `tcp://${containerName}:${DIND_INTERNAL_PORT}`,
-          NAS_DIND_CONTAINER_NAME: containerName,
-          NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
-        },
-        outputOverrides: {
-          dindContainerName: containerName,
-          networkName,
-        },
-      };
+      return runDind(plan, input);
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Effect runner
+// ---------------------------------------------------------------------------
+
+function runDind(
+  plan: DindPlan,
+  input: StageInput,
+): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DindService> {
+  return Effect.gen(function* () {
+    const dind = yield* DindService;
+
+    yield* Effect.acquireRelease(
+      dind.ensureSidecar({
+        containerName: plan.containerName,
+        sharedTmpVolume: plan.sharedTmpVolume,
+        networkName: plan.networkName,
+        shared: plan.shared,
+        disableCache: plan.disableCache,
+        readinessTimeoutMs: plan.readinessTimeoutMs,
+      }),
+      () =>
+        dind
+          .teardownSidecar({
+            containerName: plan.containerName,
+            networkName: plan.networkName,
+            sharedTmpVolume: plan.sharedTmpVolume,
+            shared: plan.shared,
+          })
+          .pipe(Effect.ignoreLogged),
+    );
+
+    return {
+      ...plan.outputOverrides,
+      dockerArgs: [
+        ...input.prior.dockerArgs,
+        ...(plan.outputOverrides.dockerArgs ?? []),
+      ],
+      envVars: { ...input.prior.envVars, ...plan.outputOverrides.envVars },
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
