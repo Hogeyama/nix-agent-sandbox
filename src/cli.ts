@@ -2,6 +2,7 @@
  * CLI エントリポイント
  */
 
+import { Layer } from "effect";
 import pkg from "../package.json";
 import {
   applyWorktreeOverride,
@@ -25,9 +26,13 @@ import { runWorktreeCommand } from "./cli/worktree.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import { setLogLevel } from "./log.ts";
+import { effectStageAdapter } from "./pipeline/effect_adapter.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { runPipeline } from "./pipeline/pipeline.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
+import { DockerServiceLive } from "./services/docker.ts";
+import { FsServiceLive } from "./services/fs.ts";
+import { ProcessServiceLive } from "./services/process.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
 import {
@@ -40,6 +45,7 @@ import { createMountStage, resolveMountProbes } from "./stages/mount.ts";
 import { NixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
 import { SessionStoreStage } from "./stages/session_store.ts";
+import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
 import { WorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
@@ -196,11 +202,18 @@ export async function main(args: string[]): Promise<void> {
     // BuildProbes を事前解決
     const buildProbes = await resolveBuildProbes(imageName);
 
+    const liveLayer = Layer.mergeAll(
+      FsServiceLive,
+      ProcessServiceLive,
+      DockerServiceLive,
+      PromptServiceLive,
+    );
+
     const stages = [
       new WorktreeStage(),
       new SessionStoreStage(),
       createDockerBuildStage(buildProbes),
-      NixDetectStage,
+      effectStageAdapter(NixDetectStage, liveLayer),
       createDbusProxyStage(),
       createMountStage(mountProbes),
       createHostExecStage(),
