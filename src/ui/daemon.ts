@@ -25,8 +25,10 @@ export interface EnsureUiDaemonOptions {
 }
 
 function daemonStateDir(): string {
-  const home = process.env.HOME ?? "/tmp";
-  return path.join(home, ".cache", "nas", "ui");
+  const xdgCache =
+    process.env.XDG_CACHE_HOME ||
+    path.join(process.env.HOME ?? "/tmp", ".cache");
+  return path.join(xdgCache, "nas", "ui");
 }
 
 function daemonStatePath(): string {
