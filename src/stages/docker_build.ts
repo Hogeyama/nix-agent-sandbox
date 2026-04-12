@@ -5,7 +5,6 @@
  * ビルドは DockerService.build。
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
@@ -22,6 +21,7 @@ import type {
   StageInput,
 } from "../pipeline/types.ts";
 import { DockerService } from "../services/docker.ts";
+import { FsService } from "../services/fs.ts";
 
 // ---------------------------------------------------------------------------
 // Embedded build asset groups
@@ -33,7 +33,7 @@ export interface EmbeddedAssetGroup {
   readonly files: readonly string[];
 }
 
-const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
+export const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
   {
     baseDir: resolveAssetDir(
       "docker/embed",
@@ -137,27 +137,32 @@ export function planDockerBuild(
 
 function extractAssetsToTempDir(
   assetGroups: readonly EmbeddedAssetGroup[],
-): Effect.Effect<string, unknown, Scope.Scope> {
+): Effect.Effect<string, unknown, FsService | Scope.Scope> {
   return Effect.acquireRelease(
-    Effect.tryPromise(async () => {
-      const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-docker-build-"));
+    Effect.gen(function* () {
+      const fs = yield* FsService;
+      const tmpDir = yield* fs.mkdtemp(
+        path.join(tmpdir(), "nas-docker-build-"),
+      );
       for (const group of assetGroups) {
         for (const name of group.files) {
-          const content = await readFile(
-            path.join(group.baseDir, name),
-            "utf8",
-          );
+          const content = yield* fs.readFile(path.join(group.baseDir, name));
           const outputPath = path.join(tmpDir, group.outputDir, name);
-          await mkdir(path.dirname(outputPath), { recursive: true });
-          await writeFile(outputPath, content);
+          yield* fs.mkdir(path.dirname(outputPath), { recursive: true });
+          yield* fs.writeFile(outputPath, content);
         }
       }
       return tmpDir;
     }),
     (tmpDir) =>
-      Effect.promise(() =>
-        rm(tmpDir, { recursive: true, force: true }).catch((e) =>
-          logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`),
+      Effect.gen(function* () {
+        const fs = yield* FsService;
+        yield* fs.rm(tmpDir, { recursive: true, force: true });
+      }).pipe(
+        Effect.catchAll((e) =>
+          Effect.sync(() =>
+            logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`),
+          ),
         ),
       ),
   );
@@ -165,14 +170,18 @@ function extractAssetsToTempDir(
 
 export function createDockerBuildStage(
   buildProbes: BuildProbes,
-): EffectStage<DockerService> {
+): EffectStage<FsService | DockerService> {
   return {
     kind: "effect",
     name: "DockerBuildStage",
 
     run(
       input: StageInput,
-    ): Effect.Effect<EffectStageResult, unknown, DockerService | Scope.Scope> {
+    ): Effect.Effect<
+      EffectStageResult,
+      unknown,
+      FsService | DockerService | Scope.Scope
+    > {
       const plan = planDockerBuild(input, buildProbes);
 
       if (!plan.needsBuild) {

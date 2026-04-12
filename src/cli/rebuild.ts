@@ -9,6 +9,7 @@ import { logInfo } from "../log.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
 import { DockerServiceLive } from "../services/docker.ts";
+import { FsServiceLive } from "../services/fs.ts";
 import {
   createDockerBuildStage,
   resolveBuildProbes,
@@ -59,7 +60,11 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
         probes,
         prior,
       })
-      .pipe(Effect.scoped, Effect.provide(DockerServiceLive));
+      .pipe(
+        Effect.scoped,
+        Effect.provide(DockerServiceLive),
+        Effect.provide(FsServiceLive),
+      );
 
     await Effect.runPromise(effect);
   } catch (err) {

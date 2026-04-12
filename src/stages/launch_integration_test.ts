@@ -39,6 +39,7 @@ import {
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
 import { DockerServiceLive } from "../services/docker.ts";
+import { FsServiceLive } from "../services/fs.ts";
 import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
 
 const IMAGE_NAME = "nas-sandbox";
@@ -153,7 +154,7 @@ async function ensureImage(): Promise<void> {
           probes,
           prior,
         })
-        .pipe(Effect.provide(DockerServiceLive)),
+        .pipe(Effect.provide(DockerServiceLive), Effect.provide(FsServiceLive)),
     ),
   );
   imageBuilt = true;
