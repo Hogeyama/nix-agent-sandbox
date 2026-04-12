@@ -1,150 +1,226 @@
 /**
- * D-Bus Proxy Stage (PlanStage)
+ * D-Bus Proxy Stage (EffectStage)
  *
  * xdg-dbus-proxy を起動して、エージェントコンテナ内から
  * ホストの D-Bus セッションバスにフィルタ付きでアクセスできるようにする。
  */
 
+import { Effect, type Scope } from "effect";
 import type { DbusRuleConfig } from "../config/types.ts";
 import { logWarn } from "../log.ts";
 import type {
+  EffectStage,
+  EffectStageResult,
   HostEnv,
-  PlanStage,
   StageInput,
-  StagePlan,
 } from "../pipeline/types.ts";
+import { FsService } from "../services/fs.ts";
+import { ProcessService } from "../services/process.ts";
 
 const SOCKET_READY_TIMEOUT_MS = 5_000;
 const SOCKET_READY_POLL_MS = 50;
 
 // ---------------------------------------------------------------------------
-// PlanStage
+// DbusProxyPlan
 // ---------------------------------------------------------------------------
 
-export function createDbusProxyStage(): PlanStage {
+export interface DbusProxyPlan {
+  readonly proxyBinaryPath: string;
+  readonly runtimeDir: string;
+  readonly sessionsDir: string;
+  readonly sessionDir: string;
+  readonly socketPath: string;
+  readonly args: string[];
+  readonly timeoutMs: number;
+  readonly pollIntervalMs: number;
+  readonly outputOverrides: EffectStageResult;
+}
+
+// ---------------------------------------------------------------------------
+// EffectStage
+// ---------------------------------------------------------------------------
+
+export function createDbusProxyStage(): EffectStage<
+  FsService | ProcessService
+> {
   return {
-    kind: "plan",
+    kind: "effect",
     name: "DbusProxyStage",
 
-    plan(input: StageInput): StagePlan | null {
-      if (!input.profile.dbus.session.enable) {
-        return null;
+    run(
+      input: StageInput,
+    ): Effect.Effect<
+      EffectStageResult,
+      unknown,
+      Scope.Scope | FsService | ProcessService
+    > {
+      const plan = planDbusProxy(input);
+      if (plan === null) {
+        return Effect.succeed({});
       }
-
-      const uid = input.host.uid;
-      if (uid === null) {
-        logWarn(
-          "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID — skipping D-Bus proxy",
-        );
-        return {
-          effects: [],
-          dockerArgs: [],
-          envVars: {},
-          outputOverrides: { dbusProxyEnabled: false },
-        };
+      if (plan.proxyBinaryPath === "") {
+        return Effect.succeed(plan.outputOverrides);
       }
-
-      const proxyBin = input.probes.xdgDbusProxyPath;
-      if (!proxyBin) {
-        logWarn(
-          "[nas] xdg-dbus-proxy not found on PATH — skipping D-Bus proxy (install xdg-dbus-proxy to enable)",
-        );
-        return {
-          effects: [],
-          dockerArgs: [],
-          envVars: {},
-          outputOverrides: { dbusProxyEnabled: false },
-        };
-      }
-
-      const sourceAddress = resolveSourceAddress(
-        input.profile.dbus.session.sourceAddress,
-        input.probes.dbusSessionAddress,
-        uid,
-      );
-      if (!sourceAddress) {
-        logWarn(
-          "[nas] DBUS_SESSION_BUS_ADDRESS not set and /run/user/$UID/bus not found — skipping D-Bus proxy",
-        );
-        return {
-          effects: [],
-          dockerArgs: [],
-          envVars: {},
-          outputOverrides: { dbusProxyEnabled: false },
-        };
-      }
-
-      if (!sourceAddress.startsWith("unix:path=")) {
-        logWarn(
-          `[nas] Unsupported dbus source address: ${sourceAddress}. Only unix:path=... is supported — skipping D-Bus proxy`,
-        );
-        return {
-          effects: [],
-          dockerArgs: [],
-          envVars: {},
-          outputOverrides: { dbusProxyEnabled: false },
-        };
-      }
-
-      // Compute session paths (pure computation).
-      const runtimeDir = resolveRuntimeDir(input.host);
-      const sessionsDir = `${runtimeDir}/sessions`;
-      const sessionDir = `${sessionsDir}/${input.sessionId}`;
-      const socketPath = `${sessionDir}/bus`;
-      const pidFile = `${sessionDir}/proxy.pid`;
-
-      const commandArgs = buildProxyArgs(
-        sourceAddress,
-        socketPath,
-        input.profile.dbus.session.see,
-        input.profile.dbus.session.talk,
-        input.profile.dbus.session.own,
-        input.profile.dbus.session.calls,
-        input.profile.dbus.session.broadcasts,
-      );
-
-      return {
-        effects: [
-          {
-            kind: "dbus-proxy",
-            proxyBinaryPath: proxyBin,
-            runtimeDir,
-            sessionsDir,
-            sessionDir,
-            socketPath,
-            pidFile,
-            sourceAddress,
-            args: commandArgs,
-            timeoutMs: SOCKET_READY_TIMEOUT_MS,
-            pollIntervalMs: SOCKET_READY_POLL_MS,
-          },
-        ],
-        dockerArgs: [],
-        envVars: {},
-        outputOverrides: {
-          dbusProxyEnabled: true,
-          dbusSessionRuntimeDir: sessionDir,
-          dbusSessionSocket: socketPath,
-          dbusSessionSourceAddress: sourceAddress,
-        },
-      };
+      return runDbusProxy(plan);
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Planner (pure)
+// ---------------------------------------------------------------------------
+
+function planDbusProxy(input: StageInput): DbusProxyPlan | null {
+  if (!input.profile.dbus.session.enable) {
+    return null;
+  }
+
+  const uid = input.host.uid;
+  if (uid === null) {
+    logWarn(
+      "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID — skipping D-Bus proxy",
+    );
+    return {
+      proxyBinaryPath: "",
+      runtimeDir: "",
+      sessionsDir: "",
+      sessionDir: "",
+      socketPath: "",
+      args: [],
+      timeoutMs: 0,
+      pollIntervalMs: 0,
+      outputOverrides: { dbusProxyEnabled: false },
+    };
+  }
+
+  const proxyBin = input.probes.xdgDbusProxyPath;
+  if (!proxyBin) {
+    logWarn(
+      "[nas] xdg-dbus-proxy not found on PATH — skipping D-Bus proxy (install xdg-dbus-proxy to enable)",
+    );
+    return {
+      proxyBinaryPath: "",
+      runtimeDir: "",
+      sessionsDir: "",
+      sessionDir: "",
+      socketPath: "",
+      args: [],
+      timeoutMs: 0,
+      pollIntervalMs: 0,
+      outputOverrides: { dbusProxyEnabled: false },
+    };
+  }
+
+  const sourceAddress = resolveSourceAddress(
+    input.profile.dbus.session.sourceAddress,
+    input.probes.dbusSessionAddress,
+    uid,
+  );
+  if (!sourceAddress) {
+    logWarn(
+      "[nas] DBUS_SESSION_BUS_ADDRESS not set and /run/user/$UID/bus not found — skipping D-Bus proxy",
+    );
+    return {
+      proxyBinaryPath: "",
+      runtimeDir: "",
+      sessionsDir: "",
+      sessionDir: "",
+      socketPath: "",
+      args: [],
+      timeoutMs: 0,
+      pollIntervalMs: 0,
+      outputOverrides: { dbusProxyEnabled: false },
+    };
+  }
+
+  if (!sourceAddress.startsWith("unix:path=")) {
+    logWarn(
+      `[nas] Unsupported dbus source address: ${sourceAddress}. Only unix:path=... is supported — skipping D-Bus proxy`,
+    );
+    return {
+      proxyBinaryPath: "",
+      runtimeDir: "",
+      sessionsDir: "",
+      sessionDir: "",
+      socketPath: "",
+      args: [],
+      timeoutMs: 0,
+      pollIntervalMs: 0,
+      outputOverrides: { dbusProxyEnabled: false },
+    };
+  }
+
+  const runtimeDir = resolveRuntimeDir(input.host);
+  const sessionsDir = `${runtimeDir}/sessions`;
+  const sessionDir = `${sessionsDir}/${input.sessionId}`;
+  const socketPath = `${sessionDir}/bus`;
+
+  const commandArgs = buildProxyArgs(
+    sourceAddress,
+    socketPath,
+    input.profile.dbus.session.see,
+    input.profile.dbus.session.talk,
+    input.profile.dbus.session.own,
+    input.profile.dbus.session.calls,
+    input.profile.dbus.session.broadcasts,
+  );
+
+  return {
+    proxyBinaryPath: proxyBin,
+    runtimeDir,
+    sessionsDir,
+    sessionDir,
+    socketPath,
+    args: commandArgs,
+    timeoutMs: SOCKET_READY_TIMEOUT_MS,
+    pollIntervalMs: SOCKET_READY_POLL_MS,
+    outputOverrides: {
+      dbusProxyEnabled: true,
+      dbusSessionRuntimeDir: sessionDir,
+      dbusSessionSocket: socketPath,
+      dbusSessionSourceAddress: sourceAddress,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Effect runner
+// ---------------------------------------------------------------------------
+
+function runDbusProxy(
+  plan: DbusProxyPlan,
+): Effect.Effect<
+  EffectStageResult,
+  unknown,
+  Scope.Scope | FsService | ProcessService
+> {
+  return Effect.gen(function* () {
+    const fs = yield* FsService;
+    const proc = yield* ProcessService;
+
+    yield* fs.mkdir(plan.runtimeDir, { recursive: true, mode: 0o755 });
+    yield* fs.mkdir(plan.sessionsDir, { recursive: true, mode: 0o700 });
+    yield* fs.mkdir(plan.sessionDir, { recursive: true, mode: 0o700 });
+
+    yield* Effect.acquireRelease(
+      proc.spawn(plan.proxyBinaryPath, plan.args),
+      (handle) => Effect.sync(() => handle.kill()),
+    );
+
+    yield* proc.waitForFileExists(
+      plan.socketPath,
+      plan.timeoutMs,
+      plan.pollIntervalMs,
+    );
+
+    return plan.outputOverrides;
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Pure helper functions
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve the D-Bus source address.
- * Prefers configured address, then probe result (from env), then default path.
- *
- * Note: When both configuredAddress and probeAddress are absent, the function
- * returns a default unix:path based on the uid. The caller validates whether
- * the returned address is usable (e.g. starts with "unix:path="), so null
- * is never actually returned in the current code path.
- */
 export function resolveSourceAddress(
   configuredAddress: string | undefined,
   probeAddress: string | null,
@@ -183,10 +259,6 @@ export function buildProxyArgs(
   return args;
 }
 
-/**
- * Resolve the dbus runtime directory path (pure, no I/O).
- * Uses HostEnv instead of directly accessing Deno.env / Deno.uid().
- */
 export function resolveRuntimeDir(host: HostEnv): string {
   const xdg = host.env.get("XDG_RUNTIME_DIR");
   if (xdg && xdg.trim().length > 0) {
