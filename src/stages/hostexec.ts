@@ -7,7 +7,7 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
+import { DEFAULT_HOSTEXEC_CONFIG, type HostExecRule } from "../config/types.ts";
 import {
   isBareCommandHostExecArgv0,
   isRelativeHostExecArgv0,
@@ -89,12 +89,24 @@ export function createHostExecStage(): EffectStage<
 // Planner (pure)
 // ---------------------------------------------------------------------------
 
+/** Internal rule: route `nas hook notification` to the host via HostExec. */
+const NAS_HOOK_RULE: HostExecRule = {
+  id: "__nas_hook",
+  match: { argv0: "nas", argRegex: "^hook\\b" },
+  cwd: { mode: "any", allow: [] },
+  env: {},
+  inheritEnv: {
+    mode: "minimal",
+    keys: ["NAS_SESSION_ID", "NAS_SESSION_STORE_DIR", "XDG_RUNTIME_DIR"],
+  },
+  approval: "allow",
+  fallback: "container",
+};
+
 export function planHostExec(input: StageInput): HostExecPlan | null {
   const config =
     input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
-  if (config.rules.length === 0) {
-    return null;
-  }
+  config.rules = [...config.rules, NAS_HOOK_RULE];
 
   const runtimePaths = resolveHostExecRuntimePathsPure(input.host);
   const socketPath = path.join(

@@ -60,9 +60,7 @@
           #!/bin/sh
           dir="\$(cd "\$(dirname "\$0")/.." && pwd)"
           export NAS_ASSET_DIR="\$dir/share/nas/assets"
-          # Use the compiled binary for in-sandbox hook mounts, not this wrapper.
-          export NAS_BIN_PATH="\$dir/share/nas/nas"
-          exec "\$NAS_BIN_PATH" "\$@"
+          exec "\$dir/share/nas/nas" "\$@"
           EOF
           chmod +x $out/bin/nas
         '';
@@ -82,12 +80,6 @@
           ];
           env = [
             { key = "NAS_ASSET_DIR"; action = "replace"; value = "%ROOT/share/nas/assets"; }
-            # Expose the pre-extraction self-extracting script path so that
-            # the SessionStoreStage can bind-mount THIS script into the agent
-            # sandbox for `nas hook notification` calls. Post-extraction
-            # artifacts under $TEMP are NOT mountable because their deps live
-            # alongside them; only the outer script is self-contained.
-            { key = "NAS_BIN_PATH"; action = "replace"; value = "%ORIG"; }
           ];
         };
       in

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Effect, Exit, type Layer, Scope } from "effect";
@@ -24,26 +24,15 @@ import {
 } from "../services/session_store_service.ts";
 import type { SessionRuntimePaths } from "../sessions/store.ts";
 import { readSession, resolveSessionRuntimePaths } from "../sessions/store.ts";
-import {
-  createSessionStoreStage,
-  IN_CONTAINER_NAS_BIN_PATH,
-  IN_CONTAINER_SESSION_STORE_DIR,
-} from "./session_store.ts";
+import { createSessionStoreStage } from "./session_store.ts";
 
 let tmpRoot: string;
 const savedEnv = process.env.NAS_SESSION_STORE_DIR;
-const savedNasBinPath = process.env.NAS_BIN_PATH;
-const savedPath = process.env.PATH;
 
 beforeEach(async () => {
   tmpRoot = await mkdtemp(path.join(tmpdir(), "nas-session-store-stage-"));
   // Point the store at a temp dir for the duration of each test.
   process.env.NAS_SESSION_STORE_DIR = path.join(tmpRoot, "sessions");
-  // Pin nas-binary detection: by default, no binary available so tests are
-  // deterministic regardless of whether the dev has a `nas` on PATH. Tests
-  // that exercise the mount opt in explicitly.
-  delete process.env.NAS_BIN_PATH;
-  process.env.PATH = tmpRoot; // isolated, no `nas` binary inside
 });
 
 afterEach(async () => {
@@ -54,16 +43,6 @@ afterEach(async () => {
       delete process.env.NAS_SESSION_STORE_DIR;
     } else {
       process.env.NAS_SESSION_STORE_DIR = savedEnv;
-    }
-    if (savedNasBinPath === undefined) {
-      delete process.env.NAS_BIN_PATH;
-    } else {
-      process.env.NAS_BIN_PATH = savedNasBinPath;
-    }
-    if (savedPath === undefined) {
-      delete process.env.PATH;
-    } else {
-      process.env.PATH = savedPath;
     }
   }
 });
@@ -101,43 +80,13 @@ test("SessionStoreStage run writes a SessionRecord to the store dir", async () =
   expect(typeof record!.startedAt).toBe("string");
 });
 
-test("SessionStoreStage run outputs bind-mount dockerArgs and store env var", async () => {
+test("SessionStoreStage run outputs no additional dockerArgs or envVars", async () => {
   const input = createTestInput({ sessionId: "sess_xyz" });
 
   const { result } = await runStage(input);
 
-  const paths = await resolveSessionRuntimePaths(undefined);
-  expect(result.dockerArgs).toEqual([
-    "-v",
-    `${paths.sessionsDir}:${IN_CONTAINER_SESSION_STORE_DIR}`,
-  ]);
-  expect(result.envVars).toEqual({
-    NAS_SESSION_STORE_DIR: IN_CONTAINER_SESSION_STORE_DIR,
-  });
-  // Must NOT set NAS_SESSION_ID — cli.ts owns that.
-  expect(result.envVars?.NAS_SESSION_ID).toBeUndefined();
-});
-
-test("SessionStoreStage run appends the nas binary mount when NAS_BIN_PATH is set", async () => {
-  const fakeNas = path.join(tmpRoot, "nas");
-  await writeFile(fakeNas, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  process.env.NAS_BIN_PATH = fakeNas;
-
-  const { result } = await runStage(createTestInput({ sessionId: "sess_n1" }));
-
-  expect(result.dockerArgs).toContain(
-    `${fakeNas}:${IN_CONTAINER_NAS_BIN_PATH}:ro`,
-  );
-});
-
-test("SessionStoreStage run omits the nas binary mount when no binary is available", async () => {
-  // beforeEach already unset NAS_BIN_PATH and pointed PATH at an empty dir.
-  const { result } = await runStage(createTestInput({ sessionId: "sess_n2" }));
-
-  const hasNasMount = (result.dockerArgs ?? []).some((a) =>
-    a.endsWith(`:${IN_CONTAINER_NAS_BIN_PATH}:ro`),
-  );
-  expect(hasNasMount).toBe(false);
+  expect(result.dockerArgs).toEqual([]);
+  expect(result.envVars).toEqual({});
 });
 
 test("SessionStoreStage finalizer removes the record on scope close", async () => {

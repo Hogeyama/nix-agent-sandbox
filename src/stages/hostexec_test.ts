@@ -125,13 +125,17 @@ function makeStageInput(
 // planHostExec tests
 // ============================================================
 
-test("HostExecStage plan: returns null when no rules", () => {
+test("HostExecStage plan: returns a plan with __nas_hook even when user rules are empty", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const input = makeStageInput(profile, hostEnv);
   const plan = planHostExec(input);
-  expect(plan).toEqual(null);
+  expect(plan).not.toBeNull();
+  // The internal __nas_hook rule creates a "nas" symlink
+  expect(plan!.symlinks.some((s) => path.basename(s.path) === "nas")).toEqual(
+    true,
+  );
 });
 
 test("HostExecStage plan: produces correct docker args and env vars", () => {
@@ -179,9 +183,13 @@ test("HostExecStage plan: creates symlinks for bare command argv0s", () => {
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  expect(plan.symlinks.length).toEqual(1);
-  expect(plan.symlinks[0].target).toEqual("hostexec-wrapper.py");
-  expect(path.basename(plan.symlinks[0].path)).toEqual("git");
+  // User rule "git" + internal rule "nas"
+  expect(plan.symlinks.length).toEqual(2);
+  const names = plan.symlinks.map((s) => path.basename(s.path)).sort();
+  expect(names).toEqual(["git", "nas"]);
+  for (const s of plan.symlinks) {
+    expect(s.target).toEqual("hostexec-wrapper.py");
+  }
 });
 
 test("HostExecStage plan: creates file entry for wrapper script", () => {
@@ -295,7 +303,7 @@ test("HostExecStage plan: auto notify resolves to desktop", () => {
 // EffectStage run() tests
 // ============================================================
 
-test("HostExecStage: run returns empty when no rules", async () => {
+test("HostExecStage: run still starts broker when user rules are empty (internal __nas_hook)", async () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
@@ -316,7 +324,8 @@ test("HostExecStage: run returns empty when no rules", async () => {
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
-  expect(result).toEqual({});
+  // Internal __nas_hook rule causes the stage to produce docker args
+  expect(result.dockerArgs?.length).toBeGreaterThan(0);
 });
 
 test("HostExecStage: run creates directories, files, and symlinks via FsService", async () => {
