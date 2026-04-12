@@ -214,7 +214,7 @@ export async function main(args: string[]): Promise<void> {
       new SessionStoreStage(),
       effectStageAdapter(createDockerBuildStage(buildProbes), liveLayer),
       effectStageAdapter(NixDetectStage, liveLayer),
-      createDbusProxyStage(),
+      effectStageAdapter(createDbusProxyStage(), liveLayer),
       effectStageAdapter(createMountStage(mountProbes), liveLayer),
       createHostExecStage(),
       createDindStage(),
