@@ -40,7 +40,15 @@ if (!jsOutput) throw new Error("No JS output found");
 const jsBasename = path.basename(jsOutput.path);
 
 // Inline CSS so the app ships as two files only
-const css = await readFile(path.join(FRONTEND_DIR, "src/styles.css"), "utf8");
+const xtermCss = await readFile(
+  path.join(ROOT, "node_modules/@xterm/xterm/css/xterm.css"),
+  "utf8",
+);
+const appCss = await readFile(
+  path.join(FRONTEND_DIR, "src/styles.css"),
+  "utf8",
+);
+const css = `${xtermCss}\n${appCss}`;
 
 // Generate index.html with correct script path
 const html = `<!DOCTYPE html>

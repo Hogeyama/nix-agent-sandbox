@@ -57,6 +57,14 @@
     url = "https://registry.npmjs.org/@types/node/-/node-22.19.17.tgz";
     hash = "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q==";
   };
+  "@xterm/addon-fit@0.11.0" = fetchurl {
+    url = "https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-0.11.0.tgz";
+    hash = "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==";
+  };
+  "@xterm/xterm@6.0.0" = fetchurl {
+    url = "https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz";
+    hash = "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==";
+  };
   "bun-types@1.3.11" = fetchurl {
     url = "https://registry.npmjs.org/bun-types/-/bun-types-1.3.11.tgz";
     hash = "sha512-1KGPpoxQWl9f6wcZh57LvrPIInQMn2TQ7jsgxqpRzg+l0QPOFvJVH7HmvHo/AiPgwXy+/Thf6Ov3EdVn1vOabg==";

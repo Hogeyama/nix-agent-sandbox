@@ -3,7 +3,6 @@
  */
 
 import {
-  DTACH_SOCKET_PREFIX,
   dtachAttach,
   dtachHasSession,
   dtachIsAvailable,
@@ -28,7 +27,7 @@ export async function runSessionCommand(nasArgs: string[]): Promise<void> {
       if (formatJson) {
         const items = sessions.map((s) => ({
           name: s.name,
-          sessionId: s.name.slice(DTACH_SOCKET_PREFIX.length),
+          sessionId: s.name,
           createdAt: s.createdAt,
         }));
         console.log(JSON.stringify(items));
@@ -41,7 +40,7 @@ export async function runSessionCommand(nasArgs: string[]): Promise<void> {
       }
 
       for (const s of sessions) {
-        const sessionId = s.name.slice(DTACH_SOCKET_PREFIX.length);
+        const sessionId = s.name;
         const created = new Date(s.createdAt * 1000).toISOString();
         console.log(`  ${sessionId}  ${created}`);
       }

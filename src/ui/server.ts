@@ -19,6 +19,14 @@ import { createDataContext } from "./data.ts";
 import { html, Router, text } from "./router.ts";
 import { createApiRoutes } from "./routes/api.ts";
 import { createSseRoutes } from "./routes/sse.ts";
+import {
+  extractSessionId,
+  handleTerminalClose,
+  handleTerminalMessage,
+  handleTerminalOpen,
+  type TerminalWSData,
+  validateTerminalUpgrade,
+} from "./routes/terminal.ts";
 
 const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
@@ -123,9 +131,33 @@ export async function startServer(options: ServeOptions): Promise<void> {
     }
   }
 
-  Bun.serve({
+  Bun.serve<TerminalWSData>({
     port: options.port,
-    fetch: app.fetch,
+    fetch: async (req, server) => {
+      // WebSocket upgrade for terminal sessions
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const url = new URL(req.url);
+        const sessionId = extractSessionId(url.pathname);
+        if (!sessionId) {
+          return new Response("Invalid terminal path", { status: 400 });
+        }
+        const result = await validateTerminalUpgrade(sessionId);
+        if (!result.ok) {
+          return new Response(result.reason, { status: 404 });
+        }
+        const ok = server.upgrade(req, {
+          data: { sessionId, socket: null },
+        });
+        if (ok) return undefined as unknown as Response;
+        return new Response("WebSocket upgrade failed", { status: 500 });
+      }
+      return app.fetch(req);
+    },
+    websocket: {
+      open: handleTerminalOpen,
+      message: handleTerminalMessage,
+      close: handleTerminalClose,
+    },
   });
 
   console.log(`[nas] UI server listening on http://localhost:${options.port}`);

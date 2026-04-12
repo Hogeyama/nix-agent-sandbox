@@ -8,6 +8,7 @@
 import { readdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { runInteractiveCommand } from "../docker/client.ts";
+import { defaultRuntimeDir } from "../lib/fs_utils.ts";
 
 /** dtach セッション情報 */
 export interface DtachSessionInfo {
@@ -16,18 +17,14 @@ export interface DtachSessionInfo {
   createdAt: number;
 }
 
-/** ソケットファイル名の prefix */
-export const DTACH_SOCKET_PREFIX = "nas-";
-
 /** ソケットディレクトリ */
 export function getSocketDir(): string {
-  const uid = process.getuid?.() ?? 0;
-  return `/tmp/nas-${uid}`;
+  return defaultRuntimeDir("sessions");
 }
 
 /** セッションID からソケットパスを得る */
 export function socketPathFor(sessionId: string): string {
-  return path.join(getSocketDir(), `nas-${sessionId}.sock`);
+  return path.join(getSocketDir(), `${sessionId}.sock`);
 }
 
 /** dtach が利用可能か確認 */
@@ -101,12 +98,12 @@ export async function dtachListSessions(): Promise<DtachSessionInfo[]> {
     const entries = await readdir(dir);
     const sessions: DtachSessionInfo[] = [];
     for (const entry of entries) {
-      if (!entry.startsWith("nas-") || !entry.endsWith(".sock")) continue;
+      if (!entry.endsWith(".sock")) continue;
       const fullPath = path.join(dir, entry);
       try {
         const s = await stat(fullPath);
         if (!s.isSocket()) continue;
-        const name = entry.slice(0, -".sock".length); // "nas-<sessionId>"
+        const name = entry.slice(0, -".sock".length); // sessionId
         sessions.push({
           name,
           socketPath: fullPath,

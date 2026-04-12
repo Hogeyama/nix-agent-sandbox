@@ -41,6 +41,9 @@ export const api = {
   cleanContainers: () =>
     request<ContainerCleanResult>("POST", "/api/containers/clean"),
 
+  getTerminalSessions: () =>
+    request<{ items: DtachSession[] }>("GET", "/api/terminal/sessions"),
+
   getAuditLogs: (params?: {
     domain?: string;
     /** Restrict to entries whose sessionId is a member of this set. */
@@ -140,6 +143,13 @@ export interface ContainerCleanResult {
   removedContainers: string[];
   removedNetworks: string[];
   removedVolumes: string[];
+}
+
+export interface DtachSession {
+  name: string;
+  sessionId: string;
+  socketPath: string;
+  createdAt: number;
 }
 
 export type AuditDomain = "network" | "hostexec";

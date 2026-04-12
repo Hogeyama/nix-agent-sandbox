@@ -10,6 +10,7 @@ import {
 import { AuditTab } from "./components/AuditTab.tsx";
 import { ContainersTab } from "./components/ContainersTab.tsx";
 import { PendingTab } from "./components/PendingTab.tsx";
+import { TerminalModal } from "./components/TerminalModal.tsx";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import { useSSE } from "./hooks/useSSE.ts";
 
@@ -41,6 +42,8 @@ export function App() {
     hostexec: [],
   });
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
+  const [termSessionId, setTermSessionId] = useState<string | null>(null);
+  const [termVisible, setTermVisible] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +81,24 @@ export function App() {
   const userTurnCount = containers.filter((c) => c.turn === "user-turn").length;
 
   useFaviconBadge(totalPending, userTurnCount);
+
+  const handleAttach = useCallback((sessionId: string) => {
+    setTermSessionId(sessionId);
+    setTermVisible(true);
+  }, []);
+
+  const handleTermClose = useCallback(() => {
+    setTermSessionId(null);
+    setTermVisible(false);
+  }, []);
+
+  const handleTermMinimize = useCallback(() => {
+    setTermVisible(false);
+  }, []);
+
+  const handleTermRestore = useCallback(() => {
+    setTermVisible(true);
+  }, []);
 
   const handleSSE = useCallback((event: string, data: unknown) => {
     const d = data as Record<string, unknown>;
@@ -159,12 +180,31 @@ export function App() {
           <ContainersTab
             containers={containers}
             onContainersChange={setContainers}
+            onAttach={handleAttach}
           />
         )}
         {activeTab === "audit" && (
           <AuditTab liveItems={auditLogs} sessions={sessions} />
         )}
       </div>
+
+      {termSessionId && (
+        <TerminalModal
+          key={termSessionId}
+          sessionId={termSessionId}
+          visible={termVisible}
+          onClose={handleTermClose}
+          onMinimize={handleTermMinimize}
+        />
+      )}
+
+      {termSessionId && !termVisible && (
+        <div class="terminal-minimized-bar" onClick={handleTermRestore}>
+          <span class="chip chip-good">terminal</span>
+          <code>{termSessionId}</code>
+          <span class="terminal-minimized-restore">Restore</span>
+        </div>
+      )}
     </div>
   );
 }

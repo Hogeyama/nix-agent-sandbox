@@ -140,11 +140,13 @@ function ContainerDetailPanel({ container: c }: ContainerDetailPanelProps) {
 interface ContainersTabProps {
   containers: ContainerInfo[];
   onContainersChange: (items: ContainerInfo[]) => void;
+  onAttach?: (sessionId: string) => void;
 }
 
 export function ContainersTab({
   containers,
   onContainersChange,
+  onAttach,
 }: ContainersTabProps) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
@@ -266,7 +268,21 @@ export function ContainersTab({
                     <td style={tdStyle}>
                       <TurnCell turn={c.turn} />
                     </td>
-                    <td style={tdStyle}>{c.name}</td>
+                    <td style={tdNameStyle}>
+                      {c.name}
+                      {c.running && c.sessionId && (
+                        <button
+                          type="button"
+                          style={attachBtnStyle}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAttach?.(c.sessionId!);
+                          }}
+                        >
+                          Attach
+                        </button>
+                      )}
+                    </td>
                     <td style={tdStyle}>
                       <span
                         style={{
@@ -327,6 +343,12 @@ const thStyle = {
 };
 const rowStyle = { cursor: "pointer" as const };
 const tdStyle = { padding: "8px", borderBottom: "1px solid #1e293b" };
+const tdNameStyle = {
+  ...tdStyle,
+  display: "flex" as const,
+  alignItems: "center" as const,
+  gap: "8px",
+};
 const detailCellStyle = {
   padding: "0",
   borderBottom: "1px solid #1e293b",
@@ -391,6 +413,14 @@ const tdPwdStyle = {
   whiteSpace: "nowrap" as const,
   fontSize: "13px",
   color: "#94a3b8",
+};
+const attachBtnStyle = {
+  background: "rgba(124, 196, 255, 0.2)",
+  color: "#9dd2ff",
+  border: "1px solid rgba(124, 196, 255, 0.4)",
+  borderRadius: "4px",
+  padding: "4px 12px",
+  cursor: "pointer",
 };
 const stopBtnStyle = {
   background: "#f59e0b",

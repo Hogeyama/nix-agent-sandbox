@@ -3,6 +3,7 @@
  */
 
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
+import { dtachListSessions } from "../../dtach/client.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   approveHostExec,
@@ -141,6 +142,23 @@ export function createApiRoutes(ctx: UiDataContext): Router {
     try {
       const result = await cleanContainers();
       return json(result);
+    } catch (e) {
+      return json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  // --- Terminal (dtach sessions) ---
+
+  api.get("/terminal/sessions", async () => {
+    try {
+      const sessions = await dtachListSessions();
+      const items = sessions.map((s) => ({
+        name: s.name,
+        sessionId: s.name,
+        socketPath: s.socketPath,
+        createdAt: s.createdAt,
+      }));
+      return json({ items });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
     }
