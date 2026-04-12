@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit, type Layer, Scope } from "effect";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -17,6 +17,12 @@ import type {
   PriorStageOutputs,
   StageInput,
 } from "../pipeline/types.ts";
+import {
+  type CreateSessionInput,
+  makeSessionStoreServiceFake,
+  SessionStoreServiceLive,
+} from "../services/session_store_service.ts";
+import type { SessionRuntimePaths } from "../sessions/store.ts";
 import { readSession, resolveSessionRuntimePaths } from "../sessions/store.ts";
 import {
   createSessionStoreStage,
@@ -65,11 +71,16 @@ afterEach(async () => {
 /** Run the EffectStage, returning the result and a close handle for the scope. */
 async function runStage(
   input: StageInput,
+  layer: Layer.Layer<
+    import("../services/session_store_service.ts").SessionStoreService
+  > = SessionStoreServiceLive,
 ): Promise<{ result: EffectStageResult; closeScope: Effect.Effect<void> }> {
   const stage = createSessionStoreStage();
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
-    stage.run(input).pipe(Effect.provideService(Scope.Scope, scope)),
+    stage
+      .run(input)
+      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
   );
   return { result, closeScope: Scope.close(scope, Exit.void) };
 }
@@ -153,6 +164,36 @@ test("SessionStoreStage finalizer on an already-missing record does not throw", 
   // Must complete without throwing.
   await Effect.runPromise(closeScope);
   expect(await readSession(paths, "sess_gone")).toBeNull();
+});
+
+test("SessionStoreStage run invokes SessionStoreService methods", async () => {
+  const calls: string[] = [];
+  const fakePaths: SessionRuntimePaths = {
+    runtimeDir: "/tmp/nas-fake",
+    sessionsDir: "/tmp/nas-fake/sessions",
+  };
+  const fakeLayer = makeSessionStoreServiceFake({
+    ensurePaths: () => {
+      calls.push("ensurePaths");
+      return Effect.succeed(fakePaths);
+    },
+    create: (_paths: SessionRuntimePaths, _record: CreateSessionInput) => {
+      calls.push("create");
+      return Effect.void;
+    },
+    delete: (_paths: SessionRuntimePaths, _sessionId: string) => {
+      calls.push("delete");
+      return Effect.void;
+    },
+  });
+
+  const input = createTestInput({ sessionId: "sess_fake" });
+  const { closeScope } = await runStage(input, fakeLayer);
+
+  expect(calls).toEqual(["ensurePaths", "create"]);
+
+  await Effect.runPromise(closeScope);
+  expect(calls).toEqual(["ensurePaths", "create", "delete"]);
 });
 
 // ---------------------------------------------------------------------------

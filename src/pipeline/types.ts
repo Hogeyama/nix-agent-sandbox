@@ -23,6 +23,7 @@ import type { FsService } from "../services/fs.ts";
 import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
+import type { SessionStoreService } from "../services/session_store_service.ts";
 import type { PromptService } from "../stages/worktree/prompt_service.ts";
 
 // ---------------------------------------------------------------------------
@@ -335,6 +336,7 @@ export type StageServices =
   | DockerService
   | PromptService
   | SessionBrokerService
+  | SessionStoreService
   | AuthRouterService;
 
 // A stage that runs as an Effect

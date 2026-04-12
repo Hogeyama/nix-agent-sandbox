@@ -32,6 +32,7 @@ import { FsServiceLive } from "../services/fs.ts";
 import { HostExecBrokerServiceLive } from "../services/hostexec_broker.ts";
 import { ProcessServiceLive } from "../services/process.ts";
 import { SessionBrokerServiceLive } from "../services/session_broker.ts";
+import { SessionStoreServiceLive } from "../services/session_store_service.ts";
 import { PromptServiceLive } from "./worktree/prompt_service.ts";
 import {
   cleanNasWorktrees,
@@ -54,6 +55,7 @@ const liveLayer = Layer.mergeAll(
   DockerServiceLive,
   PromptServiceLive,
   SessionBrokerServiceLive,
+  SessionStoreServiceLive,
 );
 
 function makeWorktreeStage(): ProceduralStage {

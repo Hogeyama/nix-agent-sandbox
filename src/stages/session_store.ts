@@ -16,11 +16,7 @@ import type {
   EffectStageResult,
   StageInput,
 } from "../pipeline/types.ts";
-import {
-  createSession,
-  deleteSession,
-  ensureSessionRuntimePaths,
-} from "../sessions/store.ts";
+import { SessionStoreService } from "../services/session_store_service.ts";
 
 /** Canonical path the in-container hook uses to reach the session store. */
 export const IN_CONTAINER_SESSION_STORE_DIR = "/run/nas/sessions";
@@ -71,39 +67,32 @@ function safeRealpath(p: string): string | null {
   }
 }
 
-export function createSessionStoreStage(): EffectStage<never> {
+export function createSessionStoreStage(): EffectStage<SessionStoreService> {
   return {
     kind: "effect",
     name: "SessionStoreStage",
 
     run(
       input: StageInput,
-    ): Effect.Effect<EffectStageResult, unknown, Scope.Scope> {
+    ): Effect.Effect<
+      EffectStageResult,
+      unknown,
+      Scope.Scope | SessionStoreService
+    > {
       return Effect.gen(function* () {
+        const sessionStore = yield* SessionStoreService;
+
         // Resolve the host runtime directory. Passing `undefined` lets the
         // helper honor NAS_SESSION_STORE_DIR on the host side (mainly useful
         // in tests) and otherwise fall back to the XDG-aware default.
-        const paths = yield* Effect.tryPromise({
-          try: () => ensureSessionRuntimePaths(undefined),
-          catch: (e) =>
-            new Error(
-              `Session store setup failed: ${e instanceof Error ? e.message : String(e)}`,
-            ),
-        });
+        const paths = yield* sessionStore.ensurePaths();
 
-        yield* Effect.tryPromise({
-          try: () =>
-            createSession(paths, {
-              sessionId: input.sessionId,
-              agent: input.profile.agent,
-              profile: input.profileName,
-              worktree: input.prior.workDir,
-              startedAt: new Date().toISOString(),
-            }),
-          catch: (e) =>
-            new Error(
-              `Session creation failed: ${e instanceof Error ? e.message : String(e)}`,
-            ),
+        yield* sessionStore.create(paths, {
+          sessionId: input.sessionId,
+          agent: input.profile.agent,
+          profile: input.profileName,
+          worktree: input.prior.workDir,
+          startedAt: new Date().toISOString(),
         });
 
         logInfo(
@@ -113,15 +102,7 @@ export function createSessionStoreStage(): EffectStage<never> {
         // Best-effort cleanup: a missing record (e.g. already deleted by
         // something else) must not surface as a teardown error.
         yield* Effect.addFinalizer(() =>
-          Effect.tryPromise({
-            try: () => deleteSession(paths, input.sessionId),
-            catch: (e) =>
-              new Error(
-                `SessionStoreStage teardown: failed to delete record ${input.sessionId}: ${
-                  e instanceof Error ? e.message : String(e)
-                }`,
-              ),
-          }).pipe(Effect.ignoreLogged),
+          sessionStore.delete(paths, input.sessionId).pipe(Effect.ignoreLogged),
         );
 
         const dockerArgs: string[] = [
