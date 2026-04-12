@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Effect } from "effect";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -12,10 +13,13 @@ import type {
   PriorStageOutputs,
   StageInput,
 } from "../pipeline/types.ts";
-import { createLaunchStage } from "./launch.ts";
+import {
+  type DockerRunOpts,
+  makeDockerServiceFake,
+} from "../services/docker.ts";
+import { createLaunchStage, planLaunch } from "./launch.ts";
 
-test("LaunchStage: produces docker-run-interactive effect with composed command", () => {
-  const stage = createLaunchStage(["--user-arg"]);
+test("planLaunch: produces correct plan with composed command", () => {
   const input = createTestInput({
     imageName: "custom-image",
     agentCommand: ["agent-bin", "serve"],
@@ -24,34 +28,57 @@ test("LaunchStage: produces docker-run-interactive effect with composed command"
   });
   input.profile.agentArgs = ["--profile-arg"];
 
-  const plan = stage.plan(input);
-  expect(plan !== null).toEqual(true);
-  expect(plan!.effects.length).toEqual(1);
-  expect(plan!.effects[0].kind).toEqual("docker-run-interactive");
+  const plan = planLaunch(input, ["--user-arg"]);
 
-  const effect = plan!.effects[0] as {
-    kind: string;
-    image: string;
-    args: string[];
-    envVars: Record<string, string>;
-    command: string[];
-    name: string;
-  };
-  expect(effect.image).toEqual("custom-image");
-  expect(effect.args).toEqual([
+  expect(plan.image).toEqual("custom-image");
+  expect(plan.args).toEqual([
     "--network",
     "sandbox-net",
     "-v",
     "/tmp:/workspace",
   ]);
-  expect(effect.envVars).toEqual({ TOKEN: "secret", MODE: "test" });
-  expect(effect.command).toEqual([
+  expect(plan.envVars).toEqual({ TOKEN: "secret", MODE: "test" });
+  expect(plan.command).toEqual([
     "agent-bin",
     "serve",
     "--profile-arg",
     "--user-arg",
   ]);
-  expect(effect.name.startsWith("nas-agent-")).toEqual(true);
+  expect(plan.containerName.startsWith("nas-agent-")).toEqual(true);
+});
+
+test("LaunchStage: run() calls DockerService.runInteractive", async () => {
+  let capturedOpts: DockerRunOpts | undefined;
+
+  const fakeLayer = makeDockerServiceFake({
+    runInteractive: (opts) => {
+      capturedOpts = opts;
+      return Effect.void;
+    },
+  });
+
+  const stage = createLaunchStage(["--extra"]);
+  const input = createTestInput({
+    imageName: "test-image",
+    agentCommand: ["claude"],
+    dockerArgs: ["-v", "/src:/work"],
+    envVars: { KEY: "val" },
+  });
+  input.profile.agentArgs = ["--fast"];
+
+  const effect = stage
+    .run(input)
+    .pipe(Effect.scoped, Effect.provide(fakeLayer));
+
+  const result = await Effect.runPromise(effect);
+
+  expect(result).toEqual({});
+  expect(capturedOpts).toBeDefined();
+  expect(capturedOpts!.image).toEqual("test-image");
+  expect(capturedOpts!.command).toEqual(["claude", "--fast", "--extra"]);
+  expect(capturedOpts!.args).toEqual(["-v", "/src:/work"]);
+  expect(capturedOpts!.envVars).toEqual({ KEY: "val" });
+  expect(capturedOpts!.name!.startsWith("nas-agent-")).toEqual(true);
 });
 
 function createTestInput(

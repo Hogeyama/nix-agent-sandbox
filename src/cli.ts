@@ -219,7 +219,7 @@ export async function main(args: string[]): Promise<void> {
       createHostExecStage(),
       createDindStage(),
       createProxyStage(),
-      createLaunchStage(agentExtraArgs),
+      effectStageAdapter(createLaunchStage(agentExtraArgs), liveLayer),
     ];
 
     // 初期 PriorStageOutputs を構築
