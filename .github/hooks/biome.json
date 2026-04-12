@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "f=$(echo \"$toolArgs\" | jq -r '.path // empty'); if [ -n \"$f\" ] && echo \"$f\" | grep -qE '\\.(ts|tsx)$'; then bun run biome check --write \"$f\"; fi",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}
