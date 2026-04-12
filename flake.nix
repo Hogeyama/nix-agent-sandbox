@@ -96,6 +96,7 @@
             pkgs.nodejs
             pkgs.pnpm
             pkgs.chromium
+            pkgs.dtach
           ];
           shellHook = ''
             if [ ! -f .playwright/cli.config.json ]; then
