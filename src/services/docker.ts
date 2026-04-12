@@ -9,6 +9,8 @@ import { Context, Effect, Layer } from "effect";
 import {
   dockerBuild,
   dockerContainerExists,
+  dockerContainerIp,
+  dockerExec,
   dockerIsRunning,
   dockerLogs,
   dockerNetworkConnect,
@@ -18,6 +20,9 @@ import {
   dockerRm,
   dockerRun,
   dockerRunDetached,
+  dockerStop,
+  dockerVolumeCreate,
+  dockerVolumeRemove,
 } from "../docker/client.ts";
 
 // ---------------------------------------------------------------------------
@@ -88,6 +93,21 @@ export class DockerService extends Context.Tag("nas/DockerService")<
       container: string,
     ) => Effect.Effect<void>;
     readonly networkRemove: (network: string) => Effect.Effect<void>;
+    readonly stop: (
+      name: string,
+      opts?: { timeoutSeconds?: number },
+    ) => Effect.Effect<void>;
+    readonly exec: (
+      container: string,
+      cmd: string[],
+      opts?: { user?: string },
+    ) => Effect.Effect<string>;
+    readonly containerIp: (name: string) => Effect.Effect<string>;
+    readonly volumeCreate: (
+      name: string,
+      opts?: { labels?: Record<string, string> },
+    ) => Effect.Effect<void>;
+    readonly volumeRemove: (name: string) => Effect.Effect<void>;
   }
 >() {}
 
@@ -208,6 +228,63 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
             `docker network rm failed: ${e instanceof Error ? e.message : String(e)}`,
           ),
       }).pipe(Effect.orDie),
+
+    stop: (name, opts) =>
+      Effect.tryPromise({
+        try: () => dockerStop(name, opts),
+        catch: (e) =>
+          new Error(
+            `docker stop failed: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+      }).pipe(Effect.orDie),
+
+    exec: (container, cmd, opts) =>
+      Effect.tryPromise({
+        try: async () => {
+          const result = await dockerExec(container, cmd, opts);
+          if (result.code !== 0) {
+            throw new Error(`docker exec exited with code ${result.code}`);
+          }
+          return result.stdout;
+        },
+        catch: (e) =>
+          new Error(
+            `docker exec failed: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+      }).pipe(Effect.orDie),
+
+    containerIp: (name) =>
+      Effect.tryPromise({
+        try: async () => {
+          const ip = await dockerContainerIp(name);
+          if (ip === null) {
+            throw new Error(`no IP address found for container ${name}`);
+          }
+          return ip;
+        },
+        catch: (e) =>
+          new Error(
+            `docker inspect failed: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+      }).pipe(Effect.orDie),
+
+    volumeCreate: (name, opts) =>
+      Effect.tryPromise({
+        try: () => dockerVolumeCreate(name, opts?.labels),
+        catch: (e) =>
+          new Error(
+            `docker volume create failed: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+      }).pipe(Effect.orDie),
+
+    volumeRemove: (name) =>
+      Effect.tryPromise({
+        try: () => dockerVolumeRemove(name),
+        catch: (e) =>
+          new Error(
+            `docker volume rm failed: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+      }).pipe(Effect.orDie),
   }),
 );
 
@@ -241,6 +318,21 @@ export interface DockerServiceFakeConfig {
     container: string,
   ) => Effect.Effect<void>;
   readonly networkRemove?: (network: string) => Effect.Effect<void>;
+  readonly stop?: (
+    name: string,
+    opts?: { timeoutSeconds?: number },
+  ) => Effect.Effect<void>;
+  readonly exec?: (
+    container: string,
+    cmd: string[],
+    opts?: { user?: string },
+  ) => Effect.Effect<string>;
+  readonly containerIp?: (name: string) => Effect.Effect<string>;
+  readonly volumeCreate?: (
+    name: string,
+    opts?: { labels?: Record<string, string> },
+  ) => Effect.Effect<void>;
+  readonly volumeRemove?: (name: string) => Effect.Effect<void>;
 }
 
 export function makeDockerServiceFake(
@@ -262,6 +354,11 @@ export function makeDockerServiceFake(
       networkConnect: overrides.networkConnect ?? (() => Effect.void),
       networkDisconnect: overrides.networkDisconnect ?? (() => Effect.void),
       networkRemove: overrides.networkRemove ?? (() => Effect.void),
+      stop: overrides.stop ?? (() => Effect.void),
+      exec: overrides.exec ?? (() => Effect.succeed("")),
+      containerIp: overrides.containerIp ?? (() => Effect.succeed("")),
+      volumeCreate: overrides.volumeCreate ?? (() => Effect.void),
+      volumeRemove: overrides.volumeRemove ?? (() => Effect.void),
     }),
   );
 }
