@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Effect, Exit, Scope } from "effect";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -12,55 +13,47 @@ import type {
   PriorStageOutputs,
   StageInput,
 } from "../pipeline/types.ts";
+import { makeDockerServiceFake } from "../services/docker.ts";
 import {
   type BuildProbes,
   createDockerBuildStage,
   EMBED_HASH_LABEL,
+  planDockerBuild,
 } from "./docker_build.ts";
 
-test("DockerBuildStage: returns docker-image-build effect when image does not exist", () => {
+test("planDockerBuild: returns needsBuild=true with labels when image does not exist", () => {
   const buildProbes: BuildProbes = {
     imageExists: false,
     currentEmbedHash: "abc123",
     imageEmbedHash: null,
   };
-  const stage = createDockerBuildStage(buildProbes);
   const input = createTestInput();
 
-  const plan = stage.plan(input);
-  expect(plan !== null).toEqual(true);
-  expect(plan!.effects.length).toEqual(1);
-  expect(plan!.effects[0].kind).toEqual("docker-image-build");
-  const effect = plan!.effects[0] as {
-    kind: string;
-    imageName: string;
-    labels: Record<string, string>;
-  };
-  expect(effect.imageName).toEqual("nas-sandbox");
-  expect(effect.labels[EMBED_HASH_LABEL]).toEqual("abc123");
+  const plan = planDockerBuild(input, buildProbes);
+  expect(plan.needsBuild).toEqual(true);
+  expect(plan.imageName).toEqual("nas-sandbox");
+  expect(plan.labels[EMBED_HASH_LABEL]).toEqual("abc123");
+  expect(plan.assetGroups.length).toBeGreaterThan(0);
 });
 
-test("DockerBuildStage: returns empty effects when image exists and hash matches", () => {
+test("planDockerBuild: returns needsBuild=false when image exists and hash matches", () => {
   const buildProbes: BuildProbes = {
     imageExists: true,
     currentEmbedHash: "abc123",
     imageEmbedHash: "abc123",
   };
-  const stage = createDockerBuildStage(buildProbes);
   const input = createTestInput();
 
-  const plan = stage.plan(input);
-  expect(plan !== null).toEqual(true);
-  expect(plan!.effects.length).toEqual(0);
+  const plan = planDockerBuild(input, buildProbes);
+  expect(plan.needsBuild).toEqual(false);
 });
 
-test("DockerBuildStage: warns when cached image embed hash is outdated", () => {
+test("planDockerBuild: warns when cached image embed hash is outdated", () => {
   const buildProbes: BuildProbes = {
     imageExists: true,
     currentEmbedHash: "new-hash",
     imageEmbedHash: "stale-hash",
   };
-  const stage = createDockerBuildStage(buildProbes);
   const input = createTestInput();
 
   const logs: string[] = [];
@@ -69,15 +62,76 @@ test("DockerBuildStage: warns when cached image embed hash is outdated", () => {
     logs.push(args.map(String).join(" "));
   };
   try {
-    const plan = stage.plan(input);
-    expect(plan !== null).toEqual(true);
-    expect(plan!.effects.length).toEqual(0);
+    const plan = planDockerBuild(input, buildProbes);
+    expect(plan.needsBuild).toEqual(false);
     expect(
       logs.some((line) => line.includes("Docker image is outdated")),
     ).toEqual(true);
   } finally {
     console.log = originalLog;
   }
+});
+
+test("DockerBuildStage.run: skips build when image exists", async () => {
+  const buildProbes: BuildProbes = {
+    imageExists: true,
+    currentEmbedHash: "abc123",
+    imageEmbedHash: "abc123",
+  };
+  const stage = createDockerBuildStage(buildProbes);
+  const input = createTestInput();
+
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(makeDockerServiceFake()),
+      ),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(result).toEqual({});
+});
+
+test("DockerBuildStage.run: calls DockerService.build when image does not exist", async () => {
+  const buildCalls: Array<{
+    contextDir: string;
+    imageName: string;
+    labels: Record<string, string>;
+  }> = [];
+
+  const buildProbes: BuildProbes = {
+    imageExists: false,
+    currentEmbedHash: "abc123",
+    imageEmbedHash: null,
+  };
+  const stage = createDockerBuildStage(buildProbes);
+  const input = createTestInput();
+
+  const fakeDocker = makeDockerServiceFake({
+    build: (contextDir, imageName, labels) => {
+      buildCalls.push({ contextDir, imageName, labels });
+      return Effect.void;
+    },
+  });
+
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(fakeDocker),
+      ),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(result).toEqual({});
+  expect(buildCalls.length).toEqual(1);
+  expect(buildCalls[0].imageName).toEqual("nas-sandbox");
+  expect(buildCalls[0].labels[EMBED_HASH_LABEL]).toEqual("abc123");
 });
 
 function createTestInput(

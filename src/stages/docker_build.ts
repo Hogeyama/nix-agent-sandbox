@@ -1,10 +1,14 @@
 /**
- * Docker イメージビルドステージ (PlanStage)
+ * Docker イメージビルドステージ (EffectStage)
  *
  * image 存在チェックは probe (resolveBuildProbes)、
- * ビルドは docker-image-build effect。
+ * ビルドは DockerService.build。
  */
 
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { Effect, type Scope } from "effect";
 import {
   computeEmbedHash,
   dockerImageExists,
@@ -13,17 +17,23 @@ import {
 import { resolveAssetDir } from "../lib/asset.ts";
 import { logInfo, logWarn } from "../log.ts";
 import type {
-  DockerImageBuildEffect,
-  PlanStage,
+  EffectStage,
+  EffectStageResult,
   StageInput,
-  StagePlan,
 } from "../pipeline/types.ts";
+import { DockerService } from "../services/docker.ts";
 
 // ---------------------------------------------------------------------------
 // Embedded build asset groups
 // ---------------------------------------------------------------------------
 
-const EMBEDDED_BUILD_ASSET_GROUPS = [
+export interface EmbeddedAssetGroup {
+  readonly baseDir: string;
+  readonly outputDir: string;
+  readonly files: readonly string[];
+}
+
+const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
   {
     baseDir: resolveAssetDir(
       "docker/embed",
@@ -76,54 +86,105 @@ export async function resolveBuildProbes(
 }
 
 // ---------------------------------------------------------------------------
-// DockerBuildStage (PlanStage)
+// DockerBuildPlan
 // ---------------------------------------------------------------------------
 
-export function createDockerBuildStage(buildProbes: BuildProbes): PlanStage {
+export interface DockerBuildPlan {
+  readonly needsBuild: boolean;
+  readonly imageName: string;
+  readonly assetGroups: readonly EmbeddedAssetGroup[];
+  readonly labels: Record<string, string>;
+}
+
+export function planDockerBuild(
+  input: StageInput,
+  buildProbes: BuildProbes,
+): DockerBuildPlan {
+  const imageName = input.prior.imageName;
+
+  if (buildProbes.imageExists) {
+    logInfo(`[nas] Docker image "${imageName}" already exists, skipping build`);
+
+    if (buildProbes.imageEmbedHash !== buildProbes.currentEmbedHash) {
+      logWarn(
+        "[nas] \u26a0 Docker image is outdated. Run `nas rebuild` to update.",
+      );
+    }
+
+    return {
+      needsBuild: false,
+      imageName,
+      assetGroups: [],
+      labels: {},
+    };
+  }
+
+  logInfo(`[nas] Building Docker image "${imageName}"...`);
+
   return {
-    kind: "plan",
+    needsBuild: true,
+    imageName,
+    assetGroups: EMBEDDED_BUILD_ASSET_GROUPS,
+    labels: {
+      [EMBED_HASH_LABEL]: buildProbes.currentEmbedHash,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DockerBuildStage (EffectStage<DockerService>)
+// ---------------------------------------------------------------------------
+
+function extractAssetsToTempDir(
+  assetGroups: readonly EmbeddedAssetGroup[],
+): Effect.Effect<string, unknown, Scope.Scope> {
+  return Effect.acquireRelease(
+    Effect.tryPromise(async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-docker-build-"));
+      for (const group of assetGroups) {
+        for (const name of group.files) {
+          const content = await readFile(
+            path.join(group.baseDir, name),
+            "utf8",
+          );
+          const outputPath = path.join(tmpDir, group.outputDir, name);
+          await mkdir(path.dirname(outputPath), { recursive: true });
+          await writeFile(outputPath, content);
+        }
+      }
+      return tmpDir;
+    }),
+    (tmpDir) =>
+      Effect.promise(() =>
+        rm(tmpDir, { recursive: true, force: true }).catch((e) =>
+          logInfo(`[nas] DockerBuild: failed to remove temp dir: ${e}`),
+        ),
+      ),
+  );
+}
+
+export function createDockerBuildStage(
+  buildProbes: BuildProbes,
+): EffectStage<DockerService> {
+  return {
+    kind: "effect",
     name: "DockerBuildStage",
 
-    plan(input: StageInput): StagePlan | null {
-      const imageName = input.prior.imageName;
+    run(
+      input: StageInput,
+    ): Effect.Effect<EffectStageResult, unknown, DockerService | Scope.Scope> {
+      const plan = planDockerBuild(input, buildProbes);
 
-      if (buildProbes.imageExists) {
-        logInfo(
-          `[nas] Docker image "${imageName}" already exists, skipping build`,
-        );
-
-        if (buildProbes.imageEmbedHash !== buildProbes.currentEmbedHash) {
-          logWarn(
-            "[nas] \u26a0 Docker image is outdated. Run `nas rebuild` to update.",
-          );
-        }
-
-        // No effects needed — image already exists
-        return {
-          effects: [],
-          dockerArgs: [],
-          envVars: {},
-          outputOverrides: {},
-        };
+      if (!plan.needsBuild) {
+        return Effect.succeed({});
       }
 
-      logInfo(`[nas] Building Docker image "${imageName}"...`);
-
-      const buildEffect: DockerImageBuildEffect = {
-        kind: "docker-image-build",
-        imageName,
-        assetGroups: EMBEDDED_BUILD_ASSET_GROUPS,
-        labels: {
-          [EMBED_HASH_LABEL]: buildProbes.currentEmbedHash,
-        },
-      };
-
-      return {
-        effects: [buildEffect],
-        dockerArgs: [],
-        envVars: {},
-        outputOverrides: {},
-      };
+      return Effect.gen(function* () {
+        const docker = yield* DockerService;
+        const tmpDir = yield* extractAssetsToTempDir(plan.assetGroups);
+        yield* docker.build(tmpDir, plan.imageName, plan.labels);
+        return {};
+      });
     },
   };
 }

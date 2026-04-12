@@ -2,12 +2,13 @@
  * nas rebuild サブコマンド
  */
 
+import { Effect } from "effect";
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
 import { logInfo } from "../log.ts";
-import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
+import { DockerServiceLive } from "../services/docker.ts";
 import {
   createDockerBuildStage,
   resolveBuildProbes,
@@ -32,7 +33,6 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
       );
     }
 
-    // Image was just removed, so probes will report imageExists=false
     const buildProbes = await resolveBuildProbes(imageName);
     const stage = createDockerBuildStage(buildProbes);
 
@@ -48,19 +48,20 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
       networkPromptEnabled: false,
       dbusProxyEnabled: false,
     };
-    const plan = stage.plan({
-      config,
-      profile,
-      profileName: name,
-      sessionId,
-      host: hostEnv,
-      probes,
-      prior,
-    });
-    if (plan) {
-      const handles = await executePlan(plan);
-      await teardownHandles(handles);
-    }
+
+    const effect = stage
+      .run({
+        config,
+        profile,
+        profileName: name,
+        sessionId,
+        host: hostEnv,
+        probes,
+        prior,
+      })
+      .pipe(Effect.scoped, Effect.provide(DockerServiceLive));
+
+    await Effect.runPromise(effect);
   } catch (err) {
     exitOnCliError(err);
   }

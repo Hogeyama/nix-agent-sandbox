@@ -212,7 +212,7 @@ export async function main(args: string[]): Promise<void> {
     const stages = [
       new WorktreeStage(),
       new SessionStoreStage(),
-      createDockerBuildStage(buildProbes),
+      effectStageAdapter(createDockerBuildStage(buildProbes), liveLayer),
       effectStageAdapter(NixDetectStage, liveLayer),
       createDbusProxyStage(),
       createMountStage(mountProbes),

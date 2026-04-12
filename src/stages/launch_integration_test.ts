@@ -29,15 +29,16 @@ import {
   writeFile,
 } from "node:fs/promises";
 import * as path from "node:path";
+import { Effect } from "effect";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import { executePlan, teardownHandles } from "../pipeline/effects.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
+import { DockerServiceLive } from "../services/docker.ts";
 import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
 
 const IMAGE_NAME = "nas-sandbox";
@@ -140,19 +141,21 @@ async function ensureImage(): Promise<void> {
     networkPromptEnabled: false,
     dbusProxyEnabled: false,
   };
-  const plan = stage.plan({
-    config,
-    profile,
-    profileName: "test",
-    sessionId: "sess_test",
-    host: hostEnv,
-    probes,
-    prior,
-  });
-  if (plan) {
-    const handles = await executePlan(plan);
-    await teardownHandles(handles);
-  }
+  await Effect.runPromise(
+    Effect.scoped(
+      stage
+        .run({
+          config,
+          profile,
+          profileName: "test",
+          sessionId: "sess_test",
+          host: hostEnv,
+          probes,
+          prior,
+        })
+        .pipe(Effect.provide(DockerServiceLive)),
+    ),
+  );
   imageBuilt = true;
 }
 
