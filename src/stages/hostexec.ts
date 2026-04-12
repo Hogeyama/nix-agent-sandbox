@@ -21,7 +21,6 @@ import type {
   StageInput,
 } from "../pipeline/types.ts";
 import { FsService } from "../services/fs.ts";
-// biome-ignore lint/style/useImportType: used as value for yield*
 import { HostExecBrokerService } from "../services/hostexec_broker.ts";
 
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
