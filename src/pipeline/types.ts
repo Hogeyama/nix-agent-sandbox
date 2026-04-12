@@ -5,6 +5,7 @@
  * ProceduralStage: 副作用を含む execute() を持つ（例外的）
  */
 
+import type { Effect, Scope } from "effect";
 import type {
   AgentType,
   Config,
@@ -15,6 +16,10 @@ import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
 import type { ApprovalScope } from "../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
+import type { DockerService } from "../services/docker.ts";
+import type { FsService } from "../services/fs.ts";
+import type { ProcessService } from "../services/process.ts";
+import type { PromptService } from "../stages/worktree/prompt_service.ts";
 
 // ---------------------------------------------------------------------------
 // Host environment & probes
@@ -310,5 +315,37 @@ export interface ProceduralStage {
   teardown?(input: StageInput): Promise<void>;
 }
 
+// ---------------------------------------------------------------------------
+// Effect-based stage types
+// ---------------------------------------------------------------------------
+
+// Effect stage result — partial outputs to merge into prior
+export type EffectStageResult = Partial<PriorStageOutputs>;
+
+// Union of all service tags that stages can depend on
+export type StageServices =
+  | FsService
+  | ProcessService
+  | DockerService
+  | PromptService;
+
+// A stage that runs as an Effect
+export interface EffectStage<R extends StageServices = never> {
+  kind: "effect";
+  name: string;
+  run(
+    input: StageInput,
+  ): Effect.Effect<EffectStageResult, unknown, Scope.Scope | R>;
+}
+
+// Extract service requirements from a stage
+export type StageServicesOf<TStage extends EffectStage<StageServices>> =
+  TStage extends EffectStage<infer R extends StageServices> ? R : never;
+
+// Compute pipeline requirements from a tuple of stages
+export type PipelineRequirements<
+  TStages extends readonly EffectStage<StageServices>[],
+> = Scope.Scope | StageServicesOf<TStages[number]>;
+
 /** すべての stage の union type */
-export type AnyStage = PlanStage | ProceduralStage;
+export type AnyStage = PlanStage | ProceduralStage | EffectStage<StageServices>;
