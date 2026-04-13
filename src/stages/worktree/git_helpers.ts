@@ -83,21 +83,11 @@ export async function findWorktreeForBranch(
   return null;
 }
 
-/**
- * remote ref (e.g. "origin/main") からローカルブランチ名を推定する。
- * ローカル ref ならそのまま返す。
- */
-export function resolveLocalBranch(ref: string): string {
-  const match = ref.match(/^[^/]+\/(.+)$/);
-  return match ? match[1] : ref;
-}
-
 export async function inheritDirtyBaseWorktree(
   repoRoot: string,
-  baseRef: string,
+  localBaseBranch: string,
   targetWorktreePath: string,
 ): Promise<void> {
-  const localBaseBranch = resolveLocalBranch(baseRef);
   const sourceWorktreePath = await findWorktreeForBranch(
     repoRoot,
     localBaseBranch,

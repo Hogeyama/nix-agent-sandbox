@@ -20,7 +20,6 @@ import {
   inheritDirtyBaseWorktree,
   isWorktreeDirty,
   resolveBase,
-  resolveLocalBranch,
   validateBaseBranch,
 } from "./git_helpers.ts";
 import { findProfileWorktrees } from "./management.ts";
@@ -30,6 +29,33 @@ import { stashDirtyWorktree } from "./prompts.ts";
 type Proc = Effect.Effect.Success<typeof ProcessService>;
 type Prompts = Effect.Effect.Success<typeof PromptService>;
 type Fs = Effect.Effect.Success<typeof FsService>;
+
+/**
+ * remote ref (e.g. "origin/main") からローカルブランチ名を推定する。
+ * git で refs/remotes/ 下に存在するか確認し、リモート ref なら最初のセグメントを除去。
+ * ローカルブランチ (e.g. "feature/foo") はそのまま返す。
+ */
+function resolveLocalBranchEffect(
+  proc: Proc,
+  repoRoot: string,
+  ref: string,
+): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const result = yield* gitExec(proc, [
+      "git",
+      "-C",
+      repoRoot,
+      "rev-parse",
+      "--verify",
+      `refs/remotes/${ref}`,
+    ]);
+    if (result !== null) {
+      const match = ref.match(/^[^/]+\/(.+)$/);
+      return match ? match[1] : ref;
+    }
+    return ref;
+  });
+}
 
 /** Run a git command via ProcessService, catching defects and returning null on failure. */
 function gitExec(
@@ -152,9 +178,14 @@ export function createWorktreeStage(): EffectStage<
           resolvedBase,
         ]);
 
+        const localBaseBranch = yield* resolveLocalBranchEffect(
+          proc,
+          repoRoot,
+          resolvedBase,
+        );
         yield* Effect.tryPromise({
           try: () =>
-            inheritDirtyBaseWorktree(repoRoot, resolvedBase, worktreePath),
+            inheritDirtyBaseWorktree(repoRoot, localBaseBranch, worktreePath),
           catch: (e) => new Error(e instanceof Error ? e.message : String(e)),
         });
 
@@ -366,7 +397,11 @@ function cherryPickToBase(
     );
 
     // base が remote ref (origin/main) の場合、ローカルブランチ名を推定
-    const targetBranch = resolveLocalBranch(baseBranch);
+    const targetBranch = yield* resolveLocalBranchEffect(
+      proc,
+      repoRoot,
+      baseBranch,
+    );
 
     const setupExit = yield* Effect.gen(function* () {
       // ローカルブランチが存在するか確認、なければ作成
