@@ -36,6 +36,31 @@ interface TerminalPaneProps extends TerminalSessionTab {
   onMinimize: () => void;
 }
 
+interface TerminalSize {
+  cols: number;
+  rows: number;
+}
+
+function getTerminalSize(
+  fitAddon: Pick<FitAddon, "proposeDimensions"> | null | undefined,
+): TerminalSize | null {
+  const dims = fitAddon?.proposeDimensions();
+  if (
+    !dims ||
+    !Number.isInteger(dims.cols) ||
+    dims.cols <= 0 ||
+    !Number.isInteger(dims.rows) ||
+    dims.rows <= 0
+  ) {
+    return null;
+  }
+  return { cols: dims.cols, rows: dims.rows };
+}
+
+function sendTerminalResize(ws: WebSocket, size: TerminalSize): void {
+  ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
+}
+
 function TerminalSessionNameEditor({
   sessionId,
   sessionName,
@@ -146,7 +171,7 @@ function TerminalPane({
   const [acking, setAcking] = useState(false);
   const [copied, setCopied] = useState(false);
   const DEFAULT_FONT_SIZE = 14;
-  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const [, setFontSize] = useState(DEFAULT_FONT_SIZE);
 
   const setError = (msg: string | null) => {
     errorRef.current = msg;
@@ -227,39 +252,28 @@ function TerminalPane({
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
-    // biome-ignore lint/style/useLet: mutated in onopen/onmessage
     let receivedData = false;
 
     ws.onopen = () => {
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        ws.send(
-          JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
-        );
+      const size = getTerminalSize(fitAddon);
+      if (size) {
+        sendTerminalResize(ws, size);
       }
       // dtach ignores SIGWINCH when the size hasn't changed.
       // If no data arrives within 1s, force a size change by temporarily
       // shrinking by 1 col, then restoring the real size.
       setTimeout(() => {
         if (!receivedData && ws.readyState === WebSocket.OPEN) {
-          const d = fitAddon.proposeDimensions();
-          if (d) {
-            ws.send(
-              JSON.stringify({
-                type: "resize",
-                cols: d.cols - 1,
-                rows: d.rows,
-              }),
-            );
+          const retrySize = getTerminalSize(fitAddon);
+          if (retrySize) {
+            sendTerminalResize(ws, {
+              cols:
+                retrySize.cols > 1 ? retrySize.cols - 1 : retrySize.cols + 1,
+              rows: retrySize.rows,
+            });
             setTimeout(() => {
               if (ws.readyState === WebSocket.OPEN) {
-                ws.send(
-                  JSON.stringify({
-                    type: "resize",
-                    cols: d.cols,
-                    rows: d.rows,
-                  }),
-                );
+                sendTerminalResize(ws, retrySize);
               }
             }, 200);
           }
@@ -292,18 +306,16 @@ function TerminalPane({
 
     term.onResize(({ cols, rows }) => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        sendTerminalResize(ws, { cols, rows });
       }
     });
 
     const onResize = () => {
       fitAddon.fit();
       ensureTerminalFocus(term);
-      const dims = fitAddon.proposeDimensions();
-      if (dims && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
-        );
+      const size = getTerminalSize(fitAddon);
+      if (size && ws.readyState === WebSocket.OPEN) {
+        sendTerminalResize(ws, size);
       }
     };
     globalThis.addEventListener("resize", onResize);
@@ -324,21 +336,16 @@ function TerminalPane({
   useEffect(() => {
     if (visible && fitAddonRef.current && terminalRef.current) {
       requestAnimationFrame(() => {
-        fitAddonRef.current?.fit();
+        const fitAddon = fitAddonRef.current;
         const term = terminalRef.current;
+        fitAddon?.fit();
         if (term) {
           ensureTerminalFocus(term);
         }
         // Also send resize to sync dtach
-        const dims = fitAddonRef.current?.proposeDimensions();
-        if (dims && wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: "resize",
-              cols: dims.cols,
-              rows: dims.rows,
-            }),
-          );
+        const size = getTerminalSize(fitAddon);
+        if (size && wsRef.current?.readyState === WebSocket.OPEN) {
+          sendTerminalResize(wsRef.current, size);
         }
       });
     }
@@ -374,11 +381,9 @@ function TerminalPane({
     term.options.fontSize = newSize;
     fitAddon.fit();
     ensureTerminalFocus(term);
-    const dims = fitAddon.proposeDimensions();
-    if (dims && ws?.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
-      );
+    const size = getTerminalSize(fitAddon);
+    if (size && ws?.readyState === WebSocket.OPEN) {
+      sendTerminalResize(ws, size);
     }
   }, []);
 
@@ -392,28 +397,22 @@ function TerminalPane({
 
   const handleRefit = useCallback(() => {
     const fitAddon = fitAddonRef.current;
+    const term = terminalRef.current;
     const ws = wsRef.current;
-    if (!fitAddon || !ws || ws.readyState !== WebSocket.OPEN) return;
-    const dims = fitAddon.proposeDimensions();
-    if (dims) {
+    if (!fitAddon || !term || !ws || ws.readyState !== WebSocket.OPEN) return;
+    fitAddon.fit();
+    ensureTerminalFocus(term);
+    const size = getTerminalSize(fitAddon);
+    if (size) {
       // Send a slightly different size first, then restore, to force
       // dtach to deliver SIGWINCH (it ignores same-size resizes).
-      ws.send(
-        JSON.stringify({
-          type: "resize",
-          cols: dims.cols - 1,
-          rows: dims.rows,
-        }),
-      );
+      sendTerminalResize(ws, {
+        cols: size.cols > 1 ? size.cols - 1 : size.cols + 1,
+        rows: size.rows,
+      });
       setTimeout(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "resize",
-              cols: dims.cols,
-              rows: dims.rows,
-            }),
-          );
+          sendTerminalResize(ws, size);
         }
       }, 200);
     }

@@ -64,6 +64,57 @@ export interface TerminalWSData {
   initialRedrawSent: boolean;
 }
 
+type TerminalControlMessage =
+  | {
+      kind: "resize";
+      cols: number;
+      rows: number;
+    }
+  | {
+      kind: "redraw";
+      cols: number;
+      rows: number;
+    };
+
+function isTerminalSizeValue(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+export function parseTerminalControlMessage(
+  message: string,
+): TerminalControlMessage | "invalid-control" | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+
+  const control = parsed as {
+    type?: unknown;
+    cols?: unknown;
+    rows?: unknown;
+  };
+  if (control.type !== "resize" && control.type !== "redraw") {
+    return null;
+  }
+  if (
+    !isTerminalSizeValue(control.cols) ||
+    !isTerminalSizeValue(control.rows)
+  ) {
+    return "invalid-control";
+  }
+  return {
+    kind: control.type,
+    cols: control.cols,
+    rows: control.rows,
+  };
+}
+
 /** リクエストURLからセッションIDを抽出 */
 export function extractSessionId(pathname: string): string | null {
   const match = pathname.match(/^\/api\/terminal\/([^/]+)$/);
@@ -153,12 +204,15 @@ export function handleTerminalMessage(
   }
 
   if (typeof message === "string") {
-    // JSON control messages (resize)
-    try {
-      const msg = JSON.parse(message);
-      if (msg.type === "resize" && msg.cols && msg.rows) {
-        console.log(`[terminal] Resize: ${msg.cols}x${msg.rows}`);
-        const winsize = makeWinsize(msg.cols, msg.rows);
+    const control = parseTerminalControlMessage(message);
+    if (control === "invalid-control") {
+      console.warn(`[terminal] Ignoring invalid control message: ${message}`);
+      return;
+    }
+    if (control) {
+      const winsize = makeWinsize(control.cols, control.rows);
+      if (control.kind === "resize") {
+        console.log(`[terminal] Resize: ${control.cols}x${control.rows}`);
         if (!ws.data.initialRedrawSent) {
           // 初回 resize: MSG_REDRAW(WINCH) でブラウザの実寸法 + 再描画要求
           // デフォルト 80x24 を送らず、正しい寸法で 1 回だけ SIGWINCH する
@@ -170,16 +224,12 @@ export function handleTerminalMessage(
         }
         return;
       }
-      // Force redraw: MSG_REDRAW(SIGWINCH) で現在のサイズのまま再描画を強制
-      if (msg.type === "redraw" && msg.cols && msg.rows) {
-        console.log(`[terminal] Force redraw: ${msg.cols}x${msg.rows}`);
-        const winsize = makeWinsize(msg.cols, msg.rows);
-        sock.write(makePacket(MSG_REDRAW, REDRAW_WINCH, winsize));
-        return;
-      }
-    } catch {
-      // Not JSON — treat as terminal input
+
+      console.log(`[terminal] Force redraw: ${control.cols}x${control.rows}`);
+      sock.write(makePacket(MSG_REDRAW, REDRAW_WINCH, winsize));
+      return;
     }
+
     // テキスト入力を MSG_PUSH パケットに分割して送信（最大8バイト/パケット）
     console.log(`[terminal] Text input: ${message.length} chars`);
     const bytes = Buffer.from(message, "utf-8");
