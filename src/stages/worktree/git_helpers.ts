@@ -172,12 +172,12 @@ async function copyUntrackedFiles(
   }
 }
 
-export function generateWorktreeName(profileName: string): string {
+export function generateWorktreeName(_profileName: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `nas-${profileName}-${ts}`;
+  return `nas-${ts}`;
 }
 
-export function generateBranchName(profileName: string): string {
+export function generateBranchName(_profileName: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `nas/${profileName}/${ts}`;
+  return `nas/${ts}`;
 }

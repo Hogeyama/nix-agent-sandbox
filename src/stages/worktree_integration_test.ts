@@ -215,8 +215,8 @@ async function createTestWorktree(
   profileName: string,
   suffix: string,
 ): Promise<{ worktreePath: string; branchName: string }> {
-  const worktreeName = `nas-${profileName}-${suffix}`;
-  const branchName = `nas/${profileName}/${suffix}`;
+  const worktreeName = `nas-${suffix}`;
+  const branchName = `nas/${suffix}`;
   const worktreePath = path.join(repoRoot, ".nas", "worktrees", worktreeName);
   await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} HEAD`.quiet();
   return { worktreePath, branchName };
@@ -242,9 +242,9 @@ test("WorktreeStage: creates worktree under repo metadata and mounts repo root",
 
     expect(mountDir).toEqual(repo);
     expect(
-      workDir.startsWith(path.join(repo, ".nas", "worktrees", "nas-test-")),
+      workDir.startsWith(path.join(repo, ".nas", "worktrees", "nas-")),
     ).toEqual(true);
-    expect(branchName.startsWith("nas/test/")).toEqual(true);
+    expect(branchName.startsWith("nas/")).toEqual(true);
 
     await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
     await $`git -C ${repo} branch -D ${branchName}`.quiet();
@@ -407,7 +407,7 @@ test("WorktreeStage teardown stashes dirty changes before deleting", async () =>
       expect(worktreeList.includes(worktreePath)).toEqual(false);
 
       const branchList = (
-        await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`.text()
+        await $`git -C ${repoRoot} branch --list ${"nas/*"}`.text()
       ).trim();
       expect(branchList).toEqual("");
 
@@ -505,7 +505,7 @@ test("WorktreeStage teardown deletes clean worktree and branch", async () => {
 
       // ブランチも削除されている
       const branchList = (
-        await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`.text()
+        await $`git -C ${repoRoot} branch --list ${"nas/*"}`.text()
       ).trim();
       expect(branchList).toEqual("");
     });
@@ -569,7 +569,7 @@ test("WorktreeStage teardown renames branch and keeps it", async () => {
 
       // 元のブランチは消え、リネーム先が存在
       const oldBranch = (
-        await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`.text()
+        await $`git -C ${repoRoot} branch --list ${"nas/*"}`.text()
       ).trim();
       expect(oldBranch).toEqual("");
 
@@ -688,7 +688,7 @@ test("WorktreeStage teardown cherry-picks even when base worktree has uncommitte
       expect(dirtyContent).toEqual("dirty\n");
 
       const branchList = (
-        await $`git -C ${repoRoot} branch --list ${"nas/test/*"}`.text()
+        await $`git -C ${repoRoot} branch --list ${"nas/*"}`.text()
       ).trim();
       expect(branchList).toEqual("");
 
@@ -948,12 +948,8 @@ test("listNasWorktrees: finds nas worktrees", async () => {
 
     const entries = await listNasWorktrees(repo);
     expect(entries.length).toEqual(2);
-    expect(entries.every((e) => e.path.includes("nas-myprofile-"))).toEqual(
-      true,
-    );
-    expect(entries.every((e) => e.branch.includes("nas/myprofile/"))).toEqual(
-      true,
-    );
+    expect(entries.every((e) => e.path.includes("nas-"))).toEqual(true);
+    expect(entries.every((e) => e.branch.includes("nas/"))).toEqual(true);
   });
 });
 
@@ -967,7 +963,7 @@ test("listNasWorktrees: ignores non-nas worktrees", async () => {
 
     const entries = await listNasWorktrees(repo);
     expect(entries.length).toEqual(1);
-    expect(entries[0].path.includes("nas-test-")).toEqual(true);
+    expect(entries[0].path.includes("nas-")).toEqual(true);
   });
 });
 
