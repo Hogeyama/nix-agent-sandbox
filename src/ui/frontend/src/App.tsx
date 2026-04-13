@@ -119,11 +119,6 @@ export function App() {
     }
   }, []);
 
-  const handleTermClose = useCallback(() => {
-    setTermSessionId(null);
-    setTermVisible(false);
-  }, []);
-
   const handleTermMinimize = useCallback(() => {
     setTermVisible(false);
   }, []);
@@ -242,7 +237,6 @@ export function App() {
           key={termSessionId}
           sessionId={termSessionId}
           visible={termVisible}
-          onClose={handleTermClose}
           onAckTurn={handleAckTurn}
           canAckTurn={terminalCanAckTurn}
           turnAcked={terminalTurnAcked}

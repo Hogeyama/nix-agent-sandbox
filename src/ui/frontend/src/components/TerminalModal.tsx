@@ -9,7 +9,6 @@ import {
 interface TerminalModalProps {
   sessionId: string;
   visible: boolean;
-  onClose: () => void;
   onAckTurn: (sessionId: string) => Promise<void> | void;
   canAckTurn: boolean;
   turnAcked: boolean;
@@ -19,7 +18,6 @@ interface TerminalModalProps {
 export function TerminalModal({
   sessionId,
   visible,
-  onClose,
   onAckTurn,
   canAckTurn,
   turnAcked,
@@ -182,19 +180,6 @@ export function TerminalModal({
     }
   }, [visible]);
 
-  const handleClose = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    if (terminalRef.current) {
-      terminalRef.current.dispose();
-      terminalRef.current = null;
-    }
-    fitAddonRef.current = null;
-    onClose();
-  }, [onClose]);
-
   const handleAck = useCallback(async () => {
     if (acking || !canAckTurn || turnAcked) return;
     setAcking(true);
@@ -291,14 +276,6 @@ export function TerminalModal({
               class="btn btn-ghost"
               onMouseDown={preventFocusSteal}
               onClick={onMinimize}
-            >
-              Minimize
-            </button>
-            <button
-              type="button"
-              class="btn btn-deny"
-              onMouseDown={preventFocusSteal}
-              onClick={handleClose}
             >
               Close
             </button>
