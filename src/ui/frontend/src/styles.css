@@ -588,6 +588,25 @@ td.time {
   box-shadow: 0 0 20px -2px var(--accent-glow);
 }
 
+.btn-danger {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 138, 138, 0.25),
+    rgba(255, 138, 138, 0.1)
+  );
+  border-color: rgba(255, 138, 138, 0.4);
+  color: #ff8a8a;
+}
+
+.btn-danger:not(:disabled):hover {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 138, 138, 0.35),
+    rgba(255, 138, 138, 0.15)
+  );
+  box-shadow: 0 0 20px -2px rgba(255, 138, 138, 0.3);
+}
+
 .btn-approve {
   background: linear-gradient(
     180deg,
@@ -934,6 +953,13 @@ td.time {
 .terminal-modal-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.font-size-controls {
+  display: flex;
+  gap: 2px;
+  align-items: center;
 }
 
 .terminal-modal .terminal-container {

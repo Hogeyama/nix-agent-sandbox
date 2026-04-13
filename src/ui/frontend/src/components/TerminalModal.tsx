@@ -31,6 +31,8 @@ export function TerminalModal({
   const errorElRef = useRef<HTMLDivElement>(null);
   const [acking, setAcking] = useState(false);
   const [copied, setCopied] = useState(false);
+  const DEFAULT_FONT_SIZE = 14;
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
 
   const setError = (msg: string | null) => {
     errorRef.current = msg;
@@ -202,7 +204,31 @@ export function TerminalModal({
     if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
   }, [sessionId]);
 
-  const handleResize = useCallback(() => {
+  const applyFontSize = useCallback((newSize: number) => {
+    const term = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    const ws = wsRef.current;
+    if (!term || !fitAddon) return;
+    term.options.fontSize = newSize;
+    fitAddon.fit();
+    ensureTerminalFocus(term);
+    const dims = fitAddon.proposeDimensions();
+    if (dims && ws?.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
+      );
+    }
+  }, []);
+
+  const handleFontSizeDecrease = useCallback(() => {
+    setFontSize((prev) => {
+      const next = Math.max(8, prev - 1);
+      applyFontSize(next);
+      return next;
+    });
+  }, [applyFontSize]);
+
+  const handleRefit = useCallback(() => {
     const fitAddon = fitAddonRef.current;
     const term = terminalRef.current;
     const ws = wsRef.current;
@@ -216,6 +242,14 @@ export function TerminalModal({
       );
     }
   }, []);
+
+  const handleFontSizeIncrease = useCallback(() => {
+    setFontSize((prev) => {
+      const next = Math.min(32, prev + 1);
+      applyFontSize(next);
+      return next;
+    });
+  }, [applyFontSize]);
 
   // ボタンの mousedown でフォーカス移動を防止
   const preventFocusSteal = useCallback((e: MouseEvent) => {
@@ -282,6 +316,70 @@ export function TerminalModal({
             </button>
           </span>
           <div class="terminal-modal-actions">
+            <div class="font-size-controls">
+              <button
+                type="button"
+                class="btn btn-icon btn-ghost"
+                title="Decrease font size"
+                onMouseDown={preventFocusSteal}
+                onClick={handleFontSizeDecrease}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="btn btn-icon btn-ghost"
+                title="Refit terminal"
+                onMouseDown={preventFocusSteal}
+                onClick={handleRefit}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="1 4 1 10 7 10" />
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="btn btn-icon btn-ghost"
+                title="Increase font size"
+                onMouseDown={preventFocusSteal}
+                onClick={handleFontSizeIncrease}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+            </div>
             <button
               type="button"
               class={turnAcked ? "btn btn-ghost" : "btn btn-primary"}
@@ -293,15 +391,7 @@ export function TerminalModal({
             </button>
             <button
               type="button"
-              class="btn btn-ghost"
-              onMouseDown={preventFocusSteal}
-              onClick={handleResize}
-            >
-              Resize
-            </button>
-            <button
-              type="button"
-              class="btn btn-ghost"
+              class="btn btn-danger"
               onMouseDown={preventFocusSteal}
               onClick={onMinimize}
             >

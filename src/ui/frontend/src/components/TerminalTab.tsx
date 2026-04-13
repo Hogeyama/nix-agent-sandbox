@@ -2,12 +2,17 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, type DtachSession } from "../api.ts";
-import { ensureTerminalFocus, setupTerminalInputForwarding } from "./terminalInput.ts";
+import {
+  ensureTerminalFocus,
+  setupTerminalInputForwarding,
+} from "./terminalInput.ts";
 
 export function TerminalTab() {
   const [sessions, setSessions] = useState<DtachSession[]>([]);
   const [activeSession, setActiveSession] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const DEFAULT_FONT_SIZE = 14;
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -88,7 +93,10 @@ export function TerminalTab() {
     let cleanupInputForwarding = () => {};
     if (termRef.current) {
       term.open(termRef.current);
-      cleanupInputForwarding = setupTerminalInputForwarding(term, termRef.current);
+      cleanupInputForwarding = setupTerminalInputForwarding(
+        term,
+        termRef.current,
+      );
       console.log(`[terminal] xterm opened, DOM:`, termRef.current);
       // Delay fit to ensure container is rendered
       requestAnimationFrame(() => {
@@ -201,6 +209,53 @@ export function TerminalTab() {
     setError(null);
   }, []);
 
+  const applyFontSize = useCallback((newSize: number) => {
+    const term = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    const ws = wsRef.current;
+    if (!term || !fitAddon) return;
+    term.options.fontSize = newSize;
+    fitAddon.fit();
+    ensureTerminalFocus(term);
+    const dims = fitAddon.proposeDimensions();
+    if (dims && ws?.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
+      );
+    }
+  }, []);
+
+  const handleFontSizeDecrease = useCallback(() => {
+    setFontSize((prev) => {
+      const next = Math.max(8, prev - 1);
+      applyFontSize(next);
+      return next;
+    });
+  }, [applyFontSize]);
+
+  const handleRefit = useCallback(() => {
+    const fitAddon = fitAddonRef.current;
+    const term = terminalRef.current;
+    const ws = wsRef.current;
+    if (!fitAddon || !term) return;
+    fitAddon.fit();
+    ensureTerminalFocus(term);
+    const dims = fitAddon.proposeDimensions();
+    if (dims && ws?.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
+      );
+    }
+  }, []);
+
+  const handleFontSizeIncrease = useCallback(() => {
+    setFontSize((prev) => {
+      const next = Math.min(32, prev + 1);
+      applyFontSize(next);
+      return next;
+    });
+  }, [applyFontSize]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -217,6 +272,67 @@ export function TerminalTab() {
             <span class="chip chip-good">connected</span>
             <code>{activeSession}</code>
           </span>
+          <div class="font-size-controls">
+            <button
+              type="button"
+              class="btn btn-icon btn-ghost"
+              title="Decrease font size"
+              onClick={handleFontSizeDecrease}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="btn btn-icon btn-ghost"
+              title="Refit terminal"
+              onClick={handleRefit}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="btn btn-icon btn-ghost"
+              title="Increase font size"
+              onClick={handleFontSizeIncrease}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          </div>
           <button type="button" class="btn btn-ghost" onClick={disconnect}>
             Disconnect
           </button>
