@@ -41,6 +41,8 @@ dtach v0.9 のワイヤープロトコルは非対称:
 - [x] xterm.js フロントエンド (`src/ui/frontend/src/components/TerminalTab.tsx`)
 - [x] Terminal タブ (セッション一覧 → Attach → ターミナル表示)
 - [x] ウィンドウリサイズ対応 (MSG_WINCH)
+- [x] Ctrl-a / Ctrl-e / Ctrl-w の TTY 転送を優先するキーハンドリング
+- [x] 右クリックのブラウザコンテキストメニュー抑止（マウスイベントをターミナル側へ通しやすくする）
 - [x] xterm.js CSS のビルドパイプライン統合
 - [x] ダークテーマ (既存ダッシュボードのカラーパレットに統一)
 

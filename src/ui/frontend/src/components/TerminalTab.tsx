@@ -2,6 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, type DtachSession } from "../api.ts";
+import { setupTerminalInputForwarding } from "./terminalInput.ts";
 
 export function TerminalTab() {
   const [sessions, setSessions] = useState<DtachSession[]>([]);
@@ -52,6 +53,7 @@ export function TerminalTab() {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
+      rightClickSelectsWord: false,
       fontFamily:
         "'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace",
       theme: {
@@ -83,8 +85,10 @@ export function TerminalTab() {
     fitAddonRef.current = fitAddon;
     terminalRef.current = term;
 
+    let cleanupInputForwarding = () => {};
     if (termRef.current) {
       term.open(termRef.current);
+      cleanupInputForwarding = setupTerminalInputForwarding(term, termRef.current);
       console.log(`[terminal] xterm opened, DOM:`, termRef.current);
       // Delay fit to ensure container is rendered
       requestAnimationFrame(() => {
@@ -176,6 +180,7 @@ export function TerminalTab() {
 
     return () => {
       globalThis.removeEventListener("resize", onResize);
+      cleanupInputForwarding();
     };
   }, [activeSession]);
 
