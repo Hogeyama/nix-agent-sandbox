@@ -6,9 +6,10 @@
  */
 
 import { readdir, stat } from "node:fs/promises";
+import { createConnection } from "node:net";
 import * as path from "node:path";
 import { runInteractiveCommand } from "../docker/client.ts";
-import { defaultRuntimeDir } from "../lib/fs_utils.ts";
+import { defaultRuntimeDir, safeRemove } from "../lib/fs_utils.ts";
 
 /** dtach セッション情報 */
 export interface DtachSessionInfo {
@@ -17,14 +18,20 @@ export interface DtachSessionInfo {
   createdAt: number;
 }
 
+const SOCKET_FILE_SUFFIX = ".sock";
+const SOCKET_CONNECT_TIMEOUT_MS = 200;
+
 /** ソケットディレクトリ */
-export function getSocketDir(): string {
-  return defaultRuntimeDir("sessions");
+export function getSocketDir(runtimeDir?: string): string {
+  return runtimeDir ?? defaultRuntimeDir("dtach");
 }
 
 /** セッションID からソケットパスを得る */
-export function socketPathFor(sessionId: string): string {
-  return path.join(getSocketDir(), `${sessionId}.sock`);
+export function socketPathFor(sessionId: string, runtimeDir?: string): string {
+  return path.join(
+    getSocketDir(runtimeDir),
+    `${sessionId}${SOCKET_FILE_SUFFIX}`,
+  );
 }
 
 /** dtach が利用可能か確認 */
@@ -81,29 +88,91 @@ export async function dtachAttach(
   });
 }
 
-/** dtach セッション（ソケット）が存在するか確認 */
-export async function dtachHasSession(socketPath: string): Promise<boolean> {
+/** ソケットに実接続できるか確認する（stale socket を弾く） */
+export async function probeDtachSocket(socketPath: string): Promise<boolean> {
   try {
     const s = await stat(socketPath);
-    return s.isSocket();
+    if (!s.isSocket()) return false;
   } catch {
     return false;
   }
+
+  return await new Promise<boolean>((resolve) => {
+    const socket = createConnection({ path: socketPath });
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      socket.off("connect", onConnect);
+      socket.off("error", onError);
+      socket.destroy();
+      resolve(ok);
+    };
+    const onConnect = () => finish(true);
+    const onError = () => finish(false);
+
+    socket.once("connect", onConnect);
+    socket.once("error", onError);
+    timer = setTimeout(() => finish(false), SOCKET_CONNECT_TIMEOUT_MS);
+  });
+}
+
+/** stale な dtach socket を掃除する */
+export async function gcDtachRuntime(runtimeDir?: string): Promise<string[]> {
+  const dir = getSocketDir(runtimeDir);
+  try {
+    const removed: string[] = [];
+    for (const entry of await readdir(dir)) {
+      if (!entry.endsWith(SOCKET_FILE_SUFFIX)) continue;
+      const fullPath = path.join(dir, entry);
+      if (await probeDtachSocket(fullPath)) continue;
+      await safeRemove(fullPath);
+      removed.push(entry.slice(0, -SOCKET_FILE_SUFFIX.length));
+    }
+    return removed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+/** dtach セッション（ソケット）が存在するか確認 */
+export async function dtachHasSession(socketPath: string): Promise<boolean> {
+  const live = await probeDtachSocket(socketPath);
+  if (!live) {
+    await safeRemove(socketPath);
+  }
+  return live;
 }
 
 /** dtach セッション一覧を取得（ソケットディレクトリをスキャン） */
-export async function dtachListSessions(): Promise<DtachSessionInfo[]> {
-  const dir = getSocketDir();
+export async function dtachListSessions(
+  runtimeDir?: string,
+): Promise<DtachSessionInfo[]> {
+  const dir = getSocketDir(runtimeDir);
+  await gcDtachRuntime(runtimeDir);
   try {
     const entries = await readdir(dir);
     const sessions: DtachSessionInfo[] = [];
     for (const entry of entries) {
-      if (!entry.endsWith(".sock")) continue;
+      if (!entry.endsWith(SOCKET_FILE_SUFFIX)) continue;
       const fullPath = path.join(dir, entry);
       try {
+        if (!(await probeDtachSocket(fullPath))) {
+          await safeRemove(fullPath);
+          continue;
+        }
         const s = await stat(fullPath);
-        if (!s.isSocket()) continue;
-        const name = entry.slice(0, -".sock".length); // sessionId
+        if (!s.isSocket()) {
+          await safeRemove(fullPath);
+          continue;
+        }
+        const name = entry.slice(0, -SOCKET_FILE_SUFFIX.length);
         sessions.push({
           name,
           socketPath: fullPath,

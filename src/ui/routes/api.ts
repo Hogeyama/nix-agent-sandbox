@@ -3,7 +3,6 @@
  */
 
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
-import { dtachListSessions } from "../../dtach/client.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   acknowledgeSessionTurn,
@@ -17,6 +16,7 @@ import {
   getNasContainers,
   getNetworkPending,
   getSessions,
+  getTerminalSessions,
   renameSession,
   stopContainer,
 } from "../data.ts";
@@ -187,13 +187,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.get("/terminal/sessions", async () => {
     try {
-      const sessions = await dtachListSessions();
-      const items = sessions.map((s) => ({
-        name: s.name,
-        sessionId: s.name,
-        socketPath: s.socketPath,
-        createdAt: s.createdAt,
-      }));
+      const items = await getTerminalSessions();
       return json({ items });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);

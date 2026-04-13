@@ -15,10 +15,9 @@
  *   MSG_REDRAW = 4  再描画要求 (len=method, payload=struct winsize)
  */
 
-import { stat } from "node:fs/promises";
 import { Socket } from "node:net";
 import type { ServerWebSocket } from "bun";
-import { socketPathFor } from "../../dtach/client.ts";
+import { dtachHasSession, socketPathFor } from "../../dtach/client.ts";
 
 // dtach message types
 const MSG_PUSH = 0;
@@ -121,22 +120,12 @@ export function extractSessionId(pathname: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-/** dtach ソケットが存在するか確認 */
-async function socketExists(socketPath: string): Promise<boolean> {
-  try {
-    const s = await stat(socketPath);
-    return s.isSocket();
-  } catch {
-    return false;
-  }
-}
-
 /** WebSocket upgrade 前のバリデーション */
 export async function validateTerminalUpgrade(
   sessionId: string,
 ): Promise<{ ok: true; socketPath: string } | { ok: false; reason: string }> {
   const socketPath = socketPathFor(sessionId);
-  if (!(await socketExists(socketPath))) {
+  if (!(await dtachHasSession(socketPath))) {
     return { ok: false, reason: `Session not found: ${sessionId}` };
   }
   return { ok: true, socketPath };

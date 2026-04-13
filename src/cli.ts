@@ -25,7 +25,11 @@ import { runUiCommand } from "./cli/ui.ts";
 import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
-import { dtachIsAvailable, socketPathFor } from "./dtach/client.ts";
+import {
+  dtachIsAvailable,
+  gcDtachRuntime,
+  socketPathFor,
+} from "./dtach/client.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import { setLogLevel } from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
@@ -319,6 +323,7 @@ async function runInsideDtach(
     );
   }
 
+  await gcDtachRuntime();
   const socketPath = socketPathFor(sessionId);
 
   // ソケットディレクトリを作成

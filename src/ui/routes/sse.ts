@@ -9,6 +9,7 @@ import {
   getNasContainers,
   getNetworkPending,
   getSessions,
+  getTerminalSessions,
 } from "../data.ts";
 import { Router } from "../router.ts";
 
@@ -39,6 +40,7 @@ export function createSseRoutes(ctx: UiDataContext): Router {
         let prevNetworkJson = "";
         let prevHostExecJson = "";
         let prevSessionsJson = "";
+        let prevTerminalSessionsJson = "";
         let prevContainersJson = "";
         let prevAuditJson = "";
 
@@ -46,13 +48,19 @@ export function createSseRoutes(ctx: UiDataContext): Router {
           if (closed) return;
 
           try {
-            const [networkPending, hostExecPending, sessions, containers] =
-              await Promise.all([
-                getNetworkPending(ctx).catch(() => []),
-                getHostExecPending(ctx).catch(() => []),
-                getSessions(ctx).catch(() => ({ network: [], hostexec: [] })),
-                getNasContainers(ctx).catch(() => []),
-              ]);
+            const [
+              networkPending,
+              hostExecPending,
+              sessions,
+              terminalSessions,
+              containers,
+            ] = await Promise.all([
+              getNetworkPending(ctx).catch(() => []),
+              getHostExecPending(ctx).catch(() => []),
+              getSessions(ctx).catch(() => ({ network: [], hostexec: [] })),
+              getTerminalSessions().catch(() => []),
+              getNasContainers(ctx).catch(() => []),
+            ]);
 
             const networkJson = JSON.stringify(networkPending);
             if (networkJson !== prevNetworkJson) {
@@ -70,6 +78,12 @@ export function createSseRoutes(ctx: UiDataContext): Router {
             if (sessionsJson !== prevSessionsJson) {
               prevSessionsJson = sessionsJson;
               send("sessions", sessions);
+            }
+
+            const terminalSessionsJson = JSON.stringify(terminalSessions);
+            if (terminalSessionsJson !== prevTerminalSessionsJson) {
+              prevTerminalSessionsJson = terminalSessionsJson;
+              send("terminal:sessions", { items: terminalSessions });
             }
 
             const containersJson = JSON.stringify(containers);

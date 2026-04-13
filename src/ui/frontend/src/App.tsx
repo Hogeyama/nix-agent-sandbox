@@ -3,6 +3,7 @@ import {
   type AuditLogEntry,
   api,
   type ContainerInfo,
+  type DtachSession,
   type HostExecPendingItem,
   type NetworkPendingItem,
   type SessionsData,
@@ -13,6 +14,7 @@ import { PendingTab } from "./components/PendingTab.tsx";
 import { TerminalModal } from "./components/TerminalModal.tsx";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import { useSSE } from "./hooks/useSSE.ts";
+import { buildTerminalSessionTabs } from "./terminalSessions.ts";
 
 type TabId = "pending" | "sessions" | "audit" | "sidecars";
 
@@ -43,6 +45,7 @@ export function App() {
     hostexec: [],
   });
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
+  const [dtachSessions, setDtachSessions] = useState<DtachSession[]>([]);
   const [openTermSessionIds, setOpenTermSessionIds] = useState<string[]>([]);
   const [activeTermSessionId, setActiveTermSessionId] = useState<string | null>(
     null,
@@ -58,6 +61,21 @@ export function App() {
       })
       .catch((e) => {
         console.error("Failed to fetch containers:", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getTerminalSessions()
+      .then((res) => {
+        if (!cancelled) setDtachSessions(res.items);
+      })
+      .catch((e) => {
+        console.error("Failed to fetch terminal sessions:", e);
       });
     return () => {
       cancelled = true;
@@ -189,6 +207,9 @@ export function App() {
       case "sessions":
         setSessions(d as unknown as SessionsData);
         break;
+      case "terminal:sessions":
+        setDtachSessions(d.items as DtachSession[]);
+        break;
       case "audit:logs":
         setAuditLogs(d.items as AuditLogEntry[]);
         break;
@@ -199,17 +220,17 @@ export function App() {
   }, []);
 
   const { connected } = useSSE("/api/events", handleSSE);
-  const terminalCandidates = useMemo(
+  const terminalMetadataCandidates = useMemo(
     () =>
       sessionContainers.filter(
         (container): container is ContainerInfo & { sessionId: string } =>
-          container.running && typeof container.sessionId === "string",
+          typeof container.sessionId === "string",
       ),
     [sessionContainers],
   );
   const availableTerminalIds = useMemo(
-    () => terminalCandidates.map((container) => container.sessionId),
-    [terminalCandidates],
+    () => dtachSessions.map((session) => session.sessionId),
+    [dtachSessions],
   );
   useEffect(() => {
     const availableIds = new Set(availableTerminalIds);
@@ -230,34 +251,12 @@ export function App() {
     });
   }, [availableTerminalIds]);
   const terminalSessions = useMemo(() => {
-    const byId = new Map(
-      terminalCandidates.map((container) => [container.sessionId, container]),
+    return buildTerminalSessionTabs(
+      openTermSessionIds,
+      dtachSessions,
+      terminalMetadataCandidates,
     );
-    const sessions = openTermSessionIds
-      .map((sessionId) => byId.get(sessionId))
-      .filter(
-        (container): container is (typeof terminalCandidates)[number] =>
-          container !== undefined,
-      )
-      .map((container) => ({
-        sessionId: container.sessionId,
-        sessionName: container.sessionName,
-        canAckTurn: container.turn === "user-turn",
-        turnAcked: container.turn === "ack-turn",
-        isOpen: true,
-      }));
-    for (const container of terminalCandidates) {
-      if (openTermSessionIds.includes(container.sessionId)) continue;
-      sessions.push({
-        sessionId: container.sessionId,
-        sessionName: container.sessionName,
-        canAckTurn: container.turn === "user-turn",
-        turnAcked: container.turn === "ack-turn",
-        isOpen: false,
-      });
-    }
-    return sessions;
-  }, [openTermSessionIds, terminalCandidates]);
+  }, [dtachSessions, openTermSessionIds, terminalMetadataCandidates]);
   const activeTerminalLabel = useMemo(() => {
     if (!activeTermSessionId) return null;
     const activeSession = terminalSessions.find(

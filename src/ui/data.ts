@@ -18,6 +18,7 @@ import {
   isNasManagedContainer,
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
+import { dtachListSessions } from "../dtach/client.ts";
 import { sendHostExecBrokerRequest } from "../hostexec/broker.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import {
@@ -181,6 +182,13 @@ export interface SessionsData {
   hostexec: HostExecSessionRegistryEntry[];
 }
 
+export interface TerminalSessionInfo {
+  name: string;
+  sessionId: string;
+  socketPath: string;
+  createdAt: number;
+}
+
 export async function getSessions(ctx: UiDataContext): Promise<SessionsData> {
   await gcNetworkRuntime(ctx.networkPaths);
   const networkSessions = await listSessionRegistries(ctx.networkPaths);
@@ -204,6 +212,16 @@ export async function getSessions(ctx: UiDataContext): Promise<SessionsData> {
   }
 
   return { network: networkSessions, hostexec: hostexecSessions };
+}
+
+export async function getTerminalSessions(): Promise<TerminalSessionInfo[]> {
+  const sessions = await dtachListSessions();
+  return sessions.map((session) => ({
+    name: session.name,
+    sessionId: session.name,
+    socketPath: session.socketPath,
+    createdAt: session.createdAt,
+  }));
 }
 
 export async function acknowledgeSessionTurn(
