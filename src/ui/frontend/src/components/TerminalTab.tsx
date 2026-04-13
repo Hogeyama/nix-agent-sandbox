@@ -234,19 +234,17 @@ export function TerminalTab() {
   }, [applyFontSize]);
 
   const handleRefit = useCallback(() => {
-    const fitAddon = fitAddonRef.current;
-    const term = terminalRef.current;
-    const ws = wsRef.current;
-    if (!fitAddon || !term) return;
-    fitAddon.fit();
-    ensureTerminalFocus(term);
-    const dims = fitAddon.proposeDimensions();
-    if (dims && ws?.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
-      );
-    }
-  }, []);
+    // Work around xterm.js fit() not always recalculating correctly by
+    // temporarily decreasing then restoring the font size.
+    setFontSize((prev) => {
+      const smaller = Math.max(8, prev - 1);
+      applyFontSize(smaller);
+      setTimeout(() => {
+        applyFontSize(prev);
+      }, 300);
+      return prev;
+    });
+  }, [applyFontSize]);
 
   const handleFontSizeIncrease = useCallback(() => {
     setFontSize((prev) => {
