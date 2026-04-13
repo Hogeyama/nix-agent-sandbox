@@ -929,9 +929,9 @@ td.time {
 }
 
 .terminal-modal {
-  width: 90vw;
-  height: 80vh;
-  max-width: 1200px;
+  width: 94vw;
+  height: 86vh;
+  max-width: 1360px;
   display: flex;
   flex-direction: column;
   background: var(--bg-1);
