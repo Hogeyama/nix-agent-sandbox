@@ -943,11 +943,19 @@ td.time {
 
 .terminal-modal-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 12px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+.terminal-modal-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
 }
 
 .terminal-modal-actions {
@@ -965,6 +973,13 @@ td.time {
 .terminal-modal .terminal-container {
   flex: 1;
   min-height: 0;
+}
+
+.terminal-modal-pane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 
 /* ──────────────── Terminal Minimized Bar ───────────���──── */
@@ -1019,11 +1034,81 @@ td.time {
   align-items: center;
   gap: 10px;
   font-size: 13px;
+  min-width: 0;
 }
 
 .terminal-session-label code {
   color: var(--accent);
   font-family: var(--mono);
+}
+
+.terminal-modal-tabs {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.terminal-modal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.terminal-modal-tab.active {
+  border-color: rgba(124, 196, 255, 0.5);
+  background: rgba(124, 196, 255, 0.14);
+}
+
+.terminal-modal-tab-select,
+.terminal-modal-tab-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.terminal-modal-tab-select {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--fg);
+}
+
+.terminal-modal-tab.active .terminal-modal-tab-select {
+  color: var(--accent-hi);
+}
+
+.terminal-modal-tab-label {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.terminal-modal-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: #94a3b8;
+}
+
+.terminal-modal-tab-close:hover {
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.14);
 }
 
 .terminal-error {

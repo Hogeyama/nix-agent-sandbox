@@ -43,7 +43,10 @@ export function App() {
     hostexec: [],
   });
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [termSessionId, setTermSessionId] = useState<string | null>(null);
+  const [openTermSessionIds, setOpenTermSessionIds] = useState<string[]>([]);
+  const [activeTermSessionId, setActiveTermSessionId] = useState<string | null>(
+    null,
+  );
   const [termVisible, setTermVisible] = useState(false);
 
   useEffect(() => {
@@ -94,7 +97,10 @@ export function App() {
   useFaviconBadge(totalPending, userTurnCount);
 
   const handleAttach = useCallback((sessionId: string) => {
-    setTermSessionId(sessionId);
+    setOpenTermSessionIds((current) =>
+      current.includes(sessionId) ? current : [...current, sessionId],
+    );
+    setActiveTermSessionId(sessionId);
     setTermVisible(true);
   }, []);
 
@@ -139,7 +145,33 @@ export function App() {
   }, []);
 
   const handleTermRestore = useCallback(() => {
+    setActiveTermSessionId(
+      (current) => current ?? openTermSessionIds[0] ?? null,
+    );
     setTermVisible(true);
+  }, [openTermSessionIds]);
+
+  const handleTermSelect = useCallback((sessionId: string) => {
+    setActiveTermSessionId(sessionId);
+    setTermVisible(true);
+  }, []);
+
+  const handleTermClose = useCallback((sessionId: string) => {
+    setOpenTermSessionIds((current) => {
+      const next = current.filter((id) => id !== sessionId);
+      setActiveTermSessionId((activeCurrent) => {
+        if (activeCurrent === sessionId) {
+          return next[0] ?? null;
+        }
+        return activeCurrent && next.includes(activeCurrent)
+          ? activeCurrent
+          : (next[0] ?? null);
+      });
+      if (next.length === 0) {
+        setTermVisible(false);
+      }
+      return next;
+    });
   }, []);
 
   const handleSSE = useCallback((event: string, data: unknown) => {
@@ -164,15 +196,28 @@ export function App() {
   }, []);
 
   const { connected } = useSSE("/api/events", handleSSE);
-  const activeTermContainer = useMemo(
+  const openTerminalSessions = useMemo(
     () =>
-      termSessionId
-        ? containers.find((container) => container.sessionId === termSessionId)
-        : undefined,
-    [containers, termSessionId],
+      openTermSessionIds.map((sessionId) => {
+        const container = containers.find(
+          (item) => item.sessionId === sessionId,
+        );
+        return {
+          sessionId,
+          sessionName: container?.sessionName,
+          canAckTurn: container?.turn === "user-turn",
+          turnAcked: container?.turn === "ack-turn",
+        };
+      }),
+    [containers, openTermSessionIds],
   );
-  const terminalCanAckTurn = activeTermContainer?.turn === "user-turn";
-  const terminalTurnAcked = activeTermContainer?.turn === "ack-turn";
+  const activeTerminalLabel = useMemo(() => {
+    if (!activeTermSessionId) return null;
+    const activeSession = openTerminalSessions.find(
+      (session) => session.sessionId === activeTermSessionId,
+    );
+    return activeSession?.sessionName || activeTermSessionId;
+  }, [activeTermSessionId, openTerminalSessions]);
 
   return (
     <div class="shell">
@@ -248,25 +293,27 @@ export function App() {
         )}
       </div>
 
-      {termSessionId && (
+      {openTerminalSessions.length > 0 && activeTermSessionId && (
         <TerminalModal
-          key={termSessionId}
-          sessionId={termSessionId}
-          sessionName={
-            containers.find((c) => c.sessionId === termSessionId)?.sessionName
-          }
+          sessions={openTerminalSessions}
+          activeSessionId={activeTermSessionId}
           visible={termVisible}
+          onSelectSession={handleTermSelect}
+          onCloseSession={handleTermClose}
           onAckTurn={handleAckTurn}
-          canAckTurn={terminalCanAckTurn}
-          turnAcked={terminalTurnAcked}
           onMinimize={handleTermMinimize}
         />
       )}
 
-      {termSessionId && !termVisible && (
+      {openTerminalSessions.length > 0 && !termVisible && (
         <div class="terminal-minimized-bar" onClick={handleTermRestore}>
-          <span class="chip chip-good">terminal</span>
-          <code>{termSessionId}</code>
+          <span class="chip chip-good">
+            terminal
+            {openTerminalSessions.length > 1
+              ? ` +${openTerminalSessions.length - 1}`
+              : ""}
+          </span>
+          <code>{activeTerminalLabel || openTermSessionIds[0]}</code>
           <span class="terminal-minimized-restore">Restore</span>
         </div>
       )}

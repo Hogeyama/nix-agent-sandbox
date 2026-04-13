@@ -6,25 +6,46 @@ import {
   setupTerminalInputForwarding,
 } from "./terminalInput.ts";
 
-interface TerminalModalProps {
+interface TerminalSessionTab {
   sessionId: string;
   sessionName?: string;
-  visible: boolean;
-  onAckTurn: (sessionId: string) => Promise<void> | void;
   canAckTurn: boolean;
   turnAcked: boolean;
+}
+
+interface TerminalModalProps {
+  sessions: TerminalSessionTab[];
+  activeSessionId: string;
+  visible: boolean;
+  onSelectSession: (sessionId: string) => void;
+  onCloseSession: (sessionId: string) => void;
+  onAckTurn: (sessionId: string) => Promise<void> | void;
   onMinimize: () => void;
 }
 
-export function TerminalModal({
+interface TerminalPaneProps extends TerminalSessionTab {
+  visible: boolean;
+  tabs: TerminalSessionTab[];
+  activeSessionId: string;
+  onSelectSession: (sessionId: string) => void;
+  onCloseSession: (sessionId: string) => void;
+  onAckTurn: (sessionId: string) => Promise<void> | void;
+  onMinimize: () => void;
+}
+
+function TerminalPane({
   sessionId,
   sessionName,
   visible,
-  onAckTurn,
+  tabs,
+  activeSessionId,
+  onSelectSession,
+  onCloseSession,
   canAckTurn,
   turnAcked,
+  onAckTurn,
   onMinimize,
-}: TerminalModalProps) {
+}: TerminalPaneProps) {
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -88,10 +109,12 @@ export function TerminalModal({
         term,
         termRef.current,
       );
-      requestAnimationFrame(() => {
-        fitAddon.fit();
-        term.focus();
-      });
+      if (visible) {
+        requestAnimationFrame(() => {
+          fitAddon.fit();
+          term.focus();
+        });
+      }
     }
 
     // Right-click to copy selected text (Windows Terminal style)
@@ -211,8 +234,10 @@ export function TerminalModal({
     if (visible && fitAddonRef.current && terminalRef.current) {
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit();
-        // fit() 後にフォーカスを復帰（fit が DOM を操作するため順序が重要）
-        ensureTerminalFocus(terminalRef.current!);
+        const term = terminalRef.current;
+        if (term) {
+          ensureTerminalFocus(term);
+        }
         // Also send resize to sync dtach
         const dims = fitAddonRef.current?.proposeDimensions();
         if (dims && wsRef.current?.readyState === WebSocket.OPEN) {
@@ -316,25 +341,14 @@ export function TerminalModal({
     e.preventDefault();
   }, []);
 
-  // オーバーレイ（モーダル外背景）クリックでターミナルにフォーカスを戻す
-  const handleOverlayMouseDown = useCallback((e: MouseEvent) => {
-    // モーダル自体のクリックは除外（バブルアップ防止）
-    if (
-      (e.target as HTMLElement).classList.contains("terminal-modal-overlay")
-    ) {
-      e.preventDefault();
-      if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
-    }
-  }, []);
-
   return (
     <div
-      class="terminal-modal-overlay"
+      class="terminal-modal-pane"
+      data-active={visible ? "true" : "false"}
       style={{ display: visible ? "flex" : "none" }}
-      onMouseDown={handleOverlayMouseDown}
     >
-      <div class="terminal-modal">
-        <div class="terminal-modal-header">
+      <div class="terminal-modal-header">
+        <div class="terminal-modal-header-top">
           <span class="terminal-session-label">
             <span class="chip chip-good">connected</span>
             <code>{sessionName || sessionId}</code>
@@ -459,12 +473,116 @@ export function TerminalModal({
             </button>
           </div>
         </div>
-        <div
-          ref={errorElRef}
-          class="terminal-error"
-          style={{ display: "none" }}
-        />
-        <div class="terminal-container" ref={termRef} />
+        <div class="terminal-modal-tabs">
+          {tabs.map((tab) => {
+            const isActive = tab.sessionId === activeSessionId;
+            return (
+              <div
+                key={tab.sessionId}
+                class={`terminal-modal-tab${isActive ? " active" : ""}`}
+              >
+                <button
+                  type="button"
+                  class="terminal-modal-tab-select"
+                  title={tab.sessionName || tab.sessionId}
+                  onMouseDown={preventFocusSteal}
+                  onClick={() => onSelectSession(tab.sessionId)}
+                >
+                  <span class="terminal-modal-tab-label">
+                    {tab.sessionName || tab.sessionId}
+                  </span>
+                </button>
+                {tabs.length > 1 && (
+                  <button
+                    type="button"
+                    class="terminal-modal-tab-close"
+                    title="Close terminal tab"
+                    onMouseDown={preventFocusSteal}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCloseSession(tab.sessionId);
+                    }}
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div
+        ref={errorElRef}
+        class="terminal-error"
+        style={{ display: "none" }}
+      />
+      <div class="terminal-container" ref={termRef} />
+    </div>
+  );
+}
+
+export function TerminalModal({
+  sessions,
+  activeSessionId,
+  visible,
+  onSelectSession,
+  onCloseSession,
+  onAckTurn,
+  onMinimize,
+}: TerminalModalProps) {
+  const resolvedActiveSessionId =
+    sessions.find((session) => session.sessionId === activeSessionId)
+      ?.sessionId ?? sessions[0]?.sessionId;
+
+  const handleOverlayMouseDown = useCallback((e: MouseEvent) => {
+    if (
+      !(e.target as HTMLElement).classList.contains("terminal-modal-overlay")
+    ) {
+      return;
+    }
+    e.preventDefault();
+    const helper = document.querySelector(
+      '.terminal-modal-pane[data-active="true"] .xterm-helper-textarea',
+    );
+    if (helper instanceof HTMLTextAreaElement) {
+      helper.focus();
+    }
+  }, []);
+
+  if (!resolvedActiveSessionId) return null;
+
+  return (
+    <div
+      class="terminal-modal-overlay"
+      style={{ display: visible ? "flex" : "none" }}
+      onMouseDown={handleOverlayMouseDown}
+    >
+      <div class="terminal-modal">
+        {sessions.map((session) => (
+          <TerminalPane
+            key={session.sessionId}
+            {...session}
+            tabs={sessions}
+            activeSessionId={resolvedActiveSessionId}
+            visible={visible && session.sessionId === resolvedActiveSessionId}
+            onSelectSession={onSelectSession}
+            onCloseSession={onCloseSession}
+            onAckTurn={onAckTurn}
+            onMinimize={onMinimize}
+          />
+        ))}
       </div>
     </div>
   );
