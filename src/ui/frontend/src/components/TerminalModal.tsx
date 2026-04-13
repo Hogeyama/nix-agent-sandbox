@@ -19,6 +19,7 @@ interface TerminalModalProps {
   visible: boolean;
   onSelectSession: (sessionId: string) => void;
   onCloseSession: (sessionId: string) => void;
+  onRenameSession: (sessionId: string, name: string) => Promise<void> | void;
   onAckTurn: (sessionId: string) => Promise<void> | void;
   onMinimize: () => void;
 }
@@ -29,8 +30,96 @@ interface TerminalPaneProps extends TerminalSessionTab {
   activeSessionId: string;
   onSelectSession: (sessionId: string) => void;
   onCloseSession: (sessionId: string) => void;
+  onRenameSession: (sessionId: string, name: string) => Promise<void> | void;
   onAckTurn: (sessionId: string) => Promise<void> | void;
   onMinimize: () => void;
+}
+
+function TerminalSessionNameEditor({
+  sessionId,
+  sessionName,
+  onRenameSession,
+  onDone,
+}: {
+  sessionId: string;
+  sessionName?: string;
+  onRenameSession: (sessionId: string, name: string) => Promise<void> | void;
+  onDone?: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(sessionName ?? "");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = useCallback(async () => {
+    const next = value.trim();
+    if (!next) return;
+    setSaving(true);
+    try {
+      await onRenameSession(sessionId, next);
+      setEditing(false);
+      onDone?.();
+    } catch (e) {
+      console.error("Failed to rename session from terminal:", e);
+    } finally {
+      setSaving(false);
+    }
+  }, [onDone, onRenameSession, sessionId, value]);
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        class="terminal-session-name-button"
+        title="Rename session"
+        onClick={() => {
+          setValue(sessionName ?? "");
+          setEditing(true);
+        }}
+      >
+        <code>{sessionName || sessionId}</code>
+      </button>
+    );
+  }
+
+  return (
+    <span class="terminal-session-name-editor">
+      <input
+        type="text"
+        value={value}
+        class="terminal-session-name-input"
+        onInput={(e) => setValue((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void handleSave();
+          if (e.key === "Escape") {
+            setEditing(false);
+            onDone?.();
+          }
+        }}
+        disabled={saving}
+        // biome-ignore lint/a11y/noAutofocus: intentional for inline edit
+        autoFocus
+      />
+      <button
+        type="button"
+        class="btn btn-ghost terminal-session-name-save"
+        disabled={saving || !value.trim()}
+        onClick={() => void handleSave()}
+      >
+        {saving ? "..." : "OK"}
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost terminal-session-name-cancel"
+        disabled={saving}
+        onClick={() => {
+          setEditing(false);
+          onDone?.();
+        }}
+      >
+        Cancel
+      </button>
+    </span>
+  );
 }
 
 function TerminalPane({
@@ -41,6 +130,7 @@ function TerminalPane({
   activeSessionId,
   onSelectSession,
   onCloseSession,
+  onRenameSession,
   canAckTurn,
   turnAcked,
   onAckTurn,
@@ -351,7 +441,15 @@ function TerminalPane({
         <div class="terminal-modal-header-top">
           <span class="terminal-session-label">
             <span class="chip chip-good">connected</span>
-            <code>{sessionName || sessionId}</code>
+            <TerminalSessionNameEditor
+              sessionId={sessionId}
+              sessionName={sessionName}
+              onRenameSession={onRenameSession}
+              onDone={() => {
+                if (terminalRef.current)
+                  ensureTerminalFocus(terminalRef.current);
+              }}
+            />
             <button
               type="button"
               class="btn btn-icon btn-ghost"
@@ -539,6 +637,7 @@ export function TerminalModal({
   visible,
   onSelectSession,
   onCloseSession,
+  onRenameSession,
   onAckTurn,
   onMinimize,
 }: TerminalModalProps) {
@@ -579,6 +678,7 @@ export function TerminalModal({
             visible={visible && session.sessionId === resolvedActiveSessionId}
             onSelectSession={onSelectSession}
             onCloseSession={onCloseSession}
+            onRenameSession={onRenameSession}
             onAckTurn={onAckTurn}
             onMinimize={onMinimize}
           />

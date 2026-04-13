@@ -1042,6 +1042,46 @@ td.time {
   font-family: var(--mono);
 }
 
+.terminal-session-name-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-bottom: 1px dashed #475569;
+}
+
+.terminal-session-name-button code {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-session-name-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminal-session-name-input {
+  width: 180px;
+  padding: 4px 8px;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font: inherit;
+}
+
+.terminal-session-name-save,
+.terminal-session-name-cancel {
+  min-height: 28px;
+  padding: 4px 10px;
+}
+
 .terminal-modal-tabs {
   display: flex;
   gap: 8px;

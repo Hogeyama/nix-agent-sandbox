@@ -300,6 +300,7 @@ export function App() {
           visible={termVisible}
           onSelectSession={handleTermSelect}
           onCloseSession={handleTermClose}
+          onRenameSession={handleRename}
           onAckTurn={handleAckTurn}
           onMinimize={handleTermMinimize}
         />
