@@ -201,6 +201,19 @@ export function TerminalModal({
     }
   }, [acking, canAckTurn, onAckTurn, sessionId, turnAcked]);
 
+  const handleResize = useCallback(() => {
+    const fitAddon = fitAddonRef.current;
+    const term = terminalRef.current;
+    const ws = wsRef.current;
+    if (!fitAddon || !term) return;
+    fitAddon.fit();
+    ensureTerminalFocus(term);
+    const dims = fitAddon.proposeDimensions();
+    if (dims && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+    }
+  }, []);
+
   // ボタンの mousedown でフォーカス移動を防止
   const preventFocusSteal = useCallback((e: MouseEvent) => {
     e.preventDefault();
@@ -236,6 +249,9 @@ export function TerminalModal({
               onClick={handleAck}
             >
               {turnAcked ? "ACKed" : acking ? "ACK..." : "ACK turn"}
+            </button>
+            <button type="button" class="btn btn-ghost" onMouseDown={preventFocusSteal} onClick={handleResize}>
+              Resize
             </button>
             <button type="button" class="btn btn-ghost" onMouseDown={preventFocusSteal} onClick={onMinimize}>
               Minimize
