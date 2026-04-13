@@ -28,7 +28,10 @@ const MSG_WINCH = 3;
 const MSG_REDRAW = 4;
 
 // Redraw methods
-const REDRAW_CTRL_L = 2;
+// REDRAW_CTRL_L (2) は子プロセスの stdin に Ctrl+L (0x0C) を注入する。
+// ink 等の TUI フレームワークはこれを入力文字として扱い、カーソル状態が壊れる。
+// REDRAW_WINCH (1) は SIGWINCH を送信し、TUI が安全に再描画できる。
+const REDRAW_WINCH = 1;
 
 /** 10 バイト固定のパケットを作る */
 function makePacket(type: number, len: number, payload?: Buffer): Buffer {
@@ -97,13 +100,14 @@ export function handleTerminalOpen(ws: ServerWebSocket<TerminalWSData>): void {
   sock.on("connect", () => {
     console.log(`[terminal] Connected to dtach socket: ${sessionId}`);
 
-    // 1. MSG_ATTACH を送信 — master に出力転送を要求
+    // 1. MSG_ATTACH — master に出力転送を要求
     sock.write(makePacket(MSG_ATTACH, 0));
 
-    // 2. MSG_REDRAW を送信 — ウィンドウサイズ + 再描画要求
-    //    デフォルト 80x24、フロントエンドから resize が来たら上書きされる
-    const ws80x24 = makeWinsize(80, 24);
-    sock.write(makePacket(MSG_REDRAW, REDRAW_CTRL_L, ws80x24));
+    // 2. MSG_REDRAW(WINCH) — デフォルト 80x24 で即座に再描画要求
+    //    REDRAW_WINCH は SIGWINCH を送信し、TUI フレームワークが安全に再描画できる。
+    //    ブラウザから実寸法が届き次第 MSG_WINCH で上書きされる。
+    const defaultWinsize = makeWinsize(80, 24);
+    sock.write(makePacket(MSG_REDRAW, REDRAW_WINCH, defaultWinsize));
   });
 
   sock.on("data", (data: Buffer) => {
