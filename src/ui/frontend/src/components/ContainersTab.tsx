@@ -151,6 +151,7 @@ interface ContainersTabProps {
   onContainersChange: (items: ContainerInfo[]) => void;
   onAttach?: (sessionId: string) => void;
   onAckTurn?: (sessionId: string) => Promise<void> | void;
+  title?: string;
 }
 
 export function ContainersTab({
@@ -158,6 +159,7 @@ export function ContainersTab({
   onContainersChange,
   onAttach,
   onAckTurn,
+  title = "Sessions",
 }: ContainersTabProps) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [acking, setAcking] = useState<Set<string>>(new Set());
@@ -258,7 +260,7 @@ export function ContainersTab({
         }}
       >
         <h3 style={{ fontSize: "16px", color: "#cbd5e1" }}>
-          NAS Managed Containers ({sorted.length})
+          {title} ({sorted.length})
         </h3>
         <button
           type="button"
@@ -315,9 +317,13 @@ export function ContainersTab({
                             <button
                               type="button"
                               style={
-                                c.turn === "ack-turn" ? ackedBtnStyle : ackBtnStyle
+                                c.turn === "ack-turn"
+                                  ? ackedBtnStyle
+                                  : ackBtnStyle
                               }
-                              disabled={c.turn === "ack-turn" || acking.has(sessionId)}
+                              disabled={
+                                c.turn === "ack-turn" || acking.has(sessionId)
+                              }
                               onClick={(e) => {
                                 e.stopPropagation();
                                 void handleAck(sessionId);

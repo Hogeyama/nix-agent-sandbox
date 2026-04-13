@@ -14,12 +14,13 @@ import { TerminalModal } from "./components/TerminalModal.tsx";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import { useSSE } from "./hooks/useSSE.ts";
 
-type TabId = "pending" | "containers" | "audit";
+type TabId = "pending" | "sessions" | "audit" | "sidecars";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "pending", label: "Pending" },
-  { id: "containers", label: "Containers" },
+  { id: "sessions", label: "Sessions" },
   { id: "audit", label: "Audit" },
+  { id: "sidecars", label: "Sidecars" },
 ];
 
 export interface DeepLink {
@@ -77,8 +78,18 @@ export function App() {
     }
   }, [deepLink]);
 
+  const SIDECAR_KINDS = new Set(["dind", "proxy", "envoy"]);
+  const sessionContainers = containers.filter(
+    (c) => !SIDECAR_KINDS.has(c.labels["nas.kind"] ?? ""),
+  );
+  const sidecarContainers = containers.filter((c) =>
+    SIDECAR_KINDS.has(c.labels["nas.kind"] ?? ""),
+  );
+
   const totalPending = networkPending.length + hostExecPending.length;
-  const userTurnCount = containers.filter((c) => c.turn === "user-turn").length;
+  const userTurnCount = sessionContainers.filter(
+    (c) => c.turn === "user-turn",
+  ).length;
 
   useFaviconBadge(totalPending, userTurnCount);
 
@@ -175,7 +186,7 @@ export function App() {
           const badge: { count: number; warn?: boolean } | null =
             tab.id === "pending" && totalPending > 0
               ? { count: totalPending }
-              : tab.id === "containers" && userTurnCount > 0
+              : tab.id === "sessions" && userTurnCount > 0
                 ? { count: userTurnCount, warn: true }
                 : null;
           return (
@@ -206,9 +217,9 @@ export function App() {
             deepLink={deepLink}
           />
         )}
-        {activeTab === "containers" && (
+        {activeTab === "sessions" && (
           <ContainersTab
-            containers={containers}
+            containers={sessionContainers}
             onContainersChange={setContainers}
             onAttach={handleAttach}
             onAckTurn={handleAckTurn}
@@ -216,6 +227,13 @@ export function App() {
         )}
         {activeTab === "audit" && (
           <AuditTab liveItems={auditLogs} sessions={sessions} />
+        )}
+        {activeTab === "sidecars" && (
+          <ContainersTab
+            containers={sidecarContainers}
+            onContainersChange={setContainers}
+            title="Sidecars"
+          />
         )}
       </div>
 
