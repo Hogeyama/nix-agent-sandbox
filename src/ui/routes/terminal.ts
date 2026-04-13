@@ -58,6 +58,10 @@ function makeWinsize(cols: number, rows: number): Buffer {
 export interface TerminalWSData {
   sessionId: string;
   socket: Socket | null;
+  /** dtach ソケット接続前に届いた WebSocket メッセージのバッファ */
+  pendingMessages: (string | Buffer)[];
+  /** 初回 resize で MSG_REDRAW を送信済みか */
+  initialRedrawSent: boolean;
 }
 
 /** リクエストURLからセッションIDを抽出 */
@@ -93,21 +97,26 @@ export function handleTerminalOpen(ws: ServerWebSocket<TerminalWSData>): void {
   const socketPath = socketPathFor(sessionId);
 
   const sock = new Socket();
-  ws.data.socket = sock;
+  // socket は connect 完了後にセットする。
+  // 接続前にセットすると、ブラウザからのメッセージが MSG_ATTACH より先に
+  // dtach に届くレースコンディションが発生する。
 
   sock.connect({ path: socketPath });
 
   sock.on("connect", () => {
     console.log(`[terminal] Connected to dtach socket: ${sessionId}`);
 
-    // 1. MSG_ATTACH — master に出力転送を要求
+    // 1. MSG_ATTACH — master に出力転送を要求（必ず最初に送る）
     sock.write(makePacket(MSG_ATTACH, 0));
 
-    // 2. MSG_REDRAW(WINCH) — デフォルト 80x24 で即座に再描画要求
-    //    REDRAW_WINCH は SIGWINCH を送信し、TUI フレームワークが安全に再描画できる。
-    //    ブラウザから実寸法が届き次第 MSG_WINCH で上書きされる。
-    const defaultWinsize = makeWinsize(80, 24);
-    sock.write(makePacket(MSG_REDRAW, REDRAW_WINCH, defaultWinsize));
+    // 2. socket をセットして以降のメッセージが直接送信されるようにする
+    ws.data.socket = sock;
+
+    // 3. 接続前にバッファされたメッセージをフラッシュ
+    for (const msg of ws.data.pendingMessages) {
+      handleTerminalMessage(ws, msg);
+    }
+    ws.data.pendingMessages = [];
   });
 
   sock.on("data", (data: Buffer) => {
@@ -133,7 +142,12 @@ export function handleTerminalMessage(
   message: string | Buffer,
 ): void {
   const sock = ws.data.socket;
-  if (!sock || sock.destroyed) {
+  if (!sock) {
+    // dtach ソケット未接続 — バッファに積む
+    ws.data.pendingMessages.push(message);
+    return;
+  }
+  if (sock.destroyed) {
     console.log(`[terminal] Socket destroyed, ignoring message`);
     return;
   }
@@ -145,7 +159,15 @@ export function handleTerminalMessage(
       if (msg.type === "resize" && msg.cols && msg.rows) {
         console.log(`[terminal] Resize: ${msg.cols}x${msg.rows}`);
         const winsize = makeWinsize(msg.cols, msg.rows);
-        sock.write(makePacket(MSG_WINCH, 0, winsize));
+        if (!ws.data.initialRedrawSent) {
+          // 初回 resize: MSG_REDRAW(WINCH) でブラウザの実寸法 + 再描画要求
+          // デフォルト 80x24 を送らず、正しい寸法で 1 回だけ SIGWINCH する
+          ws.data.initialRedrawSent = true;
+          sock.write(makePacket(MSG_REDRAW, REDRAW_WINCH, winsize));
+          console.log(`[terminal] Initial redraw (SIGWINCH) sent`);
+        } else {
+          sock.write(makePacket(MSG_WINCH, 0, winsize));
+        }
         return;
       }
     } catch {

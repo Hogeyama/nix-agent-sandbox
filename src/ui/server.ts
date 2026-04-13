@@ -146,7 +146,12 @@ export async function startServer(options: ServeOptions): Promise<void> {
           return new Response(result.reason, { status: 404 });
         }
         const ok = server.upgrade(req, {
-          data: { sessionId, socket: null },
+          data: {
+            sessionId,
+            socket: null,
+            pendingMessages: [],
+            initialRedrawSent: false,
+          },
         });
         if (ok) return undefined as unknown as Response;
         return new Response("WebSocket upgrade failed", { status: 500 });
