@@ -394,6 +394,7 @@ const tdNameStyle = {
   display: "flex" as const,
   alignItems: "center" as const,
   gap: "8px",
+  whiteSpace: "nowrap" as const,
 };
 const detailCellStyle = {
   padding: "0",
