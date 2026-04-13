@@ -162,10 +162,10 @@ let
           fallback = "container";
         }
         {
-          id = "deno-test-coverage";
+          id = "bun-test";
           match = {
-            argv0 = "deno";
-            arg-regex = ''^(task\b)?.*\b(test|coverage)\b'';
+            argv0 = "bun";
+            arg-regex = ''^(run\b)?test\b'';
           };
           cwd = {
             mode = "workspace-only";
