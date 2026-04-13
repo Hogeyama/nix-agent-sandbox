@@ -26,9 +26,12 @@ export async function runSessionCommand(nasArgs: string[]): Promise<void> {
       const sessions = await dtachListSessions();
       const sessionPaths = resolveSessionRuntimePaths();
       const storeRecords = await listSessions(sessionPaths);
-      const nameById = new Map(
-        storeRecords.filter((r) => r.name).map((r) => [r.sessionId, r.name!]),
-      );
+      const nameById = new Map<string, string>();
+      for (const record of storeRecords) {
+        if (record.name) {
+          nameById.set(record.sessionId, record.name);
+        }
+      }
 
       if (formatJson) {
         const items = sessions.map((s) => ({

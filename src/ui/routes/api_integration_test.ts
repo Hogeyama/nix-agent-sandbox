@@ -194,9 +194,7 @@ test("POST /sessions/:sessionId/ack returns 409 when session is not user-turn", 
     });
     expect(res.status).toEqual(409);
     const body = await res.json();
-    expect(body.error).toEqual(
-      "Cannot acknowledge turn in state: agent-turn",
-    );
+    expect(body.error).toEqual("Cannot acknowledge turn in state: agent-turn");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

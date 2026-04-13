@@ -92,9 +92,29 @@ function EditableSessionName({
   }
 
   if (!editing) {
+    if (!onRename) {
+      return (
+        <>
+          {currentName || fallbackName || (
+            <span style={{ color: "#64748b" }}>-</span>
+          )}
+        </>
+      );
+    }
+
     return (
-      <span
-        style={{ cursor: "pointer", borderBottom: "1px dashed #475569" }}
+      <button
+        type="button"
+        style={{
+          cursor: "pointer",
+          border: 0,
+          padding: 0,
+          background: "transparent",
+          color: "inherit",
+          font: "inherit",
+          textAlign: "left",
+          borderBottom: "1px dashed #475569",
+        }}
         onClick={(e) => {
           e.stopPropagation();
           setValue(currentName ?? "");
@@ -104,7 +124,7 @@ function EditableSessionName({
         {currentName || fallbackName || (
           <span style={{ color: "#64748b" }}>-</span>
         )}
-      </span>
+      </button>
     );
   }
 

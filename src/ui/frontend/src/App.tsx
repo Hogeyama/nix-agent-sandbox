@@ -354,7 +354,11 @@ export function App() {
       )}
 
       {openTermSessionIds.length > 0 && !termVisible && (
-        <div class="terminal-minimized-bar" onClick={handleTermRestore}>
+        <button
+          type="button"
+          class="terminal-minimized-bar"
+          onClick={handleTermRestore}
+        >
           <span class="chip chip-good">
             terminal
             {openTermSessionIds.length > 1
@@ -363,7 +367,7 @@ export function App() {
           </span>
           <code>{activeTerminalLabel || openTermSessionIds[0]}</code>
           <span class="terminal-minimized-restore">Restore</span>
-        </div>
+        </button>
       )}
     </div>
   );

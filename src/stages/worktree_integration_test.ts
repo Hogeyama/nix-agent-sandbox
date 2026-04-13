@@ -215,7 +215,7 @@ async function withMockedPrompts(
 /** テスト用の nas worktree を作成するヘルパー */
 async function createTestWorktree(
   repoRoot: string,
-  profileName: string,
+  _profileName: string,
   suffix: string,
 ): Promise<{ worktreePath: string; branchName: string }> {
   const worktreeName = `nas-${suffix}`;

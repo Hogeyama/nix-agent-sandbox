@@ -459,6 +459,8 @@ function TerminalPane({
             >
               {copied ? (
                 <svg
+                  aria-hidden="true"
+                  focusable="false"
                   width="14"
                   height="14"
                   viewBox="0 0 24 24"
@@ -472,6 +474,8 @@ function TerminalPane({
                 </svg>
               ) : (
                 <svg
+                  aria-hidden="true"
+                  focusable="false"
                   width="14"
                   height="14"
                   viewBox="0 0 24 24"
@@ -497,6 +501,8 @@ function TerminalPane({
                 onClick={handleFontSizeDecrease}
               >
                 <svg
+                  aria-hidden="true"
+                  focusable="false"
                   width="14"
                   height="14"
                   viewBox="0 0 24 24"
@@ -517,6 +523,8 @@ function TerminalPane({
                 onClick={handleRefit}
               >
                 <svg
+                  aria-hidden="true"
+                  focusable="false"
                   width="14"
                   height="14"
                   viewBox="0 0 24 24"
@@ -538,6 +546,8 @@ function TerminalPane({
                 onClick={handleFontSizeIncrease}
               >
                 <svg
+                  aria-hidden="true"
+                  focusable="false"
                   width="14"
                   height="14"
                   viewBox="0 0 24 24"
@@ -611,6 +621,8 @@ function TerminalPane({
                     }}
                   >
                     <svg
+                      aria-hidden="true"
+                      focusable="false"
                       width="12"
                       height="12"
                       viewBox="0 0 24 24"
@@ -650,6 +662,7 @@ export function TerminalModal({
   onAckTurn,
   onMinimize,
 }: TerminalModalProps) {
+  const overlayRef = useRef<HTMLDivElement>(null);
   const resolvedActiveSessionId =
     sessions.find((session) => session.sessionId === activeSessionId)
       ?.sessionId ?? sessions[0]?.sessionId;
@@ -669,15 +682,25 @@ export function TerminalModal({
     }
   }, []);
 
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const listener = (e: MouseEvent) => handleOverlayMouseDown(e);
+    overlay.addEventListener("mousedown", listener);
+    return () => {
+      overlay.removeEventListener("mousedown", listener);
+    };
+  }, [handleOverlayMouseDown]);
+
   if (!resolvedActiveSessionId) return null;
 
   return (
     <div
+      ref={overlayRef}
       class="terminal-modal-overlay"
       style={{ display: visible ? "flex" : "none" }}
-      onMouseDown={handleOverlayMouseDown}
     >
-      <div class="terminal-modal">
+      <div class="terminal-modal" role="dialog" aria-modal="true">
         {sessions
           .filter((session) => session.isOpen)
           .map((session) => (

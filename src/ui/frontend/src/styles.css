@@ -970,11 +970,6 @@ td.time {
   align-items: center;
 }
 
-.terminal-modal .terminal-container {
-  flex: 1;
-  min-height: 0;
-}
-
 .terminal-modal-pane {
   display: flex;
   flex: 1;
@@ -999,7 +994,11 @@ td.time {
   backdrop-filter: blur(10px);
   box-shadow: var(--shadow-md);
   cursor: pointer;
+  appearance: none;
+  color: inherit;
+  font: inherit;
   font-size: 12px;
+  text-align: left;
   transition:
     transform 0.15s ease,
     box-shadow 0.15s ease;
@@ -1182,6 +1181,7 @@ td.time {
 
 .terminal-container {
   flex: 1;
+  min-height: 0;
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: #0b0f1a;
