@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+  acknowledgeSessionTurn,
   createSession,
   deleteSession,
   ensureSessionRuntimePaths,
@@ -203,6 +204,43 @@ test("updateSessionTurn preserves startedAt across transitions", async () => {
   expect(afterAttention.startedAt).toBe(startedAt);
   const afterStop = await updateSessionTurn(paths, "sess-1", "stop");
   expect(afterStop.startedAt).toBe(startedAt);
+});
+
+test("acknowledgeSessionTurn marks user-turn as ack-turn", async () => {
+  await createSession(paths, {
+    sessionId: "sess-ack",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  const updated = await acknowledgeSessionTurn(paths, "sess-ack");
+  expect(updated.turn).toBe("ack-turn");
+  expect(updated.lastEventKind).toBe("ack");
+
+  const persisted = await readSession(paths, "sess-ack");
+  expect(persisted?.turn).toBe("ack-turn");
+  expect(persisted?.lastEventKind).toBe("ack");
+});
+
+test("acknowledgeSessionTurn rejects non-user-turn states", async () => {
+  await createSession(paths, {
+    sessionId: "sess-running",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+  await updateSessionTurn(paths, "sess-running", "start");
+
+  await expect(acknowledgeSessionTurn(paths, "sess-running")).rejects.toThrow(
+    "Cannot acknowledge turn in state: agent-turn",
+  );
+});
+
+test("acknowledgeSessionTurn rejects unknown session IDs", async () => {
+  await expect(acknowledgeSessionTurn(paths, "missing")).rejects.toThrow(
+    "Session not found: missing",
+  );
 });
 
 test("deleteSession removes the file; double delete does not throw", async () => {

@@ -1,12 +1,15 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { useCallback, useEffect, useRef } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { setupTerminalInputForwarding } from "./terminalInput.ts";
 
 interface TerminalModalProps {
   sessionId: string;
   visible: boolean;
   onClose: () => void;
+  onAckTurn: (sessionId: string) => Promise<void> | void;
+  canAckTurn: boolean;
+  turnAcked: boolean;
   onMinimize: () => void;
 }
 
@@ -14,6 +17,9 @@ export function TerminalModal({
   sessionId,
   visible,
   onClose,
+  onAckTurn,
+  canAckTurn,
+  turnAcked,
   onMinimize,
 }: TerminalModalProps) {
   const termRef = useRef<HTMLDivElement>(null);
@@ -22,6 +28,7 @@ export function TerminalModal({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const errorRef = useRef<string | null>(null);
   const errorElRef = useRef<HTMLDivElement>(null);
+  const [acking, setAcking] = useState(false);
 
   const setError = (msg: string | null) => {
     errorRef.current = msg;
@@ -177,6 +184,18 @@ export function TerminalModal({
     onClose();
   }, [onClose]);
 
+  const handleAck = useCallback(async () => {
+    if (acking || !canAckTurn || turnAcked) return;
+    setAcking(true);
+    try {
+      await onAckTurn(sessionId);
+    } catch (e) {
+      console.error("Failed to acknowledge turn from terminal:", e);
+    } finally {
+      setAcking(false);
+    }
+  }, [acking, canAckTurn, onAckTurn, sessionId, turnAcked]);
+
   return (
     <div
       class="terminal-modal-overlay"
@@ -189,6 +208,14 @@ export function TerminalModal({
             <code>{sessionId}</code>
           </span>
           <div class="terminal-modal-actions">
+            <button
+              type="button"
+              class={turnAcked ? "btn btn-ghost" : "btn btn-primary"}
+              disabled={acking || turnAcked || !canAckTurn}
+              onClick={handleAck}
+            >
+              {turnAcked ? "ACKed" : acking ? "ACK..." : "ACK turn"}
+            </button>
             <button type="button" class="btn btn-ghost" onClick={onMinimize}>
               Minimize
             </button>

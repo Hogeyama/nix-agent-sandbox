@@ -45,6 +45,7 @@ import {
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
 import {
+  acknowledgeSessionTurn as markSessionTurnAcknowledged,
   listSessions,
   resolveSessionRuntimePaths,
   type SessionEventKind,
@@ -202,6 +203,13 @@ export async function getSessions(ctx: UiDataContext): Promise<SessionsData> {
   }
 
   return { network: networkSessions, hostexec: hostexecSessions };
+}
+
+export async function acknowledgeSessionTurn(
+  ctx: UiDataContext,
+  sessionId: string,
+): Promise<SessionRecord> {
+  return await markSessionTurnAcknowledged(ctx.sessionPaths, sessionId);
 }
 
 // --- Containers ---

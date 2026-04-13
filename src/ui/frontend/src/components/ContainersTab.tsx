@@ -15,18 +15,24 @@ function formatRelativeTime(iso: string): string {
   return `${day}d ${hr % 24}h ago`;
 }
 
-// Sort priority: user-turn (0) → agent-turn (1) → done (2) → absent (3).
+// Sort priority: user-turn (0) → ack-turn (1) → agent-turn (2) → done (3) → absent (4).
 function turnPriority(turn: ContainerInfo["turn"]): number {
   switch (turn) {
     case "user-turn":
       return 0;
-    case "agent-turn":
+    case "ack-turn":
       return 1;
-    case "done":
+    case "agent-turn":
       return 2;
-    default:
+    case "done":
       return 3;
+    default:
+      return 4;
   }
+}
+
+function isAckEligibleTurn(turn: ContainerInfo["turn"]): boolean {
+  return turn === "user-turn" || turn === "ack-turn";
 }
 
 function tieBreakTimestamp(c: ContainerInfo): number {
@@ -59,6 +65,9 @@ interface TurnCellProps {
 function TurnCell({ turn }: TurnCellProps) {
   if (turn === "user-turn") {
     return <span style={turnBadgeUserStyle}>Your turn</span>;
+  }
+  if (turn === "ack-turn") {
+    return <span style={turnBadgeAckStyle}>Thinking (ACK)</span>;
   }
   if (turn === "agent-turn") {
     return <span style={turnBadgeAgentStyle}>Agent working</span>;
@@ -141,14 +150,17 @@ interface ContainersTabProps {
   containers: ContainerInfo[];
   onContainersChange: (items: ContainerInfo[]) => void;
   onAttach?: (sessionId: string) => void;
+  onAckTurn?: (sessionId: string) => Promise<void> | void;
 }
 
 export function ContainersTab({
   containers,
   onContainersChange,
   onAttach,
+  onAckTurn,
 }: ContainersTabProps) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [acking, setAcking] = useState<Set<string>>(new Set());
   const [cleaning, setCleaning] = useState(false);
   const [expandedNames, setExpandedNames] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
@@ -190,6 +202,22 @@ export function ContainersTab({
       setBusy((s) => {
         const next = new Set(s);
         next.delete(name);
+        return next;
+      });
+    }
+  }
+
+  async function handleAck(sessionId: string) {
+    if (!onAckTurn) return;
+    setAcking((current) => new Set(current).add(sessionId));
+    try {
+      await onAckTurn(sessionId);
+    } catch (e) {
+      console.error("ACK failed:", e);
+    } finally {
+      setAcking((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
         return next;
       });
     }
@@ -262,6 +290,7 @@ export function ContainersTab({
               const kind = c.labels["nas.kind"] || "-";
               const pwd = kind === "agent" ? c.labels["nas.pwd"] || "-" : "";
               const isExpanded = expandedNames.has(c.name);
+              const sessionId = c.sessionId;
               return (
                 <Fragment key={c.name}>
                   <tr style={rowStyle} onClick={() => toggleExpand(c.name)}>
@@ -270,17 +299,38 @@ export function ContainersTab({
                     </td>
                     <td style={tdNameStyle}>
                       {c.name}
-                      {c.running && c.sessionId && (
-                        <button
-                          type="button"
-                          style={attachBtnStyle}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onAttach?.(c.sessionId!);
-                          }}
-                        >
-                          Attach
-                        </button>
+                      {c.running && sessionId && (
+                        <>
+                          <button
+                            type="button"
+                            style={attachBtnStyle}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAttach?.(sessionId);
+                            }}
+                          >
+                            Attach
+                          </button>
+                          {isAckEligibleTurn(c.turn) && (
+                            <button
+                              type="button"
+                              style={
+                                c.turn === "ack-turn" ? ackedBtnStyle : ackBtnStyle
+                              }
+                              disabled={c.turn === "ack-turn" || acking.has(sessionId)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleAck(sessionId);
+                              }}
+                            >
+                              {c.turn === "ack-turn"
+                                ? "ACKed"
+                                : acking.has(sessionId)
+                                  ? "ACK..."
+                                  : "ACK"}
+                            </button>
+                          )}
+                        </>
                       )}
                     </td>
                     <td style={tdStyle}>
@@ -422,6 +472,21 @@ const attachBtnStyle = {
   padding: "4px 12px",
   cursor: "pointer",
 };
+const ackBtnStyle = {
+  background: "rgba(148, 163, 184, 0.2)",
+  color: "#cbd5e1",
+  border: "1px solid rgba(148, 163, 184, 0.45)",
+  borderRadius: "4px",
+  padding: "4px 10px",
+  cursor: "pointer",
+};
+const ackedBtnStyle = {
+  ...ackBtnStyle,
+  background: "rgba(99, 102, 241, 0.2)",
+  color: "#c7d2fe",
+  border: "1px solid rgba(129, 140, 248, 0.45)",
+  cursor: "default",
+};
 const stopBtnStyle = {
   background: "#f59e0b",
   color: "white",
@@ -453,6 +518,11 @@ const turnBadgeUserStyle = {
   background: "#fbbf24",
   color: "#1f2937",
   fontWeight: "bold" as const,
+};
+const turnBadgeAckStyle = {
+  ...turnBadgeBaseStyle,
+  background: "rgba(148, 163, 184, 0.22)",
+  color: "#cbd5e1",
 };
 const turnBadgeAgentStyle = {
   ...turnBadgeBaseStyle,

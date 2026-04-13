@@ -22,8 +22,9 @@ import {
   safeRemove,
 } from "../lib/fs_utils.ts";
 
-export type SessionTurn = "user-turn" | "agent-turn" | "done";
-export type SessionEventKind = "start" | "attention" | "stop";
+export type SessionTurn = "user-turn" | "ack-turn" | "agent-turn" | "done";
+export type SessionEventKind = "start" | "attention" | "ack" | "stop";
+export type SessionHookEventKind = Exclude<SessionEventKind, "ack">;
 
 export interface SessionRecord {
   sessionId: string;
@@ -158,7 +159,7 @@ export async function listSessions(
   return records;
 }
 
-function applyTransition(kind: SessionEventKind): SessionTurn {
+function applyTransition(kind: SessionHookEventKind): SessionTurn {
   switch (kind) {
     case "start":
       return "agent-turn";
@@ -184,7 +185,7 @@ function applyTransition(kind: SessionEventKind): SessionTurn {
 export async function updateSessionTurn(
   paths: SessionRuntimePaths,
   sessionId: string,
-  kind: SessionEventKind,
+  kind: SessionHookEventKind,
   message?: string,
 ): Promise<SessionRecord> {
   const now = new Date().toISOString();
@@ -210,6 +211,34 @@ export async function updateSessionTurn(
         lastEventMessage: message,
       };
 
+  await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
+  return updated;
+}
+
+/**
+ * Mark a user-turn session as acknowledged from the UI.
+ *
+ * Allowed transitions:
+ *   user-turn -> ack-turn
+ *   ack-turn  -> ack-turn (idempotent re-ack)
+ */
+export async function acknowledgeSessionTurn(
+  paths: SessionRuntimePaths,
+  sessionId: string,
+): Promise<SessionRecord> {
+  const existing = await readSession(paths, sessionId);
+  if (!existing) throw new Error(`Session not found: ${sessionId}`);
+  if (existing.turn !== "user-turn" && existing.turn !== "ack-turn") {
+    throw new Error(`Cannot acknowledge turn in state: ${existing.turn}`);
+  }
+
+  const now = new Date().toISOString();
+  const updated: SessionRecord = {
+    ...existing,
+    turn: "ack-turn",
+    lastEventAt: now,
+    lastEventKind: "ack",
+  };
   await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
   return updated;
 }

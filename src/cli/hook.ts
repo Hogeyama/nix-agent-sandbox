@@ -19,7 +19,7 @@ import {
 import {
   readSession,
   resolveSessionRuntimePaths,
-  type SessionEventKind,
+  type SessionHookEventKind,
   type SessionRuntimePaths,
   updateSessionTurn,
 } from "../sessions/store.ts";
@@ -181,12 +181,12 @@ function readMatcherValue(value: unknown, path: string[]): unknown {
 }
 
 /**
- * Map the `--kind` argument string to the store's `SessionEventKind`.
+ * Map the `--kind` argument string to the store's hook event kind.
  * Exported for direct unit testing of the parser.
  */
 export function parseHookKind(
   arg: string | undefined,
-): SessionEventKind | null {
+): SessionHookEventKind | null {
   if (arg === "start") return "start";
   if (arg === "attention") return "attention";
   if (arg === "stop") return "stop";

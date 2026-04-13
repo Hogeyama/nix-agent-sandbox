@@ -87,6 +87,27 @@ export function App() {
     setTermVisible(true);
   }, []);
 
+  const handleAckTurn = useCallback(async (sessionId: string) => {
+    try {
+      const { item } = await api.ackSessionTurn(sessionId);
+      setContainers((current) =>
+        current.map((container) =>
+          container.sessionId === sessionId
+            ? {
+                ...container,
+                turn: item.turn,
+                lastEventAt: item.lastEventAt,
+                lastEventKind: item.lastEventKind,
+                lastEventMessage: item.lastEventMessage,
+              }
+            : container,
+        ),
+      );
+    } catch (e) {
+      console.error("Failed to acknowledge turn:", e);
+    }
+  }, []);
+
   const handleTermClose = useCallback(() => {
     setTermSessionId(null);
     setTermVisible(false);
@@ -122,6 +143,15 @@ export function App() {
   }, []);
 
   const { connected } = useSSE("/api/events", handleSSE);
+  const activeTermContainer = useMemo(
+    () =>
+      termSessionId
+        ? containers.find((container) => container.sessionId === termSessionId)
+        : undefined,
+    [containers, termSessionId],
+  );
+  const terminalCanAckTurn = activeTermContainer?.turn === "user-turn";
+  const terminalTurnAcked = activeTermContainer?.turn === "ack-turn";
 
   return (
     <div class="shell">
@@ -181,6 +211,7 @@ export function App() {
             containers={containers}
             onContainersChange={setContainers}
             onAttach={handleAttach}
+            onAckTurn={handleAckTurn}
           />
         )}
         {activeTab === "audit" && (
@@ -194,6 +225,9 @@ export function App() {
           sessionId={termSessionId}
           visible={termVisible}
           onClose={handleTermClose}
+          onAckTurn={handleAckTurn}
+          canAckTurn={terminalCanAckTurn}
+          turnAcked={terminalTurnAcked}
           onMinimize={handleTermMinimize}
         />
       )}

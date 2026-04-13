@@ -10,7 +10,12 @@ import path from "node:path";
 import { appendAuditLog } from "../../audit/store.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
-import type { SessionRuntimePaths } from "../../sessions/store.ts";
+import {
+  createSession,
+  readSession,
+  type SessionRuntimePaths,
+  updateSessionTurn,
+} from "../../sessions/store.ts";
 import type { UiDataContext } from "../data.ts";
 import { Router } from "../router.ts";
 import { createApiRoutes } from "./api.ts";
@@ -110,6 +115,88 @@ test("GET /sessions returns network and hostexec arrays", async () => {
     const body = await res.json();
     expect(Array.isArray(body.network)).toEqual(true);
     expect(Array.isArray(body.hostexec)).toEqual(true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("POST /sessions/:sessionId/ack marks session as ack-turn", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    await createSession(ctx.sessionPaths, {
+      sessionId: "sess-ack",
+      agent: "claude",
+      profile: "default",
+      startedAt: "2026-04-11T10:00:00.000Z",
+    });
+
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/sessions/sess-ack/ack", {
+      method: "POST",
+    });
+    expect(res.status).toEqual(200);
+    const body = await res.json();
+    expect(body.item.turn).toEqual("ack-turn");
+    expect(body.item.lastEventKind).toEqual("ack");
+
+    const persisted = await readSession(ctx.sessionPaths, "sess-ack");
+    expect(persisted?.turn).toEqual("ack-turn");
+    expect(persisted?.lastEventKind).toEqual("ack");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("POST /sessions/:sessionId/ack returns 404 for unknown session", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/sessions/missing/ack", {
+      method: "POST",
+    });
+    expect(res.status).toEqual(404);
+    const body = await res.json();
+    expect(body.error).toEqual("Session not found: missing");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("POST /sessions/:sessionId/ack returns 409 when session is not user-turn", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    await createSession(ctx.sessionPaths, {
+      sessionId: "sess-running",
+      agent: "claude",
+      profile: "default",
+      startedAt: "2026-04-11T10:00:00.000Z",
+    });
+    await updateSessionTurn(ctx.sessionPaths, "sess-running", "start");
+
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/sessions/sess-running/ack", {
+      method: "POST",
+    });
+    expect(res.status).toEqual(409);
+    const body = await res.json();
+    expect(body.error).toEqual(
+      "Cannot acknowledge turn in state: agent-turn",
+    );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

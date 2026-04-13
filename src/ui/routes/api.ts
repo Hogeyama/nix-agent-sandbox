@@ -6,6 +6,7 @@ import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
 import { dtachListSessions } from "../../dtach/client.ts";
 import type { UiDataContext } from "../data.ts";
 import {
+  acknowledgeSessionTurn,
   approveHostExec,
   approveNetwork,
   cleanContainers,
@@ -115,6 +116,22 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       return json(sessions);
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  api.post("/sessions/:sessionId/ack", async ({ params }) => {
+    try {
+      const item = await acknowledgeSessionTurn(ctx, params.sessionId);
+      return json({ item });
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message.startsWith("Session not found:")) {
+        return json({ error: message }, 404);
+      }
+      if (message.startsWith("Cannot acknowledge turn in state:")) {
+        return json({ error: message }, 409);
+      }
+      return json({ error: message }, 500);
     }
   });
 

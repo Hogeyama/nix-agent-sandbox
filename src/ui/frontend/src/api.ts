@@ -17,6 +17,14 @@ async function request<T>(
   return res.json();
 }
 
+export interface SessionTurnRecord {
+  sessionId: string;
+  turn: "user-turn" | "ack-turn" | "agent-turn" | "done";
+  lastEventAt: string;
+  lastEventKind?: "start" | "attention" | "ack" | "stop";
+  lastEventMessage?: string;
+}
+
 export const api = {
   getNetworkPending: () =>
     request<{ items: NetworkPendingItem[] }>("GET", "/api/network/pending"),
@@ -33,6 +41,11 @@ export const api = {
     request("POST", "/api/hostexec/deny", { sessionId, requestId }),
 
   getSessions: () => request<SessionsData>("GET", "/api/sessions"),
+  ackSessionTurn: (sessionId: string) =>
+    request<{ item: SessionTurnRecord }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/ack`,
+    ),
 
   getContainers: () =>
     request<{ items: ContainerInfo[] }>("GET", "/api/containers"),
@@ -129,13 +142,13 @@ export interface ContainerInfo {
   // Session-derived fields — populated by the backend when a container
   // carries a `nas.session_id` label matching a live session record.
   sessionId?: string;
-  turn?: "user-turn" | "agent-turn" | "done";
+  turn?: "user-turn" | "ack-turn" | "agent-turn" | "done";
   sessionAgent?: string;
   sessionProfile?: string;
   worktree?: string;
   sessionStartedAt?: string;
   lastEventAt?: string;
-  lastEventKind?: "start" | "attention" | "stop";
+  lastEventKind?: "start" | "attention" | "ack" | "stop";
   lastEventMessage?: string;
 }
 

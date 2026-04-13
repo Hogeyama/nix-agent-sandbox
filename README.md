@@ -462,7 +462,7 @@ nas hostexec test --profile <profile> -- <command> [args...]
 ### セッション通知（エージェントフック経由）
 
 `nas hook --kind start|attention|stop [--when path=value ...]` をエージェントのフックから呼び出すと、
-そのセッションが今「エージェントが作業中（`agent-turn`）」「ユーザーの入力待ち（`user-turn`）」「終了済み（`done`）」のどれにあるかを nas UI に伝えられます。
+そのセッションが今「エージェントが作業中（`agent-turn`）」「ユーザーの入力待ち（`user-turn`）」「終了済み（`done`）」のどれにあるかを nas UI に伝えられます。UI 上で `user-turn` を ACK すると `ack-turn`（認識済み・検討中）として表示されます。
 
 Claude Code のフック設定は `~/.claude/settings.json`（ユーザー共通）またはプロジェクト直下の `.claude/settings.json` に書きます。設定例:
 
