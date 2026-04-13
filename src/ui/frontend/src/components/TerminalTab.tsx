@@ -131,21 +131,37 @@ export function TerminalTab() {
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
+    // biome-ignore lint/style/useLet: mutated in onopen/onmessage
+    let receivedData = false;
+
     ws.onopen = () => {
       console.log(`[terminal] WebSocket opened for ${activeSession}`);
-      // Send initial resize
+      // Send initial resize (triggers MSG_REDRAW on first connect)
       const dims = fitAddon.proposeDimensions();
       if (dims) {
-        console.log(
-          `[terminal] Sending initial resize: ${dims.cols}x${dims.rows}`,
-        );
         ws.send(
           JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
         );
       }
+      // If no data arrives within 1s (initial SIGWINCH failed to trigger
+      // a redraw), send a force redraw to retry.
+      setTimeout(() => {
+        if (!receivedData && ws.readyState === WebSocket.OPEN) {
+          console.log(
+            `[terminal] No data after initial resize, sending force redraw`,
+          );
+          const d = fitAddon.proposeDimensions();
+          if (d) {
+            ws.send(
+              JSON.stringify({ type: "redraw", cols: d.cols, rows: d.rows }),
+            );
+          }
+        }
+      }, 1000);
     };
 
     ws.onmessage = (ev) => {
+      receivedData = true;
       console.log(
         `[terminal] Received message:`,
         ev.data.byteLength ?? ev.data.length,
@@ -245,18 +261,21 @@ export function TerminalTab() {
     });
   }, [applyFontSize]);
 
+  const sendForceRedraw = useCallback(() => {
+    const fitAddon = fitAddonRef.current;
+    const ws = wsRef.current;
+    if (!fitAddon || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const dims = fitAddon.proposeDimensions();
+    if (dims) {
+      ws.send(
+        JSON.stringify({ type: "redraw", cols: dims.cols, rows: dims.rows }),
+      );
+    }
+  }, []);
+
   const handleRefit = useCallback(() => {
-    // Work around xterm.js fit() not always recalculating correctly by
-    // temporarily decreasing then restoring the font size.
-    setFontSize((prev) => {
-      const smaller = Math.max(8, prev - 1);
-      applyFontSize(smaller);
-      setTimeout(() => {
-        applyFontSize(prev);
-      }, 300);
-      return prev;
-    });
-  }, [applyFontSize]);
+    sendForceRedraw();
+  }, [sendForceRedraw]);
 
   const handleFontSizeIncrease = useCallback(() => {
     setFontSize((prev) => {

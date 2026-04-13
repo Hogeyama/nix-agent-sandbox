@@ -113,6 +113,9 @@ export function TerminalModal({
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
+    // biome-ignore lint/style/useLet: mutated in onopen/onmessage
+    let receivedData = false;
+
     ws.onopen = () => {
       const dims = fitAddon.proposeDimensions();
       if (dims) {
@@ -120,9 +123,38 @@ export function TerminalModal({
           JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
         );
       }
+      // dtach ignores SIGWINCH when the size hasn't changed.
+      // If no data arrives within 1s, force a size change by temporarily
+      // shrinking by 1 col, then restoring the real size.
+      setTimeout(() => {
+        if (!receivedData && ws.readyState === WebSocket.OPEN) {
+          const d = fitAddon.proposeDimensions();
+          if (d) {
+            ws.send(
+              JSON.stringify({
+                type: "resize",
+                cols: d.cols - 1,
+                rows: d.rows,
+              }),
+            );
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(
+                  JSON.stringify({
+                    type: "resize",
+                    cols: d.cols,
+                    rows: d.rows,
+                  }),
+                );
+              }
+            }, 200);
+          }
+        }
+      }, 1000);
     };
 
     ws.onmessage = (ev) => {
+      receivedData = true;
       if (ev.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(ev.data));
       } else {
@@ -244,16 +276,30 @@ export function TerminalModal({
 
   const handleRefit = useCallback(() => {
     const fitAddon = fitAddonRef.current;
-    const term = terminalRef.current;
     const ws = wsRef.current;
-    if (!fitAddon || !term) return;
-    fitAddon.fit();
-    ensureTerminalFocus(term);
+    if (!fitAddon || !ws || ws.readyState !== WebSocket.OPEN) return;
     const dims = fitAddon.proposeDimensions();
-    if (dims && ws?.readyState === WebSocket.OPEN) {
+    if (dims) {
+      // Send a slightly different size first, then restore, to force
+      // dtach to deliver SIGWINCH (it ignores same-size resizes).
       ws.send(
-        JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
+        JSON.stringify({
+          type: "resize",
+          cols: dims.cols - 1,
+          rows: dims.rows,
+        }),
       );
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: "resize",
+              cols: dims.cols,
+              rows: dims.rows,
+            }),
+          );
+        }
+      }, 200);
     }
   }, []);
 

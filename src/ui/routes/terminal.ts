@@ -170,6 +170,13 @@ export function handleTerminalMessage(
         }
         return;
       }
+      // Force redraw: MSG_REDRAW(SIGWINCH) で現在のサイズのまま再描画を強制
+      if (msg.type === "redraw" && msg.cols && msg.rows) {
+        console.log(`[terminal] Force redraw: ${msg.cols}x${msg.rows}`);
+        const winsize = makeWinsize(msg.cols, msg.rows);
+        sock.write(makePacket(MSG_REDRAW, REDRAW_WINCH, winsize));
+        return;
+      }
     } catch {
       // Not JSON — treat as terminal input
     }
