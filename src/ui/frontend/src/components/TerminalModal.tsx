@@ -1,7 +1,10 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { ensureTerminalFocus, setupTerminalInputForwarding } from "./terminalInput.ts";
+import {
+  ensureTerminalFocus,
+  setupTerminalInputForwarding,
+} from "./terminalInput.ts";
 
 interface TerminalModalProps {
   sessionId: string;
@@ -29,6 +32,7 @@ export function TerminalModal({
   const errorRef = useRef<string | null>(null);
   const errorElRef = useRef<HTMLDivElement>(null);
   const [acking, setAcking] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const setError = (msg: string | null) => {
     errorRef.current = msg;
@@ -78,7 +82,10 @@ export function TerminalModal({
     let cleanupInputForwarding = () => {};
     if (termRef.current) {
       term.open(termRef.current);
-      cleanupInputForwarding = setupTerminalInputForwarding(term, termRef.current);
+      cleanupInputForwarding = setupTerminalInputForwarding(
+        term,
+        termRef.current,
+      );
       requestAnimationFrame(() => {
         fitAddon.fit();
         term.focus();
@@ -201,6 +208,15 @@ export function TerminalModal({
     }
   }, [acking, canAckTurn, onAckTurn, sessionId, turnAcked]);
 
+  const handleCopyAttach = useCallback(() => {
+    const cmd = `nas session attach ${sessionId}`;
+    navigator.clipboard.writeText(cmd).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+    if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
+  }, [sessionId]);
+
   const handleResize = useCallback(() => {
     const fitAddon = fitAddonRef.current;
     const term = terminalRef.current;
@@ -210,7 +226,9 @@ export function TerminalModal({
     ensureTerminalFocus(term);
     const dims = fitAddon.proposeDimensions();
     if (dims && ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+      ws.send(
+        JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }),
+      );
     }
   }, []);
 
@@ -222,7 +240,9 @@ export function TerminalModal({
   // オーバーレイ（モーダル外背景）クリックでターミナルにフォーカスを戻す
   const handleOverlayMouseDown = useCallback((e: MouseEvent) => {
     // モーダル自体のクリックは除外（バブルアップ防止）
-    if ((e.target as HTMLElement).classList.contains("terminal-modal-overlay")) {
+    if (
+      (e.target as HTMLElement).classList.contains("terminal-modal-overlay")
+    ) {
       e.preventDefault();
       if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
     }
@@ -250,13 +270,36 @@ export function TerminalModal({
             >
               {turnAcked ? "ACKed" : acking ? "ACK..." : "ACK turn"}
             </button>
-            <button type="button" class="btn btn-ghost" onMouseDown={preventFocusSteal} onClick={handleResize}>
+            <button
+              type="button"
+              class="btn btn-ghost"
+              onMouseDown={preventFocusSteal}
+              onClick={handleCopyAttach}
+            >
+              {copied ? "Copied!" : "Copy attach cmd"}
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost"
+              onMouseDown={preventFocusSteal}
+              onClick={handleResize}
+            >
               Resize
             </button>
-            <button type="button" class="btn btn-ghost" onMouseDown={preventFocusSteal} onClick={onMinimize}>
+            <button
+              type="button"
+              class="btn btn-ghost"
+              onMouseDown={preventFocusSteal}
+              onClick={onMinimize}
+            >
               Minimize
             </button>
-            <button type="button" class="btn btn-deny" onMouseDown={preventFocusSteal} onClick={handleClose}>
+            <button
+              type="button"
+              class="btn btn-deny"
+              onMouseDown={preventFocusSteal}
+              onClick={handleClose}
+            >
               Close
             </button>
           </div>
