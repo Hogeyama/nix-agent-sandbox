@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-04-13
+
+### Added
+
+- **dtach-backed session management** for multi-client attach, plus a web terminal powered by xterm.js and browser input forwarding ([44c08b6], [04542f8], [70a6b18])
+- **Session naming workflow**: add `--name`, show/edit names in the UI, and track acknowledged user turns ([df05843], [c3f55ff], [30839b5], [4a19325])
+- **Terminal UX upgrades**: tabbed sessions, pending-session indicators, attach command copy, right-click copy, and terminal font-size/refit controls ([9545d3d], [e5d161a], [1201bd9], [49b9a55], [d553298])
+
+### Changed
+
+- Worktree management now uses an extracted `GitWorktreeService` and shorter generated branch/worktree names ([c8c7120], [037eab9])
+- UI session management was reorganized: split Containers into Sessions and Sidecars, sort Sessions by `started_at`, and simplify status/action presentation ([5a9799f], [7c61138], [478070d], [f6272fe], [bada58c], [f744bf7], [bf8d7f7])
+- Devshells now include `dtach` support for the new session attach flow ([546ded9])
+
+### Fixed
+
+- Session attach now preserves `NAS_SESSION_ID` across dtach re-exec ([bddd5d1])
+- Terminal stability and rendering: fix focus loss, redraw timing, resize/attach races, invalid resize payloads, and cleanup handling for live sessions ([2e9d07f], [2163528], [89af437], [386d371], [9c6c742], [f1b3ca7], [202b471])
+- UI polish: prevent layout shift on session status changes, shrink the name column, and enlarge the terminal modal ([bff6491], [8a03fa0], [e4d4846])
+- Worktree branch resolution now supports local branch names with slashes ([ee78096])
+- Lint: resolve outstanding Biome findings ([2903e05])
+
+### Documentation
+
+- Document dtach-based session management and capture web terminal status/TODO notes ([725d294], [230d835])
+
 ## [0.4.0] - 2026-04-13
 
 ### Added
@@ -79,6 +105,7 @@ Initial release.
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix + nix-bundle-elf
 
+[0.5.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.1.0...v0.2.0
