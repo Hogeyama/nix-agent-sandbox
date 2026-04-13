@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-04-14
+
+### Fixed
+
+- **Terminal modal attach**: new sessions now appear in the modal tab bar in real time and Attach correctly focuses the selected session instead of falling back to the first open session — the `terminal:sessions` SSE event listener was missing from the useSSE hook ([2e9c4b4])
+
 ## [0.5.0] - 2026-04-13
 
 ### Added
