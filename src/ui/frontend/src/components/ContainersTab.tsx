@@ -278,9 +278,8 @@ export function ContainersTab({
         <table style={tableStyle}>
           <thead>
             <tr>
-              <th style={thStyle}>Turn</th>
-              <th style={thStyle}>Name</th>
               <th style={thStyle}>Status</th>
+              <th style={thStyle}>Name</th>
               <th style={thStyle}>Kind</th>
               <th style={thStyle}>Uptime</th>
               <th style={thStyle}>PWD</th>
@@ -339,15 +338,6 @@ export function ContainersTab({
                         </>
                       )}
                     </td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          color: c.running ? "#22c55e" : "#94a3b8",
-                        }}
-                      >
-                        {c.running ? "running" : "stopped"}
-                      </span>
-                    </td>
                     <td style={tdStyle}>{kind}</td>
                     <td style={tdStyle}>
                       {c.running && c.startedAt
@@ -373,7 +363,7 @@ export function ContainersTab({
                   </tr>
                   {isExpanded && (
                     <tr>
-                      <td colSpan={7} style={detailCellStyle}>
+                      <td colSpan={6} style={detailCellStyle}>
                         <ContainerDetailPanel container={c} />
                       </td>
                     </tr>
