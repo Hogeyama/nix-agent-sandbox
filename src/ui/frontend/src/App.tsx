@@ -152,6 +152,9 @@ export function App() {
   }, [openTermSessionIds]);
 
   const handleTermSelect = useCallback((sessionId: string) => {
+    setOpenTermSessionIds((current) =>
+      current.includes(sessionId) ? current : [...current, sessionId],
+    );
     setActiveTermSessionId(sessionId);
     setTermVisible(true);
   }, []);
@@ -196,28 +199,72 @@ export function App() {
   }, []);
 
   const { connected } = useSSE("/api/events", handleSSE);
-  const openTerminalSessions = useMemo(
+  const terminalCandidates = useMemo(
     () =>
-      openTermSessionIds.map((sessionId) => {
-        const container = containers.find(
-          (item) => item.sessionId === sessionId,
-        );
-        return {
-          sessionId,
-          sessionName: container?.sessionName,
-          canAckTurn: container?.turn === "user-turn",
-          turnAcked: container?.turn === "ack-turn",
-        };
-      }),
-    [containers, openTermSessionIds],
+      sessionContainers.filter(
+        (container): container is ContainerInfo & { sessionId: string } =>
+          container.running && typeof container.sessionId === "string",
+      ),
+    [sessionContainers],
   );
+  const availableTerminalIds = useMemo(
+    () => terminalCandidates.map((container) => container.sessionId),
+    [terminalCandidates],
+  );
+  useEffect(() => {
+    const availableIds = new Set(availableTerminalIds);
+    setOpenTermSessionIds((current) => {
+      const next = current.filter((id) => availableIds.has(id));
+      const unchanged =
+        next.length === current.length &&
+        next.every((sessionId, index) => sessionId === current[index]);
+      setActiveTermSessionId((activeCurrent) =>
+        activeCurrent && availableIds.has(activeCurrent)
+          ? activeCurrent
+          : (next[0] ?? null),
+      );
+      if (next.length === 0) {
+        setTermVisible(false);
+      }
+      return unchanged ? current : next;
+    });
+  }, [availableTerminalIds]);
+  const terminalSessions = useMemo(() => {
+    const byId = new Map(
+      terminalCandidates.map((container) => [container.sessionId, container]),
+    );
+    const sessions = openTermSessionIds
+      .map((sessionId) => byId.get(sessionId))
+      .filter(
+        (container): container is (typeof terminalCandidates)[number] =>
+          container !== undefined,
+      )
+      .map((container) => ({
+        sessionId: container.sessionId,
+        sessionName: container.sessionName,
+        canAckTurn: container.turn === "user-turn",
+        turnAcked: container.turn === "ack-turn",
+        isOpen: true,
+      }));
+    for (const container of terminalCandidates) {
+      if (openTermSessionIds.includes(container.sessionId)) continue;
+      sessions.push({
+        sessionId: container.sessionId,
+        sessionName: container.sessionName,
+        canAckTurn: container.turn === "user-turn",
+        turnAcked: container.turn === "ack-turn",
+        isOpen: false,
+      });
+    }
+    return sessions;
+  }, [openTermSessionIds, terminalCandidates]);
   const activeTerminalLabel = useMemo(() => {
     if (!activeTermSessionId) return null;
-    const activeSession = openTerminalSessions.find(
+    const activeSession = terminalSessions.find(
       (session) => session.sessionId === activeTermSessionId,
     );
     return activeSession?.sessionName || activeTermSessionId;
-  }, [activeTermSessionId, openTerminalSessions]);
+  }, [activeTermSessionId, terminalSessions]);
 
   return (
     <div class="shell">
@@ -293,9 +340,9 @@ export function App() {
         )}
       </div>
 
-      {openTerminalSessions.length > 0 && activeTermSessionId && (
+      {terminalSessions.length > 0 && activeTermSessionId && (
         <TerminalModal
-          sessions={openTerminalSessions}
+          sessions={terminalSessions}
           activeSessionId={activeTermSessionId}
           visible={termVisible}
           onSelectSession={handleTermSelect}
@@ -306,12 +353,12 @@ export function App() {
         />
       )}
 
-      {openTerminalSessions.length > 0 && !termVisible && (
+      {openTermSessionIds.length > 0 && !termVisible && (
         <div class="terminal-minimized-bar" onClick={handleTermRestore}>
           <span class="chip chip-good">
             terminal
-            {openTerminalSessions.length > 1
-              ? ` +${openTerminalSessions.length - 1}`
+            {openTermSessionIds.length > 1
+              ? ` +${openTermSessionIds.length - 1}`
               : ""}
           </span>
           <code>{activeTerminalLabel || openTermSessionIds[0]}</code>

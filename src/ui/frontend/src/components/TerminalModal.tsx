@@ -11,6 +11,7 @@ interface TerminalSessionTab {
   sessionName?: string;
   canAckTurn: boolean;
   turnAcked: boolean;
+  isOpen: boolean;
 }
 
 interface TerminalModalProps {
@@ -577,12 +578,21 @@ function TerminalPane({
             return (
               <div
                 key={tab.sessionId}
-                class={`terminal-modal-tab${isActive ? " active" : ""}`}
+                class={`terminal-modal-tab${isActive ? " active" : ""}${
+                  tab.isOpen ? "" : " pending-open"
+                }`}
               >
+                {tab.canAckTurn && (
+                  <span class="terminal-modal-tab-badge" title="Your turn" />
+                )}
                 <button
                   type="button"
                   class="terminal-modal-tab-select"
-                  title={tab.sessionName || tab.sessionId}
+                  title={
+                    tab.isOpen
+                      ? tab.sessionName || tab.sessionId
+                      : `Attach ${tab.sessionName || tab.sessionId}`
+                  }
                   onMouseDown={preventFocusSteal}
                   onClick={() => onSelectSession(tab.sessionId)}
                 >
@@ -590,7 +600,7 @@ function TerminalPane({
                     {tab.sessionName || tab.sessionId}
                   </span>
                 </button>
-                {tabs.length > 1 && (
+                {tab.isOpen && (
                   <button
                     type="button"
                     class="terminal-modal-tab-close"
@@ -669,20 +679,22 @@ export function TerminalModal({
       onMouseDown={handleOverlayMouseDown}
     >
       <div class="terminal-modal">
-        {sessions.map((session) => (
-          <TerminalPane
-            key={session.sessionId}
-            {...session}
-            tabs={sessions}
-            activeSessionId={resolvedActiveSessionId}
-            visible={visible && session.sessionId === resolvedActiveSessionId}
-            onSelectSession={onSelectSession}
-            onCloseSession={onCloseSession}
-            onRenameSession={onRenameSession}
-            onAckTurn={onAckTurn}
-            onMinimize={onMinimize}
-          />
-        ))}
+        {sessions
+          .filter((session) => session.isOpen)
+          .map((session) => (
+            <TerminalPane
+              key={session.sessionId}
+              {...session}
+              tabs={sessions}
+              activeSessionId={resolvedActiveSessionId}
+              visible={visible && session.sessionId === resolvedActiveSessionId}
+              onSelectSession={onSelectSession}
+              onCloseSession={onCloseSession}
+              onRenameSession={onRenameSession}
+              onAckTurn={onAckTurn}
+              onMinimize={onMinimize}
+            />
+          ))}
       </div>
     </div>
   );
