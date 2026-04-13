@@ -15,28 +15,12 @@ function formatRelativeTime(iso: string): string {
   return `${day}d ${hr % 24}h ago`;
 }
 
-// Sort priority: user-turn (0) → ack-turn (1) → agent-turn (2) → done (3) → absent (4).
-function turnPriority(turn: ContainerInfo["turn"]): number {
-  switch (turn) {
-    case "user-turn":
-      return 0;
-    case "ack-turn":
-      return 1;
-    case "agent-turn":
-      return 2;
-    case "done":
-      return 3;
-    default:
-      return 4;
-  }
-}
-
 function isAckEligibleTurn(turn: ContainerInfo["turn"]): boolean {
   return turn === "user-turn" || turn === "ack-turn";
 }
 
-function tieBreakTimestamp(c: ContainerInfo): number {
-  const iso = c.lastEventAt ?? c.startedAt;
+function startedTimestamp(c: ContainerInfo): number {
+  const iso = c.sessionStartedAt ?? c.startedAt;
   const t = iso ? new Date(iso).getTime() : NaN;
   return Number.isNaN(t) ? 0 : t;
 }
@@ -50,11 +34,8 @@ function formatDateTime(iso: string | undefined): string {
 
 export function sortContainers(items: ContainerInfo[]): ContainerInfo[] {
   return [...items].sort((a, b) => {
-    const pa = turnPriority(a.turn);
-    const pb = turnPriority(b.turn);
-    if (pa !== pb) return pa - pb;
-    // Most-recently-updated first within the same bucket.
-    return tieBreakTimestamp(b) - tieBreakTimestamp(a);
+    // Most-recently-started first.
+    return startedTimestamp(b) - startedTimestamp(a);
   });
 }
 
