@@ -70,6 +70,7 @@ export function useSSE(
         "network:pending",
         "hostexec:pending",
         "sessions",
+        "terminal:sessions",
         "audit:logs",
         "containers",
       ];
