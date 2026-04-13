@@ -12,6 +12,7 @@ export type WorktreeOverride =
 export interface ParsedMainArgs {
   profileName?: string;
   profileIndex?: number;
+  sessionName?: string;
   worktreeOverride: WorktreeOverride;
   agentArgs: string[];
 }
@@ -19,6 +20,7 @@ export interface ParsedMainArgs {
 export function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
   let profileName: string | undefined;
   let profileIndex: number | undefined;
+  let sessionName: string | undefined;
   let worktreeOverride: WorktreeOverride = { type: "none" };
   const agentArgs: string[] = [];
 
@@ -26,6 +28,15 @@ export function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
     const arg = nasArgs[i];
     if (profileName !== undefined) {
       agentArgs.push(arg);
+      continue;
+    }
+    if (arg === "--name") {
+      const name = nasArgs[i + 1];
+      if (!name || name.startsWith("-")) {
+        throw new Error("--name requires a session name.");
+      }
+      i++;
+      sessionName = name;
       continue;
     }
     if (arg === "--worktree" || arg === "-b") {
@@ -61,7 +72,13 @@ export function parseProfileAndWorktreeArgs(nasArgs: string[]): ParsedMainArgs {
     }
   }
 
-  return { profileName, profileIndex, worktreeOverride, agentArgs };
+  return {
+    profileName,
+    profileIndex,
+    sessionName,
+    worktreeOverride,
+    agentArgs,
+  };
 }
 
 export function applyWorktreeOverride(

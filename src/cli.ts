@@ -149,8 +149,13 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
 
-  const { profileName, profileIndex, worktreeOverride, agentArgs } =
-    parseProfileAndWorktreeArgs(argsBeforeDashDash);
+  const {
+    profileName,
+    profileIndex,
+    sessionName,
+    worktreeOverride,
+    agentArgs,
+  } = parseProfileAndWorktreeArgs(argsBeforeDashDash);
   const nasControlArgs =
     profileIndex === undefined
       ? argsBeforeDashDash
@@ -272,6 +277,7 @@ export async function main(args: string[]): Promise<void> {
         profile: effectiveProfile,
         profileName: name,
         sessionId,
+        sessionName,
         host: hostEnv,
         probes,
         prior: initialPrior,

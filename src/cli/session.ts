@@ -9,6 +9,7 @@ import {
   dtachListSessions,
   socketPathFor,
 } from "../dtach/client.ts";
+import { listSessions, resolveSessionRuntimePaths } from "../sessions/store.ts";
 import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 
 export async function runSessionCommand(nasArgs: string[]): Promise<void> {
@@ -23,10 +24,15 @@ export async function runSessionCommand(nasArgs: string[]): Promise<void> {
       }
 
       const sessions = await dtachListSessions();
+      const sessionPaths = resolveSessionRuntimePaths();
+      const storeRecords = await listSessions(sessionPaths);
+      const nameById = new Map(
+        storeRecords.filter((r) => r.name).map((r) => [r.sessionId, r.name!]),
+      );
 
       if (formatJson) {
         const items = sessions.map((s) => ({
-          name: s.name,
+          name: nameById.get(s.name),
           sessionId: s.name,
           createdAt: s.createdAt,
         }));
@@ -41,8 +47,10 @@ export async function runSessionCommand(nasArgs: string[]): Promise<void> {
 
       for (const s of sessions) {
         const sessionId = s.name;
+        const displayName = nameById.get(sessionId);
         const created = new Date(s.createdAt * 1000).toISOString();
-        console.log(`  ${sessionId}  ${created}`);
+        const nameLabel = displayName ? `  (${displayName})` : "";
+        console.log(`  ${sessionId}${nameLabel}  ${created}`);
       }
       return;
     }

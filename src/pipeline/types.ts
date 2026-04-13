@@ -47,6 +47,7 @@ export interface StageInput {
   readonly profile: Profile;
   readonly profileName: string;
   readonly sessionId: string;
+  readonly sessionName?: string;
   readonly host: HostEnv;
   readonly probes: ProbeResults;
   readonly prior: PriorStageOutputs;

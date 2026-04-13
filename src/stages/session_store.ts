@@ -38,6 +38,7 @@ export function createSessionStoreStage(): EffectStage<SessionStoreService> {
 
         yield* sessionStore.create(paths, {
           sessionId: input.sessionId,
+          name: input.sessionName,
           agent: input.profile.agent,
           profile: input.profileName,
           worktree: input.prior.workDir,

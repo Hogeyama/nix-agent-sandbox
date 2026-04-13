@@ -28,6 +28,7 @@ export type SessionHookEventKind = Exclude<SessionEventKind, "ack">;
 
 export interface SessionRecord {
   sessionId: string;
+  name?: string;
   agent: string;
   profile: string;
   worktree?: string;
@@ -105,6 +106,7 @@ export async function createSession(
 ): Promise<SessionRecord> {
   const full: SessionRecord = {
     sessionId: record.sessionId,
+    name: record.name,
     agent: record.agent,
     profile: record.profile,
     worktree: record.worktree,
@@ -239,6 +241,21 @@ export async function acknowledgeSessionTurn(
     lastEventAt: now,
     lastEventKind: "ack",
   };
+  await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
+  return updated;
+}
+
+/**
+ * Update the display name of an existing session.
+ */
+export async function updateSessionName(
+  paths: SessionRuntimePaths,
+  sessionId: string,
+  name: string,
+): Promise<SessionRecord> {
+  const existing = await readSession(paths, sessionId);
+  if (!existing) throw new Error(`Session not found: ${sessionId}`);
+  const updated: SessionRecord = { ...existing, name };
   await atomicWriteJson(sessionRecordPath(paths, sessionId), updated);
   return updated;
 }
