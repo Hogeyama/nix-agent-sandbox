@@ -35,6 +35,7 @@ import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { FsServiceLive } from "./services/fs.ts";
+import { GitWorktreeServiceLive } from "./services/git_worktree.ts";
 import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { SessionBrokerServiceLive } from "./services/session_broker.ts";
@@ -227,10 +228,12 @@ export async function main(args: string[]): Promise<void> {
     // BuildProbes を事前解決
     const buildProbes = await resolveBuildProbes(imageName);
 
+    const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
     const liveLayer = Layer.mergeAll(
       AuthRouterServiceLive,
       DindServiceLive,
       FsServiceLive,
+      GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
       ProcessServiceLive,
       DockerServiceLive,

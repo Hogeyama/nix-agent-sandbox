@@ -1,12 +1,16 @@
 /**
  * PromptService — Effect-based abstraction over interactive worktree prompts.
  *
- * Live implementation delegates to the existing async prompt functions.
+ * Live implementation delegates to the existing sync prompt functions.
  * Fake factory allows tests to supply pre-configured responses.
+ *
+ * This service is purely about user interaction — it does NOT perform git I/O.
+ * Git state (isDirty, commitLines) is fetched by the stage via GitWorktreeService
+ * and passed into these methods as parameters.
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { WorktreeEntry } from "./management.ts";
+import type { WorktreeEntry } from "../../services/git_worktree.ts";
 import {
   type BranchAction,
   type DirtyWorktreeAction,
@@ -24,15 +28,17 @@ import {
 export class PromptService extends Context.Tag("nas/PromptService")<
   PromptService,
   {
-    readonly worktreeAction: (path: string) => Effect.Effect<WorktreeAction>;
-    readonly dirtyWorktreeAction: (
-      path: string,
-    ) => Effect.Effect<DirtyWorktreeAction | null>;
-    readonly branchAction: (
-      branch: string | null,
-      base: string | null,
-      root: string | null,
-    ) => Effect.Effect<BranchAction>;
+    readonly worktreeAction: (opts: {
+      path: string;
+      isDirty: boolean;
+    }) => Effect.Effect<WorktreeAction>;
+    readonly dirtyWorktreeAction: (opts: {
+      path: string;
+    }) => Effect.Effect<DirtyWorktreeAction>;
+    readonly branchAction: (opts: {
+      branchName: string | null;
+      commitLines: string[];
+    }) => Effect.Effect<BranchAction>;
     readonly reuseWorktree: (
       entries: readonly WorktreeEntry[],
     ) => Effect.Effect<WorktreeEntry | null>;
@@ -47,16 +53,14 @@ export class PromptService extends Context.Tag("nas/PromptService")<
 // ---------------------------------------------------------------------------
 
 export const PromptServiceLive = Layer.succeed(PromptService, {
-  worktreeAction: (path) =>
-    Effect.tryPromise(() => promptWorktreeAction(path)).pipe(Effect.orDie),
+  worktreeAction: (opts) =>
+    Effect.sync(() => promptWorktreeAction(opts.path, opts.isDirty)),
 
-  dirtyWorktreeAction: (path) =>
-    Effect.tryPromise(() => promptDirtyWorktreeAction(path)).pipe(Effect.orDie),
+  dirtyWorktreeAction: (opts) =>
+    Effect.sync(() => promptDirtyWorktreeAction(opts.path)),
 
-  branchAction: (branch, base, root) =>
-    Effect.tryPromise(() => promptBranchAction(branch, base, root)).pipe(
-      Effect.orDie,
-    ),
+  branchAction: (opts) =>
+    Effect.sync(() => promptBranchAction(opts.branchName, opts.commitLines)),
 
   reuseWorktree: (entries) =>
     Effect.sync(() => promptReuseWorktree(entries as WorktreeEntry[])),
@@ -74,7 +78,7 @@ export const PromptServiceLive = Layer.succeed(PromptService, {
 
 export interface PromptServiceFakeConfig {
   worktreeAction?: WorktreeAction;
-  dirtyWorktreeAction?: DirtyWorktreeAction | null;
+  dirtyWorktreeAction?: DirtyWorktreeAction;
   branchAction?: BranchAction;
   reuseWorktree?: WorktreeEntry | null;
   renameBranchPrompt?: string | null;
@@ -84,13 +88,12 @@ export function makePromptServiceFake(
   config: PromptServiceFakeConfig = {},
 ): Layer.Layer<PromptService> {
   return Layer.succeed(PromptService, {
-    worktreeAction: (_path) => Effect.succeed(config.worktreeAction ?? "keep"),
+    worktreeAction: (_opts) => Effect.succeed(config.worktreeAction ?? "keep"),
 
-    dirtyWorktreeAction: (_path) =>
-      Effect.succeed(config.dirtyWorktreeAction ?? null),
+    dirtyWorktreeAction: (_opts) =>
+      Effect.succeed(config.dirtyWorktreeAction ?? "delete"),
 
-    branchAction: (_branch, _base, _root) =>
-      Effect.succeed(config.branchAction ?? "delete"),
+    branchAction: (_opts) => Effect.succeed(config.branchAction ?? "delete"),
 
     reuseWorktree: (_entries) => Effect.succeed(config.reuseWorktree ?? null),
 

@@ -1,22 +1,22 @@
 /**
  * worktree teardown 時のインタラクティブプロンプト
+ *
+ * These functions are pure UI: they display information and collect user input.
+ * Git I/O (dirty checks, commit lists) is done by GitWorktreeService before
+ * calling these functions — the results are passed in as parameters.
  */
 
-import * as path from "node:path";
-import { $ } from "bun";
-import { isWorktreeDirty } from "./git_helpers.ts";
-import type { WorktreeEntry } from "./management.ts";
+import type { WorktreeEntry } from "../../services/git_worktree.ts";
 
 export type WorktreeAction = "keep" | "delete";
 export type DirtyWorktreeAction = "stash" | "delete" | "keep";
 export type BranchAction = "rename" | "cherry-pick" | "delete";
 
-export async function promptWorktreeAction(
-  worktreePath: string,
-): Promise<WorktreeAction> {
-  // 未コミットの変更があれば表示
-  const dirty = await isWorktreeDirty(worktreePath);
-  if (dirty) {
+export function promptWorktreeAction(
+  _worktreePath: string,
+  isDirty: boolean,
+): WorktreeAction {
+  if (isDirty) {
     console.log("[nas] ⚠ Worktree has uncommitted changes.");
   }
 
@@ -36,12 +36,9 @@ export async function promptWorktreeAction(
   }
 }
 
-export async function promptDirtyWorktreeAction(
-  worktreePath: string,
-): Promise<DirtyWorktreeAction | null> {
-  const dirty = await isWorktreeDirty(worktreePath);
-  if (!dirty) return null;
-
+export function promptDirtyWorktreeAction(
+  _worktreePath: string,
+): DirtyWorktreeAction {
   console.log("[nas] Worktree has uncommitted changes.");
   console.log("[nas] How should we handle them before deleting it?");
   console.log("  1. Stash and delete");
@@ -61,32 +58,18 @@ export async function promptDirtyWorktreeAction(
   }
 }
 
-export async function promptBranchAction(
+export function promptBranchAction(
   branchName: string | null,
-  baseBranch: string | null,
-  repoRoot: string | null,
-): Promise<BranchAction> {
+  commitLines: string[],
+): BranchAction {
   if (!branchName) return "delete";
 
-  // ベースブランチからの差分コミットを表示
-  let hasCommits = false;
-  const gitDir = repoRoot ? ["-C", repoRoot] : [];
-  try {
-    const log = baseBranch
-      ? await $`git ${gitDir} log --oneline ${baseBranch}..${branchName} -10`.text()
-      : await $`git ${gitDir} log --oneline ${branchName} --not --remotes -10`.text();
-    if (log.trim()) {
-      hasCommits = true;
-      console.log(`[nas] Recent commits on ${branchName}:`);
-      for (const line of log.trim().split("\n")) {
-        console.log(`  ${line}`);
-      }
+  if (commitLines.length > 0) {
+    console.log(`[nas] Recent commits on ${branchName}:`);
+    for (const line of commitLines) {
+      console.log(`  ${line}`);
     }
-  } catch {
-    /* ignore */
-  }
-
-  if (!hasCommits) {
+  } else {
     console.log(`[nas] No unique commits on ${branchName}; deleting branch.`);
     return "delete";
   }
@@ -119,7 +102,7 @@ export function promptReuseWorktree(
       : "(detached)";
     console.log(`  ${i + 1}. ${entries[i].path}  [${branch}]`);
   }
-  console.log(`  0. Create new worktree`);
+  console.log("  0. Create new worktree");
 
   while (true) {
     const raw = prompt(`[nas] Choose [0-${entries.length}]:`);
@@ -133,13 +116,4 @@ export function promptReuseWorktree(
     if (idx >= 1 && idx <= entries.length) return entries[idx - 1];
     console.log(`[nas] Please enter 0-${entries.length}.`);
   }
-}
-
-export async function stashDirtyWorktree(worktreePath: string): Promise<void> {
-  const stashMessage = `nas teardown ${path.basename(worktreePath)} ${new Date().toISOString()}`;
-  console.log(
-    `$ git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`,
-  );
-  await $`git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`;
-  console.log(`[nas] Stashed worktree changes: ${stashMessage}`);
 }

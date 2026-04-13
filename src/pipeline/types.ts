@@ -8,6 +8,7 @@ import type { AuthRouterService } from "../services/auth_router.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
 import type { FsService } from "../services/fs.ts";
+import type { GitWorktreeService } from "../services/git_worktree.ts";
 import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
@@ -89,6 +90,7 @@ export type EffectStageResult = Partial<PriorStageOutputs>;
 export type StageServices =
   | DindService
   | FsService
+  | GitWorktreeService
   | HostExecBrokerService
   | ProcessService
   | DockerService
