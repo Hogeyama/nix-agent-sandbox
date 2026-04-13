@@ -300,19 +300,9 @@ export function ContainersTab({
                       <TurnCell turn={c.turn} />
                     </td>
                     <td style={tdNameStyle}>
-                      {c.name}
+                      <span style={{ flexGrow: 1 }}>{c.name}</span>
                       {c.running && sessionId && (
                         <>
-                          <button
-                            type="button"
-                            style={attachBtnStyle}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAttach?.(sessionId);
-                            }}
-                          >
-                            Attach
-                          </button>
                           {isAckEligibleTurn(c.turn) && (
                             <button
                               type="button"
@@ -336,6 +326,16 @@ export function ContainersTab({
                                   : "ACK"}
                             </button>
                           )}
+                          <button
+                            type="button"
+                            style={attachBtnStyle}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAttach?.(sessionId);
+                            }}
+                          >
+                            Attach
+                          </button>
                         </>
                       )}
                     </td>
