@@ -616,6 +616,8 @@ const nameCancelBtnStyle = {
 
 const turnBadgeBaseStyle = {
   display: "inline-block",
+  minWidth: "100px",
+  textAlign: "center" as const,
   padding: "2px 8px",
   borderRadius: "10px",
   fontSize: "12px",
@@ -642,6 +644,4 @@ const turnBadgeDoneStyle = {
   ...turnBadgeBaseStyle,
   background: "transparent",
   color: "#64748b",
-  fontSize: "11px",
-  padding: "2px 6px",
 };
