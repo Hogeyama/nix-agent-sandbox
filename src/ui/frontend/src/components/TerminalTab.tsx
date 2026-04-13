@@ -2,7 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, type DtachSession } from "../api.ts";
-import { setupTerminalInputForwarding } from "./terminalInput.ts";
+import { ensureTerminalFocus, setupTerminalInputForwarding } from "./terminalInput.ts";
 
 export function TerminalTab() {
   const [sessions, setSessions] = useState<DtachSession[]>([]);
@@ -93,6 +93,7 @@ export function TerminalTab() {
       // Delay fit to ensure container is rendered
       requestAnimationFrame(() => {
         fitAddon.fit();
+        term.focus();
         console.log(
           `[terminal] xterm fitted, dimensions:`,
           fitAddon.proposeDimensions(),
@@ -162,6 +163,7 @@ export function TerminalTab() {
     // Handle resize
     const onResize = () => {
       fitAddon.fit();
+      ensureTerminalFocus(term);
       const dims = fitAddon.proposeDimensions();
       if (dims && ws.readyState === WebSocket.OPEN) {
         ws.send(

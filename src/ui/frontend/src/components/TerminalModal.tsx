@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { setupTerminalInputForwarding } from "./terminalInput.ts";
+import { ensureTerminalFocus, setupTerminalInputForwarding } from "./terminalInput.ts";
 
 interface TerminalModalProps {
   sessionId: string;
@@ -79,7 +79,10 @@ export function TerminalModal({
     if (termRef.current) {
       term.open(termRef.current);
       cleanupInputForwarding = setupTerminalInputForwarding(term, termRef.current);
-      requestAnimationFrame(() => fitAddon.fit());
+      requestAnimationFrame(() => {
+        fitAddon.fit();
+        term.focus();
+      });
     }
 
     // WebSocket
@@ -129,6 +132,7 @@ export function TerminalModal({
 
     const onResize = () => {
       fitAddon.fit();
+      ensureTerminalFocus(term);
       const dims = fitAddon.proposeDimensions();
       if (dims && ws.readyState === WebSocket.OPEN) {
         ws.send(
@@ -151,9 +155,11 @@ export function TerminalModal({
 
   // Re-fit when modal becomes visible (restore from minimized)
   useEffect(() => {
-    if (visible && fitAddonRef.current) {
+    if (visible && fitAddonRef.current && terminalRef.current) {
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit();
+        // fit() 後にフォーカスを復帰（fit が DOM を操作するため順序が重要）
+        ensureTerminalFocus(terminalRef.current!);
         // Also send resize to sync dtach
         const dims = fitAddonRef.current?.proposeDimensions();
         if (dims && wsRef.current?.readyState === WebSocket.OPEN) {
@@ -166,8 +172,6 @@ export function TerminalModal({
           );
         }
       });
-      // Focus the terminal
-      terminalRef.current?.focus();
     }
   }, [visible]);
 
@@ -193,13 +197,29 @@ export function TerminalModal({
       console.error("Failed to acknowledge turn from terminal:", e);
     } finally {
       setAcking(false);
+      if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
     }
   }, [acking, canAckTurn, onAckTurn, sessionId, turnAcked]);
+
+  // ボタンの mousedown でフォーカス移動を防止
+  const preventFocusSteal = useCallback((e: MouseEvent) => {
+    e.preventDefault();
+  }, []);
+
+  // オーバーレイ（モーダル外背景）クリックでターミナルにフォーカスを戻す
+  const handleOverlayMouseDown = useCallback((e: MouseEvent) => {
+    // モーダル自体のクリックは除外（バブルアップ防止）
+    if ((e.target as HTMLElement).classList.contains("terminal-modal-overlay")) {
+      e.preventDefault();
+      if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
+    }
+  }, []);
 
   return (
     <div
       class="terminal-modal-overlay"
       style={{ display: visible ? "flex" : "none" }}
+      onMouseDown={handleOverlayMouseDown}
     >
       <div class="terminal-modal">
         <div class="terminal-modal-header">
@@ -212,14 +232,15 @@ export function TerminalModal({
               type="button"
               class={turnAcked ? "btn btn-ghost" : "btn btn-primary"}
               disabled={acking || turnAcked || !canAckTurn}
+              onMouseDown={preventFocusSteal}
               onClick={handleAck}
             >
               {turnAcked ? "ACKed" : acking ? "ACK..." : "ACK turn"}
             </button>
-            <button type="button" class="btn btn-ghost" onClick={onMinimize}>
+            <button type="button" class="btn btn-ghost" onMouseDown={preventFocusSteal} onClick={onMinimize}>
               Minimize
             </button>
-            <button type="button" class="btn btn-deny" onClick={handleClose}>
+            <button type="button" class="btn btn-deny" onMouseDown={preventFocusSteal} onClick={handleClose}>
               Close
             </button>
           </div>
