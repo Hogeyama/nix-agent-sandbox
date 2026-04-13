@@ -17,6 +17,7 @@ import {
   getNasContainers,
   getNetworkPending,
   getSessions,
+  renameSession,
   stopContainer,
 } from "../data.ts";
 import { json, Router } from "../router.ts";
@@ -116,6 +117,24 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       return json(sessions);
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  api.patch("/sessions/:sessionId/name", async ({ params, req }) => {
+    try {
+      const body = await req.json();
+      const { name } = body;
+      if (typeof name !== "string" || name.length === 0) {
+        return json({ error: "name is required" }, 400);
+      }
+      const item = await renameSession(ctx, params.sessionId, name);
+      return json({ item });
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message.startsWith("Session not found:")) {
+        return json({ error: message }, 404);
+      }
+      return json({ error: message }, 500);
     }
   });
 

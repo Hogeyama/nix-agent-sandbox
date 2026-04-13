@@ -119,6 +119,21 @@ export function App() {
     }
   }, []);
 
+  const handleRename = useCallback(async (sessionId: string, name: string) => {
+    try {
+      await api.renameSession(sessionId, name);
+      setContainers((current) =>
+        current.map((container) =>
+          container.sessionId === sessionId
+            ? { ...container, sessionName: name }
+            : container,
+        ),
+      );
+    } catch (e) {
+      console.error("Failed to rename session:", e);
+    }
+  }, []);
+
   const handleTermMinimize = useCallback(() => {
     setTermVisible(false);
   }, []);
@@ -218,6 +233,7 @@ export function App() {
             onContainersChange={setContainers}
             onAttach={handleAttach}
             onAckTurn={handleAckTurn}
+            onRename={handleRename}
           />
         )}
         {activeTab === "audit" && (
@@ -236,6 +252,9 @@ export function App() {
         <TerminalModal
           key={termSessionId}
           sessionId={termSessionId}
+          sessionName={
+            containers.find((c) => c.sessionId === termSessionId)?.sessionName
+          }
           visible={termVisible}
           onAckTurn={handleAckTurn}
           canAckTurn={terminalCanAckTurn}

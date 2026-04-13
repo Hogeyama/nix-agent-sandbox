@@ -8,6 +8,7 @@ import {
 
 interface TerminalModalProps {
   sessionId: string;
+  sessionName?: string;
   visible: boolean;
   onAckTurn: (sessionId: string) => Promise<void> | void;
   canAckTurn: boolean;
@@ -17,6 +18,7 @@ interface TerminalModalProps {
 
 export function TerminalModal({
   sessionId,
+  sessionName,
   visible,
   onAckTurn,
   canAckTurn,
@@ -277,7 +279,7 @@ export function TerminalModal({
         <div class="terminal-modal-header">
           <span class="terminal-session-label">
             <span class="chip chip-good">connected</span>
-            <code>{sessionId}</code>
+            <code>{sessionName || sessionId}</code>
             <button
               type="button"
               class="btn btn-icon btn-ghost"

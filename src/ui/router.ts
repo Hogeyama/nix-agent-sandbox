@@ -66,6 +66,11 @@ export class Router {
     this.routes.push({ method: "POST", pattern, paramNames, handler });
   }
 
+  patch(path: string, handler: RouteHandler): void {
+    const { pattern, paramNames } = compilePath(path);
+    this.routes.push({ method: "PATCH", pattern, paramNames, handler });
+  }
+
   route(prefix: string, router: Router): void {
     this.mounts.push({ prefix, router });
   }

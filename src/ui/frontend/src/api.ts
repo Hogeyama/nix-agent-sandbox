@@ -46,6 +46,12 @@ export const api = {
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/ack`,
     ),
+  renameSession: (sessionId: string, name: string) =>
+    request<{ item: SessionTurnRecord }>(
+      "PATCH",
+      `/api/sessions/${encodeURIComponent(sessionId)}/name`,
+      { name },
+    ),
 
   getContainers: () =>
     request<{ items: ContainerInfo[] }>("GET", "/api/containers"),
@@ -142,6 +148,7 @@ export interface ContainerInfo {
   // Session-derived fields — populated by the backend when a container
   // carries a `nas.session_id` label matching a live session record.
   sessionId?: string;
+  sessionName?: string;
   turn?: "user-turn" | "ack-turn" | "agent-turn" | "done";
   sessionAgent?: string;
   sessionProfile?: string;

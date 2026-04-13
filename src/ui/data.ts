@@ -45,13 +45,14 @@ import {
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
 import {
-  acknowledgeSessionTurn as markSessionTurnAcknowledged,
   listSessions,
+  acknowledgeSessionTurn as markSessionTurnAcknowledged,
   resolveSessionRuntimePaths,
   type SessionEventKind,
   type SessionRecord,
   type SessionRuntimePaths,
   type SessionTurn,
+  updateSessionName as storeUpdateSessionName,
 } from "../sessions/store.ts";
 
 export interface UiDataContext {
@@ -212,6 +213,14 @@ export async function acknowledgeSessionTurn(
   return await markSessionTurnAcknowledged(ctx.sessionPaths, sessionId);
 }
 
+export async function renameSession(
+  ctx: UiDataContext,
+  sessionId: string,
+  name: string,
+): Promise<SessionRecord> {
+  return await storeUpdateSessionName(ctx.sessionPaths, sessionId, name);
+}
+
 // --- Containers ---
 
 export interface NasContainerInfo {
@@ -222,6 +231,7 @@ export interface NasContainerInfo {
   // Session-derived fields — populated by joinSessionsToContainers when a
   // container carries a `nas.session_id` label matching a live record.
   sessionId?: string;
+  sessionName?: string;
   turn?: SessionTurn;
   sessionAgent?: string;
   sessionProfile?: string;
@@ -254,6 +264,7 @@ export function joinSessionsToContainers(
     return {
       ...container,
       sessionId: record.sessionId,
+      sessionName: record.name,
       turn: record.turn,
       sessionAgent: record.agent,
       sessionProfile: record.profile,

@@ -82,6 +82,93 @@ interface ContainerDetailPanelProps {
   container: ContainerInfo;
 }
 
+function EditableSessionName({
+  sessionId,
+  currentName,
+  fallbackName,
+  onRename,
+}: {
+  sessionId: string;
+  currentName?: string;
+  fallbackName?: string;
+  onRename?: (sessionId: string, name: string) => Promise<void> | void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentName ?? "");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!onRename || !value.trim()) return;
+    setSaving(true);
+    try {
+      await onRename(sessionId, value.trim());
+      setEditing(false);
+    } catch (e) {
+      console.error("Rename failed:", e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <span
+        style={{ cursor: "pointer", borderBottom: "1px dashed #475569" }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setValue(currentName ?? "");
+          setEditing(true);
+        }}
+      >
+        {currentName || fallbackName || (
+          <span style={{ color: "#64748b" }}>-</span>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <span style={{ display: "inline-flex", gap: "4px", alignItems: "center" }}>
+      <input
+        type="text"
+        value={value}
+        onInput={(e) => setValue((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void handleSave();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        onClick={(e) => e.stopPropagation()}
+        disabled={saving}
+        style={nameInputStyle}
+        // biome-ignore lint/a11y/noAutofocus: intentional for inline edit
+        autoFocus
+      />
+      <button
+        type="button"
+        style={nameSaveBtnStyle}
+        disabled={saving || !value.trim()}
+        onClick={(e) => {
+          e.stopPropagation();
+          void handleSave();
+        }}
+      >
+        {saving ? "..." : "OK"}
+      </button>
+      <button
+        type="button"
+        style={nameCancelBtnStyle}
+        disabled={saving}
+        onClick={(e) => {
+          e.stopPropagation();
+          setEditing(false);
+        }}
+      >
+        Cancel
+      </button>
+    </span>
+  );
+}
+
 function ContainerDetailPanel({ container: c }: ContainerDetailPanelProps) {
   if (c.turn === undefined) {
     return (
@@ -93,6 +180,7 @@ function ContainerDetailPanel({ container: c }: ContainerDetailPanelProps) {
 
   const rawSession = {
     sessionId: c.sessionId,
+    sessionName: c.sessionName,
     turn: c.turn,
     sessionAgent: c.sessionAgent,
     sessionProfile: c.sessionProfile,
@@ -118,6 +206,8 @@ function ContainerDetailPanel({ container: c }: ContainerDetailPanelProps) {
       )}
 
       <div style={kvGridStyle}>
+        <div style={kvLabelStyle}>Name</div>
+        <div style={kvValueStyle}>{c.sessionName || "-"}</div>
         <div style={kvLabelStyle}>Session ID</div>
         <div style={kvValueStyle}>{c.sessionId ?? "-"}</div>
         <div style={kvLabelStyle}>Agent</div>
@@ -151,6 +241,7 @@ interface ContainersTabProps {
   onContainersChange: (items: ContainerInfo[]) => void;
   onAttach?: (sessionId: string) => void;
   onAckTurn?: (sessionId: string) => Promise<void> | void;
+  onRename?: (sessionId: string, name: string) => Promise<void> | void;
   title?: string;
 }
 
@@ -159,6 +250,7 @@ export function ContainersTab({
   onContainersChange,
   onAttach,
   onAckTurn,
+  onRename,
   title = "Sessions",
 }: ContainersTabProps) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -299,7 +391,18 @@ export function ContainersTab({
                       <TurnCell turn={c.turn} />
                     </td>
                     <td style={tdNameStyle}>
-                      <span style={{ flexGrow: 1 }}>{c.name}</span>
+                      <span style={{ flexGrow: 1 }}>
+                        {sessionId ? (
+                          <EditableSessionName
+                            sessionId={sessionId}
+                            currentName={c.sessionName}
+                            fallbackName={c.name}
+                            onRename={onRename}
+                          />
+                        ) : (
+                          c.name
+                        )}
+                      </span>
                       {c.running && sessionId && (
                         <>
                           {isAckEligibleTurn(c.turn) && (
@@ -500,6 +603,34 @@ const cleanBtnStyle = {
   padding: "6px 16px",
   cursor: "pointer",
   fontSize: "14px",
+};
+
+const nameInputStyle = {
+  background: "#1e293b",
+  color: "#e2e8f0",
+  border: "1px solid #475569",
+  borderRadius: "3px",
+  padding: "2px 6px",
+  fontSize: "13px",
+  width: "140px",
+};
+const nameSaveBtnStyle = {
+  background: "rgba(99, 102, 241, 0.3)",
+  color: "#c7d2fe",
+  border: "1px solid rgba(129, 140, 248, 0.45)",
+  borderRadius: "3px",
+  padding: "2px 8px",
+  cursor: "pointer",
+  fontSize: "12px",
+};
+const nameCancelBtnStyle = {
+  background: "transparent",
+  color: "#94a3b8",
+  border: "1px solid #475569",
+  borderRadius: "3px",
+  padding: "2px 8px",
+  cursor: "pointer",
+  fontSize: "12px",
 };
 
 const turnBadgeBaseStyle = {
