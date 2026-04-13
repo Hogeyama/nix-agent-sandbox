@@ -94,6 +94,17 @@ export function TerminalModal({
       });
     }
 
+    // Right-click to copy selected text (Windows Terminal style)
+    const handleContextMenu = (e: MouseEvent) => {
+      const sel = term.getSelection();
+      if (sel) {
+        e.preventDefault();
+        navigator.clipboard.writeText(sel);
+        term.clearSelection();
+      }
+    };
+    termRef.current?.addEventListener("contextmenu", handleContextMenu);
+
     // WebSocket
     const proto = globalThis.location?.protocol === "https:" ? "wss:" : "ws:";
     const host = globalThis.location?.host ?? "localhost:3939";
@@ -152,6 +163,7 @@ export function TerminalModal({
     globalThis.addEventListener("resize", onResize);
 
     return () => {
+      termRef.current?.removeEventListener("contextmenu", handleContextMenu);
       globalThis.removeEventListener("resize", onResize);
       cleanupInputForwarding();
       ws.close();
