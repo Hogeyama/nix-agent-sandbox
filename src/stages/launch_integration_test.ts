@@ -29,7 +29,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import * as path from "node:path";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -41,6 +41,7 @@ import {
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
 import { DockerServiceLive } from "../services/docker.ts";
+import { DockerBuildServiceLive } from "../services/docker_build.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
 
@@ -158,7 +159,13 @@ async function ensureImage(): Promise<void> {
           probes,
           prior,
         })
-        .pipe(Effect.provide(DockerServiceLive), Effect.provide(FsServiceLive)),
+        .pipe(
+          Effect.provide(
+            DockerBuildServiceLive.pipe(
+              Layer.provide(Layer.merge(FsServiceLive, DockerServiceLive)),
+            ),
+          ),
+        ),
     ),
   );
   imageBuilt = true;

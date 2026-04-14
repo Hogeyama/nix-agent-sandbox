@@ -38,6 +38,7 @@ import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
+import { DockerBuildServiceLive } from "./services/docker_build.ts";
 import { EnvoyServiceLive } from "./services/envoy.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { GitWorktreeServiceLive } from "./services/git_worktree.ts";
@@ -239,6 +240,9 @@ export async function main(args: string[]): Promise<void> {
     const liveLayer = Layer.mergeAll(
       AuthRouterServiceLive,
       DindServiceLive,
+      DockerBuildServiceLive.pipe(
+        Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
+      ),
       EnvoyServiceLive.pipe(Layer.provide(dockerLayer)),
       FsServiceLive,
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),

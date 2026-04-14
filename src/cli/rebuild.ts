@@ -2,13 +2,14 @@
  * nas rebuild サブコマンド
  */
 
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
 import { logInfo } from "../log.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
 import { DockerServiceLive } from "../services/docker.ts";
+import { DockerBuildServiceLive } from "../services/docker_build.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import {
   createDockerBuildStage,
@@ -62,8 +63,11 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
       })
       .pipe(
         Effect.scoped,
-        Effect.provide(DockerServiceLive),
-        Effect.provide(FsServiceLive),
+        Effect.provide(
+          DockerBuildServiceLive.pipe(
+            Layer.provide(Layer.merge(FsServiceLive, DockerServiceLive)),
+          ),
+        ),
       );
 
     await Effect.runPromise(effect);

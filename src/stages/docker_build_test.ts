@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import * as path from "node:path";
 import { Effect, Exit, Scope } from "effect";
 import {
   type Config,
@@ -16,13 +15,14 @@ import type {
   PriorStageOutputs,
   StageInput,
 } from "../pipeline/types.ts";
-import { makeDockerServiceFake } from "../services/docker.ts";
-import { makeFsServiceFake } from "../services/fs.ts";
+import {
+  type DockerBuildImagePlan,
+  makeDockerBuildServiceFake,
+} from "../services/docker_build.ts";
 import {
   type BuildProbes,
   createDockerBuildStage,
   EMBED_HASH_LABEL,
-  EMBEDDED_BUILD_ASSET_GROUPS,
   planDockerBuild,
 } from "./docker_build.ts";
 
@@ -85,7 +85,6 @@ test("DockerBuildStage.run: skips build when image exists", async () => {
   };
   const stage = createDockerBuildStage(buildProbes);
   const input = createTestInput();
-  const { layer: fsLayer } = makeFsServiceFake();
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
@@ -93,8 +92,7 @@ test("DockerBuildStage.run: skips build when image exists", async () => {
       .run(input)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
-        Effect.provide(makeDockerServiceFake()),
-        Effect.provide(fsLayer),
+        Effect.provide(makeDockerBuildServiceFake()),
       ),
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
@@ -102,12 +100,8 @@ test("DockerBuildStage.run: skips build when image exists", async () => {
   expect(result).toEqual({});
 });
 
-test("DockerBuildStage.run: calls DockerService.build when image does not exist", async () => {
-  const buildCalls: Array<{
-    contextDir: string;
-    imageName: string;
-    labels: Record<string, string>;
-  }> = [];
+test("DockerBuildStage.run: calls DockerBuildService.buildImage when image does not exist", async () => {
+  const buildImageCalls: DockerBuildImagePlan[] = [];
 
   const buildProbes: BuildProbes = {
     imageExists: false,
@@ -117,22 +111,12 @@ test("DockerBuildStage.run: calls DockerService.build when image does not exist"
   const stage = createDockerBuildStage(buildProbes);
   const input = createTestInput();
 
-  const fakeDocker = makeDockerServiceFake({
-    build: (contextDir, imageName, labels) => {
-      buildCalls.push({ contextDir, imageName, labels });
+  const fakeDockerBuild = makeDockerBuildServiceFake({
+    buildImage: (plan) => {
+      buildImageCalls.push(plan);
       return Effect.void;
     },
   });
-
-  const { layer: fsLayer, store } = makeFsServiceFake();
-  for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
-    for (const name of group.files) {
-      store.set(path.join(group.baseDir, name), {
-        content: `fake-${name}`,
-        mode: 0o644,
-      });
-    }
-  }
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
@@ -140,16 +124,16 @@ test("DockerBuildStage.run: calls DockerService.build when image does not exist"
       .run(input)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
-        Effect.provide(fakeDocker),
-        Effect.provide(fsLayer),
+        Effect.provide(fakeDockerBuild),
       ),
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
   expect(result).toEqual({});
-  expect(buildCalls.length).toEqual(1);
-  expect(buildCalls[0].imageName).toEqual("nas-sandbox");
-  expect(buildCalls[0].labels[EMBED_HASH_LABEL]).toEqual("abc123");
+  expect(buildImageCalls.length).toEqual(1);
+  expect(buildImageCalls[0].imageName).toEqual("nas-sandbox");
+  expect(buildImageCalls[0].labels[EMBED_HASH_LABEL]).toEqual("abc123");
+  expect(buildImageCalls[0].assetGroups.length).toBeGreaterThan(0);
 });
 
 function createTestInput(

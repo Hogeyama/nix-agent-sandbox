@@ -7,6 +7,7 @@ import type { Config, Profile } from "../config/types.ts";
 import type { AuthRouterService } from "../services/auth_router.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
+import type { DockerBuildService } from "../services/docker_build.ts";
 import type { EnvoyService } from "../services/envoy.ts";
 import type { FsService } from "../services/fs.ts";
 import type { GitWorktreeService } from "../services/git_worktree.ts";
@@ -91,6 +92,7 @@ export type EffectStageResult = Partial<PriorStageOutputs>;
 // Union of all service tags that stages can depend on
 export type StageServices =
   | DindService
+  | DockerBuildService
   | EnvoyService
   | FsService
   | GitWorktreeService
