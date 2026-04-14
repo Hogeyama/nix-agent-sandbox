@@ -109,11 +109,11 @@ test("MountStage: workspace mount keeps full absolute path", async () => {
   const { input, mountProbes } = await buildTestInput(baseProfile, workDir);
   const plan = planMount(input, mountProbes);
 
-  const mountArg = `${workDir}:${workDir}`;
-  const mountIndex = plan.dockerArgs.indexOf(mountArg);
-  expect(mountIndex >= 1 && plan.dockerArgs[mountIndex - 1] === "-v").toEqual(
-    true,
-  );
+  // mount source は workDir を含むディレクトリ (worktree 内の場合はリポジトリルート)
+  const vIdx = plan.dockerArgs.indexOf("-v");
+  const mountArg = plan.dockerArgs[vIdx + 1] as string;
+  const [mountSrc] = mountArg.split(":");
+  expect(workDir.startsWith(mountSrc)).toEqual(true);
 
   const workDirIndex = plan.dockerArgs.indexOf(workDir);
   expect(

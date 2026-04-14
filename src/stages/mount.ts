@@ -133,7 +133,9 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
   // NAS_LOG_LEVEL is set in initialPrior.envVars by cli.ts
 
   // ワークスペースマウント
-  const mountSource = path.resolve(prior.mountDir ?? prior.workDir);
+  // git worktree 内の場合は本体リポジトリルートをマウントソースに広げる
+  const baseMountSource = path.resolve(prior.mountDir ?? prior.workDir);
+  const mountSource = probes.gitWorktreeMainRoot ?? baseMountSource;
   const containerWorkDir = path.resolve(prior.workDir);
   args.push("-v", `${mountSource}:${mountSource}`);
   args.push("-w", containerWorkDir);

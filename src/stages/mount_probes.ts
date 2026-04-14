@@ -79,6 +79,8 @@ export interface MountProbes {
   resolvedExtraMounts: ResolvedExtraMount[];
   /** 環境変数エントリの事前解決結果 */
   resolvedEnvEntries: ResolvedEnvEntry[];
+  /** ワークスペースが git worktree 内にある場合、本体リポジトリのルートパス */
+  gitWorktreeMainRoot: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +157,9 @@ export async function resolveMountProbes(
   // 環境変数エントリの解決 (val_cmd / key_cmd の実行)
   const resolvedEnvEntries = await resolveEnvEntries(profile.env);
 
+  // git worktree 検出: ワークスペースが worktree 内にある場合、本体リポジトリルートを取得
+  const gitWorktreeMainRoot = await resolveGitWorktreeMainRoot(workDir);
+
   return {
     agentProbes,
     nixConfRealPath,
@@ -172,6 +177,7 @@ export async function resolveMountProbes(
     xauthorityPath,
     resolvedExtraMounts,
     resolvedEnvEntries,
+    gitWorktreeMainRoot,
   };
 }
 
@@ -317,6 +323,42 @@ async function resolveNixBinPath(): Promise<string | null> {
     if (await fileExists(p)) return p;
   }
   return null;
+}
+
+/**
+ * git worktree 内で実行されている場合、本体リポジトリのルートパスを返す。
+ * 通常のリポジトリ (worktree でない) の場合は null を返す。
+ *
+ * --git-common-dir は共有 .git ディレクトリを返すので、その親が本体リポジトリルート。
+ */
+async function resolveGitWorktreeMainRoot(
+  workDir: string,
+): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(
+      ["git", "-C", workDir, "rev-parse", "--git-common-dir", "--git-dir"],
+      { stdout: "pipe", stderr: "ignore" },
+    );
+
+    const [output, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+
+    if (code !== 0) return null;
+
+    const [commonDirRaw, gitDirRaw] = output.trim().split("\n");
+    const commonDir = path.resolve(workDir, commonDirRaw);
+    const gitDir = path.resolve(workDir, gitDirRaw);
+
+    // commonDir と gitDir が異なる場合は worktree 内にいる
+    if (commonDir !== gitDir) {
+      return path.dirname(commonDir);
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 async function runCommandForEnv(

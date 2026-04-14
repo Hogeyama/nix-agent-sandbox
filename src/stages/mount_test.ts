@@ -123,6 +123,7 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     xauthorityPath: `${TEST_HOME}/.Xauthority`,
     resolvedExtraMounts: [],
     resolvedEnvEntries: [],
+    gitWorktreeMainRoot: null,
     ...overrides,
   };
 }
@@ -1195,6 +1196,28 @@ test("MountStage: mountDir overrides workspace mount source", () => {
   // -w は workDir
   const wIdx = plan.dockerArgs.indexOf("-w");
   expect(plan.dockerArgs[wIdx + 1]).toEqual(TEST_WORK_DIR);
+});
+
+// ============================================================
+// git worktree
+// ============================================================
+
+test("MountStage: git worktree widens mount source to main repo root", () => {
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitWorktreeMainRoot: "/repo" }),
+  });
+  const plan = planMount(input, mountProbes);
+  const vIdx = plan.dockerArgs.indexOf("-v");
+  expect(plan.dockerArgs[vIdx + 1]).toEqual("/repo:/repo");
+});
+
+test("MountStage: no mount widening when not in a worktree", () => {
+  const { input, mountProbes } = makeInput();
+  const plan = planMount(input, mountProbes);
+  const vIdx = plan.dockerArgs.indexOf("-v");
+  expect(plan.dockerArgs[vIdx + 1]).toEqual(
+    `${TEST_WORK_DIR}:${TEST_WORK_DIR}`,
+  );
 });
 
 // ============================================================

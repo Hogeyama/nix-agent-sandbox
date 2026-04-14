@@ -912,21 +912,42 @@ export const GitWorktreeServiceLive: Layer.Layer<
     return GitWorktreeService.of({
       resolveRepository: (workDir) =>
         Effect.gen(function* () {
-          const result = yield* gitExec(proc, [
+          // --show-toplevel は worktree 内ではそのパスを返すため、
+          // --git-common-dir の親ディレクトリで本体リポジトリルートを取得する
+          const toplevel = yield* gitExec(proc, [
             "git",
             "-C",
             workDir,
             "rev-parse",
             "--show-toplevel",
           ]);
-          if (result === null) {
+          if (toplevel === null) {
             return yield* Effect.fail(
               new Error(
                 `"${workDir}" is not inside a git repository. Worktree requires a git repo.`,
               ),
             );
           }
-          return result.trim();
+
+          const commonDir = yield* gitExec(proc, [
+            "git",
+            "-C",
+            workDir,
+            "rev-parse",
+            "--git-common-dir",
+          ]);
+          if (commonDir !== null) {
+            const absCommonDir = path.resolve(workDir, commonDir.trim());
+            const mainRoot = path.dirname(absCommonDir);
+            if (mainRoot !== toplevel.trim()) {
+              logInfo(
+                `[nas] Detected git worktree; using main repository root: ${mainRoot}`,
+              );
+              return mainRoot;
+            }
+          }
+
+          return toplevel.trim();
         }).pipe(Effect.orDie),
 
       resolveBaseBranch: (repoRoot, base) =>
