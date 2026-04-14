@@ -94,8 +94,24 @@ export function NewSessionDialog({
   }
 
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-outside dismissal; focusable controls inside the modal handle real interaction
+    <div
+      style={overlayStyle}
+      role="presentation"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div
+        style={modalStyle}
+        role="dialog"
+        aria-modal="true"
+        aria-label="New Session"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <h2 style={titleStyle}>New Session</h2>
 
         {loading && <p style={mutedStyle}>Loading...</p>}
@@ -104,8 +120,11 @@ export function NewSessionDialog({
         {launchInfo && !loading && (
           <div style={formStyle}>
             {/* Profile */}
-            <label style={labelStyle}>Profile</label>
+            <label style={labelStyle} htmlFor="new-session-profile">
+              Profile
+            </label>
             <select
+              id="new-session-profile"
               style={inputStyle}
               value={profile}
               onChange={(e) =>
@@ -120,7 +139,7 @@ export function NewSessionDialog({
             </select>
 
             {/* Worktree Base Branch */}
-            <label style={labelStyle}>Worktree Base Branch</label>
+            <span style={labelStyle}>Worktree Base Branch</span>
             <div style={radioGroupStyle}>
               <label style={radioLabelStyle}>
                 <input
@@ -175,7 +194,7 @@ export function NewSessionDialog({
             </div>
 
             {/* Directory */}
-            <label style={labelStyle}>Directory</label>
+            <span style={labelStyle}>Directory</span>
             <div
               style={{ display: "flex", flexDirection: "column", gap: "6px" }}
             >
@@ -227,8 +246,11 @@ export function NewSessionDialog({
             </div>
 
             {/* Session Name */}
-            <label style={labelStyle}>Session Name (optional)</label>
+            <label style={labelStyle} htmlFor="new-session-name">
+              Session Name (optional)
+            </label>
             <input
+              id="new-session-name"
               type="text"
               style={inputStyle}
               placeholder="my-session"

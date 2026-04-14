@@ -109,9 +109,12 @@ function TerminalTabLabel({
 
   if (editing) {
     return (
+      // biome-ignore lint/a11y/noStaticElementInteractions: wrapper only stops event propagation; actual controls are the child input/buttons
       <span
+        role="presentation"
         class="terminal-session-name-editor"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <input
@@ -153,7 +156,9 @@ function TerminalTabLabel({
   }
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: dblclick-to-rename is a power-user shortcut; primary tab activation is the surrounding button
     <span
+      role="presentation"
       class="terminal-modal-tab-label"
       onDblClick={
         isActive
@@ -173,7 +178,6 @@ function TerminalTabLabel({
 
 function TerminalPane({
   sessionId,
-  sessionName,
   visible,
   tabs,
   activeSessionId,

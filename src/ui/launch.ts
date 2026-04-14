@@ -130,7 +130,7 @@ export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
 
   // --- Build and launch session ---
 
-  const sessionId = "sess_" + randomHex(6);
+  const sessionId = `sess_${randomHex(6)}`;
   const socketPath = socketPathFor(sessionId);
 
   const cmdArgs: string[] = [process.execPath, req.profile];

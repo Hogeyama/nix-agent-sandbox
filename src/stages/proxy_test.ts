@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Effect, Layer, Scope } from "effect";
+import { Effect, Layer } from "effect";
 
 /**
  * ProxyStage unit テスト（Docker 不要）

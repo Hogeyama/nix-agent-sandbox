@@ -52,7 +52,6 @@ describe("launchSession: profile validation", () => {
   });
 
   test("undefined-ish (empty after cast) throws 'Invalid profile name'", () => {
-    // biome-ignore lint: testing invalid input
     expect(
       launchSession({ profile: undefined as unknown as string }),
     ).rejects.toThrow("Invalid profile name");
