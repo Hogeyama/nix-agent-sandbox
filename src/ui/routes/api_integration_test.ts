@@ -47,6 +47,7 @@ function createTestContext(dir: string): UiDataContext {
     hostExecPaths,
     sessionPaths,
     auditDir: `${dir}/audit`,
+    gitRoot: null,
   };
 }
 

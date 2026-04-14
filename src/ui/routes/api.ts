@@ -20,6 +20,7 @@ import {
   renameSession,
   stopContainer,
 } from "../data.ts";
+import { getLaunchInfo } from "../launch.ts";
 import { json, Router } from "../router.ts";
 
 export function createApiRoutes(ctx: UiDataContext): Router {
@@ -29,6 +30,17 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.get("/health", () => {
     return json({ ok: true });
+  });
+
+  // --- Launch ---
+
+  api.get("/launch/info", async () => {
+    try {
+      const info = await getLaunchInfo(ctx);
+      return json(info);
+    } catch (e) {
+      return json({ error: (e as Error).message }, 500);
+    }
   });
 
   // --- Network ---
