@@ -20,9 +20,7 @@ import type {
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
-import type { FsService } from "../services/fs.ts";
 import { FsServiceLive } from "../services/fs.ts";
-import type { ProcessService } from "../services/process.ts";
 import { ProcessServiceLive } from "../services/process.ts";
 import {
   buildProxyArgs,
@@ -106,13 +104,12 @@ function makeInput(
   };
 }
 
-import { makeFsServiceFake } from "../services/fs.ts";
-import { makeProcessServiceFake } from "../services/process.ts";
+import {
+  DbusProxyServiceLive,
+  makeDbusProxyServiceFake,
+} from "../services/dbus_proxy.ts";
 
-const dummyLayer = Layer.mergeAll(
-  makeFsServiceFake().layer,
-  makeProcessServiceFake(),
-);
+const dummyLayer = makeDbusProxyServiceFake();
 
 function runStage(input: StageInput): Promise<EffectStageResult> {
   const stage = createDbusProxyStage();
@@ -128,7 +125,11 @@ function runStage(input: StageInput): Promise<EffectStageResult> {
 
 async function runStageScoped(
   input: StageInput,
-  layer: Layer.Layer<FsService | ProcessService>,
+  layer: Layer.Layer<
+    import("../services/dbus_proxy.ts").DbusProxyService,
+    never,
+    never
+  >,
   fn: (result: EffectStageResult) => Promise<void>,
 ): Promise<void> {
   const stage = createDbusProxyStage();
@@ -257,32 +258,7 @@ test("DbusProxyStage: produces correct outputs when enabled", async () => {
     },
   };
 
-  const fakeLayer = Layer.mergeAll(
-    Layer.succeed(
-      (await import("../services/fs.ts")).FsService,
-      (await import("../services/fs.ts")).FsService.of({
-        mkdir: () => Effect.void,
-        writeFile: () => Effect.void,
-        chmod: () => Effect.void,
-        symlink: () => Effect.void,
-        rm: () => Effect.void,
-        stat: () => Effect.die("not implemented"),
-        exists: () => Effect.succeed(false),
-        readFile: () => Effect.die("not implemented"),
-        rename: () => Effect.void,
-        mkdtemp: () => Effect.die("not implemented"),
-      }),
-    ),
-    Layer.succeed(
-      (await import("../services/process.ts")).ProcessService,
-      (await import("../services/process.ts")).ProcessService.of({
-        spawn: () =>
-          Effect.succeed({ kill: () => {}, exited: Effect.succeed(0) }),
-        waitForFileExists: () => Effect.void,
-        exec: () => Effect.succeed(""),
-      }),
-    ),
-  );
+  const fakeLayer = makeDbusProxyServiceFake();
 
   const input = makeInput(
     profile,
@@ -413,7 +389,9 @@ PY
       },
     );
 
-    const liveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
+    const liveLayer = DbusProxyServiceLive.pipe(
+      Layer.provide(Layer.mergeAll(FsServiceLive, ProcessServiceLive)),
+    );
     await runStageScoped(input, liveLayer, async (result) => {
       expect(result.dbusProxyEnabled).toEqual(true);
       expect(result.dbusSessionRuntimeDir?.includes(input.sessionId)).toEqual(

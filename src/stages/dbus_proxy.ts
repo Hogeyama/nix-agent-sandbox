@@ -14,8 +14,7 @@ import type {
   HostEnv,
   StageInput,
 } from "../pipeline/types.ts";
-import { FsService } from "../services/fs.ts";
-import { ProcessService } from "../services/process.ts";
+import { DbusProxyService } from "../services/dbus_proxy.ts";
 
 const SOCKET_READY_TIMEOUT_MS = 5_000;
 const SOCKET_READY_POLL_MS = 50;
@@ -40,9 +39,7 @@ export interface DbusProxyPlan {
 // EffectStage
 // ---------------------------------------------------------------------------
 
-export function createDbusProxyStage(): EffectStage<
-  FsService | ProcessService
-> {
+export function createDbusProxyStage(): EffectStage<DbusProxyService> {
   return {
     kind: "effect",
     name: "DbusProxyStage",
@@ -52,7 +49,7 @@ export function createDbusProxyStage(): EffectStage<
     ): Effect.Effect<
       EffectStageResult,
       unknown,
-      Scope.Scope | FsService | ProcessService
+      Scope.Scope | DbusProxyService
     > {
       const plan = planDbusProxy(input);
       if (plan === null) {
@@ -189,29 +186,20 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
 
 function runDbusProxy(
   plan: DbusProxyPlan,
-): Effect.Effect<
-  EffectStageResult,
-  unknown,
-  Scope.Scope | FsService | ProcessService
-> {
+): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DbusProxyService> {
   return Effect.gen(function* () {
-    const fs = yield* FsService;
-    const proc = yield* ProcessService;
+    const dbusProxy = yield* DbusProxyService;
 
-    yield* fs.mkdir(plan.runtimeDir, { recursive: true, mode: 0o755 });
-    yield* fs.mkdir(plan.sessionsDir, { recursive: true, mode: 0o700 });
-    yield* fs.mkdir(plan.sessionDir, { recursive: true, mode: 0o700 });
-
-    yield* Effect.acquireRelease(
-      proc.spawn(plan.proxyBinaryPath, plan.args),
-      (handle) => Effect.sync(() => handle.kill()),
-    );
-
-    yield* proc.waitForFileExists(
-      plan.socketPath,
-      plan.timeoutMs,
-      plan.pollIntervalMs,
-    );
+    yield* dbusProxy.startProxy({
+      proxyBinaryPath: plan.proxyBinaryPath,
+      runtimeDir: plan.runtimeDir,
+      sessionsDir: plan.sessionsDir,
+      sessionDir: plan.sessionDir,
+      socketPath: plan.socketPath,
+      args: plan.args,
+      timeoutMs: plan.timeoutMs,
+      pollIntervalMs: plan.pollIntervalMs,
+    });
 
     return plan.outputOverrides;
   });

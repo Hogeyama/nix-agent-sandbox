@@ -36,6 +36,7 @@ import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { runPipelineEffect } from "./pipeline/pipeline.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { AuthRouterServiceLive } from "./services/auth_router.ts";
+import { DbusProxyServiceLive } from "./services/dbus_proxy.ts";
 import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { DockerBuildServiceLive } from "./services/docker_build.ts";
@@ -239,6 +240,7 @@ export async function main(args: string[]): Promise<void> {
     const dockerLayer = DockerServiceLive;
     const liveLayer = Layer.mergeAll(
       AuthRouterServiceLive,
+      DbusProxyServiceLive.pipe(Layer.provide(primitiveLayer)),
       DindServiceLive,
       DockerBuildServiceLive.pipe(
         Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),

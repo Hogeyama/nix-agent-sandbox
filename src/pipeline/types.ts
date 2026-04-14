@@ -5,6 +5,7 @@
 import type { Effect, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import type { AuthRouterService } from "../services/auth_router.ts";
+import type { DbusProxyService } from "../services/dbus_proxy.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
 import type { DockerBuildService } from "../services/docker_build.ts";
@@ -91,6 +92,7 @@ export type EffectStageResult = Partial<PriorStageOutputs>;
 
 // Union of all service tags that stages can depend on
 export type StageServices =
+  | DbusProxyService
   | DindService
   | DockerBuildService
   | EnvoyService
