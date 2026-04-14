@@ -10,6 +10,7 @@ import {
 } from "./api.ts";
 import { AuditTab } from "./components/AuditTab.tsx";
 import { ContainersTab } from "./components/ContainersTab.tsx";
+import { NewSessionDialog } from "./components/NewSessionDialog.tsx";
 import { PendingTab } from "./components/PendingTab.tsx";
 import { TerminalModal } from "./components/TerminalModal.tsx";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
@@ -51,6 +52,23 @@ export function App() {
     null,
   );
   const [termVisible, setTermVisible] = useState(false);
+  const [dtachAvailable, setDtachAvailable] = useState(false);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getLaunchInfo()
+      .then((info) => {
+        if (!cancelled) setDtachAvailable(info.dtachAvailable);
+      })
+      .catch(() => {
+        setDtachAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,6 +178,14 @@ export function App() {
 
   const handleTermMinimize = useCallback(() => {
     setTermVisible(false);
+  }, []);
+
+  const handleNewSession = useCallback(() => {
+    setNewSessionOpen(true);
+  }, []);
+
+  const handleSessionLaunched = useCallback((_sessionId: string) => {
+    setNewSessionOpen(false);
   }, []);
 
   const handleTermRestore = useCallback(() => {
@@ -325,6 +351,8 @@ export function App() {
             onAttach={handleAttach}
             onAckTurn={handleAckTurn}
             onRename={handleRename}
+            onNewSession={handleNewSession}
+            dtachAvailable={dtachAvailable}
           />
         )}
         {activeTab === "audit" && (
@@ -338,6 +366,12 @@ export function App() {
           />
         )}
       </div>
+
+      <NewSessionDialog
+        open={newSessionOpen}
+        onClose={() => setNewSessionOpen(false)}
+        onLaunched={handleSessionLaunched}
+      />
 
       {terminalSessions.length > 0 && activeTermSessionId && (
         <TerminalModal

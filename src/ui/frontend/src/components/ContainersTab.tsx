@@ -243,6 +243,8 @@ interface ContainersTabProps {
   onAttach?: (sessionId: string) => void;
   onAckTurn?: (sessionId: string) => Promise<void> | void;
   onRename?: (sessionId: string, name: string) => Promise<void> | void;
+  onNewSession?: () => void;
+  dtachAvailable?: boolean;
   title?: string;
 }
 
@@ -252,6 +254,8 @@ export function ContainersTab({
   onAttach,
   onAckTurn,
   onRename,
+  onNewSession,
+  dtachAvailable,
   title = "Sessions",
 }: ContainersTabProps) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -355,14 +359,21 @@ export function ContainersTab({
         <h3 style={{ fontSize: "16px", color: "#cbd5e1" }}>
           {title} ({sorted.length})
         </h3>
-        <button
-          type="button"
-          style={cleanBtnStyle}
-          disabled={cleaning}
-          onClick={handleCleanAll}
-        >
-          {cleaning ? "Cleaning..." : "Clean All"}
-        </button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          {dtachAvailable && onNewSession && (
+            <button type="button" style={cleanBtnStyle} onClick={onNewSession}>
+              New Session
+            </button>
+          )}
+          <button
+            type="button"
+            style={cleanBtnStyle}
+            disabled={cleaning}
+            onClick={handleCleanAll}
+          >
+            {cleaning ? "Cleaning..." : "Clean All"}
+          </button>
+        </div>
       </div>
 
       {sorted.length === 0 ? (
