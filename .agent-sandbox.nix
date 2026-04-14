@@ -139,6 +139,36 @@ let
           fallback = "container";
         }
         {
+          id = "wl-copy";
+          match = {
+            argv0 = "wl-copy";
+          };
+          cwd = {
+            mode = "workspace-or-session-tmp";
+          };
+          inherit-env = {
+            mode = "minimal";
+            keys = [ "WAYLAND_DISPLAY" "XDG_RUNTIME_DIR" ];
+          };
+          approval = "allow";
+          fallback = "container";
+        }
+        {
+          id = "wl-paste";
+          match = {
+            argv0 = "wl-paste";
+          };
+          cwd = {
+            mode = "workspace-or-session-tmp";
+          };
+          inherit-env = {
+            mode = "minimal";
+            keys = [ "WAYLAND_DISPLAY" "XDG_RUNTIME_DIR" ];
+          };
+          approval = "allow";
+          fallback = "container";
+        }
+        {
           id = "gh";
           match = {
             argv0 = "gh";
