@@ -96,7 +96,10 @@ export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
   }
 
   if (req.worktreeBase !== undefined) {
-    if (!/^[a-zA-Z0-9_./@-]+$/.test(req.worktreeBase)) {
+    if (
+      !/^[a-zA-Z0-9_./@-]+$/.test(req.worktreeBase) ||
+      req.worktreeBase.includes("..")
+    ) {
       throw new LaunchValidationError("Invalid worktree base branch");
     }
   }
