@@ -20,6 +20,13 @@ type HostExecConfigOverrides = Omit<Partial<HostExecConfig>, "prompt"> & {
   prompt?: Partial<HostExecConfig["prompt"]>;
 };
 
+function decodeStdout(response: HostExecBrokerResponse): string {
+  if (response.type !== "result") {
+    throw new Error(`expected result response, got ${response.type}`);
+  }
+  return Buffer.from(response.stdout, "base64").toString("utf-8");
+}
+
 function makeConfig(overrides: HostExecConfigOverrides = {}): HostExecConfig {
   return {
     prompt: {
@@ -144,7 +151,7 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
     if (response.type !== "result") {
       throw new Error(`unexpected response type: ${response.type}`);
     }
-    expect(response.stdout.trim()).toEqual("[REDACTED]");
+    expect(decodeStdout(response).trim()).toEqual("[REDACTED]");
 
     const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
     expect(logs.length).toEqual(1);
@@ -366,7 +373,7 @@ test("HostExecBroker: argv0-only rule matches any args", async () => {
     if (response.type !== "result") {
       throw new Error(`unexpected response type: ${response.type}`);
     }
-    expect(response.stdout.trim()).toEqual("ok");
+    expect(decodeStdout(response).trim()).toEqual("ok");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -415,7 +422,7 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
     );
     expect(response.type).toEqual("result");
     if (response.type === "result") {
-      expect(response.stdout).toEqual("ok");
+      expect(decodeStdout(response)).toEqual("ok");
     }
   } finally {
     await broker.close();
@@ -463,7 +470,7 @@ test("HostExecBroker: relative rule executes original relative argv0", async () 
     );
     expect(response.type).toEqual("result");
     if (response.type === "result") {
-      expect(response.stdout).toEqual("gradle-ok");
+      expect(decodeStdout(response)).toEqual("gradle-ok");
     }
   } finally {
     await broker.close();
@@ -518,7 +525,7 @@ test("HostExecBroker: absolute rule executes exact absolute binary path", async 
     );
     expect(response.type).toEqual("result");
     if (response.type === "result") {
-      expect(response.stdout).toEqual("absolute-ok");
+      expect(decodeStdout(response)).toEqual("absolute-ok");
     }
   } finally {
     await broker.close();
@@ -707,7 +714,7 @@ test("HostExecBroker: allows cwd in session tmp with workspace-or-session-tmp mo
     );
     expect(response.type).toEqual("result");
     if (response.type === "result") {
-      expect(response.stdout.trim()).toEqual("ok");
+      expect(decodeStdout(response).trim()).toEqual("ok");
     }
   } finally {
     await broker.close();
@@ -893,7 +900,7 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
     const firstResponse = await firstPromise;
     expect(firstResponse.type).toEqual("result");
     if (firstResponse.type === "result") {
-      expect(firstResponse.stdout.trim()).toEqual("first");
+      expect(decodeStdout(firstResponse).trim()).toEqual("first");
     }
 
     // Second identical request (same args) should go to pending again (not auto-approved)
@@ -972,7 +979,7 @@ test("HostExecBroker: scope capability caches approval key", async () => {
       );
     expect(secondResponse.type).toEqual("result");
     if (secondResponse.type === "result") {
-      expect(secondResponse.stdout.trim()).toEqual("first");
+      expect(decodeStdout(secondResponse).trim()).toEqual("first");
     }
   } finally {
     await broker.close();

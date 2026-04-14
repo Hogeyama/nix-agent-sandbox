@@ -535,9 +535,9 @@ export class HostExecBroker {
       (proc.stdin as import("bun").FileSink).write(stdin);
       (proc.stdin as import("bun").FileSink).end();
     }
-    const [stdoutText, stderrText] = await Promise.all([
-      new Response(proc.stdout as ReadableStream).text(),
-      new Response(proc.stderr as ReadableStream).text(),
+    const [stdoutBuf, stderrBuf] = await Promise.all([
+      new Response(proc.stdout as ReadableStream).arrayBuffer(),
+      new Response(proc.stderr as ReadableStream).arrayBuffer(),
     ]);
     const exitCode = await proc.exited;
     const secretValues = Object.keys(resolved.rule.env)
@@ -545,14 +545,14 @@ export class HostExecBroker {
       .filter(
         (value): value is string => typeof value === "string" && value !== "",
       );
-    const stdout = redactSecrets(stdoutText, secretValues);
-    const stderr = redactSecrets(stderrText, secretValues);
+    const stdout = redactSecretsBytes(new Uint8Array(stdoutBuf), secretValues);
+    const stderr = redactSecretsBytes(new Uint8Array(stderrBuf), secretValues);
     return {
       type: "result",
       requestId: request.requestId,
       exitCode,
-      stdout,
-      stderr,
+      stdout: Buffer.from(stdout).toString("base64"),
+      stderr: Buffer.from(stderr).toString("base64"),
     };
   }
 }
@@ -684,13 +684,28 @@ function toPendingEntry(
   };
 }
 
-function redactSecrets(text: string, secrets: string[]): string {
-  let result = text;
+function redactSecretsBytes(bytes: Uint8Array, secrets: string[]): Uint8Array {
+  let buf = Buffer.from(bytes);
+  const replacement = Buffer.from("[REDACTED]", "utf-8");
   for (const secret of secrets) {
     if (!secret) continue;
-    result = result.split(secret).join("[REDACTED]");
+    const needle = Buffer.from(secret, "utf-8");
+    if (needle.length === 0) continue;
+    const parts: Buffer[] = [];
+    let idx = 0;
+    while (idx <= buf.length) {
+      const found = buf.indexOf(needle, idx);
+      if (found === -1) {
+        parts.push(buf.subarray(idx));
+        break;
+      }
+      parts.push(buf.subarray(idx, found));
+      parts.push(replacement);
+      idx = found + needle.length;
+    }
+    buf = Buffer.concat(parts);
   }
-  return result;
+  return new Uint8Array(buf);
 }
 
 function toErrorResponse(

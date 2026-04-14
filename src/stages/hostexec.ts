@@ -378,8 +378,14 @@ def main() -> int:
     if response["type"] == "error":
         print(response["message"], file=sys.stderr)
         return 1
-    sys.stdout.write(response.get("stdout", ""))
-    sys.stderr.write(response.get("stderr", ""))
+    stdout_b64 = response.get("stdout", "")
+    stderr_b64 = response.get("stderr", "")
+    if stdout_b64:
+        sys.stdout.buffer.write(base64.b64decode(stdout_b64))
+        sys.stdout.flush()
+    if stderr_b64:
+        sys.stderr.buffer.write(base64.b64decode(stderr_b64))
+        sys.stderr.flush()
     return int(response.get("exitCode", 0))
 
 

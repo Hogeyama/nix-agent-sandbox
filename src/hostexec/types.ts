@@ -61,7 +61,9 @@ export interface ExecuteResultResponse {
   type: "result";
   requestId: string;
   exitCode: number;
+  /** Base64-encoded raw bytes from the child process. */
   stdout: string;
+  /** Base64-encoded raw bytes from the child process. */
   stderr: string;
 }
 
