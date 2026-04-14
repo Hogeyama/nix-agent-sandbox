@@ -61,14 +61,16 @@ function sendTerminalResize(ws: WebSocket, size: TerminalSize): void {
   ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
 }
 
-function TerminalSessionNameEditor({
+function TerminalTabLabel({
   sessionId,
   sessionName,
+  isActive,
   onRenameSession,
   onDone,
 }: {
   sessionId: string;
   sessionName?: string;
+  isActive: boolean;
   onRenameSession: (sessionId: string, name: string) => Promise<void> | void;
   onDone?: () => void;
 }) {
@@ -91,59 +93,66 @@ function TerminalSessionNameEditor({
     }
   }, [onDone, onRenameSession, sessionId, value]);
 
-  if (!editing) {
+  if (editing) {
     return (
-      <button
-        type="button"
-        class="terminal-session-name-button"
-        title="Rename session"
-        onClick={() => {
-          setValue(sessionName ?? "");
-          setEditing(true);
-        }}
+      <span
+        class="terminal-session-name-editor"
+        onClick={(e) => e.stopPropagation()}
       >
-        <code>{sessionName || sessionId}</code>
-      </button>
+        <input
+          type="text"
+          value={value}
+          class="terminal-session-name-input"
+          onInput={(e) => setValue((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleSave();
+            if (e.key === "Escape") {
+              setEditing(false);
+              onDone?.();
+            }
+          }}
+          disabled={saving}
+          // biome-ignore lint/a11y/noAutofocus: intentional for inline edit
+          autoFocus
+        />
+        <button
+          type="button"
+          class="btn btn-ghost terminal-session-name-save"
+          disabled={saving || !value.trim()}
+          onClick={() => void handleSave()}
+        >
+          {saving ? "..." : "OK"}
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost terminal-session-name-cancel"
+          disabled={saving}
+          onClick={() => {
+            setEditing(false);
+            onDone?.();
+          }}
+        >
+          Cancel
+        </button>
+      </span>
     );
   }
 
   return (
-    <span class="terminal-session-name-editor">
-      <input
-        type="text"
-        value={value}
-        class="terminal-session-name-input"
-        onInput={(e) => setValue((e.target as HTMLInputElement).value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") void handleSave();
-          if (e.key === "Escape") {
-            setEditing(false);
-            onDone?.();
-          }
-        }}
-        disabled={saving}
-        // biome-ignore lint/a11y/noAutofocus: intentional for inline edit
-        autoFocus
-      />
-      <button
-        type="button"
-        class="btn btn-ghost terminal-session-name-save"
-        disabled={saving || !value.trim()}
-        onClick={() => void handleSave()}
-      >
-        {saving ? "..." : "OK"}
-      </button>
-      <button
-        type="button"
-        class="btn btn-ghost terminal-session-name-cancel"
-        disabled={saving}
-        onClick={() => {
-          setEditing(false);
-          onDone?.();
-        }}
-      >
-        Cancel
-      </button>
+    <span
+      class="terminal-modal-tab-label"
+      onDblClick={
+        isActive
+          ? (e) => {
+              e.stopPropagation();
+              setValue(sessionName ?? "");
+              setEditing(true);
+            }
+          : undefined
+      }
+      title={isActive ? "Double-click to rename" : undefined}
+    >
+      {sessionName || sessionId}
     </span>
   );
 }
@@ -438,149 +447,6 @@ function TerminalPane({
       style={{ display: visible ? "flex" : "none" }}
     >
       <div class="terminal-modal-header">
-        <div class="terminal-modal-header-top">
-          <span class="terminal-session-label">
-            <span class="chip chip-good">connected</span>
-            <TerminalSessionNameEditor
-              sessionId={sessionId}
-              sessionName={sessionName}
-              onRenameSession={onRenameSession}
-              onDone={() => {
-                if (terminalRef.current)
-                  ensureTerminalFocus(terminalRef.current);
-              }}
-            />
-            <button
-              type="button"
-              class="btn btn-icon btn-ghost"
-              title="Copy attach command"
-              onMouseDown={preventFocusSteal}
-              onClick={handleCopyAttach}
-            >
-              {copied ? (
-                <svg
-                  aria-hidden="true"
-                  focusable="false"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                <svg
-                  aria-hidden="true"
-                  focusable="false"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-              )}
-            </button>
-          </span>
-          <div class="terminal-modal-actions">
-            <div class="font-size-controls">
-              <button
-                type="button"
-                class="btn btn-icon btn-ghost"
-                title="Decrease font size"
-                onMouseDown={preventFocusSteal}
-                onClick={handleFontSizeDecrease}
-              >
-                <svg
-                  aria-hidden="true"
-                  focusable="false"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                class="btn btn-icon btn-ghost"
-                title="Refit terminal"
-                onMouseDown={preventFocusSteal}
-                onClick={handleRefit}
-              >
-                <svg
-                  aria-hidden="true"
-                  focusable="false"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polyline points="1 4 1 10 7 10" />
-                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                class="btn btn-icon btn-ghost"
-                title="Increase font size"
-                onMouseDown={preventFocusSteal}
-                onClick={handleFontSizeIncrease}
-              >
-                <svg
-                  aria-hidden="true"
-                  focusable="false"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-            </div>
-            <button
-              type="button"
-              class={turnAcked ? "btn btn-ghost" : "btn btn-primary"}
-              disabled={acking || turnAcked || !canAckTurn}
-              onMouseDown={preventFocusSteal}
-              onClick={handleAck}
-            >
-              {turnAcked ? "ACKed" : acking ? "ACK..." : "ACK turn"}
-            </button>
-            <button
-              type="button"
-              class="btn btn-danger"
-              onMouseDown={preventFocusSteal}
-              onClick={onMinimize}
-            >
-              Close
-            </button>
-          </div>
-        </div>
         <div class="terminal-modal-tabs">
           {tabs.map((tab) => {
             const isActive = tab.sessionId === activeSessionId;
@@ -605,9 +471,16 @@ function TerminalPane({
                   onMouseDown={preventFocusSteal}
                   onClick={() => onSelectSession(tab.sessionId)}
                 >
-                  <span class="terminal-modal-tab-label">
-                    {tab.sessionName || tab.sessionId}
-                  </span>
+                  <TerminalTabLabel
+                    sessionId={tab.sessionId}
+                    sessionName={tab.sessionName}
+                    isActive={isActive}
+                    onRenameSession={onRenameSession}
+                    onDone={() => {
+                      if (terminalRef.current)
+                        ensureTerminalFocus(terminalRef.current);
+                    }}
+                  />
                 </button>
                 {tab.isOpen && (
                   <button
@@ -640,6 +513,135 @@ function TerminalPane({
               </div>
             );
           })}
+        </div>
+        <div class="terminal-modal-actions">
+          <button
+            type="button"
+            class="btn btn-icon btn-ghost"
+            title={copied ? "Copied!" : "Copy attach command"}
+            onMouseDown={preventFocusSteal}
+            onClick={handleCopyAttach}
+          >
+            {copied ? (
+              <svg
+                aria-hidden="true"
+                focusable="false"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg
+                aria-hidden="true"
+                focusable="false"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+          </button>
+          <div class="font-size-controls">
+            <button
+              type="button"
+              class="btn btn-icon btn-ghost"
+              title="Decrease font size"
+              onMouseDown={preventFocusSteal}
+              onClick={handleFontSizeDecrease}
+            >
+              <svg
+                aria-hidden="true"
+                focusable="false"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="btn btn-icon btn-ghost"
+              title="Refit terminal"
+              onMouseDown={preventFocusSteal}
+              onClick={handleRefit}
+            >
+              <svg
+                aria-hidden="true"
+                focusable="false"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="1 4 1 10 7 10" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="btn btn-icon btn-ghost"
+              title="Increase font size"
+              onMouseDown={preventFocusSteal}
+              onClick={handleFontSizeIncrease}
+            >
+              <svg
+                aria-hidden="true"
+                focusable="false"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          </div>
+          <button
+            type="button"
+            class={turnAcked ? "btn btn-ghost" : "btn btn-primary"}
+            disabled={acking || turnAcked || !canAckTurn}
+            onMouseDown={preventFocusSteal}
+            onClick={handleAck}
+          >
+            {turnAcked ? "ACKed" : acking ? "ACK..." : "ACK turn"}
+          </button>
+          <button
+            type="button"
+            class="btn btn-danger"
+            onMouseDown={preventFocusSteal}
+            onClick={onMinimize}
+          >
+            Close
+          </button>
         </div>
       </div>
       <div
