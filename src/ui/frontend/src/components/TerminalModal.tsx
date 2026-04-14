@@ -1,6 +1,7 @@
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
@@ -219,6 +220,7 @@ function TerminalPane({
   // Initialize xterm + WebSocket on mount (sessionId won't change for a given modal instance)
   useEffect(() => {
     const term = new Terminal({
+      allowProposedApi: true,
       cursorBlink: true,
       fontSize: 14,
       rightClickSelectsWord: false,
@@ -254,6 +256,12 @@ function TerminalPane({
     term.loadAddon(new ClipboardAddon());
     term.loadAddon(new WebLinksAddon());
     term.loadAddon(searchAddon);
+    try {
+      term.loadAddon(new UnicodeGraphemesAddon());
+      term.unicode.activeVersion = "15-graphemes";
+    } catch (e) {
+      console.error("UnicodeGraphemesAddon failed to load", e);
+    }
     searchAddon.onDidChangeResults((e) => {
       setSearchMatch(
         e.resultCount > 0
