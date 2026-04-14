@@ -77,6 +77,17 @@ function TerminalTabLabel({
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(sessionName ?? "");
   const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Focus the input explicitly after entering edit mode.
+  // autoFocus alone doesn't work because the parent button's
+  // onMouseDown={preventFocusSteal} calls preventDefault() on the
+  // double-click's mousedown events, suppressing browser focus transfer.
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+    }
+  }, [editing]);
 
   const handleSave = useCallback(async () => {
     const next = value.trim();
@@ -98,11 +109,13 @@ function TerminalTabLabel({
       <span
         class="terminal-session-name-editor"
         onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
       >
         <input
           type="text"
           value={value}
           class="terminal-session-name-input"
+          ref={inputRef}
           onInput={(e) => setValue((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") void handleSave();
@@ -112,8 +125,6 @@ function TerminalTabLabel({
             }
           }}
           disabled={saving}
-          // biome-ignore lint/a11y/noAutofocus: intentional for inline edit
-          autoFocus
         />
         <button
           type="button"
