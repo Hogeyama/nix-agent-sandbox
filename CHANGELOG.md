@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-04-15
+
+### Added
+
+- **UI session launcher**: New Session dialog in the Sessions tab with profile, worktree base branch, working directory, and name selection, backed by `GET /api/launch/info` and `POST /api/launch` endpoints ([1fca123], [95fc5d1], [ad8de8f], [fb9f3ca], [6b7726e], [5f25bd7], [4b4c12d])
+- **Terminal search bar**: Ctrl-F/Cmd-F search with next/prev navigation and match count via `@xterm/addon-search`, plus clickable URLs via `@xterm/addon-web-links` ([731eb11])
+- **OSC 52 clipboard forwarding**: terminal copy sequences (e.g. Claude Code `/copy`) now reach the browser clipboard via `@xterm/addon-clipboard` ([21ee7ce])
+
+### Changed
+
+- **Breaking:** removed the osc52-clip clipboard shim and tmux detection; dtach persistence makes startup-time `TMUX` env detection unreliable, and X11/Wayland socket mounting will be considered separately ([60e3ef1])
+- Routed host `wl-copy`/`wl-paste` through hostexec to enable clipboard access from inside the container ([0e79328])
+- Extracted domain services from pipeline stages to enforce the effect-separation rule: `ContainerLaunchService`, `MountSetupService`, `HostExecSetupService`, `DbusProxyService`, `DockerBuildService`, `NetworkRuntimeService`, `EnvoyService` ([03c8529], [526ec5e], [3ee0efa], [69f1a7f], [d5f6809], [0d16ef5])
+- `dtachNewSession` accepts an optional `cwd` for spawning sessions from user-selected directories ([4b4c12d])
+- Replaced the Deno-based `post-change-checks` skill with a Bun equivalent (fmt/lint/check, `bun test`, tsc) ([6e38d78])
+
+### Fixed
+
+- **hostexec binary-safe I/O**: stdout/stderr are now captured as raw bytes and base64-encoded on the wire, so `wl-paste --type image/png` and other binary payloads are no longer corrupted by UTF-8 replacement ([ea0252c])
+- **Git worktree mount and nesting**: `resolveRepository` uses `--git-common-dir` to find the real repo root, the mount stage widens its source when inside a worktree, and probes detect worktrees correctly — fixes missing `.git` access and nested worktree creation ([c5e6a31])
+- **Tab double-click rename**: stop mousedown propagation and explicitly focus the rename input so xterm no longer swallows keystrokes ([fc85646])
+- **TerminalModal header**: consolidated into a single row (FHD height fix); renaming moved to active-tab double-click ([1152c32])
+- Resolve outstanding Biome findings (template literal, unused imports/parameters/suppressions, label htmlFor, dialog Escape-to-close, role annotations on wrapper elements) ([8446e35])
+
 ## [0.5.1] - 2026-04-14
 
 ### Fixed
