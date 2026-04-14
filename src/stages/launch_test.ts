@@ -16,9 +16,9 @@ import type {
   StageInput,
 } from "../pipeline/types.ts";
 import {
-  type DockerRunOpts,
-  makeDockerServiceFake,
-} from "../services/docker.ts";
+  type LaunchOpts,
+  makeContainerLaunchServiceFake,
+} from "../services/container_launch.ts";
 import { createLaunchStage, planLaunch } from "./launch.ts";
 
 test("planLaunch: produces correct plan with composed command", () => {
@@ -49,11 +49,11 @@ test("planLaunch: produces correct plan with composed command", () => {
   expect(plan.containerName.startsWith("nas-agent-")).toEqual(true);
 });
 
-test("LaunchStage: run() calls DockerService.runInteractive", async () => {
-  let capturedOpts: DockerRunOpts | undefined;
+test("LaunchStage: run() calls ContainerLaunchService.launch", async () => {
+  let capturedOpts: LaunchOpts | undefined;
 
-  const fakeLayer = makeDockerServiceFake({
-    runInteractive: (opts) => {
+  const fakeLayer = makeContainerLaunchServiceFake({
+    launch: (opts) => {
       capturedOpts = opts;
       return Effect.void;
     },

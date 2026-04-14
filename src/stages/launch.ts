@@ -21,7 +21,10 @@ import type {
   EffectStageResult,
   StageInput,
 } from "../pipeline/types.ts";
-import { type DockerRunOpts, DockerService } from "../services/docker.ts";
+import {
+  ContainerLaunchService,
+  type LaunchOpts,
+} from "../services/container_launch.ts";
 
 // ---------------------------------------------------------------------------
 // LaunchPlan
@@ -67,22 +70,22 @@ export function planLaunch(
 }
 
 // ---------------------------------------------------------------------------
-// LaunchStage (EffectStage<DockerService>)
+// LaunchStage (EffectStage<ContainerLaunchService>)
 // ---------------------------------------------------------------------------
 
 export function createLaunchStage(
   extraArgs: string[] = [],
-): EffectStage<DockerService> {
+): EffectStage<ContainerLaunchService> {
   return {
     kind: "effect",
     name: "LaunchStage",
 
     run(
       input: StageInput,
-    ): Effect.Effect<EffectStageResult, unknown, DockerService> {
+    ): Effect.Effect<EffectStageResult, unknown, ContainerLaunchService> {
       const plan = planLaunch(input, extraArgs);
 
-      const opts: DockerRunOpts = {
+      const opts: LaunchOpts = {
         image: plan.image,
         name: plan.containerName,
         args: plan.args,
@@ -92,8 +95,8 @@ export function createLaunchStage(
       };
 
       return Effect.gen(function* () {
-        const docker = yield* DockerService;
-        yield* docker.runInteractive(opts);
+        const containerLaunchService = yield* ContainerLaunchService;
+        yield* containerLaunchService.launch(opts);
         return {};
       });
     },
