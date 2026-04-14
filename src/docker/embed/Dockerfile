@@ -24,12 +24,8 @@ RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 RUN userdel -r ubuntu 2>/dev/null && groupdel ubuntu 2>/dev/null || true
 
 COPY entrypoint.sh /entrypoint.sh
-COPY osc52-clip.sh /usr/local/bin/osc52-clip
 COPY local-proxy.mjs /usr/local/bin/local-proxy.mjs
-RUN chmod +x /entrypoint.sh /usr/local/bin/osc52-clip \
-  && ln -s osc52-clip /usr/local/bin/xclip \
-  && ln -s osc52-clip /usr/local/bin/xsel \
-  && ln -s osc52-clip /usr/local/bin/wl-copy
+RUN chmod +x /entrypoint.sh
 
 # エージェントバイナリのマウント先
 RUN mkdir -p /usr/local/bin /home /nix

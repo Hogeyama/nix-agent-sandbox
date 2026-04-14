@@ -38,7 +38,7 @@ export const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
       "../docker/embed/",
     ),
     outputDir: "",
-    files: ["Dockerfile", "entrypoint.sh", "osc52-clip.sh", "local-proxy.mjs"],
+    files: ["Dockerfile", "entrypoint.sh", "local-proxy.mjs"],
   },
   {
     baseDir: resolveAssetDir(

@@ -122,10 +122,7 @@ test("computeEmbedHash returns consistent hash", async () => {
 test("computeEmbedHash matches embed and envoy assets", async () => {
   const parts: string[] = [];
   for (const [baseUrl, files] of [
-    [
-      new URL("./embed/", import.meta.url),
-      ["Dockerfile", "entrypoint.sh", "osc52-clip.sh"],
-    ],
+    [new URL("./embed/", import.meta.url), ["Dockerfile", "entrypoint.sh"]],
     [new URL("./envoy/", import.meta.url), ["envoy.template.yaml"]],
   ] as const) {
     for (const name of files) {

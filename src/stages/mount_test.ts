@@ -1162,26 +1162,6 @@ test("MountStage: X11 skipped when no DISPLAY", () => {
 });
 
 // ============================================================
-// tmux 検出
-// ============================================================
-
-test("MountStage: NAS_HOST_TMUX set when TMUX env exists", () => {
-  const hostEnv: HostEnv = {
-    ...defaultHostEnv,
-    env: new Map([["TMUX", "/tmp/tmux-1000/default,12345,0"]]),
-  };
-  const { input, mountProbes } = makeInput({ hostEnv });
-  const plan = planMount(input, mountProbes);
-  expect(plan.envVars.NAS_HOST_TMUX).toEqual("1");
-});
-
-test("MountStage: NAS_HOST_TMUX not set when TMUX absent", () => {
-  const { input, mountProbes } = makeInput();
-  const plan = planMount(input, mountProbes);
-  expect("NAS_HOST_TMUX" in plan.envVars).toEqual(false);
-});
-
-// ============================================================
 // mountDir
 // ============================================================
 

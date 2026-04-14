@@ -43,7 +43,6 @@
 
           cp ${self}/src/docker/embed/Dockerfile $out/docker/embed/
           cp ${self}/src/docker/embed/entrypoint.sh $out/docker/embed/
-          cp ${self}/src/docker/embed/osc52-clip.sh $out/docker/embed/
           cp ${self}/src/docker/embed/local-proxy.mjs $out/docker/embed/
           cp ${self}/src/docker/envoy/envoy.template.yaml $out/docker/envoy/
           cp ${self}/scripts/notify-send-wsl $out/scripts/

@@ -424,12 +424,6 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
     }
   }
 
-  // tmux 検出
-  const hostTmux = host.env.get("TMUX");
-  if (hostTmux) {
-    envVars.NAS_HOST_TMUX = "1";
-  }
-
   // エージェント固有の設定
   // Build priorDockerArgs and priorEnvVars by combining prior + current stage's args
   const priorDockerArgs = [...prior.dockerArgs, ...args];
