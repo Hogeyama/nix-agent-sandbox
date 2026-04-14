@@ -20,7 +20,12 @@ import {
   renameSession,
   stopContainer,
 } from "../data.ts";
-import { getLaunchInfo } from "../launch.ts";
+import {
+  getLaunchInfo,
+  type LaunchRequest,
+  LaunchValidationError,
+  launchSession,
+} from "../launch.ts";
 import { json, Router } from "../router.ts";
 
 export function createApiRoutes(ctx: UiDataContext): Router {
@@ -39,6 +44,24 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       const info = await getLaunchInfo(ctx);
       return json(info);
     } catch (e) {
+      return json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  api.post("/launch", async ({ req }) => {
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
+    try {
+      const result = await launchSession(body as LaunchRequest);
+      return json(result);
+    } catch (e) {
+      if (e instanceof LaunchValidationError) {
+        return json({ error: e.message }, 400);
+      }
       return json({ error: (e as Error).message }, 500);
     }
   });
