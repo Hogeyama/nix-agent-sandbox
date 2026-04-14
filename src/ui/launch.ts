@@ -5,6 +5,7 @@
 import { loadConfig } from "../config/load.ts";
 import { dtachIsAvailable } from "../dtach/client.ts";
 import { listSessions } from "../sessions/store.ts";
+import { getCurrentBranch } from "../stages/worktree/git_helpers.ts";
 import type { UiDataContext } from "./data.ts";
 
 export interface LaunchInfo {
@@ -39,23 +40,10 @@ export async function getLaunchInfo(ctx: UiDataContext): Promise<LaunchInfo> {
     if (recentDirectories.length >= 10) break;
   }
 
-  // Resolve current branch
-  let currentBranch: string | null = null;
-  if (ctx.gitRoot) {
-    try {
-      const proc = Bun.spawn(
-        ["git", "-C", ctx.gitRoot, "symbolic-ref", "--short", "HEAD"],
-        { stdout: "pipe", stderr: "pipe" },
-      );
-      const exitCode = await proc.exited;
-      if (exitCode === 0) {
-        const text = await new Response(proc.stdout).text();
-        currentBranch = text.trim() || null;
-      }
-    } catch {
-      // detached HEAD or git error — leave as null
-    }
-  }
+  // Resolve current branch at git root
+  const currentBranch = ctx.gitRoot
+    ? await getCurrentBranch(ctx.gitRoot)
+    : null;
 
   return {
     dtachAvailable,

@@ -39,6 +39,22 @@ export async function resolveBase(
   }
 }
 
+/**
+ * 現在のブランチ名を返す。detached HEAD なら null。
+ */
+export async function getCurrentBranch(
+  repoRoot: string,
+): Promise<string | null> {
+  try {
+    const branch = (
+      await $`git -C ${repoRoot} symbolic-ref --short HEAD`.text()
+    ).trim();
+    return branch || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function validateBaseBranch(
   repoRoot: string,
   base: string,
