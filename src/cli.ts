@@ -44,6 +44,7 @@ import { EnvoyServiceLive } from "./services/envoy.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { GitWorktreeServiceLive } from "./services/git_worktree.ts";
 import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
+import { HostExecSetupServiceLive } from "./services/hostexec_setup.ts";
 import { NetworkRuntimeServiceLive } from "./services/network_runtime.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { SessionBrokerServiceLive } from "./services/session_broker.ts";
@@ -249,6 +250,7 @@ export async function main(args: string[]): Promise<void> {
       FsServiceLive,
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
+      HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
       ProcessServiceLive,
       DockerServiceLive,

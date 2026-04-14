@@ -13,8 +13,11 @@ import type {
   PriorStageOutputs,
   StageInput,
 } from "../pipeline/types.ts";
-import { makeFsServiceFake } from "../services/fs.ts";
 import { makeHostExecBrokerServiceFake } from "../services/hostexec_broker.ts";
+import {
+  type HostExecWorkspacePlan,
+  makeHostExecSetupServiceFake,
+} from "../services/hostexec_setup.ts";
 import { createHostExecStage, planHostExec } from "./hostexec.ts";
 
 function makeProfile(): Profile {
@@ -317,7 +320,7 @@ test("HostExecStage: run still starts broker when user rules are empty (internal
   const input = makeStageInput(profile, hostEnv);
   const stage = createHostExecStage();
 
-  const { layer: fsLayer } = makeFsServiceFake();
+  const setupLayer = makeHostExecSetupServiceFake();
   const brokerLayer = makeHostExecBrokerServiceFake();
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
@@ -325,7 +328,7 @@ test("HostExecStage: run still starts broker when user rules are empty (internal
       .run(input)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
-        Effect.provide(fsLayer),
+        Effect.provide(setupLayer),
         Effect.provide(brokerLayer),
       ),
   );
@@ -335,14 +338,20 @@ test("HostExecStage: run still starts broker when user rules are empty (internal
   expect(result.dockerArgs?.length).toBeGreaterThan(0);
 });
 
-test("HostExecStage: run creates directories, files, and symlinks via FsService", async () => {
+test("HostExecStage: run delegates directories, files, and symlinks to HostExecSetupService", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = makeStageInput(profile, hostEnv);
   const plan = planHostExec(input)!;
 
-  const { layer: fsLayer, store } = makeFsServiceFake();
+  let capturedPlan: HostExecWorkspacePlan | null = null;
+  const setupLayer = makeHostExecSetupServiceFake({
+    prepareWorkspace: (p) =>
+      Effect.sync(() => {
+        capturedPlan = p;
+      }),
+  });
   const brokerLayer = makeHostExecBrokerServiceFake();
 
   const stage = createHostExecStage();
@@ -353,24 +362,14 @@ test("HostExecStage: run creates directories, files, and symlinks via FsService"
       .run(input)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
-        Effect.provide(fsLayer),
+        Effect.provide(setupLayer),
         Effect.provide(brokerLayer),
       ),
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
-  for (const dir of plan.directories) {
-    expect(store.has(dir.path)).toEqual(true);
-  }
 
-  for (const file of plan.files) {
-    const entry = store.get(file.path);
-    expect(entry).toBeDefined();
-    expect(entry!.content).toEqual(file.content);
-  }
-
-  for (const link of plan.symlinks) {
-    const entry = store.get(link.path);
-    expect(entry).toBeDefined();
-    expect(entry!.symlinkTarget).toEqual(link.target);
-  }
+  expect(capturedPlan).not.toBeNull();
+  expect(capturedPlan!.directories).toEqual(plan.directories);
+  expect(capturedPlan!.files).toEqual(plan.files);
+  expect(capturedPlan!.symlinks).toEqual(plan.symlinks);
 });

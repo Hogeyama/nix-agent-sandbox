@@ -20,8 +20,8 @@ import type {
   HostEnv,
   StageInput,
 } from "../pipeline/types.ts";
-import { FsService } from "../services/fs.ts";
 import { HostExecBrokerService } from "../services/hostexec_broker.ts";
+import { HostExecSetupService } from "../services/hostexec_setup.ts";
 
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
@@ -63,7 +63,7 @@ export interface HostExecPlan {
 // ---------------------------------------------------------------------------
 
 export function createHostExecStage(): EffectStage<
-  FsService | HostExecBrokerService
+  HostExecSetupService | HostExecBrokerService
 > {
   return {
     kind: "effect",
@@ -74,7 +74,7 @@ export function createHostExecStage(): EffectStage<
     ): Effect.Effect<
       EffectStageResult,
       unknown,
-      Scope.Scope | FsService | HostExecBrokerService
+      Scope.Scope | HostExecSetupService | HostExecBrokerService
     > {
       const plan = planHostExec(input);
       if (plan === null) {
@@ -224,23 +224,17 @@ function runHostExec(
 ): Effect.Effect<
   EffectStageResult,
   unknown,
-  Scope.Scope | FsService | HostExecBrokerService
+  Scope.Scope | HostExecSetupService | HostExecBrokerService
 > {
   return Effect.gen(function* () {
-    const fs = yield* FsService;
+    const setupService = yield* HostExecSetupService;
     const brokerService = yield* HostExecBrokerService;
 
-    for (const dir of plan.directories) {
-      yield* fs.mkdir(dir.path, { recursive: true, mode: dir.mode });
-    }
-
-    for (const file of plan.files) {
-      yield* fs.writeFile(file.path, file.content, { mode: file.mode });
-    }
-
-    for (const link of plan.symlinks) {
-      yield* fs.symlink(link.target, link.path);
-    }
+    yield* setupService.prepareWorkspace({
+      directories: plan.directories,
+      files: plan.files,
+      symlinks: plan.symlinks,
+    });
 
     const spec = plan.broker;
 
