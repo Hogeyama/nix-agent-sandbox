@@ -7,9 +7,11 @@ import type { Config, Profile } from "../config/types.ts";
 import type { AuthRouterService } from "../services/auth_router.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
+import type { EnvoyService } from "../services/envoy.ts";
 import type { FsService } from "../services/fs.ts";
 import type { GitWorktreeService } from "../services/git_worktree.ts";
 import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
+import type { NetworkRuntimeService } from "../services/network_runtime.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
 import type { SessionStoreService } from "../services/session_store_service.ts";
@@ -89,9 +91,11 @@ export type EffectStageResult = Partial<PriorStageOutputs>;
 // Union of all service tags that stages can depend on
 export type StageServices =
   | DindService
+  | EnvoyService
   | FsService
   | GitWorktreeService
   | HostExecBrokerService
+  | NetworkRuntimeService
   | ProcessService
   | DockerService
   | PromptService

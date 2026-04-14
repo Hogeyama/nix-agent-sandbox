@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Effect, Layer, Scope } from "effect";
 
 /**
  * ProxyStage unit テスト（Docker 不要）
@@ -21,6 +22,10 @@ import type {
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
+import { makeAuthRouterServiceFake } from "../services/auth_router.ts";
+import { makeEnvoyServiceFake } from "../services/envoy.ts";
+import { makeNetworkRuntimeServiceFake } from "../services/network_runtime.ts";
+import { makeSessionBrokerServiceFake } from "../services/session_broker.ts";
 import {
   buildNetworkRuntimePaths,
   createProxyStage,
@@ -329,4 +334,110 @@ test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
   };
   const paths = buildNetworkRuntimePaths(host);
   expect(paths.runtimeDir).toEqual("/tmp/nas-1000/network");
+});
+
+// ---------------------------------------------------------------------------
+// Orchestration tests — createProxyStage().run() with Fake services
+// ---------------------------------------------------------------------------
+
+test("createProxyStage().run(): skips when proxy is disabled", async () => {
+  const profile = makeProfile();
+  const input = makeInput(profile);
+  const stage = createProxyStage();
+
+  const layer = Layer.mergeAll(
+    makeNetworkRuntimeServiceFake(),
+    makeEnvoyServiceFake(),
+    makeSessionBrokerServiceFake(),
+    makeAuthRouterServiceFake(),
+  );
+
+  const result = await Effect.runPromise(
+    stage.run(input).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  expect(result).toEqual({});
+});
+
+test("createProxyStage().run(): calls services and returns merged output", async () => {
+  const profile = makeProfile({
+    network: { allowlist: ["example.com"] },
+  });
+  const input = makeInput(profile, {
+    prior: { dockerArgs: ["--rm", "--network", "bridge"] },
+  });
+
+  const calls: string[] = [];
+
+  const layer = Layer.mergeAll(
+    makeNetworkRuntimeServiceFake({
+      gcStaleRuntime: () => {
+        calls.push("gcStaleRuntime");
+        return Effect.void;
+      },
+      renderEnvoyConfig: () => {
+        calls.push("renderEnvoyConfig");
+        return Effect.void;
+      },
+    }),
+    makeEnvoyServiceFake({
+      ensureSharedEnvoy: () => {
+        calls.push("ensureSharedEnvoy");
+        return Effect.void;
+      },
+      createSessionNetwork: () => {
+        calls.push("createSessionNetwork");
+        return Effect.succeed(() => Effect.void);
+      },
+    }),
+    makeSessionBrokerServiceFake({
+      start: () => {
+        calls.push("sessionBrokerStart");
+        return Effect.succeed({ close: () => Effect.void });
+      },
+    }),
+    makeAuthRouterServiceFake({
+      ensureDaemon: () => {
+        calls.push("authRouterEnsureDaemon");
+        return Effect.succeed({ abort: () => Effect.void });
+      },
+    }),
+  );
+
+  const stage = createProxyStage({
+    generateSessionToken: () => "test-token-fixed",
+  });
+
+  const result = await Effect.runPromise(
+    stage.run(input).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  // All services were called in the expected order
+  expect(calls).toEqual([
+    "gcStaleRuntime",
+    "renderEnvoyConfig",
+    "sessionBrokerStart",
+    "authRouterEnsureDaemon",
+    "ensureSharedEnvoy",
+    "createSessionNetwork",
+  ]);
+
+  // Output includes proxy env vars
+  expect(result.envVars).toBeDefined();
+  expect((result.envVars as Record<string, string>).http_proxy).toEqual(
+    `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
+  );
+
+  // Output includes network override
+  expect(result.networkName).toBeDefined();
+  expect((result.networkName as string).startsWith("nas-session-net-")).toEqual(
+    true,
+  );
+
+  // dockerArgs has the session network replacing original
+  expect(result.dockerArgs).toBeDefined();
+  const dockerArgs = result.dockerArgs as string[];
+  const netIdx = dockerArgs.indexOf("--network");
+  expect(netIdx).not.toEqual(-1);
+  expect(dockerArgs[netIdx + 1]).toMatch(/^nas-session-net-/);
 });

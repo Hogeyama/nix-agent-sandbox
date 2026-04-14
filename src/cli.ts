@@ -38,9 +38,11 @@ import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
+import { EnvoyServiceLive } from "./services/envoy.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { GitWorktreeServiceLive } from "./services/git_worktree.ts";
 import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
+import { NetworkRuntimeServiceLive } from "./services/network_runtime.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { SessionBrokerServiceLive } from "./services/session_broker.ts";
 import { SessionStoreServiceLive } from "./services/session_store_service.ts";
@@ -233,12 +235,15 @@ export async function main(args: string[]): Promise<void> {
     const buildProbes = await resolveBuildProbes(imageName);
 
     const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
+    const dockerLayer = DockerServiceLive;
     const liveLayer = Layer.mergeAll(
       AuthRouterServiceLive,
       DindServiceLive,
+      EnvoyServiceLive.pipe(Layer.provide(dockerLayer)),
       FsServiceLive,
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
+      NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
       ProcessServiceLive,
       DockerServiceLive,
       PromptServiceLive,

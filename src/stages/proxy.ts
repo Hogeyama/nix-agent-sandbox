@@ -11,14 +11,6 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import {
-  NAS_KIND_ENVOY,
-  NAS_KIND_LABEL,
-  NAS_KIND_SESSION_NETWORK,
-  NAS_MANAGED_LABEL,
-  NAS_MANAGED_VALUE,
-} from "../docker/nas_resources.ts";
-import { resolveAsset } from "../lib/asset.ts";
 import { resolveNotifyBackend } from "../lib/notify_utils.ts";
 import { logInfo } from "../log.ts";
 import {
@@ -36,9 +28,8 @@ import {
   type AuthRouterHandle,
   AuthRouterService,
 } from "../services/auth_router.ts";
-import { DockerService } from "../services/docker.ts";
-import { FsService } from "../services/fs.ts";
-import { ProcessService } from "../services/process.ts";
+import { EnvoyService } from "../services/envoy.ts";
+import { NetworkRuntimeService } from "../services/network_runtime.ts";
 import {
   type SessionBrokerHandle,
   SessionBrokerService,
@@ -174,9 +165,8 @@ export function planProxy(
 export function createProxyStage(
   options: ProxyStageOptions = {},
 ): EffectStage<
-  | FsService
-  | ProcessService
-  | DockerService
+  | NetworkRuntimeService
+  | EnvoyService
   | SessionBrokerService
   | AuthRouterService
 > {
@@ -190,9 +180,8 @@ export function createProxyStage(
       EffectStageResult,
       unknown,
       | Scope.Scope
-      | FsService
-      | ProcessService
-      | DockerService
+      | NetworkRuntimeService
+      | EnvoyService
       | SessionBrokerService
       | AuthRouterService
     > {
@@ -216,24 +205,22 @@ function runProxy(
   EffectStageResult,
   unknown,
   | Scope.Scope
-  | FsService
-  | ProcessService
-  | DockerService
+  | NetworkRuntimeService
+  | EnvoyService
   | SessionBrokerService
   | AuthRouterService
 > {
   return Effect.gen(function* () {
-    const fs = yield* FsService;
-    const proc = yield* ProcessService;
-    const docker = yield* DockerService;
+    const networkRuntime = yield* NetworkRuntimeService;
+    const envoy = yield* EnvoyService;
     const sessionBrokerService = yield* SessionBrokerService;
     const authRouterService = yield* AuthRouterService;
 
     // 1. GC stale sessions (read PID file, check alive, remove stale files)
-    yield* gcNetworkRuntimeEffect(fs, proc, plan.runtimePaths);
+    yield* networkRuntime.gcStaleRuntime(plan.runtimePaths);
 
     // 2. Render envoy config (read template + write config)
-    yield* renderEnvoyConfigEffect(fs, plan.runtimePaths);
+    yield* networkRuntime.renderEnvoyConfig(plan.runtimePaths);
 
     // 3. Session broker + registry (acquireRelease)
     const tokenHash = yield* Effect.tryPromise({
@@ -273,13 +260,13 @@ function runProxy(
 
     // 5. Shared envoy container (acquireRelease — no teardown since it's shared)
     yield* Effect.acquireRelease(
-      ensureSharedEnvoyEffect(docker, plan),
+      envoy.ensureSharedEnvoy(plan),
       () => Effect.void,
     );
 
     // 6. Session network + envoy/dind connect (acquireRelease)
     yield* Effect.acquireRelease(
-      createSessionNetworkEffect(docker, plan),
+      envoy.createSessionNetwork(plan),
       (teardown: () => Effect.Effect<void>) => teardown(),
     );
 
@@ -291,196 +278,6 @@ function runProxy(
       ),
       envVars: { ...input.prior.envVars, ...plan.envVars },
     };
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Service-based helpers (replacing direct I/O)
-// ---------------------------------------------------------------------------
-
-function gcNetworkRuntimeEffect(
-  fs: Effect.Effect.Success<typeof FsService>,
-  proc: Effect.Effect.Success<typeof ProcessService>,
-  paths: NetworkRuntimePaths,
-): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const pidFileExists = yield* fs.exists(paths.authRouterPidFile);
-    if (!pidFileExists) return;
-
-    const pidStr = yield* fs.readFile(paths.authRouterPidFile);
-    const pid = Number.parseInt(pidStr.trim(), 10);
-    if (Number.isNaN(pid)) {
-      yield* fs.rm(paths.authRouterPidFile, { force: true });
-      yield* fs
-        .rm(paths.authRouterSocket, { force: true })
-        .pipe(Effect.catchAll(() => Effect.void));
-      return;
-    }
-
-    const alive = yield* proc.exec(["kill", "-0", pid.toString()]).pipe(
-      Effect.as(true),
-      Effect.catchAll(() => Effect.succeed(false)),
-    );
-
-    if (!alive) {
-      yield* fs
-        .rm(paths.authRouterSocket, { force: true })
-        .pipe(Effect.catchAll(() => Effect.void));
-      yield* fs
-        .rm(paths.authRouterPidFile, { force: true })
-        .pipe(Effect.catchAll(() => Effect.void));
-    }
-  });
-}
-
-function renderEnvoyConfigEffect(
-  fs: Effect.Effect.Success<typeof FsService>,
-  paths: NetworkRuntimePaths,
-): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    const envoyTemplatePath = resolveAsset(
-      "docker/envoy/envoy.template.yaml",
-      import.meta.url,
-      "../docker/envoy/envoy.template.yaml",
-    );
-    const source = yield* fs.readFile(envoyTemplatePath);
-    yield* fs.writeFile(paths.envoyConfigFile, source, { mode: 0o644 });
-  });
-}
-
-function ensureSharedEnvoyEffect(
-  docker: Effect.Effect.Success<typeof DockerService>,
-  plan: ProxyPlan,
-): Effect.Effect<void, unknown> {
-  return Effect.gen(function* () {
-    const running = yield* docker.isRunning(plan.envoyContainerName);
-    if (running) return;
-
-    const exists = yield* docker.containerExists(plan.envoyContainerName);
-    if (exists) {
-      yield* docker
-        .rm(plan.envoyContainerName)
-        .pipe(
-          Effect.catchAll((e) =>
-            Effect.sync(() =>
-              logInfo(
-                `[nas] Proxy: failed to remove stale envoy container: ${e}`,
-              ),
-            ),
-          ),
-        );
-    }
-
-    yield* docker.runDetached({
-      name: plan.envoyContainerName,
-      image: plan.envoyImage,
-      args: ["--add-host=host.docker.internal:host-gateway"],
-      envVars: {},
-      mounts: [
-        {
-          source: plan.runtimePaths.runtimeDir,
-          target: "/nas-network",
-          mode: "rw",
-        },
-      ],
-      labels: {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
-      },
-      command: ["-c", "/nas-network/envoy.yaml", "--log-level", "info"],
-    });
-
-    yield* waitForEnvoyReadyEffect(docker, plan);
-  });
-}
-
-function waitForEnvoyReadyEffect(
-  docker: Effect.Effect.Success<typeof DockerService>,
-  plan: ProxyPlan,
-): Effect.Effect<void, Error> {
-  return Effect.gen(function* () {
-    const started = Date.now();
-    while (Date.now() - started < plan.envoyReadyTimeoutMs) {
-      const running = yield* docker.isRunning(plan.envoyContainerName);
-      if (running) return;
-      yield* Effect.sleep("200 millis");
-    }
-    const logs = yield* docker.logs(plan.envoyContainerName);
-    yield* Effect.fail(new Error(`Envoy sidecar failed to start:\n${logs}`));
-  });
-}
-
-function createSessionNetworkEffect(
-  docker: Effect.Effect.Success<typeof DockerService>,
-  plan: ProxyPlan,
-): Effect.Effect<() => Effect.Effect<void>> {
-  return Effect.gen(function* () {
-    let envoyConnected = false;
-    let dindConnected = false;
-
-    yield* docker.networkCreate(plan.sessionNetworkName, {
-      internal: true,
-      labels: {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
-      },
-    });
-
-    yield* docker.networkConnect(
-      plan.sessionNetworkName,
-      plan.envoyContainerName,
-      { aliases: [plan.envoyAlias] },
-    );
-    envoyConnected = true;
-
-    if (plan.dindContainerName) {
-      yield* docker.networkConnect(
-        plan.sessionNetworkName,
-        plan.dindContainerName,
-      );
-      dindConnected = true;
-    }
-
-    const teardown = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        if (dindConnected && plan.dindContainerName) {
-          yield* docker
-            .networkDisconnect(plan.sessionNetworkName, plan.dindContainerName)
-            .pipe(
-              Effect.catchAll((e) =>
-                Effect.sync(() =>
-                  logInfo(
-                    `[nas] Proxy teardown: failed to disconnect dind from network: ${e}`,
-                  ),
-                ),
-              ),
-            );
-        }
-        if (envoyConnected) {
-          yield* docker
-            .networkDisconnect(plan.sessionNetworkName, plan.envoyContainerName)
-            .pipe(
-              Effect.catchAll((e) =>
-                Effect.sync(() =>
-                  logInfo(
-                    `[nas] Proxy teardown: failed to disconnect envoy from network: ${e}`,
-                  ),
-                ),
-              ),
-            );
-        }
-        yield* docker
-          .networkRemove(plan.sessionNetworkName)
-          .pipe(
-            Effect.catchAll((e) =>
-              Effect.sync(() =>
-                logInfo(`[nas] Proxy teardown: failed to remove network: ${e}`),
-              ),
-            ),
-          );
-      });
-
-    return teardown;
   });
 }
 
