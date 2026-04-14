@@ -970,6 +970,40 @@ td.time {
   flex-direction: column;
 }
 
+.terminal-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.terminal-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text, #f5f8ff);
+  background: var(--surface-hi, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+  outline: none;
+}
+
+.terminal-search-input:focus {
+  border-color: #9dd2ff;
+}
+
+.terminal-search-count {
+  font-size: 12px;
+  color: var(--text-muted, #8897b3);
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ──────────────── Terminal Minimized Bar ───────────���──── */
 
 .terminal-minimized-bar {

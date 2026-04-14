@@ -33,8 +33,12 @@ export function ensureTerminalFocus(term: Terminal): void {
 export function setupTerminalInputForwarding(
   term: Terminal,
   container: HTMLElement,
+  extraKeyHandler?: (event: KeyboardEvent) => boolean,
 ): () => void {
   term.attachCustomKeyEventHandler((event) => {
+    if (extraKeyHandler && extraKeyHandler(event) === false) {
+      return false;
+    }
     if (shouldForwardCtrlShortcut(event)) {
       event.preventDefault();
       event.stopPropagation();

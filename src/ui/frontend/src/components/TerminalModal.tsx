@@ -1,5 +1,7 @@
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import {
@@ -187,10 +189,18 @@ function TerminalPane({
   const terminalRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const errorRef = useRef<string | null>(null);
   const errorElRef = useRef<HTMLDivElement>(null);
   const [acking, setAcking] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatch, setSearchMatch] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
   const DEFAULT_FONT_SIZE = 14;
   const [, setFontSize] = useState(DEFAULT_FONT_SIZE);
 
@@ -235,9 +245,20 @@ function TerminalPane({
     });
 
     const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new ClipboardAddon());
+    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(searchAddon);
+    searchAddon.onDidChangeResults((e) => {
+      setSearchMatch(
+        e.resultCount > 0
+          ? { current: e.resultIndex + 1, total: e.resultCount }
+          : null,
+      );
+    });
     fitAddonRef.current = fitAddon;
+    searchAddonRef.current = searchAddon;
     terminalRef.current = term;
 
     let cleanupInputForwarding = () => {};
@@ -246,6 +267,20 @@ function TerminalPane({
       cleanupInputForwarding = setupTerminalInputForwarding(
         term,
         termRef.current,
+        (e) => {
+          if (
+            e.type === "keydown" &&
+            (e.ctrlKey || e.metaKey) &&
+            e.key === "f"
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+            setSearchOpen(true);
+            requestAnimationFrame(() => searchInputRef.current?.select());
+            return false;
+          }
+          return true;
+        },
       );
       if (visible) {
         requestAnimationFrame(() => {
@@ -351,6 +386,7 @@ function TerminalPane({
       wsRef.current = null;
       terminalRef.current = null;
       fitAddonRef.current = null;
+      searchAddonRef.current = null;
     };
   }, [sessionId]);
 
@@ -451,6 +487,53 @@ function TerminalPane({
   // ボタンの mousedown でフォーカス移動を防止
   const preventFocusSteal = useCallback((e: MouseEvent) => {
     e.preventDefault();
+  }, []);
+
+  const runSearch = useCallback(
+    (query: string, direction: "next" | "prev" = "next") => {
+      const addon = searchAddonRef.current;
+      if (!addon) return;
+      if (!query) {
+        addon.clearDecorations();
+        setSearchMatch(null);
+        return;
+      }
+      if (direction === "next") addon.findNext(query);
+      else addon.findPrevious(query);
+    },
+    [],
+  );
+
+  const handleSearchInput = useCallback(
+    (e: Event) => {
+      const value = (e.target as HTMLInputElement).value;
+      setSearchQuery(value);
+      runSearch(value, "next");
+    },
+    [runSearch],
+  );
+
+  const handleSearchKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        runSearch(searchQuery, e.shiftKey ? "prev" : "next");
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setSearchOpen(false);
+        searchAddonRef.current?.clearDecorations();
+        setSearchMatch(null);
+        if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
+      }
+    },
+    [runSearch, searchQuery],
+  );
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    searchAddonRef.current?.clearDecorations();
+    setSearchMatch(null);
+    if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
   }, []);
 
   return (
@@ -662,6 +745,93 @@ function TerminalPane({
         class="terminal-error"
         style={{ display: "none" }}
       />
+      {searchOpen && (
+        <div class="terminal-search-bar">
+          <input
+            ref={searchInputRef}
+            type="text"
+            class="terminal-search-input"
+            placeholder="Search..."
+            value={searchQuery}
+            onInput={handleSearchInput}
+            onKeyDown={handleSearchKeyDown}
+          />
+          <span class="terminal-search-count">
+            {searchMatch
+              ? `${searchMatch.current}/${searchMatch.total}`
+              : searchQuery
+                ? "0/0"
+                : ""}
+          </span>
+          <button
+            type="button"
+            class="btn btn-icon btn-ghost"
+            title="Previous match (Shift+Enter)"
+            onMouseDown={preventFocusSteal}
+            onClick={() => runSearch(searchQuery, "prev")}
+          >
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="btn btn-icon btn-ghost"
+            title="Next match (Enter)"
+            onMouseDown={preventFocusSteal}
+            onClick={() => runSearch(searchQuery, "next")}
+          >
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="btn btn-icon btn-ghost"
+            title="Close search (Esc)"
+            onMouseDown={preventFocusSteal}
+            onClick={closeSearch}
+          >
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
       <div class="terminal-container" ref={termRef} />
     </div>
   );

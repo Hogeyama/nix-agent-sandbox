@@ -65,6 +65,14 @@
     url = "https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-0.11.0.tgz";
     hash = "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==";
   };
+  "@xterm/addon-search@0.16.0" = fetchurl {
+    url = "https://registry.npmjs.org/@xterm/addon-search/-/addon-search-0.16.0.tgz";
+    hash = "sha512-9OeuBFu0/uZJPu+9AHKY6g/w0Czyb/Ut0A5t79I4ULoU4IfU5BEpPFVGQxP4zTTMdfZEYkVIRYbHBX1xWwjeSA==";
+  };
+  "@xterm/addon-web-links@0.12.0" = fetchurl {
+    url = "https://registry.npmjs.org/@xterm/addon-web-links/-/addon-web-links-0.12.0.tgz";
+    hash = "sha512-4Smom3RPyVp7ZMYOYDoC/9eGJJJqYhnPLGGqJ6wOBfB8VxPViJNSKdgRYb8NpaM6YSelEKbA2SStD7lGyqaobw==";
+  };
   "@xterm/xterm@6.0.0" = fetchurl {
     url = "https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz";
     hash = "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==";
