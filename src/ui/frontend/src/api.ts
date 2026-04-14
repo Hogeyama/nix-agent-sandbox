@@ -25,6 +25,25 @@ export interface SessionTurnRecord {
   lastEventMessage?: string;
 }
 
+export interface LaunchInfo {
+  dtachAvailable: boolean;
+  profiles: string[];
+  defaultProfile?: string;
+  recentDirectories: string[];
+  currentBranch: string | null;
+}
+
+export interface LaunchRequest {
+  profile: string;
+  worktreeBase?: string;
+  name?: string;
+  cwd?: string;
+}
+
+export interface LaunchResult {
+  sessionId: string;
+}
+
 export const api = {
   getNetworkPending: () =>
     request<{ items: NetworkPendingItem[] }>("GET", "/api/network/pending"),
@@ -52,6 +71,10 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}/name`,
       { name },
     ),
+
+  getLaunchInfo: () => request<LaunchInfo>("GET", "/api/launch/info"),
+  launchSession: (params: LaunchRequest) =>
+    request<LaunchResult>("POST", "/api/launch", params),
 
   getContainers: () =>
     request<{ items: ContainerInfo[] }>("GET", "/api/containers"),
