@@ -36,6 +36,7 @@ import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { runPipelineEffect } from "./pipeline/pipeline.ts";
 import type { PriorStageOutputs } from "./pipeline/types.ts";
 import { AuthRouterServiceLive } from "./services/auth_router.ts";
+import { ContainerLaunchServiceLive } from "./services/container_launch.ts";
 import { DbusProxyServiceLive } from "./services/dbus_proxy.ts";
 import { DindServiceLive } from "./services/dind.ts";
 import { DockerServiceLive } from "./services/docker.ts";
@@ -45,6 +46,7 @@ import { FsServiceLive } from "./services/fs.ts";
 import { GitWorktreeServiceLive } from "./services/git_worktree.ts";
 import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
 import { HostExecSetupServiceLive } from "./services/hostexec_setup.ts";
+import { MountSetupServiceLive } from "./services/mount_setup.ts";
 import { NetworkRuntimeServiceLive } from "./services/network_runtime.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { SessionBrokerServiceLive } from "./services/session_broker.ts";
@@ -241,6 +243,7 @@ export async function main(args: string[]): Promise<void> {
     const dockerLayer = DockerServiceLive;
     const liveLayer = Layer.mergeAll(
       AuthRouterServiceLive,
+      ContainerLaunchServiceLive.pipe(Layer.provide(dockerLayer)),
       DbusProxyServiceLive.pipe(Layer.provide(primitiveLayer)),
       DindServiceLive,
       DockerBuildServiceLive.pipe(
@@ -251,6 +254,7 @@ export async function main(args: string[]): Promise<void> {
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
+      MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
       ProcessServiceLive,
       DockerServiceLive,

@@ -5,6 +5,7 @@
 import type { Effect, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import type { AuthRouterService } from "../services/auth_router.ts";
+import type { ContainerLaunchService } from "../services/container_launch.ts";
 import type { DbusProxyService } from "../services/dbus_proxy.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DockerService } from "../services/docker.ts";
@@ -14,6 +15,7 @@ import type { FsService } from "../services/fs.ts";
 import type { GitWorktreeService } from "../services/git_worktree.ts";
 import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
 import type { HostExecSetupService } from "../services/hostexec_setup.ts";
+import type { MountSetupService } from "../services/mount_setup.ts";
 import type { NetworkRuntimeService } from "../services/network_runtime.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
@@ -93,6 +95,7 @@ export type EffectStageResult = Partial<PriorStageOutputs>;
 
 // Union of all service tags that stages can depend on
 export type StageServices =
+  | ContainerLaunchService
   | DbusProxyService
   | DindService
   | DockerBuildService
@@ -101,6 +104,7 @@ export type StageServices =
   | GitWorktreeService
   | HostExecBrokerService
   | HostExecSetupService
+  | MountSetupService
   | NetworkRuntimeService
   | ProcessService
   | DockerService

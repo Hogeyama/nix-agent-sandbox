@@ -1,9 +1,9 @@
 /**
- * マウント構成の組み立てステージ (EffectStage<FsService>)
+ * マウント構成の組み立てステージ (EffectStage<MountSetupService>)
  *
  * resolveMountProbes() で全ての I/O を事前解決し、
  * planMount() は純粋関数として MountPlan を返す。
- * run() は FsService を使ってディレクトリ作成等を実行する。
+ * run() は MountSetupService を使ってディレクトリ作成等を実行する。
  */
 
 import * as path from "node:path";
@@ -20,7 +20,7 @@ import type {
   EffectStageResult,
   StageInput,
 } from "../pipeline/types.ts";
-import { FsService } from "../services/fs.ts";
+import { MountSetupService } from "../services/mount_setup.ts";
 import type { MountProbes } from "./mount_probes.ts";
 
 export type {
@@ -91,7 +91,7 @@ export interface MountPlan {
 
 export function createMountStage(
   mountProbes: MountProbes,
-): EffectStage<FsService> {
+): EffectStage<MountSetupService> {
   return {
     kind: "effect",
     name: "MountStage",
@@ -100,11 +100,9 @@ export function createMountStage(
       const plan = planMount(input, mountProbes);
 
       return Effect.gen(function* () {
-        const fs = yield* FsService;
+        const mountSetupService = yield* MountSetupService;
 
-        for (const dir of plan.directories) {
-          yield* fs.mkdir(dir.path, { recursive: true, mode: dir.mode });
-        }
+        yield* mountSetupService.ensureDirectories(plan.directories);
 
         return {
           dockerArgs: [...input.prior.dockerArgs, ...plan.dockerArgs],

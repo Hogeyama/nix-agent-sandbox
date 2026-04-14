@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
  *
  * planMount() は純粋関数なので、HostEnv / ProbeResults / MountProbes を
  * リテラルで組み立てて渡す。実行環境に依存しない。
- * run() テストは FsService fake を使う。
+ * run() テストは MountSetupService fake を使う。
  */
 
 import { Effect, Exit, Scope } from "effect";
@@ -27,7 +27,10 @@ import type {
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
-import { makeFsServiceFake } from "../services/fs.ts";
+import {
+  type MountDirectoryEntry,
+  makeMountSetupServiceFake,
+} from "../services/mount_setup.ts";
 import {
   createMountStage,
   encodeDynamicEnvOps,
@@ -1278,10 +1281,10 @@ test("encodeDynamicEnvOps: value with single quotes escaped", () => {
 });
 
 // ============================================================
-// run() with FsService fake
+// run() with MountSetupService fake
 // ============================================================
 
-test("MountStage run(): creates directories via FsService and returns result", async () => {
+test("MountStage run(): creates directories via MountSetupService and returns result", async () => {
   const profile = makeProfile({
     nix: { enable: true, mountSocket: true, extraPackages: [] },
   });
@@ -1304,7 +1307,13 @@ test("MountStage run(): creates directories via FsService and returns result", a
     prior: { nixEnabled: true },
   });
 
-  const { layer, store } = makeFsServiceFake();
+  const createdDirs: MountDirectoryEntry[] = [];
+  const layer = makeMountSetupServiceFake({
+    ensureDirectories: (dirs) =>
+      Effect.sync(() => {
+        createdDirs.push(...dirs);
+      }),
+  });
   const stage = createMountStage(mountProbes);
 
   const scope = Effect.runSync(Scope.make());
@@ -1314,10 +1323,9 @@ test("MountStage run(): creates directories via FsService and returns result", a
   const result = await Effect.runPromise(effect);
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
-  expect(store.has("/home/testuser/.cache/nas")).toEqual(true);
-  expect(store.has("/home/testuser/.cache/nix")).toEqual(true);
-  expect(store.get("/home/testuser/.cache/nas")?.isDirectory).toEqual(true);
-  expect(store.get("/home/testuser/.cache/nix")?.isDirectory).toEqual(true);
+  const createdPaths = createdDirs.map((d) => d.path);
+  expect(createdPaths).toContain("/home/testuser/.cache/nas");
+  expect(createdPaths).toContain("/home/testuser/.cache/nix");
 
   expect(result.dockerArgs).toBeDefined();
   expect(result.envVars).toBeDefined();
@@ -1328,7 +1336,13 @@ test("MountStage run(): creates directories via FsService and returns result", a
 test("MountStage run(): no directories when nix disabled", async () => {
   const { input, mountProbes } = makeInput();
 
-  const { layer, store } = makeFsServiceFake();
+  const createdDirs: MountDirectoryEntry[] = [];
+  const layer = makeMountSetupServiceFake({
+    ensureDirectories: (dirs) =>
+      Effect.sync(() => {
+        createdDirs.push(...dirs);
+      }),
+  });
   const stage = createMountStage(mountProbes);
 
   const scope = Effect.runSync(Scope.make());
@@ -1338,7 +1352,7 @@ test("MountStage run(): no directories when nix disabled", async () => {
   const result = await Effect.runPromise(effect);
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
-  expect(store.size).toEqual(0);
+  expect(createdDirs.length).toEqual(0);
   expect(result.dockerArgs).toBeDefined();
   expect(result.envVars).toBeDefined();
   expect(result.envVars!.NAS_USER).toEqual(TEST_USER);
