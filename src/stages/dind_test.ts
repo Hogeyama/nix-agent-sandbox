@@ -17,6 +17,7 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
+import { emptyContainerPlan } from "../pipeline/container_plan.ts";
 import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
 import { type DindSidecarOpts, makeDindServiceFake } from "../services/dind.ts";
 import {
@@ -146,6 +147,26 @@ test("DindStage: shared mode uses fixed names", () => {
     NAS_DIND_CONTAINER_NAME: "nas-dind-shared",
     NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
   });
+  expect(p.outputOverrides.dind).toEqual({
+    containerName: "nas-dind-shared",
+  });
+  expect(p.outputOverrides.container).toEqual({
+    image: "nas:latest",
+    workDir: "/tmp",
+    mounts: [],
+    env: {
+      static: {
+        DOCKER_HOST: "tcp://nas-dind-shared:2375",
+        NAS_DIND_CONTAINER_NAME: "nas-dind-shared",
+        NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+      },
+      dynamicOps: [],
+    },
+    extraRunArgs: ["-v", "nas-dind-shared-tmp:/tmp/nas-shared"],
+    command: { agentCommand: ["claude"], extraArgs: [] },
+    labels: {},
+  });
+  expect(p.outputOverrides.network).toBeUndefined();
   expect(p.outputOverrides.dindContainerName).toEqual("nas-dind-shared");
   expect(p.outputOverrides.networkName).toEqual("nas-dind-shared");
 });
@@ -178,6 +199,62 @@ test("DindStage: default options", () => {
   const p = plan as DindPlan;
   expect(p.disableCache).toEqual(false);
   expect(p.readinessTimeoutMs).toEqual(30_000);
+});
+
+test("DindStage: planner merges into existing container and network slices", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const baseInput = makeStageInput(
+    profile,
+    "abcdef12-3456-7890-abcd-ef1234567890",
+  );
+  const input: StageInput = {
+    ...baseInput,
+    prior: {
+      ...baseInput.prior,
+      envVars: { EXISTING_ENV: "1" },
+      dockerArgs: ["--shm-size", "2g"],
+      container: {
+        ...emptyContainerPlan("slice-image", "/slice-workdir"),
+        env: { static: { EXISTING_ENV: "1" }, dynamicOps: [] },
+        extraRunArgs: ["--shm-size", "2g"],
+        network: { name: "stale-net" },
+        command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
+        labels: { "nas.managed": "true" },
+      },
+      network: {
+        networkName: "legacy-net",
+        runtimeDir: "/run/nas/network",
+      },
+    },
+  };
+
+  const plan = planDind(input);
+  expect(plan).not.toBeNull();
+
+  expect(plan!.outputOverrides.network).toBeUndefined();
+  expect(plan!.outputOverrides.container).toEqual({
+    image: "slice-image",
+    workDir: "/slice-workdir",
+    mounts: [],
+    env: {
+      static: {
+        EXISTING_ENV: "1",
+        DOCKER_HOST: "tcp://nas-dind-abcdef12:2375",
+        NAS_DIND_CONTAINER_NAME: "nas-dind-abcdef12",
+        NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+      },
+      dynamicOps: [],
+    },
+    extraRunArgs: [
+      "--shm-size",
+      "2g",
+      "-v",
+      "nas-dind-tmp-abcdef12:/tmp/nas-shared",
+    ],
+    command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
+    labels: { "nas.managed": "true" },
+  });
+  expect(plan!.outputOverrides.container?.network).toBeUndefined();
 });
 
 // ============================================================
@@ -252,6 +329,16 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(result.envVars!.DOCKER_HOST).toEqual("tcp://nas-dind-shared:2375");
   expect(result.dindContainerName).toEqual("nas-dind-shared");
   expect(result.networkName).toEqual("nas-dind-shared");
+  expect(result.dind).toEqual({ containerName: "nas-dind-shared" });
+  expect(result.network).toBeUndefined();
+  expect(result.container?.network).toBeUndefined();
+  expect(result.container?.env.static.DOCKER_HOST).toEqual(
+    "tcp://nas-dind-shared:2375",
+  );
+  expect(result.container?.extraRunArgs).toEqual([
+    "-v",
+    "nas-dind-shared-tmp:/tmp/nas-shared",
+  ]);
 
   expect(teardownCalls.length).toEqual(0);
 

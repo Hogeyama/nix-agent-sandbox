@@ -23,6 +23,11 @@ import {
   SHARED_TMP_MOUNT_PATH,
 } from "../docker/dind.ts";
 import { logInfo } from "../log.ts";
+import {
+  emptyContainerPlan,
+  mergeContainerPlan,
+} from "../pipeline/container_plan.ts";
+import type { ContainerPlan, DindState } from "../pipeline/state.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -102,6 +107,13 @@ export function planDind(
         NAS_DIND_CONTAINER_NAME: containerName,
         NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
       },
+      dind: {
+        containerName,
+      },
+      container: buildContainerState(input, {
+        containerName,
+        sharedTmpVolume,
+      }),
     },
   };
 }
@@ -169,6 +181,59 @@ function runDind(
       envVars: { ...input.prior.envVars, ...plan.outputOverrides.envVars },
     };
   });
+}
+
+function buildContainerState(
+  input: StageInput,
+  config: {
+    readonly containerName: string;
+    readonly sharedTmpVolume: string;
+  },
+): ContainerPlan {
+  const base = normalizeContainerBase(input);
+
+  const normalizedBase =
+    input.prior.container === undefined
+      ? mergeContainerPlan(base, {
+          env: { static: { ...input.prior.envVars } },
+          extraRunArgs: [...input.prior.dockerArgs],
+          command: {
+            agentCommand: [...input.prior.agentCommand],
+            extraArgs: [],
+          },
+        })
+      : base;
+
+  return mergeContainerPlan(normalizedBase, {
+    env: {
+      static: {
+        DOCKER_HOST: `tcp://${config.containerName}:${DIND_INTERNAL_PORT}`,
+        NAS_DIND_CONTAINER_NAME: config.containerName,
+        NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
+      },
+    },
+    extraRunArgs: [
+      "-v",
+      `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
+    ],
+  });
+}
+
+function resolveImageName(input: StageInput): string {
+  return input.prior.workspace?.imageName ?? input.prior.imageName;
+}
+
+function resolveWorkDir(input: StageInput): string {
+  return input.prior.workspace?.workDir ?? input.prior.workDir;
+}
+
+function normalizeContainerBase(input: StageInput): ContainerPlan {
+  if (input.prior.container === undefined) {
+    return emptyContainerPlan(resolveImageName(input), resolveWorkDir(input));
+  }
+
+  const { network: _network, ...containerWithoutNetwork } = input.prior.container;
+  return containerWithoutNetwork;
 }
 
 // ---------------------------------------------------------------------------

@@ -196,6 +196,12 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       expect(result.envVars!.DOCKER_HOST.endsWith(":2375")).toEqual(true);
       expect(typeof result.envVars!.NAS_DIND_CONTAINER_NAME).toEqual("string");
       expect(typeof result.envVars!.NAS_DIND_SHARED_TMP).toEqual("string");
+      expect(result.dind?.containerName).toEqual(containerName);
+      expect(result.network).toBeUndefined();
+      expect(result.container?.network).toBeUndefined();
+      expect(result.container?.env.static.DOCKER_HOST).toEqual(
+        result.envVars!.DOCKER_HOST,
+      );
 
       const networkIdx = result.dockerArgs!.indexOf("--network");
       expect(networkIdx !== -1).toEqual(true);
