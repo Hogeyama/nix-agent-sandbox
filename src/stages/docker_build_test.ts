@@ -10,6 +10,7 @@ import {
   DEFAULT_UI_CONFIG,
   type Profile,
 } from "../config/types.ts";
+import type { WorkspaceState } from "../pipeline/state.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
@@ -28,6 +29,7 @@ import {
 
 test("planDockerBuild: returns needsBuild=true with labels when image does not exist", () => {
   const buildProbes: BuildProbes = {
+    imageName: "nas-sandbox",
     imageExists: false,
     currentEmbedHash: "abc123",
     imageEmbedHash: null,
@@ -43,6 +45,7 @@ test("planDockerBuild: returns needsBuild=true with labels when image does not e
 
 test("planDockerBuild: returns needsBuild=false when image exists and hash matches", () => {
   const buildProbes: BuildProbes = {
+    imageName: "nas-sandbox",
     imageExists: true,
     currentEmbedHash: "abc123",
     imageEmbedHash: "abc123",
@@ -53,8 +56,47 @@ test("planDockerBuild: returns needsBuild=false when image exists and hash match
   expect(plan.needsBuild).toEqual(false);
 });
 
+test("planDockerBuild: prefers workspace slice image name over legacy prior field", () => {
+  const buildProbes: BuildProbes = {
+    imageName: "slice-image",
+    imageExists: false,
+    currentEmbedHash: "abc123",
+    imageEmbedHash: null,
+  };
+  const input = createTestInput({
+    imageName: "legacy-image",
+    workspace: {
+      workDir: "/workspace",
+      imageName: "slice-image",
+    },
+  });
+
+  const plan = planDockerBuild(input, buildProbes);
+  expect(plan.imageName).toEqual("slice-image");
+});
+
+test("planDockerBuild: throws when workspace image differs from probe image", () => {
+  const buildProbes: BuildProbes = {
+    imageName: "probed-image",
+    imageExists: false,
+    currentEmbedHash: "abc123",
+    imageEmbedHash: null,
+  };
+  const input = createTestInput({
+    workspace: {
+      workDir: "/workspace",
+      imageName: "slice-image",
+    },
+  });
+
+  expect(() => planDockerBuild(input, buildProbes)).toThrow(
+    "DockerBuildStage probe/image mismatch",
+  );
+});
+
 test("planDockerBuild: warns when cached image embed hash is outdated", () => {
   const buildProbes: BuildProbes = {
+    imageName: "nas-sandbox",
     imageExists: true,
     currentEmbedHash: "new-hash",
     imageEmbedHash: "stale-hash",
@@ -79,6 +121,7 @@ test("planDockerBuild: warns when cached image embed hash is outdated", () => {
 
 test("DockerBuildStage.run: skips build when image exists", async () => {
   const buildProbes: BuildProbes = {
+    imageName: "nas-sandbox",
     imageExists: true,
     currentEmbedHash: "abc123",
     imageEmbedHash: "abc123",
@@ -104,6 +147,7 @@ test("DockerBuildStage.run: calls DockerBuildService.buildImage when image does 
   const buildImageCalls: DockerBuildImagePlan[] = [];
 
   const buildProbes: BuildProbes = {
+    imageName: "nas-sandbox",
     imageExists: false,
     currentEmbedHash: "abc123",
     imageEmbedHash: null,
@@ -137,7 +181,9 @@ test("DockerBuildStage.run: calls DockerBuildService.buildImage when image does 
 });
 
 function createTestInput(
-  priorOverrides: Partial<PriorStageOutputs> = {},
+  priorOverrides: Partial<PriorStageOutputs> & {
+    workspace?: WorkspaceState;
+  } = {},
 ): StageInput {
   const profile: Profile = {
     agent: "claude",
@@ -168,7 +214,7 @@ function createTestInput(
     isWSL: false,
     env: new Map(),
   };
-  const prior: PriorStageOutputs = {
+  const prior: PriorStageOutputs & { workspace?: WorkspaceState } = {
     dockerArgs: [],
     envVars: {},
     workDir: "/workspace",

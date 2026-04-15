@@ -13,6 +13,7 @@ import {
 } from "../docker/client.ts";
 import { resolveAssetDir } from "../lib/asset.ts";
 import { logInfo, logWarn } from "../log.ts";
+import type { WorkspaceState } from "../pipeline/state.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -56,6 +57,7 @@ export const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
 // ---------------------------------------------------------------------------
 
 export interface BuildProbes {
+  readonly imageName: string;
   readonly imageExists: boolean;
   readonly currentEmbedHash: string;
   readonly imageEmbedHash: string | null;
@@ -79,7 +81,7 @@ export async function resolveBuildProbes(
     imageEmbedHash = await getImageLabel(imageName, EMBED_HASH_LABEL);
   }
 
-  return { imageExists, currentEmbedHash, imageEmbedHash };
+  return { imageName, imageExists, currentEmbedHash, imageEmbedHash };
 }
 
 // ---------------------------------------------------------------------------
@@ -93,11 +95,29 @@ export interface DockerBuildPlan {
   readonly labels: Record<string, string>;
 }
 
+function resolveWorkspace(input: StageInput): WorkspaceState {
+  return (
+    input.prior.workspace ?? {
+      workDir: input.prior.workDir,
+      imageName: input.prior.imageName,
+      ...(input.prior.mountDir !== undefined
+        ? { mountDir: input.prior.mountDir }
+        : {}),
+    }
+  );
+}
+
 export function planDockerBuild(
   input: StageInput,
   buildProbes: BuildProbes,
 ): DockerBuildPlan {
-  const imageName = input.prior.imageName;
+  const { imageName } = resolveWorkspace(input);
+
+  if (buildProbes.imageName !== imageName) {
+    throw new Error(
+      `[nas] DockerBuildStage probe/image mismatch: probes=${buildProbes.imageName} workspace=${imageName}`,
+    );
+  }
 
   if (buildProbes.imageExists) {
     logInfo(`[nas] Docker image "${imageName}" already exists, skipping build`);
