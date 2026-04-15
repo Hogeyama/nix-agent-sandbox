@@ -5,8 +5,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   gh ripgrep fd-find python3 python-is-python3 \
   gnupg unzip jq \
   fonts-noto-cjk fonts-noto-color-emoji fontconfig \
+  locales \
   && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
+  && locale-gen en_US.UTF-8 ja_JP.UTF-8 \
+  && update-locale LANG=en_US.UTF-8 \
   && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # Bun (local-proxy 実行用。Node.js より起動が高速)
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
