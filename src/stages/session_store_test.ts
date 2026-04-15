@@ -13,6 +13,7 @@ import {
   DEFAULT_UI_CONFIG,
   type Profile,
 } from "../config/types.ts";
+import type { WorkspaceState } from "../pipeline/state.ts";
 import type {
   EffectStageResult,
   HostEnv,
@@ -89,6 +90,7 @@ test("SessionStoreStage run outputs no additional dockerArgs or envVars", async 
 
   expect(result.dockerArgs).toEqual([]);
   expect(result.envVars).toEqual({});
+  expect(result.session).toEqual({ sessionId: "sess_xyz" });
 });
 
 test("SessionStoreStage finalizer removes the record on scope close", async () => {
@@ -147,9 +149,42 @@ test("SessionStoreStage run invokes SessionStoreService methods", async () => {
   expect(calls).toEqual(["ensurePaths", "create", "delete"]);
 });
 
+test("SessionStoreStage run prefers workspace slice worktree and emits named session slice", async () => {
+  let capturedRecord: CreateSessionInput | undefined;
+  const fakeLayer = makeSessionStoreServiceFake({
+    create: (_paths, record) =>
+      Effect.sync(() => {
+        capturedRecord = record;
+      }),
+  });
+
+  const input = createTestInput({
+    sessionId: "sess_workspace",
+    sessionName: "named session",
+    priorWorkDir: "/legacy-workdir",
+    workspace: {
+      workDir: "/workspace-from-slice",
+      imageName: "nas-sandbox",
+    },
+  });
+
+  const { result } = await runStage(input, fakeLayer);
+
+  expect(capturedRecord?.worktree).toBe("/workspace-from-slice");
+  expect(result.session).toEqual({
+    sessionId: "sess_workspace",
+    sessionName: "named session",
+  });
+});
+
 // ---------------------------------------------------------------------------
 
-function createTestInput(opts: { sessionId: string }): StageInput {
+function createTestInput(opts: {
+  sessionId: string;
+  sessionName?: string;
+  priorWorkDir?: string;
+  workspace?: WorkspaceState;
+}): StageInput {
   const profile: Profile = {
     agent: "claude",
     agentArgs: [],
@@ -182,7 +217,7 @@ function createTestInput(opts: { sessionId: string }): StageInput {
   const prior: PriorStageOutputs = {
     dockerArgs: [],
     envVars: {},
-    workDir: "/workspace",
+    workDir: opts.priorWorkDir ?? "/workspace",
     nixEnabled: false,
     imageName: "nas-sandbox",
     agentCommand: [],
@@ -194,6 +229,7 @@ function createTestInput(opts: { sessionId: string }): StageInput {
     profile,
     profileName: "test-profile",
     sessionId: opts.sessionId,
+    sessionName: opts.sessionName,
     host,
     probes: {
       hasHostNix: false,
@@ -202,6 +238,7 @@ function createTestInput(opts: { sessionId: string }): StageInput {
       gpgAgentSocket: null,
       auditDir: "/tmp/audit",
     },
-    prior,
+    prior:
+      opts.workspace === undefined ? prior : { ...prior, workspace: opts.workspace },
   };
 }
