@@ -1,16 +1,9 @@
 /**
- * ContainerPlan compiler helpers.
+ * ContainerPlan helpers.
  *
- * Pure functions for creating, patching, and compiling ContainerPlan values.
- * LaunchStage is the sole caller of compileLaunchOpts in production (C10).
- * Defining the compiler here in C2 allows parity tests to validate correctness
- * independently of the full pipeline wiring.
- *
- * Effect-separation note: imports from src/services/ are type-only.
+ * Pure functions for creating and patching ContainerPlan values.
  */
 
-import type { LaunchOpts } from "../services/container_launch.ts";
-import { encodeDynamicEnvOps } from "./env_ops.ts";
 import type {
   CommandSpec,
   ContainerPlan,
@@ -105,67 +98,5 @@ export function mergeContainerPlan(
       patch.labels !== undefined
         ? { ...base.labels, ...patch.labels }
         : base.labels,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Compiler
-// ---------------------------------------------------------------------------
-
-/**
- * Compile a ContainerPlan into LaunchOpts (the Docker CLI encoding).
- *
- * This is the canonical ContainerPlan → Docker CLI compiler.  LaunchStage is
- * its sole production caller; no other stage should produce Docker args
- * directly from a ContainerPlan.
- *
- * @param plan          The declarative container description to compile.
- * @param containerName The `docker run --name` value (e.g. `nas-agent-<id>`).
- */
-export function compileLaunchOpts(
-  plan: ContainerPlan,
-  containerName: string,
-): LaunchOpts {
-  const args: string[] = [];
-
-  // Working directory
-  args.push("-w", plan.workDir);
-
-  // Bind mounts
-  for (const mount of plan.mounts) {
-    const suffix = mount.readOnly ? ":ro" : "";
-    args.push("-v", `${mount.source}:${mount.target}${suffix}`);
-  }
-
-  // Network attachment
-  if (plan.network) {
-    args.push("--network", plan.network.name);
-    if (plan.network.alias) {
-      args.push("--network-alias", plan.network.alias);
-    }
-  }
-
-  // Extra run args (verbatim passthrough)
-  args.push(...plan.extraRunArgs);
-
-  // Env vars: static entries plus encoded dynamic ops
-  const envVars: Record<string, string> = { ...plan.env.static };
-  if (plan.env.dynamicOps.length > 0) {
-    envVars.NAS_ENV_OPS = encodeDynamicEnvOps(plan.env.dynamicOps);
-  }
-
-  // Command
-  const command = [
-    ...plan.command.agentCommand,
-    ...plan.command.extraArgs,
-  ];
-
-  return {
-    image: plan.image,
-    name: containerName,
-    args,
-    envVars,
-    command,
-    labels: { ...plan.labels },
   };
 }
