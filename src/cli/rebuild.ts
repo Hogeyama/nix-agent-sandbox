@@ -3,17 +3,23 @@
  */
 
 import { Effect, Layer } from "effect";
+import {
+  adaptEffectStageToPipelineStateStage,
+  createCliInitialState,
+} from "./pipeline_state.ts";
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
 import { logInfo } from "../log.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
-import type { WorkspaceState } from "../pipeline/state.ts";
-import type { PriorStageOutputs } from "../pipeline/types.ts";
+import type { PipelineState, WorkspaceState } from "../pipeline/state.ts";
+import { createPipelineBuilder } from "../pipeline/stage_builder.ts";
+import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { DockerBuildServiceLive } from "../services/docker_build.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import {
   createDockerBuildStage,
+  type BuildProbes,
   resolveBuildProbes,
 } from "../stages/docker_build.ts";
 import { exitOnCliError } from "./helpers.ts";
@@ -22,6 +28,7 @@ export function createRebuildPrior(
   workDir: string,
   imageName: string,
 ): PriorStageOutputs & { workspace: WorkspaceState } {
+  const initialState = createCliInitialState(workDir, imageName);
   return {
     dockerArgs: [],
     envVars: {},
@@ -31,11 +38,34 @@ export function createRebuildPrior(
     agentCommand: [],
     networkPromptEnabled: false,
     dbusProxyEnabled: false,
-    workspace: {
-      workDir,
-      imageName,
-    },
+    ...initialState,
   };
+}
+
+export function createRebuildPipelineBuilder({
+  input,
+  initialPrior,
+  buildProbes,
+}: {
+  readonly input: Omit<StageInput, "prior">;
+  readonly initialPrior: PriorStageOutputs & Pick<PipelineState, "workspace">;
+  readonly buildProbes: BuildProbes;
+}) {
+  const priorRef: {
+    current: PriorStageOutputs & Partial<PipelineState>;
+  } = { current: initialPrior };
+
+  return createPipelineBuilder<Pick<PipelineState, "workspace">>().add(
+    adaptEffectStageToPipelineStateStage(
+      {
+        stage: createDockerBuildStage(buildProbes),
+        needs: ["workspace"],
+        pickAdds: () => ({}),
+      },
+      input,
+      priorRef,
+    ),
+  );
 }
 
 export async function runRebuild(nasArgs: string[]): Promise<void> {
@@ -57,30 +87,31 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
     }
 
     const buildProbes = await resolveBuildProbes(imageName);
-    const stage = createDockerBuildStage(buildProbes);
 
     const hostEnv = buildHostEnv();
     const probes = await resolveProbes(hostEnv);
     const prior = createRebuildPrior(process.cwd(), imageName);
-
-    const effect = stage
-      .run({
+    const builder = createRebuildPipelineBuilder({
+      input: {
         config,
         profile,
         profileName: name,
         sessionId,
         host: hostEnv,
         probes,
-        prior,
-      })
-      .pipe(
-        Effect.scoped,
-        Effect.provide(
-          DockerBuildServiceLive.pipe(
-            Layer.provide(Layer.merge(FsServiceLive, DockerServiceLive)),
-          ),
+      },
+      initialPrior: prior,
+      buildProbes,
+    });
+
+    const effect = builder.run({ workspace: prior.workspace }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        DockerBuildServiceLive.pipe(
+          Layer.provide(Layer.merge(FsServiceLive, DockerServiceLive)),
         ),
-      );
+      ),
+    );
 
     await Effect.runPromise(effect);
   } catch (err) {
