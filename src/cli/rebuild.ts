@@ -7,6 +7,7 @@ import { loadConfig, resolveProfile } from "../config/load.ts";
 import { dockerImageExists, dockerRemoveImage } from "../docker/client.ts";
 import { logInfo } from "../log.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
+import type { WorkspaceState } from "../pipeline/state.ts";
 import type { PriorStageOutputs } from "../pipeline/types.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { DockerBuildServiceLive } from "../services/docker_build.ts";
@@ -16,6 +17,26 @@ import {
   resolveBuildProbes,
 } from "../stages/docker_build.ts";
 import { exitOnCliError } from "./helpers.ts";
+
+export function createRebuildPrior(
+  workDir: string,
+  imageName: string,
+): PriorStageOutputs & { workspace: WorkspaceState } {
+  return {
+    dockerArgs: [],
+    envVars: {},
+    workDir,
+    nixEnabled: false,
+    imageName,
+    agentCommand: [],
+    networkPromptEnabled: false,
+    dbusProxyEnabled: false,
+    workspace: {
+      workDir,
+      imageName,
+    },
+  };
+}
 
 export async function runRebuild(nasArgs: string[]): Promise<void> {
   const force = nasArgs.includes("--force") || nasArgs.includes("-f");
@@ -40,16 +61,7 @@ export async function runRebuild(nasArgs: string[]): Promise<void> {
 
     const hostEnv = buildHostEnv();
     const probes = await resolveProbes(hostEnv);
-    const prior: PriorStageOutputs = {
-      dockerArgs: [],
-      envVars: {},
-      workDir: process.cwd(),
-      nixEnabled: false,
-      imageName,
-      agentCommand: [],
-      networkPromptEnabled: false,
-      dbusProxyEnabled: false,
-    };
+    const prior = createRebuildPrior(process.cwd(), imageName);
 
     const effect = stage
       .run({
