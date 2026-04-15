@@ -16,9 +16,9 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
+import { emptyContainerPlan } from "../pipeline/container_plan.ts";
 import type {
   HostEnv,
-  PriorStageOutputs,
   ProbeResults,
   StageInput,
 } from "../pipeline/types.ts";
@@ -106,8 +106,8 @@ function makeProbes(): ProbeResults {
 }
 
 function makePrior(
-  overrides: Partial<PriorStageOutputs> = {},
-): PriorStageOutputs {
+  overrides: Partial<StageInput["prior"]> = {},
+): StageInput["prior"] {
   return {
     dockerArgs: [],
     envVars: {},
@@ -123,7 +123,7 @@ function makePrior(
 
 function makeInput(
   profile: Profile,
-  overrides: { prior?: Partial<PriorStageOutputs> } = {},
+  overrides: { prior?: Partial<StageInput["prior"]> } = {},
 ): StageInput {
   const config = makeConfig(profile);
   return {
@@ -215,6 +215,20 @@ test("ProxyStage: sets outputOverrides", () => {
   expect(result.outputOverrides.networkPromptEnabled).toEqual(false);
   expect(typeof result.outputOverrides.networkBrokerSocket).toEqual("string");
   expect(typeof result.outputOverrides.networkProxyEndpoint).toEqual("string");
+  const promptToken = result.outputOverrides.networkPromptToken!;
+  const proxyEndpoint = result.outputOverrides.networkProxyEndpoint!;
+  expect(result.outputOverrides.network).toEqual({
+    networkName: "nas-session-net-test-session-123",
+    runtimeDir: "/run/user/1000/nas/network",
+  });
+  expect(result.outputOverrides.prompt).toEqual({
+    promptToken,
+    promptEnabled: false,
+  });
+  expect(result.outputOverrides.proxy).toEqual({
+    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123.sock",
+    proxyEndpoint,
+  });
 });
 
 test("ProxyStage: planner sets networkName in outputOverrides", () => {
@@ -256,6 +270,78 @@ test("ProxyStage: reuses existing networkPromptToken", () => {
   expect(result.envVars.NAS_UPSTREAM_PROXY.includes(existingToken)).toEqual(
     true,
   );
+});
+
+test("ProxyStage: prefers prompt and dind slices when building plan", () => {
+  const profile = makeProfile({
+    network: { allowlist: ["example.com"], prompt: { enable: true } },
+  });
+  const input = makeInput(profile, {
+    prior: {
+      networkPromptToken: "legacy-token",
+      prompt: { promptToken: "slice-token", promptEnabled: false },
+      dind: { containerName: "nas-dind-from-slice" },
+    },
+  });
+
+  const result = planProxy(input)!;
+
+  expect(result.token).toEqual("slice-token");
+  expect(result.outputOverrides.prompt).toEqual({
+    promptToken: "slice-token",
+    promptEnabled: true,
+  });
+  expect(result.envVars.no_proxy).toEqual(
+    "localhost,127.0.0.1,nas-dind-from-slice",
+  );
+});
+
+test("ProxyStage: planner merges proxy settings into existing container slice", () => {
+  const profile = makeProfile({
+    network: { allowlist: ["example.com"] },
+  });
+  const input = makeInput(profile, {
+    prior: {
+      workspace: {
+        workDir: "/slice-workdir",
+        imageName: "slice-image",
+      },
+      container: {
+        ...emptyContainerPlan("slice-image", "/slice-workdir"),
+        mounts: [{ source: "/existing-src", target: "/existing-target" }],
+        env: { static: { EXISTING_ENV: "1" }, dynamicOps: [] },
+        extraRunArgs: ["--shm-size", "2g"],
+        command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
+        labels: { "nas.managed": "true" },
+      },
+    },
+  });
+
+  const result = planProxy(input)!;
+  const proxyEndpoint = result.outputOverrides.networkProxyEndpoint!;
+
+  expect(result.outputOverrides.container).toEqual({
+    image: "slice-image",
+    workDir: "/slice-workdir",
+    mounts: [{ source: "/existing-src", target: "/existing-target" }],
+    env: {
+      static: {
+        EXISTING_ENV: "1",
+        NAS_UPSTREAM_PROXY: proxyEndpoint,
+        http_proxy: `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
+        https_proxy: `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
+        HTTP_PROXY: `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
+        HTTPS_PROXY: `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
+        no_proxy: "localhost,127.0.0.1",
+        NO_PROXY: "localhost,127.0.0.1",
+      },
+      dynamicOps: [],
+    },
+    extraRunArgs: ["--shm-size", "2g"],
+    network: { name: "nas-session-net-test-session-123" },
+    command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
+    labels: { "nas.managed": "true" },
+  });
 });
 
 test("ProxyStage: EffectStage kind is effect", () => {
@@ -433,6 +519,19 @@ test("createProxyStage().run(): calls services and returns merged output", async
   expect((result.networkName as string).startsWith("nas-session-net-")).toEqual(
     true,
   );
+  expect(result.network).toEqual({
+    networkName: "nas-session-net-test-session-123",
+    runtimeDir: "/run/user/1000/nas/network",
+  });
+  const proxyEndpoint = result.networkProxyEndpoint!;
+  expect(result.prompt).toEqual({
+    promptToken: "test-token-fixed",
+    promptEnabled: false,
+  });
+  expect(result.proxy).toEqual({
+    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123.sock",
+    proxyEndpoint,
+  });
 
   // dockerArgs has the session network replacing original
   expect(result.dockerArgs).toBeDefined();
@@ -440,4 +539,11 @@ test("createProxyStage().run(): calls services and returns merged output", async
   const netIdx = dockerArgs.indexOf("--network");
   expect(netIdx).not.toEqual(-1);
   expect(dockerArgs[netIdx + 1]).toMatch(/^nas-session-net-/);
+  expect(result.container?.network).toEqual({
+    name: "nas-session-net-test-session-123",
+  });
+  expect(result.container?.env.static.http_proxy).toEqual(
+    `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
+  );
+  expect(result.envVars).toEqual(result.container?.env.static);
 });
