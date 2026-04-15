@@ -4,8 +4,19 @@
  */
 
 import { expect, test } from "bun:test";
-import { applyWorktreeOverride, parseProfileAndWorktreeArgs } from "./cli.ts";
-import type { Profile } from "./config/types.ts";
+import { Effect } from "effect";
+import {
+  adaptEffectStageToPipelineStateStage,
+  createCliInitialState,
+  pickDindStageSlices,
+  pickProxyStageSlices,
+} from "./cli/pipeline_state.ts";
+import {
+  applyWorktreeOverride,
+  createCliPipelineBuilder,
+  parseProfileAndWorktreeArgs,
+} from "./cli.ts";
+import type { Config, Profile } from "./config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -13,6 +24,12 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
 } from "./config/types.ts";
+import type { PipelineState } from "./pipeline/state.ts";
+import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
+import type { BuildProbes } from "./stages/docker_build.ts";
+import type { MountProbes } from "./stages/mount.ts";
+import { createProxyStage } from "./stages/proxy.ts";
+import type { HostEnv, PriorStageOutputs, ProbeResults } from "./pipeline/types.ts";
 
 const baseProfile: Profile = {
   agent: "claude",
@@ -29,6 +46,28 @@ const baseProfile: Profile = {
   hook: DEFAULT_HOOK_CONFIG,
   extraMounts: [],
   env: [],
+};
+
+const baseConfig: Config = {
+  ui: { enable: false, port: 7777, idleTimeout: 300 },
+  profiles: { dev: baseProfile },
+};
+
+const baseHost: HostEnv = {
+  home: "/home/tester",
+  user: "tester",
+  uid: 1000,
+  gid: 1000,
+  isWSL: false,
+  env: new Map(),
+};
+
+const baseProbes: ProbeResults = {
+  hasHostNix: false,
+  xdgDbusProxyPath: null,
+  dbusSessionAddress: null,
+  gpgAgentSocket: null,
+  auditDir: "/audit",
 };
 
 // ============================================================
@@ -244,4 +283,277 @@ test("applyWorktreeOverride: enable without existing worktree uses empty onCreat
     base: "main",
   });
   expect(result.worktree?.onCreate).toEqual("");
+});
+
+test("createCliInitialState: seeds workspace slice for PipelineState builder", () => {
+  expect(createCliInitialState("/repo/worktree", "nas-sandbox")).toEqual({
+    workspace: {
+      workDir: "/repo/worktree",
+      imageName: "nas-sandbox",
+    },
+  });
+});
+
+test("pickDindStageSlices: preserves both dind and container slices", () => {
+  expect(
+    pickDindStageSlices(
+      {
+        dind: { containerName: "nas-dind-1234" },
+      },
+      {
+        dind: { containerName: "nas-dind-1234" },
+        container: {
+          image: "nas-sandbox",
+          workDir: "/repo/worktree",
+          mounts: [],
+          env: { static: {}, dynamicOps: [] },
+          extraRunArgs: [],
+          command: { agentCommand: ["claude"], extraArgs: [] },
+          labels: {},
+        },
+      },
+    ),
+  ).toEqual({
+    dind: { containerName: "nas-dind-1234" },
+    container: {
+      image: "nas-sandbox",
+      workDir: "/repo/worktree",
+      mounts: [],
+      env: { static: {}, dynamicOps: [] },
+      extraRunArgs: [],
+      command: { agentCommand: ["claude"], extraArgs: [] },
+      labels: {},
+    },
+  });
+});
+
+test("pickDindStageSlices: keeps existing container when stage is skipped", () => {
+  expect(
+    pickDindStageSlices(
+      {},
+      {
+        container: {
+          image: "nas-sandbox",
+          workDir: "/repo/worktree",
+          mounts: [],
+          env: { static: {}, dynamicOps: [] },
+          extraRunArgs: [],
+          command: { agentCommand: ["claude"], extraArgs: [] },
+          labels: {},
+        },
+      },
+    ),
+  ).toEqual({
+    container: {
+      image: "nas-sandbox",
+      workDir: "/repo/worktree",
+      mounts: [],
+      env: { static: {}, dynamicOps: [] },
+      extraRunArgs: [],
+      command: { agentCommand: ["claude"], extraArgs: [] },
+      labels: {},
+    },
+  });
+});
+
+test("pickProxyStageSlices: preserves proxy-related slices alongside container", () => {
+  expect(
+    pickProxyStageSlices(
+      {
+        network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
+        prompt: { promptToken: "token", promptEnabled: true },
+        proxy: {
+          brokerSocket: "/runtime/broker.sock",
+          proxyEndpoint: "http://endpoint",
+        },
+      },
+      {
+        network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
+        prompt: { promptToken: "token", promptEnabled: true },
+        proxy: {
+          brokerSocket: "/runtime/broker.sock",
+          proxyEndpoint: "http://endpoint",
+        },
+        container: {
+          image: "nas-sandbox",
+          workDir: "/repo/worktree",
+          mounts: [],
+          env: { static: { http_proxy: "http://127.0.0.1:18080" }, dynamicOps: [] },
+          extraRunArgs: [],
+          command: { agentCommand: ["claude"], extraArgs: [] },
+          labels: {},
+        },
+      },
+    ),
+  ).toEqual({
+    network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
+    prompt: { promptToken: "token", promptEnabled: true },
+    proxy: {
+      brokerSocket: "/runtime/broker.sock",
+      proxyEndpoint: "http://endpoint",
+    },
+    container: {
+      image: "nas-sandbox",
+      workDir: "/repo/worktree",
+      mounts: [],
+      env: { static: { http_proxy: "http://127.0.0.1:18080" }, dynamicOps: [] },
+      extraRunArgs: [],
+      command: { agentCommand: ["claude"], extraArgs: [] },
+      labels: {},
+    },
+  });
+});
+
+test("pickProxyStageSlices: keeps existing container when stage is skipped", () => {
+  expect(
+    pickProxyStageSlices(
+      {},
+      {
+        container: {
+          image: "nas-sandbox",
+          workDir: "/repo/worktree",
+          mounts: [],
+          env: { static: { http_proxy: "http://127.0.0.1:18080" }, dynamicOps: [] },
+          extraRunArgs: [],
+          command: { agentCommand: ["claude"], extraArgs: [] },
+          labels: {},
+        },
+      },
+    ),
+  ).toEqual({
+    container: {
+      image: "nas-sandbox",
+      workDir: "/repo/worktree",
+      mounts: [],
+      env: { static: { http_proxy: "http://127.0.0.1:18080" }, dynamicOps: [] },
+      extraRunArgs: [],
+      command: { agentCommand: ["claude"], extraArgs: [] },
+      labels: {},
+    },
+  });
+});
+
+test("createCliPipelineBuilder: wires CLI stages through PipelineState order", () => {
+  const initialState = createCliInitialState("/repo/worktree", "nas-sandbox");
+  const initialPrior: PriorStageOutputs & typeof initialState = {
+    dockerArgs: [],
+    envVars: {},
+    workDir: "/repo/worktree",
+    nixEnabled: false,
+    imageName: "nas-sandbox",
+    agentCommand: [],
+    networkPromptEnabled: false,
+    dbusProxyEnabled: false,
+    ...initialState,
+  };
+  const buildProbes: BuildProbes = {
+    imageName: "nas-sandbox",
+    imageExists: false,
+    currentEmbedHash: "embed-hash",
+    imageEmbedHash: null,
+  };
+
+  const builder = createCliPipelineBuilder({
+    input: {
+      config: baseConfig,
+      profile: baseProfile,
+      profileName: "dev",
+      sessionId: "sess_test123",
+      host: baseHost,
+      probes: baseProbes,
+    },
+    initialPrior,
+    buildProbes,
+    mountProbes: {} as MountProbes,
+    agentExtraArgs: ["--resume"],
+  });
+
+  expect(
+    builder
+      .getStages()
+      .map(({ name, needs }) => ({ name, needs: [...needs].sort() })),
+  ).toEqual([
+    { name: "WorktreeStage", needs: ["workspace"] },
+    { name: "SessionStoreStage", needs: ["workspace"] },
+    { name: "DockerBuildStage", needs: ["workspace"] },
+    { name: "NixDetectStage", needs: [] },
+    { name: "DbusProxyStage", needs: [] },
+    { name: "MountStage", needs: ["dbus", "nix", "workspace"] },
+    { name: "HostExecStage", needs: ["container", "workspace"] },
+    { name: "DindStage", needs: ["container", "workspace"] },
+    { name: "ProxyStage", needs: ["container"] },
+    { name: "LaunchStage", needs: ["container"] },
+  ]);
+});
+
+test("proxy adapter builder: preserves no-op path when proxy is disabled", async () => {
+  const profile: Profile = {
+    ...baseProfile,
+    network: {
+      ...structuredClone(DEFAULT_NETWORK_CONFIG),
+      allowlist: [],
+      prompt: {
+        ...structuredClone(DEFAULT_NETWORK_CONFIG).prompt,
+        enable: false,
+      },
+    },
+  };
+  const initialState = {
+    container: {
+      image: "nas-sandbox",
+      workDir: "/repo/worktree",
+      mounts: [],
+      env: { static: {}, dynamicOps: [] },
+      extraRunArgs: [],
+      command: { agentCommand: ["claude"], extraArgs: [] },
+      labels: {},
+    },
+  } satisfies Pick<PipelineState, "container">;
+  const priorRef: {
+    current: PriorStageOutputs & Partial<PipelineState>;
+  } = {
+    current: {
+      dockerArgs: [],
+      envVars: {},
+      workDir: "/repo/worktree",
+      nixEnabled: false,
+      imageName: "nas-sandbox",
+      agentCommand: [],
+      networkPromptEnabled: false,
+      dbusProxyEnabled: false,
+      ...initialState,
+    },
+  };
+
+  const builder = createPipelineBuilder<Pick<PipelineState, "container">>().add(
+    adaptEffectStageToPipelineStateStage(
+      {
+        stage: createProxyStage(),
+        needs: ["container"],
+        pickAdds: (result, prior) => pickProxyStageSlices(result, prior),
+      },
+      {
+        config: baseConfig,
+        profile,
+        profileName: "dev",
+        sessionId: "sess_test123",
+        host: baseHost,
+        probes: baseProbes,
+      },
+      priorRef,
+    ),
+  );
+
+  const result = await Effect.runPromise(
+    builder.run(initialState).pipe(Effect.scoped) as Effect.Effect<
+      Pick<PipelineState, "container"> & Partial<PipelineState>,
+      unknown,
+      never
+    >,
+  );
+
+  expect(result.container).toEqual(initialState.container);
+  expect(result.network).toEqual(undefined);
+  expect(result.prompt).toEqual(undefined);
+  expect(result.proxy).toEqual(undefined);
 });
