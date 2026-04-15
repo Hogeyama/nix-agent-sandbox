@@ -8,6 +8,7 @@
 import { Effect, type Scope } from "effect";
 import type { DbusRuleConfig } from "../config/types.ts";
 import { logWarn } from "../log.ts";
+import type { DbusState } from "../pipeline/state.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -18,6 +19,17 @@ import { DbusProxyService } from "../services/dbus_proxy.ts";
 
 const SOCKET_READY_TIMEOUT_MS = 5_000;
 const SOCKET_READY_POLL_MS = 50;
+const DBUS_DISABLED_STATE = { enabled: false } satisfies DbusState;
+
+function buildDisabledDbusResult(): EffectStageResult {
+  return {
+    dbusProxyEnabled: false,
+    dbusSessionRuntimeDir: undefined,
+    dbusSessionSocket: undefined,
+    dbusSessionSourceAddress: undefined,
+    dbus: DBUS_DISABLED_STATE,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // DbusProxyPlan
@@ -53,7 +65,7 @@ export function createDbusProxyStage(): EffectStage<DbusProxyService> {
     > {
       const plan = planDbusProxy(input);
       if (plan === null) {
-        return Effect.succeed({});
+        return Effect.succeed(buildDisabledDbusResult());
       }
       if (plan.proxyBinaryPath === "") {
         return Effect.succeed(plan.outputOverrides);
@@ -86,7 +98,7 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
       args: [],
       timeoutMs: 0,
       pollIntervalMs: 0,
-      outputOverrides: { dbusProxyEnabled: false },
+      outputOverrides: buildDisabledDbusResult(),
     };
   }
 
@@ -104,7 +116,7 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
       args: [],
       timeoutMs: 0,
       pollIntervalMs: 0,
-      outputOverrides: { dbusProxyEnabled: false },
+      outputOverrides: buildDisabledDbusResult(),
     };
   }
 
@@ -126,7 +138,7 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
       args: [],
       timeoutMs: 0,
       pollIntervalMs: 0,
-      outputOverrides: { dbusProxyEnabled: false },
+      outputOverrides: buildDisabledDbusResult(),
     };
   }
 
@@ -143,7 +155,7 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
       args: [],
       timeoutMs: 0,
       pollIntervalMs: 0,
-      outputOverrides: { dbusProxyEnabled: false },
+      outputOverrides: buildDisabledDbusResult(),
     };
   }
 
@@ -176,6 +188,12 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
       dbusSessionRuntimeDir: sessionDir,
       dbusSessionSocket: socketPath,
       dbusSessionSourceAddress: sourceAddress,
+      dbus: {
+        enabled: true,
+        runtimeDir: sessionDir,
+        socket: socketPath,
+        sourceAddress,
+      },
     },
   };
 }

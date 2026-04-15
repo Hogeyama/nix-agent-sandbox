@@ -248,6 +248,11 @@ test("WorktreeStage: creates worktree under repo metadata and mounts repo root",
       workDir.startsWith(path.join(repo, ".nas", "worktrees", "nas-")),
     ).toEqual(true);
     expect(branchName.startsWith("nas/")).toEqual(true);
+    expect(result.outputOverrides.workspace).toEqual({
+      workDir,
+      mountDir: repo,
+      imageName: input.prior.imageName,
+    });
 
     await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
     await $`git -C ${repo} branch -D ${branchName}`.quiet();
@@ -759,8 +764,12 @@ test("WorktreeStage execute skips when worktree is not configured", async () => 
   };
   const input = createTestInput(config, profile, process.cwd());
   const result = await stage.execute(input);
-  // outputOverrides は空 (workDir は変更されない)
-  expect(Object.keys(result.outputOverrides).length).toEqual(0);
+  expect(result.outputOverrides).toEqual({
+    workspace: {
+      workDir: input.prior.workDir,
+      imageName: input.prior.imageName,
+    },
+  });
 });
 
 // --- execute with invalid base branch ---
@@ -807,6 +816,11 @@ test("WorktreeStage execute reuses existing worktree when user selects it", asyn
       // 再利用された worktree のパスが一致
       expect(result2.outputOverrides.workDir).toEqual(firstWorktreePath);
       expect(result2.outputOverrides.mountDir).toEqual(repoRoot);
+      expect(result2.outputOverrides.workspace).toEqual({
+        workDir: firstWorktreePath,
+        mountDir: repoRoot,
+        imageName: input2.prior.imageName,
+      });
     });
 
     // cleanup

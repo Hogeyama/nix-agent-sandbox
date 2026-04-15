@@ -143,6 +143,12 @@ test("DbusProxyStage: run calls startProxy with correct plan when enabled", asyn
   expect(result.dbusSessionSourceAddress).toEqual(
     "unix:path=/run/user/1000/bus",
   );
+  expect(result.dbus).toEqual({
+    enabled: true,
+    runtimeDir: "/run/user/1000/nas/dbus/sessions/test-session-1234",
+    socket: "/run/user/1000/nas/dbus/sessions/test-session-1234/bus",
+    sourceAddress: "unix:path=/run/user/1000/bus",
+  });
 });
 
 test("DbusProxyStage: service-owned cleanup runs on scope close (no double kill)", async () => {
@@ -191,7 +197,7 @@ test("DbusProxyStage: service-owned cleanup runs on scope close (no double kill)
   expect(killCount).toEqual(1);
 });
 
-test("DbusProxyStage: run returns empty result when disabled", async () => {
+test("DbusProxyStage: run returns disabled legacy and dbus outputs when disabled", async () => {
   const startCalls: DbusProxyStartPlan[] = [];
 
   const fakeLayer = makeDbusProxyServiceFake({
@@ -217,5 +223,48 @@ test("DbusProxyStage: run returns empty result when disabled", async () => {
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
   expect(startCalls.length).toEqual(0);
-  expect(result).toEqual({});
+  expect(result).toEqual({
+    dbusProxyEnabled: false,
+    dbusSessionRuntimeDir: undefined,
+    dbusSessionSocket: undefined,
+    dbusSessionSourceAddress: undefined,
+    dbus: { enabled: false },
+  });
+});
+
+test("DbusProxyStage: disabled run clears stale legacy dbus session fields", async () => {
+  const fakeLayer = makeDbusProxyServiceFake({
+    startProxy: (_plan) => Effect.succeed({ kill: () => {} }),
+  });
+
+  const profile = makeProfile();
+  const input = {
+    ...makeStageInput(profile),
+    prior: {
+      ...makeStageInput(profile).prior,
+      dbusProxyEnabled: true,
+      dbusSessionRuntimeDir: "/stale/runtime",
+      dbusSessionSocket: "/stale/socket",
+      dbusSessionSourceAddress: "unix:path=/stale/bus",
+    },
+  } satisfies StageInput;
+  const stage = createDbusProxyStage();
+
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(fakeLayer),
+      ),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  const merged = { ...input.prior, ...result };
+  expect(merged.dbusProxyEnabled).toEqual(false);
+  expect(merged.dbusSessionRuntimeDir).toBeUndefined();
+  expect(merged.dbusSessionSocket).toBeUndefined();
+  expect(merged.dbusSessionSourceAddress).toBeUndefined();
+  expect(merged.dbus).toEqual({ enabled: false });
 });

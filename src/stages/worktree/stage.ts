@@ -10,6 +10,7 @@
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
 import { logInfo } from "../../log.ts";
+import type { WorkspaceState } from "../../pipeline/state.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -36,6 +37,19 @@ export function generateBranchName(_profileName: string): string {
   return `nas/${ts}`;
 }
 
+function buildWorkspaceResult(
+  imageName: string,
+  workDir: string,
+  mountDir?: string,
+): EffectStageResult {
+  const workspace: WorkspaceState = { workDir, imageName };
+  return {
+    workDir,
+    mountDir,
+    workspace: mountDir ? { ...workspace, mountDir } : workspace,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Stage factory
 // ---------------------------------------------------------------------------
@@ -58,7 +72,15 @@ export function createWorktreeStage(): EffectStage<
         const wt = input.profile.worktree;
         if (!wt) {
           logInfo("[nas] Worktree: skipped (not configured)");
-          return {};
+          return {
+            workspace: {
+              workDir: input.prior.workDir,
+              imageName: input.prior.imageName,
+              ...(input.prior.mountDir
+                ? { mountDir: input.prior.mountDir }
+                : {}),
+            },
+          };
         }
 
         const svc = yield* GitWorktreeService;
@@ -77,7 +99,11 @@ export function createWorktreeStage(): EffectStage<
           const reused = yield* prompts.reuseWorktree(existing);
           if (reused) {
             logInfo(`[nas] Reusing worktree: ${reused.path}`);
-            return { workDir: reused.path, mountDir: repoRoot };
+            return buildWorkspaceResult(
+              input.prior.imageName,
+              reused.path,
+              repoRoot,
+            );
           }
         }
 
@@ -110,7 +136,11 @@ export function createWorktreeStage(): EffectStage<
           ),
         );
 
-        return { workDir: worktreePath, mountDir: repoRoot };
+        return buildWorkspaceResult(
+          input.prior.imageName,
+          worktreePath,
+          repoRoot,
+        );
       });
     },
   };

@@ -84,6 +84,7 @@ test("NixDetectStage: enable=true sets nixEnabled to true", async () => {
     Effect.scoped(NixDetectStage.run(makeInput(true, false))),
   );
   expect(result.nixEnabled).toEqual(true);
+  expect(result.nix).toEqual({ enabled: true });
 });
 
 test("NixDetectStage: enable=false sets nixEnabled to false", async () => {
@@ -91,6 +92,7 @@ test("NixDetectStage: enable=false sets nixEnabled to false", async () => {
     Effect.scoped(NixDetectStage.run(makeInput(false, true))),
   );
   expect(result.nixEnabled).toEqual(false);
+  expect(result.nix).toEqual({ enabled: false });
 });
 
 test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", async () => {
@@ -98,6 +100,7 @@ test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", async () => {
     Effect.scoped(NixDetectStage.run(makeInput("auto", true))),
   );
   expect(result.nixEnabled).toEqual(true);
+  expect(result.nix).toEqual({ enabled: true });
 });
 
 test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", async () => {
@@ -105,6 +108,7 @@ test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", async () => {
     Effect.scoped(NixDetectStage.run(makeInput("auto", false))),
   );
   expect(result.nixEnabled).toEqual(false);
+  expect(result.nix).toEqual({ enabled: false });
 });
 
 test("NixDetectStage: kind is 'effect'", () => {
@@ -118,6 +122,7 @@ test("NixDetectStage: run() always returns a result (never skips)", async () => 
         Effect.scoped(NixDetectStage.run(makeInput(enable, hasNix))),
       );
       expect(result.nixEnabled).toBeDefined();
+      expect(result.nix?.enabled).toEqual(result.nixEnabled);
     }
   }
 });

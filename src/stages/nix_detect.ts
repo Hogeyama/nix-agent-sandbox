@@ -26,7 +26,10 @@ export function planNixDetect(input: StageInput): EffectStageResult {
     logInfo(`[nas] Nix: explicitly ${nixEnabled ? "enabled" : "disabled"}`);
   }
 
-  return { nixEnabled };
+  return {
+    nixEnabled,
+    nix: { enabled: nixEnabled },
+  };
 }
 
 export const NixDetectStage: EffectStage<never> = {
