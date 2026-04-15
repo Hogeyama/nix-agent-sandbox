@@ -55,14 +55,11 @@ import {
   type SessionTurn,
   updateSessionName as storeUpdateSessionName,
 } from "../sessions/store.ts";
-import { getGitRoot } from "../stages/worktree/git_helpers.ts";
-
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
   hostExecPaths: HostExecRuntimePaths;
   sessionPaths: SessionRuntimePaths;
   auditDir: string;
-  gitRoot: string | null;
 }
 
 export async function createDataContext(): Promise<UiDataContext> {
@@ -90,13 +87,7 @@ export async function createDataContext(): Promise<UiDataContext> {
     );
   }
   const auditDir = resolveAuditDir();
-  let gitRoot: string | null = null;
-  try {
-    gitRoot = await getGitRoot(process.cwd());
-  } catch {
-    // git repo 外の場合は null
-  }
-  return { networkPaths, hostExecPaths, sessionPaths, auditDir, gitRoot };
+  return { networkPaths, hostExecPaths, sessionPaths, auditDir };
 }
 
 // --- Network ---

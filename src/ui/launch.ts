@@ -11,7 +11,11 @@ import {
   socketPathFor,
 } from "../dtach/client.ts";
 import { listSessions } from "../sessions/store.ts";
-import { getCurrentBranch } from "../stages/worktree/git_helpers.ts";
+import {
+  getCurrentBranch,
+  getGitRoot,
+  hasLocalBranch,
+} from "../stages/worktree/git_helpers.ts";
 import type { UiDataContext } from "./data.ts";
 
 /** Client-facing validation error (maps to HTTP 400). */
@@ -27,7 +31,11 @@ export interface LaunchInfo {
   profiles: string[];
   defaultProfile?: string;
   recentDirectories: string[];
+}
+
+export interface LaunchBranches {
   currentBranch: string | null;
+  hasMain: boolean;
 }
 
 export async function getLaunchInfo(ctx: UiDataContext): Promise<LaunchInfo> {
@@ -54,18 +62,27 @@ export async function getLaunchInfo(ctx: UiDataContext): Promise<LaunchInfo> {
     if (recentDirectories.length >= 10) break;
   }
 
-  // Resolve current branch at git root
-  const currentBranch = ctx.gitRoot
-    ? await getCurrentBranch(ctx.gitRoot)
-    : null;
-
   return {
     dtachAvailable,
     profiles,
     defaultProfile,
     recentDirectories,
-    currentBranch,
   };
+}
+
+export async function getLaunchBranches(cwd: string): Promise<LaunchBranches> {
+  validateCwd(cwd);
+  let root: string;
+  try {
+    root = await getGitRoot(cwd);
+  } catch {
+    return { currentBranch: null, hasMain: false };
+  }
+  const [currentBranch, hasMain] = await Promise.all([
+    getCurrentBranch(root),
+    hasLocalBranch(root, "main"),
+  ]);
+  return { currentBranch, hasMain };
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +103,21 @@ export interface LaunchResult {
 function randomHex(bytes: number): string {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return Buffer.from(data).toString("hex");
+}
+
+function validateCwd(cwd: string): void {
+  if (!cwd) {
+    throw new LaunchValidationError("Invalid cwd: must be an absolute path");
+  }
+  if (!path.isAbsolute(cwd)) {
+    throw new LaunchValidationError("Invalid cwd: must be an absolute path");
+  }
+  const normalized = path.normalize(cwd);
+  if (normalized !== cwd) {
+    throw new LaunchValidationError(
+      "Invalid cwd: path contains disallowed segments",
+    );
+  }
 }
 
 export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
@@ -111,15 +143,7 @@ export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
   }
 
   if (req.cwd !== undefined) {
-    if (!path.isAbsolute(req.cwd)) {
-      throw new LaunchValidationError("Invalid cwd: must be an absolute path");
-    }
-    const normalized = path.normalize(req.cwd);
-    if (normalized !== req.cwd) {
-      throw new LaunchValidationError(
-        "Invalid cwd: path contains disallowed segments",
-      );
-    }
+    validateCwd(req.cwd);
   }
 
   // --- dtach availability ---

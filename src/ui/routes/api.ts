@@ -21,6 +21,7 @@ import {
   stopContainer,
 } from "../data.ts";
 import {
+  getLaunchBranches,
   getLaunchInfo,
   type LaunchRequest,
   LaunchValidationError,
@@ -44,6 +45,22 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       const info = await getLaunchInfo(ctx);
       return json(info);
     } catch (e) {
+      return json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  api.get("/launch/branches", async ({ url }) => {
+    const cwd = url.searchParams.get("cwd");
+    if (!cwd) {
+      return json({ error: "cwd is required" }, 400);
+    }
+    try {
+      const branches = await getLaunchBranches(cwd);
+      return json(branches);
+    } catch (e) {
+      if (e instanceof LaunchValidationError) {
+        return json({ error: e.message }, 400);
+      }
       return json({ error: (e as Error).message }, 500);
     }
   });

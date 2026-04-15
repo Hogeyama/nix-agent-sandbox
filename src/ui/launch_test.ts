@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { tmpdir } from "node:os";
 import type { LaunchRequest } from "./launch.ts";
-import { LaunchValidationError, launchSession } from "./launch.ts";
+import {
+  getLaunchBranches,
+  LaunchValidationError,
+  launchSession,
+} from "./launch.ts";
 
 /**
  * Tests for launchSession() input validation.
@@ -162,5 +167,34 @@ describe("launchSession: cwd validation", () => {
       { ...validReq, cwd: "/home/user/project" },
       "Invalid cwd",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getLaunchBranches
+// ---------------------------------------------------------------------------
+
+describe("getLaunchBranches", () => {
+  test("empty cwd rejects with LaunchValidationError", () => {
+    expect(getLaunchBranches("")).rejects.toThrow(LaunchValidationError);
+  });
+
+  test("non-absolute cwd rejects with LaunchValidationError", () => {
+    expect(getLaunchBranches("relative/path")).rejects.toThrow(
+      LaunchValidationError,
+    );
+  });
+
+  test("non-git directory resolves to null/false", async () => {
+    const result = await getLaunchBranches(tmpdir());
+    expect(result).toEqual({ currentBranch: null, hasMain: false });
+  });
+
+  test("git repo cwd returns string-or-null branch and boolean hasMain", async () => {
+    const result = await getLaunchBranches(process.cwd());
+    expect(
+      typeof result.currentBranch === "string" || result.currentBranch === null,
+    ).toEqual(true);
+    expect(typeof result.hasMain).toEqual("boolean");
   });
 });

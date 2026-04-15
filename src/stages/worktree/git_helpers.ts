@@ -55,6 +55,18 @@ export async function getCurrentBranch(
   }
 }
 
+export async function hasLocalBranch(
+  repoRoot: string,
+  branchName: string,
+): Promise<boolean> {
+  try {
+    await $`git -C ${repoRoot} rev-parse --verify ${`refs/heads/${branchName}`}`.quiet();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function validateBaseBranch(
   repoRoot: string,
   base: string,
