@@ -15,6 +15,7 @@ import { configureCodex } from "../agents/codex.ts";
 import type { CopilotProbes } from "../agents/copilot.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 import { logWarn } from "../log.ts";
+import { encodeDynamicEnvOps } from "../pipeline/env_ops.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -32,30 +33,6 @@ export type {
 export { resolveMountProbes } from "./mount_probes.ts";
 
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** Shell-safe single-quoting (escape embedded single quotes) */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
-/** Encode prefix/suffix ops as shell commands for container-runtime evaluation */
-export function encodeDynamicEnvOps(
-  ops: ReadonlyArray<{
-    mode: "prefix" | "suffix";
-    key: string;
-    value: string;
-    separator: string;
-  }>,
-): string {
-  return ops
-    .map((op) => {
-      const fn = op.mode === "prefix" ? "__nas_pfx" : "__nas_sfx";
-      return `${fn} ${shellQuote(op.key)} ${shellQuote(op.value)} ${shellQuote(
-        op.separator,
-      )}`;
-    })
-    .join("\n");
-}
 
 const DEFAULT_CONTAINER_USER = "nas";
 const RESERVED_EXTRA_MOUNT_DESTINATIONS = ["/nix"] as const;
