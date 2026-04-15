@@ -260,7 +260,6 @@ export function ContainersTab({
 }: ContainersTabProps) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [acking, setAcking] = useState<Set<string>>(new Set());
-  const [cleaning, setCleaning] = useState(false);
   const [expandedNames, setExpandedNames] = useState<Set<string>>(new Set());
   const [, setTick] = useState(0);
 
@@ -322,31 +321,6 @@ export function ContainersTab({
     }
   }
 
-  async function handleCleanAll() {
-    setCleaning(true);
-    try {
-      const result = await api.cleanContainers();
-      const parts: string[] = [];
-      if (result.removedContainers.length > 0) {
-        parts.push(`${result.removedContainers.length} container(s)`);
-      }
-      if (result.removedNetworks.length > 0) {
-        parts.push(`${result.removedNetworks.length} network(s)`);
-      }
-      if (result.removedVolumes.length > 0) {
-        parts.push(`${result.removedVolumes.length} volume(s)`);
-      }
-      if (parts.length > 0) {
-        console.log(`Cleaned: ${parts.join(", ")}`);
-      }
-      await refresh();
-    } catch (e) {
-      console.error("Clean failed:", e);
-    } finally {
-      setCleaning(false);
-    }
-  }
-
   return (
     <div>
       <div
@@ -365,14 +339,6 @@ export function ContainersTab({
               New Session
             </button>
           )}
-          <button
-            type="button"
-            style={cleanBtnStyle}
-            disabled={cleaning}
-            onClick={handleCleanAll}
-          >
-            {cleaning ? "Cleaning..." : "Clean All"}
-          </button>
         </div>
       </div>
 
