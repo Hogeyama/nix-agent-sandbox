@@ -21,6 +21,7 @@ import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
 import type { SessionStoreService } from "../services/session_store_service.ts";
 import type { PromptService } from "../stages/worktree/prompt_service.ts";
+import type { PipelineState } from "./state.ts";
 
 // ---------------------------------------------------------------------------
 // Host environment & probes
@@ -90,8 +91,9 @@ export interface PriorStageOutputs {
 // Effect-based stage types
 // ---------------------------------------------------------------------------
 
-// Effect stage result — partial outputs to merge into prior
-export type EffectStageResult = Partial<PriorStageOutputs>;
+// Effect stage result — legacy prior outputs plus optional slice-based state
+export type EffectStageResult = Partial<PriorStageOutputs> &
+  Partial<PipelineState>;
 
 // Union of all service tags that stages can depend on
 export type StageServices =

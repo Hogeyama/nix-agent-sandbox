@@ -1,13 +1,5 @@
 import { expect, test } from "bun:test";
 import type {
-  AnyStage,
-  EffectStageResult,
-  HostEnv,
-  PriorStageOutputs,
-  ProbeResults,
-  StageInput,
-} from "./types.ts";
-import type {
   ContainerPlan,
   DbusState,
   DindState,
@@ -24,6 +16,14 @@ import type {
   SliceKey,
   WorkspaceState,
 } from "./state.ts";
+import type {
+  AnyStage,
+  EffectStageResult,
+  HostEnv,
+  PriorStageOutputs,
+  ProbeResults,
+  StageInput,
+} from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Type import verification — these tests confirm that types are importable
@@ -110,14 +110,16 @@ test("PriorStageOutputs: can construct with required and optional fields", () =>
   expect(outputs.dindContainerName).toEqual(undefined);
 });
 
-test("EffectStageResult: is a partial of PriorStageOutputs", () => {
+test("EffectStageResult: allows legacy outputs and pipeline slices", () => {
   const result: EffectStageResult = {
     workDir: "/new/path",
     nixEnabled: true,
+    nix: { enabled: true },
   };
 
   expect(result.workDir).toEqual("/new/path");
   expect(result.nixEnabled).toEqual(true);
+  expect(result.nix).toEqual({ enabled: true });
 });
 
 test("AnyStage: is EffectStage with kind 'effect'", () => {
@@ -163,7 +165,10 @@ test("SessionState: can construct with and without sessionName", () => {
   expect(s.sessionId).toEqual("sess_abc");
   expect(s.sessionName).toBeUndefined();
 
-  const named: SessionState = { sessionId: "sess_abc", sessionName: "my-session" };
+  const named: SessionState = {
+    sessionId: "sess_abc",
+    sessionName: "my-session",
+  };
   expect(named.sessionName).toEqual("my-session");
 });
 
@@ -254,10 +259,15 @@ test("EnvPlan: can construct with static env and dynamicOps", () => {
   const plan: EnvPlan = {
     static: { TERM: "xterm", HOME: "/root" },
     dynamicOps: [
-      { mode: "prefix", key: "PATH", value: "/nix/store/xxx/bin", separator: ":" },
+      {
+        mode: "prefix",
+        key: "PATH",
+        value: "/nix/store/xxx/bin",
+        separator: ":",
+      },
     ],
   };
-  expect(plan.static["TERM"]).toEqual("xterm");
+  expect(plan.static.TERM).toEqual("xterm");
   expect(plan.dynamicOps).toHaveLength(1);
 });
 
