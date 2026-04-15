@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
-import { runPipelineEffect } from "./pipeline.ts";
+import { runPipelineEffect, runPipelineState } from "./pipeline.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -165,15 +165,100 @@ test("PipelineBuilder.add: chaining multiple stages accumulates them in order", 
   expect(stages[1].name).toEqual("nix-stage");
 });
 
-test("PipelineBuilder.run: throws before C11 wiring", () => {
-  const builder = createPipelineBuilder<Pick<PipelineState, "workspace">>();
-  expect(() => {
-    // Cast to any to bypass the `Initial` constraint in tests.
-    // biome-ignore lint/suspicious/noExplicitAny: test-only bypass
-    (builder as any).run({
-      workspace: { workDir: "/workspace", imageName: "img" },
-    });
-  }).toThrow("not yet implemented");
+test("runPipelineState: runs slice stages and merges accumulated state", async () => {
+  const seenInputs: Array<Pick<PipelineState, "workspace">> = [];
+
+  const workspaceStage: Stage<never, Pick<PipelineState, "workspace">> = {
+    name: "workspace-stage",
+    needs: [],
+    run: () =>
+      Effect.succeed({
+        workspace: { workDir: "/workspace", imageName: "img" },
+      }),
+  };
+
+  const nixStage: Stage<"workspace", Pick<PipelineState, "nix">> = {
+    name: "nix-stage",
+    needs: ["workspace"],
+    run: (input) => {
+      seenInputs.push(input);
+      expect(Object.keys(input)).toEqual(["workspace"]);
+      return Effect.succeed({ nix: { enabled: true } });
+    },
+  };
+
+  const result = await Effect.runPromise(
+    runPipelineState([workspaceStage, nixStage], {}).pipe(Effect.scoped),
+  );
+
+  expect(seenInputs).toEqual([
+    { workspace: { workDir: "/workspace", imageName: "img" } },
+  ]);
+  expect(result).toEqual({
+    workspace: { workDir: "/workspace", imageName: "img" },
+    nix: { enabled: true },
+  });
+});
+
+test("runPipelineState: empty stages returns initial state unchanged", async () => {
+  const initial = {
+    workspace: { workDir: "/workspace", imageName: "img" },
+  } satisfies Pick<PipelineState, "workspace">;
+
+  const result = await Effect.runPromise(
+    runPipelineState([], initial).pipe(Effect.scoped),
+  );
+
+  expect(result).toEqual(initial);
+});
+
+test("PipelineBuilder.run: executes stages in builder order", async () => {
+  const executionOrder: string[] = [];
+
+  const workspaceStage: Stage<never, Pick<PipelineState, "workspace">> = {
+    name: "workspace-stage",
+    needs: [],
+    run: () =>
+      Effect.sync(() => {
+        executionOrder.push("workspace");
+        return {
+          workspace: { workDir: "/workspace", imageName: "img" },
+        };
+      }),
+  };
+
+  const nixStage: Stage<"workspace", Pick<PipelineState, "nix">> = {
+    name: "nix-stage",
+    needs: ["workspace"],
+    run: (input) =>
+      Effect.sync(() => {
+        executionOrder.push(input.workspace.workDir);
+        return { nix: { enabled: true } };
+      }),
+  };
+
+  const builder = createPipelineBuilder().add(workspaceStage).add(nixStage);
+  const result = await Effect.runPromise(builder.run({}).pipe(Effect.scoped));
+
+  expect(executionOrder).toEqual(["workspace", "/workspace"]);
+  expect(result).toEqual({
+    workspace: { workDir: "/workspace", imageName: "img" },
+    nix: { enabled: true },
+  });
+});
+
+test("PipelineBuilder.run: fails when a required slice is missing at runtime", async () => {
+  const builder = createPipelineBuilder<Pick<PipelineState, "workspace">>().add({
+    name: "nix-stage",
+    needs: ["workspace"],
+    run: () => Effect.succeed({ nix: { enabled: true } }),
+  });
+
+  await expect(
+    // Cast to bypass compile-time guarantees and verify the runtime guard.
+    // biome-ignore lint/suspicious/noExplicitAny: runtime safety test
+    Effect.runPromise((builder as any).run({}).pipe(Effect.scoped)),
+  ).rejects.toThrow('Stage "nix-stage" requires missing pipeline slice "workspace"');
 });
 
 // Suppress unused imports satisfied by type-only usage above.
