@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { api, type LaunchInfo } from "../api.ts";
+import { api, type LaunchBranches, type LaunchInfo } from "../api.ts";
 
 interface NewSessionDialogProps {
   open: boolean;
@@ -27,8 +27,18 @@ export function NewSessionDialog({
   const [customDir, setCustomDir] = useState("");
   const [sessionName, setSessionName] = useState("");
 
+  const [launchBranches, setLaunchBranches] = useState<LaunchBranches | null>(
+    null,
+  );
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchesError, setBranchesError] = useState<string | null>(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const effectiveCwd = (
+    dirChoice === "custom" ? customDir.trim() : selectedDir
+  ).trim();
 
   useEffect(() => {
     if (!open) return;
@@ -55,6 +65,52 @@ export function NewSessionDialog({
       });
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    if (effectiveCwd === "") {
+      setLaunchBranches({ currentBranch: null, hasMain: false });
+      setBranchesError(null);
+      setBranchesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setBranchesLoading(true);
+    setBranchesError(null);
+    api
+      .getLaunchBranches(effectiveCwd)
+      .then((b) => {
+        if (cancelled) return;
+        setLaunchBranches(b);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setLaunchBranches({ currentBranch: null, hasMain: false });
+        setBranchesError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setBranchesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, effectiveCwd]);
+
+  // Reset worktreeChoice when selection becomes unavailable (e.g. switched to
+  // a non-git dir while "main"/"current" was selected).
+  useEffect(() => {
+    if (!launchBranches) return;
+    if (worktreeChoice === "main" && !launchBranches.hasMain) {
+      setWorktreeChoice("none");
+    } else if (
+      worktreeChoice === "current" &&
+      (launchBranches.currentBranch == null ||
+        launchBranches.currentBranch === "main")
+    ) {
+      setWorktreeChoice("none");
+    }
+  }, [launchBranches, worktreeChoice]);
+
   if (!open) return null;
 
   function handleSubmit() {
@@ -64,8 +120,8 @@ export function NewSessionDialog({
 
     let worktreeBase: string | undefined;
     if (worktreeChoice === "main") worktreeBase = "main";
-    else if (worktreeChoice === "current" && launchInfo.currentBranch)
-      worktreeBase = launchInfo.currentBranch;
+    else if (worktreeChoice === "current" && launchBranches?.currentBranch)
+      worktreeBase = launchBranches.currentBranch;
     else if (worktreeChoice === "custom" && customWorktree.trim())
       worktreeBase = customWorktree.trim();
 
@@ -119,80 +175,6 @@ export function NewSessionDialog({
 
         {launchInfo && !loading && (
           <div style={formStyle}>
-            {/* Profile */}
-            <label style={labelStyle} htmlFor="new-session-profile">
-              Profile
-            </label>
-            <select
-              id="new-session-profile"
-              style={inputStyle}
-              value={profile}
-              onChange={(e) =>
-                setProfile((e.target as HTMLSelectElement).value)
-              }
-            >
-              {launchInfo.profiles.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-
-            {/* Worktree Base Branch */}
-            <span style={labelStyle}>Worktree Base Branch</span>
-            <div style={radioGroupStyle}>
-              <label style={radioLabelStyle}>
-                <input
-                  type="radio"
-                  name="worktree"
-                  checked={worktreeChoice === "none"}
-                  onChange={() => setWorktreeChoice("none")}
-                />
-                None (use profile default)
-              </label>
-              <label style={radioLabelStyle}>
-                <input
-                  type="radio"
-                  name="worktree"
-                  checked={worktreeChoice === "main"}
-                  onChange={() => setWorktreeChoice("main")}
-                />
-                main
-              </label>
-              {launchInfo.currentBranch != null &&
-                launchInfo.currentBranch !== "main" && (
-                  <label style={radioLabelStyle}>
-                    <input
-                      type="radio"
-                      name="worktree"
-                      checked={worktreeChoice === "current"}
-                      onChange={() => setWorktreeChoice("current")}
-                    />
-                    {launchInfo.currentBranch}
-                  </label>
-                )}
-              <label style={radioLabelStyle}>
-                <input
-                  type="radio"
-                  name="worktree"
-                  checked={worktreeChoice === "custom"}
-                  onChange={() => setWorktreeChoice("custom")}
-                />
-                Custom
-              </label>
-              {worktreeChoice === "custom" && (
-                <input
-                  type="text"
-                  style={{ ...inputStyle, marginTop: "4px" }}
-                  placeholder="Branch name"
-                  value={customWorktree}
-                  onInput={(e) =>
-                    setCustomWorktree((e.target as HTMLInputElement).value)
-                  }
-                />
-              )}
-            </div>
-
             {/* Directory */}
             <span style={labelStyle}>Directory</span>
             <div
@@ -243,6 +225,84 @@ export function NewSessionDialog({
                   }
                 />
               )}
+            </div>
+
+            {/* Profile */}
+            <label style={labelStyle} htmlFor="new-session-profile">
+              Profile
+            </label>
+            <select
+              id="new-session-profile"
+              style={inputStyle}
+              value={profile}
+              onChange={(e) =>
+                setProfile((e.target as HTMLSelectElement).value)
+              }
+            >
+              {launchInfo.profiles.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+
+            {/* Worktree Base Branch */}
+            <span style={labelStyle}>Worktree Base Branch</span>
+            <div style={radioGroupStyle}>
+              <label style={radioLabelStyle}>
+                <input
+                  type="radio"
+                  name="worktree"
+                  checked={worktreeChoice === "none"}
+                  onChange={() => setWorktreeChoice("none")}
+                />
+                None (use profile default)
+              </label>
+              {launchBranches?.hasMain === true && (
+                <label style={radioLabelStyle}>
+                  <input
+                    type="radio"
+                    name="worktree"
+                    checked={worktreeChoice === "main"}
+                    onChange={() => setWorktreeChoice("main")}
+                  />
+                  main
+                </label>
+              )}
+              {launchBranches?.currentBranch != null &&
+                launchBranches.currentBranch !== "main" && (
+                  <label style={radioLabelStyle}>
+                    <input
+                      type="radio"
+                      name="worktree"
+                      checked={worktreeChoice === "current"}
+                      onChange={() => setWorktreeChoice("current")}
+                    />
+                    {launchBranches.currentBranch}
+                  </label>
+                )}
+              <label style={radioLabelStyle}>
+                <input
+                  type="radio"
+                  name="worktree"
+                  checked={worktreeChoice === "custom"}
+                  onChange={() => setWorktreeChoice("custom")}
+                />
+                Custom
+              </label>
+              {worktreeChoice === "custom" && (
+                <input
+                  type="text"
+                  style={{ ...inputStyle, marginTop: "4px" }}
+                  placeholder="Branch name"
+                  value={customWorktree}
+                  onInput={(e) =>
+                    setCustomWorktree((e.target as HTMLInputElement).value)
+                  }
+                />
+              )}
+              {branchesLoading && <p style={mutedStyle}>Loading branches...</p>}
+              {branchesError && <p style={errorStyle}>{branchesError}</p>}
             </div>
 
             {/* Session Name */}

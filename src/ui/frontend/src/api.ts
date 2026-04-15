@@ -30,7 +30,11 @@ export interface LaunchInfo {
   profiles: string[];
   defaultProfile?: string;
   recentDirectories: string[];
+}
+
+export interface LaunchBranches {
   currentBranch: string | null;
+  hasMain: boolean;
 }
 
 export interface LaunchRequest {
@@ -73,6 +77,11 @@ export const api = {
     ),
 
   getLaunchInfo: () => request<LaunchInfo>("GET", "/api/launch/info"),
+  getLaunchBranches: (cwd: string) =>
+    request<LaunchBranches>(
+      "GET",
+      `/api/launch/branches?cwd=${encodeURIComponent(cwd)}`,
+    ),
   launchSession: (params: LaunchRequest) =>
     request<LaunchResult>("POST", "/api/launch", params),
 
