@@ -17,6 +17,17 @@ import {
   generateSessionToken as defaultGenerateToken,
   hashToken,
 } from "../network/protocol.ts";
+import {
+  emptyContainerPlan,
+  mergeContainerPlan,
+} from "../pipeline/container_plan.ts";
+import { encodeDynamicEnvOps } from "../pipeline/env_ops.ts";
+import type {
+  ContainerPlan,
+  NetworkState,
+  PromptState,
+  ProxyState,
+} from "../pipeline/state.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type {
   EffectStage,
@@ -72,6 +83,7 @@ export interface ProxyPlan {
   readonly dindContainerName: string | null;
   readonly outputOverrides: EffectStageResult;
   readonly envVars: Record<string, string>;
+  readonly container: ContainerPlan;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,10 +114,14 @@ export function planProxy(
     `${input.sessionId}.sock`,
   );
   const prompt = input.profile.network.prompt;
-  const token = input.prior.networkPromptToken ?? generateSessionToken();
+  const token =
+    input.prior.prompt?.promptToken ??
+    input.prior.networkPromptToken ??
+    generateSessionToken();
   const sessionNetworkName = `nas-session-net-${input.sessionId}`;
 
-  const dindContainerName = parseDindContainerName(input.prior.envVars);
+  const dindContainerName =
+    input.prior.dind?.containerName ?? parseDindContainerName(input.prior.envVars);
 
   const proxyUrl = `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
@@ -113,6 +129,32 @@ export function planProxy(
   if (dindContainerName) {
     noProxyEntries.push(dindContainerName);
   }
+
+  const container = buildContainerState(input, {
+    sessionNetworkName,
+    envVars: {
+      NAS_UPSTREAM_PROXY: proxyUrl,
+      http_proxy: localProxyUrl,
+      https_proxy: localProxyUrl,
+      HTTP_PROXY: localProxyUrl,
+      HTTPS_PROXY: localProxyUrl,
+      no_proxy: noProxyEntries.join(","),
+      NO_PROXY: noProxyEntries.join(","),
+    },
+  });
+
+  const network: NetworkState = {
+    networkName: sessionNetworkName,
+    runtimeDir: runtimePaths.runtimeDir,
+  };
+  const promptState: PromptState = {
+    promptToken: token,
+    promptEnabled: prompt.enable,
+  };
+  const proxy: ProxyState = {
+    brokerSocket,
+    proxyEndpoint: proxyUrl,
+  };
 
   return {
     envoyContainerName,
@@ -138,15 +180,8 @@ export function planProxy(
     uiIdleTimeout: input.config.ui.idleTimeout,
     auditDir: input.probes.auditDir,
     dindContainerName,
-    envVars: {
-      NAS_UPSTREAM_PROXY: proxyUrl,
-      http_proxy: localProxyUrl,
-      https_proxy: localProxyUrl,
-      HTTP_PROXY: localProxyUrl,
-      HTTPS_PROXY: localProxyUrl,
-      no_proxy: noProxyEntries.join(","),
-      NO_PROXY: noProxyEntries.join(","),
-    },
+    envVars: container.env.static,
+    container,
     outputOverrides: {
       networkName: sessionNetworkName,
       networkRuntimeDir: runtimePaths.runtimeDir,
@@ -154,6 +189,10 @@ export function planProxy(
       networkPromptEnabled: prompt.enable,
       networkBrokerSocket: brokerSocket,
       networkProxyEndpoint: proxyUrl,
+      network,
+      prompt: promptState,
+      proxy,
+      container,
     },
   };
 }
@@ -270,13 +309,12 @@ function runProxy(
       (teardown: () => Effect.Effect<void>) => teardown(),
     );
 
+    const legacy = renderLegacyContainerState(plan.container);
+
     return {
       ...plan.outputOverrides,
-      dockerArgs: replaceNetwork(
-        [...input.prior.dockerArgs],
-        plan.sessionNetworkName,
-      ),
-      envVars: { ...input.prior.envVars, ...plan.envVars },
+      dockerArgs: legacy.dockerArgs,
+      envVars: legacy.envVars,
     };
   });
 }
@@ -324,6 +362,156 @@ export function replaceNetwork(
     args.push("--network", newNetwork);
   }
   return args;
+}
+
+function buildContainerState(
+  input: StageInput,
+  config: {
+    readonly sessionNetworkName: string;
+    readonly envVars: Readonly<Record<string, string>>;
+  },
+): ContainerPlan {
+  return mergeContainerPlan(resolveContainerBase(input), {
+    env: { static: config.envVars },
+    network: { name: config.sessionNetworkName },
+  });
+}
+
+function resolveContainerBase(input: StageInput): ContainerPlan {
+  if (input.prior.container) {
+    return input.prior.container;
+  }
+
+  const { mounts, workDir, network, extraRunArgs } = parseLegacyDockerArgs(
+    input.prior.dockerArgs,
+    resolveWorkDir(input),
+  );
+
+  return mergeContainerPlan(emptyContainerPlan(resolveImageName(input), workDir), {
+    mounts,
+    env: { static: { ...input.prior.envVars } },
+    ...(network ? { network } : {}),
+    extraRunArgs,
+    command: {
+      agentCommand: [...input.prior.agentCommand],
+      extraArgs: [],
+    },
+  });
+}
+
+function resolveImageName(input: StageInput): string {
+  return input.prior.workspace?.imageName ?? input.prior.imageName;
+}
+
+function resolveWorkDir(input: StageInput): string {
+  return input.prior.workspace?.workDir ?? input.prior.workDir;
+}
+
+function parseLegacyDockerArgs(
+  dockerArgs: readonly string[],
+  defaultWorkDir: string,
+): {
+  readonly mounts: ContainerPlan["mounts"];
+  readonly workDir: string;
+  readonly network?: { name: string; alias?: string };
+  readonly extraRunArgs: string[];
+} {
+  const mounts: Array<ContainerPlan["mounts"][number]> = [];
+  const extraRunArgs: string[] = [];
+  let workDir = defaultWorkDir;
+  let networkName: string | undefined;
+  let networkAlias: string | undefined;
+
+  for (let i = 0; i < dockerArgs.length; i += 1) {
+    const arg = dockerArgs[i];
+    if (arg === "-v" && i + 1 < dockerArgs.length) {
+      const mountArg = dockerArgs[i + 1];
+      if (mountArg !== undefined) {
+        mounts.push(parseMountSpec(mountArg));
+      }
+      i += 1;
+      continue;
+    }
+    if (arg === "-w" && i + 1 < dockerArgs.length) {
+      const workDirArg = dockerArgs[i + 1];
+      if (workDirArg !== undefined) {
+        workDir = workDirArg;
+      }
+      i += 1;
+      continue;
+    }
+    if (arg === "--network" && i + 1 < dockerArgs.length) {
+      const networkArg = dockerArgs[i + 1];
+      if (networkArg !== undefined) {
+        networkName = networkArg;
+      }
+      i += 1;
+      continue;
+    }
+    if (arg === "--network-alias" && i + 1 < dockerArgs.length) {
+      const aliasArg = dockerArgs[i + 1];
+      if (aliasArg !== undefined) {
+        networkAlias = aliasArg;
+      }
+      i += 1;
+      continue;
+    }
+    extraRunArgs.push(arg);
+  }
+
+  return {
+    mounts,
+    workDir,
+    ...(networkName ? { network: { name: networkName, alias: networkAlias } } : {}),
+    extraRunArgs,
+  };
+}
+
+function parseMountSpec(rawMount: string): {
+  readonly source: string;
+  readonly target: string;
+  readonly readOnly?: true;
+} {
+  const readOnly = rawMount.endsWith(":ro");
+  const mountValue = readOnly ? rawMount.slice(0, -3) : rawMount;
+  const separatorIndex = mountValue.indexOf(":");
+  if (separatorIndex === -1) {
+    throw new Error(`[nas] Invalid mount arg: ${rawMount}`);
+  }
+  const source = mountValue.slice(0, separatorIndex);
+  const target = mountValue.slice(separatorIndex + 1);
+  return readOnly ? { source, target, readOnly: true } : { source, target };
+}
+
+function renderLegacyContainerState(container: ContainerPlan): {
+  readonly dockerArgs: readonly string[];
+  readonly envVars: Readonly<Record<string, string>>;
+} {
+  const dockerArgs = [
+    ...container.mounts.flatMap((mount) => [
+      "-v",
+      `${mount.source}:${mount.target}${mount.readOnly ? ":ro" : ""}`,
+    ]),
+    "-w",
+    container.workDir,
+    ...(container.network
+      ? [
+          "--network",
+          container.network.name,
+          ...(container.network.alias
+            ? ["--network-alias", container.network.alias]
+            : []),
+        ]
+      : []),
+    ...container.extraRunArgs,
+  ];
+
+  const envVars: Record<string, string> = { ...container.env.static };
+  if (container.env.dynamicOps.length > 0) {
+    envVars.NAS_ENV_OPS = encodeDynamicEnvOps(container.env.dynamicOps);
+  }
+
+  return { dockerArgs, envVars };
 }
 
 export function parseDindContainerName(
