@@ -9,11 +9,10 @@
  *     available in the builder's `Current` state.
  *   - Service requirements (`R`) and error channels (`E`) are accumulated
  *     across all stages and re-surfaced on `run()`.
- *
- * Runtime execution is wired in C11.  This file is pure type scaffolding.
  */
 
 import type { Effect, Scope } from "effect";
+import { runPipelineState } from "./pipeline.ts";
 import type { PipelineState, SliceKey } from "./state.ts";
 import type { StageServices } from "./types.ts";
 
@@ -145,16 +144,15 @@ export class PipelineBuilder<
   /**
    * Execute the pipeline starting from `initial`.
    * Returns the accumulated PipelineState after all stages have run.
-   *
-   * Implementation is deferred to C11.  Calling this before C11 is wired
-   * throws at runtime.
    */
   run(
-    _initial: Initial,
+    initial: Initial,
   ): Effect.Effect<Current, EAcc, RAcc | Scope.Scope> {
-    throw new Error(
-      "PipelineBuilder.run() is not yet implemented. Wired in C11.",
-    );
+    return runPipelineState(this._stages, initial) as unknown as Effect.Effect<
+      Current,
+      EAcc,
+      RAcc | Scope.Scope
+    >;
   }
 
   /** Retrieve the accumulated stages (for introspection and testing). */
