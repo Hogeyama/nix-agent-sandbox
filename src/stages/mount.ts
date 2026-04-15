@@ -15,7 +15,18 @@ import { configureCodex } from "../agents/codex.ts";
 import type { CopilotProbes } from "../agents/copilot.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 import { logWarn } from "../log.ts";
+import {
+  emptyContainerPlan,
+  mergeContainerPlan,
+  type ContainerPatch,
+} from "../pipeline/container_plan.ts";
 import { encodeDynamicEnvOps } from "../pipeline/env_ops.ts";
+import type {
+  ContainerPlan,
+  DynamicEnvOp,
+  MountSpec,
+  WorkspaceState,
+} from "../pipeline/state.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -59,6 +70,7 @@ export interface MountPlan {
   readonly directories: readonly MountPlanDirectory[];
   readonly dockerArgs: readonly string[];
   readonly envVars: Readonly<Record<string, string>>;
+  readonly containerPatch: ContainerPatch;
   readonly outputOverrides: Partial<EffectStageResult>;
 }
 
@@ -75,6 +87,12 @@ export function createMountStage(
 
     run(input: StageInput) {
       const plan = planMount(input, mountProbes);
+      const workspace = resolveWorkspace(input);
+      const container = mergeContainerPlan(
+        resolveContainerBase(input, workspace),
+        plan.containerPatch,
+      );
+      const legacy = renderLegacyContainerState(container);
 
       return Effect.gen(function* () {
         const mountSetupService = yield* MountSetupService;
@@ -82,8 +100,9 @@ export function createMountStage(
         yield* mountSetupService.ensureDirectories(plan.directories);
 
         return {
-          dockerArgs: [...input.prior.dockerArgs, ...plan.dockerArgs],
-          envVars: { ...input.prior.envVars, ...plan.envVars },
+          dockerArgs: legacy.dockerArgs,
+          envVars: legacy.envVars,
+          container,
           ...plan.outputOverrides,
         } satisfies EffectStageResult;
       });
@@ -97,8 +116,12 @@ export function createMountStage(
 
 export function planMount(input: StageInput, probes: MountProbes): MountPlan {
   const { host, profile, prior } = input;
+  const workspace = resolveWorkspace(input);
+  const dbus = resolveDbusRuntime(input);
   const directories: MountPlanDirectory[] = [];
   const args: string[] = [];
+  const mounts: MountSpec[] = [];
+  const extraRunArgs: string[] = [];
   const envVars: Record<string, string> = {};
 
   const containerUser = resolveContainerUser(host.user);
@@ -109,10 +132,10 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
 
   // ワークスペースマウント
   // git worktree 内の場合は本体リポジトリルートをマウントソースに広げる
-  const baseMountSource = path.resolve(prior.mountDir ?? prior.workDir);
+  const baseMountSource = path.resolve(workspace.mountDir ?? workspace.workDir);
   const mountSource = probes.gitWorktreeMainRoot ?? baseMountSource;
-  const containerWorkDir = path.resolve(prior.workDir);
-  args.push("-v", `${mountSource}:${mountSource}`);
+  const containerWorkDir = path.resolve(workspace.workDir);
+  addMount(args, mounts, mountSource, mountSource);
   args.push("-w", containerWorkDir);
   envVars.WORKSPACE = containerWorkDir;
 
@@ -136,7 +159,7 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
     envVars.NAS_UID = String(uid);
     envVars.NAS_GID = String(gid);
   }
-  if (prior.dbusProxyEnabled) {
+  if (dbus.enabled) {
     if (uid === null) {
       throw new Error(
         "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID",
@@ -150,17 +173,20 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
   }
 
   // Nix ソケットマウント
-  if (prior.nixEnabled && profile.nix.mountSocket) {
+  if (resolveNixEnabled(input) && profile.nix.mountSocket) {
     if (input.probes.hasHostNix) {
-      args.push("-v", "/nix:/nix");
+      addMount(args, mounts, "/nix", "/nix");
 
       // nix.conf の実体パス
       if (probes.nixConfRealPath) {
         if (!probes.nixConfRealPath.startsWith("/nix/")) {
           const containerNixConfPath = "/tmp/nas-host-nix.conf";
-          args.push(
-            "-v",
-            `${probes.nixConfRealPath}:${containerNixConfPath}:ro`,
+          addMount(
+            args,
+            mounts,
+            probes.nixConfRealPath,
+            containerNixConfPath,
+            true,
           );
           envVars.NIX_CONF_PATH = containerNixConfPath;
         } else {
@@ -178,7 +204,7 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
         mode: 0o755,
         removeOnTeardown: false,
       });
-      args.push("-v", `${nasCacheDir}:${containerHome}/.cache/nas`);
+      addMount(args, mounts, nasCacheDir, `${containerHome}/.cache/nas`);
 
       // ホストの ~/.cache/nix
       const hostNixCache = `${xdgCache}/nix`;
@@ -187,7 +213,7 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
         mode: 0o755,
         removeOnTeardown: false,
       });
-      args.push("-v", `${hostNixCache}:${containerHome}/.cache/nix`);
+      addMount(args, mounts, hostNixCache, `${containerHome}/.cache/nix`);
 
       const nixExtraPackages = serializeNixExtraPackages(
         profile.nix.extraPackages,
@@ -205,14 +231,22 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
 
   // git 設定マウント
   if (probes.gitConfigExists) {
-    args.push("-v", `${host.home}/.config/git:${containerHome}/.config/git:ro`);
+    addMount(
+      args,
+      mounts,
+      `${host.home}/.config/git`,
+      `${containerHome}/.config/git`,
+      true,
+    );
   }
 
   // gcloud 設定マウント
   if (profile.gcloud.mountConfig && probes.gcloudConfigExists) {
-    args.push(
-      "-v",
-      `${host.home}/.config/gcloud:${containerHome}/.config/gcloud`,
+    addMount(
+      args,
+      mounts,
+      `${host.home}/.config/gcloud`,
+      `${containerHome}/.config/gcloud`,
     );
   }
 
@@ -220,38 +254,55 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
   if (profile.gpg.forwardAgent) {
     const gpgSocketPath = input.probes.gpgAgentSocket;
     if (gpgSocketPath && probes.gpgSocketExists) {
-      args.push("-v", `${gpgSocketPath}:${containerHome}/.gnupg/S.gpg-agent`);
+      addMount(
+        args,
+        mounts,
+        gpgSocketPath,
+        `${containerHome}/.gnupg/S.gpg-agent`,
+      );
       envVars.GPG_AGENT_INFO = `${containerHome}/.gnupg/S.gpg-agent`;
     }
     if (probes.gpgConfExists) {
-      args.push(
-        "-v",
-        `${host.home}/.gnupg/gpg.conf:${containerHome}/.gnupg/gpg.conf:ro`,
+      addMount(
+        args,
+        mounts,
+        `${host.home}/.gnupg/gpg.conf`,
+        `${containerHome}/.gnupg/gpg.conf`,
+        true,
       );
     }
     if (probes.gpgAgentConfExists) {
-      args.push(
-        "-v",
-        `${host.home}/.gnupg/gpg-agent.conf:${containerHome}/.gnupg/gpg-agent.conf:ro`,
+      addMount(
+        args,
+        mounts,
+        `${host.home}/.gnupg/gpg-agent.conf`,
+        `${containerHome}/.gnupg/gpg-agent.conf`,
+        true,
       );
     }
     if (probes.gpgPubringExists) {
-      args.push(
-        "-v",
-        `${host.home}/.gnupg/pubring.kbx:${containerHome}/.gnupg/pubring.kbx:ro`,
+      addMount(
+        args,
+        mounts,
+        `${host.home}/.gnupg/pubring.kbx`,
+        `${containerHome}/.gnupg/pubring.kbx`,
+        true,
       );
     }
     if (probes.gpgTrustdbExists) {
-      args.push(
-        "-v",
-        `${host.home}/.gnupg/trustdb.gpg:${containerHome}/.gnupg/trustdb.gpg:ro`,
+      addMount(
+        args,
+        mounts,
+        `${host.home}/.gnupg/trustdb.gpg`,
+        `${containerHome}/.gnupg/trustdb.gpg`,
+        true,
       );
     }
   }
 
   // AWS 設定マウント
   if (profile.aws.mountConfig && probes.awsConfigExists) {
-    args.push("-v", `${host.home}/.aws:${containerHome}/.aws`);
+    addMount(args, mounts, `${host.home}/.aws`, `${containerHome}/.aws`);
   }
 
   // 追加マウント
@@ -285,23 +336,20 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
       allowNestedFiles: false,
     });
 
-    const modeSuffix = resolvedMount.mode === "ro" ? ":ro" : "";
-    args.push(
-      "-v",
-      `${resolvedMount.normalizedSrc}:${normalizedDst}${modeSuffix}`,
+    addMount(
+      args,
+      mounts,
+      resolvedMount.normalizedSrc,
+      normalizedDst,
+      resolvedMount.mode === "ro",
     );
   }
 
   // プロファイルの環境変数
-  const dynamicEnvOps: Array<{
-    mode: "prefix" | "suffix";
-    key: string;
-    value: string;
-    separator: string;
-  }> = [];
+  const dynamicEnvOps: DynamicEnvOp[] = [];
 
   // Merge prior envVars for prefix/suffix resolution
-  const mergedEnvVars = { ...input.prior.envVars, ...envVars };
+  const mergedEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
 
   for (const resolved of probes.resolvedEnvEntries) {
     if (!ENV_VAR_NAME_RE.test(resolved.key)) {
@@ -361,14 +409,14 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
   }
 
   // DBus proxy runtime マウント
-  if (prior.dbusProxyEnabled) {
-    if (uid === null || !prior.dbusSessionRuntimeDir) {
+  if (dbus.enabled) {
+    if (uid === null || !dbus.runtimeDir) {
       throw new Error(
         "[nas] dbus.session.enable requires an initialized DBus proxy runtime",
       );
     }
     const containerRuntimeDir = `/run/user/${uid}`;
-    args.push("-v", `${prior.dbusSessionRuntimeDir}:${containerRuntimeDir}`);
+    addMount(args, mounts, dbus.runtimeDir, containerRuntimeDir);
     envVars.XDG_RUNTIME_DIR = containerRuntimeDir;
     envVars.DBUS_SESSION_BUS_ADDRESS = `unix:path=${containerRuntimeDir}/bus`;
   }
@@ -378,17 +426,23 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
     const hostDisplay = host.env.get("DISPLAY");
     if (hostDisplay) {
       if (probes.x11SocketDirExists) {
-        args.push("-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro");
+        addMount(args, mounts, "/tmp/.X11-unix", "/tmp/.X11-unix", true);
         envVars.DISPLAY = hostDisplay;
 
         // Xauthority
         if (probes.xauthorityExists) {
           const containerXauthority = `${containerHome}/.Xauthority`;
-          args.push("-v", `${probes.xauthorityPath}:${containerXauthority}:ro`);
+          addMount(
+            args,
+            mounts,
+            probes.xauthorityPath,
+            containerXauthority,
+            true,
+          );
           envVars.XAUTHORITY = containerXauthority;
         }
 
-        args.push("--shm-size", "2g");
+        addRunArgs(args, extraRunArgs, "--shm-size", "2g");
       } else {
         logWarn(
           "[nas] display.enable is true but /tmp/.X11-unix not found; skipping X11 forwarding",
@@ -404,8 +458,8 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
   // エージェント固有の設定
   // Build priorDockerArgs and priorEnvVars by combining prior + current stage's args
   const priorDockerArgs = [...prior.dockerArgs, ...args];
-  const priorEnvVars = { ...prior.envVars, ...envVars };
-  let agentCommand: readonly string[] = prior.agentCommand;
+  const priorEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
+  let agentCommand: readonly string[] = resolvePriorAgentCommand(input);
 
   const applyAgentResult = (agentResult: {
     dockerArgs: string[];
@@ -420,6 +474,7 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
       }
     }
     args.push(...agentArgs);
+    appendStructuredArgs(agentArgs, mounts, extraRunArgs);
     Object.assign(envVars, agentEnv);
     agentCommand = agentResult.agentCommand;
   };
@@ -460,10 +515,26 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
       break;
   }
 
+  const staticEnvVars = { ...envVars };
+  delete staticEnvVars.NAS_ENV_OPS;
+
   return {
     directories,
     dockerArgs: args,
     envVars,
+    containerPatch: {
+      workDir: containerWorkDir,
+      mounts,
+      env: {
+        static: staticEnvVars,
+        dynamicOps: dynamicEnvOps,
+      },
+      extraRunArgs,
+      command: {
+        agentCommand,
+        extraArgs: resolvePriorCommandExtraArgs(input),
+      },
+    },
     outputOverrides: { agentCommand },
   };
 }
@@ -497,6 +568,144 @@ function resolveContainerUser(hostUser: string): string {
   const user = hostUser.trim();
   if (user) return user;
   return DEFAULT_CONTAINER_USER;
+}
+
+function resolveWorkspace(input: StageInput): WorkspaceState {
+  return (
+    input.prior.workspace ?? {
+      workDir: input.prior.workDir,
+      imageName: input.prior.imageName,
+      ...(input.prior.mountDir !== undefined
+        ? { mountDir: input.prior.mountDir }
+        : {}),
+    }
+  );
+}
+
+function resolveNixEnabled(input: StageInput): boolean {
+  return input.prior.nix?.enabled ?? input.prior.nixEnabled;
+}
+
+function resolveDbusRuntime(
+  input: StageInput,
+): { readonly enabled: boolean; readonly runtimeDir?: string } {
+  const dbus = input.prior.dbus;
+  if (dbus) {
+    return dbus.enabled
+      ? { enabled: true, runtimeDir: dbus.runtimeDir }
+      : { enabled: false };
+  }
+  return input.prior.dbusProxyEnabled
+    ? {
+        enabled: true,
+        runtimeDir: input.prior.dbusSessionRuntimeDir,
+      }
+    : { enabled: false };
+}
+
+function resolvePriorEnvVars(input: StageInput): Readonly<Record<string, string>> {
+  return input.prior.container?.env.static ?? input.prior.envVars;
+}
+
+function resolvePriorAgentCommand(input: StageInput): readonly string[] {
+  return input.prior.container?.command.agentCommand ?? input.prior.agentCommand;
+}
+
+function resolvePriorCommandExtraArgs(input: StageInput): readonly string[] {
+  return input.prior.container?.command.extraArgs ?? [];
+}
+
+function resolveContainerBase(
+  input: StageInput,
+  workspace: WorkspaceState,
+): ContainerPlan {
+  if (input.prior.container) {
+    return input.prior.container;
+  }
+
+  return mergeContainerPlan(
+    emptyContainerPlan(workspace.imageName, workspace.workDir),
+    {
+      env: { static: { ...input.prior.envVars } },
+      extraRunArgs: [...input.prior.dockerArgs],
+      command: {
+        agentCommand: [...input.prior.agentCommand],
+        extraArgs: [],
+      },
+    },
+  );
+}
+
+function renderLegacyContainerState(container: ContainerPlan): {
+  readonly dockerArgs: readonly string[];
+  readonly envVars: Readonly<Record<string, string>>;
+} {
+  const dockerArgs = [
+    ...container.mounts.flatMap((mount) => [
+      "-v",
+      `${mount.source}:${mount.target}${mount.readOnly ? ":ro" : ""}`,
+    ]),
+    "-w",
+    container.workDir,
+    ...container.extraRunArgs,
+  ];
+
+  const envVars: Record<string, string> = { ...container.env.static };
+  if (container.env.dynamicOps.length > 0) {
+    envVars.NAS_ENV_OPS = encodeDynamicEnvOps(container.env.dynamicOps);
+  }
+
+  return { dockerArgs, envVars };
+}
+
+function addMount(
+  dockerArgs: string[],
+  mounts: MountSpec[],
+  source: string,
+  target: string,
+  readOnly = false,
+): void {
+  const suffix = readOnly ? ":ro" : "";
+  dockerArgs.push("-v", `${source}:${target}${suffix}`);
+  mounts.push(readOnly ? { source, target, readOnly: true } : { source, target });
+}
+
+function addRunArgs(
+  dockerArgs: string[],
+  extraRunArgs: string[],
+  ...values: string[]
+): void {
+  dockerArgs.push(...values);
+  extraRunArgs.push(...values);
+}
+
+function appendStructuredArgs(
+  dockerArgs: readonly string[],
+  mounts: MountSpec[],
+  extraRunArgs: string[],
+): void {
+  for (let i = 0; i < dockerArgs.length; i++) {
+    const arg = dockerArgs[i];
+    if (arg === "-v" && i + 1 < dockerArgs.length) {
+      const mount = parseMountSpec(dockerArgs[i + 1]);
+      mounts.push(mount);
+      i += 1;
+      continue;
+    }
+    extraRunArgs.push(arg);
+  }
+}
+
+function parseMountSpec(rawMount: string): MountSpec {
+  const readOnly = rawMount.endsWith(":ro");
+  const mountValue = readOnly ? rawMount.slice(0, -3) : rawMount;
+  const separatorIndex = mountValue.indexOf(":");
+  if (separatorIndex === -1) {
+    throw new Error(`[nas] Invalid mount arg: ${rawMount}`);
+  }
+  const source = mountValue.slice(0, separatorIndex);
+  const target = mountValue.slice(separatorIndex + 1);
+  return readOnly ? { source, target, readOnly: true } : { source, target };
 }
 
 function findConflictingMountDestination(

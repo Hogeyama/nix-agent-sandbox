@@ -21,6 +21,7 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
+import type { PipelineState } from "../pipeline/state.ts";
 import type {
   HostEnv,
   PriorStageOutputs,
@@ -158,7 +159,7 @@ function makeInput(
     mountProbes?: MountProbes;
     hostEnv?: HostEnv;
     probes?: ProbeResults;
-    prior?: Partial<PriorStageOutputs>;
+    prior?: Partial<PriorStageOutputs> & Partial<PipelineState>;
   } = {},
 ): { input: StageInput; mountProbes: MountProbes } {
   const profile = opts.profile ?? makeProfile();
@@ -1202,6 +1203,125 @@ test("MountStage: no mount widening when not in a worktree", () => {
   );
 });
 
+test("MountStage: structured workspace, nix, and dbus slices override legacy prior fields", () => {
+  const profile = makeProfile({
+    nix: { enable: true, mountSocket: true, extraPackages: [] },
+  });
+  const { input, mountProbes } = makeInput({
+    profile,
+    probes: {
+      ...defaultProbeResults,
+      hasHostNix: true,
+    },
+    prior: {
+      workDir: "/legacy/workdir",
+      mountDir: "/legacy/mountdir",
+      nixEnabled: false,
+      dbusProxyEnabled: false,
+      workspace: {
+        workDir: "/slice/workdir",
+        mountDir: "/slice/mountdir",
+        imageName: "slice-image",
+      },
+      nix: { enabled: true },
+      dbus: {
+        enabled: true,
+        runtimeDir: "/slice/dbus",
+        socket: "/slice/dbus/bus",
+        sourceAddress: "unix:path=/slice/dbus/bus",
+      },
+    },
+  });
+
+  const plan = planMount(input, mountProbes);
+
+  expect(plan.dockerArgs).toContain("/slice/mountdir:/slice/mountdir");
+  expect(plan.dockerArgs).toContain("/slice/dbus:/run/user/1000");
+  expect(plan.dockerArgs).toContain("/nix:/nix");
+  expect(plan.envVars.WORKSPACE).toEqual("/slice/workdir");
+  expect(plan.envVars.XDG_RUNTIME_DIR).toEqual("/run/user/1000");
+  expect(plan.envVars.NIX_ENABLED).toEqual("true");
+});
+
+test("MountStage: planner emits container patch with structured mounts and dynamic env ops", () => {
+  const profile = makeProfile({
+    env: [
+      {
+        key: "PATH",
+        val: "/opt/nas/bin",
+        mode: "prefix",
+        separator: ":",
+      },
+    ],
+  });
+  const { input, mountProbes } = makeInput({
+    profile,
+    mountProbes: makeMountProbes({
+      resolvedEnvEntries: [
+        {
+          key: "PATH",
+          value: "/opt/nas/bin",
+          mode: "prefix",
+          separator: ":",
+          index: 0,
+          keySource: "key",
+        },
+      ],
+    }),
+    prior: {
+      agentCommand: ["legacy-agent"],
+      container: {
+        image: "slice-image",
+        workDir: "/slice/workdir",
+        mounts: [{ source: "/existing/src", target: "/existing/dst" }],
+        env: {
+          static: { EXISTING_ENV: "1" },
+          dynamicOps: [],
+        },
+        extraRunArgs: ["--init"],
+        command: { agentCommand: ["legacy-agent"], extraArgs: ["--safe"] },
+        labels: { "nas.managed": "true" },
+      },
+    },
+  });
+
+  const plan = planMount(input, mountProbes);
+
+  expect(plan.containerPatch.workDir).toEqual(TEST_WORK_DIR);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: TEST_WORK_DIR,
+    target: TEST_WORK_DIR,
+  });
+  expect(plan.containerPatch.env).toEqual({
+    static: {
+      NAS_USER: TEST_USER,
+      NAS_HOME: CONTAINER_HOME,
+      NAS_UID: "1000",
+      NAS_GID: "1000",
+      WORKSPACE: TEST_WORK_DIR,
+      PATH:
+        `${CONTAINER_HOME}/.local/bin:` +
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    },
+    dynamicOps: [
+      {
+        mode: "prefix",
+        key: "PATH",
+        value: "/opt/nas/bin",
+        separator: ":",
+      },
+    ],
+  });
+  expect(plan.containerPatch.command).toEqual({
+    agentCommand: [
+      "bash",
+      "-c",
+      "curl -fsSL https://claude.ai/install.sh | bash && claude",
+    ],
+    extraArgs: ["--safe"],
+  });
+});
+
 // ============================================================
 // minimal profile
 // ============================================================
@@ -1265,6 +1385,49 @@ test("MountStage run(): creates directories via MountSetupService and returns re
 
   expect(result.dockerArgs).toBeDefined();
   expect(result.envVars).toBeDefined();
+  expect(result.container).toEqual({
+    image: "nas-sandbox",
+    workDir: TEST_WORK_DIR,
+    mounts: [
+      { source: TEST_WORK_DIR, target: TEST_WORK_DIR },
+      { source: "/nix", target: "/nix" },
+      {
+        source: "/home/testuser/.cache/nas",
+        target: `${CONTAINER_HOME}/.cache/nas`,
+      },
+      {
+        source: "/home/testuser/.cache/nix",
+        target: `${CONTAINER_HOME}/.cache/nix`,
+      },
+    ],
+    env: {
+      static: {
+        NAS_LOG_LEVEL: "info",
+        NAS_USER: TEST_USER,
+        NAS_HOME: CONTAINER_HOME,
+        NAS_UID: "1000",
+        NAS_GID: "1000",
+        NIX_REMOTE: "daemon",
+        NIX_ENABLED: "true",
+        NIX_BIN_PATH: "/nix/store/xxx/bin/nix",
+        WORKSPACE: TEST_WORK_DIR,
+        PATH:
+          `${CONTAINER_HOME}/.local/bin:` +
+          "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      },
+      dynamicOps: [],
+    },
+    extraRunArgs: [],
+    command: {
+      agentCommand: [
+        "bash",
+        "-c",
+        "curl -fsSL https://claude.ai/install.sh | bash && claude",
+      ],
+      extraArgs: [],
+    },
+    labels: {},
+  });
   expect(result.envVars!.NAS_USER).toEqual(TEST_USER);
   expect(result.envVars!.NIX_ENABLED).toEqual("true");
 });
@@ -1292,4 +1455,67 @@ test("MountStage run(): no directories when nix disabled", async () => {
   expect(result.dockerArgs).toBeDefined();
   expect(result.envVars).toBeDefined();
   expect(result.envVars!.NAS_USER).toEqual(TEST_USER);
+});
+
+test("MountStage run(): legacy outputs preserve structured base container state", async () => {
+  const mountProbes = makeMountProbes({
+    gcloudConfigExists: true,
+  });
+  const profile = makeProfile({
+    gcloud: { mountConfig: true },
+  });
+  const { input } = makeInput({
+    profile,
+    mountProbes,
+    prior: {
+      dockerArgs: ["--legacy-only"],
+      envVars: { LEGACY_ONLY: "1" },
+      container: {
+        image: "slice-image",
+        workDir: "/slice/workdir",
+        mounts: [{ source: "/structured/src", target: "/structured/dst" }],
+        env: {
+          static: { STRUCTURED_ONLY: "1" },
+          dynamicOps: [],
+        },
+        extraRunArgs: ["--structured-flag"],
+        command: { agentCommand: ["legacy-agent"], extraArgs: [] },
+        labels: {},
+      },
+    },
+  });
+
+  const layer = makeMountSetupServiceFake();
+  const stage = createMountStage(mountProbes);
+
+  const scope = Effect.runSync(Scope.make());
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(result.dockerArgs).toEqual([
+    "-v",
+    "/structured/src:/structured/dst",
+    "-v",
+    `${TEST_WORK_DIR}:${TEST_WORK_DIR}`,
+    "-v",
+    `${TEST_HOME}/.config/gcloud:${CONTAINER_HOME}/.config/gcloud`,
+    "-w",
+    TEST_WORK_DIR,
+    "--structured-flag",
+  ]);
+  expect(result.envVars).toEqual({
+    STRUCTURED_ONLY: "1",
+    NAS_USER: TEST_USER,
+    NAS_HOME: CONTAINER_HOME,
+    NAS_UID: "1000",
+    NAS_GID: "1000",
+    WORKSPACE: TEST_WORK_DIR,
+    PATH:
+      `${CONTAINER_HOME}/.local/bin:` +
+      "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  });
 });
