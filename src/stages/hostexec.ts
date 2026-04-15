@@ -14,6 +14,17 @@ import {
 } from "../hostexec/match.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../lib/notify_utils.ts";
+import {
+  emptyContainerPlan,
+  mergeContainerPlan,
+} from "../pipeline/container_plan.ts";
+import { encodeDynamicEnvOps } from "../pipeline/env_ops.ts";
+import type {
+  ContainerPlan,
+  HostExecState,
+  MountSpec,
+  WorkspaceState,
+} from "../pipeline/state.ts";
 import type {
   EffectStage,
   EffectStageResult,
@@ -38,6 +49,7 @@ export interface HostExecPlan {
     mode: number;
   }>;
   readonly symlinks: ReadonlyArray<{ target: string; path: string }>;
+  readonly mounts: readonly MountSpec[];
   readonly dockerArgs: string[];
   readonly envVars: Record<string, string>;
   readonly outputOverrides: EffectStageResult;
@@ -107,6 +119,7 @@ export function planHostExec(input: StageInput): HostExecPlan | null {
   const config =
     input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
   config.rules = [...config.rules, NAS_HOOK_RULE];
+  const workspace = resolveWorkspace(input);
 
   const runtimePaths = resolveHostExecRuntimePathsPure(input.host);
   const socketPath = path.join(
@@ -162,29 +175,32 @@ export function planHostExec(input: StageInput): HostExecPlan | null {
     ),
   ];
 
-  const workDir = input.prior.workDir;
-  const workspaceRoot = input.prior.mountDir ?? input.prior.workDir;
+  const workDir = workspace.workDir;
+  const workspaceRoot = workspace.mountDir ?? workspace.workDir;
+  const mounts: MountSpec[] = [];
+  const dockerArgs = [
+    "-v",
+    addMount(mounts, wrapperBinDir, WRAPPER_DIR, true),
+    "-v",
+    addMount(mounts, runtimePaths.brokersDir, runtimePaths.brokersDir),
+    "-v",
+    addMount(mounts, sessionTmpDir, containerSessionTmp),
+    ...relativeArgv0s.flatMap((argv0) => {
+      const target = path.resolve(workDir, argv0);
+      return ["-v", addMount(mounts, wrapperScript, target, true)];
+    }),
+    ...absoluteArgv0s.flatMap((argv0) => [
+      "-v",
+      addMount(mounts, wrapperScript, argv0, true),
+    ]),
+  ];
 
   return {
     directories,
     files,
     symlinks,
-    dockerArgs: [
-      "-v",
-      `${wrapperBinDir}:${WRAPPER_DIR}:ro`,
-      "-v",
-      `${runtimePaths.brokersDir}:${runtimePaths.brokersDir}`,
-      "-v",
-      `${sessionTmpDir}:${containerSessionTmp}`,
-      ...relativeArgv0s.flatMap((argv0) => [
-        "-v",
-        `${wrapperScript}:${path.resolve(workDir, argv0)}:ro`,
-      ]),
-      ...absoluteArgv0s.flatMap((argv0) => [
-        "-v",
-        `${wrapperScript}:${argv0}:ro`,
-      ]),
-    ],
+    mounts,
+    dockerArgs,
     envVars: {
       NAS_HOSTEXEC_SOCKET: socketPath,
       NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
@@ -195,6 +211,11 @@ export function planHostExec(input: StageInput): HostExecPlan | null {
       hostexecRuntimeDir: runtimePaths.runtimeDir,
       hostexecBrokerSocket: socketPath,
       hostexecSessionTmpDir: containerSessionTmp,
+      hostexec: {
+        runtimeDir: runtimePaths.runtimeDir,
+        brokerSocket: socketPath,
+        sessionTmpDir: containerSessionTmp,
+      } satisfies HostExecState,
     },
     broker: {
       socketPath,
@@ -229,6 +250,8 @@ function runHostExec(
   return Effect.gen(function* () {
     const setupService = yield* HostExecSetupService;
     const brokerService = yield* HostExecBrokerService;
+    const container = buildContainerState(input, plan);
+    const legacy = renderLegacyContainerState(container);
 
     yield* setupService.prepareWorkspace({
       directories: plan.directories,
@@ -259,8 +282,9 @@ function runHostExec(
 
     return {
       ...plan.outputOverrides,
-      dockerArgs: [...input.prior.dockerArgs, ...plan.dockerArgs],
-      envVars: { ...input.prior.envVars, ...plan.envVars },
+      container,
+      dockerArgs: legacy.dockerArgs,
+      envVars: legacy.envVars,
     };
   });
 }
@@ -287,6 +311,116 @@ export function resolveHostExecRuntimePathsPure(
     brokersDir: path.join(runtimeDir, "brokers"),
     wrappersDir: path.join(runtimeDir, "wrappers"),
   };
+}
+
+function resolveWorkspace(input: StageInput): WorkspaceState {
+  return (
+    input.prior.workspace ?? {
+      workDir: input.prior.workDir,
+      imageName: input.prior.imageName,
+      ...(input.prior.mountDir ? { mountDir: input.prior.mountDir } : {}),
+    }
+  );
+}
+
+function buildContainerState(
+  input: StageInput,
+  plan: HostExecPlan,
+): ContainerPlan {
+  const workspace = resolveWorkspace(input);
+  return mergeContainerPlan(resolveContainerBase(input, workspace), {
+    mounts: plan.mounts,
+    env: { static: plan.envVars },
+  });
+}
+
+function resolveContainerBase(
+  input: StageInput,
+  workspace: WorkspaceState,
+): ContainerPlan {
+  if (input.prior.container) {
+    return input.prior.container;
+  }
+
+  let workDir = workspace.workDir;
+  const mounts: MountSpec[] = [];
+  const extraRunArgs: string[] = [];
+  for (let i = 0; i < input.prior.dockerArgs.length; i += 1) {
+    const arg = input.prior.dockerArgs[i];
+    if (arg === "-v" && i + 1 < input.prior.dockerArgs.length) {
+      const mountArg = input.prior.dockerArgs[i + 1];
+      if (mountArg !== undefined) {
+        mounts.push(parseMountSpec(mountArg));
+      }
+      i += 1;
+      continue;
+    }
+    if (arg === "-w" && i + 1 < input.prior.dockerArgs.length) {
+      const workDirArg = input.prior.dockerArgs[i + 1];
+      if (workDirArg !== undefined) {
+        workDir = workDirArg;
+      }
+      i += 1;
+      continue;
+    }
+    extraRunArgs.push(arg);
+  }
+
+  return mergeContainerPlan(emptyContainerPlan(workspace.imageName, workDir), {
+    mounts,
+    env: { static: { ...input.prior.envVars } },
+    extraRunArgs,
+    command: {
+      agentCommand: [...input.prior.agentCommand],
+      extraArgs: [],
+    },
+  });
+}
+
+function renderLegacyContainerState(container: ContainerPlan): {
+  readonly dockerArgs: readonly string[];
+  readonly envVars: Readonly<Record<string, string>>;
+} {
+  const dockerArgs = [
+    ...container.mounts.flatMap((mount) => [
+      "-v",
+      `${mount.source}:${mount.target}${mount.readOnly ? ":ro" : ""}`,
+    ]),
+    "-w",
+    container.workDir,
+    ...container.extraRunArgs,
+  ];
+
+  const envVars: Record<string, string> = { ...container.env.static };
+  if (container.env.dynamicOps.length > 0) {
+    envVars.NAS_ENV_OPS = encodeDynamicEnvOps(container.env.dynamicOps);
+  }
+
+  return { dockerArgs, envVars };
+}
+
+function addMount(
+  mounts: MountSpec[],
+  source: string,
+  target: string,
+  readOnly = false,
+): string {
+  mounts.push(
+    readOnly ? { source, target, readOnly: true } : { source, target },
+  );
+  return `${source}:${target}${readOnly ? ":ro" : ""}`;
+}
+
+function parseMountSpec(rawMount: string): MountSpec {
+  const readOnly = rawMount.endsWith(":ro");
+  const mountValue = readOnly ? rawMount.slice(0, -3) : rawMount;
+  const separatorIndex = mountValue.indexOf(":");
+  if (separatorIndex === -1) {
+    throw new Error(`[nas] Invalid mount arg: ${rawMount}`);
+  }
+  const source = mountValue.slice(0, separatorIndex);
+  const target = mountValue.slice(separatorIndex + 1);
+  return readOnly ? { source, target, readOnly: true } : { source, target };
 }
 
 function buildWrapperScript(): string {

@@ -8,11 +8,8 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import type {
-  HostEnv,
-  PriorStageOutputs,
-  StageInput,
-} from "../pipeline/types.ts";
+import { emptyContainerPlan } from "../pipeline/container_plan.ts";
+import type { HostEnv, StageInput } from "../pipeline/types.ts";
 import { makeHostExecBrokerServiceFake } from "../services/hostexec_broker.ts";
 import {
   type HostExecWorkspacePlan,
@@ -97,12 +94,13 @@ function makeStageInput(
   profile: Profile,
   hostEnv: HostEnv,
   workDir?: string,
+  priorOverrides: Partial<StageInput["prior"]> = {},
 ): StageInput {
   const config: Config = {
     profiles: { default: profile },
     ui: DEFAULT_UI_CONFIG,
   };
-  const prior: PriorStageOutputs = {
+  const prior: StageInput["prior"] = {
     dockerArgs: [],
     envVars: {
       PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -113,6 +111,7 @@ function makeStageInput(
     agentCommand: ["claude"],
     networkPromptEnabled: false,
     dbusProxyEnabled: false,
+    ...priorOverrides,
   };
   return {
     config,
@@ -271,6 +270,50 @@ test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   ).toEqual(true);
 });
 
+test("HostExecStage plan: prefers workspace slice for relative mounts and broker root", () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [
+    {
+      id: "gradlew",
+      match: { argv0: "./gradlew" },
+      cwd: { mode: "workspace-only", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "container",
+    },
+  ];
+  const input = makeStageInput(
+    profile,
+    makeHostEnv("/tmp/nas-test-runtime"),
+    "/legacy-workspace",
+    {
+      mountDir: "/legacy-root",
+      workspace: {
+        workDir: "/slice-workspace",
+        mountDir: "/slice-root",
+        imageName: "slice-image",
+      },
+    },
+  );
+  const plan = planHostExec(input);
+
+  expect(plan).not.toEqual(null);
+  if (!plan) return;
+
+  expect(
+    plan.dockerArgs.some((arg) =>
+      arg.endsWith(`:${path.join("/slice-workspace", "gradlew")}:ro`),
+    ),
+  ).toEqual(true);
+  expect(
+    plan.dockerArgs.some((arg) =>
+      arg.endsWith(`:${path.join("/legacy-workspace", "gradlew")}:ro`),
+    ),
+  ).toEqual(false);
+  expect(plan.broker.workspaceRoot).toEqual("/slice-root");
+});
+
 test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [
@@ -372,4 +415,93 @@ test("HostExecStage: run delegates directories, files, and symlinks to HostExecS
   expect(capturedPlan!.directories).toEqual(plan.directories);
   expect(capturedPlan!.files).toEqual(plan.files);
   expect(capturedPlan!.symlinks).toEqual(plan.symlinks);
+});
+
+test("HostExecStage: run merges hostexec mounts and env into container and hostexec slices", async () => {
+  const profile = makeProfile();
+  const input = makeStageInput(
+    profile,
+    makeHostEnv("/tmp/nas-test-runtime"),
+    "/legacy-workspace",
+    {
+      workspace: {
+        workDir: "/slice-workspace",
+        mountDir: "/slice-root",
+        imageName: "slice-image",
+      },
+      container: {
+        ...emptyContainerPlan("slice-image", "/slice-workspace"),
+        mounts: [{ source: "/existing-src", target: "/existing-target" }],
+        env: { static: { EXISTING_ENV: "1" }, dynamicOps: [] },
+        extraRunArgs: ["--shm-size", "2g"],
+        command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
+        labels: { "nas.managed": "true" },
+      },
+    },
+  );
+
+  const stage = createHostExecStage();
+  const setupLayer = makeHostExecSetupServiceFake();
+  const brokerLayer = makeHostExecBrokerServiceFake();
+  const scope = Effect.runSync(Scope.make());
+
+  const result = await Effect.runPromise(
+    stage
+      .run(input)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(setupLayer),
+        Effect.provide(brokerLayer),
+      ),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(result.hostexec).toEqual({
+    runtimeDir: "/tmp/nas-test-runtime/nas/hostexec",
+    brokerSocket:
+      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id.sock",
+    sessionTmpDir: "/tmp/nas-hostexec/test-session-id",
+  });
+  expect(result.container?.mounts).toEqual(
+    expect.arrayContaining([
+      { source: "/existing-src", target: "/existing-target" },
+      {
+        source:
+          "/tmp/nas-test-runtime/nas/hostexec/wrappers/test-session-id/bin",
+        target: "/opt/nas/hostexec/bin",
+        readOnly: true,
+      },
+    ]),
+  );
+  expect(result.container?.env.static).toEqual({
+    EXISTING_ENV: "1",
+    NAS_HOSTEXEC_SOCKET:
+      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id.sock",
+    NAS_HOSTEXEC_WRAPPER_DIR: "/opt/nas/hostexec/bin",
+    NAS_HOSTEXEC_SESSION_ID: "test-session-id",
+    NAS_HOSTEXEC_SESSION_TMP: "/tmp/nas-hostexec/test-session-id",
+  });
+  expect(result.container?.extraRunArgs).toEqual(["--shm-size", "2g"]);
+  expect(result.container?.command).toEqual({
+    agentCommand: ["copilot"],
+    extraArgs: ["--safe"],
+  });
+  expect(result.dockerArgs).toEqual(
+    expect.arrayContaining([
+      "-w",
+      "/slice-workspace",
+      "--shm-size",
+      "2g",
+      "/existing-src:/existing-target",
+      "/tmp/nas-test-runtime/nas/hostexec/wrappers/test-session-id/bin:/opt/nas/hostexec/bin:ro",
+    ]),
+  );
+  expect(result.envVars).toEqual({
+    EXISTING_ENV: "1",
+    NAS_HOSTEXEC_SOCKET:
+      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id.sock",
+    NAS_HOSTEXEC_WRAPPER_DIR: "/opt/nas/hostexec/bin",
+    NAS_HOSTEXEC_SESSION_ID: "test-session-id",
+    NAS_HOSTEXEC_SESSION_TMP: "/tmp/nas-hostexec/test-session-id",
+  });
 });
