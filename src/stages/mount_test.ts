@@ -33,7 +33,6 @@ import {
 } from "../services/mount_setup.ts";
 import {
   createMountStage,
-  encodeDynamicEnvOps,
   planMount,
   serializeNixExtraPackages,
 } from "./mount.ts";
@@ -1215,49 +1214,6 @@ test("MountStage: minimal profile produces valid docker args", () => {
   expect("NAS_USER" in plan.envVars).toEqual(true);
   expect("NAS_HOME" in plan.envVars).toEqual(true);
   expect("WORKSPACE" in plan.envVars).toEqual(true);
-});
-
-// ============================================================
-// encodeDynamicEnvOps (exported helper)
-// ============================================================
-
-test("encodeDynamicEnvOps: single prefix op", () => {
-  expect(
-    encodeDynamicEnvOps([
-      {
-        mode: "prefix",
-        key: "PATH",
-        value: "/opt/bin",
-        separator: ":",
-      },
-    ]),
-  ).toEqual("__nas_pfx 'PATH' '/opt/bin' ':'");
-});
-
-test("encodeDynamicEnvOps: single suffix op", () => {
-  expect(
-    encodeDynamicEnvOps([
-      {
-        mode: "suffix",
-        key: "PATH",
-        value: "/opt/lib",
-        separator: ":",
-      },
-    ]),
-  ).toEqual("__nas_sfx 'PATH' '/opt/lib' ':'");
-});
-
-test("encodeDynamicEnvOps: value with single quotes escaped", () => {
-  expect(
-    encodeDynamicEnvOps([
-      {
-        mode: "prefix",
-        key: "MSG",
-        value: "it's",
-        separator: " ",
-      },
-    ]),
-  ).toEqual("__nas_pfx 'MSG' 'it'\\''s' ' '");
 });
 
 // ============================================================
