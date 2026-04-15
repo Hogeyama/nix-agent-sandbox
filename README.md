@@ -368,6 +368,39 @@ profiles:
 > 相対パス `argv0` を指定すると、コンテナ内の該当ファイル（例: `./gradlew`）がラッパースクリプトで bind-mount 置換されます。
 > そのためコンテナ内での直接実行にフォールバックできず、`fallback` は `"deny"` のみ利用可能です。
 
+### `http_proxy` を参照しないツールにプロキシを設定する
+
+nas のコンテナ内では `http_proxy` / `https_proxy` が自動設定されますが、JVM ベースのツール（Gradle、Maven など）はこれらの環境変数を無視し、JVM システムプロパティでプロキシを受け取ります。
+そのようなツールには `env` でプロパティを明示的に渡してください。nas の Envoy forward proxy はコンテナ内から `localhost:18080` でアクセスできます。
+
+**Gradle**
+
+```yaml
+profiles:
+  android:
+    agent: claude
+    env:
+      - key: GRADLE_OPTS
+        val: >-
+          -Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=18080
+          -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=18080
+          -Dhttp.nonProxyHosts=localhost|127.0.0.1
+```
+
+**Maven**
+
+```yaml
+profiles:
+  java:
+    agent: claude
+    env:
+      - key: MAVEN_OPTS
+        val: >-
+          -Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=18080
+          -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=18080
+          -Dhttp.nonProxyHosts=localhost|127.0.0.1
+```
+
 ### `cli_auth_credentials_store = "keyring"` な Codex を使う
 
 ```yaml
