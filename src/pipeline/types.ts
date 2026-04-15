@@ -59,7 +59,7 @@ export interface StageInput {
   readonly sessionName?: string;
   readonly host: HostEnv;
   readonly probes: ProbeResults;
-  readonly prior: PriorStageOutputs;
+  readonly prior: PriorStageOutputs & Partial<PipelineState>;
 }
 
 /** stage 間で蓄積される出力 */

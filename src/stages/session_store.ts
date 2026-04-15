@@ -9,12 +9,32 @@
 
 import { Effect, type Scope } from "effect";
 import { logInfo } from "../log.ts";
+import type { SessionState } from "../pipeline/state.ts";
 import type {
   EffectStage,
   EffectStageResult,
   StageInput,
 } from "../pipeline/types.ts";
 import { SessionStoreService } from "../services/session_store_service.ts";
+
+function resolveWorktree(input: StageInput): string {
+  return input.prior.workspace?.workDir ?? input.prior.workDir;
+}
+
+function buildSessionResult(input: StageInput): EffectStageResult {
+  const session: SessionState =
+    input.sessionName === undefined
+      ? { sessionId: input.sessionId }
+      : { sessionId: input.sessionId, sessionName: input.sessionName };
+
+  return {
+    dockerArgs: [...input.prior.dockerArgs],
+    envVars: {
+      ...input.prior.envVars,
+    },
+    session,
+  };
+}
 
 export function createSessionStoreStage(): EffectStage<SessionStoreService> {
   return {
@@ -41,7 +61,7 @@ export function createSessionStoreStage(): EffectStage<SessionStoreService> {
           name: input.sessionName,
           agent: input.profile.agent,
           profile: input.profileName,
-          worktree: input.prior.workDir,
+          worktree: resolveWorktree(input),
           startedAt: new Date().toISOString(),
           hookNotify: input.profile.hook.notify,
         });
@@ -56,12 +76,7 @@ export function createSessionStoreStage(): EffectStage<SessionStoreService> {
           sessionStore.delete(paths, input.sessionId).pipe(Effect.ignoreLogged),
         );
 
-        return {
-          dockerArgs: [...input.prior.dockerArgs],
-          envVars: {
-            ...input.prior.envVars,
-          },
-        };
+        return buildSessionResult(input);
       });
     },
   };
