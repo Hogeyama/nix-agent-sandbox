@@ -115,6 +115,18 @@ function makeStdin(raw: string): () => Promise<string> {
   return async () => raw;
 }
 
+const noopNotifySender = () => {};
+
+async function runHook(
+  args: string[],
+  deps: Parameters<typeof runHookCommand>[1] = {},
+): Promise<void> {
+  await runHookCommand(args, {
+    notifySender: noopNotifySender,
+    ...deps,
+  });
+}
+
 test("runHookCommand --kind start transitions pre-created record to agent-turn", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-1";
   // Seed the store with a user-turn record via the store module directly.
@@ -126,7 +138,7 @@ test("runHookCommand --kind start transitions pre-created record to agent-turn",
     startedAt: new Date(Date.now() - 60_000).toISOString(),
   });
 
-  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "start"], { stdinReader: emptyStdin });
 
   const record = await readSession(paths, "sess-hook-1");
   expect(record?.turn).toBe("agent-turn");
@@ -146,7 +158,7 @@ test("runHookCommand --kind attention with stdin message transitions to user-tur
   const { updateSessionTurn } = await import("../sessions/store.ts");
   await updateSessionTurn(paths, "sess-hook-2", "start");
 
-  await runHookCommand(["--kind", "attention"], {
+  await runHook(["--kind", "attention"], {
     stdinReader: makeStdin('{"message":"hello"}'),
   });
 
@@ -169,7 +181,7 @@ test("runHookCommand applies --when toolName=ask_user", async () => {
   });
   await updateSessionTurn(paths, "sess-hook-when-tool", "start");
 
-  await runHookCommand(["--kind", "attention", "--when", "toolName=ask_user"], {
+  await runHook(["--kind", "attention", "--when", "toolName=ask_user"], {
     stdinReader: makeStdin('{"toolName":"ask_user","message":"hello"}'),
   });
 
@@ -189,12 +201,9 @@ test("runHookCommand applies --when stopReason=end_turn", async () => {
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  await runHookCommand(
-    ["--kind", "attention", "--when", "stopReason=end_turn"],
-    {
-      stdinReader: makeStdin('{"stopReason":"end_turn","message":"done"}'),
-    },
-  );
+  await runHook(["--kind", "attention", "--when", "stopReason=end_turn"], {
+    stdinReader: makeStdin('{"stopReason":"end_turn","message":"done"}'),
+  });
 
   const record = await readSession(paths, "sess-hook-when-stop");
   expect(record?.turn).toBe("user-turn");
@@ -215,7 +224,7 @@ test("runHookCommand --kind attention without message leaves lastEventMessage em
   });
   await updateSessionTurn(paths, "sess-hook-2b", "start");
 
-  await runHookCommand(["--kind", "attention"], {
+  await runHook(["--kind", "attention"], {
     stdinReader: emptyStdin,
   });
 
@@ -237,7 +246,7 @@ test("runHookCommand with mismatched --when leaves the store untouched", async (
 
   const before = await readSession(paths, "sess-hook-when-mismatch");
 
-  await runHookCommand(
+  await runHook(
     ["--kind", "attention", "--when", "toolResult.resultType=success"],
     {
       stdinReader: makeStdin(
@@ -260,7 +269,7 @@ test("runHookCommand --kind stop transitions to done", async () => {
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  await runHookCommand(["--kind", "stop"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "stop"], { stdinReader: emptyStdin });
 
   const record = await readSession(paths, "sess-hook-3");
   expect(record?.turn).toBe("done");
@@ -269,7 +278,7 @@ test("runHookCommand --kind stop transitions to done", async () => {
 test("runHookCommand without NAS_SESSION_ID exits cleanly and writes nothing", async () => {
   delete process.env.NAS_SESSION_ID;
 
-  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "start"], { stdinReader: emptyStdin });
 
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
@@ -278,7 +287,7 @@ test("runHookCommand without NAS_SESSION_ID exits cleanly and writes nothing", a
 test("runHookCommand with empty NAS_SESSION_ID exits cleanly and writes nothing", async () => {
   process.env.NAS_SESSION_ID = "";
 
-  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "start"], { stdinReader: emptyStdin });
 
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
@@ -287,9 +296,9 @@ test("runHookCommand with empty NAS_SESSION_ID exits cleanly and writes nothing"
 test("runHookCommand with invalid --kind exits cleanly and writes nothing", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-bad-kind";
 
-  await runHookCommand(["--kind", "bogus"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "bogus"], { stdinReader: emptyStdin });
   // Also test missing --kind entirely.
-  await runHookCommand([], { stdinReader: emptyStdin });
+  await runHook([], { stdinReader: emptyStdin });
 
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
@@ -298,7 +307,7 @@ test("runHookCommand with invalid --kind exits cleanly and writes nothing", asyn
 test("runHookCommand rejects NAS_SESSION_ID with path traversal and writes nothing", async () => {
   process.env.NAS_SESSION_ID = "../etc/passwd";
 
-  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "start"], { stdinReader: emptyStdin });
 
   // Nothing should have been written in our temp sessions dir.
   const entries = await readdir(sessionsDir);
@@ -307,21 +316,21 @@ test("runHookCommand rejects NAS_SESSION_ID with path traversal and writes nothi
 
 test("runHookCommand rejects NAS_SESSION_ID containing slash", async () => {
   process.env.NAS_SESSION_ID = "foo/bar";
-  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "start"], { stdinReader: emptyStdin });
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
 test("runHookCommand rejects NAS_SESSION_ID containing backslash", async () => {
   process.env.NAS_SESSION_ID = "foo\\bar";
-  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "start"], { stdinReader: emptyStdin });
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
 
 test("runHookCommand rejects NAS_SESSION_ID starting with dot", async () => {
   process.env.NAS_SESSION_ID = ".hidden";
-  await runHookCommand(["--kind", "start"], { stdinReader: emptyStdin });
+  await runHook(["--kind", "start"], { stdinReader: emptyStdin });
   const entries = await readdir(sessionsDir);
   expect(entries.length).toBe(0);
 });
@@ -336,7 +345,7 @@ test("runHookCommand tolerates malformed stdin JSON and still updates the store"
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  await runHookCommand(["--kind", "start"], {
+  await runHook(["--kind", "start"], {
     stdinReader: makeStdin("{not valid json"),
   });
 
@@ -363,7 +372,7 @@ test("runHookCommand with malformed --when warns and is a no-op", async () => {
 
   let threw: unknown;
   try {
-    await runHookCommand(["--kind", "attention", "--when", "toolName"], {
+    await runHook(["--kind", "attention", "--when", "toolName"], {
       stdinReader: makeStdin('{"toolName":"ask_user"}'),
     });
   } catch (err) {
@@ -398,7 +407,7 @@ test("runHookCommand with missing --when value warns and is a no-op", async () =
 
   let threw: unknown;
   try {
-    await runHookCommand(["--kind", "attention", "--when"], {
+    await runHook(["--kind", "attention", "--when"], {
       stdinReader: makeStdin('{"toolName":"ask_user"}'),
     });
   } catch (err) {
@@ -428,7 +437,7 @@ test("runHookCommand: store update failure is swallowed", async () => {
 
   let threw: unknown;
   try {
-    await runHookCommand(["--kind", "attention"], {
+    await runHook(["--kind", "attention"], {
       stdinReader: makeStdin('{"message":"should-not-notify"}'),
     });
   } catch (err) {
@@ -459,7 +468,7 @@ test("attention hook fires desktop notification by default", async () => {
   await updateSessionTurn(paths, "sess-hook-notify-default", "start");
 
   const calls: { title: string; body: string }[] = [];
-  await runHookCommand(["--kind", "attention"], {
+  await runHook(["--kind", "attention"], {
     stdinReader: makeStdin('{"message":"please review"}'),
     notifySender: (title, body) => calls.push({ title, body }),
   });
@@ -486,7 +495,7 @@ test("attention hook fires notification with fallback body when no message", asy
   await updateSessionTurn(paths, "sess-hook-notify-no-msg", "start");
 
   const calls: { title: string; body: string }[] = [];
-  await runHookCommand(["--kind", "attention"], {
+  await runHook(["--kind", "attention"], {
     stdinReader: emptyStdin,
     notifySender: (title, body) => calls.push({ title, body }),
   });
@@ -512,7 +521,7 @@ test("attention hook suppressed when hookNotify is off", async () => {
   await updateSessionTurn(paths, "sess-hook-notify-off", "start");
 
   const calls: { title: string; body: string }[] = [];
-  await runHookCommand(["--kind", "attention"], {
+  await runHook(["--kind", "attention"], {
     stdinReader: makeStdin('{"message":"hello"}'),
     notifySender: (title, body) => calls.push({ title, body }),
   });
@@ -538,8 +547,8 @@ test("start/stop hooks do not fire notification", async () => {
     notifySender: (title: string, body: string) => calls.push({ title, body }),
   };
 
-  await runHookCommand(["--kind", "start"], deps);
-  await runHookCommand(["--kind", "stop"], deps);
+  await runHook(["--kind", "start"], deps);
+  await runHook(["--kind", "stop"], deps);
   await Bun.sleep(50);
 
   expect(calls).toHaveLength(0);
