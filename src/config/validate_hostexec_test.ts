@@ -320,9 +320,7 @@ test("hostexec config: allows relative argv0 with fallback container (LD_PRELOAD
       },
     },
   });
-  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual(
-    "container",
-  );
+  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("container");
 });
 
 test("hostexec config: allows relative argv0 with fallback deny", () => {
@@ -362,9 +360,7 @@ test("hostexec config: allows absolute argv0 with fallback container (LD_PRELOAD
       },
     },
   });
-  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual(
-    "container",
-  );
+  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("container");
 });
 
 test("hostexec config: allows absolute argv0 with fallback deny", () => {
