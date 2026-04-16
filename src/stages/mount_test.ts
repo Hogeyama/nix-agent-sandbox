@@ -21,13 +21,9 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
+import { emptyContainerPlan } from "../pipeline/container_plan.ts";
 import type { PipelineState } from "../pipeline/state.ts";
-import type {
-  HostEnv,
-  PriorStageOutputs,
-  ProbeResults,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
 import {
   type MountDirectoryEntry,
   makeMountSetupServiceFake,
@@ -137,18 +133,25 @@ const baseConfig: Config = {
   ui: DEFAULT_UI_CONFIG,
 };
 
-function makePrior(
-  overrides: Partial<PriorStageOutputs> = {},
-): PriorStageOutputs {
+type MountStageSlices = Pick<
+  PipelineState,
+  "workspace" | "nix" | "dbus" | "container"
+>;
+
+function makeSlices(
+  overrides: Partial<MountStageSlices> = {},
+): MountStageSlices {
   return {
-    dockerArgs: [],
-    envVars: { NAS_LOG_LEVEL: "info" },
-    workDir: TEST_WORK_DIR,
-    nixEnabled: false,
-    imageName: "nas-sandbox",
-    agentCommand: [],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
+    workspace: {
+      workDir: TEST_WORK_DIR,
+      imageName: "nas-sandbox",
+    },
+    nix: { enabled: false },
+    dbus: { enabled: false },
+    container: {
+      ...emptyContainerPlan("nas-sandbox", TEST_WORK_DIR),
+      env: { static: { NAS_LOG_LEVEL: "info" }, dynamicOps: [] },
+    },
     ...overrides,
   };
 }
@@ -159,21 +162,29 @@ function makeInput(
     mountProbes?: MountProbes;
     hostEnv?: HostEnv;
     probes?: ProbeResults;
-    prior?: Partial<PriorStageOutputs> & Partial<PipelineState>;
+    slices?: Partial<MountStageSlices>;
   } = {},
-): { input: StageInput; mountProbes: MountProbes } {
+): {
+  input: StageInput & MountStageSlices;
+  sharedInput: StageInput;
+  slices: MountStageSlices;
+  mountProbes: MountProbes;
+} {
   const profile = opts.profile ?? makeProfile();
   const mountProbes = opts.mountProbes ?? makeMountProbes();
+  const sharedInput: StageInput = {
+    config: baseConfig,
+    profile,
+    profileName: "test",
+    sessionId: "sess_test",
+    host: opts.hostEnv ?? defaultHostEnv,
+    probes: opts.probes ?? defaultProbeResults,
+  };
+  const slices = makeSlices(opts.slices);
   return {
-    input: {
-      config: baseConfig,
-      profile,
-      profileName: "test",
-      sessionId: "sess_test",
-      host: opts.hostEnv ?? defaultHostEnv,
-      probes: opts.probes ?? defaultProbeResults,
-      prior: makePrior(opts.prior),
-    },
+    input: { ...sharedInput, ...slices },
+    sharedInput,
+    slices,
     mountProbes,
   };
 }
@@ -886,7 +897,7 @@ test("MountStage: nix enabled but mountSocket false skips socket", () => {
   });
   const { input, mountProbes } = makeInput({
     profile,
-    prior: { nixEnabled: true },
+    slices: { nix: { enabled: true } },
   });
   const plan = planMount(input, mountProbes);
   expect(plan.dockerArgs.includes("/nix:/nix")).toEqual(false);
@@ -902,7 +913,7 @@ test("MountStage: nix enabled with mountSocket mounts /nix when host has nix", (
     profile,
     mountProbes,
     probes,
-    prior: { nixEnabled: true },
+    slices: { nix: { enabled: true } },
   });
   const plan = planMount(input, mountProbes);
   expect(plan.dockerArgs.includes("/nix:/nix")).toEqual(true);
@@ -918,7 +929,7 @@ test("MountStage: nix enabled but host has no nix does not mount /nix", () => {
   const { input, mountProbes } = makeInput({
     profile,
     probes,
-    prior: { nixEnabled: true },
+    slices: { nix: { enabled: true } },
   });
   const plan = planMount(input, mountProbes);
   expect(plan.dockerArgs.includes("/nix:/nix")).toEqual(false);
@@ -936,7 +947,7 @@ test("MountStage: nix extra-packages set when nix enabled and host has nix", () 
   const { input, mountProbes } = makeInput({
     profile,
     probes,
-    prior: { nixEnabled: true },
+    slices: { nix: { enabled: true } },
   });
   const plan = planMount(input, mountProbes);
   expect(plan.envVars.NIX_EXTRA_PACKAGES).toEqual("nixpkgs#gh\nnixpkgs#jq");
@@ -954,7 +965,7 @@ test("MountStage: nix conf outside /nix is mounted to temp path", () => {
     profile,
     mountProbes,
     probes,
-    prior: { nixEnabled: true },
+    slices: { nix: { enabled: true } },
   });
   const plan = planMount(input, mountProbes);
   expect(plan.envVars.NIX_CONF_PATH).toEqual("/tmp/nas-host-nix.conf");
@@ -977,7 +988,7 @@ test("MountStage: nix conf under /nix uses original path", () => {
     profile,
     mountProbes,
     probes,
-    prior: { nixEnabled: true },
+    slices: { nix: { enabled: true } },
   });
   const plan = planMount(input, mountProbes);
   expect(plan.envVars.NIX_CONF_PATH).toEqual("/nix/store/xxx/etc/nix.conf");
@@ -1054,7 +1065,7 @@ test("MountStage: claude agent sets agentCommand and PATH", () => {
   const mountProbes = makeMountProbes({ agentProbes: defaultClaudeProbes });
   const { input } = makeInput({ profile, mountProbes });
   const plan = planMount(input, mountProbes);
-  const agentCommand = plan.outputOverrides.agentCommand as string[];
+  const agentCommand = plan.containerPatch.command!.agentCommand;
   expect(agentCommand.length > 0).toEqual(true);
   expect(plan.envVars.PATH?.includes(`${CONTAINER_HOME}/.local/bin`)).toEqual(
     true,
@@ -1074,7 +1085,7 @@ test("MountStage: copilot agent sets agentCommand", () => {
   const mountProbes = makeMountProbes({ agentProbes: copilotProbes });
   const { input } = makeInput({ profile, mountProbes });
   const plan = planMount(input, mountProbes);
-  expect(plan.outputOverrides.agentCommand).toEqual(["copilot"]);
+  expect(plan.containerPatch.command!.agentCommand).toEqual(["copilot"]);
 });
 
 test("MountStage: codex agent sets agentCommand", () => {
@@ -1086,7 +1097,7 @@ test("MountStage: codex agent sets agentCommand", () => {
   const mountProbes = makeMountProbes({ agentProbes: codexProbes });
   const { input } = makeInput({ profile, mountProbes });
   const plan = planMount(input, mountProbes);
-  expect(plan.outputOverrides.agentCommand).toEqual(["codex"]);
+  expect(plan.containerPatch.command!.agentCommand).toEqual(["codex"]);
 });
 
 // ============================================================
@@ -1097,9 +1108,13 @@ test("MountStage: dbus proxy mounts runtime dir", () => {
   const profile = makeProfile();
   const { input, mountProbes } = makeInput({
     profile,
-    prior: {
-      dbusProxyEnabled: true,
-      dbusSessionRuntimeDir: "/tmp/nas-dbus-123",
+    slices: {
+      dbus: {
+        enabled: true,
+        runtimeDir: "/tmp/nas-dbus-123",
+        socket: "/tmp/nas-dbus-123/bus",
+        sourceAddress: "unix:path=/tmp/nas-dbus-123/bus",
+      },
     },
   });
   const plan = planMount(input, mountProbes);
@@ -1116,7 +1131,14 @@ test("MountStage: dbus proxy requires uid", () => {
   const hostEnv: HostEnv = { ...defaultHostEnv, uid: null, gid: null };
   const { input, mountProbes } = makeInput({
     hostEnv,
-    prior: { dbusProxyEnabled: true },
+    slices: {
+      dbus: {
+        enabled: true,
+        runtimeDir: "/tmp/nas-dbus-123",
+        socket: "/tmp/nas-dbus-123/bus",
+        sourceAddress: "unix:path=/tmp/nas-dbus-123/bus",
+      },
+    },
   });
   expect(() => planMount(input, mountProbes)).toThrow(
     "dbus.session.enable requires a host UID",
@@ -1167,7 +1189,13 @@ test("MountStage: X11 skipped when no DISPLAY", () => {
 
 test("MountStage: mountDir overrides workspace mount source", () => {
   const { input, mountProbes } = makeInput({
-    prior: { mountDir: "/alt/mount/source" },
+    slices: {
+      workspace: {
+        workDir: TEST_WORK_DIR,
+        mountDir: "/alt/mount/source",
+        imageName: "nas-sandbox",
+      },
+    },
   });
   const plan = planMount(input, mountProbes);
   const vIdx = plan.dockerArgs.indexOf("-v");
@@ -1203,7 +1231,7 @@ test("MountStage: no mount widening when not in a worktree", () => {
   );
 });
 
-test("MountStage: structured workspace, nix, and dbus slices override legacy prior fields", () => {
+test("MountStage: structured workspace, nix, and dbus slices drive planning", () => {
   const profile = makeProfile({
     nix: { enable: true, mountSocket: true, extraPackages: [] },
   });
@@ -1213,11 +1241,7 @@ test("MountStage: structured workspace, nix, and dbus slices override legacy pri
       ...defaultProbeResults,
       hasHostNix: true,
     },
-    prior: {
-      workDir: "/legacy/workdir",
-      mountDir: "/legacy/mountdir",
-      nixEnabled: false,
-      dbusProxyEnabled: false,
+    slices: {
       workspace: {
         workDir: "/slice/workdir",
         mountDir: "/slice/mountdir",
@@ -1268,8 +1292,7 @@ test("MountStage: planner emits container patch with structured mounts and dynam
         },
       ],
     }),
-    prior: {
-      agentCommand: ["legacy-agent"],
+    slices: {
       container: {
         image: "slice-image",
         workDir: "/slice/workdir",
@@ -1355,12 +1378,12 @@ test("MountStage run(): creates directories via MountSetupService and returns re
   const mountProbes = makeMountProbes({
     nixBinPath: "/nix/store/xxx/bin/nix",
   });
-  const { input } = makeInput({
+  const { sharedInput, slices } = makeInput({
     profile,
     mountProbes,
     hostEnv,
     probes,
-    prior: { nixEnabled: true },
+    slices: { nix: { enabled: true } },
   });
 
   const createdDirs: MountDirectoryEntry[] = [];
@@ -1370,11 +1393,11 @@ test("MountStage run(): creates directories via MountSetupService and returns re
         createdDirs.push(...dirs);
       }),
   });
-  const stage = createMountStage(mountProbes);
+  const stage = createMountStage(sharedInput, mountProbes);
 
   const scope = Effect.runSync(Scope.make());
   const effect = stage
-    .run(input)
+    .run(slices)
     .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer));
   const result = await Effect.runPromise(effect);
   await Effect.runPromise(Scope.close(scope, Exit.void));
@@ -1383,8 +1406,8 @@ test("MountStage run(): creates directories via MountSetupService and returns re
   expect(createdPaths).toContain("/home/testuser/.cache/nas");
   expect(createdPaths).toContain("/home/testuser/.cache/nix");
 
-  expect(result.dockerArgs).toBeDefined();
-  expect(result.envVars).toBeDefined();
+  expect(result.container!.extraRunArgs).toBeDefined();
+  expect(result.container!.env.static).toBeDefined();
   expect(result.container).toEqual({
     image: "nas-sandbox",
     workDir: TEST_WORK_DIR,
@@ -1428,12 +1451,12 @@ test("MountStage run(): creates directories via MountSetupService and returns re
     },
     labels: {},
   });
-  expect(result.envVars!.NAS_USER).toEqual(TEST_USER);
-  expect(result.envVars!.NIX_ENABLED).toEqual("true");
+  expect(result.container!.env.static.NAS_USER).toEqual(TEST_USER);
+  expect(result.container!.env.static.NIX_ENABLED).toEqual("true");
 });
 
 test("MountStage run(): no directories when nix disabled", async () => {
-  const { input, mountProbes } = makeInput();
+  const { sharedInput, slices, mountProbes } = makeInput();
 
   const createdDirs: MountDirectoryEntry[] = [];
   const layer = makeMountSetupServiceFake({
@@ -1442,34 +1465,32 @@ test("MountStage run(): no directories when nix disabled", async () => {
         createdDirs.push(...dirs);
       }),
   });
-  const stage = createMountStage(mountProbes);
+  const stage = createMountStage(sharedInput, mountProbes);
 
   const scope = Effect.runSync(Scope.make());
   const effect = stage
-    .run(input)
+    .run(slices)
     .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer));
   const result = await Effect.runPromise(effect);
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
   expect(createdDirs.length).toEqual(0);
-  expect(result.dockerArgs).toBeDefined();
-  expect(result.envVars).toBeDefined();
-  expect(result.envVars!.NAS_USER).toEqual(TEST_USER);
+  expect(result.container!.extraRunArgs).toBeDefined();
+  expect(result.container!.env.static).toBeDefined();
+  expect(result.container!.env.static.NAS_USER).toEqual(TEST_USER);
 });
 
-test("MountStage run(): legacy outputs preserve structured base container state", async () => {
+test("MountStage run(): preserves structured base container state", async () => {
   const mountProbes = makeMountProbes({
     gcloudConfigExists: true,
   });
   const profile = makeProfile({
     gcloud: { mountConfig: true },
   });
-  const { input } = makeInput({
+  const { sharedInput, slices } = makeInput({
     profile,
     mountProbes,
-    prior: {
-      dockerArgs: ["--legacy-only"],
-      envVars: { LEGACY_ONLY: "1" },
+    slices: {
       container: {
         image: "slice-image",
         workDir: "/slice/workdir",
@@ -1486,28 +1507,26 @@ test("MountStage run(): legacy outputs preserve structured base container state"
   });
 
   const layer = makeMountSetupServiceFake();
-  const stage = createMountStage(mountProbes);
+  const stage = createMountStage(sharedInput, mountProbes);
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run(slices)
       .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
-  expect(result.dockerArgs).toEqual([
-    "-v",
-    "/structured/src:/structured/dst",
-    "-v",
-    `${TEST_WORK_DIR}:${TEST_WORK_DIR}`,
-    "-v",
-    `${TEST_HOME}/.config/gcloud:${CONTAINER_HOME}/.config/gcloud`,
-    "-w",
-    TEST_WORK_DIR,
-    "--structured-flag",
+  expect(result.container!.mounts).toEqual([
+    { source: "/structured/src", target: "/structured/dst" },
+    { source: TEST_WORK_DIR, target: TEST_WORK_DIR },
+    {
+      source: `${TEST_HOME}/.config/gcloud`,
+      target: `${CONTAINER_HOME}/.config/gcloud`,
+    },
   ]);
-  expect(result.envVars).toEqual({
+  expect(result.container!.extraRunArgs).toEqual(["--structured-flag"]);
+  expect(result.container!.env.static).toEqual({
     STRUCTURED_ONLY: "1",
     NAS_USER: TEST_USER,
     NAS_HOME: CONTAINER_HOME,
