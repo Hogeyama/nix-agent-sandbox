@@ -11,8 +11,8 @@ tools: Read, Grep, Glob, Bash, Edit, Write
 1. 渡された計画の「今回実装する Commit」を確認する
 2. 対象ファイルを読み、現状を把握する
 3. 計画に従って実装する
-4. `deno task fmt` と `deno task lint` を実行して問題がないことを確認する
-5. テストがある場合は `deno task test {関連テストファイル}` を実行する
+4. `bun run check` を実行して型エラーがないことを確認する
+5. テストがある場合は `bun test {関連テストファイル}` を実行する
 6. 結果を報告する
 
 ## 出力フォーマット
@@ -42,7 +42,8 @@ suggestion: {どうすべきか}
 - 計画にない「ついでの改善」や「気づいたリファクタ」は絶対にしない
 - コミットはしない（orchestrator が行う）
 - 計画と現実が合わない場合、勝手に判断せず `status: blocked` で報告する
-- code-reviewer からの指摘（reject findings）が渡された場合、その指摘のみ修正する。指摘以外の変更はしない
+- code-reviewer からの指摘（reject findings）が渡された場合、その指摘を修正する。指摘以外の変更はしない
+- ただし、指摘の修正が他のコードパス（disabled / skip / fallback / error 分岐）に影響する場合は、それらのパスも整合させる。これは scope 内とみなす
 
 ## コーディングルール
 

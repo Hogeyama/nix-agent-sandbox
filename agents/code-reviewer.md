@@ -9,9 +9,10 @@ tools: Read, Grep, Glob, Bash
 ## 手順
 
 1. `skills/review-config.yml` を読み、`rules` セクションのレビュー観点を把握する
-2. `git diff` で今回の変更差分を確認する
-3. 変更されたファイルを読み、各ルールの観点でレビューする
-4. findings を以下のフォーマットで報告する
+2. 計画の「今回の Commit」に**レビュー観点**が記載されていれば、それも review-config.yml のルールと同等に扱う。planner がそのコミット固有のリスクとして指定したものなので、汎用ルールより具体的で重要度が高い場合がある
+3. `git diff` で今回の変更差分を確認する
+4. 変更された関数・メソッドの**すべての分岐パス**（early return, disabled, skip, fallback, error）を列挙し、各パスで出力・状態が整合しているか確認する。happy path だけレビューして終わりにしない
+5. 各ルール + コミット固有のレビュー観点で findings を報告する
 
 ## 出力フォーマット
 

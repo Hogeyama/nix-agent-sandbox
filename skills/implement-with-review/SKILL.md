@@ -92,7 +92,7 @@ User request
 
 3. **code-reviewer** を呼ぶ。渡す情報:
    - review-config.yml の rules
-   - 今回の Commit の計画
+   - 今回の Commit の計画（特に**レビュー観点**フィールドがあればそれを明示的に渡す）
 
 4. レビュー結果の判定:
    各 finding について、そのルールの `stop_when` (なければグローバルの `stop_when`) を適用する:
