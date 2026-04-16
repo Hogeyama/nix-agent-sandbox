@@ -17,7 +17,6 @@ import { configureCopilot } from "../agents/copilot.ts";
 import { logWarn } from "../log.ts";
 import {
   type ContainerPatch,
-  emptyContainerPlan,
   mergeContainerPlan,
 } from "../pipeline/container_plan.ts";
 import { encodeDynamicEnvOps } from "../pipeline/env_ops.ts";

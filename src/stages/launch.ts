@@ -122,11 +122,13 @@ export function compileLaunchOpts(
 export function createLaunchStage(
   shared: StageInput,
   extraArgs: string[] = [],
+  // biome-ignore lint/complexity/noBannedTypes: empty output — this stage adds no pipeline slices.
 ): Stage<"container", {}, ContainerLaunchService, unknown> {
   return {
     name: "LaunchStage",
     needs: ["container"],
 
+    // biome-ignore lint/complexity/noBannedTypes: empty output — this stage adds no pipeline slices.
     run(input): Effect.Effect<{}, unknown, ContainerLaunchService> {
       const stageInput = {
         ...shared,

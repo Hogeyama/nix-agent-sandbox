@@ -51,7 +51,7 @@ export function createDbusProxyStage(
     needs: [],
 
     run(
-      input,
+      _input,
     ): Effect.Effect<
       Pick<StageResult, "dbus">,
       unknown,

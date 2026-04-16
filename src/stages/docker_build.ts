@@ -151,11 +151,13 @@ export function planDockerBuild(
 
 export function createDockerBuildStage(
   buildProbes: BuildProbes,
+  // biome-ignore lint/complexity/noBannedTypes: empty output — this stage adds no pipeline slices.
 ): Stage<"workspace", {}, DockerBuildService, unknown> {
   return {
     name: "DockerBuildStage",
     needs: ["workspace"],
 
+    // biome-ignore lint/complexity/noBannedTypes: empty output — this stage adds no pipeline slices.
     run(input): Effect.Effect<{}, unknown, DockerBuildService | Scope.Scope> {
       const plan = planDockerBuild(input, buildProbes);
 

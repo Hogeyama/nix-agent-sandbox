@@ -382,18 +382,6 @@ function addMount(
   return `${source}:${target}${readOnly ? ":ro" : ""}`;
 }
 
-function parseMountSpec(rawMount: string): MountSpec {
-  const readOnly = rawMount.endsWith(":ro");
-  const mountValue = readOnly ? rawMount.slice(0, -3) : rawMount;
-  const separatorIndex = mountValue.indexOf(":");
-  if (separatorIndex === -1) {
-    throw new Error(`[nas] Invalid mount arg: ${rawMount}`);
-  }
-  const source = mountValue.slice(0, separatorIndex);
-  const target = mountValue.slice(separatorIndex + 1);
-  return readOnly ? { source, target, readOnly: true } : { source, target };
-}
-
 function buildWrapperScript(): string {
   return `#!/usr/bin/env python3
 import base64

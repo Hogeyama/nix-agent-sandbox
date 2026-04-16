@@ -71,6 +71,7 @@ export interface Stage<
  * `{} extends Pick<T, K>` is true when K is optional, false when required.
  */
 type RequiredKeys<T> = {
+  // biome-ignore lint/complexity/noBannedTypes: `{}` is required here to detect optional keys via assignability.
   [K in keyof T]-?: {} extends Pick<T, K> ? never : K;
 }[keyof T];
 

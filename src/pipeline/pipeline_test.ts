@@ -148,7 +148,6 @@ test("PipelineBuilder.run: fails when a required slice is missing at runtime", a
 
   await expect(
     // Cast to bypass compile-time guarantees and verify the runtime guard.
-    // biome-ignore lint/suspicious/noExplicitAny: runtime safety test
     Effect.runPromise((builder as any).run({}).pipe(Effect.scoped)),
   ).rejects.toThrow(
     'Stage "nix-stage" requires missing pipeline slice "workspace"',
