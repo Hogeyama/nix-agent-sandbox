@@ -7,3 +7,5 @@ src/ui/dist/
 .direnv/
 node_modules/
 result
+zig-out/
+.zig-cache/
