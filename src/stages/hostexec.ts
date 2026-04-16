@@ -9,6 +9,10 @@ import * as path from "node:path";
 import { Effect, type Scope } from "effect";
 import { DEFAULT_HOSTEXEC_CONFIG, type HostExecRule } from "../config/types.ts";
 import {
+  INTERCEPT_LIB_CONTAINER_PATH,
+  resolveInterceptLibPath,
+} from "../hostexec/intercept_path.ts";
+import {
   isBareCommandHostExecArgv0,
   isRelativeHostExecArgv0,
 } from "../hostexec/match.ts";
@@ -93,11 +97,13 @@ export function createHostExecStage(
         ...shared,
         ...input,
       };
-      const plan = planHostExec(stageInput);
-      if (plan === null) {
-        return Effect.succeed({});
-      }
-      return runHostExec(plan, stageInput);
+      return Effect.gen(function* () {
+        const plan = yield* Effect.promise(() => planHostExec(stageInput));
+        if (plan === null) {
+          return {};
+        }
+        return yield* runHostExec(plan, stageInput);
+      });
     },
   };
 }
@@ -120,7 +126,14 @@ const NAS_HOOK_RULE: HostExecRule = {
   fallback: "container",
 };
 
-export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
+export async function planHostExec(
+  input: HostExecStageInput,
+  opts?: { interceptLibPath?: string | null },
+): Promise<HostExecPlan | null> {
+  const interceptLibPath =
+    opts?.interceptLibPath !== undefined
+      ? opts.interceptLibPath
+      : await resolveInterceptLibPath();
   const config =
     input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
   config.rules = [...config.rules, NAS_HOOK_RULE];
@@ -182,6 +195,11 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
 
   const workDir = workspace.workDir;
   const workspaceRoot = workspace.mountDir ?? workspace.workDir;
+  const interceptPaths = [
+    ...relativeArgv0s.map((a) => path.resolve(workDir, a)),
+    ...absoluteArgv0s,
+  ];
+
   const mounts: MountSpec[] = [];
   const dockerArgs = [
     "-v",
@@ -190,15 +208,36 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
     addMount(mounts, runtimePaths.brokersDir, runtimePaths.brokersDir),
     "-v",
     addMount(mounts, sessionTmpDir, containerSessionTmp),
-    ...relativeArgv0s.flatMap((argv0) => {
-      const target = path.resolve(workDir, argv0);
-      return ["-v", addMount(mounts, wrapperScript, target, true)];
-    }),
-    ...absoluteArgv0s.flatMap((argv0) => [
-      "-v",
-      addMount(mounts, wrapperScript, argv0, true),
-    ]),
   ];
+
+  const envVars: Record<string, string> = {
+    NAS_HOSTEXEC_SOCKET: socketPath,
+    NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
+    NAS_HOSTEXEC_SESSION_ID: input.sessionId,
+    NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
+  };
+
+  if (interceptPaths.length > 0 && interceptLibPath) {
+    // LD_PRELOAD 方式: .so をマウントし、環境変数を設定
+    const existingLdPreload = envVars.LD_PRELOAD;
+    envVars.LD_PRELOAD = existingLdPreload
+      ? `${INTERCEPT_LIB_CONTAINER_PATH}:${existingLdPreload}`
+      : INTERCEPT_LIB_CONTAINER_PATH;
+    envVars.NAS_HOSTEXEC_INTERCEPT_PATHS = interceptPaths.join("\n");
+    dockerArgs.push(
+      "-v",
+      addMount(mounts, interceptLibPath, INTERCEPT_LIB_CONTAINER_PATH, true),
+    );
+  } else if (interceptPaths.length > 0) {
+    // フォールバック: .so が見つからない場合は従来の bind mount 方式
+    for (const argv0 of relativeArgv0s) {
+      const target = path.resolve(workDir, argv0);
+      dockerArgs.push("-v", addMount(mounts, wrapperScript, target, true));
+    }
+    for (const argv0 of absoluteArgv0s) {
+      dockerArgs.push("-v", addMount(mounts, wrapperScript, argv0, true));
+    }
+  }
 
   return {
     directories,
@@ -206,12 +245,7 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
     symlinks,
     mounts,
     dockerArgs,
-    envVars: {
-      NAS_HOSTEXEC_SOCKET: socketPath,
-      NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
-      NAS_HOSTEXEC_SESSION_ID: input.sessionId,
-      NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
-    },
+    envVars,
     outputOverrides: {
       hostexec: {
         runtimeDir: runtimePaths.runtimeDir,

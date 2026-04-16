@@ -8,6 +8,7 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
+import { INTERCEPT_LIB_CONTAINER_PATH } from "../hostexec/intercept_path.ts";
 import { emptyContainerPlan } from "../pipeline/container_plan.ts";
 import type { PipelineState } from "../pipeline/state.ts";
 import type { HostEnv, StageInput } from "../pipeline/types.ts";
@@ -134,12 +135,14 @@ function makeStageState(
 // planHostExec tests
 // ============================================================
 
-test("HostExecStage plan: returns a plan with __nas_hook even when user rules are empty", () => {
+test("HostExecStage plan: returns a plan with __nas_hook even when user rules are empty", async () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
   expect(plan).not.toBeNull();
   // The internal __nas_hook rule creates a "nas" symlink
   expect(plan!.symlinks.some((s) => path.basename(s.path) === "nas")).toEqual(
@@ -147,12 +150,14 @@ test("HostExecStage plan: returns a plan with __nas_hook even when user rules ar
   );
 });
 
-test("HostExecStage plan: produces correct docker args and env vars", () => {
+test("HostExecStage plan: produces correct docker args and env vars", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -182,12 +187,14 @@ test("HostExecStage plan: produces correct docker args and env vars", () => {
   );
 });
 
-test("HostExecStage plan: creates symlinks for bare command argv0s", () => {
+test("HostExecStage plan: creates symlinks for bare command argv0s", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -201,12 +208,14 @@ test("HostExecStage plan: creates symlinks for bare command argv0s", () => {
   }
 });
 
-test("HostExecStage plan: creates file entry for wrapper script", () => {
+test("HostExecStage plan: creates file entry for wrapper script", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -226,12 +235,14 @@ test("HostExecStage plan: creates file entry for wrapper script", () => {
   ).toEqual(true);
 });
 
-test("HostExecStage plan: broker spec contains correct fields", () => {
+test("HostExecStage plan: broker spec contains correct fields", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -241,7 +252,7 @@ test("HostExecStage plan: broker spec contains correct fields", () => {
   expect(plan.broker.notify).toEqual("off");
 });
 
-test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
+test("HostExecStage plan: sets LD_PRELOAD for relative argv0 intercept", async () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [
     {
@@ -263,19 +274,23 @@ test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
       workspace: { workDir: workspace, imageName: "nas-test" },
     }),
   };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/path/to/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
+  expect(plan.envVars.LD_PRELOAD).toEqual(INTERCEPT_LIB_CONTAINER_PATH);
+  expect(plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS).toEqual(
+    path.join(workspace, "gradlew"),
+  );
   expect(
-    plan.dockerArgs.some((arg) =>
-      arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`),
-    ),
+    plan.dockerArgs.some((arg) => arg.includes(INTERCEPT_LIB_CONTAINER_PATH)),
   ).toEqual(true);
 });
 
-test("HostExecStage plan: uses workspace slice for relative mounts and broker root", () => {
+test("HostExecStage plan: uses workspace slice for LD_PRELOAD intercept and broker root", async () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [
     {
@@ -298,20 +313,21 @@ test("HostExecStage plan: uses workspace slice for relative mounts and broker ro
       },
     }),
   };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/path/to/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  expect(
-    plan.dockerArgs.some((arg) =>
-      arg.endsWith(`:${path.join("/slice-workspace", "gradlew")}:ro`),
-    ),
-  ).toEqual(true);
+  expect(plan.envVars.LD_PRELOAD).toEqual(INTERCEPT_LIB_CONTAINER_PATH);
+  expect(plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS).toEqual(
+    path.join("/slice-workspace", "gradlew"),
+  );
   expect(plan.broker.workspaceRoot).toEqual("/slice-root");
 });
 
-test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path", () => {
+test("HostExecStage plan: sets LD_PRELOAD for absolute argv0 intercept", async () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [
     {
@@ -327,29 +343,165 @@ test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path"
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/path/to/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
+  expect(plan.envVars.LD_PRELOAD).toEqual(INTERCEPT_LIB_CONTAINER_PATH);
+  expect(plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS).toEqual("/usr/bin/git");
   expect(
-    plan.dockerArgs.some((arg) => arg.endsWith(":/usr/bin/git:ro")),
+    plan.dockerArgs.some((arg) => arg.includes(INTERCEPT_LIB_CONTAINER_PATH)),
   ).toEqual(true);
 });
 
-test("HostExecStage plan: auto notify resolves to desktop", () => {
+test("HostExecStage plan: auto notify resolves to desktop", async () => {
   const profile = makeProfile();
   profile.hostexec!.prompt.notify = "auto";
   const input = {
     ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime")),
     ...makeStageState(),
   };
-  const plan = planHostExec(input);
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
   expect(plan.broker.notify).toEqual("desktop");
+});
+
+test("HostExecStage plan: falls back to bind mount when interceptLibPath is null", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [
+    {
+      id: "gradlew",
+      match: { argv0: "./gradlew" },
+      cwd: { mode: "workspace-only", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "container",
+    },
+  ];
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const workspace = "/workspace";
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState({
+      workspace: { workDir: workspace, imageName: "nas-test" },
+    }),
+  };
+  const plan = await planHostExec(input, { interceptLibPath: null });
+
+  expect(plan).not.toEqual(null);
+  if (!plan) return;
+
+  // LD_PRELOAD should NOT be set in fallback mode
+  expect(plan.envVars.LD_PRELOAD).toBeUndefined();
+  expect(plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS).toBeUndefined();
+
+  // Traditional bind mount should be present
+  expect(
+    plan.dockerArgs.some((arg) =>
+      arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`),
+    ),
+  ).toEqual(true);
+});
+
+test("HostExecStage plan: LD_PRELOAD value has no spurious colons when set", async () => {
+  // The colon-concatenation logic in planHostExec is defensive:
+  // currently envVars is freshly constructed so existingLdPreload is always
+  // undefined, but the code path is ready if a future change seeds LD_PRELOAD.
+  const profile = makeProfile();
+  profile.hostexec!.rules = [
+    {
+      id: "gradlew",
+      match: { argv0: "./gradlew" },
+      cwd: { mode: "workspace-only", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "container",
+    },
+  ];
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const workspace = "/workspace";
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState({
+      workspace: { workDir: workspace, imageName: "nas-test" },
+    }),
+  };
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/path/to/intercept.so",
+  });
+
+  expect(plan).not.toEqual(null);
+  if (!plan) return;
+
+  // LD_PRELOAD should be exactly the intercept lib path (no spurious colons)
+  expect(plan.envVars.LD_PRELOAD).toEqual(INTERCEPT_LIB_CONTAINER_PATH);
+  expect(plan.envVars.LD_PRELOAD).not.toContain(":");
+});
+
+test("HostExecStage plan: mixed relative and absolute argv0s produce multi-line intercept paths", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [
+    {
+      id: "hello",
+      match: { argv0: "./hello.bash" },
+      cwd: { mode: "workspace-only", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "container",
+    },
+    {
+      id: "tool",
+      match: { argv0: "/usr/local/bin/tool" },
+      cwd: { mode: "any", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "deny",
+    },
+  ];
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const workspace = "/workspace";
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState({
+      workspace: { workDir: workspace, imageName: "nas-test" },
+    }),
+  };
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/path/to/intercept.so",
+  });
+
+  expect(plan).not.toEqual(null);
+  if (!plan) return;
+
+  expect(plan.envVars.LD_PRELOAD).toEqual(INTERCEPT_LIB_CONTAINER_PATH);
+
+  // NAS_HOSTEXEC_INTERCEPT_PATHS should contain both entries separated by newline
+  const interceptPaths = plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS.split("\n");
+  expect(interceptPaths).toEqual([
+    path.join(workspace, "hello.bash"),
+    "/usr/local/bin/tool",
+  ]);
+
+  // Only one .so mount, not per-target bind mounts
+  const soMounts = plan.dockerArgs.filter((arg) =>
+    arg.includes(INTERCEPT_LIB_CONTAINER_PATH),
+  );
+  expect(soMounts.length).toEqual(1);
 });
 
 // ============================================================
@@ -388,7 +540,9 @@ test("HostExecStage: run delegates directories, files, and symlinks to HostExecS
   const sharedInput = makeSharedInput(profile, hostEnv);
   const stageState = makeStageState();
   const input = { ...sharedInput, ...stageState };
-  const plan = planHostExec(input)!;
+  const plan = (await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  }))!;
 
   let capturedPlan: HostExecWorkspacePlan | null = null;
   const setupLayer = makeHostExecSetupServiceFake({
