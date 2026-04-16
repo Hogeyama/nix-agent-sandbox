@@ -17,6 +17,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { EMBEDDED_BUILD_ASSET_GROUPS } from "../stages/docker_build.ts";
 import {
   computeEmbedHash,
   dockerBuild,
@@ -121,12 +122,9 @@ test("computeEmbedHash returns consistent hash", async () => {
 
 test("computeEmbedHash matches embed and envoy assets", async () => {
   const parts: string[] = [];
-  for (const [baseUrl, files] of [
-    [new URL("./embed/", import.meta.url), ["Dockerfile", "entrypoint.sh"]],
-    [new URL("./envoy/", import.meta.url), ["envoy.template.yaml"]],
-  ] as const) {
-    for (const name of files) {
-      parts.push(await readFile(new URL(name, baseUrl), "utf8"));
+  for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
+    for (const name of group.files) {
+      parts.push(await readFile(path.join(group.baseDir, name), "utf8"));
     }
   }
   const data = new TextEncoder().encode(parts.join("\n"));
@@ -136,6 +134,25 @@ test("computeEmbedHash matches embed and envoy assets", async () => {
     .join("");
 
   expect(await computeEmbedHash()).toEqual(expected);
+});
+
+test("computeEmbedHash changes compared with legacy hash that omitted local-proxy.mjs", async () => {
+  const parts: string[] = [];
+  for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
+    for (const name of group.files) {
+      if (name === "local-proxy.mjs") {
+        continue;
+      }
+      parts.push(await readFile(path.join(group.baseDir, name), "utf8"));
+    }
+  }
+  const data = new TextEncoder().encode(parts.join("\n"));
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  const legacyHash = Array.from(new Uint8Array(hash))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+
+  expect(await computeEmbedHash()).not.toEqual(legacyHash);
 });
 
 test("envoy template includes required proxy settings", async () => {

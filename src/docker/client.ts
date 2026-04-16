@@ -11,7 +11,7 @@ import type { DockerLabels } from "./nas_resources.ts";
 const EMBEDDED_ASSET_GROUPS = [
   {
     baseDir: resolveAssetDir("docker/embed", import.meta.url, "./embed/"),
-    files: ["Dockerfile", "entrypoint.sh"],
+    files: ["Dockerfile", "entrypoint.sh", "local-proxy.mjs"],
   },
   {
     baseDir: resolveAssetDir("docker/envoy", import.meta.url, "./envoy/"),
@@ -82,7 +82,7 @@ export interface DockerVolumeDetails {
   containers: string[];
 }
 
-/** 埋め込みファイル (Dockerfile + entrypoint.sh) の SHA-256 ハッシュを計算 */
+/** 埋め込みビルドアセットの SHA-256 ハッシュを計算 */
 export async function computeEmbedHash(): Promise<string> {
   const parts: string[] = [];
   for (const group of EMBEDDED_ASSET_GROUPS) {

@@ -110,19 +110,26 @@ export function planDockerBuild(
   }
 
   if (buildProbes.imageExists) {
-    logInfo(`[nas] Docker image "${imageName}" already exists, skipping build`);
-
-    if (buildProbes.imageEmbedHash !== buildProbes.currentEmbedHash) {
-      logWarn(
-        "[nas] \u26a0 Docker image is outdated. Run `nas rebuild` to update.",
+    if (buildProbes.imageEmbedHash === buildProbes.currentEmbedHash) {
+      logInfo(
+        `[nas] Docker image "${imageName}" already exists, skipping build`,
       );
+      return {
+        needsBuild: false,
+        imageName,
+        assetGroups: [],
+        labels: {},
+      };
     }
 
+    logWarn(`[nas] Docker image "${imageName}" is outdated, rebuilding...`);
     return {
-      needsBuild: false,
+      needsBuild: true,
       imageName,
-      assetGroups: [],
-      labels: {},
+      assetGroups: EMBEDDED_BUILD_ASSET_GROUPS,
+      labels: {
+        [EMBED_HASH_LABEL]: buildProbes.currentEmbedHash,
+      },
     };
   }
 
