@@ -36,10 +36,35 @@
           '';
         };
 
+        hostexecIntercept = pkgs.stdenv.mkDerivation {
+          pname = "hostexec-intercept";
+          version = "0.1.0";
+          src = ./src/hostexec/intercept;
+          nativeBuildInputs = [ pkgs.zig ];
+          dontConfigure = true;
+          dontFixup = true;
+          doCheck = true;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            zig build \
+              --global-cache-dir "$TMPDIR/zig-cache" \
+              -Dtarget=x86_64-linux-gnu \
+              -Doptimize=ReleaseSafe
+          '';
+          checkPhase = ''
+            export HOME=$TMPDIR
+            zig build test --global-cache-dir "$TMPDIR/zig-cache"
+          '';
+          installPhase = ''
+            mkdir -p $out/lib
+            cp zig-out/lib/libhostexec_intercept.so $out/lib/hostexec_intercept.so
+          '';
+        };
+
         # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
         # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
         nasAssets = pkgs.runCommand "nas-assets" { } ''
-          mkdir -p $out/docker/embed $out/docker/envoy $out/scripts $out/ui
+          mkdir -p $out/docker/embed $out/docker/envoy $out/scripts $out/ui $out/hostexec
 
           cp ${self}/src/docker/embed/Dockerfile $out/docker/embed/
           cp ${self}/src/docker/embed/entrypoint.sh $out/docker/embed/
@@ -47,6 +72,7 @@
           cp ${self}/src/docker/envoy/envoy.template.yaml $out/docker/envoy/
           cp ${self}/scripts/notify-send-wsl $out/scripts/
           cp -r ${nasBin}/share/nas/dist $out/ui/ || true
+          cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
         '';
 
         nas = pkgs.runCommand "nas-wrapped" { } ''
@@ -96,6 +122,7 @@
             pkgs.pnpm
             pkgs.chromium
             pkgs.dtach
+            pkgs.zig
           ];
           shellHook = ''
             if [ ! -f .playwright/cli.config.json ]; then
