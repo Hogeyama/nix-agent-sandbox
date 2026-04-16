@@ -10,28 +10,28 @@ import {
   DEFAULT_UI_CONFIG,
   type Profile,
 } from "../config/types.ts";
-import type {
-  HostEnv,
-  PriorStageOutputs,
-  StageInput,
-} from "../pipeline/types.ts";
+import { emptyContainerPlan } from "../pipeline/container_plan.ts";
+import type { ContainerPlan } from "../pipeline/state.ts";
+import type { HostEnv, StageInput } from "../pipeline/types.ts";
 import {
   type LaunchOpts,
   makeContainerLaunchServiceFake,
 } from "../services/container_launch.ts";
-import type { ContainerPlan, PipelineState } from "../pipeline/state.ts";
 import { compileLaunchOpts, createLaunchStage, planLaunch } from "./launch.ts";
 
 test("planLaunch: produces correct plan with composed command", () => {
-  const input = createTestInput({
-    imageName: "custom-image",
-    agentCommand: ["agent-bin", "serve"],
-    dockerArgs: ["--network", "sandbox-net", "-v", "/tmp:/workspace"],
-    envVars: { TOKEN: "secret", MODE: "test" },
+  const { input, container } = createTestInput({
+    container: {
+      ...emptyContainerPlan("custom-image", "/workspace"),
+      mounts: [{ source: "/tmp", target: "/workspace" }],
+      env: { static: { TOKEN: "secret", MODE: "test" }, dynamicOps: [] },
+      network: { name: "sandbox-net" },
+      command: { agentCommand: ["agent-bin", "serve"], extraArgs: [] },
+    },
   });
   input.profile.agentArgs = ["--profile-arg"];
 
-  const plan = planLaunch(input, ["--user-arg"]);
+  const plan = planLaunch({ ...input, container }, ["--user-arg"]);
 
   expect(plan.container.image).toEqual("custom-image");
   expect(plan.opts.args).toEqual([
@@ -52,13 +52,8 @@ test("planLaunch: produces correct plan with composed command", () => {
   expect(plan.containerName.startsWith("nas-agent-")).toEqual(true);
 });
 
-test("planLaunch: composes launch opts from prior container slice", () => {
-  const input = createTestInput({
-    imageName: "legacy-image",
-    workDir: "/legacy-workdir",
-    dockerArgs: ["--rm"],
-    envVars: { LEGACY: "1" },
-    agentCommand: ["legacy-agent"],
+test("planLaunch: composes launch opts from container slice", () => {
+  const { input, container } = createTestInput({
     container: {
       image: "slice-image",
       workDir: "/slice-workdir",
@@ -78,7 +73,7 @@ test("planLaunch: composes launch opts from prior container slice", () => {
   });
   input.profile.agentArgs = ["--profile"];
 
-  const plan = planLaunch(input, ["--cli"]);
+  const plan = planLaunch({ ...input, container }, ["--cli"]);
 
   expect(plan.container.image).toEqual("slice-image");
   expect(plan.opts.args).toEqual([
@@ -108,34 +103,40 @@ test("planLaunch: composes launch opts from prior container slice", () => {
   });
 });
 
-test("planLaunch: legacy fallback parses structured dockerArgs without duplicating -w", () => {
-  const input = createTestInput({
-    imageName: "legacy-image",
-    workDir: "/legacy-default",
-    dockerArgs: [
-      "-w",
-      "/legacy-workdir",
-      "--network",
-      "legacy-net",
-      "--rm",
-    ],
-    envVars: { LEGACY: "1" },
-    agentCommand: ["legacy-agent"],
+test("planLaunch: slice contract keeps workdir/network/mounts singular in launch args", () => {
+  const workDir = "/slice-workdir";
+  const mounts = [
+    { source: "/repo", target: "/workspace" },
+    { source: "/nix", target: "/nix", readOnly: true as const },
+  ];
+  const network = { name: "slice-net", alias: "slice-agent" };
+  const { input, container } = createTestInput({
+    container: {
+      image: "slice-image",
+      workDir,
+      mounts,
+      env: { static: {}, dynamicOps: [] },
+      network,
+      extraRunArgs: ["--init", "--cpus", "2"],
+      command: { agentCommand: ["slice-agent"], extraArgs: [] },
+      labels: {},
+    },
   });
-  input.profile.agentArgs = ["--profile"];
 
-  const plan = planLaunch(input, ["--cli"]);
+  const plan = planLaunch({ ...input, container }, []);
+  const args = plan.opts.args;
 
-  expect(plan.container.workDir).toEqual("/legacy-workdir");
-  expect(plan.container.network).toEqual({ name: "legacy-net", alias: undefined });
-  expect(plan.opts.args).toEqual([
-    "-w",
-    "/legacy-workdir",
-    "--network",
-    "legacy-net",
-    "--rm",
-  ]);
-  expect(plan.opts.command).toEqual(["legacy-agent", "--profile", "--cli"]);
+  expect(args.filter((arg) => arg === "-w")).toHaveLength(1);
+  expect(args[args.indexOf("-w") + 1]).toEqual(workDir);
+
+  expect(args.filter((arg) => arg === "--network")).toHaveLength(1);
+  expect(args[args.indexOf("--network") + 1]).toEqual(network.name);
+
+  const encodedMounts: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-v") encodedMounts.push(args[i + 1]);
+  }
+  expect(encodedMounts).toEqual(["/repo:/workspace", "/nix:/nix:ro"]);
 });
 
 test("LaunchStage: run() calls ContainerLaunchService.launch", async () => {
@@ -148,17 +149,19 @@ test("LaunchStage: run() calls ContainerLaunchService.launch", async () => {
     },
   });
 
-  const stage = createLaunchStage(["--extra"]);
-  const input = createTestInput({
-    imageName: "test-image",
-    agentCommand: ["claude"],
-    dockerArgs: ["-v", "/src:/work"],
-    envVars: { KEY: "val" },
+  const { input, container } = createTestInput({
+    container: {
+      ...emptyContainerPlan("test-image", "/workspace"),
+      mounts: [{ source: "/src", target: "/work" }],
+      env: { static: { KEY: "val" }, dynamicOps: [] },
+      command: { agentCommand: ["claude"], extraArgs: [] },
+    },
   });
   input.profile.agentArgs = ["--fast"];
 
+  const stage = createLaunchStage(input, ["--extra"]);
   const effect = stage
-    .run(input)
+    .run({ container })
     .pipe(Effect.scoped, Effect.provide(fakeLayer));
 
   const result = await Effect.runPromise(effect);
@@ -228,7 +231,12 @@ test("compileLaunchOpts: dynamic env ops are encoded into NAS_ENV_OPS", () => {
     env: {
       static: { EXISTING: "val" },
       dynamicOps: [
-        { mode: "prefix", key: "PATH", value: "/usr/local/bin", separator: ":" },
+        {
+          mode: "prefix",
+          key: "PATH",
+          value: "/usr/local/bin",
+          separator: ":",
+        },
         { mode: "suffix", key: "MANPATH", value: "/man", separator: ":" },
       ],
     },
@@ -299,7 +307,12 @@ test("compileLaunchOpts: mounts + env + network combined (mixed parity)", () => 
     env: {
       static: { NAS_USER: "alice", NAS_HOME: "/home/alice" },
       dynamicOps: [
-        { mode: "prefix", key: "PATH", value: "/home/alice/.local/bin", separator: ":" },
+        {
+          mode: "prefix",
+          key: "PATH",
+          value: "/home/alice/.local/bin",
+          separator: ":",
+        },
       ],
     },
     network: { name: "nas-proxy-net", alias: "nas-agent" },
@@ -325,9 +338,10 @@ test("compileLaunchOpts: mounts + env + network combined (mixed parity)", () => 
   expect(netIdx).toBeLessThan(shmIdx);
 });
 
-function createTestInput(
-  priorOverrides: Partial<PriorStageOutputs & Partial<PipelineState>> = {},
-): StageInput & { profile: Profile } {
+function createTestInput(overrides: { container?: ContainerPlan } = {}): {
+  input: StageInput & { profile: Profile };
+  container: ContainerPlan;
+} {
   const profile: Profile = {
     agent: "claude",
     agentArgs: [],
@@ -357,30 +371,23 @@ function createTestInput(
     isWSL: false,
     env: new Map(),
   };
-  const prior: PriorStageOutputs = {
-    dockerArgs: [],
-    envVars: {},
-    workDir: "/workspace",
-    nixEnabled: false,
-    imageName: "nas-sandbox",
-    agentCommand: [],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
-    ...priorOverrides,
-  };
+  const container =
+    overrides.container ?? emptyContainerPlan("nas-sandbox", "/workspace");
   return {
-    config,
-    profile,
-    profileName: "test",
-    sessionId: "sess_test123",
-    host,
-    probes: {
-      hasHostNix: false,
-      xdgDbusProxyPath: null,
-      dbusSessionAddress: null,
-      gpgAgentSocket: null,
-      auditDir: "/tmp/audit",
+    input: {
+      config,
+      profile,
+      profileName: "test",
+      sessionId: "sess_test123",
+      host,
+      probes: {
+        hasHostNix: false,
+        xdgDbusProxyPath: null,
+        dbusSessionAddress: null,
+        gpgAgentSocket: null,
+        auditDir: "/tmp/audit",
+      },
     },
-    prior,
+    container,
   };
 }
