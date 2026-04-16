@@ -21,7 +21,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         b2n = bun2nix.packages.${system}.default;
         single-exe = nix-bundle-elf.lib.${system}.single-exe;
-        nasBin = b2n.mkDerivation {
+        nasUnwrapped = b2n.mkDerivation {
           pname = "nas";
           version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
           src = self;
@@ -71,14 +71,14 @@
           cp ${self}/src/docker/embed/local-proxy.mjs $out/docker/embed/
           cp ${self}/src/docker/envoy/envoy.template.yaml $out/docker/envoy/
           cp ${self}/scripts/notify-send-wsl $out/scripts/
-          cp -r ${nasBin}/share/nas/dist $out/ui/ || true
+          cp -r ${nasUnwrapped}/share/nas/dist $out/ui/ || true
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
         '';
 
-        nas = pkgs.runCommand "nas-wrapped" { } ''
+        nas = pkgs.runCommand "nas" { } ''
           mkdir -p $out/bin $out/share/nas
 
-          cp ${nasBin}/bin/nas $out/share/nas/nas
+          cp ${nasUnwrapped}/bin/nas $out/share/nas/nas
           cp -r ${nasAssets} $out/share/nas/assets
 
           cat > $out/bin/nas <<EOF
@@ -92,7 +92,7 @@
 
         nasBundled = single-exe {
           name = "nas";
-          target = "${nasBin}/bin/nas";
+          target = "${nasUnwrapped}/bin/nas";
           type = "preload";
           extraFiles = { "share/nas/assets" = nasAssets; };
           resolveWith = [
