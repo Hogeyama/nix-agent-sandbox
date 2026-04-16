@@ -24,21 +24,7 @@ function startMockUpstream(
 }
 
 /** Start local-proxy.mjs as a child process on the given port */
-async function startLocalProxy(
-  upstreamUrl: string,
-  port: number,
-): Promise<ReturnType<typeof Bun.spawn>> {
-  const proc = Bun.spawn(["bun", "run", PROXY_SCRIPT], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: {
-      ...process.env,
-      NAS_UPSTREAM_PROXY: upstreamUrl,
-      NAS_LOCAL_PROXY_PORT: String(port),
-    },
-  });
-
-  // Wait until the proxy is accepting connections
+async function waitForPort(port: number): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     try {
@@ -49,12 +35,33 @@ async function startLocalProxy(
         });
         sock.on("error", reject);
       });
-      break;
+      return;
     } catch {
       await new Promise((r) => setTimeout(r, 50));
     }
   }
 
+  throw new Error(`Timed out waiting for port ${port}`);
+}
+
+async function startLocalProxy(
+  upstreamUrl: string,
+  port: number,
+  envOverrides: Record<string, string | undefined> = {},
+): Promise<ReturnType<typeof Bun.spawn>> {
+  const proc = Bun.spawn(["bun", "run", PROXY_SCRIPT], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      NAS_UPSTREAM_PROXY: upstreamUrl,
+      NAS_LOCAL_PROXY_PORT: String(port),
+      ...envOverrides,
+    },
+  });
+
+  // Wait until the proxy is accepting connections
+  await waitForPort(port);
   return proc;
 }
 
@@ -208,6 +215,118 @@ test("local-proxy: CONNECT tunnel forwards with Proxy-Authorization", async () =
   } finally {
     await killProcess(process);
     listener.close();
+  }
+});
+
+test("local-proxy: forwarded port preserves early client bytes", async () => {
+  const upstreamPort = 19903;
+  const proxyPort = 18084;
+  const forwardedPort = 18085;
+  const payload = "hello before tunnel";
+  let receivedConnectReq = "";
+  let tunneledPayload = "";
+
+  const listener = net.createServer();
+  listener.listen(upstreamPort, "127.0.0.1");
+  const upstreamReady = new Promise<void>((resolve, reject) => {
+    listener.on("connection", (conn) => {
+      let requestBuffer = Buffer.alloc(0);
+
+      const onRequestData = (chunk: Buffer) => {
+        requestBuffer = Buffer.concat([requestBuffer, chunk]);
+        const headerEnd = requestBuffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+
+        conn.removeListener("data", onRequestData);
+        receivedConnectReq = requestBuffer.subarray(0, headerEnd).toString();
+
+        const earlyTunnelBytes = requestBuffer.subarray(headerEnd + 4);
+        setTimeout(() => {
+          conn.write("HTTP/1.1 200 OK\r\n\r\n");
+
+          if (earlyTunnelBytes.length > 0) {
+            tunneledPayload += earlyTunnelBytes.toString();
+            conn.write(earlyTunnelBytes);
+            conn.end();
+            resolve();
+            return;
+          }
+
+          conn.once("data", (data) => {
+            tunneledPayload += data.toString();
+            conn.write(data);
+            conn.end();
+            resolve();
+          });
+        }, 100);
+      };
+
+      conn.on("data", onRequestData);
+      conn.on("error", reject);
+    });
+    listener.on("error", reject);
+  });
+
+  const process = await startLocalProxy(
+    `http://sess_abc:token123@127.0.0.1:${upstreamPort}`,
+    proxyPort,
+    { NAS_FORWARD_PORTS: String(forwardedPort) },
+  );
+
+  try {
+    const client = await new Promise<net.Socket>((resolve, reject) => {
+      const deadline = Date.now() + 5_000;
+
+      const connect = () => {
+        const sock = net.createConnection(
+          {
+            host: "127.0.0.1",
+            port: forwardedPort,
+          },
+          () => resolve(sock),
+        );
+        sock.on("error", (error) => {
+          sock.destroy();
+          if (Date.now() >= deadline) {
+            reject(error);
+            return;
+          }
+          setTimeout(connect, 50);
+        });
+      };
+
+      connect();
+    });
+
+    client.write(payload);
+    const echoData = await new Promise<string>((resolve, reject) => {
+      client.once("data", (buf) => resolve(buf.toString()));
+      client.once("error", reject);
+    });
+    expect(echoData).toEqual(payload);
+
+    await Promise.race([
+      upstreamReady,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Timed out waiting for forwarded payload")),
+          1_000,
+        ),
+      ),
+    ]);
+
+    expect(tunneledPayload).toEqual(payload);
+    expect(receivedConnectReq).toContain(
+      `CONNECT host.docker.internal:${forwardedPort}`,
+    );
+    expect(receivedConnectReq).toContain("Proxy-Authorization: Basic ");
+
+    client.destroy();
+  } finally {
+    await killProcess(process);
+    await new Promise<void>((resolve) => listener.close(() => resolve()));
   }
 });
 

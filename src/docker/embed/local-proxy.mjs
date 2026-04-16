@@ -10,8 +10,8 @@
 
 import { createServer, request as httpRequest } from "node:http";
 import {
-  connect as netConnect,
   createServer as createTcpServer,
+  connect as netConnect,
 } from "node:net";
 
 const LISTEN_HOST = "127.0.0.1";
@@ -132,6 +132,16 @@ const forwardPorts = (process.env.NAS_FORWARD_PORTS || "")
 
 for (const port of forwardPorts) {
   const tcpServer = createTcpServer((clientSocket) => {
+    const bufferedClientChunks = [];
+    const onClientData = (chunk) => {
+      bufferedClientChunks.push(chunk);
+    };
+    const cleanupBufferedClientData = () => {
+      clientSocket.removeListener("data", onClientData);
+      bufferedClientChunks.length = 0;
+    };
+    clientSocket.on("data", onClientData);
+
     const proxySocket = netConnect(upstreamPort, upstreamHost, () => {
       let connectReq = `CONNECT host.docker.internal:${port} HTTP/1.1\r\n`;
       connectReq += `Host: host.docker.internal:${port}\r\n`;
@@ -156,13 +166,21 @@ for (const port of forwardPorts) {
       const statusCode = parseInt(statusLine.split(" ")[1], 10);
 
       if (statusCode === 200) {
+        clientSocket.removeListener("data", onClientData);
+        clientSocket.pause();
+        for (let i = bufferedClientChunks.length - 1; i >= 0; i -= 1) {
+          clientSocket.unshift(bufferedClientChunks[i]);
+        }
+        bufferedClientChunks.length = 0;
         const remainder = responseBuffer.subarray(headerEnd + 4);
         if (remainder.length > 0) {
           clientSocket.write(remainder);
         }
         proxySocket.pipe(clientSocket);
         clientSocket.pipe(proxySocket);
+        clientSocket.resume();
       } else {
+        cleanupBufferedClientData();
         console.error(
           `[local-proxy] TCP forward port ${port}: CONNECT failed with ${statusCode}`,
         );
@@ -173,6 +191,7 @@ for (const port of forwardPorts) {
     proxySocket.on("data", onData);
 
     proxySocket.on("error", (err) => {
+      cleanupBufferedClientData();
       console.error(
         `[local-proxy] TCP forward port ${port}: upstream error: ${err.message}`,
       );
@@ -180,6 +199,7 @@ for (const port of forwardPorts) {
     });
 
     clientSocket.on("error", () => {
+      cleanupBufferedClientData();
       proxySocket.destroy();
     });
   });
