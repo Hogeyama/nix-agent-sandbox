@@ -30,16 +30,6 @@ import {
 } from "node:fs/promises";
 import * as path from "node:path";
 import { Effect, Layer } from "effect";
-import {
-  DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
-  DEFAULT_HOOK_CONFIG,
-  DEFAULT_NETWORK_CONFIG,
-  DEFAULT_SESSION_CONFIG,
-  DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
-import type { PriorStageOutputs } from "../pipeline/types.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { DockerBuildServiceLive } from "../services/docker_build.ts";
 import { FsServiceLive } from "../services/fs.ts";
@@ -113,52 +103,10 @@ async function ensureImage(): Promise<void> {
   const imageName = IMAGE_NAME;
   const buildProbes = await resolveBuildProbes(imageName);
   const stage = createDockerBuildStage(buildProbes);
-
-  const profile = {
-    agent: "claude" as const,
-    agentArgs: [],
-    nix: { enable: false as const, mountSocket: false, extraPackages: [] },
-    docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
-    session: DEFAULT_SESSION_CONFIG,
-    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
-    network: structuredClone(DEFAULT_NETWORK_CONFIG),
-    dbus: structuredClone(DEFAULT_DBUS_CONFIG),
-    hook: DEFAULT_HOOK_CONFIG,
-    extraMounts: [],
-    env: [],
-  };
-  const config = {
-    default: "test",
-    profiles: { test: profile },
-    ui: DEFAULT_UI_CONFIG,
-  };
-  const hostEnv = buildHostEnv();
-  const probes = await resolveProbes(hostEnv);
-  const prior: PriorStageOutputs = {
-    dockerArgs: [],
-    envVars: {},
-    workDir: "/tmp",
-    nixEnabled: false,
-    imageName,
-    agentCommand: [],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
-  };
   await Effect.runPromise(
     Effect.scoped(
       stage
-        .run({
-          config,
-          profile,
-          profileName: "test",
-          sessionId: "sess_test",
-          host: hostEnv,
-          probes,
-          prior,
-        })
+        .run({ workspace: { workDir: "/tmp", imageName } })
         .pipe(
           Effect.provide(
             DockerBuildServiceLive.pipe(
