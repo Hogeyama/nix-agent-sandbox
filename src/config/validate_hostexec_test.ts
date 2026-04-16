@@ -303,25 +303,26 @@ test("hostexec config: no warning when specific rule comes before catch-all", ()
   expect(shadowWarnings.length).toEqual(0);
 });
 
-test("hostexec config: rejects relative argv0 with fallback container", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              {
-                id: "gradlew",
-                match: { argv0: "./gradlew" },
-                fallback: "container",
-              },
-            ],
-          },
+test("hostexec config: allows relative argv0 with fallback container (LD_PRELOAD keeps original binary)", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        hostexec: {
+          rules: [
+            {
+              id: "gradlew",
+              match: { argv0: "./gradlew" },
+              fallback: "container",
+            },
+          ],
         },
       },
-    }),
-  ).toThrow("relative argv0");
+    },
+  });
+  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual(
+    "container",
+  );
 });
 
 test("hostexec config: allows relative argv0 with fallback deny", () => {
@@ -344,25 +345,26 @@ test("hostexec config: allows relative argv0 with fallback deny", () => {
   expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("deny");
 });
 
-test("hostexec config: rejects absolute argv0 with fallback container", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              {
-                id: "usr-bin-git",
-                match: { argv0: "/usr/bin/git" },
-                fallback: "container",
-              },
-            ],
-          },
+test("hostexec config: allows absolute argv0 with fallback container (LD_PRELOAD keeps original binary)", () => {
+  const config = validateConfig({
+    profiles: {
+      test: {
+        agent: "claude",
+        hostexec: {
+          rules: [
+            {
+              id: "usr-bin-git",
+              match: { argv0: "/usr/bin/git" },
+              fallback: "container",
+            },
+          ],
         },
       },
-    }),
-  ).toThrow("absolute argv0");
+    },
+  });
+  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual(
+    "container",
+  );
 });
 
 test("hostexec config: allows absolute argv0 with fallback deny", () => {

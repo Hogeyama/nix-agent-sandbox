@@ -637,28 +637,6 @@ function hostexecRuleSchema(_prefix: string, secretNames: Set<string>) {
         approval: r.approval,
         fallback: r.fallback,
       }),
-    )
-    .refine(
-      (rule) =>
-        !(
-          rule.fallback === "container" &&
-          (rule.match.argv0.startsWith("./") ||
-            rule.match.argv0.startsWith("../"))
-        ),
-      {
-        message:
-          'relative argv0 (e.g. "./gradlew") cannot use fallback "container" because the original binary is replaced by the wrapper inside the container; use fallback "deny" instead',
-        path: ["fallback"],
-      },
-    )
-    .refine(
-      (rule) =>
-        !(rule.fallback === "container" && rule.match.argv0.startsWith("/")),
-      {
-        message:
-          'absolute argv0 (e.g. "/usr/bin/git") cannot use fallback "container" because the container binary is replaced by the wrapper; use fallback "deny" instead',
-        path: ["fallback"],
-      },
     );
 }
 
