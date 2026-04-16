@@ -11,8 +11,10 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
+import { emptyContainerPlan } from "../pipeline/container_plan.ts";
 import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
-import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
+import type { PipelineState } from "../pipeline/state.ts";
+import type { StageInput } from "../pipeline/types.ts";
 import type { MountProbes } from "./mount.ts";
 import { planMount, resolveMountProbes } from "./mount.ts";
 
@@ -49,9 +51,15 @@ async function buildTestInput(
   profile: Profile,
   workDir: string,
   overrides?: {
-    priorOverrides?: Partial<PriorStageOutputs>;
+    sliceOverrides?: Partial<
+      Pick<PipelineState, "workspace" | "container" | "nix" | "dbus">
+    >;
   },
-): Promise<{ input: StageInput; mountProbes: MountProbes }> {
+): Promise<{
+  input: StageInput &
+    Pick<PipelineState, "workspace" | "container" | "nix" | "dbus">;
+  mountProbes: MountProbes;
+}> {
   const hostEnv = buildHostEnv();
   const probes = await resolveProbes(hostEnv);
   const mountProbes = await resolveMountProbes(
@@ -61,26 +69,29 @@ async function buildTestInput(
     probes.gpgAgentSocket,
   );
 
-  const prior: PriorStageOutputs = {
-    dockerArgs: [],
-    envVars: { NAS_LOG_LEVEL: "info" },
-    workDir,
-    nixEnabled: false,
-    imageName: "nas-sandbox",
-    agentCommand: [],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
-    ...overrides?.priorOverrides,
+  const slices: Pick<
+    PipelineState,
+    "workspace" | "container" | "nix" | "dbus"
+  > = {
+    workspace: { workDir, imageName: "nas-sandbox" },
+    container: {
+      ...emptyContainerPlan("nas-sandbox", workDir),
+      env: { static: { NAS_LOG_LEVEL: "info" }, dynamicOps: [] },
+    },
+    nix: { enabled: false },
+    dbus: { enabled: false },
+    ...overrides?.sliceOverrides,
   };
 
-  const input: StageInput = {
+  const input: StageInput &
+    Pick<PipelineState, "workspace" | "container" | "nix" | "dbus"> = {
     config: baseConfig,
     profile,
     profileName: "test",
     sessionId: "sess_test",
     host: hostEnv,
     probes,
-    prior,
+    ...slices,
   };
 
   return { input, mountProbes };
@@ -122,17 +133,24 @@ test("MountStage: workspace mount keeps full absolute path", async () => {
   expect(plan.envVars.WORKSPACE).toEqual(workDir);
 });
 
-test("MountStage: propagates log level from prior envVars", async () => {
+test("MountStage: propagates log level from prior container env", async () => {
   const workDir = process.cwd();
   const { input, mountProbes } = await buildTestInput(baseProfile, workDir, {
-    priorOverrides: {
-      envVars: { NAS_LOG_LEVEL: "warn" },
+    sliceOverrides: {
+      container: {
+        image: "nas-sandbox",
+        workDir,
+        mounts: [],
+        env: { static: { NAS_LOG_LEVEL: "warn" }, dynamicOps: [] },
+        extraRunArgs: [],
+        command: { agentCommand: [], extraArgs: [] },
+        labels: {},
+      },
     },
   });
   const _plan = planMount(input, mountProbes);
-  // NAS_LOG_LEVEL is set in initialPrior, not by MountStage.
-  // Verify it comes through from prior envVars (merged by pipeline).
-  expect(input.prior.envVars.NAS_LOG_LEVEL).toEqual("warn");
+  // NAS_LOG_LEVEL is set in initial prior container env, not by MountStage.
+  expect(input.container.env.static.NAS_LOG_LEVEL).toEqual("warn");
 });
 
 test("MountStage: mounts DBus proxy runtime and injects session env", async () => {
@@ -158,10 +176,13 @@ test("MountStage: mounts DBus proxy runtime and injects session env", async () =
       profile,
       process.cwd(),
       {
-        priorOverrides: {
-          dbusProxyEnabled: true,
-          dbusSessionRuntimeDir: runtimeDir,
-          dbusSessionSocket: `${runtimeDir}/bus`,
+        sliceOverrides: {
+          dbus: {
+            enabled: true,
+            runtimeDir,
+            socket: `${runtimeDir}/bus`,
+            sourceAddress: "unix:path=/run/user/1000/bus",
+          },
         },
       },
     );
