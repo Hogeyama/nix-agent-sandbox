@@ -2,7 +2,6 @@
  * Stage アーキテクチャの型定義
  */
 
-import type { Effect, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import type { AuthRouterService } from "../services/auth_router.ts";
 import type { ContainerLaunchService } from "../services/container_launch.ts";
@@ -59,41 +58,14 @@ export interface StageInput {
   readonly sessionName?: string;
   readonly host: HostEnv;
   readonly probes: ProbeResults;
-  readonly prior: PriorStageOutputs & Partial<PipelineState>;
-}
-
-/** stage 間で蓄積される出力 */
-export interface PriorStageOutputs {
-  readonly dockerArgs: readonly string[];
-  readonly envVars: Readonly<Record<string, string>>;
-  readonly workDir: string;
-  readonly mountDir?: string;
-  readonly nixEnabled: boolean;
-  readonly imageName: string;
-  readonly agentCommand: readonly string[];
-  readonly dindContainerName?: string;
-  readonly networkName?: string;
-  readonly networkRuntimeDir?: string;
-  readonly networkPromptToken?: string;
-  readonly networkPromptEnabled: boolean;
-  readonly networkBrokerSocket?: string;
-  readonly networkProxyEndpoint?: string;
-  readonly hostexecRuntimeDir?: string;
-  readonly hostexecBrokerSocket?: string;
-  readonly hostexecSessionTmpDir?: string;
-  readonly dbusProxyEnabled: boolean;
-  readonly dbusSessionRuntimeDir?: string;
-  readonly dbusSessionSocket?: string;
-  readonly dbusSessionSourceAddress?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Effect-based stage types
+// Pipeline stage types
 // ---------------------------------------------------------------------------
 
-// Effect stage result — legacy prior outputs plus optional slice-based state
-export type EffectStageResult = Partial<PriorStageOutputs> &
-  Partial<PipelineState>;
+/** Stage result — stages return only the slices they modify */
+export type StageResult = Partial<PipelineState>;
 
 // Union of all service tags that stages can depend on
 export type StageServices =
@@ -114,24 +86,3 @@ export type StageServices =
   | SessionBrokerService
   | SessionStoreService
   | AuthRouterService;
-
-// A stage that runs as an Effect
-export interface EffectStage<R extends StageServices = never> {
-  kind: "effect";
-  name: string;
-  run(
-    input: StageInput,
-  ): Effect.Effect<EffectStageResult, unknown, Scope.Scope | R>;
-}
-
-// Extract service requirements from a stage
-export type StageServicesOf<TStage extends EffectStage<StageServices>> =
-  TStage extends EffectStage<infer R extends StageServices> ? R : never;
-
-// Compute pipeline requirements from a tuple of stages
-export type PipelineRequirements<
-  TStages extends readonly EffectStage<StageServices>[],
-> = Scope.Scope | StageServicesOf<TStages[number]>;
-
-/** すべての stage の union type */
-export type AnyStage = EffectStage<StageServices>;

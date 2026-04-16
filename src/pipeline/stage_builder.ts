@@ -145,9 +145,7 @@ export class PipelineBuilder<
    * Execute the pipeline starting from `initial`.
    * Returns the accumulated PipelineState after all stages have run.
    */
-  run(
-    initial: Initial,
-  ): Effect.Effect<Current, EAcc, RAcc | Scope.Scope> {
+  run(initial: Initial): Effect.Effect<Current, EAcc, RAcc | Scope.Scope> {
     return runPipelineState(this._stages, initial) as unknown as Effect.Effect<
       Current,
       EAcc,

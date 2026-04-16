@@ -164,11 +164,9 @@ test("DockerBuildStage.run: calls DockerBuildService.buildImage when image does 
   expect(buildImageCalls[0].assetGroups.length).toBeGreaterThan(0);
 });
 
-function createTestInput(
-  overrides: {
-    workspace?: WorkspaceState;
-  } = {},
-): { workspace: WorkspaceState } {
+function createTestInput(overrides: { workspace?: WorkspaceState } = {}): {
+  workspace: WorkspaceState;
+} {
   const workspace: WorkspaceState = overrides.workspace ?? {
     workDir: "/workspace",
     imageName: "nas-sandbox",

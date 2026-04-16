@@ -10,12 +10,9 @@
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
 import { logInfo } from "../../log.ts";
+import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { WorkspaceState } from "../../pipeline/state.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  StageInput,
-} from "../../pipeline/types.ts";
+import type { StageInput } from "../../pipeline/types.ts";
 import {
   GitWorktreeService,
   type WorktreeHandle,
@@ -41,11 +38,9 @@ function buildWorkspaceResult(
   imageName: string,
   workDir: string,
   mountDir?: string,
-): EffectStageResult {
+): { workspace: WorkspaceState } {
   const workspace: WorkspaceState = { workDir, imageName };
   return {
-    workDir,
-    mountDir,
     workspace: mountDir ? { ...workspace, mountDir } : workspace,
   };
 }
@@ -54,53 +49,50 @@ function buildWorkspaceResult(
 // Stage factory
 // ---------------------------------------------------------------------------
 
-export function createWorktreeStage(): EffectStage<
-  GitWorktreeService | PromptService
+export function createWorktreeStage(
+  shared: StageInput,
+): Stage<
+  "workspace",
+  { workspace: WorkspaceState },
+  GitWorktreeService | PromptService,
+  unknown
 > {
   return {
-    kind: "effect",
     name: "WorktreeStage",
+    needs: ["workspace"],
 
     run(
-      input: StageInput,
+      input,
     ): Effect.Effect<
-      EffectStageResult,
+      { workspace: WorkspaceState },
       unknown,
       Scope.Scope | GitWorktreeService | PromptService
     > {
       return Effect.gen(function* () {
-        const wt = input.profile.worktree;
+        const wt = shared.profile.worktree;
         if (!wt) {
           logInfo("[nas] Worktree: skipped (not configured)");
-          return {
-            workspace: {
-              workDir: input.prior.workDir,
-              imageName: input.prior.imageName,
-              ...(input.prior.mountDir
-                ? { mountDir: input.prior.mountDir }
-                : {}),
-            },
-          };
+          return { workspace: input.workspace };
         }
 
         const svc = yield* GitWorktreeService;
         const prompts = yield* PromptService;
 
-        const workDir = input.prior.workDir;
+        const workDir = input.workspace.workDir;
         const repoRoot = yield* svc.resolveRepository(workDir);
         const resolvedBase = yield* svc.resolveBaseBranch(repoRoot, wt.base);
 
         // Check for existing worktrees to reuse
         const existing = yield* svc.findProfileWorktrees(
           repoRoot,
-          input.profileName,
+          shared.profileName,
         );
         if (existing.length > 0) {
           const reused = yield* prompts.reuseWorktree(existing);
           if (reused) {
             logInfo(`[nas] Reusing worktree: ${reused.path}`);
             return buildWorkspaceResult(
-              input.prior.imageName,
+              input.workspace.imageName,
               reused.path,
               repoRoot,
             );
@@ -108,8 +100,8 @@ export function createWorktreeStage(): EffectStage<
         }
 
         // Pure name generation
-        const worktreeName = generateWorktreeName(input.profileName);
-        const branchName = generateBranchName(input.profileName);
+        const worktreeName = generateWorktreeName(shared.profileName);
+        const branchName = generateBranchName(shared.profileName);
         const worktreePath = path.join(
           repoRoot,
           ".nas",
@@ -137,7 +129,7 @@ export function createWorktreeStage(): EffectStage<
         );
 
         return buildWorkspaceResult(
-          input.prior.imageName,
+          input.workspace.imageName,
           worktreePath,
           repoRoot,
         );

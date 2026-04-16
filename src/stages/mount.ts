@@ -16,22 +16,22 @@ import type { CopilotProbes } from "../agents/copilot.ts";
 import { configureCopilot } from "../agents/copilot.ts";
 import { logWarn } from "../log.ts";
 import {
+  type ContainerPatch,
   emptyContainerPlan,
   mergeContainerPlan,
-  type ContainerPatch,
 } from "../pipeline/container_plan.ts";
 import { encodeDynamicEnvOps } from "../pipeline/env_ops.ts";
+import type { Stage } from "../pipeline/stage_builder.ts";
 import type {
   ContainerPlan,
+  DbusState,
   DynamicEnvOp,
   MountSpec,
+  NixState,
+  PipelineState,
   WorkspaceState,
 } from "../pipeline/state.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { StageInput, StageResult } from "../pipeline/types.ts";
 import { MountSetupService } from "../services/mount_setup.ts";
 import type { MountProbes } from "./mount_probes.ts";
 
@@ -71,28 +71,43 @@ export interface MountPlan {
   readonly dockerArgs: readonly string[];
   readonly envVars: Readonly<Record<string, string>>;
   readonly containerPatch: ContainerPatch;
-  readonly outputOverrides: Partial<EffectStageResult>;
+  readonly outputOverrides: Partial<StageResult>;
 }
+
+type MountStageState = Pick<
+  PipelineState,
+  "workspace" | "nix" | "dbus" | "container"
+>;
+type MountStageInput = StageInput & MountStageState;
 
 // ---------------------------------------------------------------------------
 // EffectStage factory
 // ---------------------------------------------------------------------------
 
 export function createMountStage(
+  shared: StageInput,
   mountProbes: MountProbes,
-): EffectStage<MountSetupService> {
+): Stage<
+  "workspace" | "nix" | "dbus" | "container",
+  { container: ContainerPlan },
+  MountSetupService,
+  unknown
+> {
   return {
-    kind: "effect",
     name: "MountStage",
+    needs: ["workspace", "nix", "dbus", "container"],
 
-    run(input: StageInput) {
-      const plan = planMount(input, mountProbes);
+    run(input) {
+      const stageInput: MountStageInput = {
+        ...shared,
+        ...input,
+      };
+      const plan = planMount(stageInput, mountProbes);
       const workspace = resolveWorkspace(input);
       const container = mergeContainerPlan(
         resolveContainerBase(input, workspace),
         plan.containerPatch,
       );
-      const legacy = renderLegacyContainerState(container);
 
       return Effect.gen(function* () {
         const mountSetupService = yield* MountSetupService;
@@ -100,11 +115,9 @@ export function createMountStage(
         yield* mountSetupService.ensureDirectories(plan.directories);
 
         return {
-          dockerArgs: legacy.dockerArgs,
-          envVars: legacy.envVars,
           container,
           ...plan.outputOverrides,
-        } satisfies EffectStageResult;
+        } satisfies { container: ContainerPlan };
       });
     },
   };
@@ -114,8 +127,11 @@ export function createMountStage(
 // Pure plan function
 // ---------------------------------------------------------------------------
 
-export function planMount(input: StageInput, probes: MountProbes): MountPlan {
-  const { host, profile, prior } = input;
+export function planMount(
+  input: MountStageInput,
+  probes: MountProbes,
+): MountPlan {
+  const { host, profile } = input;
   const workspace = resolveWorkspace(input);
   const dbus = resolveDbusRuntime(input);
   const directories: MountPlanDirectory[] = [];
@@ -457,7 +473,7 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
 
   // エージェント固有の設定
   // Build priorDockerArgs and priorEnvVars by combining prior + current stage's args
-  const priorDockerArgs = [...prior.dockerArgs, ...args];
+  const priorDockerArgs = [...args];
   const priorEnvVars = { ...resolvePriorEnvVars(input), ...envVars };
   let agentCommand: readonly string[] = resolvePriorAgentCommand(input);
 
@@ -535,7 +551,7 @@ export function planMount(input: StageInput, probes: MountProbes): MountPlan {
         extraArgs: resolvePriorCommandExtraArgs(input),
       },
     },
-    outputOverrides: { agentCommand },
+    outputOverrides: {},
   };
 }
 
@@ -570,92 +586,49 @@ function resolveContainerUser(hostUser: string): string {
   return DEFAULT_CONTAINER_USER;
 }
 
-function resolveWorkspace(input: StageInput): WorkspaceState {
-  return (
-    input.prior.workspace ?? {
-      workDir: input.prior.workDir,
-      imageName: input.prior.imageName,
-      ...(input.prior.mountDir !== undefined
-        ? { mountDir: input.prior.mountDir }
-        : {}),
-    }
-  );
+function resolveWorkspace(input: {
+  workspace: WorkspaceState;
+}): WorkspaceState {
+  return input.workspace;
 }
 
-function resolveNixEnabled(input: StageInput): boolean {
-  return input.prior.nix?.enabled ?? input.prior.nixEnabled;
+function resolveNixEnabled(input: { nix: NixState }): boolean {
+  return input.nix.enabled;
 }
 
-function resolveDbusRuntime(
-  input: StageInput,
-): { readonly enabled: boolean; readonly runtimeDir?: string } {
-  const dbus = input.prior.dbus;
-  if (dbus) {
-    return dbus.enabled
-      ? { enabled: true, runtimeDir: dbus.runtimeDir }
-      : { enabled: false };
-  }
-  return input.prior.dbusProxyEnabled
-    ? {
-        enabled: true,
-        runtimeDir: input.prior.dbusSessionRuntimeDir,
-      }
+function resolveDbusRuntime(input: { dbus: DbusState }): {
+  readonly enabled: boolean;
+  readonly runtimeDir?: string;
+} {
+  const dbus = input.dbus;
+  return dbus.enabled
+    ? { enabled: true, runtimeDir: dbus.runtimeDir }
     : { enabled: false };
 }
 
-function resolvePriorEnvVars(input: StageInput): Readonly<Record<string, string>> {
-  return input.prior.container?.env.static ?? input.prior.envVars;
+function resolvePriorEnvVars(input: {
+  container: ContainerPlan;
+}): Readonly<Record<string, string>> {
+  return input.container.env.static;
 }
 
-function resolvePriorAgentCommand(input: StageInput): readonly string[] {
-  return input.prior.container?.command.agentCommand ?? input.prior.agentCommand;
+function resolvePriorAgentCommand(input: {
+  container: ContainerPlan;
+}): readonly string[] {
+  return input.container.command.agentCommand;
 }
 
-function resolvePriorCommandExtraArgs(input: StageInput): readonly string[] {
-  return input.prior.container?.command.extraArgs ?? [];
+function resolvePriorCommandExtraArgs(input: {
+  container: ContainerPlan;
+}): readonly string[] {
+  return input.container.command.extraArgs;
 }
 
 function resolveContainerBase(
-  input: StageInput,
-  workspace: WorkspaceState,
+  input: { container: ContainerPlan },
+  _workspace: WorkspaceState,
 ): ContainerPlan {
-  if (input.prior.container) {
-    return input.prior.container;
-  }
-
-  return mergeContainerPlan(
-    emptyContainerPlan(workspace.imageName, workspace.workDir),
-    {
-      env: { static: { ...input.prior.envVars } },
-      extraRunArgs: [...input.prior.dockerArgs],
-      command: {
-        agentCommand: [...input.prior.agentCommand],
-        extraArgs: [],
-      },
-    },
-  );
-}
-
-function renderLegacyContainerState(container: ContainerPlan): {
-  readonly dockerArgs: readonly string[];
-  readonly envVars: Readonly<Record<string, string>>;
-} {
-  const dockerArgs = [
-    ...container.mounts.flatMap((mount) => [
-      "-v",
-      `${mount.source}:${mount.target}${mount.readOnly ? ":ro" : ""}`,
-    ]),
-    "-w",
-    container.workDir,
-    ...container.extraRunArgs,
-  ];
-
-  const envVars: Record<string, string> = { ...container.env.static };
-  if (container.env.dynamicOps.length > 0) {
-    envVars.NAS_ENV_OPS = encodeDynamicEnvOps(container.env.dynamicOps);
-  }
-
-  return { dockerArgs, envVars };
+  return input.container;
 }
 
 function addMount(
@@ -667,7 +640,9 @@ function addMount(
 ): void {
   const suffix = readOnly ? ":ro" : "";
   dockerArgs.push("-v", `${source}:${target}${suffix}`);
-  mounts.push(readOnly ? { source, target, readOnly: true } : { source, target });
+  mounts.push(
+    readOnly ? { source, target, readOnly: true } : { source, target },
+  );
 }
 
 function addRunArgs(

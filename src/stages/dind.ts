@@ -23,16 +23,10 @@ import {
   SHARED_TMP_MOUNT_PATH,
 } from "../docker/dind.ts";
 import { logInfo } from "../log.ts";
-import {
-  emptyContainerPlan,
-  mergeContainerPlan,
-} from "../pipeline/container_plan.ts";
-import type { ContainerPlan, DindState } from "../pipeline/state.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  StageInput,
-} from "../pipeline/types.ts";
+import { mergeContainerPlan } from "../pipeline/container_plan.ts";
+import type { Stage } from "../pipeline/stage_builder.ts";
+import type { ContainerPlan, PipelineState } from "../pipeline/state.ts";
+import type { StageInput, StageResult } from "../pipeline/types.ts";
 import { DindService } from "../services/dind.ts";
 
 const SHARED_NETWORK_NAME = "nas-dind-shared";
@@ -51,7 +45,14 @@ export interface DindPlan {
   readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
-  readonly outputOverrides: EffectStageResult;
+  readonly outputOverrides: Pick<StageResult, "container" | "dind">;
+}
+
+type DindStageState = Pick<PipelineState, "workspace" | "container">;
+type DindStageInput = StageInput & DindStageState;
+export interface DindStagePlanOptions {
+  disableCache?: boolean;
+  readinessTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,8 +60,8 @@ export interface DindPlan {
 // ---------------------------------------------------------------------------
 
 export function planDind(
-  input: StageInput,
-  options: { disableCache?: boolean; readinessTimeoutMs?: number } = {},
+  input: DindStageInput,
+  options: DindStagePlanOptions = {},
 ): DindPlan | null {
   if (!input.profile.docker.enable) {
     logInfo("[nas] DinD: skipped (not enabled)");
@@ -94,19 +95,6 @@ export function planDind(
     disableCache,
     readinessTimeoutMs,
     outputOverrides: {
-      dindContainerName: containerName,
-      networkName,
-      dockerArgs: [
-        "--network",
-        networkName,
-        "-v",
-        `${sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
-      ],
-      envVars: {
-        DOCKER_HOST: `tcp://${containerName}:${DIND_INTERNAL_PORT}`,
-        NAS_DIND_CONTAINER_NAME: containerName,
-        NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
-      },
       dind: {
         containerName,
       },
@@ -123,20 +111,45 @@ export function planDind(
 // ---------------------------------------------------------------------------
 
 export function createDindStage(
-  options: { disableCache?: boolean; readinessTimeoutMs?: number } = {},
-): EffectStage<DindService> {
+  shared: StageInput,
+): Stage<
+  "workspace" | "container",
+  Partial<Pick<StageResult, "container" | "dind">>,
+  DindService,
+  unknown
+> {
+  return createDindStageWithOptions(shared);
+}
+
+export function createDindStageWithOptions(
+  shared: StageInput,
+  options: DindStagePlanOptions = {},
+): Stage<
+  "workspace" | "container",
+  Partial<Pick<StageResult, "container" | "dind">>,
+  DindService,
+  unknown
+> {
   return {
-    kind: "effect",
     name: "DindStage",
+    needs: ["workspace", "container"],
 
     run(
-      input: StageInput,
-    ): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DindService> {
-      const plan = planDind(input, options);
+      input,
+    ): Effect.Effect<
+      Partial<Pick<StageResult, "container" | "dind">>,
+      unknown,
+      Scope.Scope | DindService
+    > {
+      const stageInput: DindStageInput = {
+        ...shared,
+        ...input,
+      };
+      const plan = planDind(stageInput, options);
       if (plan === null) {
         return Effect.succeed({});
       }
-      return runDind(plan, input);
+      return runDind(plan);
     },
   };
 }
@@ -147,8 +160,11 @@ export function createDindStage(
 
 function runDind(
   plan: DindPlan,
-  input: StageInput,
-): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DindService> {
+): Effect.Effect<
+  Partial<Pick<StageResult, "container" | "dind">>,
+  unknown,
+  Scope.Scope | DindService
+> {
   return Effect.gen(function* () {
     const dind = yield* DindService;
 
@@ -172,19 +188,12 @@ function runDind(
           .pipe(Effect.ignoreLogged),
     );
 
-    return {
-      ...plan.outputOverrides,
-      dockerArgs: [
-        ...input.prior.dockerArgs,
-        ...(plan.outputOverrides.dockerArgs ?? []),
-      ],
-      envVars: { ...input.prior.envVars, ...plan.outputOverrides.envVars },
-    };
+    return plan.outputOverrides;
   });
 }
 
 function buildContainerState(
-  input: StageInput,
+  input: DindStageInput,
   config: {
     readonly containerName: string;
     readonly sharedTmpVolume: string;
@@ -192,19 +201,12 @@ function buildContainerState(
 ): ContainerPlan {
   const base = normalizeContainerBase(input);
 
-  const normalizedBase =
-    input.prior.container === undefined
-      ? mergeContainerPlan(base, {
-          env: { static: { ...input.prior.envVars } },
-          extraRunArgs: [...input.prior.dockerArgs],
-          command: {
-            agentCommand: [...input.prior.agentCommand],
-            extraArgs: [],
-          },
-        })
-      : base;
-
-  return mergeContainerPlan(normalizedBase, {
+  return mergeContainerPlan(base, {
+    network: {
+      name: input.profile.docker.shared
+        ? SHARED_NETWORK_NAME
+        : `nas-dind-${input.sessionId.slice(0, 8)}`,
+    },
     env: {
       static: {
         DOCKER_HOST: `tcp://${config.containerName}:${DIND_INTERNAL_PORT}`,
@@ -212,27 +214,12 @@ function buildContainerState(
         NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
       },
     },
-    extraRunArgs: [
-      "-v",
-      `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`,
-    ],
+    extraRunArgs: ["-v", `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`],
   });
 }
 
-function resolveImageName(input: StageInput): string {
-  return input.prior.workspace?.imageName ?? input.prior.imageName;
-}
-
-function resolveWorkDir(input: StageInput): string {
-  return input.prior.workspace?.workDir ?? input.prior.workDir;
-}
-
-function normalizeContainerBase(input: StageInput): ContainerPlan {
-  if (input.prior.container === undefined) {
-    return emptyContainerPlan(resolveImageName(input), resolveWorkDir(input));
-  }
-
-  const { network: _network, ...containerWithoutNetwork } = input.prior.container;
+function normalizeContainerBase(input: DindStageInput): ContainerPlan {
+  const { network: _network, ...containerWithoutNetwork } = input.container;
   return containerWithoutNetwork;
 }
 

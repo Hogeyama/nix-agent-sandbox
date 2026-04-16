@@ -4,39 +4,38 @@
 
 import { Effect } from "effect";
 import { logInfo } from "../log.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { Stage } from "../pipeline/stage_builder.ts";
+import type { StageInput } from "../pipeline/types.ts";
 
-export function planNixDetect(input: StageInput): EffectStageResult {
+export function planNixDetect(input: StageInput): {
+  nix: { enabled: boolean };
+} {
   const nixCfg = input.profile.nix;
-  let nixEnabled: boolean;
+  let enabled: boolean;
 
   if (nixCfg.enable === "auto") {
-    nixEnabled = input.probes.hasHostNix;
+    enabled = input.probes.hasHostNix;
     logInfo(
-      `[nas] Nix: auto-detected host nix → ${
-        nixEnabled ? "enabled" : "disabled"
-      }`,
+      `[nas] Nix: auto-detected host nix → ${enabled ? "enabled" : "disabled"}`,
     );
   } else {
-    nixEnabled = nixCfg.enable;
-    logInfo(`[nas] Nix: explicitly ${nixEnabled ? "enabled" : "disabled"}`);
+    enabled = nixCfg.enable;
+    logInfo(`[nas] Nix: explicitly ${enabled ? "enabled" : "disabled"}`);
   }
 
   return {
-    nixEnabled,
-    nix: { enabled: nixEnabled },
+    nix: { enabled },
   };
 }
 
-export const NixDetectStage: EffectStage<never> = {
-  kind: "effect",
-  name: "NixDetectStage",
-
-  run(input: StageInput) {
-    return Effect.succeed(planNixDetect(input));
-  },
-};
+export function createNixDetectStage(
+  shared: StageInput,
+): Stage<never, { nix: { enabled: boolean } }> {
+  return {
+    name: "NixDetectStage",
+    needs: [],
+    run(_input) {
+      return Effect.succeed(planNixDetect(shared));
+    },
+  };
+}

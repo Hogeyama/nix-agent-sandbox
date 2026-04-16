@@ -14,11 +14,7 @@ import {
   type Profile,
 } from "../config/types.ts";
 import type { WorkspaceState } from "../pipeline/state.ts";
-import type {
-  HostEnv,
-  StageResult,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { HostEnv, StageInput, StageResult } from "../pipeline/types.ts";
 import {
   type CreateSessionInput,
   makeSessionStoreServiceFake,

@@ -16,16 +16,10 @@ import {
   parseLogLevel,
   removeFirstOccurrence,
 } from "./cli/helpers.ts";
-import {
-  adaptEffectStageToPipelineStateStage,
-  createCliInitialState,
-  pickDindStageSlices,
-  pickPipelineStateSlices,
-  pickProxyStageSlices,
-} from "./cli/pipeline_state.ts";
 import { runHookCommand } from "./cli/hook.ts";
 import { runHostExecCommand } from "./cli/hostexec.ts";
 import { runNetworkCommand } from "./cli/network.ts";
+import { createCliInitialState } from "./cli/pipeline_state.ts";
 import { runRebuild } from "./cli/rebuild.ts";
 import { runSessionCommand } from "./cli/session.ts";
 import { runUiCommand } from "./cli/ui.ts";
@@ -40,9 +34,9 @@ import {
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import { setLogLevel } from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
-import type { PipelineState } from "./pipeline/state.ts";
 import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
-import type { PriorStageOutputs, StageInput } from "./pipeline/types.ts";
+import type { PipelineState } from "./pipeline/state.ts";
+import type { StageInput } from "./pipeline/types.ts";
 import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { ContainerLaunchServiceLive } from "./services/container_launch.ts";
 import { DbusProxyServiceLive } from "./services/dbus_proxy.ts";
@@ -62,8 +56,8 @@ import { SessionStoreServiceLive } from "./services/session_store_service.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
 import {
-  createDockerBuildStage,
   type BuildProbes,
+  createDockerBuildStage,
   resolveBuildProbes,
 } from "./stages/docker_build.ts";
 import { createHostExecStage } from "./stages/hostexec.ts";
@@ -73,7 +67,7 @@ import {
   type MountProbes,
   resolveMountProbes,
 } from "./stages/mount.ts";
-import { NixDetectStage } from "./stages/nix_detect.ts";
+import { createNixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
 import { createSessionStoreStage } from "./stages/session_store.ts";
 import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
@@ -209,9 +203,6 @@ export async function main(args: string[]): Promise<void> {
     }
 
     const imageName = "nas-sandbox";
-    const proxyEnabled =
-      effectiveProfile.network.allowlist.length > 0 ||
-      effectiveProfile.network.prompt.enable;
 
     // HostEnv 構築と probe 解決
     // NOTE: Probe failures (e.g. PermissionDenied on /nix stat) will
@@ -279,22 +270,10 @@ export async function main(args: string[]): Promise<void> {
     // HostExec broker が nas hook を実行する際に参照する
     process.env.NAS_SESSION_ID = sessionId;
 
-    const initialState = createCliInitialState(process.cwd(), imageName);
-    const initialPrior: PriorStageOutputs & Pick<PipelineState, "workspace"> = {
-      dockerArgs: [],
-      envVars: {
-        NAS_LOG_LEVEL: logLevel,
-        NAS_SESSION_ID: sessionId,
-      },
-      workDir: process.cwd(),
-      nixEnabled: false,
-      imageName,
-      agentCommand: [],
-      networkPromptToken: proxyEnabled ? randomHex(32) : undefined,
-      networkPromptEnabled: effectiveProfile.network.prompt.enable,
-      dbusProxyEnabled: effectiveProfile.dbus.session.enable,
-      ...initialState,
-    };
+    const initialState = createCliInitialState(process.cwd(), imageName, {
+      NAS_LOG_LEVEL: logLevel,
+      NAS_SESSION_ID: sessionId,
+    });
     const builder = createCliPipelineBuilder({
       input: {
         config,
@@ -305,7 +284,6 @@ export async function main(args: string[]): Promise<void> {
         host: hostEnv,
         probes,
       },
-      initialPrior,
       buildProbes,
       mountProbes,
       agentExtraArgs,
@@ -328,138 +306,26 @@ export { applyWorktreeOverride, parseProfileAndWorktreeArgs };
 
 export function createCliPipelineBuilder({
   input,
-  initialPrior,
   buildProbes,
   mountProbes,
   agentExtraArgs,
 }: {
-  readonly input: Omit<StageInput, "prior">;
-  readonly initialPrior: PriorStageOutputs & Pick<PipelineState, "workspace">;
+  readonly input: StageInput;
   readonly buildProbes: BuildProbes;
   readonly mountProbes: MountProbes;
   readonly agentExtraArgs: string[];
 }) {
-  const priorRef: {
-    current: PriorStageOutputs & Partial<PipelineState>;
-  } = { current: initialPrior };
-
-  return createPipelineBuilder<Pick<PipelineState, "workspace">>()
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createWorktreeStage(),
-          needs: ["workspace"],
-          pickAdds: (_result, prior) =>
-            pickPipelineStateSlices(prior, "workspace"),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createSessionStoreStage(),
-          needs: ["workspace"],
-          pickAdds: (_result, prior) =>
-            pickPipelineStateSlices(prior, "session"),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createDockerBuildStage(buildProbes),
-          needs: ["workspace"],
-          pickAdds: () => ({}),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: NixDetectStage,
-          needs: [],
-          pickAdds: (_result, prior) => pickPipelineStateSlices(prior, "nix"),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createDbusProxyStage(),
-          needs: [],
-          pickAdds: (_result, prior) => pickPipelineStateSlices(prior, "dbus"),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createMountStage(mountProbes),
-          needs: ["workspace", "nix", "dbus"],
-          pickAdds: (_result, prior) =>
-            pickPipelineStateSlices(prior, "container"),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createHostExecStage(),
-          needs: ["workspace", "container"],
-          pickAdds: (_result, prior) => ({
-            ...pickPipelineStateSlices(prior, "container"),
-            ...pickPipelineStateSlices(prior, "hostexec"),
-          }),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createDindStage(),
-          needs: ["workspace", "container"],
-          pickAdds: (result, prior) => pickDindStageSlices(result, prior),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createProxyStage(),
-          needs: ["container"],
-          pickAdds: (result, prior) => pickProxyStageSlices(result, prior),
-        },
-        input,
-        priorRef,
-      ),
-    )
-    .add(
-      adaptEffectStageToPipelineStateStage(
-        {
-          stage: createLaunchStage(agentExtraArgs),
-          needs: ["container"],
-          pickAdds: () => ({}),
-        },
-        input,
-        priorRef,
-      ),
-    );
+  return createPipelineBuilder<Pick<PipelineState, "workspace" | "container">>()
+    .add(createWorktreeStage(input))
+    .add(createSessionStoreStage(input))
+    .add(createDockerBuildStage(buildProbes))
+    .add(createNixDetectStage(input))
+    .add(createDbusProxyStage(input))
+    .add(createMountStage(input, mountProbes))
+    .add(createHostExecStage(input))
+    .add(createDindStage(input))
+    .add(createProxyStage(input))
+    .add(createLaunchStage(input, agentExtraArgs));
 }
 
 function randomHex(bytes: number): string {

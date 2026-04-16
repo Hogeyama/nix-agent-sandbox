@@ -24,6 +24,7 @@ import { type DindSidecarOpts, makeDindServiceFake } from "../services/dind.ts";
 import {
   buildDindSidecarArgs,
   createDindStage,
+  createDindStageWithOptions,
   type DindPlan,
   planDind,
 } from "./dind.ts";
@@ -294,7 +295,7 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   const profile = makeProfile({ docker: { enable: true, shared: true } });
   const sharedInput = makeSharedInput(profile);
   const stageState = makeStageState();
-  const stage = createDindStage(sharedInput, {
+  const stage = createDindStageWithOptions(sharedInput, {
     disableCache: true,
     readinessTimeoutMs: 5000,
   });

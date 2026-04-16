@@ -355,7 +355,6 @@ test("pickPipelineStateSlices: throws when required slice is missing", () => {
 });
 
 test("createCliPipelineBuilder: wires CLI stages through PipelineState order", () => {
-  const initialState = createCliInitialState("/repo/worktree", "nas-sandbox");
   const buildProbes: BuildProbes = {
     imageName: "nas-sandbox",
     imageExists: false,
@@ -372,7 +371,6 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
       host: baseHost,
       probes: baseProbes,
     },
-    initialState,
     buildProbes,
     mountProbes: {} as MountProbes,
     agentExtraArgs: ["--resume"],
