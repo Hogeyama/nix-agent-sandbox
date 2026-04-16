@@ -32,6 +32,7 @@ function makeProfile(): Profile {
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: {
       allowlist: [],
+      proxy: { forwardPorts: [] },
       prompt: {
         enable: false,
         denylist: [],

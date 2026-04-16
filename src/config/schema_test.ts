@@ -4,7 +4,57 @@
  */
 
 import { expect, test } from "bun:test";
-import { profileSchema } from "./schema.ts";
+import { profileSchema, proxySchema } from "./schema.ts";
+
+// ---------------------------------------------------------------------------
+// proxySchema
+// ---------------------------------------------------------------------------
+
+test("proxySchema: defaults to empty forwardPorts", () => {
+  const result = proxySchema.parse(undefined);
+  expect(result).toEqual({ forwardPorts: [] });
+});
+
+test("proxySchema: accepts forward-ports array", () => {
+  const result = proxySchema.parse({ "forward-ports": [8080, 3000] });
+  expect(result).toEqual({ forwardPorts: [8080, 3000] });
+});
+
+test("proxySchema: empty object defaults forward-ports", () => {
+  const result = proxySchema.parse({});
+  expect(result).toEqual({ forwardPorts: [] });
+});
+
+test("proxySchema: rejects out-of-range and non-integer ports", () => {
+  expect(() => proxySchema.parse({ "forward-ports": [0] })).toThrow();
+  expect(() => proxySchema.parse({ "forward-ports": [65536] })).toThrow();
+  expect(() => proxySchema.parse({ "forward-ports": [1.5] })).toThrow();
+});
+
+test("proxySchema: rejects reserved port 18080", () => {
+  expect(() => proxySchema.parse({ "forward-ports": [18080] })).toThrow(
+    /18080.*reserved/,
+  );
+});
+
+test("proxySchema: rejects duplicate ports", () => {
+  expect(() =>
+    proxySchema.parse({ "forward-ports": [8080, 3000, 8080] }),
+  ).toThrow(/duplicate/);
+});
+
+test("profileSchema: accepts network.proxy.forward-ports", () => {
+  const schema = profileSchema("test");
+  const result = schema.parse({
+    agent: "claude",
+    network: {
+      proxy: {
+        "forward-ports": [8080, 5432],
+      },
+    },
+  });
+  expect(result.network.proxy.forwardPorts).toEqual([8080, 5432]);
+});
 
 // ---------------------------------------------------------------------------
 // Error aggregation: superRefine collects multiple issues instead of aborting

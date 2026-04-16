@@ -176,6 +176,7 @@ function mergeRawNetworkConfigs(
   return {
     ...global,
     ...local,
+    proxy: shallowMerge(global.proxy, local.proxy),
     prompt: shallowMerge(global.prompt, local.prompt),
   };
 }

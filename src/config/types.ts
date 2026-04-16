@@ -37,6 +37,11 @@ export interface GpgConfig {
   forwardAgent: boolean;
 }
 
+/** Proxy 設定 */
+export interface ProxyConfig {
+  forwardPorts: number[];
+}
+
 /** Secret 設定 */
 export type SecretSource = string;
 
@@ -122,6 +127,7 @@ export interface NetworkPromptConfig {
 export interface NetworkConfig {
   allowlist: string[];
   prompt: NetworkPromptConfig;
+  proxy: ProxyConfig;
 }
 
 /** ディスプレイ転送設定 */
@@ -251,6 +257,9 @@ export interface RawProfile {
   };
   network?: {
     allowlist?: string[];
+    proxy?: {
+      "forward-ports"?: number[];
+    };
     prompt?: {
       enable?: boolean;
       denylist?: string[];
@@ -357,6 +366,10 @@ export const DEFAULT_GPG_CONFIG: GpgConfig = {
   forwardAgent: false,
 };
 
+export const DEFAULT_PROXY_CONFIG: ProxyConfig = {
+  forwardPorts: [],
+};
+
 export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   enable: false,
 };
@@ -372,6 +385,7 @@ export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
   allowlist: [],
   prompt: DEFAULT_NETWORK_PROMPT_CONFIG,
+  proxy: DEFAULT_PROXY_CONFIG,
 };
 
 export const DEFAULT_DBUS_SESSION_CONFIG: DbusSessionConfig = {

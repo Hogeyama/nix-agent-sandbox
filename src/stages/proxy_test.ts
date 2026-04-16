@@ -13,6 +13,7 @@ import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
+  DEFAULT_PROXY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
@@ -66,6 +67,7 @@ function makeProfile(
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    proxy: DEFAULT_PROXY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network,

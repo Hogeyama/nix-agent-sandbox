@@ -166,7 +166,10 @@ test("mergeRawProfiles: all RawProfile keys are preserved", () => {
     aws: { "mount-config": true },
     gpg: { "forward-agent": true },
     display: { enable: true },
-    network: { allowlist: ["example.com"] },
+    network: {
+      allowlist: ["example.com"],
+      proxy: { "forward-ports": [8080] },
+    },
     dbus: { session: { enable: true } },
     "extra-mounts": [{ src: "/a", dst: "/b" }],
     env: [{ key: "K", val: "V" }],
@@ -206,6 +209,24 @@ test("mergeRawProfiles: network.prompt subfields are preserved", () => {
     "timeout-seconds": 300,
     "default-scope": "host-port",
     notify: "desktop",
+  });
+});
+
+test("mergeRawProfiles: network.proxy subfields are preserved", () => {
+  const global: RawProfile = {
+    agent: "claude",
+    network: {
+      proxy: { "forward-ports": [8080] },
+    },
+  };
+  const local: RawProfile = {
+    network: {
+      proxy: { "forward-ports": [5432] },
+    },
+  };
+  const result = mergeRawProfiles(global, local);
+  expect(result.network?.proxy).toEqual({
+    "forward-ports": [5432],
   });
 });
 

@@ -24,6 +24,7 @@ import {
   DEFAULT_HOSTEXEC_PROMPT_CONFIG,
   DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
+  DEFAULT_PROXY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "./types.ts";
@@ -168,6 +169,46 @@ export const gpgSchema = z
   .prefault({})
   .transform((r) => ({
     forwardAgent: r["forward-agent"],
+  }));
+
+export const proxySchema = z
+  .object({
+    "forward-ports": z
+      .array(
+        z
+          .number()
+          .int({ message: "must be an integer" })
+          .min(1, { message: "must be >= 1" })
+          .max(65535, { message: "must be <= 65535" }),
+      )
+      .default(DEFAULT_PROXY_CONFIG.forwardPorts)
+      .superRefine((ports, ctx) => {
+        for (const [i, port] of ports.entries()) {
+          if (port === 18080) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [i],
+              message:
+                "port 18080 is reserved for the internal authentication proxy",
+            });
+          }
+        }
+        const seen = new Set<number>();
+        for (const [i, port] of ports.entries()) {
+          if (seen.has(port)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [i],
+              message: `duplicate port ${port}`,
+            });
+          }
+          seen.add(port);
+        }
+      }),
+  })
+  .prefault({})
+  .transform((r) => ({
+    forwardPorts: r["forward-ports"],
   }));
 
 // ---------------------------------------------------------------------------
@@ -428,6 +469,7 @@ export function networkSchema(_profileName: string) {
     .object(
       {
         allowlist: hostListSchema("network.allowlist"),
+        proxy: proxySchema,
         prompt: networkPromptSchema,
       },
       { error: "network must be an object" },
