@@ -9,8 +9,8 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import type { PriorStageOutputs, StageInput } from "../pipeline/types.ts";
-import { NixDetectStage } from "./nix_detect.ts";
+import type { StageInput } from "../pipeline/types.ts";
+import { createNixDetectStage } from "./nix_detect.ts";
 
 function makeProfile(nixEnable: boolean | "auto"): Profile {
   return {
@@ -28,20 +28,6 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
-  };
-}
-
-function makePrior(overrides?: Partial<PriorStageOutputs>): PriorStageOutputs {
-  return {
-    dockerArgs: [],
-    envVars: {},
-    workDir: "/tmp/work",
-    nixEnabled: false,
-    imageName: "nas-sandbox",
-    agentCommand: ["claude"],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
-    ...overrides,
   };
 }
 
@@ -75,54 +61,54 @@ function makeInput(
       gpgAgentSocket: null,
       auditDir: "/tmp/nas-audit",
     },
-    prior: makePrior(),
   };
 }
 
 test("NixDetectStage: enable=true sets nixEnabled to true", async () => {
+  const stage = createNixDetectStage(makeInput(true, false));
   const result = await Effect.runPromise(
-    Effect.scoped(NixDetectStage.run(makeInput(true, false))),
+    Effect.scoped(stage.run({})),
   );
-  expect(result.nixEnabled).toEqual(true);
   expect(result.nix).toEqual({ enabled: true });
 });
 
 test("NixDetectStage: enable=false sets nixEnabled to false", async () => {
+  const stage = createNixDetectStage(makeInput(false, true));
   const result = await Effect.runPromise(
-    Effect.scoped(NixDetectStage.run(makeInput(false, true))),
+    Effect.scoped(stage.run({})),
   );
-  expect(result.nixEnabled).toEqual(false);
   expect(result.nix).toEqual({ enabled: false });
 });
 
 test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", async () => {
+  const stage = createNixDetectStage(makeInput("auto", true));
   const result = await Effect.runPromise(
-    Effect.scoped(NixDetectStage.run(makeInput("auto", true))),
+    Effect.scoped(stage.run({})),
   );
-  expect(result.nixEnabled).toEqual(true);
   expect(result.nix).toEqual({ enabled: true });
 });
 
 test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", async () => {
+  const stage = createNixDetectStage(makeInput("auto", false));
   const result = await Effect.runPromise(
-    Effect.scoped(NixDetectStage.run(makeInput("auto", false))),
+    Effect.scoped(stage.run({})),
   );
-  expect(result.nixEnabled).toEqual(false);
   expect(result.nix).toEqual({ enabled: false });
 });
 
 test("NixDetectStage: kind is 'effect'", () => {
-  expect(NixDetectStage.kind).toEqual("effect");
+  const stage = createNixDetectStage(makeInput(true, true));
+  expect(stage.name).toEqual("NixDetectStage");
 });
 
 test("NixDetectStage: run() always returns a result (never skips)", async () => {
   for (const enable of [true, false, "auto" as const]) {
     for (const hasNix of [true, false]) {
+      const stage = createNixDetectStage(makeInput(enable, hasNix));
       const result = await Effect.runPromise(
-        Effect.scoped(NixDetectStage.run(makeInput(enable, hasNix))),
+        Effect.scoped(stage.run({})),
       );
-      expect(result.nixEnabled).toBeDefined();
-      expect(result.nix?.enabled).toEqual(result.nixEnabled);
+      expect(result.nix).toBeDefined();
     }
   }
 });

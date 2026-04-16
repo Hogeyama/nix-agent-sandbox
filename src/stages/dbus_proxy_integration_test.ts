@@ -15,9 +15,9 @@ import {
   type Profile,
 } from "../config/types.ts";
 import type {
-  EffectStageResult,
   HostEnv,
   ProbeResults,
+  StageResult,
   StageInput,
 } from "../pipeline/types.ts";
 import { FsServiceLive } from "../services/fs.ts";
@@ -91,16 +91,6 @@ function makeInput(
     sessionId: "test-session-id",
     host: makeHostEnv(hostEnv),
     probes: makeProbes(probes),
-    prior: {
-      dockerArgs: [],
-      envVars: {},
-      workDir: process.cwd(),
-      nixEnabled: false,
-      imageName: "nas:default",
-      agentCommand: ["claude"],
-      networkPromptEnabled: false,
-      dbusProxyEnabled: false,
-    },
   };
 }
 
@@ -111,11 +101,11 @@ import {
 
 const dummyLayer = makeDbusProxyServiceFake();
 
-function runStage(input: StageInput): Promise<EffectStageResult> {
-  const stage = createDbusProxyStage();
+function runStage(input: StageInput): Promise<StageResult> {
+  const stage = createDbusProxyStage(input);
   const scope = Effect.runSync(Scope.make());
   const effect = stage
-    .run(input)
+    .run({})
     .pipe(
       Effect.provideService(Scope.Scope, scope),
       Effect.provide(dummyLayer),
@@ -130,12 +120,12 @@ async function runStageScoped(
     never,
     never
   >,
-  fn: (result: EffectStageResult) => Promise<void>,
+  fn: (result: StageResult) => Promise<void>,
 ): Promise<void> {
-  const stage = createDbusProxyStage();
+  const stage = createDbusProxyStage(input);
   const scope = Effect.runSync(Scope.make());
   const effect = stage
-    .run(input)
+    .run({})
     .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer));
   const result = await Effect.runPromise(effect);
   try {
@@ -184,14 +174,14 @@ test("buildProxyArgs: serializes filter flags", () => {
   ]);
 });
 
-test("DbusProxyStage: returns empty result when disabled", async () => {
+test("DbusProxyStage: returns disabled dbus slice when disabled", async () => {
   const profile = makeProfile();
   const input = makeInput(profile);
   const result = await runStage(input);
-  expect(result).toEqual({});
+  expect(result).toEqual({ dbus: { enabled: false } });
 });
 
-test("DbusProxyStage: returns dbusProxyEnabled=false when uid is null", async () => {
+test("DbusProxyStage: returns disabled dbus slice when uid is null", async () => {
   const profile: Profile = {
     ...makeProfile(),
     dbus: {
@@ -203,10 +193,10 @@ test("DbusProxyStage: returns dbusProxyEnabled=false when uid is null", async ()
   };
   const input = makeInput(profile, { uid: null });
   const result = await runStage(input);
-  expect(result.dbusProxyEnabled).toEqual(false);
+  expect(result.dbus).toEqual({ enabled: false });
 });
 
-test("DbusProxyStage: returns dbusProxyEnabled=false when xdg-dbus-proxy not found", async () => {
+test("DbusProxyStage: returns disabled dbus slice when xdg-dbus-proxy not found", async () => {
   const profile: Profile = {
     ...makeProfile(),
     dbus: {
@@ -219,10 +209,10 @@ test("DbusProxyStage: returns dbusProxyEnabled=false when xdg-dbus-proxy not fou
   };
   const input = makeInput(profile, { uid: 1000 }, { xdgDbusProxyPath: null });
   const result = await runStage(input);
-  expect(result.dbusProxyEnabled).toEqual(false);
+  expect(result.dbus).toEqual({ enabled: false });
 });
 
-test("DbusProxyStage: returns dbusProxyEnabled=false for unsupported address", async () => {
+test("DbusProxyStage: returns disabled dbus slice for unsupported address", async () => {
   const profile: Profile = {
     ...makeProfile(),
     dbus: {
@@ -239,7 +229,7 @@ test("DbusProxyStage: returns dbusProxyEnabled=false for unsupported address", a
     { xdgDbusProxyPath: "/usr/bin/xdg-dbus-proxy" },
   );
   const result = await runStage(input);
-  expect(result.dbusProxyEnabled).toEqual(false);
+  expect(result.dbus).toEqual({ enabled: false });
 });
 
 test("DbusProxyStage: produces correct outputs when enabled", async () => {
@@ -269,11 +259,11 @@ test("DbusProxyStage: produces correct outputs when enabled", async () => {
     },
   );
 
-  const stage = createDbusProxyStage();
+  const stage = createDbusProxyStage(input);
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run({})
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(fakeLayer),
@@ -281,12 +271,12 @@ test("DbusProxyStage: produces correct outputs when enabled", async () => {
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
-  expect(result.dbusProxyEnabled).toEqual(true);
-  expect(result.dbusSessionRuntimeDir?.includes(input.sessionId)).toEqual(true);
-  expect(result.dbusSessionSocket?.endsWith("/bus")).toEqual(true);
-  expect(result.dbusSessionSourceAddress).toEqual(
-    `unix:path=/run/user/${uid}/bus`,
-  );
+  expect(result.dbus).toEqual({
+    enabled: true,
+    runtimeDir: expect.stringContaining(input.sessionId),
+    socket: expect.stringMatching(/\/bus$/),
+    sourceAddress: `unix:path=/run/user/${uid}/bus`,
+  });
 });
 
 test("resolveRuntimeDir: uses HostEnv instead of Deno.env directly", () => {
@@ -393,12 +383,13 @@ PY
       Layer.provide(Layer.mergeAll(FsServiceLive, ProcessServiceLive)),
     );
     await runStageScoped(input, liveLayer, async (result) => {
-      expect(result.dbusProxyEnabled).toEqual(true);
-      expect(result.dbusSessionRuntimeDir?.includes(input.sessionId)).toEqual(
-        true,
-      );
-      expect(result.dbusSessionSocket?.endsWith("/bus")).toEqual(true);
-      const st = await stat(result.dbusSessionSocket!);
+      expect(result.dbus?.enabled).toEqual(true);
+      if (!result.dbus?.enabled) {
+        throw new Error("expected enabled dbus slice");
+      }
+      expect(result.dbus.runtimeDir.includes(input.sessionId)).toEqual(true);
+      expect(result.dbus.socket.endsWith("/bus")).toEqual(true);
+      const st = await stat(result.dbus.socket);
       expect(st.isSocket()).toEqual(true);
     });
   } finally {
