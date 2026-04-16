@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-04-17
+
+### Added
+
+- **Localhost port forwarding**: `proxy.forward-ports` config exposes host TCP ports inside the sandbox via an upstream CONNECT tunnel, so agents can reach tools like JVM debuggers on the host ([b2a8d0d], [0aab7c4], [72faf84])
+- **LD_PRELOAD hostexec intercept**: new `hostexec_intercept.so` replaces the PATH-wrapper approach, hooking `execvp`/`posix_spawnp` inside the container so relative and bare-name commands dispatch through the broker correctly ([1f81bd9], [b10d22c], [8bb43a0])
+- **UTF-8 locales** (`en_US.UTF-8`, `ja_JP.UTF-8`) baked into the sandbox image ([1dd9d1a])
+- **Emoji and CJK width rendering** in the web terminal via `@xterm/addon-unicode-graphemes` ([d386bdb])
+- **Directory-first New Session dialog**: working directory is picked first and drives the per-cwd profile and base-branch options ([3162ba4], [e32045d])
+
+### Changed
+
+- **Breaking:** AWS CLI and gcloud CLI removed from the sandbox image; install them per-project if needed ([0ab5598])
+- **Breaking:** `hostexec` intercept is now LD_PRELOAD-based instead of bind-mounted PATH wrappers — relative paths (`./script.sh`) and bare names resolved inside the container are now matched, and `container` fallback works for non-bare argv0 ([4e0fedc], [f73ceb1], [29ccd74])
+- **Pipeline rearchitected around a typed `PipelineState`** with a container plan compiler; every stage was migrated to slice-based inputs (session store, docker build, dind, mount, hostexec, proxy, launch) and tests rewritten against slice contracts. The legacy prior-bag wiring is removed ([24e4a04], [e8e86ba], [7503283], [0cc9a1f], [5d85837], [3fa8eb5], [e3e1fe1], [ec95f75], [312864f], [d609671], [73ed07e], [0da2faa], [0242fe0])
+- Removed the "Clean All" button from the Containers tab ([68dae39])
+
+### Fixed
+
+- **Stale sandbox image on proxy asset changes**: docker build now detects changed proxy assets and rebuilds, so proxy fixes ship without manual `--rebuild` ([c78b29a])
+- **Audit log pollution**: hide internal `nas hook` entries from the audit tab ([3d8a797])
+- **GitHub Copilot CLI hooks**: corrected the hook wiring ([1f1953c])
+
+### Documentation
+
+- Document `proxy.forward-ports` with a JVM-tools example ([42237bd], [0292824])
+- Update hostexec docs to describe the LD_PRELOAD intercept ([0e6a80f])
+
 ## [0.6.0] - 2026-04-15
 
 ### Added
@@ -135,6 +163,9 @@ Initial release.
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix + nix-bundle-elf
 
+[0.7.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.2.0...v0.3.0
