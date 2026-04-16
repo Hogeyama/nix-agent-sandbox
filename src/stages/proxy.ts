@@ -116,6 +116,11 @@ export function planProxy(
   const dindContainerName =
     input.container.env.static.NAS_DIND_CONTAINER_NAME ?? null;
 
+  const forwardPorts = input.profile.network.proxy.forwardPorts;
+  const forwardPortEntries = forwardPorts.map(
+    (p) => `host.docker.internal:${p}`,
+  );
+
   const proxyUrl = `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
   const noProxyEntries = ["localhost", "127.0.0.1"];
@@ -123,17 +128,22 @@ export function planProxy(
     noProxyEntries.push(dindContainerName);
   }
 
+  const envVars: Record<string, string> = {
+    NAS_UPSTREAM_PROXY: proxyUrl,
+    http_proxy: localProxyUrl,
+    https_proxy: localProxyUrl,
+    HTTP_PROXY: localProxyUrl,
+    HTTPS_PROXY: localProxyUrl,
+    no_proxy: noProxyEntries.join(","),
+    NO_PROXY: noProxyEntries.join(","),
+  };
+  if (forwardPorts.length > 0) {
+    envVars.NAS_FORWARD_PORTS = forwardPorts.join(",");
+  }
+
   const container = buildContainerState(input, {
     sessionNetworkName,
-    envVars: {
-      NAS_UPSTREAM_PROXY: proxyUrl,
-      http_proxy: localProxyUrl,
-      https_proxy: localProxyUrl,
-      HTTP_PROXY: localProxyUrl,
-      HTTPS_PROXY: localProxyUrl,
-      no_proxy: noProxyEntries.join(","),
-      NO_PROXY: noProxyEntries.join(","),
-    },
+    envVars,
   });
 
   const network: NetworkState = {
@@ -162,7 +172,7 @@ export function planProxy(
     runtimePaths,
     brokerSocket,
     token,
-    allowlist: input.profile.network.allowlist,
+    allowlist: [...input.profile.network.allowlist, ...forwardPortEntries],
     denylist: prompt.denylist,
     promptEnabled: prompt.enable,
     timeoutSeconds: prompt.timeoutSeconds,
@@ -330,7 +340,8 @@ function runProxy(
 function isProxyEnabled(input: StageInput): boolean {
   return (
     input.profile.network.allowlist.length > 0 ||
-    input.profile.network.prompt.enable
+    input.profile.network.prompt.enable ||
+    input.profile.network.proxy.forwardPorts.length > 0
   );
 }
 

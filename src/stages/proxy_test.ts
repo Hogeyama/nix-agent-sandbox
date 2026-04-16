@@ -13,7 +13,6 @@ import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
-  DEFAULT_PROXY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
@@ -54,6 +53,9 @@ function makeProfile(
     allowlist: networkOverrides.allowlist
       ? [...networkOverrides.allowlist]
       : [],
+    proxy: networkOverrides.proxy
+      ? { forwardPorts: [...networkOverrides.proxy.forwardPorts] }
+      : { forwardPorts: [] },
     prompt: {
       ...DEFAULT_PROMPT,
       ...(networkOverrides.prompt ?? {}),
@@ -67,7 +69,6 @@ function makeProfile(
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
-    proxy: DEFAULT_PROXY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network,
@@ -357,6 +358,57 @@ test("replaceNetwork: appends when no --network", () => {
 
 test("LOCAL_PROXY_PORT: is 18080", () => {
   expect(LOCAL_PROXY_PORT).toEqual(18080);
+});
+
+// ---------------------------------------------------------------------------
+// forward-ports
+// ---------------------------------------------------------------------------
+
+test("ProxyStage: forwardPorts-only enables proxy", () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080] } },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container });
+  expect(result !== null).toEqual(true);
+});
+
+test("ProxyStage: forwardPorts adds host.docker.internal entries to allowlist", () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080, 5432] } },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+  expect(result.allowlist).toContain("host.docker.internal:8080");
+  expect(result.allowlist).toContain("host.docker.internal:5432");
+});
+
+test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080, 5432] } },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+  expect(result.envVars.NAS_FORWARD_PORTS).toEqual("8080,5432");
+});
+
+test("ProxyStage: forwardPorts merges with existing allowlist", () => {
+  const profile = makeProfile({
+    network: { allowlist: ["example.com"], proxy: { forwardPorts: [3000] } },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+  expect(result.allowlist).toContain("example.com");
+  expect(result.allowlist).toContain("host.docker.internal:3000");
+});
+
+test("ProxyStage: no NAS_FORWARD_PORTS when forwardPorts is empty", () => {
+  const profile = makeProfile({
+    network: { allowlist: ["example.com"] },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+  expect(result.envVars.NAS_FORWARD_PORTS).toBeUndefined();
 });
 
 test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
