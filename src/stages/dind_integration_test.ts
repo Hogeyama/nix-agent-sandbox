@@ -28,7 +28,7 @@ import { emptyContainerPlan } from "../pipeline/container_plan.ts";
 import type { PipelineState } from "../pipeline/state.ts";
 import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
 import { DindServiceLive } from "../services/dind.ts";
-import { createDindStage, planDind } from "./dind.ts";
+import { createDindStageWithOptions, planDind } from "./dind.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;
@@ -187,7 +187,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
 
     const scope = Effect.runSync(Scope.make());
     try {
-      const stage = createDindStage(sharedInput, {
+      const stage = createDindStageWithOptions(sharedInput, {
         disableCache: true,
         readinessTimeoutMs: 20_000,
       });

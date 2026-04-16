@@ -122,7 +122,9 @@ test("mergeContainerPlan: labels are key-merged (patch wins)", () => {
 
 test("mergeContainerPlan: network is replaced", () => {
   const base = makeBasePlan({ network: { name: "base-net" } });
-  const patch: ContainerPatch = { network: { name: "patch-net", alias: "alias1" } };
+  const patch: ContainerPatch = {
+    network: { name: "patch-net", alias: "alias1" },
+  };
   const result = mergeContainerPlan(base, patch);
   expect(result.network).toEqual({ name: "patch-net", alias: "alias1" });
 });

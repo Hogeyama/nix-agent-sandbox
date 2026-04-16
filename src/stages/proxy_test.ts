@@ -26,6 +26,7 @@ import { makeSessionBrokerServiceFake } from "../services/session_broker.ts";
 import {
   buildNetworkRuntimePaths,
   createProxyStage,
+  createProxyStageWithOptions,
   LOCAL_PROXY_PORT,
   planProxy,
   replaceNetwork,
@@ -334,7 +335,8 @@ test("ProxyStage: planner merges proxy settings into existing container slice", 
 });
 
 test("ProxyStage: stage metadata is stable", () => {
-  const stage = createProxyStage();
+  const { shared } = makeInput(makeProfile());
+  const stage = createProxyStage(shared);
   expect(stage.name).toEqual("ProxyStage");
   expect(stage.needs).toEqual(["container"]);
 });
@@ -455,7 +457,7 @@ test("createProxyStage().run(): calls services and returns merged output", async
     }),
   );
 
-  const stage = createProxyStage(shared, {
+  const stage = createProxyStageWithOptions(shared, {
     generateSessionToken: () => "test-token-fixed",
   });
 

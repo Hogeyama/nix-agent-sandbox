@@ -13,12 +13,8 @@ import {
 } from "../docker/client.ts";
 import { resolveAssetDir } from "../lib/asset.ts";
 import { logInfo, logWarn } from "../log.ts";
+import type { Stage } from "../pipeline/stage_builder.ts";
 import type { WorkspaceState } from "../pipeline/state.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  StageInput,
-} from "../pipeline/types.ts";
 import { DockerBuildService } from "../services/docker_build.ts";
 
 // ---------------------------------------------------------------------------
@@ -95,20 +91,14 @@ export interface DockerBuildPlan {
   readonly labels: Record<string, string>;
 }
 
-function resolveWorkspace(input: StageInput): WorkspaceState {
-  return (
-    input.prior.workspace ?? {
-      workDir: input.prior.workDir,
-      imageName: input.prior.imageName,
-      ...(input.prior.mountDir !== undefined
-        ? { mountDir: input.prior.mountDir }
-        : {}),
-    }
-  );
+function resolveWorkspace(input: {
+  workspace: WorkspaceState;
+}): WorkspaceState {
+  return input.workspace;
 }
 
 export function planDockerBuild(
-  input: StageInput,
+  input: { workspace: WorkspaceState },
   buildProbes: BuildProbes,
 ): DockerBuildPlan {
   const { imageName } = resolveWorkspace(input);
@@ -154,18 +144,12 @@ export function planDockerBuild(
 
 export function createDockerBuildStage(
   buildProbes: BuildProbes,
-): EffectStage<DockerBuildService> {
+): Stage<"workspace", {}, DockerBuildService, unknown> {
   return {
-    kind: "effect",
     name: "DockerBuildStage",
+    needs: ["workspace"],
 
-    run(
-      input: StageInput,
-    ): Effect.Effect<
-      EffectStageResult,
-      unknown,
-      DockerBuildService | Scope.Scope
-    > {
+    run(input): Effect.Effect<{}, unknown, DockerBuildService | Scope.Scope> {
       const plan = planDockerBuild(input, buildProbes);
 
       if (!plan.needsBuild) {

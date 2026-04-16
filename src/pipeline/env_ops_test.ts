@@ -19,9 +19,7 @@ test("encodeDynamicEnvOps: single suffix op", () => {
   const ops: DynamicEnvOp[] = [
     { mode: "suffix", key: "PATH", value: "/opt/bin", separator: ":" },
   ];
-  expect(encodeDynamicEnvOps(ops)).toEqual(
-    "__nas_sfx 'PATH' '/opt/bin' ':'",
-  );
+  expect(encodeDynamicEnvOps(ops)).toEqual("__nas_sfx 'PATH' '/opt/bin' ':'");
 });
 
 test("encodeDynamicEnvOps: multiple ops joined by newline", () => {

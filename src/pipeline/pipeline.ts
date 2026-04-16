@@ -4,52 +4,9 @@
 
 import { Effect, type Scope } from "effect";
 import { logInfo } from "../log.ts";
-import type { PipelineState, SliceKey } from "./state.ts";
 import type { Stage as PipelineStateStage } from "./stage_builder.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  PipelineRequirements,
-  PriorStageOutputs,
-  StageInput,
-  StageServices,
-} from "./types.ts";
-
-// ---------------------------------------------------------------------------
-// Effect-based pipeline runner
-// ---------------------------------------------------------------------------
-
-/**
- * Run a pipeline of EffectStage[] natively using Effect.gen.
- *
- * Teardown is handled by Effect's Scope — stages register finalizers via
- * Effect.acquireRelease / Effect.addFinalizer, and the caller uses
- * Effect.scoped to close the scope when the pipeline finishes.
- */
-export function runPipelineEffect<
-  const TStages extends readonly EffectStage<StageServices>[],
->(
-  stages: TStages,
-  input: StageInput,
-): Effect.Effect<PriorStageOutputs, unknown, PipelineRequirements<TStages>> {
-  // Cast is safe: TStages constrains which services are required at the
-  // call site, but inside the loop TypeScript widens R to StageServices.
-  const pipeline = Effect.gen(function* () {
-    let prior: PriorStageOutputs = { ...input.prior };
-    for (const stage of stages) {
-      yield* Effect.sync(() => logInfo(`[nas] Running stage: ${stage.name}`));
-      const currentInput: StageInput = { ...input, prior };
-      const result: EffectStageResult = yield* stage.run(currentInput);
-      prior = { ...prior, ...result };
-    }
-    return prior;
-  });
-  return pipeline as Effect.Effect<
-    PriorStageOutputs,
-    unknown,
-    PipelineRequirements<TStages>
-  >;
-}
+import type { PipelineState, SliceKey } from "./state.ts";
+import type { StageServices } from "./types.ts";
 
 type AnyPipelineStateStage = PipelineStateStage<
   SliceKey,
@@ -58,27 +15,25 @@ type AnyPipelineStateStage = PipelineStateStage<
   unknown
 >;
 
-type PipelineStateStageServicesOf<
-  TStage extends AnyPipelineStateStage,
-> = TStage extends PipelineStateStage<
-  SliceKey,
-  Partial<PipelineState>,
-  infer R extends StageServices,
-  unknown
->
-  ? R
-  : never;
+type PipelineStateStageServicesOf<TStage extends AnyPipelineStateStage> =
+  TStage extends PipelineStateStage<
+    SliceKey,
+    Partial<PipelineState>,
+    infer R extends StageServices,
+    unknown
+  >
+    ? R
+    : never;
 
-type PipelineStateStageErrorOf<
-  TStage extends AnyPipelineStateStage,
-> = TStage extends PipelineStateStage<
-  SliceKey,
-  Partial<PipelineState>,
-  StageServices,
-  infer E
->
-  ? E
-  : never;
+type PipelineStateStageErrorOf<TStage extends AnyPipelineStateStage> =
+  TStage extends PipelineStateStage<
+    SliceKey,
+    Partial<PipelineState>,
+    StageServices,
+    infer E
+  >
+    ? E
+    : never;
 
 export type PipelineStateRequirements<
   TStages extends readonly AnyPipelineStateStage[],
@@ -89,7 +44,12 @@ export type PipelineStateErrors<
 > = PipelineStateStageErrorOf<TStages[number]>;
 
 function pickPipelineStateInput<Needs extends SliceKey>(
-  stage: PipelineStateStage<Needs, Partial<PipelineState>, StageServices, unknown>,
+  stage: PipelineStateStage<
+    Needs,
+    Partial<PipelineState>,
+    StageServices,
+    unknown
+  >,
   current: Partial<PipelineState>,
 ): Pick<PipelineState, Needs> {
   const input = {} as Pick<PipelineState, Needs>;

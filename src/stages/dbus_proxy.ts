@@ -8,25 +8,17 @@
 import { Effect, type Scope } from "effect";
 import type { DbusRuleConfig } from "../config/types.ts";
 import { logWarn } from "../log.ts";
+import type { Stage } from "../pipeline/stage_builder.ts";
 import type { DbusState } from "../pipeline/state.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  HostEnv,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { HostEnv, StageInput, StageResult } from "../pipeline/types.ts";
 import { DbusProxyService } from "../services/dbus_proxy.ts";
 
 const SOCKET_READY_TIMEOUT_MS = 5_000;
 const SOCKET_READY_POLL_MS = 50;
 const DBUS_DISABLED_STATE = { enabled: false } satisfies DbusState;
 
-function buildDisabledDbusResult(): EffectStageResult {
+function buildDisabledDbusResult(): Pick<StageResult, "dbus"> {
   return {
-    dbusProxyEnabled: false,
-    dbusSessionRuntimeDir: undefined,
-    dbusSessionSocket: undefined,
-    dbusSessionSourceAddress: undefined,
     dbus: DBUS_DISABLED_STATE,
   };
 }
@@ -44,26 +36,28 @@ export interface DbusProxyPlan {
   readonly args: string[];
   readonly timeoutMs: number;
   readonly pollIntervalMs: number;
-  readonly outputOverrides: EffectStageResult;
+  readonly outputOverrides: Pick<StageResult, "dbus">;
 }
 
 // ---------------------------------------------------------------------------
 // EffectStage
 // ---------------------------------------------------------------------------
 
-export function createDbusProxyStage(): EffectStage<DbusProxyService> {
+export function createDbusProxyStage(
+  shared: StageInput,
+): Stage<never, Pick<StageResult, "dbus">, DbusProxyService, unknown> {
   return {
-    kind: "effect",
     name: "DbusProxyStage",
+    needs: [],
 
     run(
-      input: StageInput,
+      input,
     ): Effect.Effect<
-      EffectStageResult,
+      Pick<StageResult, "dbus">,
       unknown,
       Scope.Scope | DbusProxyService
     > {
-      const plan = planDbusProxy(input);
+      const plan = planDbusProxy(shared);
       if (plan === null) {
         return Effect.succeed(buildDisabledDbusResult());
       }
@@ -184,10 +178,6 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
     timeoutMs: SOCKET_READY_TIMEOUT_MS,
     pollIntervalMs: SOCKET_READY_POLL_MS,
     outputOverrides: {
-      dbusProxyEnabled: true,
-      dbusSessionRuntimeDir: sessionDir,
-      dbusSessionSocket: socketPath,
-      dbusSessionSourceAddress: sourceAddress,
       dbus: {
         enabled: true,
         runtimeDir: sessionDir,
@@ -204,7 +194,11 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
 
 function runDbusProxy(
   plan: DbusProxyPlan,
-): Effect.Effect<EffectStageResult, unknown, Scope.Scope | DbusProxyService> {
+): Effect.Effect<
+  Pick<StageResult, "dbus">,
+  unknown,
+  Scope.Scope | DbusProxyService
+> {
   return Effect.gen(function* () {
     const dbusProxy = yield* DbusProxyService;
 

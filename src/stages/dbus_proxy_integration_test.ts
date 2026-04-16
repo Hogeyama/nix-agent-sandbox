@@ -17,8 +17,8 @@ import {
 import type {
   HostEnv,
   ProbeResults,
-  StageResult,
   StageInput,
+  StageResult,
 } from "../pipeline/types.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import { ProcessServiceLive } from "../services/process.ts";

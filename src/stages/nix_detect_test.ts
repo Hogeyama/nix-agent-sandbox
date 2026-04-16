@@ -66,33 +66,25 @@ function makeInput(
 
 test("NixDetectStage: enable=true sets nixEnabled to true", async () => {
   const stage = createNixDetectStage(makeInput(true, false));
-  const result = await Effect.runPromise(
-    Effect.scoped(stage.run({})),
-  );
+  const result = await Effect.runPromise(Effect.scoped(stage.run({})));
   expect(result.nix).toEqual({ enabled: true });
 });
 
 test("NixDetectStage: enable=false sets nixEnabled to false", async () => {
   const stage = createNixDetectStage(makeInput(false, true));
-  const result = await Effect.runPromise(
-    Effect.scoped(stage.run({})),
-  );
+  const result = await Effect.runPromise(Effect.scoped(stage.run({})));
   expect(result.nix).toEqual({ enabled: false });
 });
 
 test("NixDetectStage: enable=auto uses probes.hasHostNix (true)", async () => {
   const stage = createNixDetectStage(makeInput("auto", true));
-  const result = await Effect.runPromise(
-    Effect.scoped(stage.run({})),
-  );
+  const result = await Effect.runPromise(Effect.scoped(stage.run({})));
   expect(result.nix).toEqual({ enabled: true });
 });
 
 test("NixDetectStage: enable=auto uses probes.hasHostNix (false)", async () => {
   const stage = createNixDetectStage(makeInput("auto", false));
-  const result = await Effect.runPromise(
-    Effect.scoped(stage.run({})),
-  );
+  const result = await Effect.runPromise(Effect.scoped(stage.run({})));
   expect(result.nix).toEqual({ enabled: false });
 });
 
@@ -105,9 +97,7 @@ test("NixDetectStage: run() always returns a result (never skips)", async () => 
   for (const enable of [true, false, "auto" as const]) {
     for (const hasNix of [true, false]) {
       const stage = createNixDetectStage(makeInput(enable, hasNix));
-      const result = await Effect.runPromise(
-        Effect.scoped(stage.run({})),
-      );
+      const result = await Effect.runPromise(Effect.scoped(stage.run({})));
       expect(result.nix).toBeDefined();
     }
   }

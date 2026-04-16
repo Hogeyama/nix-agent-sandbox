@@ -16,14 +16,11 @@ import {
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
 import { logInfo } from "../log.ts";
-import { emptyContainerPlan, mergeContainerPlan } from "../pipeline/container_plan.ts";
+import { mergeContainerPlan } from "../pipeline/container_plan.ts";
 import { encodeDynamicEnvOps } from "../pipeline/env_ops.ts";
-import type { ContainerPlan } from "../pipeline/state.ts";
-import type {
-  EffectStage,
-  EffectStageResult,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { Stage } from "../pipeline/stage_builder.ts";
+import type { ContainerPlan, PipelineState } from "../pipeline/state.ts";
+import type { StageInput } from "../pipeline/types.ts";
 import {
   ContainerLaunchService,
   type LaunchOpts,
@@ -40,7 +37,7 @@ export interface LaunchPlan {
 }
 
 export function planLaunch(
-  input: StageInput,
+  input: StageInput & Pick<PipelineState, "container">,
   extraArgs: string[] = [],
 ): LaunchPlan {
   const containerName = `nas-agent-${input.sessionId}`;
@@ -60,12 +57,10 @@ export function planLaunch(
 }
 
 function buildLaunchContainerPlan(
-  input: StageInput,
+  input: StageInput & Pick<PipelineState, "container">,
   extraArgs: readonly string[],
 ): ContainerPlan {
-  const base =
-    input.prior.container ??
-    buildLegacyContainerPlan(input);
+  const base = input.container;
 
   return mergeContainerPlan(base, {
     command: {
@@ -83,76 +78,6 @@ function buildLaunchContainerPlan(
       [NAS_SESSION_ID_LABEL]: input.sessionId,
     },
   });
-}
-
-function buildLegacyContainerPlan(input: StageInput): ContainerPlan {
-  const mounts: Array<ContainerPlan["mounts"][number]> = [];
-  const extraRunArgs: string[] = [];
-  let workDir = input.prior.workDir;
-  let networkName: string | undefined;
-  let networkAlias: string | undefined;
-
-  for (let i = 0; i < input.prior.dockerArgs.length; i += 1) {
-    const arg = input.prior.dockerArgs[i];
-    if (arg === "-v" && i + 1 < input.prior.dockerArgs.length) {
-      const mountArg = input.prior.dockerArgs[i + 1];
-      if (mountArg !== undefined) {
-        mounts.push(parseMountSpec(mountArg));
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "-w" && i + 1 < input.prior.dockerArgs.length) {
-      const workDirArg = input.prior.dockerArgs[i + 1];
-      if (workDirArg !== undefined) {
-        workDir = workDirArg;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--network" && i + 1 < input.prior.dockerArgs.length) {
-      const networkArg = input.prior.dockerArgs[i + 1];
-      if (networkArg !== undefined) {
-        networkName = networkArg;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--network-alias" && i + 1 < input.prior.dockerArgs.length) {
-      const aliasArg = input.prior.dockerArgs[i + 1];
-      if (aliasArg !== undefined) {
-        networkAlias = aliasArg;
-      }
-      i += 1;
-      continue;
-    }
-    extraRunArgs.push(arg);
-  }
-
-  return mergeContainerPlan(emptyContainerPlan(input.prior.imageName, workDir), {
-    mounts,
-    env: { static: { ...input.prior.envVars } },
-    ...(networkName
-      ? { network: { name: networkName, alias: networkAlias } }
-      : {}),
-    extraRunArgs,
-    command: {
-      agentCommand: [...input.prior.agentCommand],
-      extraArgs: [],
-    },
-  });
-}
-
-function parseMountSpec(rawMount: string): ContainerPlan["mounts"][number] {
-  const readOnly = rawMount.endsWith(":ro");
-  const mountValue = readOnly ? rawMount.slice(0, -3) : rawMount;
-  const separatorIndex = mountValue.indexOf(":");
-  if (separatorIndex === -1) {
-    throw new Error(`[nas] Invalid mount arg: ${rawMount}`);
-  }
-  const source = mountValue.slice(0, separatorIndex);
-  const target = mountValue.slice(separatorIndex + 1);
-  return readOnly ? { source, target, readOnly: true } : { source, target };
 }
 
 export function compileLaunchOpts(
@@ -195,16 +120,19 @@ export function compileLaunchOpts(
 // ---------------------------------------------------------------------------
 
 export function createLaunchStage(
+  shared: StageInput,
   extraArgs: string[] = [],
-): EffectStage<ContainerLaunchService> {
+): Stage<"container", {}, ContainerLaunchService, unknown> {
   return {
-    kind: "effect",
     name: "LaunchStage",
+    needs: ["container"],
 
-    run(
-      input: StageInput,
-    ): Effect.Effect<EffectStageResult, unknown, ContainerLaunchService> {
-      const plan = planLaunch(input, extraArgs);
+    run(input): Effect.Effect<{}, unknown, ContainerLaunchService> {
+      const stageInput = {
+        ...shared,
+        ...input,
+      };
+      const plan = planLaunch(stageInput, extraArgs);
 
       return Effect.gen(function* () {
         const containerLaunchService = yield* ContainerLaunchService;
