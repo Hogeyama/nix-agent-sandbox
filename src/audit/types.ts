@@ -52,4 +52,9 @@ export interface AuditLogFilter {
   sessionContains?: string;
   /** Filter by domain. */
   domain?: AuditDomain;
+  /**
+   * Exclude entries whose `command` starts with any of these prefixes.
+   * Useful for hiding noisy internal commands like "nas hook".
+   */
+  excludeCommandPrefixes?: string[];
 }

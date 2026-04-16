@@ -202,6 +202,16 @@ export async function queryAuditLogs(
     where.push("session_id LIKE ? ESCAPE '\\' COLLATE NOCASE");
     params.push(`%${escaped}%`);
   }
+  if (
+    filter.excludeCommandPrefixes &&
+    filter.excludeCommandPrefixes.length > 0
+  ) {
+    for (const prefix of filter.excludeCommandPrefixes) {
+      const escaped = prefix.replace(/[\\%_]/g, "\\$&");
+      where.push("(command IS NULL OR command NOT LIKE ? ESCAPE '\\')");
+      params.push(`${escaped}%`);
+    }
+  }
 
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
                       decision, reason, scope, target, command

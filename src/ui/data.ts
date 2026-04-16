@@ -331,12 +331,19 @@ export async function cleanContainers(): Promise<ContainerCleanResult> {
 
 // --- Audit ---
 
+/** Command prefixes hidden from the UI by default (noisy internal traffic). */
+const DEFAULT_EXCLUDE_COMMAND_PREFIXES = ["nas hook"];
+
 export async function getAuditLogs(
   ctx: UiDataContext,
   filter: AuditLogFilter = {},
   limit?: number,
 ): Promise<AuditLogEntry[]> {
-  const entries = await queryAuditLogs(filter, ctx.auditDir);
+  const merged: AuditLogFilter = {
+    excludeCommandPrefixes: DEFAULT_EXCLUDE_COMMAND_PREFIXES,
+    ...filter,
+  };
+  const entries = await queryAuditLogs(merged, ctx.auditDir);
   if (limit !== undefined && limit > 0) {
     return entries.slice(-limit);
   }
