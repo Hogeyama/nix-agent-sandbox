@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { Effect } from "effect";
+import type { Stage } from "./stage_builder.ts";
 import type {
   ContainerPlan,
   DbusState,
@@ -17,12 +19,10 @@ import type {
   WorkspaceState,
 } from "./state.ts";
 import type {
-  AnyStage,
-  EffectStageResult,
   HostEnv,
-  PriorStageOutputs,
   ProbeResults,
   StageInput,
+  StageResult,
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -50,16 +50,6 @@ const dummyStageInput: StageInput = {
     dbusSessionAddress: null,
     gpgAgentSocket: null,
     auditDir: "/tmp/nas-audit",
-  },
-  prior: {
-    dockerArgs: [],
-    envVars: {},
-    workDir: "/workspace",
-    nixEnabled: false,
-    imageName: "nas-sandbox",
-    agentCommand: ["claude"],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
   },
 };
 
@@ -94,47 +84,35 @@ test("ProbeResults: can construct with all fields", () => {
   expect(probes.gpgAgentSocket).toEqual("/run/user/1000/gnupg/S.gpg-agent");
 });
 
-test("PriorStageOutputs: can construct with required and optional fields", () => {
-  const outputs: PriorStageOutputs = {
-    dockerArgs: ["--rm"],
-    envVars: { TERM: "xterm" },
-    workDir: "/workspace",
-    nixEnabled: false,
-    imageName: "nas-sandbox",
-    agentCommand: ["claude"],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
-  };
-
-  expect(outputs.workDir).toEqual("/workspace");
-  expect(outputs.dindContainerName).toEqual(undefined);
+test("StageInput: can construct without prior pipeline bag", () => {
+  expect(dummyStageInput.profileName).toEqual("default");
+  expect(dummyStageInput.probes.auditDir).toEqual("/tmp/nas-audit");
 });
 
-test("EffectStageResult: allows legacy outputs and pipeline slices", () => {
-  const result: EffectStageResult = {
-    workDir: "/new/path",
-    nixEnabled: true,
+test("StageResult: allows pipeline slices", () => {
+  const result: StageResult = {
     nix: { enabled: true },
   };
 
-  expect(result.workDir).toEqual("/new/path");
-  expect(result.nixEnabled).toEqual(true);
   expect(result.nix).toEqual({ enabled: true });
 });
 
-test("AnyStage: is EffectStage with kind 'effect'", () => {
-  // Verify that AnyStage only accepts effect kind
-  const stage: AnyStage = {
-    kind: "effect",
-    name: "test-effect-stage",
-    run: (_input) => {
-      // Just verify this compiles — Effect type not needed at runtime
-      throw new Error("not called");
+test("Stage: can define typed pipeline stage", async () => {
+  const stage: Stage<"workspace", Pick<PipelineState, "nix">> = {
+    name: "test-stage",
+    needs: ["workspace"],
+    run: (input) => {
+      expect(input.workspace.workDir).toEqual("/workspace");
+      return Effect.succeed({ nix: { enabled: true } });
     },
   };
-
-  expect(stage.kind).toEqual("effect");
-  expect(stage.name).toEqual("test-effect-stage");
+  const result = await Effect.runPromise(
+    stage
+      .run({ workspace: { workDir: "/workspace", imageName: "nas-sandbox" } })
+      .pipe(Effect.scoped),
+  );
+  expect(stage.name).toEqual("test-stage");
+  expect(result.nix).toEqual({ enabled: true });
 });
 
 // Suppress unused variable warning

@@ -6,10 +6,8 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import {
-  adaptEffectStageToPipelineStateStage,
   createCliInitialState,
-  pickDindStageSlices,
-  pickProxyStageSlices,
+  pickPipelineStateSlices,
 } from "./cli/pipeline_state.ts";
 import {
   applyWorktreeOverride,
@@ -24,12 +22,12 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
 } from "./config/types.ts";
+import { runPipelineState } from "./pipeline/pipeline.ts";
 import type { PipelineState } from "./pipeline/state.ts";
-import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
+import type { HostEnv, ProbeResults } from "./pipeline/types.ts";
 import type { BuildProbes } from "./stages/docker_build.ts";
 import type { MountProbes } from "./stages/mount.ts";
 import { createProxyStage } from "./stages/proxy.ts";
-import type { HostEnv, PriorStageOutputs, ProbeResults } from "./pipeline/types.ts";
 
 const baseProfile: Profile = {
   agent: "claude",
@@ -285,88 +283,27 @@ test("applyWorktreeOverride: enable without existing worktree uses empty onCreat
   expect(result.worktree?.onCreate).toEqual("");
 });
 
-test("createCliInitialState: seeds workspace slice for PipelineState builder", () => {
+test("createCliInitialState: seeds workspace and container slices", () => {
   expect(createCliInitialState("/repo/worktree", "nas-sandbox")).toEqual({
     workspace: {
       workDir: "/repo/worktree",
       imageName: "nas-sandbox",
     },
-  });
-});
-
-test("pickDindStageSlices: preserves both dind and container slices", () => {
-  expect(
-    pickDindStageSlices(
-      {
-        dind: { containerName: "nas-dind-1234" },
-      },
-      {
-        dind: { containerName: "nas-dind-1234" },
-        container: {
-          image: "nas-sandbox",
-          workDir: "/repo/worktree",
-          mounts: [],
-          env: { static: {}, dynamicOps: [] },
-          extraRunArgs: [],
-          command: { agentCommand: ["claude"], extraArgs: [] },
-          labels: {},
-        },
-      },
-    ),
-  ).toEqual({
-    dind: { containerName: "nas-dind-1234" },
     container: {
       image: "nas-sandbox",
       workDir: "/repo/worktree",
       mounts: [],
       env: { static: {}, dynamicOps: [] },
       extraRunArgs: [],
-      command: { agentCommand: ["claude"], extraArgs: [] },
+      command: { agentCommand: [], extraArgs: [] },
       labels: {},
     },
   });
 });
 
-test("pickDindStageSlices: keeps existing container when stage is skipped", () => {
+test("pickPipelineStateSlices: preserves selected slices", () => {
   expect(
-    pickDindStageSlices(
-      {},
-      {
-        container: {
-          image: "nas-sandbox",
-          workDir: "/repo/worktree",
-          mounts: [],
-          env: { static: {}, dynamicOps: [] },
-          extraRunArgs: [],
-          command: { agentCommand: ["claude"], extraArgs: [] },
-          labels: {},
-        },
-      },
-    ),
-  ).toEqual({
-    container: {
-      image: "nas-sandbox",
-      workDir: "/repo/worktree",
-      mounts: [],
-      env: { static: {}, dynamicOps: [] },
-      extraRunArgs: [],
-      command: { agentCommand: ["claude"], extraArgs: [] },
-      labels: {},
-    },
-  });
-});
-
-test("pickProxyStageSlices: preserves proxy-related slices alongside container", () => {
-  expect(
-    pickProxyStageSlices(
-      {
-        network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
-        prompt: { promptToken: "token", promptEnabled: true },
-        proxy: {
-          brokerSocket: "/runtime/broker.sock",
-          proxyEndpoint: "http://endpoint",
-        },
-      },
+    pickPipelineStateSlices(
       {
         network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
         prompt: { promptToken: "token", promptEnabled: true },
@@ -378,12 +315,19 @@ test("pickProxyStageSlices: preserves proxy-related slices alongside container",
           image: "nas-sandbox",
           workDir: "/repo/worktree",
           mounts: [],
-          env: { static: { http_proxy: "http://127.0.0.1:18080" }, dynamicOps: [] },
+          env: {
+            static: { http_proxy: "http://127.0.0.1:18080" },
+            dynamicOps: [],
+          },
           extraRunArgs: [],
           command: { agentCommand: ["claude"], extraArgs: [] },
           labels: {},
         },
       },
+      "network",
+      "prompt",
+      "proxy",
+      "container",
     ),
   ).toEqual({
     network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
@@ -404,48 +348,14 @@ test("pickProxyStageSlices: preserves proxy-related slices alongside container",
   });
 });
 
-test("pickProxyStageSlices: keeps existing container when stage is skipped", () => {
-  expect(
-    pickProxyStageSlices(
-      {},
-      {
-        container: {
-          image: "nas-sandbox",
-          workDir: "/repo/worktree",
-          mounts: [],
-          env: { static: { http_proxy: "http://127.0.0.1:18080" }, dynamicOps: [] },
-          extraRunArgs: [],
-          command: { agentCommand: ["claude"], extraArgs: [] },
-          labels: {},
-        },
-      },
-    ),
-  ).toEqual({
-    container: {
-      image: "nas-sandbox",
-      workDir: "/repo/worktree",
-      mounts: [],
-      env: { static: { http_proxy: "http://127.0.0.1:18080" }, dynamicOps: [] },
-      extraRunArgs: [],
-      command: { agentCommand: ["claude"], extraArgs: [] },
-      labels: {},
-    },
-  });
+test("pickPipelineStateSlices: throws when required slice is missing", () => {
+  expect(() => pickPipelineStateSlices({}, "container")).toThrow(
+    'Legacy stage did not produce required pipeline slice "container"',
+  );
 });
 
 test("createCliPipelineBuilder: wires CLI stages through PipelineState order", () => {
   const initialState = createCliInitialState("/repo/worktree", "nas-sandbox");
-  const initialPrior: PriorStageOutputs & typeof initialState = {
-    dockerArgs: [],
-    envVars: {},
-    workDir: "/repo/worktree",
-    nixEnabled: false,
-    imageName: "nas-sandbox",
-    agentCommand: [],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
-    ...initialState,
-  };
   const buildProbes: BuildProbes = {
     imageName: "nas-sandbox",
     imageExists: false,
@@ -462,7 +372,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
       host: baseHost,
       probes: baseProbes,
     },
-    initialPrior,
+    initialState,
     buildProbes,
     mountProbes: {} as MountProbes,
     agentExtraArgs: ["--resume"],
@@ -478,7 +388,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
     { name: "DockerBuildStage", needs: ["workspace"] },
     { name: "NixDetectStage", needs: [] },
     { name: "DbusProxyStage", needs: [] },
-    { name: "MountStage", needs: ["dbus", "nix", "workspace"] },
+    { name: "MountStage", needs: ["container", "dbus", "nix", "workspace"] },
     { name: "HostExecStage", needs: ["container", "workspace"] },
     { name: "DindStage", needs: ["container", "workspace"] },
     { name: "ProxyStage", needs: ["container"] },
@@ -486,7 +396,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
   ]);
 });
 
-test("proxy adapter builder: preserves no-op path when proxy is disabled", async () => {
+test("createProxyStage: preserves no-op path when proxy is disabled", async () => {
   const profile: Profile = {
     ...baseProfile,
     network: {
@@ -498,7 +408,7 @@ test("proxy adapter builder: preserves no-op path when proxy is disabled", async
       },
     },
   };
-  const initialState = {
+  const initialState: Pick<PipelineState, "container"> = {
     container: {
       image: "nas-sandbox",
       workDir: "/repo/worktree",
@@ -508,44 +418,20 @@ test("proxy adapter builder: preserves no-op path when proxy is disabled", async
       command: { agentCommand: ["claude"], extraArgs: [] },
       labels: {},
     },
-  } satisfies Pick<PipelineState, "container">;
-  const priorRef: {
-    current: PriorStageOutputs & Partial<PipelineState>;
-  } = {
-    current: {
-      dockerArgs: [],
-      envVars: {},
-      workDir: "/repo/worktree",
-      nixEnabled: false,
-      imageName: "nas-sandbox",
-      agentCommand: [],
-      networkPromptEnabled: false,
-      dbusProxyEnabled: false,
-      ...initialState,
-    },
+  };
+  const stageInput = {
+    config: baseConfig,
+    profile,
+    profileName: "dev",
+    sessionId: "sess_test123",
+    host: baseHost,
+    probes: baseProbes,
   };
 
-  const builder = createPipelineBuilder<Pick<PipelineState, "container">>().add(
-    adaptEffectStageToPipelineStateStage(
-      {
-        stage: createProxyStage(),
-        needs: ["container"],
-        pickAdds: (result, prior) => pickProxyStageSlices(result, prior),
-      },
-      {
-        config: baseConfig,
-        profile,
-        profileName: "dev",
-        sessionId: "sess_test123",
-        host: baseHost,
-        probes: baseProbes,
-      },
-      priorRef,
-    ),
-  );
-
   const result = await Effect.runPromise(
-    builder.run(initialState).pipe(Effect.scoped) as Effect.Effect<
+    runPipelineState([createProxyStage(stageInput)], initialState).pipe(
+      Effect.scoped,
+    ) as Effect.Effect<
       Pick<PipelineState, "container"> & Partial<PipelineState>,
       unknown,
       never
