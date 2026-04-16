@@ -18,6 +18,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import { emptyContainerPlan } from "../pipeline/container_plan.ts";
+import type { PipelineState } from "../pipeline/state.ts";
 import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
 import { type DindSidecarOpts, makeDindServiceFake } from "../services/dind.ts";
 import {
@@ -68,7 +69,7 @@ function makeConfig(profile: Profile): Config {
   return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
 }
 
-function makeStageInput(
+function makeSharedInput(
   profile: Profile,
   sessionId = "test-session-1234",
 ): StageInput {
@@ -95,17 +96,21 @@ function makeStageInput(
     sessionId,
     host: hostEnv,
     probes,
-    prior: {
-      dockerArgs: [],
-      envVars: {},
-      workDir: "/tmp",
-      nixEnabled: false,
-      imageName: "nas:latest",
-      agentCommand: ["claude"],
-      networkPromptEnabled: false,
-      dbusProxyEnabled: false,
-    },
   };
+}
+
+function makeStageState(
+  overrides: Partial<Pick<PipelineState, "workspace" | "container">> = {},
+): Pick<PipelineState, "workspace" | "container"> {
+  const workspace = overrides.workspace ?? {
+    workDir: "/tmp",
+    imageName: "nas:latest",
+  };
+  const container = overrides.container ?? {
+    ...emptyContainerPlan(workspace.imageName, workspace.workDir),
+    command: { agentCommand: ["claude"], extraArgs: [] },
+  };
+  return { workspace, container };
 }
 
 // ============================================================
@@ -114,14 +119,14 @@ function makeStageInput(
 
 test("DindStage: skip when disabled (plan returns null)", () => {
   const profile = makeProfile({ docker: { enable: false, shared: false } });
-  const input = makeStageInput(profile);
+  const input = { ...makeSharedInput(profile), ...makeStageState() };
   const plan = planDind(input);
   expect(plan).toEqual(null);
 });
 
 test("DindStage: shared mode uses fixed names", () => {
   const profile = makeProfile({ docker: { enable: true, shared: true } });
-  const input = makeStageInput(profile);
+  const input = { ...makeSharedInput(profile), ...makeStageState() };
   const plan = planDind(input, {
     disableCache: true,
     readinessTimeoutMs: 20_000,
@@ -136,17 +141,6 @@ test("DindStage: shared mode uses fixed names", () => {
   expect(p.disableCache).toEqual(true);
   expect(p.readinessTimeoutMs).toEqual(20_000);
 
-  expect(p.outputOverrides.dockerArgs).toEqual([
-    "--network",
-    "nas-dind-shared",
-    "-v",
-    "nas-dind-shared-tmp:/tmp/nas-shared",
-  ]);
-  expect(p.outputOverrides.envVars).toEqual({
-    DOCKER_HOST: "tcp://nas-dind-shared:2375",
-    NAS_DIND_CONTAINER_NAME: "nas-dind-shared",
-    NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
-  });
   expect(p.outputOverrides.dind).toEqual({
     containerName: "nas-dind-shared",
   });
@@ -162,19 +156,20 @@ test("DindStage: shared mode uses fixed names", () => {
       },
       dynamicOps: [],
     },
+    network: { name: "nas-dind-shared" },
     extraRunArgs: ["-v", "nas-dind-shared-tmp:/tmp/nas-shared"],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
   });
-  expect(p.outputOverrides.network).toBeUndefined();
-  expect(p.outputOverrides.dindContainerName).toEqual("nas-dind-shared");
-  expect(p.outputOverrides.networkName).toEqual("nas-dind-shared");
 });
 
 test("DindStage: non-shared mode uses session-based names", () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
   const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-  const input = makeStageInput(profile, sessionId);
+  const input = {
+    ...makeSharedInput(profile, sessionId),
+    ...makeStageState(),
+  };
   const plan = planDind(input);
 
   expect(plan).not.toBeNull();
@@ -184,15 +179,17 @@ test("DindStage: non-shared mode uses session-based names", () => {
   expect(p.sharedTmpVolume).toEqual("nas-dind-tmp-abcdef12");
   expect(p.shared).toEqual(false);
 
-  expect(p.outputOverrides.dockerArgs![1]).toEqual("nas-dind-abcdef12");
-  expect(p.outputOverrides.envVars!.DOCKER_HOST).toEqual(
+  expect(p.outputOverrides.container?.network).toEqual({
+    name: "nas-dind-abcdef12",
+  });
+  expect(p.outputOverrides.container?.env.static.DOCKER_HOST).toEqual(
     "tcp://nas-dind-abcdef12:2375",
   );
 });
 
 test("DindStage: default options", () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
-  const input = makeStageInput(profile);
+  const input = { ...makeSharedInput(profile), ...makeStageState() };
   const plan = planDind(input);
 
   expect(plan).not.toBeNull();
@@ -201,18 +198,15 @@ test("DindStage: default options", () => {
   expect(p.readinessTimeoutMs).toEqual(30_000);
 });
 
-test("DindStage: planner merges into existing container and network slices", () => {
+test("DindStage: planner merges into existing container slice and replaces stale network attachment", () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
-  const baseInput = makeStageInput(
-    profile,
-    "abcdef12-3456-7890-abcd-ef1234567890",
-  );
-  const input: StageInput = {
-    ...baseInput,
-    prior: {
-      ...baseInput.prior,
-      envVars: { EXISTING_ENV: "1" },
-      dockerArgs: ["--shm-size", "2g"],
+  const input = {
+    ...makeSharedInput(profile, "abcdef12-3456-7890-abcd-ef1234567890"),
+    ...makeStageState({
+      workspace: {
+        workDir: "/slice-workdir",
+        imageName: "slice-image",
+      },
       container: {
         ...emptyContainerPlan("slice-image", "/slice-workdir"),
         env: { static: { EXISTING_ENV: "1" }, dynamicOps: [] },
@@ -221,17 +215,12 @@ test("DindStage: planner merges into existing container and network slices", () 
         command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
         labels: { "nas.managed": "true" },
       },
-      network: {
-        networkName: "legacy-net",
-        runtimeDir: "/run/nas/network",
-      },
-    },
+    }),
   };
 
   const plan = planDind(input);
   expect(plan).not.toBeNull();
 
-  expect(plan!.outputOverrides.network).toBeUndefined();
   expect(plan!.outputOverrides.container).toEqual({
     image: "slice-image",
     workDir: "/slice-workdir",
@@ -251,10 +240,10 @@ test("DindStage: planner merges into existing container and network slices", () 
       "-v",
       "nas-dind-tmp-abcdef12:/tmp/nas-shared",
     ],
+    network: { name: "nas-dind-abcdef12" },
     command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
     labels: { "nas.managed": "true" },
   });
-  expect(plan!.outputOverrides.container?.network).toBeUndefined();
 });
 
 // ============================================================
@@ -263,14 +252,15 @@ test("DindStage: planner merges into existing container and network slices", () 
 
 test("DindStage: run returns empty when disabled", async () => {
   const profile = makeProfile({ docker: { enable: false, shared: false } });
-  const input = makeStageInput(profile);
-  const stage = createDindStage();
+  const sharedInput = makeSharedInput(profile);
+  const stageState = makeStageState();
+  const stage = createDindStage(sharedInput);
   const fakeLayer = makeDindServiceFake();
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run(stageState)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(fakeLayer),
@@ -302,8 +292,9 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   });
 
   const profile = makeProfile({ docker: { enable: true, shared: true } });
-  const input = makeStageInput(profile);
-  const stage = createDindStage({
+  const sharedInput = makeSharedInput(profile);
+  const stageState = makeStageState();
+  const stage = createDindStage(sharedInput, {
     disableCache: true,
     readinessTimeoutMs: 5000,
   });
@@ -311,7 +302,7 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run(stageState)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(fakeLayer),
@@ -326,12 +317,8 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(ensureCalls[0].disableCache).toEqual(true);
   expect(ensureCalls[0].readinessTimeoutMs).toEqual(5000);
 
-  expect(result.envVars!.DOCKER_HOST).toEqual("tcp://nas-dind-shared:2375");
-  expect(result.dindContainerName).toEqual("nas-dind-shared");
-  expect(result.networkName).toEqual("nas-dind-shared");
   expect(result.dind).toEqual({ containerName: "nas-dind-shared" });
-  expect(result.network).toBeUndefined();
-  expect(result.container?.network).toBeUndefined();
+  expect(result.container?.network).toEqual({ name: "nas-dind-shared" });
   expect(result.container?.env.static.DOCKER_HOST).toEqual(
     "tcp://nas-dind-shared:2375",
   );

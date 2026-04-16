@@ -9,6 +9,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
 import { emptyContainerPlan } from "../pipeline/container_plan.ts";
+import type { PipelineState } from "../pipeline/state.ts";
 import type { HostEnv, StageInput } from "../pipeline/types.ts";
 import { makeHostExecBrokerServiceFake } from "../services/hostexec_broker.ts";
 import {
@@ -90,28 +91,10 @@ function makeHostEnv(runtimeDir: string): HostEnv {
   };
 }
 
-function makeStageInput(
-  profile: Profile,
-  hostEnv: HostEnv,
-  workDir?: string,
-  priorOverrides: Partial<StageInput["prior"]> = {},
-): StageInput {
+function makeSharedInput(profile: Profile, hostEnv: HostEnv): StageInput {
   const config: Config = {
     profiles: { default: profile },
     ui: DEFAULT_UI_CONFIG,
-  };
-  const prior: StageInput["prior"] = {
-    dockerArgs: [],
-    envVars: {
-      PATH: "/usr/local/bin:/usr/bin:/bin",
-    },
-    workDir: workDir ?? "/workspace",
-    nixEnabled: false,
-    imageName: "nas-test",
-    agentCommand: ["claude"],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
-    ...priorOverrides,
   };
   return {
     config,
@@ -126,8 +109,25 @@ function makeStageInput(
       gpgAgentSocket: null,
       auditDir: "/tmp/nas-test-audit",
     },
-    prior,
   };
+}
+
+function makeStageState(
+  overrides: Partial<Pick<PipelineState, "workspace" | "container">> = {},
+): Pick<PipelineState, "workspace" | "container"> {
+  const workspace = overrides.workspace ?? {
+    workDir: "/workspace",
+    imageName: "nas-test",
+  };
+  const container = overrides.container ?? {
+    ...emptyContainerPlan(workspace.imageName, workspace.workDir),
+    env: {
+      static: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+      dynamicOps: [],
+    },
+    command: { agentCommand: ["claude"], extraArgs: [] },
+  };
+  return { workspace, container };
 }
 
 // ============================================================
@@ -138,7 +138,7 @@ test("HostExecStage plan: returns a plan with __nas_hook even when user rules ar
   const profile = makeProfile();
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
-  const input = makeStageInput(profile, hostEnv);
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
   const plan = planHostExec(input);
   expect(plan).not.toBeNull();
   // The internal __nas_hook rule creates a "nas" symlink
@@ -151,7 +151,7 @@ test("HostExecStage plan: produces correct docker args and env vars", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
-  const input = makeStageInput(profile, hostEnv);
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -169,16 +169,16 @@ test("HostExecStage plan: produces correct docker args and env vars", () => {
   expect(plan.envVars.NAS_HOSTEXEC_SOCKET !== undefined).toEqual(true);
   expect(plan.envVars.NAS_HOSTEXEC_SESSION_ID).toEqual("test-session-id");
 
-  expect(plan.outputOverrides.hostexecBrokerSocket !== undefined).toEqual(true);
-  expect(plan.outputOverrides.hostexecRuntimeDir !== undefined).toEqual(true);
+  expect(plan.outputOverrides.hostexec?.brokerSocket !== undefined).toEqual(
+    true,
+  );
+  expect(plan.outputOverrides.hostexec?.runtimeDir !== undefined).toEqual(true);
   expect(
-    (plan.outputOverrides.hostexecSessionTmpDir as string)?.includes(
-      "test-session-id",
-    ),
+    plan.outputOverrides.hostexec?.sessionTmpDir?.includes("test-session-id"),
   ).toEqual(true);
 
   expect(plan.envVars.NAS_HOSTEXEC_SOCKET).toEqual(
-    plan.outputOverrides.hostexecBrokerSocket!,
+    plan.outputOverrides.hostexec!.brokerSocket,
   );
 });
 
@@ -186,7 +186,7 @@ test("HostExecStage plan: creates symlinks for bare command argv0s", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
-  const input = makeStageInput(profile, hostEnv);
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -205,7 +205,7 @@ test("HostExecStage plan: creates file entry for wrapper script", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
-  const input = makeStageInput(profile, hostEnv);
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -230,7 +230,7 @@ test("HostExecStage plan: broker spec contains correct fields", () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
-  const input = makeStageInput(profile, hostEnv);
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -257,7 +257,12 @@ test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const workspace = "/workspace";
-  const input = makeStageInput(profile, hostEnv, workspace);
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState({
+      workspace: { workDir: workspace, imageName: "nas-test" },
+    }),
+  };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -270,7 +275,7 @@ test("HostExecStage plan: mounts relative argv0 wrapper target", () => {
   ).toEqual(true);
 });
 
-test("HostExecStage plan: prefers workspace slice for relative mounts and broker root", () => {
+test("HostExecStage plan: uses workspace slice for relative mounts and broker root", () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [
     {
@@ -283,19 +288,16 @@ test("HostExecStage plan: prefers workspace slice for relative mounts and broker
       fallback: "container",
     },
   ];
-  const input = makeStageInput(
-    profile,
-    makeHostEnv("/tmp/nas-test-runtime"),
-    "/legacy-workspace",
-    {
-      mountDir: "/legacy-root",
+  const input = {
+    ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime")),
+    ...makeStageState({
       workspace: {
         workDir: "/slice-workspace",
         mountDir: "/slice-root",
         imageName: "slice-image",
       },
-    },
-  );
+    }),
+  };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -306,11 +308,6 @@ test("HostExecStage plan: prefers workspace slice for relative mounts and broker
       arg.endsWith(`:${path.join("/slice-workspace", "gradlew")}:ro`),
     ),
   ).toEqual(true);
-  expect(
-    plan.dockerArgs.some((arg) =>
-      arg.endsWith(`:${path.join("/legacy-workspace", "gradlew")}:ro`),
-    ),
-  ).toEqual(false);
   expect(plan.broker.workspaceRoot).toEqual("/slice-root");
 });
 
@@ -329,7 +326,7 @@ test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path"
   ];
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
-  const input = makeStageInput(profile, hostEnv);
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -343,7 +340,10 @@ test("HostExecStage plan: mounts absolute argv0 wrapper at exact container path"
 test("HostExecStage plan: auto notify resolves to desktop", () => {
   const profile = makeProfile();
   profile.hostexec!.prompt.notify = "auto";
-  const input = makeStageInput(profile, makeHostEnv("/tmp/nas-test-runtime"));
+  const input = {
+    ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime")),
+    ...makeStageState(),
+  };
   const plan = planHostExec(input);
 
   expect(plan).not.toEqual(null);
@@ -360,15 +360,16 @@ test("HostExecStage: run still starts broker when user rules are empty (internal
   const profile = makeProfile();
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
-  const input = makeStageInput(profile, hostEnv);
-  const stage = createHostExecStage();
+  const sharedInput = makeSharedInput(profile, hostEnv);
+  const stageState = makeStageState();
+  const stage = createHostExecStage(sharedInput);
 
   const setupLayer = makeHostExecSetupServiceFake();
   const brokerLayer = makeHostExecBrokerServiceFake();
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run(stageState)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(setupLayer),
@@ -377,15 +378,16 @@ test("HostExecStage: run still starts broker when user rules are empty (internal
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
-  // Internal __nas_hook rule causes the stage to produce docker args
-  expect(result.dockerArgs?.length).toBeGreaterThan(0);
+  expect(result.container?.mounts.length).toBeGreaterThan(0);
 });
 
 test("HostExecStage: run delegates directories, files, and symlinks to HostExecSetupService", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
-  const input = makeStageInput(profile, hostEnv);
+  const sharedInput = makeSharedInput(profile, hostEnv);
+  const stageState = makeStageState();
+  const input = { ...sharedInput, ...stageState };
   const plan = planHostExec(input)!;
 
   let capturedPlan: HostExecWorkspacePlan | null = null;
@@ -397,12 +399,12 @@ test("HostExecStage: run delegates directories, files, and symlinks to HostExecS
   });
   const brokerLayer = makeHostExecBrokerServiceFake();
 
-  const stage = createHostExecStage();
+  const stage = createHostExecStage(sharedInput);
   const scope = Effect.runSync(Scope.make());
 
   await Effect.runPromiseExit(
     stage
-      .run(input)
+      .run(stageState)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(setupLayer),
@@ -419,35 +421,34 @@ test("HostExecStage: run delegates directories, files, and symlinks to HostExecS
 
 test("HostExecStage: run merges hostexec mounts and env into container and hostexec slices", async () => {
   const profile = makeProfile();
-  const input = makeStageInput(
+  const sharedInput = makeSharedInput(
     profile,
     makeHostEnv("/tmp/nas-test-runtime"),
-    "/legacy-workspace",
-    {
-      workspace: {
-        workDir: "/slice-workspace",
-        mountDir: "/slice-root",
-        imageName: "slice-image",
-      },
-      container: {
-        ...emptyContainerPlan("slice-image", "/slice-workspace"),
-        mounts: [{ source: "/existing-src", target: "/existing-target" }],
-        env: { static: { EXISTING_ENV: "1" }, dynamicOps: [] },
-        extraRunArgs: ["--shm-size", "2g"],
-        command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
-        labels: { "nas.managed": "true" },
-      },
-    },
   );
+  const stageState = makeStageState({
+    workspace: {
+      workDir: "/slice-workspace",
+      mountDir: "/slice-root",
+      imageName: "slice-image",
+    },
+    container: {
+      ...emptyContainerPlan("slice-image", "/slice-workspace"),
+      mounts: [{ source: "/existing-src", target: "/existing-target" }],
+      env: { static: { EXISTING_ENV: "1" }, dynamicOps: [] },
+      extraRunArgs: ["--shm-size", "2g"],
+      command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
+      labels: { "nas.managed": "true" },
+    },
+  });
 
-  const stage = createHostExecStage();
+  const stage = createHostExecStage(sharedInput);
   const setupLayer = makeHostExecSetupServiceFake();
   const brokerLayer = makeHostExecBrokerServiceFake();
   const scope = Effect.runSync(Scope.make());
 
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run(stageState)
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(setupLayer),
@@ -486,22 +487,5 @@ test("HostExecStage: run merges hostexec mounts and env into container and hoste
     agentCommand: ["copilot"],
     extraArgs: ["--safe"],
   });
-  expect(result.dockerArgs).toEqual(
-    expect.arrayContaining([
-      "-w",
-      "/slice-workspace",
-      "--shm-size",
-      "2g",
-      "/existing-src:/existing-target",
-      "/tmp/nas-test-runtime/nas/hostexec/wrappers/test-session-id/bin:/opt/nas/hostexec/bin:ro",
-    ]),
-  );
-  expect(result.envVars).toEqual({
-    EXISTING_ENV: "1",
-    NAS_HOSTEXEC_SOCKET:
-      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id.sock",
-    NAS_HOSTEXEC_WRAPPER_DIR: "/opt/nas/hostexec/bin",
-    NAS_HOSTEXEC_SESSION_ID: "test-session-id",
-    NAS_HOSTEXEC_SESSION_TMP: "/tmp/nas-hostexec/test-session-id",
-  });
+  expect(result.container?.extraRunArgs).toEqual(["--shm-size", "2g"]);
 });

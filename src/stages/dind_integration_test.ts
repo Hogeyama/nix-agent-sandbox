@@ -24,6 +24,8 @@ import {
   dockerStop,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+import { emptyContainerPlan } from "../pipeline/container_plan.ts";
+import type { PipelineState } from "../pipeline/state.ts";
 import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
 import { DindServiceLive } from "../services/dind.ts";
 import { createDindStage, planDind } from "./dind.ts";
@@ -69,7 +71,7 @@ function makeConfig(profile: Profile): Config {
   return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
 }
 
-function makeStageInput(
+function makeSharedInput(
   profile: Profile,
   sessionId = "test-session-1234",
 ): StageInput {
@@ -96,17 +98,21 @@ function makeStageInput(
     sessionId,
     host: hostEnv,
     probes,
-    prior: {
-      dockerArgs: [],
-      envVars: {},
-      workDir: "/tmp",
-      nixEnabled: false,
-      imageName: "nas:latest",
-      agentCommand: ["claude"],
-      networkPromptEnabled: false,
-      dbusProxyEnabled: false,
-    },
   };
+}
+
+function makeStageState(
+  overrides: Partial<Pick<PipelineState, "workspace" | "container">> = {},
+): Pick<PipelineState, "workspace" | "container"> {
+  const workspace = overrides.workspace ?? {
+    workDir: "/tmp",
+    imageName: "nas:latest",
+  };
+  const container = overrides.container ?? {
+    ...emptyContainerPlan(workspace.imageName, workspace.workDir),
+    command: { agentCommand: ["claude"], extraArgs: [] },
+  };
+  return { workspace, container };
 }
 
 /**
@@ -168,7 +174,9 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
   "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
   async () => {
     const profile = makeProfile({ docker: { enable: true, shared: false } });
-    const input = makeStageInput(profile);
+    const sharedInput = makeSharedInput(profile);
+    const stageState = makeStageState();
+    const input = { ...sharedInput, ...stageState };
     const plan = planDind(input, {
       disableCache: true,
       readinessTimeoutMs: 20_000,
@@ -179,35 +187,38 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
 
     const scope = Effect.runSync(Scope.make());
     try {
-      const stage = createDindStage({
+      const stage = createDindStage(sharedInput, {
         disableCache: true,
         readinessTimeoutMs: 20_000,
       });
       const result = await Effect.runPromise(
         stage
-          .run(input)
+          .run(stageState)
           .pipe(
             Effect.provideService(Scope.Scope, scope),
             Effect.provide(DindServiceLive),
           ),
       );
 
-      expect(result.envVars!.DOCKER_HOST.startsWith("tcp://")).toEqual(true);
-      expect(result.envVars!.DOCKER_HOST.endsWith(":2375")).toEqual(true);
-      expect(typeof result.envVars!.NAS_DIND_CONTAINER_NAME).toEqual("string");
-      expect(typeof result.envVars!.NAS_DIND_SHARED_TMP).toEqual("string");
-      expect(result.dind?.containerName).toEqual(containerName);
-      expect(result.network).toBeUndefined();
-      expect(result.container?.network).toBeUndefined();
-      expect(result.container?.env.static.DOCKER_HOST).toEqual(
-        result.envVars!.DOCKER_HOST,
-      );
-
-      const networkIdx = result.dockerArgs!.indexOf("--network");
-      expect(networkIdx !== -1).toEqual(true);
       expect(
-        result.dockerArgs![networkIdx + 1].startsWith("nas-dind-"),
+        result.container?.env.static.DOCKER_HOST.startsWith("tcp://"),
       ).toEqual(true);
+      expect(
+        result.container?.env.static.DOCKER_HOST.endsWith(":2375"),
+      ).toEqual(true);
+      expect(
+        typeof result.container?.env.static.NAS_DIND_CONTAINER_NAME,
+      ).toEqual("string");
+      expect(typeof result.container?.env.static.NAS_DIND_SHARED_TMP).toEqual(
+        "string",
+      );
+      expect(result.dind?.containerName).toEqual(containerName);
+      expect(result.container?.network?.name.startsWith("nas-dind-")).toEqual(
+        true,
+      );
+      expect(result.container?.env.static.DOCKER_HOST).toEqual(
+        `tcp://${containerName}:2375`,
+      );
 
       const running = await dockerIsRunning(containerName);
       expect(running).toEqual(true);
