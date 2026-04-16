@@ -21,11 +21,8 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../config/types.ts";
-import type {
-  EffectStageResult,
-  PriorStageOutputs,
-  StageInput,
-} from "../pipeline/types.ts";
+import type { WorkspaceState } from "../pipeline/state.ts";
+import type { StageInput } from "../pipeline/types.ts";
 import { AuthRouterServiceLive } from "../services/auth_router.ts";
 import { DindServiceLive } from "../services/dind.ts";
 import { DockerServiceLive } from "../services/docker.ts";
@@ -62,30 +59,32 @@ const liveLayer = Layer.mergeAll(
   SessionStoreServiceLive,
 );
 
+type WorktreeTestInput = StageInput & { workspace: WorkspaceState };
+
 interface WorktreeStageAdapter {
   name: string;
-  execute(input: StageInput): Promise<{ outputOverrides: EffectStageResult }>;
-  teardown(input?: StageInput): Promise<void>;
+  execute(input: WorktreeTestInput): Promise<{ workspace: WorkspaceState }>;
+  teardown(input?: WorktreeTestInput): Promise<void>;
 }
 
 function makeWorktreeStage(): WorktreeStageAdapter {
-  const stage = createWorktreeStage();
   let closeScope: Effect.Effect<void> | undefined;
 
   return {
-    name: stage.name,
-    async execute(input: StageInput) {
+    name: "WorktreeStage",
+    async execute(input: WorktreeTestInput) {
+      const stage = createWorktreeStage(input);
       const scope = Effect.runSync(Scope.make());
       closeScope = Scope.close(scope, Exit.void);
 
       const effect = stage
-        .run(input)
+        .run({ workspace: input.workspace })
         .pipe(
           Effect.provideService(Scope.Scope, scope),
           Effect.provide(liveLayer),
         );
-      const outputOverrides = await Effect.runPromise(effect);
-      return { outputOverrides };
+      const output = await Effect.runPromise(effect);
+      return output;
     },
     async teardown() {
       if (closeScope) {
@@ -148,7 +147,7 @@ function createTestInput(
   config: Config,
   profile: Profile,
   workDir: string,
-): StageInput {
+): WorktreeTestInput {
   return {
     config,
     profile,
@@ -169,16 +168,10 @@ function createTestInput(
       gpgAgentSocket: null,
       auditDir: "/tmp/audit",
     },
-    prior: {
-      dockerArgs: [],
-      envVars: {},
+    workspace: {
       workDir,
-      nixEnabled: false,
       imageName: "nas-sandbox",
-      agentCommand: [],
-      networkPromptEnabled: false,
-      dbusProxyEnabled: false,
-    } satisfies PriorStageOutputs,
+    },
   };
 }
 
@@ -237,8 +230,8 @@ test("WorktreeStage: creates worktree under repo metadata and mounts repo root",
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
-    const workDir = result.outputOverrides.workDir!;
-    const mountDir = result.outputOverrides.mountDir;
+    const workDir = result.workspace.workDir;
+    const mountDir = result.workspace.mountDir;
     const branchName = (
       await $`git -C ${workDir} branch --show-current`.text()
     ).trim();
@@ -248,10 +241,10 @@ test("WorktreeStage: creates worktree under repo metadata and mounts repo root",
       workDir.startsWith(path.join(repo, ".nas", "worktrees", "nas-")),
     ).toEqual(true);
     expect(branchName.startsWith("nas/")).toEqual(true);
-    expect(result.outputOverrides.workspace).toEqual({
+    expect(result.workspace).toEqual({
       workDir,
       mountDir: repo,
-      imageName: input.prior.imageName,
+      imageName: input.workspace.imageName,
     });
 
     await $`git -C ${repo} worktree remove --force ${workDir}`.quiet();
@@ -267,7 +260,7 @@ test("WorktreeStage: worktree commits stay visible from the main repository", as
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
-    const workDir = result.outputOverrides.workDir!;
+    const workDir = result.workspace.workDir;
     const branchName = (
       await $`git -C ${workDir} branch --show-current`.text()
     ).trim();
@@ -299,7 +292,7 @@ test("WorktreeStage: starts from the selected base commit", async () => {
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
-    const workDir = result.outputOverrides.workDir!;
+    const workDir = result.workspace.workDir;
     const branchName = (
       await $`git -C ${workDir} branch --show-current`.text()
     ).trim();
@@ -335,7 +328,7 @@ test("WorktreeStage: inherits dirty tracked, staged, and untracked changes from 
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
-    const workDir = result.outputOverrides.workDir!;
+    const workDir = result.workspace.workDir;
     const branchName = (
       await $`git -C ${workDir} branch --show-current`.text()
     ).trim();
@@ -374,7 +367,7 @@ test("WorktreeStage: leaves a clean base branch clean in the new worktree", asyn
     const input = createTestInput(config, profile, repo);
 
     const result = await stage.execute(input);
-    const workDir = result.outputOverrides.workDir!;
+    const workDir = result.workspace.workDir;
     const branchName = (
       await $`git -C ${workDir} branch --show-current`.text()
     ).trim();
@@ -404,7 +397,7 @@ test("WorktreeStage teardown stashes dirty changes before deleting", async () =>
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       await writeFile(path.join(worktreePath, "draft.txt"), "hello");
 
@@ -435,7 +428,7 @@ test("WorktreeStage teardown can keep a dirty worktree from the stash prompt", a
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
       const branchName = (
         await $`git -C ${worktreePath} branch --show-current`.text()
       ).trim();
@@ -471,7 +464,7 @@ test("WorktreeStage teardown keeps worktree when user chooses keep", async () =>
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
       const branchName = (
         await $`git -C ${worktreePath} branch --show-current`.text()
       ).trim();
@@ -501,7 +494,7 @@ test("WorktreeStage teardown deletes clean worktree and branch", async () => {
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       // worktree は clean (dirty ファイルなし)
       await stage.teardown!(input);
@@ -531,7 +524,7 @@ test("WorktreeStage teardown deletes dirty worktree without stashing", async () 
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       await writeFile(path.join(worktreePath, "draft.txt"), "hello");
 
@@ -561,7 +554,7 @@ test("WorktreeStage teardown renames branch and keeps it", async () => {
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       // ブランチにコミットを追加して promptBranchAction が表示されるようにする
       await writeFile(path.join(worktreePath, "feature.txt"), "feature\n");
@@ -604,7 +597,7 @@ test("WorktreeStage teardown rename with empty name keeps original branch name",
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       // ブランチにコミットを追加して promptBranchAction が表示されるようにする
       await writeFile(path.join(worktreePath, "feature.txt"), "feature\n");
@@ -635,7 +628,7 @@ test("WorktreeStage teardown cherry-picks commits to base branch", async () => {
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       // worktree 内でコミットを作成
       await writeFile(path.join(worktreePath, "feature.txt"), "feature\n");
@@ -670,7 +663,7 @@ test("WorktreeStage teardown cherry-picks even when base worktree has uncommitte
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       await writeFile(path.join(worktreePath, "feature.txt"), "feature\n");
       await $`git -C ${worktreePath} add feature.txt`.quiet();
@@ -718,7 +711,7 @@ test("WorktreeStage teardown auto-deletes branch with no new commits", async () 
       const stage = makeWorktreeStage();
       const input = createTestInput(testConfig, testProfile, repoRoot);
       const result = await stage.execute(input);
-      const worktreePath = result.outputOverrides.workDir!;
+      const worktreePath = result.workspace.workDir;
 
       // コミットせずに teardown
       await stage.teardown!(input);
@@ -764,10 +757,10 @@ test("WorktreeStage execute skips when worktree is not configured", async () => 
   };
   const input = createTestInput(config, profile, process.cwd());
   const result = await stage.execute(input);
-  expect(result.outputOverrides).toEqual({
+  expect(result).toEqual({
     workspace: {
-      workDir: input.prior.workDir,
-      imageName: input.prior.imageName,
+      workDir: input.workspace.workDir,
+      imageName: input.workspace.imageName,
     },
   });
 });
@@ -805,7 +798,7 @@ test("WorktreeStage execute reuses existing worktree when user selects it", asyn
     const stage1 = makeWorktreeStage();
     const input1 = createTestInput(testConfig, testProfile, repoRoot);
     const result1 = await stage1.execute(input1);
-    const firstWorktreePath = result1.outputOverrides.workDir!;
+    const firstWorktreePath = result1.workspace.workDir;
 
     // 2 回目の execute: 既存 worktree が見つかる → "1" で再利用
     await withMockedPrompts(["1"], async () => {
@@ -814,12 +807,12 @@ test("WorktreeStage execute reuses existing worktree when user selects it", asyn
       const result2 = await stage2.execute(input2);
 
       // 再利用された worktree のパスが一致
-      expect(result2.outputOverrides.workDir).toEqual(firstWorktreePath);
-      expect(result2.outputOverrides.mountDir).toEqual(repoRoot);
-      expect(result2.outputOverrides.workspace).toEqual({
+      expect(result2.workspace.workDir).toEqual(firstWorktreePath);
+      expect(result2.workspace.mountDir).toEqual(repoRoot);
+      expect(result2.workspace).toEqual({
         workDir: firstWorktreePath,
         mountDir: repoRoot,
-        imageName: input2.prior.imageName,
+        imageName: input2.workspace.imageName,
       });
     });
 
@@ -840,7 +833,7 @@ test("WorktreeStage execute creates new worktree when user declines reuse", asyn
     const stage1 = makeWorktreeStage();
     const input1 = createTestInput(testConfig, testProfile, repoRoot);
     const result1 = await stage1.execute(input1);
-    const firstWorktreePath = result1.outputOverrides.workDir!;
+    const firstWorktreePath = result1.workspace.workDir;
 
     // 2 回目の execute: "0" で新規作成
     await withMockedPrompts(["0"], async () => {
@@ -849,18 +842,14 @@ test("WorktreeStage execute creates new worktree when user declines reuse", asyn
       const result2 = await stage2.execute(input2);
 
       // 異なるパスの worktree が作られた
-      expect(result2.outputOverrides.workDir !== firstWorktreePath).toEqual(
-        true,
-      );
-      expect(result2.outputOverrides.mountDir).toEqual(repoRoot);
+      expect(result2.workspace.workDir !== firstWorktreePath).toEqual(true);
+      expect(result2.workspace.mountDir).toEqual(repoRoot);
 
       // cleanup: 2つ目
       const branchName2 = (
-        await $`git -C ${result2.outputOverrides
-          .workDir!} branch --show-current`.text()
+        await $`git -C ${result2.workspace.workDir} branch --show-current`.text()
       ).trim();
-      await $`git -C ${repoRoot} worktree remove --force ${result2
-        .outputOverrides.workDir!}`.quiet();
+      await $`git -C ${repoRoot} worktree remove --force ${result2.workspace.workDir}`.quiet();
       await $`git -C ${repoRoot} branch -D ${branchName2}`.quiet();
     });
 
@@ -889,7 +878,7 @@ test("WorktreeStage execute runs onCreate hook", async () => {
     const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repoRoot);
     const result = await stage.execute(input);
-    const workDir = result.outputOverrides.workDir!;
+    const workDir = result.workspace.workDir;
 
     // onCreate で作られたファイルが存在する
     const markerExists = await stat(
