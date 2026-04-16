@@ -79,16 +79,6 @@ function makeStageInput(
     sessionId,
     host: hostEnv,
     probes,
-    prior: {
-      dockerArgs: [],
-      envVars: {},
-      workDir: "/tmp/test",
-      nixEnabled: false,
-      imageName: "nas:default",
-      agentCommand: ["claude"],
-      networkPromptEnabled: false,
-      dbusProxyEnabled: false,
-    },
   };
 }
 
@@ -117,12 +107,12 @@ test("DbusProxyStage: run calls startProxy with correct plan when enabled", asyn
     },
   });
   const input = makeStageInput(profile);
-  const stage = createDbusProxyStage();
+  const stage = createDbusProxyStage(input);
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run({})
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(fakeLayer),
@@ -137,12 +127,6 @@ test("DbusProxyStage: run calls startProxy with correct plan when enabled", asyn
   expect(startCalls[0].args).toContain("--filter");
   expect(startCalls[0].args).toContain("--talk=org.freedesktop.secrets");
 
-  expect(result.dbusProxyEnabled).toEqual(true);
-  expect(result.dbusSessionRuntimeDir).toContain("test-session-1234");
-  expect(result.dbusSessionSocket).toEndWith("/bus");
-  expect(result.dbusSessionSourceAddress).toEqual(
-    "unix:path=/run/user/1000/bus",
-  );
   expect(result.dbus).toEqual({
     enabled: true,
     runtimeDir: "/run/user/1000/nas/dbus/sessions/test-session-1234",
@@ -176,12 +160,12 @@ test("DbusProxyStage: service-owned cleanup runs on scope close (no double kill)
     },
   });
   const input = makeStageInput(profile);
-  const stage = createDbusProxyStage();
+  const stage = createDbusProxyStage(input);
 
   const scope = Effect.runSync(Scope.make());
   await Effect.runPromise(
     stage
-      .run(input)
+      .run({})
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(fakeLayer),
@@ -197,7 +181,7 @@ test("DbusProxyStage: service-owned cleanup runs on scope close (no double kill)
   expect(killCount).toEqual(1);
 });
 
-test("DbusProxyStage: run returns disabled legacy and dbus outputs when disabled", async () => {
+test("DbusProxyStage: run returns disabled dbus slice when disabled", async () => {
   const startCalls: DbusProxyStartPlan[] = [];
 
   const fakeLayer = makeDbusProxyServiceFake({
@@ -209,12 +193,12 @@ test("DbusProxyStage: run returns disabled legacy and dbus outputs when disabled
 
   const profile = makeProfile();
   const input = makeStageInput(profile);
-  const stage = createDbusProxyStage();
+  const stage = createDbusProxyStage(input);
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run({})
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(fakeLayer),
@@ -224,36 +208,31 @@ test("DbusProxyStage: run returns disabled legacy and dbus outputs when disabled
 
   expect(startCalls.length).toEqual(0);
   expect(result).toEqual({
-    dbusProxyEnabled: false,
-    dbusSessionRuntimeDir: undefined,
-    dbusSessionSocket: undefined,
-    dbusSessionSourceAddress: undefined,
     dbus: { enabled: false },
   });
 });
 
-test("DbusProxyStage: disabled run clears stale legacy dbus session fields", async () => {
+test("DbusProxyStage: disabled run overwrites stale dbus slice", async () => {
   const fakeLayer = makeDbusProxyServiceFake({
     startProxy: (_plan) => Effect.succeed({ kill: () => {} }),
   });
 
   const profile = makeProfile();
-  const input = {
-    ...makeStageInput(profile),
-    prior: {
-      ...makeStageInput(profile).prior,
-      dbusProxyEnabled: true,
-      dbusSessionRuntimeDir: "/stale/runtime",
-      dbusSessionSocket: "/stale/socket",
-      dbusSessionSourceAddress: "unix:path=/stale/bus",
+  const input = makeStageInput(profile);
+  const stage = createDbusProxyStage(input);
+  const staleState = {
+    dbus: {
+      enabled: true,
+      runtimeDir: "/stale/runtime",
+      socket: "/stale/socket",
+      sourceAddress: "unix:path=/stale/bus",
     },
-  } satisfies StageInput;
-  const stage = createDbusProxyStage();
+  } as const;
 
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run({})
       .pipe(
         Effect.provideService(Scope.Scope, scope),
         Effect.provide(fakeLayer),
@@ -261,10 +240,6 @@ test("DbusProxyStage: disabled run clears stale legacy dbus session fields", asy
   );
   await Effect.runPromise(Scope.close(scope, Exit.void));
 
-  const merged = { ...input.prior, ...result };
-  expect(merged.dbusProxyEnabled).toEqual(false);
-  expect(merged.dbusSessionRuntimeDir).toBeUndefined();
-  expect(merged.dbusSessionSocket).toBeUndefined();
-  expect(merged.dbusSessionSourceAddress).toBeUndefined();
+  const merged = { ...staleState, ...result };
   expect(merged.dbus).toEqual({ enabled: false });
 });

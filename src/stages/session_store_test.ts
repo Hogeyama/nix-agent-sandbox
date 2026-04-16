@@ -15,9 +15,8 @@ import {
 } from "../config/types.ts";
 import type { WorkspaceState } from "../pipeline/state.ts";
 import type {
-  EffectStageResult,
   HostEnv,
-  PriorStageOutputs,
+  StageResult,
   StageInput,
 } from "../pipeline/types.ts";
 import {
@@ -53,24 +52,25 @@ afterEach(async () => {
 /** Run the EffectStage, returning the result and a close handle for the scope. */
 async function runStage(
   input: StageInput,
+  workspace: WorkspaceState,
   layer: Layer.Layer<
     import("../services/session_store_service.ts").SessionStoreService
   > = SessionStoreServiceLive,
-): Promise<{ result: EffectStageResult; closeScope: Effect.Effect<void> }> {
-  const stage = createSessionStoreStage();
+): Promise<{ result: StageResult; closeScope: Effect.Effect<void> }> {
+  const stage = createSessionStoreStage(input);
   const scope = Effect.runSync(Scope.make());
   const result = await Effect.runPromise(
     stage
-      .run(input)
+      .run({ workspace })
       .pipe(Effect.provideService(Scope.Scope, scope), Effect.provide(layer)),
   );
   return { result, closeScope: Scope.close(scope, Exit.void) };
 }
 
 test("SessionStoreStage run writes a SessionRecord to the store dir", async () => {
-  const input = createTestInput({ sessionId: "sess_abc123" });
+  const { input, workspace } = createTestInput({ sessionId: "sess_abc123" });
 
-  await runStage(input);
+  await runStage(input, workspace);
 
   const paths = await resolveSessionRuntimePaths(undefined);
   const record = await readSession(paths, "sess_abc123");
@@ -83,20 +83,18 @@ test("SessionStoreStage run writes a SessionRecord to the store dir", async () =
   expect(typeof record!.startedAt).toBe("string");
 });
 
-test("SessionStoreStage run outputs no additional dockerArgs or envVars", async () => {
-  const input = createTestInput({ sessionId: "sess_xyz" });
+test("SessionStoreStage run outputs only the session slice", async () => {
+  const { input, workspace } = createTestInput({ sessionId: "sess_xyz" });
 
-  const { result } = await runStage(input);
+  const { result } = await runStage(input, workspace);
 
-  expect(result.dockerArgs).toEqual([]);
-  expect(result.envVars).toEqual({});
-  expect(result.session).toEqual({ sessionId: "sess_xyz" });
+  expect(result).toEqual({ session: { sessionId: "sess_xyz" } });
 });
 
 test("SessionStoreStage finalizer removes the record on scope close", async () => {
-  const input = createTestInput({ sessionId: "sess_to_delete" });
+  const { input, workspace } = createTestInput({ sessionId: "sess_to_delete" });
 
-  const { closeScope } = await runStage(input);
+  const { closeScope } = await runStage(input, workspace);
   const paths = await resolveSessionRuntimePaths(undefined);
   expect(await readSession(paths, "sess_to_delete")).not.toBeNull();
 
@@ -105,9 +103,9 @@ test("SessionStoreStage finalizer removes the record on scope close", async () =
 });
 
 test("SessionStoreStage finalizer on an already-missing record does not throw", async () => {
-  const input = createTestInput({ sessionId: "sess_gone" });
+  const { input, workspace } = createTestInput({ sessionId: "sess_gone" });
 
-  const { closeScope } = await runStage(input);
+  const { closeScope } = await runStage(input, workspace);
   const paths = await resolveSessionRuntimePaths(undefined);
 
   // Delete the file out-of-band, simulating something else cleaning up.
@@ -140,8 +138,8 @@ test("SessionStoreStage run invokes SessionStoreService methods", async () => {
     },
   });
 
-  const input = createTestInput({ sessionId: "sess_fake" });
-  const { closeScope } = await runStage(input, fakeLayer);
+  const { input, workspace } = createTestInput({ sessionId: "sess_fake" });
+  const { closeScope } = await runStage(input, workspace, fakeLayer);
 
   expect(calls).toEqual(["ensurePaths", "create"]);
 
@@ -158,17 +156,16 @@ test("SessionStoreStage run prefers workspace slice worktree and emits named ses
       }),
   });
 
-  const input = createTestInput({
+  const { input, workspace } = createTestInput({
     sessionId: "sess_workspace",
     sessionName: "named session",
-    priorWorkDir: "/legacy-workdir",
     workspace: {
       workDir: "/workspace-from-slice",
       imageName: "nas-sandbox",
     },
   });
 
-  const { result } = await runStage(input, fakeLayer);
+  const { result } = await runStage(input, workspace, fakeLayer);
 
   expect(capturedRecord?.worktree).toBe("/workspace-from-slice");
   expect(result.session).toEqual({
@@ -182,9 +179,8 @@ test("SessionStoreStage run prefers workspace slice worktree and emits named ses
 function createTestInput(opts: {
   sessionId: string;
   sessionName?: string;
-  priorWorkDir?: string;
   workspace?: WorkspaceState;
-}): StageInput {
+}): { input: StageInput; workspace: WorkspaceState } {
   const profile: Profile = {
     agent: "claude",
     agentArgs: [],
@@ -214,31 +210,26 @@ function createTestInput(opts: {
     isWSL: false,
     env: new Map(),
   };
-  const prior: PriorStageOutputs = {
-    dockerArgs: [],
-    envVars: {},
-    workDir: opts.priorWorkDir ?? "/workspace",
-    nixEnabled: false,
+  const workspace = opts.workspace ?? {
+    workDir: "/workspace",
     imageName: "nas-sandbox",
-    agentCommand: [],
-    networkPromptEnabled: false,
-    dbusProxyEnabled: false,
   };
   return {
-    config,
-    profile,
-    profileName: "test-profile",
-    sessionId: opts.sessionId,
-    sessionName: opts.sessionName,
-    host,
-    probes: {
-      hasHostNix: false,
-      xdgDbusProxyPath: null,
-      dbusSessionAddress: null,
-      gpgAgentSocket: null,
-      auditDir: "/tmp/audit",
+    input: {
+      config,
+      profile,
+      profileName: "test-profile",
+      sessionId: opts.sessionId,
+      sessionName: opts.sessionName,
+      host,
+      probes: {
+        hasHostNix: false,
+        xdgDbusProxyPath: null,
+        dbusSessionAddress: null,
+        gpgAgentSocket: null,
+        auditDir: "/tmp/audit",
+      },
     },
-    prior:
-      opts.workspace === undefined ? prior : { ...prior, workspace: opts.workspace },
+    workspace,
   };
 }
