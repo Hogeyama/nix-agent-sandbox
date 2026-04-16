@@ -37,27 +37,27 @@ const RealPosixSpawnFn = *const fn (*c.pid_t, [*:0]const u8, ?*const posix_spawn
 
 fn getRealExecve() ?RealExecveFn {
     const ptr = dlsymNext("execve") orelse return null;
-    return @ptrCast(ptr);
+    return @ptrCast(@alignCast(ptr));
 }
 fn getRealExecv() ?RealExecvFn {
     const ptr = dlsymNext("execv") orelse return null;
-    return @ptrCast(ptr);
+    return @ptrCast(@alignCast(ptr));
 }
 fn getRealExecvp() ?RealExecvpFn {
     const ptr = dlsymNext("execvp") orelse return null;
-    return @ptrCast(ptr);
+    return @ptrCast(@alignCast(ptr));
 }
 fn getRealExecvpe() ?RealExecvpeFn {
     const ptr = dlsymNext("execvpe") orelse return null;
-    return @ptrCast(ptr);
+    return @ptrCast(@alignCast(ptr));
 }
 fn getRealPosixSpawn() ?RealPosixSpawnFn {
     const ptr = dlsymNext("posix_spawn") orelse return null;
-    return @ptrCast(ptr);
+    return @ptrCast(@alignCast(ptr));
 }
 fn getRealPosixSpawnp() ?RealPosixSpawnFn {
     const ptr = dlsymNext("posix_spawnp") orelse return null;
-    return @ptrCast(ptr);
+    return @ptrCast(@alignCast(ptr));
 }
 
 // ─── Debug logging ──────────────────────────────────────────────────
