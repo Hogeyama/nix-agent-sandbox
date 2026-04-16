@@ -90,6 +90,23 @@ DinD サイドカーを起動して、エージェントコンテナから隔離
 
 ![network prompt](./images/network-prompt.png)
 
+### ホストの localhost ポート転送
+
+`network.proxy.forward-ports` を使うと、ホスト側で `localhost` に bind しているポートをコンテナ内から同じ `localhost:<port>` で利用できます。TCP 接続は nas の認証付き proxy を経由して `host.docker.internal:<port>` へ CONNECT トンネルされるため、ローカルで動かしている開発サーバーや DB にコンテナから安全に接続できます。
+
+```yaml
+profiles:
+  blah:
+    network:
+      proxy:
+        forward-ports:
+          - 8080
+          - 5432
+```
+
+> [!NOTE]
+> `18080` は nas の内部認証 proxy 用に予約されているため指定できません。
+
 ### コマンド移譲
 
 指定したコマンドの実行をホスト側に移譲できます。
@@ -207,6 +224,10 @@ profiles:
         - api.anthropic.com       # ホスト名のみ（全ポート許可）
         - github.com:443          # ポート指定（443 のみ許可）
         - "*.githubusercontent.com:443"  # ワイルドカード + ポート指定
+      proxy:
+        forward-ports:        # ホスト localhost の TCP ポートを同じ番号でコンテナ内 localhost に転送
+          - 8080
+          - 5432
       prompt:
         enable: true        # allowlist 外通信を pending にして手動承認する
         timeout-seconds: 300
@@ -700,6 +721,7 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `network.prompt.timeout-seconds` | number | `300` | pending 承認の待機秒数。タイムアウト時は deny |
 | `network.prompt.default-scope` | `"once"` \| `"host-port"` \| `"host"` | `"host-port"` | `nas network approve` の既定 scope。`once`: そのリクエストのみ、`host-port`: 同じホスト+ポートへの通信を以降許可、`host`: 同じホストへの全ポート通信を以降許可 |
 | `network.prompt.notify` | `"auto"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`ui.enable: true` なら通知クリックでブラウザ UI を開く。`false` なら通知ボタンで直接 approve/deny |
+| `network.proxy.forward-ports` | number[] | `[]` | ホストの `localhost:<port>` をコンテナ内の同じ `localhost:<port>` へ TCP 転送する。内部的には `host.docker.internal:<port>` への CONNECT トンネルを張る。`18080` は内部 proxy 用に予約済み |
 | `dbus.session.enable` | bool | `false` | host session bus に対する filtered proxy を有効化し、コンテナへ proxy socket だけを渡す |
 | `dbus.session.source-address` | string | 自動解決 | source の session bus address。省略時は `DBUS_SESSION_BUS_ADDRESS`、なければ `/run/user/$UID/bus` |
 | `dbus.session.see` | string[] | `[]` | `xdg-dbus-proxy --see` に渡す well-known name |

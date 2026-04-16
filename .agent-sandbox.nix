@@ -97,6 +97,9 @@ let
           "http-intake.logs.us5.datadoghq.com"
         ];
       };
+      proxy = {
+        forward-ports = [ 8080 5432 ];
+      };
     };
   };
 
