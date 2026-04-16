@@ -48,7 +48,6 @@
             export HOME=$TMPDIR
             zig build \
               --global-cache-dir "$TMPDIR/zig-cache" \
-              -Dtarget=x86_64-linux-gnu \
               -Doptimize=ReleaseSafe
           '';
           checkPhase = ''

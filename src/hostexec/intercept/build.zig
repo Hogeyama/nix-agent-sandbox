@@ -1,17 +1,9 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{
-        .default_target = .{
-            .cpu_arch = .x86_64,
-            .os_tag = .linux,
-            .abi = .gnu,
-        },
-    });
+    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // For tests, use native host target so they can run in Nix sandbox
-    // (the cross-compile target uses /lib64/ld-linux which doesn't exist there)
     const host_target = b.resolveTargetQuery(.{});
 
     // ── shared library ──
