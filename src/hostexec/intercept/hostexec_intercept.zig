@@ -460,9 +460,8 @@ export fn execv(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) cal
 
 export fn execvp(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) callconv(.c) c_int {
     const path_slice = std.mem.span(pathname);
-    // Only intercept if pathname starts with '/' or './'
-    const should_check = path_slice.len > 0 and
-        (path_slice[0] == '/' or (path_slice.len >= 2 and path_slice[0] == '.' and path_slice[1] == '/'));
+    // Intercept if pathname contains '/' (POSIX: any slash means path, not PATH lookup)
+    const should_check = std.mem.indexOfScalar(u8, path_slice, '/') != null;
 
     if (should_check and shouldIntercept(std.heap.c_allocator, pathname)) {
         debugLog("intercepting execvp: {s}", .{path_slice});
@@ -480,8 +479,8 @@ export fn execvp(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) ca
 
 export fn execvpe(pathname: [*:0]const u8, argv: [*:null]const ?[*:0]const u8, envp: [*:null]const ?[*:0]const u8) callconv(.c) c_int {
     const path_slice = std.mem.span(pathname);
-    const should_check = path_slice.len > 0 and
-        (path_slice[0] == '/' or (path_slice.len >= 2 and path_slice[0] == '.' and path_slice[1] == '/'));
+    // Intercept if pathname contains '/' (POSIX: any slash means path, not PATH lookup)
+    const should_check = std.mem.indexOfScalar(u8, path_slice, '/') != null;
 
     if (should_check and shouldIntercept(std.heap.c_allocator, pathname)) {
         debugLog("intercepting execvpe: {s}", .{path_slice});
@@ -522,8 +521,8 @@ export fn posix_spawnp(
     envp: [*:null]const ?[*:0]const u8,
 ) callconv(.c) c_int {
     const path_slice = std.mem.span(pathname);
-    const should_check = path_slice.len > 0 and
-        (path_slice[0] == '/' or (path_slice.len >= 2 and path_slice[0] == '.' and path_slice[1] == '/'));
+    // Intercept if pathname contains '/' (POSIX: any slash means path, not PATH lookup)
+    const should_check = std.mem.indexOfScalar(u8, path_slice, '/') != null;
 
     if (should_check and shouldIntercept(std.heap.c_allocator, pathname)) {
         debugLog("intercepting posix_spawnp: {s}", .{path_slice});
@@ -829,4 +828,28 @@ test "resolvePath: relative path resolves to cwd-based absolute path" {
     try std.testing.expectEqual(@as(u8, '/'), resolved[0]);
     // Must end with /foo (cwd + ./foo joined)
     try std.testing.expect(std.mem.endsWith(u8, resolved, "/foo"));
+}
+
+test "resolvePath: relative path without ./ prefix resolves to cwd-based absolute path" {
+    const alloc = std.testing.allocator;
+    const resolved = try resolvePath(alloc, "contrib/exodus/docker/vne/bin/up");
+    defer alloc.free(resolved);
+
+    // Must be absolute
+    try std.testing.expect(resolved.len > 0);
+    try std.testing.expectEqual(@as(u8, '/'), resolved[0]);
+    // Must end with the relative path appended to cwd
+    try std.testing.expect(std.mem.endsWith(u8, resolved, "/contrib/exodus/docker/vne/bin/up"));
+}
+
+test "matchesInterceptPaths: relative path resolved to absolute matches" {
+    const alloc = std.testing.allocator;
+
+    // Simulate: cwd is /workspace, relative path is contrib/bin/up
+    // resolvePath would produce /workspace/contrib/bin/up (or similar)
+    const resolved = try resolvePath(alloc, "contrib/bin/up");
+    defer alloc.free(resolved);
+
+    // The intercept paths env should contain the resolved absolute path
+    try std.testing.expect(matchesInterceptPaths(resolved, resolved));
 }

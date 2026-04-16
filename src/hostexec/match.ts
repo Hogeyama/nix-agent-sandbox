@@ -40,7 +40,9 @@ export function matchRule(
 }
 
 export function isRelativeHostExecArgv0(argv0: string): boolean {
-  return argv0.startsWith("./") || argv0.startsWith("../");
+  if (path.isAbsolute(argv0)) return false;
+  // Any non-absolute path containing '/' is relative (e.g. "./foo", "../foo", "hoge/fuga.bash")
+  return argv0.includes("/");
 }
 
 export function isBareCommandHostExecArgv0(argv0: string): boolean {
