@@ -12,7 +12,6 @@ import type { DockerContainerDetails } from "../docker/client.ts";
 import {
   dockerExec,
   dockerInspectContainer,
-  dockerIsRunning,
   dockerListContainerNames,
   dockerStop,
 } from "../docker/client.ts";
@@ -67,6 +66,14 @@ export class ContainerNotRunningError extends Error {
   constructor(containerName: string) {
     super(`Container is not running: ${containerName}`);
     this.name = "ContainerNotRunningError";
+  }
+}
+
+/** Thrown when an operation targets a container not managed by nas. */
+export class NotNasManagedContainerError extends Error {
+  constructor(containerName: string) {
+    super(`Not a nas-managed container: ${containerName}`);
+    this.name = "NotNasManagedContainerError";
   }
 }
 
@@ -345,12 +352,14 @@ export async function cleanContainers(): Promise<ContainerCleanResult> {
 }
 
 export async function startShellSession(
-  sessionId: string,
+  containerName: string,
 ): Promise<{ dtachSessionId: string }> {
-  // 1. コンテナ稼働確認
-  const containerName = `nas-agent-${sessionId}`;
-  const running = await dockerIsRunning(containerName);
-  if (!running) {
+  // 1. nas 管理コンテナかどうかを検証し、稼働確認
+  const details = await dockerInspectContainer(containerName);
+  if (!isNasManagedContainer(details.labels, details.name)) {
+    throw new NotNasManagedContainerError(containerName);
+  }
+  if (!details.running) {
     throw new ContainerNotRunningError(containerName);
   }
 
@@ -362,7 +371,7 @@ export async function startShellSession(
   ]);
   const shell = bashCheck.code === 0 ? "/bin/bash" : "/bin/sh";
 
-  // 3. dtach セッションID生成 (shell- prefix で区別)
+  // 3. dtach セッションID生成
   const randomBytes = crypto.getRandomValues(new Uint8Array(6));
   const dtachSessionId = `shell-${Buffer.from(randomBytes).toString("hex")}`;
 

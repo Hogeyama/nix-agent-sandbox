@@ -18,6 +18,7 @@ import {
   getNetworkPending,
   getSessions,
   getTerminalSessions,
+  NotNasManagedContainerError,
   renameSession,
   startShellSession,
   stopContainer,
@@ -237,13 +238,16 @@ export function createApiRoutes(ctx: UiDataContext): Router {
     }
   });
 
-  api.post("/containers/:sessionId/shell", async ({ params }) => {
+  api.post("/containers/:name/shell", async ({ params }) => {
     try {
-      const result = await startShellSession(params.sessionId);
+      const result = await startShellSession(params.name);
       return json(result);
     } catch (e) {
       if (e instanceof ContainerNotRunningError) {
         return json({ error: e.message }, 409);
+      }
+      if (e instanceof NotNasManagedContainerError) {
+        return json({ error: e.message }, 403);
       }
       return json({ error: (e as Error).message }, 500);
     }

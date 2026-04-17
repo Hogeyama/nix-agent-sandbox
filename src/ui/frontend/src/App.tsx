@@ -140,6 +140,21 @@ export function App() {
     setTermVisible(true);
   }, []);
 
+  const handleShell = useCallback(async (containerName: string) => {
+    try {
+      const { dtachSessionId } = await api.startShell(containerName);
+      setOpenTermSessionIds((current) =>
+        current.includes(dtachSessionId)
+          ? current
+          : [...current, dtachSessionId],
+      );
+      setActiveTermSessionId(dtachSessionId);
+      setTermVisible(true);
+    } catch (e) {
+      console.error("Failed to start shell:", e);
+    }
+  }, []);
+
   const handleAckTurn = useCallback(async (sessionId: string) => {
     try {
       const { item } = await api.ackSessionTurn(sessionId);
@@ -349,6 +364,7 @@ export function App() {
             containers={sessionContainers}
             onContainersChange={setContainers}
             onAttach={handleAttach}
+            onShell={handleShell}
             onAckTurn={handleAckTurn}
             onRename={handleRename}
             onNewSession={handleNewSession}

@@ -91,6 +91,11 @@ export const api = {
     request("POST", `/api/containers/${encodeURIComponent(name)}/stop`),
   cleanContainers: () =>
     request<ContainerCleanResult>("POST", "/api/containers/clean"),
+  startShell: (containerName: string) =>
+    request<{ dtachSessionId: string }>(
+      "POST",
+      `/api/containers/${encodeURIComponent(containerName)}/shell`,
+    ),
 
   getTerminalSessions: () =>
     request<{ items: DtachSession[] }>("GET", "/api/terminal/sessions"),
