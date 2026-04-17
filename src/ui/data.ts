@@ -350,6 +350,42 @@ export async function cleanContainers(): Promise<ContainerCleanResult> {
   return await cleanNasContainers();
 }
 
+/**
+ * shell dtach セッション ID の形式:
+ *   shell-<parentSessionId>.<seq>
+ * seq は 1 始まりの整数。parentSessionId は末尾に `.<digits>` を
+ * 含まない前提 (現状の nas セッション ID は ISO タイムスタンプ形式)。
+ */
+export interface ParsedShellSessionId {
+  parentSessionId: string;
+  seq: number;
+}
+
+export function parseShellSessionId(id: string): ParsedShellSessionId | null {
+  if (!id.startsWith("shell-")) return null;
+  const rest = id.slice("shell-".length);
+  const dotIdx = rest.lastIndexOf(".");
+  if (dotIdx <= 0 || dotIdx === rest.length - 1) return null;
+  const parent = rest.slice(0, dotIdx);
+  const seqStr = rest.slice(dotIdx + 1);
+  if (!/^\d+$/.test(seqStr)) return null;
+  const seq = Number.parseInt(seqStr, 10);
+  if (seq <= 0) return null;
+  return { parentSessionId: parent, seq };
+}
+
+async function nextShellSessionId(parentSessionId: string): Promise<string> {
+  const existing = await dtachListSessions();
+  let maxSeq = 0;
+  for (const s of existing) {
+    const parsed = parseShellSessionId(s.name);
+    if (!parsed) continue;
+    if (parsed.parentSessionId !== parentSessionId) continue;
+    if (parsed.seq > maxSeq) maxSeq = parsed.seq;
+  }
+  return `shell-${parentSessionId}.${maxSeq + 1}`;
+}
+
 export async function startShellSession(
   containerName: string,
 ): Promise<{ dtachSessionId: string }> {
@@ -362,9 +398,17 @@ export async function startShellSession(
     throw new ContainerNotRunningError(containerName);
   }
 
+  const parentSessionId = details.labels[NAS_SESSION_ID_LABEL];
+  if (!parentSessionId) {
+    throw new Error(
+      `Container ${containerName} has no ${NAS_SESSION_ID_LABEL} label`,
+    );
+  }
+
   // 2. dtach セッションID生成
-  const randomBytes = crypto.getRandomValues(new Uint8Array(6));
-  const dtachSessionId = `shell-${Buffer.from(randomBytes).toString("hex")}`;
+  // 形式: shell-<parentSessionId>.<seq> (seq は 1 始まり)
+  // 既存の shell セッションを走査して衝突しない番号を選ぶ。
+  const dtachSessionId = await nextShellSessionId(parentSessionId);
 
   // 3. ソケットパス取得
   const socketPath = socketPathFor(dtachSessionId);

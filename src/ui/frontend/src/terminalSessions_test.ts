@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import type { ContainerInfo, DtachSession } from "./api.ts";
-import { buildTerminalSessionTabs } from "./terminalSessions.ts";
+import {
+  buildTerminalSessionTabs,
+  parseShellSessionId,
+} from "./terminalSessions.ts";
 
 function makeDtachSession(sessionId: string): DtachSession {
   return {
@@ -39,6 +42,7 @@ test("buildTerminalSessionTabs keeps live dtach sessions even without container 
       canAckTurn: false,
       turnAcked: false,
       isOpen: true,
+      kind: "agent",
     },
   ]);
 });
@@ -62,54 +66,71 @@ test("buildTerminalSessionTabs overlays container metadata when available", () =
       canAckTurn: true,
       turnAcked: false,
       isOpen: true,
+      kind: "agent",
     },
   ]);
 });
 
-test("buildTerminalSessionTabs handles shell- prefix sessions without container metadata", () => {
+test("buildTerminalSessionTabs labels shell session with parent name + seq", () => {
   const result = buildTerminalSessionTabs(
-    ["shell-abc123"],
-    [makeDtachSession("shell-abc123")],
-    [],
+    ["shell-sess-1.1"],
+    [makeDtachSession("shell-sess-1.1")],
+    [makeContainer("sess-1", { sessionName: "review" })],
   );
 
   expect(result).toEqual([
     {
-      sessionId: "shell-abc123",
-      sessionName: undefined,
+      sessionId: "shell-sess-1.1",
+      sessionName: "review (shell#1)",
       canAckTurn: false,
       turnAcked: false,
       isOpen: true,
+      kind: "shell",
+      parentSessionId: "sess-1",
+      shellSeq: 1,
     },
   ]);
 });
 
-test("buildTerminalSessionTabs shows new shell- session as not open", () => {
-  // shell- session exists in dtach but has not been opened yet
+test("buildTerminalSessionTabs falls back to parent sessionId when parent has no sessionName", () => {
   const result = buildTerminalSessionTabs(
-    [],
-    [makeDtachSession("shell-def456")],
+    ["shell-sess-1.2"],
+    [makeDtachSession("shell-sess-1.2")],
     [],
   );
 
   expect(result).toEqual([
     {
-      sessionId: "shell-def456",
-      sessionName: undefined,
+      sessionId: "shell-sess-1.2",
+      sessionName: "sess-1 (shell#2)",
       canAckTurn: false,
       turnAcked: false,
-      isOpen: false,
+      isOpen: true,
+      kind: "shell",
+      parentSessionId: "sess-1",
+      shellSeq: 2,
     },
   ]);
 });
 
-test("buildTerminalSessionTabs mixes shell- and agent sessions", () => {
+test("buildTerminalSessionTabs shows new shell session as not open", () => {
   const result = buildTerminalSessionTabs(
-    ["sess-agent", "shell-abc123"],
+    [],
+    [makeDtachSession("shell-sess-1.1")],
+    [],
+  );
+
+  expect(result[0]?.isOpen).toBe(false);
+  expect(result[0]?.kind).toBe("shell");
+});
+
+test("buildTerminalSessionTabs mixes shell and agent sessions with parent linkage", () => {
+  const result = buildTerminalSessionTabs(
+    ["sess-agent", "shell-sess-agent.1"],
     [
       makeDtachSession("sess-agent"),
-      makeDtachSession("shell-abc123"),
-      makeDtachSession("shell-new999"),
+      makeDtachSession("shell-sess-agent.1"),
+      makeDtachSession("shell-sess-agent.2"),
     ],
     [
       makeContainer("sess-agent", {
@@ -126,20 +147,27 @@ test("buildTerminalSessionTabs mixes shell- and agent sessions", () => {
       canAckTurn: false,
       turnAcked: false,
       isOpen: true,
+      kind: "agent",
     },
     {
-      sessionId: "shell-abc123",
-      sessionName: undefined,
+      sessionId: "shell-sess-agent.1",
+      sessionName: "my-agent (shell#1)",
       canAckTurn: false,
       turnAcked: false,
       isOpen: true,
+      kind: "shell",
+      parentSessionId: "sess-agent",
+      shellSeq: 1,
     },
     {
-      sessionId: "shell-new999",
-      sessionName: undefined,
+      sessionId: "shell-sess-agent.2",
+      sessionName: "my-agent (shell#2)",
       canAckTurn: false,
       turnAcked: false,
       isOpen: false,
+      kind: "shell",
+      parentSessionId: "sess-agent",
+      shellSeq: 2,
     },
   ]);
 });
@@ -157,4 +185,24 @@ test("buildTerminalSessionTabs drops tabs whose dtach session is gone", () => {
   ]);
   expect(result[0].isOpen).toBe(true);
   expect(result[1].isOpen).toBe(false);
+});
+
+test("parseShellSessionId parses well-formed ids", () => {
+  expect(parseShellSessionId("shell-abc.1")).toEqual({
+    parentSessionId: "abc",
+    seq: 1,
+  });
+  expect(parseShellSessionId("shell-2026-04-17T12-18-49-960Z.3")).toEqual({
+    parentSessionId: "2026-04-17T12-18-49-960Z",
+    seq: 3,
+  });
+});
+
+test("parseShellSessionId rejects non-shell ids", () => {
+  expect(parseShellSessionId("sess-1")).toBeNull();
+  expect(parseShellSessionId("shell-abc")).toBeNull();
+  expect(parseShellSessionId("shell-abc.")).toBeNull();
+  expect(parseShellSessionId("shell-.1")).toBeNull();
+  expect(parseShellSessionId("shell-abc.0")).toBeNull();
+  expect(parseShellSessionId("shell-abc.xyz")).toBeNull();
 });

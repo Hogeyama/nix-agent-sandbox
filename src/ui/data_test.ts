@@ -161,3 +161,26 @@ test("joinSessionsToContainers: empty inputs produce empty output", () => {
   expect(joinSessionsToContainers([], [])).toEqual([]);
   expect(joinSessionsToContainers([], [makeRecord("sess1")])).toEqual([]);
 });
+
+import { parseShellSessionId } from "./data.ts";
+
+test("parseShellSessionId: well-formed ids", () => {
+  expect(parseShellSessionId("shell-abc.1")).toEqual({
+    parentSessionId: "abc",
+    seq: 1,
+  });
+  expect(parseShellSessionId("shell-2026-04-17T12-18-49-960Z.7")).toEqual({
+    parentSessionId: "2026-04-17T12-18-49-960Z",
+    seq: 7,
+  });
+});
+
+test("parseShellSessionId: rejects malformed inputs", () => {
+  expect(parseShellSessionId("sess-1")).toBeNull();
+  expect(parseShellSessionId("shell-abc")).toBeNull();
+  expect(parseShellSessionId("shell-abc.")).toBeNull();
+  expect(parseShellSessionId("shell-.1")).toBeNull();
+  expect(parseShellSessionId("shell-abc.0")).toBeNull();
+  expect(parseShellSessionId("shell-abc.xyz")).toBeNull();
+  expect(parseShellSessionId("shell-abc.1a")).toBeNull();
+});
