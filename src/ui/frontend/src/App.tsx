@@ -20,8 +20,8 @@ import { buildTerminalSessionTabs } from "./terminalSessions.ts";
 type TabId = "pending" | "sessions" | "audit" | "sidecars";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "pending", label: "Pending" },
   { id: "sessions", label: "Sessions" },
+  { id: "pending", label: "Pending" },
   { id: "audit", label: "Audit" },
   { id: "sidecars", label: "Sidecars" },
 ];
