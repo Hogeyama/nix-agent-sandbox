@@ -115,6 +115,8 @@ function makeStdin(raw: string): () => Promise<string> {
   return async () => raw;
 }
 
+const noopNotify = () => {};
+
 test("runHookCommand --kind start transitions pre-created record to agent-turn", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-1";
   // Seed the store with a user-turn record via the store module directly.
@@ -148,6 +150,7 @@ test("runHookCommand --kind attention with stdin message transitions to user-tur
 
   await runHookCommand(["--kind", "attention"], {
     stdinReader: makeStdin('{"message":"hello"}'),
+    notifySender: noopNotify,
   });
 
   const record = await readSession(paths, "sess-hook-2");
@@ -171,6 +174,7 @@ test("runHookCommand applies --when toolName=ask_user", async () => {
 
   await runHookCommand(["--kind", "attention", "--when", "toolName=ask_user"], {
     stdinReader: makeStdin('{"toolName":"ask_user","message":"hello"}'),
+    notifySender: noopNotify,
   });
 
   const record = await readSession(paths, "sess-hook-when-tool");
@@ -193,6 +197,7 @@ test("runHookCommand applies --when stopReason=end_turn", async () => {
     ["--kind", "attention", "--when", "stopReason=end_turn"],
     {
       stdinReader: makeStdin('{"stopReason":"end_turn","message":"done"}'),
+      notifySender: noopNotify,
     },
   );
 
@@ -217,6 +222,7 @@ test("runHookCommand --kind attention without message leaves lastEventMessage em
 
   await runHookCommand(["--kind", "attention"], {
     stdinReader: emptyStdin,
+    notifySender: noopNotify,
   });
 
   const record = await readSession(paths, "sess-hook-2b");
@@ -430,6 +436,7 @@ test("runHookCommand: store update failure is swallowed", async () => {
   try {
     await runHookCommand(["--kind", "attention"], {
       stdinReader: makeStdin('{"message":"should-not-notify"}'),
+      notifySender: noopNotify,
     });
   } catch (err) {
     threw = err;
