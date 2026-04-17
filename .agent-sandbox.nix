@@ -24,8 +24,31 @@ let
       forward-agent = false;
     };
     extra-mounts = [
-      # playwright-cliを試すため
-      { src = "~/.local/share/pnpm"; dst = "~/.local/share/pnpm"; }
+      {
+        src = "~/.nix-profile/bin";
+        dst = "~/.nix-profile/bin";
+        mode = "rw";
+      }
+      {
+        src = "~/.config/nvim";
+        dst = "~/.config/nvim";
+        mode = "rw";
+      }
+      {
+        src = "~/.config/tmux";
+        dst = "~/.config/tmux";
+        mode = "ro";
+      }
+      {
+        src = "~/.local/share/nvim";
+        dst = "~/.local/share/nvim";
+        mode = "ro";
+      }
+      {
+        src = "~/nix-config";
+        dst = "~/nix-config";
+        mode = "ro";
+      }
     ];
   };
 
@@ -95,6 +118,8 @@ let
         denylist = [
           # Claude Codeがなんか送ってるやつ
           "http-intake.logs.us5.datadoghq.com"
+          # Copilot CLIがなんか送ってるやつ
+          "copilot-telemetry.githubusercontent.com"
         ];
       };
       proxy = {
@@ -111,11 +136,11 @@ let
       { key = "GIT_CONFIG_COUNT"; val = "1"; }
       { key = "GIT_CONFIG_KEY_0"; val = "gpg.program"; }
       { key = "GIT_CONFIG_VALUE_0"; val = "gpg"; }
-      # playwright-cliを試すため
+      { key = "TERM"; val = "xterm-256color"; }
       {
         key = "PATH";
-        val = "~/.local/share/pnpm";
-        mode = "prefix";
+        val = "~/.nix-profile/bin";
+        mode = "suffix";
         separator = ":";
       }
     ];
