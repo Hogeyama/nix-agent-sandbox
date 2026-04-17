@@ -133,6 +133,7 @@ export async function startServer(options: ServeOptions): Promise<void> {
 
   Bun.serve<TerminalWSData>({
     port: options.port,
+    hostname: "127.0.0.1",
     fetch: async (req, server) => {
       // WebSocket upgrade for terminal sessions
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
