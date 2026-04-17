@@ -27,6 +27,7 @@ import {
   type TerminalWSData,
   validateTerminalUpgrade,
 } from "./routes/terminal.ts";
+import { guardHttpRequest, guardWebSocketUpgrade } from "./security.ts";
 
 const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
@@ -137,6 +138,8 @@ export async function startServer(options: ServeOptions): Promise<void> {
     fetch: async (req, server) => {
       // WebSocket upgrade for terminal sessions
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const reject = guardWebSocketUpgrade(req, { port: options.port });
+        if (reject) return reject;
         const url = new URL(req.url);
         const sessionId = extractSessionId(url.pathname);
         if (!sessionId) {
@@ -157,6 +160,8 @@ export async function startServer(options: ServeOptions): Promise<void> {
         if (ok) return undefined as unknown as Response;
         return new Response("WebSocket upgrade failed", { status: 500 });
       }
+      const reject = guardHttpRequest(req, { port: options.port });
+      if (reject) return reject;
       return app.fetch(req);
     },
     websocket: {
