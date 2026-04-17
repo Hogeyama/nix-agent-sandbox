@@ -19,6 +19,7 @@ import {
   getNetworkPending,
   getSessions,
   getTerminalSessions,
+  killTerminalClients,
   NotNasManagedContainerError,
   renameSession,
   startShellSession,
@@ -269,6 +270,15 @@ export function createApiRoutes(ctx: UiDataContext): Router {
     try {
       const items = await getTerminalSessions();
       return json({ items });
+    } catch (e) {
+      return json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  api.post("/terminal/:sessionId/kill-clients", async ({ params }) => {
+    try {
+      const killed = await killTerminalClients(params.sessionId);
+      return json({ killed });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
     }

@@ -5,6 +5,7 @@ import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { api } from "../api.ts";
 import {
   ensureTerminalFocus,
   setupTerminalInputForwarding,
@@ -203,6 +204,7 @@ function TerminalPane({
   const errorElRef = useRef<HTMLDivElement>(null);
   const [acking, setAcking] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [killingClients, setKillingClients] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatch, setSearchMatch] = useState<{
@@ -491,6 +493,20 @@ function TerminalPane({
     }
   }, []);
 
+  const handleKillClients = useCallback(async () => {
+    if (killingClients) return;
+    setKillingClients(true);
+    try {
+      await api.killTerminalClients(sessionId);
+    } catch (e) {
+      console.error("Failed to kill dtach clients:", e);
+      setError(`Failed to kill clients: ${(e as Error).message}`);
+    } finally {
+      setKillingClients(false);
+      if (terminalRef.current) ensureTerminalFocus(terminalRef.current);
+    }
+  }, [killingClients, sessionId]);
+
   const handleFontSizeIncrease = useCallback(() => {
     setFontSize((prev) => {
       const next = Math.min(32, prev + 1);
@@ -736,6 +752,31 @@ function TerminalPane({
               </svg>
             </button>
           </div>
+          <button
+            type="button"
+            class="btn btn-icon btn-ghost"
+            title="Kick all other dtach clients (use when Copilot CLI input is stuck because someone else is attached)"
+            disabled={killingClients}
+            onMouseDown={preventFocusSteal}
+            onClick={() => void handleKillClients()}
+          >
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+              <circle cx="12" cy="12" r="10" />
+            </svg>
+          </button>
           {onShell && !sessionId.startsWith("shell-") && (
             <button
               type="button"

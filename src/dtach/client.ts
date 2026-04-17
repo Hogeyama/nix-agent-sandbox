@@ -5,7 +5,7 @@
  * tmux と違い prefix キーの衝突やヘッダの二重表示が起きない。
  */
 
-import { readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { createConnection } from "node:net";
 import * as path from "node:path";
 import { runInteractiveCommand } from "../docker/client.ts";
@@ -192,6 +192,65 @@ export async function dtachListSessions(
   } catch {
     return [];
   }
+}
+
+/**
+ * ソケットにアタッチしている dtach クライアントプロセスを列挙する。
+ *
+ * nas サーバ自身は dtach プロセスとしてではなく Unix ソケットへ直接接続する
+ * ため、ここには含まれない。
+ */
+async function findDtachClientPids(socketPath: string): Promise<number[]> {
+  const self = process.pid;
+  const pids: number[] = [];
+  let entries: string[];
+  try {
+    entries = await readdir("/proc");
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    const pid = Number(entry);
+    if (!Number.isFinite(pid) || pid === self) continue;
+    try {
+      const raw = await readFile(`/proc/${pid}/cmdline`);
+      const parts = raw
+        .toString("utf8")
+        .split("\0")
+        .filter((s) => s.length > 0);
+      if (parts.length === 0) continue;
+      const exe = parts[0].split("/").pop();
+      if (exe !== "dtach") continue;
+      if (!parts.includes(socketPath)) continue;
+      // master は `-n` / `-N` / `-c` で起動するため除外し、
+      // アタッチクライアント (`-a` / `-A`) のみを対象にする。
+      // 除外し忘れるとソケットを持っている master を殺してセッションごと落ちる。
+      const isAttacher = parts.includes("-a") || parts.includes("-A");
+      if (!isAttacher) continue;
+      pids.push(pid);
+    } catch {
+      // プロセス消滅・権限不足などは無視
+    }
+  }
+  return pids;
+}
+
+/**
+ * 指定ソケットに張り付いている dtach クライアントを全て SIGTERM で切断する。
+ * 戻り値は kill に成功した pid 数。
+ */
+export async function killDtachClients(socketPath: string): Promise<number> {
+  const pids = await findDtachClientPids(socketPath);
+  let killed = 0;
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+      killed += 1;
+    } catch {
+      // 既に終了していた等は無視
+    }
+  }
+  return killed;
 }
 
 /** シェルコマンド文字列に安全にエスケープする */

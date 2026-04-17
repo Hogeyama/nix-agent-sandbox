@@ -99,6 +99,11 @@ export const api = {
 
   getTerminalSessions: () =>
     request<{ items: DtachSession[] }>("GET", "/api/terminal/sessions"),
+  killTerminalClients: (sessionId: string) =>
+    request<{ killed: number }>(
+      "POST",
+      `/api/terminal/${encodeURIComponent(sessionId)}/kill-clients`,
+    ),
 
   getAuditLogs: (params?: {
     domain?: string;

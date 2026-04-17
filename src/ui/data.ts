@@ -21,6 +21,7 @@ import {
 import {
   dtachListSessions,
   dtachNewSession,
+  killDtachClients,
   shellEscape,
   socketPathFor,
 } from "../dtach/client.ts";
@@ -252,6 +253,12 @@ export async function getTerminalSessions(): Promise<TerminalSessionInfo[]> {
     socketPath: session.socketPath,
     createdAt: session.createdAt,
   }));
+}
+
+/** dtach セッションにアタッチしている他クライアントを全て切断する */
+export async function killTerminalClients(sessionId: string): Promise<number> {
+  const socketPath = socketPathFor(sessionId);
+  return await killDtachClients(socketPath);
 }
 
 export async function acknowledgeSessionTurn(
