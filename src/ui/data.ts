@@ -36,6 +36,7 @@ import type {
   HostExecPendingEntry,
   HostExecSessionRegistryEntry,
 } from "../hostexec/types.ts";
+import { safeRemove } from "../lib/fs_utils.ts";
 import { sendBrokerRequest } from "../network/broker.ts";
 import type {
   ApprovalScope,
@@ -343,11 +344,67 @@ export async function getNasContainers(
 }
 
 export async function stopContainer(name: string): Promise<void> {
+  let parentSessionId: string | undefined;
+  try {
+    const details = await dockerInspectContainer(name);
+    parentSessionId = details.labels[NAS_SESSION_ID_LABEL];
+  } catch {
+    // Container may have already been removed; let dockerStop surface the error.
+  }
   await dockerStop(name);
+  if (parentSessionId) {
+    await removeShellSocketsForParent(parentSessionId);
+  }
 }
 
 export async function cleanContainers(): Promise<ContainerCleanResult> {
-  return await cleanNasContainers();
+  const result = await cleanNasContainers();
+  await removeOrphanShellSockets();
+  return result;
+}
+
+/** Remove shell dtach sockets whose parent agent session matches. */
+async function removeShellSocketsForParent(
+  parentSessionId: string,
+): Promise<void> {
+  const sessions = await dtachListSessions();
+  for (const session of sessions) {
+    const parsed = parseShellSessionId(session.name);
+    if (!parsed || parsed.parentSessionId !== parentSessionId) continue;
+    await safeRemove(session.socketPath);
+  }
+}
+
+/** Remove shell sockets whose parent agent session is no longer running. */
+async function removeOrphanShellSockets(): Promise<void> {
+  const sessions = await dtachListSessions();
+  const shellSessions = sessions.flatMap((s) => {
+    const parsed = parseShellSessionId(s.name);
+    return parsed ? [{ session: s, parsed }] : [];
+  });
+  if (shellSessions.length === 0) return;
+
+  const runningParents = await collectRunningSessionIds();
+  for (const { session, parsed } of shellSessions) {
+    if (runningParents.has(parsed.parentSessionId)) continue;
+    await safeRemove(session.socketPath);
+  }
+}
+
+async function collectRunningSessionIds(): Promise<Set<string>> {
+  const names = await dockerListContainerNames();
+  const running = new Set<string>();
+  for (const name of names) {
+    try {
+      const details = await dockerInspectContainer(name);
+      if (!details.running) continue;
+      const sid = details.labels[NAS_SESSION_ID_LABEL];
+      if (sid) running.add(sid);
+    } catch {
+      // ignore containers that disappeared between list and inspect
+    }
+  }
+  return running;
 }
 
 /**
