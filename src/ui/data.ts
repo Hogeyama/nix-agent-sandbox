@@ -10,7 +10,6 @@ import type { ContainerCleanResult } from "../container_clean.ts";
 import { cleanNasContainers } from "../container_clean.ts";
 import type { DockerContainerDetails } from "../docker/client.ts";
 import {
-  dockerExec,
   dockerInspectContainer,
   dockerListContainerNames,
   dockerStop,
@@ -363,26 +362,27 @@ export async function startShellSession(
     throw new ContainerNotRunningError(containerName);
   }
 
-  // 2. bash 存在確認、なければ /bin/sh にフォールバック
-  const bashCheck = await dockerExec(containerName, [
-    "test",
-    "-x",
-    "/bin/bash",
-  ]);
-  const shell = bashCheck.code === 0 ? "/bin/bash" : "/bin/sh";
-
-  // 3. dtach セッションID生成
+  // 2. dtach セッションID生成
   const randomBytes = crypto.getRandomValues(new Uint8Array(6));
   const dtachSessionId = `shell-${Buffer.from(randomBytes).toString("hex")}`;
 
-  // 4. ソケットパス取得
+  // 3. ソケットパス取得
   const socketPath = socketPathFor(dtachSessionId);
 
-  // 5. コマンド文字列構築
-  const execArgs = ["docker", "exec", "-it", containerName, shell];
-  if (shell === "/bin/bash") {
-    execArgs.push("-l");
-  }
+  // 4. コマンド文字列構築
+  // entrypoint.sh --shell を root で起動し、その中で setpriv により
+  // agent と同じ NAS_UID/NAS_GID・PATH・Nix 環境の bash にドロップする。
+  // docker exec はデフォルトで ENTRYPOINT を通らないため明示的に呼ぶ。
+  const execArgs = [
+    "docker",
+    "exec",
+    "-it",
+    "-u",
+    "0:0",
+    containerName,
+    "/entrypoint.sh",
+    "--shell",
+  ];
   const shellCommand = shellEscape(execArgs);
 
   // 6. dtach セッション起動

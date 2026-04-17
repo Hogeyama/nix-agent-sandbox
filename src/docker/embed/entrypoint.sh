@@ -1,7 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --shell モード: docker exec 経由で対話シェルを起動する際に使う。
+# PID 1 で実行される通常モードと異なり、初回のみ必要な初期化
+# (ユーザー作成、ローカルプロキシ起動、/etc/nix/nix.conf への追記) を
+# スキップしつつ、agent と同じ env/PATH/Nix 環境・非 root ユーザーで
+# bash を起動する。
+NAS_SHELL_MODE=false
+if [ "${1:-}" = "--shell" ]; then
+  NAS_SHELL_MODE=true
+  shift
+fi
+
 NAS_LOG_LEVEL="${NAS_LOG_LEVEL:-info}"
+if [ "$NAS_SHELL_MODE" = "true" ]; then
+  # シェル起動時は info ログを抑制して余計な出力を避ける
+  NAS_LOG_LEVEL=quiet
+  # xtrace を /tmp/nas-shell.log に出す。dtach socket が即消える系の無言死を
+  # 診断可能にするため、全コマンドと stderr をファイルに残す。
+  # 古いログは残すと混乱するので毎回 truncate、PS4 で行番号を表示する。
+  NAS_SHELL_LOG="/tmp/nas-shell.log"
+  : >"$NAS_SHELL_LOG" 2>/dev/null || true
+  chmod 666 "$NAS_SHELL_LOG" 2>/dev/null || true
+  export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
+  exec {NAS_SHELL_LOG_FD}>>"$NAS_SHELL_LOG"
+  BASH_XTRACEFD=$NAS_SHELL_LOG_FD
+  set -x
+  # ENTRYPOINT で起きた非捕捉エラーの原因を最後に書き残す
+  trap 'rc=$?; echo "[nas-shell][trap] exit=$rc at ${BASH_SOURCE##*/}:${LINENO} cmd=${BASH_COMMAND}" >&$NAS_SHELL_LOG_FD' ERR EXIT
+fi
 
 nas_info() {
   if [ "$NAS_LOG_LEVEL" != "info" ]; then
@@ -38,7 +65,10 @@ if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_BIN_PATH:-}" ]; then
   # ホストの nix バイナリ (/nix/store/... 内) へのシンボリックリンクを作成
   ln -sf "$NIX_BIN_PATH" /usr/local/bin/nix
 fi
-if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_CONF_PATH:-}" ] && [ -f "$NIX_CONF_PATH" ]; then
+# --shell モードでは初回起動時に追記した trusted-users 等の設定を
+# 保持するため再コピーしない。
+if [ "$NAS_SHELL_MODE" != "true" ] && \
+   [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_CONF_PATH:-}" ] && [ -f "$NIX_CONF_PATH" ]; then
   # ホストの nix.conf をコンテナ内に配置
   mkdir -p /etc/nix
   cp "$NIX_CONF_PATH" /etc/nix/nix.conf
@@ -77,7 +107,9 @@ if [ "$NAS_UID" != "0" ]; then
     -exec chown "${NAS_UID}:${NAS_GID}" {} + 2>/dev/null || true
 
   # nix trusted-users にコンテナユーザーを追加 (nix daemon 経由操作に必要)
-  if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f /etc/nix/nix.conf ]; then
+  # --shell モードでは初回起動時に設定済みのため重複追記を避ける
+  if [ "$NAS_SHELL_MODE" != "true" ] && \
+     [ "${NIX_ENABLED:-false}" = "true" ] && [ -f /etc/nix/nix.conf ]; then
     echo "trusted-users = root ${NAS_USER}" >>/etc/nix/nix.conf 2>/dev/null || true
   fi
 
@@ -134,21 +166,24 @@ git config --system safe.directory "$WORKSPACE"
 # --- ローカル認証プロキシ ---
 # NAS_UPSTREAM_PROXY が設定されている場合、認証代行ローカルプロキシを起動し
 # http_proxy/https_proxy を localhost:18080 に書き換える。
+# --shell モードでは初回起動時の proxy が既に走っているため env のみ書き換える。
 if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
-  bun /usr/local/bin/local-proxy.mjs &
-  LOCAL_PROXY_PID=$!
+  if [ "$NAS_SHELL_MODE" != "true" ]; then
+    bun /usr/local/bin/local-proxy.mjs &
+    LOCAL_PROXY_PID=$!
 
-  # ヘルスチェック: localhost:18080 に接続可能になるまで待機
-  for i in $(seq 1 50); do
-    if bash -c "echo >/dev/tcp/127.0.0.1/18080" 2>/dev/null; then
-      nas_info "[nas] Local auth proxy ready (pid=$LOCAL_PROXY_PID)"
-      break
-    fi
-    if [ "$i" -eq 50 ]; then
-      echo "[nas] WARNING: local proxy failed to start within 5s" >&2
-    fi
-    sleep 0.1
-  done
+    # ヘルスチェック: localhost:18080 に接続可能になるまで待機
+    for i in $(seq 1 50); do
+      if bash -c "echo >/dev/tcp/127.0.0.1/18080" 2>/dev/null; then
+        nas_info "[nas] Local auth proxy ready (pid=$LOCAL_PROXY_PID)"
+        break
+      fi
+      if [ "$i" -eq 50 ]; then
+        echo "[nas] WARNING: local proxy failed to start within 5s" >&2
+      fi
+      sleep 0.1
+    done
+  fi
 
   export http_proxy="http://127.0.0.1:18080"
   export https_proxy="http://127.0.0.1:18080"
@@ -159,12 +194,56 @@ fi
 # --- エージェントコマンド ---
 AGENT_COMMAND=("${@}")
 if [ ${#AGENT_COMMAND[@]} -eq 0 ]; then
-  AGENT_COMMAND=("bash")
+  if [ "$NAS_SHELL_MODE" = "true" ]; then
+    AGENT_COMMAND=("bash" "-i")
+  else
+    AGENT_COMMAND=("bash")
+  fi
 fi
 
 HOSTEXEC_PATH_PREFIX=""
 if [ -n "${NAS_HOSTEXEC_WRAPPER_DIR:-}" ]; then
   HOSTEXEC_PATH_PREFIX="${NAS_HOSTEXEC_WRAPPER_DIR}"
+fi
+
+# --shell モード: flake 再評価や nix develop/print-dev-env 経由の複雑な
+# 起動は避け、初回起動時に作られたキャッシュ env を source するだけにする。
+# エージェント用の経路は入出力を expr/exec で回しているため、そのまま bash -i
+# を流すと source 結果や set オプションとの相互作用で無言即死しうる。
+# シェルは会話的に使えればよいので最短経路にする。
+if [ "$NAS_SHELL_MODE" = "true" ]; then
+  NAS_BASH_OVERRIDE_DIR="/tmp/nas-bash-override"
+  mkdir -p "$NAS_BASH_OVERRIDE_DIR"
+  if [ -x /bin/bash ] && [ ! -e "$NAS_BASH_OVERRIDE_DIR/bash" ]; then
+    ln -sf /bin/bash "$NAS_BASH_OVERRIDE_DIR/bash"
+  fi
+  SHELL_PATH_PREFIX="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE_DIR}:"
+  SHELL_CACHE_FILE=""
+  if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
+    SHELL_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
+    if [ -f "$WORKSPACE/flake.lock" ]; then
+      SHELL_FLAKE_HASH=$(cat "$WORKSPACE/flake.nix" "$WORKSPACE/flake.lock" | sha256sum | cut -d' ' -f1)
+    else
+      SHELL_FLAKE_HASH=$(sha256sum "$WORKSPACE/flake.nix" | cut -d' ' -f1)
+    fi
+    CANDIDATE="${SHELL_NIX_CACHE}/${SHELL_FLAKE_HASH}.env"
+    if [ -f "$CANDIDATE" ]; then
+      SHELL_CACHE_FILE="$CANDIDATE"
+    fi
+  fi
+  if [ -n "$SHELL_CACHE_FILE" ]; then
+    SHELL_RC_FILE="$(mktemp "/tmp/nas-shell-rc-${NAS_UID}.XXXXXX")"
+    {
+      echo "source '$SHELL_CACHE_FILE' 2>/dev/null || true"
+      echo "export PATH=\"${SHELL_PATH_PREFIX}\$PATH\""
+      echo "[ -f ~/.bashrc ] && source ~/.bashrc"
+    } >"$SHELL_RC_FILE"
+    chown "${NAS_UID}:${NAS_GID}" "$SHELL_RC_FILE" 2>/dev/null || true
+    exec "${EXEC_PREFIX[@]}" bash --noprofile --rcfile "$SHELL_RC_FILE" -i
+  else
+    export PATH="${SHELL_PATH_PREFIX}$PATH"
+    exec "${EXEC_PREFIX[@]}" bash -i
+  fi
 fi
 
 exec_agent_command() {
