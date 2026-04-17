@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-04-18
+
+### Added
+
+- **Shell sessions inside agent containers**: open additional shell sessions attached to a running agent container, both via `POST /api/containers/:sessionId/shell` and the new Shell button in the TerminalModal header ([3f92be7], [f6a4992], [8f436f2], [00dfcb0], [9756de3])
+- **Kick dtach attachers**: new button in the terminal modal to disconnect other dtach clients ([9bb7474])
+- **Persistent UI daemon log**: UI daemon stdout/stderr is now written to a log file for later inspection ([73b8bf5])
+- **Recent launch directories** persist across UI sessions ([a3b5398])
+- Enlarged terminal modal sized for FHD monitors ([e16ff01])
+
+### Changed
+
+- **Sessions/Pending tab order swapped** in the UI ([1456b9e])
+- `nas` options are now placed before the profile argument when launching sessions from the UI ([048eeb4])
+- Dtach master and attacher split for session sessions ([d5bc88d])
+- Centralized agent container name construction ([ff18f37])
+- `FsServiceLive` tryPromise calls now attach catch mappers ([a9b4e96])
+- Extra-mount destination conflict detection removed from mount stage ([91ba865])
+
+### Fixed
+
+- UI-launched sessions now resolve a stable `nas` binary path ([85b3d29])
+- Strip `NAS_SESSION_ID`/`NAS_INSIDE_DTACH` from env when spawning the UI daemon ([a119d8a])
+- Keep a newly opened shell tab selected while waiting for SSE catch-up ([caf0aea])
+- Stale shell sockets are cleaned up on container stop/clean and on `dtachNewSession` failure ([441c04b], [cb6a018])
+
+### Documentation
+
+- Added a data-flow diagram ([a1b6479])
+
 ## [0.7.0] - 2026-04-17
 
 ### Added
