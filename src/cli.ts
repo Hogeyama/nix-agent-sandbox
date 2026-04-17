@@ -53,6 +53,7 @@ import { NetworkRuntimeServiceLive } from "./services/network_runtime.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { SessionBrokerServiceLive } from "./services/session_broker.ts";
 import { SessionStoreServiceLive } from "./services/session_store_service.ts";
+import { addRecentDir } from "./sessions/recent_dirs.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
 import {
@@ -201,6 +202,11 @@ export async function main(args: string[]): Promise<void> {
       await runInsideDtach(sessionId, effectiveProfile.session.detachKey, args);
       return;
     }
+
+    // 起動 cwd を UI の "Recent directories" 用に記録（best-effort）
+    try {
+      await addRecentDir(process.cwd());
+    } catch {}
 
     const imageName = "nas-sandbox";
 

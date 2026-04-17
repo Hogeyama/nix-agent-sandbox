@@ -10,7 +10,7 @@ import {
   shellEscape,
   socketPathFor,
 } from "../dtach/client.ts";
-import { listSessions } from "../sessions/store.ts";
+import { readRecentDirs } from "../sessions/recent_dirs.ts";
 import {
   getCurrentBranch,
   getGitRoot,
@@ -38,34 +38,17 @@ export interface LaunchBranches {
   hasMain: boolean;
 }
 
-export async function getLaunchInfo(ctx: UiDataContext): Promise<LaunchInfo> {
-  const [dtachAvailable, config, sessions] = await Promise.all([
+export async function getLaunchInfo(_ctx: UiDataContext): Promise<LaunchInfo> {
+  const [dtachAvailable, config, recentDirectories] = await Promise.all([
     dtachIsAvailable(),
     loadConfig(),
-    listSessions(ctx.sessionPaths),
+    readRecentDirs(),
   ]);
-
-  const profiles = Object.keys(config.profiles);
-  const defaultProfile = config.default;
-
-  // Collect worktree directories from sessions, deduplicated, sorted by startedAt descending, max 10
-  const seen = new Set<string>();
-  const recentDirectories: string[] = [];
-  const sorted = [...sessions].sort(
-    (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
-  );
-  for (const session of sorted) {
-    if (!session.worktree) continue;
-    if (seen.has(session.worktree)) continue;
-    seen.add(session.worktree);
-    recentDirectories.push(session.worktree);
-    if (recentDirectories.length >= 10) break;
-  }
 
   return {
     dtachAvailable,
-    profiles,
-    defaultProfile,
+    profiles: Object.keys(config.profiles),
+    defaultProfile: config.default,
     recentDirectories,
   };
 }
