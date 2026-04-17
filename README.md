@@ -345,18 +345,12 @@ profiles:
         val: /opt/nas/hostexec/bin/gpg
     hostexec:
       rules:
-        - id: gpg-sign
+        # git commit/tag -S が呼ぶ形だけを通す:
+        #   gpg --status-fd=2 -bsau <keyid>
+        - id: gpg-git-sign
           match:
             argv0: gpg
-            arg-regex: '(^|\s)(--sign|-[a-zA-Z]*s)(\s|$)'
-          cwd:
-            mode: workspace-or-session-tmp
-          approval: prompt
-          fallback: deny
-        - id: gpg-verify
-          match:
-            argv0: gpg
-            arg-regex: '(^|\s)(--verify|-[a-zA-Z]*v)(\s|$)'
+            arg-regex: '^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$'
           cwd:
             mode: workspace-or-session-tmp
           approval: allow
@@ -367,6 +361,11 @@ profiles:
           approval: deny
           fallback: deny
 ```
+
+> [!WARNING]
+> `gpg` のような「任意の引数で副作用を起こせるコマンド」を委譲する場合、`--sign` を含むだけ通す
+> ような緩い regex は危険です（`--output` で任意ファイル上書き、`--homedir` で keyring 差し替え等）。
+> git の呼び出し形 (`gpg --status-fd=2 -bsau <keyid>`) のような完全一致パターンに絞ってください。
 
 ### 相対パスのコマンド（`./gradlew` など）をホストに移譲する
 
@@ -641,11 +640,11 @@ session network
 - `arg-regex` は引数をスペースで join した文字列に対してマッチします。そのためスペースを含む単一引数（例: `git commit -m "hello world"` の `"hello world"`）と
   複数引数の区別はできません。実用上、コマンド識別に使う先頭引数やフラグにスペースが含まれることは少ないため問題になることは多くないですが、
   引数の値そのものに依存するマッチパターンを書く場合は留意してください
-- エージェント設定ディレクトリ（`~/.claude/` / `~/.copilot/` / `~/.codex/`）は常にマウントされるため、hostexec を制限しても認証トークン等へのアクセスは残ります
+- エージェント設定ディレクトリ（`~/.claude/` / `~/.copilot/` / `~/.codex/`）は存在すれば常にマウントされるため、これらに認証トークンが置かれている場合は hostexec を制限してもコンテナ内からアクセス可能です
 
 ### 常にマウントされるもの
 
-- **エージェントの設定**: Claude Code の場合は `~/.claude/`、Copilot CLI の場合は `~/.copilot/`、OpenAI Codex CLI の場合は `~/.codex/` がコンテナに渡されます。これはエージェントの動作に必須です。
+- **エージェントの設定**: ホスト上に存在する場合のみ、Claude Code は `~/.claude/`、Copilot CLI は `~/.copilot/`、OpenAI Codex CLI は `~/.codex/` がコンテナに渡されます。
 - **Nix（有効時）**: ホストの `/nix` ディレクトリと nix daemon ソケットがマウントされます。
 
 ### 推奨事項
