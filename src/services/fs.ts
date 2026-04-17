@@ -39,47 +39,81 @@ export class FsService extends Context.Tag("nas/FsService")<
 // Live
 // ---------------------------------------------------------------------------
 
+const fsError =
+  (op: string, ...args: string[]) =>
+  (e: unknown) =>
+    new Error(
+      `fs.${op}(${args.join(", ")}) failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+
 export const FsServiceLive = Layer.succeed(FsService, {
   mkdir: (path, opts) =>
-    Effect.tryPromise(() => fs.mkdir(path, opts).then(() => undefined)).pipe(
-      Effect.orDie,
-    ),
+    Effect.tryPromise({
+      try: () => fs.mkdir(path, opts).then(() => undefined),
+      catch: fsError("mkdir", path),
+    }).pipe(Effect.orDie),
 
   writeFile: (path, content, opts) =>
-    Effect.tryPromise(() =>
-      fs.writeFile(path, content, opts ? { mode: opts.mode } : undefined),
-    ).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () =>
+        fs.writeFile(path, content, opts ? { mode: opts.mode } : undefined),
+      catch: fsError("writeFile", path),
+    }).pipe(Effect.orDie),
 
   chmod: (path, mode) =>
-    Effect.tryPromise(() => fs.chmod(path, mode)).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () => fs.chmod(path, mode),
+      catch: fsError("chmod", path),
+    }).pipe(Effect.orDie),
 
   symlink: (target, path) =>
-    Effect.tryPromise(() => fs.symlink(target, path)).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () => fs.symlink(target, path),
+      catch: fsError("symlink", target, path),
+    }).pipe(Effect.orDie),
 
   rm: (path, opts) =>
-    Effect.tryPromise(() => fs.rm(path, opts)).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () => fs.rm(path, opts),
+      catch: fsError("rm", path),
+    }).pipe(Effect.orDie),
 
-  stat: (path) => Effect.tryPromise(() => fs.stat(path)).pipe(Effect.orDie),
+  stat: (path) =>
+    Effect.tryPromise({
+      try: () => fs.stat(path),
+      catch: fsError("stat", path),
+    }).pipe(Effect.orDie),
 
   exists: (path) =>
-    Effect.tryPromise(() =>
-      fs.stat(path).then(
-        () => true,
-        (e: NodeJS.ErrnoException) => {
-          if (e.code === "ENOENT") return false;
-          throw e;
-        },
-      ),
-    ).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () =>
+        fs.stat(path).then(
+          () => true,
+          (e: NodeJS.ErrnoException) => {
+            if (e.code === "ENOENT") return false;
+            throw e;
+          },
+        ),
+      catch: fsError("exists", path),
+    }).pipe(Effect.orDie),
 
   readFile: (path) =>
-    Effect.tryPromise(() => fs.readFile(path, "utf8")).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () => fs.readFile(path, "utf8"),
+      catch: fsError("readFile", path),
+    }).pipe(Effect.orDie),
 
   rename: (oldPath, newPath) =>
-    Effect.tryPromise(() => fs.rename(oldPath, newPath)).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () => fs.rename(oldPath, newPath),
+      catch: fsError("rename", oldPath, newPath),
+    }).pipe(Effect.orDie),
 
   mkdtemp: (prefix) =>
-    Effect.tryPromise(() => fs.mkdtemp(prefix)).pipe(Effect.orDie),
+    Effect.tryPromise({
+      try: () => fs.mkdtemp(prefix),
+      catch: fsError("mkdtemp", prefix),
+    }).pipe(Effect.orDie),
 });
 
 // ---------------------------------------------------------------------------
