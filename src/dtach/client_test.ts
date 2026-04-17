@@ -52,6 +52,23 @@ test("probeDtachSocket returns true for a live unix socket", async () => {
   }
 });
 
+test("socketPathFor rejects traversal via ..", () => {
+  expect(() => socketPathFor("../x", "/tmp/nas-dtach")).toThrow(
+    /path traversal detected/,
+  );
+});
+
+test("socketPathFor rejects deeper traversal via ../..", () => {
+  expect(() =>
+    socketPathFor("../../../var/run/docker", "/tmp/nas-dtach"),
+  ).toThrow(/path traversal detected/);
+});
+
+test("socketPathFor accepts a plain sessionId", () => {
+  const p = socketPathFor("sess_abc123", "/tmp/nas-dtach");
+  expect(p).toBe("/tmp/nas-dtach/sess_abc123.sock");
+});
+
 test("gcDtachRuntime removes stale sockets and keeps live ones", async () => {
   const runtimeDir = await fs.mkdtemp(path.join(tmpdir(), "nas-dtach-test-"));
   const staleSocketPath = socketPathFor("sess-stale", runtimeDir);

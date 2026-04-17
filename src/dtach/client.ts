@@ -26,11 +26,26 @@ export function getSocketDir(runtimeDir?: string): string {
   return runtimeDir ?? defaultRuntimeDir("dtach");
 }
 
+/**
+ * Defense-in-depth: ensure a joined path stays inside `base`. Throws if the
+ * computed path escapes (traversal via `..`, absolute path, or equals the
+ * base). Complements the API-boundary allowlist so that trusted internal
+ * callers that forget to validate their sessionId still fail closed.
+ */
+function assertWithin(base: string, joined: string): string {
+  const rel = path.relative(base, joined);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`path traversal detected: ${joined}`);
+  }
+  return joined;
+}
+
 /** セッションID からソケットパスを得る */
 export function socketPathFor(sessionId: string, runtimeDir?: string): string {
-  return path.join(
-    getSocketDir(runtimeDir),
-    `${sessionId}${SOCKET_FILE_SUFFIX}`,
+  const base = getSocketDir(runtimeDir);
+  return assertWithin(
+    base,
+    path.join(base, `${sessionId}${SOCKET_FILE_SUFFIX}`),
   );
 }
 

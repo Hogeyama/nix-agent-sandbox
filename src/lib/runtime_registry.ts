@@ -39,25 +39,46 @@ export interface BasePendingEntry {
 
 // --- Path helpers ---
 
+/**
+ * Defense-in-depth: ensure a joined path stays inside `base`. Throws if
+ * `joined` escapes (traversal via `..`, absolute path, or equals the base
+ * itself). Complements the API-boundary allowlist — even if a future caller
+ * forgets to validate its id, this refuses to read/write outside the
+ * runtime directory.
+ */
+function assertWithin(base: string, joined: string): string {
+  const rel = path.relative(base, joined);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`path traversal detected: ${joined}`);
+  }
+  return joined;
+}
+
 export function sessionRegistryPath(
   paths: BaseRuntimePaths,
   sessionId: string,
 ): string {
-  return path.join(paths.sessionsDir, `${sessionId}.json`);
+  return assertWithin(
+    paths.sessionsDir,
+    path.join(paths.sessionsDir, `${sessionId}.json`),
+  );
 }
 
 export function brokerSocketPath(
   paths: BaseRuntimePaths,
   sessionId: string,
 ): string {
-  return path.join(paths.brokersDir, `${sessionId}.sock`);
+  return assertWithin(
+    paths.brokersDir,
+    path.join(paths.brokersDir, `${sessionId}.sock`),
+  );
 }
 
 export function pendingSessionDir(
   paths: BaseRuntimePaths,
   sessionId: string,
 ): string {
-  return path.join(paths.pendingDir, sessionId);
+  return assertWithin(paths.pendingDir, path.join(paths.pendingDir, sessionId));
 }
 
 export function pendingRequestPath(
@@ -65,7 +86,8 @@ export function pendingRequestPath(
   sessionId: string,
   requestId: string,
 ): string {
-  return path.join(pendingSessionDir(paths, sessionId), `${requestId}.json`);
+  const sessionDir = pendingSessionDir(paths, sessionId);
+  return assertWithin(sessionDir, path.join(sessionDir, `${requestId}.json`));
 }
 
 // --- Session registry CRUD ---

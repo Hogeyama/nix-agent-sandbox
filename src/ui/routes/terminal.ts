@@ -18,6 +18,7 @@
 import { Socket } from "node:net";
 import type { ServerWebSocket } from "bun";
 import { dtachHasSession, socketPathFor } from "../../dtach/client.ts";
+import { isSafeId } from "./validate_ids.ts";
 
 // dtach message types
 const MSG_PUSH = 0;
@@ -114,10 +115,25 @@ export function parseTerminalControlMessage(
   };
 }
 
-/** リクエストURLからセッションIDを抽出 */
+/**
+ * リクエストURLからセッションIDを抽出する。
+ *
+ * 復号結果が `isSafeId` の安全な形式 (legit な `sess_<hex>` や
+ * `shell-<parent>.<seq>` を含む) を満たさない場合は `null` を返し、
+ * 呼び出し元で 400 を応答させる。これにより `..%2F..%2Fvar%2Frun`
+ * のようなパストラバーサルが `socketPathFor` に渡るのを防ぐ。
+ */
 export function extractSessionId(pathname: string): string | null {
   const match = pathname.match(/^\/api\/terminal\/([^/]+)$/);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (!match) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+  if (!isSafeId(decoded)) return null;
+  return decoded;
 }
 
 /** WebSocket upgrade 前のバリデーション */

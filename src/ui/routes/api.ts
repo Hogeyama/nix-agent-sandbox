@@ -33,6 +33,7 @@ import {
   launchSession,
 } from "../launch.ts";
 import { json, Router } from "../router.ts";
+import { isSafeId } from "./validate_ids.ts";
 
 export function createApiRoutes(ctx: UiDataContext): Router {
   const api = new Router();
@@ -115,6 +116,12 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!sessionId || !requestId) {
         return json({ error: "sessionId and requestId are required" }, 400);
       }
+      if (!isSafeId(sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (!isSafeId(requestId)) {
+        return json({ error: "Invalid requestId format" }, 400);
+      }
       await approveNetwork(ctx, sessionId, requestId, scope);
       return json({ ok: true });
     } catch (e) {
@@ -128,6 +135,12 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
         return json({ error: "sessionId and requestId are required" }, 400);
+      }
+      if (!isSafeId(sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (!isSafeId(requestId)) {
+        return json({ error: "Invalid requestId format" }, 400);
       }
       await denyNetwork(ctx, sessionId, requestId, scope);
       return json({ ok: true });
@@ -154,6 +167,12 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!sessionId || !requestId) {
         return json({ error: "sessionId and requestId are required" }, 400);
       }
+      if (!isSafeId(sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (!isSafeId(requestId)) {
+        return json({ error: "Invalid requestId format" }, 400);
+      }
       await approveHostExec(ctx, sessionId, requestId, scope);
       return json({ ok: true });
     } catch (e) {
@@ -167,6 +186,12 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       const { sessionId, requestId } = body;
       if (!sessionId || !requestId) {
         return json({ error: "sessionId and requestId are required" }, 400);
+      }
+      if (!isSafeId(sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
+      if (!isSafeId(requestId)) {
+        return json({ error: "Invalid requestId format" }, 400);
       }
       await denyHostExec(ctx, sessionId, requestId);
       return json({ ok: true });
@@ -188,6 +213,9 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.patch("/sessions/:sessionId/name", async ({ params, req }) => {
     try {
+      if (!isSafeId(params.sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
       const body = await req.json();
       const { name } = body;
       if (typeof name !== "string" || name.length === 0) {
@@ -206,6 +234,9 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.post("/sessions/:sessionId/ack", async ({ params }) => {
     try {
+      if (!isSafeId(params.sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
       const item = await acknowledgeSessionTurn(ctx, params.sessionId);
       return json({ item });
     } catch (e) {
@@ -233,6 +264,9 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.post("/containers/:name/stop", async ({ params }) => {
     try {
+      if (!isSafeId(params.name)) {
+        return json({ error: "Invalid container name format" }, 400);
+      }
       await stopContainer(params.name);
       return json({ ok: true });
     } catch (e) {
@@ -251,6 +285,9 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.post("/containers/:name/shell", async ({ params }) => {
     try {
+      if (!isSafeId(params.name)) {
+        return json({ error: "Invalid container name format" }, 400);
+      }
       const result = await startShellSession(params.name);
       return json(result);
     } catch (e) {
@@ -277,6 +314,9 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.post("/terminal/:sessionId/kill-clients", async ({ params }) => {
     try {
+      if (!isSafeId(params.sessionId)) {
+        return json({ error: "Invalid sessionId format" }, 400);
+      }
       const killed = await killTerminalClients(params.sessionId);
       return json({ killed });
     } catch (e) {

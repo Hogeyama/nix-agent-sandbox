@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import {
+  extractSessionId,
   handleTerminalMessage,
   parseTerminalControlMessage,
   type TerminalWSData,
@@ -64,4 +65,35 @@ test("handleTerminalMessage: plain text is still forwarded to dtach", () => {
 
   expect(writes).toHaveLength(1);
   expect([...writes[0]]).toEqual([0, 8, 101, 99, 104, 111, 32, 104, 105, 10]);
+});
+
+test("extractSessionId: returns the plain id for a legit sess_<hex>", () => {
+  expect(extractSessionId("/api/terminal/sess_abc123")).toBe("sess_abc123");
+});
+
+test("extractSessionId: returns the plain id for a shell-<parent>.<seq>", () => {
+  expect(extractSessionId("/api/terminal/shell-sess_abc.1")).toBe(
+    "shell-sess_abc.1",
+  );
+});
+
+test("extractSessionId: rejects URL-encoded path traversal", () => {
+  expect(extractSessionId("/api/terminal/..%2F..%2Fetc%2Fpasswd")).toBeNull();
+});
+
+test("extractSessionId: rejects a decoded `..` substring", () => {
+  expect(extractSessionId("/api/terminal/foo..bar")).toBeNull();
+});
+
+test("extractSessionId: rejects unknown path shape", () => {
+  expect(extractSessionId("/api/not-terminal/sess_abc123")).toBeNull();
+});
+
+test("extractSessionId: rejects empty segment", () => {
+  expect(extractSessionId("/api/terminal/")).toBeNull();
+});
+
+test("extractSessionId: rejects malformed percent encoding", () => {
+  // decodeURIComponent throws on a lone %, triggering the catch.
+  expect(extractSessionId("/api/terminal/bad%zz")).toBeNull();
 });

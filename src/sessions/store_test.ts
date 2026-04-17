@@ -276,3 +276,29 @@ test("resolveSessionRuntimePaths honors NAS_SESSION_STORE_DIR env var", async ()
     await rm(envRoot, { recursive: true, force: true });
   }
 });
+
+test("sessionRecordPath rejects traversal via ..", () => {
+  expect(() => sessionRecordPath(paths, "../x")).toThrow(
+    /path traversal detected/,
+  );
+});
+
+test("sessionRecordPath rejects deeper traversal via ../..", () => {
+  expect(() => sessionRecordPath(paths, "../../../etc/passwd")).toThrow(
+    /path traversal detected/,
+  );
+});
+
+test("sessionRecordPath rejects equal-to-base sessionId", () => {
+  // `path.join("sessions", ".json")` keeps us at sessionsDir — defense
+  // depth still treats this as not strictly within, per `rel === ""`.
+  // We use a normalized-empty case instead.
+  expect(() => sessionRecordPath(paths, "../sessions/..")).toThrow(
+    /path traversal detected/,
+  );
+});
+
+test("sessionRecordPath accepts a plain sessionId", () => {
+  const resolved = sessionRecordPath(paths, "sess_abc123");
+  expect(resolved).toBe(path.join(paths.sessionsDir, "sess_abc123.json"));
+});

@@ -89,11 +89,28 @@ export async function ensureSessionRuntimePaths(
   return paths;
 }
 
+/**
+ * Defense-in-depth: ensure a joined path stays inside `base`. Throws if
+ * `joined` escapes the base (traversal via `..`, absolute path, or
+ * resolves to `base` itself). Complements API-boundary validation — a
+ * caller that forgets to validate its sessionId still fails closed.
+ */
+function assertWithin(base: string, joined: string): string {
+  const rel = path.relative(base, joined);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`path traversal detected: ${joined}`);
+  }
+  return joined;
+}
+
 export function sessionRecordPath(
   paths: SessionRuntimePaths,
   sessionId: string,
 ): string {
-  return path.join(paths.sessionsDir, `${sessionId}.json`);
+  return assertWithin(
+    paths.sessionsDir,
+    path.join(paths.sessionsDir, `${sessionId}.json`),
+  );
 }
 
 /**
