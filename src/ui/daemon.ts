@@ -35,6 +35,10 @@ function daemonStatePath(): string {
   return path.join(daemonStateDir(), "daemon.json");
 }
 
+function daemonLogPath(): string {
+  return path.join(daemonStateDir(), "daemon.log");
+}
+
 /**
  * Ensure a UI daemon is running on the given port.
  * If not running, starts one automatically.
@@ -138,6 +142,10 @@ async function startUiDaemon(
     args.push("--idle-timeout", String(idleTimeout));
   }
 
+  // Ensure log dir exists and log path is ready before the daemon writes to it.
+  const logPath = daemonLogPath();
+  await mkdir(daemonStateDir(), { recursive: true });
+
   // Fully detach via shell double-fork + setsid so the daemon survives
   // parent exit. Deno may kill direct child processes on shutdown, so we
   // launch through a shell subshell that backgrounds and exits immediately.
@@ -145,9 +153,12 @@ async function startUiDaemon(
   const cmdLine = [execPath, ...args]
     .map((a) => `'${a.replaceAll("'", "'\\''")}'`)
     .join(" ");
+  const escapedLog = `'${logPath.replaceAll("'", "'\\''")}'`;
+  const redirect = `</dev/null >>${escapedLog} 2>&1`;
   const shellCmd = (await hasSetsid())
-    ? `setsid ${cmdLine} </dev/null >/dev/null 2>&1 &`
-    : `(${cmdLine}) </dev/null >/dev/null 2>&1 &`;
+    ? `setsid ${cmdLine} ${redirect} &`
+    : `(${cmdLine}) ${redirect} &`;
+  logInfo(`[nas] UI daemon logs: ${logPath}`);
   // Drop NAS_SESSION_ID / NAS_INSIDE_DTACH so the daemon (and any child
   // sessions it spawns) does not inherit identity from an outer nas session.
   const { NAS_SESSION_ID, NAS_INSIDE_DTACH, ...cleanEnv } = process.env;
