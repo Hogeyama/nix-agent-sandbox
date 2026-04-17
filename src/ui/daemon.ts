@@ -148,10 +148,16 @@ async function startUiDaemon(
   const shellCmd = (await hasSetsid())
     ? `setsid ${cmdLine} </dev/null >/dev/null 2>&1 &`
     : `(${cmdLine}) </dev/null >/dev/null 2>&1 &`;
+  // Drop NAS_SESSION_ID / NAS_INSIDE_DTACH so the daemon (and any child
+  // sessions it spawns) does not inherit identity from an outer nas session.
+  const { NAS_SESSION_ID, NAS_INSIDE_DTACH, ...cleanEnv } = process.env;
+  void NAS_SESSION_ID;
+  void NAS_INSIDE_DTACH;
   const child = Bun.spawn(["sh", "-c", shellCmd], {
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
+    env: cleanEnv,
   });
   child.unref();
 
