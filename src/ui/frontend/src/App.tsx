@@ -143,6 +143,23 @@ export function App() {
   const handleShell = useCallback(async (containerName: string) => {
     try {
       const { dtachSessionId } = await api.startShell(containerName);
+      // Optimistically register the new session so the reconciliation
+      // effect keyed on availableTerminalIds does not drop it (and reset
+      // activeTermSessionId to the first tab) while we wait for the SSE
+      // `terminal:sessions` event to catch up.
+      setDtachSessions((current) =>
+        current.some((session) => session.sessionId === dtachSessionId)
+          ? current
+          : [
+              ...current,
+              {
+                name: dtachSessionId,
+                sessionId: dtachSessionId,
+                socketPath: "",
+                createdAt: Math.floor(Date.now() / 1000),
+              },
+            ],
+      );
       setOpenTermSessionIds((current) =>
         current.includes(dtachSessionId)
           ? current
