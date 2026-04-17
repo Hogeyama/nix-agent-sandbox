@@ -1,4 +1,7 @@
+import { parseShellSessionId } from "../../shell_session_id.ts";
 import type { ContainerInfo, DtachSession } from "./api.ts";
+
+export { parseShellSessionId } from "../../shell_session_id.ts";
 
 export interface TerminalSessionTabData {
   sessionId: string;
@@ -11,26 +14,6 @@ export interface TerminalSessionTabData {
   parentSessionId?: string;
   /** shell セッションの場合、コンテナ単位で何番目の shell か */
   shellSeq?: number;
-}
-
-/**
- * shell dtach セッション ID の形式:
- *   shell-<parentSessionId>.<seq>
- * backend の `parseShellSessionId` (src/ui/data.ts) と対応。
- */
-export function parseShellSessionId(
-  id: string,
-): { parentSessionId: string; seq: number } | null {
-  if (!id.startsWith("shell-")) return null;
-  const rest = id.slice("shell-".length);
-  const dotIdx = rest.lastIndexOf(".");
-  if (dotIdx <= 0 || dotIdx === rest.length - 1) return null;
-  const parent = rest.slice(0, dotIdx);
-  const seqStr = rest.slice(dotIdx + 1);
-  if (!/^\d+$/.test(seqStr)) return null;
-  const seq = Number.parseInt(seqStr, 10);
-  if (seq <= 0) return null;
-  return { parentSessionId: parent, seq };
 }
 
 export function buildTerminalSessionTabs(

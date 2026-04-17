@@ -61,6 +61,15 @@ import {
   type SessionTurn,
   updateSessionName as storeUpdateSessionName,
 } from "../sessions/store.ts";
+import {
+  buildShellSessionId,
+  type ParsedShellSessionId,
+  parseShellSessionId,
+} from "./shell_session_id.ts";
+
+export type { ParsedShellSessionId };
+export { buildShellSessionId, parseShellSessionId };
+
 /** Thrown when a shell session is requested for a container that is not running. */
 export class ContainerNotRunningError extends Error {
   constructor(containerName: string) {
@@ -407,30 +416,6 @@ async function collectRunningSessionIds(): Promise<Set<string>> {
   return running;
 }
 
-/**
- * shell dtach セッション ID の形式:
- *   shell-<parentSessionId>.<seq>
- * seq は 1 始まりの整数。parentSessionId は末尾に `.<digits>` を
- * 含まない前提 (現状の nas セッション ID は ISO タイムスタンプ形式)。
- */
-export interface ParsedShellSessionId {
-  parentSessionId: string;
-  seq: number;
-}
-
-export function parseShellSessionId(id: string): ParsedShellSessionId | null {
-  if (!id.startsWith("shell-")) return null;
-  const rest = id.slice("shell-".length);
-  const dotIdx = rest.lastIndexOf(".");
-  if (dotIdx <= 0 || dotIdx === rest.length - 1) return null;
-  const parent = rest.slice(0, dotIdx);
-  const seqStr = rest.slice(dotIdx + 1);
-  if (!/^\d+$/.test(seqStr)) return null;
-  const seq = Number.parseInt(seqStr, 10);
-  if (seq <= 0) return null;
-  return { parentSessionId: parent, seq };
-}
-
 async function nextShellSessionId(parentSessionId: string): Promise<string> {
   const existing = await dtachListSessions();
   let maxSeq = 0;
@@ -440,7 +425,7 @@ async function nextShellSessionId(parentSessionId: string): Promise<string> {
     if (parsed.parentSessionId !== parentSessionId) continue;
     if (parsed.seq > maxSeq) maxSeq = parsed.seq;
   }
-  return `shell-${parentSessionId}.${maxSeq + 1}`;
+  return buildShellSessionId(parentSessionId, maxSeq + 1);
 }
 
 export async function startShellSession(
