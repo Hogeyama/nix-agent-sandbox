@@ -486,8 +486,13 @@ export async function startShellSession(
   ];
   const shellCommand = shellEscape(execArgs);
 
-  // 6. dtach セッション起動
-  await dtachNewSession(socketPath, shellCommand);
+  // 6. dtach セッション起動 — 失敗時は socket 残骸を掃除する
+  try {
+    await dtachNewSession(socketPath, shellCommand);
+  } catch (error) {
+    await safeRemove(socketPath);
+    throw error;
+  }
 
   return { dtachSessionId };
 }
