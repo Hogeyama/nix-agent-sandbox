@@ -8,6 +8,7 @@ import {
   acknowledgeSessionTurn,
   approveHostExec,
   approveNetwork,
+  ContainerNotRunningError,
   cleanContainers,
   denyHostExec,
   denyNetwork,
@@ -18,6 +19,7 @@ import {
   getSessions,
   getTerminalSessions,
   renameSession,
+  startShellSession,
   stopContainer,
 } from "../data.ts";
 import {
@@ -231,6 +233,18 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       const result = await cleanContainers();
       return json(result);
     } catch (e) {
+      return json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  api.post("/containers/:sessionId/shell", async ({ params }) => {
+    try {
+      const result = await startShellSession(params.sessionId);
+      return json(result);
+    } catch (e) {
+      if (e instanceof ContainerNotRunningError) {
+        return json({ error: e.message }, 409);
+      }
       return json({ error: (e as Error).message }, 500);
     }
   });

@@ -10,7 +10,9 @@ import type { ContainerCleanResult } from "../container_clean.ts";
 import { cleanNasContainers } from "../container_clean.ts";
 import type { DockerContainerDetails } from "../docker/client.ts";
 import {
+  dockerExec,
   dockerInspectContainer,
+  dockerIsRunning,
   dockerListContainerNames,
   dockerStop,
 } from "../docker/client.ts";
@@ -18,7 +20,12 @@ import {
   isNasManagedContainer,
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
-import { dtachListSessions } from "../dtach/client.ts";
+import {
+  dtachListSessions,
+  dtachNewSession,
+  shellEscape,
+  socketPathFor,
+} from "../dtach/client.ts";
 import { sendHostExecBrokerRequest } from "../hostexec/broker.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import {
@@ -55,6 +62,14 @@ import {
   type SessionTurn,
   updateSessionName as storeUpdateSessionName,
 } from "../sessions/store.ts";
+/** Thrown when a shell session is requested for a container that is not running. */
+export class ContainerNotRunningError extends Error {
+  constructor(containerName: string) {
+    super(`Container is not running: ${containerName}`);
+    this.name = "ContainerNotRunningError";
+  }
+}
+
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
   hostExecPaths: HostExecRuntimePaths;
@@ -327,6 +342,44 @@ export async function stopContainer(name: string): Promise<void> {
 
 export async function cleanContainers(): Promise<ContainerCleanResult> {
   return await cleanNasContainers();
+}
+
+export async function startShellSession(
+  sessionId: string,
+): Promise<{ dtachSessionId: string }> {
+  // 1. コンテナ稼働確認
+  const containerName = `nas-agent-${sessionId}`;
+  const running = await dockerIsRunning(containerName);
+  if (!running) {
+    throw new ContainerNotRunningError(containerName);
+  }
+
+  // 2. bash 存在確認、なければ /bin/sh にフォールバック
+  const bashCheck = await dockerExec(containerName, [
+    "test",
+    "-x",
+    "/bin/bash",
+  ]);
+  const shell = bashCheck.code === 0 ? "/bin/bash" : "/bin/sh";
+
+  // 3. dtach セッションID生成 (shell- prefix で区別)
+  const randomBytes = crypto.getRandomValues(new Uint8Array(6));
+  const dtachSessionId = `shell-${Buffer.from(randomBytes).toString("hex")}`;
+
+  // 4. ソケットパス取得
+  const socketPath = socketPathFor(dtachSessionId);
+
+  // 5. コマンド文字列構築
+  const execArgs = ["docker", "exec", "-it", containerName, shell];
+  if (shell === "/bin/bash") {
+    execArgs.push("-l");
+  }
+  const shellCommand = shellEscape(execArgs);
+
+  // 6. dtach セッション起動
+  await dtachNewSession(socketPath, shellCommand);
+
+  return { dtachSessionId };
 }
 
 // --- Audit ---
