@@ -27,12 +27,12 @@ let
       {
         src = "~/.nix-profile/bin";
         dst = "~/.nix-profile/bin";
-        mode = "rw";
+        mode = "ro";
       }
       {
         src = "~/.config/nvim";
         dst = "~/.config/nvim";
-        mode = "rw";
+        mode = "ro";
       }
       {
         src = "~/.config/tmux";
@@ -169,21 +169,6 @@ let
           };
           approval = "deny";
           fallback = "deny";
-        }
-        {
-          id = "wl-copy";
-          match = {
-            argv0 = "wl-copy";
-          };
-          cwd = {
-            mode = "workspace-or-session-tmp";
-          };
-          inherit-env = {
-            mode = "minimal";
-            keys = [ "WAYLAND_DISPLAY" "XDG_RUNTIME_DIR" ];
-          };
-          approval = "allow";
-          fallback = "container";
         }
         {
           id = "wl-paste";
