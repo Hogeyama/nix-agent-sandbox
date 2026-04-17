@@ -298,11 +298,7 @@ test("resolveClaudeProbes: returns null when claude not on PATH", async () => {
 test("configureCopilot: uses ['copilot'] when binary found", () => {
   const probes: CopilotProbes = {
     copilotBinPath: "/usr/bin/copilot",
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
     copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: null,
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
@@ -321,11 +317,7 @@ test("configureCopilot: uses ['copilot'] when binary found", () => {
 test("configureCopilot: uses error command when copilot binary not found", () => {
   const probes: CopilotProbes = {
     copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
     copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: null,
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
@@ -340,35 +332,10 @@ test("configureCopilot: uses error command when copilot binary not found", () =>
   );
 });
 
-test("configureCopilot: mounts copilot config dir with custom containerHome", () => {
+test("configureCopilot: does not mount copilot dir when absent", () => {
   const probes: CopilotProbes = {
-    copilotBinPath: null,
-    copilotConfigDirExists: true,
-    copilotStateDirExists: false,
+    copilotBinPath: "/usr/bin/copilot",
     copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: null,
-  };
-  const result = configureCopilot({
-    containerHome: "/home/custom",
-    hostHome: "/home/host",
-    probes,
-    priorDockerArgs: [],
-    priorEnvVars: {},
-  });
-  const mountArg = result.dockerArgs.find((a) => a.includes(".copilot"));
-  expect(mountArg !== undefined).toEqual(true);
-  expect(mountArg?.includes("/home/custom/")).toEqual(true);
-});
-
-test("configureCopilot: does not mount copilot config when absent", () => {
-  const probes: CopilotProbes = {
-    copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
-    copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: null,
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
@@ -377,18 +344,33 @@ test("configureCopilot: does not mount copilot config when absent", () => {
     priorDockerArgs: [],
     priorEnvVars: {},
   });
-  const hasCopilotMount = result.dockerArgs.some((a) => a.includes(".copilot"));
-  expect(hasCopilotMount).toEqual(false);
+  const hasCopilotDirMount = result.dockerArgs.some(
+    (a) => a.includes(".copilot") && !a.endsWith("/copilot:ro"),
+  );
+  expect(hasCopilotDirMount).toEqual(false);
+});
+
+test("configureCopilot: mounts ~/.copilot when legacy dir exists", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: "/usr/bin/copilot",
+    copilotLegacyDirExists: true,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.dockerArgs).toContain(
+    "/home/host/.copilot:/home/testuser/.copilot",
+  );
 });
 
 test("configureCopilot: preserves existing dockerArgs and envVars", () => {
   const probes: CopilotProbes = {
     copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
     copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: null,
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
@@ -401,91 +383,10 @@ test("configureCopilot: preserves existing dockerArgs and envVars", () => {
   expect(result.envVars.KEEP_ME).toEqual("yes");
 });
 
-test("configureCopilot: passes XDG_CONFIG_HOME when set", () => {
+test("configureCopilot: does not leak XDG env vars", () => {
   const probes: CopilotProbes = {
     copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
     copilotLegacyDirExists: false,
-    xdgConfigHome: "/tmp/nas-test-xdg-config",
-    xdgStateHome: null,
-  };
-  const result = configureCopilot({
-    containerHome: "/home/testuser",
-    hostHome: "/home/host",
-    probes,
-    priorDockerArgs: [],
-    priorEnvVars: {},
-  });
-  expect(result.envVars.XDG_CONFIG_HOME !== undefined).toEqual(true);
-});
-
-test("configureCopilot: passes XDG_STATE_HOME when set", () => {
-  const probes: CopilotProbes = {
-    copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
-    copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: "/tmp/nas-test-xdg-state",
-  };
-  const result = configureCopilot({
-    containerHome: "/home/testuser",
-    hostHome: "/home/host",
-    probes,
-    priorDockerArgs: [],
-    priorEnvVars: {},
-  });
-  expect(result.envVars.XDG_STATE_HOME !== undefined).toEqual(true);
-});
-
-test("configureCopilot: remaps XDG paths under HOME to containerHome", () => {
-  const hostHome = "/home/host";
-  const probes: CopilotProbes = {
-    copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
-    copilotLegacyDirExists: false,
-    xdgConfigHome: `${hostHome}/.config`,
-    xdgStateHome: null,
-  };
-  const result = configureCopilot({
-    containerHome: "/home/testuser",
-    hostHome,
-    probes,
-    priorDockerArgs: [],
-    priorEnvVars: {},
-  });
-  expect(result.envVars.XDG_CONFIG_HOME).toEqual("/home/testuser/.config");
-});
-
-test("configureCopilot: does not remap XDG paths outside HOME", () => {
-  const probes: CopilotProbes = {
-    copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
-    copilotLegacyDirExists: false,
-    xdgConfigHome: "/opt/custom-config",
-    xdgStateHome: null,
-  };
-  const result = configureCopilot({
-    containerHome: "/home/testuser",
-    hostHome: "/home/host",
-    probes,
-    priorDockerArgs: [],
-    priorEnvVars: {},
-  });
-  expect(result.envVars.XDG_CONFIG_HOME).toEqual("/opt/custom-config");
-});
-
-test("configureCopilot: does not set XDG vars when not set on host", () => {
-  const probes: CopilotProbes = {
-    copilotBinPath: null,
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
-    copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: null,
   };
   const result = configureCopilot({
     containerHome: "/home/testuser",
@@ -502,38 +403,6 @@ test("configureCopilot: does not set XDG vars when not set on host", () => {
 // resolveCopilotProbes (integration with filesystem)
 // ============================================================
 
-test("resolveCopilotProbes: detects existing config dir", async () => {
-  await withTempHome(async (tmpHome) => {
-    const origXdg = process.env.XDG_CONFIG_HOME;
-    try {
-      delete process.env.XDG_CONFIG_HOME;
-      await mkdir(`${tmpHome}/.copilot`, { recursive: true });
-      const probes = resolveCopilotProbes(tmpHome);
-      expect(probes.copilotConfigDirExists).toEqual(true);
-    } finally {
-      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
-    }
-  });
-});
-
-test("resolveCopilotProbes: detects missing config dir", async () => {
-  await withTempHome((tmpHome) => {
-    const origXdg = process.env.XDG_CONFIG_HOME;
-    const origXdgState = process.env.XDG_STATE_HOME;
-    try {
-      delete process.env.XDG_CONFIG_HOME;
-      delete process.env.XDG_STATE_HOME;
-      const probes = resolveCopilotProbes(tmpHome);
-      expect(probes.copilotConfigDirExists).toEqual(false);
-    } finally {
-      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
-      if (origXdgState !== undefined) {
-        process.env.XDG_STATE_HOME = origXdgState;
-      }
-    }
-  });
-});
-
 test("resolveCopilotProbes: finds copilot binary on PATH", async () => {
   await withFakeBinary("copilot", () => {
     const probes = resolveCopilotProbes("/tmp");
@@ -548,106 +417,18 @@ test("resolveCopilotProbes: returns null when copilot not on PATH", async () => 
   });
 });
 
-test("resolveCopilotProbes: detects existing state dir", async () => {
+test("resolveCopilotProbes: detects existing ~/.copilot", async () => {
   await withTempHome(async (tmpHome) => {
-    const origXdg = process.env.XDG_CONFIG_HOME;
-    const origXdgState = process.env.XDG_STATE_HOME;
-    try {
-      delete process.env.XDG_CONFIG_HOME;
-      delete process.env.XDG_STATE_HOME;
-      // XDG 未設定時は state dir = config dir = $HOME/.copilot
-      await mkdir(`${tmpHome}/.copilot`, { recursive: true });
-      const probes = resolveCopilotProbes(tmpHome);
-      expect(probes.copilotStateDirExists).toEqual(true);
-    } finally {
-      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
-      if (origXdgState !== undefined) {
-        process.env.XDG_STATE_HOME = origXdgState;
-      }
-    }
+    await mkdir(`${tmpHome}/.copilot`, { recursive: true });
+    const probes = resolveCopilotProbes(tmpHome);
+    expect(probes.copilotLegacyDirExists).toEqual(true);
   });
 });
 
-test("resolveCopilotProbes: detects missing state dir", async () => {
+test("resolveCopilotProbes: reports missing ~/.copilot", async () => {
   await withTempHome((tmpHome) => {
-    const origXdg = process.env.XDG_CONFIG_HOME;
-    const origXdgState = process.env.XDG_STATE_HOME;
-    try {
-      delete process.env.XDG_CONFIG_HOME;
-      delete process.env.XDG_STATE_HOME;
-      const probes = resolveCopilotProbes(tmpHome);
-      expect(probes.copilotStateDirExists).toEqual(false);
-    } finally {
-      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
-      if (origXdgState !== undefined) {
-        process.env.XDG_STATE_HOME = origXdgState;
-      }
-    }
-  });
-});
-
-test("resolveCopilotProbes: detects existing legacy dir when XDG paths differ", async () => {
-  await withTempHome(async (tmpHome) => {
-    const origXdg = process.env.XDG_CONFIG_HOME;
-    const origXdgState = process.env.XDG_STATE_HOME;
-    const xdgConfigDir = await mkdtemp(path.join(tmpdir(), "nas-test-xdg-"));
-    const xdgStateDir = await mkdtemp(path.join(tmpdir(), "nas-test-xdg-"));
-    try {
-      process.env.XDG_CONFIG_HOME = xdgConfigDir;
-      process.env.XDG_STATE_HOME = xdgStateDir;
-      // legacy dir は $HOME/.copilot (XDG とは異なるパス)
-      await mkdir(`${tmpHome}/.copilot`, { recursive: true });
-      const probes = resolveCopilotProbes(tmpHome);
-      expect(probes.copilotLegacyDirExists).toEqual(true);
-    } finally {
-      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
-      else delete process.env.XDG_CONFIG_HOME;
-      if (origXdgState !== undefined) {
-        process.env.XDG_STATE_HOME = origXdgState;
-      } else delete process.env.XDG_STATE_HOME;
-      await rm(xdgConfigDir, { recursive: true, force: true }).catch(() => {});
-      await rm(xdgStateDir, { recursive: true, force: true }).catch(() => {});
-    }
-  });
-});
-
-test("resolveCopilotProbes: legacy dir is false when it does not exist", async () => {
-  await withTempHome((_tmpHome) => {
-    const origXdg = process.env.XDG_CONFIG_HOME;
-    const origXdgState = process.env.XDG_STATE_HOME;
-    try {
-      process.env.XDG_CONFIG_HOME = "/tmp/nas-nonexistent-xdg-config";
-      process.env.XDG_STATE_HOME = "/tmp/nas-nonexistent-xdg-state";
-      // $HOME/.copilot does not exist
-      const probes = resolveCopilotProbes(_tmpHome);
-      expect(probes.copilotLegacyDirExists).toEqual(false);
-    } finally {
-      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
-      else delete process.env.XDG_CONFIG_HOME;
-      if (origXdgState !== undefined) {
-        process.env.XDG_STATE_HOME = origXdgState;
-      } else delete process.env.XDG_STATE_HOME;
-    }
-  });
-});
-
-test("resolveCopilotProbes: legacy dir is false when XDG not set (same as config dir)", async () => {
-  await withTempHome(async (tmpHome) => {
-    const origXdg = process.env.XDG_CONFIG_HOME;
-    const origXdgState = process.env.XDG_STATE_HOME;
-    try {
-      delete process.env.XDG_CONFIG_HOME;
-      delete process.env.XDG_STATE_HOME;
-      // XDG 未設定時は legacy dir == config dir なので常に false
-      await mkdir(`${tmpHome}/.copilot`, { recursive: true });
-      const probes = resolveCopilotProbes(tmpHome);
-      expect(probes.copilotLegacyDirExists).toEqual(false);
-    } finally {
-      if (origXdg !== undefined) process.env.XDG_CONFIG_HOME = origXdg;
-      if (origXdgState !== undefined) {
-        process.env.XDG_STATE_HOME = origXdgState;
-      }
-    }
+    const probes = resolveCopilotProbes(tmpHome);
+    expect(probes.copilotLegacyDirExists).toEqual(false);
   });
 });
 

@@ -1006,11 +1006,7 @@ test("MountStage: claude agent sets agentCommand and PATH", () => {
 test("MountStage: copilot agent sets agentCommand", () => {
   const copilotProbes: CopilotProbes = {
     copilotBinPath: "/usr/bin/copilot",
-    copilotConfigDirExists: false,
-    copilotStateDirExists: false,
     copilotLegacyDirExists: false,
-    xdgConfigHome: null,
-    xdgStateHome: null,
   };
   const profile = makeProfile({ agent: "copilot" });
   const mountProbes = makeMountProbes({ agentProbes: copilotProbes });
