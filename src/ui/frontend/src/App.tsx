@@ -155,6 +155,20 @@ export function App() {
     }
   }, []);
 
+  const handleTerminalShell = useCallback(
+    (sessionId: string) => {
+      const container = containers.find((c) => c.sessionId === sessionId);
+      if (!container) {
+        console.error(
+          `Cannot open shell: no container found for session ${sessionId}`,
+        );
+        return;
+      }
+      void handleShell(container.name);
+    },
+    [containers, handleShell],
+  );
+
   const handleAckTurn = useCallback(async (sessionId: string) => {
     try {
       const { item } = await api.ackSessionTurn(sessionId);
@@ -398,6 +412,7 @@ export function App() {
           onCloseSession={handleTermClose}
           onRenameSession={handleRename}
           onAckTurn={handleAckTurn}
+          onShell={handleTerminalShell}
           onMinimize={handleTermMinimize}
         />
       )}

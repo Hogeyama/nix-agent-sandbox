@@ -26,6 +26,7 @@ interface TerminalModalProps {
   onCloseSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => Promise<void> | void;
   onAckTurn: (sessionId: string) => Promise<void> | void;
+  onShell?: (sessionId: string) => void;
   onMinimize: () => void;
 }
 
@@ -37,6 +38,7 @@ interface TerminalPaneProps extends TerminalSessionTab {
   onCloseSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, name: string) => Promise<void> | void;
   onAckTurn: (sessionId: string) => Promise<void> | void;
+  onShell?: (sessionId: string) => void;
   onMinimize: () => void;
 }
 
@@ -188,6 +190,7 @@ function TerminalPane({
   canAckTurn,
   turnAcked,
   onAckTurn,
+  onShell,
   onMinimize,
 }: TerminalPaneProps) {
   const termRef = useRef<HTMLDivElement>(null);
@@ -733,6 +736,16 @@ function TerminalPane({
               </svg>
             </button>
           </div>
+          {onShell && !sessionId.startsWith("shell-") && (
+            <button
+              type="button"
+              class="btn btn-ghost"
+              onMouseDown={preventFocusSteal}
+              onClick={() => onShell(sessionId)}
+            >
+              Shell
+            </button>
+          )}
           <button
             type="button"
             class={turnAcked ? "btn btn-ghost" : "btn btn-primary"}
@@ -857,6 +870,7 @@ export function TerminalModal({
   onCloseSession,
   onRenameSession,
   onAckTurn,
+  onShell,
   onMinimize,
 }: TerminalModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -911,6 +925,7 @@ export function TerminalModal({
               onCloseSession={onCloseSession}
               onRenameSession={onRenameSession}
               onAckTurn={onAckTurn}
+              onShell={onShell}
               onMinimize={onMinimize}
             />
           ))}
