@@ -502,27 +502,6 @@ test("MountStage: extra-mount relative dst resolves from workDir", () => {
   ).toEqual(true);
 });
 
-test("MountStage: extra-mount to /nix conflicts", () => {
-  const profile = makeProfile({
-    extraMounts: [{ src: "/some/dir", dst: "/nix", mode: "ro" }],
-  });
-  const mountProbes = makeMountProbes({
-    resolvedExtraMounts: [
-      {
-        normalizedSrc: "/some/dir",
-        srcExists: true,
-        srcIsDirectory: true,
-        mode: "ro",
-        index: 0,
-      },
-    ],
-  });
-  const { input } = makeInput({ profile, mountProbes });
-  expect(() => planMount(input, mountProbes)).toThrow(
-    "conflicts with existing mount destination",
-  );
-});
-
 test("MountStage: extra-mount to /var/run/docker.sock is allowed", () => {
   const profile = makeProfile({
     extraMounts: [
@@ -551,7 +530,7 @@ test("MountStage: extra-mount to /var/run/docker.sock is allowed", () => {
   ).toEqual(true);
 });
 
-test("MountStage: extra-mount to workspace dir conflicts", () => {
+test("MountStage: extra-mount to workspace dir is allowed", () => {
   const profile = makeProfile({
     extraMounts: [{ src: "/tmp", dst: TEST_WORK_DIR, mode: "ro" }],
   });
@@ -567,9 +546,10 @@ test("MountStage: extra-mount to workspace dir conflicts", () => {
     ],
   });
   const { input } = makeInput({ profile, mountProbes });
-  expect(() => planMount(input, mountProbes)).toThrow(
-    "conflicts with existing mount destination",
-  );
+  const plan = planMount(input, mountProbes);
+  expect(
+    plan.dockerArgs.some((a: string) => a.includes(`:${TEST_WORK_DIR}:ro`)),
+  ).toEqual(true);
 });
 
 test("MountStage: extra-mount file under workspace dir is allowed", () => {
@@ -600,7 +580,7 @@ test("MountStage: extra-mount file under workspace dir is allowed", () => {
   ).toEqual(true);
 });
 
-test("MountStage: extra-mount directory under workspace dir conflicts", () => {
+test("MountStage: extra-mount directory under workspace dir is allowed", () => {
   const profile = makeProfile({
     extraMounts: [
       {
@@ -622,61 +602,12 @@ test("MountStage: extra-mount directory under workspace dir conflicts", () => {
     ],
   });
   const { input } = makeInput({ profile, mountProbes });
-  expect(() => planMount(input, mountProbes)).toThrow(
-    "conflicts with existing mount destination",
-  );
-});
-
-test("MountStage: extra-mount duplicate dst conflicts", () => {
-  const profile = makeProfile({
-    extraMounts: [
-      { src: "/a", dst: "/mnt/dup", mode: "ro" },
-      { src: "/b", dst: "/mnt/dup", mode: "rw" },
-    ],
-  });
-  const mountProbes = makeMountProbes({
-    resolvedExtraMounts: [
-      {
-        normalizedSrc: "/a",
-        srcExists: true,
-        srcIsDirectory: true,
-        mode: "ro",
-        index: 0,
-      },
-      {
-        normalizedSrc: "/b",
-        srcExists: true,
-        srcIsDirectory: true,
-        mode: "rw",
-        index: 1,
-      },
-    ],
-  });
-  const { input } = makeInput({ profile, mountProbes });
-  expect(() => planMount(input, mountProbes)).toThrow(
-    "conflicts with existing mount destination",
-  );
-});
-
-test("MountStage: extra-mount under reserved /nix conflicts", () => {
-  const profile = makeProfile({
-    extraMounts: [{ src: "/dev/null", dst: "/nix/.env", mode: "ro" }],
-  });
-  const mountProbes = makeMountProbes({
-    resolvedExtraMounts: [
-      {
-        normalizedSrc: "/dev/null",
-        srcExists: true,
-        srcIsDirectory: false,
-        mode: "ro",
-        index: 0,
-      },
-    ],
-  });
-  const { input } = makeInput({ profile, mountProbes });
-  expect(() => planMount(input, mountProbes)).toThrow(
-    "conflicts with existing mount destination",
-  );
+  const plan = planMount(input, mountProbes);
+  expect(
+    plan.dockerArgs.some((a: string) =>
+      a.includes(`:${TEST_WORK_DIR}/.config:ro`),
+    ),
+  ).toEqual(true);
 });
 
 test("MountStage: extra-mount nonexistent src is skipped", () => {

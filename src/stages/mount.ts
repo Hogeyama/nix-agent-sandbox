@@ -45,15 +45,6 @@ export { resolveMountProbes } from "./mount_probes.ts";
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const DEFAULT_CONTAINER_USER = "nas";
-const RESERVED_EXTRA_MOUNT_DESTINATIONS = ["/nix"] as const;
-
-type MountDestinationKind = "file" | "directory";
-
-interface RegisteredMountDestination {
-  path: string;
-  kind: MountDestinationKind;
-  allowNestedFiles: boolean;
-}
 
 // ---------------------------------------------------------------------------
 // MountPlan — pure data description returned by planMount()
@@ -154,19 +145,6 @@ export function planMount(
   args.push("-w", containerWorkDir);
   envVars.WORKSPACE = containerWorkDir;
 
-  const extraMountDestinations: RegisteredMountDestination[] = [
-    ...RESERVED_EXTRA_MOUNT_DESTINATIONS.map((reservedPath) => ({
-      path: path.normalize(reservedPath),
-      kind: "directory" as const,
-      allowNestedFiles: false,
-    })),
-    {
-      path: path.normalize(mountSource),
-      kind: "directory",
-      allowNestedFiles: true,
-    },
-  ];
-
   // UID/GID
   const uid = host.uid;
   const gid = host.gid;
@@ -180,11 +158,6 @@ export function planMount(
         "[nas] dbus.session.enable requires a host UID to mount /run/user/$UID",
       );
     }
-    extraMountDestinations.push({
-      path: path.normalize(`/run/user/${uid}`),
-      kind: "directory",
-      allowNestedFiles: false,
-    });
   }
 
   // Nix ソケットマウント
@@ -334,22 +307,6 @@ export function planMount(
       containerHome,
       containerWorkDir,
     );
-
-    const conflict = findConflictingMountDestination(
-      extraMountDestinations,
-      normalizedDst,
-      resolvedMount.srcIsDirectory ? "directory" : "file",
-    );
-    if (conflict) {
-      throw new Error(
-        `[nas] profile.extra-mounts[${resolvedMount.index}].dst conflicts with existing mount destination: ${normalizedDst}`,
-      );
-    }
-    extraMountDestinations.push({
-      path: normalizedDst,
-      kind: resolvedMount.srcIsDirectory ? "directory" : "file",
-      allowNestedFiles: false,
-    });
 
     addMount(
       args,
@@ -680,37 +637,6 @@ function parseMountSpec(rawMount: string): MountSpec {
   const source = mountValue.slice(0, separatorIndex);
   const target = mountValue.slice(separatorIndex + 1);
   return readOnly ? { source, target, readOnly: true } : { source, target };
-}
-
-function findConflictingMountDestination(
-  existingDestinations: RegisteredMountDestination[],
-  candidatePath: string,
-  candidateKind: MountDestinationKind,
-): RegisteredMountDestination | null {
-  for (const existing of existingDestinations) {
-    if (existing.path === candidatePath) {
-      return existing;
-    }
-    if (isParentPath(existing.path, candidatePath)) {
-      if (!(existing.allowNestedFiles && candidateKind === "file")) {
-        return existing;
-      }
-    }
-    if (isParentPath(candidatePath, existing.path)) {
-      return existing;
-    }
-  }
-  return null;
-}
-
-function isParentPath(parentPath: string, childPath: string): boolean {
-  const relative = path.relative(parentPath, childPath);
-  return (
-    relative !== "" &&
-    relative !== "." &&
-    !relative.startsWith("..") &&
-    !path.isAbsolute(relative)
-  );
 }
 
 export function serializeNixExtraPackages(packages: string[]): string | null {
