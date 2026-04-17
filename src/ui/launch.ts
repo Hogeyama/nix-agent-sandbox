@@ -88,6 +88,33 @@ function randomHex(bytes: number): string {
   return Buffer.from(data).toString("hex");
 }
 
+/**
+ * Resolve a stable path to the `nas` binary for spawning new sessions.
+ *
+ * `process.execPath` points at the nix-bundle-elf self-extracted binary
+ * under /tmp, which is removed when the originating nas session exits.
+ * The UI daemon outlives that session, so that path becomes unusable.
+ *
+ * Resolution order:
+ *   1. NAS_BIN_PATH env var — set by packaging (flake.nix) or the developer.
+ *   2. process.execPath, if not under /tmp (covers `bun build --compile`
+ *      dev builds and the non-bundled nix wrapper's resolved sibling).
+ *
+ * PATH lookup is intentionally NOT used: during development with
+ * `nix run`, PATH may point at a different installed version of nas
+ * (e.g. ~/.local/bin/nas) which silently diverges from the one the
+ * developer is actually iterating on.
+ */
+async function resolveStableNasBin(): Promise<string | null> {
+  const envOverride = process.env.NAS_BIN_PATH;
+  if (envOverride && envOverride.trim().length > 0) return envOverride;
+
+  const exec = process.execPath;
+  if (exec && !exec.startsWith("/tmp/")) return exec;
+
+  return null;
+}
+
 function validateCwd(cwd: string): void {
   if (!cwd) {
     throw new LaunchValidationError("Invalid cwd: must be an absolute path");
@@ -140,7 +167,17 @@ export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
   const sessionId = `sess_${randomHex(6)}`;
   const socketPath = socketPathFor(sessionId);
 
-  const cmdArgs: string[] = [process.execPath, req.profile];
+  const nasBin = await resolveStableNasBin();
+  if (!nasBin) {
+    throw new Error(
+      "Could not resolve a stable path to the nas binary. " +
+        "process.execPath is under /tmp (nix-bundle-elf self-extraction) " +
+        "which is removed when the originating session exits. " +
+        "Set NAS_BIN_PATH to the wrapper or compiled binary that should " +
+        "be used for launching new sessions.",
+    );
+  }
+  const cmdArgs: string[] = [nasBin, req.profile];
   if (req.worktreeBase !== undefined) {
     cmdArgs.push("--worktree", req.worktreeBase);
   }

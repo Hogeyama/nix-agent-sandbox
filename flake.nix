@@ -80,11 +80,15 @@
           cp ${nasUnwrapped}/bin/nas $out/share/nas/nas
           cp -r ${nasAssets} $out/share/nas/assets
 
-          cat > $out/bin/nas <<EOF
+          cat > $out/bin/nas <<'EOF'
           #!/bin/sh
-          dir="\$(cd "\$(dirname "\$0")/.." && pwd)"
-          export NAS_ASSET_DIR="\$dir/share/nas/assets"
-          exec "\$dir/share/nas/nas" "\$@"
+          dir="$(cd "$(dirname "$0")/.." && pwd)"
+          export NAS_ASSET_DIR="$dir/share/nas/assets"
+          # Expose a stable absolute path to this wrapper so the UI
+          # daemon can spawn new sessions after its originating session
+          # cleaned up /tmp (where the inner binary would otherwise go).
+          export NAS_BIN_PATH="''${NAS_BIN_PATH:-$dir/share/nas/nas}"
+          exec "$dir/share/nas/nas" "$@"
           EOF
           chmod +x $out/bin/nas
         '';
@@ -104,6 +108,9 @@
           ];
           env = [
             { key = "NAS_ASSET_DIR"; action = "replace"; value = "%ROOT/share/nas/assets"; }
+            # Point at the outer self-extracting script so the UI daemon can
+            # spawn fresh sessions after the originating one cleans up /tmp.
+            { key = "NAS_BIN_PATH"; action = "replace"; value = "%ORIG"; }
           ];
         };
       in

@@ -3,6 +3,7 @@
  */
 
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
+import { logInfo, logWarn } from "../../log.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   acknowledgeSessionTurn,
@@ -75,13 +76,22 @@ export function createApiRoutes(ctx: UiDataContext): Router {
     } catch {
       return json({ error: "Invalid JSON body" }, 400);
     }
+    const reqBody = body as LaunchRequest;
+    logInfo(
+      `[nas] /api/launch: profile=${reqBody?.profile} cwd=${reqBody?.cwd ?? "(unset)"} worktreeBase=${reqBody?.worktreeBase ?? "(unset)"} name=${reqBody?.name ?? "(unset)"}`,
+    );
     try {
-      const result = await launchSession(body as LaunchRequest);
+      const result = await launchSession(reqBody);
+      logInfo(`[nas] /api/launch: started ${result.sessionId}`);
       return json(result);
     } catch (e) {
       if (e instanceof LaunchValidationError) {
+        logWarn(`[nas] /api/launch: validation error: ${e.message}`);
         return json({ error: e.message }, 400);
       }
+      logWarn(
+        `[nas] /api/launch: failed: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`,
+      );
       return json({ error: (e as Error).message }, 500);
     }
   });
