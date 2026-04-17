@@ -53,7 +53,7 @@ export async function dtachIsAvailable(): Promise<boolean> {
 export async function dtachNewSession(
   socketPath: string,
   shellCommand: string,
-  options?: { cwd?: string },
+  options?: { cwd?: string; env?: Record<string, string | undefined> },
 ): Promise<void> {
   // ソケットディレクトリを作成
   const dir = path.dirname(socketPath);
@@ -64,7 +64,12 @@ export async function dtachNewSession(
 
   const proc = Bun.spawn(
     ["dtach", "-n", socketPath, "-z", "/bin/sh", "-c", shellCommand],
-    { stdout: "pipe", stderr: "pipe", cwd: options?.cwd },
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: options?.cwd,
+      env: options?.env,
+    },
   );
   const stderr = await new Response(proc.stderr).text();
   const code = await proc.exited;

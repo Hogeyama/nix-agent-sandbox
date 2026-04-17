@@ -27,8 +27,11 @@ import { printUsage } from "./cli/usage.ts";
 import { runWorktreeCommand } from "./cli/worktree.ts";
 import { loadConfig, resolveProfile } from "./config/load.ts";
 import {
+  dtachAttach,
   dtachIsAvailable,
+  dtachNewSession,
   gcDtachRuntime,
+  shellEscape,
   socketPathFor,
 } from "./dtach/client.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
@@ -341,8 +344,14 @@ function randomHex(bytes: number): string {
 
 /**
  * nas プロセス全体を dtach 内で再実行する。
- * dtach -c でソケットを作成し、中で NAS_INSIDE_DTACH=1 付きで nas を起動。
- * デタッチすると dtach -c が戻り、この関数も戻る（中の nas は生き続ける）。
+ *
+ * master と attacher を分離する構成:
+ *   1. `dtach -n` で独立 master プロセスを spawn（内部で nas を PTY 起動）
+ *   2. `dtach -a` でユーザーのターミナルを attacher として接続
+ *
+ * `dtach -c` は master 兼 attacher で単一プロセスになり、ユーザの attacher を
+ * 安全に kick する手段が無い（kill するとセッションごと死ぬ）。`-n` + `-a`
+ * に分けることで、nas UI から `-a` attacher だけを SIGTERM できるようになる。
  */
 async function runInsideDtach(
   sessionId: string,
@@ -358,36 +367,26 @@ async function runInsideDtach(
   await gcDtachRuntime();
   const socketPath = socketPathFor(sessionId);
 
-  // ソケットディレクトリを作成
-  const dir = await import("node:path").then((p) => p.dirname(socketPath));
-  await Bun.spawn(["mkdir", "-p", dir], {
-    stdout: "ignore",
-    stderr: "ignore",
-  }).exited;
-
-  // dtach -c <socket> -e <key> -z <nas ...>
-  // NAS_INSIDE_DTACH=1 を渡して再帰を防止
   // process.execPath で実際のバイナリパスを使う（Bun コンパイル済みだと
   // process.argv[0] が仮想パス /$bunfs/... になるため）。
   // originalArgs は main() に渡されたユーザー引数のみ。
-  const nasCommand = [process.execPath, ...originalArgs];
-  const dtachArgs = ["-c", socketPath, "-e", detachKey, "-z", ...nasCommand];
+  const nasCommand = shellEscape([process.execPath, ...originalArgs]);
 
   console.log(
     `[nas] Starting dtach session: ${sessionId} (detach: ${detachKey})`,
   );
 
-  const proc = Bun.spawn(["dtach", ...dtachArgs], {
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
+  // 1. master を -n で起動（即座に detach 状態になる）
+  await dtachNewSession(socketPath, nasCommand, {
     env: {
       ...process.env,
       NAS_INSIDE_DTACH: "1",
       NAS_SESSION_ID: sessionId,
     },
   });
-  await proc.exited;
+
+  // 2. ユーザーのターミナルを -a で attach
+  await dtachAttach(socketPath, detachKey);
 
   console.log(`[nas] Detached. Reattach with: nas session attach ${sessionId}`);
 }
