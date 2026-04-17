@@ -139,19 +139,6 @@ test("mergeRawProfiles: aws shallow merge", () => {
   expect(result.aws?.["mount-config"]).toEqual(false);
 });
 
-test("mergeRawProfiles: display shallow merge", () => {
-  const global: RawProfile = {
-    agent: "claude",
-    display: { enable: true },
-  };
-  const local: RawProfile = {};
-  const result = mergeRawProfiles(global, local);
-  expect(result.display?.enable).toEqual(true);
-
-  const result2 = mergeRawProfiles(local, global);
-  expect(result2.display?.enable).toEqual(true);
-});
-
 test("mergeRawProfiles: all RawProfile keys are preserved", () => {
   // Guard against forgetting to add new fields to mergeRawProfiles.
   // When a new field is added to RawProfile, add it here too.
@@ -165,7 +152,6 @@ test("mergeRawProfiles: all RawProfile keys are preserved", () => {
     gcloud: { "mount-config": true },
     aws: { "mount-config": true },
     gpg: { "forward-agent": true },
-    display: { enable: true },
     network: {
       allowlist: ["example.com"],
       proxy: { "forward-ports": [8080] },

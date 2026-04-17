@@ -6,7 +6,6 @@ import { Effect, Exit, type Layer, Scope } from "effect";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -186,7 +185,6 @@ function createTestInput(opts: {
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
-    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     hook: DEFAULT_HOOK_CONFIG,

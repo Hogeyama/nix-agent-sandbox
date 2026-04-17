@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { Effect, Exit, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
-  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
@@ -29,7 +28,6 @@ function makeProfile(): Profile {
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
-    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: {
       allowlist: [],
       proxy: { forwardPorts: [] },

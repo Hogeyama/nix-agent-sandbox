@@ -11,7 +11,6 @@ import { Effect, Exit, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -49,7 +48,6 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
-    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: {
       ...baseNetwork,
       ...network,

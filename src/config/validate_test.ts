@@ -10,7 +10,7 @@ import { expect, test } from "bun:test";
  */
 
 import type { RawConfig } from "./types.ts";
-import { DEFAULT_DBUS_CONFIG, DEFAULT_DISPLAY_CONFIG } from "./types.ts";
+import { DEFAULT_DBUS_CONFIG } from "./types.ts";
 import { type ConfigValidationError, validateConfig } from "./validate.ts";
 
 // ---------------------------------------------------------------------------
@@ -806,7 +806,6 @@ test("validateConfig: valid minimal config", () => {
   expect(config.profiles.test.docker.enable).toEqual(false);
   expect(config.profiles.test.docker.shared).toEqual(false);
   expect(config.profiles.test.gpg.forwardAgent).toEqual(false);
-  expect(config.profiles.test.display).toEqual(DEFAULT_DISPLAY_CONFIG);
   expect(config.profiles.test.network.allowlist).toEqual([]);
   expect(config.profiles.test.network.prompt.enable).toEqual(false);
   expect(config.profiles.test.network.prompt.denylist).toEqual([]);

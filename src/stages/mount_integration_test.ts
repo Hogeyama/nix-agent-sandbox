@@ -5,7 +5,6 @@ import path from "node:path";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -27,7 +26,6 @@ const baseProfile: Profile = {
   aws: { mountConfig: false },
   gpg: { forwardAgent: false },
   session: DEFAULT_SESSION_CONFIG,
-  display: structuredClone(DEFAULT_DISPLAY_CONFIG),
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
   dbus: structuredClone(DEFAULT_DBUS_CONFIG),
   hook: DEFAULT_HOOK_CONFIG,
@@ -255,86 +253,6 @@ test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
   expect(
     plan.dockerArgs.includes(`${process.cwd()}:/tmp/nas-extra-rw`),
   ).toEqual(true);
-});
-
-test("MountStage: display.enable sets DISPLAY and mounts X11 socket", async () => {
-  const origDisplay = process.env.DISPLAY;
-  try {
-    process.env.DISPLAY = ":42";
-    const profile: Profile = {
-      ...baseProfile,
-      display: { enable: true },
-    };
-    // Need to rebuild hostEnv after setting DISPLAY
-    const { input, mountProbes } = await buildTestInput(profile, process.cwd());
-    const plan = planMount(input, mountProbes);
-
-    // DISPLAY should be passed through if /tmp/.X11-unix exists
-    const x11Exists = await stat("/tmp/.X11-unix")
-      .then(() => true)
-      .catch(() => false);
-    if (x11Exists) {
-      expect(plan.envVars.DISPLAY).toEqual(":42");
-      const mountArg = "/tmp/.X11-unix:/tmp/.X11-unix:ro";
-      const mountIndex = plan.dockerArgs.indexOf(mountArg);
-      expect(
-        mountIndex >= 1 && plan.dockerArgs[mountIndex - 1] === "-v",
-      ).toEqual(true);
-
-      // Xauthority should be forwarded if the file exists on host
-      const home = process.env.HOME ?? "/root";
-      const xauthority = process.env.XAUTHORITY ?? `${home}/.Xauthority`;
-      const xauthExists = await stat(xauthority)
-        .then(() => true)
-        .catch(() => false);
-      if (xauthExists) {
-        const containerHome = getContainerHome();
-        expect(plan.envVars.XAUTHORITY).toEqual(`${containerHome}/.Xauthority`);
-        const xauthMount = `${xauthority}:${containerHome}/.Xauthority:ro`;
-        expect(plan.dockerArgs.includes(xauthMount)).toEqual(true);
-      }
-
-      // --shm-size should be set for GUI apps (Chromium etc.)
-      const shmIndex = plan.dockerArgs.indexOf("2g");
-      expect(
-        shmIndex >= 1 && plan.dockerArgs[shmIndex - 1] === "--shm-size",
-      ).toEqual(true);
-    }
-  } finally {
-    if (origDisplay !== undefined) {
-      process.env.DISPLAY = origDisplay;
-    } else {
-      delete process.env.DISPLAY;
-    }
-  }
-});
-
-test("MountStage: display.enable=false does not set DISPLAY", async () => {
-  const profile: Profile = {
-    ...baseProfile,
-    display: { enable: false },
-  };
-  const { input, mountProbes } = await buildTestInput(profile, process.cwd());
-  const plan = planMount(input, mountProbes);
-  expect(plan.envVars.DISPLAY).toBeUndefined();
-});
-
-test("MountStage: display.enable skips when host DISPLAY unset", async () => {
-  const origDisplay = process.env.DISPLAY;
-  try {
-    delete process.env.DISPLAY;
-    const profile: Profile = {
-      ...baseProfile,
-      display: { enable: true },
-    };
-    const { input, mountProbes } = await buildTestInput(profile, process.cwd());
-    const plan = planMount(input, mountProbes);
-    expect(plan.envVars.DISPLAY).toBeUndefined();
-  } finally {
-    if (origDisplay !== undefined) {
-      process.env.DISPLAY = origDisplay;
-    }
-  }
 });
 
 test("MountStage: unknown agent type throws in resolveMountProbes", async () => {

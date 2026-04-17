@@ -11,9 +11,6 @@ let
       enable = true;
       shared = true;
     };
-    display = {
-      enable = true;
-    };
     gcloud = {
       mount-config = false;
     };

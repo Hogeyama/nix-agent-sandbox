@@ -69,12 +69,6 @@ export interface MountProbes {
   gpgTrustdbExists: boolean;
   /** AWS 設定ディレクトリ ($HOME/.aws) が存在するか */
   awsConfigExists: boolean;
-  /** X11 ソケットディレクトリ (/tmp/.X11-unix) が存在するか */
-  x11SocketDirExists: boolean;
-  /** Xauthority ファイルが存在するか */
-  xauthorityExists: boolean;
-  /** Xauthority ファイルパス (ホスト上) */
-  xauthorityPath: string;
   /** 追加マウントの事前解決結果 */
   resolvedExtraMounts: ResolvedExtraMount[];
   /** 環境変数エントリの事前解決結果 */
@@ -118,7 +112,6 @@ export async function resolveMountProbes(
   const gpgAgentConf = `${home}/.gnupg/gpg-agent.conf`;
   const pubring = `${home}/.gnupg/pubring.kbx`;
   const trustdb = `${home}/.gnupg/trustdb.gpg`;
-  const xauthorityPath = hostEnv.env.get("XAUTHORITY") ?? `${home}/.Xauthority`;
 
   const [
     gitConfigExists,
@@ -128,8 +121,6 @@ export async function resolveMountProbes(
     gpgAgentConfExists,
     gpgPubringExists,
     gpgTrustdbExists,
-    x11SocketDirExists,
-    xauthorityExists,
   ] = await Promise.all([
     fileExists(gitConfigDir),
     fileExists(gcloudConfigDir),
@@ -138,8 +129,6 @@ export async function resolveMountProbes(
     fileExists(gpgAgentConf),
     fileExists(pubring),
     fileExists(trustdb),
-    fileExists("/tmp/.X11-unix"),
-    fileExists(xauthorityPath),
   ]);
 
   // GPG ソケット存在チェック
@@ -172,9 +161,6 @@ export async function resolveMountProbes(
     gpgPubringExists,
     gpgTrustdbExists,
     awsConfigExists,
-    x11SocketDirExists,
-    xauthorityExists,
-    xauthorityPath,
     resolvedExtraMounts,
     resolvedEnvEntries,
     gitWorktreeMainRoot,

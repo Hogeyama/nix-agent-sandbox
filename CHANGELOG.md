@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Removed
+
+- **BREAKING: `display.enable` / X11 socket forwarding has been removed.** The feature bind-mounted `/tmp/.X11-unix` and `~/.Xauthority` into the agent container. X11 has no isolation between clients sharing a display, so any agent granted `display.enable` could record host keystrokes, capture the host screen, inject synthetic keys/mouse events into host apps, and read the host clipboard — none of which can be scoped per-window or per-app. Unlike the other opt-in capabilities in nas (which grant a specific, bounded resource), `display.enable` promoted a full sandbox-escape to a one-line config toggle. Users who need X11 forwarding can still assemble it explicitly with `extra-mounts` (`/tmp/.X11-unix`, `~/.Xauthority`) and `env` (`DISPLAY`, `XAUTHORITY`); doing so surfaces the risk at config-review time.
+
+### Migration
+
+- If you have `display:` blocks in `.agent-sandbox.yml`, remove them; nas will reject unknown fields at config-validation time.
+
 ## [0.8.1] - 2026-04-18
 
 ### Security

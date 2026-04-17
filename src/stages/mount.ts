@@ -393,40 +393,6 @@ export function planMount(
     envVars.DBUS_SESSION_BUS_ADDRESS = `unix:path=${containerRuntimeDir}/bus`;
   }
 
-  // X11 ディスプレイ転送
-  if (profile.display.enable) {
-    const hostDisplay = host.env.get("DISPLAY");
-    if (hostDisplay) {
-      if (probes.x11SocketDirExists) {
-        addMount(args, mounts, "/tmp/.X11-unix", "/tmp/.X11-unix", true);
-        envVars.DISPLAY = hostDisplay;
-
-        // Xauthority
-        if (probes.xauthorityExists) {
-          const containerXauthority = `${containerHome}/.Xauthority`;
-          addMount(
-            args,
-            mounts,
-            probes.xauthorityPath,
-            containerXauthority,
-            true,
-          );
-          envVars.XAUTHORITY = containerXauthority;
-        }
-
-        addRunArgs(args, extraRunArgs, "--shm-size", "2g");
-      } else {
-        logWarn(
-          "[nas] display.enable is true but /tmp/.X11-unix not found; skipping X11 forwarding",
-        );
-      }
-    } else {
-      logWarn(
-        "[nas] display.enable is true but DISPLAY is not set on host; skipping X11 forwarding",
-      );
-    }
-  }
-
   // エージェント固有の設定
   // Build priorDockerArgs and priorEnvVars by combining prior + current stage's args
   const priorDockerArgs = [...args];
@@ -599,15 +565,6 @@ function addMount(
   mounts.push(
     readOnly ? { source, target, readOnly: true } : { source, target },
   );
-}
-
-function addRunArgs(
-  dockerArgs: string[],
-  extraRunArgs: string[],
-  ...values: string[]
-): void {
-  dockerArgs.push(...values);
-  extraRunArgs.push(...values);
 }
 
 function appendStructuredArgs(

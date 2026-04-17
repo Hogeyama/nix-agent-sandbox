@@ -15,7 +15,6 @@ import type { CopilotProbes } from "../agents/copilot.ts";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
-  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -64,7 +63,6 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
-    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     network: {
       ...baseNetwork,
       ...network,
@@ -117,9 +115,6 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     gpgPubringExists: false,
     gpgTrustdbExists: false,
     awsConfigExists: false,
-    x11SocketDirExists: false,
-    xauthorityExists: false,
-    xauthorityPath: `${TEST_HOME}/.Xauthority`,
     resolvedExtraMounts: [],
     resolvedEnvEntries: [],
     gitWorktreeMainRoot: null,
@@ -1070,44 +1065,6 @@ test("MountStage: dbus proxy requires uid", () => {
   expect(() => planMount(input, mountProbes)).toThrow(
     "dbus.session.enable requires a host UID",
   );
-});
-
-// ============================================================
-// display (X11)
-// ============================================================
-
-test("MountStage: X11 forwarding when display enabled and socket exists", () => {
-  const profile = makeProfile({
-    display: { ...DEFAULT_DISPLAY_CONFIG, enable: true },
-  });
-  const hostEnv: HostEnv = {
-    ...defaultHostEnv,
-    env: new Map([["DISPLAY", ":0"]]),
-  };
-  const mountProbes = makeMountProbes({
-    x11SocketDirExists: true,
-    xauthorityExists: true,
-    xauthorityPath: `${TEST_HOME}/.Xauthority`,
-  });
-  const { input } = makeInput({ profile, mountProbes, hostEnv });
-  const plan = planMount(input, mountProbes);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes("/tmp/.X11-unix")),
-  ).toEqual(true);
-  expect(plan.envVars.DISPLAY).toEqual(":0");
-  expect(plan.envVars.XAUTHORITY).toEqual(`${CONTAINER_HOME}/.Xauthority`);
-  expect(plan.dockerArgs.includes("--shm-size")).toEqual(true);
-});
-
-test("MountStage: X11 skipped when no DISPLAY", () => {
-  const profile = makeProfile({
-    display: { ...DEFAULT_DISPLAY_CONFIG, enable: true },
-  });
-  const { input, mountProbes } = makeInput({ profile });
-  const plan = planMount(input, mountProbes);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes("/tmp/.X11-unix")),
-  ).toEqual(false);
 });
 
 // ============================================================

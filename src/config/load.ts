@@ -157,7 +157,6 @@ export function mergeRawProfiles(
     gcloud: shallowMerge(global.gcloud, local.gcloud),
     aws: shallowMerge(global.aws, local.aws),
     gpg: shallowMerge(global.gpg, local.gpg),
-    display: shallowMerge(global.display, local.display),
     network: mergeRawNetworkConfigs(global.network, local.network),
     dbus: mergeRawDbusConfigs(global.dbus, local.dbus),
     "extra-mounts": local["extra-mounts"] ?? global["extra-mounts"],
