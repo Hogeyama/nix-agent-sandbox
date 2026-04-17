@@ -494,6 +494,28 @@ test("GET /audit respects limit parameter", async () => {
   }
 });
 
+test("POST /containers/:name/shell returns 500 when container does not exist", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request(
+      "/api/containers/nas-agent-nonexistent-container/shell",
+      { method: "POST" },
+    );
+    // docker inspect will fail for a non-existent container → 500
+    expect(res.status).toEqual(500);
+    const body = await res.json();
+    expect(typeof body.error).toEqual("string");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("GET /audit filters by session parameter", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
