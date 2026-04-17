@@ -177,13 +177,14 @@ export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
         "be used for launching new sessions.",
     );
   }
-  const cmdArgs: string[] = [nasBin, req.profile];
+  const cmdArgs: string[] = [nasBin];
   if (req.worktreeBase !== undefined) {
     cmdArgs.push("--worktree", req.worktreeBase);
   }
   if (req.name !== undefined) {
     cmdArgs.push("--name", req.name);
   }
+  cmdArgs.push(req.profile);
 
   const escaped = shellEscape(cmdArgs);
   const escapedSessionId = shellEscape([sessionId]);
