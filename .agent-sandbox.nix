@@ -138,6 +138,10 @@ let
       { key = "GIT_CONFIG_VALUE_0"; val = "gpg"; }
       { key = "TERM"; val = "xterm-256color"; }
       {
+        key = "GITHUB_TOKEN";
+        val_cmd = "pass github/token/for-agent";
+      }
+      {
         key = "PATH";
         val = "~/.nix-profile/bin";
         mode = "suffix";
@@ -155,16 +159,16 @@ let
       };
       rules = [
         {
-          id = "git-fetch-pull";
+          id = "git-push";
           match = {
             argv0 = "git";
-            arg-regex = ''^(fetch|pull)\b'';
+            arg-regex = ''push'';
           };
           cwd = {
             mode = "workspace-or-session-tmp";
           };
-          approval = "allow";
-          fallback = "container";
+          approval = "deny";
+          fallback = "deny";
         }
         {
           id = "wl-copy";
@@ -197,36 +201,15 @@ let
           fallback = "container";
         }
         {
-          id = "gh";
-          match = {
-            argv0 = "gh";
-          };
-          cwd = {
-            mode = "workspace-or-session-tmp";
-          };
-          approval = "allow";
-          fallback = "container";
-        }
-        {
-          id = "gpg-sign";
+          # git commit/tag -S が呼ぶ形だけを通す:
+          #   gpg --status-fd=2 -bsau <keyid>
+          id = "gpg-git-sign";
           match = {
             argv0 = "gpg";
-            arg-regex = ''(^|\s)(--sign|-[a-zA-Z]*s[a-zA-Z]*)(\s|$)'';
+            arg-regex = ''^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$'';
           };
           cwd = {
             mode = "workspace-or-session-tmp";
-          };
-          approval = "allow";
-          fallback = "container";
-        }
-        {
-          id = "bun-test";
-          match = {
-            argv0 = "bun";
-            arg-regex = ''^(run\b)?test\b'';
-          };
-          cwd = {
-            mode = "workspace-only";
           };
           approval = "allow";
           fallback = "container";

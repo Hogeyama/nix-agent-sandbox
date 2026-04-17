@@ -283,9 +283,9 @@ profiles:
             mode: workspace-or-session-tmp
           env:
             GITHUB_TOKEN: secret:github_token # hostexec.secrets から注入する
-          inherit-env:                        # 環境変数のうち、必要最低限なもの+SSH_AUTH_SOCKだけを継承
+          inherit-env:                        # 環境変数のうち、必要最低限なもの+DISPLAYだけを継承
             mode: minimal
-            keys: [SSH_AUTH_SOCK]
+            keys: [DISPLAY]
           approval: prompt        # allow | prompt | deny
           fallback: container     # container | deny
 ```
