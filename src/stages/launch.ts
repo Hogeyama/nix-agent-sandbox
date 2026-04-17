@@ -8,6 +8,7 @@
 
 import { Effect } from "effect";
 import {
+  containerNameForSession,
   NAS_KIND_AGENT,
   NAS_KIND_LABEL,
   NAS_MANAGED_LABEL,
@@ -40,7 +41,7 @@ export function planLaunch(
   input: StageInput & Pick<PipelineState, "container">,
   extraArgs: string[] = [],
 ): LaunchPlan {
-  const containerName = `nas-agent-${input.sessionId}`;
+  const containerName = containerNameForSession(input.sessionId);
   const container = buildLaunchContainerPlan(input, extraArgs);
   const opts = compileLaunchOpts(container, containerName);
 
