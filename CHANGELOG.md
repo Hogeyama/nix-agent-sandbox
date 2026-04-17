@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-04-18
+
+### Security
+
+- **UI server now binds to `127.0.0.1` only**: previously the UI daemon listened on `0.0.0.0`, exposing `/api/network/approve`, `/api/hostexec/approve`, and the terminal WebSocket — none of which carry per-caller authentication — to anything that could reach the host's port. Any LAN peer could approve pending broker prompts or attach to a running session ([35ad875])
+- **Stop bind-mounting the host's Copilot config/state directories** (`$XDG_CONFIG_HOME/.copilot`, `$XDG_STATE_HOME/.copilot`): on Copilot CLI versions where the auth token lives there, the bind mount let any code inside the sandbox read the host token directly. Tokens now flow through `gh auth token`, brokered via the hostexec `gh` rule. The legacy `~/.copilot` (per-user CLI state without credentials) is still mounted ([a907895])
+
 ## [0.8.0] - 2026-04-18
 
 ### Added
