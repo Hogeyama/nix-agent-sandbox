@@ -14,6 +14,8 @@ import { Context, Effect, Layer, Schedule } from "effect";
 export interface SpawnHandle {
   readonly kill: () => void;
   readonly exited: Effect.Effect<number>;
+  /** OS pid of the spawned child. Zero when unknown (e.g. in fakes). */
+  readonly pid: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +89,7 @@ export const ProcessServiceLive: Layer.Layer<ProcessService> = Layer.succeed(
                 `Process exited abnormally: ${e instanceof Error ? e.message : String(e)}`,
               ),
           }).pipe(Effect.orDie),
+          pid: child.pid ?? 0,
         } satisfies SpawnHandle;
       }),
 
@@ -163,6 +166,7 @@ export interface ProcessServiceFakeConfig {
 const defaultSpawnHandle: SpawnHandle = {
   kill: () => {},
   exited: Effect.succeed(0),
+  pid: 0,
 };
 
 export function makeProcessServiceFake(

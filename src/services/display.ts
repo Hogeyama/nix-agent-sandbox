@@ -11,6 +11,12 @@
  */
 
 import { Context, Effect, Layer, type Scope } from "effect";
+import {
+  gcDisplayRuntime,
+  removeDisplayRegistry,
+  resolveDisplayRuntimePaths,
+  writeDisplayRegistry,
+} from "../display/registry.ts";
 import { FsService } from "./fs.ts";
 import { ProcessService } from "./process.ts";
 
@@ -202,6 +208,23 @@ export const DisplayServiceLive: Layer.Layer<
     return DisplayService.of({
       startXpra: (plan) =>
         Effect.gen(function* () {
+          // Reap stale registry entries from previous nas runs that crashed
+          // before their scope finalizers could remove them. Best-effort —
+          // a broken registry dir must not block starting a new session.
+          const runtimePaths = yield* Effect.tryPromise({
+            try: () => resolveDisplayRuntimePaths(),
+            catch: (e) =>
+              new Error(
+                `failed to resolve display runtime paths: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
+              ),
+          }).pipe(Effect.orDie);
+          yield* Effect.tryPromise({
+            try: () => gcDisplayRuntime(runtimePaths),
+            catch: (e) => e,
+          }).pipe(Effect.catchAll(() => Effect.void));
+
           yield* fs.mkdir(plan.sessionDir, { recursive: true, mode: 0o700 });
 
           // xpra には default の Xvfb コマンドを使わせる。`--xvfb` で
@@ -295,13 +318,42 @@ export const DisplayServiceLive: Layer.Layer<
           // immediately and the log explains why; the agent container
           // and the X server keep running unaffected.
           const attachLogPath = `${plan.sessionDir}/xpra-attach.log`;
-          yield* Effect.acquireRelease(
+          const attachHandle = yield* Effect.acquireRelease(
             proc.spawn(
               plan.xpraBinaryPath,
               ["attach", `:${plan.displayNumber}`],
               { logFile: attachLogPath },
             ),
             (handle) => Effect.sync(() => handle.kill()),
+          );
+
+          // Both processes alive — publish a registry entry so a future
+          // GC can detect orphan state if nas dies without its scope
+          // finalizers. The finalizer removes the entry on clean shutdown.
+          yield* Effect.acquireRelease(
+            Effect.tryPromise({
+              try: () =>
+                writeDisplayRegistry(runtimePaths, {
+                  sessionId: plan.sessionId,
+                  xpraServerPid: spawnHandle.pid,
+                  attachPid: attachHandle.pid,
+                  sessionDir: plan.sessionDir,
+                  displayNumber: plan.displayNumber,
+                  socketPath: plan.socketPath,
+                  createdAt: new Date().toISOString(),
+                }),
+              catch: (e) =>
+                new Error(
+                  `failed to write display registry entry: ${
+                    e instanceof Error ? e.message : String(e)
+                  }`,
+                ),
+            }).pipe(Effect.orDie),
+            () =>
+              Effect.tryPromise({
+                try: () => removeDisplayRegistry(runtimePaths, plan.sessionId),
+                catch: (e) => e,
+              }).pipe(Effect.catchAll(() => Effect.void)),
           );
 
           return {

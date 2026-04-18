@@ -108,6 +108,9 @@ export async function readPid(pidFile: string): Promise<number | null> {
 }
 
 export async function isPidAlive(pid: number): Promise<boolean> {
+  // `kill -0 0` signals every process in the caller's group, so a pid<=0
+  // sentinel would falsely report alive; guard explicitly.
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     const proc = Bun.spawn(["kill", "-0", String(pid)], {
       stdout: "ignore",
