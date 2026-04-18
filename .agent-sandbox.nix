@@ -17,6 +17,9 @@ let
     aws = {
       mount-config = false;
     };
+    display = {
+      sandbox = "xpra";
+    };
     gpg = {
       forward-agent = false;
     };
