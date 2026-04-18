@@ -146,6 +146,7 @@ function resolveLocalBranch(
       repoRoot,
       "rev-parse",
       "--verify",
+      "--end-of-options",
       `refs/remotes/${ref}`,
     ]);
     if (result !== null) {
@@ -311,6 +312,26 @@ function applyPatch(
   return Effect.acquireUseRelease(acquire, use, release);
 }
 
+/**
+ * Validate that a git-reported relative path stays inside the target worktree.
+ * Rejects absolute paths, paths containing ".." segments, and paths that
+ * resolve outside `targetWorktreePath`. An attacker-controlled source
+ * worktree could otherwise smuggle a path that escapes the target directory.
+ */
+export function isSafeRelativePath(
+  relativePath: string,
+  targetWorktreePath: string,
+): boolean {
+  if (relativePath.length === 0) return false;
+  if (path.isAbsolute(relativePath)) return false;
+  const segments = relativePath.split(/[\\/]/);
+  if (segments.some((s) => s === "..")) return false;
+  const resolved = path.resolve(targetWorktreePath, relativePath);
+  const rel = path.relative(targetWorktreePath, resolved);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+  return true;
+}
+
 /** Copy untracked files from source to target worktree. */
 function copyUntrackedFiles(
   proc: Proc,
@@ -332,10 +353,20 @@ function copyUntrackedFiles(
 
     const untrackedFiles = output.split("\0").filter((f) => f.length > 0);
     for (const relativePath of untrackedFiles) {
+      // The source worktree may be attacker-controlled (untrusted clone).
+      // Reject any path that could escape the target directory.
+      if (!isSafeRelativePath(relativePath, targetWorktreePath)) {
+        console.error(`[nas] Skipping unsafe untracked path: ${relativePath}`);
+        continue;
+      }
       const sourcePath = path.join(sourceWorktreePath, relativePath);
       const targetPath = path.join(targetWorktreePath, relativePath);
       yield* fs.mkdir(path.dirname(targetPath), { recursive: true });
-      yield* proc.exec(["cp", sourcePath, targetPath]);
+      // `cp -P` preserves symlinks as symlinks instead of dereferencing
+      // them. This prevents an untracked `evil -> /etc/passwd` symlink in
+      // the source worktree from exfiltrating host files into the new
+      // worktree (where the agent container would read them).
+      yield* proc.exec(["cp", "-P", "--", sourcePath, targetPath]);
     }
   });
 }
@@ -420,6 +451,7 @@ function executeTeardown(
         handle.repoRoot,
         "branch",
         "-D",
+        "--end-of-options",
         handle.branchName,
       ]);
       if (delResult !== null) {
@@ -471,6 +503,7 @@ function renameBranch(
       repoRoot,
       "branch",
       "-m",
+      "--end-of-options",
       branchName,
       newName,
     ]);
@@ -498,9 +531,10 @@ function cherryPickToBase(
       "-C",
       repoRoot,
       "log",
-      `${baseBranch}..${branchName}`,
       "--format=%H",
       "--reverse",
+      "--end-of-options",
+      `${baseBranch}..${branchName}`,
     ])).trim();
 
     if (!commitsRaw) {
@@ -522,6 +556,7 @@ function cherryPickToBase(
         repoRoot,
         "rev-parse",
         "--verify",
+        "--end-of-options",
         `refs/heads/${targetBranch}`,
       ]);
       if (verifyResult === null) {
@@ -536,6 +571,7 @@ function cherryPickToBase(
           "-C",
           repoRoot,
           "branch",
+          "--end-of-options",
           targetBranch,
           baseBranch,
         ]);
@@ -615,6 +651,7 @@ function cherryPickInWorktree(
       "-C",
       worktreePath,
       "cherry-pick",
+      "--end-of-options",
       ...commitList,
     ]);
     let success = cpOk !== null;
@@ -690,6 +727,7 @@ function cherryPickDetached(
       "-C",
       repoRoot,
       "rev-parse",
+      "--end-of-options",
       `refs/heads/${targetBranch}`,
     ])).trim();
     const tmpWorktree = path.join(
@@ -708,6 +746,7 @@ function cherryPickDetached(
       "worktree",
       "add",
       "--detach",
+      "--end-of-options",
       tmpWorktree,
       targetRef,
     ]);
@@ -746,6 +785,7 @@ function cherryPickInTmpWorktree(
       "-C",
       tmpWorktree,
       "cherry-pick",
+      "--end-of-options",
       ...commitList,
     ]);
 
@@ -764,6 +804,7 @@ function cherryPickInTmpWorktree(
         repoRoot,
         "branch",
         "-f",
+        "--end-of-options",
         targetBranch,
         newHead,
       ]);
@@ -792,6 +833,7 @@ function cherryPickInTmpWorktree(
         repoRoot,
         "branch",
         "-f",
+        "--end-of-options",
         targetBranch,
         newHead,
       ]);
@@ -981,6 +1023,7 @@ export const GitWorktreeServiceLive: Layer.Layer<
             repoRoot,
             "rev-parse",
             "--verify",
+            "--end-of-options",
             resolved,
           ]);
           if (valid === null) {
@@ -1057,6 +1100,7 @@ export const GitWorktreeServiceLive: Layer.Layer<
             "add",
             "-b",
             params.branchName,
+            "--end-of-options",
             params.worktreePath,
             params.baseBranch,
           ]);
@@ -1120,8 +1164,9 @@ export const GitWorktreeServiceLive: Layer.Layer<
             ...gitDir,
             "log",
             "--oneline",
-            `${opts.baseBranch}..${opts.branchName}`,
             `-${opts.limit}`,
+            "--end-of-options",
+            `${opts.baseBranch}..${opts.branchName}`,
           ]);
           if (result === null || result.trim() === "") return [];
           return result.trim().split("\n");
