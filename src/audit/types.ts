@@ -53,8 +53,10 @@ export interface AuditLogFilter {
   /** Filter by domain. */
   domain?: AuditDomain;
   /**
-   * Exclude entries whose `command` starts with any of these prefixes.
-   * Useful for hiding noisy internal commands like "nas hook".
+   * Exclude entries whose `command` matches any of these prefixes — either
+   * as a bare prefix (`nas hook ...`) or after a path separator
+   * (`/opt/nas/hostexec/bin/nas hook ...`). Useful for hiding noisy
+   * internal commands like "nas hook".
    */
   excludeCommandPrefixes?: string[];
 }

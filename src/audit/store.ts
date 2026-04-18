@@ -206,10 +206,16 @@ export async function queryAuditLogs(
     filter.excludeCommandPrefixes &&
     filter.excludeCommandPrefixes.length > 0
   ) {
+    // Match both bare-argv0 form (`nas hook ...`) and absolute-path form
+    // (`/opt/nas/hostexec/bin/nas hook ...`). The broker stores whatever
+    // `argv0` the intercept library captured, which is usually the
+    // PATH-resolved absolute path.
     for (const prefix of filter.excludeCommandPrefixes) {
       const escaped = prefix.replace(/[\\%_]/g, "\\$&");
-      where.push("(command IS NULL OR command NOT LIKE ? ESCAPE '\\')");
-      params.push(`${escaped}%`);
+      where.push(
+        "(command IS NULL OR (command NOT LIKE ? ESCAPE '\\' AND command NOT LIKE ? ESCAPE '\\'))",
+      );
+      params.push(`${escaped}%`, `%/${escaped}%`);
     }
   }
 
