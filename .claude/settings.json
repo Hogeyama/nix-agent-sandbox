@@ -51,6 +51,15 @@
             "statusMessage": "Running biome check --write..."
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.filePath // .tool_input.file_path' | { read -r f; if echo \"$f\" | grep -qE '\\.md$'; then mo \"$f\"; fi; } 2>/dev/null || true"
+          }
+        ]
       }
     ]
   }

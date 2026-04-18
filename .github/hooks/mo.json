@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "payload=$(cat); tool_name=$(printf '%s\\n' \"$payload\" | jq -r '.toolName // empty'); if printf '%s' \"$tool_name\" | grep -qiE '^(create|write|edit|multiedit|apply_patch)$'; then f=$(printf '%s\\n' \"$payload\" | jq -r '.toolArgs | def parsed: if type == \"string\" then (fromjson? // .) else . end; parsed | if type == \"object\" then [.path?, .file_path?, .filePath?] | map(select(type == \"string\" and test(\"\\\\.md$\"))) | .[]? elif type == \"string\" then split(\"\\n\")[] | select(test(\"^\\\\*\\\\*\\\\* (Add File|Update File|Move to): .*\\\\.md$\")) | sub(\"^\\\\*\\\\*\\\\* (Add File|Update File|Move to): \"; \"\") else empty end' | sort -u); if [ -n \"$f\" ]; then printf '%s\\n' \"$f\" | xargs -r mo; fi; fi",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

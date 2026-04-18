@@ -199,6 +199,17 @@ let
           approval = "allow";
           fallback = "container";
         }
+        {
+          id = "mo";
+          match = {
+            argv0 = "mo";
+          };
+          cwd = {
+            mode = "workspace-or-session-tmp";
+          };
+          approval = "allow";
+          fallback = "container";
+        }
       ];
     };
   };
