@@ -127,7 +127,16 @@ export const nixSchema = z
       .default(DEFAULT_NIX_CONFIG.enable),
     "mount-socket": z.boolean().default(DEFAULT_NIX_CONFIG.mountSocket),
     "extra-packages": z
-      .array(z.string())
+      .array(
+        z
+          .string()
+          .refine((s) => !s.startsWith("-"), {
+            message: "must not start with '-' (flags are not allowed)",
+          })
+          .refine((s) => !s.includes(".."), {
+            message: "must not contain '..'",
+          }),
+      )
       .default(DEFAULT_NIX_CONFIG.extraPackages),
   })
   .prefault({})
@@ -361,10 +370,25 @@ function dbusNameListSchema(field: string) {
     .default([]);
 }
 
+// D-Bus well-known name: dot-separated identifier (one char plus up to 253
+// more, total 254 max per D-Bus spec), with optional trailing '*' wildcard
+// commonly used by xdg-dbus-proxy. Must not contain '=', which is the
+// delimiter used between name and rule on the xdg-dbus-proxy CLI.
+const DBUS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,253}\*?$/;
+
 const dbusRuleSchema = z.object(
   {
-    name: nonEmptyString,
-    rule: nonEmptyString,
+    name: nonEmptyString
+      .refine((s) => !s.includes("="), {
+        message: "must not contain '='",
+      })
+      .refine((s) => DBUS_NAME_RE.test(s), {
+        message:
+          "must be a valid D-Bus well-known name (e.g. org.example.Foo, org.example.*)",
+      }),
+    rule: nonEmptyString.refine((s) => !s.includes("="), {
+      message: "must not contain '='",
+    }),
   },
   { error: "must be an object" },
 );

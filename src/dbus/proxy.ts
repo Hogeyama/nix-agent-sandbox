@@ -5,7 +5,7 @@
  * proxy socket to become ready before returning a handle.
  */
 
-import { chmod, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { logInfo, logWarn } from "../log.ts";
 import { gcDbusRuntime } from "./registry.ts";
 
@@ -71,8 +71,22 @@ export async function startDbusProxy(
     stderr: "pipe",
   });
 
-  // Write PID file
-  await writeFile(pidFile, String(child.pid));
+  // Write PID file. Use O_EXCL ("wx") so the write fails if the file or a
+  // symlink already exists — defense-in-depth against a pre-planted symlink
+  // that would otherwise be followed. If a stale file is left over from a
+  // previous crashed run, unlink it explicitly (ignoring ENOENT) and retry.
+  try {
+    await writeFile(pidFile, String(child.pid), { flag: "wx", mode: 0o600 });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      await unlink(pidFile).catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      });
+      await writeFile(pidFile, String(child.pid), { flag: "wx", mode: 0o600 });
+    } else {
+      throw e;
+    }
+  }
   await chmod(pidFile, 0o600);
 
   // Capture stderr in background for diagnostics

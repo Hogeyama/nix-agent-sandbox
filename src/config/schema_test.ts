@@ -4,7 +4,13 @@
  */
 
 import { expect, test } from "bun:test";
-import { displaySchema, profileSchema, proxySchema } from "./schema.ts";
+import {
+  dbusSessionSchema,
+  displaySchema,
+  nixSchema,
+  profileSchema,
+  proxySchema,
+} from "./schema.ts";
 
 // ---------------------------------------------------------------------------
 // proxySchema
@@ -219,4 +225,92 @@ test("profileSchema: accepts display.sandbox=xpra", () => {
     display: { sandbox: "xpra", size: "1366x768" },
   });
   expect(result.display).toEqual({ sandbox: "xpra", size: "1366x768" });
+});
+
+// ---------------------------------------------------------------------------
+// dbusSessionSchema: calls/broadcasts rule validation
+// ---------------------------------------------------------------------------
+
+test("dbusSessionSchema: accepts valid call rule names (incl. trailing '*')", () => {
+  const result = dbusSessionSchema.parse({
+    enable: true,
+    calls: [
+      { name: "org.freedesktop.Notifications", rule: "*" },
+      { name: "org.gnome.*", rule: "Notify@/org/freedesktop/Notifications" },
+    ],
+    broadcasts: [{ name: "org.example.Foo", rule: "Signal@/path" }],
+  });
+  expect(result.calls.length).toEqual(2);
+  expect(result.broadcasts.length).toEqual(1);
+});
+
+test("dbusSessionSchema: rejects '=' in call rule name", () => {
+  expect(() =>
+    dbusSessionSchema.parse({
+      enable: true,
+      calls: [{ name: "org.example=evil", rule: "*" }],
+    }),
+  ).toThrow();
+});
+
+test("dbusSessionSchema: rejects '=' in call rule body", () => {
+  expect(() =>
+    dbusSessionSchema.parse({
+      enable: true,
+      calls: [{ name: "org.example.Foo", rule: "a=b" }],
+    }),
+  ).toThrow();
+});
+
+test("dbusSessionSchema: rejects empty rule", () => {
+  expect(() =>
+    dbusSessionSchema.parse({
+      enable: true,
+      calls: [{ name: "org.example.Foo", rule: "" }],
+    }),
+  ).toThrow();
+});
+
+test("dbusSessionSchema: rejects invalid name characters", () => {
+  expect(() =>
+    dbusSessionSchema.parse({
+      enable: true,
+      broadcasts: [{ name: "org.example.Foo bar", rule: "*" }],
+    }),
+  ).toThrow();
+  expect(() =>
+    dbusSessionSchema.parse({
+      enable: true,
+      broadcasts: [{ name: ".leadingdot", rule: "*" }],
+    }),
+  ).toThrow();
+});
+
+// ---------------------------------------------------------------------------
+// nixSchema: extra-packages hardening
+// ---------------------------------------------------------------------------
+
+test("nixSchema: accepts typical flake refs and plain names", () => {
+  const result = nixSchema.parse({
+    "extra-packages": ["nixpkgs#gh", "github:NixOS/nixpkgs#ripgrep", "jq"],
+  });
+  expect(result.extraPackages).toEqual([
+    "nixpkgs#gh",
+    "github:NixOS/nixpkgs#ripgrep",
+    "jq",
+  ]);
+});
+
+test("nixSchema: rejects extra-packages entry starting with '-'", () => {
+  expect(() =>
+    nixSchema.parse({ "extra-packages": ["--evil-flag"] }),
+  ).toThrow();
+  expect(() => nixSchema.parse({ "extra-packages": ["-x"] })).toThrow();
+});
+
+test("nixSchema: rejects extra-packages entry containing '..'", () => {
+  expect(() => nixSchema.parse({ "extra-packages": ["../escape"] })).toThrow();
+  expect(() =>
+    nixSchema.parse({ "extra-packages": ["nixpkgs#../bad"] }),
+  ).toThrow();
 });

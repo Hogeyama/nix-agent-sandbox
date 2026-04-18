@@ -153,6 +153,23 @@ function planDbusProxy(input: StageInput): DbusProxyPlan | null {
     };
   }
 
+  if (!isValidUnixPathAddress(sourceAddress)) {
+    logWarn(
+      `[nas] Refusing unsafe dbus source address: ${sourceAddress}. Path must be absolute and contain only [A-Za-z0-9/_.+%-] — skipping D-Bus proxy`,
+    );
+    return {
+      proxyBinaryPath: "",
+      runtimeDir: "",
+      sessionsDir: "",
+      sessionDir: "",
+      socketPath: "",
+      args: [],
+      timeoutMs: 0,
+      pollIntervalMs: 0,
+      outputOverrides: buildDisabledDbusResult(),
+    };
+  }
+
   const runtimeDir = resolveRuntimeDir(input.host);
   const sessionsDir = `${runtimeDir}/sessions`;
   const sessionDir = `${sessionsDir}/${input.sessionId}`;
@@ -229,6 +246,24 @@ export function resolveSourceAddress(
   if (configuredAddress) return configuredAddress;
   if (probeAddress) return probeAddress;
   return `unix:path=/run/user/${uid}/bus`;
+}
+
+/**
+ * Validate a D-Bus source address of the form `unix:path=<path>`.
+ *
+ * The path must be absolute and contain only a conservative character set
+ * (no whitespace, commas, semicolons, NULs, or other D-Bus address
+ * metacharacters). Callers must ensure the address begins with
+ * `unix:path=` before invoking this helper.
+ */
+export function isValidUnixPathAddress(sourceAddress: string): boolean {
+  const PREFIX = "unix:path=";
+  if (!sourceAddress.startsWith(PREFIX)) return false;
+  const path = sourceAddress.slice(PREFIX.length);
+  if (path.length === 0) return false;
+  if (!path.startsWith("/")) return false;
+  // Conservative allowlist of path characters.
+  return /^[A-Za-z0-9/_.+%-]+$/.test(path);
 }
 
 export function buildProxyArgs(

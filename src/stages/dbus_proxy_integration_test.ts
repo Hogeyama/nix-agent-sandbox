@@ -25,6 +25,7 @@ import { ProcessServiceLive } from "../services/process.ts";
 import {
   buildProxyArgs,
   createDbusProxyStage,
+  isValidUnixPathAddress,
   resolveRuntimeDir,
   resolveSourceAddress,
 } from "./dbus_proxy.ts";
@@ -134,6 +135,31 @@ async function runStageScoped(
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
 }
+
+test("isValidUnixPathAddress: accepts safe absolute paths and rejects unsafe ones", () => {
+  // Safe cases
+  expect(isValidUnixPathAddress("unix:path=/run/user/1000/bus")).toBe(true);
+  expect(isValidUnixPathAddress("unix:path=/tmp/dbus-abc.sock")).toBe(true);
+  expect(isValidUnixPathAddress("unix:path=/home/user/.cache/bus+1%20")).toBe(
+    true,
+  );
+
+  // Wrong prefix
+  expect(isValidUnixPathAddress("unix:abstract=/foo")).toBe(false);
+  // Empty path
+  expect(isValidUnixPathAddress("unix:path=")).toBe(false);
+  // Not absolute
+  expect(isValidUnixPathAddress("unix:path=relative/bus")).toBe(false);
+  // Whitespace / disallowed chars
+  expect(isValidUnixPathAddress("unix:path=/tmp/has space/bus")).toBe(false);
+  expect(isValidUnixPathAddress("unix:path=/tmp/a,b")).toBe(false);
+  expect(isValidUnixPathAddress("unix:path=/tmp/a;b")).toBe(false);
+  expect(isValidUnixPathAddress("unix:path=/tmp/a\0b")).toBe(false);
+  // Extra D-Bus address guards (comma separates addresses)
+  expect(
+    isValidUnixPathAddress("unix:path=/run/user/1000/bus,guid=deadbeef"),
+  ).toBe(false);
+});
 
 test("resolveSourceAddress: prefers configured address, then probe, then default path", () => {
   expect(
