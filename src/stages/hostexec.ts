@@ -34,6 +34,74 @@ import { HostExecSetupService } from "../services/hostexec_setup.ts";
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
 
+/**
+ * Allowed prefixes for absolute `argv0` values in hostexec rules.
+ *
+ * These are the only container paths where nas is permitted to shadow a
+ * binary with the hostexec wrapper (either via LD_PRELOAD intercept or as a
+ * fallback bind-mount). Paths under system-sensitive directories like
+ * `/etc`, `/bin`, `/lib`, `/var`, `/root`, etc. must never be targetable
+ * from repo config.
+ *
+ * `CONTAINER_HOME_LOCAL_BIN_PREFIX` is a suffix under the dynamic per-user
+ * container home (`/home/<user>/.local/bin`), matched by suffix check.
+ */
+const ABSOLUTE_ARGV0_ALLOWED_PREFIXES = [
+  "/usr/bin/",
+  "/usr/local/bin/",
+] as const;
+const ABSOLUTE_ARGV0_ALLOWED_OPT_PATTERN = /^\/opt\/[^/]+\/bin\//;
+const CONTAINER_HOME_LOCAL_BIN_SUFFIX = "/.local/bin/";
+
+/**
+ * Validate that an absolute `argv0` in a hostexec rule points at a safe
+ * container path. Throws with a descriptive error on rejection.
+ *
+ * Exported for tests.
+ */
+export function validateAbsoluteArgv0(ruleId: string, argv0: string): void {
+  // Reject exactly "/" or any trailing slash (non-file targets).
+  if (argv0 === "/" || argv0.endsWith("/")) {
+    throw new Error(
+      `hostexec rule ${JSON.stringify(ruleId)}: argv0 ${JSON.stringify(argv0)} is not a file path. ` +
+        `Absolute argv0 must be a file under one of: /usr/bin/*, /usr/local/bin/*, /opt/*/bin/*, /home/<user>/.local/bin/*`,
+    );
+  }
+  // Reject any ".." segments to prevent traversal-based prefix bypass.
+  const segments = argv0.split("/");
+  if (segments.includes("..") || segments.includes(".")) {
+    throw new Error(
+      `hostexec rule ${JSON.stringify(ruleId)}: argv0 ${JSON.stringify(argv0)} must not contain '.' or '..' segments. ` +
+        `Absolute argv0 must be a file under one of: /usr/bin/*, /usr/local/bin/*, /opt/*/bin/*, /home/<user>/.local/bin/*`,
+    );
+  }
+  for (const prefix of ABSOLUTE_ARGV0_ALLOWED_PREFIXES) {
+    if (argv0.startsWith(prefix) && argv0.length > prefix.length) return;
+  }
+  if (ABSOLUTE_ARGV0_ALLOWED_OPT_PATTERN.test(argv0)) return;
+  // Allow /home/<user>/.local/bin/<file>
+  if (argv0.startsWith("/home/")) {
+    const idx = argv0.indexOf(CONTAINER_HOME_LOCAL_BIN_SUFFIX, "/home/".length);
+    // ensure the suffix appears directly after the user segment: /home/<user>/.local/bin/...
+    if (idx > 0) {
+      const afterHome = argv0.slice("/home/".length);
+      const userSeg = afterHome.split("/", 1)[0];
+      const expected = `/home/${userSeg}${CONTAINER_HOME_LOCAL_BIN_SUFFIX}`;
+      if (
+        userSeg.length > 0 &&
+        argv0.startsWith(expected) &&
+        argv0.length > expected.length
+      ) {
+        return;
+      }
+    }
+  }
+  throw new Error(
+    `hostexec rule ${JSON.stringify(ruleId)}: absolute argv0 ${JSON.stringify(argv0)} targets a disallowed container path. ` +
+      `Allowed prefixes: /usr/bin/*, /usr/local/bin/*, /opt/*/bin/*, /home/<user>/.local/bin/*`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // HostExecPlan
 // ---------------------------------------------------------------------------
@@ -137,6 +205,14 @@ export async function planHostExec(
   const config =
     input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
   config.rules = [...config.rules, NAS_HOOK_RULE];
+  // Reject absolute argv0 values that would bind-mount a wrapper over a
+  // sensitive container path (e.g. /etc/passwd, /bin/sh). Validate before
+  // any filesystem/mount planning so we fail fast with a clear error.
+  for (const rule of config.rules) {
+    if (path.isAbsolute(rule.match.argv0)) {
+      validateAbsoluteArgv0(rule.id, rule.match.argv0);
+    }
+  }
   const workspace = resolveWorkspace(input);
 
   const runtimePaths = resolveHostExecRuntimePathsPure(input.host);

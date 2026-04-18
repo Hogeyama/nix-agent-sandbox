@@ -17,7 +17,11 @@ import {
   type HostExecWorkspacePlan,
   makeHostExecSetupServiceFake,
 } from "../services/hostexec_setup.ts";
-import { createHostExecStage, planHostExec } from "./hostexec.ts";
+import {
+  createHostExecStage,
+  planHostExec,
+  validateAbsoluteArgv0,
+} from "./hostexec.ts";
 
 function makeProfile(): Profile {
   return {
@@ -503,6 +507,81 @@ test("HostExecStage plan: mixed relative and absolute argv0s produce multi-line 
     arg.includes(INTERCEPT_LIB_CONTAINER_PATH),
   );
   expect(soMounts.length).toEqual(1);
+});
+
+// ============================================================
+// validateAbsoluteArgv0 tests
+// ============================================================
+
+test("validateAbsoluteArgv0: accepts allowed prefixes", () => {
+  for (const argv0 of [
+    "/usr/bin/git",
+    "/usr/local/bin/mytool",
+    "/opt/android-sdk/bin/adb",
+    "/opt/jdk-21/bin/java",
+    "/home/testuser/.local/bin/foo",
+  ]) {
+    expect(() => validateAbsoluteArgv0("r", argv0)).not.toThrow();
+  }
+});
+
+test("validateAbsoluteArgv0: rejects sensitive container paths", () => {
+  for (const argv0 of [
+    "/etc/passwd",
+    "/etc/cron.d/evil",
+    "/bin/sh",
+    "/sbin/init",
+    "/lib/x.so",
+    "/lib64/x.so",
+    "/usr/lib/x.so",
+    "/usr/sbin/sshd",
+    "/boot/vmlinuz",
+    "/dev/null",
+    "/proc/self/mem",
+    "/sys/kernel/x",
+    "/root/.ssh/authorized_keys",
+    "/var/log/x",
+    "/run/docker.sock",
+  ]) {
+    expect(() => validateAbsoluteArgv0("bad-rule", argv0)).toThrow(/bad-rule/);
+  }
+});
+
+test("validateAbsoluteArgv0: rejects '/', trailing slash, '..', and '.' segments", () => {
+  expect(() => validateAbsoluteArgv0("r", "/")).toThrow();
+  expect(() => validateAbsoluteArgv0("r", "/usr/bin/")).toThrow();
+  expect(() => validateAbsoluteArgv0("r", "/usr/bin/../../etc/passwd")).toThrow(
+    /\.\./,
+  );
+  expect(() => validateAbsoluteArgv0("r", "/usr/bin/./git")).toThrow(/'\.'/);
+});
+
+test("validateAbsoluteArgv0: rejects partial prefix matches like /usr/bin (no trailing file)", () => {
+  expect(() => validateAbsoluteArgv0("r", "/usr/bin")).toThrow();
+  // /opt/foo without /bin/<file> should be rejected
+  expect(() => validateAbsoluteArgv0("r", "/opt/foo/lib/x")).toThrow();
+  // /opt/bin/x is not /opt/*/bin/x (missing product segment)
+  expect(() => validateAbsoluteArgv0("r", "/opt/bin/x")).toThrow();
+});
+
+test("HostExecStage plan: rejects rule whose absolute argv0 targets a sensitive path", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [
+    {
+      id: "evil",
+      match: { argv0: "/etc/passwd" },
+      cwd: { mode: "any", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "container",
+    },
+  ];
+  const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
+  await expect(
+    planHostExec(input, { interceptLibPath: "/fake/intercept.so" }),
+  ).rejects.toThrow(/evil.*\/etc\/passwd/);
 });
 
 // ============================================================
