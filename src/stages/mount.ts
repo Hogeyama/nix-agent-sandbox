@@ -515,12 +515,37 @@ function resolveContainerMountPath(
   containerHome: string,
   containerWorkDir: string,
 ): string {
-  const expandedPath = expandContainerPath(rawPath, containerHome);
-  return path.normalize(
-    path.isAbsolute(expandedPath)
-      ? path.resolve(expandedPath)
-      : path.resolve(containerWorkDir, expandedPath),
-  );
+  // `~` / `~/...` は containerHome 配下に限定（`..` による脱出を拒否）。
+  if (rawPath === "~" || rawPath.startsWith("~/")) {
+    const expandedPath = expandContainerPath(rawPath, containerHome);
+    const resolved = path.normalize(path.resolve(expandedPath));
+    assertPathWithin(resolved, containerHome, rawPath, "containerHome");
+    return resolved;
+  }
+  // 絶対パスはそのまま（既存挙動）。
+  if (path.isAbsolute(rawPath)) {
+    return path.normalize(path.resolve(rawPath));
+  }
+  // 相対パスは containerWorkDir 配下に限定（`..` による脱出を拒否）。
+  const resolved = path.normalize(path.resolve(containerWorkDir, rawPath));
+  assertPathWithin(resolved, containerWorkDir, rawPath, "containerWorkDir");
+  return resolved;
+}
+
+function assertPathWithin(
+  resolved: string,
+  root: string,
+  rawPath: string,
+  rootLabel: string,
+): void {
+  const rel = path.relative(root, resolved);
+  if (rel === "") return;
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(
+      `[nas] extra-mounts.dst "${rawPath}" escapes ${rootLabel} (${root}); ` +
+        `resolved to ${resolved}`,
+    );
+  }
 }
 
 function resolveContainerUser(hostUser: string): string {

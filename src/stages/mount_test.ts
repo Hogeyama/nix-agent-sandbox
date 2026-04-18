@@ -663,6 +663,70 @@ test("MountStage: multiple valid extra-mounts all mounted", () => {
   expect(plan.dockerArgs.includes("/dir2:/mnt/two")).toEqual(true);
 });
 
+test("MountStage: extra-mount relative dst with ../ escaping workDir throws", () => {
+  const profile = makeProfile({
+    extraMounts: [{ src: "/dev/null", dst: "../../etc/passwd", mode: "ro" }],
+  });
+  const mountProbes = makeMountProbes({
+    resolvedExtraMounts: [
+      {
+        normalizedSrc: "/dev/null",
+        srcExists: true,
+        srcIsDirectory: false,
+        mode: "ro",
+        index: 0,
+      },
+    ],
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  expect(() => planMount(input, mountProbes)).toThrow(
+    /extra-mounts\.dst .* escapes containerWorkDir/,
+  );
+});
+
+test("MountStage: extra-mount ~ dst with ../ escaping containerHome throws", () => {
+  const profile = makeProfile({
+    extraMounts: [{ src: "/dev/null", dst: "~/../etc/passwd", mode: "ro" }],
+  });
+  const mountProbes = makeMountProbes({
+    resolvedExtraMounts: [
+      {
+        normalizedSrc: "/dev/null",
+        srcExists: true,
+        srcIsDirectory: false,
+        mode: "ro",
+        index: 0,
+      },
+    ],
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  expect(() => planMount(input, mountProbes)).toThrow(
+    /extra-mounts\.dst .* escapes containerHome/,
+  );
+});
+
+test("MountStage: extra-mount relative dst with inner ../ that stays inside workDir is allowed", () => {
+  const profile = makeProfile({
+    extraMounts: [{ src: "/dev/null", dst: "sub/../.env", mode: "ro" }],
+  });
+  const mountProbes = makeMountProbes({
+    resolvedExtraMounts: [
+      {
+        normalizedSrc: "/dev/null",
+        srcExists: true,
+        srcIsDirectory: false,
+        mode: "ro",
+        index: 0,
+      },
+    ],
+  });
+  const { input } = makeInput({ profile, mountProbes });
+  const plan = planMount(input, mountProbes);
+  expect(
+    plan.dockerArgs.includes(`/dev/null:${TEST_WORK_DIR}/.env:ro`),
+  ).toEqual(true);
+});
+
 // ============================================================
 // serializeNixExtraPackages
 // ============================================================
