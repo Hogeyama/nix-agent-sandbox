@@ -33,7 +33,7 @@ export interface DeepLink {
 }
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabId>("pending");
+  const [activeTab, setActiveTab] = useState<TabId>("sessions");
   const [networkPending, setNetworkPending] = useState<NetworkPendingItem[]>(
     [],
   );
