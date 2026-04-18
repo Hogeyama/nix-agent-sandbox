@@ -24,16 +24,6 @@ import { PromptService } from "./prompt_service.ts";
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-export function generateWorktreeName(_profileName: string): string {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `nas-${ts}`;
-}
-
-export function generateBranchName(_profileName: string): string {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `nas/${ts}`;
-}
-
 function buildWorkspaceResult(
   imageName: string,
   workDir: string,
@@ -99,9 +89,9 @@ export function createWorktreeStage(
           }
         }
 
-        // Pure name generation
-        const worktreeName = generateWorktreeName(shared.profileName);
-        const branchName = generateBranchName(shared.profileName);
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        const worktreeName = `nas-${ts}`;
+        const branchName = `nas/${ts}`;
         const worktreePath = path.join(
           repoRoot,
           ".nas",
