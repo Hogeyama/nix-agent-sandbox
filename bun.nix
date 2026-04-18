@@ -49,6 +49,10 @@
     url = "https://registry.npmjs.org/@biomejs/cli-win32-x64/-/cli-win32-x64-2.4.11.tgz";
     hash = "sha512-A8D3JM/00C2KQgUV3oj8Ba15EHEYwebAGCy5Sf9GAjr5Y3+kJIYOiESoqRDeuRZueuMdCsbLZIUqmPhpYXJE9A==";
   };
+  "@playwright/cli@0.1.8" = fetchurl {
+    url = "https://registry.npmjs.org/@playwright/cli/-/cli-0.1.8.tgz";
+    hash = "sha512-z1oo8VewG3IevpiUd9+2OMa157yd9i9vQ+q3DUlYCk1Tb2oZ3mp2piyQbFH0j+msOQK5qLYSBgK6+wPlHZFXKA==";
+  };
   "@standard-schema/spec@1.1.0" = fetchurl {
     url = "https://registry.npmjs.org/@standard-schema/spec/-/spec-1.1.0.tgz";
     hash = "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==";
@@ -97,6 +101,10 @@
     url = "https://registry.npmjs.org/fast-check/-/fast-check-3.23.2.tgz";
     hash = "sha512-h5+1OzzfCC3Ef7VbtKdcv7zsstUQwUDlYpUTvjeUsJAssPgLn7QzbboPtL5ro04Mq0rPOsMzl7q5hIbRs2wD1A==";
   };
+  "fsevents@2.3.2" = fetchurl {
+    url = "https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz";
+    hash = "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==";
+  };
   "js-base64@3.7.8" = fetchurl {
     url = "https://registry.npmjs.org/js-base64/-/js-base64-3.7.8.tgz";
     hash = "sha512-hNngCeKxIUQiEUN3GPJOkz4wF/YvdUdbNL9hsBcMQTkKzboD7T/q3OYOuuPZLUE6dBxSGpwhk5mwuDud7JVAow==";
@@ -104,6 +112,14 @@
   "mri@1.2.0" = fetchurl {
     url = "https://registry.npmjs.org/mri/-/mri-1.2.0.tgz";
     hash = "sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==";
+  };
+  "playwright-core@1.60.0-alpha-2026-04-14" = fetchurl {
+    url = "https://registry.npmjs.org/playwright-core/-/playwright-core-1.60.0-alpha-2026-04-14.tgz";
+    hash = "sha512-Wkuhxvhg7YnJXJo+UomP4XlOhdH+AL2QdzJyLuHzqKEIxFkKqtSKF5TTfLt5gyB0UhqEO6knMpr5hULo3W6OEw==";
+  };
+  "playwright@1.60.0-alpha-2026-04-14" = fetchurl {
+    url = "https://registry.npmjs.org/playwright/-/playwright-1.60.0-alpha-2026-04-14.tgz";
+    hash = "sha512-wrYNgIOWpw/vaC4TpFHx9mVYF7kM6bYyRbStIHfxfqHDZvj1rNcYKSiIBNSUA9qm4bye4PvPEDSpe3RqjYFX6A==";
   };
   "preact@10.29.1" = fetchurl {
     url = "https://registry.npmjs.org/preact/-/preact-10.29.1.tgz";
