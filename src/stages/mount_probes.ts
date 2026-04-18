@@ -5,7 +5,7 @@
  * plan() が純粋関数になるようにデータとして返す。
  */
 
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { ClaudeProbes } from "../agents/claude.ts";
 import { resolveClaudeProbes } from "../agents/claude.ts";
@@ -241,6 +241,16 @@ function expandHostPath(rawPath: string, hostHome: string): string {
   return rawPath;
 }
 
+/**
+ * Resolve a user-supplied host mount path to its canonical host path.
+ *
+ * Performs tilde expansion and turns the path into an absolute, normalized
+ * path. This is a purely logical transformation — symlinks are NOT followed
+ * here. Callers that will hand the result to Docker as a bind-mount source
+ * MUST additionally canonicalize via `fs.realpath` (see `resolveExtraMounts`)
+ * so that a symlink inside the workspace cannot redirect the mount to an
+ * unrelated host path.
+ */
 export function resolveHostMountPath(
   rawPath: string,
   baseDir: string,
@@ -261,8 +271,24 @@ async function resolveExtraMounts(
 ): Promise<ResolvedExtraMount[]> {
   return await Promise.all(
     extraMounts.map(async (mount, index) => {
-      const normalizedSrc = resolveHostMountPath(mount.src, workDir, hostHome);
-      const srcExists = await fileExists(normalizedSrc);
+      const logicalSrc = resolveHostMountPath(mount.src, workDir, hostHome);
+      // Canonicalize via realpath so that a symlink inside `src` cannot be
+      // used to bind-mount an arbitrary host path (e.g. a committed
+      // `evil-link -> /etc/passwd` in the workspace). Docker resolves
+      // symlinks on the host at bind time, so the plan must reflect what
+      // will actually be mounted. If realpath fails (e.g. ENOENT because
+      // the target does not yet exist — which the downstream code tolerates
+      // via `srcExists`), fall back to the logical path so the "skip
+      // missing src" warning in MountStage still surfaces the user-written
+      // location.
+      let normalizedSrc = logicalSrc;
+      let srcExists = false;
+      try {
+        normalizedSrc = await realpath(logicalSrc);
+        srcExists = true;
+      } catch {
+        srcExists = false;
+      }
       let srcIsDirectory = false;
       if (srcExists) {
         try {

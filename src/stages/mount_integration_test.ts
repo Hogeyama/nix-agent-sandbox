@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import {
+  mkdtemp,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Config, Profile } from "../config/types.ts";
@@ -262,6 +269,41 @@ test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
   expect(
     plan.dockerArgs.includes(`${process.cwd()}:/tmp/nas-extra-rw`),
   ).toEqual(true);
+});
+
+test("MountStage: resolveMountProbes canonicalizes extra-mounts src through symlinks", async () => {
+  // Security regression test: a symlink under the workspace pointing at a
+  // sensitive host path must NOT be followed into that host path as the
+  // bind-mount source. resolveMountProbes should canonicalize via realpath so
+  // the `normalizedSrc` is the realpath of the symlink target, letting callers
+  // apply further policy. The key property we assert here is that
+  // normalizedSrc is NOT left equal to the symlink path itself.
+  const tmp = await mkdtemp(path.join(tmpdir(), "nas-mount-symlink-"));
+  try {
+    const target = path.join(tmp, "target-file");
+    await writeFile(target, "ok");
+    const link = path.join(tmp, "evil-link");
+    await symlink(target, link);
+
+    const profile: Profile = {
+      ...baseProfile,
+      extraMounts: [{ src: link, dst: "/tmp/nas-evil", mode: "ro" }],
+    };
+    const hostEnv = buildHostEnv();
+    const probes = await resolveMountProbes(hostEnv, profile, tmp, null);
+    expect(probes.resolvedExtraMounts.length).toEqual(1);
+    const resolved = probes.resolvedExtraMounts[0];
+    expect(resolved.srcExists).toEqual(true);
+    // normalizedSrc must be the realpath of the target, not the symlink path.
+    // Compare against realpath(target) to tolerate tmpdir itself being a
+    // symlink (e.g. /tmp -> /private/tmp on macOS).
+    const expected = await realpath(target);
+    const linkReal = await realpath(link);
+    expect(resolved.normalizedSrc).toEqual(expected);
+    expect(resolved.normalizedSrc).toEqual(linkReal);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 });
 
 test("MountStage: unknown agent type throws in resolveMountProbes", async () => {
