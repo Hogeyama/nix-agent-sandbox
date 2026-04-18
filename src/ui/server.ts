@@ -118,10 +118,21 @@ export async function startServer(options: ServeOptions): Promise<void> {
   const assets = await preloadAssets();
   const app = createApp(ctx, assets);
 
+  if (
+    !Number.isInteger(options.port) ||
+    options.port < 1 ||
+    options.port > 65535
+  ) {
+    throw new Error(
+      `Invalid UI port: ${String(options.port)} (must be integer 1..65535)`,
+    );
+  }
+
   console.log(`[nas] UI server starting on http://localhost:${options.port}`);
 
   if (options.open) {
-    // Fire and forget — best effort browser open
+    // Fire and forget — best effort browser open. The port is validated above
+    // so the URL here cannot embed arbitrary attacker-controlled content.
     try {
       Bun.spawn(["xdg-open", `http://localhost:${options.port}`], {
         stdout: "ignore",

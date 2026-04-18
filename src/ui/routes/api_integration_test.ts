@@ -559,3 +559,170 @@ test("GET /audit filters by session parameter", async () => {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// --- UI hardening (fix/ui-hardening) -------------------------------------
+
+test("POST /network/approve rejects unknown scope values with 400", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/network/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "sess-1",
+        requestId: "req-1",
+        // Not in {once, host-port, host} — any escalation attempt here
+        // (e.g., "global", "all", "..") must be rejected at the HTTP layer.
+        scope: "all",
+      }),
+    });
+    expect(res.status).toEqual(400);
+    const body = await res.json();
+    expect(body.error).toContain("Invalid scope");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("POST /hostexec/approve rejects unknown scope values with 400", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/hostexec/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/hostexec/pending`, { recursive: true });
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/hostexec/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "sess-1",
+        requestId: "req-1",
+        scope: "host", // not a hostexec scope; must be rejected
+      }),
+    });
+    expect(res.status).toEqual(400);
+    const body = await res.json();
+    expect(body.error).toContain("Invalid scope");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH /sessions/:id/name rejects names longer than 200 chars", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    await createSession(ctx.sessionPaths, {
+      sessionId: "sess-rename",
+      agent: "claude",
+      profile: "default",
+      startedAt: "2026-04-11T10:00:00.000Z",
+    });
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/sessions/sess-rename/name", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "x".repeat(201) }),
+    });
+    expect(res.status).toEqual(400);
+    const body = await res.json();
+    expect(body.error).toContain("200");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH /sessions/:id/name strips control characters and persists the result", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    await createSession(ctx.sessionPaths, {
+      sessionId: "sess-ctrl",
+      agent: "claude",
+      profile: "default",
+      startedAt: "2026-04-11T10:00:00.000Z",
+    });
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/sessions/sess-ctrl/name", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "a\u0000b\u0007c\u007fd" }),
+    });
+    expect(res.status).toEqual(200);
+    const body = await res.json();
+    expect(body.item.name).toEqual("abcd");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("PATCH /sessions/:id/name rejects names that become empty after stripping", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    await createSession(ctx.sessionPaths, {
+      sessionId: "sess-empty",
+      agent: "claude",
+      profile: "default",
+      startedAt: "2026-04-11T10:00:00.000Z",
+    });
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/sessions/sess-empty/name", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "\u0001\u0002\u0003" }),
+    });
+    expect(res.status).toEqual(400);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("POST /containers/clean requires {confirm:true} body", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const noBody = await app.request("/api/containers/clean", {
+      method: "POST",
+    });
+    expect(noBody.status).toEqual(400);
+
+    const falseConfirm = await app.request("/api/containers/clean", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: false }),
+    });
+    expect(falseConfirm.status).toEqual(400);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});

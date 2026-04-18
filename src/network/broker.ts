@@ -67,7 +67,26 @@ interface PendingGroup {
   waiters: Map<string, PendingWaiter>;
   timer: ReturnType<typeof setTimeout>;
   notificationAbort: AbortController;
+  /**
+   * Set of approval scopes the UI/client is permitted to select when
+   * approving this pending group. An approve/deny message with a scope
+   * outside this set is rejected, preventing a caller that reads
+   * /api/network/pending and POSTs arbitrary JSON from escalating beyond
+   * what was advertised.
+   */
+  allowedScopes: ReadonlySet<ApprovalScope>;
 }
+
+/**
+ * Scopes a client may pick when approving a network request. This mirrors
+ * what the UI exposes today and is the defensive cap enforced by the
+ * broker regardless of what the HTTP layer forwards.
+ */
+const ALLOWED_NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set([
+  "once",
+  "host-port",
+  "host",
+]);
 
 type BrokerMessage =
   | AuthorizeRequest
@@ -320,6 +339,7 @@ export class SessionBroker {
       waiters: new Map(),
       timer,
       notificationAbort,
+      allowedScopes: ALLOWED_NETWORK_SCOPES,
     };
     this.groups.set(groupKey, group);
     this.requestIndex.set(message.requestId, groupKey);
@@ -355,6 +375,13 @@ export class SessionBroker {
         message: `Pending request not found: ${requestId}`,
       };
     }
+    if (scope !== undefined && !group.allowedScopes.has(scope)) {
+      return {
+        type: "error",
+        requestId,
+        message: `scope not allowed for this request: ${scope}`,
+      };
+    }
     const selectedScope = scope ?? this.defaultScope;
     if (selectedScope === "host") {
       this.approvedHosts.add(group.target.host);
@@ -379,6 +406,13 @@ export class SessionBroker {
         type: "error",
         requestId,
         message: `Pending request not found: ${requestId}`,
+      };
+    }
+    if (scope !== undefined && !group.allowedScopes.has(scope)) {
+      return {
+        type: "error",
+        requestId,
+        message: `scope not allowed for this request: ${scope}`,
       };
     }
     if (scope === "host") {

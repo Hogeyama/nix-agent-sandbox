@@ -11,12 +11,12 @@ import {
   socketPathFor,
 } from "../dtach/client.ts";
 import { readRecentDirs } from "../sessions/recent_dirs.ts";
-import {
-  getCurrentBranch,
-  getGitRoot,
-  hasLocalBranch,
-} from "../stages/worktree/git_helpers.ts";
 import type { UiDataContext } from "./data.ts";
+import {
+  getCurrentBranchSafe,
+  getGitRootSafe,
+  hasLocalBranchSafe,
+} from "./git_safe.ts";
 
 /** Client-facing validation error (maps to HTTP 400). */
 export class LaunchValidationError extends Error {
@@ -57,13 +57,13 @@ export async function getLaunchBranches(cwd: string): Promise<LaunchBranches> {
   validateCwd(cwd);
   let root: string;
   try {
-    root = await getGitRoot(cwd);
+    root = await getGitRootSafe(cwd);
   } catch {
     return { currentBranch: null, hasMain: false };
   }
   const [currentBranch, hasMain] = await Promise.all([
-    getCurrentBranch(root),
-    hasLocalBranch(root, "main"),
+    getCurrentBranchSafe(root),
+    hasLocalBranchSafe(root, "main"),
   ]);
   return { currentBranch, hasMain };
 }

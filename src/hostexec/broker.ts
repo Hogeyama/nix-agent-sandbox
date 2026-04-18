@@ -76,7 +76,23 @@ interface PendingGroup {
   >;
   timer: ReturnType<typeof setTimeout>;
   notificationAbort: AbortController;
+  /**
+   * Scopes the client may pick when approving this pending group. An
+   * approve request carrying a scope outside this set is rejected,
+   * defending against a caller that reads /api/hostexec/pending and
+   * then POSTs a broader scope than was advertised.
+   */
+  allowedScopes: ReadonlySet<HostExecPromptScope>;
 }
+
+/**
+ * Scopes a client may pick when approving a hostexec request. Matches
+ * what the UI exposes today.
+ */
+const ALLOWED_HOSTEXEC_SCOPES: ReadonlySet<HostExecPromptScope> = new Set([
+  "once",
+  "capability",
+]);
 
 const MINIMAL_ENV_KEYS = ["HOME", "PATH", "LANG", "TERM", "USER", "LOGNAME"];
 const DEFAULT_PATH =
@@ -290,6 +306,7 @@ export class HostExecBroker {
       requests: new Map([[message.requestId, { request: message, resolved }]]),
       timer,
       notificationAbort,
+      allowedScopes: ALLOWED_HOSTEXEC_SCOPES,
     };
     this.groups.set(approvalKey, group);
     this.requestToApprovalKey.set(message.requestId, approvalKey);
@@ -323,6 +340,13 @@ export class HostExecBroker {
         type: "error",
         requestId,
         message: `Pending request not found: ${requestId}`,
+      };
+    }
+    if (scope !== undefined && !group.allowedScopes.has(scope)) {
+      return {
+        type: "error",
+        requestId,
+        message: `scope not allowed for this request: ${scope}`,
       };
     }
     const selectedScope = scope ?? this.config.prompt.defaultScope;

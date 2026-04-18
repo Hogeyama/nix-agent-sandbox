@@ -3,7 +3,9 @@
  */
 
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
+import type { HostExecPromptScope } from "../../config/types.ts";
 import { logInfo, logWarn } from "../../log.ts";
+import type { ApprovalScope } from "../../network/protocol.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   acknowledgeSessionTurn,
@@ -34,6 +36,62 @@ import {
 } from "../launch.ts";
 import { json, Router } from "../router.ts";
 import { isSafeId } from "./validate_ids.ts";
+
+const NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set([
+  "once",
+  "host-port",
+  "host",
+]);
+const HOSTEXEC_SCOPES: ReadonlySet<HostExecPromptScope> = new Set([
+  "once",
+  "capability",
+]);
+
+function validateNetworkScope(raw: unknown): ApprovalScope | undefined | Error {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") return new Error("scope must be a string");
+  if (!NETWORK_SCOPES.has(raw as ApprovalScope)) {
+    return new Error(
+      `Invalid scope: must be one of ${[...NETWORK_SCOPES].join(", ")}`,
+    );
+  }
+  return raw as ApprovalScope;
+}
+
+function validateHostExecScope(
+  raw: unknown,
+): HostExecPromptScope | undefined | Error {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") return new Error("scope must be a string");
+  if (!HOSTEXEC_SCOPES.has(raw as HostExecPromptScope)) {
+    return new Error(
+      `Invalid scope: must be one of ${[...HOSTEXEC_SCOPES].join(", ")}`,
+    );
+  }
+  return raw as HostExecPromptScope;
+}
+
+/**
+ * Sanitize a session display name. Trims control characters (U+0000..U+001F,
+ * U+007F) from anywhere in the string, caps the result at 200 characters,
+ * and returns an Error if the name is empty after sanitization or exceeds
+ * the cap *before* control-char stripping (to distinguish accidental giant
+ * payloads from ordinary names).
+ */
+function sanitizeSessionName(raw: unknown): string | Error {
+  if (typeof raw !== "string") return new Error("name must be a string");
+  if (raw.length > 200) {
+    return new Error("name must be 200 characters or fewer");
+  }
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: explicit strip
+  const stripped = raw.replace(/[\u0000-\u001f\u007f]/g, "");
+  if (stripped.length === 0) {
+    return new Error(
+      "name must not be empty after removing control characters",
+    );
+  }
+  return stripped;
+}
 
 export function createApiRoutes(ctx: UiDataContext): Router {
   const api = new Router();
@@ -122,7 +180,11 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!isSafeId(requestId)) {
         return json({ error: "Invalid requestId format" }, 400);
       }
-      await approveNetwork(ctx, sessionId, requestId, scope);
+      const validatedScope = validateNetworkScope(scope);
+      if (validatedScope instanceof Error) {
+        return json({ error: validatedScope.message }, 400);
+      }
+      await approveNetwork(ctx, sessionId, requestId, validatedScope);
       return json({ ok: true });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
@@ -142,7 +204,11 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!isSafeId(requestId)) {
         return json({ error: "Invalid requestId format" }, 400);
       }
-      await denyNetwork(ctx, sessionId, requestId, scope);
+      const validatedScope = validateNetworkScope(scope);
+      if (validatedScope instanceof Error) {
+        return json({ error: validatedScope.message }, 400);
+      }
+      await denyNetwork(ctx, sessionId, requestId, validatedScope);
       return json({ ok: true });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
@@ -173,7 +239,11 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!isSafeId(requestId)) {
         return json({ error: "Invalid requestId format" }, 400);
       }
-      await approveHostExec(ctx, sessionId, requestId, scope);
+      const validatedScope = validateHostExecScope(scope);
+      if (validatedScope instanceof Error) {
+        return json({ error: validatedScope.message }, 400);
+      }
+      await approveHostExec(ctx, sessionId, requestId, validatedScope);
       return json({ ok: true });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
@@ -221,7 +291,11 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (typeof name !== "string" || name.length === 0) {
         return json({ error: "name is required" }, 400);
       }
-      const item = await renameSession(ctx, params.sessionId, name);
+      const sanitized = sanitizeSessionName(name);
+      if (sanitized instanceof Error) {
+        return json({ error: sanitized.message }, 400);
+      }
+      const item = await renameSession(ctx, params.sessionId, sanitized);
       return json({ item });
     } catch (e) {
       const message = (e as Error).message;
@@ -274,8 +348,27 @@ export function createApiRoutes(ctx: UiDataContext): Router {
     }
   });
 
-  api.post("/containers/clean", async () => {
+  api.post("/containers/clean", async ({ req }) => {
     try {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json(
+          { error: "Missing or invalid JSON body: {confirm: true} required" },
+          400,
+        );
+      }
+      const confirm = (body as { confirm?: unknown } | null)?.confirm;
+      if (confirm !== true) {
+        return json(
+          {
+            error:
+              'Confirmation required: POST {"confirm": true} to clean nas-managed containers',
+          },
+          400,
+        );
+      }
       const result = await cleanContainers();
       return json(result);
     } catch (e) {

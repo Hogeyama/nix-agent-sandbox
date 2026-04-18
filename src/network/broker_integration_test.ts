@@ -548,6 +548,65 @@ test("SessionBroker: deny-by-default targets blocked even when in allowlist", as
   }
 });
 
+test("SessionBroker: approve with unknown scope is rejected and request stays pending", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_scope",
+    allowlist: [],
+    denylist: [],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+    auditDir,
+  });
+  const socketPath = `${paths.brokersDir}/sess_scope.sock`;
+  await broker.start(socketPath);
+  try {
+    const authorizePromise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_scope", "req_bad_scope", "example.com", 443),
+    );
+    await waitForPending(socketPath);
+    // Attacker forges a scope value not in the UI-advertised set. The
+    // broker must reject the scope without resolving the pending group.
+    const response = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, {
+      type: "approve",
+      requestId: "req_bad_scope",
+      scope: "all" as never,
+    });
+    expect(response.type).toEqual("error");
+    expect(response.message.toLowerCase()).toContain("scope not allowed");
+
+    // The pending request must still be pending (not resolved).
+    const stillPending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
+    expect(stillPending.items.length).toEqual(1);
+
+    // Clean up: approve with a valid scope so the socket client unblocks.
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_bad_scope",
+      scope: "once",
+    });
+    const decision = await authorizePromise;
+    expect(decision.decision).toEqual("allow");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 async function waitForPending(
   socketPath: string,
   minCount = 1,
