@@ -1,4 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { SecretConfig } from "../config/types.ts";
 
@@ -69,6 +70,7 @@ export async function resolveSecret(
   }
   if (source.startsWith("file:")) {
     const filePath = source.slice(5);
+    assertSafeSecretPath(filePath, env);
     return (await readFile(filePath, "utf8")).trimEnd();
   }
   if (source.startsWith("dotenv:")) {
@@ -79,6 +81,7 @@ export async function resolveSecret(
     }
     const filePath = target.slice(0, hashIndex);
     const key = target.slice(hashIndex + 1);
+    assertSafeSecretPath(filePath, env);
     const parsed = parseDotEnv(await readFile(filePath, "utf8"));
     return parsed[key] ?? null;
   }
@@ -93,6 +96,69 @@ export async function resolveSecret(
     return await keyringResolver(service, account);
   }
   throw new Error(`Unsupported secret source: ${source}`);
+}
+
+const SENSITIVE_PREFIXES = [
+  "/etc",
+  "/proc",
+  "/sys",
+  "/dev",
+  "/boot",
+  "/var/log",
+];
+
+export function assertSafeSecretPath(
+  rawPath: string,
+  env: Record<string, string | undefined>,
+): void {
+  if (rawPath === "") {
+    throw new Error("secret path must not be empty");
+  }
+  if (rawPath.split("/").some((segment) => segment === "..")) {
+    throw new Error(`secret path "${rawPath}" must not contain ".." segments`);
+  }
+  const normalized = path.resolve(rawPath);
+  if (normalized.split("/").some((segment) => segment === "..")) {
+    throw new Error(`secret path "${rawPath}" must not contain ".." segments`);
+  }
+  const home = env.HOME ?? os.homedir();
+  const xdgConfig = env.XDG_CONFIG_HOME;
+  if (home && isWithin(normalized, home)) return;
+  if (xdgConfig && isWithin(normalized, xdgConfig)) return;
+
+  for (const prefix of SENSITIVE_PREFIXES) {
+    if (isWithin(normalized, prefix)) {
+      throw new Error(
+        `secret path "${rawPath}" is inside sensitive prefix ${prefix}`,
+      );
+    }
+  }
+  // /root is only rejected when it isn't the user's HOME.
+  if (isWithin(normalized, "/root") && home !== "/root") {
+    throw new Error(
+      `secret path "${rawPath}" is inside sensitive prefix /root`,
+    );
+  }
+  // /var/lib is sensitive, but allow /var/lib/<user>/... (i.e. require a
+  // subdirectory beneath the first segment so bare files like
+  // /var/lib/secret are rejected).
+  if (isWithin(normalized, "/var/lib")) {
+    const rest = path.relative("/var/lib", normalized);
+    const segments = rest === "" ? [] : rest.split(path.sep).filter(Boolean);
+    if (segments.length < 2) {
+      throw new Error(
+        `secret path "${rawPath}" is inside sensitive prefix /var/lib`,
+      );
+    }
+  }
+}
+
+function isWithin(target: string, root: string): boolean {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 export function parseDotEnv(text: string): Record<string, string> {

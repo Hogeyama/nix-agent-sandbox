@@ -2,7 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseDotEnv, resolveSecret, SecretStore } from "./secret_store.ts";
+import {
+  assertSafeSecretPath,
+  parseDotEnv,
+  resolveSecret,
+  SecretStore,
+} from "./secret_store.ts";
 
 test("parseDotEnv: parses export and quoted values", () => {
   const parsed = parseDotEnv(
@@ -76,6 +81,58 @@ test("SecretStore: caches values and enforces required secrets", async () => {
   expect(await store.require("keyring")).toEqual("from-keyring");
   expect(calls).toEqual(1);
   await expect(store.require("missing")).rejects.toThrow("Unknown secret");
+});
+
+test("assertSafeSecretPath: allows HOME and XDG_CONFIG_HOME paths", () => {
+  const env = { HOME: "/home/alice", XDG_CONFIG_HOME: "/home/alice/.config" };
+  expect(() => assertSafeSecretPath("/home/alice/.creds", env)).not.toThrow();
+  expect(() =>
+    assertSafeSecretPath("/home/alice/.config/nas/token", env),
+  ).not.toThrow();
+  expect(() => assertSafeSecretPath("/opt/app/creds", env)).not.toThrow();
+  expect(() => assertSafeSecretPath("/srv/secret", env)).not.toThrow();
+  expect(() => assertSafeSecretPath("/var/lib/alice/t", env)).not.toThrow();
+});
+
+test("assertSafeSecretPath: rejects sensitive system paths", () => {
+  const env = { HOME: "/home/alice" };
+  expect(() => assertSafeSecretPath("/etc/shadow", env)).toThrow(/sensitive/);
+  expect(() => assertSafeSecretPath("/proc/self/environ", env)).toThrow(
+    /sensitive/,
+  );
+  expect(() => assertSafeSecretPath("/sys/class", env)).toThrow(/sensitive/);
+  expect(() => assertSafeSecretPath("/dev/null", env)).toThrow(/sensitive/);
+  expect(() => assertSafeSecretPath("/boot/grub", env)).toThrow(/sensitive/);
+  expect(() => assertSafeSecretPath("/var/log/syslog", env)).toThrow(
+    /sensitive/,
+  );
+  expect(() => assertSafeSecretPath("/var/lib/secret", env)).toThrow(
+    /sensitive/,
+  );
+  expect(() => assertSafeSecretPath("/root/.token", env)).toThrow(/sensitive/);
+});
+
+test("assertSafeSecretPath: allows /root when HOME is /root", () => {
+  const env = { HOME: "/root" };
+  expect(() => assertSafeSecretPath("/root/.creds", env)).not.toThrow();
+});
+
+test("assertSafeSecretPath: rejects paths with .. segments", () => {
+  const env = { HOME: "/home/alice" };
+  expect(() =>
+    assertSafeSecretPath("/home/alice/../../etc/passwd", env),
+  ).toThrow(/\.\./);
+  expect(() => assertSafeSecretPath("../secret", env)).toThrow(/\.\./);
+});
+
+test("resolveSecret: rejects file: and dotenv: pointing at sensitive paths", async () => {
+  const env = { HOME: "/home/alice" };
+  await expect(
+    resolveSecret("file:/etc/shadow", env, () => Promise.resolve(null)),
+  ).rejects.toThrow(/sensitive/);
+  await expect(
+    resolveSecret("dotenv:/etc/secrets#KEY", env, () => Promise.resolve(null)),
+  ).rejects.toThrow(/sensitive/);
 });
 
 test("SecretStore: rejects missing required secret", async () => {

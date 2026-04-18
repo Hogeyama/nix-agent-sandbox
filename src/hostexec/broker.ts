@@ -609,19 +609,41 @@ async function normalizeAllowedCwd(
   return normalized;
 }
 
-async function resolveAllowEntry(
+export async function resolveAllowEntry(
   entry: string,
   workspaceRoot: string,
   sessionTmpDir: string,
 ): Promise<string> {
   const { realpath } = await import("node:fs/promises");
   if (entry.startsWith("workspace:")) {
-    return path.resolve(workspaceRoot, entry.slice("workspace:".length));
+    const resolved = path.resolve(
+      workspaceRoot,
+      entry.slice("workspace:".length),
+    );
+    assertWithinRoot(resolved, workspaceRoot, entry);
+    return resolved;
   }
   if (entry.startsWith("session_tmp:")) {
-    return path.resolve(sessionTmpDir, entry.slice("session_tmp:".length));
+    const resolved = path.resolve(
+      sessionTmpDir,
+      entry.slice("session_tmp:".length),
+    );
+    assertWithinRoot(resolved, sessionTmpDir, entry);
+    return resolved;
   }
   return await realpath(entry).catch(() => path.resolve(entry));
+}
+
+function assertWithinRoot(resolved: string, root: string, entry: string): void {
+  const relative = path.relative(root, resolved);
+  if (
+    relative !== "" &&
+    (relative.startsWith("..") || path.isAbsolute(relative))
+  ) {
+    throw new Error(
+      `hostexec cwd.allow entry "${entry}" escapes its root (${root})`,
+    );
+  }
 }
 
 function isWithin(target: string, root: string): boolean {
