@@ -5,19 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.0] - 2026-04-19
 
 ### Added
 
-- **`display.sandbox: "xpra"`**: scoped replacement for the removed `display.enable`. Launches a per-session detached xpra X server (Xvfb-backed) and bind-mounts only its Xvfb socket plus a FamilyWild MIT-MAGIC-COOKIE Xauthority into the agent container. nas also auto-starts a host-side seamless-mode `xpra attach :N` viewer (inheriting the nas process's `DISPLAY` / `XAUTHORITY`) so X11 windows drawn by the agent pop up directly on the user's desktop without a manual command; the viewer is scoped to the same lifetime as the X server. Sub-option: `display.size` (default `"1920x1080"`). Requires `xpra` on the host.
+- **`display.sandbox: "xpra"`**: scoped X11 forwarding. Launches a per-session xpra X server (Xvfb-backed), bind-mounts only its socket and an MIT-MAGIC-COOKIE Xauthority into the container, and auto-starts a host-side `xpra attach` viewer so agent windows surface on the user's desktop. Sub-option `display.size` (default `"1920x1080"`). Requires `xpra` on the host ([4ac0c69], [3c5ec9b])
+
+### Changed
+
+- **Breaking:** `session.enable` renamed to `session.multiplex` ([55c5a51])
 
 ### Removed
 
-- **BREAKING: `display.enable` / unscoped X11 socket forwarding has been removed.** The feature bind-mounted `/tmp/.X11-unix` and `~/.Xauthority` into the agent container. X11 has no isolation between clients sharing a display, so any agent granted `display.enable` could record host keystrokes, capture the host screen, inject synthetic keys/mouse events into host apps, and read the host clipboard — none of which can be scoped per-window or per-app. Unlike the other opt-in capabilities in nas (which grant a specific, bounded resource), `display.enable` promoted a full sandbox-escape to a one-line config toggle. Replaced by `display.sandbox: "xpra"` (see Added above), which keeps the agent inside a dedicated, headless virtual X server. Users who specifically want the old unscoped behavior can still assemble it manually with `extra-mounts` (`/tmp/.X11-unix`, `~/.Xauthority`) and `env` (`DISPLAY`, `XAUTHORITY`); doing so surfaces the risk at config-review time.
+- **Breaking:** `display.enable` (unscoped X11 socket forwarding) removed. X11 has no isolation between clients sharing a display, so the feature let any agent granted it keylog the host, capture the screen, inject input, and read the clipboard — none of which can be scoped per-app. Replaced by `display.sandbox: "xpra"`. The old behavior can still be assembled manually with `extra-mounts` and `env`, which surfaces the risk at config-review time ([93ac88f])
+
+### Security
+
+- UI daemon rejects cross-origin requests and DNS-rebinding `Host` headers ([17c4339])
+- UI rejects `sessionId`/`requestId` path traversal ([ee37b3f])
+- UI sandboxes git invocations and tightens approve/clean/rename/xdg-open inputs; audit command prefix exclusion now matches absolute-path form ([19f70f5], [29c124e])
+- Worktree hardens git invocations and avoids symlink-following `cp` ([c1d5560])
+- Mount stage resolves `extra-mounts.src` via realpath and rejects `extra-mounts.dst` that escapes the container work/home dirs ([d4af561], [5862cdb])
+- Hostexec restricts absolute `argv0` to safe container path prefixes, and validates `cwd.allow` entries and secret path prefixes ([c512347], [f38ad61])
+- Dbus/config tighten validation on dbus rules, source-address, pid file, and `nix.extra-packages` ([4f0c011])
 
 ### Migration
 
-- If your config has `display: { enable: true }`, replace it with `display: { sandbox: "xpra" }` (and optionally `size: "WxH"`). The `enable` key is no longer recognized.
+- Replace `display: { enable: true }` with `display: { sandbox: "xpra" }` (optionally `size: "WxH"`); the `enable` key is no longer recognized.
+- Replace `session: { enable: ... }` with `session: { multiplex: ... }`.
 
 ## [0.8.1] - 2026-04-18
 
@@ -214,6 +229,9 @@ Initial release.
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix + nix-bundle-elf
 
+[0.9.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.5.0...v0.5.1
