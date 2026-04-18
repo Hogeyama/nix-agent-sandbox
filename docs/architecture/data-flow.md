@@ -86,7 +86,7 @@ flowchart LR
 | プロセス | 起動契機 | 主な役割 |
 |---|---|---|
 | nas CLI | ユーザーが `nas [profile]` 実行 | config を読み、pipeline で各コンテナ・デーモンを組み立てる |
-| dtach session | `session.enable: true` のとき CLI が自己ラップ | 複数ターミナルからの attach を可能にする |
+| dtach session | `session.multiplex: true` のとき CLI が自己ラップ | 複数ターミナルからの attach を可能にする |
 | UI Daemon | `ui.enable: true` で CLI が auto-start、または `nas ui` | HTTP/SSE/WS でダッシュボードを配信、承認操作を受ける |
 | Host Brokers (auth-router / hostexec-broker) | pipeline stage で起動 | 外向き通信・ホストコマンド実行の承認窓口 |
 | Agent container | launch stage | Claude Code / Copilot CLI / Codex CLI 本体が走る |

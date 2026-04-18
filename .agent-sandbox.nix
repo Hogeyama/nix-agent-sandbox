@@ -5,7 +5,7 @@ let
       mount-socket = true;
     };
     session = {
-      enable = true;
+      multiplex = true;
     };
     docker = {
       enable = true;

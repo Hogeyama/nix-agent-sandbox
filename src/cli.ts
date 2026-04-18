@@ -202,8 +202,8 @@ export async function main(args: string[]): Promise<void> {
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
     const sessionId = process.env.NAS_SESSION_ID || `sess_${randomHex(6)}`;
 
-    // session.enable かつ dtach 内でなければ、nas 自体を dtach でラップして再実行
-    if (effectiveProfile.session.enable && !process.env.NAS_INSIDE_DTACH) {
+    // session.multiplex かつ dtach 内でなければ、nas 自体を dtach でラップして再実行
+    if (effectiveProfile.session.multiplex && !process.env.NAS_INSIDE_DTACH) {
       await runInsideDtach(sessionId, effectiveProfile.session.detachKey, args);
       return;
     }
@@ -364,7 +364,7 @@ async function runInsideDtach(
 ): Promise<void> {
   if (!(await dtachIsAvailable())) {
     throw new Error(
-      "dtach is required for session.enable but was not found. Install dtach or disable session.enable.",
+      "dtach is required for session.multiplex but was not found. Install dtach or disable session.multiplex.",
     );
   }
 

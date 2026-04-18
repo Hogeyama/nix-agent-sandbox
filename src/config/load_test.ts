@@ -146,7 +146,7 @@ test("mergeRawProfiles: all RawProfile keys are preserved", () => {
     agent: "claude",
     "agent-args": ["--flag"],
     worktree: { base: "main" },
-    session: { enable: false },
+    session: { multiplex: false },
     nix: { enable: true },
     docker: { enable: true },
     gcloud: { "mount-config": true },

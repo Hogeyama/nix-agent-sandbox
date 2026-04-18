@@ -111,12 +111,12 @@ export const worktreeSchema = z
 
 export const sessionSchema = z
   .object({
-    enable: z.boolean().default(DEFAULT_SESSION_CONFIG.enable),
+    multiplex: z.boolean().default(DEFAULT_SESSION_CONFIG.multiplex),
     "detach-key": z.string().default(DEFAULT_SESSION_CONFIG.detachKey),
   })
   .prefault({})
   .transform((r) => ({
-    enable: r.enable,
+    multiplex: r.multiplex,
     detachKey: r["detach-key"],
   }));
 

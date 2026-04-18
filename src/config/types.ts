@@ -52,7 +52,7 @@ export interface SecretConfig {
 
 /** Session 設定 */
 export interface SessionConfig {
-  enable: boolean;
+  multiplex: boolean;
   detachKey: string;
 }
 
@@ -234,7 +234,7 @@ export interface RawProfile {
     "on-create"?: string;
   };
   session?: {
-    enable?: boolean;
+    multiplex?: boolean;
     "detach-key"?: string;
   };
   nix?: {
@@ -408,7 +408,7 @@ export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
 };
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
-  enable: false,
+  multiplex: false,
   detachKey: "^\\",
 };
 
