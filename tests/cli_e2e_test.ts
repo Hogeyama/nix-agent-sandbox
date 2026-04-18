@@ -83,11 +83,24 @@ async function runNas(
     env?: Record<string, string>;
   } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
+  // Strip outer nas session id so child nas invocations don't reuse our
+  // session id / hostexec wrappers (which causes symlink-EEXIST collisions
+  // when tests run inside a nas container). Keep hostexec wrapper env
+  // (NAS_HOSTEXEC_SOCKET etc.) so that any `git` invoked via the mounted
+  // /opt/nas/hostexec/bin shim can still reach its broker.
+  const cleanedParent: Record<string, string | undefined> = { ...process.env };
+  for (const key of [
+    "NAS_SESSION_ID",
+    "NAS_HOSTEXEC_SESSION_ID",
+    "NAS_HOSTEXEC_SESSION_TMP",
+  ]) {
+    delete cleanedParent[key];
+  }
   const proc = Bun.spawn(["bun", "run", MAIN_TS, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     cwd: options.cwd,
-    env: options.env ? { ...process.env, ...options.env } : undefined,
+    env: options.env ? { ...cleanedParent, ...options.env } : cleanedParent,
   });
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,

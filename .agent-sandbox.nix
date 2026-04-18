@@ -162,7 +162,7 @@ let
           id = "git-push";
           match = {
             argv0 = "git";
-            arg-regex = ''push'';
+            arg-regex = ''(?<!stash )push'';
           };
           cwd = {
             mode = "workspace-or-session-tmp";

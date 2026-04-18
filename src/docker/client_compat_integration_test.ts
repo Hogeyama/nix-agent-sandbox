@@ -45,6 +45,10 @@ const EXPECTED_PROXY_AUTH = `Basic ${Buffer.from(
 
 const curlAvailable = await commandExists("curl");
 const gitAvailable = await commandExists("git");
+// Running inside a nas container: the outer hostexec policy blocks `git push`
+// (even to a local bare repo), so these fixtures cannot be set up. Skip rather
+// than fail when we detect we are nested inside a nas session.
+const insideNas = process.env.NAS_SESSION_ID !== undefined;
 
 async function commandExists(command: string): Promise<boolean> {
   try {
@@ -362,7 +366,7 @@ function assertNoProxyAuthLeak(requests: RecordedRequest[]): void {
   }
 }
 
-test.skipIf(!curlAvailable)(
+test.skipIf(!curlAvailable || insideNas)(
   "Client compatibility: curl retries after 407 and does not leak proxy credentials upstream",
   async () => {
     await withProxyFixture(
@@ -394,7 +398,7 @@ test.skipIf(!curlAvailable)(
   },
 );
 
-test.skipIf(!gitAvailable)(
+test.skipIf(!gitAvailable || insideNas)(
   "Client compatibility: git retries after 407 and does not leak proxy credentials upstream",
   async () => {
     await withProxyFixture(
