@@ -14,6 +14,7 @@ import type { EnvConfig, EnvMode, HostExecRule, Profile } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_SESSION_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_DOCKER_CONFIG,
   DEFAULT_GCLOUD_CONFIG,
   DEFAULT_GPG_CONFIG,
@@ -402,6 +403,44 @@ export const dbusSchema = z
   .prefault({});
 
 // ---------------------------------------------------------------------------
+// Display (xpra sandbox)
+// ---------------------------------------------------------------------------
+
+const MAX_DISPLAY_DIMENSION = 16384;
+
+export const displaySchema = z
+  .object({
+    sandbox: zodEnum(["none", "xpra"] as const).default(
+      DEFAULT_DISPLAY_CONFIG.sandbox,
+    ),
+    size: z
+      .string()
+      .regex(/^\d+x\d+$/, { message: "must match WIDTHxHEIGHT" })
+      .refine(
+        (s) => {
+          const [w, h] = s.split("x").map((n) => Number.parseInt(n, 10));
+          return (
+            Number.isFinite(w) &&
+            Number.isFinite(h) &&
+            w > 0 &&
+            h > 0 &&
+            w <= MAX_DISPLAY_DIMENSION &&
+            h <= MAX_DISPLAY_DIMENSION
+          );
+        },
+        {
+          message: `width and height must be in range [1, ${MAX_DISPLAY_DIMENSION}]`,
+        },
+      )
+      .default(DEFAULT_DISPLAY_CONFIG.size),
+  })
+  .prefault({})
+  .transform((r) => ({
+    sandbox: r.sandbox,
+    size: r.size,
+  }));
+
+// ---------------------------------------------------------------------------
 // Secret config
 // ---------------------------------------------------------------------------
 
@@ -751,6 +790,7 @@ export function profileSchema(profileName: string) {
       gpg: gpgSchema,
       network: networkSchema(profileName),
       dbus: dbusSchema,
+      display: displaySchema,
       "extra-mounts": extraMountsSchema,
       env: envSchema,
       hook: hookSchema,
@@ -770,6 +810,7 @@ export function profileSchema(profileName: string) {
           gpg: r.gpg,
           network: r.network,
           dbus: r.dbus,
+          display: r.display,
           extraMounts: r["extra-mounts"],
           env: r.env,
           hook: r.hook,

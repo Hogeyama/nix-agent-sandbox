@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { Effect, Exit, Scope } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
@@ -27,6 +28,7 @@ function makeProfile(): Profile {
     gcloud: { mountConfig: false },
     aws: { mountConfig: false },
     gpg: { forwardAgent: false },
+    display: DEFAULT_DISPLAY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     network: {
       allowlist: [],

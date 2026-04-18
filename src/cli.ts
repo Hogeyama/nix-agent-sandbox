@@ -44,6 +44,7 @@ import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { ContainerLaunchServiceLive } from "./services/container_launch.ts";
 import { DbusProxyServiceLive } from "./services/dbus_proxy.ts";
 import { DindServiceLive } from "./services/dind.ts";
+import { DisplayServiceLive } from "./services/display.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { DockerBuildServiceLive } from "./services/docker_build.ts";
 import { EnvoyServiceLive } from "./services/envoy.ts";
@@ -59,6 +60,7 @@ import { SessionStoreServiceLive } from "./services/session_store_service.ts";
 import { addRecentDir } from "./sessions/recent_dirs.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
+import { createDisplayStage } from "./stages/display.ts";
 import {
   type BuildProbes,
   createDockerBuildStage,
@@ -259,6 +261,7 @@ export async function main(args: string[]): Promise<void> {
       ContainerLaunchServiceLive.pipe(Layer.provide(dockerLayer)),
       DbusProxyServiceLive.pipe(Layer.provide(primitiveLayer)),
       DindServiceLive,
+      DisplayServiceLive.pipe(Layer.provide(primitiveLayer)),
       DockerBuildServiceLive.pipe(
         Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
       ),
@@ -330,6 +333,7 @@ export function createCliPipelineBuilder({
     .add(createDockerBuildStage(buildProbes))
     .add(createNixDetectStage(input))
     .add(createDbusProxyStage(input))
+    .add(createDisplayStage(input, mountProbes))
     .add(createMountStage(input, mountProbes))
     .add(createHostExecStage(input))
     .add(createDindStage(input))

@@ -11,6 +11,7 @@ import { Effect, Layer } from "effect";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
@@ -71,6 +72,7 @@ function makeProfile(
     session: DEFAULT_SESSION_CONFIG,
     network,
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],

@@ -15,6 +15,7 @@ import type { CopilotProbes } from "../agents/copilot.ts";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -72,6 +73,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
       },
     },
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+    display: structuredClone(DEFAULT_DISPLAY_CONFIG),
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
@@ -118,6 +120,8 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     resolvedExtraMounts: [],
     resolvedEnvEntries: [],
     gitWorktreeMainRoot: null,
+    xpraBinPath: null,
+    takenX11Displays: new Set<number>(),
     ...overrides,
   };
 }
@@ -130,7 +134,7 @@ const baseConfig: Config = {
 
 type MountStageSlices = Pick<
   PipelineState,
-  "workspace" | "nix" | "dbus" | "container"
+  "workspace" | "nix" | "dbus" | "display" | "container"
 >;
 
 function makeSlices(
@@ -143,6 +147,7 @@ function makeSlices(
     },
     nix: { enabled: false },
     dbus: { enabled: false },
+    display: { enabled: false },
     container: {
       ...emptyContainerPlan("nas-sandbox", TEST_WORK_DIR),
       env: { static: { NAS_LOG_LEVEL: "info" }, dynamicOps: [] },

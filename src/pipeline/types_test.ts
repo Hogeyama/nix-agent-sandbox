@@ -286,6 +286,7 @@ test("SliceKey: covers all expected slice names", () => {
     "session",
     "nix",
     "dbus",
+    "display",
     "hostexec",
     "dind",
     "network",
@@ -293,7 +294,7 @@ test("SliceKey: covers all expected slice names", () => {
     "proxy",
     "container",
   ];
-  expect(keys).toHaveLength(10);
+  expect(keys).toHaveLength(11);
 });
 
 test("PipelineState: can construct with all slices", () => {
@@ -302,6 +303,7 @@ test("PipelineState: can construct with all slices", () => {
     session: { sessionId: "sess_abc" },
     nix: { enabled: false },
     dbus: { enabled: false },
+    display: { enabled: false },
     hostexec: {
       runtimeDir: "/run/nas/hostexec",
       brokerSocket: "/run/nas/hostexec/broker.sock",

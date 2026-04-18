@@ -7,6 +7,7 @@ import type { AuthRouterService } from "../services/auth_router.ts";
 import type { ContainerLaunchService } from "../services/container_launch.ts";
 import type { DbusProxyService } from "../services/dbus_proxy.ts";
 import type { DindService } from "../services/dind.ts";
+import type { DisplayService } from "../services/display.ts";
 import type { DockerService } from "../services/docker.ts";
 import type { DockerBuildService } from "../services/docker_build.ts";
 import type { EnvoyService } from "../services/envoy.ts";
@@ -72,6 +73,7 @@ export type StageServices =
   | ContainerLaunchService
   | DbusProxyService
   | DindService
+  | DisplayService
   | DockerBuildService
   | EnvoyService
   | FsService

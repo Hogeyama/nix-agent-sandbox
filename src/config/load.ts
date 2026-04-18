@@ -159,6 +159,7 @@ export function mergeRawProfiles(
     gpg: shallowMerge(global.gpg, local.gpg),
     network: mergeRawNetworkConfigs(global.network, local.network),
     dbus: mergeRawDbusConfigs(global.dbus, local.dbus),
+    display: shallowMerge(global.display, local.display),
     "extra-mounts": local["extra-mounts"] ?? global["extra-mounts"],
     env: local.env ?? global.env,
     hook: shallowMerge(global.hook, local.hook),

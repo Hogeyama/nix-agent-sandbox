@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Config, Profile } from "../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -28,6 +29,7 @@ const baseProfile: Profile = {
   session: DEFAULT_SESSION_CONFIG,
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
   dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+  display: structuredClone(DEFAULT_DISPLAY_CONFIG),
   hook: DEFAULT_HOOK_CONFIG,
   extraMounts: [],
   env: [],
@@ -50,12 +52,15 @@ async function buildTestInput(
   workDir: string,
   overrides?: {
     sliceOverrides?: Partial<
-      Pick<PipelineState, "workspace" | "container" | "nix" | "dbus">
+      Pick<
+        PipelineState,
+        "workspace" | "container" | "nix" | "dbus" | "display"
+      >
     >;
   },
 ): Promise<{
   input: StageInput &
-    Pick<PipelineState, "workspace" | "container" | "nix" | "dbus">;
+    Pick<PipelineState, "workspace" | "container" | "nix" | "dbus" | "display">;
   mountProbes: MountProbes;
 }> {
   const hostEnv = buildHostEnv();
@@ -69,7 +74,7 @@ async function buildTestInput(
 
   const slices: Pick<
     PipelineState,
-    "workspace" | "container" | "nix" | "dbus"
+    "workspace" | "container" | "nix" | "dbus" | "display"
   > = {
     workspace: { workDir, imageName: "nas-sandbox" },
     container: {
@@ -78,11 +83,15 @@ async function buildTestInput(
     },
     nix: { enabled: false },
     dbus: { enabled: false },
+    display: { enabled: false },
     ...overrides?.sliceOverrides,
   };
 
   const input: StageInput &
-    Pick<PipelineState, "workspace" | "container" | "nix" | "dbus"> = {
+    Pick<
+      PipelineState,
+      "workspace" | "container" | "nix" | "dbus" | "display"
+    > = {
     config: baseConfig,
     profile,
     profileName: "test",

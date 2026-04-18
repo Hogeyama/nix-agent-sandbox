@@ -43,6 +43,19 @@ export type DbusState =
       readonly sourceAddress: string;
     };
 
+/**
+ * Display (xpra sandbox) state.  Uses a discriminated union so that
+ * `enabled: true` without path data is a type error.
+ */
+export type DisplayState =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly displayNumber: number;
+      readonly socketPath: string;
+      readonly xauthorityPath: string;
+    };
+
 /** Host-exec broker paths resolved by the hostexec stage. */
 export interface HostExecState {
   readonly runtimeDir: string;
@@ -151,6 +164,7 @@ export interface PipelineState {
   readonly session: SessionState;
   readonly nix: NixState;
   readonly dbus: DbusState;
+  readonly display: DisplayState;
   readonly hostexec: HostExecState;
   readonly dind: DindState;
   readonly network: NetworkState;

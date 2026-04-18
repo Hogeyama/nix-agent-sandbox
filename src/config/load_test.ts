@@ -157,6 +157,7 @@ test("mergeRawProfiles: all RawProfile keys are preserved", () => {
       proxy: { "forward-ports": [8080] },
     },
     dbus: { session: { enable: true } },
+    display: { sandbox: "none" },
     "extra-mounts": [{ src: "/a", dst: "/b" }],
     env: [{ key: "K", val: "V" }],
     hostexec: { rules: [] },

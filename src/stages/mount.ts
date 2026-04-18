@@ -24,6 +24,7 @@ import type { Stage } from "../pipeline/stage_builder.ts";
 import type {
   ContainerPlan,
   DbusState,
+  DisplayState,
   DynamicEnvOp,
   MountSpec,
   NixState,
@@ -66,7 +67,7 @@ export interface MountPlan {
 
 type MountStageState = Pick<
   PipelineState,
-  "workspace" | "nix" | "dbus" | "container"
+  "workspace" | "nix" | "dbus" | "display" | "container"
 >;
 type MountStageInput = StageInput & MountStageState;
 
@@ -78,14 +79,14 @@ export function createMountStage(
   shared: StageInput,
   mountProbes: MountProbes,
 ): Stage<
-  "workspace" | "nix" | "dbus" | "container",
+  "workspace" | "nix" | "dbus" | "display" | "container",
   { container: ContainerPlan },
   MountSetupService,
   unknown
 > {
   return {
     name: "MountStage",
-    needs: ["workspace", "nix", "dbus", "container"],
+    needs: ["workspace", "nix", "dbus", "display", "container"],
 
     run(input) {
       const stageInput: MountStageInput = {
@@ -393,6 +394,26 @@ export function planMount(
     envVars.DBUS_SESSION_BUS_ADDRESS = `unix:path=${containerRuntimeDir}/bus`;
   }
 
+  // Display (xpra sandbox) マウント
+  const display = resolveDisplayRuntime(input);
+  if (display.enabled) {
+    // xpra が spawn した Xvfb のソケットだけをマウント
+    // (ホスト側 /tmp/.X11-unix 全体は渡さない)
+    addMount(args, mounts, display.socketPath, display.socketPath, true);
+    // per-session xauthority を ~/.Xauthority へ bind
+    addMount(
+      args,
+      mounts,
+      display.xauthorityPath,
+      `${containerHome}/.Xauthority`,
+      true,
+    );
+    envVars.DISPLAY = `:${display.displayNumber}`;
+    envVars.XAUTHORITY = `${containerHome}/.Xauthority`;
+    // playwright/chromium 等が /dev/shm を多用するため拡張
+    extraRunArgs.push("--shm-size", "2g");
+  }
+
   // エージェント固有の設定
   // Build priorDockerArgs and priorEnvVars by combining prior + current stage's args
   const priorDockerArgs = [...args];
@@ -525,6 +546,25 @@ function resolveDbusRuntime(input: { dbus: DbusState }): {
   const dbus = input.dbus;
   return dbus.enabled
     ? { enabled: true, runtimeDir: dbus.runtimeDir }
+    : { enabled: false };
+}
+
+function resolveDisplayRuntime(input: { display: DisplayState }):
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly displayNumber: number;
+      readonly socketPath: string;
+      readonly xauthorityPath: string;
+    } {
+  const display = input.display;
+  return display.enabled
+    ? {
+        enabled: true,
+        displayNumber: display.displayNumber,
+        socketPath: display.socketPath,
+        xauthorityPath: display.xauthorityPath,
+      }
     : { enabled: false };
 }
 

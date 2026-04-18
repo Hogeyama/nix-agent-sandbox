@@ -130,6 +130,28 @@ profiles:
 >     mode: ro
 > ```
 
+### X11 ディスプレイ転送（xpra サンドボックス）
+
+`display.sandbox: xpra` を有効にすると、nas はホスト上に **xpra** の detached X server を 1 つ立ち上げます（バックエンドは xpra が spawn する Xvfb）。コンテナには**その Xvfb のソケットと per-session の MIT-MAGIC-COOKIE Xauthority だけ**が渡ります。エージェントから動かせるのはこの仮想 X server 内のアプリだけで、ホスト本体の X セッション（他のウィンドウ・キー入力・スクリーン）には到達できません。
+
+X server の準備が整い次第、nas は同時にホスト側で `xpra attach :N` を seamless モードで自動起動します（nas プロセスの `DISPLAY` / `XAUTHORITY` を継承）。エージェントが描画した X11 アプリケーションのウィンドウは、ユーザの実際のデスクトップに通常のウィンドウとしてポップアップします。何もウィンドウが出ていない間は viewer も画面に何も描かないので「常時 attach」のコストは実質ありません。viewer プロセスは X server と同じスコープで管理され、セッション終了時にまとめて落ちます。
+
+主な用途は `playwright test --headed` のような GUI 付き E2E をエージェントから実行するケースです。
+
+```yaml
+profiles:
+  e2e:
+    agent: claude
+    display:
+      sandbox: xpra          # "none"（デフォルト）/ "xpra"
+      size: "1366x768"       # Xvfb のスクリーンサイズ（デフォルト: "1920x1080"）
+```
+
+前提として、ホストに `xpra` がインストールされている必要があります（Debian系: `xpra`、Nix: `pkgs.xpra`）。xpra が内部で Xvfb を起動するので追加で `Xvfb` も必要です（通常 xpra パッケージが引き連れてきます）。`xauth` は不要です（nas が `FamilyWild` の Xauthority を直接書き出すため、コンテナのホスト名と無関係に cookie がマッチします）。xpra が見つからない場合は明示的なエラーで起動を中止します。
+
+> [!WARNING]
+> 仮想 X server **内部**ではエージェントは依然として X11 client として全権を持ちます。auto-attach された viewer ウィンドウにフォーカスを当てている間は、ユーザのキー入力やクリップボード内容が viewer 経由でエージェント側のアプリに流れます（これは X11 アプリを操作している以上避けられない仕様）。この仮想 server に別の信頼アプリを同時に attach しないでください。xpra/Xvfb 自体に脆弱性があった場合のみホスト権限まで escape する余地が残りますが、ホスト本体の X server に対するキーロガー・画面キャプチャ・キー注入・クリップボード窃取は構造的に不可能になります。
+
 ### セッション管理（dtach）
 
 `session.enable: true` にすると、nas プロセス全体（プロキシ等を含む）が dtach セッション内で起動されます。これにより複数のターミナルから同じセッションに attach でき、detach してもコンテナやプロキシは動き続けます。tmux と違い prefix キーの衝突やヘッダの二重表示が起きません。
@@ -625,6 +647,7 @@ session network
 | `docker.enable: true` | `docker:dind-rootless` サイドカーが `--privileged` で起動される（user namespace セットアップに必要）。エージェントコンテナ自体は非特権のまま。Docker 操作はサイドカー内に隔離され、ホストの Docker デーモンにはアクセスできない |
 | `dbus.session.enable: true` | 許可した DBus service に対して host 側資産へ到達できる。session bus 全体の露出は減るが、許可先 service の権限そのものは残る |
 | `extra-mounts` | 指定したホストディレクトリがコンテナにマウントされる（`mode: rw` の場合は書き込みも可能） |
+| `display.sandbox: "xpra"` | ホスト上に xpra の detached X server (Xvfb backing) を 1 つ起動し、その Xvfb ソケット + per-session cookie のみコンテナへ渡す。nas プロセスが seamless モードの `xpra attach :N` を同時に自動起動するため、エージェントが描画したウィンドウはユーザのデスクトップに通常のウィンドウとして出る。エージェントはこの仮想 X server **内**のアプリに対しては X11 client として全権を持つ（同 server 内のキー入力・画面取得・キー注入は可能）。ホスト本体の X server へは到達不可。xpra の control socket は xpra デフォルト (`$XDG_RUNTIME_DIR/xpra/`) に置かれる（ユーザ自身が再 attach/stop に使うだけで機微情報ではない）。xpra/Xvfb 自体に脆弱性があった場合のみホスト権限まで escape する余地あり |
 | `hostexec.rules[].inherit-env.mode: unsafe-inherit-all` | host の環境変数が広く継承されるため、secret 漏えい面が大きくなる |
 
 ### HostExec の注意点
@@ -729,6 +752,8 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `gcloud.mount-config` | bool | `false` | gcloud 設定ディレクトリ（`~/.config/gcloud`）をマウント |
 | `aws.mount-config` | bool | `false` | AWS 設定ディレクトリ（`~/.aws`）をマウント |
 | `gpg.forward-agent` | bool | `false` | ホストの gpg-agent を転送（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント） |
+| `display.sandbox` | `"none"` \| `"xpra"` | `"none"` | `xpra` にすると、ホスト上に xpra の detached X server (Xvfb backing) を起動し、その Xvfb ソケットと per-session cookie のみをコンテナへ渡す。前提: ホストに `xpra` が必要 |
+| `display.size` | string | `"1920x1080"` | Xvfb のスクリーンサイズ。`"WIDTHxHEIGHT"` 形式（各値 1〜16384） |
 | `extra-mounts` | list | `[]` | 追加マウント。`[{ src, dst, mode? }]`（`mode` は `"ro"`/`"rw"`、省略時 `"ro"`）。`src`/`dst` は絶対パスのほか `~` と workDir 基準の相対パスも可。既存ワークスペース配下への単一ファイルマウント（例: `/dev/null` → `.env`）も可 |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key, val_cmd }]` 形式で環境変数を追加。`mode`（`"set"` / `"prefix"` / `"suffix"`、デフォルト `"set"`）と `separator`（prefix/suffix 時は必須）で既存値への prepend/append が可能 |
 | `hostexec.secrets.<name>.from` | string | （必須） | secret の取得元。`env:VAR_NAME` / `file:/absolute/path` / `dotenv:/absolute/path#KEY` / `keyring:service/account` |

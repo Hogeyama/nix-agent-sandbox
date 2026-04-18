@@ -4,7 +4,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { profileSchema, proxySchema } from "./schema.ts";
+import { displaySchema, profileSchema, proxySchema } from "./schema.ts";
 
 // ---------------------------------------------------------------------------
 // proxySchema
@@ -153,4 +153,70 @@ test("profileSchema: network allowlist/denylist overlap with matching port", () 
     },
   });
   expect(portDiff.success).toEqual(true);
+});
+
+// ---------------------------------------------------------------------------
+// displaySchema (xpra sandbox)
+// ---------------------------------------------------------------------------
+
+test("displaySchema: defaults to sandbox=none and 1920x1080", () => {
+  const result = displaySchema.parse(undefined);
+  expect(result).toEqual({ sandbox: "none", size: "1920x1080" });
+});
+
+test("displaySchema: empty object applies defaults", () => {
+  const result = displaySchema.parse({});
+  expect(result).toEqual({ sandbox: "none", size: "1920x1080" });
+});
+
+test("displaySchema: accepts sandbox=xpra with explicit size", () => {
+  const result = displaySchema.parse({ sandbox: "xpra", size: "1280x720" });
+  expect(result).toEqual({ sandbox: "xpra", size: "1280x720" });
+});
+
+test("displaySchema: accepts sandbox=none explicitly", () => {
+  const result = displaySchema.parse({ sandbox: "none" });
+  expect(result).toEqual({ sandbox: "none", size: "1920x1080" });
+});
+
+test("displaySchema: rejects unknown sandbox values", () => {
+  expect(() => displaySchema.parse({ sandbox: "wayland" })).toThrow();
+  expect(() => displaySchema.parse({ sandbox: "xvfb" })).toThrow();
+  expect(() => displaySchema.parse({ sandbox: "" })).toThrow();
+});
+
+test("displaySchema: rejects malformed size strings", () => {
+  expect(() => displaySchema.parse({ size: "bogus" })).toThrow();
+  expect(() => displaySchema.parse({ size: "1920" })).toThrow();
+  expect(() => displaySchema.parse({ size: "1920×1080" })).toThrow();
+  expect(() => displaySchema.parse({ size: "1920x1080;rm -rf /" })).toThrow();
+});
+
+test("displaySchema: rejects out-of-range dimensions (zero or above 16384)", () => {
+  expect(() => displaySchema.parse({ size: "0x1080" })).toThrow();
+  expect(() => displaySchema.parse({ size: "1920x0" })).toThrow();
+  expect(() => displaySchema.parse({ size: "16385x1080" })).toThrow();
+  expect(() => displaySchema.parse({ size: "1920x99999" })).toThrow();
+});
+
+test("displaySchema: accepts dimensions at the boundary", () => {
+  expect(displaySchema.parse({ size: "1x1" }).size).toEqual("1x1");
+  expect(displaySchema.parse({ size: "16384x16384" }).size).toEqual(
+    "16384x16384",
+  );
+});
+
+test("profileSchema: display defaults when omitted", () => {
+  const schema = profileSchema("test");
+  const result = schema.parse({ agent: "claude" });
+  expect(result.display).toEqual({ sandbox: "none", size: "1920x1080" });
+});
+
+test("profileSchema: accepts display.sandbox=xpra", () => {
+  const schema = profileSchema("test");
+  const result = schema.parse({
+    agent: "claude",
+    display: { sandbox: "xpra", size: "1366x768" },
+  });
+  expect(result.display).toEqual({ sandbox: "xpra", size: "1366x768" });
 });

@@ -150,6 +150,14 @@ export interface DbusConfig {
   session: DbusSessionConfig;
 }
 
+/** Display 設定 */
+export type DisplaySandbox = "none" | "xpra";
+
+export interface DisplayConfig {
+  sandbox: DisplaySandbox;
+  size: string;
+}
+
 /** 追加マウント設定 */
 export interface ExtraMountConfig {
   src: string;
@@ -186,6 +194,7 @@ export interface Profile {
   gpg: GpgConfig;
   network: NetworkConfig;
   dbus: DbusConfig;
+  display: DisplayConfig;
   extraMounts: ExtraMountConfig[];
   env: EnvConfig[];
   hook: HookConfig;
@@ -258,6 +267,10 @@ export interface RawProfile {
       "default-scope"?: ApprovalScope;
       notify?: NetworkPromptNotify;
     };
+  };
+  display?: {
+    sandbox?: string;
+    size?: string;
   };
   dbus?: {
     session?: {
@@ -387,6 +400,11 @@ export const DEFAULT_DBUS_SESSION_CONFIG: DbusSessionConfig = {
 
 export const DEFAULT_DBUS_CONFIG: DbusConfig = {
   session: DEFAULT_DBUS_SESSION_CONFIG,
+};
+
+export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
+  sandbox: "none",
+  size: "1920x1080",
 };
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {

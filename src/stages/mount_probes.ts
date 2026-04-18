@@ -5,7 +5,7 @@
  * plan() が純粋関数になるようにデータとして返す。
  */
 
-import { stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { ClaudeProbes } from "../agents/claude.ts";
 import { resolveClaudeProbes } from "../agents/claude.ts";
@@ -75,6 +75,10 @@ export interface MountProbes {
   resolvedEnvEntries: ResolvedEnvEntry[];
   /** ワークスペースが git worktree 内にある場合、本体リポジトリのルートパス */
   gitWorktreeMainRoot: string | null;
+  /** xpra バイナリのパス (PATH 探索の結果)。見つからなければ null */
+  xpraBinPath: string | null;
+  /** /tmp/.X11-unix/X* で既に使用されている display 番号 */
+  takenX11Displays: ReadonlySet<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +153,12 @@ export async function resolveMountProbes(
   // git worktree 検出: ワークスペースが worktree 内にある場合、本体リポジトリルートを取得
   const gitWorktreeMainRoot = await resolveGitWorktreeMainRoot(workDir);
 
+  // display: xpra サンドボックス用のバイナリ探索と X11 display 採番
+  const [xpraBinPath, takenX11Displays] = await Promise.all([
+    resolveBinaryPath("xpra"),
+    resolveTakenX11Displays(),
+  ]);
+
   return {
     agentProbes,
     nixConfRealPath,
@@ -164,7 +174,45 @@ export async function resolveMountProbes(
     resolvedExtraMounts,
     resolvedEnvEntries,
     gitWorktreeMainRoot,
+    xpraBinPath,
+    takenX11Displays,
   };
+}
+
+/** PATH から任意のバイナリを which 相当で解決する */
+async function resolveBinaryPath(binary: string): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["which", binary], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const out = (await new Response(proc.stdout).text()).trim();
+    const code = await proc.exited;
+    if (code !== 0) return null;
+    return out === "" ? null : out;
+  } catch {
+    return null;
+  }
+}
+
+/** /tmp/.X11-unix/X<N> を列挙して使用済みの display 番号集合を返す */
+async function resolveTakenX11Displays(): Promise<ReadonlySet<number>> {
+  const taken = new Set<number>();
+  try {
+    const entries = await readdir("/tmp/.X11-unix");
+    for (const entry of entries) {
+      const match = /^X(\d+)$/.exec(entry);
+      if (match) {
+        const n = Number.parseInt(match[1], 10);
+        if (Number.isFinite(n)) {
+          taken.add(n);
+        }
+      }
+    }
+  } catch {
+    // /tmp/.X11-unix が無い環境 (Wayland のみ等) は空集合
+  }
+  return taken;
 }
 
 // ---------------------------------------------------------------------------

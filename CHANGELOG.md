@@ -7,13 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`display.sandbox: "xpra"`**: scoped replacement for the removed `display.enable`. Launches a per-session detached xpra X server (Xvfb-backed) and bind-mounts only its Xvfb socket plus a FamilyWild MIT-MAGIC-COOKIE Xauthority into the agent container. nas also auto-starts a host-side seamless-mode `xpra attach :N` viewer (inheriting the nas process's `DISPLAY` / `XAUTHORITY`) so X11 windows drawn by the agent pop up directly on the user's desktop without a manual command; the viewer is scoped to the same lifetime as the X server. Sub-option: `display.size` (default `"1920x1080"`). Requires `xpra` on the host.
+
 ### Removed
 
-- **BREAKING: `display.enable` / X11 socket forwarding has been removed.** The feature bind-mounted `/tmp/.X11-unix` and `~/.Xauthority` into the agent container. X11 has no isolation between clients sharing a display, so any agent granted `display.enable` could record host keystrokes, capture the host screen, inject synthetic keys/mouse events into host apps, and read the host clipboard — none of which can be scoped per-window or per-app. Unlike the other opt-in capabilities in nas (which grant a specific, bounded resource), `display.enable` promoted a full sandbox-escape to a one-line config toggle. Users who need X11 forwarding can still assemble it explicitly with `extra-mounts` (`/tmp/.X11-unix`, `~/.Xauthority`) and `env` (`DISPLAY`, `XAUTHORITY`); doing so surfaces the risk at config-review time.
+- **BREAKING: `display.enable` / unscoped X11 socket forwarding has been removed.** The feature bind-mounted `/tmp/.X11-unix` and `~/.Xauthority` into the agent container. X11 has no isolation between clients sharing a display, so any agent granted `display.enable` could record host keystrokes, capture the host screen, inject synthetic keys/mouse events into host apps, and read the host clipboard — none of which can be scoped per-window or per-app. Unlike the other opt-in capabilities in nas (which grant a specific, bounded resource), `display.enable` promoted a full sandbox-escape to a one-line config toggle. Replaced by `display.sandbox: "xpra"` (see Added above), which keeps the agent inside a dedicated, headless virtual X server. Users who specifically want the old unscoped behavior can still assemble it manually with `extra-mounts` (`/tmp/.X11-unix`, `~/.Xauthority`) and `env` (`DISPLAY`, `XAUTHORITY`); doing so surfaces the risk at config-review time.
 
 ### Migration
 
-- If you have `display:` blocks in `.agent-sandbox.yml`, remove them; nas will reject unknown fields at config-validation time.
+- If your config has `display: { enable: true }`, replace it with `display: { sandbox: "xpra" }` (and optionally `size: "WxH"`). The `enable` key is no longer recognized.
 
 ## [0.8.1] - 2026-04-18
 

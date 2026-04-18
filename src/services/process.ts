@@ -3,6 +3,7 @@
  * file-system readiness polling.
  */
 
+import { closeSync, openSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Context, Effect, Layer, Schedule } from "effect";
 
@@ -25,6 +26,7 @@ export class ProcessService extends Context.Tag("nas/ProcessService")<
     readonly spawn: (
       command: string,
       args: string[],
+      opts?: { logFile?: string; env?: Record<string, string> },
     ) => Effect.Effect<SpawnHandle>;
     readonly waitForFileExists: (
       path: string,
@@ -45,12 +47,25 @@ export class ProcessService extends Context.Tag("nas/ProcessService")<
 export const ProcessServiceLive: Layer.Layer<ProcessService> = Layer.succeed(
   ProcessService,
   ProcessService.of({
-    spawn: (command, args) =>
+    spawn: (command, args, opts) =>
       Effect.sync(() => {
+        // logFile: child の stdout/stderr をこのパスに追記する。Agent の
+        // TTY を汚さず、後から `tail` で閲覧できる。未指定なら pipe のまま
+        // (呼び出し側が読む責任を持つ前提)。
+        let logFd: number | null = null;
+        if (opts?.logFile) {
+          logFd = openSync(opts.logFile, "a");
+        }
         const child = Bun.spawn([command, ...args], {
-          stdout: "pipe",
-          stderr: "pipe",
+          stdout: logFd !== null ? logFd : "pipe",
+          stderr: logFd !== null ? logFd : "pipe",
+          env: opts?.env ? { ...process.env, ...opts.env } : undefined,
         });
+        if (logFd !== null) {
+          // spawn が FD を複製しているので、親プロセスで持ってる側は閉じて
+          // 漏れを防ぐ。子側の複製は child 終了まで生きる。
+          closeSync(logFd);
+        }
         return {
           kill: () => {
             try {
@@ -132,6 +147,7 @@ export interface ProcessServiceFakeConfig {
   readonly spawn?: (
     command: string,
     args: string[],
+    opts?: { logFile?: string; env?: Record<string, string> },
   ) => Effect.Effect<SpawnHandle>;
   readonly waitForFileExists?: (
     path: string,

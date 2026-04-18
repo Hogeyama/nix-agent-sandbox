@@ -17,6 +17,7 @@ import {
 import type { Config, Profile } from "./config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
@@ -39,6 +40,7 @@ const baseProfile: Profile = {
   session: DEFAULT_SESSION_CONFIG,
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
   dbus: structuredClone(DEFAULT_DBUS_CONFIG),
+  display: structuredClone(DEFAULT_DISPLAY_CONFIG),
   hook: DEFAULT_HOOK_CONFIG,
   extraMounts: [],
   env: [],
@@ -384,7 +386,11 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
     { name: "DockerBuildStage", needs: ["workspace"] },
     { name: "NixDetectStage", needs: [] },
     { name: "DbusProxyStage", needs: [] },
-    { name: "MountStage", needs: ["container", "dbus", "nix", "workspace"] },
+    { name: "DisplayStage", needs: [] },
+    {
+      name: "MountStage",
+      needs: ["container", "dbus", "display", "nix", "workspace"],
+    },
     { name: "HostExecStage", needs: ["container", "workspace"] },
     { name: "DindStage", needs: ["container", "workspace"] },
     { name: "ProxyStage", needs: ["container"] },
