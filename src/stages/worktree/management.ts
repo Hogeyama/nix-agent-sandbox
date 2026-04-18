@@ -83,14 +83,6 @@ async function readBranchBase(
   }
 }
 
-/** nas が作成した既存 worktree を検索 */
-export async function findProfileWorktrees(
-  repoRoot: string,
-  _profileName: string,
-): Promise<WorktreeEntry[]> {
-  return listNasWorktrees(repoRoot);
-}
-
 /** worktree に紐づかない nas/* ブランチを一覧取得 */
 export async function listOrphanNasBranches(
   workDir: string,
