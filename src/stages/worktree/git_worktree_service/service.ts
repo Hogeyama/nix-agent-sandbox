@@ -44,10 +44,9 @@ export class GitWorktreeService extends Context.Tag("nas/GitWorktreeService")<
       base: string,
     ) => Effect.Effect<string>;
 
-    /** Find existing worktrees for a profile (names starting with "wt-"). */
-    readonly findProfileWorktrees: (
+    /** Find existing nas-managed worktrees under `.nas/worktrees/`. */
+    readonly findNasWorktrees: (
       repoRoot: string,
-      profileName: string,
     ) => Effect.Effect<WorktreeEntry[]>;
 
     /** Create a new worktree (add, config, inherit dirty state, onCreate hook). */
@@ -171,7 +170,7 @@ export const GitWorktreeServiceLive: Layer.Layer<
           return resolved;
         }).pipe(Effect.orDie),
 
-      findProfileWorktrees: (repoRoot, _profileName) =>
+      findNasWorktrees: (repoRoot) =>
         Effect.gen(function* () {
           const output = yield* proc.exec([
             "git",
@@ -257,9 +256,8 @@ export interface GitWorktreeServiceFakeConfig {
     repoRoot: string,
     base: string,
   ) => Effect.Effect<string>;
-  readonly findProfileWorktrees?: (
+  readonly findNasWorktrees?: (
     repoRoot: string,
-    profileName: string,
   ) => Effect.Effect<WorktreeEntry[]>;
   readonly createWorktree?: (
     params: CreateWorktreeParams,
@@ -293,8 +291,8 @@ export function makeGitWorktreeServiceFake(
       resolveBaseBranch:
         overrides.resolveBaseBranch ??
         ((_repoRoot, base) => Effect.succeed(base)),
-      findProfileWorktrees:
-        overrides.findProfileWorktrees ?? (() => Effect.succeed([])),
+      findNasWorktrees:
+        overrides.findNasWorktrees ?? (() => Effect.succeed([])),
       createWorktree:
         overrides.createWorktree ?? (() => Effect.succeed(defaultHandle)),
       isWorktreeDirty:

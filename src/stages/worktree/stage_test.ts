@@ -120,7 +120,7 @@ function makeHandle(
 interface Recorder {
   resolveRepository: string[];
   resolveBaseBranch: Array<{ repoRoot: string; base: string }>;
-  findProfileWorktrees: Array<{ repoRoot: string; profileName: string }>;
+  findNasWorktrees: string[];
   createWorktree: CreateWorktreeParams[];
   isWorktreeDirty: string[];
   getHead: string[];
@@ -136,7 +136,7 @@ function freshRecorder(): Recorder {
   return {
     resolveRepository: [],
     resolveBaseBranch: [],
-    findProfileWorktrees: [],
+    findNasWorktrees: [],
     createWorktree: [],
     isWorktreeDirty: [],
     getHead: [],
@@ -173,8 +173,8 @@ function recordingGitLayer(
       recorder.resolveBaseBranch.push({ repoRoot: root, base });
       return Effect.succeed(resolvedBase);
     },
-    findProfileWorktrees: (root, profileName) => {
-      recorder.findProfileWorktrees.push({ repoRoot: root, profileName });
+    findNasWorktrees: (root) => {
+      recorder.findNasWorktrees.push(root);
       return Effect.succeed(existing);
     },
     createWorktree: (params) => {
@@ -331,9 +331,7 @@ test("run: creates a new worktree when no existing worktrees are found", async (
   expect(gitRecorder.resolveBaseBranch).toEqual([
     { repoRoot: "/repo", base: "HEAD" },
   ]);
-  expect(gitRecorder.findProfileWorktrees).toEqual([
-    { repoRoot: "/repo", profileName: "test" },
-  ]);
+  expect(gitRecorder.findNasWorktrees).toEqual(["/repo"]);
 
   expect(gitRecorder.createWorktree.length).toEqual(1);
   const createParams = gitRecorder.createWorktree[0];

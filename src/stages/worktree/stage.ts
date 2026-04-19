@@ -73,10 +73,7 @@ export function createWorktreeStage(
         const resolvedBase = yield* svc.resolveBaseBranch(repoRoot, wt.base);
 
         // Check for existing worktrees to reuse
-        const existing = yield* svc.findProfileWorktrees(
-          repoRoot,
-          shared.profileName,
-        );
+        const existing = yield* svc.findNasWorktrees(repoRoot);
         if (existing.length > 0) {
           const reused = yield* prompts.reuseWorktree(existing);
           if (reused) {
