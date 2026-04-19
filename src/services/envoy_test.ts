@@ -216,13 +216,6 @@ test("ensureSharedEnvoy: removes stale container before launching", async () => 
 test("ensureSharedEnvoy: tolerates rm failure and still launches", async () => {
   const calls = freshCalls();
   let launched = false;
-  const layer = makeDockerFake(calls, {
-    isRunning: () => launched, // becomes true after launch
-    containerExists: () => true,
-    rm: () => Effect.fail(new Error("boom")) as unknown as Effect.Effect<void>,
-  });
-
-  // Override runDetached so it flips `launched`.
   const wrappedLayer: Layer.Layer<DockerService> = makeDockerServiceFake({
     isRunning: (name) => {
       calls.isRunning.push(name);
