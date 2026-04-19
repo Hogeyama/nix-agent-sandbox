@@ -161,6 +161,35 @@ The fix is to split the function so that each branch of the composition calls an
 
 Stage code continues to follow the stricter rule from the top of this document: stages orchestrate intentful service methods and do not compose primitives at all.
 
+#### Pattern: file-private Ops tags for layered D1/D2 services
+
+When a single domain service has enough D2 functions that each want independent fakes — e.g. `createWorktree` composes `executeTeardown` composes `cherryPickToBase` composes `cherryPickInWorktree` — introduce one `Context.Tag` per D2 function to hold its D1 dependencies. `GitWorktreeService` (`src/stages/worktree/git_worktree_service.ts`) is the canonical example.
+
+**Shape:**
+
+1. **One Ops Tag per D2 function.** Export each Tag and each D2 function as `@internal Exported only for the colocated test file`. External callers see only the public service Tag.
+2. **Live factory forwards to primitives, nothing else.** `makeXxxOpsLayer(proc, fs)` returns a `Layer.succeed(XxxOps, { ... })` where every method is a D1 wrapper — a single `proc.exec` / `fs.*` / `gitExec` call. **Never provide another Ops layer from inside a Live factory**; that hides transitive deps and breaks fake granularity.
+3. **D2 R lists every transitive Ops, not just its immediate one.** If `executeTeardown` composes `cherryPickToBase`, its R is `TeardownOps | CherryPickToBaseOps | CherryPickOps`, not just `TeardownOps`. The type is the dependency manifest.
+4. **Service boundary provides the whole stack with `Layer.mergeAll`.** The public service's Live impl (`GitWorktreeServiceLive.createWorktree`) is the single `Effect.provide(Layer.mergeAll(makeA(...), makeB(...), ...))` site. Tests skip this boundary and call D2 functions directly with their own fakes.
+5. **Long-lived handles snapshot context to keep `R = never`.** When a D2 function returns a handle whose methods run later (e.g. `WorktreeHandle.close`), snapshot the teardown Ops at acquisition time:
+   ```typescript
+   const teardownCtx = yield* Effect.context<TeardownOps | CherryPickToBaseOps | CherryPickOps>();
+   const handle = {
+     close: (plan) => executeTeardown(handle, plan).pipe(Effect.provide(teardownCtx)),
+   };
+   ```
+   The handle's external type stays `R = never` while the D2 function's R still truthfully advertises every Ops it transitively needs.
+
+**Anti-patterns this rule forbids:**
+
+- **Nested-provide Live factories.** A `TeardownOps.cherryPickToBase` method whose Live implementation internally `.pipe(Effect.provide(makeCherryPickToBaseOpsLayer(proc)))`. This makes `executeTeardown`'s R look like it only needs `TeardownOps`, but the real dependency graph is hidden, and tests can only fake the whole wrapper instead of the underlying D1s.
+- **Callback-factory Ops methods.** An Ops method returning `(handle) => (plan) => Effect<void>` instead of `Effect<void>`. It has a different shape than every other Ops method and forces tests to fake the closure wholesale. Instead, make the Ops method return an Effect and let the D2 function do the composition.
+- **Shrinking D2 R to the "immediate" Ops.** If you're tempted to wrap a sub-D2 in a single Ops method just to shorten the R, you're re-introducing the nested-provide anti-pattern. Hoist the transitive Ops into R instead.
+
+**Tradeoff:** D2 signatures get longer as the Ops union grows. Accept it — the type *is* the dependency manifest, and fake-ability at Ops-method granularity is worth more than a compact signature.
+
+**Status:** This pattern is still being explored. If you find a cleaner alternative while working in this area, flag it and we can revise — don't silently diverge.
+
 ## Writing a New Stage
 
 ### 1. Add a pure planner only when the plan itself deserves tests
