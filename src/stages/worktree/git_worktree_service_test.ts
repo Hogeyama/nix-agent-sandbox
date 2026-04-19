@@ -214,11 +214,14 @@ interface FakeOpsConfig {
   readonly stashPop?: boolean;
 }
 
-function makeFakeCherryPickOps(config: FakeOpsConfig): {
+function makeFakeCherryPickOps(
+  config: FakeOpsConfig,
+  shared?: string[],
+): {
   layer: Layer.Layer<CherryPickOps>;
   calls: string[];
 } {
-  const calls: string[] = [];
+  const calls = shared ?? [];
   const layer = Layer.succeed(CherryPickOps, {
     isDirty: (wt) =>
       Effect.sync(() => {
@@ -578,11 +581,14 @@ interface FakeTeardownOpsConfig {
   readonly deleteOk?: boolean;
 }
 
-function makeFakeTeardownOps(config: FakeTeardownOpsConfig): {
+function makeFakeTeardownOps(
+  config: FakeTeardownOpsConfig,
+  shared?: string[],
+): {
   layer: Layer.Layer<TeardownOps>;
   calls: string[];
 } {
-  const calls: string[] = [];
+  const calls = shared ?? [];
   const layer = Layer.succeed(TeardownOps, {
     stashWorktreeChanges: (wt) =>
       Effect.sync(() => {
@@ -591,11 +597,6 @@ function makeFakeTeardownOps(config: FakeTeardownOpsConfig): {
     renameBranch: (branchName, repoRoot, newName) =>
       Effect.sync(() => {
         calls.push(`renameBranch(${branchName},${repoRoot},${newName})`);
-      }),
-    cherryPickToBase: (branchName, repoRoot, baseBranch) =>
-      Effect.sync(() => {
-        calls.push(`cherryPickToBase(${branchName},${repoRoot},${baseBranch})`);
-        return config.cherryPickSuccess ?? true;
       }),
     removeWorktree: (repoRoot, worktreePath) =>
       Effect.sync(() => {
@@ -611,6 +612,46 @@ function makeFakeTeardownOps(config: FakeTeardownOpsConfig): {
   return { layer, calls };
 }
 
+/**
+ * Stub layer that makes the real {@link cherryPickToBase} return a canned
+ * boolean without spinning up nested fakes for every Op method. Tests that
+ * only care that teardown sees a success/failure pivot use this instead of
+ * wiring the full CherryPickToBaseOps + CherryPickOps stack.
+ *
+ * Implementation: if `success`, `listCommitsBetween` returns `""`, which
+ * short-circuits `cherryPickToBase` to `true`. If not, the flow runs through
+ * to `cherryPickInDetachedWorktree`, which returns `false`.
+ */
+function makeCherryPickToBaseStubLayers(
+  success: boolean,
+  shared: string[],
+): Layer.Layer<CherryPickToBaseOps | CherryPickOps> {
+  const cpToBase = Layer.succeed(CherryPickToBaseOps, {
+    listCommitsBetween: (repoRoot, baseBranch, branchName) =>
+      Effect.sync(() => {
+        shared.push(
+          `listCommitsBetween(${repoRoot},${baseBranch},${branchName})`,
+        );
+        return success ? "" : "aaa\n";
+      }),
+    resolveLocalBranch: (_repoRoot, ref) => Effect.succeed(ref),
+    verifyRefExists: () => Effect.succeed(true),
+    createBranch: () => Effect.void,
+    findWorktreeForBranch: () => Effect.succeed(null),
+    cherryPickInDetachedWorktree: (commitList, targetBranch, repoRoot) =>
+      Effect.sync(() => {
+        shared.push(
+          `cherryPickInDetachedWorktree([${commitList.join(",")}],${targetBranch},${repoRoot})`,
+        );
+        return false;
+      }),
+  });
+  // cherryPickToBase's R includes CherryPickOps (for the in-worktree path).
+  // The stub never reaches that path, but Effect still needs the Tag satisfied.
+  const cpOps = makeFakeCherryPickOps({}, shared).layer;
+  return Layer.mergeAll(cpToBase, cpOps);
+}
+
 const fakeHandle: WorktreeHandle = {
   worktreePath: "/wt",
   branchName: "wt/foo",
@@ -623,9 +664,16 @@ async function runTeardown(
   plan: WorktreeTeardownPlan,
   config: FakeTeardownOpsConfig = {},
 ): Promise<{ calls: string[] }> {
-  const { layer, calls } = makeFakeTeardownOps(config);
+  const calls: string[] = [];
+  const { layer: teardownLayer } = makeFakeTeardownOps(config, calls);
+  const cpStub = makeCherryPickToBaseStubLayers(
+    config.cherryPickSuccess ?? true,
+    calls,
+  );
   await Effect.runPromise(
-    executeTeardown(fakeHandle, plan).pipe(Effect.provide(layer)),
+    executeTeardown(fakeHandle, plan).pipe(
+      Effect.provide(Layer.mergeAll(teardownLayer, cpStub)),
+    ),
   );
   return { calls };
 }
@@ -653,9 +701,11 @@ describe("executeTeardown", () => {
       },
       { cherryPickSuccess: true },
     );
+    // cherryPickToBase short-circuits on empty listCommitsBetween; the stub's
+    // single call stands in for "cherry-pick ran and succeeded".
     expect(calls).toEqual([
       "stashWorktreeChanges(/wt)",
-      "cherryPickToBase(wt/foo,/repo,main)",
+      "listCommitsBetween(/repo,main,wt/foo)",
       "removeWorktree(/repo,/wt)",
       "deleteBranch(/repo,wt/foo)",
     ]);
@@ -681,8 +731,12 @@ describe("executeTeardown", () => {
       },
       { cherryPickSuccess: false },
     );
+    // On failure the stub drives cherryPickToBase through the full detached
+    // path; the trace is noisier but confirms real composition, not a
+    // pre-wrapped `TeardownOps.cherryPickToBase` shim.
     expect(calls).toEqual([
-      "cherryPickToBase(wt/foo,/repo,main)",
+      "listCommitsBetween(/repo,main,wt/foo)",
+      "cherryPickInDetachedWorktree([aaa],main,/repo)",
       "removeWorktree(/repo,/wt)",
     ]);
   });
@@ -727,7 +781,6 @@ interface FakeCherryPickToBaseOpsConfig {
   readonly resolvedBranch?: string;
   readonly refExists?: boolean;
   readonly checkedOutIn?: string | null;
-  readonly checkedOutResult?: boolean;
   readonly detachedResult?: boolean;
   readonly failOn?:
     | "verifyRefExists"
@@ -735,11 +788,14 @@ interface FakeCherryPickToBaseOpsConfig {
     | "findWorktreeForBranch";
 }
 
-function makeFakeCherryPickToBaseOps(config: FakeCherryPickToBaseOpsConfig): {
+function makeFakeCherryPickToBaseOps(
+  config: FakeCherryPickToBaseOpsConfig,
+  shared?: string[],
+): {
   layer: Layer.Layer<CherryPickToBaseOps>;
   calls: string[];
 } {
-  const calls: string[] = [];
+  const calls = shared ?? [];
   const layer = Layer.succeed(CherryPickToBaseOps, {
     listCommitsBetween: (repoRoot, baseBranch, branchName) =>
       Effect.sync(() => {
@@ -776,13 +832,6 @@ function makeFakeCherryPickToBaseOps(config: FakeCherryPickToBaseOpsConfig): {
         }
         return config.checkedOutIn ?? null;
       }),
-    cherryPickInCheckedOutWorktree: (worktreePath, commitList, targetBranch) =>
-      Effect.sync(() => {
-        calls.push(
-          `cherryPickInCheckedOutWorktree(${worktreePath},[${commitList.join(",")}],${targetBranch})`,
-        );
-        return config.checkedOutResult ?? true;
-      }),
     cherryPickInDetachedWorktree: (commitList, targetBranch, repoRoot) =>
       Effect.sync(() => {
         calls.push(
@@ -795,11 +844,17 @@ function makeFakeCherryPickToBaseOps(config: FakeCherryPickToBaseOpsConfig): {
 }
 
 async function runCherryPickToBase(
-  config: FakeCherryPickToBaseOpsConfig,
+  config: FakeCherryPickToBaseOpsConfig & FakeOpsConfig,
 ): Promise<{ result: boolean; calls: string[] }> {
-  const { layer, calls } = makeFakeCherryPickToBaseOps(config);
+  const calls: string[] = [];
+  const { layer: cpToBaseLayer } = makeFakeCherryPickToBaseOps(config, calls);
+  // The in-worktree path calls CherryPickOps; the detached path does not.
+  // Providing CherryPickOps unconditionally keeps the layer shape uniform.
+  const { layer: cpOpsLayer } = makeFakeCherryPickOps(config, calls);
   const result = await Effect.runPromise(
-    cherryPickToBase("wt/foo", "/repo", "main").pipe(Effect.provide(layer)),
+    cherryPickToBase("wt/foo", "/repo", "main").pipe(
+      Effect.provide(Layer.mergeAll(cpToBaseLayer, cpOpsLayer)),
+    ),
   );
   return { result, calls };
 }
@@ -819,21 +874,24 @@ describe("cherryPickToBase", () => {
     expect(calls).toEqual(["listCommitsBetween(/repo,main,wt/foo)"]);
   });
 
-  test("ref exists + worktree checked out: delegates to cherryPickInCheckedOutWorktree", async () => {
+  test("ref exists + worktree checked out: delegates to cherryPickInWorktree (CherryPickOps)", async () => {
     const { result, calls } = await runCherryPickToBase({
       commitsRaw: "aaa\nbbb\n",
       resolvedBranch: "main",
       refExists: true,
       checkedOutIn: "/repo/worktrees/main",
-      checkedOutResult: true,
+      // CherryPickOps defaults: isDirty=false, applyCherryPick=true
     });
     expect(result).toEqual(true);
+    // cherryPickInWorktree runs on real CherryPickOps fake instead of a
+    // pre-wrapped `cherryPickInCheckedOutWorktree` method.
     expect(calls).toEqual([
       "listCommitsBetween(/repo,main,wt/foo)",
       "resolveLocalBranch(/repo,main)",
       "verifyRefExists(/repo,refs/heads/main)",
       "findWorktreeForBranch(/repo,main)",
-      "cherryPickInCheckedOutWorktree(/repo/worktrees/main,[aaa,bbb],main)",
+      "isDirty(/repo/worktrees/main)",
+      "applyCherryPick(/repo/worktrees/main,[aaa,bbb])",
     ]);
   });
 
@@ -917,14 +975,16 @@ describe("cherryPickToBase", () => {
 
 interface FakeCreateWorktreeOpsConfig {
   readonly resolvedBranch?: string;
-  readonly closeSentinel?: string[];
 }
 
-function makeFakeCreateWorktreeOps(config: FakeCreateWorktreeOpsConfig): {
+function makeFakeCreateWorktreeOps(
+  config: FakeCreateWorktreeOpsConfig,
+  shared?: string[],
+): {
   layer: Layer.Layer<CreateWorktreeOps>;
   calls: string[];
 } {
-  const calls: string[] = [];
+  const calls = shared ?? [];
   const layer = Layer.succeed(CreateWorktreeOps, {
     ensureNasGitignore: (repoRoot) =>
       Effect.sync(() => {
@@ -955,18 +1015,39 @@ function makeFakeCreateWorktreeOps(config: FakeCreateWorktreeOpsConfig): {
       Effect.sync(() => {
         calls.push(`runOnCreateHook(${cwd},${script})`);
       }),
-    makeCloseCallback: (handle) => (plan) =>
-      Effect.sync(() => {
-        calls.push(`close(${handle.branchName},action=${plan.action})`);
-        config.closeSentinel?.push(`${handle.branchName}:${plan.action}`);
-      }),
   });
   return { layer, calls };
 }
 
+/**
+ * Minimum teardown-stack layer so `createWorktree` can complete without
+ * spinning up real git. Callers that exercise `handle.close` can pass a
+ * shared `calls` array to observe the composed teardown trace.
+ */
+function makeTeardownStackLayer(
+  shared: string[],
+): Layer.Layer<TeardownOps | CherryPickToBaseOps | CherryPickOps> {
+  const teardown = makeFakeTeardownOps({}, shared).layer;
+  // Short-circuit cherry-pick (listCommits→"") so `handle.close` with
+  // branchAction=cherry-pick doesn't cascade through extra ops.
+  const cpStub = makeCherryPickToBaseStubLayers(true, shared);
+  return Layer.mergeAll(teardown, cpStub);
+}
+
+function buildCreateWorktreeLayers(
+  config: FakeCreateWorktreeOpsConfig,
+  shared: string[],
+): Layer.Layer<
+  CreateWorktreeOps | TeardownOps | CherryPickToBaseOps | CherryPickOps
+> {
+  const { layer: createLayer } = makeFakeCreateWorktreeOps(config, shared);
+  return Layer.mergeAll(createLayer, makeTeardownStackLayer(shared));
+}
+
 describe("createWorktree", () => {
   test("happy path without onCreate hook: ops sequenced, no hook call", async () => {
-    const { layer, calls } = makeFakeCreateWorktreeOps({});
+    const calls: string[] = [];
+    const layer = buildCreateWorktreeLayers({}, calls);
     const handle = await Effect.runPromise(
       createWorktree({
         repoRoot: "/repo",
@@ -989,7 +1070,8 @@ describe("createWorktree", () => {
   });
 
   test("with onCreate hook: runOnCreateHook called after inherit", async () => {
-    const { layer, calls } = makeFakeCreateWorktreeOps({});
+    const calls: string[] = [];
+    const layer = buildCreateWorktreeLayers({}, calls);
     await Effect.runPromise(
       createWorktree({
         repoRoot: "/repo",
@@ -1010,9 +1092,8 @@ describe("createWorktree", () => {
   });
 
   test("remote-style baseBranch: resolveLocalBranch rewrite threads through inheritDirtyBaseWorktree", async () => {
-    const { layer, calls } = makeFakeCreateWorktreeOps({
-      resolvedBranch: "main",
-    });
+    const calls: string[] = [];
+    const layer = buildCreateWorktreeLayers({ resolvedBranch: "main" }, calls);
     await Effect.runPromise(
       createWorktree({
         repoRoot: "/repo",
@@ -1033,9 +1114,9 @@ describe("createWorktree", () => {
     ]);
   });
 
-  test("returned handle.close delegates to makeCloseCallback with the handle", async () => {
-    const sentinel: string[] = [];
-    const { layer } = makeFakeCreateWorktreeOps({ closeSentinel: sentinel });
+  test("returned handle.close runs executeTeardown through the captured Ops stack", async () => {
+    const calls: string[] = [];
+    const layer = buildCreateWorktreeLayers({}, calls);
     const handle = await Effect.runPromise(
       createWorktree({
         repoRoot: "/repo",
@@ -1044,7 +1125,16 @@ describe("createWorktree", () => {
         baseBranch: "main",
       }).pipe(Effect.provide(layer)),
     );
+    // `calls` at this point only contains createWorktree ops; reset to
+    // isolate the teardown trace.
+    calls.length = 0;
     await Effect.runPromise(handle.close({ action: "delete" }));
-    expect(sentinel).toEqual(["wt/foo:delete"]);
+    // executeTeardown defaults to removeWorktree + deleteBranch when no
+    // dirty/branch plan is supplied. Seeing these in the trace confirms the
+    // captured TeardownOps context was wired through close().
+    expect(calls).toEqual([
+      "removeWorktree(/repo,/wt)",
+      "deleteBranch(/repo,wt/foo)",
+    ]);
   });
 });

@@ -416,18 +416,17 @@ function copyUntrackedFiles(
 // ---------------------------------------------------------------------------
 
 /**
- * Module-internal service for {@link executeTeardown}. Absorbs the two
- * primitive `gitExec` calls (worktree remove, branch delete) and the
- * composed helpers (stash / rename / cherry-pick) behind one Tag so that the
+ * Module-internal service describing the primitive-level operations
+ * {@link executeTeardown} needs (stash / rename / worktree remove / branch
+ * delete). Each method is a thin wrapper over a single git invocation so the
  * teardown's branching — keep / stash-fails / rename / cherry-pick-success /
  * cherry-pick-fail — is reachable from unit tests without a real git
  * process.
  *
- * Helpers are routed through the Tag rather than left as direct calls
- * because they all perform real IO and we want teardown tests to be fully
- * hermetic. Keeping them inside the Tag also makes the live factory the
- * only place that knows about `cherryPickToBase`'s own Ops wiring, so the
- * D2 here doesn't have to provide a second layer inline.
+ * Cherry-pick is **not** here; `executeTeardown` composes
+ * {@link cherryPickToBase} directly and surfaces its Ops in its own R so that
+ * tests can fake the cherry-pick stack independently instead of through a
+ * pre-wired wrapper.
  *
  * @internal Exported only for the colocated test file.
  */
@@ -442,11 +441,6 @@ export class TeardownOps extends Context.Tag("nas/git_worktree/TeardownOps")<
       repoRoot: string,
       newName: string | null,
     ) => Effect.Effect<void>;
-    readonly cherryPickToBase: (
-      branchName: string,
-      repoRoot: string,
-      baseBranch: string,
-    ) => Effect.Effect<boolean>;
     readonly removeWorktree: (
       repoRoot: string,
       worktreePath: string,
@@ -463,10 +457,6 @@ function makeTeardownOpsLayer(proc: Proc): Layer.Layer<TeardownOps> {
     stashWorktreeChanges: (wt) => stashWorktreeChanges(proc, wt),
     renameBranch: (branchName, repoRoot, newName) =>
       renameBranch(proc, branchName, repoRoot, newName),
-    cherryPickToBase: (branchName, repoRoot, baseBranch) =>
-      cherryPickToBase(branchName, repoRoot, baseBranch).pipe(
-        Effect.provide(makeCherryPickToBaseOpsLayer(proc)),
-      ),
     removeWorktree: (repoRoot, worktreePath) =>
       gitExec(proc, [
         "git",
@@ -496,7 +486,11 @@ function makeTeardownOpsLayer(proc: Proc): Layer.Layer<TeardownOps> {
 export function executeTeardown(
   handle: WorktreeHandle,
   plan: WorktreeTeardownPlan,
-): Effect.Effect<void, never, TeardownOps> {
+): Effect.Effect<
+  void,
+  never,
+  TeardownOps | CherryPickToBaseOps | CherryPickOps
+> {
   return Effect.gen(function* () {
     const ops = yield* TeardownOps;
     if (plan.action === "keep") {
@@ -530,7 +524,7 @@ export function executeTeardown(
         plan.newBranchName ?? null,
       );
     } else if (plan.branchAction === "cherry-pick") {
-      const success = yield* ops.cherryPickToBase(
+      const success = yield* cherryPickToBase(
         handle.branchName,
         handle.repoRoot,
         handle.baseBranch,
@@ -622,18 +616,19 @@ function renameBranch(
 // ---------------------------------------------------------------------------
 
 /**
- * Module-internal service for {@link createWorktree}. Absorbs the three
- * primitive `proc.exec` calls (worktree add, nasBase config, onCreate hook)
- * and the three composed helpers (`ensureNasGitignore`, `resolveLocalBranch`,
- * `inheritDirtyBaseWorktree`) plus the teardown callback factory behind one
- * Tag, so every branch — with / without onCreate hook, base as local branch
- * vs remote-style ref — is reachable from unit tests without a real git
- * process.
+ * Module-internal service describing the primitive-level operations
+ * {@link createWorktree} composes (worktree add, nasBase config, onCreate
+ * hook, plus the `ensureNasGitignore` / `resolveLocalBranch` /
+ * `inheritDirtyBaseWorktree` helpers). Every branch — with / without
+ * onCreate hook, base as local branch vs remote-style ref — is reachable
+ * from unit tests through fakes of this Tag.
  *
- * The teardown close-callback factory (`makeCloseCallback`) is routed
- * through this Tag because it is the only place that knows how to wire
- * `TeardownOps` for a concrete `proc`. Keeping it inside the Ops avoids
- * leaking `Proc` / `Fs` into the D2's argument list.
+ * The teardown callback is **not** here: {@link createWorktree} snapshots
+ * the ambient teardown-related Ops with `Effect.context` and wires
+ * {@link executeTeardown} into the handle's `close` directly. That keeps
+ * `WorktreeHandle.close`'s requirements (`R = never`) while surfacing every
+ * Ops dependency in `createWorktree`'s own R so tests can fake them
+ * independently.
  *
  * @internal Exported only for the colocated test file.
  */
@@ -667,9 +662,6 @@ export class CreateWorktreeOps extends Context.Tag(
       cwd: string,
       script: string,
     ) => Effect.Effect<void>;
-    readonly makeCloseCallback: (
-      handle: WorktreeHandle,
-    ) => (plan: WorktreeTeardownPlan) => Effect.Effect<void>;
   }
 >() {}
 
@@ -717,10 +709,6 @@ function makeCreateWorktreeOpsLayer(
       ),
     runOnCreateHook: (cwd, script) =>
       proc.exec(["bash", "-c", script], { cwd }).pipe(Effect.asVoid),
-    makeCloseCallback: (handle) => (plan) =>
-      executeTeardown(handle, plan).pipe(
-        Effect.provide(makeTeardownOpsLayer(proc)),
-      ),
   });
 }
 
@@ -729,9 +717,18 @@ function makeCreateWorktreeOpsLayer(
  */
 export function createWorktree(
   params: CreateWorktreeParams,
-): Effect.Effect<WorktreeHandle, never, CreateWorktreeOps> {
+): Effect.Effect<
+  WorktreeHandle,
+  never,
+  CreateWorktreeOps | TeardownOps | CherryPickToBaseOps | CherryPickOps
+> {
   return Effect.gen(function* () {
     const ops = yield* CreateWorktreeOps;
+    // Snapshot the teardown stack now so `handle.close` can run later with
+    // no ambient Ops layer, keeping WorktreeHandle.close's R = never.
+    const teardownContext = yield* Effect.context<
+      TeardownOps | CherryPickToBaseOps | CherryPickOps
+    >();
     yield* ops.ensureNasGitignore(params.repoRoot);
 
     logInfo(
@@ -775,7 +772,8 @@ export function createWorktree(
       branchName: params.branchName,
       repoRoot: params.repoRoot,
       baseBranch: params.baseBranch,
-      close: (plan) => ops.makeCloseCallback(handle)(plan),
+      close: (plan) =>
+        executeTeardown(handle, plan).pipe(Effect.provide(teardownContext)),
     };
 
     return handle;
@@ -787,14 +785,13 @@ export function createWorktree(
 // ---------------------------------------------------------------------------
 
 /**
- * Module-internal service for {@link cherryPickToBase} (including its inner
- * `setupExit` generator, which shares this Tag because it is a nested
- * function literal, not an independent helper). Absorbs the log/verify/
- * branch-create primitives plus the `resolveLocalBranch` /
- * `findWorktreeForBranch` helpers and delegates the two terminal
- * cherry-pick variants (in-worktree / detached) so the branching —
- * "no commits" / "branch exists vs created" / "worktree checked out vs
- * detached" — is reachable without real git.
+ * Module-internal service describing the primitive-level operations
+ * {@link cherryPickToBase} (and its nested `setupExit` generator) compose.
+ * The in-worktree / detached cherry-pick flows are **not** exposed here:
+ * {@link cherryPickToBase} composes `cherryPickInWorktree` and
+ * {@link cherryPickDetached} directly and surfaces their Ops in its own R.
+ * That keeps this Tag's Live factory a pure forwarding over git primitives
+ * instead of a wrapper that provides nested layers.
  *
  * @internal Exported only for the colocated test file.
  */
@@ -825,11 +822,6 @@ export class CherryPickToBaseOps extends Context.Tag(
       repoRoot: string,
       branchName: string,
     ) => Effect.Effect<string | null>;
-    readonly cherryPickInCheckedOutWorktree: (
-      worktreePath: string,
-      commitList: string[],
-      targetBranch: string,
-    ) => Effect.Effect<boolean>;
     readonly cherryPickInDetachedWorktree: (
       commitList: string[],
       targetBranch: string,
@@ -879,10 +871,6 @@ function makeCherryPickToBaseOpsLayer(
         .pipe(Effect.asVoid),
     findWorktreeForBranch: (repoRoot, branchName) =>
       findWorktreeForBranch(proc, repoRoot, branchName),
-    cherryPickInCheckedOutWorktree: (worktreePath, commitList, targetBranch) =>
-      cherryPickInWorktree(worktreePath, commitList, targetBranch).pipe(
-        Effect.provide(makeCherryPickOpsLayer(proc)),
-      ),
     cherryPickInDetachedWorktree: (commitList, targetBranch, repoRoot) =>
       cherryPickDetached(proc, commitList, targetBranch, repoRoot),
   });
@@ -895,7 +883,7 @@ export function cherryPickToBase(
   branchName: string,
   repoRoot: string,
   baseBranch: string,
-): Effect.Effect<boolean, never, CherryPickToBaseOps> {
+): Effect.Effect<boolean, never, CherryPickToBaseOps | CherryPickOps> {
   return Effect.gen(function* () {
     const ops = yield* CherryPickToBaseOps;
     const commitsRaw = (yield* ops.listCommitsBetween(
@@ -937,7 +925,7 @@ export function cherryPickToBase(
       );
 
       if (checkedOutIn) {
-        return yield* ops.cherryPickInCheckedOutWorktree(
+        return yield* cherryPickInWorktree(
           checkedOutIn,
           commitList,
           targetBranch,
@@ -1512,7 +1500,14 @@ export const GitWorktreeServiceLive: Layer.Layer<
 
       createWorktree: (params) =>
         createWorktree(params).pipe(
-          Effect.provide(makeCreateWorktreeOpsLayer(proc, fs)),
+          Effect.provide(
+            Layer.mergeAll(
+              makeCreateWorktreeOpsLayer(proc, fs),
+              makeTeardownOpsLayer(proc),
+              makeCherryPickToBaseOpsLayer(proc),
+              makeCherryPickOpsLayer(proc),
+            ),
+          ),
         ),
 
       isWorktreeDirty: (worktreePath) => checkDirty(proc, worktreePath),
