@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-04-19
+
+### Added
+
+- **Display**: auto-detect read-only `/tmp/.X11-unix` and use `unshare` to work around it ([019f6ff])
+
+### Changed
+
+- **Stages**: co-locate each stage with its services into subdirectory layout ([e002d10]–[3dd3e12])
+- **Worktree**: split service into per-concern files with D1/D2 effect separation ([4d83d40]–[d99db6d])
+- **Worktree**: route logs through `log` module; rename `findProfileWorktrees` → `findNasWorktrees` ([b656964], [ac7e062])
+- **Lint**: add composed-effects violation detector ([b101353])
+
+### Fixed
+
+- **Display**: remove non-null assertion in `spawnXpraWithUnshare` ([426ca21])
+- **Test**: exclude bare `integration_test.ts` files from `test:unit` ([a7c3025])
+- **Test**: isolate XDG dirs during `bun test`; make tests pass inside nas containers ([5b849ac], [5a96707])
+
+### Tests
+
+- Add unit tests for pure helpers, CLI args, secret store, service fakes ([5c13606]–[28e2399])
+
 ## [0.9.0] - 2026-04-19
 
 ### Added
