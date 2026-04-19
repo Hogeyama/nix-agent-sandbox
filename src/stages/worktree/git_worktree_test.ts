@@ -14,6 +14,8 @@ import { Effect, Layer } from "effect";
 import { FsServiceLive } from "../../services/fs.ts";
 import { ProcessServiceLive } from "../../services/process.ts";
 import {
+  CherryPickOps,
+  cherryPickInWorktree,
   GitWorktreeService,
   GitWorktreeServiceLive,
   isSafeRelativePath,
@@ -185,5 +187,188 @@ describe("copyUntrackedFiles hardening", () => {
       await $`git -C ${repo} worktree remove --force ${worktreePath}`.quiet();
       await $`git -C ${repo} branch -D ${branchName}`.quiet();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cherryPickInWorktree — branch coverage via fake CherryPickOps
+// ---------------------------------------------------------------------------
+
+interface FakeOpsConfig {
+  readonly isDirty?: boolean;
+  readonly stashPush?: boolean;
+  readonly applyCherryPick?: boolean;
+  readonly resolveEmpties?: boolean;
+  readonly stashPop?: boolean;
+}
+
+function makeFakeCherryPickOps(config: FakeOpsConfig): {
+  layer: Layer.Layer<CherryPickOps>;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const layer = Layer.succeed(CherryPickOps, {
+    isDirty: (wt) =>
+      Effect.sync(() => {
+        calls.push(`isDirty(${wt})`);
+        return config.isDirty ?? false;
+      }),
+    stashPush: (wt, _msg) =>
+      Effect.sync(() => {
+        calls.push(`stashPush(${wt})`);
+        return config.stashPush ?? true;
+      }),
+    applyCherryPick: (wt, commits) =>
+      Effect.sync(() => {
+        calls.push(`applyCherryPick(${wt},[${commits.join(",")}])`);
+        return config.applyCherryPick ?? true;
+      }),
+    resolveEmpties: (wt, expected) =>
+      Effect.sync(() => {
+        calls.push(`resolveEmpties(${wt},${expected})`);
+        return config.resolveEmpties ?? false;
+      }),
+    cherryPickAbort: (wt) =>
+      Effect.sync(() => {
+        calls.push(`cherryPickAbort(${wt})`);
+      }),
+    stashPop: (wt) =>
+      Effect.sync(() => {
+        calls.push(`stashPop(${wt})`);
+        return config.stashPop ?? true;
+      }),
+  });
+  return { layer, calls };
+}
+
+async function runCherryPick(config: FakeOpsConfig): Promise<{
+  result: boolean;
+  calls: string[];
+}> {
+  const { layer, calls } = makeFakeCherryPickOps(config);
+  const result = await Effect.runPromise(
+    cherryPickInWorktree("/wt", ["abc", "def"], "branch").pipe(
+      Effect.provide(layer),
+    ),
+  );
+  return { result, calls };
+}
+
+describe("cherryPickInWorktree", () => {
+  test("clean worktree + cherry-pick succeeds: returns true, no stash ops", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: false,
+      applyCherryPick: true,
+    });
+    expect(result).toEqual(true);
+    expect(calls).toEqual(["isDirty(/wt)", "applyCherryPick(/wt,[abc,def])"]);
+  });
+
+  test("clean + cherry-pick fails but resolveEmpties rescues: returns true", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: false,
+      applyCherryPick: false,
+      resolveEmpties: true,
+    });
+    expect(result).toEqual(true);
+    expect(calls).toEqual([
+      "isDirty(/wt)",
+      "applyCherryPick(/wt,[abc,def])",
+      "resolveEmpties(/wt,2)",
+    ]);
+  });
+
+  test("clean + cherry-pick fails, cannot resolve: abort called, returns false", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: false,
+      applyCherryPick: false,
+      resolveEmpties: false,
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual([
+      "isDirty(/wt)",
+      "applyCherryPick(/wt,[abc,def])",
+      "resolveEmpties(/wt,2)",
+      "cherryPickAbort(/wt)",
+    ]);
+  });
+
+  test("dirty + stashPush fails: returns false, no cherry-pick attempt", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: true,
+      stashPush: false,
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual(["isDirty(/wt)", "stashPush(/wt)"]);
+  });
+
+  test("dirty + full happy path: stash, cherry-pick, pop", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: true,
+      stashPush: true,
+      applyCherryPick: true,
+      stashPop: true,
+    });
+    expect(result).toEqual(true);
+    expect(calls).toEqual([
+      "isDirty(/wt)",
+      "stashPush(/wt)",
+      "applyCherryPick(/wt,[abc,def])",
+      "stashPop(/wt)",
+    ]);
+  });
+
+  test("dirty + cherry-pick succeeds but stashPop fails: returns false", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: true,
+      stashPush: true,
+      applyCherryPick: true,
+      stashPop: false,
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual([
+      "isDirty(/wt)",
+      "stashPush(/wt)",
+      "applyCherryPick(/wt,[abc,def])",
+      "stashPop(/wt)",
+    ]);
+  });
+
+  test("dirty + conflict + abort + stashPop succeeds: returns false", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: true,
+      stashPush: true,
+      applyCherryPick: false,
+      resolveEmpties: false,
+      stashPop: true,
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual([
+      "isDirty(/wt)",
+      "stashPush(/wt)",
+      "applyCherryPick(/wt,[abc,def])",
+      "resolveEmpties(/wt,2)",
+      "cherryPickAbort(/wt)",
+      "stashPop(/wt)",
+    ]);
+  });
+
+  test("dirty + conflict + abort + stashPop fails: returns false, warning logged", async () => {
+    const { result, calls } = await runCherryPick({
+      isDirty: true,
+      stashPush: true,
+      applyCherryPick: false,
+      resolveEmpties: false,
+      stashPop: false,
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual([
+      "isDirty(/wt)",
+      "stashPush(/wt)",
+      "applyCherryPick(/wt,[abc,def])",
+      "resolveEmpties(/wt,2)",
+      "cherryPickAbort(/wt)",
+      "stashPop(/wt)",
+    ]);
   });
 });

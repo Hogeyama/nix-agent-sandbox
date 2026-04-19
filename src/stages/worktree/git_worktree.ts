@@ -585,11 +585,10 @@ function cherryPickToBase(
 
       if (checkedOutIn) {
         return yield* cherryPickInWorktree(
-          proc,
           checkedOutIn,
           commitList,
           targetBranch,
-        );
+        ).pipe(Effect.provide(makeCherryPickOpsLayer(proc)));
       }
 
       return yield* cherryPickDetached(
@@ -610,14 +609,86 @@ function cherryPickToBase(
   });
 }
 
-function cherryPickInWorktree(
-  proc: Proc,
+/**
+ * Module-internal service describing the intentful git operations that
+ * {@link cherryPickInWorktree} composes. Factoring this out lets unit tests
+ * replace individual steps (stash / cherry-pick / abort / pop) with fakes so
+ * every branch of the composition can be exercised without a real git
+ * process.
+ *
+ * @internal Exported only for the colocated test file; not for use from other
+ * stages or services.
+ */
+export class CherryPickOps extends Context.Tag(
+  "nas/git_worktree/CherryPickOps",
+)<
+  CherryPickOps,
+  {
+    readonly isDirty: (worktreePath: string) => Effect.Effect<boolean>;
+    readonly stashPush: (
+      worktreePath: string,
+      message: string,
+    ) => Effect.Effect<boolean>;
+    readonly applyCherryPick: (
+      worktreePath: string,
+      commits: readonly string[],
+    ) => Effect.Effect<boolean>;
+    readonly resolveEmpties: (
+      worktreePath: string,
+      expected: number,
+    ) => Effect.Effect<boolean>;
+    readonly cherryPickAbort: (worktreePath: string) => Effect.Effect<void>;
+    readonly stashPop: (worktreePath: string) => Effect.Effect<boolean>;
+  }
+>() {}
+
+function makeCherryPickOpsLayer(proc: Proc): Layer.Layer<CherryPickOps> {
+  return Layer.succeed(CherryPickOps, {
+    isDirty: (wt) => checkDirty(proc, wt),
+    stashPush: (wt, message) =>
+      gitExec(proc, [
+        "git",
+        "-C",
+        wt,
+        "stash",
+        "push",
+        "--include-untracked",
+        "-m",
+        message,
+      ]).pipe(Effect.map((r) => r !== null)),
+    applyCherryPick: (wt, commits) =>
+      gitExec(proc, [
+        "git",
+        "-C",
+        wt,
+        "cherry-pick",
+        "--end-of-options",
+        ...commits,
+      ]).pipe(Effect.map((r) => r !== null)),
+    resolveEmpties: (wt, expected) =>
+      resolveEmptyCherryPicks(proc, wt, expected),
+    cherryPickAbort: (wt) =>
+      gitExec(proc, ["git", "-C", wt, "cherry-pick", "--abort"]).pipe(
+        Effect.asVoid,
+      ),
+    stashPop: (wt) =>
+      gitExec(proc, ["git", "-C", wt, "stash", "pop"]).pipe(
+        Effect.map((r) => r !== null),
+      ),
+  });
+}
+
+/**
+ * @internal Exported only for the colocated test file.
+ */
+export function cherryPickInWorktree(
   worktreePath: string,
   commitList: string[],
   targetBranch: string,
-): Effect.Effect<boolean> {
+): Effect.Effect<boolean, never, CherryPickOps> {
   return Effect.gen(function* () {
-    const dirty = yield* checkDirty(proc, worktreePath);
+    const ops = yield* CherryPickOps;
+    const dirty = yield* ops.isDirty(worktreePath);
     let stashed = false;
     const stashMessage = `nas cherry-pick ${targetBranch} ${new Date().toISOString()}`;
 
@@ -625,17 +696,8 @@ function cherryPickInWorktree(
       console.log(
         `[nas] Worktree for "${targetBranch}" has uncommitted changes; stashing temporarily before cherry-pick.`,
       );
-      const stashOk = yield* gitExec(proc, [
-        "git",
-        "-C",
-        worktreePath,
-        "stash",
-        "push",
-        "--include-untracked",
-        "-m",
-        stashMessage,
-      ]);
-      if (stashOk === null) {
+      const stashOk = yield* ops.stashPush(worktreePath, stashMessage);
+      if (!stashOk) {
         console.error(
           `[nas] Failed to stash changes in "${targetBranch}" worktree`,
         );
@@ -646,20 +708,11 @@ function cherryPickInWorktree(
     }
 
     console.log(`[nas] Cherry-picking in worktree: ${worktreePath}`);
-    const cpOk = yield* gitExec(proc, [
-      "git",
-      "-C",
-      worktreePath,
-      "cherry-pick",
-      "--end-of-options",
-      ...commitList,
-    ]);
-    let success = cpOk !== null;
+    let success = yield* ops.applyCherryPick(worktreePath, commitList);
 
     if (!success) {
       console.error("[nas] cherry-pick exited with error");
-      const resolved = yield* resolveEmptyCherryPicks(
-        proc,
+      const resolved = yield* ops.resolveEmpties(
         worktreePath,
         commitList.length,
       );
@@ -667,25 +720,13 @@ function cherryPickInWorktree(
         success = true;
       } else {
         console.error("[nas] Cherry-pick failed with conflicts.");
-        yield* gitExec(proc, [
-          "git",
-          "-C",
-          worktreePath,
-          "cherry-pick",
-          "--abort",
-        ]);
+        yield* ops.cherryPickAbort(worktreePath);
       }
     }
 
     if (!success && stashed) {
-      const popOk = yield* gitExec(proc, [
-        "git",
-        "-C",
-        worktreePath,
-        "stash",
-        "pop",
-      ]);
-      if (popOk === null) {
+      const popOk = yield* ops.stashPop(worktreePath);
+      if (!popOk) {
         console.error(
           `[nas] Failed to restore stashed changes in "${targetBranch}" worktree`,
         );
@@ -695,14 +736,8 @@ function cherryPickInWorktree(
     if (!success) return false;
 
     if (stashed) {
-      const popOk = yield* gitExec(proc, [
-        "git",
-        "-C",
-        worktreePath,
-        "stash",
-        "pop",
-      ]);
-      if (popOk === null) {
+      const popOk = yield* ops.stashPop(worktreePath);
+      if (!popOk) {
         console.error(
           `[nas] Cherry-pick succeeded, but restoring stashed changes failed`,
         );
