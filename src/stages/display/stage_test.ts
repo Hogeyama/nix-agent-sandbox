@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
  */
 
 import { Cause, Effect, Exit, Scope } from "effect";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -16,19 +16,19 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
+} from "../../config/types.ts";
+import type { HostEnv, ProbeResults, StageInput } from "../../pipeline/types.ts";
 import {
   type DisplayHandle,
   type DisplayStartPlan,
   makeDisplayServiceFake,
-} from "../services/display.ts";
+} from "./display_service.ts";
 import {
   createDisplayStage,
   pickFreeDisplayNumber,
   planDisplay,
-} from "./display.ts";
-import type { MountProbes } from "./mount.ts";
+} from "./stage.ts";
+import type { MountProbes } from "../mount.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

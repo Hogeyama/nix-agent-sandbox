@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   buildWildXauthorityRecord,
   extractCookieFromXauthList,
-} from "./display.ts";
+} from "./display_service.ts";
 
 /**
  * Xauthority(5) wire format:

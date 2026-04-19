@@ -16,9 +16,9 @@ import {
   removeDisplayRegistry,
   resolveDisplayRuntimePaths,
   writeDisplayRegistry,
-} from "../display/registry.ts";
-import { FsService } from "./fs.ts";
-import { ProcessService } from "./process.ts";
+} from "../../display/registry.ts";
+import { FsService } from "../../services/fs.ts";
+import { ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // Service-local plan interface
