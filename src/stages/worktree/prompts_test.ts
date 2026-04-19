@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, expect, test } from "bun:test";
-import type { WorktreeEntry } from "../../services/git_worktree.ts";
+import type { WorktreeEntry } from "./git_worktree.ts";
 import {
   promptBranchAction,
   promptDirtyWorktreeAction,

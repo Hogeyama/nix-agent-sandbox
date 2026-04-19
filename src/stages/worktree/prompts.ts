@@ -6,7 +6,7 @@
  * calling these functions — the results are passed in as parameters.
  */
 
-import type { WorktreeEntry } from "../../services/git_worktree.ts";
+import type { WorktreeEntry } from "./git_worktree.ts";
 
 export type WorktreeAction = "keep" | "delete";
 export type DirtyWorktreeAction = "stash" | "delete" | "keep";

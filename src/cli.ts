@@ -49,7 +49,6 @@ import { DockerServiceLive } from "./services/docker.ts";
 import { DockerBuildServiceLive } from "./services/docker_build.ts";
 import { EnvoyServiceLive } from "./services/envoy.ts";
 import { FsServiceLive } from "./services/fs.ts";
-import { GitWorktreeServiceLive } from "./services/git_worktree.ts";
 import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
 import { HostExecSetupServiceLive } from "./services/hostexec_setup.ts";
 import { MountSetupServiceLive } from "./services/mount_setup.ts";
@@ -76,6 +75,7 @@ import {
 import { createNixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
 import { createSessionStoreStage } from "./stages/session_store.ts";
+import { GitWorktreeServiceLive } from "./stages/worktree/git_worktree.ts";
 import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
 import { createWorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";

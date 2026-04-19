@@ -27,11 +27,11 @@ import { AuthRouterServiceLive } from "../services/auth_router.ts";
 import { DindServiceLive } from "../services/dind.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { FsServiceLive } from "../services/fs.ts";
-import { GitWorktreeServiceLive } from "../services/git_worktree.ts";
 import { HostExecBrokerServiceLive } from "../services/hostexec_broker.ts";
 import { ProcessServiceLive } from "../services/process.ts";
 import { SessionBrokerServiceLive } from "../services/session_broker.ts";
 import { SessionStoreServiceLive } from "../services/session_store_service.ts";
+import { GitWorktreeServiceLive } from "./worktree/git_worktree.ts";
 import { PromptServiceLive } from "./worktree/prompt_service.ts";
 import {
   cleanNasWorktrees,

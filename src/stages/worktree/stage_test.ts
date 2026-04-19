@@ -29,7 +29,7 @@ import {
   type WorktreeEntry,
   type WorktreeHandle,
   type WorktreeTeardownPlan,
-} from "../../services/git_worktree.ts";
+} from "./git_worktree.ts";
 import { makePromptServiceFake, PromptService } from "./prompt_service.ts";
 import { createWorktreeStage } from "./stage.ts";
 

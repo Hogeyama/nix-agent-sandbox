@@ -12,7 +12,6 @@ import type { DockerService } from "../services/docker.ts";
 import type { DockerBuildService } from "../services/docker_build.ts";
 import type { EnvoyService } from "../services/envoy.ts";
 import type { FsService } from "../services/fs.ts";
-import type { GitWorktreeService } from "../services/git_worktree.ts";
 import type { HostExecBrokerService } from "../services/hostexec_broker.ts";
 import type { HostExecSetupService } from "../services/hostexec_setup.ts";
 import type { MountSetupService } from "../services/mount_setup.ts";
@@ -20,6 +19,7 @@ import type { NetworkRuntimeService } from "../services/network_runtime.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
 import type { SessionStoreService } from "../services/session_store_service.ts";
+import type { GitWorktreeService } from "../stages/worktree/git_worktree.ts";
 import type { PromptService } from "../stages/worktree/prompt_service.ts";
 import type { PipelineState } from "./state.ts";
 

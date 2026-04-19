@@ -12,11 +12,11 @@
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Context, Effect, Exit, Layer } from "effect";
-import { logInfo } from "../log.ts";
-import type { FsService } from "./fs.ts";
-import { FsService as FsServiceTag } from "./fs.ts";
-import type { ProcessService } from "./process.ts";
-import { ProcessService as ProcessServiceTag } from "./process.ts";
+import { logInfo } from "../../log.ts";
+import type { FsService } from "../../services/fs.ts";
+import { FsService as FsServiceTag } from "../../services/fs.ts";
+import type { ProcessService } from "../../services/process.ts";
+import { ProcessService as ProcessServiceTag } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // Config & handle types

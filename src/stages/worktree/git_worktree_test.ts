@@ -11,13 +11,13 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import { Effect, Layer } from "effect";
-import { FsServiceLive } from "./fs.ts";
+import { FsServiceLive } from "../../services/fs.ts";
+import { ProcessServiceLive } from "../../services/process.ts";
 import {
   GitWorktreeService,
   GitWorktreeServiceLive,
   isSafeRelativePath,
 } from "./git_worktree.ts";
-import { ProcessServiceLive } from "./process.ts";
 
 // ---------------------------------------------------------------------------
 // isSafeRelativePath — path validation for copyUntrackedFiles
