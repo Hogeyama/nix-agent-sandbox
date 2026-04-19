@@ -7,14 +7,18 @@
 
 import { readdir, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
-import type { ClaudeProbes } from "../agents/claude.ts";
-import { resolveClaudeProbes } from "../agents/claude.ts";
-import type { CodexProbes } from "../agents/codex.ts";
-import { resolveCodexProbes } from "../agents/codex.ts";
-import type { CopilotProbes } from "../agents/copilot.ts";
-import { resolveCopilotProbes } from "../agents/copilot.ts";
-import type { EnvConfig, ExtraMountConfig, Profile } from "../config/types.ts";
-import type { HostEnv } from "../pipeline/types.ts";
+import type { ClaudeProbes } from "../../agents/claude.ts";
+import { resolveClaudeProbes } from "../../agents/claude.ts";
+import type { CodexProbes } from "../../agents/codex.ts";
+import { resolveCodexProbes } from "../../agents/codex.ts";
+import type { CopilotProbes } from "../../agents/copilot.ts";
+import { resolveCopilotProbes } from "../../agents/copilot.ts";
+import type {
+  EnvConfig,
+  ExtraMountConfig,
+  Profile,
+} from "../../config/types.ts";
+import type { HostEnv } from "../../pipeline/types.ts";
 // ---------------------------------------------------------------------------
 // Types — pre-resolved I/O results
 // ---------------------------------------------------------------------------

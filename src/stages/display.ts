@@ -14,7 +14,7 @@ import type { Stage } from "../pipeline/stage_builder.ts";
 import type { DisplayState } from "../pipeline/state.ts";
 import type { StageInput, StageResult } from "../pipeline/types.ts";
 import { DisplayService, type DisplayStartPlan } from "../services/display.ts";
-import type { MountProbes } from "./mount_probes.ts";
+import type { MountProbes } from "./mount.ts";
 
 // Xvfb 起動があるので遅い
 const SOCKET_READY_TIMEOUT_MS = 15_000;

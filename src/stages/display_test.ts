@@ -28,7 +28,7 @@ import {
   pickFreeDisplayNumber,
   planDisplay,
 } from "./display.ts";
-import type { MountProbes } from "./mount_probes.ts";
+import type { MountProbes } from "./mount.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

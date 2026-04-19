@@ -9,10 +9,10 @@ import { expect, test } from "bun:test";
  */
 
 import { Effect, Exit, Scope } from "effect";
-import type { ClaudeProbes } from "../agents/claude.ts";
-import type { CodexProbes } from "../agents/codex.ts";
-import type { CopilotProbes } from "../agents/copilot.ts";
-import type { Config, Profile } from "../config/types.ts";
+import type { ClaudeProbes } from "../../agents/claude.ts";
+import type { CodexProbes } from "../../agents/codex.ts";
+import type { CopilotProbes } from "../../agents/copilot.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -20,20 +20,24 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import { emptyContainerPlan } from "../pipeline/container_plan.ts";
-import type { PipelineState } from "../pipeline/state.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
+} from "../../config/types.ts";
+import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import type { PipelineState } from "../../pipeline/state.ts";
+import type {
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../../pipeline/types.ts";
+import type { MountProbes, ResolvedEnvEntry } from "./mount_probes.ts";
 import {
   type MountDirectoryEntry,
   makeMountSetupServiceFake,
-} from "../services/mount_setup.ts";
+} from "./mount_setup_service.ts";
 import {
   createMountStage,
   planMount,
   serializeNixExtraPackages,
-} from "./mount.ts";
-import type { MountProbes, ResolvedEnvEntry } from "./mount_probes.ts";
+} from "./stage.ts";
 
 // ============================================================
 // テスト用ヘルパー — 全て純粋なリテラル構築

@@ -50,7 +50,6 @@ import { EnvoyServiceLive } from "./services/envoy.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { HostExecBrokerServiceLive } from "./services/hostexec_broker.ts";
 import { HostExecSetupServiceLive } from "./services/hostexec_setup.ts";
-import { MountSetupServiceLive } from "./services/mount_setup.ts";
 import { NetworkRuntimeServiceLive } from "./services/network_runtime.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { SessionBrokerServiceLive } from "./services/session_broker.ts";
@@ -71,6 +70,7 @@ import {
 import {
   createMountStage,
   type MountProbes,
+  MountSetupServiceLive,
   resolveMountProbes,
 } from "./stages/mount.ts";
 import { createNixDetectStage } from "./stages/nix_detect.ts";
