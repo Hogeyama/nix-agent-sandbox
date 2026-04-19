@@ -31,9 +31,47 @@ export type AnyStage = EffectStage<StageServices>;
 - `Scope.Scope` is always present for resource management but is not part of `R`.
 - `EffectStageResult` is `Partial<PriorStageOutputs>` -- each stage returns only the fields it modifies.
 
+## Directory Layout & Naming
+
+**`src/services/` holds only cross-cutting primitives.** Stage-specific services live inside their owning stage's subdirectory.
+
+```
+src/services/                 # 3 primitives only (fs, process, docker)
+src/stages/<name>.ts          # barrel re-export (public API)
+src/stages/<name>/
+├── stage.ts                  # stage orchestrator (createXxxStage, planXxx)
+├── stage_test.ts
+├── *_service.ts              # Effect service(s): Tag + Live + Fake
+├── *_service_test.ts
+├── *_probes.ts               # pre-stage IO resolver (plain async, returns data)
+└── <helper>.ts               # helpers / domain types (no suffix)
+```
+
+### File suffix convention
+
+The suffix marks the **Effect boundary** and **execution phase**:
+
+| Suffix | Role | Effect framework | When it runs |
+|---|---|---|---|
+| `_service.ts` | Effect Service (Tag + Live + Fake Layer) | inside | during `run()` |
+| `_probes.ts` | Plain async IO resolver → data | outside | before any stage (pre-pipeline) |
+| (no suffix) | Pure helper / domain type / utility | n/a | n/a |
+| `stage.ts` | Orchestrator | inside (`Effect.gen`) | during `run()` |
+
+Importantly, **probes are not services**. A probe returns plain data (`Promise<MountProbes>`), runs once at pipeline startup, and is passed into the stage as an argument. Tests fabricate the data directly — no Fake Layer needed. A service runs lazily inside `run()` via a Context.Tag and is fake-able through Layer substitution.
+
+### Barrel re-exports
+
+`src/stages/<name>.ts` re-exports the stage factory and the service Tag/Live/Fake triad. External consumers (`cli.ts`, `pipeline/types.ts`, cross-stage imports) import from the barrel, not from the subdirectory's inner files. Internal tests and siblings inside the subdirectory import directly.
+
+### Where to put a new service
+
+- Shared by many stages and truly cross-cutting (like `FsService`, `ProcessService`, `DockerService`) → `src/services/`.
+- Scoped to one stage's concern → `src/stages/<owning-stage>/<name>_service.ts`, and re-export from the barrel. Default to this location unless you can point at concrete cross-stage consumers.
+
 ## Service Inventory
 
-### Primitive Services (src/services/, usually not stage-facing)
+### Cross-cutting primitives (`src/services/`, usually not stage-facing)
 
 Thin adapters over OS or Docker primitives. Treat these as implementation details of probes and domain services, not as the normal interface of stage code.
 
@@ -45,25 +83,26 @@ Thin adapters over OS or Docker primitives. Treat these as implementation detail
 
 If a stage needs a file read, process exec, or Docker query, the default answer is still "move that primitive behind a probe or a domain service." Do not create stage-level exceptions just because the I/O sequence is short.
 
-### Interaction Services (src/services/, stage-facing)
+### Stage-facing interaction services
 
-These are generic, but the interaction itself is often the stage behavior, so direct stage use is acceptable.
+Generic interaction, but the interaction itself is often the stage behavior, so direct stage use is acceptable.
 
-| Service | Purpose | Key methods |
+| Service | Location | Purpose | Key methods |
+|---|---|---|---|
+| `PromptService` | `src/stages/worktree/prompt_service.ts` | Interactive prompts | `worktreeAction`, `dirtyWorktreeAction`, `branchAction`, `reuseWorktree`, `renameBranchPrompt` |
+
+### Stage-owned domain services
+
+Preferred stage-facing boundaries for named workflows and lifecycles. All live inside their owning stage's subdirectory.
+
+| Service | Stage | Purpose |
 |---|---|---|
-| `PromptService` | Interactive prompts | `worktreeAction`, `dirtyWorktreeAction`, `branchAction`, `reuseWorktree`, `renameBranchPrompt` |
-
-### Domain Services (src/services/)
-
-Preferred stage-facing boundaries for named workflows and lifecycles.
-
-| Service | Purpose |
-|---|---|
-| `DindService` | Docker-in-Docker sidecar lifecycle (`ensureSidecar` / `teardownSidecar`) |
-| `SessionBrokerService` | Network session broker lifecycle (`start` -> handle with `close`) |
-| `HostExecBrokerService` | Host-exec broker lifecycle (`start` -> handle with `close`) |
-| `AuthRouterService` | Envoy auth router daemon lifecycle (`ensureDaemon` -> handle with `abort`) |
-| `SessionStoreService` | Session record persistence (`ensurePaths`, `create`, `delete`) |
+| `DindService` | `stages/dind/dind_service.ts` | Docker-in-Docker sidecar lifecycle (`ensureSidecar` / `teardownSidecar`) |
+| `SessionBrokerService` | `stages/proxy/session_broker_service.ts` | Network session broker lifecycle (`start` -> handle with `close`) |
+| `HostExecBrokerService` | `stages/hostexec/broker_service.ts` | Host-exec broker lifecycle (`start` -> handle with `close`) |
+| `AuthRouterService` | `stages/proxy/auth_router_service.ts` | Envoy auth router daemon lifecycle (`ensureDaemon` -> handle with `abort`) |
+| `SessionStoreService` | `stages/session_store/session_store_service.ts` | Session record persistence (`ensurePaths`, `create`, `delete`) |
+| `GitWorktreeService` | `stages/worktree/git_worktree_service.ts` | Git worktree lifecycle (D1/D2 layered: see file-private `*Ops` tags) |
 
 Each service file exports three things:
 
@@ -325,5 +364,5 @@ Agent modules are not stages, but they follow the same separation rule.
 3. **Would execution require primitive filesystem/process/Docker I/O or manual cleanup?** -- Create or reuse a domain service first. Do not call primitive services directly from the stage.
 4. **Is there already an intentful service method for the job?** -- Call that service from the stage and keep the stage focused on orchestration.
 5. **Does the service return a long-lived handle?** -- Register cleanup with `Effect.acquireRelease` or `Effect.addFinalizer`.
-6. **Adding a new service?** -- Define Tag + Live + Fake in `src/services/`. Add the service to the `StageServices` union in `types.ts`.
+6. **Adding a new service?** -- Put Tag + Live + Fake in `src/stages/<owning-stage>/<name>_service.ts` (or `src/services/` only for truly cross-cutting primitives). Re-export from the stage barrel. Add the service to the `StageServices` union in `pipeline/types.ts`.
 7. **Adding/modifying an agent?** -- Follow the same split: I/O in `resolve*Probes()`, pure logic in `configure*()`, lifecycle work in services.
