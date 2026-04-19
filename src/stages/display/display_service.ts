@@ -214,11 +214,13 @@ async function readXpraCookieWithRetry(
  */
 function spawnXpraWithUnshare(
   proc: Context.Tag.Service<typeof ProcessService>,
-  plan: DisplayStartPlan,
+  plan: DisplayStartPlan & {
+    unshareBindMount: NonNullable<DisplayStartPlan["unshareBindMount"]>;
+  },
   xpraArgs: string[],
   logPath: string,
 ): Effect.Effect<SpawnHandle> {
-  const bind = plan.unshareBindMount!;
+  const bind = plan.unshareBindMount;
   // shell 内で mount → exec xpra する。引数は全て single-quote で安全にエスケープ。
   const xpraCmd = [plan.xpraBinaryPath, ...xpraArgs]
     .map((a) => `'${a.replace(/'/g, "'\\''")}'`)
@@ -317,7 +319,12 @@ export const DisplayServiceLive: Layer.Layer<
           // Docker からも namespace 外からもアクセスできる。
           const spawnHandle = yield* Effect.acquireRelease(
             plan.unshareBindMount
-              ? spawnXpraWithUnshare(proc, plan, xpraArgs, logPath)
+              ? spawnXpraWithUnshare(
+                  proc,
+                  { ...plan, unshareBindMount: plan.unshareBindMount },
+                  xpraArgs,
+                  logPath,
+                )
               : proc.spawn(plan.xpraBinaryPath, xpraArgs, { logFile: logPath }),
             (handle) => Effect.sync(() => handle.kill()),
           );
