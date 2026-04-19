@@ -196,7 +196,9 @@ function inheritDirtyBaseWorktree(
       `[nas] Inheriting dirty changes from ${sourceWorktreePath} (${localBaseBranch})`,
     );
 
-    yield* applyTrackedDiff(proc, fs, sourceWorktreePath, targetWorktreePath);
+    yield* applyTrackedDiff(sourceWorktreePath, targetWorktreePath).pipe(
+      Effect.provide(makeApplyTrackedDiffOpsLayer(proc, fs)),
+    );
     yield* copyUntrackedFiles(proc, fs, sourceWorktreePath, targetWorktreePath);
   });
 }
@@ -240,37 +242,75 @@ function findWorktreeForBranch(
   });
 }
 
-/** Apply tracked diffs (staged + unstaged) from source to target worktree. */
-function applyTrackedDiff(
+/**
+ * Module-internal service for {@link applyTrackedDiff}. The function branches
+ * on whether each of staged / unstaged diffs is empty, and we want those
+ * branches reachable from unit tests without running real git processes.
+ *
+ * @internal Exported only for the colocated test file.
+ */
+export class ApplyTrackedDiffOps extends Context.Tag(
+  "nas/git_worktree/ApplyTrackedDiffOps",
+)<
+  ApplyTrackedDiffOps,
+  {
+    readonly readTrackedDiff: (
+      sourceWorktreePath: string,
+      opts: { readonly cached: boolean },
+    ) => Effect.Effect<string>;
+    readonly applyPatchToTarget: (
+      targetWorktreePath: string,
+      patch: string,
+      extraArgs: readonly string[],
+    ) => Effect.Effect<void>;
+  }
+>() {}
+
+function makeApplyTrackedDiffOpsLayer(
   proc: Proc,
   fs: Fs,
+): Layer.Layer<ApplyTrackedDiffOps> {
+  return Layer.succeed(ApplyTrackedDiffOps, {
+    readTrackedDiff: (sourceWorktreePath, { cached }) =>
+      proc.exec([
+        "git",
+        "-C",
+        sourceWorktreePath,
+        "diff",
+        "--no-ext-diff",
+        "--binary",
+        ...(cached ? ["--cached"] : []),
+      ]),
+    applyPatchToTarget: (targetWorktreePath, patch, extraArgs) =>
+      applyPatch(proc, fs, targetWorktreePath, patch, [...extraArgs]),
+  });
+}
+
+/**
+ * Apply tracked diffs (staged + unstaged) from source to target worktree.
+ *
+ * @internal Exported only for the colocated test file.
+ */
+export function applyTrackedDiff(
   sourceWorktreePath: string,
   targetWorktreePath: string,
-): Effect.Effect<void> {
+): Effect.Effect<void, never, ApplyTrackedDiffOps> {
   return Effect.gen(function* () {
-    const stagedPatch = yield* proc.exec([
-      "git",
-      "-C",
-      sourceWorktreePath,
-      "diff",
-      "--no-ext-diff",
-      "--binary",
-      "--cached",
-    ]);
+    const ops = yield* ApplyTrackedDiffOps;
+    const stagedPatch = yield* ops.readTrackedDiff(sourceWorktreePath, {
+      cached: true,
+    });
     if (stagedPatch.trim().length > 0) {
-      yield* applyPatch(proc, fs, targetWorktreePath, stagedPatch, ["--index"]);
+      yield* ops.applyPatchToTarget(targetWorktreePath, stagedPatch, [
+        "--index",
+      ]);
     }
 
-    const unstagedPatch = yield* proc.exec([
-      "git",
-      "-C",
-      sourceWorktreePath,
-      "diff",
-      "--no-ext-diff",
-      "--binary",
-    ]);
+    const unstagedPatch = yield* ops.readTrackedDiff(sourceWorktreePath, {
+      cached: false,
+    });
     if (unstagedPatch.trim().length > 0) {
-      yield* applyPatch(proc, fs, targetWorktreePath, unstagedPatch);
+      yield* ops.applyPatchToTarget(targetWorktreePath, unstagedPatch, []);
     }
   });
 }

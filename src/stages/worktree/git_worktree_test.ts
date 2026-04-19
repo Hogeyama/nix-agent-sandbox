@@ -14,6 +14,8 @@ import { Effect, Layer } from "effect";
 import { FsServiceLive } from "../../services/fs.ts";
 import { ProcessServiceLive } from "../../services/process.ts";
 import {
+  ApplyTrackedDiffOps,
+  applyTrackedDiff,
   CherryPickOps,
   cherryPickInTmpWorktree,
   cherryPickInWorktree,
@@ -460,6 +462,100 @@ describe("cherryPickInTmpWorktree", () => {
       "applyCherryPick(/tmp-wt,[abc,def])",
       "resolveEmpties(/tmp-wt,2)",
       "cherryPickAbort(/tmp-wt)",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyTrackedDiff — branch coverage via fake ApplyTrackedDiffOps
+// ---------------------------------------------------------------------------
+
+interface FakeApplyTrackedDiffOpsConfig {
+  readonly stagedPatch?: string;
+  readonly unstagedPatch?: string;
+}
+
+function makeFakeApplyTrackedDiffOps(config: FakeApplyTrackedDiffOpsConfig): {
+  layer: Layer.Layer<ApplyTrackedDiffOps>;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const layer = Layer.succeed(ApplyTrackedDiffOps, {
+    readTrackedDiff: (src, { cached }) =>
+      Effect.sync(() => {
+        calls.push(`readTrackedDiff(${src},cached=${cached})`);
+        return cached
+          ? (config.stagedPatch ?? "")
+          : (config.unstagedPatch ?? "");
+      }),
+    applyPatchToTarget: (target, patch, extraArgs) =>
+      Effect.sync(() => {
+        calls.push(
+          `applyPatchToTarget(${target},len=${patch.length},[${extraArgs.join(",")}])`,
+        );
+      }),
+  });
+  return { layer, calls };
+}
+
+async function runApplyTrackedDiff(
+  config: FakeApplyTrackedDiffOpsConfig,
+): Promise<{ calls: string[] }> {
+  const { layer, calls } = makeFakeApplyTrackedDiffOps(config);
+  await Effect.runPromise(
+    applyTrackedDiff("/src", "/target").pipe(Effect.provide(layer)),
+  );
+  return { calls };
+}
+
+describe("applyTrackedDiff", () => {
+  test("both diffs empty: reads both, applies neither", async () => {
+    const { calls } = await runApplyTrackedDiff({});
+    expect(calls).toEqual([
+      "readTrackedDiff(/src,cached=true)",
+      "readTrackedDiff(/src,cached=false)",
+    ]);
+  });
+
+  test("only staged non-empty: applies staged with --index, no unstaged apply", async () => {
+    const { calls } = await runApplyTrackedDiff({ stagedPatch: "diff-a" });
+    expect(calls).toEqual([
+      "readTrackedDiff(/src,cached=true)",
+      "applyPatchToTarget(/target,len=6,[--index])",
+      "readTrackedDiff(/src,cached=false)",
+    ]);
+  });
+
+  test("only unstaged non-empty: applies unstaged without --index", async () => {
+    const { calls } = await runApplyTrackedDiff({ unstagedPatch: "diff-bc" });
+    expect(calls).toEqual([
+      "readTrackedDiff(/src,cached=true)",
+      "readTrackedDiff(/src,cached=false)",
+      "applyPatchToTarget(/target,len=7,[])",
+    ]);
+  });
+
+  test("both diffs non-empty: applies staged then unstaged", async () => {
+    const { calls } = await runApplyTrackedDiff({
+      stagedPatch: "S",
+      unstagedPatch: "UU",
+    });
+    expect(calls).toEqual([
+      "readTrackedDiff(/src,cached=true)",
+      "applyPatchToTarget(/target,len=1,[--index])",
+      "readTrackedDiff(/src,cached=false)",
+      "applyPatchToTarget(/target,len=2,[])",
+    ]);
+  });
+
+  test("whitespace-only staged diff is treated as empty (not applied)", async () => {
+    const { calls } = await runApplyTrackedDiff({
+      stagedPatch: "   \n\t",
+      unstagedPatch: "",
+    });
+    expect(calls).toEqual([
+      "readTrackedDiff(/src,cached=true)",
+      "readTrackedDiff(/src,cached=false)",
     ]);
   });
 });
