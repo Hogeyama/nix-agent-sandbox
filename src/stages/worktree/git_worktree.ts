@@ -415,12 +415,88 @@ function copyUntrackedFiles(
 // Teardown logic
 // ---------------------------------------------------------------------------
 
-function executeTeardown(
-  proc: Proc,
+/**
+ * Module-internal service for {@link executeTeardown}. Absorbs the two
+ * primitive `gitExec` calls (worktree remove, branch delete) and the
+ * composed helpers (stash / rename / cherry-pick) behind one Tag so that the
+ * teardown's branching — keep / stash-fails / rename / cherry-pick-success /
+ * cherry-pick-fail — is reachable from unit tests without a real git
+ * process.
+ *
+ * Helpers are routed through the Tag rather than left as direct calls
+ * because they all perform real IO and we want teardown tests to be fully
+ * hermetic. Keeping them inside the Tag also makes the live factory the
+ * only place that knows about `cherryPickToBase`'s own Ops wiring, so the
+ * D2 here doesn't have to provide a second layer inline.
+ *
+ * @internal Exported only for the colocated test file.
+ */
+export class TeardownOps extends Context.Tag("nas/git_worktree/TeardownOps")<
+  TeardownOps,
+  {
+    readonly stashWorktreeChanges: (
+      worktreePath: string,
+    ) => Effect.Effect<void>;
+    readonly renameBranch: (
+      branchName: string,
+      repoRoot: string,
+      newName: string | null,
+    ) => Effect.Effect<void>;
+    readonly cherryPickToBase: (
+      branchName: string,
+      repoRoot: string,
+      baseBranch: string,
+    ) => Effect.Effect<boolean>;
+    readonly removeWorktree: (
+      repoRoot: string,
+      worktreePath: string,
+    ) => Effect.Effect<boolean>;
+    readonly deleteBranch: (
+      repoRoot: string,
+      branchName: string,
+    ) => Effect.Effect<boolean>;
+  }
+>() {}
+
+function makeTeardownOpsLayer(proc: Proc): Layer.Layer<TeardownOps> {
+  return Layer.succeed(TeardownOps, {
+    stashWorktreeChanges: (wt) => stashWorktreeChanges(proc, wt),
+    renameBranch: (branchName, repoRoot, newName) =>
+      renameBranch(proc, branchName, repoRoot, newName),
+    cherryPickToBase: (branchName, repoRoot, baseBranch) =>
+      cherryPickToBase(proc, branchName, repoRoot, baseBranch),
+    removeWorktree: (repoRoot, worktreePath) =>
+      gitExec(proc, [
+        "git",
+        "-C",
+        repoRoot,
+        "worktree",
+        "remove",
+        "--force",
+        worktreePath,
+      ]).pipe(Effect.map((r) => r !== null)),
+    deleteBranch: (repoRoot, branchName) =>
+      gitExec(proc, [
+        "git",
+        "-C",
+        repoRoot,
+        "branch",
+        "-D",
+        "--end-of-options",
+        branchName,
+      ]).pipe(Effect.map((r) => r !== null)),
+  });
+}
+
+/**
+ * @internal Exported only for the colocated test file.
+ */
+export function executeTeardown(
   handle: WorktreeHandle,
   plan: WorktreeTeardownPlan,
-): Effect.Effect<void> {
+): Effect.Effect<void, never, TeardownOps> {
   return Effect.gen(function* () {
+    const ops = yield* TeardownOps;
     if (plan.action === "keep") {
       console.log(`[nas] Worktree kept: ${handle.worktreePath}`);
       return;
@@ -428,10 +504,9 @@ function executeTeardown(
 
     // Stash if requested
     if (plan.dirtyAction === "stash") {
-      const stashResult = yield* stashWorktreeChanges(
-        proc,
-        handle.worktreePath,
-      ).pipe(Effect.either);
+      const stashResult = yield* ops
+        .stashWorktreeChanges(handle.worktreePath)
+        .pipe(Effect.either);
       if (stashResult._tag === "Left") {
         console.error(`[nas] ${stashResult.left}`);
         console.log(`[nas] Worktree kept: ${handle.worktreePath}`);
@@ -447,15 +522,13 @@ function executeTeardown(
     let shouldDeleteBranch = plan.branchAction !== "rename";
 
     if (plan.branchAction === "rename") {
-      yield* renameBranch(
-        proc,
+      yield* ops.renameBranch(
         handle.branchName,
         handle.repoRoot,
         plan.newBranchName ?? null,
       );
     } else if (plan.branchAction === "cherry-pick") {
-      const success = yield* cherryPickToBase(
-        proc,
+      const success = yield* ops.cherryPickToBase(
         handle.branchName,
         handle.repoRoot,
         handle.baseBranch,
@@ -470,31 +543,18 @@ function executeTeardown(
 
     // Remove worktree
     console.log(`[nas] Removing worktree: ${handle.worktreePath}`);
-    const removeResult = yield* gitExec(proc, [
-      "git",
-      "-C",
+    const removeOk = yield* ops.removeWorktree(
       handle.repoRoot,
-      "worktree",
-      "remove",
-      "--force",
       handle.worktreePath,
-    ]);
-    if (removeResult === null) {
+    );
+    if (!removeOk) {
       console.error("[nas] Failed to remove worktree");
     }
 
     // Delete branch unless renamed or cherry-pick failed
     if (shouldDeleteBranch && handle.branchName) {
-      const delResult = yield* gitExec(proc, [
-        "git",
-        "-C",
-        handle.repoRoot,
-        "branch",
-        "-D",
-        "--end-of-options",
-        handle.branchName,
-      ]);
-      if (delResult !== null) {
+      const delOk = yield* ops.deleteBranch(handle.repoRoot, handle.branchName);
+      if (delOk) {
         console.log(`[nas] Deleted branch: ${handle.branchName}`);
       } else {
         console.error(`[nas] Failed to delete branch: ${handle.branchName}`);
@@ -1259,7 +1319,10 @@ export const GitWorktreeServiceLive: Layer.Layer<
             branchName: params.branchName,
             repoRoot: params.repoRoot,
             baseBranch: params.baseBranch,
-            close: (plan) => executeTeardown(proc, handle, plan),
+            close: (plan) =>
+              executeTeardown(handle, plan).pipe(
+                Effect.provide(makeTeardownOpsLayer(proc)),
+              ),
           };
 
           return handle;

@@ -19,10 +19,14 @@ import {
   CherryPickOps,
   cherryPickInTmpWorktree,
   cherryPickInWorktree,
+  executeTeardown,
   GitWorktreeService,
   GitWorktreeServiceLive,
   isSafeRelativePath,
+  TeardownOps,
   TmpCherryPickOps,
+  type WorktreeHandle,
+  type WorktreeTeardownPlan,
 } from "./git_worktree.ts";
 
 // ---------------------------------------------------------------------------
@@ -556,6 +560,156 @@ describe("applyTrackedDiff", () => {
     expect(calls).toEqual([
       "readTrackedDiff(/src,cached=true)",
       "readTrackedDiff(/src,cached=false)",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// executeTeardown — branch coverage via fake TeardownOps
+// ---------------------------------------------------------------------------
+
+interface FakeTeardownOpsConfig {
+  readonly cherryPickSuccess?: boolean;
+  readonly removeOk?: boolean;
+  readonly deleteOk?: boolean;
+}
+
+function makeFakeTeardownOps(config: FakeTeardownOpsConfig): {
+  layer: Layer.Layer<TeardownOps>;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const layer = Layer.succeed(TeardownOps, {
+    stashWorktreeChanges: (wt) =>
+      Effect.sync(() => {
+        calls.push(`stashWorktreeChanges(${wt})`);
+      }),
+    renameBranch: (branchName, repoRoot, newName) =>
+      Effect.sync(() => {
+        calls.push(`renameBranch(${branchName},${repoRoot},${newName})`);
+      }),
+    cherryPickToBase: (branchName, repoRoot, baseBranch) =>
+      Effect.sync(() => {
+        calls.push(`cherryPickToBase(${branchName},${repoRoot},${baseBranch})`);
+        return config.cherryPickSuccess ?? true;
+      }),
+    removeWorktree: (repoRoot, worktreePath) =>
+      Effect.sync(() => {
+        calls.push(`removeWorktree(${repoRoot},${worktreePath})`);
+        return config.removeOk ?? true;
+      }),
+    deleteBranch: (repoRoot, branchName) =>
+      Effect.sync(() => {
+        calls.push(`deleteBranch(${repoRoot},${branchName})`);
+        return config.deleteOk ?? true;
+      }),
+  });
+  return { layer, calls };
+}
+
+const fakeHandle: WorktreeHandle = {
+  worktreePath: "/wt",
+  branchName: "wt/foo",
+  repoRoot: "/repo",
+  baseBranch: "main",
+  close: () => Effect.void,
+};
+
+async function runTeardown(
+  plan: WorktreeTeardownPlan,
+  config: FakeTeardownOpsConfig = {},
+): Promise<{ calls: string[] }> {
+  const { layer, calls } = makeFakeTeardownOps(config);
+  await Effect.runPromise(
+    executeTeardown(fakeHandle, plan).pipe(Effect.provide(layer)),
+  );
+  return { calls };
+}
+
+describe("executeTeardown", () => {
+  test("action=keep: no ops called", async () => {
+    const { calls } = await runTeardown({ action: "keep" });
+    expect(calls).toEqual([]);
+  });
+
+  test("dirtyAction=keep: bail out after (no) stash, worktree kept", async () => {
+    const { calls } = await runTeardown({
+      action: "delete",
+      dirtyAction: "keep",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("stash succeeds + cherry-pick success: remove + delete branch", async () => {
+    const { calls } = await runTeardown(
+      {
+        action: "delete",
+        dirtyAction: "stash",
+        branchAction: "cherry-pick",
+      },
+      { cherryPickSuccess: true },
+    );
+    expect(calls).toEqual([
+      "stashWorktreeChanges(/wt)",
+      "cherryPickToBase(wt/foo,/repo,main)",
+      "removeWorktree(/repo,/wt)",
+      "deleteBranch(/repo,wt/foo)",
+    ]);
+  });
+
+  test("branchAction=rename: rename branch, remove worktree, do NOT delete branch", async () => {
+    const { calls } = await runTeardown({
+      action: "delete",
+      branchAction: "rename",
+      newBranchName: "kept-branch",
+    });
+    expect(calls).toEqual([
+      "renameBranch(wt/foo,/repo,kept-branch)",
+      "removeWorktree(/repo,/wt)",
+    ]);
+  });
+
+  test("branchAction=cherry-pick + failure: preserve branch (no delete)", async () => {
+    const { calls } = await runTeardown(
+      {
+        action: "delete",
+        branchAction: "cherry-pick",
+      },
+      { cherryPickSuccess: false },
+    );
+    expect(calls).toEqual([
+      "cherryPickToBase(wt/foo,/repo,main)",
+      "removeWorktree(/repo,/wt)",
+    ]);
+  });
+
+  test("no branchAction: defaults to delete; removeWorktree + deleteBranch called", async () => {
+    const { calls } = await runTeardown({ action: "delete" });
+    expect(calls).toEqual([
+      "removeWorktree(/repo,/wt)",
+      "deleteBranch(/repo,wt/foo)",
+    ]);
+  });
+
+  test("removeWorktree fails: still attempts deleteBranch, no throw", async () => {
+    const { calls } = await runTeardown(
+      { action: "delete" },
+      { removeOk: false },
+    );
+    expect(calls).toEqual([
+      "removeWorktree(/repo,/wt)",
+      "deleteBranch(/repo,wt/foo)",
+    ]);
+  });
+
+  test("deleteBranch fails: logs error but does not throw", async () => {
+    const { calls } = await runTeardown(
+      { action: "delete" },
+      { deleteOk: false },
+    );
+    expect(calls).toEqual([
+      "removeWorktree(/repo,/wt)",
+      "deleteBranch(/repo,wt/foo)",
     ]);
   });
 });
