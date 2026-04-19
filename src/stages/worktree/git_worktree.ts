@@ -618,6 +618,171 @@ function renameBranch(
 }
 
 // ---------------------------------------------------------------------------
+// Worktree creation
+// ---------------------------------------------------------------------------
+
+/**
+ * Module-internal service for {@link createWorktree}. Absorbs the three
+ * primitive `proc.exec` calls (worktree add, nasBase config, onCreate hook)
+ * and the three composed helpers (`ensureNasGitignore`, `resolveLocalBranch`,
+ * `inheritDirtyBaseWorktree`) plus the teardown callback factory behind one
+ * Tag, so every branch — with / without onCreate hook, base as local branch
+ * vs remote-style ref — is reachable from unit tests without a real git
+ * process.
+ *
+ * The teardown close-callback factory (`makeCloseCallback`) is routed
+ * through this Tag because it is the only place that knows how to wire
+ * `TeardownOps` for a concrete `proc`. Keeping it inside the Ops avoids
+ * leaking `Proc` / `Fs` into the D2's argument list.
+ *
+ * @internal Exported only for the colocated test file.
+ */
+export class CreateWorktreeOps extends Context.Tag(
+  "nas/git_worktree/CreateWorktreeOps",
+)<
+  CreateWorktreeOps,
+  {
+    readonly ensureNasGitignore: (repoRoot: string) => Effect.Effect<void>;
+    readonly addWorktree: (
+      repoRoot: string,
+      branchName: string,
+      worktreePath: string,
+      baseBranch: string,
+    ) => Effect.Effect<void>;
+    readonly recordNasBase: (
+      repoRoot: string,
+      branchName: string,
+      baseBranch: string,
+    ) => Effect.Effect<void>;
+    readonly resolveLocalBranch: (
+      repoRoot: string,
+      ref: string,
+    ) => Effect.Effect<string>;
+    readonly inheritDirtyBaseWorktree: (
+      repoRoot: string,
+      localBaseBranch: string,
+      targetWorktreePath: string,
+    ) => Effect.Effect<void>;
+    readonly runOnCreateHook: (
+      cwd: string,
+      script: string,
+    ) => Effect.Effect<void>;
+    readonly makeCloseCallback: (
+      handle: WorktreeHandle,
+    ) => (plan: WorktreeTeardownPlan) => Effect.Effect<void>;
+  }
+>() {}
+
+function makeCreateWorktreeOpsLayer(
+  proc: Proc,
+  fs: Fs,
+): Layer.Layer<CreateWorktreeOps> {
+  return Layer.succeed(CreateWorktreeOps, {
+    ensureNasGitignore: (repoRoot) => ensureNasGitignore(repoRoot, fs),
+    addWorktree: (repoRoot, branchName, worktreePath, baseBranch) =>
+      proc
+        .exec([
+          "git",
+          "-C",
+          repoRoot,
+          "worktree",
+          "add",
+          "-b",
+          branchName,
+          "--end-of-options",
+          worktreePath,
+          baseBranch,
+        ])
+        .pipe(Effect.asVoid),
+    recordNasBase: (repoRoot, branchName, baseBranch) =>
+      proc
+        .exec([
+          "git",
+          "-C",
+          repoRoot,
+          "config",
+          `branch.${branchName}.nasBase`,
+          baseBranch,
+        ])
+        .pipe(Effect.asVoid),
+    resolveLocalBranch: (repoRoot, ref) =>
+      resolveLocalBranch(proc, repoRoot, ref),
+    inheritDirtyBaseWorktree: (repoRoot, localBaseBranch, targetWorktreePath) =>
+      inheritDirtyBaseWorktree(
+        proc,
+        fs,
+        repoRoot,
+        localBaseBranch,
+        targetWorktreePath,
+      ),
+    runOnCreateHook: (cwd, script) =>
+      proc.exec(["bash", "-c", script], { cwd }).pipe(Effect.asVoid),
+    makeCloseCallback: (handle) => (plan) =>
+      executeTeardown(handle, plan).pipe(
+        Effect.provide(makeTeardownOpsLayer(proc)),
+      ),
+  });
+}
+
+/**
+ * @internal Exported only for the colocated test file.
+ */
+export function createWorktree(
+  params: CreateWorktreeParams,
+): Effect.Effect<WorktreeHandle, never, CreateWorktreeOps> {
+  return Effect.gen(function* () {
+    const ops = yield* CreateWorktreeOps;
+    yield* ops.ensureNasGitignore(params.repoRoot);
+
+    logInfo(
+      `[nas] Creating worktree: ${params.worktreePath} (branch: ${params.branchName}) from ${params.baseBranch}`,
+    );
+    console.log(
+      `$ git -C ${params.repoRoot} worktree add -b ${params.branchName} ${params.worktreePath} ${params.baseBranch}`,
+    );
+    yield* ops.addWorktree(
+      params.repoRoot,
+      params.branchName,
+      params.worktreePath,
+      params.baseBranch,
+    );
+
+    // Record base ref in branch config for `nas worktree list`
+    yield* ops.recordNasBase(
+      params.repoRoot,
+      params.branchName,
+      params.baseBranch,
+    );
+
+    const localBaseBranch = yield* ops.resolveLocalBranch(
+      params.repoRoot,
+      params.baseBranch,
+    );
+    yield* ops.inheritDirtyBaseWorktree(
+      params.repoRoot,
+      localBaseBranch,
+      params.worktreePath,
+    );
+
+    if (params.onCreate) {
+      logInfo(`[nas] Running on-create hook: ${params.onCreate}`);
+      console.log(`$ bash -c ${params.onCreate} (cwd: ${params.worktreePath})`);
+      yield* ops.runOnCreateHook(params.worktreePath, params.onCreate);
+    }
+
+    const handle: WorktreeHandle = {
+      worktreePath: params.worktreePath,
+      branchName: params.branchName,
+      repoRoot: params.repoRoot,
+      baseBranch: params.baseBranch,
+      close: (plan) => ops.makeCloseCallback(handle)(plan),
+    };
+
+    return handle;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Cherry-pick
 // ---------------------------------------------------------------------------
 
@@ -1346,74 +1511,9 @@ export const GitWorktreeServiceLive: Layer.Layer<
         }),
 
       createWorktree: (params) =>
-        Effect.gen(function* () {
-          yield* ensureNasGitignore(params.repoRoot, fs);
-
-          logInfo(
-            `[nas] Creating worktree: ${params.worktreePath} (branch: ${params.branchName}) from ${params.baseBranch}`,
-          );
-          console.log(
-            `$ git -C ${params.repoRoot} worktree add -b ${params.branchName} ${params.worktreePath} ${params.baseBranch}`,
-          );
-          yield* proc.exec([
-            "git",
-            "-C",
-            params.repoRoot,
-            "worktree",
-            "add",
-            "-b",
-            params.branchName,
-            "--end-of-options",
-            params.worktreePath,
-            params.baseBranch,
-          ]);
-
-          // Record base ref in branch config for `nas worktree list`
-          yield* proc.exec([
-            "git",
-            "-C",
-            params.repoRoot,
-            "config",
-            `branch.${params.branchName}.nasBase`,
-            params.baseBranch,
-          ]);
-
-          const localBaseBranch = yield* resolveLocalBranch(
-            proc,
-            params.repoRoot,
-            params.baseBranch,
-          );
-          yield* inheritDirtyBaseWorktree(
-            proc,
-            fs,
-            params.repoRoot,
-            localBaseBranch,
-            params.worktreePath,
-          );
-
-          if (params.onCreate) {
-            logInfo(`[nas] Running on-create hook: ${params.onCreate}`);
-            console.log(
-              `$ bash -c ${params.onCreate} (cwd: ${params.worktreePath})`,
-            );
-            yield* proc.exec(["bash", "-c", params.onCreate], {
-              cwd: params.worktreePath,
-            });
-          }
-
-          const handle: WorktreeHandle = {
-            worktreePath: params.worktreePath,
-            branchName: params.branchName,
-            repoRoot: params.repoRoot,
-            baseBranch: params.baseBranch,
-            close: (plan) =>
-              executeTeardown(handle, plan).pipe(
-                Effect.provide(makeTeardownOpsLayer(proc)),
-              ),
-          };
-
-          return handle;
-        }),
+        createWorktree(params).pipe(
+          Effect.provide(makeCreateWorktreeOpsLayer(proc, fs)),
+        ),
 
       isWorktreeDirty: (worktreePath) => checkDirty(proc, worktreePath),
 

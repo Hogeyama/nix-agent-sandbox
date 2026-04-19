@@ -18,9 +18,11 @@ import {
   applyTrackedDiff,
   CherryPickOps,
   CherryPickToBaseOps,
+  CreateWorktreeOps,
   cherryPickInTmpWorktree,
   cherryPickInWorktree,
   cherryPickToBase,
+  createWorktree,
   executeTeardown,
   GitWorktreeService,
   GitWorktreeServiceLive,
@@ -906,5 +908,143 @@ describe("cherryPickToBase", () => {
       "findWorktreeForBranch(/repo,develop)",
       "cherryPickInDetachedWorktree([aaa],develop,/repo)",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createWorktree — branch coverage via fake CreateWorktreeOps
+// ---------------------------------------------------------------------------
+
+interface FakeCreateWorktreeOpsConfig {
+  readonly resolvedBranch?: string;
+  readonly closeSentinel?: string[];
+}
+
+function makeFakeCreateWorktreeOps(config: FakeCreateWorktreeOpsConfig): {
+  layer: Layer.Layer<CreateWorktreeOps>;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const layer = Layer.succeed(CreateWorktreeOps, {
+    ensureNasGitignore: (repoRoot) =>
+      Effect.sync(() => {
+        calls.push(`ensureNasGitignore(${repoRoot})`);
+      }),
+    addWorktree: (repoRoot, branchName, worktreePath, baseBranch) =>
+      Effect.sync(() => {
+        calls.push(
+          `addWorktree(${repoRoot},${branchName},${worktreePath},${baseBranch})`,
+        );
+      }),
+    recordNasBase: (repoRoot, branchName, baseBranch) =>
+      Effect.sync(() => {
+        calls.push(`recordNasBase(${repoRoot},${branchName},${baseBranch})`);
+      }),
+    resolveLocalBranch: (repoRoot, ref) =>
+      Effect.sync(() => {
+        calls.push(`resolveLocalBranch(${repoRoot},${ref})`);
+        return config.resolvedBranch ?? ref;
+      }),
+    inheritDirtyBaseWorktree: (repoRoot, localBaseBranch, targetWorktreePath) =>
+      Effect.sync(() => {
+        calls.push(
+          `inheritDirtyBaseWorktree(${repoRoot},${localBaseBranch},${targetWorktreePath})`,
+        );
+      }),
+    runOnCreateHook: (cwd, script) =>
+      Effect.sync(() => {
+        calls.push(`runOnCreateHook(${cwd},${script})`);
+      }),
+    makeCloseCallback: (handle) => (plan) =>
+      Effect.sync(() => {
+        calls.push(`close(${handle.branchName},action=${plan.action})`);
+        config.closeSentinel?.push(`${handle.branchName}:${plan.action}`);
+      }),
+  });
+  return { layer, calls };
+}
+
+describe("createWorktree", () => {
+  test("happy path without onCreate hook: ops sequenced, no hook call", async () => {
+    const { layer, calls } = makeFakeCreateWorktreeOps({});
+    const handle = await Effect.runPromise(
+      createWorktree({
+        repoRoot: "/repo",
+        worktreePath: "/repo/.nas/worktrees/wt",
+        branchName: "wt/foo",
+        baseBranch: "main",
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(handle.worktreePath).toEqual("/repo/.nas/worktrees/wt");
+    expect(handle.branchName).toEqual("wt/foo");
+    expect(handle.repoRoot).toEqual("/repo");
+    expect(handle.baseBranch).toEqual("main");
+    expect(calls).toEqual([
+      "ensureNasGitignore(/repo)",
+      "addWorktree(/repo,wt/foo,/repo/.nas/worktrees/wt,main)",
+      "recordNasBase(/repo,wt/foo,main)",
+      "resolveLocalBranch(/repo,main)",
+      "inheritDirtyBaseWorktree(/repo,main,/repo/.nas/worktrees/wt)",
+    ]);
+  });
+
+  test("with onCreate hook: runOnCreateHook called after inherit", async () => {
+    const { layer, calls } = makeFakeCreateWorktreeOps({});
+    await Effect.runPromise(
+      createWorktree({
+        repoRoot: "/repo",
+        worktreePath: "/wt",
+        branchName: "wt/foo",
+        baseBranch: "main",
+        onCreate: "echo hi",
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(calls).toEqual([
+      "ensureNasGitignore(/repo)",
+      "addWorktree(/repo,wt/foo,/wt,main)",
+      "recordNasBase(/repo,wt/foo,main)",
+      "resolveLocalBranch(/repo,main)",
+      "inheritDirtyBaseWorktree(/repo,main,/wt)",
+      "runOnCreateHook(/wt,echo hi)",
+    ]);
+  });
+
+  test("remote-style baseBranch: resolveLocalBranch rewrite threads through inheritDirtyBaseWorktree", async () => {
+    const { layer, calls } = makeFakeCreateWorktreeOps({
+      resolvedBranch: "main",
+    });
+    await Effect.runPromise(
+      createWorktree({
+        repoRoot: "/repo",
+        worktreePath: "/wt",
+        branchName: "wt/foo",
+        baseBranch: "origin/main",
+      }).pipe(Effect.provide(layer)),
+    );
+    // Note: the resolved "main" (not "origin/main") is passed to
+    // inheritDirtyBaseWorktree, but the original "origin/main" is retained
+    // for addWorktree / recordNasBase since that's what git worktree add needs.
+    expect(calls).toEqual([
+      "ensureNasGitignore(/repo)",
+      "addWorktree(/repo,wt/foo,/wt,origin/main)",
+      "recordNasBase(/repo,wt/foo,origin/main)",
+      "resolveLocalBranch(/repo,origin/main)",
+      "inheritDirtyBaseWorktree(/repo,main,/wt)",
+    ]);
+  });
+
+  test("returned handle.close delegates to makeCloseCallback with the handle", async () => {
+    const sentinel: string[] = [];
+    const { layer } = makeFakeCreateWorktreeOps({ closeSentinel: sentinel });
+    const handle = await Effect.runPromise(
+      createWorktree({
+        repoRoot: "/repo",
+        worktreePath: "/wt",
+        branchName: "wt/foo",
+        baseBranch: "main",
+      }).pipe(Effect.provide(layer)),
+    );
+    await Effect.runPromise(handle.close({ action: "delete" }));
+    expect(sentinel).toEqual(["wt/foo:delete"]);
   });
 });
