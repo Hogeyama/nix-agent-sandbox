@@ -30,10 +30,10 @@ import {
 } from "node:fs/promises";
 import * as path from "node:path";
 import { Effect, Layer } from "effect";
-import { DockerServiceLive } from "../services/docker.ts";
-import { FsServiceLive } from "../services/fs.ts";
-import { DockerBuildServiceLive } from "../stages/docker_build.ts";
-import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
+import { DockerServiceLive } from "../../services/docker.ts";
+import { FsServiceLive } from "../../services/fs.ts";
+import { DockerBuildServiceLive } from "../../stages/docker_build.ts";
+import { createDockerBuildStage, resolveBuildProbes } from "../docker_build.ts";
 
 const IMAGE_NAME = "nas-sandbox";
 

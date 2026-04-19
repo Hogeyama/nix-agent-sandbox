@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -17,13 +17,13 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import { emptyContainerPlan } from "../pipeline/container_plan.ts";
-import { buildHostEnv, resolveProbes } from "../pipeline/host_env.ts";
-import type { PipelineState } from "../pipeline/state.ts";
-import type { StageInput } from "../pipeline/types.ts";
-import type { MountProbes } from "./mount.ts";
-import { planMount, resolveMountProbes } from "./mount.ts";
+} from "../../config/types.ts";
+import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import { buildHostEnv, resolveProbes } from "../../pipeline/host_env.ts";
+import type { PipelineState } from "../../pipeline/state.ts";
+import type { StageInput } from "../../pipeline/types.ts";
+import type { MountProbes } from "../mount.ts";
+import { planMount, resolveMountProbes } from "../mount.ts";
 
 const baseProfile: Profile = {
   agent: "claude",

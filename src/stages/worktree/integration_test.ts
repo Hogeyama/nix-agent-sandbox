@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import { Effect, Exit, Layer, Scope } from "effect";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -20,19 +20,19 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import type { WorkspaceState } from "../pipeline/state.ts";
-import type { StageInput } from "../pipeline/types.ts";
-import { DockerServiceLive } from "../services/docker.ts";
-import { FsServiceLive } from "../services/fs.ts";
-import { ProcessServiceLive } from "../services/process.ts";
-import { DindServiceLive } from "../stages/dind.ts";
-import { HostExecBrokerServiceLive } from "../stages/hostexec.ts";
+} from "../../config/types.ts";
+import type { WorkspaceState } from "../../pipeline/state.ts";
+import type { StageInput } from "../../pipeline/types.ts";
+import { DockerServiceLive } from "../../services/docker.ts";
+import { FsServiceLive } from "../../services/fs.ts";
+import { ProcessServiceLive } from "../../services/process.ts";
+import { DindServiceLive } from "../../stages/dind.ts";
+import { HostExecBrokerServiceLive } from "../../stages/hostexec.ts";
 import {
   AuthRouterServiceLive,
   SessionBrokerServiceLive,
-} from "../stages/proxy.ts";
-import { SessionStoreServiceLive } from "./session_store.ts";
+} from "../../stages/proxy.ts";
+import { SessionStoreServiceLive } from "../session_store.ts";
 import {
   cleanNasWorktrees,
   createWorktreeStage,
@@ -41,7 +41,7 @@ import {
   listOrphanNasBranches,
   PromptServiceLive,
   resolveBase,
-} from "./worktree.ts";
+} from "../worktree.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers

@@ -13,22 +13,22 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
-} from "../config/types.ts";
+} from "../../config/types.ts";
 import type {
   HostEnv,
   ProbeResults,
   StageInput,
   StageResult,
-} from "../pipeline/types.ts";
-import { FsServiceLive } from "../services/fs.ts";
-import { ProcessServiceLive } from "../services/process.ts";
+} from "../../pipeline/types.ts";
+import { FsServiceLive } from "../../services/fs.ts";
+import { ProcessServiceLive } from "../../services/process.ts";
 import {
   buildProxyArgs,
   createDbusProxyStage,
   isValidUnixPathAddress,
   resolveRuntimeDir,
   resolveSourceAddress,
-} from "./dbus_proxy.ts";
+} from "../dbus_proxy.ts";
 
 function makeProfile(): Profile {
   return {
@@ -98,7 +98,7 @@ function makeInput(
 import {
   DbusProxyServiceLive,
   makeDbusProxyServiceFake,
-} from "../stages/dbus_proxy.ts";
+} from "../dbus_proxy.ts";
 
 const dummyLayer = makeDbusProxyServiceFake();
 
@@ -116,11 +116,7 @@ function runStage(input: StageInput): Promise<StageResult> {
 
 async function runStageScoped(
   input: StageInput,
-  layer: Layer.Layer<
-    import("../stages/dbus_proxy.ts").DbusProxyService,
-    never,
-    never
-  >,
+  layer: Layer.Layer<import("../dbus_proxy.ts").DbusProxyService, never, never>,
   fn: (result: StageResult) => Promise<void>,
 ): Promise<void> {
   const stage = createDbusProxyStage(input);

@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
  */
 
 import { Effect, Exit, Scope } from "effect";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -16,19 +16,23 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
+} from "../../config/types.ts";
 import {
   dockerIsRunning,
   dockerNetworkRemove,
   dockerRm,
   dockerStop,
   dockerVolumeRemove,
-} from "../docker/client.ts";
-import { emptyContainerPlan } from "../pipeline/container_plan.ts";
-import type { PipelineState } from "../pipeline/state.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
-import { DindServiceLive } from "../stages/dind.ts";
-import { createDindStageWithOptions, planDind } from "./dind.ts";
+} from "../../docker/client.ts";
+import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import type { PipelineState } from "../../pipeline/state.ts";
+import type {
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../../pipeline/types.ts";
+import { DindServiceLive } from "../../stages/dind.ts";
+import { createDindStageWithOptions, planDind } from "../dind.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;
