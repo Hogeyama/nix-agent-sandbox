@@ -31,7 +31,7 @@ import {
   TmpCherryPickOps,
   type WorktreeHandle,
   type WorktreeTeardownPlan,
-} from "./git_worktree.ts";
+} from "./git_worktree_service.ts";
 
 // ---------------------------------------------------------------------------
 // isSafeRelativePath — path validation for copyUntrackedFiles

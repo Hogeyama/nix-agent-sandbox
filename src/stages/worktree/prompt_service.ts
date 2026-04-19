@@ -10,7 +10,7 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { WorktreeEntry } from "./git_worktree.ts";
+import type { WorktreeEntry } from "./git_worktree_service.ts";
 import {
   type BranchAction,
   type DirtyWorktreeAction,

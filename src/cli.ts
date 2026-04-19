@@ -79,8 +79,8 @@ import {
   createSessionStoreStage,
   SessionStoreServiceLive,
 } from "./stages/session_store.ts";
-import { GitWorktreeServiceLive } from "./stages/worktree/git_worktree.ts";
-import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
+import { GitWorktreeServiceLive } from "./stages/worktree.ts";
+import { PromptServiceLive } from "./stages/worktree.ts";
 import { createWorktreeStage } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 

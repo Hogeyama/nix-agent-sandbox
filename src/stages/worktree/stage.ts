@@ -17,7 +17,7 @@ import {
   GitWorktreeService,
   type WorktreeHandle,
   type WorktreeTeardownPlan,
-} from "./git_worktree.ts";
+} from "./git_worktree_service.ts";
 import { PromptService } from "./prompt_service.ts";
 
 // ---------------------------------------------------------------------------

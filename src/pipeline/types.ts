@@ -19,8 +19,8 @@ import type { SessionBrokerService } from "../stages/proxy.ts";
 import type { ContainerLaunchService } from "../stages/launch.ts";
 import type { MountSetupService } from "../stages/mount.ts";
 import type { SessionStoreService } from "../stages/session_store.ts";
-import type { GitWorktreeService } from "../stages/worktree/git_worktree.ts";
-import type { PromptService } from "../stages/worktree/prompt_service.ts";
+import type { GitWorktreeService } from "../stages/worktree.ts";
+import type { PromptService } from "../stages/worktree.ts";
 import type { PipelineState } from "./state.ts";
 
 // ---------------------------------------------------------------------------

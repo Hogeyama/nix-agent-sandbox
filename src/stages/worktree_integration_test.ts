@@ -31,8 +31,8 @@ import { HostExecBrokerServiceLive } from "../stages/hostexec.ts";
 import { ProcessServiceLive } from "../services/process.ts";
 import { SessionBrokerServiceLive } from "../stages/proxy.ts";
 import { SessionStoreServiceLive } from "./session_store.ts";
-import { GitWorktreeServiceLive } from "./worktree/git_worktree.ts";
-import { PromptServiceLive } from "./worktree/prompt_service.ts";
+import { GitWorktreeServiceLive } from "./worktree.ts";
+import { PromptServiceLive } from "./worktree.ts";
 import {
   cleanNasWorktrees,
   createWorktreeStage,
