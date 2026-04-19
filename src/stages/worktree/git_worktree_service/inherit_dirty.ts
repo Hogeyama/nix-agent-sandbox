@@ -6,7 +6,7 @@
 
 import * as path from "node:path";
 import { Context, Effect, Layer } from "effect";
-import { logInfo } from "../../../log.ts";
+import { logError, logInfo } from "../../../log.ts";
 import {
   applyPatch,
   checkDirty,
@@ -147,7 +147,7 @@ function copyUntrackedFiles(
       // The source worktree may be attacker-controlled (untrusted clone).
       // Reject any path that could escape the target directory.
       if (!isSafeRelativePath(relativePath, targetWorktreePath)) {
-        console.error(`[nas] Skipping unsafe untracked path: ${relativePath}`);
+        logError(`[nas] Skipping unsafe untracked path: ${relativePath}`);
         continue;
       }
       const sourcePath = path.join(sourceWorktreePath, relativePath);

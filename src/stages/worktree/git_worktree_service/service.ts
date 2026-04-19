@@ -146,7 +146,7 @@ export const GitWorktreeServiceLive: Layer.Layer<
               );
             }
             resolved = branch.trim();
-            console.log(`[nas] Resolved HEAD to current branch: ${resolved}`);
+            logInfo(`[nas] Resolved HEAD to current branch: ${resolved}`);
           }
 
           // Validate the base ref exists

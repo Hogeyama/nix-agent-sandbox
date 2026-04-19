@@ -8,6 +8,7 @@
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Effect, Exit } from "effect";
+import { logInfo } from "../../../log.ts";
 import type { FsService } from "../../../services/fs.ts";
 import { FsService as FsServiceTag } from "../../../services/fs.ts";
 import type { ProcessService } from "../../../services/process.ts";
@@ -150,7 +151,7 @@ export function applyPatch(
       const patchFile = path.join(tmpDir, "patch.patch");
       const normalizedPatch = patch.endsWith("\n") ? patch : `${patch}\n`;
       yield* fs.writeFile(patchFile, normalizedPatch);
-      console.log(
+      logInfo(
         `$ git -C ${targetWorktreePath} apply --binary --allow-empty ${extraArgs.join(" ")} ${patchFile}`,
       );
       yield* proc.exec([
@@ -205,7 +206,7 @@ export function resolveEmptyCherryPicks(
         "CHERRY_PICK_HEAD",
       ]);
       if (cpHead === null) {
-        console.log("[nas] Cherry-pick completed (empty commits skipped).");
+        logInfo("[nas] Cherry-pick completed (empty commits skipped).");
         return true;
       }
 
@@ -217,7 +218,7 @@ export function resolveEmptyCherryPicks(
         "--porcelain",
       ])).trim();
       if (status === "") {
-        console.log("[nas] Skipping empty cherry-pick (already applied).");
+        logInfo("[nas] Skipping empty cherry-pick (already applied).");
         yield* gitExec(proc, ["git", "-C", worktree, "cherry-pick", "--skip"]);
       } else {
         return false;
@@ -232,7 +233,7 @@ export function resolveEmptyCherryPicks(
       "CHERRY_PICK_HEAD",
     ]);
     if (finalCheck === null) {
-      console.log("[nas] Cherry-pick completed (empty commits skipped).");
+      logInfo("[nas] Cherry-pick completed (empty commits skipped).");
       return true;
     }
     return false;

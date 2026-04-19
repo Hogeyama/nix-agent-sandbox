@@ -28,6 +28,12 @@ export function logWarn(message: string): void {
   }
 }
 
+export function logError(message: string): void {
+  if (shouldLog("error")) {
+    console.error(message);
+  }
+}
+
 function shouldLog(level: LogLevel): boolean {
   return LOG_PRIORITY[level] >= LOG_PRIORITY[currentLogLevel];
 }

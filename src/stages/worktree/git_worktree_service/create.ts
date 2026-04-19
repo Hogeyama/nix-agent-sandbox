@@ -162,7 +162,7 @@ export function createWorktree(
     logInfo(
       `[nas] Creating worktree: ${params.worktreePath} (branch: ${params.branchName}) from ${params.baseBranch}`,
     );
-    console.log(
+    logInfo(
       `$ git -C ${params.repoRoot} worktree add -b ${params.branchName} ${params.worktreePath} ${params.baseBranch}`,
     );
     yield* ops.addWorktree(
@@ -191,7 +191,7 @@ export function createWorktree(
 
     if (params.onCreate) {
       logInfo(`[nas] Running on-create hook: ${params.onCreate}`);
-      console.log(`$ bash -c ${params.onCreate} (cwd: ${params.worktreePath})`);
+      logInfo(`$ bash -c ${params.onCreate} (cwd: ${params.worktreePath})`);
       yield* ops.runOnCreateHook(params.worktreePath, params.onCreate);
     }
 

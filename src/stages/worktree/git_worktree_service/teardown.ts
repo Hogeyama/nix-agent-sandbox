@@ -7,6 +7,7 @@
 
 import * as path from "node:path";
 import { Context, Effect, Layer } from "effect";
+import { logError, logInfo } from "../../../log.ts";
 import {
   type CherryPickOps,
   type CherryPickToBaseOps,
@@ -94,7 +95,7 @@ export function executeTeardown(
   return Effect.gen(function* () {
     const ops = yield* TeardownOps;
     if (plan.action === "keep") {
-      console.log(`[nas] Worktree kept: ${handle.worktreePath}`);
+      logInfo(`[nas] Worktree kept: ${handle.worktreePath}`);
       return;
     }
 
@@ -104,13 +105,13 @@ export function executeTeardown(
         .stashWorktreeChanges(handle.worktreePath)
         .pipe(Effect.either);
       if (stashResult._tag === "Left") {
-        console.error(`[nas] ${stashResult.left}`);
-        console.log(`[nas] Worktree kept: ${handle.worktreePath}`);
+        logError(`[nas] ${stashResult.left}`);
+        logInfo(`[nas] Worktree kept: ${handle.worktreePath}`);
         return;
       }
     }
     if (plan.dirtyAction === "keep") {
-      console.log(`[nas] Worktree kept: ${handle.worktreePath}`);
+      logInfo(`[nas] Worktree kept: ${handle.worktreePath}`);
       return;
     }
 
@@ -131,29 +132,29 @@ export function executeTeardown(
       );
       if (!success) {
         shouldDeleteBranch = false;
-        console.log(
+        logInfo(
           `[nas] Branch "${handle.branchName}" is preserved for manual resolution.`,
         );
       }
     }
 
     // Remove worktree
-    console.log(`[nas] Removing worktree: ${handle.worktreePath}`);
+    logInfo(`[nas] Removing worktree: ${handle.worktreePath}`);
     const removeOk = yield* ops.removeWorktree(
       handle.repoRoot,
       handle.worktreePath,
     );
     if (!removeOk) {
-      console.error("[nas] Failed to remove worktree");
+      logError("[nas] Failed to remove worktree");
     }
 
     // Delete branch unless renamed or cherry-pick failed
     if (shouldDeleteBranch && handle.branchName) {
       const delOk = yield* ops.deleteBranch(handle.repoRoot, handle.branchName);
       if (delOk) {
-        console.log(`[nas] Deleted branch: ${handle.branchName}`);
+        logInfo(`[nas] Deleted branch: ${handle.branchName}`);
       } else {
-        console.error(`[nas] Failed to delete branch: ${handle.branchName}`);
+        logError(`[nas] Failed to delete branch: ${handle.branchName}`);
       }
     }
   });
@@ -165,7 +166,7 @@ function stashWorktreeChanges(
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
     const stashMessage = `nas teardown ${path.basename(worktreePath)} ${new Date().toISOString()}`;
-    console.log(
+    logInfo(
       `$ git -C ${worktreePath} stash push --include-untracked -m ${stashMessage}`,
     );
     yield* proc.exec([
@@ -178,7 +179,7 @@ function stashWorktreeChanges(
       "-m",
       stashMessage,
     ]);
-    console.log(`[nas] Stashed worktree changes: ${stashMessage}`);
+    logInfo(`[nas] Stashed worktree changes: ${stashMessage}`);
   });
 }
 
@@ -190,7 +191,7 @@ function renameBranch(
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
     if (!newName) {
-      console.log("[nas] No name entered, keeping original branch name.");
+      logInfo("[nas] No name entered, keeping original branch name.");
       return;
     }
     const result = yield* gitExec(proc, [
@@ -204,9 +205,9 @@ function renameBranch(
       newName,
     ]);
     if (result !== null) {
-      console.log(`[nas] Renamed branch: ${branchName} → ${newName}`);
+      logInfo(`[nas] Renamed branch: ${branchName} → ${newName}`);
     } else {
-      console.error(`[nas] Failed to rename branch: ${branchName}`);
+      logError(`[nas] Failed to rename branch: ${branchName}`);
     }
   });
 }

@@ -16,6 +16,7 @@
 
 import * as path from "node:path";
 import { Context, Effect, Exit, Layer } from "effect";
+import { logError, logInfo } from "../../../log.ts";
 import {
   checkDirty,
   exitMessage,
@@ -135,12 +136,12 @@ export function cherryPickToBase(
     )).trim();
 
     if (!commitsRaw) {
-      console.log("[nas] No commits to cherry-pick.");
+      logInfo("[nas] No commits to cherry-pick.");
       return true;
     }
 
     const commitList = commitsRaw.split("\n");
-    console.log(
+    logInfo(
       `[nas] Cherry-picking ${commitList.length} commit(s) onto ${baseBranch}...`,
     );
 
@@ -152,12 +153,10 @@ export function cherryPickToBase(
         `refs/heads/${targetBranch}`,
       );
       if (!refExists) {
-        console.log(
+        logInfo(
           `[nas] Creating local branch "${targetBranch}" from ${baseBranch}`,
         );
-        console.log(
-          `$ git -C ${repoRoot} branch ${targetBranch} ${baseBranch}`,
-        );
+        logInfo(`$ git -C ${repoRoot} branch ${targetBranch} ${baseBranch}`);
         yield* ops.createBranch(repoRoot, targetBranch, baseBranch);
       }
 
@@ -182,9 +181,7 @@ export function cherryPickToBase(
     }).pipe(Effect.exit);
 
     if (Exit.isFailure(setupExit)) {
-      console.error(
-        `[nas] Cherry-pick setup failed: ${exitMessage(setupExit)}`,
-      );
+      logError(`[nas] Cherry-pick setup failed: ${exitMessage(setupExit)}`);
       return false;
     }
     return setupExit.value;
@@ -275,25 +272,23 @@ export function cherryPickInWorktree(
     const stashMessage = `nas cherry-pick ${targetBranch} ${new Date().toISOString()}`;
 
     if (dirty) {
-      console.log(
+      logInfo(
         `[nas] Worktree for "${targetBranch}" has uncommitted changes; stashing temporarily before cherry-pick.`,
       );
       const stashOk = yield* ops.stashPush(worktreePath, stashMessage);
       if (!stashOk) {
-        console.error(
-          `[nas] Failed to stash changes in "${targetBranch}" worktree`,
-        );
-        console.error(`[nas]   ${worktreePath}`);
+        logError(`[nas] Failed to stash changes in "${targetBranch}" worktree`);
+        logError(`[nas]   ${worktreePath}`);
         return false;
       }
       stashed = true;
     }
 
-    console.log(`[nas] Cherry-picking in worktree: ${worktreePath}`);
+    logInfo(`[nas] Cherry-picking in worktree: ${worktreePath}`);
     let success = yield* ops.applyCherryPick(worktreePath, commitList);
 
     if (!success) {
-      console.error("[nas] cherry-pick exited with error");
+      logError("[nas] cherry-pick exited with error");
       const resolved = yield* ops.resolveEmpties(
         worktreePath,
         commitList.length,
@@ -301,7 +296,7 @@ export function cherryPickInWorktree(
       if (resolved) {
         success = true;
       } else {
-        console.error("[nas] Cherry-pick failed with conflicts.");
+        logError("[nas] Cherry-pick failed with conflicts.");
         yield* ops.cherryPickAbort(worktreePath);
       }
     }
@@ -309,7 +304,7 @@ export function cherryPickInWorktree(
     if (!success && stashed) {
       const popOk = yield* ops.stashPop(worktreePath);
       if (!popOk) {
-        console.error(
+        logError(
           `[nas] Failed to restore stashed changes in "${targetBranch}" worktree`,
         );
       }
@@ -320,14 +315,14 @@ export function cherryPickInWorktree(
     if (stashed) {
       const popOk = yield* ops.stashPop(worktreePath);
       if (!popOk) {
-        console.error(
+        logError(
           `[nas] Cherry-pick succeeded, but restoring stashed changes failed`,
         );
         return false;
       }
     }
 
-    console.log("[nas] Cherry-pick completed successfully.");
+    logInfo("[nas] Cherry-pick completed successfully.");
     return true;
   });
 }
@@ -353,7 +348,7 @@ function cherryPickDetached(
       "worktrees",
       `nas-cherry-pick-tmp-${Date.now()}`,
     );
-    console.log(
+    logInfo(
       `$ git -C ${repoRoot} worktree add --detach ${tmpWorktree} ${targetRef}`,
     );
     yield* proc.exec([
@@ -446,9 +441,7 @@ function makeTmpCherryPickOpsLayer(proc: Proc): Layer.Layer<TmpCherryPickOps> {
           "rev-parse",
           "HEAD",
         ])).trim();
-        console.log(
-          `$ git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`,
-        );
+        logInfo(`$ git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`);
         yield* proc.exec([
           "git",
           "-C",
@@ -474,7 +467,7 @@ export function cherryPickInTmpWorktree(
 ): Effect.Effect<boolean, never, TmpCherryPickOps> {
   return Effect.gen(function* () {
     const ops = yield* TmpCherryPickOps;
-    console.log(`$ git -C ${tmpWorktree} cherry-pick ${commitList.join(" ")}`);
+    logInfo(`$ git -C ${tmpWorktree} cherry-pick ${commitList.join(" ")}`);
     const cpOk = yield* ops.applyCherryPick(tmpWorktree, commitList);
 
     if (cpOk) {
@@ -483,11 +476,11 @@ export function cherryPickInTmpWorktree(
         repoRoot,
         targetBranch,
       );
-      console.log("[nas] Cherry-pick completed successfully.");
+      logInfo("[nas] Cherry-pick completed successfully.");
       return true;
     }
 
-    console.error("[nas] cherry-pick exited with error");
+    logError("[nas] cherry-pick exited with error");
     const resolved = yield* ops.resolveEmpties(tmpWorktree, commitList.length);
     if (resolved) {
       yield* ops.updateBranchToWorktreeHead(
@@ -498,7 +491,7 @@ export function cherryPickInTmpWorktree(
       return true;
     }
 
-    console.error("[nas] Cherry-pick failed with conflicts.");
+    logError("[nas] Cherry-pick failed with conflicts.");
     yield* ops.cherryPickAbort(tmpWorktree);
     return false;
   });
