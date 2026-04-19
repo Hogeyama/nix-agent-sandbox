@@ -9,15 +9,15 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
-} from "../config/types.ts";
-import { emptyContainerPlan } from "../pipeline/container_plan.ts";
-import type { ContainerPlan } from "../pipeline/state.ts";
-import type { HostEnv, StageInput } from "../pipeline/types.ts";
+} from "../../config/types.ts";
+import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import type { ContainerPlan } from "../../pipeline/state.ts";
+import type { HostEnv, StageInput } from "../../pipeline/types.ts";
 import {
   type LaunchOpts,
   makeContainerLaunchServiceFake,
-} from "../services/container_launch.ts";
-import { compileLaunchOpts, createLaunchStage, planLaunch } from "./launch.ts";
+} from "./container_launch_service.ts";
+import { compileLaunchOpts, createLaunchStage, planLaunch } from "./stage.ts";
 
 test("planLaunch: produces correct plan with composed command", () => {
   const { input, container } = createTestInput({

@@ -4,7 +4,6 @@
 
 import type { Config, Profile } from "../config/types.ts";
 import type { AuthRouterService } from "../services/auth_router.ts";
-import type { ContainerLaunchService } from "../services/container_launch.ts";
 import type { DbusProxyService } from "../services/dbus_proxy.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DisplayService } from "../services/display.ts";
@@ -18,6 +17,7 @@ import type { MountSetupService } from "../services/mount_setup.ts";
 import type { NetworkRuntimeService } from "../services/network_runtime.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
+import type { ContainerLaunchService } from "../stages/launch.ts";
 import type { SessionStoreService } from "../stages/session_store.ts";
 import type { GitWorktreeService } from "../stages/worktree/git_worktree.ts";
 import type { PromptService } from "../stages/worktree/prompt_service.ts";

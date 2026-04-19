@@ -9,7 +9,7 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import { type DockerRunOpts, DockerService } from "./docker.ts";
+import { type DockerRunOpts, DockerService } from "../../services/docker.ts";
 
 // ---------------------------------------------------------------------------
 // Service-local option type (re-exports DockerRunOpts since it is a
