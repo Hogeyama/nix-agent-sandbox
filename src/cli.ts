@@ -42,7 +42,7 @@ import type { PipelineState } from "./pipeline/state.ts";
 import type { StageInput } from "./pipeline/types.ts";
 import { AuthRouterServiceLive } from "./services/auth_router.ts";
 import { DbusProxyServiceLive } from "./stages/dbus_proxy.ts";
-import { DindServiceLive } from "./services/dind.ts";
+import { DindServiceLive } from "./stages/dind.ts";
 import { DisplayServiceLive } from "./services/display.ts";
 import { DockerServiceLive } from "./services/docker.ts";
 import { DockerBuildServiceLive } from "./services/docker_build.ts";

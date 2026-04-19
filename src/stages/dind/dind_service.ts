@@ -7,7 +7,7 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import { ensureDindSidecar, teardownDindSidecar } from "../docker/dind.ts";
+import { ensureDindSidecar, teardownDindSidecar } from "../../docker/dind.ts";
 
 // ---------------------------------------------------------------------------
 // Option types

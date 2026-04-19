@@ -27,7 +27,7 @@ import {
 import { emptyContainerPlan } from "../pipeline/container_plan.ts";
 import type { PipelineState } from "../pipeline/state.ts";
 import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
-import { DindServiceLive } from "../services/dind.ts";
+import { DindServiceLive } from "../stages/dind.ts";
 import { createDindStageWithOptions, planDind } from "./dind.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {

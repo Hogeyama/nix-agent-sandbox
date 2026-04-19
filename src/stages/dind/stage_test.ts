@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
  */
 
 import { Effect, Exit, Scope } from "effect";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -16,18 +16,18 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import { emptyContainerPlan } from "../pipeline/container_plan.ts";
-import type { PipelineState } from "../pipeline/state.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
-import { type DindSidecarOpts, makeDindServiceFake } from "../services/dind.ts";
+} from "../../config/types.ts";
+import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import type { PipelineState } from "../../pipeline/state.ts";
+import type { HostEnv, ProbeResults, StageInput } from "../../pipeline/types.ts";
+import { type DindSidecarOpts, makeDindServiceFake } from "./dind_service.ts";
 import {
   buildDindSidecarArgs,
   createDindStage,
   createDindStageWithOptions,
   type DindPlan,
   planDind,
-} from "./dind.ts";
+} from "./stage.ts";
 
 type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
   prompt?: Partial<Profile["network"]["prompt"]>;

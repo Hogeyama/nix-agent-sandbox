@@ -24,7 +24,7 @@ import {
 import type { WorkspaceState } from "../pipeline/state.ts";
 import type { StageInput } from "../pipeline/types.ts";
 import { AuthRouterServiceLive } from "../services/auth_router.ts";
-import { DindServiceLive } from "../services/dind.ts";
+import { DindServiceLive } from "../stages/dind.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import { HostExecBrokerServiceLive } from "../stages/hostexec.ts";
