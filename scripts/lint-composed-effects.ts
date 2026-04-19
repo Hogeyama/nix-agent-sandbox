@@ -29,7 +29,7 @@ const PRIMITIVE_MEMBERS: Record<string, "any" | string[]> = {
 
 const PRIMITIVE_IDENTIFIERS = new Set(["gitExec"]);
 
-const DEFAULT_GLOBS = ["src/services/**/*.ts"];
+const DEFAULT_GLOBS = ["src/services/**/*.ts", "src/stages/**/*_service.ts"];
 const EXCLUDE_SUFFIXES = ["_test.ts", ".test.ts"];
 
 // ----- Types ----------------------------------------------------------------
