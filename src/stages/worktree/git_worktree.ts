@@ -464,7 +464,9 @@ function makeTeardownOpsLayer(proc: Proc): Layer.Layer<TeardownOps> {
     renameBranch: (branchName, repoRoot, newName) =>
       renameBranch(proc, branchName, repoRoot, newName),
     cherryPickToBase: (branchName, repoRoot, baseBranch) =>
-      cherryPickToBase(proc, branchName, repoRoot, baseBranch),
+      cherryPickToBase(branchName, repoRoot, baseBranch).pipe(
+        Effect.provide(makeCherryPickToBaseOpsLayer(proc)),
+      ),
     removeWorktree: (repoRoot, worktreePath) =>
       gitExec(proc, [
         "git",
@@ -619,23 +621,123 @@ function renameBranch(
 // Cherry-pick
 // ---------------------------------------------------------------------------
 
-function cherryPickToBase(
+/**
+ * Module-internal service for {@link cherryPickToBase} (including its inner
+ * `setupExit` generator, which shares this Tag because it is a nested
+ * function literal, not an independent helper). Absorbs the log/verify/
+ * branch-create primitives plus the `resolveLocalBranch` /
+ * `findWorktreeForBranch` helpers and delegates the two terminal
+ * cherry-pick variants (in-worktree / detached) so the branching —
+ * "no commits" / "branch exists vs created" / "worktree checked out vs
+ * detached" — is reachable without real git.
+ *
+ * @internal Exported only for the colocated test file.
+ */
+export class CherryPickToBaseOps extends Context.Tag(
+  "nas/git_worktree/CherryPickToBaseOps",
+)<
+  CherryPickToBaseOps,
+  {
+    readonly listCommitsBetween: (
+      repoRoot: string,
+      baseBranch: string,
+      branchName: string,
+    ) => Effect.Effect<string>;
+    readonly resolveLocalBranch: (
+      repoRoot: string,
+      ref: string,
+    ) => Effect.Effect<string>;
+    readonly verifyRefExists: (
+      repoRoot: string,
+      refName: string,
+    ) => Effect.Effect<boolean>;
+    readonly createBranch: (
+      repoRoot: string,
+      branchName: string,
+      fromRef: string,
+    ) => Effect.Effect<void>;
+    readonly findWorktreeForBranch: (
+      repoRoot: string,
+      branchName: string,
+    ) => Effect.Effect<string | null>;
+    readonly cherryPickInCheckedOutWorktree: (
+      worktreePath: string,
+      commitList: string[],
+      targetBranch: string,
+    ) => Effect.Effect<boolean>;
+    readonly cherryPickInDetachedWorktree: (
+      commitList: string[],
+      targetBranch: string,
+      repoRoot: string,
+    ) => Effect.Effect<boolean>;
+  }
+>() {}
+
+function makeCherryPickToBaseOpsLayer(
   proc: Proc,
+): Layer.Layer<CherryPickToBaseOps> {
+  return Layer.succeed(CherryPickToBaseOps, {
+    listCommitsBetween: (repoRoot, baseBranch, branchName) =>
+      proc.exec([
+        "git",
+        "-C",
+        repoRoot,
+        "log",
+        "--format=%H",
+        "--reverse",
+        "--end-of-options",
+        `${baseBranch}..${branchName}`,
+      ]),
+    resolveLocalBranch: (repoRoot, ref) =>
+      resolveLocalBranch(proc, repoRoot, ref),
+    verifyRefExists: (repoRoot, refName) =>
+      gitExec(proc, [
+        "git",
+        "-C",
+        repoRoot,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        refName,
+      ]).pipe(Effect.map((r) => r !== null)),
+    createBranch: (repoRoot, branchName, fromRef) =>
+      proc
+        .exec([
+          "git",
+          "-C",
+          repoRoot,
+          "branch",
+          "--end-of-options",
+          branchName,
+          fromRef,
+        ])
+        .pipe(Effect.asVoid),
+    findWorktreeForBranch: (repoRoot, branchName) =>
+      findWorktreeForBranch(proc, repoRoot, branchName),
+    cherryPickInCheckedOutWorktree: (worktreePath, commitList, targetBranch) =>
+      cherryPickInWorktree(worktreePath, commitList, targetBranch).pipe(
+        Effect.provide(makeCherryPickOpsLayer(proc)),
+      ),
+    cherryPickInDetachedWorktree: (commitList, targetBranch, repoRoot) =>
+      cherryPickDetached(proc, commitList, targetBranch, repoRoot),
+  });
+}
+
+/**
+ * @internal Exported only for the colocated test file.
+ */
+export function cherryPickToBase(
   branchName: string,
   repoRoot: string,
   baseBranch: string,
-): Effect.Effect<boolean> {
+): Effect.Effect<boolean, never, CherryPickToBaseOps> {
   return Effect.gen(function* () {
-    const commitsRaw = (yield* proc.exec([
-      "git",
-      "-C",
+    const ops = yield* CherryPickToBaseOps;
+    const commitsRaw = (yield* ops.listCommitsBetween(
       repoRoot,
-      "log",
-      "--format=%H",
-      "--reverse",
-      "--end-of-options",
-      `${baseBranch}..${branchName}`,
-    ])).trim();
+      baseBranch,
+      branchName,
+    )).trim();
 
     if (!commitsRaw) {
       console.log("[nas] No commits to cherry-pick.");
@@ -647,52 +749,37 @@ function cherryPickToBase(
       `[nas] Cherry-picking ${commitList.length} commit(s) onto ${baseBranch}...`,
     );
 
-    const targetBranch = yield* resolveLocalBranch(proc, repoRoot, baseBranch);
+    const targetBranch = yield* ops.resolveLocalBranch(repoRoot, baseBranch);
 
     const setupExit = yield* Effect.gen(function* () {
-      const verifyResult = yield* gitExec(proc, [
-        "git",
-        "-C",
+      const refExists = yield* ops.verifyRefExists(
         repoRoot,
-        "rev-parse",
-        "--verify",
-        "--end-of-options",
         `refs/heads/${targetBranch}`,
-      ]);
-      if (verifyResult === null) {
+      );
+      if (!refExists) {
         console.log(
           `[nas] Creating local branch "${targetBranch}" from ${baseBranch}`,
         );
         console.log(
           `$ git -C ${repoRoot} branch ${targetBranch} ${baseBranch}`,
         );
-        yield* proc.exec([
-          "git",
-          "-C",
-          repoRoot,
-          "branch",
-          "--end-of-options",
-          targetBranch,
-          baseBranch,
-        ]);
+        yield* ops.createBranch(repoRoot, targetBranch, baseBranch);
       }
 
-      const checkedOutIn = yield* findWorktreeForBranch(
-        proc,
+      const checkedOutIn = yield* ops.findWorktreeForBranch(
         repoRoot,
         targetBranch,
       );
 
       if (checkedOutIn) {
-        return yield* cherryPickInWorktree(
+        return yield* ops.cherryPickInCheckedOutWorktree(
           checkedOutIn,
           commitList,
           targetBranch,
-        ).pipe(Effect.provide(makeCherryPickOpsLayer(proc)));
+        );
       }
 
-      return yield* cherryPickDetached(
-        proc,
+      return yield* ops.cherryPickInDetachedWorktree(
         commitList,
         targetBranch,
         repoRoot,

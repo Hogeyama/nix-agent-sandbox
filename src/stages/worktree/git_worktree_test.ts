@@ -17,8 +17,10 @@ import {
   ApplyTrackedDiffOps,
   applyTrackedDiff,
   CherryPickOps,
+  CherryPickToBaseOps,
   cherryPickInTmpWorktree,
   cherryPickInWorktree,
+  cherryPickToBase,
   executeTeardown,
   GitWorktreeService,
   GitWorktreeServiceLive,
@@ -710,6 +712,199 @@ describe("executeTeardown", () => {
     expect(calls).toEqual([
       "removeWorktree(/repo,/wt)",
       "deleteBranch(/repo,wt/foo)",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cherryPickToBase — branch coverage via fake CherryPickToBaseOps
+// ---------------------------------------------------------------------------
+
+interface FakeCherryPickToBaseOpsConfig {
+  readonly commitsRaw?: string;
+  readonly resolvedBranch?: string;
+  readonly refExists?: boolean;
+  readonly checkedOutIn?: string | null;
+  readonly checkedOutResult?: boolean;
+  readonly detachedResult?: boolean;
+  readonly failOn?:
+    | "verifyRefExists"
+    | "createBranch"
+    | "findWorktreeForBranch";
+}
+
+function makeFakeCherryPickToBaseOps(config: FakeCherryPickToBaseOpsConfig): {
+  layer: Layer.Layer<CherryPickToBaseOps>;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const layer = Layer.succeed(CherryPickToBaseOps, {
+    listCommitsBetween: (repoRoot, baseBranch, branchName) =>
+      Effect.sync(() => {
+        calls.push(
+          `listCommitsBetween(${repoRoot},${baseBranch},${branchName})`,
+        );
+        return config.commitsRaw ?? "";
+      }),
+    resolveLocalBranch: (repoRoot, ref) =>
+      Effect.sync(() => {
+        calls.push(`resolveLocalBranch(${repoRoot},${ref})`);
+        return config.resolvedBranch ?? ref;
+      }),
+    verifyRefExists: (repoRoot, refName) =>
+      Effect.gen(function* () {
+        calls.push(`verifyRefExists(${repoRoot},${refName})`);
+        if (config.failOn === "verifyRefExists") {
+          return yield* Effect.die(new Error("verify boom"));
+        }
+        return config.refExists ?? true;
+      }),
+    createBranch: (repoRoot, branchName, fromRef) =>
+      Effect.gen(function* () {
+        calls.push(`createBranch(${repoRoot},${branchName},${fromRef})`);
+        if (config.failOn === "createBranch") {
+          return yield* Effect.die(new Error("create boom"));
+        }
+      }),
+    findWorktreeForBranch: (repoRoot, branchName) =>
+      Effect.gen(function* () {
+        calls.push(`findWorktreeForBranch(${repoRoot},${branchName})`);
+        if (config.failOn === "findWorktreeForBranch") {
+          return yield* Effect.die(new Error("find boom"));
+        }
+        return config.checkedOutIn ?? null;
+      }),
+    cherryPickInCheckedOutWorktree: (worktreePath, commitList, targetBranch) =>
+      Effect.sync(() => {
+        calls.push(
+          `cherryPickInCheckedOutWorktree(${worktreePath},[${commitList.join(",")}],${targetBranch})`,
+        );
+        return config.checkedOutResult ?? true;
+      }),
+    cherryPickInDetachedWorktree: (commitList, targetBranch, repoRoot) =>
+      Effect.sync(() => {
+        calls.push(
+          `cherryPickInDetachedWorktree([${commitList.join(",")}],${targetBranch},${repoRoot})`,
+        );
+        return config.detachedResult ?? true;
+      }),
+  });
+  return { layer, calls };
+}
+
+async function runCherryPickToBase(
+  config: FakeCherryPickToBaseOpsConfig,
+): Promise<{ result: boolean; calls: string[] }> {
+  const { layer, calls } = makeFakeCherryPickToBaseOps(config);
+  const result = await Effect.runPromise(
+    cherryPickToBase("wt/foo", "/repo", "main").pipe(Effect.provide(layer)),
+  );
+  return { result, calls };
+}
+
+describe("cherryPickToBase", () => {
+  test("no commits to pick: returns true early", async () => {
+    const { result, calls } = await runCherryPickToBase({ commitsRaw: "" });
+    expect(result).toEqual(true);
+    expect(calls).toEqual(["listCommitsBetween(/repo,main,wt/foo)"]);
+  });
+
+  test("whitespace-only commits output: also treated as empty", async () => {
+    const { result, calls } = await runCherryPickToBase({
+      commitsRaw: "  \n  \n",
+    });
+    expect(result).toEqual(true);
+    expect(calls).toEqual(["listCommitsBetween(/repo,main,wt/foo)"]);
+  });
+
+  test("ref exists + worktree checked out: delegates to cherryPickInCheckedOutWorktree", async () => {
+    const { result, calls } = await runCherryPickToBase({
+      commitsRaw: "aaa\nbbb\n",
+      resolvedBranch: "main",
+      refExists: true,
+      checkedOutIn: "/repo/worktrees/main",
+      checkedOutResult: true,
+    });
+    expect(result).toEqual(true);
+    expect(calls).toEqual([
+      "listCommitsBetween(/repo,main,wt/foo)",
+      "resolveLocalBranch(/repo,main)",
+      "verifyRefExists(/repo,refs/heads/main)",
+      "findWorktreeForBranch(/repo,main)",
+      "cherryPickInCheckedOutWorktree(/repo/worktrees/main,[aaa,bbb],main)",
+    ]);
+  });
+
+  test("ref missing: createBranch then falls through to detached path", async () => {
+    const { result, calls } = await runCherryPickToBase({
+      commitsRaw: "aaa\n",
+      resolvedBranch: "main",
+      refExists: false,
+      checkedOutIn: null,
+      detachedResult: true,
+    });
+    expect(result).toEqual(true);
+    expect(calls).toEqual([
+      "listCommitsBetween(/repo,main,wt/foo)",
+      "resolveLocalBranch(/repo,main)",
+      "verifyRefExists(/repo,refs/heads/main)",
+      "createBranch(/repo,main,main)",
+      "findWorktreeForBranch(/repo,main)",
+      "cherryPickInDetachedWorktree([aaa],main,/repo)",
+    ]);
+  });
+
+  test("ref exists + no worktree: delegates to detached variant", async () => {
+    const { result, calls } = await runCherryPickToBase({
+      commitsRaw: "aaa\n",
+      resolvedBranch: "main",
+      refExists: true,
+      checkedOutIn: null,
+      detachedResult: false,
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual([
+      "listCommitsBetween(/repo,main,wt/foo)",
+      "resolveLocalBranch(/repo,main)",
+      "verifyRefExists(/repo,refs/heads/main)",
+      "findWorktreeForBranch(/repo,main)",
+      "cherryPickInDetachedWorktree([aaa],main,/repo)",
+    ]);
+  });
+
+  test("setupExit defect (createBranch dies): Exit.Failure path returns false", async () => {
+    const { result, calls } = await runCherryPickToBase({
+      commitsRaw: "aaa\n",
+      resolvedBranch: "main",
+      refExists: false,
+      failOn: "createBranch",
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual([
+      "listCommitsBetween(/repo,main,wt/foo)",
+      "resolveLocalBranch(/repo,main)",
+      "verifyRefExists(/repo,refs/heads/main)",
+      "createBranch(/repo,main,main)",
+    ]);
+  });
+
+  test("resolveLocalBranch rewrites remote-style ref: targetBranch used for subsequent ops", async () => {
+    const { result, calls } = await runCherryPickToBase({
+      commitsRaw: "aaa\n",
+      resolvedBranch: "develop",
+      refExists: true,
+      checkedOutIn: null,
+      detachedResult: true,
+    });
+    expect(result).toEqual(true);
+    // note: the resolved "develop" is threaded through verifyRefExists and
+    // findWorktreeForBranch, not the original baseBranch "main".
+    expect(calls).toEqual([
+      "listCommitsBetween(/repo,main,wt/foo)",
+      "resolveLocalBranch(/repo,main)",
+      "verifyRefExists(/repo,refs/heads/develop)",
+      "findWorktreeForBranch(/repo,develop)",
+      "cherryPickInDetachedWorktree([aaa],develop,/repo)",
     ]);
   });
 });
