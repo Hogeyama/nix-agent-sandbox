@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -8,9 +8,9 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import type { StageInput } from "../pipeline/types.ts";
-import { createNixDetectStage } from "./nix_detect.ts";
+} from "../../config/types.ts";
+import type { StageInput } from "../../pipeline/types.ts";
+import { createNixDetectStage } from "./stage.ts";
 
 function makeProfile(nixEnable: boolean | "auto"): Profile {
   return {
