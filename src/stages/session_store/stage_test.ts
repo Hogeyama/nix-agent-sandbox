@@ -12,17 +12,20 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
   type Profile,
-} from "../config/types.ts";
-import type { WorkspaceState } from "../pipeline/state.ts";
-import type { HostEnv, StageInput, StageResult } from "../pipeline/types.ts";
+} from "../../config/types.ts";
+import type { WorkspaceState } from "../../pipeline/state.ts";
+import type { HostEnv, StageInput, StageResult } from "../../pipeline/types.ts";
+import type { SessionRuntimePaths } from "../../sessions/store.ts";
+import {
+  readSession,
+  resolveSessionRuntimePaths,
+} from "../../sessions/store.ts";
 import {
   type CreateSessionInput,
   makeSessionStoreServiceFake,
   SessionStoreServiceLive,
-} from "../services/session_store_service.ts";
-import type { SessionRuntimePaths } from "../sessions/store.ts";
-import { readSession, resolveSessionRuntimePaths } from "../sessions/store.ts";
-import { createSessionStoreStage } from "./session_store.ts";
+} from "./session_store_service.ts";
+import { createSessionStoreStage } from "./stage.ts";
 
 let tmpRoot: string;
 const savedEnv = process.env.NAS_SESSION_STORE_DIR;
@@ -50,7 +53,7 @@ async function runStage(
   input: StageInput,
   workspace: WorkspaceState,
   layer: Layer.Layer<
-    import("../services/session_store_service.ts").SessionStoreService
+    import("./session_store_service.ts").SessionStoreService
   > = SessionStoreServiceLive,
 ): Promise<{ result: StageResult; closeScope: Effect.Effect<void> }> {
   const stage = createSessionStoreStage(input);
@@ -105,7 +108,7 @@ test("SessionStoreStage finalizer on an already-missing record does not throw", 
   const paths = await resolveSessionRuntimePaths(undefined);
 
   // Delete the file out-of-band, simulating something else cleaning up.
-  const { deleteSession } = await import("../sessions/store.ts");
+  const { deleteSession } = await import("../../sessions/store.ts");
   await deleteSession(paths, "sess_gone");
 
   // Must complete without throwing.

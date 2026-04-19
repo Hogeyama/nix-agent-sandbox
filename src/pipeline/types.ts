@@ -18,7 +18,7 @@ import type { MountSetupService } from "../services/mount_setup.ts";
 import type { NetworkRuntimeService } from "../services/network_runtime.ts";
 import type { ProcessService } from "../services/process.ts";
 import type { SessionBrokerService } from "../services/session_broker.ts";
-import type { SessionStoreService } from "../services/session_store_service.ts";
+import type { SessionStoreService } from "../stages/session_store.ts";
 import type { GitWorktreeService } from "../stages/worktree/git_worktree.ts";
 import type { PromptService } from "../stages/worktree/prompt_service.ts";
 import type { PipelineState } from "./state.ts";

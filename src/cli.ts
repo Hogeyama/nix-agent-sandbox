@@ -55,7 +55,6 @@ import { MountSetupServiceLive } from "./services/mount_setup.ts";
 import { NetworkRuntimeServiceLive } from "./services/network_runtime.ts";
 import { ProcessServiceLive } from "./services/process.ts";
 import { SessionBrokerServiceLive } from "./services/session_broker.ts";
-import { SessionStoreServiceLive } from "./services/session_store_service.ts";
 import { addRecentDir } from "./sessions/recent_dirs.ts";
 import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
 import { createDindStage } from "./stages/dind.ts";
@@ -74,7 +73,10 @@ import {
 } from "./stages/mount.ts";
 import { createNixDetectStage } from "./stages/nix_detect.ts";
 import { createProxyStage } from "./stages/proxy.ts";
-import { createSessionStoreStage } from "./stages/session_store.ts";
+import {
+  createSessionStoreStage,
+  SessionStoreServiceLive,
+} from "./stages/session_store.ts";
 import { GitWorktreeServiceLive } from "./stages/worktree/git_worktree.ts";
 import { PromptServiceLive } from "./stages/worktree/prompt_service.ts";
 import { createWorktreeStage } from "./stages/worktree.ts";

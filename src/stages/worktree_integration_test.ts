@@ -30,7 +30,7 @@ import { FsServiceLive } from "../services/fs.ts";
 import { HostExecBrokerServiceLive } from "../services/hostexec_broker.ts";
 import { ProcessServiceLive } from "../services/process.ts";
 import { SessionBrokerServiceLive } from "../services/session_broker.ts";
-import { SessionStoreServiceLive } from "../services/session_store_service.ts";
+import { SessionStoreServiceLive } from "./session_store.ts";
 import { GitWorktreeServiceLive } from "./worktree/git_worktree.ts";
 import { PromptServiceLive } from "./worktree/prompt_service.ts";
 import {

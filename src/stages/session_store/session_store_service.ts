@@ -6,12 +6,15 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { SessionRecord, SessionRuntimePaths } from "../sessions/store.ts";
+import type {
+  SessionRecord,
+  SessionRuntimePaths,
+} from "../../sessions/store.ts";
 import {
   createSession,
   deleteSession,
   ensureSessionRuntimePaths,
-} from "../sessions/store.ts";
+} from "../../sessions/store.ts";
 
 // ---------------------------------------------------------------------------
 // Input type for create (mirrors what the existing createSession accepts)
