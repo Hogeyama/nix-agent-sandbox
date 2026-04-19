@@ -15,10 +15,12 @@ import { FsServiceLive } from "../../services/fs.ts";
 import { ProcessServiceLive } from "../../services/process.ts";
 import {
   CherryPickOps,
+  cherryPickInTmpWorktree,
   cherryPickInWorktree,
   GitWorktreeService,
   GitWorktreeServiceLive,
   isSafeRelativePath,
+  TmpCherryPickOps,
 } from "./git_worktree.ts";
 
 // ---------------------------------------------------------------------------
@@ -369,6 +371,95 @@ describe("cherryPickInWorktree", () => {
       "resolveEmpties(/wt,2)",
       "cherryPickAbort(/wt)",
       "stashPop(/wt)",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cherryPickInTmpWorktree — branch coverage via fake TmpCherryPickOps
+// ---------------------------------------------------------------------------
+
+interface FakeTmpOpsConfig {
+  readonly applyCherryPick?: boolean;
+  readonly resolveEmpties?: boolean;
+}
+
+function makeFakeTmpCherryPickOps(config: FakeTmpOpsConfig): {
+  layer: Layer.Layer<TmpCherryPickOps>;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const layer = Layer.succeed(TmpCherryPickOps, {
+    applyCherryPick: (wt, commits) =>
+      Effect.sync(() => {
+        calls.push(`applyCherryPick(${wt},[${commits.join(",")}])`);
+        return config.applyCherryPick ?? true;
+      }),
+    resolveEmpties: (wt, expected) =>
+      Effect.sync(() => {
+        calls.push(`resolveEmpties(${wt},${expected})`);
+        return config.resolveEmpties ?? false;
+      }),
+    cherryPickAbort: (wt) =>
+      Effect.sync(() => {
+        calls.push(`cherryPickAbort(${wt})`);
+      }),
+    updateBranchToWorktreeHead: (wt, repoRoot, targetBranch) =>
+      Effect.sync(() => {
+        calls.push(
+          `updateBranchToWorktreeHead(${wt},${repoRoot},${targetBranch})`,
+        );
+      }),
+  });
+  return { layer, calls };
+}
+
+async function runTmpCherryPick(config: FakeTmpOpsConfig): Promise<{
+  result: boolean;
+  calls: string[];
+}> {
+  const { layer, calls } = makeFakeTmpCherryPickOps(config);
+  const result = await Effect.runPromise(
+    cherryPickInTmpWorktree("/tmp-wt", ["abc", "def"], "branch", "/repo").pipe(
+      Effect.provide(layer),
+    ),
+  );
+  return { result, calls };
+}
+
+describe("cherryPickInTmpWorktree", () => {
+  test("cherry-pick succeeds: branch forwarded to new HEAD, returns true", async () => {
+    const { result, calls } = await runTmpCherryPick({ applyCherryPick: true });
+    expect(result).toEqual(true);
+    expect(calls).toEqual([
+      "applyCherryPick(/tmp-wt,[abc,def])",
+      "updateBranchToWorktreeHead(/tmp-wt,/repo,branch)",
+    ]);
+  });
+
+  test("cherry-pick fails, resolveEmpties rescues: branch forwarded, returns true", async () => {
+    const { result, calls } = await runTmpCherryPick({
+      applyCherryPick: false,
+      resolveEmpties: true,
+    });
+    expect(result).toEqual(true);
+    expect(calls).toEqual([
+      "applyCherryPick(/tmp-wt,[abc,def])",
+      "resolveEmpties(/tmp-wt,2)",
+      "updateBranchToWorktreeHead(/tmp-wt,/repo,branch)",
+    ]);
+  });
+
+  test("cherry-pick fails, cannot resolve: abort called, returns false", async () => {
+    const { result, calls } = await runTmpCherryPick({
+      applyCherryPick: false,
+      resolveEmpties: false,
+    });
+    expect(result).toEqual(false);
+    expect(calls).toEqual([
+      "applyCherryPick(/tmp-wt,[abc,def])",
+      "resolveEmpties(/tmp-wt,2)",
+      "cherryPickAbort(/tmp-wt)",
     ]);
   });
 });

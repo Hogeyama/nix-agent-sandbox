@@ -789,7 +789,9 @@ function cherryPickDetached(
     const result = yield* Effect.acquireUseRelease(
       Effect.succeed(tmpWorktree),
       (tw) =>
-        cherryPickInTmpWorktree(proc, tw, commitList, targetBranch, repoRoot),
+        cherryPickInTmpWorktree(tw, commitList, targetBranch, repoRoot).pipe(
+          Effect.provide(makeTmpCherryPickOpsLayer(proc)),
+        ),
       (tw) =>
         gitExec(proc, [
           "git",
@@ -806,77 +808,116 @@ function cherryPickDetached(
   });
 }
 
-function cherryPickInTmpWorktree(
-  proc: Proc,
+/**
+ * Module-internal service for {@link cherryPickInTmpWorktree}. Distinct from
+ * {@link CherryPickOps} because the tmp-worktree flow has no stash concept;
+ * instead it needs to forward the target branch to the worktree's new HEAD
+ * after a successful cherry-pick.
+ *
+ * @internal Exported only for the colocated test file.
+ */
+export class TmpCherryPickOps extends Context.Tag(
+  "nas/git_worktree/TmpCherryPickOps",
+)<
+  TmpCherryPickOps,
+  {
+    readonly applyCherryPick: (
+      worktreePath: string,
+      commits: readonly string[],
+    ) => Effect.Effect<boolean>;
+    readonly resolveEmpties: (
+      worktreePath: string,
+      expected: number,
+    ) => Effect.Effect<boolean>;
+    readonly cherryPickAbort: (worktreePath: string) => Effect.Effect<void>;
+    readonly updateBranchToWorktreeHead: (
+      worktreePath: string,
+      repoRoot: string,
+      targetBranch: string,
+    ) => Effect.Effect<void>;
+  }
+>() {}
+
+function makeTmpCherryPickOpsLayer(proc: Proc): Layer.Layer<TmpCherryPickOps> {
+  return Layer.succeed(TmpCherryPickOps, {
+    applyCherryPick: (wt, commits) =>
+      gitExec(proc, [
+        "git",
+        "-C",
+        wt,
+        "cherry-pick",
+        "--end-of-options",
+        ...commits,
+      ]).pipe(Effect.map((r) => r !== null)),
+    resolveEmpties: (wt, expected) =>
+      resolveEmptyCherryPicks(proc, wt, expected),
+    cherryPickAbort: (wt) =>
+      gitExec(proc, ["git", "-C", wt, "cherry-pick", "--abort"]).pipe(
+        Effect.asVoid,
+      ),
+    updateBranchToWorktreeHead: (wt, repoRoot, targetBranch) =>
+      Effect.gen(function* () {
+        const newHead = (yield* proc.exec([
+          "git",
+          "-C",
+          wt,
+          "rev-parse",
+          "HEAD",
+        ])).trim();
+        console.log(
+          `$ git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`,
+        );
+        yield* proc.exec([
+          "git",
+          "-C",
+          repoRoot,
+          "branch",
+          "-f",
+          "--end-of-options",
+          targetBranch,
+          newHead,
+        ]);
+      }),
+  });
+}
+
+/**
+ * @internal Exported only for the colocated test file.
+ */
+export function cherryPickInTmpWorktree(
   tmpWorktree: string,
   commitList: string[],
   targetBranch: string,
   repoRoot: string,
-): Effect.Effect<boolean> {
+): Effect.Effect<boolean, never, TmpCherryPickOps> {
   return Effect.gen(function* () {
+    const ops = yield* TmpCherryPickOps;
     console.log(`$ git -C ${tmpWorktree} cherry-pick ${commitList.join(" ")}`);
-    const cpOk = yield* gitExec(proc, [
-      "git",
-      "-C",
-      tmpWorktree,
-      "cherry-pick",
-      "--end-of-options",
-      ...commitList,
-    ]);
+    const cpOk = yield* ops.applyCherryPick(tmpWorktree, commitList);
 
-    if (cpOk !== null) {
-      const newHead = (yield* proc.exec([
-        "git",
-        "-C",
+    if (cpOk) {
+      yield* ops.updateBranchToWorktreeHead(
         tmpWorktree,
-        "rev-parse",
-        "HEAD",
-      ])).trim();
-      console.log(`$ git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`);
-      yield* proc.exec([
-        "git",
-        "-C",
         repoRoot,
-        "branch",
-        "-f",
-        "--end-of-options",
         targetBranch,
-        newHead,
-      ]);
+      );
       console.log("[nas] Cherry-pick completed successfully.");
       return true;
     }
 
     console.error("[nas] cherry-pick exited with error");
-    const resolved = yield* resolveEmptyCherryPicks(
-      proc,
-      tmpWorktree,
-      commitList.length,
-    );
+    const resolved = yield* ops.resolveEmpties(tmpWorktree, commitList.length);
     if (resolved) {
-      const newHead = (yield* proc.exec([
-        "git",
-        "-C",
+      yield* ops.updateBranchToWorktreeHead(
         tmpWorktree,
-        "rev-parse",
-        "HEAD",
-      ])).trim();
-      console.log(`$ git -C ${repoRoot} branch -f ${targetBranch} ${newHead}`);
-      yield* proc.exec([
-        "git",
-        "-C",
         repoRoot,
-        "branch",
-        "-f",
-        "--end-of-options",
         targetBranch,
-        newHead,
-      ]);
+      );
       return true;
     }
 
     console.error("[nas] Cherry-pick failed with conflicts.");
-    yield* gitExec(proc, ["git", "-C", tmpWorktree, "cherry-pick", "--abort"]);
+    yield* ops.cherryPickAbort(tmpWorktree);
     return false;
   });
 }
