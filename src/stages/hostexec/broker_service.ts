@@ -8,16 +8,16 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { HostExecConfig } from "../config/types.ts";
-import { HostExecBroker } from "../hostexec/broker.ts";
-import type { ResolvedNotifyBackend } from "../hostexec/notify.ts";
-import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
+import type { HostExecConfig } from "../../config/types.ts";
+import { HostExecBroker } from "../../hostexec/broker.ts";
+import type { ResolvedNotifyBackend } from "../../hostexec/notify.ts";
+import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import {
   removeHostExecPendingDir,
   removeHostExecSessionRegistry,
   writeHostExecSessionRegistry,
-} from "../hostexec/registry.ts";
-import { logInfo, logWarn } from "../log.ts";
+} from "../../hostexec/registry.ts";
+import { logInfo, logWarn } from "../../log.ts";
 
 // ---------------------------------------------------------------------------
 // Config

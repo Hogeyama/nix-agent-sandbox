@@ -27,7 +27,7 @@ import { AuthRouterServiceLive } from "../services/auth_router.ts";
 import { DindServiceLive } from "../services/dind.ts";
 import { DockerServiceLive } from "../services/docker.ts";
 import { FsServiceLive } from "../services/fs.ts";
-import { HostExecBrokerServiceLive } from "../services/hostexec_broker.ts";
+import { HostExecBrokerServiceLive } from "../stages/hostexec.ts";
 import { ProcessServiceLive } from "../services/process.ts";
 import { SessionBrokerServiceLive } from "../services/session_broker.ts";
 import { SessionStoreServiceLive } from "./session_store.ts";

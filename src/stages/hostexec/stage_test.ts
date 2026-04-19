@@ -1,27 +1,27 @@
 import { expect, test } from "bun:test";
 import * as path from "node:path";
 import { Effect, Exit, Scope } from "effect";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import { INTERCEPT_LIB_CONTAINER_PATH } from "../hostexec/intercept_path.ts";
-import { emptyContainerPlan } from "../pipeline/container_plan.ts";
-import type { PipelineState } from "../pipeline/state.ts";
-import type { HostEnv, StageInput } from "../pipeline/types.ts";
-import { makeHostExecBrokerServiceFake } from "../services/hostexec_broker.ts";
+} from "../../config/types.ts";
+import { INTERCEPT_LIB_CONTAINER_PATH } from "../../hostexec/intercept_path.ts";
+import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import type { PipelineState } from "../../pipeline/state.ts";
+import type { HostEnv, StageInput } from "../../pipeline/types.ts";
+import { makeHostExecBrokerServiceFake } from "./broker_service.ts";
 import {
   type HostExecWorkspacePlan,
   makeHostExecSetupServiceFake,
-} from "../services/hostexec_setup.ts";
+} from "./setup_service.ts";
 import {
   createHostExecStage,
   planHostExec,
   validateAbsoluteArgv0,
-} from "./hostexec.ts";
+} from "./stage.ts";
 
 function makeProfile(): Profile {
   return {
