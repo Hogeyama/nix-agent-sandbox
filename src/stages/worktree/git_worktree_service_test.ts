@@ -14,21 +14,29 @@ import { Effect, Layer } from "effect";
 import { FsServiceLive } from "../../services/fs.ts";
 import { ProcessServiceLive } from "../../services/process.ts";
 import {
-  ApplyTrackedDiffOps,
-  applyTrackedDiff,
   CherryPickOps,
   CherryPickToBaseOps,
-  CreateWorktreeOps,
   cherryPickInTmpWorktree,
   cherryPickInWorktree,
   cherryPickToBase,
+  TmpCherryPickOps,
+} from "./git_worktree_service/cherry_pick.ts";
+import {
+  CreateWorktreeOps,
   createWorktree,
+} from "./git_worktree_service/create.ts";
+import {
+  ApplyTrackedDiffOps,
+  applyTrackedDiff,
+} from "./git_worktree_service/inherit_dirty.ts";
+import { isSafeRelativePath } from "./git_worktree_service/internal.ts";
+import {
   executeTeardown,
+  TeardownOps,
+} from "./git_worktree_service/teardown.ts";
+import {
   GitWorktreeService,
   GitWorktreeServiceLive,
-  isSafeRelativePath,
-  TeardownOps,
-  TmpCherryPickOps,
   type WorktreeHandle,
   type WorktreeTeardownPlan,
 } from "./git_worktree_service.ts";
