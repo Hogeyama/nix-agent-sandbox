@@ -66,6 +66,7 @@ Preferred stage-facing boundaries for named workflows and lifecycles.
 | `SessionStoreService` | Session record persistence (`ensurePaths`, `create`, `delete`) |
 
 Each service file exports three things:
+
 - **Tag**: `FsService` (the `Context.Tag`)
 - **Live layer**: `FsServiceLive` (real implementation)
 - **Fake factory**: `makeFsServiceFake()` (for testing)
@@ -84,6 +85,42 @@ Create or reuse a domain service when any of these are true:
 - The stage would otherwise need a primitive service such as `FsService`, `ProcessService`, or `DockerService`.
 
 If the work is only pure data shaping, keep it as a pure function instead of inventing a service.
+
+### Composition rule inside services
+
+The stage-level rule ("do not mix primitives with orchestration") applies recursively **inside** the service layer. Functions that build new effects by composing other effects must not simultaneously call IO primitives. Otherwise the composed logic cannot be unit-tested with fakes.
+
+#### Two kinds of effect-producing functions
+
+| # | Kind | Definition | Expected coverage |
+|---|------|------------|-------------------|
+| D1 | **Primitive effect wrapper** | Directly invokes an IO primitive (`proc.exec`, `proc.spawn`, `fs.*`, `docker.*`, raw `Bun.spawn`, socket APIs, etc.) and does not compose other effects. One function ~= one IO call. | Not unit-tested. Exercised by integration tests only. |
+| D2 | **Composed effect** | Builds a new effect by sequencing / branching over other effect-returning functions. **Must not call IO primitives directly.** | Unit-tested with fakes. Target 80%+ line coverage, including branches. |
+
+The same file can expose both kinds, but a single function must pick one role. Mixing them is the violation pattern this rule forbids.
+
+#### Non-negotiable rules
+
+- A D2 function may call other D1 / D2 functions, but **must not** call `proc.exec`, `proc.spawn`, `fs.readFile`, `fs.writeFile`, `fs.rm`, `docker.*`, `Bun.spawn`, `node:fs`, socket APIs, or other IO primitives inline.
+- If a D2 function needs IO that has no existing wrapper, add a D1 wrapper (or a new domain-service method) first, then call that wrapper from D2.
+- `gitExec`, `runCommand`, and similar helpers that shell out to external processes count as primitives for this rule. Wrapping an IO primitive in a thin helper does not make it non-primitive.
+- D2 functions must be fake-able: every effect they invoke must be reachable through a service Tag or an injected dependency, so tests can substitute a Fake implementation.
+- When a D2 function grows conditional branches (stash / cherry-pick / pop, retry, dirty-check), those branches are the primary motivation for this rule -- they are unreachable from integration tests and must be covered by unit tests.
+
+#### Violation example
+
+`services/git_worktree.ts` `cherryPickInWorktree` composes `checkDirty` (another effect) with five direct `gitExec` calls (primitive) in the same function body. That makes the stash / cherry-pick / abort / pop branching impossible to unit-test with a fake `checkDirty`, and forces every branch to be exercised through a real git process.
+
+The fix is to split the function so that each branch of the composition calls an intentful D1/D2 helper (`stashChanges`, `applyCherryPick`, `abortCherryPick`, `popStash`), and the composed function only orchestrates.
+
+#### Checklist when writing or reviewing a service function
+
+1. Does this function call an IO primitive? -> It is D1. Keep it short and do not branch over other effects inside it.
+2. Does this function compose other effects (sequence, branch, loop)? -> It is D2. Remove any inline primitive calls; extract them into D1 helpers.
+3. Can you write a unit test that provides a Fake for every effect this function invokes, without spinning up a real process / filesystem / docker daemon? If no, the function is still mixing roles.
+4. If the function grew conditional branches, are all branches reachable from unit tests with fakes? If not, the branches are effectively untested.
+
+Stage code continues to follow the stricter rule from the top of this document: stages orchestrate intentful service methods and do not compose primitives at all.
 
 ## Writing a New Stage
 
