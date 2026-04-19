@@ -11,6 +11,7 @@
     "test:unit": "bash -c 'bun test $(find src -name \"*_test.ts\" ! -name \"*_integration_test.ts\")'",
     "test:integration": "bash -c 'bun test $(find src tests -name \"*_integration_test.ts\") tests/'",
     "lint": "biome check src/ tests/ scripts/ main.ts",
+    "lint:composed-effects": "bun scripts/lint-composed-effects.ts",
     "fmt": "biome format --write src/ tests/ scripts/ main.ts",
     "check": "tsc --noEmit",
     "bun2nix": "bun2nix -o bun.nix"
