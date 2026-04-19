@@ -98,7 +98,7 @@ function makeInput(
 import {
   DbusProxyServiceLive,
   makeDbusProxyServiceFake,
-} from "../services/dbus_proxy.ts";
+} from "../stages/dbus_proxy.ts";
 
 const dummyLayer = makeDbusProxyServiceFake();
 
@@ -117,7 +117,7 @@ function runStage(input: StageInput): Promise<StageResult> {
 async function runStageScoped(
   input: StageInput,
   layer: Layer.Layer<
-    import("../services/dbus_proxy.ts").DbusProxyService,
+    import("../stages/dbus_proxy.ts").DbusProxyService,
     never,
     never
   >,

@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
  */
 
 import { Effect, Exit, Scope } from "effect";
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -16,14 +16,14 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
+} from "../../config/types.ts";
+import type { HostEnv, ProbeResults, StageInput } from "../../pipeline/types.ts";
 import {
   type DbusProxyHandle,
   type DbusProxyStartPlan,
   makeDbusProxyServiceFake,
-} from "../services/dbus_proxy.ts";
-import { createDbusProxyStage } from "./dbus_proxy.ts";
+} from "./dbus_proxy_service.ts";
+import { createDbusProxyStage } from "./stage.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

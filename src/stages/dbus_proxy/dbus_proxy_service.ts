@@ -8,8 +8,8 @@
  */
 
 import { Context, Effect, Layer, type Scope } from "effect";
-import { FsService } from "./fs.ts";
-import { ProcessService } from "./process.ts";
+import { FsService } from "../../services/fs.ts";
+import { ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // Service-local plan interface (avoids service → stage dependency)

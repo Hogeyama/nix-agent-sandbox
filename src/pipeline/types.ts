@@ -4,7 +4,7 @@
 
 import type { Config, Profile } from "../config/types.ts";
 import type { AuthRouterService } from "../services/auth_router.ts";
-import type { DbusProxyService } from "../services/dbus_proxy.ts";
+import type { DbusProxyService } from "../stages/dbus_proxy.ts";
 import type { DindService } from "../services/dind.ts";
 import type { DisplayService } from "../services/display.ts";
 import type { DockerService } from "../services/docker.ts";
