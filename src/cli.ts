@@ -45,7 +45,7 @@ import { DbusProxyServiceLive } from "./stages/dbus_proxy.ts";
 import { DindServiceLive } from "./stages/dind.ts";
 import { DisplayServiceLive } from "./stages/display.ts";
 import { DockerServiceLive } from "./services/docker.ts";
-import { DockerBuildServiceLive } from "./services/docker_build.ts";
+import { DockerBuildServiceLive } from "./stages/docker_build.ts";
 import { EnvoyServiceLive } from "./services/envoy.ts";
 import { FsServiceLive } from "./services/fs.ts";
 import { HostExecBrokerServiceLive } from "./stages/hostexec.ts";

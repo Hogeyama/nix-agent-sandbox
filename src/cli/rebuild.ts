@@ -8,7 +8,7 @@ import { logInfo } from "../log.ts";
 import { createPipelineBuilder } from "../pipeline/stage_builder.ts";
 import type { PipelineState } from "../pipeline/state.ts";
 import { DockerServiceLive } from "../services/docker.ts";
-import { DockerBuildServiceLive } from "../services/docker_build.ts";
+import { DockerBuildServiceLive } from "../stages/docker_build.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import {
   type BuildProbes,

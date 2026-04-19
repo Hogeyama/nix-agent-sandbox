@@ -8,7 +8,7 @@ import type { DbusProxyService } from "../stages/dbus_proxy.ts";
 import type { DindService } from "../stages/dind.ts";
 import type { DisplayService } from "../stages/display.ts";
 import type { DockerService } from "../services/docker.ts";
-import type { DockerBuildService } from "../services/docker_build.ts";
+import type { DockerBuildService } from "../stages/docker_build.ts";
 import type { EnvoyService } from "../services/envoy.ts";
 import type { FsService } from "../services/fs.ts";
 import type { HostExecBrokerService } from "../stages/hostexec.ts";

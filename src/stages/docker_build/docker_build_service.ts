@@ -11,9 +11,9 @@
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
-import { logInfo } from "../log.ts";
-import { DockerService } from "./docker.ts";
-import { FsService } from "./fs.ts";
+import { logInfo } from "../../log.ts";
+import { DockerService } from "../../services/docker.ts";
+import { FsService } from "../../services/fs.ts";
 
 // ---------------------------------------------------------------------------
 // Service-local plan interface (avoids service → stage dependency)

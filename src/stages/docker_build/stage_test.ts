@@ -2,19 +2,19 @@ import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Effect, Exit, Scope } from "effect";
-import { computeEmbedHash } from "../docker/client.ts";
-import type { WorkspaceState } from "../pipeline/state.ts";
+import { computeEmbedHash } from "../../docker/client.ts";
+import type { WorkspaceState } from "../../pipeline/state.ts";
 import {
   type DockerBuildImagePlan,
   makeDockerBuildServiceFake,
-} from "../services/docker_build.ts";
+} from "./docker_build_service.ts";
 import {
   type BuildProbes,
   createDockerBuildStage,
   EMBED_HASH_LABEL,
   EMBEDDED_BUILD_ASSET_GROUPS,
   planDockerBuild,
-} from "./docker_build.ts";
+} from "./stage.ts";
 
 test("planDockerBuild: returns needsBuild=true with labels when image does not exist", () => {
   const buildProbes: BuildProbes = {

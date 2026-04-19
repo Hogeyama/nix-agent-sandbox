@@ -31,7 +31,7 @@ import {
 import * as path from "node:path";
 import { Effect, Layer } from "effect";
 import { DockerServiceLive } from "../services/docker.ts";
-import { DockerBuildServiceLive } from "../services/docker_build.ts";
+import { DockerBuildServiceLive } from "../stages/docker_build.ts";
 import { FsServiceLive } from "../services/fs.ts";
 import { createDockerBuildStage, resolveBuildProbes } from "./docker_build.ts";
 
