@@ -7,13 +7,16 @@
 
 import { expect, test } from "bun:test";
 import { Effect, Exit, Layer, Scope } from "effect";
-import { type DockerService, makeDockerServiceFake } from "../../services/docker.ts";
+import {
+  type DockerService,
+  makeDockerServiceFake,
+} from "../../services/docker.ts";
+import { type FsService, makeFsServiceFake } from "../../services/fs.ts";
 import {
   type DockerBuildImagePlan,
   DockerBuildService,
   DockerBuildServiceLive,
 } from "./docker_build_service.ts";
-import { type FsService, makeFsServiceFake } from "../../services/fs.ts";
 
 interface BuildCall {
   contextDir: string;

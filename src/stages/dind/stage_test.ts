@@ -19,7 +19,11 @@ import {
 } from "../../config/types.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../../pipeline/types.ts";
+import type {
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../../pipeline/types.ts";
 import { type DindSidecarOpts, makeDindServiceFake } from "./dind_service.ts";
 import {
   buildDindSidecarArgs,

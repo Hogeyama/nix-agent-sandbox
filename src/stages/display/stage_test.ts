@@ -17,7 +17,12 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../../pipeline/types.ts";
+import type {
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../../pipeline/types.ts";
+import type { MountProbes } from "../mount.ts";
 import {
   type DisplayHandle,
   type DisplayStartPlan,
@@ -28,7 +33,6 @@ import {
   pickFreeDisplayNumber,
   planDisplay,
 } from "./stage.ts";
-import type { MountProbes } from "../mount.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

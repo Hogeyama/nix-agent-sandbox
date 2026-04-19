@@ -3,24 +3,27 @@
  */
 
 import type { Config, Profile } from "../config/types.ts";
-import type { AuthRouterService } from "../stages/proxy.ts";
+import type { DockerService } from "../services/docker.ts";
+import type { FsService } from "../services/fs.ts";
+import type { ProcessService } from "../services/process.ts";
 import type { DbusProxyService } from "../stages/dbus_proxy.ts";
 import type { DindService } from "../stages/dind.ts";
 import type { DisplayService } from "../stages/display.ts";
-import type { DockerService } from "../services/docker.ts";
 import type { DockerBuildService } from "../stages/docker_build.ts";
-import type { EnvoyService } from "../stages/proxy.ts";
-import type { FsService } from "../services/fs.ts";
-import type { HostExecBrokerService } from "../stages/hostexec.ts";
-import type { HostExecSetupService } from "../stages/hostexec.ts";
-import type { NetworkRuntimeService } from "../stages/proxy.ts";
-import type { ProcessService } from "../services/process.ts";
-import type { SessionBrokerService } from "../stages/proxy.ts";
+import type {
+  HostExecBrokerService,
+  HostExecSetupService,
+} from "../stages/hostexec.ts";
 import type { ContainerLaunchService } from "../stages/launch.ts";
 import type { MountSetupService } from "../stages/mount.ts";
+import type {
+  AuthRouterService,
+  EnvoyService,
+  NetworkRuntimeService,
+  SessionBrokerService,
+} from "../stages/proxy.ts";
 import type { SessionStoreService } from "../stages/session_store.ts";
-import type { GitWorktreeService } from "../stages/worktree.ts";
-import type { PromptService } from "../stages/worktree.ts";
+import type { GitWorktreeService, PromptService } from "../stages/worktree.ts";
 import type { PipelineState } from "./state.ts";
 
 // ---------------------------------------------------------------------------

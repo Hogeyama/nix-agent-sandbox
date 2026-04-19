@@ -18,7 +18,11 @@ import {
 } from "../../config/types.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { ContainerPlan } from "../../pipeline/state.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../../pipeline/types.ts";
+import type {
+  HostEnv,
+  ProbeResults,
+  StageInput,
+} from "../../pipeline/types.ts";
 import { makeAuthRouterServiceFake } from "./auth_router_service.ts";
 import { makeEnvoyServiceFake } from "./envoy_service.ts";
 import { makeNetworkRuntimeServiceFake } from "./network_runtime_service.ts";

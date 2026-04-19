@@ -10,10 +10,13 @@ import { Effect, Layer } from "effect";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { makeFsServiceFake } from "../../services/fs.ts";
 import {
+  makeProcessServiceFake,
+  type ProcessService,
+} from "../../services/process.ts";
+import {
   NetworkRuntimeService,
   NetworkRuntimeServiceLive,
 } from "./network_runtime_service.ts";
-import { makeProcessServiceFake, type ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

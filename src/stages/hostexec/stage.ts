@@ -7,7 +7,10 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import { DEFAULT_HOSTEXEC_CONFIG, type HostExecRule } from "../../config/types.ts";
+import {
+  DEFAULT_HOSTEXEC_CONFIG,
+  type HostExecRule,
+} from "../../config/types.ts";
 import {
   INTERCEPT_LIB_CONTAINER_PATH,
   resolveInterceptLibPath,

@@ -40,29 +40,27 @@ import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
 import type { PipelineState } from "./pipeline/state.ts";
 import type { StageInput } from "./pipeline/types.ts";
-import { AuthRouterServiceLive } from "./stages/proxy.ts";
-import { DbusProxyServiceLive } from "./stages/dbus_proxy.ts";
-import { DindServiceLive } from "./stages/dind.ts";
-import { DisplayServiceLive } from "./stages/display.ts";
 import { DockerServiceLive } from "./services/docker.ts";
-import { DockerBuildServiceLive } from "./stages/docker_build.ts";
-import { EnvoyServiceLive } from "./stages/proxy.ts";
 import { FsServiceLive } from "./services/fs.ts";
-import { HostExecBrokerServiceLive } from "./stages/hostexec.ts";
-import { HostExecSetupServiceLive } from "./stages/hostexec.ts";
-import { NetworkRuntimeServiceLive } from "./stages/proxy.ts";
 import { ProcessServiceLive } from "./services/process.ts";
-import { SessionBrokerServiceLive } from "./stages/proxy.ts";
 import { addRecentDir } from "./sessions/recent_dirs.ts";
-import { createDbusProxyStage } from "./stages/dbus_proxy.ts";
-import { createDindStage } from "./stages/dind.ts";
-import { createDisplayStage } from "./stages/display.ts";
+import {
+  createDbusProxyStage,
+  DbusProxyServiceLive,
+} from "./stages/dbus_proxy.ts";
+import { createDindStage, DindServiceLive } from "./stages/dind.ts";
+import { createDisplayStage, DisplayServiceLive } from "./stages/display.ts";
 import {
   type BuildProbes,
   createDockerBuildStage,
+  DockerBuildServiceLive,
   resolveBuildProbes,
 } from "./stages/docker_build.ts";
-import { createHostExecStage } from "./stages/hostexec.ts";
+import {
+  createHostExecStage,
+  HostExecBrokerServiceLive,
+  HostExecSetupServiceLive,
+} from "./stages/hostexec.ts";
 import {
   ContainerLaunchServiceLive,
   createLaunchStage,
@@ -74,14 +72,22 @@ import {
   resolveMountProbes,
 } from "./stages/mount.ts";
 import { createNixDetectStage } from "./stages/nix_detect.ts";
-import { createProxyStage } from "./stages/proxy.ts";
+import {
+  AuthRouterServiceLive,
+  createProxyStage,
+  EnvoyServiceLive,
+  NetworkRuntimeServiceLive,
+  SessionBrokerServiceLive,
+} from "./stages/proxy.ts";
 import {
   createSessionStoreStage,
   SessionStoreServiceLive,
 } from "./stages/session_store.ts";
-import { GitWorktreeServiceLive } from "./stages/worktree.ts";
-import { PromptServiceLive } from "./stages/worktree.ts";
-import { createWorktreeStage } from "./stages/worktree.ts";
+import {
+  createWorktreeStage,
+  GitWorktreeServiceLive,
+  PromptServiceLive,
+} from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
 const VERSION: string = pkg.version;
