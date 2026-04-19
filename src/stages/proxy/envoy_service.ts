@@ -13,10 +13,10 @@ import {
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
-} from "../docker/nas_resources.ts";
-import { logInfo } from "../log.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
-import { DockerService } from "./docker.ts";
+} from "../../docker/nas_resources.ts";
+import { logInfo } from "../../log.ts";
+import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import { DockerService } from "../../services/docker.ts";
 
 // ---------------------------------------------------------------------------
 // EnvoyService-local plan interfaces (avoids service → stage dependency)

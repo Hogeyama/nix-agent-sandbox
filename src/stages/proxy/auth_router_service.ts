@@ -8,8 +8,8 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import { ensureAuthRouterDaemon } from "../network/envoy_auth_router.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
+import { ensureAuthRouterDaemon } from "../../network/envoy_auth_router.ts";
+import type { NetworkRuntimePaths } from "../../network/registry.ts";
 
 // ---------------------------------------------------------------------------
 // Handle

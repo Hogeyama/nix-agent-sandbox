@@ -8,16 +8,16 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { ResolvedNotifyBackend } from "../lib/notify_utils.ts";
-import { logInfo, logWarn } from "../log.ts";
-import { SessionBroker } from "../network/broker.ts";
-import type { ApprovalScope } from "../network/protocol.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
+import type { ResolvedNotifyBackend } from "../../lib/notify_utils.ts";
+import { logInfo, logWarn } from "../../log.ts";
+import { SessionBroker } from "../../network/broker.ts";
+import type { ApprovalScope } from "../../network/protocol.ts";
+import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
   removePendingDir,
   removeSessionRegistry,
   writeSessionRegistry,
-} from "../network/registry.ts";
+} from "../../network/registry.ts";
 
 // ---------------------------------------------------------------------------
 // Config

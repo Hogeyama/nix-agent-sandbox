@@ -15,19 +15,19 @@ import {
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
-} from "../docker/nas_resources.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
+} from "../../docker/nas_resources.ts";
+import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
   type DockerRunDetachedOpts,
   type DockerService,
   makeDockerServiceFake,
-} from "./docker.ts";
+} from "../../services/docker.ts";
 import {
   type EnsureEnvoyPlan,
   EnvoyService,
   EnvoyServiceLive,
   type SessionNetworkPlan,
-} from "./envoy.ts";
+} from "./envoy_service.ts";
 
 // ---------------------------------------------------------------------------
 // Docker fake with call recording

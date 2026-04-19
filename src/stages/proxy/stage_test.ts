@@ -8,21 +8,21 @@ import { Effect, Layer } from "effect";
  * Envoy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
-import type { Config, Profile } from "../config/types.ts";
+import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-} from "../config/types.ts";
-import { emptyContainerPlan } from "../pipeline/container_plan.ts";
-import type { ContainerPlan } from "../pipeline/state.ts";
-import type { HostEnv, ProbeResults, StageInput } from "../pipeline/types.ts";
-import { makeAuthRouterServiceFake } from "../services/auth_router.ts";
-import { makeEnvoyServiceFake } from "../services/envoy.ts";
-import { makeNetworkRuntimeServiceFake } from "../services/network_runtime.ts";
-import { makeSessionBrokerServiceFake } from "../services/session_broker.ts";
+} from "../../config/types.ts";
+import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
+import type { ContainerPlan } from "../../pipeline/state.ts";
+import type { HostEnv, ProbeResults, StageInput } from "../../pipeline/types.ts";
+import { makeAuthRouterServiceFake } from "./auth_router_service.ts";
+import { makeEnvoyServiceFake } from "./envoy_service.ts";
+import { makeNetworkRuntimeServiceFake } from "./network_runtime_service.ts";
+import { makeSessionBrokerServiceFake } from "./session_broker_service.ts";
 import {
   buildNetworkRuntimePaths,
   createProxyStage,
@@ -30,7 +30,7 @@ import {
   LOCAL_PROXY_PORT,
   planProxy,
   replaceNetwork,
-} from "./proxy.ts";
+} from "./stage.ts";
 
 const DEFAULT_PROMPT = {
   enable: false,

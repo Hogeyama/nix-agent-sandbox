@@ -7,13 +7,13 @@
 
 import { expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
-import { makeFsServiceFake } from "./fs.ts";
+import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import { makeFsServiceFake } from "../../services/fs.ts";
 import {
   NetworkRuntimeService,
   NetworkRuntimeServiceLive,
-} from "./network_runtime.ts";
-import { makeProcessServiceFake, type ProcessService } from "./process.ts";
+} from "./network_runtime_service.ts";
+import { makeProcessServiceFake, type ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -156,7 +156,7 @@ test("gcStaleRuntime: dead process cleanup survives missing socket", async () =>
 test("renderEnvoyConfig: reads template and writes it to paths.envoyConfigFile", async () => {
   // Use Live FsService so resolveAsset can locate the real template file.
   // Only the destination write is verified (into a tmp dir via the fake).
-  const { FsServiceLive } = await import("./fs.ts");
+  const { FsServiceLive } = await import("../../services/fs.ts");
   const { mkdtemp, rm, readFile } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const pathMod = await import("node:path");

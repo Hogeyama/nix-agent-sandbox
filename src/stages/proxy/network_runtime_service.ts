@@ -7,10 +7,10 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import { resolveAsset } from "../lib/asset.ts";
-import type { NetworkRuntimePaths } from "../network/registry.ts";
-import { FsService } from "./fs.ts";
-import { ProcessService } from "./process.ts";
+import { resolveAsset } from "../../lib/asset.ts";
+import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import { FsService } from "../../services/fs.ts";
+import { ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // NetworkRuntimeService tag
@@ -80,7 +80,7 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           const envoyTemplatePath = resolveAsset(
             "docker/envoy/envoy.template.yaml",
             import.meta.url,
-            "../docker/envoy/envoy.template.yaml",
+            "../../docker/envoy/envoy.template.yaml",
           );
           const source = yield* fs.readFile(envoyTemplatePath);
           yield* fs.writeFile(paths.envoyConfigFile, source, { mode: 0o644 });
