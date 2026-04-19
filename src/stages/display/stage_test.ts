@@ -109,6 +109,7 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     gitWorktreeMainRoot: null,
     xpraBinPath: "/usr/bin/xpra",
     takenX11Displays: new Set<number>(),
+    x11UnixDirReadOnly: false,
     ...overrides,
   };
 }
@@ -306,6 +307,48 @@ test("DisplayStage: surfaces 'xpra not found' error when binary missing", async 
     }
   }
 });
+
+// ===========================================================================
+// planDisplay: x11UnixDirReadOnly (WSL unshare support)
+// ===========================================================================
+
+test("planDisplay: sets unshareBindMount when x11UnixDirReadOnly is true", () => {
+  const input = makeStageInput(
+    makeProfile({ display: { sandbox: "xpra", size: "1920x1080" } }),
+  );
+  const probes = makeMountProbes({ x11UnixDirReadOnly: true });
+  const result = planDisplay(input, probes);
+  expect(result.kind).toEqual("ok");
+  if (result.kind === "ok") {
+    const plan = result.plan.startPlan;
+    expect(plan.unshareBindMount).toBeDefined();
+    expect(plan.unshareBindMount!.realDir).toEqual(
+      "/run/user/1000/nas/display/test-session-1234/X11-unix",
+    );
+    // socketPath は realDir 配下の実体パスを指す
+    expect(plan.socketPath).toEqual(
+      "/run/user/1000/nas/display/test-session-1234/X11-unix/X100",
+    );
+  }
+});
+
+test("planDisplay: does not set unshareBindMount when x11UnixDirReadOnly is false", () => {
+  const input = makeStageInput(
+    makeProfile({ display: { sandbox: "xpra", size: "1920x1080" } }),
+  );
+  const probes = makeMountProbes({ x11UnixDirReadOnly: false });
+  const result = planDisplay(input, probes);
+  expect(result.kind).toEqual("ok");
+  if (result.kind === "ok") {
+    const plan = result.plan.startPlan;
+    expect(plan.unshareBindMount).toBeUndefined();
+    expect(plan.socketPath).toEqual("/tmp/.X11-unix/X100");
+  }
+});
+
+// ===========================================================================
+// EffectStage orchestration (continued)
+// ===========================================================================
 
 test("DisplayStage: kill handler runs on scope close", async () => {
   let killCalls = 0;

@@ -399,7 +399,10 @@ export function planMount(
   if (display.enabled) {
     // xpra が spawn した Xvfb のソケットだけをマウント
     // (ホスト側 /tmp/.X11-unix 全体は渡さない)
-    addMount(args, mounts, display.socketPath, display.socketPath, true);
+    // unshare 方式ではソケットの実体が sessionDir 配下にあるため、
+    // コンテナ内では /tmp/.X11-unix/X<N> にマウントし直す必要がある。
+    const containerSocketPath = `/tmp/.X11-unix/X${display.displayNumber}`;
+    addMount(args, mounts, display.socketPath, containerSocketPath, true);
     // per-session xauthority を ~/.Xauthority へ bind
     addMount(
       args,

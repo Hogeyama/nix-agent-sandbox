@@ -126,6 +126,7 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     gitWorktreeMainRoot: null,
     xpraBinPath: null,
     takenX11Displays: new Set<number>(),
+    x11UnixDirReadOnly: false,
     ...overrides,
   };
 }

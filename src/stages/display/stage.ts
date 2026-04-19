@@ -98,8 +98,17 @@ export function planDisplay(
 
   const sessionDir = resolveSessionDir(input);
   const xauthorityPath = `${sessionDir}/Xauthority`;
-  const socketPath = `/tmp/.X11-unix/X${displayNumber}`;
   const xpraInternalXauthPath = resolveXpraInternalXauthPath(input);
+
+  // WSL 等で /tmp/.X11-unix が ro の場合、unshare + bind mount で回避する。
+  // ソケットの実体は sessionDir 配下に作り、Docker にはそちらをマウントする。
+  const useUnshare = mountProbes.x11UnixDirReadOnly;
+  const unshareBindMount = useUnshare
+    ? { realDir: `${sessionDir}/X11-unix` }
+    : undefined;
+  const socketPath = useUnshare
+    ? `${sessionDir}/X11-unix/X${displayNumber}`
+    : `/tmp/.X11-unix/X${displayNumber}`;
 
   return {
     kind: "ok",
@@ -115,6 +124,7 @@ export function planDisplay(
         timeoutMs: SOCKET_READY_TIMEOUT_MS,
         pollIntervalMs: SOCKET_READY_POLL_MS,
         sessionId: input.sessionId,
+        unshareBindMount,
       },
     },
   };

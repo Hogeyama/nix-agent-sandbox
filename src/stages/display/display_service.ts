@@ -18,7 +18,7 @@ import {
   writeDisplayRegistry,
 } from "../../display/registry.ts";
 import { FsService } from "../../services/fs.ts";
-import { ProcessService } from "../../services/process.ts";
+import { ProcessService, type SpawnHandle } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // Service-local plan interface
@@ -41,6 +41,15 @@ export interface DisplayStartPlan {
   readonly timeoutMs: number;
   readonly pollIntervalMs: number;
   readonly sessionId: string;
+  /**
+   * /tmp/.X11-unix が read-only (WSL 等) の場合に設定される。
+   * unshare --user --mount で private mount namespace を作り、
+   * realDir を /tmp/.X11-unix に bind mount して xpra を起動する。
+   * socketPath は realDir 配下の実体パスを指す。
+   */
+  readonly unshareBindMount?: {
+    readonly realDir: string;
+  };
 }
 
 export interface DisplayHandle {
@@ -192,6 +201,37 @@ async function readXpraCookieWithRetry(
 }
 
 // ---------------------------------------------------------------------------
+// unshare helper
+// ---------------------------------------------------------------------------
+
+/**
+ * WSL 等で /tmp/.X11-unix が read-only の場合に xpra を unshare 経由で起動する。
+ *
+ * `unshare --user --mount --map-root-user` で private mount namespace を作り、
+ * `plan.unshareBindMount.realDir` を `/tmp/.X11-unix` に bind mount してから
+ * xpra を exec する。Xvfb は `/tmp/.X11-unix/X<N>` にソケットを作るが、
+ * 実体は realDir 配下に置かれるため、namespace 外の Docker からもアクセスできる。
+ */
+function spawnXpraWithUnshare(
+  proc: Context.Tag.Service<typeof ProcessService>,
+  plan: DisplayStartPlan,
+  xpraArgs: string[],
+  logPath: string,
+): Effect.Effect<SpawnHandle> {
+  const bind = plan.unshareBindMount!;
+  // shell 内で mount → exec xpra する。引数は全て single-quote で安全にエスケープ。
+  const xpraCmd = [plan.xpraBinaryPath, ...xpraArgs]
+    .map((a) => `'${a.replace(/'/g, "'\\''")}'`)
+    .join(" ");
+  const script = `mount --bind '${bind.realDir}' /tmp/.X11-unix && exec ${xpraCmd}`;
+  return proc.spawn(
+    "unshare",
+    ["--user", "--mount", "--map-root-user", "sh", "-c", script],
+    { logFile: logPath },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Live implementation
 // ---------------------------------------------------------------------------
 
@@ -226,6 +266,14 @@ export const DisplayServiceLive: Layer.Layer<
           }).pipe(Effect.catchAll(() => Effect.void));
 
           yield* fs.mkdir(plan.sessionDir, { recursive: true, mode: 0o700 });
+
+          // unshare + bind mount が必要な場合 (WSL 等)、realDir を先に作る
+          if (plan.unshareBindMount) {
+            yield* fs.mkdir(plan.unshareBindMount.realDir, {
+              recursive: true,
+              mode: 0o700,
+            });
+          }
 
           // xpra には default の Xvfb コマンドを使わせる。`--xvfb` で
           // `-auth <file>` を上書きすると、xpra 内部で別 cookie を生成
@@ -262,8 +310,15 @@ export const DisplayServiceLive: Layer.Layer<
           // agent TTY に混ざるのでどちらもダメ。ファイルに落として後から
           // `tail` で見れる形が一番扱いやすい。
           const logPath = `${plan.sessionDir}/xpra.log`;
+
+          // WSL 等で /tmp/.X11-unix が ro の場合、unshare で private mount
+          // namespace を作り、writable dir を /tmp/.X11-unix に bind mount
+          // してから xpra を起動する。ソケットの実体は realDir に作られるため
+          // Docker からも namespace 外からもアクセスできる。
           const spawnHandle = yield* Effect.acquireRelease(
-            proc.spawn(plan.xpraBinaryPath, xpraArgs, { logFile: logPath }),
+            plan.unshareBindMount
+              ? spawnXpraWithUnshare(proc, plan, xpraArgs, logPath)
+              : proc.spawn(plan.xpraBinaryPath, xpraArgs, { logFile: logPath }),
             (handle) => Effect.sync(() => handle.kill()),
           );
 

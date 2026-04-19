@@ -5,7 +5,7 @@
  * plan() が純粋関数になるようにデータとして返す。
  */
 
-import { readdir, realpath, stat } from "node:fs/promises";
+import { readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { ClaudeProbes } from "../../agents/claude.ts";
 import { resolveClaudeProbes } from "../../agents/claude.ts";
@@ -83,6 +83,8 @@ export interface MountProbes {
   xpraBinPath: string | null;
   /** /tmp/.X11-unix/X* で既に使用されている display 番号 */
   takenX11Displays: ReadonlySet<number>;
+  /** /tmp/.X11-unix が read-only か (WSL 等で ro マウントされている場合 true) */
+  x11UnixDirReadOnly: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,10 +160,13 @@ export async function resolveMountProbes(
   const gitWorktreeMainRoot = await resolveGitWorktreeMainRoot(workDir);
 
   // display: xpra サンドボックス用のバイナリ探索と X11 display 採番
-  const [xpraBinPath, takenX11Displays] = await Promise.all([
-    resolveBinaryPath("xpra"),
-    resolveTakenX11Displays(),
-  ]);
+  const [xpraBinPath, takenX11Displays, x11UnixDirReadOnly] = await Promise.all(
+    [
+      resolveBinaryPath("xpra"),
+      resolveTakenX11Displays(),
+      resolveX11UnixDirReadOnly(),
+    ],
+  );
 
   return {
     agentProbes,
@@ -180,6 +185,7 @@ export async function resolveMountProbes(
     gitWorktreeMainRoot,
     xpraBinPath,
     takenX11Displays,
+    x11UnixDirReadOnly,
   };
 }
 
@@ -217,6 +223,24 @@ async function resolveTakenX11Displays(): Promise<ReadonlySet<number>> {
     // /tmp/.X11-unix が無い環境 (Wayland のみ等) は空集合
   }
   return taken;
+}
+
+const X11_UNIX_DIR = "/tmp/.X11-unix";
+
+/**
+ * /tmp/.X11-unix が read-only かどうかを判定する。
+ * WSL では /tmp/.X11-unix がカーネルにより ro マウントされているため、
+ * Xvfb がソケットを作成できない。tmpfile 作成→即削除で判定する。
+ */
+async function resolveX11UnixDirReadOnly(): Promise<boolean> {
+  const testFile = `${X11_UNIX_DIR}/.nas-probe-${process.pid}`;
+  try {
+    await writeFile(testFile, "");
+    await unlink(testFile);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 // ---------------------------------------------------------------------------

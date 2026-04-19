@@ -152,6 +152,9 @@ profiles:
 > [!WARNING]
 > 仮想 X server **内部**ではエージェントは依然として X11 client として全権を持ちます。auto-attach された viewer ウィンドウにフォーカスを当てている間は、ユーザのキー入力やクリップボード内容が viewer 経由でエージェント側のアプリに流れます（これは X11 アプリを操作している以上避けられない仕様）。この仮想 server に別の信頼アプリを同時に attach しないでください。xpra/Xvfb 自体に脆弱性があった場合のみホスト権限まで escape する余地が残りますが、ホスト本体の X server に対するキーロガー・画面キャプチャ・キー注入・クリップボード窃取は構造的に不可能になります。
 
+> [!NOTE]
+> **WSL ユーザー向け**: WSL2 では `/tmp/.X11-unix` がカーネルにより read-only マウントされているため、Xvfb がソケットを作成できません。nas はこの状況を自動検知し、`unshare --user --mount` で private mount namespace を作成して回避します。ソケットの実体はセッションディレクトリ配下に置かれるため、Docker からも問題なくアクセスできます。この回避策は unprivileged user namespace が利用可能な環境で動作します。もし `unshare` が失敗する場合は、`sudo mount -o remount,rw /tmp/.X11-unix` を nas 起動前に実行してください。
+
 ### セッション管理（dtach）
 
 `session.multiplex: true` にすると、nas プロセス全体（プロキシ等を含む）が dtach セッション内で起動されます。これにより複数のターミナルから同じセッションに attach でき、detach してもコンテナやプロキシは動き続けます。tmux と違い prefix キーの衝突やヘッダの二重表示が起きません。
