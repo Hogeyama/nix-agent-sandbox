@@ -1,4 +1,5 @@
-import { rm } from "node:fs/promises";
+import { mkdir, rm, rmdir } from "node:fs/promises";
+import * as path from "node:path";
 import { appendAuditLog } from "../audit/store.ts";
 import type { AuditLogEntry } from "../audit/types.ts";
 import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
@@ -145,6 +146,7 @@ export class SessionBroker {
 
   async start(socketPath: string): Promise<void> {
     this.socketPath = socketPath;
+    await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
     await rm(socketPath, { force: true });
     this.server = await createUnixServer(
       socketPath,
@@ -184,6 +186,13 @@ export class SessionBroker {
     await rm(sock, { force: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         logInfo(`[nas] NetworkBroker: failed to remove socket: ${e}`);
+      }
+    });
+    await rmdir(path.dirname(sock)).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        logInfo(
+          `[nas] NetworkBroker: failed to remove session broker dir: ${e}`,
+        );
       }
     });
   }

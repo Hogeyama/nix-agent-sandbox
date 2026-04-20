@@ -322,7 +322,9 @@ test("GET /network/pending with pending entry returns it", async () => {
     );
 
     // Create a fake broker socket file so GC doesn't remove the session
-    const brokerSocketPath = `${tmpDir}/network/brokers/${sessionId}.sock`;
+    const brokerSocketDir = `${tmpDir}/network/brokers/${sessionId}`;
+    await mkdir(brokerSocketDir, { recursive: true, mode: 0o700 });
+    const brokerSocketPath = `${brokerSocketDir}/sock`;
     await writeFile(brokerSocketPath, "");
 
     // Write a session registry so GC doesn't remove it

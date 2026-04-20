@@ -64,14 +64,19 @@ export function sessionRegistryPath(
   );
 }
 
+export function sessionBrokerDir(
+  paths: BaseRuntimePaths,
+  sessionId: string,
+): string {
+  return assertWithin(paths.brokersDir, path.join(paths.brokersDir, sessionId));
+}
+
 export function brokerSocketPath(
   paths: BaseRuntimePaths,
   sessionId: string,
 ): string {
-  return assertWithin(
-    paths.brokersDir,
-    path.join(paths.brokersDir, `${sessionId}.sock`),
-  );
+  const sessionDir = sessionBrokerDir(paths, sessionId);
+  return assertWithin(sessionDir, path.join(sessionDir, "sock"));
 }
 
 export function pendingSessionDir(
@@ -216,15 +221,14 @@ export async function gcRuntime<S extends BaseSessionEntry>(
   }
 
   try {
-    for (const socketEntry of await readdir(paths.brokersDir, {
+    for (const entry of await readdir(paths.brokersDir, {
       withFileTypes: true,
     })) {
-      if (!socketEntry.isFile() && !socketEntry.isSymbolicLink()) continue;
-      const socketPath = path.join(paths.brokersDir, socketEntry.name);
-      const sessionId = socketEntry.name.replace(/\.sock$/, "");
-      if (liveSessionIds.has(sessionId)) continue;
-      await safeRemove(socketPath);
-      removedBrokerSockets.push(socketPath);
+      if (!entry.isDirectory()) continue;
+      if (liveSessionIds.has(entry.name)) continue;
+      const subdir = path.join(paths.brokersDir, entry.name);
+      await safeRemove(subdir, { recursive: true });
+      removedBrokerSockets.push(path.join(subdir, "sock"));
     }
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;

@@ -18,6 +18,7 @@ import {
   hashToken,
 } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import { brokerSocketPath } from "../../network/registry.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
@@ -105,10 +106,7 @@ export function planProxy(
     options.generateSessionToken ?? defaultGenerateToken;
 
   const runtimePaths = buildNetworkRuntimePaths(input.host);
-  const brokerSocket = path.join(
-    runtimePaths.brokersDir,
-    `${input.sessionId}.sock`,
-  );
+  const brokerSocket = brokerSocketPath(runtimePaths, input.sessionId);
   const prompt = input.profile.network.prompt;
   const token = generateSessionToken();
   const sessionNetworkName = `nas-session-net-${input.sessionId}`;

@@ -19,7 +19,11 @@ import {
   isBareCommandHostExecArgv0,
   isRelativeHostExecArgv0,
 } from "../../hostexec/match.ts";
-import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
+import {
+  type HostExecRuntimePaths,
+  hostExecBrokerSocketPath,
+  hostExecSessionBrokerDir,
+} from "../../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
@@ -219,10 +223,11 @@ export async function planHostExec(
   const workspace = resolveWorkspace(input);
 
   const runtimePaths = resolveHostExecRuntimePathsPure(input.host);
-  const socketPath = path.join(
-    runtimePaths.brokersDir,
-    `${input.sessionId}.sock`,
+  const sessionBrokerDirPath = hostExecSessionBrokerDir(
+    runtimePaths,
+    input.sessionId,
   );
+  const socketPath = hostExecBrokerSocketPath(runtimePaths, input.sessionId);
   const wrapperRoot = path.join(runtimePaths.wrappersDir, input.sessionId);
   const wrapperBinDir = path.join(wrapperRoot, "bin");
   const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
@@ -234,6 +239,7 @@ export async function planHostExec(
     { path: runtimePaths.sessionsDir, mode: 0o700 },
     { path: runtimePaths.pendingDir, mode: 0o700 },
     { path: runtimePaths.brokersDir, mode: 0o700 },
+    { path: sessionBrokerDirPath, mode: 0o700 },
     { path: runtimePaths.wrappersDir, mode: 0o700 },
     { path: wrapperBinDir, mode: 0o755 },
     { path: sessionTmpDir, mode: 0o700 },
@@ -284,7 +290,7 @@ export async function planHostExec(
     "-v",
     addMount(mounts, wrapperBinDir, WRAPPER_DIR, true),
     "-v",
-    addMount(mounts, runtimePaths.brokersDir, runtimePaths.brokersDir),
+    addMount(mounts, sessionBrokerDirPath, sessionBrokerDirPath),
     "-v",
     addMount(mounts, sessionTmpDir, containerSessionTmp),
   ];

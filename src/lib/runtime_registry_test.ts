@@ -41,7 +41,7 @@ test("brokerSocketPath rejects traversal via ..", () => {
 
 test("brokerSocketPath accepts a plain sessionId", () => {
   expect(brokerSocketPath(paths, "sess_abc123")).toBe(
-    path.join(paths.brokersDir, "sess_abc123.sock"),
+    path.join(paths.brokersDir, "sess_abc123", "sock"),
   );
 });
 

@@ -694,7 +694,7 @@ test("HostExecStage: run merges hostexec mounts and env into container and hoste
   expect(result.hostexec).toEqual({
     runtimeDir: "/tmp/nas-test-runtime/nas/hostexec",
     brokerSocket:
-      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id.sock",
+      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id/sock",
     sessionTmpDir: "/tmp/nas-hostexec/test-session-id",
   });
   expect(result.container?.mounts).toEqual(
@@ -711,7 +711,7 @@ test("HostExecStage: run merges hostexec mounts and env into container and hoste
   expect(result.container?.env.static).toEqual({
     EXISTING_ENV: "1",
     NAS_HOSTEXEC_SOCKET:
-      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id.sock",
+      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id/sock",
     NAS_HOSTEXEC_WRAPPER_DIR: "/opt/nas/hostexec/bin",
     NAS_HOSTEXEC_SESSION_ID: "test-session-id",
     NAS_HOSTEXEC_SESSION_TMP: "/tmp/nas-hostexec/test-session-id",

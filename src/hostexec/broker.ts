@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { mkdir, rm, rmdir } from "node:fs/promises";
 import * as path from "node:path";
 import { appendAuditLog } from "../audit/store.ts";
 import type { AuditLogEntry } from "../audit/types.ts";
@@ -135,6 +135,7 @@ export class HostExecBroker {
 
   async start(socketPath: string): Promise<void> {
     this.socketPath = socketPath;
+    await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
     await rm(socketPath, { force: true });
     this.server = await createUnixServer(
       socketPath,
@@ -168,6 +169,13 @@ export class HostExecBroker {
     await rm(target, { force: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         logInfo(`[nas] HostExecBroker: failed to remove socket: ${e}`);
+      }
+    });
+    await rmdir(path.dirname(target)).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        logInfo(
+          `[nas] HostExecBroker: failed to remove session broker dir: ${e}`,
+        );
       }
     });
   }

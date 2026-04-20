@@ -27,7 +27,7 @@ test("SessionBroker: allowlist hit returns allow immediately", async () => {
     notify: "off",
     auditDir,
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     const response = await sendBrokerRequest<DecisionResponse>(
@@ -65,7 +65,7 @@ test("SessionBroker: pending request resumes after approve", async () => {
     notify: "off",
     auditDir,
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     const authorizePromise = sendBrokerRequest<DecisionResponse>(
@@ -145,7 +145,7 @@ true
       notify: "desktop",
       uiPort: healthServer.port,
     });
-    const socketPath = `${paths.brokersDir}/sess_test.sock`;
+    const socketPath = `${paths.brokersDir}/sess_test/sock`;
     await broker.start(socketPath);
     try {
       const authorizePromise = sendBrokerRequest<DecisionResponse>(
@@ -207,7 +207,7 @@ test("SessionBroker: denylist hit returns deny immediately", async () => {
     notify: "off",
     auditDir,
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     const response = await sendBrokerRequest<DecisionResponse>(
@@ -242,7 +242,7 @@ test("SessionBroker: allowlist=*.example.com allows sub.example.com even if deny
     defaultScope: "host-port",
     notify: "off",
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     const response = await sendBrokerRequest<DecisionResponse>(
@@ -270,7 +270,7 @@ test("SessionBroker: allowlist=sub.example.com, denylist=*.example.com denies ot
     defaultScope: "host-port",
     notify: "off",
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     // sub.example.com is in allowlist → allow
@@ -307,7 +307,7 @@ test("SessionBroker: denied target is cached as recent-deny", async () => {
     defaultScope: "host-port",
     notify: "off",
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     // Send an authorize request that goes to prompt, then deny it
@@ -351,7 +351,7 @@ test("SessionBroker: negative cache expires after TTL", async () => {
     notify: "off",
     negativeCacheTtlMs: 50,
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     // Deny a request to populate the negative cache
@@ -412,7 +412,7 @@ test("SessionBroker: deny with host-port scope persists beyond negative-cache TT
     notify: "off",
     negativeCacheTtlMs: 50,
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     const authorizePromise = sendBrokerRequest<DecisionResponse>(
@@ -459,7 +459,7 @@ test("SessionBroker: approve after group already resolved returns error", async 
     defaultScope: "host-port",
     notify: "off",
   });
-  const socketPath = `${paths.brokersDir}/sess_test.sock`;
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
     // Two concurrent authorize requests to the same host:port
@@ -532,7 +532,7 @@ test("SessionBroker: deny-by-default targets blocked even when in allowlist", as
       defaultScope: "host-port",
       notify: "off",
     });
-    const socketPath = `${paths.brokersDir}/sess_test.sock`;
+    const socketPath = `${paths.brokersDir}/sess_test/sock`;
     await broker.start(socketPath);
     try {
       const response = await sendBrokerRequest<DecisionResponse>(
@@ -563,7 +563,7 @@ test("SessionBroker: approve with unknown scope is rejected and request stays pe
     notify: "off",
     auditDir,
   });
-  const socketPath = `${paths.brokersDir}/sess_scope.sock`;
+  const socketPath = `${paths.brokersDir}/sess_scope/sock`;
   await broker.start(socketPath);
   try {
     const authorizePromise = sendBrokerRequest<DecisionResponse>(

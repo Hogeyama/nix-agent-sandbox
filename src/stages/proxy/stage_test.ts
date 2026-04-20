@@ -223,7 +223,7 @@ test("ProxyStage: sets outputOverrides", () => {
     promptEnabled: false,
   });
   expect(result.outputOverrides.proxy).toEqual({
-    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123.sock",
+    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123/sock",
     proxyEndpoint,
   });
 });
@@ -543,7 +543,7 @@ test("createProxyStage().run(): calls services and returns merged output", async
     promptEnabled: false,
   });
   expect(result.proxy).toEqual({
-    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123.sock",
+    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123/sock",
     proxyEndpoint,
   });
 

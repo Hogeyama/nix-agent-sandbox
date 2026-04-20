@@ -20,6 +20,7 @@ export {
   removePendingDir as removeHostExecPendingDir,
   removePendingEntry as removeHostExecPendingEntry,
   removeSessionRegistry as removeHostExecSessionRegistry,
+  sessionBrokerDir as hostExecSessionBrokerDir,
   sessionRegistryPath as hostExecSessionRegistryPath,
   writePendingEntry as writeHostExecPendingEntry,
   writeSessionRegistry as writeHostExecSessionRegistry,
