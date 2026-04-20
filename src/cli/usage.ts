@@ -9,9 +9,11 @@ Usage:
   nas [options-before-profile] [profile-name] [agent-args...]
   nas rebuild [profile-name] [options]
   nas worktree [list|clean] [options]
-  nas container clean
+  nas container [list|clean]
+  nas session [list|attach <session-id>]
   nas network [pending|approve|deny|review|gc]
-  nas ui [--port PORT] [--no-open]
+  nas hostexec [pending|approve|deny|review|test] [options]
+  nas ui [stop] [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
   nas hook --kind start|attention|stop [--when path=value ...]
 
@@ -19,11 +21,12 @@ Subcommands:
   rebuild   Docker イメージを削除して再ビルドする
   worktree  git worktree の管理
   container sidecar container の管理
+  session   dtach セッションの管理
   network   network 承認キューと runtime の管理
   hostexec  hostexec 承認キューの管理
   ui        Web ダッシュボードを起動する
   audit     監査ログを表示する
-  hook              Report a session event from an agent hook (internal use)
+  hook      Report a session event from an agent hook (internal use)
 
 Options:
   (main command only — must appear before [profile-name])
@@ -53,18 +56,25 @@ Worktree subcommand options:
   -B, --delete-branch  worktree 削除時にブランチも削除
 
 Container options:
+  list            nas 管理コンテナを一覧表示
   clean           未使用の nas sidecar container/network/volume を削除
+
+Session options:
+  list            アクティブな dtach セッション一覧（デフォルト）
+  attach <id>     セッションに再接続
 
 Network options:
   pending         保留中の network 承認要求を表示
   approve         承認する
   deny            拒否する
+  review          fzf で対話的に承認/拒否する
   gc              stale runtime state を掃除する
 
 HostExec options:
   pending         保留中の hostexec 承認要求を表示
   approve         承認する
   deny            拒否する
+  review          fzf で対話的に承認/拒否する
   test            ルールマッチングをテストする
 
 Audit options:
