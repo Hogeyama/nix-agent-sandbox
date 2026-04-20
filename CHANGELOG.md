@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] - 2026-04-21
+
+### Security
+
+- **HostExec / Network broker**: isolate per-session broker sockets under a per-session 0o700 subdirectory (`brokers/{sessionId}/sock`) and bind-mount only that subdir into the agent container. Sibling sessions' sockets are no longer reachable — or nameable — from within the container, closing a defense-in-depth gap where the broker protocol performed no peer-cred or `sessionId` check ([eb8a3e0], [8cb6b72])
+
+### Fixed
+
+- **CLI**: update `--help` output to match implemented subcommands (session, container list, ui stop, hostexec subcommands, review) ([24d1f31])
+- **Docs**: correct README discrepancies with the current implementation ([ecd4900])
+
 ## [0.10.0] - 2026-04-19
 
 ### Added
