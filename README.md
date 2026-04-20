@@ -164,7 +164,7 @@ profiles:
   claude:
     agent: claude
     session:
-      enable: true
+      multiplex: true
       detach-key: "^\\"   # デタッチキー（デフォルト: Ctrl+\）
 ```
 
@@ -734,16 +734,16 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `agent` | `"claude"` \| `"copilot"` \| `"codex"` | （必須） | 使用するエージェント |
 | `worktree.base` | string | `"origin/main"` | worktree のベースブランチ |
 | `worktree.on-create` | string | `""` | worktree 作成後に実行するコマンド |
-| `worktree.cleanup` | `"force"` \| `"auto"` \| `"keep"` | `"auto"` | エージェント終了後の worktree 処理。`force`: 常に削除、`auto`: 未コミット変更がなければ削除、`keep`: 常に残す |
 | `session.multiplex` | bool | `false` | dtach セッション内で nas を起動する。複数ターミナルからの同時 attach や detach 後の再接続が可能 |
 | `session.detach-key` | string | `"^\\"` | dtach のデタッチキー（デフォルト: Ctrl+\） |
-| `nix.enable` | bool \| `"auto"` | `"auto"` | Nix 統合。`auto` は `flake.nix` で判定 |
+| `nix.enable` | bool \| `"auto"` | `"auto"` | Nix 統合。`auto` は `/nix` の有無で判定 |
 | `nix.mount-socket` | bool | `true` | ホストの nix daemon にソケット経由で接続 |
 | `nix.extra-packages` | string[] | `[]` | `nix shell` で追加するパッケージ（`nix develop` 前に適用） |
 | `docker.enable` | bool | `false` | DinD rootless サイドカーを起動して隔離された Docker 環境を提供 |
 | `docker.shared` | bool | `false` | サイドカーをセッション間で共有（起動が速い。`false` ではセッションごとに起動・破棄） |
 | `network.allowlist` | string[] | `[]` | 即時許可する外部ドメインのリスト。`"example.com"`（全ポート）または `"example.com:443"`（ポート指定）形式、`"*.example.com:443"` のようなワイルドカード + ポート指定も可能。allowlist 外通信は `network.prompt.enable` が無効なら拒否、有効なら pending になる |
 | `network.prompt.enable` | bool | `false` | allowlist 外通信を session ごとの承認キューに入れる |
+| `network.prompt.denylist` | string[] | `[]` | 即時拒否するドメインのリスト。形式は `allowlist` と同じ。`allowlist` と重複するエントリがある場合はバリデーションエラー |
 | `network.prompt.timeout-seconds` | number | `300` | pending 承認の待機秒数。タイムアウト時は deny |
 | `network.prompt.default-scope` | `"once"` \| `"host-port"` \| `"host"` | `"host-port"` | `nas network approve` の既定 scope。`once`: そのリクエストのみ、`host-port`: 同じホスト+ポートへの通信を以降許可、`host`: 同じホストへの全ポート通信を以降許可 |
 | `network.prompt.notify` | `"auto"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`ui.enable: true` なら通知クリックでブラウザ UI を開く。`false` なら通知ボタンで直接 approve/deny |
@@ -762,6 +762,7 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `display.size` | string | `"1920x1080"` | Xvfb のスクリーンサイズ。`"WIDTHxHEIGHT"` 形式（各値 1〜16384） |
 | `extra-mounts` | list | `[]` | 追加マウント。`[{ src, dst, mode? }]`（`mode` は `"ro"`/`"rw"`、省略時 `"ro"`）。`src`/`dst` は絶対パスのほか `~` と workDir 基準の相対パスも可。既存ワークスペース配下への単一ファイルマウント（例: `/dev/null` → `.env`）も可 |
 | `env` | list | `[]` | `[{ key, val }]` または `[{ key, val_cmd }]` 形式で環境変数を追加。`mode`（`"set"` / `"prefix"` / `"suffix"`、デフォルト `"set"`）と `separator`（prefix/suffix 時は必須）で既存値への prepend/append が可能 |
+| `hook.notify` | `"auto"` \| `"desktop"` \| `"off"` | `"auto"` | `nas hook` による状態通知の backend。`ui.enable: true` なら UI daemon 経由、`false` ならデスクトップ通知 |
 | `hostexec.secrets.<name>.from` | string | （必須） | secret の取得元。`env:VAR_NAME` / `file:/absolute/path` / `dotenv:/absolute/path#KEY` / `keyring:service/account` |
 | `hostexec.secrets.<name>.required` | bool | `true` | secret が取得できない場合にエラーにするか |
 | `hostexec.prompt.enable` | bool | `true` | `approval: prompt` の hostexec 実行を承認キューに入れる |
