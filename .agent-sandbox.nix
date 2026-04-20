@@ -200,6 +200,23 @@ let
           fallback = "container";
         }
         {
+          # mo の危険引数を遮断：
+          #   --port/-p: forward-ports と衝突させるとホスト側 mo がコンテナから読める
+          #   --bind/-b: 非ループバックへ bind されるとネットワーク越しに露出
+          #   --dangerously-allow-remote-access: 安全プロンプトのバイパス
+          #   絶対パス / ~ / .. を含む位置引数・値: workspace 外の host ファイル参照を禁止
+          id = "mo-guard";
+          match = {
+            argv0 = "mo";
+            arg-regex = ''((^|\s)(--port|-p|--bind|-b|--dangerously-allow-remote-access)(\s|=|$))|((^|\s|=)/)|((^|\s|=)~)|((^|\s|=|/)\.\.(\s|$|/))'';
+          };
+          cwd = {
+            mode = "workspace-or-session-tmp";
+          };
+          approval = "deny";
+          fallback = "deny";
+        }
+        {
           id = "mo";
           match = {
             argv0 = "mo";
