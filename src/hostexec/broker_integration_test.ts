@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { queryAuditLogs } from "../audit/store.ts";
@@ -1074,3 +1082,85 @@ async function waitForPendingCount(
 ) {
   return await waitForPendingEntries(paths, count);
 }
+
+test("HostExecBroker: isolates sockets per session under 0o700 subdirs", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+
+  const brokerA = new HostExecBroker({
+    paths,
+    sessionId: "sess_alpha",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: process.cwd(),
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig(),
+  });
+  const brokerB = new HostExecBroker({
+    paths,
+    sessionId: "sess_beta",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: process.cwd(),
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig(),
+  });
+
+  const socketA = hostExecBrokerSocketPath(paths, "sess_alpha");
+  const socketB = hostExecBrokerSocketPath(paths, "sess_beta");
+
+  try {
+    await brokerA.start(socketA);
+    await brokerB.start(socketB);
+
+    expect(path.dirname(socketA)).toBe(
+      path.join(paths.brokersDir, "sess_alpha"),
+    );
+    expect(path.dirname(socketB)).toBe(
+      path.join(paths.brokersDir, "sess_beta"),
+    );
+    expect(path.basename(socketA)).toBe("sock");
+
+    const dirA = await stat(path.dirname(socketA));
+    const dirB = await stat(path.dirname(socketB));
+    expect(dirA.mode & 0o777).toBe(0o700);
+    expect(dirB.mode & 0o777).toBe(0o700);
+
+    const entries = (await readdir(paths.brokersDir)).sort();
+    expect(entries).toEqual(["sess_alpha", "sess_beta"]);
+
+    // Each session's subdir contains only its own socket — sibling
+    // sockets are not reachable by name from the other subdir.
+    const inA = await readdir(path.dirname(socketA));
+    const inB = await readdir(path.dirname(socketB));
+    expect(inA).toEqual(["sock"]);
+    expect(inB).toEqual(["sock"]);
+  } finally {
+    await brokerA.close();
+    await brokerB.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: close() removes both socket and session subdir", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_cleanup",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: process.cwd(),
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig(),
+  });
+  const socketPath = hostExecBrokerSocketPath(paths, "sess_cleanup");
+  try {
+    await broker.start(socketPath);
+    expect(await readdir(paths.brokersDir)).toEqual(["sess_cleanup"]);
+    await broker.close();
+    expect(await readdir(paths.brokersDir)).toEqual([]);
+  } finally {
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
