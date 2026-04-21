@@ -2,6 +2,7 @@
  * nas session サブコマンド
  */
 
+import { makeSessionUiClient } from "../domain/session.ts";
 import {
   dtachAttach,
   dtachHasSession,
@@ -9,12 +10,13 @@ import {
   dtachListSessions,
   socketPathFor,
 } from "../dtach/client.ts";
-import { listSessions, resolveSessionRuntimePaths } from "../sessions/store.ts";
+import { resolveSessionRuntimePaths } from "../sessions/store.ts";
 import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 
 export async function runSessionCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((a) => !a.startsWith("-"));
   const formatJson = hasFormatJson(nasArgs);
+  const client = makeSessionUiClient();
 
   try {
     if (sub === "list") {
@@ -25,7 +27,7 @@ export async function runSessionCommand(nasArgs: string[]): Promise<void> {
 
       const sessions = await dtachListSessions();
       const sessionPaths = resolveSessionRuntimePaths();
-      const storeRecords = await listSessions(sessionPaths);
+      const storeRecords = await client.list(sessionPaths);
       const nameById = new Map<string, string>();
       for (const record of storeRecords) {
         if (record.name) {

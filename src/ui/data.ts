@@ -21,6 +21,7 @@ import {
 import { makeAuditQueryClient } from "../domain/audit.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
+import { makeSessionUiClient } from "../domain/session.ts";
 import {
   dtachListSessions,
   dtachNewSession,
@@ -51,14 +52,11 @@ import {
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
 import {
-  listSessions,
-  acknowledgeSessionTurn as markSessionTurnAcknowledged,
   resolveSessionRuntimePaths,
   type SessionEventKind,
   type SessionRecord,
   type SessionRuntimePaths,
   type SessionTurn,
-  updateSessionName as storeUpdateSessionName,
 } from "../sessions/store.ts";
 import {
   buildShellSessionId,
@@ -177,6 +175,8 @@ export async function denyHostExec(
 
 // --- Sessions ---
 
+const sessionUiClient = makeSessionUiClient();
+
 export interface SessionsData {
   network: SessionRegistryEntry[];
   hostexec: HostExecSessionRegistryEntry[];
@@ -234,7 +234,7 @@ export async function acknowledgeSessionTurn(
   ctx: UiDataContext,
   sessionId: string,
 ): Promise<SessionRecord> {
-  return await markSessionTurnAcknowledged(ctx.sessionPaths, sessionId);
+  return await sessionUiClient.acknowledgeTurn(ctx.sessionPaths, sessionId);
 }
 
 export async function renameSession(
@@ -242,7 +242,7 @@ export async function renameSession(
   sessionId: string,
   name: string,
 ): Promise<SessionRecord> {
-  return await storeUpdateSessionName(ctx.sessionPaths, sessionId, name);
+  return await sessionUiClient.rename(ctx.sessionPaths, sessionId, name);
 }
 
 // --- Containers ---
@@ -324,7 +324,7 @@ export async function getNasContainers(
     }
   }
 
-  const sessions = await listSessions(ctx.sessionPaths);
+  const sessions = await sessionUiClient.list(ctx.sessionPaths);
   return joinSessionsToContainers(containers, sessions);
 }
 
