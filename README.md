@@ -658,15 +658,36 @@ session network
 
 ### HostExec の注意点
 
-- `hostexec` は「任意コマンドを host 実行できる機能」ではなく、構造化ルールで限定委譲する仕組みです
-- `bash -lc` / `sh -c` / `python -c` のような任意コード実行に繋がるルールは設定者の責任で避けてください
-- `unsafe-inherit-all` は互換性用の escape hatch であり、通常は `minimal` + `inherit-env.keys` を推奨します
-- `argv0` には bare name（`git`）、絶対パス（`/usr/bin/git`）、相対パス（`./gradlew`）を指定できます。
-  - bare name: PATH 上のラッパーシンボリックリンクで委譲します
-  - 絶対パス・相対パス: `LD_PRELOAD` による `execve` インターセプトで委譲します。
-- `arg-regex` は引数をスペースで join した文字列に対してマッチします。そのためスペースを含む単一引数（例: `git commit -m "hello world"` の `"hello world"`）と
-  複数引数の区別はできません。実用上、コマンド識別に使う先頭引数やフラグにスペースが含まれることは少ないため問題になることは多くないですが、
-  引数の値そのものに依存するマッチパターンを書く場合は留意してください
+hostexec ルールで許可したコマンドはホスト側で実行されるため、そのコマンドが持つ能力（任意コード実行経路、任意ファイル I/O、ネットワーク、鍵アクセス等）はそのままエージェントの能力になります。ルールを追加する際は「意図した機能」だけでなく「そのコマンドで他に何ができてしまうか」（全オプション、設定ファイル依存、任意コード実行パス）を把握した上で追加してください。特に `approval: allow` は恒久的な貫通口になるため、必要最小限に留めてください。
+
+ルール設計時の指針:
+
+- hostexec の入力となるパス（`argv0`、ホスト側 `PATH` に含まれるディレクトリ、委譲先コマンドが参照する設定ファイル 等）は、コンテナから書き込み不能に保たれる必要があります。これが崩れるとエージェントによる書き換えが直ちにホスト任意コード実行に繋がります
+  - 相対パス `argv0`（例: `./scripts/foo`）→ 対応する `extra-mounts` を `mode: ro` に
+  - bare name `argv0`（例: `git`）→ ホスト側 `PATH` 上のディレクトリ（`~/.local/bin`, `~/.nix-profile/bin` 等）を `extra-mounts` で rw マウントしない
+  - 設定ファイルを読むコマンド（`deno task` / `npm run` / `make` 等）→ 当該設定ファイルを `ro` マウントする
+- `allow` はできる限り避け、`approval: prompt` + 絞り込んだ `arg-regex` を既定とする
+- `bash -lc` / `sh -c` / `python -c` のような任意コード実行に直結する委譲はルール化しない
+- `unsafe-inherit-all` は互換性用の escape hatch。通常は `minimal` + `inherit-env.keys` を使う
+
+特に注意すべきコマンドカテゴリ:
+
+- **テスト・ビルドランナー**（`bun test`, `npm test`, `make`, `cargo` ...）: 定義上、テスト・ビルドファイル経由で任意コード実行
+- **言語ランタイム**（`python`, `node`, `ruby`, `deno` ...）: `-c` / スクリプト引数で任意コード実行
+- **ローカルに HTTP サーバを立てるツール**（静的ファイルサーバ / live-reload プレビュー / API モック 等）: `--bind` で非-loopback、あるいは `--port` を `network.proxy.forward-ports` と衝突させると、コンテナからホスト任意ファイルが読める経路になる
+- **`gpg`**: `--output` 系オプションでホスト任意パスへの書き込みが可能。`arg-regex` で意図した最小フォーマット（例: git の署名だけ許すなら `^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$`）に絞ること
+- **エディタ**（`vim`, `nvim`, `emacs` ...）: `:!` / 設定ファイルから任意コマンド起動
+- **ネットワークツール**（`curl`, `wget`, `ssh` ...）: 任意 I/O。`ssh` は `ProxyCommand` 経路でシェル実行
+- **`git`**: 引数内 alias 定義（`-c 'alias.x=!cmd'`）で任意シェルが走る。`git push` 等をピンポイントで deny するより、「想定の sub-command パターンに match する prompt ルール」の方が安全
+- **パッケージマネージャ**（`npm install`, `pip install`, `cargo install` ...）: post-install / build スクリプトによる任意コード実行
+- **プロセス置換系**（`env`, `xargs`, `find -exec`, `rg --pre` 等）: 結局別のコマンドに橋渡しする構造なので arg 制約が必須
+
+マッチ仕様と周辺の挙動:
+
+- `argv0` には bare name（`git`）、絶対パス（`/usr/bin/git`）、相対パス（`./scripts/foo`）を指定できます
+  - bare name: PATH 上のラッパーシンボリックリンクで委譲
+  - 絶対パス・相対パス: `LD_PRELOAD` による `execve` インターセプトで委譲
+- `arg-regex` は引数をスペースで join した文字列に対してマッチします。そのためスペースを含む単一引数（例: `git commit -m "hello world"` の `"hello world"`）と複数引数の区別はできません。実用上、コマンド識別に使う先頭引数やフラグにスペースが含まれることは少ないため問題になることは多くないですが、引数の値そのものに依存するマッチパターンを書く場合は留意してください
 - エージェント設定ディレクトリ（`~/.claude/` / `~/.copilot/` / `~/.codex/`）は存在すれば常にマウントされるため、これらに認証トークンが置かれている場合は hostexec を制限してもコンテナ内からアクセス可能です
 
 ### 常にマウントされるもの
