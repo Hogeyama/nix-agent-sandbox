@@ -25,7 +25,7 @@ CLI / UI の plain-async 呼び出しサイトのために `makeXxxClient(layer?
 という plain-async ブリッジも同梱する (Effect ランタイムで包まずに
 使える、Fake を差し込むテストでは Effect API 直接利用)。
 
-## Phase 2 — Domain service 層の横展開
+## Phase 2 — Domain service 層の横展開 (完了)
 
 ### 完了
 
@@ -36,15 +36,11 @@ CLI / UI の plain-async 呼び出しサイトのために `makeXxxClient(layer?
 | `AuditQueryService` | `834674c` | read-only 1 method。`(auditDir, filter)` の引数順 regression を test で押さえ。`DEFAULT_EXCLUDE_COMMAND_PREFIXES` / `slice(-limit)` は UI 表示方針として data.ts 側残置 |
 | `SessionUiService` | `571ff33` | list / acknowledgeTurn / rename の 3 method。`stages/session_store/SessionStoreService` (create/delete/ensurePaths) とは別 Tag (`nas/SessionUiService`) で分離。`readSession` / `updateSessionTurn` は hook 専用なので scope 外。error prefix-match 契約 (`"Session not found:"` / `"Cannot acknowledge turn in state:"`) を保存 |
 | `TerminalSessionService` | `f51a2b1` | listSessions / killClients の 2 method。`dtach/client.ts` の `dtachListSessions` / `killDtachClients` を薄く wrap。`DtachSessionInfo` は primitive の type-only re-export で重複定義しない。引数順は `(runtimeDir, sessionId)` 固定。`UiDataContext` に `terminalRuntimeDir: string` を追加。`startShellSession` / `nextShellSessionId` / `removeShellSocketsForParent` / `removeOrphanShellSockets` は SessionLaunchService 回に送る |
+| `SessionLaunchService` | `(this commit)` | UI-only service。launchAgentSession / startShellSession / removeShellSocketsForParent / removeOrphanShellSockets の 4 method。`dtach/client.ts` の `dtachNewSession` + `shellEscape` + `socketPathFor` + 失敗時 `safeRemove` cleanup を吸収。引数順は `(runtimeDir, ...)` 固定。`LaunchValidationError` / `ContainerNotRunningError` / `NotNasManagedContainerError` は UI wrapper 残置 (Phase 3 `ContainerLifecycleService` 前提)。`removeOrphanShellSockets` は docker 依存を切り離し `runningParentIds: ReadonlySet<string>` を引数で受け取る契約 (Phase 3 `ContainerQueryService` で wrapper の docker 直叩きが解消予定)。CLI の `runInsideDtach` は self-exec 一発呼びで CRUD 定義外なので scope 外。`NAS_INSIDE_DTACH=1 NAS_SESSION_ID=...` env prefix 組み立てと `resolveStableNasBin` UI 残置を保存 |
 
 ### 残り
 
-優先順（Docker を触らない軽いものから順）:
-
-1. **`SessionLaunchService`** — 新規セッションの dtach 起動
-   - `ui/launch.ts` の `launchSession` と `cli.ts` の `runInsideDtach` が
-     `shellEscape` + `dtachNewSession` + `socketPathFor` を独立に組んでおり重複
-   - 副作用が強く、Live test は書きづらい。Fake 中心になりそう
+Phase 2 は完了。
 
 ### Phase 2 で遵守するパターン
 

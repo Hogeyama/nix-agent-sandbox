@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
+import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
+import type { NetworkRuntimePaths } from "../network/registry.ts";
+import type { SessionRuntimePaths } from "../sessions/store.ts";
+import type { UiDataContext } from "./data.ts";
 import type { LaunchRequest } from "./launch.ts";
 import {
   getLaunchBranches,
@@ -21,7 +25,44 @@ import {
 const validReq: LaunchRequest = { profile: "default" };
 
 /**
- * Assert that `launchSession(req)` does NOT throw a LaunchValidationError
+ * Minimal dummy UiDataContext for launchSession tests.
+ * `launchSession` only reads `terminalRuntimeDir` when it proceeds past
+ * validation + dtach availability; the other paths are unused here.
+ */
+function createDummyCtx(): UiDataContext {
+  const networkPaths: NetworkRuntimePaths = {
+    runtimeDir: "/tmp/nas-launch-test-unused/network",
+    sessionsDir: "/tmp/nas-launch-test-unused/network/sessions",
+    pendingDir: "/tmp/nas-launch-test-unused/network/pending",
+    brokersDir: "/tmp/nas-launch-test-unused/network/brokers",
+    authRouterSocket: "/tmp/nas-launch-test-unused/network/auth-router.sock",
+    authRouterPidFile: "/tmp/nas-launch-test-unused/network/auth-router.pid",
+    envoyConfigFile: "/tmp/nas-launch-test-unused/network/envoy.yaml",
+  };
+  const hostExecPaths: HostExecRuntimePaths = {
+    runtimeDir: "/tmp/nas-launch-test-unused/hostexec",
+    sessionsDir: "/tmp/nas-launch-test-unused/hostexec/sessions",
+    pendingDir: "/tmp/nas-launch-test-unused/hostexec/pending",
+    brokersDir: "/tmp/nas-launch-test-unused/hostexec/brokers",
+    wrappersDir: "/tmp/nas-launch-test-unused/hostexec/wrappers",
+  };
+  const sessionPaths: SessionRuntimePaths = {
+    runtimeDir: "/tmp/nas-launch-test-unused/sessions-root",
+    sessionsDir: "/tmp/nas-launch-test-unused/sessions-root/sessions",
+  };
+  return {
+    networkPaths,
+    hostExecPaths,
+    sessionPaths,
+    auditDir: "/tmp/nas-launch-test-unused/audit",
+    terminalRuntimeDir: "/tmp/nas-launch-test-unused/dtach",
+  };
+}
+
+const dummyCtx = createDummyCtx();
+
+/**
+ * Assert that `launchSession(ctx, req)` does NOT throw a LaunchValidationError
  * with the given message.  The promise may resolve (dtach present) or reject
  * with a different error (dtach absent) — both are fine.
  */
@@ -30,7 +71,7 @@ async function expectNoValidationError(
   forbiddenMessage: string,
 ): Promise<void> {
   try {
-    await launchSession(req);
+    await launchSession(dummyCtx, req);
     // resolved — validation passed, dtach was available and launch succeeded
   } catch (err: unknown) {
     if (
@@ -51,26 +92,26 @@ async function expectNoValidationError(
 
 describe("launchSession: profile validation", () => {
   test("empty string throws 'Invalid profile name'", () => {
-    expect(launchSession({ ...validReq, profile: "" })).rejects.toThrow(
-      "Invalid profile name",
-    );
+    expect(
+      launchSession(dummyCtx, { ...validReq, profile: "" }),
+    ).rejects.toThrow("Invalid profile name");
   });
 
   test("undefined-ish (empty after cast) throws 'Invalid profile name'", () => {
     expect(
-      launchSession({ profile: undefined as unknown as string }),
+      launchSession(dummyCtx, { profile: undefined as unknown as string }),
     ).rejects.toThrow("Invalid profile name");
   });
 
   test("shell meta-characters throw 'Invalid profile name'", () => {
     expect(
-      launchSession({ ...validReq, profile: "my;profile" }),
+      launchSession(dummyCtx, { ...validReq, profile: "my;profile" }),
     ).rejects.toThrow("Invalid profile name");
   });
 
   test("spaces throw 'Invalid profile name'", () => {
     expect(
-      launchSession({ ...validReq, profile: "my profile" }),
+      launchSession(dummyCtx, { ...validReq, profile: "my profile" }),
     ).rejects.toThrow("Invalid profile name");
   });
 
@@ -91,19 +132,19 @@ describe("launchSession: profile validation", () => {
 describe("launchSession: worktreeBase validation", () => {
   test("shell meta-characters throw 'Invalid worktree base branch'", () => {
     expect(
-      launchSession({ ...validReq, worktreeBase: "main;rm" }),
+      launchSession(dummyCtx, { ...validReq, worktreeBase: "main;rm" }),
     ).rejects.toThrow("Invalid worktree base branch");
   });
 
   test("path traversal (..) throws 'Invalid worktree base branch'", () => {
     expect(
-      launchSession({ ...validReq, worktreeBase: "../../etc" }),
+      launchSession(dummyCtx, { ...validReq, worktreeBase: "../../etc" }),
     ).rejects.toThrow("Invalid worktree base branch");
   });
 
   test("spaces throw 'Invalid worktree base branch'", () => {
     expect(
-      launchSession({ ...validReq, worktreeBase: "my branch" }),
+      launchSession(dummyCtx, { ...validReq, worktreeBase: "my branch" }),
     ).rejects.toThrow("Invalid worktree base branch");
   });
 
@@ -124,15 +165,15 @@ describe("launchSession: worktreeBase validation", () => {
 describe("launchSession: name validation", () => {
   test("65-char name throws 'Invalid session name'", () => {
     const longName = "a".repeat(65);
-    expect(launchSession({ ...validReq, name: longName })).rejects.toThrow(
-      "Invalid session name",
-    );
+    expect(
+      launchSession(dummyCtx, { ...validReq, name: longName }),
+    ).rejects.toThrow("Invalid session name");
   });
 
   test("special characters throw 'Invalid session name'", () => {
-    expect(launchSession({ ...validReq, name: "my session!" })).rejects.toThrow(
-      "Invalid session name",
-    );
+    expect(
+      launchSession(dummyCtx, { ...validReq, name: "my session!" }),
+    ).rejects.toThrow("Invalid session name");
   });
 
   test("valid names pass validation", async () => {
@@ -151,15 +192,15 @@ describe("launchSession: name validation", () => {
 
 describe("launchSession: cwd validation", () => {
   test("relative path throws 'must be an absolute path'", () => {
-    expect(launchSession({ ...validReq, cwd: "./relative" })).rejects.toThrow(
-      "Invalid cwd: must be an absolute path",
-    );
+    expect(
+      launchSession(dummyCtx, { ...validReq, cwd: "./relative" }),
+    ).rejects.toThrow("Invalid cwd: must be an absolute path");
   });
 
   test("path with .. throws 'path contains disallowed segments'", () => {
-    expect(launchSession({ ...validReq, cwd: "/foo/../bar" })).rejects.toThrow(
-      "Invalid cwd: path contains disallowed segments",
-    );
+    expect(
+      launchSession(dummyCtx, { ...validReq, cwd: "/foo/../bar" }),
+    ).rejects.toThrow("Invalid cwd: path contains disallowed segments");
   });
 
   test("valid absolute path passes validation", async () => {

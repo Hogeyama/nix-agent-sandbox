@@ -4,12 +4,8 @@
 
 import * as path from "node:path";
 import { loadConfig } from "../config/load.ts";
-import {
-  dtachIsAvailable,
-  dtachNewSession,
-  shellEscape,
-  socketPathFor,
-} from "../dtach/client.ts";
+import { makeSessionLaunchClient } from "../domain/launch.ts";
+import { dtachIsAvailable } from "../dtach/client.ts";
 import { readRecentDirs } from "../sessions/recent_dirs.ts";
 import type { UiDataContext } from "./data.ts";
 import {
@@ -17,6 +13,8 @@ import {
   getGitRootSafe,
   hasLocalBranchSafe,
 } from "./git_safe.ts";
+
+const launchClient = makeSessionLaunchClient();
 
 /** Client-facing validation error (maps to HTTP 400). */
 export class LaunchValidationError extends Error {
@@ -130,7 +128,10 @@ function validateCwd(cwd: string): void {
   }
 }
 
-export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
+export async function launchSession(
+  ctx: UiDataContext,
+  req: LaunchRequest,
+): Promise<LaunchResult> {
   // --- Input validation ---
 
   if (!req.profile || !/^[a-zA-Z0-9_-]+$/.test(req.profile)) {
@@ -165,7 +166,6 @@ export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
   // --- Build and launch session ---
 
   const sessionId = `sess_${randomHex(6)}`;
-  const socketPath = socketPathFor(sessionId);
 
   const nasBin = await resolveStableNasBin();
   if (!nasBin) {
@@ -177,20 +177,22 @@ export async function launchSession(req: LaunchRequest): Promise<LaunchResult> {
         "be used for launching new sessions.",
     );
   }
-  const cmdArgs: string[] = [nasBin];
+  const extraArgs: string[] = [];
   if (req.worktreeBase !== undefined) {
-    cmdArgs.push("--worktree", req.worktreeBase);
+    extraArgs.push("--worktree", req.worktreeBase);
   }
   if (req.name !== undefined) {
-    cmdArgs.push("--name", req.name);
+    extraArgs.push("--name", req.name);
   }
-  cmdArgs.push(req.profile);
+  extraArgs.push(req.profile);
 
-  const escaped = shellEscape(cmdArgs);
-  const escapedSessionId = shellEscape([sessionId]);
-  const shellCommand = `NAS_INSIDE_DTACH=1 NAS_SESSION_ID=${escapedSessionId} ${escaped}`;
-
-  await dtachNewSession(socketPath, shellCommand, { cwd: req.cwd });
-
-  return { sessionId };
+  // NAS_INSIDE_DTACH / NAS_SESSION_ID env prefix の組み立てと
+  // socketPathFor + dtachNewSession + 失敗時 safeRemove の cleanup は
+  // SessionLaunchService Live 実装に吸収済み。
+  return await launchClient.launchAgentSession(ctx.terminalRuntimeDir, {
+    sessionId,
+    nasBin,
+    extraArgs,
+    cwd: req.cwd,
+  });
 }

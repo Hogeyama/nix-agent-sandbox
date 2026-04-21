@@ -141,7 +141,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       `[nas] /api/launch: profile=${reqBody?.profile} cwd=${reqBody?.cwd ?? "(unset)"} worktreeBase=${reqBody?.worktreeBase ?? "(unset)"} name=${reqBody?.name ?? "(unset)"}`,
     );
     try {
-      const result = await launchSession(reqBody);
+      const result = await launchSession(ctx, reqBody);
       logInfo(`[nas] /api/launch: started ${result.sessionId}`);
       return json(result);
     } catch (e) {
@@ -341,7 +341,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!isSafeId(params.name)) {
         return json({ error: "Invalid container name format" }, 400);
       }
-      await stopContainer(params.name);
+      await stopContainer(ctx, params.name);
       return json({ ok: true });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
@@ -369,7 +369,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
           400,
         );
       }
-      const result = await cleanContainers();
+      const result = await cleanContainers(ctx);
       return json(result);
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
@@ -381,7 +381,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!isSafeId(params.name)) {
         return json({ error: "Invalid container name format" }, 400);
       }
-      const result = await startShellSession(params.name);
+      const result = await startShellSession(ctx, params.name);
       return json(result);
     } catch (e) {
       if (e instanceof ContainerNotRunningError) {

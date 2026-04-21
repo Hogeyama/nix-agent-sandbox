@@ -20,16 +20,11 @@ import {
 } from "../docker/nas_resources.ts";
 import { makeAuditQueryClient } from "../domain/audit.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
+import { makeSessionLaunchClient } from "../domain/launch.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
 import { makeTerminalSessionClient } from "../domain/terminal.ts";
-import {
-  dtachListSessions,
-  dtachNewSession,
-  getSocketDir,
-  shellEscape,
-  socketPathFor,
-} from "../dtach/client.ts";
+import { getSocketDir } from "../dtach/client.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import {
   gcHostExecRuntime,
@@ -40,7 +35,6 @@ import type {
   HostExecPendingEntry,
   HostExecSessionRegistryEntry,
 } from "../hostexec/types.ts";
-import { safeRemove } from "../lib/fs_utils.ts";
 import type {
   ApprovalScope,
   PendingEntry,
@@ -186,6 +180,7 @@ export async function denyHostExec(
 
 const sessionUiClient = makeSessionUiClient();
 const terminalClient = makeTerminalSessionClient();
+const launchClient = makeSessionLaunchClient();
 
 export interface SessionsData {
   network: SessionRegistryEntry[];
@@ -342,7 +337,10 @@ export async function getNasContainers(
   return joinSessionsToContainers(containers, sessions);
 }
 
-export async function stopContainer(name: string): Promise<void> {
+export async function stopContainer(
+  ctx: UiDataContext,
+  name: string,
+): Promise<void> {
   let parentSessionId: string | undefined;
   try {
     const details = await dockerInspectContainer(name);
@@ -352,42 +350,26 @@ export async function stopContainer(name: string): Promise<void> {
   }
   await dockerStop(name);
   if (parentSessionId) {
-    await removeShellSocketsForParent(parentSessionId);
+    await launchClient.removeShellSocketsForParent(
+      ctx.terminalRuntimeDir,
+      parentSessionId,
+    );
   }
 }
 
-export async function cleanContainers(): Promise<ContainerCleanResult> {
+export async function cleanContainers(
+  ctx: UiDataContext,
+): Promise<ContainerCleanResult> {
   const result = await cleanNasContainers();
-  await removeOrphanShellSockets();
-  return result;
-}
-
-/** Remove shell dtach sockets whose parent agent session matches. */
-async function removeShellSocketsForParent(
-  parentSessionId: string,
-): Promise<void> {
-  const sessions = await dtachListSessions();
-  for (const session of sessions) {
-    const parsed = parseShellSessionId(session.name);
-    if (!parsed || parsed.parentSessionId !== parentSessionId) continue;
-    await safeRemove(session.socketPath);
-  }
-}
-
-/** Remove shell sockets whose parent agent session is no longer running. */
-async function removeOrphanShellSockets(): Promise<void> {
-  const sessions = await dtachListSessions();
-  const shellSessions = sessions.flatMap((s) => {
-    const parsed = parseShellSessionId(s.name);
-    return parsed ? [{ session: s, parsed }] : [];
-  });
-  if (shellSessions.length === 0) return;
-
+  // `removeOrphanShellSockets` は docker 依存を切り離した契約なので、
+  // running parent 集合はこの wrapper で docker primitive を直叩きして
+  // 組み立てる。Phase 3 `ContainerQueryService` で解消予定。
   const runningParents = await collectRunningSessionIds();
-  for (const { session, parsed } of shellSessions) {
-    if (runningParents.has(parsed.parentSessionId)) continue;
-    await safeRemove(session.socketPath);
-  }
+  await launchClient.removeOrphanShellSockets(
+    ctx.terminalRuntimeDir,
+    runningParents,
+  );
+  return result;
 }
 
 async function collectRunningSessionIds(): Promise<Set<string>> {
@@ -406,22 +388,13 @@ async function collectRunningSessionIds(): Promise<Set<string>> {
   return running;
 }
 
-async function nextShellSessionId(parentSessionId: string): Promise<string> {
-  const existing = await dtachListSessions();
-  let maxSeq = 0;
-  for (const s of existing) {
-    const parsed = parseShellSessionId(s.name);
-    if (!parsed) continue;
-    if (parsed.parentSessionId !== parentSessionId) continue;
-    if (parsed.seq > maxSeq) maxSeq = parsed.seq;
-  }
-  return buildShellSessionId(parentSessionId, maxSeq + 1);
-}
-
 export async function startShellSession(
+  ctx: UiDataContext,
   containerName: string,
 ): Promise<{ dtachSessionId: string }> {
-  // 1. nas 管理コンテナかどうかを検証し、稼働確認
+  // docker inspect guard は wrapper 側に残置 (Phase 3 ContainerLifecycleService
+  // 前提)。nas 管理コンテナであり running 状態であることを確認した上で、
+  // dtach 起動自体は SessionLaunchService に委譲する。
   const details = await dockerInspectContainer(containerName);
   if (!isNasManagedContainer(details.labels, details.name)) {
     throw new NotNasManagedContainerError(containerName);
@@ -437,39 +410,10 @@ export async function startShellSession(
     );
   }
 
-  // 2. dtach セッションID生成
-  // 形式: shell-<parentSessionId>.<seq> (seq は 1 始まり)
-  // 既存の shell セッションを走査して衝突しない番号を選ぶ。
-  const dtachSessionId = await nextShellSessionId(parentSessionId);
-
-  // 3. ソケットパス取得
-  const socketPath = socketPathFor(dtachSessionId);
-
-  // 4. コマンド文字列構築
-  // entrypoint.sh --shell を root で起動し、その中で setpriv により
-  // agent と同じ NAS_UID/NAS_GID・PATH・Nix 環境の bash にドロップする。
-  // docker exec はデフォルトで ENTRYPOINT を通らないため明示的に呼ぶ。
-  const execArgs = [
-    "docker",
-    "exec",
-    "-it",
-    "-u",
-    "0:0",
+  return await launchClient.startShellSession(ctx.terminalRuntimeDir, {
     containerName,
-    "/entrypoint.sh",
-    "--shell",
-  ];
-  const shellCommand = shellEscape(execArgs);
-
-  // 6. dtach セッション起動 — 失敗時は socket 残骸を掃除する
-  try {
-    await dtachNewSession(socketPath, shellCommand);
-  } catch (error) {
-    await safeRemove(socketPath);
-    throw error;
-  }
-
-  return { dtachSessionId };
+    parentSessionId,
+  });
 }
 
 // --- Audit ---
