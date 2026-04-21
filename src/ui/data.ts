@@ -18,6 +18,7 @@ import {
   isNasManagedContainer,
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
+import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import {
   dtachListSessions,
@@ -26,11 +27,9 @@ import {
   shellEscape,
   socketPathFor,
 } from "../dtach/client.ts";
-import { sendHostExecBrokerRequest } from "../hostexec/broker.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import {
   gcHostExecRuntime,
-  listHostExecPendingEntries,
   readHostExecSessionRegistry,
   resolveHostExecRuntimePaths,
 } from "../hostexec/registry.ts";
@@ -150,11 +149,12 @@ export async function denyNetwork(
 
 // --- HostExec ---
 
+const hostexecClient = makeHostExecApprovalClient();
+
 export async function getHostExecPending(
   ctx: UiDataContext,
 ): Promise<HostExecPendingEntry[]> {
-  await gcHostExecRuntime(ctx.hostExecPaths);
-  return await listHostExecPendingEntries(ctx.hostExecPaths);
+  return await hostexecClient.listPending(ctx.hostExecPaths);
 }
 
 export async function approveHostExec(
@@ -163,16 +163,7 @@ export async function approveHostExec(
   requestId: string,
   scope?: HostExecPromptScope,
 ): Promise<void> {
-  const session = await readHostExecSessionRegistry(
-    ctx.hostExecPaths,
-    sessionId,
-  );
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  await sendHostExecBrokerRequest(session.brokerSocket, {
-    type: "approve",
-    requestId,
-    scope,
-  });
+  await hostexecClient.approve(ctx.hostExecPaths, sessionId, requestId, scope);
 }
 
 export async function denyHostExec(
@@ -180,15 +171,7 @@ export async function denyHostExec(
   sessionId: string,
   requestId: string,
 ): Promise<void> {
-  const session = await readHostExecSessionRegistry(
-    ctx.hostExecPaths,
-    sessionId,
-  );
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  await sendHostExecBrokerRequest(session.brokerSocket, {
-    type: "deny",
-    requestId,
-  });
+  await hostexecClient.deny(ctx.hostExecPaths, sessionId, requestId);
 }
 
 // --- Sessions ---

@@ -4,13 +4,9 @@
 
 import { loadConfig, resolveProfile } from "../config/load.ts";
 import type { HostExecPromptScope } from "../config/types.ts";
-import { sendHostExecBrokerRequest } from "../hostexec/broker.ts";
+import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { buildArgsString, matchRule } from "../hostexec/match.ts";
-import {
-  listHostExecPendingEntries,
-  readHostExecSessionRegistry,
-  resolveHostExecRuntimePaths,
-} from "../hostexec/registry.ts";
+import { resolveHostExecRuntimePaths } from "../hostexec/registry.ts";
 import type { ApprovalAdapter, DecisionMessage } from "./approval_command.ts";
 import { handleApprovalSubcommand } from "./approval_command.ts";
 import { getFlagValue, removeFirstOccurrence } from "./helpers.ts";
@@ -27,11 +23,12 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
       return;
     }
 
+    const client = makeHostExecApprovalClient();
     const adapter: ApprovalAdapter = {
       domain: "hostexec",
       scopeOptions: ["once", "capability"],
       async listPending() {
-        const items = await listHostExecPendingEntries(paths);
+        const items = await client.listPending(paths);
         return items.map((item) => {
           const argv = [item.argv0, ...item.args].join(" ");
           return {
@@ -51,23 +48,19 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
       },
       async sendDecision(
         sessionId: string,
-        _requestId: string,
+        requestId: string,
         message: DecisionMessage,
       ) {
-        const session = await readHostExecSessionRegistry(paths, sessionId);
-        if (!session) {
-          throw new Error(`Session not found: ${sessionId}`);
+        if (message.type === "approve") {
+          await client.approve(
+            paths,
+            sessionId,
+            requestId,
+            message.scope as HostExecPromptScope | undefined,
+          );
+        } else {
+          await client.deny(paths, sessionId, requestId);
         }
-        await sendHostExecBrokerRequest(
-          session.brokerSocket,
-          message as
-            | {
-                type: "approve";
-                requestId: string;
-                scope?: HostExecPromptScope;
-              }
-            | { type: "deny"; requestId: string },
-        );
       },
     };
 
