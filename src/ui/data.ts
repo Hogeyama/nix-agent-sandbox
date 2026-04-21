@@ -3,7 +3,7 @@
  */
 
 import { readdir } from "node:fs/promises";
-import { queryAuditLogs, resolveAuditDir } from "../audit/store.ts";
+import { resolveAuditDir } from "../audit/store.ts";
 import type { AuditLogEntry, AuditLogFilter } from "../audit/types.ts";
 import type { HostExecPromptScope } from "../config/types.ts";
 import type { ContainerCleanResult } from "../container_clean.ts";
@@ -18,6 +18,7 @@ import {
   isNasManagedContainer,
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
+import { makeAuditQueryClient } from "../domain/audit.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import {
@@ -459,6 +460,8 @@ export async function startShellSession(
 
 // --- Audit ---
 
+const auditClient = makeAuditQueryClient();
+
 /** Command prefixes hidden from the UI by default (noisy internal traffic). */
 const DEFAULT_EXCLUDE_COMMAND_PREFIXES = ["nas hook"];
 
@@ -471,7 +474,7 @@ export async function getAuditLogs(
     excludeCommandPrefixes: DEFAULT_EXCLUDE_COMMAND_PREFIXES,
     ...filter,
   };
-  const entries = await queryAuditLogs(merged, ctx.auditDir);
+  const entries = await auditClient.query(ctx.auditDir, merged);
   if (limit !== undefined && limit > 0) {
     return entries.slice(-limit);
   }

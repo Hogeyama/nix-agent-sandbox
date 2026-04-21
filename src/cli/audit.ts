@@ -2,12 +2,14 @@
  * nas audit サブコマンド
  */
 
-import { queryAuditLogs, resolveAuditDir } from "../audit/store.ts";
+import { resolveAuditDir } from "../audit/store.ts";
 import type { AuditDomain, AuditLogEntry } from "../audit/types.ts";
+import { makeAuditQueryClient } from "../domain/audit.ts";
 import { exitOnCliError, getFlagValue } from "./helpers.ts";
 
 export async function runAuditCommand(nasArgs: string[]): Promise<void> {
   try {
+    const auditClient = makeAuditQueryClient();
     const jsonMode = nasArgs.includes("--json");
     const since = getFlagValue(nasArgs, "--since");
     const sessionId = getFlagValue(nasArgs, "--session");
@@ -24,14 +26,12 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
     const today = new Date().toISOString().slice(0, 10);
     const startDate = since ?? today;
 
-    const entries = await queryAuditLogs(
-      {
-        startDate,
-        sessionIds: sessionId ? [sessionId] : undefined,
-        domain: domain ?? undefined,
-      },
-      auditDirOverride ?? undefined,
-    );
+    const auditDir = auditDirOverride ?? resolveAuditDir();
+    const entries = await auditClient.query(auditDir, {
+      startDate,
+      sessionIds: sessionId ? [sessionId] : undefined,
+      domain: domain ?? undefined,
+    });
 
     if (jsonMode) {
       console.log(JSON.stringify(entries, null, 2));
@@ -56,5 +56,3 @@ function formatEntry(entry: AuditLogEntry): string {
     entry.domain === "network" ? (entry.target ?? "") : (entry.command ?? "");
   return `${entry.timestamp} ${entry.sessionId} ${entry.domain} ${entry.decision} ${entry.reason} ${target}`;
 }
-
-export { resolveAuditDir };
