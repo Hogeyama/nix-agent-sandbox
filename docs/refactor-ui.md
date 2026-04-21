@@ -35,7 +35,7 @@ CLI / UI の plain-async 呼び出しサイトのために `makeXxxClient(layer?
 | `HostExecApprovalService` | `43cbac1` | network のミラー。deny が scope を取らない点が network との構造差 |
 | `AuditQueryService` | `834674c` | read-only 1 method。`(auditDir, filter)` の引数順 regression を test で押さえ。`DEFAULT_EXCLUDE_COMMAND_PREFIXES` / `slice(-limit)` は UI 表示方針として data.ts 側残置 |
 | `SessionUiService` | `571ff33` | list / acknowledgeTurn / rename の 3 method。`stages/session_store/SessionStoreService` (create/delete/ensurePaths) とは別 Tag (`nas/SessionUiService`) で分離。`readSession` / `updateSessionTurn` は hook 専用なので scope 外。error prefix-match 契約 (`"Session not found:"` / `"Cannot acknowledge turn in state:"`) を保存 |
-| `TerminalSessionService` | `(this commit)` | listSessions / killClients の 2 method。`dtach/client.ts` の `dtachListSessions` / `killDtachClients` を薄く wrap。`DtachSessionInfo` は primitive の type-only re-export で重複定義しない。引数順は `(runtimeDir, sessionId)` 固定。`UiDataContext` に `terminalRuntimeDir: string` を追加。`startShellSession` / `nextShellSessionId` / `removeShellSocketsForParent` / `removeOrphanShellSockets` は SessionLaunchService 回に送る |
+| `TerminalSessionService` | `f51a2b1` | listSessions / killClients の 2 method。`dtach/client.ts` の `dtachListSessions` / `killDtachClients` を薄く wrap。`DtachSessionInfo` は primitive の type-only re-export で重複定義しない。引数順は `(runtimeDir, sessionId)` 固定。`UiDataContext` に `terminalRuntimeDir: string` を追加。`startShellSession` / `nextShellSessionId` / `removeShellSocketsForParent` / `removeOrphanShellSockets` は SessionLaunchService 回に送る |
 
 ### 残り
 
