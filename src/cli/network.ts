@@ -2,13 +2,11 @@
  * nas network サブコマンド
  */
 
-import { sendBrokerRequest } from "../network/broker.ts";
+import { makeNetworkApprovalClient } from "../domain/network.ts";
 import { serveAuthRouter } from "../network/envoy_auth_router.ts";
 import type { ApprovalScope } from "../network/protocol.ts";
 import {
   gcNetworkRuntime,
-  listPendingEntries,
-  readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
 import type { ApprovalAdapter, DecisionMessage } from "./approval_command.ts";
@@ -35,12 +33,12 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
       return;
     }
 
+    const client = makeNetworkApprovalClient();
     const adapter: ApprovalAdapter = {
       domain: "network",
       scopeOptions: ["once", "host-port", "host"],
       async listPending() {
-        await gcNetworkRuntime(paths);
-        const items = await listPendingEntries(paths);
+        const items = await client.listPending(paths);
         return items.map((item) => {
           const target = `${item.target.host}:${item.target.port}`;
           return {
@@ -60,24 +58,19 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
       },
       async sendDecision(
         sessionId: string,
-        _requestId: string,
+        requestId: string,
         message: DecisionMessage,
       ) {
-        await gcNetworkRuntime(paths);
-        const session = await readSessionRegistry(paths, sessionId);
-        if (!session) {
-          throw new Error(`Session not found: ${sessionId}`);
+        if (message.type === "approve") {
+          await client.approve(
+            paths,
+            sessionId,
+            requestId,
+            message.scope as ApprovalScope | undefined,
+          );
+        } else {
+          await client.deny(paths, sessionId, requestId);
         }
-        await sendBrokerRequest(
-          session.brokerSocket,
-          message as
-            | {
-                type: "approve";
-                requestId: string;
-                scope?: ApprovalScope;
-              }
-            | { type: "deny"; requestId: string },
-        );
       },
     };
 

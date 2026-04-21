@@ -18,6 +18,7 @@ import {
   isNasManagedContainer,
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
+import { makeNetworkApprovalClient } from "../domain/network.ts";
 import {
   dtachListSessions,
   dtachNewSession,
@@ -38,7 +39,6 @@ import type {
   HostExecSessionRegistryEntry,
 } from "../hostexec/types.ts";
 import { safeRemove } from "../lib/fs_utils.ts";
-import { sendBrokerRequest } from "../network/broker.ts";
 import type {
   ApprovalScope,
   PendingEntry,
@@ -47,9 +47,7 @@ import type {
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import {
   gcNetworkRuntime,
-  listPendingEntries,
   listSessionRegistries,
-  readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "../network/registry.ts";
 import {
@@ -124,11 +122,12 @@ export async function createDataContext(): Promise<UiDataContext> {
 
 // --- Network ---
 
+const networkClient = makeNetworkApprovalClient();
+
 export async function getNetworkPending(
   ctx: UiDataContext,
 ): Promise<PendingEntry[]> {
-  await gcNetworkRuntime(ctx.networkPaths);
-  return await listPendingEntries(ctx.networkPaths);
+  return await networkClient.listPending(ctx.networkPaths);
 }
 
 export async function approveNetwork(
@@ -137,14 +136,7 @@ export async function approveNetwork(
   requestId: string,
   scope?: ApprovalScope,
 ): Promise<void> {
-  await gcNetworkRuntime(ctx.networkPaths);
-  const session = await readSessionRegistry(ctx.networkPaths, sessionId);
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  await sendBrokerRequest(session.brokerSocket, {
-    type: "approve",
-    requestId,
-    scope,
-  });
+  await networkClient.approve(ctx.networkPaths, sessionId, requestId, scope);
 }
 
 export async function denyNetwork(
@@ -153,14 +145,7 @@ export async function denyNetwork(
   requestId: string,
   scope?: ApprovalScope,
 ): Promise<void> {
-  await gcNetworkRuntime(ctx.networkPaths);
-  const session = await readSessionRegistry(ctx.networkPaths, sessionId);
-  if (!session) throw new Error(`Session not found: ${sessionId}`);
-  await sendBrokerRequest(session.brokerSocket, {
-    type: "deny",
-    requestId,
-    scope,
-  });
+  await networkClient.deny(ctx.networkPaths, sessionId, requestId, scope);
 }
 
 // --- HostExec ---
