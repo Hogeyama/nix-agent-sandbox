@@ -3,11 +3,12 @@
  */
 
 import { makeSessionUiClient } from "../domain/session.ts";
+import { makeTerminalSessionClient } from "../domain/terminal.ts";
 import {
   dtachAttach,
   dtachHasSession,
   dtachIsAvailable,
-  dtachListSessions,
+  getSocketDir,
   socketPathFor,
 } from "../dtach/client.ts";
 import { resolveSessionRuntimePaths } from "../sessions/store.ts";
@@ -16,7 +17,8 @@ import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 export async function runSessionCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((a) => !a.startsWith("-"));
   const formatJson = hasFormatJson(nasArgs);
-  const client = makeSessionUiClient();
+  const sessionClient = makeSessionUiClient();
+  const terminalClient = makeTerminalSessionClient();
 
   try {
     if (sub === "list") {
@@ -25,9 +27,10 @@ export async function runSessionCommand(nasArgs: string[]): Promise<void> {
         process.exit(1);
       }
 
-      const sessions = await dtachListSessions();
+      const runtimeDir = getSocketDir();
+      const sessions = await terminalClient.listSessions(runtimeDir);
       const sessionPaths = resolveSessionRuntimePaths();
-      const storeRecords = await client.list(sessionPaths);
+      const storeRecords = await sessionClient.list(sessionPaths);
       const nameById = new Map<string, string>();
       for (const record of storeRecords) {
         if (record.name) {

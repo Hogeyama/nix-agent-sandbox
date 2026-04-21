@@ -398,7 +398,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   api.get("/terminal/sessions", async () => {
     try {
-      const items = await getTerminalSessions();
+      const items = await getTerminalSessions(ctx);
       return json({ items });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);
@@ -410,7 +410,7 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       if (!isSafeId(params.sessionId)) {
         return json({ error: "Invalid sessionId format" }, 400);
       }
-      const killed = await killTerminalClients(params.sessionId);
+      const killed = await killTerminalClients(ctx, params.sessionId);
       return json({ killed });
     } catch (e) {
       return json({ error: (e as Error).message }, 500);

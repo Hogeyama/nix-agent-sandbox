@@ -22,10 +22,11 @@ import { makeAuditQueryClient } from "../domain/audit.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
+import { makeTerminalSessionClient } from "../domain/terminal.ts";
 import {
   dtachListSessions,
   dtachNewSession,
-  killDtachClients,
+  getSocketDir,
   shellEscape,
   socketPathFor,
 } from "../dtach/client.ts";
@@ -88,6 +89,7 @@ export interface UiDataContext {
   hostExecPaths: HostExecRuntimePaths;
   sessionPaths: SessionRuntimePaths;
   auditDir: string;
+  terminalRuntimeDir: string;
 }
 
 export async function createDataContext(): Promise<UiDataContext> {
@@ -115,7 +117,14 @@ export async function createDataContext(): Promise<UiDataContext> {
     );
   }
   const auditDir = resolveAuditDir();
-  return { networkPaths, hostExecPaths, sessionPaths, auditDir };
+  const terminalRuntimeDir = getSocketDir();
+  return {
+    networkPaths,
+    hostExecPaths,
+    sessionPaths,
+    auditDir,
+    terminalRuntimeDir,
+  };
 }
 
 // --- Network ---
@@ -176,6 +185,7 @@ export async function denyHostExec(
 // --- Sessions ---
 
 const sessionUiClient = makeSessionUiClient();
+const terminalClient = makeTerminalSessionClient();
 
 export interface SessionsData {
   network: SessionRegistryEntry[];
@@ -214,8 +224,10 @@ export async function getSessions(ctx: UiDataContext): Promise<SessionsData> {
   return { network: networkSessions, hostexec: hostexecSessions };
 }
 
-export async function getTerminalSessions(): Promise<TerminalSessionInfo[]> {
-  const sessions = await dtachListSessions();
+export async function getTerminalSessions(
+  ctx: UiDataContext,
+): Promise<TerminalSessionInfo[]> {
+  const sessions = await terminalClient.listSessions(ctx.terminalRuntimeDir);
   return sessions.map((session) => ({
     name: session.name,
     sessionId: session.name,
@@ -225,9 +237,11 @@ export async function getTerminalSessions(): Promise<TerminalSessionInfo[]> {
 }
 
 /** dtach セッションにアタッチしている他クライアントを全て切断する */
-export async function killTerminalClients(sessionId: string): Promise<number> {
-  const socketPath = socketPathFor(sessionId);
-  return await killDtachClients(socketPath);
+export async function killTerminalClients(
+  ctx: UiDataContext,
+  sessionId: string,
+): Promise<number> {
+  return await terminalClient.killClients(ctx.terminalRuntimeDir, sessionId);
 }
 
 export async function acknowledgeSessionTurn(

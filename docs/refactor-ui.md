@@ -35,17 +35,13 @@ CLI / UI の plain-async 呼び出しサイトのために `makeXxxClient(layer?
 | `HostExecApprovalService` | `43cbac1` | network のミラー。deny が scope を取らない点が network との構造差 |
 | `AuditQueryService` | `834674c` | read-only 1 method。`(auditDir, filter)` の引数順 regression を test で押さえ。`DEFAULT_EXCLUDE_COMMAND_PREFIXES` / `slice(-limit)` は UI 表示方針として data.ts 側残置 |
 | `SessionUiService` | `571ff33` | list / acknowledgeTurn / rename の 3 method。`stages/session_store/SessionStoreService` (create/delete/ensurePaths) とは別 Tag (`nas/SessionUiService`) で分離。`readSession` / `updateSessionTurn` は hook 専用なので scope 外。error prefix-match 契約 (`"Session not found:"` / `"Cannot acknowledge turn in state:"`) を保存 |
+| `TerminalSessionService` | `(this commit)` | listSessions / killClients の 2 method。`dtach/client.ts` の `dtachListSessions` / `killDtachClients` を薄く wrap。`DtachSessionInfo` は primitive の type-only re-export で重複定義しない。引数順は `(runtimeDir, sessionId)` 固定。`UiDataContext` に `terminalRuntimeDir: string` を追加。`startShellSession` / `nextShellSessionId` / `removeShellSocketsForParent` / `removeOrphanShellSockets` は SessionLaunchService 回に送る |
 
 ### 残り
 
 優先順（Docker を触らない軽いものから順）:
 
-1. **`TerminalSessionService`** — dtach セッション一覧と kill
-   - `ui/data.ts` の `getTerminalSessions` / `killTerminalClients`
-   - `dtach/client.ts` の `dtachListSessions` / `killDtachClients` ラップ
-   - Live test はソケットを用意する必要があり、どこまで unit で書くかは要判断
-
-2. **`SessionLaunchService`** — 新規セッションの dtach 起動
+1. **`SessionLaunchService`** — 新規セッションの dtach 起動
    - `ui/launch.ts` の `launchSession` と `cli.ts` の `runInsideDtach` が
      `shellEscape` + `dtachNewSession` + `socketPathFor` を独立に組んでおり重複
    - 副作用が強く、Live test は書きづらい。Fake 中心になりそう

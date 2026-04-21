@@ -58,7 +58,7 @@ export function createSseRoutes(ctx: UiDataContext): Router {
               getNetworkPending(ctx).catch(() => []),
               getHostExecPending(ctx).catch(() => []),
               getSessions(ctx).catch(() => ({ network: [], hostexec: [] })),
-              getTerminalSessions().catch(() => []),
+              getTerminalSessions(ctx).catch(() => []),
               getNasContainers(ctx).catch(() => []),
             ]);
 
