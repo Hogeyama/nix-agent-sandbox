@@ -7,20 +7,13 @@ import { resolveAuditDir } from "../audit/store.ts";
 import type { AuditLogEntry, AuditLogFilter } from "../audit/types.ts";
 import type { HostExecPromptScope } from "../config/types.ts";
 import type { ContainerCleanResult } from "../container_clean.ts";
-import { cleanNasContainers } from "../container_clean.ts";
-import { dockerInspectContainer, dockerStop } from "../docker/client.ts";
-import {
-  isNasManagedContainer,
-  NAS_SESSION_ID_LABEL,
-} from "../docker/nas_resources.ts";
 import { makeAuditQueryClient } from "../domain/audit.ts";
 import {
-  joinSessionsToContainers,
+  makeContainerLifecycleClient,
   makeContainerQueryClient,
   type NasContainerInfo,
 } from "../domain/container.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
-import { makeSessionLaunchClient } from "../domain/launch.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
 import { makeTerminalSessionClient } from "../domain/terminal.ts";
@@ -59,22 +52,6 @@ import {
 
 export type { ParsedShellSessionId };
 export { buildShellSessionId, parseShellSessionId };
-
-/** Thrown when a shell session is requested for a container that is not running. */
-export class ContainerNotRunningError extends Error {
-  constructor(containerName: string) {
-    super(`Container is not running: ${containerName}`);
-    this.name = "ContainerNotRunningError";
-  }
-}
-
-/** Thrown when an operation targets a container not managed by nas. */
-export class NotNasManagedContainerError extends Error {
-  constructor(containerName: string) {
-    super(`Not a nas-managed container: ${containerName}`);
-    this.name = "NotNasManagedContainerError";
-  }
-}
 
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
@@ -178,8 +155,8 @@ export async function denyHostExec(
 
 const sessionUiClient = makeSessionUiClient();
 const terminalClient = makeTerminalSessionClient();
-const launchClient = makeSessionLaunchClient();
 const containerQueryClient = makeContainerQueryClient();
+const lifecycleClient = makeContainerLifecycleClient();
 
 export interface SessionsData {
   network: SessionRegistryEntry[];
@@ -255,10 +232,7 @@ export async function renameSession(
 
 // --- Containers ---
 
-// `NasContainerInfo` / `joinSessionsToContainers` は `domain/container/`
-// に移設済。本 shim は既存 import path を保つための re-export。
 export type { NasContainerInfo };
-export { joinSessionsToContainers };
 
 export async function getNasContainers(
   ctx: UiDataContext,
@@ -270,63 +244,23 @@ export async function stopContainer(
   ctx: UiDataContext,
   name: string,
 ): Promise<void> {
-  let parentSessionId: string | undefined;
-  try {
-    const details = await dockerInspectContainer(name);
-    parentSessionId = details.labels[NAS_SESSION_ID_LABEL];
-  } catch {
-    // Container may have already been removed; let dockerStop surface the error.
-  }
-  await dockerStop(name);
-  if (parentSessionId) {
-    await launchClient.removeShellSocketsForParent(
-      ctx.terminalRuntimeDir,
-      parentSessionId,
-    );
-  }
+  await lifecycleClient.stopContainer(ctx.terminalRuntimeDir, name);
 }
 
 export async function cleanContainers(
   ctx: UiDataContext,
 ): Promise<ContainerCleanResult> {
-  const result = await cleanNasContainers();
-  // `removeOrphanShellSockets` は docker 依存を切り離した契約なので、
-  // running parent 集合は ContainerQueryService 経由で取得する
-  // (Phase 3 Commit 2 で wrapper の docker 直叩き中間状態を解消済)。
-  const runningParents = await containerQueryClient.collectRunningParentIds();
-  await launchClient.removeOrphanShellSockets(
-    ctx.terminalRuntimeDir,
-    runningParents,
-  );
-  return result;
+  return await lifecycleClient.cleanContainers(ctx.terminalRuntimeDir);
 }
 
 export async function startShellSession(
   ctx: UiDataContext,
   containerName: string,
 ): Promise<{ dtachSessionId: string }> {
-  // docker inspect guard は wrapper 側に残置 (Phase 3 ContainerLifecycleService
-  // 前提)。nas 管理コンテナであり running 状態であることを確認した上で、
-  // dtach 起動自体は SessionLaunchService に委譲する。
-  const details = await dockerInspectContainer(containerName);
-  if (!isNasManagedContainer(details.labels, details.name)) {
-    throw new NotNasManagedContainerError(containerName);
-  }
-  if (!details.running) {
-    throw new ContainerNotRunningError(containerName);
-  }
-
-  const parentSessionId = details.labels[NAS_SESSION_ID_LABEL];
-  if (!parentSessionId) {
-    throw new Error(
-      `Container ${containerName} has no ${NAS_SESSION_ID_LABEL} label`,
-    );
-  }
-
-  return await launchClient.startShellSession(ctx.terminalRuntimeDir, {
+  return await lifecycleClient.startShellSession(
+    ctx.terminalRuntimeDir,
     containerName,
-    parentSessionId,
-  });
+  );
 }
 
 // --- Audit ---

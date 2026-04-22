@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { NAS_SESSION_ID_LABEL } from "../docker/nas_resources.ts";
+import {
+  joinSessionsToContainers,
+  type NasContainerInfo,
+} from "../domain/container.ts";
 import type { SessionRecord } from "../sessions/store.ts";
-import type { NasContainerInfo } from "./data.ts";
-import { joinSessionsToContainers } from "./data.ts";
 
 function makeContainer(
   name: string,

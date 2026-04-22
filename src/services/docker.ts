@@ -13,13 +13,19 @@
 import { Context, Effect, Layer } from "effect";
 import {
   type DockerContainerDetails,
+  type DockerNetworkDetails,
+  type DockerVolumeDetails,
   dockerBuild,
   dockerContainerExists,
   dockerContainerIp,
   dockerExec,
   dockerInspectContainer,
+  dockerInspectNetwork,
+  dockerInspectVolume,
   dockerIsRunning,
   dockerListContainerNames,
+  dockerListNetworkNames,
+  dockerListVolumeNames,
   dockerLogs,
   dockerNetworkConnect,
   dockerNetworkCreateWithLabels,
@@ -34,8 +40,12 @@ import {
 } from "../docker/client.ts";
 
 // Re-export so domain services depending on DockerService can import the
-// detail type from the same module without reaching into docker/client.ts.
-export type { DockerContainerDetails } from "../docker/client.ts";
+// detail types from the same module without reaching into docker/client.ts.
+export type {
+  DockerContainerDetails,
+  DockerNetworkDetails,
+  DockerVolumeDetails,
+} from "../docker/client.ts";
 
 // ---------------------------------------------------------------------------
 // Option types
@@ -135,6 +145,14 @@ export class DockerService extends Context.Tag("nas/DockerService")<
       name: string,
     ) => Effect.Effect<DockerContainerDetails, Error>;
     readonly listContainerNames: () => Effect.Effect<string[], Error>;
+    readonly listNetworkNames: () => Effect.Effect<string[], Error>;
+    readonly inspectNetwork: (
+      name: string,
+    ) => Effect.Effect<DockerNetworkDetails, Error>;
+    readonly listVolumeNames: () => Effect.Effect<string[], Error>;
+    readonly inspectVolume: (
+      name: string,
+    ) => Effect.Effect<DockerVolumeDetails, Error>;
   }
 >() {}
 
@@ -276,6 +294,30 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
         try: () => dockerListContainerNames(),
         catch: wrapError("docker ps failed"),
       }),
+
+    listNetworkNames: () =>
+      Effect.tryPromise({
+        try: () => dockerListNetworkNames(),
+        catch: wrapError("docker network ls failed"),
+      }),
+
+    inspectNetwork: (name) =>
+      Effect.tryPromise({
+        try: () => dockerInspectNetwork(name),
+        catch: wrapError("docker network inspect failed"),
+      }),
+
+    listVolumeNames: () =>
+      Effect.tryPromise({
+        try: () => dockerListVolumeNames(),
+        catch: wrapError("docker volume ls failed"),
+      }),
+
+    inspectVolume: (name) =>
+      Effect.tryPromise({
+        try: () => dockerInspectVolume(name),
+        catch: wrapError("docker volume inspect failed"),
+      }),
   }),
 );
 
@@ -330,6 +372,14 @@ export interface DockerServiceFakeConfig {
     name: string,
   ) => Effect.Effect<DockerContainerDetails, Error>;
   readonly listContainerNames?: () => Effect.Effect<string[], Error>;
+  readonly listNetworkNames?: () => Effect.Effect<string[], Error>;
+  readonly inspectNetwork?: (
+    name: string,
+  ) => Effect.Effect<DockerNetworkDetails, Error>;
+  readonly listVolumeNames?: () => Effect.Effect<string[], Error>;
+  readonly inspectVolume?: (
+    name: string,
+  ) => Effect.Effect<DockerVolumeDetails, Error>;
 }
 
 export function makeDockerServiceFake(
@@ -368,6 +418,25 @@ export function makeDockerServiceFake(
           })),
       listContainerNames:
         overrides.listContainerNames ?? (() => Effect.succeed([])),
+      listNetworkNames:
+        overrides.listNetworkNames ?? (() => Effect.succeed([])),
+      inspectNetwork:
+        overrides.inspectNetwork ??
+        ((name) =>
+          Effect.succeed({
+            name,
+            labels: {},
+            containers: [],
+          })),
+      listVolumeNames: overrides.listVolumeNames ?? (() => Effect.succeed([])),
+      inspectVolume:
+        overrides.inspectVolume ??
+        ((name) =>
+          Effect.succeed({
+            name,
+            labels: {},
+            containers: [],
+          })),
     }),
   );
 }

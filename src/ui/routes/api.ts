@@ -4,6 +4,10 @@
 
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
 import type { HostExecPromptScope } from "../../config/types.ts";
+import {
+  ContainerNotRunningError,
+  NotNasManagedContainerError,
+} from "../../domain/container.ts";
 import { logInfo, logWarn } from "../../log.ts";
 import type { ApprovalScope } from "../../network/protocol.ts";
 import type { UiDataContext } from "../data.ts";
@@ -11,7 +15,6 @@ import {
   acknowledgeSessionTurn,
   approveHostExec,
   approveNetwork,
-  ContainerNotRunningError,
   cleanContainers,
   denyHostExec,
   denyNetwork,
@@ -22,7 +25,6 @@ import {
   getSessions,
   getTerminalSessions,
   killTerminalClients,
-  NotNasManagedContainerError,
   renameSession,
   startShellSession,
   stopContainer,

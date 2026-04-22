@@ -1,9 +1,10 @@
 /**
- * container domain — IO-free pure helpers + shape 定義のみ。
+ * container domain — IO-free pure helpers + shape 定義 + typed errors のみ。
  *
  * Effect 依存なし。`NasContainerInfo` interface と
  * `joinSessionsToContainers` 純関数 (ラベルベースで session record を
- * overlay する) のみを提供する。
+ * overlay する) と `ContainerLifecycleService` 系の typed error class
+ * を提供する。
  */
 
 import { NAS_SESSION_ID_LABEL } from "../../docker/nas_resources.ts";
@@ -12,6 +13,27 @@ import type {
   SessionRecord,
   SessionTurn,
 } from "../../sessions/store.ts";
+
+// ---------------------------------------------------------------------------
+// Typed errors (used by ContainerLifecycleService.startShellSession;
+// `ui/routes/api.ts` does `instanceof` 分岐 to map to HTTP 403/409.)
+// ---------------------------------------------------------------------------
+
+/** Thrown when a shell session is requested for a container that is not running. */
+export class ContainerNotRunningError extends Error {
+  constructor(containerName: string) {
+    super(`Container is not running: ${containerName}`);
+    this.name = "ContainerNotRunningError";
+  }
+}
+
+/** Thrown when an operation targets a container not managed by nas. */
+export class NotNasManagedContainerError extends Error {
+  constructor(containerName: string) {
+    super(`Not a nas-managed container: ${containerName}`);
+    this.name = "NotNasManagedContainerError";
+  }
+}
 
 export interface NasContainerInfo {
   name: string;

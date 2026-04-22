@@ -89,6 +89,126 @@ test("Fake listContainerNames: override is invoked and returns configured names"
   expect(names).toEqual(["nas-a", "nas-b"]);
 });
 
+test("Fake listNetworkNames: default [], override is invoked", async () => {
+  // default
+  const defaultLayer = makeDockerServiceFake();
+  const defaultNames = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) => svc.listNetworkNames()).pipe(
+      Effect.provide(defaultLayer),
+    ),
+  );
+  expect(defaultNames).toEqual([]);
+
+  // override
+  let calls = 0;
+  const layer = makeDockerServiceFake({
+    listNetworkNames: () => {
+      calls += 1;
+      return Effect.succeed(["nas-net-a", "bridge"]);
+    },
+  });
+  const names = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) => svc.listNetworkNames()).pipe(
+      Effect.provide(layer),
+    ),
+  );
+  expect(calls).toBe(1);
+  expect(names).toEqual(["nas-net-a", "bridge"]);
+});
+
+test("Fake inspectNetwork: default returns minimum DockerNetworkDetails for the requested name", async () => {
+  const layer = makeDockerServiceFake();
+  const details = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) =>
+      svc.inspectNetwork("nas-net-x"),
+    ).pipe(Effect.provide(layer)),
+  );
+  expect(details).toEqual({
+    name: "nas-net-x",
+    labels: {},
+    containers: [],
+  });
+
+  // override
+  const calls: string[] = [];
+  const overrideLayer = makeDockerServiceFake({
+    inspectNetwork: (name) => {
+      calls.push(name);
+      return Effect.succeed({
+        name,
+        labels: { "nas.managed": "true" },
+        containers: ["c1"],
+      });
+    },
+  });
+  const overridden = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) =>
+      svc.inspectNetwork("nas-net-y"),
+    ).pipe(Effect.provide(overrideLayer)),
+  );
+  expect(calls).toEqual(["nas-net-y"]);
+  expect(overridden.name).toBe("nas-net-y");
+  expect(overridden.containers).toEqual(["c1"]);
+});
+
+test("Fake listVolumeNames: default [], override is invoked", async () => {
+  const defaultLayer = makeDockerServiceFake();
+  const defaultNames = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) => svc.listVolumeNames()).pipe(
+      Effect.provide(defaultLayer),
+    ),
+  );
+  expect(defaultNames).toEqual([]);
+
+  let calls = 0;
+  const layer = makeDockerServiceFake({
+    listVolumeNames: () => {
+      calls += 1;
+      return Effect.succeed(["nas-vol-a"]);
+    },
+  });
+  const names = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) => svc.listVolumeNames()).pipe(
+      Effect.provide(layer),
+    ),
+  );
+  expect(calls).toBe(1);
+  expect(names).toEqual(["nas-vol-a"]);
+});
+
+test("Fake inspectVolume: default returns minimum DockerVolumeDetails for the requested name", async () => {
+  const layer = makeDockerServiceFake();
+  const details = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) => svc.inspectVolume("nas-vol-x")).pipe(
+      Effect.provide(layer),
+    ),
+  );
+  expect(details).toEqual({
+    name: "nas-vol-x",
+    labels: {},
+    containers: [],
+  });
+
+  const calls: string[] = [];
+  const overrideLayer = makeDockerServiceFake({
+    inspectVolume: (name) => {
+      calls.push(name);
+      return Effect.succeed({
+        name,
+        labels: { "nas.managed": "true", "nas.kind": "dind-tmp" },
+        containers: [],
+      });
+    },
+  });
+  const overridden = await Effect.runPromise(
+    Effect.flatMap(DockerService, (svc) => svc.inspectVolume("nas-vol-y")).pipe(
+      Effect.provide(overrideLayer),
+    ),
+  );
+  expect(calls).toEqual(["nas-vol-y"]);
+  expect(overridden.labels["nas.kind"]).toBe("dind-tmp");
+});
+
 test(".orDie was retracted: Fake errors land in Fail, not Die", async () => {
   // Regression for Phase 3 Commit 1: previously Live wrapped every method
   // with `.pipe(Effect.orDie)`, which converted typed errors into defects
