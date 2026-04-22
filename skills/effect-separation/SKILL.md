@@ -1,6 +1,6 @@
 ---
 name: effect-separation
-description: Stage Architecture — Effect-based Design Rules. Use when adding new stages, modifying existing stages, creating helper functions, or refactoring pipeline code. Always consult when touching stages/, pipeline/, services/, or agents/ directories, or when design questions arise about where to place side-effects.
+description: Effect-based service architecture for this codebase — covers pipeline stages (src/stages/, src/services/) and long-lived domain services shared between CLI and UI (src/domain/). Use when adding or modifying stages, creating helper functions, refactoring pipeline code, adding or touching services under src/domain/, or consolidating primitive-direct-call duplication in src/cli/, src/ui/data.ts, or src/ui/routes/. Always consult when touching stages/, pipeline/, services/, domain/, or agents/ directories, or when design questions arise about where to place side-effects.
 ---
 
 # Effect-based Stage Architecture
@@ -13,6 +13,29 @@ description: Stage Architecture — Effect-based Design Rules. Use when adding n
 > - If you feel tempted to write `mkdir`, `writeFile`, `spawn`, `exec`, `rm`, `networkCreate`, or similar steps in a stage, stop and extract a service first.
 
 All pipeline stages use a single type: `EffectStage<R>`. A stage declares its required services via `R`, computes pure data when helpful, and orchestrates service calls inside a shared `Scope`.
+
+## Service Tiers
+
+nas organizes service-level code into four tiers by reusability and call context:
+
+| tier | role | location | called from | examples |
+|---|---|---|---|---|
+| L1 | primitive | `src/services/` | Effect only | `FsService`, `DockerService`, `ProcessService` |
+| L2 | domain (nas-specific, reusable) | `src/domain/<name>/service.ts` | **plain-async or Effect** | `ContainerQueryService`, `SessionUiService`, `AuditQueryService` |
+| L3-a | stage-only | `src/stages/<name>/*_service.ts` | Effect only (stage `run()`) | `DindService`, `GitWorktreeService` |
+| L3-b | api-only (rare) | `src/ui/routes/<name>_service.ts` | plain-async (HTTP route) | none yet — `sse_diff.ts` stays a pure function |
+
+Call-direction rules:
+- L3-a and L3-b may call L1 and L2.
+- L3-a and L3-b never call each other — sibling tiers.
+- L2 may call L2; declare the dependency in `R` honestly and close it at the `makeXxxClient` adapter.
+- Reverse flow (L1→L2, L2→L3) is forbidden.
+
+**This document covers the L1 primitive and L3-a stage service rules.**
+For L2 domain services (long-lived CRUD shared between CLI and UI),
+read `references/domain-service.md`. They reuse the same Tag + Live +
+Fake idiom but add a plain-async client bridge, a different R-closure
+strategy, and typed-error unwrap at the adapter boundary.
 
 ## EffectStage<R>
 
