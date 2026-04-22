@@ -144,10 +144,7 @@ test("buildImage: tmp dir is removed even when docker.build fails", async () => 
   });
 
   const dockerLayer = makeDockerServiceFake({
-    build: () =>
-      Effect.fail(
-        new Error("docker exploded"),
-      ) as unknown as Effect.Effect<void>,
+    build: () => Effect.fail(new Error("docker exploded")),
   });
 
   const plan: DockerBuildImagePlan = {

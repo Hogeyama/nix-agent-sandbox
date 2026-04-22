@@ -3,15 +3,23 @@
  *
  * Live implementation delegates to existing functions in src/docker/client.ts.
  * Fake implementation provides configurable stubs for testing.
+ *
+ * Live methods expose `Effect.Effect<T, Error>` (no `.orDie`). Stage code that
+ * wants to die on Docker failures wraps individual calls with `.pipe(Effect.orDie)`.
+ * Domain services that want to surface error channels (UI/HTTP) consume the
+ * raw Effect directly.
  */
 
 import { Context, Effect, Layer } from "effect";
 import {
+  type DockerContainerDetails,
   dockerBuild,
   dockerContainerExists,
   dockerContainerIp,
   dockerExec,
+  dockerInspectContainer,
   dockerIsRunning,
+  dockerListContainerNames,
   dockerLogs,
   dockerNetworkConnect,
   dockerNetworkCreateWithLabels,
@@ -24,6 +32,10 @@ import {
   dockerVolumeCreate,
   dockerVolumeRemove,
 } from "../docker/client.ts";
+
+// Re-export so domain services depending on DockerService can import the
+// detail type from the same module without reaching into docker/client.ts.
+export type { DockerContainerDetails } from "../docker/client.ts";
 
 // ---------------------------------------------------------------------------
 // Option types
@@ -60,6 +72,15 @@ export interface DockerRunDetachedOpts {
 }
 
 // ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+function wrapError(prefix: string): (e: unknown) => Error {
+  return (e) =>
+    new Error(`${prefix}: ${e instanceof Error ? e.message : String(e)}`);
+}
+
+// ---------------------------------------------------------------------------
 // DockerService tag
 // ---------------------------------------------------------------------------
 
@@ -70,44 +91,50 @@ export class DockerService extends Context.Tag("nas/DockerService")<
       contextDir: string,
       imageName: string,
       labels: Record<string, string>,
-    ) => Effect.Effect<void>;
-    readonly runInteractive: (opts: DockerRunOpts) => Effect.Effect<void>;
+    ) => Effect.Effect<void, Error>;
+    readonly runInteractive: (
+      opts: DockerRunOpts,
+    ) => Effect.Effect<void, Error>;
     readonly runDetached: (
       opts: DockerRunDetachedOpts,
-    ) => Effect.Effect<string>;
-    readonly isRunning: (name: string) => Effect.Effect<boolean>;
-    readonly containerExists: (name: string) => Effect.Effect<boolean>;
-    readonly rm: (name: string) => Effect.Effect<void>;
-    readonly logs: (name: string) => Effect.Effect<string>;
+    ) => Effect.Effect<string, Error>;
+    readonly isRunning: (name: string) => Effect.Effect<boolean, Error>;
+    readonly containerExists: (name: string) => Effect.Effect<boolean, Error>;
+    readonly rm: (name: string) => Effect.Effect<void, Error>;
+    readonly logs: (name: string) => Effect.Effect<string, Error>;
     readonly networkCreate: (
       name: string,
       opts: { internal?: boolean; labels?: Record<string, string> },
-    ) => Effect.Effect<void>;
+    ) => Effect.Effect<void, Error>;
     readonly networkConnect: (
       network: string,
       container: string,
       opts?: { aliases?: string[] },
-    ) => Effect.Effect<void>;
+    ) => Effect.Effect<void, Error>;
     readonly networkDisconnect: (
       network: string,
       container: string,
-    ) => Effect.Effect<void>;
-    readonly networkRemove: (network: string) => Effect.Effect<void>;
+    ) => Effect.Effect<void, Error>;
+    readonly networkRemove: (network: string) => Effect.Effect<void, Error>;
     readonly stop: (
       name: string,
       opts?: { timeoutSeconds?: number },
-    ) => Effect.Effect<void>;
+    ) => Effect.Effect<void, Error>;
     readonly exec: (
       container: string,
       cmd: string[],
       opts?: { user?: string },
-    ) => Effect.Effect<string>;
-    readonly containerIp: (name: string) => Effect.Effect<string>;
+    ) => Effect.Effect<string, Error>;
+    readonly containerIp: (name: string) => Effect.Effect<string, Error>;
     readonly volumeCreate: (
       name: string,
       opts?: { labels?: Record<string, string> },
-    ) => Effect.Effect<void>;
-    readonly volumeRemove: (name: string) => Effect.Effect<void>;
+    ) => Effect.Effect<void, Error>;
+    readonly volumeRemove: (name: string) => Effect.Effect<void, Error>;
+    readonly inspect: (
+      name: string,
+    ) => Effect.Effect<DockerContainerDetails, Error>;
+    readonly listContainerNames: () => Effect.Effect<string[], Error>;
   }
 >() {}
 
@@ -121,11 +148,8 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
     build: (contextDir, imageName, labels) =>
       Effect.tryPromise({
         try: () => dockerBuild(contextDir, imageName, labels),
-        catch: (e) =>
-          new Error(
-            `docker build failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker build failed"),
+      }),
 
     runInteractive: (opts) =>
       Effect.tryPromise({
@@ -139,11 +163,8 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
             name: opts.name,
             labels: opts.labels,
           }),
-        catch: (e) =>
-          new Error(
-            `docker run (interactive) failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker run (interactive) failed"),
+      }),
 
     runDetached: (opts) =>
       Effect.tryPromise({
@@ -151,92 +172,62 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
           await dockerRunDetached(opts);
           return opts.name;
         },
-        catch: (e) =>
-          new Error(
-            `docker run (detached) failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker run (detached) failed"),
+      }),
 
     isRunning: (name) =>
       Effect.tryPromise({
         try: () => dockerIsRunning(name),
-        catch: (e) =>
-          new Error(
-            `docker inspect failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker inspect failed"),
+      }),
 
     containerExists: (name) =>
       Effect.tryPromise({
         try: () => dockerContainerExists(name),
-        catch: (e) =>
-          new Error(
-            `docker inspect failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker inspect failed"),
+      }),
 
     rm: (name) =>
       Effect.tryPromise({
         try: () => dockerRm(name),
-        catch: (e) =>
-          new Error(
-            `docker rm failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker rm failed"),
+      }),
 
     logs: (name) =>
       Effect.tryPromise({
         try: () => dockerLogs(name),
-        catch: (e) =>
-          new Error(
-            `docker logs failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker logs failed"),
+      }),
 
     networkCreate: (name, opts) =>
       Effect.tryPromise({
         try: () => dockerNetworkCreateWithLabels(name, opts),
-        catch: (e) =>
-          new Error(
-            `docker network create failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker network create failed"),
+      }),
 
     networkConnect: (network, container, opts) =>
       Effect.tryPromise({
         try: () => dockerNetworkConnect(network, container, opts),
-        catch: (e) =>
-          new Error(
-            `docker network connect failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker network connect failed"),
+      }),
 
     networkDisconnect: (network, container) =>
       Effect.tryPromise({
         try: () => dockerNetworkDisconnect(network, container),
-        catch: (e) =>
-          new Error(
-            `docker network disconnect failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker network disconnect failed"),
+      }),
 
     networkRemove: (network) =>
       Effect.tryPromise({
         try: () => dockerNetworkRemove(network),
-        catch: (e) =>
-          new Error(
-            `docker network rm failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker network rm failed"),
+      }),
 
     stop: (name, opts) =>
       Effect.tryPromise({
         try: () => dockerStop(name, opts),
-        catch: (e) =>
-          new Error(
-            `docker stop failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker stop failed"),
+      }),
 
     exec: (container, cmd, opts) =>
       Effect.tryPromise({
@@ -247,11 +238,8 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
           }
           return result.stdout;
         },
-        catch: (e) =>
-          new Error(
-            `docker exec failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker exec failed"),
+      }),
 
     containerIp: (name) =>
       Effect.tryPromise({
@@ -262,29 +250,32 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
           }
           return ip;
         },
-        catch: (e) =>
-          new Error(
-            `docker inspect failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker inspect failed"),
+      }),
 
     volumeCreate: (name, opts) =>
       Effect.tryPromise({
         try: () => dockerVolumeCreate(name, opts?.labels),
-        catch: (e) =>
-          new Error(
-            `docker volume create failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker volume create failed"),
+      }),
 
     volumeRemove: (name) =>
       Effect.tryPromise({
         try: () => dockerVolumeRemove(name),
-        catch: (e) =>
-          new Error(
-            `docker volume rm failed: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-      }).pipe(Effect.orDie),
+        catch: wrapError("docker volume rm failed"),
+      }),
+
+    inspect: (name) =>
+      Effect.tryPromise({
+        try: () => dockerInspectContainer(name),
+        catch: wrapError("docker inspect failed"),
+      }),
+
+    listContainerNames: () =>
+      Effect.tryPromise({
+        try: () => dockerListContainerNames(),
+        catch: wrapError("docker ps failed"),
+      }),
   }),
 );
 
@@ -297,42 +288,48 @@ export interface DockerServiceFakeConfig {
     contextDir: string,
     imageName: string,
     labels: Record<string, string>,
-  ) => Effect.Effect<void>;
-  readonly runInteractive?: (opts: DockerRunOpts) => Effect.Effect<void>;
-  readonly runDetached?: (opts: DockerRunDetachedOpts) => Effect.Effect<string>;
-  readonly isRunning?: (name: string) => Effect.Effect<boolean>;
-  readonly containerExists?: (name: string) => Effect.Effect<boolean>;
-  readonly rm?: (name: string) => Effect.Effect<void>;
-  readonly logs?: (name: string) => Effect.Effect<string>;
+  ) => Effect.Effect<void, Error>;
+  readonly runInteractive?: (opts: DockerRunOpts) => Effect.Effect<void, Error>;
+  readonly runDetached?: (
+    opts: DockerRunDetachedOpts,
+  ) => Effect.Effect<string, Error>;
+  readonly isRunning?: (name: string) => Effect.Effect<boolean, Error>;
+  readonly containerExists?: (name: string) => Effect.Effect<boolean, Error>;
+  readonly rm?: (name: string) => Effect.Effect<void, Error>;
+  readonly logs?: (name: string) => Effect.Effect<string, Error>;
   readonly networkCreate?: (
     name: string,
     opts: { internal?: boolean; labels?: Record<string, string> },
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, Error>;
   readonly networkConnect?: (
     network: string,
     container: string,
     opts?: { aliases?: string[] },
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, Error>;
   readonly networkDisconnect?: (
     network: string,
     container: string,
-  ) => Effect.Effect<void>;
-  readonly networkRemove?: (network: string) => Effect.Effect<void>;
+  ) => Effect.Effect<void, Error>;
+  readonly networkRemove?: (network: string) => Effect.Effect<void, Error>;
   readonly stop?: (
     name: string,
     opts?: { timeoutSeconds?: number },
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, Error>;
   readonly exec?: (
     container: string,
     cmd: string[],
     opts?: { user?: string },
-  ) => Effect.Effect<string>;
-  readonly containerIp?: (name: string) => Effect.Effect<string>;
+  ) => Effect.Effect<string, Error>;
+  readonly containerIp?: (name: string) => Effect.Effect<string, Error>;
   readonly volumeCreate?: (
     name: string,
     opts?: { labels?: Record<string, string> },
-  ) => Effect.Effect<void>;
-  readonly volumeRemove?: (name: string) => Effect.Effect<void>;
+  ) => Effect.Effect<void, Error>;
+  readonly volumeRemove?: (name: string) => Effect.Effect<void, Error>;
+  readonly inspect?: (
+    name: string,
+  ) => Effect.Effect<DockerContainerDetails, Error>;
+  readonly listContainerNames?: () => Effect.Effect<string[], Error>;
 }
 
 export function makeDockerServiceFake(
@@ -359,6 +356,18 @@ export function makeDockerServiceFake(
       containerIp: overrides.containerIp ?? (() => Effect.succeed("")),
       volumeCreate: overrides.volumeCreate ?? (() => Effect.void),
       volumeRemove: overrides.volumeRemove ?? (() => Effect.void),
+      inspect:
+        overrides.inspect ??
+        ((name) =>
+          Effect.succeed({
+            name,
+            running: false,
+            labels: {},
+            networks: [],
+            startedAt: "",
+          })),
+      listContainerNames:
+        overrides.listContainerNames ?? (() => Effect.succeed([])),
     }),
   );
 }

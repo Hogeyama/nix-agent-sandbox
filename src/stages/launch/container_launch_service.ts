@@ -45,7 +45,7 @@ export const ContainerLaunchServiceLive: Layer.Layer<
     const docker = yield* DockerService;
 
     return ContainerLaunchService.of({
-      launch: (opts) => docker.runInteractive(opts),
+      launch: (opts) => docker.runInteractive(opts).pipe(Effect.orDie),
     });
   }),
 );

@@ -65,12 +65,14 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
       return EnvoyService.of({
         ensureSharedEnvoy: (plan) =>
           Effect.gen(function* () {
-            const running = yield* docker.isRunning(plan.envoyContainerName);
+            const running = yield* docker
+              .isRunning(plan.envoyContainerName)
+              .pipe(Effect.orDie);
             if (running) return;
 
-            const exists = yield* docker.containerExists(
-              plan.envoyContainerName,
-            );
+            const exists = yield* docker
+              .containerExists(plan.envoyContainerName)
+              .pipe(Effect.orDie);
             if (exists) {
               yield* docker
                 .rm(plan.envoyContainerName)
@@ -85,35 +87,44 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
                 );
             }
 
-            yield* docker.runDetached({
-              name: plan.envoyContainerName,
-              image: plan.envoyImage,
-              args: ["--add-host=host.docker.internal:host-gateway"],
-              envVars: {},
-              mounts: [
-                {
-                  source: plan.runtimePaths.runtimeDir,
-                  target: "/nas-network",
-                  mode: "rw",
+            yield* docker
+              .runDetached({
+                name: plan.envoyContainerName,
+                image: plan.envoyImage,
+                args: ["--add-host=host.docker.internal:host-gateway"],
+                envVars: {},
+                mounts: [
+                  {
+                    source: plan.runtimePaths.runtimeDir,
+                    target: "/nas-network",
+                    mode: "rw",
+                  },
+                ],
+                labels: {
+                  [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+                  [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
                 },
-              ],
-              labels: {
-                [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-                [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
-              },
-              command: ["-c", "/nas-network/envoy.yaml", "--log-level", "info"],
-            });
+                command: [
+                  "-c",
+                  "/nas-network/envoy.yaml",
+                  "--log-level",
+                  "info",
+                ],
+              })
+              .pipe(Effect.orDie);
 
             // Wait for envoy readiness
             const started = Date.now();
             while (Date.now() - started < plan.envoyReadyTimeoutMs) {
-              const isRunning = yield* docker.isRunning(
-                plan.envoyContainerName,
-              );
+              const isRunning = yield* docker
+                .isRunning(plan.envoyContainerName)
+                .pipe(Effect.orDie);
               if (isRunning) return;
               yield* Effect.sleep("200 millis");
             }
-            const logs = yield* docker.logs(plan.envoyContainerName);
+            const logs = yield* docker
+              .logs(plan.envoyContainerName)
+              .pipe(Effect.orDie);
             yield* Effect.fail(
               new Error(`Envoy sidecar failed to start:\n${logs}`),
             );
@@ -124,26 +135,29 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
             let envoyConnected = false;
             let dindConnected = false;
 
-            yield* docker.networkCreate(plan.sessionNetworkName, {
-              internal: true,
-              labels: {
-                [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-                [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
-              },
-            });
+            yield* docker
+              .networkCreate(plan.sessionNetworkName, {
+                internal: true,
+                labels: {
+                  [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
+                  [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
+                },
+              })
+              .pipe(Effect.orDie);
 
-            yield* docker.networkConnect(
-              plan.sessionNetworkName,
-              plan.envoyContainerName,
-              { aliases: [plan.envoyAlias] },
-            );
+            yield* docker
+              .networkConnect(
+                plan.sessionNetworkName,
+                plan.envoyContainerName,
+                { aliases: [plan.envoyAlias] },
+              )
+              .pipe(Effect.orDie);
             envoyConnected = true;
 
             if (plan.dindContainerName) {
-              yield* docker.networkConnect(
-                plan.sessionNetworkName,
-                plan.dindContainerName,
-              );
+              yield* docker
+                .networkConnect(plan.sessionNetworkName, plan.dindContainerName)
+                .pipe(Effect.orDie);
               dindConnected = true;
             }
 
