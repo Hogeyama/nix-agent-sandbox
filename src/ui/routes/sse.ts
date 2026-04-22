@@ -2,6 +2,7 @@
  * SSE エンドポイント — 2秒間隔ポーリングで差分送出
  */
 
+import type { AuditLogEntry } from "../../audit/types.ts";
 import type { UiDataContext } from "../data.ts";
 import {
   getAuditLogs,
@@ -12,6 +13,7 @@ import {
   getTerminalSessions,
 } from "../data.ts";
 import { Router } from "../router.ts";
+import { diffSnapshots, initialSnapshotState } from "./sse_diff.ts";
 
 export function createSseRoutes(ctx: UiDataContext): Router {
   const app = new Router();
@@ -37,12 +39,10 @@ export function createSseRoutes(ctx: UiDataContext): Router {
           }
         }
 
-        let prevNetworkJson = "";
-        let prevHostExecJson = "";
-        let prevSessionsJson = "";
-        let prevTerminalSessionsJson = "";
-        let prevContainersJson = "";
-        let prevAuditJson = "";
+        // Per-connection snapshot state. Lives strictly inside this
+        // `start(controller)` closure so that concurrent SSE clients do not
+        // share diff state. Do NOT lift to module scope.
+        let state = initialSnapshotState();
 
         async function poll(): Promise<void> {
           if (closed) return;
@@ -62,46 +62,29 @@ export function createSseRoutes(ctx: UiDataContext): Router {
               getNasContainers(ctx).catch(() => []),
             ]);
 
-            const networkJson = JSON.stringify(networkPending);
-            if (networkJson !== prevNetworkJson) {
-              prevNetworkJson = networkJson;
-              send("network:pending", { items: networkPending });
-            }
-
-            const hostExecJson = JSON.stringify(hostExecPending);
-            if (hostExecJson !== prevHostExecJson) {
-              prevHostExecJson = hostExecJson;
-              send("hostexec:pending", { items: hostExecPending });
-            }
-
-            const sessionsJson = JSON.stringify(sessions);
-            if (sessionsJson !== prevSessionsJson) {
-              prevSessionsJson = sessionsJson;
-              send("sessions", sessions);
-            }
-
-            const terminalSessionsJson = JSON.stringify(terminalSessions);
-            if (terminalSessionsJson !== prevTerminalSessionsJson) {
-              prevTerminalSessionsJson = terminalSessionsJson;
-              send("terminal:sessions", { items: terminalSessions });
-            }
-
-            const containersJson = JSON.stringify(containers);
-            if (containersJson !== prevContainersJson) {
-              prevContainersJson = containersJson;
-              send("containers", { items: containers });
-            }
-
-            // Audit logs — send delta since last poll
+            // Audit logs — fetched separately so a failure does not affect
+            // the other 5 snapshots. `undefined` is a sentinel for
+            // `diffSnapshots` to suppress the audit:logs event.
+            let auditLogs: AuditLogEntry[] | undefined;
             try {
-              const auditLogs = await getAuditLogs(ctx);
-              const auditJson = JSON.stringify(auditLogs);
-              if (auditJson !== prevAuditJson) {
-                prevAuditJson = auditJson;
-                send("audit:logs", { items: auditLogs });
-              }
+              auditLogs = await getAuditLogs(ctx);
             } catch {
-              // ignore audit log read errors
+              auditLogs = undefined;
+            }
+
+            const { events, nextState } = diffSnapshots(state, {
+              network: networkPending,
+              hostexec: hostExecPending,
+              sessions,
+              terminalSessions,
+              containers,
+              audit: auditLogs,
+            });
+            state = nextState;
+
+            for (const ev of events) {
+              if (closed) return;
+              send(ev.event, ev.data);
             }
           } catch {
             // ignore polling errors

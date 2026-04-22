@@ -69,7 +69,7 @@ Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
 | 4 | ContainerLifecycleService + typed error | #2 | `b21e39a` |
 | 5 | CLI Promise.allSettled 化 | #2 | `81e343b` |
 | 6 | `withErrorHandling` boilerplate 削減 (TaggedError 移行なし) | #4 | `f325129` + `c3c52c6` |
-| 7 | `diffSnapshots` 純関数化 | 独立 | TODO |
+| 7 | `diffSnapshots` 純関数化 | 独立 | (this commit) |
 | 8 | DaemonProcService (optional、優先度低) | — | TODO |
 | 9 | `cleanNasContainers` の domain 化 + `defaultBackend` 廃止 + CLI 経路の service 化 | #4 | TODO |
 
@@ -83,6 +83,7 @@ Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
 | ContainerLifecycleService + typed error | `b21e39a` | `domain/container/lifecycle_service.ts` 新設。`stopContainer` / `cleanContainers` / `startShellSession` の 3 method を Live + Fake + plain-async client。Live R = `DockerService \| SessionLaunchService \| ContainerQueryService` を Layer 依存で正直に宣言、`liveDeps` + `Layer.mergeAll` 1 階層閉包パターンを Phase 3 Commit 2 から踏襲。`ContainerNotRunningError` / `NotNasManagedContainerError` を `ui/data.ts` から `domain/container/types.ts` に移設、`api.ts` 側の `instanceof` 分岐 (403/409) は無編集で domain 経由に切替。plain-async adapter は `Effect.runPromiseExit` + `Cause.failureOption` で typed error を unwrap して直接 throw する (α) 戦略で `instanceof` identity を保持。`cleanNasContainers` には file-private な `makeBackendFromDockerService(docker)` adapter で fake DockerService 経由全貫通 (DI 第三案、Live test 不能を回避)。`DockerService` Tag に `listNetworkNames` / `inspectNetwork` / `listVolumeNames` / `inspectVolume` を追加 (Live + Fake config + Fake デフォルト)。`ui/data.ts` から `NasContainerInfo` / `joinSessionsToContainers` shim と typed error class / docker primitive direct import を完全撤去、`data_test.ts` の import path も `../domain/container.ts` に切替。`compile-time satisfies` で `R = never, never` 厳格 pin。`defaultBackend` 廃止と CLI 経路の service 化は将来 commit (#9) として明示的に defer |
 | CLI Promise.allSettled 化 | `81e343b` | `src/cli/container.ts` の `Promise.all` → `Promise.allSettled` 置換 + `pickFulfilledContainerDetails` 純関数抽出 + `container_test.ts` 新規 4 test。silent skip で UI `for`+skip と semantics 一致、`--format json` パイプ非破壊性を契約として console spy で 1 行 assert (rejected reason はログ出力されない)。stderr warning による observability 強化は将来課題として `pickFulfilledContainerDetails` JSDoc にメモ。`cleanNasContainers()` 引数なし呼出と `defaultBackend` 経路は本 commit で触らず #9 で `cleanNasContainers` の domain 化と一緒に廃止予定。CLI が `ContainerQueryService.listManaged()` 経由になれば `pickFulfilledContainerDetails` は不要になる見通し |
 | `withErrorHandling` boilerplate 削減 | `f325129` + `c3c52c6` | 2 commit 分割。Commit 6.1 (`f325129`) で `src/ui/routes/with_error_handling.ts` 新設 (`withErrorHandling(handler)` + `mapErrorToResponse(e)` export、test 10 本)。Commit 6.2 (`c3c52c6`) で `api.ts` 21 個 try/catch のうち 18 endpoint を一括置換、line 数 483 → 442 (-41)。`/launch` のみ `logWarn` / `logInfo` 副作用保持のため手動 catch 残置、ack endpoint は `Cannot acknowledge turn:` 409 を mapper に入れず 2 段 catch (内側 prefix-match + rethrow → 外側 mapper)。`Cannot acknowledge turn:` mapper 非含有理由は「他 endpoint で偶発的に同 prefix が出ると 409 化する semantic regression を避ける」defensive 戦略。bit-identical 保証として既存 24 integration test + `/launch/branches` 400 + rename 404 の 2 本追加 = 26 pass。`Data.TaggedError` 移行は不採用 (CLI/stages 全体方針) |
+| `diffSnapshots` 純関数化 | (this commit) | `src/ui/routes/sse_diff.ts` 新設 (`SnapshotState` Readonly 6-field 正規化 JSON 文字列 + `SnapshotInputs` + `SseEvent` discriminated union + `SSE_EVENT_NAMES` const tuple + `initialSnapshotState()` + `diffSnapshots(prev, next): { events, nextState }` 純関数)。`sse.ts` controller の `prevXxxJson` 6 closure 変数 + 6 個の inline `if (json !== prev) { send(...) }` ブロックを `let state = initialSnapshotState()` + 1 個の `diffSnapshots()` 呼び出し + `for (const ev of events) send(ev.event, ev.data)` ループに置換。`let state` は `start(controller)` scope 内に置き module scope に漏らさない (per-connection 隔離、最重要設計点)。同値判定は `JSON.stringify` 維持 (deep equal 移行は別 commit に defer)。wire bit-identical: event 名 6 種 / payload 形状 (`sessions` のみ素 object、他 5 種は `{ items: [...] }` 包装) / 送出順序 (`network:pending → hostexec:pending → sessions → terminal:sessions → containers → audit:logs`) すべて完全保存。audit non-symmetric 設計: `audit?: AuditLogEntry[]` で `undefined` (fetch 失敗) を表現、event suppress + `nextState.audit = prev.audit` 据え置き。audit fetch の個別 try/catch / 5 fetch の `.catch(() => [])` fallback / `setTimeout(poll, 2000)` / `closed` ガード / `send()` の try/catch は controller 残置 (純関数に副作用漏らさず)。15 unit test (6 種単独変化 + 全変化順序 + audit undefined 2 ケース + payload shape 2 ケース + 部分変化 + round-trip + 初回全送出 + 同値 0 events)。Commit 6.1 (`with_error_handling.ts`) と同じ「別ファイル + 純関数 + ユニットテスト」パターン。`/api/events` integration test (接続 → 初回 6 event 受信 → close) は将来 commit で追加検討 |
 
 ### 残タスク詳細
 
@@ -121,9 +122,8 @@ json({error: e.message}, 500); }` を `withErrorHandling(handler)` で
 
 ### SSE 純化
 
-`src/ui/routes/sse.ts` の `diffSnapshots(prev, next): SseEvent[]` を純
-関数として抽出、unit test でカバー。現状は controller の closure で
-前回値を抱えており test しづらい。
+完了 (Commit 7、上の完了 table 参照)。`/api/events` の integration test
+(接続 → 初回 6 event 受信 → close) は将来 commit で追加検討。
 
 ### daemon.ts の service 化
 
