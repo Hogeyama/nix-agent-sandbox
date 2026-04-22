@@ -706,6 +706,52 @@ test("PATCH /sessions/:id/name rejects names that become empty after stripping",
   }
 });
 
+test("PATCH /sessions/:id/name returns 404 for unknown session", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/sessions-root/sessions`, { recursive: true });
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/sessions/sess_missing/name", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "new-name" }),
+    });
+    expect(res.status).toEqual(404);
+    const body = await res.json();
+    expect(body).toEqual({
+      error: expect.stringMatching(/^Session not found:/),
+    });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /launch/branches with relative cwd returns 400 (LaunchValidationError)", async () => {
+  // Verifies that LaunchValidationError thrown from validateCwd() is mapped to
+  // a 400 response by withErrorHandling. This is the typed-error wrap path in
+  // the refactor — the handler itself does not catch the error explicitly.
+  // Docker / git binaries are NOT required: validateCwd() rejects synchronously
+  // before any subprocess is spawned.
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/launch/branches?cwd=relative-path");
+    expect(res.status).toEqual(400);
+    const body = await res.json();
+    expect(body.error).toEqual("Invalid cwd: must be an absolute path");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("POST /containers/clean requires {confirm:true} body", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {

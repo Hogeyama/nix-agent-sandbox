@@ -4,10 +4,6 @@
 
 import type { AuditDomain, AuditLogFilter } from "../../audit/types.ts";
 import type { HostExecPromptScope } from "../../config/types.ts";
-import {
-  ContainerNotRunningError,
-  NotNasManagedContainerError,
-} from "../../domain/container.ts";
 import { logInfo, logWarn } from "../../log.ts";
 import type { ApprovalScope } from "../../network/protocol.ts";
 import type { UiDataContext } from "../data.ts";
@@ -38,6 +34,7 @@ import {
 } from "../launch.ts";
 import { json, Router } from "../router.ts";
 import { isSafeId } from "./validate_ids.ts";
+import { withErrorHandling } from "./with_error_handling.ts";
 
 const NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set([
   "once",
@@ -106,31 +103,26 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   // --- Launch ---
 
-  api.get("/launch/info", async () => {
-    try {
+  api.get("/launch/info", () =>
+    withErrorHandling(async () => {
       const info = await getLaunchInfo(ctx);
       return json(info);
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.get("/launch/branches", async ({ url }) => {
-    const cwd = url.searchParams.get("cwd");
-    if (!cwd) {
-      return json({ error: "cwd is required" }, 400);
-    }
-    try {
+  api.get("/launch/branches", ({ url }) =>
+    withErrorHandling(async () => {
+      const cwd = url.searchParams.get("cwd");
+      if (!cwd) {
+        return json({ error: "cwd is required" }, 400);
+      }
       const branches = await getLaunchBranches(cwd);
       return json(branches);
-    } catch (e) {
-      if (e instanceof LaunchValidationError) {
-        return json({ error: e.message }, 400);
-      }
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
+  // 副作用 (logWarn / logInfo) を保持するためこの endpoint は手動
+  // catch を維持する
   api.post("/launch", async ({ req }) => {
     let body: unknown;
     try {
@@ -160,17 +152,15 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   // --- Network ---
 
-  api.get("/network/pending", async () => {
-    try {
+  api.get("/network/pending", () =>
+    withErrorHandling(async () => {
       const items = await getNetworkPending(ctx);
       return json({ items });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/network/approve", async ({ req }) => {
-    try {
+  api.post("/network/approve", ({ req }) =>
+    withErrorHandling(async () => {
       const body = await req.json();
       const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
@@ -188,13 +178,11 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       }
       await approveNetwork(ctx, sessionId, requestId, validatedScope);
       return json({ ok: true });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/network/deny", async ({ req }) => {
-    try {
+  api.post("/network/deny", ({ req }) =>
+    withErrorHandling(async () => {
       const body = await req.json();
       const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
@@ -212,24 +200,20 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       }
       await denyNetwork(ctx, sessionId, requestId, validatedScope);
       return json({ ok: true });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
   // --- HostExec ---
 
-  api.get("/hostexec/pending", async () => {
-    try {
+  api.get("/hostexec/pending", () =>
+    withErrorHandling(async () => {
       const items = await getHostExecPending(ctx);
       return json({ items });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/hostexec/approve", async ({ req }) => {
-    try {
+  api.post("/hostexec/approve", ({ req }) =>
+    withErrorHandling(async () => {
       const body = await req.json();
       const { sessionId, requestId, scope } = body;
       if (!sessionId || !requestId) {
@@ -247,13 +231,11 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       }
       await approveHostExec(ctx, sessionId, requestId, validatedScope);
       return json({ ok: true });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/hostexec/deny", async ({ req }) => {
-    try {
+  api.post("/hostexec/deny", ({ req }) =>
+    withErrorHandling(async () => {
       const body = await req.json();
       const { sessionId, requestId } = body;
       if (!sessionId || !requestId) {
@@ -267,24 +249,20 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       }
       await denyHostExec(ctx, sessionId, requestId);
       return json({ ok: true });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
   // --- Sessions ---
 
-  api.get("/sessions", async () => {
-    try {
+  api.get("/sessions", () =>
+    withErrorHandling(async () => {
       const sessions = await getSessions(ctx);
       return json(sessions);
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.patch("/sessions/:sessionId/name", async ({ params, req }) => {
-    try {
+  api.patch("/sessions/:sessionId/name", ({ params, req }) =>
+    withErrorHandling(async () => {
       if (!isSafeId(params.sessionId)) {
         return json({ error: "Invalid sessionId format" }, 400);
       }
@@ -299,59 +277,56 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       }
       const item = await renameSession(ctx, params.sessionId, sanitized);
       return json({ item });
-    } catch (e) {
-      const message = (e as Error).message;
-      if (message.startsWith("Session not found:")) {
-        return json({ error: message }, 404);
-      }
-      return json({ error: message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/sessions/:sessionId/ack", async ({ params }) => {
-    try {
+  api.post("/sessions/:sessionId/ack", ({ params }) =>
+    withErrorHandling(async () => {
       if (!isSafeId(params.sessionId)) {
         return json({ error: "Invalid sessionId format" }, 400);
       }
-      const item = await acknowledgeSessionTurn(ctx, params.sessionId);
-      return json({ item });
-    } catch (e) {
-      const message = (e as Error).message;
-      if (message.startsWith("Session not found:")) {
-        return json({ error: message }, 404);
+      try {
+        const item = await acknowledgeSessionTurn(ctx, params.sessionId);
+        return json({ item });
+      } catch (e) {
+        // "Cannot acknowledge turn in state:" prefix を mapper に入れない理由:
+        // この 409 コントラクトは ack endpoint 固有であり、global mapper に
+        // 昇格させると他 endpoint で同 prefix が偶発的に出た場合に silent な
+        // semantic regression を引き起こすリスクがある。ここで個別 catch して
+        // 409 化し、それ以外の error (Session not found: → 404、その他 → 500)
+        // は外側 withErrorHandling の mapper に委譲する。
+        if (
+          e instanceof Error &&
+          e.message.startsWith("Cannot acknowledge turn in state:")
+        ) {
+          return json({ error: e.message }, 409);
+        }
+        throw e;
       }
-      if (message.startsWith("Cannot acknowledge turn in state:")) {
-        return json({ error: message }, 409);
-      }
-      return json({ error: message }, 500);
-    }
-  });
+    }),
+  );
 
   // --- Containers ---
 
-  api.get("/containers", async () => {
-    try {
+  api.get("/containers", () =>
+    withErrorHandling(async () => {
       const containers = await getNasContainers(ctx);
       return json({ items: containers });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/containers/:name/stop", async ({ params }) => {
-    try {
+  api.post("/containers/:name/stop", ({ params }) =>
+    withErrorHandling(async () => {
       if (!isSafeId(params.name)) {
         return json({ error: "Invalid container name format" }, 400);
       }
       await stopContainer(ctx, params.name);
       return json({ ok: true });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/containers/clean", async ({ req }) => {
-    try {
+  api.post("/containers/clean", ({ req }) =>
+    withErrorHandling(async () => {
       let body: unknown;
       try {
         body = await req.json();
@@ -373,56 +348,42 @@ export function createApiRoutes(ctx: UiDataContext): Router {
       }
       const result = await cleanContainers(ctx);
       return json(result);
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/containers/:name/shell", async ({ params }) => {
-    try {
+  api.post("/containers/:name/shell", ({ params }) =>
+    withErrorHandling(async () => {
       if (!isSafeId(params.name)) {
         return json({ error: "Invalid container name format" }, 400);
       }
       const result = await startShellSession(ctx, params.name);
       return json(result);
-    } catch (e) {
-      if (e instanceof ContainerNotRunningError) {
-        return json({ error: e.message }, 409);
-      }
-      if (e instanceof NotNasManagedContainerError) {
-        return json({ error: e.message }, 403);
-      }
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
   // --- Terminal (dtach sessions) ---
 
-  api.get("/terminal/sessions", async () => {
-    try {
+  api.get("/terminal/sessions", () =>
+    withErrorHandling(async () => {
       const items = await getTerminalSessions(ctx);
       return json({ items });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
-  api.post("/terminal/:sessionId/kill-clients", async ({ params }) => {
-    try {
+  api.post("/terminal/:sessionId/kill-clients", ({ params }) =>
+    withErrorHandling(async () => {
       if (!isSafeId(params.sessionId)) {
         return json({ error: "Invalid sessionId format" }, 400);
       }
       const killed = await killTerminalClients(ctx, params.sessionId);
       return json({ killed });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
   // --- Audit ---
 
-  api.get("/audit", async ({ url }) => {
-    try {
+  api.get("/audit", ({ url }) =>
+    withErrorHandling(async () => {
       const since = url.searchParams.get("since");
       const before = url.searchParams.get("before");
       const sessionsParam = url.searchParams.get("sessions");
@@ -474,10 +435,8 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
       const items = await getAuditLogs(ctx, filter, limit);
       return json({ items });
-    } catch (e) {
-      return json({ error: (e as Error).message }, 500);
-    }
-  });
+    }),
+  );
 
   return api;
 }
