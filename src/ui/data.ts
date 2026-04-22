@@ -8,17 +8,13 @@ import type { AuditLogEntry, AuditLogFilter } from "../audit/types.ts";
 import type { HostExecPromptScope } from "../config/types.ts";
 import type { ContainerCleanResult } from "../container_clean.ts";
 import { cleanNasContainers } from "../container_clean.ts";
-import type { DockerContainerDetails } from "../docker/client.ts";
-import {
-  dockerInspectContainer,
-  dockerListContainerNames,
-  dockerStop,
-} from "../docker/client.ts";
+import { dockerInspectContainer, dockerStop } from "../docker/client.ts";
 import {
   isNasManagedContainer,
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
 import { makeAuditQueryClient } from "../domain/audit.ts";
+import { makeContainerQueryClient } from "../domain/container.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeSessionLaunchClient } from "../domain/launch.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
@@ -181,6 +177,7 @@ export async function denyHostExec(
 const sessionUiClient = makeSessionUiClient();
 const terminalClient = makeTerminalSessionClient();
 const launchClient = makeSessionLaunchClient();
+const containerQueryClient = makeContainerQueryClient();
 
 export interface SessionsData {
   network: SessionRegistryEntry[];
@@ -313,28 +310,7 @@ export function joinSessionsToContainers(
 export async function getNasContainers(
   ctx: UiDataContext,
 ): Promise<NasContainerInfo[]> {
-  const names = await dockerListContainerNames();
-  const containers: NasContainerInfo[] = [];
-
-  for (const name of names) {
-    let details: DockerContainerDetails;
-    try {
-      details = await dockerInspectContainer(name);
-    } catch {
-      continue;
-    }
-    if (isNasManagedContainer(details.labels, details.name)) {
-      containers.push({
-        name: details.name,
-        running: details.running,
-        labels: details.labels,
-        startedAt: details.startedAt,
-      });
-    }
-  }
-
-  const sessions = await sessionUiClient.list(ctx.sessionPaths);
-  return joinSessionsToContainers(containers, sessions);
+  return await containerQueryClient.listManagedWithSessions(ctx.sessionPaths);
 }
 
 export async function stopContainer(
@@ -362,30 +338,14 @@ export async function cleanContainers(
 ): Promise<ContainerCleanResult> {
   const result = await cleanNasContainers();
   // `removeOrphanShellSockets` は docker 依存を切り離した契約なので、
-  // running parent 集合はこの wrapper で docker primitive を直叩きして
-  // 組み立てる。Phase 3 `ContainerQueryService` で解消予定。
-  const runningParents = await collectRunningSessionIds();
+  // running parent 集合は ContainerQueryService 経由で取得する
+  // (Phase 3 Commit 2 で wrapper の docker 直叩き中間状態を解消済)。
+  const runningParents = await containerQueryClient.collectRunningParentIds();
   await launchClient.removeOrphanShellSockets(
     ctx.terminalRuntimeDir,
     runningParents,
   );
   return result;
-}
-
-async function collectRunningSessionIds(): Promise<Set<string>> {
-  const names = await dockerListContainerNames();
-  const running = new Set<string>();
-  for (const name of names) {
-    try {
-      const details = await dockerInspectContainer(name);
-      if (!details.running) continue;
-      const sid = details.labels[NAS_SESSION_ID_LABEL];
-      if (sid) running.add(sid);
-    } catch {
-      // ignore containers that disappeared between list and inspect
-    }
-  }
-  return running;
 }
 
 export async function startShellSession(

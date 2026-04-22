@@ -31,9 +31,10 @@
  *     `NotNasManagedContainerError` throw は UI wrapper 側に残置。
  *     Phase 3 `ContainerLifecycleService` で整理予定。
  *   - `removeOrphanShellSockets` は docker 依存を切り離し、呼び出し側が
- *     `runningParentIds: ReadonlySet<string>` を渡す契約。docker primitive
- *     直叩きは wrapper (`ui/data.ts#cleanContainers`) に残る中間状態で、
- *     Phase 3 `ContainerQueryService` で解消予定。
+ *     `runningParentIds: ReadonlySet<string>` を渡す契約。wrapper
+ *     (`ui/data.ts#cleanContainers`) の docker primitive 直叩きは
+ *     Phase 3 Commit 2 の `ContainerQueryService.collectRunningParentIds`
+ *     で解消済。
  *   - `nextShellSessionId` は `startShellSession` 内部 private helper 化
  *     (外部露出なし)。
  *   - `NAS_INSIDE_DTACH=1 NAS_SESSION_ID=<escapedSessionId>` の env prefix
