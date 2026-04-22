@@ -175,6 +175,27 @@ The same file can expose both kinds, but a single function must pick one role. M
 
 The fix is to split the function so that each branch of the composition calls an intentful D1/D2 helper (`stashChanges`, `applyCherryPick`, `abortCherryPick`, `popStash`), and the composed function only orchestrates.
 
+#### Common D2 idioms
+
+**Silent skip on IO failure** — When a D2 function loops over items and the legacy behavior was "try each; swallow errors; continue" (e.g. a container may vanish between `list` and `inspect`, or a session file may be deleted mid-enumeration), use `Effect.either` and pattern-match on `_tag`:
+
+```ts
+// ContainerQueryService.listManaged: preserves the old try/catch-continue
+// semantics while making the choice to skip explicit.
+const managed: NasContainerInfo[] = [];
+for (const name of names) {
+  const result = yield* Effect.either(docker.inspect(name));
+  if (result._tag === "Left") continue; // vanished between list and inspect
+  const details = result.right;
+  if (!isNasManagedContainer(details.labels, details.name)) continue;
+  managed.push({ name, running: details.running, labels: details.labels, ... });
+}
+```
+
+`Effect.either` converts `Effect.Effect<A, E>` into `Effect.Effect<Either<E, A>, never>`. The error becomes data, and the loop's continuation is driven by an explicit branch on `_tag`, not by the invisible short-circuit of a `try/catch` wrapping the whole body.
+
+Prefer this over `Effect.catchAll(() => Effect.succeed(sentinel))` when your intent is to drop the error: `catchAll` reads as "recovering", while `either` reads as "making the failure visible so I can decide what to do at this specific call site". The difference is one of intent, but it shows up immediately when someone else reads the code — and it keeps the error channel honest for the surrounding D2 (no swallowed errors propagate up as `succeed` sentinels that downstream code has to re-detect).
+
 #### Checklist when writing or reviewing a service function
 
 1. Does this function call an IO primitive? -> It is D1. Keep it short and do not branch over other effects inside it.

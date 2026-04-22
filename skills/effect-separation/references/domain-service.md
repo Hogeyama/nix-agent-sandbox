@@ -56,13 +56,12 @@ Fake (with `FakeConfig` overrides) + barrel + module-level `liveDeps =
 Layer.mergeAll(...)` + `makeXxxClient(layer?)` plain-async adapter. The
 barrel lives at `src/domain/<name>.ts`.
 
-For typed-error variants (`ContainerNotRunningError` throws in Live, UI
-route `instanceof`-matches to 409), read
-`src/domain/container/lifecycle_service.ts` — specifically how
-`makeContainerLifecycleClient` uses `Effect.runPromiseExit` +
-`Cause.failureOption` to preserve identity across the plain-async
-boundary, and how `src/ui/routes/with_error_handling.ts#mapErrorToResponse`
-maps on the route side.
+For typed-error variants where a service `Effect.fail`s a subclass of
+`Error` and the UI route `instanceof`-matches to HTTP status, see
+**Typed-error throw-through at the plain-async boundary** below — the
+reference implementation is `makeContainerLifecycleClient` in
+`src/domain/container/lifecycle_service.ts`, paired with
+`mapErrorToResponse` in `src/ui/routes/with_error_handling.ts`.
 
 ### Invariants to preserve (easy to break, hard to re-derive from code alone)
 
@@ -89,6 +88,101 @@ maps on the route side.
   sibling's convention.** network / hostexec CLI do it inside
   `run*Command()`; UI does it module-level. `audit` was once rolled back
   by code-review for deviating.
+
+## Transitive Live composition
+
+When an L2 service depends on another L2 service that itself has an
+open `R`, close the inner one *before* the outer merge — don't move
+the nested `Layer.provide` into the Live factory:
+
+```ts
+// ContainerQueryServiceLive requires DockerService | SessionUiService.
+// ContainerLifecycleServiceLive requires Docker | SessionLaunch | ContainerQuery.
+// The inner requirement is closed one step earlier at the client boundary:
+
+const liveDeps: Layer.Layer<
+  DockerService | SessionLaunchService | ContainerQueryService
+> = Layer.mergeAll(
+  DockerServiceLive,
+  SessionLaunchServiceLive,
+  ContainerQueryServiceLive.pipe(
+    Layer.provide(Layer.mergeAll(DockerServiceLive, SessionUiServiceLive)),
+  ),
+);
+```
+
+Putting the nested `provide` inside the Live factory body (e.g. inside
+`ContainerLifecycleServiceLive`'s `Layer.effect`) is the same
+anti-pattern as nested-provide Live factories in the stage-side Ops
+pattern: it hides transitive deps from the outer `R`, breaks fake
+granularity (tests can't substitute the inner service's primitives),
+and disables the compile-time R-leakage pin (below) since the outer
+Live's reported `R` no longer reflects reality.
+
+The rule: closure nesting lives at the `makeXxxClient` boundary.
+That's the single site where `R = never` is contractually required,
+and it's also where the `satisfies` pin can verify it.
+
+## Typed-error throw-through at the plain-async boundary
+
+When a Live method `Effect.fail`s a typed `Error` subclass (e.g.
+`ContainerNotRunningError`), the default `Effect.runPromise(...)`
+inside the plain-async client wraps the cause in a `FiberFailureImpl`.
+On the `await` side, `instanceof ContainerNotRunningError` returns
+**false** — the class identity is lost, and the route-side `instanceof`
+dispatcher in `src/ui/routes/with_error_handling.ts` falls through to
+the default 500.
+
+This is a surprise worth calling out explicitly because:
+
+- Services whose Live body synchronously `throw`s from inside
+  `Effect.tryPromise({ try: () => ... })` don't hit it — the original
+  class propagates through naturally (e.g. `SessionUiService`'s
+  `"Session not found:"` Error reaches the route unchanged).
+- The wrap only appears once an error goes through `Effect.fail`,
+  which becomes necessary when composing multiple Live methods. The
+  error channel has to carry typed failures, and that's where the
+  loss of class identity at `runPromise` surfaces.
+
+Use `Effect.runPromiseExit` + `Cause.failureOption` in the client
+adapter to unwrap the expected failure and re-throw it directly:
+
+```ts
+async function run<A>(
+  effect: Effect.Effect<A, Error, ContainerLifecycleService>,
+): Promise<A> {
+  const exit = await Effect.runPromiseExit(effect.pipe(Effect.provide(provided)));
+  if (Exit.isSuccess(exit)) return exit.value;
+  const failure = Cause.failureOption(exit.cause);
+  if (Option.isSome(failure)) throw failure.value; // typed identity preserved
+  throw new Error(`Defect or interruption: ${Cause.pretty(exit.cause)}`);
+}
+```
+
+- `Cause.failureOption` returns only the **expected** failure (what
+  `Effect.fail` put in the error channel). Defects (`Effect.die`,
+  uncaught exceptions) and interruptions fall through to the last
+  branch — they shouldn't be mapped to typed business errors.
+- Route-side `mapErrorToResponse` (`src/ui/routes/with_error_handling.ts`)
+  uses `instanceof` to dispatch HTTP status. That dispatch only
+  succeeds because `throw failure.value` preserves the original class
+  instance.
+
+Pin this with a client-level test so a future rewrite of `run` doesn't
+silently regress identity:
+
+```ts
+test("typed error survives the client boundary", async () => {
+  const client = makeContainerLifecycleClient(fakeLayerThatFailsWithTypedError);
+  const err = await client.startShellSession(dir, "nas-x").catch((e) => e);
+  expect(err).toBeInstanceOf(ContainerNotRunningError); // not just a message match
+  expect(err.message).toBe("Container is not running: nas-x");
+});
+```
+
+The canonical implementation is `makeContainerLifecycleClient` in
+`src/domain/container/lifecycle_service.ts`. Reuse that exact shape —
+don't re-derive the unwrap from scratch.
 
 ## Commit granularity
 
@@ -126,6 +220,35 @@ Skip happy-path cases already covered by broker / integration tests.
 **Do** add a test for any non-obvious invariant you want pinned (argument
 order, gc position, error prefix) — these don't fail-fast at the type
 level and will silently regress otherwise.
+
+### Compile-time R-leakage pin
+
+Runtime R-leakage — forgetting to include a transitive dep in
+`liveDeps` — fails at `Effect.runPromise` time, not at
+`makeXxxClient()` construction. Pin the intended closure at the type
+level by placing a `satisfies` assertion at the bottom of
+`service_test.ts`:
+
+```ts
+// Compile-time regression guard: default makeXxxClient() layer closes R to never.
+const _defaultLayerClosesToNever = ContainerLifecycleServiceLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      DockerServiceLive,
+      SessionLaunchServiceLive,
+      ContainerQueryServiceLive.pipe(
+        Layer.provide(Layer.mergeAll(DockerServiceLive, SessionUiServiceLive)),
+      ),
+    ),
+  ),
+) satisfies Layer.Layer<ContainerLifecycleService, never, never>;
+```
+
+A future commit that adds a new dep to Live without updating
+`liveDeps` would otherwise only surface at call time — and only if the
+test hit that particular method's code path. The `satisfies` pin
+turns the regression into a `tsc` failure, caught before merge without
+needing 100% runtime coverage of every Live method.
 
 ### Docker primitive testability
 
