@@ -24,9 +24,6 @@
  *     anti-pattern (SKILL.md L185) は避ける。
  *   - `listManaged()` を public 露出するのは `collectRunningParentIds()`
  *     との対称性 (両方 docker-only view) を取るため。
- *   - `NasContainerInfo` は当面 `ui/data.ts` から `import type` で逆向き
- *     import する暫定状態。Phase 3 Commit 3 で `domain/container/types.ts`
- *     に移設して反転する。
  *   - 直列ループ + `Effect.either` で個別 skip という legacy try/catch-
  *     continue 挙動を保存する。並列化 (`Effect.all({concurrency})`) は
  *     CLI 側 (Phase 3 Commit 5) で別途検討。
@@ -38,12 +35,9 @@ import {
   NAS_SESSION_ID_LABEL,
 } from "../../docker/nas_resources.ts";
 import { DockerService, DockerServiceLive } from "../../services/docker.ts";
-import type {
-  SessionRecord,
-  SessionRuntimePaths,
-} from "../../sessions/store.ts";
-import type { NasContainerInfo } from "../../ui/data.ts";
+import type { SessionRuntimePaths } from "../../sessions/store.ts";
 import { SessionUiService, SessionUiServiceLive } from "../session.ts";
+import { joinSessionsToContainers, type NasContainerInfo } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // ContainerQueryService tag
@@ -64,49 +58,6 @@ export class ContainerQueryService extends Context.Tag(
     >;
   }
 >() {}
-
-// ---------------------------------------------------------------------------
-// Pure helpers (D2-friendly, IO-free)
-// ---------------------------------------------------------------------------
-
-/**
- * Pure function: overlay session record data onto containers via the
- * `nas.session_id` label. Containers without a label, or with a label
- * that has no matching record, are returned unchanged (shallow-copied).
- *
- * `ui/data.ts#joinSessionsToContainers` と完全に等価な実装。Phase 3
- * Commit 3 で `domain/container/types.ts` への移設後はそちらを import
- * する想定のため、本ファイルでは file-private に保つ (export しない)。
- */
-function joinSessionsToContainersPure(
-  containers: NasContainerInfo[],
-  sessions: SessionRecord[],
-): NasContainerInfo[] {
-  const bySessionId = new Map<string, SessionRecord>();
-  for (const record of sessions) {
-    bySessionId.set(record.sessionId, record);
-  }
-
-  return containers.map((container) => {
-    const sessionId = container.labels[NAS_SESSION_ID_LABEL];
-    if (!sessionId) return { ...container };
-    const record = bySessionId.get(sessionId);
-    if (!record) return { ...container };
-    return {
-      ...container,
-      sessionId: record.sessionId,
-      sessionName: record.name,
-      turn: record.turn,
-      sessionAgent: record.agent,
-      sessionProfile: record.profile,
-      worktree: record.worktree,
-      sessionStartedAt: record.startedAt,
-      lastEventAt: record.lastEventAt,
-      lastEventKind: record.lastEventKind,
-      lastEventMessage: record.lastEventMessage,
-    };
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Live implementation
@@ -139,6 +90,7 @@ export const ContainerQueryServiceLive: Layer.Layer<
             name: details.name,
             running: details.running,
             labels: details.labels,
+            networks: details.networks,
             startedAt: details.startedAt,
           });
         }
@@ -152,7 +104,7 @@ export const ContainerQueryServiceLive: Layer.Layer<
         Effect.gen(function* () {
           const containers = yield* listManaged();
           const sessions = yield* sessionUi.list(paths);
-          return joinSessionsToContainersPure(containers, sessions);
+          return joinSessionsToContainers(containers, sessions);
         }),
 
       collectRunningParentIds: () =>

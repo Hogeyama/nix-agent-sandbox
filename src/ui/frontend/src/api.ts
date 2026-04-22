@@ -187,6 +187,10 @@ export interface ContainerInfo {
   running: boolean;
   labels: Record<string, string>;
   startedAt: string;
+  // Docker network names this container is attached to. Backend always
+  // populates this field (`NasContainerInfo.networks: string[]`); declared
+  // optional here as forward-compat for readers that don't yet consume it.
+  networks?: string[];
   // Session-derived fields — populated by the backend when a container
   // carries a `nas.session_id` label matching a live session record.
   sessionId?: string;

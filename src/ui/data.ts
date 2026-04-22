@@ -14,7 +14,11 @@ import {
   NAS_SESSION_ID_LABEL,
 } from "../docker/nas_resources.ts";
 import { makeAuditQueryClient } from "../domain/audit.ts";
-import { makeContainerQueryClient } from "../domain/container.ts";
+import {
+  joinSessionsToContainers,
+  makeContainerQueryClient,
+  type NasContainerInfo,
+} from "../domain/container.ts";
 import { makeHostExecApprovalClient } from "../domain/hostexec.ts";
 import { makeSessionLaunchClient } from "../domain/launch.ts";
 import { makeNetworkApprovalClient } from "../domain/network.ts";
@@ -44,10 +48,8 @@ import {
 } from "../network/registry.ts";
 import {
   resolveSessionRuntimePaths,
-  type SessionEventKind,
   type SessionRecord,
   type SessionRuntimePaths,
-  type SessionTurn,
 } from "../sessions/store.ts";
 import {
   buildShellSessionId,
@@ -253,59 +255,10 @@ export async function renameSession(
 
 // --- Containers ---
 
-export interface NasContainerInfo {
-  name: string;
-  running: boolean;
-  labels: Record<string, string>;
-  startedAt: string;
-  // Session-derived fields — populated by joinSessionsToContainers when a
-  // container carries a `nas.session_id` label matching a live record.
-  sessionId?: string;
-  sessionName?: string;
-  turn?: SessionTurn;
-  sessionAgent?: string;
-  sessionProfile?: string;
-  worktree?: string;
-  sessionStartedAt?: string;
-  lastEventAt?: string;
-  lastEventKind?: SessionEventKind;
-  lastEventMessage?: string;
-}
-
-/**
- * Pure function: overlay session record data onto containers via the
- * `nas.session_id` label. Containers without a label, or with a label
- * that has no matching record, are returned unchanged (shallow-copied).
- */
-export function joinSessionsToContainers(
-  containers: NasContainerInfo[],
-  sessions: SessionRecord[],
-): NasContainerInfo[] {
-  const bySessionId = new Map<string, SessionRecord>();
-  for (const record of sessions) {
-    bySessionId.set(record.sessionId, record);
-  }
-
-  return containers.map((container) => {
-    const sessionId = container.labels[NAS_SESSION_ID_LABEL];
-    if (!sessionId) return { ...container };
-    const record = bySessionId.get(sessionId);
-    if (!record) return { ...container };
-    return {
-      ...container,
-      sessionId: record.sessionId,
-      sessionName: record.name,
-      turn: record.turn,
-      sessionAgent: record.agent,
-      sessionProfile: record.profile,
-      worktree: record.worktree,
-      sessionStartedAt: record.startedAt,
-      lastEventAt: record.lastEventAt,
-      lastEventKind: record.lastEventKind,
-      lastEventMessage: record.lastEventMessage,
-    };
-  });
-}
+// `NasContainerInfo` / `joinSessionsToContainers` は `domain/container/`
+// に移設済。本 shim は既存 import path を保つための re-export。
+export type { NasContainerInfo };
+export { joinSessionsToContainers };
 
 export async function getNasContainers(
   ctx: UiDataContext,

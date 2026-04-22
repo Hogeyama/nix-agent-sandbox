@@ -113,6 +113,7 @@ describe("ContainerQueryServiceLive: listManaged", () => {
               name: "nas-managed",
               running: true,
               labels: nasAgentLabels({ [NAS_SESSION_ID_LABEL]: "sess-1" }),
+              networks: ["nas-net-1", "bridge"],
               startedAt: "2026-04-10T00:00:00.000Z",
             }),
           );
@@ -141,6 +142,8 @@ describe("ContainerQueryServiceLive: listManaged", () => {
     expect(result[0].running).toBe(true);
     expect(result[0].labels[NAS_SESSION_ID_LABEL]).toBe("sess-1");
     expect(result[0].startedAt).toBe("2026-04-10T00:00:00.000Z");
+    // networks primitive が透過されること (D2 wire)
+    expect(result[0].networks).toEqual(["nas-net-1", "bridge"]);
   });
 
   test("inspect 失敗は skip し、続く inspect を継続する (legacy try/catch-continue 保存)", async () => {
@@ -185,6 +188,7 @@ describe("ContainerQueryServiceLive: listManagedWithSessions", () => {
               name: "nas-with-sess",
               running: true,
               labels: nasAgentLabels({ [NAS_SESSION_ID_LABEL]: "sess1" }),
+              networks: ["nas-net-1"],
             }),
           );
         }
@@ -237,6 +241,8 @@ describe("ContainerQueryServiceLive: listManagedWithSessions", () => {
     expect(overlaid?.lastEventAt).toBe("2026-04-10T01:00:00.000Z");
     expect(overlaid?.lastEventKind).toBe("attention");
     expect(overlaid?.lastEventMessage).toBe("msg");
+    // networks primitive が overlay 後も透過されること (shallow copy 経路)
+    expect(overlaid?.networks).toEqual(["nas-net-1"]);
 
     const untouched = result.find((c) => c.name === "nas-no-sess");
     expect(untouched).toBeDefined();
