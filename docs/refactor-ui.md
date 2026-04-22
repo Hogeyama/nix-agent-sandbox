@@ -64,7 +64,7 @@ Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
 | # | Commit | 依存 | 状況 |
 |---|---|---|---|
 | 1 | DockerService 拡張 (inspect/listContainerNames, `.orDie` 撤回) | — | `57a1bec` |
-| 2 | ContainerQueryService (read-only) | #1 | TODO |
+| 2 | ContainerQueryService (read-only) | #1 | `96804a2` |
 | 3 | NasContainerInfo 移設 + `networks` wire 追加 | #2 | TODO |
 | 4 | ContainerLifecycleService + typed error | #2 | TODO |
 | 5 | CLI Promise.allSettled 化 | #2 | TODO |
@@ -77,6 +77,7 @@ Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
 | Commit | hash | 備考 |
 |---|---|---|
 | DockerService 拡張 | `57a1bec` | 既存 16 method の `.pipe(Effect.orDie)` 撤回 + inspect/listContainerNames 追加。stage 側 8 箇所 (envoy 7 + launch 1) で `.pipe(Effect.orDie)` 補填 atomic。`docker_build` は E=unknown のまま (orDie 不要)。Docker primitive は mock 不能のため Fake 配線確認の test 5 本のみ。`Data.TaggedError` 不採用方針を確立 |
+| ContainerQueryService | `96804a2` | 3 method (`listManaged` / `listManagedWithSessions` / `collectRunningParentIds`)。`Live` の R = `DockerService \| SessionUiService` を正直に宣言、default layer 閉包は plain-async client 内 `Layer.mergeAll(...)` で行う方針を確立 (Phase 3 後続も踏襲)。`cleanContainers` wrapper の docker 直叩き中間状態 (Phase 2 で「Phase 3 で解消予定」と明記) を本 commit で解消。`NasContainerInfo` は当面 `ui/data.ts` から逆 import (Commit 3 で反転)。compile-time `satisfies` で R-leakage regression を pin。fake-only test 8 本 |
 
 ### 残タスク詳細
 
