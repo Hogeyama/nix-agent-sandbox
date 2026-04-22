@@ -70,7 +70,7 @@ Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
 | 5 | CLI Promise.allSettled 化 | #2 | `81e343b` |
 | 6 | `withErrorHandling` boilerplate 削減 (TaggedError 移行なし) | #4 | `f325129` + `c3c52c6` |
 | 7 | `diffSnapshots` 純関数化 | 独立 | `8d5e03a` |
-| 8 | DaemonProcService (optional、優先度低) | — | TODO |
+| 8 | DaemonProcService (optional、優先度低) | — | defer (priority low) |
 | 9 | `cleanNasContainers` の domain 化 + `defaultBackend` 廃止 + CLI 経路の service 化 | #4 | TODO |
 
 ### 完了
@@ -125,10 +125,41 @@ json({error: e.message}, 500); }` を `withErrorHandling(handler)` で
 完了 (Commit 7、上の完了 table 参照)。`/api/events` の integration test
 (接続 → 初回 6 event 受信 → close) は将来 commit で追加検討。
 
-### daemon.ts の service 化
+### daemon.ts の service 化 (defer)
 
-`src/ui/daemon.ts` が `spawn` / `setsid` / `lsof` を直叩きしている。
-`DaemonProcService` に切って fake 可能にする。優先度は低い。
+`src/ui/daemon.ts` の `spawn` / `setsid` / `lsof` 直叩きを
+`DaemonProcService` に切る案は **defer** (priority low)。
+
+defer 判断根拠:
+- **発火回数 0〜1**: `ensureUiDaemon` は「running なら何もしない」semantics。
+  実 spawn 発火は「daemon 落ち初回」のみで、1 nas プロセス内で事実上
+  0〜1 回。呼び出し元 4 箇所 (`cli.ts` / `network/notify.ts` /
+  `hostexec/notify.ts` / `cli/ui.ts`) も running なら early return
+- **既に部分的に testable**: `parseListeningPids` / `resolveDaemonPidsToStop`
+  は純関数化済、`syncDaemonStatePid` も ad-hoc DI (3 関数注入オプション)
+  済。`daemon_test.ts` 4 本既存。regression 出やすい純関数 / state DI 部分は
+  service 化なしでカバー済
+- **CLI/UI 対称性なし**: Phase 2 service の動機 (CLI/UI 共有 CRUD) は
+  daemon に適用しづらい。CLI は `nas ui daemon-stop` だけ、UI 側は notify
+  path 自動起動だけで CRUD パターンに収まらない
+- **コスパ**: 250-350 行追加 + 4 import サイト変更 vs 得られる test 強化
+  (shellCmd assert / poll-loop / SIGTERM 各 1-2 本)。real value は
+  integration test (実 daemon 起動) の方が大きい
+
+将来 service 化を再考するトリガ条件:
+- `/api/events` 等 daemon 起動を検証する integration test を追加する流れ
+  になり、Fake spawn が必要になった時
+- `ensureUiDaemon` が複数 port / 複数 lifecycle を扱う変更で、複数回
+  spawn 経路を持つようになった時 (現状単一 daemon の前提が崩れた場合)
+
+将来再着手は容易: daemon.ts 内部 helper は既に分離済 (`syncDaemonStatePid`
+が示している)、後から service 化する障壁は低い。
+
+### Phase 3 ステータス
+
+Phase 3 主要 commit (#1〜#7) 完了。`#8` は defer (上記根拠)、`#9` は
+Commit 4 (`b21e39a`) 残務 (`cleanNasContainers` の domain 化 +
+`defaultBackend` 廃止 + CLI 経路の service 化) として別 commit 予定。
 
 ## Phase 4 — Frontend 整理
 
