@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+} from "preact/hooks";
 import {
   type AuditLogEntry,
   api,
@@ -16,6 +22,10 @@ import { TerminalModal } from "./components/TerminalModal.tsx";
 import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
 import { useSSE } from "./hooks/useSSE.ts";
 import { buildTerminalSessionTabs } from "./terminalSessions.ts";
+import {
+  initialTerminalUiState,
+  terminalUiReducer,
+} from "./terminalUiState.ts";
 
 type TabId = "pending" | "sessions" | "audit" | "sidecars";
 
@@ -46,12 +56,16 @@ export function App() {
     hostexec: [],
   });
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [dtachSessions, setDtachSessions] = useState<DtachSession[]>([]);
-  const [openTermSessionIds, setOpenTermSessionIds] = useState<string[]>([]);
-  const [activeTermSessionId, setActiveTermSessionId] = useState<string | null>(
-    null,
+  const [terminalUi, dispatchTerminalUi] = useReducer(
+    terminalUiReducer,
+    initialTerminalUiState,
   );
-  const [termVisible, setTermVisible] = useState(false);
+  const {
+    dtachSessions,
+    openSessionIds: openTermSessionIds,
+    activeSessionId: activeTermSessionId,
+    visible: termVisible,
+  } = terminalUi;
   const [dtachAvailable, setDtachAvailable] = useState(false);
   const [newSessionOpen, setNewSessionOpen] = useState(false);
 
@@ -90,7 +104,12 @@ export function App() {
     api
       .getTerminalSessions()
       .then((res) => {
-        if (!cancelled) setDtachSessions(res.items);
+        if (!cancelled) {
+          dispatchTerminalUi({
+            type: "set-dtach-sessions",
+            sessions: res.items,
+          });
+        }
       })
       .catch((e) => {
         console.error("Failed to fetch terminal sessions:", e);
@@ -133,40 +152,21 @@ export function App() {
   useFaviconBadge(totalPending, userTurnCount);
 
   const handleAttach = useCallback((sessionId: string) => {
-    setOpenTermSessionIds((current) =>
-      current.includes(sessionId) ? current : [...current, sessionId],
-    );
-    setActiveTermSessionId(sessionId);
-    setTermVisible(true);
+    dispatchTerminalUi({ type: "attach", sessionId });
   }, []);
 
   const handleShell = useCallback(async (containerName: string) => {
     try {
       const { dtachSessionId } = await api.startShell(containerName);
-      // Optimistically register the new session so the reconciliation
-      // effect keyed on availableTerminalIds does not drop it (and reset
-      // activeTermSessionId to the first tab) while we wait for the SSE
-      // `terminal:sessions` event to catch up.
-      setDtachSessions((current) =>
-        current.some((session) => session.sessionId === dtachSessionId)
-          ? current
-          : [
-              ...current,
-              {
-                name: dtachSessionId,
-                sessionId: dtachSessionId,
-                socketPath: "",
-                createdAt: Math.floor(Date.now() / 1000),
-              },
-            ],
-      );
-      setOpenTermSessionIds((current) =>
-        current.includes(dtachSessionId)
-          ? current
-          : [...current, dtachSessionId],
-      );
-      setActiveTermSessionId(dtachSessionId);
-      setTermVisible(true);
+      // Optimistically register the new session so the `set-dtach-sessions`
+      // reconcile path (driven by SSE) does not drop it (and reset the
+      // active tab) while we wait for the `terminal:sessions` event to
+      // catch up.
+      dispatchTerminalUi({
+        type: "shell-started",
+        sessionId: dtachSessionId,
+        createdAt: Math.floor(Date.now() / 1000),
+      });
     } catch (e) {
       console.error("Failed to start shell:", e);
     }
@@ -223,7 +223,7 @@ export function App() {
   }, []);
 
   const handleTermMinimize = useCallback(() => {
-    setTermVisible(false);
+    dispatchTerminalUi({ type: "minimize" });
   }, []);
 
   const handleNewSession = useCallback(() => {
@@ -235,36 +235,15 @@ export function App() {
   }, []);
 
   const handleTermRestore = useCallback(() => {
-    setActiveTermSessionId(
-      (current) => current ?? openTermSessionIds[0] ?? null,
-    );
-    setTermVisible(true);
-  }, [openTermSessionIds]);
+    dispatchTerminalUi({ type: "restore" });
+  }, []);
 
   const handleTermSelect = useCallback((sessionId: string) => {
-    setOpenTermSessionIds((current) =>
-      current.includes(sessionId) ? current : [...current, sessionId],
-    );
-    setActiveTermSessionId(sessionId);
-    setTermVisible(true);
+    dispatchTerminalUi({ type: "select-tab", sessionId });
   }, []);
 
   const handleTermClose = useCallback((sessionId: string) => {
-    setOpenTermSessionIds((current) => {
-      const next = current.filter((id) => id !== sessionId);
-      setActiveTermSessionId((activeCurrent) => {
-        if (activeCurrent === sessionId) {
-          return next[0] ?? null;
-        }
-        return activeCurrent && next.includes(activeCurrent)
-          ? activeCurrent
-          : (next[0] ?? null);
-      });
-      if (next.length === 0) {
-        setTermVisible(false);
-      }
-      return next;
-    });
+    dispatchTerminalUi({ type: "close-tab", sessionId });
   }, []);
 
   const handleSSE = useCallback((event: string, data: unknown) => {
@@ -280,7 +259,10 @@ export function App() {
         setSessions(d as unknown as SessionsData);
         break;
       case "terminal:sessions":
-        setDtachSessions(d.items as DtachSession[]);
+        dispatchTerminalUi({
+          type: "set-dtach-sessions",
+          sessions: d.items as DtachSession[],
+        });
         break;
       case "audit:logs":
         setAuditLogs(d.items as AuditLogEntry[]);
@@ -300,28 +282,6 @@ export function App() {
       ),
     [sessionContainers],
   );
-  const availableTerminalIds = useMemo(
-    () => dtachSessions.map((session) => session.sessionId),
-    [dtachSessions],
-  );
-  useEffect(() => {
-    const availableIds = new Set(availableTerminalIds);
-    setOpenTermSessionIds((current) => {
-      const next = current.filter((id) => availableIds.has(id));
-      const unchanged =
-        next.length === current.length &&
-        next.every((sessionId, index) => sessionId === current[index]);
-      setActiveTermSessionId((activeCurrent) =>
-        activeCurrent && availableIds.has(activeCurrent)
-          ? activeCurrent
-          : (next[0] ?? null),
-      );
-      if (next.length === 0) {
-        setTermVisible(false);
-      }
-      return unchanged ? current : next;
-    });
-  }, [availableTerminalIds]);
   const terminalSessions = useMemo(() => {
     return buildTerminalSessionTabs(
       openTermSessionIds,
