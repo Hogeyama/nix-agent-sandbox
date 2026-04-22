@@ -28,7 +28,9 @@
  *   - `cleanContainers` の中で `cleanNasContainers(backend)` を呼ぶが、
  *     backend は file-private な `makeBackendFromDockerService(docker)`
  *     adapter で fake DockerService 経由で全貫通させる (DI 第三案)。
- *     `defaultBackend` は本 commit では撤廃しない (将来 commit で defer)。
+ *     CLI も `lifecycleClient.cleanContainers` 経由となり、`defaultBackend`
+ *     は不要になったため撤廃済み。adapter は外部公開不要のため file-private
+ *     のまま据え置き。
  *   - `stopContainer` の inspect 失敗握りつぶしは `Effect.either` で吸収し、
  *     `parentSessionId` が取れた時のみ `removeShellSocketsForParent` を呼ぶ
  *     legacy 挙動を保存する (data.ts wrapper の try/catch ロジックと同型)。

@@ -2,40 +2,19 @@
  * nas container サブコマンド
  */
 
-import { cleanNasContainers } from "../container_clean.ts";
+import { NAS_KIND_LABEL } from "../docker/nas_resources.ts";
 import {
-  type DockerContainerDetails,
-  dockerInspectContainer,
-  dockerListContainerNames,
-} from "../docker/client.ts";
-import {
-  isNasManagedContainer,
-  NAS_KIND_LABEL,
-} from "../docker/nas_resources.ts";
+  makeContainerLifecycleClient,
+  makeContainerQueryClient,
+} from "../domain/container.ts";
+import { getSocketDir } from "../dtach/client.ts";
 import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 
-/**
- * Pick fulfilled `dockerInspectContainer` results, silently dropping rejected
- * ones so a single broken container does not abort `nas container list`.
- *
- * Silent skip semantics match the UI's `for` + skip in
- * `ContainerQueryService.listManaged`, and keep `--format json` output as a
- * pipe-friendly array (no stderr noise interleaved).
- *
- * NOTE: A future observability improvement could surface skipped container
- * inspect failures via stderr (warning) without polluting `--format json`
- * stdout. Out of scope for this commit; tracked alongside #9.
- */
-export function pickFulfilledContainerDetails(
-  results: PromiseSettledResult<DockerContainerDetails>[],
-): DockerContainerDetails[] {
-  return results
-    .filter(
-      (r): r is PromiseFulfilledResult<DockerContainerDetails> =>
-        r.status === "fulfilled",
-    )
-    .map((r) => r.value);
-}
+// Module-level clients: `Layer` は pure description (副作用なし) なので
+// module-level const は安全。`ui/data.ts` の同パターンと整合させ、CLI process
+// per invocation 環境では関数内 const と実害差なし。
+const containerQueryClient = makeContainerQueryClient();
+const lifecycleClient = makeContainerLifecycleClient();
 
 export async function runContainerCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((a) => !a.startsWith("-"));
@@ -43,14 +22,7 @@ export async function runContainerCommand(nasArgs: string[]): Promise<void> {
 
   try {
     if (sub === "list") {
-      const names = await dockerListContainerNames();
-      const settled = await Promise.allSettled(
-        names.map((name) => dockerInspectContainer(name)),
-      );
-      const details = pickFulfilledContainerDetails(settled);
-      const managed = details.filter((c) =>
-        isNasManagedContainer(c.labels, c.name),
-      );
+      const managed = await containerQueryClient.listManaged();
       if (formatJson) {
         const items = managed.map((c) => ({
           name: c.name,
@@ -75,7 +47,7 @@ export async function runContainerCommand(nasArgs: string[]): Promise<void> {
     }
 
     if (sub === "clean") {
-      const result = await cleanNasContainers();
+      const result = await lifecycleClient.cleanContainers(getSocketDir());
       const parts: string[] = [];
       if (result.removedContainers.length > 0) {
         parts.push(`${result.removedContainers.length} container(s)`);

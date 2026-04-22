@@ -1,16 +1,6 @@
-import {
-  type DockerContainerDetails,
-  type DockerNetworkDetails,
-  dockerInspectContainer,
-  dockerInspectNetwork,
-  dockerInspectVolume,
-  dockerListContainerNames,
-  dockerListNetworkNames,
-  dockerListVolumeNames,
-  dockerNetworkRemove,
-  dockerRm,
-  dockerStop,
-  dockerVolumeRemove,
+import type {
+  DockerContainerDetails,
+  DockerNetworkDetails,
 } from "./docker/client.ts";
 import {
   isNasManagedNetwork,
@@ -41,21 +31,8 @@ export interface ContainerCleanBackend {
   removeVolume(name: string): Promise<void>;
 }
 
-const defaultBackend: ContainerCleanBackend = {
-  listContainerNames: dockerListContainerNames,
-  inspectContainer: dockerInspectContainer,
-  listNetworkNames: dockerListNetworkNames,
-  inspectNetwork: dockerInspectNetwork,
-  listVolumeNames: dockerListVolumeNames,
-  inspectVolume: dockerInspectVolume,
-  stopContainer: (name) => dockerStop(name, { timeoutSeconds: 0 }),
-  removeContainer: dockerRm,
-  removeNetwork: dockerNetworkRemove,
-  removeVolume: dockerVolumeRemove,
-};
-
 export async function cleanNasContainers(
-  backend: ContainerCleanBackend = defaultBackend,
+  backend: ContainerCleanBackend,
 ): Promise<ContainerCleanResult> {
   const containers = await loadContainers(backend);
   const networks = await loadNetworks(backend);
