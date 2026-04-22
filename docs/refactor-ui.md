@@ -65,7 +65,7 @@ Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
 |---|---|---|---|
 | 1 | DockerService 拡張 (inspect/listContainerNames, `.orDie` 撤回) | — | `57a1bec` |
 | 2 | ContainerQueryService (read-only) | #1 | `96804a2` |
-| 3 | NasContainerInfo 移設 + `networks` wire 追加 | #2 | (this commit) |
+| 3 | NasContainerInfo 移設 + `networks` wire 追加 | #2 | `c887ee1` |
 | 4 | ContainerLifecycleService + typed error | #2 | TODO |
 | 5 | CLI Promise.allSettled 化 | #2 | TODO |
 | 6 | `withErrorHandling` boilerplate 削減 (TaggedError 移行なし) | #4 | TODO |
@@ -78,7 +78,7 @@ Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
 |---|---|---|
 | DockerService 拡張 | `57a1bec` | 既存 16 method の `.pipe(Effect.orDie)` 撤回 + inspect/listContainerNames 追加。stage 側 8 箇所 (envoy 7 + launch 1) で `.pipe(Effect.orDie)` 補填 atomic。`docker_build` は E=unknown のまま (orDie 不要)。Docker primitive は mock 不能のため Fake 配線確認の test 5 本のみ。`Data.TaggedError` 不採用方針を確立 |
 | ContainerQueryService | `96804a2` | 3 method (`listManaged` / `listManagedWithSessions` / `collectRunningParentIds`)。`Live` の R = `DockerService \| SessionUiService` を正直に宣言、default layer 閉包は plain-async client 内 `Layer.mergeAll(...)` で行う方針を確立 (Phase 3 後続も踏襲)。`cleanContainers` wrapper の docker 直叩き中間状態 (Phase 2 で「Phase 3 で解消予定」と明記) を本 commit で解消。`NasContainerInfo` は当面 `ui/data.ts` から逆 import (Commit 3 で反転)。compile-time `satisfies` で R-leakage regression を pin。fake-only test 8 本 |
-| NasContainerInfo 移設 + `networks` wire | (this commit) | `domain/container/types.ts` 新設 (IO-free pure: `NasContainerInfo` interface + `joinSessionsToContainers` 純関数)。`service.ts` の逆向き import (`ui/data.ts` → `domain/container/`) と inline `joinSessionsToContainersPure` を解消。`NasContainerInfo.networks: string[]` を必須追加し `listManaged` で `details.networks` を投影。frontend `api.ts#ContainerInfo` には `networks?: string[]` optional を additive 追加 (backend 必須 / frontend optional の非対称設計、frontend は読み手不在で forward-compat)。`ui/data.ts` は `NasContainerInfo` / `joinSessionsToContainers` を `domain/container.ts` バレルから re-export する shim 化 (#4 `ContainerLifecycleService` 完了で `data.ts` 全体が薄くなったタイミングで剥がす予定)。`service_test.ts` 8 本維持し 2 ケースに `networks` 透過 assertion 追加 |
+| NasContainerInfo 移設 + `networks` wire | `c887ee1` | `domain/container/types.ts` 新設 (IO-free pure: `NasContainerInfo` interface + `joinSessionsToContainers` 純関数)。`service.ts` の逆向き import (`ui/data.ts` → `domain/container/`) と inline `joinSessionsToContainersPure` を解消。`NasContainerInfo.networks: string[]` を必須追加し `listManaged` で `details.networks` を投影。frontend `api.ts#ContainerInfo` には `networks?: string[]` optional を additive 追加 (backend 必須 / frontend optional の非対称設計、frontend は読み手不在で forward-compat)。`ui/data.ts` は `NasContainerInfo` / `joinSessionsToContainers` を `domain/container.ts` バレルから re-export する shim 化 (#4 `ContainerLifecycleService` 完了で `data.ts` 全体が薄くなったタイミングで剥がす予定)。`service_test.ts` 8 本維持し 2 ケースに `networks` 透過 assertion 追加 |
 
 ### 残タスク詳細
 
