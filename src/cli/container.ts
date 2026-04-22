@@ -4,6 +4,7 @@
 
 import { cleanNasContainers } from "../container_clean.ts";
 import {
+  type DockerContainerDetails,
   dockerInspectContainer,
   dockerListContainerNames,
 } from "../docker/client.ts";
@@ -13,6 +14,29 @@ import {
 } from "../docker/nas_resources.ts";
 import { exitOnCliError, hasFormatJson } from "./helpers.ts";
 
+/**
+ * Pick fulfilled `dockerInspectContainer` results, silently dropping rejected
+ * ones so a single broken container does not abort `nas container list`.
+ *
+ * Silent skip semantics match the UI's `for` + skip in
+ * `ContainerQueryService.listManaged`, and keep `--format json` output as a
+ * pipe-friendly array (no stderr noise interleaved).
+ *
+ * NOTE: A future observability improvement could surface skipped container
+ * inspect failures via stderr (warning) without polluting `--format json`
+ * stdout. Out of scope for this commit; tracked alongside #9.
+ */
+export function pickFulfilledContainerDetails(
+  results: PromiseSettledResult<DockerContainerDetails>[],
+): DockerContainerDetails[] {
+  return results
+    .filter(
+      (r): r is PromiseFulfilledResult<DockerContainerDetails> =>
+        r.status === "fulfilled",
+    )
+    .map((r) => r.value);
+}
+
 export async function runContainerCommand(nasArgs: string[]): Promise<void> {
   const sub = nasArgs.find((a) => !a.startsWith("-"));
   const formatJson = hasFormatJson(nasArgs);
@@ -20,9 +44,10 @@ export async function runContainerCommand(nasArgs: string[]): Promise<void> {
   try {
     if (sub === "list") {
       const names = await dockerListContainerNames();
-      const details = await Promise.all(
+      const settled = await Promise.allSettled(
         names.map((name) => dockerInspectContainer(name)),
       );
+      const details = pickFulfilledContainerDetails(settled);
       const managed = details.filter((c) =>
         isNasManagedContainer(c.labels, c.name),
       );
