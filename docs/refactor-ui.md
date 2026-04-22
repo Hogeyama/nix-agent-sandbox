@@ -53,17 +53,35 @@ Phase 2 は完了。
 - CLI 側は `const client = make*Client();` を `run*Command` 関数内に、UI 側は module-level に置く (CLI/UI それぞれの既存 sibling と揃える)
 - 既存挙動（gc 呼び出し位置、filter default、error class 等）を極力保存。逸脱する場合は commit message で明記
 
-## Phase 3 — 積み残し
+## Phase 3 — Docker 関連集約 + route boilerplate
 
-Phase 2 を先行させて Phase 3 に送ったもの。ここで一気に片付ける方が
-boundary が綺麗という判断。
+Phase 2 で積み残した Docker primitive 直叩きを domain service に寄せる。
+Phase 2 の `Effect.Effect<T, Error>` を継続 (`Data.TaggedError` は
+採用しない方針 — CLI 側 stages service も使っていないため)。
 
-### Docker まわり（container 関連）
+### 全体 commit 分割マップ (8 commits、#8 optional)
 
-- **`DockerService` 拡張**: `inspect(name)` と `listContainerNames()` を
-  method に追加。`.orDie` は stages だけで必要なので、Live は error
-  channel を返す形に撤回し、stage 側で `.pipe(Effect.orDie)` する。
-  これで UI が 500 応答する経路と整合する
+| # | Commit | 依存 | 状況 |
+|---|---|---|---|
+| 1 | DockerService 拡張 (inspect/listContainerNames, `.orDie` 撤回) | — | `57a1bec` |
+| 2 | ContainerQueryService (read-only) | #1 | TODO |
+| 3 | NasContainerInfo 移設 + `networks` wire 追加 | #2 | TODO |
+| 4 | ContainerLifecycleService + typed error | #2 | TODO |
+| 5 | CLI Promise.allSettled 化 | #2 | TODO |
+| 6 | `withErrorHandling` boilerplate 削減 (TaggedError 移行なし) | #4 | TODO |
+| 7 | `diffSnapshots` 純関数化 | 独立 | TODO |
+| 8 | DaemonProcService (optional、優先度低) | — | TODO |
+
+### 完了
+
+| Commit | hash | 備考 |
+|---|---|---|
+| DockerService 拡張 | `57a1bec` | 既存 16 method の `.pipe(Effect.orDie)` 撤回 + inspect/listContainerNames 追加。stage 側 8 箇所 (envoy 7 + launch 1) で `.pipe(Effect.orDie)` 補填 atomic。`docker_build` は E=unknown のまま (orDie 不要)。Docker primitive は mock 不能のため Fake 配線確認の test 5 本のみ。`Data.TaggedError` 不採用方針を確立 |
+
+### 残タスク詳細
+
+#### Docker まわり（container 関連）
+
 - **`ContainerQueryService`**: 読み取り系 (`listManagedContainers` /
   `listContainersWithSessions`)。`DockerService` + `sessions/store.ts`
   依存。fake DockerService で Live compose logic を unit test 可能に
@@ -78,20 +96,22 @@ boundary が綺麗という判断。
   寄せて並列性を保ちつつ個別 skip を実現する（UI の for+skip に
   直列化させない）
 
-### Route boilerplate 削減
+#### Route boilerplate 削減
 
 `src/ui/routes/api.ts` で 24 箇所の `try { ... } catch (e) { return
 json({error: e.message}, 500); }` を `withErrorHandling(handler)` で
-一元化。エラー型 → HTTP status のマップをここに集約:
+一元化。エラー型 → HTTP status のマップをここに集約 (`instanceof`
+分岐で実装):
 
 - `LaunchValidationError` → 400
 - `ContainerNotRunningError` → 409
 - `NotNasManagedContainerError` → 403
-- `SessionNotFound` (新規 tagged error) → 404
+- `Session not found:` prefix → 404 (`SessionUiService` の既存契約)
 - default → 500
 
-domain service の error channel を `Data.TaggedError` ベースに移行する
-タイミング。Phase 2 の `Effect.Effect<T, Error>` は暫定。
+`Data.TaggedError` ベースへの移行は **採用しない**。CLI/stages/UI 全部
+`Effect.Effect<T, Error>` で統一し、typed error は既存
+`class XxxError extends Error` + `instanceof` 分岐を継続。
 
 ### SSE 純化
 
