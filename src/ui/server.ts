@@ -33,6 +33,7 @@ import {
   applySecurityHeaders,
   guardHttpRequest,
   guardWebSocketUpgrade,
+  verifyWsTokenSubprotocol,
 } from "./security.ts";
 import { loadOrCreateWsToken } from "./ws_token.ts";
 
@@ -246,6 +247,17 @@ export async function startServer(options: ServeOptions): Promise<void> {
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
         const reject = guardWebSocketUpgrade(req, { port: options.port });
         if (reject) return reject;
+        // Verify the WS bearer token carried in Sec-WebSocket-Protocol.
+        // Same-origin Host/Origin alone cannot distinguish a real browser
+        // tab from a same-origin non-browser process (threat review F1);
+        // the token closes that gap because only a page that already read
+        // the DOM meta tag can learn it.
+        const tokenResult = verifyWsTokenSubprotocol(req, wsToken);
+        if (!tokenResult.ok) {
+          return new Response(`WS token: ${tokenResult.reason}`, {
+            status: 401,
+          });
+        }
         const url = new URL(req.url);
         const sessionId = extractSessionId(url.pathname);
         if (!sessionId) {
@@ -262,6 +274,10 @@ export async function startServer(options: ServeOptions): Promise<void> {
             pendingMessages: [],
             initialRedrawSent: false,
           },
+          // Echo the exact subprotocol the client offered so the RFC 6455
+          // handshake completes. Without this the browser's WebSocket
+          // client closes with a protocol-error before any payload flows.
+          headers: { "Sec-WebSocket-Protocol": tokenResult.echo },
         });
         if (ok) return undefined as unknown as Response;
         return new Response("WebSocket upgrade failed", { status: 500 });

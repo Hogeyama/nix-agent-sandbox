@@ -15,7 +15,17 @@
  *      requests and for WebSocket upgrades.
  */
 
+import { tokenEquals } from "./ws_token.ts";
+
 const MUTATING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+/**
+ * Subprotocol prefix used to smuggle the WS bearer token through
+ * `Sec-WebSocket-Protocol`. Browsers expose `new WebSocket(url, [proto])` but
+ * no API for custom handshake headers, so the token rides in a subprotocol
+ * offer of the form `nas.token.<base64url>`.
+ */
+export const WS_TOKEN_SUBPROTOCOL_PREFIX = "nas.token.";
 
 export interface OriginGuardOptions {
   port: number;
@@ -98,6 +108,81 @@ export function guardWebSocketUpgrade(
   const hostReject = checkHost(req, options.port);
   if (hostReject) return hostReject;
   return checkOrigin(req, options.port);
+}
+
+/** Outcome of `verifyWsTokenSubprotocol`. */
+export type WsTokenVerifyResult =
+  | { ok: true; echo: string }
+  | { ok: false; reason: WsTokenFailureReason };
+
+/**
+ * Stable reason codes for WS token verification failures.
+ *
+ * These are surfaced verbatim in the 401 response body and therefore reach
+ * the browser's `WebSocket.onclose.reason`. They must NOT contain the
+ * offered or expected token value — only the category of failure — so that
+ * a hostile script that can observe its own upgrade-close reason cannot
+ * use the server to confirm a guessed token.
+ */
+export type WsTokenFailureReason =
+  | "missing-subprotocol"
+  | "bad-format"
+  | "token-mismatch";
+
+/**
+ * Verify that the WS upgrade request carries our bearer token smuggled in
+ * `Sec-WebSocket-Protocol`. This is the programmatic-client defence from
+ * threat review F1: Origin + Host checks alone cannot distinguish a real
+ * browser tab from a same-origin non-browser process, but the token —
+ * materialised into the HTML shell and served only to same-origin GETs —
+ * is not reachable to an attacker who cannot already read the user's DOM.
+ *
+ * The client offers `nas.token.<base64url>` as a subprotocol; on success we
+ * echo the exact same string back so the RFC 6455 handshake completes. On
+ * failure we return a reason code for the caller to place in the 401 body.
+ *
+ * Comparison uses `tokenEquals` (constant-time) — a hostile script cannot
+ * leak the token via upgrade-timing differences.
+ */
+export function verifyWsTokenSubprotocol(
+  req: Request,
+  expected: string,
+): WsTokenVerifyResult {
+  const raw = req.headers.get("sec-websocket-protocol");
+  if (raw === null) {
+    return { ok: false, reason: "missing-subprotocol" };
+  }
+
+  // RFC 6455 §4.1 allows the client to offer multiple subprotocols,
+  // comma-separated. Trim each so incidental whitespace does not matter.
+  const offers = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  if (offers.length === 0) {
+    return { ok: false, reason: "missing-subprotocol" };
+  }
+
+  let sawPrefix = false;
+  for (const offer of offers) {
+    if (!offer.startsWith(WS_TOKEN_SUBPROTOCOL_PREFIX)) {
+      continue;
+    }
+    sawPrefix = true;
+    const actual = offer.slice(WS_TOKEN_SUBPROTOCOL_PREFIX.length);
+    if (tokenEquals(actual, expected)) {
+      // Echo the exact offered string (not re-constructed) so we don't
+      // accidentally normalise and break the client's protocol check.
+      return { ok: true, echo: offer };
+    }
+    // Keep scanning: another offer might carry the right token.
+  }
+
+  if (!sawPrefix) {
+    return { ok: false, reason: "bad-format" };
+  }
+  return { ok: false, reason: "token-mismatch" };
 }
 
 /**

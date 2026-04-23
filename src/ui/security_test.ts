@@ -3,6 +3,8 @@ import {
   applySecurityHeaders,
   guardHttpRequest,
   guardWebSocketUpgrade,
+  verifyWsTokenSubprotocol,
+  WS_TOKEN_SUBPROTOCOL_PREFIX,
 } from "./security.ts";
 
 const PORT = 3939;
@@ -143,6 +145,134 @@ describe("guardWebSocketUpgrade", () => {
       { port: PORT },
     );
     expect(res?.status).toBe(403);
+  });
+});
+
+describe("verifyWsTokenSubprotocol", () => {
+  const EXPECTED = "expected-token-value_123";
+
+  function mkWsReq(headers: Record<string, string>): Request {
+    return new Request("http://127.0.0.1:3939/api/terminal/session-1", {
+      method: "GET",
+      headers,
+    });
+  }
+
+  test("WS_TOKEN_SUBPROTOCOL_PREFIX is the documented constant", () => {
+    // Pins the wire prefix so frontend/backend never silently drift.
+    expect(WS_TOKEN_SUBPROTOCOL_PREFIX).toBe("nas.token.");
+  });
+
+  test("missing Sec-WebSocket-Protocol rejects as missing-subprotocol", () => {
+    const res = verifyWsTokenSubprotocol(mkWsReq({}), EXPECTED);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("missing-subprotocol");
+  });
+
+  test("empty Sec-WebSocket-Protocol rejects as missing-subprotocol", () => {
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({ "sec-websocket-protocol": "   ,  , " }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("missing-subprotocol");
+  });
+
+  test("unknown subprotocol (wrong prefix) rejects as bad-format", () => {
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({ "sec-websocket-protocol": "foo.bar.xxx" }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("bad-format");
+  });
+
+  test("correct prefix but wrong token rejects as token-mismatch", () => {
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({ "sec-websocket-protocol": "nas.token.not-the-right-value" }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("token-mismatch");
+  });
+
+  test("correct prefix + correct token returns ok + echo", () => {
+    const offer = `nas.token.${EXPECTED}`;
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({ "sec-websocket-protocol": offer }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.echo).toBe(offer);
+  });
+
+  test("multiple offers, one is valid → ok", () => {
+    const offer = `nas.token.${EXPECTED}`;
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({
+        "sec-websocket-protocol": `chat, ${offer}, other.proto`,
+      }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.echo).toBe(offer);
+  });
+
+  test("multiple offers, none valid → reject", () => {
+    // A mix: one non-nas entry (triggers bad-format arm only), and one
+    // nas.token.* with wrong value (should dominate → token-mismatch).
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({
+        "sec-websocket-protocol": "chat, nas.token.WRONG, other.proto",
+      }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("token-mismatch");
+  });
+
+  test("multiple offers, all non-nas → bad-format", () => {
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({
+        "sec-websocket-protocol": "chat, other.proto",
+      }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("bad-format");
+  });
+
+  test("differing-length token does not throw (constant-time wrap)", () => {
+    // tokenEquals must swallow length differences without throwing; pin
+    // that verifyWsTokenSubprotocol never leaks a synchronous exception.
+    // `expected` is 25 chars; offered slice is 3 chars — different lengths.
+    let threw: unknown = null;
+    let result: { ok: boolean } | null = null;
+    try {
+      result = verifyWsTokenSubprotocol(
+        mkWsReq({ "sec-websocket-protocol": "nas.token.abc" }),
+        EXPECTED,
+      );
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeNull();
+    expect(result?.ok).toBe(false);
+  });
+
+  test("reason code never contains the token value (no leak via onclose)", () => {
+    const res = verifyWsTokenSubprotocol(
+      mkWsReq({ "sec-websocket-protocol": "nas.token.SECRET-GUESS-ABC" }),
+      EXPECTED,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      // The reason code should be a fixed enum — not a string containing
+      // either the offered or expected token value.
+      expect(res.reason).toBe("token-mismatch");
+      expect(res.reason).not.toContain("SECRET-GUESS-ABC");
+      expect(res.reason).not.toContain(EXPECTED);
+    }
   });
 });
 

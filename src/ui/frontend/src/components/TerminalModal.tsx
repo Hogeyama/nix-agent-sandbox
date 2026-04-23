@@ -5,7 +5,7 @@ import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { api } from "../api.ts";
+import { api, getWsToken } from "../api.ts";
 import { TerminalTabLabel } from "./TerminalTabLabel.tsx";
 import {
   ensureTerminalFocus,
@@ -187,7 +187,12 @@ function TerminalPane({
     const proto = globalThis.location?.protocol === "https:" ? "wss:" : "ws:";
     const host = globalThis.location?.host ?? "localhost:3939";
     const wsUrl = `${proto}//${host}/api/terminal/${encodeURIComponent(sessionId)}`;
-    const ws = new WebSocket(wsUrl);
+    // Smuggle the WS bearer token through Sec-WebSocket-Protocol. Browsers
+    // expose no API for custom handshake headers, but subprotocols are a
+    // client-settable channel that the daemon validates (see
+    // `verifyWsTokenSubprotocol`). The prefix must stay in sync with
+    // `WS_TOKEN_SUBPROTOCOL_PREFIX` on the server side.
+    const ws = new WebSocket(wsUrl, [`nas.token.${getWsToken()}`]);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
