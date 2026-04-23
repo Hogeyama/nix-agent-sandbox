@@ -127,6 +127,7 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     xpraBinPath: null,
     takenX11Displays: new Set<number>(),
     x11UnixDirReadOnly: false,
+    localConfigPaths: [],
     ...overrides,
   };
 }
@@ -1187,6 +1188,73 @@ test("MountStage: no mount widening when not in a worktree", () => {
   expect(plan.dockerArgs[vIdx + 1]).toEqual(
     `${TEST_WORK_DIR}:${TEST_WORK_DIR}`,
   );
+});
+
+// ============================================================
+// .agent-sandbox.{yml,nix} RO bind mount (改ざん防止)
+// ============================================================
+
+test("MountStage: .agent-sandbox.yml inside mountSource is RO bind mounted", () => {
+  const configPath = `${TEST_WORK_DIR}/.agent-sandbox.yml`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: configPath,
+    target: configPath,
+    readOnly: true,
+  });
+});
+
+test("MountStage: both .agent-sandbox.yml and .nix are RO bind mounted when both exist", () => {
+  const ymlPath = `${TEST_WORK_DIR}/.agent-sandbox.yml`;
+  const nixPath = `${TEST_WORK_DIR}/.agent-sandbox.nix`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [ymlPath, nixPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${ymlPath}:${ymlPath}:ro`);
+  expect(plan.dockerArgs).toContain(`${nixPath}:${nixPath}:ro`);
+});
+
+test("MountStage: config path outside mountSource is skipped", () => {
+  // workspace = /workspace/project だが、config は /etc/other/.agent-sandbox.yml
+  // (mountSource 外なのでコンテナからは見えない → RO mount する必要もない)
+  const outsidePath = "/etc/other/.agent-sandbox.yml";
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [outsidePath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).not.toContain(`${outsidePath}:${outsidePath}:ro`);
+});
+
+test("MountStage: with gitWorktreeMainRoot, config within main root is RO mounted", () => {
+  // worktree 内にいるが、config は本体リポジトリルート直下にある
+  const mainRoot = "/repo";
+  const configPath = `${mainRoot}/.agent-sandbox.yml`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitWorktreeMainRoot: mainRoot,
+      localConfigPaths: [configPath],
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+});
+
+test("MountStage: RO mount is emitted AFTER the workspace RW mount", () => {
+  // Docker は後から指定された具体的なサブマウントで上書きするため順序が重要
+  const configPath = `${TEST_WORK_DIR}/.agent-sandbox.yml`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+  const wsIdx = plan.dockerArgs.indexOf(`${TEST_WORK_DIR}:${TEST_WORK_DIR}`);
+  const configIdx = plan.dockerArgs.indexOf(`${configPath}:${configPath}:ro`);
+  expect(wsIdx).toBeGreaterThanOrEqual(0);
+  expect(configIdx).toBeGreaterThan(wsIdx);
 });
 
 test("MountStage: structured workspace, nix, and dbus slices drive planning", () => {

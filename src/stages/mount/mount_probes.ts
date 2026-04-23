@@ -85,6 +85,14 @@ export interface MountProbes {
   takenX11Displays: ReadonlySet<number>;
   /** /tmp/.X11-unix が read-only か (WSL 等で ro マウントされている場合 true) */
   x11UnixDirReadOnly: boolean;
+  /**
+   * workDir から上位へ walk して見つかった .agent-sandbox.{yml,nix} の絶対パス。
+   *
+   * これらは次回 nas 起動時に loadConfig が読み込む候補であり、コンテナ内の
+   * 悪意あるエージェントが書き換えると hostexec 等の設定を差し替えられるため、
+   * mountSource 内にあるものは RO bind mount で保護する。
+   */
+  localConfigPaths: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +167,9 @@ export async function resolveMountProbes(
   // git worktree 検出: ワークスペースが worktree 内にある場合、本体リポジトリルートを取得
   const gitWorktreeMainRoot = await resolveGitWorktreeMainRoot(workDir);
 
+  // .agent-sandbox.{yml,nix} の列挙（後で RO bind mount 対象にする）
+  const localConfigPaths = await resolveLocalConfigPaths(workDir);
+
   // display: xpra サンドボックス用のバイナリ探索と X11 display 採番
   const [xpraBinPath, takenX11Displays, x11UnixDirReadOnly] = await Promise.all(
     [
@@ -186,7 +197,45 @@ export async function resolveMountProbes(
     xpraBinPath,
     takenX11Displays,
     x11UnixDirReadOnly,
+    localConfigPaths,
   };
+}
+
+const LOCAL_CONFIG_FILENAMES = [
+  ".agent-sandbox.yml",
+  ".agent-sandbox.nix",
+] as const;
+
+/**
+ * workDir から上位へ walk し、各ディレクトリ直下の
+ * .agent-sandbox.{yml,nix} を列挙する。
+ *
+ * loadConfig と異なり「最初に見つかった 1 件」ではなく、辿ったパス上で
+ * 見つかった全てを返す。次回起動時の cwd が変わっても拾われる候補を
+ * 一括で保護するため。
+ */
+async function resolveLocalConfigPaths(workDir: string): Promise<string[]> {
+  const paths: string[] = [];
+  let current = path.resolve(workDir);
+  const root = path.parse(current).root;
+
+  while (true) {
+    for (const filename of LOCAL_CONFIG_FILENAMES) {
+      const candidate = path.join(current, filename);
+      try {
+        await stat(candidate);
+        paths.push(candidate);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
+        // 権限不足等は握りつぶさず伝播
+        throw e;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current || current === root) break;
+    current = parent;
+  }
+  return paths;
 }
 
 /** PATH から任意のバイナリを which 相当で解決する */

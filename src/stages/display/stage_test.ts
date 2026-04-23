@@ -110,6 +110,7 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     xpraBinPath: "/usr/bin/xpra",
     takenX11Displays: new Set<number>(),
     x11UnixDirReadOnly: false,
+    localConfigPaths: [],
     ...overrides,
   };
 }
