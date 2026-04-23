@@ -18,7 +18,7 @@ let
       mount-config = false;
     };
     display = {
-      sandbox = "xpra";
+      sandbox = "none";
     };
     gpg = {
       forward-agent = false;
