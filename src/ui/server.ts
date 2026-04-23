@@ -17,6 +17,7 @@ import {
 } from "../network/registry.ts";
 import type { UiDataContext } from "./data.ts";
 import { createDataContext } from "./data.ts";
+import { daemonStateDir } from "./paths.ts";
 import { html, Router, text } from "./router.ts";
 import { createApiRoutes } from "./routes/api.ts";
 import { createSseRoutes } from "./routes/sse.ts";
@@ -33,6 +34,7 @@ import {
   guardHttpRequest,
   guardWebSocketUpgrade,
 } from "./security.ts";
+import { loadOrCreateWsToken } from "./ws_token.ts";
 
 const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
@@ -140,6 +142,13 @@ export async function startServer(options: ServeOptions): Promise<void> {
   const ctx = await createDataContext();
   const assets = await preloadAssets();
   const app = createApp(ctx, assets);
+
+  // Load or create the WS bearer token so that the on-disk secret is
+  // materialised the first time the daemon runs. The token itself is not
+  // yet consumed here — C3 injects it into the HTML shell and C4 enforces
+  // it on WebSocket upgrade. Kept as `_wsToken` until those commits wire it.
+  const _wsToken = await loadOrCreateWsToken(daemonStateDir());
+  void _wsToken;
 
   if (
     !Number.isInteger(options.port) ||

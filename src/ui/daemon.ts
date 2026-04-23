@@ -4,9 +4,14 @@
  */
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import * as path from "node:path";
 import { resolveNasCommand } from "../lib/notify_utils.ts";
 import { logInfo, logWarn } from "../log.ts";
+import {
+  daemonLogPath,
+  daemonStateDir,
+  daemonStatePath,
+  daemonTokenPath,
+} from "./paths.ts";
 
 const DEFAULT_UI_PORT = 3939;
 const HEALTH_TIMEOUT_MS = 2000;
@@ -22,21 +27,6 @@ interface DaemonState {
 export interface EnsureUiDaemonOptions {
   port?: number;
   idleTimeout?: number;
-}
-
-function daemonStateDir(): string {
-  const xdgCache =
-    process.env.XDG_CACHE_HOME ||
-    path.join(process.env.HOME ?? "/tmp", ".cache");
-  return path.join(xdgCache, "nas", "ui");
-}
-
-function daemonStatePath(): string {
-  return path.join(daemonStateDir(), "daemon.json");
-}
-
-function daemonLogPath(): string {
-  return path.join(daemonStateDir(), "daemon.log");
 }
 
 /**
@@ -120,11 +110,18 @@ export async function stopUiDaemon(options?: { port?: number }): Promise<void> {
 
   if (killed) {
     logInfo("[nas] UI daemon stopped");
-    // Clean up state file
+    // Clean up state + token files. Both use `force: true` so ENOENT is
+    // swallowed by node's fs.rm; any other failure is logged (non-fatal for
+    // stop) rather than silently dropped.
     try {
       await rm(daemonStatePath(), { force: true });
-    } catch {
-      // ignore
+    } catch (error) {
+      logWarn(`[nas] Failed to remove daemon state file: ${String(error)}`);
+    }
+    try {
+      await rm(daemonTokenPath(), { force: true });
+    } catch (error) {
+      logWarn(`[nas] Failed to remove daemon token file: ${String(error)}`);
     }
   } else {
     logWarn("[nas] Could not determine daemon PID to stop");
