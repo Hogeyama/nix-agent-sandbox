@@ -8,6 +8,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
+import type { WebSocketHandler } from "bun";
 import { listHostExecPendingEntries } from "../hostexec/registry.ts";
 import { resolveAssetDir } from "../lib/asset.ts";
 import {
@@ -35,6 +36,24 @@ import {
 
 const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
+
+// Cap WebSocket frame size to kill the unbounded JSON.parse / FD-buffer DoS
+// vector noted in the threat review (F6). Terminal input is keystrokes —
+// 64 KiB is luxuriously generous even for large paste events, and still
+// blocks multi-MB frame attacks that would stall the event loop or OOM.
+export const WS_MAX_PAYLOAD_BYTES = 64 * 1024;
+
+/**
+ * `Bun.serve({ websocket })` に直接渡される config。
+ * テストから import して `maxPayloadLength` などが正しく配線されているか
+ * 検証できるよう module-level に export している。
+ */
+export const WEBSOCKET_CONFIG: WebSocketHandler<TerminalWSData> = {
+  maxPayloadLength: WS_MAX_PAYLOAD_BYTES,
+  open: handleTerminalOpen,
+  message: handleTerminalMessage,
+  close: handleTerminalClose,
+};
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -180,11 +199,7 @@ export async function startServer(options: ServeOptions): Promise<void> {
       const res = await app.fetch(req);
       return applySecurityHeaders(res, { port: options.port });
     },
-    websocket: {
-      open: handleTerminalOpen,
-      message: handleTerminalMessage,
-      close: handleTerminalClose,
-    },
+    websocket: WEBSOCKET_CONFIG,
   });
 
   console.log(`[nas] UI server listening on http://localhost:${options.port}`);
