@@ -72,24 +72,54 @@ function contentType(p: string): string {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
+/**
+ * Raw assets as loaded from disk. `indexHtmlTemplate` still contains the
+ * `{{NAS_WS_TOKEN}}` placeholder and MUST NOT be served as-is — callers
+ * must materialise it into a `RuntimeAssets` via token injection first.
+ */
 export interface PreloadedAssets {
-  indexHtml: string | null;
+  indexHtmlTemplate: string | null;
   /** pathname → Blob (contentType 込み) */
   files: Map<string, Blob>;
 }
 
-export async function preloadAssets(): Promise<PreloadedAssets> {
+/**
+ * Materialised assets ready to be handed to `createApp`. The `indexHtml`
+ * field has already had the WS bearer token injected, so no placeholders
+ * remain. Keeping this as a distinct type from `PreloadedAssets` lets the
+ * type system prevent the "raw template accidentally served" bug.
+ */
+export interface RuntimeAssets {
+  indexHtml: string | null;
+  files: Map<string, Blob>;
+}
+
+/**
+ * Load static UI assets from disk into memory.
+ *
+ * `distBase` is injectable so tests can exercise both the happy path
+ * (ENOENT → fields are null / empty) and the error re-throw path
+ * (e.g. EACCES from a `chmod 000` directory) without touching the
+ * real `DIST_BASE`. Production callers omit the argument.
+ */
+export async function preloadAssets(
+  distBase: string = DIST_BASE,
+): Promise<PreloadedAssets> {
   const files = new Map<string, Blob>();
-  let indexHtml: string | null = null;
+  let indexHtmlTemplate: string | null = null;
 
   try {
-    indexHtml = await readFile(path.join(DIST_BASE, "index.html"), "utf8");
-  } catch {
+    indexHtmlTemplate = await readFile(
+      path.join(distBase, "index.html"),
+      "utf8",
+    );
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     // index.html not found — will return 500 at request time
   }
 
   try {
-    const assetsDir = path.join(DIST_BASE, "assets");
+    const assetsDir = path.join(distBase, "assets");
     const entries = await readdir(assetsDir);
     for (const entry of entries) {
       const filePath = path.join(assetsDir, entry);
@@ -99,14 +129,48 @@ export async function preloadAssets(): Promise<PreloadedAssets> {
         new Blob([buf], { type: contentType(entry) }),
       );
     }
-  } catch {
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     // assets dir not found — will return 404 at request time
   }
 
-  return { indexHtml, files };
+  return { indexHtmlTemplate, files };
 }
 
-export function createApp(ctx: UiDataContext, assets: PreloadedAssets): Router {
+/**
+ * Inject the WS bearer token into the preloaded index.html template.
+ *
+ * The token is a base64url string (`[A-Za-z0-9_-]` only), so no HTML
+ * attribute escaping is needed for its context in
+ * `<meta name="nas-ws-token" content="...">`.
+ *
+ * After replacement we assert the placeholder is gone: if a future build
+ * template lost the `{{NAS_WS_TOKEN}}` marker (or was truncated) we would
+ * otherwise silently ship an un-tokenised UI that can never authenticate
+ * its WebSocket, producing a very confusing runtime failure instead of a
+ * loud startup one.
+ */
+export function materializeAssets(
+  assets: PreloadedAssets,
+  wsToken: string,
+): RuntimeAssets {
+  let indexHtml: string | null = null;
+  if (assets.indexHtmlTemplate !== null) {
+    // token is base64url (no escape needed for HTML attribute context)
+    indexHtml = assets.indexHtmlTemplate.replaceAll(
+      "{{NAS_WS_TOKEN}}",
+      wsToken,
+    );
+    if (indexHtml.includes("{{NAS_WS_TOKEN}}")) {
+      throw new Error(
+        "WS token injection failed: placeholder still present after replace",
+      );
+    }
+  }
+  return { indexHtml, files: assets.files };
+}
+
+export function createApp(ctx: UiDataContext, assets: RuntimeAssets): Router {
   const app = new Router();
 
   // API routes
@@ -140,15 +204,14 @@ export interface ServeOptions {
 
 export async function startServer(options: ServeOptions): Promise<void> {
   const ctx = await createDataContext();
-  const assets = await preloadAssets();
-  const app = createApp(ctx, assets);
+  const preloaded = await preloadAssets();
 
-  // Load or create the WS bearer token so that the on-disk secret is
-  // materialised the first time the daemon runs. The token itself is not
-  // yet consumed here — C3 injects it into the HTML shell and C4 enforces
-  // it on WebSocket upgrade. Kept as `_wsToken` until those commits wire it.
-  const _wsToken = await loadOrCreateWsToken(daemonStateDir());
-  void _wsToken;
+  // Load or create the WS bearer token, then materialise it into the HTML
+  // shell so the frontend can read it via `<meta name="nas-ws-token">`.
+  // C4 will enforce this same token on the WebSocket upgrade path.
+  const wsToken = await loadOrCreateWsToken(daemonStateDir());
+  const runtimeAssets = materializeAssets(preloaded, wsToken);
+  const app = createApp(ctx, runtimeAssets);
 
   if (
     !Number.isInteger(options.port) ||

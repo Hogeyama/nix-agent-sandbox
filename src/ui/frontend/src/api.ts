@@ -1,5 +1,46 @@
 const BASE = "";
 
+/**
+ * Read the WebSocket bearer token injected by the daemon into the HTML
+ * shell's `<meta name="nas-ws-token">` tag.
+ *
+ * The token is materialised at daemon startup (see `materializeAssets` in
+ * `src/ui/server.ts`) from the on-disk `${daemonStateDir}/daemon.token`.
+ * It is used (starting in C4) as the WebSocket `Sec-WebSocket-Protocol`
+ * subprotocol so the daemon can authenticate same-origin connections.
+ *
+ * Why throw instead of returning null:
+ *   - A missing / empty / placeholder token means the UI bundle and the
+ *     daemon are out of sync (e.g. stale `bun run build-ui` output, or the
+ *     daemon forgot to inject). Silent fallback would produce a WebSocket
+ *     that *looks* authorised but is actually spoofable, which is exactly
+ *     what this subsystem exists to prevent. Fail loudly at load time.
+ *
+ * The `doc` parameter defaults to `document` but is overridable to keep
+ * the function unit-testable without a real DOM.
+ */
+export function getWsToken(doc: Document = document): string {
+  const meta = doc.querySelector('meta[name="nas-ws-token"]');
+  if (!meta) {
+    throw new Error(
+      "WS token not injected — UI daemon may be out of sync with frontend build",
+    );
+  }
+  const content = meta.getAttribute("content");
+  if (content === null || content === "") {
+    throw new Error(
+      "WS token not injected — UI daemon may be out of sync with frontend build",
+    );
+  }
+  if (content === "{{NAS_WS_TOKEN}}") {
+    // Placeholder untouched — daemon never ran materializeAssets.
+    throw new Error(
+      "WS token not injected — UI daemon may be out of sync with frontend build",
+    );
+  }
+  return content;
+}
+
 async function request<T>(
   method: string,
   path: string,

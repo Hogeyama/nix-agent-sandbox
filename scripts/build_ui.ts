@@ -50,12 +50,19 @@ const appCss = await readFile(
 );
 const css = `${xtermCss}\n${appCss}`;
 
-// Generate index.html with correct script path
+// Generate index.html with correct script path.
+//
+// The `nas-ws-token` meta tag is a placeholder left in the built artifact.
+// At daemon runtime `startServer` (src/ui/server.ts) replaces
+// `{{NAS_WS_TOKEN}}` with the actual base64url bearer token loaded from
+// `${daemonStateDir}/daemon.token`. The frontend reads it via
+// `getWsToken()` in src/ui/frontend/src/api.ts.
 const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="nas-ws-token" content="{{NAS_WS_TOKEN}}" />
   <title>nas — Dashboard</title>
   <style>
 ${css}
