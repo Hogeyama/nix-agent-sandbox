@@ -99,3 +99,59 @@ export function guardWebSocketUpgrade(
   if (hostReject) return hostReject;
   return checkOrigin(req, options.port);
 }
+
+/**
+ * Apply security response headers to an outgoing Response.
+ *
+ * These headers harden the loopback UI against a few browser-level
+ * attack classes (framing, MIME sniffing, cross-origin resource reads,
+ * powerful-feature abuse) and satisfy the OWASP ZAP baseline findings
+ * for CSP / X-Frame-Options / X-Content-Type-Options / COOP / CORP /
+ * Permissions-Policy.
+ *
+ * Existing headers on the Response are preserved — routes that
+ * intentionally set their own (e.g. a custom CSP) win.
+ *
+ * Note: Response headers can be immutable (e.g. when constructed from
+ * `new Response(blob)` in some runtimes). We always copy into a fresh
+ * Headers instance and rebuild the Response so `.set` is safe.
+ */
+export function applySecurityHeaders(
+  res: Response,
+  options: { port: number },
+): Response {
+  const headers = new Headers(res.headers);
+
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    `connect-src 'self' ws://127.0.0.1:${options.port} ws://localhost:${options.port}`,
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
+
+  const defaults: Array<[string, string]> = [
+    ["Content-Security-Policy", csp],
+    ["X-Frame-Options", "DENY"],
+    ["X-Content-Type-Options", "nosniff"],
+    ["Cross-Origin-Opener-Policy", "same-origin"],
+    ["Cross-Origin-Resource-Policy", "same-origin"],
+    ["Permissions-Policy", "camera=(), microphone=(), geolocation=()"],
+  ];
+
+  for (const [name, value] of defaults) {
+    if (!headers.has(name)) {
+      headers.set(name, value);
+    }
+  }
+
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}

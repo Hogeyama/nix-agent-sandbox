@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { guardHttpRequest, guardWebSocketUpgrade } from "./security.ts";
+import {
+  applySecurityHeaders,
+  guardHttpRequest,
+  guardWebSocketUpgrade,
+} from "./security.ts";
 
 const PORT = 3939;
 
@@ -139,5 +143,55 @@ describe("guardWebSocketUpgrade", () => {
       { port: PORT },
     );
     expect(res?.status).toBe(403);
+  });
+});
+
+describe("applySecurityHeaders", () => {
+  test("sets all six OWASP baseline headers", () => {
+    const res = applySecurityHeaders(new Response("ok"), { port: PORT });
+    expect(res.headers.get("Content-Security-Policy")).not.toBeNull();
+    expect(res.headers.get("X-Frame-Options")).toBe("DENY");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("Cross-Origin-Opener-Policy")).toBe("same-origin");
+    expect(res.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
+    expect(res.headers.get("Permissions-Policy")).toBe(
+      "camera=(), microphone=(), geolocation=()",
+    );
+  });
+
+  test("CSP connect-src contains the configured port for ws://", () => {
+    const res = applySecurityHeaders(new Response("ok"), { port: 12345 });
+    const csp = res.headers.get("Content-Security-Policy") ?? "";
+    expect(csp).toContain("ws://127.0.0.1:12345");
+    expect(csp).toContain("ws://localhost:12345");
+    expect(csp).not.toContain("ws://127.0.0.1:3939");
+  });
+
+  test("CSP hardens framing and form/base", () => {
+    const res = applySecurityHeaders(new Response("ok"), { port: PORT });
+    const csp = res.headers.get("Content-Security-Policy") ?? "";
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("form-action 'none'");
+  });
+
+  test("preserves body and status of the original Response", async () => {
+    const original = new Response("hello-body", {
+      status: 418,
+      statusText: "I'm a teapot",
+    });
+    const res = applySecurityHeaders(original, { port: PORT });
+    expect(res.status).toBe(418);
+    expect(await res.text()).toBe("hello-body");
+  });
+
+  test("does not overwrite headers already present", () => {
+    const original = new Response("ok", {
+      headers: { "X-Frame-Options": "SAMEORIGIN" },
+    });
+    const res = applySecurityHeaders(original, { port: PORT });
+    expect(res.headers.get("X-Frame-Options")).toBe("SAMEORIGIN");
+    // Other defaults still applied
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
 });

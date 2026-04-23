@@ -27,7 +27,11 @@ import {
   type TerminalWSData,
   validateTerminalUpgrade,
 } from "./routes/terminal.ts";
-import { guardHttpRequest, guardWebSocketUpgrade } from "./security.ts";
+import {
+  applySecurityHeaders,
+  guardHttpRequest,
+  guardWebSocketUpgrade,
+} from "./security.ts";
 
 const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
@@ -172,8 +176,9 @@ export async function startServer(options: ServeOptions): Promise<void> {
         return new Response("WebSocket upgrade failed", { status: 500 });
       }
       const reject = guardHttpRequest(req, { port: options.port });
-      if (reject) return reject;
-      return app.fetch(req);
+      if (reject) return applySecurityHeaders(reject, { port: options.port });
+      const res = await app.fetch(req);
+      return applySecurityHeaders(res, { port: options.port });
     },
     websocket: {
       open: handleTerminalOpen,
