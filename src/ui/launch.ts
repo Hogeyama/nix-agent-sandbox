@@ -81,13 +81,18 @@ export interface LaunchResult {
   sessionId: string;
 }
 
+export interface NasLaunchCommand {
+  nasBin: string;
+  nasArgs: string[];
+}
+
 function randomHex(bytes: number): string {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return Buffer.from(data).toString("hex");
 }
 
 /**
- * Resolve a stable path to the `nas` binary for spawning new sessions.
+ * Resolve a stable command for spawning new sessions.
  *
  * `process.execPath` points at the nix-bundle-elf self-extracted binary
  * under /tmp, which is removed when the originating nas session exits.
@@ -95,7 +100,10 @@ function randomHex(bytes: number): string {
  *
  * Resolution order:
  *   1. NAS_BIN_PATH env var — set by packaging (flake.nix) or the developer.
- *   2. process.execPath, if not under /tmp (covers `bun build --compile`
+ *   2. If running via a script runner such as `bun main.ts`, reuse
+ *      `process.execPath + process.argv[1]` so the spawned session
+ *      re-enters the checked-out source tree instead of invoking bare `bun`.
+ *   3. process.execPath, if not under /tmp (covers `bun build --compile`
  *      dev builds and the non-bundled nix wrapper's resolved sibling).
  *
  * PATH lookup is intentionally NOT used: during development with
@@ -103,14 +111,29 @@ function randomHex(bytes: number): string {
  * (e.g. ~/.local/bin/nas) which silently diverges from the one the
  * developer is actually iterating on.
  */
-async function resolveStableNasBin(): Promise<string | null> {
-  const envOverride = process.env.NAS_BIN_PATH;
-  if (envOverride && envOverride.trim().length > 0) return envOverride;
+export function resolveStableNasCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+  argv: readonly string[] = process.argv,
+): NasLaunchCommand | null {
+  const envOverride = env.NAS_BIN_PATH?.trim();
+  if (envOverride) {
+    return { nasBin: envOverride, nasArgs: [] };
+  }
 
-  const exec = process.execPath;
-  if (exec && !exec.startsWith("/tmp/")) return exec;
+  if (!execPath || execPath.startsWith("/tmp/")) return null;
 
-  return null;
+  const entry = argv[1];
+  const runner = path.basename(execPath);
+  if (
+    (runner === "bun" || runner === "node") &&
+    typeof entry === "string" &&
+    path.isAbsolute(entry)
+  ) {
+    return { nasBin: execPath, nasArgs: [entry] };
+  }
+
+  return { nasBin: execPath, nasArgs: [] };
 }
 
 function validateCwd(cwd: string): void {
@@ -167,10 +190,10 @@ export async function launchSession(
 
   const sessionId = `sess_${randomHex(6)}`;
 
-  const nasBin = await resolveStableNasBin();
-  if (!nasBin) {
+  const nasCommand = resolveStableNasCommand();
+  if (!nasCommand) {
     throw new Error(
-      "Could not resolve a stable path to the nas binary. " +
+      "Could not resolve a stable command for nas session launch. " +
         "process.execPath is under /tmp (nix-bundle-elf self-extraction) " +
         "which is removed when the originating session exits. " +
         "Set NAS_BIN_PATH to the wrapper or compiled binary that should " +
@@ -191,7 +214,8 @@ export async function launchSession(
   // SessionLaunchService Live 実装に吸収済み。
   return await launchClient.launchAgentSession(ctx.terminalRuntimeDir, {
     sessionId,
-    nasBin,
+    nasBin: nasCommand.nasBin,
+    nasArgs: nasCommand.nasArgs,
     extraArgs,
     cwd: req.cwd,
   });

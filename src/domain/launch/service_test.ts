@@ -71,6 +71,7 @@ describe("SessionLaunchService (Live): launchAgentSession", () => {
       const spec: AgentLaunchSpec = {
         sessionId: "sess-badcwd",
         nasBin: "/usr/bin/true",
+        nasArgs: [],
         extraArgs: ["default"],
         cwd: "/definitely/does/not/exist/for/nas/test",
       };
@@ -270,6 +271,7 @@ describe("SessionLaunchService (Fake): 注入確認", () => {
     const spec: AgentLaunchSpec = {
       sessionId: "sess-abc",
       nasBin: "/usr/local/bin/nas",
+      nasArgs: [],
       extraArgs: ["--worktree", "main", "default"],
       cwd: "/home/user/proj",
     };
@@ -324,6 +326,7 @@ describe("SessionLaunchService (Fake): 注入確認", () => {
         const launched = yield* svc.launchAgentSession("/tmp/nas-default", {
           sessionId: "sess-default",
           nasBin: "/usr/local/bin/nas",
+          nasArgs: [],
           extraArgs: [],
         });
         const shell = yield* svc.startShellSession("/tmp/nas-default", {

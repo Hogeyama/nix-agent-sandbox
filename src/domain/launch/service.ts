@@ -64,6 +64,7 @@ import {
 export interface AgentLaunchSpec {
   readonly sessionId: string;
   readonly nasBin: string;
+  readonly nasArgs: string[];
   readonly extraArgs: string[];
   readonly cwd?: string;
 }
@@ -134,7 +135,7 @@ async function launchAgentSessionImpl(
 ): Promise<{ sessionId: string }> {
   const socketPath = socketPathFor(spec.sessionId, runtimeDir);
 
-  const cmdArgs: string[] = [spec.nasBin, ...spec.extraArgs];
+  const cmdArgs: string[] = [spec.nasBin, ...spec.nasArgs, ...spec.extraArgs];
   const escaped = shellEscape(cmdArgs);
   const escapedSessionId = shellEscape([spec.sessionId]);
   // NAS_INSIDE_DTACH / NAS_SESSION_ID env prefix の順序と shellEscape 適用は

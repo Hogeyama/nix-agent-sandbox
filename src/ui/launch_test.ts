@@ -9,6 +9,7 @@ import {
   getLaunchBranches,
   LaunchValidationError,
   launchSession,
+  resolveStableNasCommand,
 } from "./launch.ts";
 
 /**
@@ -237,5 +238,47 @@ describe("getLaunchBranches", () => {
       typeof result.currentBranch === "string" || result.currentBranch === null,
     ).toEqual(true);
     expect(typeof result.hasMain).toEqual("boolean");
+  });
+});
+
+describe("resolveStableNasCommand", () => {
+  test("NAS_BIN_PATH があればそれを優先する", () => {
+    expect(
+      resolveStableNasCommand(
+        { NAS_BIN_PATH: "/opt/nas/bin/nas" },
+        "/nix/store/bun/bin/bun",
+        ["/nix/store/bun/bin/bun", "/repo/main.ts", "ui"],
+      ),
+    ).toEqual({
+      nasBin: "/opt/nas/bin/nas",
+      nasArgs: [],
+    });
+  });
+
+  test("bun main.ts 経由で起動している場合は script path を再利用する", () => {
+    expect(
+      resolveStableNasCommand({}, "/nix/store/bun/bin/bun", [
+        "/nix/store/bun/bin/bun",
+        "/repo/main.ts",
+        "ui",
+        "--port",
+        "3939",
+      ]),
+    ).toEqual({
+      nasBin: "/nix/store/bun/bin/bun",
+      nasArgs: ["/repo/main.ts"],
+    });
+  });
+
+  test("compiled binary では execPath 単体を使う", () => {
+    expect(
+      resolveStableNasCommand({}, "/home/user/bin/nas", [
+        "/home/user/bin/nas",
+        "ui",
+      ]),
+    ).toEqual({
+      nasBin: "/home/user/bin/nas",
+      nasArgs: [],
+    });
   });
 });
