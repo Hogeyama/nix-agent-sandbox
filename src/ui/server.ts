@@ -121,13 +121,11 @@ export async function preloadAssets(
 
   try {
     const assetsDir = path.join(distBase, "assets");
-    const entries = await readdir(assetsDir);
-    for (const entry of entries) {
-      const filePath = path.join(assetsDir, entry);
-      const buf = await readFile(filePath);
+    for await (const { absPath, relPath } of walkAssetFiles(assetsDir)) {
+      const buf = await readFile(absPath);
       files.set(
-        `/assets/${entry}`,
-        new Blob([buf], { type: contentType(entry) }),
+        `/assets/${relPath}`,
+        new Blob([buf], { type: contentType(relPath) }),
       );
     }
   } catch (e) {
@@ -136,6 +134,34 @@ export async function preloadAssets(
   }
 
   return { indexHtmlTemplate, files };
+}
+
+// Walk the assets tree and yield every regular file with its path relative
+// to the assets root. Subdirectories (e.g. assets/fonts/) are required for
+// the self-hosted woff2 layout produced by build_ui_next.ts; a flat readdir
+// would EISDIR on the directory entry itself. Symlinks are not followed —
+// we only descend into entries that report as a directory through the
+// directory listing dirent, mirroring how the build script lays out files.
+async function* walkAssetFiles(
+  rootDir: string,
+): AsyncGenerator<{ absPath: string; relPath: string }> {
+  async function* walk(
+    dir: string,
+    prefix: string,
+  ): AsyncGenerator<{ absPath: string; relPath: string }> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const absPath = path.join(dir, entry.name);
+      const relPath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        yield* walk(absPath, relPath);
+      } else if (entry.isFile()) {
+        yield { absPath, relPath };
+      }
+      // other dirent kinds (symlink, socket, fifo) are ignored on purpose
+    }
+  }
+  yield* walk(rootDir, "");
 }
 
 /**
