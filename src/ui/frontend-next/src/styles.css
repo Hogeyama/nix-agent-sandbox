@@ -357,6 +357,17 @@ body::after {
   position: relative;
 }
 
+/* Per-session keep-alive slot. Multiple slots stack absolutely inside
+ * `.terminal`; the active one sets `hidden=false` while the rest stay
+ * mounted but display:none so xterm and the WebSocket survive switches. */
+.terminal-slot {
+  position: absolute;
+  inset: 0;
+}
+.terminal-slot[hidden] {
+  display: none;
+}
+
 /* xterm.css ships a default .xterm-viewport { background: #000 } that
  * paints a black band between .terminal and the xterm screen. Force
  * the viewport (and its inner screen) to inherit so the whole pane is
