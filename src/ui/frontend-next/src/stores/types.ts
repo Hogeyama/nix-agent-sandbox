@@ -40,6 +40,15 @@ export type HostExecPendingItemLike = {
   cwd?: string | null;
 };
 
+// SSE-received payload subset describing one dtach socket exposed by the
+// backend (one entry per attachable terminal session).
+export type DtachSessionLike = {
+  name: string;
+  sessionId: string;
+  socketPath: string;
+  createdAt: number;
+};
+
 // Normalized row consumed by the sessions pane.
 export type SessionRow = {
   id: string; // sessionId, used as key
