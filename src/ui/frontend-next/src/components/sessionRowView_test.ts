@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionRow } from "../stores/types";
+import type { PendingCount } from "./sessionPendingSummary";
 import { describeSessionRow, formatSessionTree } from "./sessionRowView";
 
 function makeRow(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -19,9 +20,14 @@ function makeRow(overrides: Partial<SessionRow> = {}): SessionRow {
   };
 }
 
+const NO_PENDING: PendingCount = { network: 0, hostexec: 0 };
+
 describe("describeSessionRow", () => {
-  test("user-turn yields the amber turn dot and Turn badge", () => {
-    const display = describeSessionRow(makeRow({ turn: "user-turn" }));
+  test("user-turn with no pending yields the amber turn dot and Turn badge", () => {
+    const display = describeSessionRow(
+      makeRow({ turn: "user-turn" }),
+      NO_PENDING,
+    );
     expect(display.dotClass).toBe("session-dot turn");
     expect(display.badge).toEqual({
       text: "Turn",
@@ -29,8 +35,11 @@ describe("describeSessionRow", () => {
     });
   });
 
-  test("agent-turn yields the teal busy dot and Busy badge", () => {
-    const display = describeSessionRow(makeRow({ turn: "agent-turn" }));
+  test("agent-turn with no pending yields the teal busy dot and Busy badge", () => {
+    const display = describeSessionRow(
+      makeRow({ turn: "agent-turn" }),
+      NO_PENDING,
+    );
     expect(display.dotClass).toBe("session-dot busy");
     expect(display.badge).toEqual({
       text: "Busy",
@@ -38,22 +47,70 @@ describe("describeSessionRow", () => {
     });
   });
 
-  test("turn=null yields the idle dot and no badge", () => {
-    const display = describeSessionRow(makeRow({ turn: null }));
+  test("turn=null with no pending yields the idle dot and no badge", () => {
+    const display = describeSessionRow(makeRow({ turn: null }), NO_PENDING);
     expect(display.dotClass).toBe("session-dot");
     expect(display.badge).toBeNull();
   });
 
   test("unknown turn 'ack-turn' falls through to the default state", () => {
-    const display = describeSessionRow(makeRow({ turn: "ack-turn" }));
+    const display = describeSessionRow(
+      makeRow({ turn: "ack-turn" }),
+      NO_PENDING,
+    );
     expect(display.dotClass).toBe("session-dot");
     expect(display.badge).toBeNull();
   });
 
   test("unknown turn 'done' falls through to the default state", () => {
-    const display = describeSessionRow(makeRow({ turn: "done" }));
+    const display = describeSessionRow(makeRow({ turn: "done" }), NO_PENDING);
     expect(display.dotClass).toBe("session-dot");
     expect(display.badge).toBeNull();
+  });
+
+  test("network=1 + user-turn yields the rose pending dot and keeps Turn badge", () => {
+    const display = describeSessionRow(makeRow({ turn: "user-turn" }), {
+      network: 1,
+      hostexec: 0,
+    });
+    expect(display.dotClass).toBe("session-dot pending");
+    expect(display.badge).toEqual({
+      text: "Turn",
+      class: "badge badge-turn",
+    });
+  });
+
+  test("hostexec=1 + agent-turn yields the rose pending dot and keeps Busy badge", () => {
+    const display = describeSessionRow(makeRow({ turn: "agent-turn" }), {
+      network: 0,
+      hostexec: 1,
+    });
+    expect(display.dotClass).toBe("session-dot pending");
+    expect(display.badge).toEqual({
+      text: "Busy",
+      class: "badge badge-busy",
+    });
+  });
+
+  test("both network and hostexec pending + idle turn yields the rose pending dot and no badge", () => {
+    const display = describeSessionRow(makeRow({ turn: null }), {
+      network: 1,
+      hostexec: 1,
+    });
+    expect(display.dotClass).toBe("session-dot pending");
+    expect(display.badge).toBeNull();
+  });
+
+  test("multiple pending of each kind + user-turn still resolves to the rose pending dot and Turn badge", () => {
+    const display = describeSessionRow(makeRow({ turn: "user-turn" }), {
+      network: 2,
+      hostexec: 3,
+    });
+    expect(display.dotClass).toBe("session-dot pending");
+    expect(display.badge).toEqual({
+      text: "Turn",
+      class: "badge badge-turn",
+    });
   });
 });
 

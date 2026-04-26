@@ -29,9 +29,9 @@ export function SessionsPane(props: Props) {
           fallback={<li class="empty">No sessions</li>}
         >
           {(row) => {
-            const display = describeSessionRow(row);
-            const tree = formatSessionTree(row);
             const counts = () => props.pendingFor(row.id);
+            const display = () => describeSessionRow(row, counts());
+            const tree = formatSessionTree(row);
             return (
               // biome-ignore lint/a11y/useSemanticElements: <dl> is not phrasing content, so wrapping the row in <button> is invalid HTML; the row uses <li> with role="button" instead.
               // biome-ignore lint/a11y/useFocusableInteractive: tabindex={0} below makes the row focusable; biome does not recognise the lowercase Solid attribute.
@@ -65,7 +65,7 @@ export function SessionsPane(props: Props) {
                   }
                 }}
               >
-                <span class={display.dotClass} aria-hidden="true" />
+                <span class={display().dotClass} aria-hidden="true" />
                 <div class="session-title-slot">
                   <EditableSessionName
                     currentName={row.name}
@@ -125,7 +125,7 @@ export function SessionsPane(props: Props) {
                     </span>
                   </Show>
                 </div>
-                <Show when={display.badge}>
+                <Show when={display().badge}>
                   {(badge) => <span class={badge().class}>{badge().text}</span>}
                 </Show>
                 <dl class="session-meta">

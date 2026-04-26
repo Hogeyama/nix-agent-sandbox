@@ -8,6 +8,7 @@
  */
 
 import type { SessionRow } from "../stores/types";
+import type { PendingCount } from "./sessionPendingSummary";
 
 export type SessionRowDisplay = {
   /** Class string for the leading status dot. */
@@ -17,26 +18,42 @@ export type SessionRowDisplay = {
 };
 
 /**
- * Maps a session's `turn` value to the dot/badge presentation tuple.
+ * Maps a session's `turn` value plus its outstanding pending counts to
+ * the dot/badge presentation tuple.
+ *
+ * Dot precedence mirrors the favicon lamp ladder
+ * (`pending > user-turn > agent-turn > idle`): when any approval is
+ * pending the dot switches to the rose `pending` variant regardless of
+ * the underlying turn, so the row visibly signals user intervention is
+ * needed. The badge still tracks the raw turn (Turn / Busy / none), so
+ * a pending agent-turn row reads as "rose dot + Busy badge" rather than
+ * collapsing the turn information.
  *
  * Unknown / unrecognized turn values fall through to the default state
  * (idle dot, no badge) rather than throwing, so the UI stays robust to
  * future server-side turn values.
  */
-export function describeSessionRow(row: SessionRow): SessionRowDisplay {
+export function describeSessionRow(
+  row: SessionRow,
+  pendingCount: PendingCount,
+): SessionRowDisplay {
+  const hasPending = pendingCount.network + pendingCount.hostexec > 0;
   switch (row.turn) {
     case "user-turn":
       return {
-        dotClass: "session-dot turn",
+        dotClass: hasPending ? "session-dot pending" : "session-dot turn",
         badge: { text: "Turn", class: "badge badge-turn" },
       };
     case "agent-turn":
       return {
-        dotClass: "session-dot busy",
+        dotClass: hasPending ? "session-dot pending" : "session-dot busy",
         badge: { text: "Busy", class: "badge badge-busy" },
       };
     default:
-      return { dotClass: "session-dot", badge: null };
+      return {
+        dotClass: hasPending ? "session-dot pending" : "session-dot",
+        badge: null,
+      };
   }
 }
 
