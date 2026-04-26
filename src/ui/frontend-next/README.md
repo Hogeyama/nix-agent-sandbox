@@ -37,3 +37,6 @@ this frontend (via `tsc -p src/ui/frontend-next/tsconfig.json`).
 - Client-side rendered only. There is no SSR or hydration path.
 - `tsconfig.json` sets `types: []` because this package never calls
   `Bun.*` APIs directly; the bundler is Bun, not the runtime.
+- The build inlines `@xterm/xterm/css/xterm.css` ahead of `src/styles.css`
+  so terminal panes render with xterm's base styles, overridable via the
+  app stylesheet.

@@ -80,7 +80,22 @@ async function buildOnce(): Promise<void> {
         "solidPlugin no longer forwarding CSS imports.",
     );
   }
-  let bundledCss = "";
+  // Prepend xterm's base stylesheet so terminal panes render correctly when
+  // mounted. Placing it first lets src/ui/frontend-next/src/styles.css
+  // override xterm defaults via standard CSS cascade.
+  const xtermCssPath = path.join(
+    ROOT,
+    "node_modules/@xterm/xterm/css/xterm.css",
+  );
+  let xtermCss: string;
+  try {
+    xtermCss = await readFile(xtermCssPath, "utf8");
+  } catch (e) {
+    throw new Error(
+      `xterm css not found at ${xtermCssPath}: ${(e as Error).message}`,
+    );
+  }
+  let bundledCss = xtermCss;
   for (const out of cssOutputs) {
     bundledCss += await readFile(out.path, "utf8");
   }
