@@ -19,7 +19,7 @@ export function App() {
     <div class="app">
       <Topbar connected={connected()} />
       <main class="workspace">
-        <SessionsPane />
+        <SessionsPane sessions={sessions.rows} />
         <TerminalPane />
         <PendingPane />
       </main>
