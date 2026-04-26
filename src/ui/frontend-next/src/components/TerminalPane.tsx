@@ -6,6 +6,7 @@ import {
   Show,
 } from "solid-js";
 import type { SessionsStore } from "../stores/sessionsStore";
+import { resolveContextAgentRow } from "../stores/shellMapping";
 import type { TerminalsStore } from "../stores/terminalsStore";
 import type { SessionRow } from "../stores/types";
 import {
@@ -57,6 +58,30 @@ type Props = {
    */
   onShellToggle: (row: SessionRow) => void | Promise<void>;
 };
+
+export interface TerminalToolbarContext {
+  contextAgentRow: SessionRow | null;
+  ackTargetSessionId: string | null;
+  activeTerminalId: string | null;
+}
+
+/**
+ * Describes the toolbar's current display context and action targets.
+ * Shell terminals keep the parent agent row for display and agent-scoped
+ * actions, while terminal-scoped actions continue to target the active
+ * terminal session id.
+ */
+export function describeTerminalToolbarContext(
+  activeTerminalId: string | null,
+  rows: readonly SessionRow[],
+): TerminalToolbarContext {
+  const contextAgentRow = resolveContextAgentRow(activeTerminalId, rows);
+  return {
+    contextAgentRow,
+    ackTargetSessionId: contextAgentRow?.id ?? null,
+    activeTerminalId,
+  };
+}
 
 /**
  * Center-pane terminal host with keep-alive semantics.
@@ -178,21 +203,20 @@ export function TerminalPane(props: Props) {
     }
   });
 
+  const activeTerminalId = createMemo(() => props.terminals.activeId());
   // The toolbar reads handles through a memo so it re-evaluates whenever
-  // the active session changes or the handles map mutates. `activeId` is a
-  // signal already, and `handlesVersion` is bumped on every mount/dispose
+  // the active terminal changes or the handles map mutates. `activeId` is
+  // a signal already, and `handlesVersion` is bumped on every mount/dispose
   // so a handle attached after the activeId change is also observable.
-  const activeHandle = createMemo<TerminalHandle | null>(() => {
+  const activeTerminalHandle = createMemo<TerminalHandle | null>(() => {
     handlesVersion();
-    const id = props.terminals.activeId();
+    const id = activeTerminalId();
     if (!id) return null;
     return handles.get(id)?.handle ?? null;
   });
-  const activeRow = createMemo(() => {
-    const id = props.terminals.activeId();
-    if (!id) return null;
-    return props.sessions.rows().find((r) => r.id === id) ?? null;
-  });
+  const toolbarContext = createMemo(() =>
+    describeTerminalToolbarContext(activeTerminalId(), props.sessions.rows()),
+  );
 
   return (
     <section class="pane pane-center">
@@ -211,8 +235,10 @@ export function TerminalPane(props: Props) {
         </Show>
       </div>
       <TerminalToolbar
-        activeRow={activeRow}
-        handle={activeHandle}
+        contextAgentRow={() => toolbarContext().contextAgentRow}
+        ackTargetSessionId={() => toolbarContext().ackTargetSessionId}
+        activeTerminalHandle={activeTerminalHandle}
+        activeTerminalId={() => toolbarContext().activeTerminalId}
         viewFor={(id) => props.terminals.getViewFor(id)}
         shellSpawnInFlight={(id) => props.terminals.isShellSpawnInFlight(id)}
         onAck={props.onAck}

@@ -3,8 +3,9 @@ import {
   describeShellToggle,
   findShellForAgent,
   reconcileViewState,
+  resolveContextAgentRow,
 } from "./shellMapping";
-import type { DtachSessionLike } from "./types";
+import type { DtachSessionLike, SessionRow } from "./types";
 
 function makeDtach(sessionId: string): DtachSessionLike {
   return {
@@ -14,6 +15,38 @@ function makeDtach(sessionId: string): DtachSessionLike {
     createdAt: 0,
   };
 }
+
+function makeRow(id: string): SessionRow {
+  return {
+    id,
+    shortId: `short-${id}`,
+    name: `name-${id}`,
+    containerName: `container-${id}`,
+    dir: null,
+    profile: null,
+    worktreeName: null,
+    baseBranch: null,
+    turn: null,
+    lastEventAt: null,
+    isAgent: true,
+  };
+}
+
+describe("resolveContextAgentRow", () => {
+  test("returns the active agent row when activeId is an agent session id", () => {
+    const row = makeRow("agent-A");
+    expect(resolveContextAgentRow("agent-A", [row])).toBe(row);
+  });
+
+  test("returns the parent agent row when activeId is a shell session id", () => {
+    const row = makeRow("agent-A");
+    expect(resolveContextAgentRow("shell-agent-A.2", [row])).toBe(row);
+  });
+
+  test("returns null when a shell session's parent row is absent", () => {
+    expect(resolveContextAgentRow("shell-agent-A.2", [])).toBeNull();
+  });
+});
 
 describe("findShellForAgent", () => {
   test("returns null when the dtach list is empty", () => {
@@ -54,28 +87,32 @@ describe("findShellForAgent", () => {
 });
 
 describe("describeShellToggle", () => {
-  test("agent view, idle: label Shell, enabled", () => {
+  test("agent view, idle: opens shell and shows AGENT badge", () => {
     expect(describeShellToggle("agent", false)).toEqual({
-      label: "Shell",
+      label: "Open shell",
       disabled: false,
+      currentBadge: "AGENT",
     });
   });
 
-  test("shell view, idle: label Agent, enabled", () => {
+  test("shell view, idle: returns to agent and shows SHELL badge", () => {
     expect(describeShellToggle("shell", false)).toEqual({
-      label: "Agent",
+      label: "Return to agent",
       disabled: false,
+      currentBadge: "SHELL",
     });
   });
 
-  test("in-flight spawn: label Spawning…, disabled regardless of current view", () => {
+  test("in-flight spawn: label Spawning…, disabled, badge fixed to AGENT", () => {
     expect(describeShellToggle("agent", true)).toEqual({
       label: "Spawning…",
       disabled: true,
+      currentBadge: "AGENT",
     });
     expect(describeShellToggle("shell", true)).toEqual({
       label: "Spawning…",
       disabled: true,
+      currentBadge: "AGENT",
     });
   });
 });

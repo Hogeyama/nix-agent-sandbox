@@ -642,6 +642,13 @@ body::after {
   font-size: 11px;
   letter-spacing: 0.06em;
 }
+.term-context .agent-shell-badge {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  font-variant: all-small-caps;
+  line-height: 1;
+}
 
 .tool {
   background: transparent;

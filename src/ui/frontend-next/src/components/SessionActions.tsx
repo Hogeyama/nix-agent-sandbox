@@ -22,8 +22,9 @@
  * Shell is a toggle: clicking it switches the center pane between the
  * agent terminal and the spawned shell. The label and disabled state
  * are derived from `describeShellToggle` so the button surfaces the
- * destination view ("Shell" while viewing the agent, "Agent" while
- * viewing the shell, "Spawning…" while a spawn request is in flight).
+ * destination view ("Open shell" while viewing the agent, "Return to
+ * agent" while viewing the shell, "Spawning…" while a spawn request is
+ * in flight).
  */
 
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";

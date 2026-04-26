@@ -17,19 +17,19 @@
  *     absorbed because the daemon returns 409 when the snapshot raced
  *     the ack; the next SSE push reconciles the state. All other errors
  *     surface in `aria-live="polite"` for 5 s.
- *   - Shell: the button label names the destination view ("Shell" while
- *     viewing the agent, "Agent" while viewing the shell). The click
- *     delegates to `onShellToggle`; the toolbar owns no shell state of
- *     its own. `shellSpawnInFlight` collapses the label to "Spawning…"
- *     and disables the button so a double-click cannot issue a second
- *     POST while the first is in flight.
+ *   - Shell: the button label names the destination view ("Open shell"
+ *     while viewing the agent, "Return to agent" while viewing the shell).
+ *     The click delegates to `onShellToggle`; the toolbar owns no shell
+ *     state of its own. `shellSpawnInFlight` collapses the label to
+ *     "Spawning…" and disables the button so a double-click cannot issue
+ *     a second POST while the first is in flight.
  *   - Kill clients: same in-flight pattern as Ack, no benign-status
  *     branch.
  *   - Font-size: a Toolbar-local signal clamped via `clampFontSize`.
  *     Persistence is intentionally out of scope for this layer.
- *   - Search: a session-scoped buffer. When the active session changes,
- *     the input collapses and the addon's decorations are cleared so
- *     the next session does not inherit the previous query's highlights.
+ *   - Search: a terminal-scoped buffer. When the active terminal changes,
+ *     the input collapses and the addon's decorations are cleared so the
+ *     next terminal does not inherit the previous query's highlights.
  */
 
 import {
@@ -52,18 +52,29 @@ import {
 } from "./terminalToolbarLogic";
 
 export interface TerminalToolbarProps {
-  activeRow: () => SessionRow | null;
-  handle: () => TerminalHandle | null;
+  contextAgentRow: () => SessionRow | null;
   /**
-   * Resolves the active row's recorded view position. Returns
-   * `undefined` when the user has not interacted with the toggle yet,
-   * in which case the button defaults to the "agent" branch.
+   * Session id for agent-scoped actions such as Ack. This stays pinned to
+   * the parent agent session while the user is viewing a shell terminal.
+   */
+  ackTargetSessionId: () => string | null;
+  activeTerminalHandle: () => TerminalHandle | null;
+  /**
+   * Session id of the terminal the user is viewing right now. This stays
+   * equal to the shell session id in shell view so terminal-scoped actions
+   * continue to target the visible terminal.
+   */
+  activeTerminalId: () => string | null;
+  /**
+   * Resolves the context agent row's recorded view position. Returns
+   * `undefined` when the user has not interacted with the toggle yet, in
+   * which case the button defaults to the "agent" branch.
    */
   viewFor: (sessionId: string) => ShellView | undefined;
   /**
-   * Reports whether a shell-spawn HTTP request is in flight for the
-   * active row. Drives the toolbar's Shell-toggle disabled state and
-   * its "Spawning…" label.
+   * Reports whether a shell-spawn HTTP request is in flight for the context
+   * agent row. Drives the toolbar's Shell-toggle disabled state and its
+   * "Spawning…" label.
    */
   shellSpawnInFlight: (sessionId: string) => boolean;
   onAck: (sessionId: string) => Promise<void>;
@@ -81,16 +92,16 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   const [searchOpen, setSearchOpen] = createSignal(false);
   const [searchQuery, setSearchQuery] = createSignal("");
 
-  // Reset the search affordance whenever the active session changes so a
+  // Reset the search affordance whenever the active terminal changes so a
   // query typed against one terminal does not survive into the next.
-  let lastSessionId: string | null = null;
+  let lastTerminalId: string | null = null;
   createEffect(() => {
-    const id = props.activeRow()?.id ?? null;
-    if (id === lastSessionId) return;
-    lastSessionId = id;
+    const id = props.activeTerminalId();
+    if (id === lastTerminalId) return;
+    lastTerminalId = id;
     setSearchOpen(false);
     setSearchQuery("");
-    props.handle()?.search.clear();
+    props.activeTerminalHandle()?.search.clear();
   });
 
   // Auto-clear surfaced errors after `ERROR_TIMEOUT_MS` so a transient
@@ -111,11 +122,11 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   });
 
   const ack = createMemo(() =>
-    describeAckButton(props.activeRow()?.turn ?? null, acking()),
+    describeAckButton(props.contextAgentRow()?.turn ?? null, acking()),
   );
 
   const shellToggle = createMemo(() => {
-    const row = props.activeRow();
+    const row = props.contextAgentRow();
     if (!row) return null;
     return describeShellToggle(
       props.viewFor(row.id) ?? "agent",
@@ -124,7 +135,7 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   });
 
   const handleShellToggleClick = async () => {
-    const row = props.activeRow();
+    const row = props.contextAgentRow();
     if (!row) return;
     const state = shellToggle();
     if (state === null || state.disabled) return;
@@ -136,11 +147,11 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   };
 
   const handleAck = async () => {
-    const row = props.activeRow();
-    if (!row || acking()) return;
+    const agentId = props.ackTargetSessionId();
+    if (agentId === null || acking()) return;
     setAcking(true);
     try {
-      await props.onAck(row.id);
+      await props.onAck(agentId);
     } catch (e) {
       // 409 means a stale snapshot raced the ack; the next SSE push
       // reconciles the turn state, so no UI surface is required.
@@ -153,11 +164,11 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   };
 
   const handleKillClients = async () => {
-    const row = props.activeRow();
-    if (!row || killing()) return;
+    const terminalId = props.activeTerminalId();
+    if (terminalId === null || killing()) return;
     setKilling(true);
     try {
-      await props.onKillClients(row.id);
+      await props.onKillClients(terminalId);
     } catch (e) {
       surfaceError(e instanceof Error ? e.message : "Failed to kill clients");
     } finally {
@@ -170,7 +181,7 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   const applyFontSize = (px: number) => {
     const clamped = clampFontSize(px);
     setFontSize(clamped);
-    props.handle()?.setFontSize(clamped);
+    props.activeTerminalHandle()?.setFontSize(clamped);
   };
   const handleFontInc = () => applyFontSize(fontSize() + FONT_SIZE_STEP);
   const handleFontDec = () => applyFontSize(fontSize() - FONT_SIZE_STEP);
@@ -179,11 +190,11 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
     if (e.key === "Escape") {
       setSearchOpen(false);
       setSearchQuery("");
-      props.handle()?.search.clear();
+      props.activeTerminalHandle()?.search.clear();
       return;
     }
     if (e.key !== "Enter") return;
-    const handle = props.handle();
+    const handle = props.activeTerminalHandle();
     if (!handle) return;
     const action = decideSearchSubmit(searchQuery(), e.shiftKey);
     if (action === "next") handle.search.findNext(searchQuery());
@@ -196,18 +207,19 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
     setSearchOpen(next);
     if (!next) {
       setSearchQuery("");
-      props.handle()?.search.clear();
+      props.activeTerminalHandle()?.search.clear();
     }
   };
 
   return (
     <footer class="term-toolbar">
-      <Show when={props.activeRow()}>
+      <Show when={props.contextAgentRow()}>
         {(row) => (
           <span class="term-context">
             <span class="dot" aria-hidden="true" />
             <span class="name">{row().name}</span>
             <span class="id-hint">{row().shortId}</span>
+            <span class="agent-shell-badge">{shellToggle()?.currentBadge}</span>
           </span>
         )}
       </Show>
@@ -228,7 +240,7 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
             class="tool"
             disabled={state().disabled}
             onClick={handleShellToggleClick}
-            aria-label={`Switch to ${state().label}`}
+            aria-label={state().label}
           >
             {state().label}
           </button>
@@ -276,7 +288,7 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
       <button
         type="button"
         class="tool danger"
-        disabled={killing() || props.activeRow() === null}
+        disabled={killing() || props.activeTerminalId() === null}
         onClick={handleKillClients}
       >
         Kill clients
