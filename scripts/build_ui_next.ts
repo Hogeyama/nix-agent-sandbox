@@ -141,12 +141,44 @@ async function buildOnce(): Promise<void> {
     );
   }
 
+  // Bundle third-party license texts so distributions (including the
+  // bun-compile + nix-bundle-elf binary) carry the notices required by
+  // OFL (Geist Mono) and MIT (xterm.js). Without these the woff2 files
+  // and inlined xterm.css would ship without their license terms.
+  const licenseDir = path.join(ASSETS_DIR, "licenses");
+  await mkdir(licenseDir, { recursive: true });
+  const licenseSources: Array<{ src: string; dst: string; label: string }> = [
+    {
+      src: path.join(
+        ROOT,
+        "node_modules/@fontsource-variable/geist-mono/LICENSE",
+      ),
+      dst: path.join(licenseDir, "Geist-OFL.txt"),
+      label: "geist-mono",
+    },
+    {
+      src: path.join(ROOT, "node_modules/@xterm/xterm/LICENSE"),
+      dst: path.join(licenseDir, "xterm-MIT.txt"),
+      label: "xterm",
+    },
+  ];
+  for (const { src, dst, label } of licenseSources) {
+    try {
+      await cp(src, dst);
+    } catch (e) {
+      throw new Error(
+        `${label} LICENSE not found at ${src}: ${(e as Error).message}`,
+      );
+    }
+  }
+
   const jsSize = (await stat(path.join(ASSETS_DIR, jsBasename))).size;
   console.log(`dist-next/index.html`);
   console.log(
     `dist-next/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`,
   );
   console.log(`dist-next/assets/fonts/  ${fontCount} woff2 file(s)`);
+  console.log(`dist-next/assets/licenses/  ${licenseSources.length} file(s)`);
 }
 
 await buildOnce();
