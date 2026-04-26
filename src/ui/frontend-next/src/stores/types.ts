@@ -19,6 +19,12 @@ export type ContainerInfoLike = {
   sessionProfile?: string | null;
   worktree?: { name: string; baseBranch: string } | null;
   lastEventAt?: string | null;
+  // ISO-8601 timestamp at which the container was started, or `null`
+  // when the daemon does not (yet) know. The Sidecars settings page
+  // reads this to render an uptime column; the sessions normalizer
+  // ignores the field, so making it optional adds no regression to
+  // any consumer that does not opt in.
+  startedAt?: string | null;
 };
 
 export type NetworkPendingItemLike = {

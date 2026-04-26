@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, mock, test } from "bun:test";
+import type { SidecarRow } from "../components/settings/sidecarRowView";
 import type { AuditStore } from "../stores/auditStore";
 import type { PendingActionStore } from "../stores/pendingActionStore";
 import { pendingRequestKey } from "../stores/pendingRequestKey";
@@ -19,6 +20,7 @@ import type {
   PendingStore,
 } from "../stores/pendingStore";
 import type { SessionsStore } from "../stores/sessionsStore";
+import type { SidecarsStore } from "../stores/sidecarsStore";
 import type { TerminalsStore } from "../stores/terminalsStore";
 import type {
   AuditLogEntryLike,
@@ -32,6 +34,7 @@ import { createSseDispatch, SSE_EVENT_NAMES } from "./createSseDispatch";
 
 interface FakeStores {
   sessions: SessionsStore & { setSessions: ReturnType<typeof mock> };
+  sidecars: SidecarsStore & { setSidecars: ReturnType<typeof mock> };
   pending: PendingStore & {
     setNetwork: ReturnType<typeof mock>;
     setHostExec: ReturnType<typeof mock>;
@@ -49,6 +52,10 @@ function makeFakeStores(): FakeStores {
   const sessions: FakeStores["sessions"] = {
     rows: () => [] as SessionRow[],
     setSessions: mock((_items: ContainerInfoLike[]) => {}),
+  };
+  const sidecars: FakeStores["sidecars"] = {
+    rows: () => [] as SidecarRow[],
+    setSidecars: mock((_items: ContainerInfoLike[]) => {}),
   };
   const pending: FakeStores["pending"] = {
     network: () => [] as NetworkPendingRow[],
@@ -83,11 +90,15 @@ function makeFakeStores(): FakeStores {
     entries: () => [],
     setEntries: mock((_items: AuditLogEntryLike[]) => {}),
   };
-  return { sessions, pending, pendingAction, terminals, audit };
+  return { sessions, sidecars, pending, pendingAction, terminals, audit };
 }
 
 describe("createSseDispatch", () => {
-  test("'containers' with valid envelope routes to sessions.setSessions", () => {
+  test("'containers' with valid envelope fans out to both sessions.setSessions and sidecars.setSidecars", () => {
+    // Pin the fan-out contract: every `containers` snapshot is handed
+    // unchanged to both stores. Each store filters by `nas.kind`, so
+    // the views are disjoint by construction; the dispatch layer must
+    // never make the kind decision on the stores' behalf.
     const stores = makeFakeStores();
     const dispatch = createSseDispatch(stores);
 
@@ -98,10 +109,59 @@ describe("createSseDispatch", () => {
 
     expect(stores.sessions.setSessions).toHaveBeenCalledTimes(1);
     expect(stores.sessions.setSessions).toHaveBeenCalledWith(items);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledTimes(1);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledWith(items);
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
     expect(stores.audit.setEntries).not.toHaveBeenCalled();
+  });
+
+  test("'containers' with a sidecar-only payload still calls both setters with the same array", () => {
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+
+    const items: ContainerInfoLike[] = [
+      { name: "dind-1", running: true, labels: { "nas.kind": "dind" } },
+      { name: "proxy-1", running: true, labels: { "nas.kind": "proxy" } },
+    ];
+    dispatch("containers", { items });
+
+    expect(stores.sessions.setSessions).toHaveBeenCalledTimes(1);
+    expect(stores.sessions.setSessions).toHaveBeenCalledWith(items);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledTimes(1);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledWith(items);
+  });
+
+  test("'containers' with a mixed payload calls both setters with the full array", () => {
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+
+    const items: ContainerInfoLike[] = [
+      { name: "agent-1", running: true, labels: { "nas.kind": "agent" } },
+      { name: "dind-1", running: true, labels: { "nas.kind": "dind" } },
+    ];
+    dispatch("containers", { items });
+
+    expect(stores.sessions.setSessions).toHaveBeenCalledTimes(1);
+    expect(stores.sessions.setSessions).toHaveBeenCalledWith(items);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledTimes(1);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledWith(items);
+  });
+
+  test("'containers' with an empty array still calls both setters so each store can clear", () => {
+    // Symmetric to the pending and audit empty-snapshot cases: an
+    // empty `containers` snapshot must hit both setters so an emptied
+    // view is rendered as empty rather than holding stale rows.
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+
+    dispatch("containers", { items: [] });
+
+    expect(stores.sessions.setSessions).toHaveBeenCalledTimes(1);
+    expect(stores.sessions.setSessions).toHaveBeenCalledWith([]);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledTimes(1);
+    expect(stores.sidecars.setSidecars).toHaveBeenCalledWith([]);
   });
 
   test("'network:pending' with valid envelope routes to pending.setNetwork and reconciles pendingAction", () => {
@@ -132,6 +192,7 @@ describe("createSseDispatch", () => {
       pendingRequestKey("network", "s2", "r2"),
     ]);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.sidecars.setSidecars).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.audit.setEntries).not.toHaveBeenCalled();
   });
@@ -158,6 +219,7 @@ describe("createSseDispatch", () => {
       pendingRequestKey("hostexec", "s1", "x1"),
     ]);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.sidecars.setSidecars).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.audit.setEntries).not.toHaveBeenCalled();
   });
@@ -179,6 +241,7 @@ describe("createSseDispatch", () => {
     expect(stores.terminals.setDtachSessions).toHaveBeenCalledTimes(1);
     expect(stores.terminals.setDtachSessions).toHaveBeenCalledWith(items);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.sidecars.setSidecars).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
@@ -212,6 +275,7 @@ describe("createSseDispatch", () => {
     dispatch("audit:logs", { items: "not-an-array" });
 
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.sidecars.setSidecars).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
@@ -239,6 +303,7 @@ describe("createSseDispatch", () => {
     dispatch("", { items: [] });
 
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.sidecars.setSidecars).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
@@ -266,6 +331,7 @@ describe("createSseDispatch", () => {
     expect(stores.audit.setEntries).toHaveBeenCalledTimes(1);
     expect(stores.audit.setEntries).toHaveBeenCalledWith(items);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.sidecars.setSidecars).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();

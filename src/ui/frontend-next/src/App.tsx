@@ -5,6 +5,7 @@ import {
   killTerminalClients,
   renameSession,
   startShell,
+  stopContainer,
 } from "./api/client";
 import { getWsToken } from "./api/wsToken";
 import { PaneResizer } from "./components/PaneResizer";
@@ -28,6 +29,7 @@ import { createPendingActionStore } from "./stores/pendingActionStore";
 import { createPendingStore } from "./stores/pendingStore";
 import { createSessionsStore } from "./stores/sessionsStore";
 import { findShellForAgent } from "./stores/shellMapping";
+import { createSidecarsStore } from "./stores/sidecarsStore";
 import { createTerminalsStore } from "./stores/terminalsStore";
 import type { SessionRow } from "./stores/types";
 import { createUiStore } from "./stores/uiStore";
@@ -40,6 +42,7 @@ const RESIZER_PX = 4;
 
 export function App() {
   const sessions = createSessionsStore();
+  const sidecars = createSidecarsStore();
   const pending = createPendingStore();
   const pendingAction = createPendingActionStore();
   const terminals = createTerminalsStore();
@@ -54,6 +57,7 @@ export function App() {
   });
   const dispatch = createSseDispatch({
     sessions,
+    sidecars,
     pending,
     pendingAction,
     terminals,
@@ -246,7 +250,12 @@ export function App() {
           accessor reads the active settings page; while the route is
           the workspace it falls back to the default page so the shell
           still has a valid props value while it is hidden. */}
-      <SettingsShell page={settingsPage()} hidden={!isSettingsRoute()} />
+      <SettingsShell
+        page={settingsPage()}
+        hidden={!isSettingsRoute()}
+        sidecars={sidecars.rows}
+        onStop={(name) => stopContainer(name)}
+      />
       <StatusBar />
       <NewSessionDialog
         open={dialogOpen}

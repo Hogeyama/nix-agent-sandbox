@@ -849,10 +849,113 @@ body::after {
   color: var(--cream);
 }
 .settings-page-note {
-  margin: 0;
+  margin: 0 0 18px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0.02em;
+}
+
+/* Sidecars settings page: a small status table with one Stop action
+ * per row. The row dot mirrors the live/offline indicator on the topbar;
+ * the action button reuses the .tool typography so it sits flush with
+ * the rest of the settings palette. */
+.sidecars-empty {
+  margin: 8px 0;
+  padding: 14px;
+  border: 1px dashed var(--line);
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted-2);
+  letter-spacing: 0.06em;
+}
+.sidecars-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--cream-dim);
+}
+.sidecars-table thead th {
+  text-align: left;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sidecars-row td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+.sidecars-name {
+  color: var(--cream);
+  font-weight: 500;
+}
+.sidecars-kind {
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.sidecars-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidecars-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted-2);
+}
+.sidecars-status-dot.running {
+  background: var(--teal);
+  box-shadow: 0 0 6px rgba(94, 234, 212, 0.5);
+}
+.sidecars-status-dot.stopped {
+  background: var(--muted-2);
+}
+.sidecars-uptime {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.sidecars-actions-col {
+  text-align: right;
+  width: 1%;
+  white-space: nowrap;
+}
+.sidecars-action {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--cream-dim);
+  padding: 4px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background-color 0.15s;
+}
+.sidecars-action:hover:not(:disabled) {
+  color: var(--rose);
+  border-color: rgba(244, 63, 94, 0.5);
+  background: rgba(244, 63, 94, 0.08);
+}
+.sidecars-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sidecars-row-error td.sidecars-error {
+  padding: 4px 12px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--rose);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  word-break: break-word;
 }
 
 /* statusbar */

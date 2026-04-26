@@ -13,6 +13,8 @@
 
 import { Match, Switch } from "solid-js";
 import type { SettingsPage } from "../../routes/router";
+import { SidecarsPage } from "./SidecarsPage";
+import type { SidecarRow } from "./sidecarRowView";
 
 interface SettingsShellProps {
   page: SettingsPage;
@@ -23,6 +25,14 @@ interface SettingsShellProps {
    * the workspace.
    */
   hidden?: boolean;
+  /** Sidecar rows for the `#/settings/sidecars` page. */
+  sidecars: () => SidecarRow[];
+  /**
+   * Stop the named container. Forwarded verbatim to `SidecarsPage`,
+   * which catches errors and renders them per-row; the shell never
+   * inspects the result.
+   */
+  onStop: (name: string) => Promise<unknown>;
 }
 
 interface NavLink {
@@ -59,10 +69,7 @@ export function SettingsShell(props: SettingsShellProps) {
       <div class="settings-content">
         <Switch>
           <Match when={props.page === "sidecars"}>
-            <SettingsPageIntro
-              heading="Sidecars"
-              note="Manage sidecar containers and their lifecycle."
-            />
+            <SidecarsPage sidecars={props.sidecars} onStop={props.onStop} />
           </Match>
           <Match when={props.page === "audit"}>
             <SettingsPageIntro

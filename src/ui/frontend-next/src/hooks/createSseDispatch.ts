@@ -30,6 +30,7 @@ import type { PendingActionStore } from "../stores/pendingActionStore";
 import { pendingRequestKey } from "../stores/pendingRequestKey";
 import type { PendingStore } from "../stores/pendingStore";
 import type { SessionsStore } from "../stores/sessionsStore";
+import type { SidecarsStore } from "../stores/sidecarsStore";
 import type { TerminalsStore } from "../stores/terminalsStore";
 import type {
   AuditLogEntryLike,
@@ -41,6 +42,7 @@ import type {
 
 export interface SseDispatchStores {
   sessions: SessionsStore;
+  sidecars: SidecarsStore;
   pending: PendingStore;
   pendingAction: PendingActionStore;
   terminals: TerminalsStore;
@@ -73,7 +75,15 @@ export function createSseDispatch(stores: SseDispatchStores): SseDispatch {
     switch (name) {
       case "containers": {
         const items = extractItems<ContainerInfoLike>(data);
-        if (items !== null) stores.sessions.setSessions(items);
+        if (items === null) return;
+        // The `containers` snapshot mixes session (agent-kind) and
+        // sidecar (dind / proxy / envoy) entries. Each store filters
+        // by kind, so the two views are disjoint by construction.
+        // Both setters are called on every snapshot — including the
+        // empty array — so a snapshot that has lost all entries of
+        // one kind correctly clears the corresponding store.
+        stores.sessions.setSessions(items);
+        stores.sidecars.setSidecars(items);
         return;
       }
       case "network:pending": {
