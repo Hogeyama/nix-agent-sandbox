@@ -5,7 +5,7 @@
 設計 (不変条件): `docs/ui-redesign.md`
 進捗 (生きた状態): 本ファイル
 
-最終更新: 2026-04-26 / P2 完了時点
+最終更新: 2026-04-26 / P3 完了時点
 
 ---
 
@@ -16,7 +16,7 @@
 | P0 セットアップ + topbar + SSE dot | ✅ done | topbar + SSE dot が live 表示 |
 | P1 Sessions / Pending pane (読み取り) | ✅ done | 既存 API から一覧が出る |
 | P2 NewSessionDialog + 自動 attach | ✅ done | launch → 入力できる |
-| P3 セッション切替 + Detach/Stop/Rename + Shell + drag-resize | ☐ todo | 痛点 (a)(b)(c) 解決 |
+| P3 セッション切替 + Rename + Shell + drag-resize | ✅ done | 痛点 (a)(b)(c) 解決 |
 | P4 Pending Approve/Deny + Audit accordion | ☐ todo | Pending 業務完結 |
 | P5 Settings (Sidecars / Audit / Keybinds / Prefs) | ☐ todo | 機能パリティ |
 | P6 Keyboard shortcuts + focus trap + a11y | ☐ todo | 完了 |
@@ -62,6 +62,25 @@
 
 検証状態: `bun run check` clean / `bun test src/ui/frontend-next/` 132 pass / 0 fail (251 expect, 14 files) / `bun run build-ui-next` success (387.84 kB main.js) / `bun test src/` 1554 pass / 7 skip / 0 fail (regression なし)
 
+### P3 (2026-04-26, landing order)
+
+| hash | message |
+|------|---------|
+| `7312172` | feat(ui-next): expose containerName and lastEventAt on SessionRow |
+| `7921608` | feat(ui-next): add HttpError, ackSessionTurn, renameSession, stopContainer, startShell to api client |
+| `1248f01` | feat(ui-next): wire row click to selectSession with closest-check guard |
+| `793b10c` | feat(ui-next): keep-alive terminal handles via reconcileTerminals reducer |
+| `79cfdde` | feat(ui-next): drag-resize panes with uiStore-backed widths and right-pane collapse |
+| `b760538` | feat(ui-next): center-pane Toolbar with ack, search, font-size, kill-clients |
+| `b0b840b` | feat(ui-next): inline session row actions stop, rename, shell with optimistic state |
+| `341657d` | feat(ui-next): shell toggle and per-session view restore via terminalsStore.viewBySession |
+| `d2d9ff4` | refactor(ui-next): inline validateName into editableSessionNameLogic |
+| `64cfa7a` | refactor(ui-next): clarify shell toggle toolbar state |
+| `ce10aa4` | feat(ui-next): add renderIdle slot for toolbar rename |
+| `8b31557` | refactor(ui-next): switch SessionsPane rename to title triggers |
+
+検証状態: 各 commit で `bun run check` clean / `bun test src/ui/frontend-next/` pass / `bun run build-ui-next` success
+
 レビュー差し戻し: Commit 2 (design + test-coverage) / Commit 5 (design 4 + error-handling 1 + test-coverage 3) / Commit 6 (design 2) / Commit 7 (tombstone 1 + design 3)。いずれも 1 iteration で approve。Commit 4 で URL spec の typo を implementer が検出 (orchestrator 修正後に再投入)。Commit 7 は biome a11y (`useKeyWithClickEvents`) を pre-commit hook で捕捉、`stopPropagation` を `e.target === e.currentTarget` パターンに置換して解消。
 
 ---
@@ -83,7 +102,8 @@ NAS_UI_NEXT=1 bun run dev -- ui --port 3939 --no-open
 - P0 動作確認: topbar の LIVE dot が teal で `breathe` アニメーション。daemon kill → 5s 後 offline (muted dot) → 再起動で即 live 復帰
 - P1 動作確認: 起動直後は左 `No sessions` / 右 `Network · out 00` `Host exec · cmd 00` の空表示。`nas <profile>` で agent 起動すると左 pane に行が追加され、turn 値で dot/badge が切り替わる (`user-turn` → amber pulse + `Turn` バッジ / `agent-turn` → teal dim + `Busy` バッジ)。allowlist 外 curl や hostexec 必要な操作で右 pane にカードが追加、相対時刻が 1 秒ごとに更新される。Approve/Deny/scope ボタンは `disabled` で無反応 (read-only 仕様)
 - P2 動作確認: 中央 pane は initial state で `Launch a session to attach a terminal` の placeholder。Topbar の `+ new session` をクリックすると dialog が開き、profile / cwd / worktree (none/main/current/custom) / sessionName を入力できる。cwd を切替えると `Loading branches...` を経て worktree 選択肢が更新される。Launch を押すと dialog が閉じ、左 pane に行が追加され、数秒以内に中央 pane で xterm が立ち上がりプロンプトが表示・入力可能になる (= 自動 attach)。launch validation エラー (profile 空など) では dialog 内に赤字でメッセージが出て dialog は閉じない。submit 中は Cancel / Esc / backdrop click のいずれも無視される (`tryClose` が `submitting()` でガード)。daemon を kill すると 5s 後に Topbar が offline になり、xterm 側に Disconnected エラーが出る
-- 既知の未実装 (P3): 行クリックでセッション切替なし (P2 中は単一 active session 前提) / Detach / Stop / Rename / Shell ボタン未配線 / 中央 pane Toolbar (Ack turn / Search / font-size / Kill clients) 未実装 / pane drag-resize なし / 右 pane 折りたたみ無効 (collapse ボタン disabled)
+- P3 動作確認: 左 pane の row click で中央 pane の terminal が切り替わり、行き来しても scrollback が残る。Toolbar context は `AGENT` / `SHELL` バッジと `Open shell` / `Return to agent` / `Spawning…` を切り替える。手動確認スコープは rename の未テスト DOM 経路に絞る: (1) SessionsPane title の double-click が inline edit を開き、Enter で確定し、Esc で破棄する (2) Toolbar context name の double-click が同じ edit 経路を開き、Enter で確定し、Esc で破棄する (3) 保存中に別 row へ切り替えても edit 状態が漏れない
+- 既知の未実装 (P4): Pending Approve/Deny / scope selector / Audit アコーディオンは未配線。右 pane は read-only 表示のまま
 
 ---
 
@@ -173,31 +193,24 @@ src/ui/
 
 ---
 
-## 次セッションで P3 に着手する手順
+## 次セッションで P4 に着手する手順
 
-**P3 完了条件**: セッション切替 + Detach/Stop/Rename + Shell + drag-resize。痛点 (a)(b)(c) (auto attach 未対応 / Pending と Terminal 並行観察不能 / × ボタン用語混乱) を解消する。P2 で auto attach は完成しているので、痛点 (a) は実質既に解決済み。残る (b)(c) と並行操作系を P3 で実装する。
+**P4 完了条件**: Pending pane で Approve/Deny と scope selector が完結し、Audit アコーディオンで直近ログを確認できる。
 
 ### 作業の流れ (planner 投入時の参考)
 
-1. **行クリックでセッション切替**
-   - `SessionsPane` の `<li>` に `onClick={() => terminals.setActive(row.sessionId)}` を配線
-   - `terminalsStore.setActive` は P2 Commit 2 で API surface を確保済み (破壊変更なし)
-   - `TerminalPane` の `createEffect` が prevId/nextId 差分で remount するロジックも P2 で済んでいる
-2. **keep-alive (裏側 WS 維持)**
-   - 現状: `activeId` が切り替わると古い handle を `dispose()` → 裏で WS が落ちる
-   - P3 設計: `TerminalPane` 内に `Map<sessionId, TerminalHandle>` を持ち、`activeId` ごとに `display: none` で表示切替。dispose は session 自体が消えたとき (`terminalsStore.dtachSessions` から落ちたとき) のみ
-   - `attachTerminalSession` の DI seam はそのまま使える
-3. **中央 pane Toolbar 実装** (`docs/ui-redesign.md` §6.3)
-   - `Ack turn` / `Shell` (agent ⇄ shell トグル) / `Search` / font-size / `Kill clients`
-   - `attachTerminalSession` の `TerminalHandle` には `setFontSize` / `refit` が既にある。`Search` は xterm の SearchAddon 経由
-   - `api/client.ts` に `ackSessionTurn` / `startShell` / `killTerminalClients` (一部済) / `renameSession` / `stopContainer` を追加
-4. **行内アクション (Stop / Rename / Shell)**
-   - `SessionsPane` 行右側の hover アクション (旧 UI と同等)。`EditableSessionName` 相当を Solid 化
-5. **pane drag-resize** (`docs/ui-redesign.md` §6.1)
-   - 左右 pane と中央の境界に drag handle。`uiStore` (新規) に幅を保持し localStorage 永続化、最小幅 200/240px
-   - 右 pane 折りたたみ (Ctrl+Shift+])
-6. **shell トグル** (§6.3 「Shell 起動 — 中央 pane トグル」)
-   - 1 container = 1 shell の制約。session 切替時は最後の view (agent / shell) を復元
+1. **Pending Approve/Deny の配線**
+   - Network / HostExec の approve / deny API を右 pane から呼び出す
+   - busy / error 表示はカード単位で閉じる
+2. **scope selector の状態管理**
+   - Pending card ごとの選択値を UI state に寄せる
+   - SSE 更新後も requestId 単位で選択を維持するかどうかを helper で固定する
+3. **Audit アコーディオン**
+   - right pane 下段に default closed のアコーディオンを置く
+   - 直近ログの取得と再描画を Pending と干渉させない
+4. **手動確認**
+   - Approve / Deny 後に Pending からカードが消え、Audit に decision が出ることを確認する
+   - accordion 開閉が terminal 操作と干渉しないことを確認する
 
 ### `/implement-with-review` skill で進める場合のメモ
 
@@ -205,7 +218,7 @@ src/ui/
 - scope 外: `src/ui/frontend/`, `scripts/build_ui.ts`, `flake.nix` (P7 まで不変)
 - review-config: `error-handling` / `security` / `design` / `tombstone-comments` / `test-coverage` がいずれも `no_findings` (warning でも差し戻し)
 - 旧 frontend からの複製 (`terminalInput.ts` / `terminalSize.ts` / `api.ts` 一部) は P7 で旧 UI 削除と同時に解消する。P3 で新 API を足すときも同じ規約で複製しつつ、各 commit message に DRY 例外を明記
-- a11y: P2 で `useKeyWithClickEvents` を `e.target === e.currentTarget` パターンで回避した。P3 で行クリックを追加する際も biome rule への対応が必要 — `<button>` 化するか、suppression + 妥当な keyboard alternative を用意する
+- a11y: P2 で `useKeyWithClickEvents` を `e.target === e.currentTarget` パターンで回避している。P4 でも button semantics を優先し、click handler を載せる要素の keyboard alternative を欠かさない
 
 ---
 
@@ -213,8 +226,6 @@ src/ui/
 
 - **routes 設計** (`docs/ui-redesign.md` §7): `#/settings/...` の hash routing か `@solidjs/router` か未決。**判断期限: P5 着手前**
 - **キーボードショートカットの上書き**: `docs/ui-redesign.md` §8 末尾 "Settings で上書き可（将来）" は P6 以降の判断事項
-- **行クリックでセッション切替**: P2 完了時点で `terminalsStore.setActive` API は確保済み、`SessionsPane` の `<li>` には listener 未配線。**判断期限: P3 着手時**
-- **キーボード操作の代替** (a11y): P2 の dialog overlay は `e.target === e.currentTarget` で backdrop click を判定し、biome の `useKeyWithClickEvents` を回避したが、行クリックでセッション切替を入れる P3 では `<li>` に keyboard alternative (Enter / Space) を持たせるか、`<button>` 化する判断が必要
 
 ---
 
@@ -256,6 +267,15 @@ src/ui/
 - **dialog の Esc / backdrop / Cancel が `submitting()` を bypass** → Cancel button だけ disabled でも、Esc / backdrop click は in-flight submit を中断できてしまう。Commit 7 で `tryClose` ヘルパーに集約
 - **biome `useKeyWithClickEvents` が dialog 内側 div の `onClick={(e) => e.stopPropagation()}` を blocking** → `e.target === e.currentTarget` チェックを overlay 側に集約することで、内側 div から `onClick` を完全に除去。a11y rule への自然な対応として推奨パターン
 - **plan の URL spec typo を implementer が検出** → `killTerminalClients` の URL を `/api/terminal/sessions/{id}/kill-clients` と書いていたが正しくは `/api/terminal/{id}/kill-clients`。implementer が `src/ui/routes/api.ts` と旧 `api.ts` の double-check で blocked を返したのが正解。orchestrator は plan を盲信させないこと
+
+---
+
+## P3 で踏んだ罠と回避策 (再発防止メモ)
+
+- **shell view の Toolbar context は agent row と active terminal id を分けて持つ必要がある** → `describeTerminalToolbarContext` が `contextAgentRow` と `ackTargetSessionId` を parent agent session に固定し、`activeTerminalId` は表示中 terminal の id を保つ。これで Ack / rename は agent 側を向き、Search / Kill clients は表示中 terminal 側を向く
+- **`shellSpawnInFlight` の in-flight 表示は AGENT に固定する必要がある** → `describeShellToggle` の anchor コメントが `in-flight = AGENT` 契約を守る。spawn 中でも表示先は agent terminal のままなので badge は AGENT を保つ
+- **Toolbar rename と SessionsPane rename は同じ start 経路に揃える必要がある** → 両方の dblclick は `renderIdle` slot から start action を呼ぶ。`<input>` と `.rename-edit` wrapper は入力イベントを `stopPropagation` で隔離し、row selection や toolbar click へ漏らさない
+- **`renderIdle` の DOM 経路は reducer test だけでは固定できない** → 手動確認で rename の未テスト DOM 経路を押さえる。手順: (1) Toolbar context の session 名を dblclick して inline edit を開き、入力して Enter で確定する (2) SessionsPane の session 名でも同じ手順を通し、Esc で破棄する (3) 保存中に別 row へ切り替えても edit 状態が漏れないことを確認する
 
 ---
 
