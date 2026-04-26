@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
 import * as client from "./api/client";
 import {
   ackSessionTurn,
@@ -13,6 +13,7 @@ import { SessionsPane } from "./components/SessionsPane";
 import { StatusBar } from "./components/StatusBar";
 import { maxLamp } from "./components/sessionLamp";
 import { summarizePendingBySession } from "./components/sessionPendingSummary";
+import { SettingsShell } from "./components/settings/SettingsShell";
 import { TerminalPane } from "./components/TerminalPane";
 import { Topbar } from "./components/Topbar";
 import { NewSessionDialog } from "./dialogs/NewSessionDialog";
@@ -21,6 +22,7 @@ import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
 import { useConnection } from "./hooks/useConnection";
 import { useFaviconBadge } from "./hooks/useFaviconBadge";
 import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
+import { createRouter } from "./routes/router";
 import { createAuditStore } from "./stores/auditStore";
 import { createPendingActionStore } from "./stores/pendingActionStore";
 import { createPendingStore } from "./stores/pendingStore";
@@ -62,6 +64,50 @@ export function App() {
   });
   const [dialogOpen, setDialogOpen] = createSignal(false);
   useGlobalKeyboard({ onToggleRightCollapse: ui.toggleRightCollapsed });
+
+  // Routing: parse `window.location.hash` into a `Route`. The router
+  // is instantiated once for the lifetime of `App` so the hashchange
+  // listener is shared across re-renders. Workspace and SettingsShell
+  // both stay mounted at all times — we toggle `display: none` on the
+  // hidden side instead. Unmounting the workspace would tear down
+  // every xterm instance and its dtach WebSocket on every gear click,
+  // which is exactly the lifecycle this design is built to avoid.
+  const router = createRouter();
+
+  // Refit trigger for the active terminal. When `display: none` hides
+  // the workspace while the Settings shell is open, xterm's fit addon
+  // measures a 0x0 viewport and stores garbage dimensions. Bumping
+  // this counter on the workspace return causes `TerminalPane` to
+  // schedule a refit on the next animation frame, after layout has
+  // settled and the viewport reports its real size again.
+  const [terminalRefitTrigger, setTerminalRefitTrigger] = createSignal(0);
+
+  // When the route transitions back to the workspace, request a refit
+  // so any terminal that was hidden through `display: none` recovers
+  // its real viewport dimensions. `on(..., { defer: true })` skips
+  // the initial run so the trigger does not fire on first paint, when
+  // the show action's own rAF refit already covers the active terminal.
+  createEffect(
+    on(
+      () => router.route().kind,
+      (kind) => {
+        if (kind === "workspace") {
+          setTerminalRefitTrigger((n) => n + 1);
+        }
+      },
+      { defer: true },
+    ),
+  );
+
+  const isSettingsRoute = () => router.route().kind === "settings";
+  // While the route is the workspace, the SettingsShell is hidden via
+  // `display: none`; its `page` prop still needs a valid value, so we
+  // pin it to the default page until the user navigates back into
+  // Settings and the route resolves to a real `SettingsPage`.
+  const settingsPage = () => {
+    const route = router.route();
+    return route.kind === "settings" ? route.page : "sidecars";
+  };
 
   // Per-session pending counts, derived once per pending-store change so
   // every SessionsPane row reads from the same memo instead of re-folding
@@ -135,6 +181,7 @@ export function App() {
       />
       <main
         class="workspace"
+        classList={{ "workspace-hidden": isSettingsRoute() }}
         style={{ "grid-template-columns": gridTemplateColumns() }}
       >
         <SessionsPane
@@ -165,6 +212,7 @@ export function App() {
             await renameSession(sessionId, name);
           }}
           onShellToggle={handleShellToggle}
+          refitTrigger={terminalRefitTrigger}
         />
         {/* The right resizer is unmounted while collapsed so that the
             workspace grid track count matches the children count. The
@@ -192,6 +240,13 @@ export function App() {
           auditEntries={audit.entries}
         />
       </main>
+      {/* SettingsShell stays mounted alongside the workspace and toggles
+          via `display: none` so its child state survives route changes
+          the same way the workspace's xterm instances do. The `page`
+          accessor reads the active settings page; while the route is
+          the workspace it falls back to the default page so the shell
+          still has a valid props value while it is hidden. */}
+      <SettingsShell page={settingsPage()} hidden={!isSettingsRoute()} />
       <StatusBar />
       <NewSessionDialog
         open={dialogOpen}

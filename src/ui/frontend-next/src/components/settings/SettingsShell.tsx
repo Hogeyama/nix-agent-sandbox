@@ -1,0 +1,103 @@
+/**
+ * Settings shell: two-column layout that hosts every `#/settings/*` page.
+ *
+ * The left column is a navigation rail of anchor links pointing at the
+ * four settings hashes. Anchors (rather than buttons) are used so the
+ * browser handles back/forward natively and so middle-click / open in
+ * new tab keep working without component-level handlers.
+ *
+ * The right column renders a page-specific component selected by the
+ * `page` prop. The shell itself owns layout and navigation only; each
+ * page component is responsible for its own data fetching and state.
+ */
+
+import { Match, Switch } from "solid-js";
+import type { SettingsPage } from "../../routes/router";
+
+interface SettingsShellProps {
+  page: SettingsPage;
+  /**
+   * When true, the shell renders with `display: none` so it stays
+   * mounted while the workspace is the active route. Keeping the
+   * shell mounted lets per-page state survive a round-trip through
+   * the workspace.
+   */
+  hidden?: boolean;
+}
+
+interface NavLink {
+  page: SettingsPage;
+  hash: string;
+  label: string;
+}
+
+const NAV_LINKS: readonly NavLink[] = [
+  { page: "sidecars", hash: "#/settings/sidecars", label: "Sidecars" },
+  { page: "audit", hash: "#/settings/audit", label: "Audit" },
+  { page: "keybinds", hash: "#/settings/keybinds", label: "Keybinds" },
+  { page: "prefs", hash: "#/settings/prefs", label: "Preferences" },
+];
+
+export function SettingsShell(props: SettingsShellProps) {
+  return (
+    <section
+      class="settings-shell"
+      classList={{ "settings-shell-hidden": props.hidden === true }}
+      aria-label="Settings"
+    >
+      <nav class="settings-nav" aria-label="Settings sections">
+        {NAV_LINKS.map((link) => (
+          <a
+            href={link.hash}
+            class="settings-nav-link"
+            aria-current={props.page === link.page ? "page" : undefined}
+          >
+            {link.label}
+          </a>
+        ))}
+      </nav>
+      <div class="settings-content">
+        <Switch>
+          <Match when={props.page === "sidecars"}>
+            <SettingsPageIntro
+              heading="Sidecars"
+              note="Manage sidecar containers and their lifecycle."
+            />
+          </Match>
+          <Match when={props.page === "audit"}>
+            <SettingsPageIntro
+              heading="Audit"
+              note="Browse the durable audit log of approvals and denials."
+            />
+          </Match>
+          <Match when={props.page === "keybinds"}>
+            <SettingsPageIntro
+              heading="Keybinds"
+              note="Inspect the keyboard shortcuts the control room responds to."
+            />
+          </Match>
+          <Match when={props.page === "prefs"}>
+            <SettingsPageIntro
+              heading="Preferences"
+              note="Adjust per-user UI preferences such as font size and pane layout."
+            />
+          </Match>
+        </Switch>
+      </div>
+    </section>
+  );
+}
+
+interface IntroProps {
+  heading: string;
+  note: string;
+}
+
+function SettingsPageIntro(props: IntroProps) {
+  return (
+    <div>
+      <h1 class="settings-page-heading">{props.heading}</h1>
+      <p class="settings-page-note">{props.note}</p>
+    </div>
+  );
+}

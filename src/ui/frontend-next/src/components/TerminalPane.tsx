@@ -2,6 +2,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  on,
   onCleanup,
   Show,
 } from "solid-js";
@@ -58,6 +59,16 @@ type Props = {
    * delegates state to it without owning any of its own.
    */
   onShellToggle: (row: SessionRow) => void | Promise<void>;
+  /**
+   * Optional accessor whose value change requests a refit of the
+   * currently-active terminal handle on the next animation frame. The
+   * host uses this when the workspace was hidden via `display: none`
+   * (for example while the Settings shell was visible): xterm's fit
+   * addon measured a 0x0 viewport while hidden, and the terminal needs
+   * an explicit refit once the workspace returns to view. Subsequent
+   * value changes re-trigger the same path.
+   */
+  refitTrigger?: () => unknown;
 };
 
 export interface TerminalToolbarContext {
@@ -203,6 +214,28 @@ export function TerminalPane(props: Props) {
       dispose(sessionId);
     }
   });
+
+  // External refit trigger. `on(..., { defer: true })` skips the initial
+  // run so this effect only fires when the host bumps the trigger; the
+  // first paint already gets its refit through the `show` action's rAF
+  // path. Refit is scheduled on the next animation frame so layout has
+  // a chance to settle (the same reason `applyTerminalActions` defers
+  // refit after `show`).
+  createEffect(
+    on(
+      () => props.refitTrigger?.(),
+      () => {
+        const id = props.terminals.activeId();
+        if (!id) return;
+        const entry = handles.get(id);
+        if (!entry) return;
+        globalThis.requestAnimationFrame(() => {
+          entry.handle.refit();
+        });
+      },
+      { defer: true },
+    ),
+  );
 
   const activeTerminalId = createMemo(() => props.terminals.activeId());
   // The toolbar reads handles through a memo so it re-evaluates whenever
