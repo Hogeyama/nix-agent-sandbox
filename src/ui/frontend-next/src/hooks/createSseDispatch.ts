@@ -14,10 +14,19 @@
  * each store's normalizer, so this dispatch only enforces the outer
  * envelope.
  *
+ * For pending events (`network:pending` and `hostexec:pending`) the
+ * dispatcher additionally drives the per-card UI state in
+ * `pendingActionStore`: every snapshot is followed by a call to
+ * `reconcile(domain, snapshotKeys)` so rows that disappeared from the
+ * snapshot drop their selected scope, busy flag, and error message,
+ * while rows still present keep their state untouched.
+ *
  * Event names not present in the switch (for example `sessions` or
  * `audit:logs`) fall into the default branch and are no-ops.
  */
 
+import type { PendingActionStore } from "../stores/pendingActionStore";
+import { pendingRequestKey } from "../stores/pendingRequestKey";
 import type { PendingStore } from "../stores/pendingStore";
 import type { SessionsStore } from "../stores/sessionsStore";
 import type { TerminalsStore } from "../stores/terminalsStore";
@@ -31,6 +40,7 @@ import type {
 export interface SseDispatchStores {
   sessions: SessionsStore;
   pending: PendingStore;
+  pendingAction: PendingActionStore;
   terminals: TerminalsStore;
 }
 
@@ -64,12 +74,29 @@ export function createSseDispatch(stores: SseDispatchStores): SseDispatch {
       }
       case "network:pending": {
         const items = extractItems<NetworkPendingItemLike>(data);
-        if (items !== null) stores.pending.setNetwork(items);
+        if (items === null) return;
+        stores.pending.setNetwork(items);
+        // Reconcile per-card state immediately after the snapshot is
+        // applied so a removed row cannot leave a dangling scope chip
+        // selection or stale error message.
+        stores.pendingAction.reconcile(
+          "network",
+          items.map((it) =>
+            pendingRequestKey("network", it.sessionId, it.requestId),
+          ),
+        );
         return;
       }
       case "hostexec:pending": {
         const items = extractItems<HostExecPendingItemLike>(data);
-        if (items !== null) stores.pending.setHostExec(items);
+        if (items === null) return;
+        stores.pending.setHostExec(items);
+        stores.pendingAction.reconcile(
+          "hostexec",
+          items.map((it) =>
+            pendingRequestKey("hostexec", it.sessionId, it.requestId),
+          ),
+        );
         return;
       }
       case "terminal:sessions": {

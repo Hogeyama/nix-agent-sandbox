@@ -941,6 +941,19 @@ body::after {
   background: transparent;
 }
 
+/* Inline error rendered below the action row when an Approve or Deny
+   call is rejected at the transport layer. The message is dropped when
+   the row is reconciled away from the SSE snapshot; that is intentional
+   (audit log is the durable record of attempts that reached the daemon). */
+.card-error {
+  margin: 8px 0 0;
+  color: var(--rose);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  word-break: break-word;
+}
+
 /* dialog */
 .dialog-overlay {
   position: fixed;

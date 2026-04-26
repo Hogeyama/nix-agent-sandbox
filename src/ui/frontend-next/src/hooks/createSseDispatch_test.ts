@@ -1,13 +1,17 @@
 /**
  * Tests for `createSseDispatch`.
  *
- * Pin the dispatch contract: the three event names consumed by the
+ * Pin the dispatch contract: the four event names consumed by the
  * sessions and pending panes route to the matching store setter,
- * malformed envelopes drop the payload silently (per design: store
- * state is not touched), and unknown event names are no-ops.
+ * pending events additionally drive `pendingAction.reconcile` with the
+ * snapshot's composite keys, malformed envelopes drop the payload
+ * silently (per design: store state is not touched), and unknown event
+ * names are no-ops.
  */
 
 import { describe, expect, mock, test } from "bun:test";
+import type { PendingActionStore } from "../stores/pendingActionStore";
+import { pendingRequestKey } from "../stores/pendingRequestKey";
 import type {
   HostExecPendingRow,
   NetworkPendingRow,
@@ -30,6 +34,9 @@ interface FakeStores {
     setNetwork: ReturnType<typeof mock>;
     setHostExec: ReturnType<typeof mock>;
   };
+  pendingAction: PendingActionStore & {
+    reconcile: ReturnType<typeof mock>;
+  };
   terminals: TerminalsStore & {
     setDtachSessions: ReturnType<typeof mock>;
   };
@@ -46,6 +53,15 @@ function makeFakeStores(): FakeStores {
     setNetwork: mock((_items: NetworkPendingItemLike[]) => {}),
     setHostExec: mock((_items: HostExecPendingItemLike[]) => {}),
   };
+  const pendingAction: FakeStores["pendingAction"] = {
+    scopeFor: () => undefined,
+    busyFor: () => false,
+    errorFor: () => null,
+    setScope: () => {},
+    beginAction: () => {},
+    endAction: () => {},
+    reconcile: mock((_domain, _keys) => {}),
+  };
   const terminals: FakeStores["terminals"] = {
     dtachSessions: () => [] as DtachSessionLike[],
     activeId: () => null,
@@ -60,7 +76,7 @@ function makeFakeStores(): FakeStores {
     clearShellSpawnInFlight: () => {},
     isShellSpawnInFlight: () => false,
   };
-  return { sessions, pending, terminals };
+  return { sessions, pending, pendingAction, terminals };
 }
 
 describe("createSseDispatch", () => {
@@ -77,9 +93,10 @@ describe("createSseDispatch", () => {
     expect(stores.sessions.setSessions).toHaveBeenCalledWith(items);
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
+    expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
   });
 
-  test("'network:pending' with valid envelope routes to pending.setNetwork", () => {
+  test("'network:pending' with valid envelope routes to pending.setNetwork and reconciles pendingAction", () => {
     const stores = makeFakeStores();
     const dispatch = createSseDispatch(stores);
 
@@ -90,16 +107,27 @@ describe("createSseDispatch", () => {
         createdAt: "2026-01-01T00:00:00Z",
         target: { host: "example.com", port: 443 },
       },
+      {
+        requestId: "r2",
+        sessionId: "s2",
+        createdAt: "2026-01-01T00:00:01Z",
+        target: { host: "example.com", port: 443 },
+      },
     ];
     dispatch("network:pending", { items });
 
     expect(stores.pending.setNetwork).toHaveBeenCalledTimes(1);
     expect(stores.pending.setNetwork).toHaveBeenCalledWith(items);
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledTimes(1);
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledWith("network", [
+      pendingRequestKey("network", "s1", "r1"),
+      pendingRequestKey("network", "s2", "r2"),
+    ]);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
   });
 
-  test("'hostexec:pending' with valid envelope routes to pending.setHostExec", () => {
+  test("'hostexec:pending' with valid envelope routes to pending.setHostExec and reconciles pendingAction", () => {
     const stores = makeFakeStores();
     const dispatch = createSseDispatch(stores);
 
@@ -116,6 +144,10 @@ describe("createSseDispatch", () => {
 
     expect(stores.pending.setHostExec).toHaveBeenCalledTimes(1);
     expect(stores.pending.setHostExec).toHaveBeenCalledWith(items);
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledTimes(1);
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledWith("hostexec", [
+      pendingRequestKey("hostexec", "s1", "x1"),
+    ]);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
   });
@@ -139,6 +171,7 @@ describe("createSseDispatch", () => {
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
+    expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
   });
 
   test("'terminal:sessions' with invalid envelope is ignored", () => {
@@ -154,7 +187,7 @@ describe("createSseDispatch", () => {
     expect(stores.terminals.setDtachSessions).not.toHaveBeenCalled();
   });
 
-  test("malformed envelope (missing items / not an array / null / primitive) does not invoke any setter", () => {
+  test("malformed envelope (missing items / not an array / null / primitive) does not invoke any setter or reconcile", () => {
     const stores = makeFakeStores();
     const dispatch = createSseDispatch(stores);
 
@@ -168,6 +201,7 @@ describe("createSseDispatch", () => {
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
+    expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
   });
 
   test("SSE_EVENT_NAMES exposes the dispatched event vocabulary in a stable order", () => {
@@ -193,5 +227,24 @@ describe("createSseDispatch", () => {
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
+    expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
+  });
+
+  test("empty network snapshot reconciles with an empty key list", () => {
+    // Pin: an empty snapshot still triggers reconcile so any prior
+    // selected-scope / busy / error entries are cleared.
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+    dispatch("network:pending", { items: [] });
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledTimes(1);
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledWith("network", []);
+  });
+
+  test("empty hostexec snapshot reconciles with an empty key list", () => {
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+    dispatch("hostexec:pending", { items: [] });
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledTimes(1);
+    expect(stores.pendingAction.reconcile).toHaveBeenCalledWith("hostexec", []);
   });
 });

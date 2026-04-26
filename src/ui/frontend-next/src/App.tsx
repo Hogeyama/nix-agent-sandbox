@@ -1,4 +1,5 @@
 import { createSignal, Show } from "solid-js";
+import * as client from "./api/client";
 import {
   ackSessionTurn,
   killTerminalClients,
@@ -13,9 +14,11 @@ import { StatusBar } from "./components/StatusBar";
 import { TerminalPane } from "./components/TerminalPane";
 import { Topbar } from "./components/Topbar";
 import { NewSessionDialog } from "./dialogs/NewSessionDialog";
+import { createPendingActionHandlers } from "./handlers/createPendingActionHandlers";
 import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
 import { useConnection } from "./hooks/useConnection";
 import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
+import { createPendingActionStore } from "./stores/pendingActionStore";
 import { createPendingStore } from "./stores/pendingStore";
 import { createSessionsStore } from "./stores/sessionsStore";
 import { findShellForAgent } from "./stores/shellMapping";
@@ -32,9 +35,22 @@ const RESIZER_PX = 4;
 export function App() {
   const sessions = createSessionsStore();
   const pending = createPendingStore();
+  const pendingAction = createPendingActionStore();
   const terminals = createTerminalsStore();
   const ui = createUiStore();
-  const dispatch = createSseDispatch({ sessions, pending, terminals });
+  // Single instantiation: handlers close over the same store and client
+  // for the entire app lifetime so a re-render of `PendingPane` cannot
+  // produce divergent closures.
+  const pendingHandlers = createPendingActionHandlers({
+    client,
+    pending: pendingAction,
+  });
+  const dispatch = createSseDispatch({
+    sessions,
+    pending,
+    pendingAction,
+    terminals,
+  });
   const { connected } = useConnection("/api/events", dispatch, {
     eventNames: SSE_EVENT_NAMES,
   });
@@ -138,6 +154,12 @@ export function App() {
           hostexec={pending.hostexec}
           collapsed={ui.rightCollapsed}
           onToggleCollapse={ui.toggleRightCollapsed}
+          scopeFor={pendingAction.scopeFor}
+          busyFor={pendingAction.busyFor}
+          errorFor={pendingAction.errorFor}
+          setScope={pendingAction.setScope}
+          onApprove={pendingHandlers.onApprove}
+          onDeny={pendingHandlers.onDeny}
         />
       </main>
       <StatusBar />
