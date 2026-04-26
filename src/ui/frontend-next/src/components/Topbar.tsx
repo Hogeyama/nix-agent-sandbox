@@ -1,4 +1,8 @@
-export function Topbar() {
+interface TopbarProps {
+  connected: boolean;
+}
+
+export function Topbar(props: TopbarProps) {
   return (
     <header class="topbar">
       <div class="brand">
@@ -14,9 +18,9 @@ export function Topbar() {
         </button>
       </div>
       <div class="topbar-right">
-        <div class="live">
+        <div class="live" classList={{ offline: !props.connected }}>
           <span class="dot"></span>
-          <span>live</span>
+          <span>{props.connected ? "live" : "offline"}</span>
         </div>
         <button class="btn-icon" type="button" aria-label="Settings">
           <svg

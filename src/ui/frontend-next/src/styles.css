@@ -160,6 +160,14 @@ body::after {
   0%, 100% { opacity: 0.75; }
   50%      { opacity: 1; }
 }
+.live.offline {
+  color: var(--muted-2);
+}
+.live.offline .dot {
+  background: var(--muted-2);
+  box-shadow: none;
+  animation: none;
+}
 
 /* workspace (3 panes) */
 .workspace {

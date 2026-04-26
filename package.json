@@ -14,7 +14,7 @@
     "lint": "biome check src/ tests/ scripts/ main.ts",
     "lint:composed-effects": "bun scripts/lint-composed-effects.ts",
     "fmt": "biome format --write src/ tests/ scripts/ main.ts",
-    "check": "tsc --noEmit && tsc -p src/ui/frontend-next/tsconfig.json --noEmit",
+    "check": "tsc --noEmit && tsc -p src/ui/frontend-next/tsconfig.json --noEmit && tsc -p src/ui/frontend-next/tsconfig.test.json --noEmit",
     "bun2nix": "bun2nix -o bun.nix"
   },
   "dependencies": {
