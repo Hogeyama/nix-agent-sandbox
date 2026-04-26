@@ -442,6 +442,7 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
   let fitAddon: FitAddonLike;
   let ws: WebSocketLike;
   let bindingDispose: () => void;
+  let resizeObserver: ResizeObserver | null = null;
   const timeoutHandles: unknown[] = [];
   let receivedData = false;
   let disposed = false;
@@ -460,6 +461,18 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
       term.loadAddon(new WebLinksAddon());
     }
     term.open(container);
+    // term.open attaches xterm at the default 80x24 because container
+    // layout has not settled yet. Watch the container's box size with
+    // ResizeObserver: it fires once after the initial layout (sizing
+    // xterm to the real pane width) and again on every subsequent
+    // container resize, including future drag-resize between panes.
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        if (disposed) return;
+        fitAddon.fit();
+      });
+      resizeObserver.observe(container);
+    }
 
     ws = connectWebSocket(buildWsUrl(sessionId), wsToken, wsFactory);
     bindLifecycleCallbacks(ws, {
@@ -492,7 +505,7 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
   const onWindowResize = createWindowResizeHandler(term, fitAddon, ws);
   globalThis.addEventListener("resize", onWindowResize);
 
-  const dispose = createDisposeFn({
+  const baseDispose = createDisposeFn({
     term,
     ws,
     bindingDispose,
@@ -504,6 +517,21 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
       disposed = true;
     },
   });
+  const dispose = () => {
+    if (resizeObserver) {
+      try {
+        resizeObserver.disconnect();
+      } catch (e) {
+        reportError(
+          e instanceof Error
+            ? `ResizeObserver disconnect failed: ${e.message}`
+            : "ResizeObserver disconnect failed",
+        );
+      }
+      resizeObserver = null;
+    }
+    baseDispose();
+  };
 
   return {
     focus() {
