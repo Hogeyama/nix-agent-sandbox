@@ -5,7 +5,7 @@
 設計 (不変条件): `docs/ui-redesign.md`
 進捗 (生きた状態): 本ファイル
 
-最終更新: 2026-04-26 / P1 完了時点
+最終更新: 2026-04-26 / P2 完了時点
 
 ---
 
@@ -15,7 +15,7 @@
 |-------|------|---------|
 | P0 セットアップ + topbar + SSE dot | ✅ done | topbar + SSE dot が live 表示 |
 | P1 Sessions / Pending pane (読み取り) | ✅ done | 既存 API から一覧が出る |
-| P2 NewSessionDialog + 自動 attach | ☐ todo | launch → 入力できる |
+| P2 NewSessionDialog + 自動 attach | ✅ done | launch → 入力できる |
 | P3 セッション切替 + Detach/Stop/Rename + Shell + drag-resize | ☐ todo | 痛点 (a)(b)(c) 解決 |
 | P4 Pending Approve/Deny + Audit accordion | ☐ todo | Pending 業務完結 |
 | P5 Settings (Sidecars / Audit / Keybinds / Prefs) | ☐ todo | 機能パリティ |
@@ -48,6 +48,22 @@
 
 検証状態: `bun test src/ui/frontend-next/` 63 pass / 0 fail / `bun run check` clean / `bun run build-ui-next` success / `bun test src/ui/` 303 pass / 0 fail (preloadAssets 再帰対応の追加テスト含む)
 
+### P2 (7 commits, 2026-04-26)
+
+| hash | message |
+|------|---------|
+| `85ca8b9` | build(ui-next): inline xterm.css into bundled stylesheet |
+| `f909112` | feat(ui-next): add terminalsStore for dtach sessions and active id |
+| `5eaab56` | feat(ui-next): wire terminal:sessions SSE into terminalsStore |
+| `8061fcb` | feat(ui-next): add api client and wsToken helper for launch and terminal |
+| `b619fc4` | feat(ui-next): extract attachTerminalSession (xterm + ws lifecycle) |
+| `535e78f` | feat(ui-next): mount terminal in TerminalPane bound to activeId |
+| `8c7dbe9` | feat(ui-next): wire NewSessionDialog to launch and auto-activate terminal |
+
+検証状態: `bun run check` clean / `bun test src/ui/frontend-next/` 132 pass / 0 fail (251 expect, 14 files) / `bun run build-ui-next` success (387.84 kB main.js) / `bun test src/` 1554 pass / 7 skip / 0 fail (regression なし)
+
+レビュー差し戻し: Commit 2 (design + test-coverage) / Commit 5 (design 4 + error-handling 1 + test-coverage 3) / Commit 6 (design 2) / Commit 7 (tombstone 1 + design 3)。いずれも 1 iteration で approve。Commit 4 で URL spec の typo を implementer が検出 (orchestrator 修正後に再投入)。Commit 7 は biome a11y (`useKeyWithClickEvents`) を pre-commit hook で捕捉、`stopPropagation` を `e.target === e.currentTarget` パターンに置換して解消。
+
 ---
 
 ## ビルド・起動方法 (動作確認)
@@ -66,7 +82,8 @@ NAS_UI_NEXT=1 bun run dev -- ui --port 3939 --no-open
 - 起動ログに `[nas] UI mode: next` または `classic` が出る
 - P0 動作確認: topbar の LIVE dot が teal で `breathe` アニメーション。daemon kill → 5s 後 offline (muted dot) → 再起動で即 live 復帰
 - P1 動作確認: 起動直後は左 `No sessions` / 右 `Network · out 00` `Host exec · cmd 00` の空表示。`nas <profile>` で agent 起動すると左 pane に行が追加され、turn 値で dot/badge が切り替わる (`user-turn` → amber pulse + `Turn` バッジ / `agent-turn` → teal dim + `Busy` バッジ)。allowlist 外 curl や hostexec 必要な操作で右 pane にカードが追加、相対時刻が 1 秒ごとに更新される。Approve/Deny/scope ボタンは `disabled` で無反応 (read-only 仕様)
-- 既知の未実装 (P2-P3): `+ New Session` 反応なし / 行クリックでセッション切替なし / 中央 pane 空 / pane drag-resize なし / 右 pane 折りたたみ無効 (collapse ボタン disabled)
+- P2 動作確認: 中央 pane は initial state で `Launch a session to attach a terminal` の placeholder。Topbar の `+ new session` をクリックすると dialog が開き、profile / cwd / worktree (none/main/current/custom) / sessionName を入力できる。cwd を切替えると `Loading branches...` を経て worktree 選択肢が更新される。Launch を押すと dialog が閉じ、左 pane に行が追加され、数秒以内に中央 pane で xterm が立ち上がりプロンプトが表示・入力可能になる (= 自動 attach)。launch validation エラー (profile 空など) では dialog 内に赤字でメッセージが出て dialog は閉じない。submit 中は Cancel / Esc / backdrop click のいずれも無視される (`tryClose` が `submitting()` でガード)。daemon を kill すると 5s 後に Topbar が offline になり、xterm 側に Disconnected エラーが出る
+- 既知の未実装 (P3): 行クリックでセッション切替なし (P2 中は単一 active session 前提) / Detach / Stop / Rename / Shell ボタン未配線 / 中央 pane Toolbar (Ack turn / Search / font-size / Kill clients) 未実装 / pane drag-resize なし / 右 pane 折りたたみ無効 (collapse ボタン disabled)
 
 ---
 
@@ -83,99 +100,122 @@ NAS_UI_NEXT=1 bun run dev -- ui --port 3939 --no-open
 
 ---
 
-## ディレクトリ構成 (P1 完了時点)
+## ディレクトリ構成 (P2 完了時点)
 
 ```
 src/ui/frontend-next/
   index.html.tmpl                      # {{NAS_WS_TOKEN}} / {{CSS}} / {{JS}} placeholder
   tsconfig.json                        # production (types: [])
   tsconfig.test.json                   # test (types: ["bun-types"])
-  README.md                            # dev workflow など
+  README.md                            # dev workflow など (xterm.css inline 含む)
   src/
     ambient.d.ts                       # *.css, fontsource 宣言
     main.tsx                           # entry: fontsource import + render
-    App.tsx                            # .app grid + Topbar + workspace + StatusBar、stores と dispatch を生成して useConnection と panes に配線
-    styles.css                         # control-room.html の shell rule + .live.offline + Sessions 行 / Pending カード CSS
+    App.tsx                            # .app grid + stores と dispatch、Topbar / TerminalPane / NewSessionDialog 配線
+    styles.css                         # shell rule + Sessions 行 / Pending カード / .terminal-empty / .terminal-error / .dialog-* CSS
+    api/
+      client.ts                        # request<T> + launch / terminal の 5 関数。encodeURIComponent / silent success 禁止
+      client_test.ts                   # 9 ケース (header / 4xx / fetch reject / non-JSON / URL encoding x2)
+      wsToken.ts                       # getWsToken(doc) — meta 不在 / 空 / placeholder で必ず throw
+      wsToken_test.ts                  # 4 ケース
     components/
-      Topbar.tsx                       # connected prop + classList offline
+      Topbar.tsx                       # connected + onNewSession (required prop)
       SessionsPane.tsx                 # 左 pane <For> 描画、turn → dot/badge mapping を sessionRowView から
       sessionRowView.ts                # 純関数: describeSessionRow / formatSessionTree
-      sessionRowView_test.ts           # 8 ケース (turn / worktree フォールバック)
-      TerminalPane.tsx                 # 中央 pane 外枠 (空、P2-P3 で実装)
+      sessionRowView_test.ts           # 8 ケース
+      TerminalPane.tsx                 # 中央 pane: onMount + createEffect で activeId を観測し attachTerminalSession を mount/dispose、errorMessage signal で UI 表示
+      terminalPaneTransition.ts        # 純関数: pickTerminalAction(prev, next) → "noop" | "mount" | "remount" | "unmount"
+      terminalPaneTransition_test.ts   # 5 ケース
       PendingPane.tsx                  # 右 pane <For> 描画 (Network / HostExec)、setInterval で 1s tick
       pendingCardView.ts               # 純関数: formatRelativeTime / sessionLabel
-      pendingCardView_test.ts          # 13 ケース (時間境界 / 未来 clamp / sessionName フォールバック)
+      pendingCardView_test.ts          # 13 ケース
       StatusBar.tsx                    # footer 最低限
-    stores/
-      types.ts                         # SSE payload Like 型 + UI 用 SessionRow 型
-      sessionId.ts                     # shortenSessionId (両 store 共通 helper)
-      sessionId_test.ts                # 3 ケース
-      sessionsStore.ts                 # createStore + accessor。containers payload を normalize
-      sessionsStore_test.ts            # 9 ケース (sidecar 除外 / フィールドフォールバック)
-      pendingStore.ts                  # network / hostexec 2 セット accessor
-      pendingStore_test.ts             # 11 ケース (verb default / argv join / ISO parse 失敗)
+    dialogs/
+      NewSessionDialog.tsx             # Solid Dialog: launchInfo / launchBranches 2 段階 fetch、submit で launchSession → onLaunched(sessionId)。tryClose で submit 中の dismiss を抑止
+      newSessionForm.ts                # 純関数: pickWorktreeBase / pickEffectiveCwd / reconcileWorktreeChoice
+      newSessionForm_test.ts           # 18 ケース
     hooks/
       createConnectionController.ts        # 純関数 + DI、5000ms grace / 3000ms backoff、named-event 購読
-      createConnectionController_test.ts   # 8 ケース (5 既存 + onEvent 経路 3)
-      createSseDispatch.ts                 # SSE_EVENT_NAMES + extractItems + 3 イベント分岐
-      createSseDispatch_test.ts            # 5 ケース
-      useConnection.ts                     # Solid 薄 wrapper、UseConnectionOptions で eventNames 受け渡し
+      createConnectionController_test.ts   # 8 ケース
+      createSseDispatch.ts                 # SSE_EVENT_NAMES (4 要素: containers / network:pending / hostexec:pending / terminal:sessions) + extractItems + 4 イベント分岐
+      createSseDispatch_test.ts            # 8 ケース (terminal:sessions valid/invalid 含む)
+      useConnection.ts                     # Solid 薄 wrapper
+    stores/
+      types.ts                         # SSE payload Like 型 + UI 用 SessionRow 型 + DtachSessionLike
+      sessionId.ts                     # shortenSessionId (共通 helper)
+      sessionId_test.ts                # 3 ケース
+      sessionsStore.ts                 # createStore + accessor
+      sessionsStore_test.ts            # 9 ケース
+      pendingStore.ts                  # network / hostexec
+      pendingStore_test.ts             # 11 ケース
+      terminalsStore.ts                # dtachSessions / activeId / pendingActivateId。requestActivate (launch 後の race 吸収) / setActive (P3 行クリック用) を分離
+      terminalsStore_test.ts           # 10 ケース (set / pending 昇格 / pending 上書き / setActive / activeId 失効 / immediate-activate での pending クリア / pending と activeId 失効が同時)
+    terminal/
+      attachTerminalSession.ts         # xterm + WS lifecycle factory (Solid 非依存、DI seam: createTerminal / createWebSocket / createFitAddon / setTimeoutFn / clearTimeoutFn / onError)。dispose 冒頭で ws ハンドラ null 化 + 内側 nudge timer も全 clear。エラー経路は onError で surface (構築時 throw も吸収して NOOP_HANDLE 返却)
+      attachTerminalSession_test.ts    # 13 ケース (mount / dispose / initial resize / dtach 1s nudge / 異常 close / 正常 close / onData → ws.send / 構築時 throw / setFontSize / ws.onerror / dispose 内 onError 経路 / inner timer cancel)
+      terminalInput.ts                 # キー入力フォワーディング (旧 frontend から複製、P7 で統合)
+      terminalSize.ts                  # cols/rows 計算と resize 送信
+      terminalSize_test.ts             # 8 ケース
   design/
-    control-room.html                  # 静的モック (ビルド対象外、CSS の正本)
+    control-room.html                  # 静的モック (CSS の正本)
 
 scripts/
-  build_ui_next.ts                     # Bun.build + index.html.tmpl 展開 + woff2 cp + assertion
+  build_ui_next.ts                     # Bun.build + index.html.tmpl 展開 + woff2 cp + xterm.css inline (bundledCss 先頭)
   solid_plugin.ts                      # Bun.plugin + babel glue (~50行)
-  solid_plugin_test.ts                 # 2 ケース (TSX 変換 / .ts filter)
+  solid_plugin_test.ts                 # 2 ケース
 
 src/ui/
   server.ts                            # resolveDistBase(env) + preloadAssets (assets/ ネスト対応)
-  server_dist_base_test.ts             # 4 ケース pin (unset / "1" / "0" / "true")
-  server_preload_assets_test.ts        # 5 ケース (nested fonts/ / 不在 / 空 / 深いネスト)
+  server_dist_base_test.ts             # 4 ケース
+  server_preload_assets_test.ts        # 5 ケース
   dist-next/                           # ビルド出力 (.gitignore 対象)
 ```
 
 ---
 
-## 次セッションで P2 に着手する手順
+## 次セッションで P3 に着手する手順
 
-**P2 完了条件**: NewSessionDialog + 自動 attach。`+ New Session` ボタンから dialog → `POST /api/launch` → containers SSE で行追加 → 中央 pane に xterm が立ち上がって入力できる、までが繋がる。
+**P3 完了条件**: セッション切替 + Detach/Stop/Rename + Shell + drag-resize。痛点 (a)(b)(c) (auto attach 未対応 / Pending と Terminal 並行観察不能 / × ボタン用語混乱) を解消する。P2 で auto attach は完成しているので、痛点 (a) は実質既に解決済み。残る (b)(c) と並行操作系を P3 で実装する。
 
 ### 作業の流れ (planner 投入時の参考)
 
-1. **`stores/terminalsStore.ts` を追加** (Solid `createStore`)
-   - `dtachSessions` (id → metadata) と `activeId` を保持
-   - `terminal:sessions` SSE を `createSseDispatch` の switch に足す
-2. **`hooks/useXTerm.ts` / `hooks/useTerminalWS.ts` を新設**
-   - 既存 Preact `TerminalModal.tsx` (846行) の xterm 初期化と WS lifecycle を pure 関数 + DI で抽出
-   - 設計 §7 のフォルダ構成に揃える
-3. **`components/TerminalPane/` を実装**
-   - `index.tsx` で activeId に対応する xterm を mount、非表示 session の WS は keep-alive
-   - 中央 pane の Toolbar (`docs/ui-redesign.md` §6.3) は最小実装で良い (ack/shell/search は P3 へ)
-4. **`dialogs/NewSessionDialog.tsx`**
-   - Preact 版 `NewSessionDialog.tsx` (456行) の profile / cwd / worktree / sessionName 入力 UI を Solid 化
-   - launch 成功で取得した sessionId を `terminalsStore` に流し込み、自動 attach
-5. **Topbar の `+ New Session` ボタンに handler 配線**
-   - dialog open / close
-   - 既知の TBD「`+ New Session` の disabled 化」はこの commit で同時に解消
+1. **行クリックでセッション切替**
+   - `SessionsPane` の `<li>` に `onClick={() => terminals.setActive(row.sessionId)}` を配線
+   - `terminalsStore.setActive` は P2 Commit 2 で API surface を確保済み (破壊変更なし)
+   - `TerminalPane` の `createEffect` が prevId/nextId 差分で remount するロジックも P2 で済んでいる
+2. **keep-alive (裏側 WS 維持)**
+   - 現状: `activeId` が切り替わると古い handle を `dispose()` → 裏で WS が落ちる
+   - P3 設計: `TerminalPane` 内に `Map<sessionId, TerminalHandle>` を持ち、`activeId` ごとに `display: none` で表示切替。dispose は session 自体が消えたとき (`terminalsStore.dtachSessions` から落ちたとき) のみ
+   - `attachTerminalSession` の DI seam はそのまま使える
+3. **中央 pane Toolbar 実装** (`docs/ui-redesign.md` §6.3)
+   - `Ack turn` / `Shell` (agent ⇄ shell トグル) / `Search` / font-size / `Kill clients`
+   - `attachTerminalSession` の `TerminalHandle` には `setFontSize` / `refit` が既にある。`Search` は xterm の SearchAddon 経由
+   - `api/client.ts` に `ackSessionTurn` / `startShell` / `killTerminalClients` (一部済) / `renameSession` / `stopContainer` を追加
+4. **行内アクション (Stop / Rename / Shell)**
+   - `SessionsPane` 行右側の hover アクション (旧 UI と同等)。`EditableSessionName` 相当を Solid 化
+5. **pane drag-resize** (`docs/ui-redesign.md` §6.1)
+   - 左右 pane と中央の境界に drag handle。`uiStore` (新規) に幅を保持し localStorage 永続化、最小幅 200/240px
+   - 右 pane 折りたたみ (Ctrl+Shift+])
+6. **shell トグル** (§6.3 「Shell 起動 — 中央 pane トグル」)
+   - 1 container = 1 shell の制約。session 切替時は最後の view (agent / shell) を復元
 
 ### `/implement-with-review` skill で進める場合のメモ
 
 - protected dirty paths: 着手時に `git status --short` で確認
 - scope 外: `src/ui/frontend/`, `scripts/build_ui.ts`, `flake.nix` (P7 まで不変)
 - review-config: `error-handling` / `security` / `design` / `tombstone-comments` / `test-coverage` がいずれも `no_findings` (warning でも差し戻し)
-- Commit 粒度の目安: terminalsStore + dispatch 拡張 → useXTerm/useTerminalWS 抽出 → TerminalPane mount → NewSessionDialog → launch wiring の 4-5 commits
-- xterm.js は既存 Preact 版で動いているので、import はそちらと同じ npm package で問題なし。WebSocket auth トークンは `index.html` の `<meta name="nas-ws-token">` に既に注入されている (P0 で確認済)
+- 旧 frontend からの複製 (`terminalInput.ts` / `terminalSize.ts` / `api.ts` 一部) は P7 で旧 UI 削除と同時に解消する。P3 で新 API を足すときも同じ規約で複製しつつ、各 commit message に DRY 例外を明記
+- a11y: P2 で `useKeyWithClickEvents` を `e.target === e.currentTarget` パターンで回避した。P3 で行クリックを追加する際も biome rule への対応が必要 — `<button>` 化するか、suppression + 妥当な keyboard alternative を用意する
 
 ---
 
 ## 既知の TBD / 未決事項
 
 - **routes 設計** (`docs/ui-redesign.md` §7): `#/settings/...` の hash routing か `@solidjs/router` か未決。**判断期限: P5 着手前**
-- **`+ New Session` ボタン**: P0 で markup だけ存在 (handler 無し)。**判断期限: P2 で NewSessionDialog をマウントする時に同時 wiring**
 - **キーボードショートカットの上書き**: `docs/ui-redesign.md` §8 末尾 "Settings で上書き可（将来）" は P6 以降の判断事項
-- **`+ New Session` の disabled 化**: 現状クリックしても無反応で a11y 違反。P2 まで放置するなら `disabled` 属性を入れた方が誠実 (P2 着手と同時に handler 配線で解消する想定)
-- **行クリックでセッション切替**: P1 完了時点で `cursor: pointer` だけ付与され listener なし。**判断期限: P3 着手時** (P2 で attach は自動化されるため、P2 中は単一 session 前提で運用可能)
+- **行クリックでセッション切替**: P2 完了時点で `terminalsStore.setActive` API は確保済み、`SessionsPane` の `<li>` には listener 未配線。**判断期限: P3 着手時**
+- **`pendingActivateId` の TTL**: P2 では launch レスポンスの sessionId が SSE に永遠に出てこない場合 (dtach プロセス起動失敗等) に pending が leak する。1 セッション運用前提で当面実害なし。**判断期限: P3 で keep-alive を入れたあと、複数 session 並行運用での挙動を観察してから**
+- **キーボード操作の代替** (a11y): P2 の dialog overlay は `e.target === e.currentTarget` で backdrop click を判定し、biome の `useKeyWithClickEvents` を回避したが、行クリックでセッション切替を入れる P3 では `<li>` に keyboard alternative (Enter / Space) を持たせるか、`<button>` 化する判断が必要
 
 ---
 
@@ -195,6 +235,22 @@ src/ui/
 - **`shortenSessionId` が両 store に重複** → review で差し戻し、`stores/sessionId.ts` に共通 helper として抽出。`stop_when: no_findings` 設定下では DRY 違反も blocking
 - **JSON.parse 失敗の silent catch** → Preact 側 `useSSE.ts` の空 catch 慣習を踏襲しないよう、`createConnectionController` の named-event listener では `console.warn(name, e)` で必ず surface してから当該 payload だけ skip
 - **Pending pane の `setInterval` 解放忘れリスク** → `onCleanup(() => clearInterval(...))` を必ず対にする。1 秒 tick で `formatRelativeTime(now)` を再評価する設計
+
+## P2 で踏んだ罠と回避策 (再発防止メモ)
+
+- **`requestActivate` の immediate-activate パスで stale pending が残る** → `requestActivate("a")` 後に dtach 一覧に既にある "b" を `requestActivate("b")` すると、`activeId="b"` は立つが `pendingActivateId="a"` が残り、後続 SSE で "a" が出現すると意図せず activeId を上書きする bug。code-reviewer に差し戻され、immediate-activate パス内でも `s.pendingActivateId = null` を必ず実行する形に。境界条件は `terminalsStore_test.ts` の "requestActivate clears stale pending when the new id is already present" で pin
+- **xterm.css が build に inline されないと viewport が壊れる** → `scripts/build_ui.ts` (旧) は inline していたが `build_ui_next.ts` には未実装だった。Commit 1 で `node_modules/@xterm/xterm/css/xterm.css` を `bundledCss` の先頭に concatenate する処理を追加。失敗時は path 付きで throw
+- **`SseDispatchStores` の doc コメントから消費イベントを抜き忘れる** → `terminal:sessions` を consume するようになった後も「未消費イベントの例」一覧に残すと tombstone 違反 (review-config 上 blocking)。Commit 3 で同 commit 内に doc コメント修正を含めた
+- **`fetch` の DI を `globalThis.fetch` に逃がしたら Bun の `typeof fetch` が `preconnect` プロパティを要求して TS エラー** → test 内で `installFetch` 引数の型を `(input, init?) => Promise<Response>` の simpler shape に narrow し、代入時のみ `as unknown as FetchFn` でキャスト
+- **`attachTerminalSession` の `dispose` 後に `ws.onclose`/`ws.onerror` が `reportError` を呼ぶ** → `disposed=true` をセットしただけでは ws ハンドラは残るため、通常 close (code 1005) で reportError が誤発火する。Commit 5 で dispose 冒頭に `ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null` を追加。`armDtachInitialResizeNudge` の内側 setTimeout も `timeoutHandles` に push して全 clear
+- **`createTerminal` DI seam の契約乖離による二重 open リスク** → fake と本物経路で `loadAddon`/`open` の呼び方が違うと、本物の Terminal を渡したとき二重 open する。Commit 5 で `createDefaultTerminal` に「new Terminal のみ」の責務を絞り、`loadAddon`/`open` は本体側で一律実行する形に統一
+- **errorMessage を unmount 時にリセットし忘れて empty placeholder と error UI が重なる** → Commit 6 で `unmount` 内に `setErrorMessage(null)` を追加。`<Show when={errorMessage()}>` の表示条件を絞る選択肢もあったが、source of truth を一箇所にする選択を採用
+- **Solid `onMount` と `createEffect` の登録順依存** → 同じ component 内で `onMount` を先に登録し `prevActiveId` を初期化、その後 `createEffect` を登録することで「effect の初回実行時に prev === next となり noop」になる。順序を入れ替えると初回 attach が二重に走る。Commit 6 で doc コメントに登録順依存を明示
+- **`request<T>` の URL 組み立てで `cwd` / `sessionId` を encodeURIComponent し忘れると path traversal や 404 になる** → Commit 4 で全箇所に `encodeURIComponent` を入れ、`getLaunchBranches` (空白・日本語) と `killTerminalClients` (`/` `&`) のテストで pin
+- **`getWsToken` の placeholder (`{{NAS_WS_TOKEN}}`) を silent fallback すると spoofable な WS を作る** → Commit 4 で必ず throw する形に。理由を doc コメントに現在形で明記
+- **dialog の Esc / backdrop / Cancel が `submitting()` を bypass** → Cancel button だけ disabled でも、Esc / backdrop click は in-flight submit を中断できてしまう。Commit 7 で `tryClose` ヘルパーに集約
+- **biome `useKeyWithClickEvents` が dialog 内側 div の `onClick={(e) => e.stopPropagation()}` を blocking** → `e.target === e.currentTarget` チェックを overlay 側に集約することで、内側 div から `onClick` を完全に除去。a11y rule への自然な対応として推奨パターン
+- **plan の URL spec typo を implementer が検出** → `killTerminalClients` の URL を `/api/terminal/sessions/{id}/kill-clients` と書いていたが正しくは `/api/terminal/{id}/kill-clients`。implementer が `src/ui/routes/api.ts` と旧 `api.ts` の double-check で blocked を返したのが正解。orchestrator は plan を盲信させないこと
 
 ---
 
