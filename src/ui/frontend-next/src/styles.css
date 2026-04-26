@@ -271,7 +271,84 @@ body::after {
   outline-offset: -2px;
 }
 
-.session-actions { display: none; }
+/* Inline row actions slot. Hidden by default; revealed on row hover or
+ * when keyboard focus lands inside the slot. Positioned absolutely in
+ * the row's top-right corner so it does not steal a grid track from the
+ * existing `10px 1fr auto` template (badge column already lives there).
+ * The session row's onClick guards against clicks that originate from
+ * inside this slot via a `.session-actions` closest-check, so individual
+ * action buttons own their own handlers without `stopPropagation`. */
+.session-actions {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  display: none;
+}
+.session:hover .session-actions,
+.session:focus-within .session-actions {
+  display: block;
+}
+
+.session-actions-content {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.session-action-btn {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--cream-dim);
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.session-action-btn:hover:not(:disabled) {
+  color: var(--cream);
+  border-color: var(--muted);
+  background: var(--surface);
+}
+.session-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.session-action-btn.stop-trigger {
+  border-color: rgba(244, 63, 94, 0.4);
+  color: var(--rose);
+}
+.session-action-btn.stop-trigger:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.12);
+  color: var(--rose);
+  border-color: var(--rose);
+}
+
+.rename-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rename-input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--cream);
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  width: 140px;
+}
+.rename-input:focus {
+  outline: none;
+  border-color: var(--amber);
+}
+.rename-error,
+.session-stop-chip {
+  color: var(--rose);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
 
 .session-dot {
   grid-row: 1; grid-column: 1;

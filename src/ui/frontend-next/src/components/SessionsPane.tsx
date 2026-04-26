@@ -1,11 +1,15 @@
 import { For, Show } from "solid-js";
 import type { SessionRow } from "../stores/types";
+import { SessionActions } from "./SessionActions";
 import { describeSessionRow, formatSessionTree } from "./sessionRowView";
 
 type Props = {
   sessions: () => SessionRow[];
   activeId: () => string | null;
   onSelect: (sessionId: string) => void;
+  onStop: (containerName: string) => Promise<void>;
+  onRename: (sessionId: string, name: string) => Promise<void>;
+  onShellToggle: (row: SessionRow) => void;
 };
 
 export function SessionsPane(props: Props) {
@@ -43,6 +47,15 @@ export function SessionsPane(props: Props) {
                   }
                 }}
                 onKeyDown={(e) => {
+                  // Match the closest-check guard on onClick: keystrokes
+                  // that originate inside .session-actions belong to inner
+                  // inputs/buttons and must not bubble up as row activation.
+                  if (
+                    (e.target as HTMLElement).closest(".session-actions") !==
+                    null
+                  ) {
+                    return;
+                  }
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     props.onSelect(row.id);
@@ -66,7 +79,14 @@ export function SessionsPane(props: Props) {
                     <span class="id">{row.shortId}</span>
                   </dd>
                 </dl>
-                <div class="session-actions" aria-hidden="true" />
+                <div class="session-actions">
+                  <SessionActions
+                    row={row}
+                    onStop={props.onStop}
+                    onRename={props.onRename}
+                    onShellToggle={props.onShellToggle}
+                  />
+                </div>
               </li>
             );
           }}

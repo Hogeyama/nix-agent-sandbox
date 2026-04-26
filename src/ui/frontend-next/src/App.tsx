@@ -1,5 +1,10 @@
 import { createSignal, Show } from "solid-js";
-import { ackSessionTurn, killTerminalClients } from "./api/client";
+import {
+  ackSessionTurn,
+  killTerminalClients,
+  renameSession,
+  stopContainer,
+} from "./api/client";
 import { getWsToken } from "./api/wsToken";
 import { PaneResizer } from "./components/PaneResizer";
 import { PendingPane } from "./components/PendingPane";
@@ -53,6 +58,17 @@ export function App() {
           sessions={sessions.rows}
           activeId={terminals.activeId}
           onSelect={(id) => terminals.selectSession(id)}
+          onStop={async (containerName) => {
+            await stopContainer(containerName);
+          }}
+          onRename={async (sessionId, name) => {
+            await renameSession(sessionId, name);
+          }}
+          onShellToggle={(row) => {
+            // No-op stub: SessionsPane requires the callback to be present.
+            // The shell toggle behaviour lives in a separate module.
+            void row;
+          }}
         />
         <PaneResizer
           side="left"
