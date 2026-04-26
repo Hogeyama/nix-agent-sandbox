@@ -11,6 +11,7 @@ import { PaneResizer } from "./components/PaneResizer";
 import { PendingPane } from "./components/PendingPane";
 import { SessionsPane } from "./components/SessionsPane";
 import { StatusBar } from "./components/StatusBar";
+import { maxLamp } from "./components/sessionLamp";
 import { summarizePendingBySession } from "./components/sessionPendingSummary";
 import { TerminalPane } from "./components/TerminalPane";
 import { Topbar } from "./components/Topbar";
@@ -18,6 +19,7 @@ import { NewSessionDialog } from "./dialogs/NewSessionDialog";
 import { createPendingActionHandlers } from "./handlers/createPendingActionHandlers";
 import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
 import { useConnection } from "./hooks/useConnection";
+import { useFaviconBadge } from "./hooks/useFaviconBadge";
 import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
 import { createAuditStore } from "./stores/auditStore";
 import { createPendingActionStore } from "./stores/pendingActionStore";
@@ -70,6 +72,18 @@ export function App() {
   );
   const pendingFor = (sessionId: string) =>
     pendingByKey().get(sessionId) ?? { network: 0, hostexec: 0 };
+
+  // Favicon badge: re-rendered only when the aggregate lamp transitions
+  // (a `createMemo` with the default `===` equality dedupes per-row
+  // mutations that don't change the aggregate). The accessor adapts
+  // `SessionRow.id` to `sessionLamp`'s structural shape (`sessionId`).
+  const aggregateLamp = createMemo(() =>
+    maxLamp(
+      sessions.rows().map((row) => ({ sessionId: row.id, turn: row.turn })),
+      pendingFor,
+    ),
+  );
+  useFaviconBadge(aggregateLamp);
 
   const gridTemplateColumns = () =>
     ui.rightCollapsed()
