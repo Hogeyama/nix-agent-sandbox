@@ -22,7 +22,7 @@ type EditableSessionNameTree = {
 };
 
 describe("EditableSessionName", () => {
-  test("uses renderIdle as the idle fallback when the slot is provided", () => {
+  test("uses renderIdle as the idle fallback", () => {
     const calls: Array<{ start: () => void; currentName: string }> = [];
     const sentinel = {
       type: "span",
@@ -50,6 +50,7 @@ describe("EditableSessionName", () => {
     const tree = EditableSessionName({
       currentName: "alpha",
       onSubmit: async () => undefined,
+      renderIdle: () => ({ type: "span", props: {} }) as unknown as JSX.Element,
     }) as unknown as EditableSessionNameTree;
     const input = tree.props.children.props.children[0];
 

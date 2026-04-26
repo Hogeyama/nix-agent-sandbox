@@ -4,7 +4,6 @@ import {
   killTerminalClients,
   renameSession,
   startShell,
-  stopContainer,
 } from "./api/client";
 import { getWsToken } from "./api/wsToken";
 import { PaneResizer } from "./components/PaneResizer";
@@ -97,16 +96,10 @@ export function App() {
         <SessionsPane
           sessions={sessions.rows}
           activeId={terminals.activeId}
-          viewFor={(id) => terminals.getViewFor(id)}
-          shellSpawnInFlight={(id) => terminals.isShellSpawnInFlight(id)}
           onSelect={(id) => terminals.selectSession(id)}
-          onStop={async (containerName) => {
-            await stopContainer(containerName);
-          }}
           onRename={async (sessionId, name) => {
             await renameSession(sessionId, name);
           }}
-          onShellToggle={handleShellToggle}
         />
         <PaneResizer
           side="left"

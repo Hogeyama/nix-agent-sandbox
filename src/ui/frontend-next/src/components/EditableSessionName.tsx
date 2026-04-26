@@ -1,9 +1,9 @@
 /**
  * Inline rename affordance for a session row.
  *
- * In `idle` the caller may delegate rendering via `renderIdle`; when the
- * slot is absent the component shows a "Rename" button by default.
- * Clicking enters `editing` with the current name as the draft. The
+ * In `idle` the caller provides the visible affordance through
+ * `renderIdle`. Clicking enters `editing` with the current name as the
+ * draft. The
  * input commits with Enter, cancels with Escape or blur, and stays
  * disabled while a save is in flight. Validation runs locally via
  * `validateName` before the `commit` action is dispatched, so a
@@ -25,7 +25,7 @@ import {
 export interface EditableSessionNameProps {
   currentName: string;
   onSubmit: (next: string) => Promise<void>;
-  renderIdle?: (api: { start: () => void; currentName: string }) => JSX.Element;
+  renderIdle: (api: { start: () => void; currentName: string }) => JSX.Element;
 }
 
 export function EditableSessionName(props: EditableSessionNameProps) {
@@ -109,23 +109,10 @@ export function EditableSessionName(props: EditableSessionNameProps) {
   return (
     <Show
       when={state().mode !== "idle"}
-      fallback={
-        props.renderIdle ? (
-          props.renderIdle({
-            start: startEdit,
-            currentName: props.currentName,
-          })
-        ) : (
-          <button
-            type="button"
-            class="session-action-btn rename-trigger"
-            onClick={startEdit}
-            aria-label={`Rename session ${props.currentName}`}
-          >
-            Rename
-          </button>
-        )
-      }
+      fallback={props.renderIdle({
+        start: startEdit,
+        currentName: props.currentName,
+      })}
     >
       <label class="rename-edit">
         <input

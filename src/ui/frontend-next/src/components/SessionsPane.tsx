@@ -1,28 +1,13 @@
 import { For, Show } from "solid-js";
-import type { ShellView } from "../stores/shellMapping";
 import type { SessionRow } from "../stores/types";
-import { SessionActions } from "./SessionActions";
+import { EditableSessionName } from "./EditableSessionName";
 import { describeSessionRow, formatSessionTree } from "./sessionRowView";
 
 type Props = {
   sessions: () => SessionRow[];
   activeId: () => string | null;
-  /**
-   * Resolves the agent's currently-recorded view position. Returning
-   * `undefined` means the user has not interacted with the toggle yet
-   * for that agent; SessionActions defaults to "agent" in that case.
-   */
-  viewFor: (sessionId: string) => ShellView | undefined;
-  /**
-   * Reports whether the agent has a shell-spawn HTTP request in flight.
-   * Drives the disabled state of the Shell button so a double-click
-   * cannot issue two parallel POSTs for the same container.
-   */
-  shellSpawnInFlight: (sessionId: string) => boolean;
   onSelect: (sessionId: string) => void;
-  onStop: (containerName: string) => Promise<void>;
   onRename: (sessionId: string, name: string) => Promise<void>;
-  onShellToggle: (row: SessionRow) => void | Promise<void>;
 };
 
 export function SessionsPane(props: Props) {
@@ -51,21 +36,20 @@ export function SessionsPane(props: Props) {
                 role="button"
                 tabindex={0}
                 onClick={(e) => {
-                  // Ignore clicks that originate inside .session-actions so inner action buttons own their own click handlers.
+                  // Ignore clicks that originate inside .rename-edit so the
+                  // inline editor owns its own event handling.
                   if (
-                    (e.target as HTMLElement).closest(".session-actions") ===
-                    null
+                    (e.target as HTMLElement).closest(".rename-edit") === null
                   ) {
                     props.onSelect(row.id);
                   }
                 }}
                 onKeyDown={(e) => {
                   // Match the closest-check guard on onClick: keystrokes
-                  // that originate inside .session-actions belong to inner
-                  // inputs/buttons and must not bubble up as row activation.
+                  // that originate inside .rename-edit belong to inner
+                  // inputs and must not bubble up as row activation.
                   if (
-                    (e.target as HTMLElement).closest(".session-actions") !==
-                    null
+                    (e.target as HTMLElement).closest(".rename-edit") !== null
                   ) {
                     return;
                   }
@@ -76,7 +60,35 @@ export function SessionsPane(props: Props) {
                 }}
               >
                 <span class={display.dotClass} aria-hidden="true" />
-                <div class="session-title">{row.name}</div>
+                <div class="session-title-slot">
+                  <EditableSessionName
+                    currentName={row.name}
+                    onSubmit={(next) => props.onRename(row.id, next)}
+                    renderIdle={({ start, currentName }) => (
+                      <button
+                        type="button"
+                        class="session-title"
+                        aria-label={`Rename session ${currentName}. Press Enter or Space, or double-click, to rename`}
+                        onClick={(e) => {
+                          if (e.detail === 0) e.stopPropagation();
+                        }}
+                        onDblClick={(e) => {
+                          e.stopPropagation();
+                          start();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter" && e.key !== " ") return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          start();
+                        }}
+                        title="Double-click or press Enter or Space to rename"
+                      >
+                        {currentName}
+                      </button>
+                    )}
+                  />
+                </div>
                 <Show when={display.badge}>
                   {(badge) => <span class={badge().class}>{badge().text}</span>}
                 </Show>
@@ -92,16 +104,6 @@ export function SessionsPane(props: Props) {
                     <span class="id">{row.shortId}</span>
                   </dd>
                 </dl>
-                <div class="session-actions">
-                  <SessionActions
-                    row={row}
-                    view={() => props.viewFor(row.id)}
-                    shellInFlight={() => props.shellSpawnInFlight(row.id)}
-                    onStop={props.onStop}
-                    onRename={props.onRename}
-                    onShellToggle={props.onShellToggle}
-                  />
-                </div>
               </li>
             );
           }}
