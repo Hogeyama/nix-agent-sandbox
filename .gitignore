@@ -2,6 +2,7 @@
 .hostexec-demo/
 src/ui/dist/
 !src/ui/dist/.gitkeep
+src/ui/dist-next/
 .playwright/cli.config.json
 .playwright-cli/
 .direnv/

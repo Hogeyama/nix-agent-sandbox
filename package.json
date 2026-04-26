@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun run main.ts",
     "build-ui": "bun run scripts/build_ui.ts",
+    "build-ui-next": "bun run scripts/build_ui_next.ts",
     "compile": "bun build --compile --outfile nas main.ts",
     "test": "bun test src/ tests/",
     "test:unit": "bash -c 'bun test $(find src -name \"*_test.ts\" ! -name \"*integration_test.ts\")'",
@@ -13,10 +14,11 @@
     "lint": "biome check src/ tests/ scripts/ main.ts",
     "lint:composed-effects": "bun scripts/lint-composed-effects.ts",
     "fmt": "biome format --write src/ tests/ scripts/ main.ts",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc -p src/ui/frontend-next/tsconfig.json --noEmit",
     "bun2nix": "bun2nix -o bun.nix"
   },
   "dependencies": {
+    "@fontsource-variable/geist-mono": "^5",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
@@ -25,12 +27,16 @@
     "@xterm/xterm": "^6.0.0",
     "effect": "^3.21.0",
     "preact": "^10",
+    "solid-js": "^1.9",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@babel/core": "^7",
+    "@babel/preset-typescript": "^7",
     "@biomejs/biome": "2.4.11",
     "@playwright/cli": "^0.1.8",
     "@types/node": "^22",
+    "babel-preset-solid": "^1.9",
     "bun-types": "latest",
     "bun2nix": "latest",
     "typescript": "^6.0.2"
