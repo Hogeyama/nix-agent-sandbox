@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, mock, test } from "bun:test";
+import type { AuditLogEntryRow } from "../stores/auditStore";
 import { pendingRequestKey } from "../stores/pendingRequestKey";
 import type {
   HostExecPendingRow,
@@ -135,6 +136,7 @@ function makeProps(opts: {
   scopeFor?: (key: string) => string | undefined;
   busyFor?: (key: string) => boolean;
   errorFor?: (key: string) => string | null;
+  auditEntries?: AuditLogEntryRow[];
 }) {
   const onApprove = mock(async () => undefined);
   const onDeny = mock(async () => undefined);
@@ -151,6 +153,7 @@ function makeProps(opts: {
       setScope,
       onApprove,
       onDeny,
+      auditEntries: () => opts.auditEntries ?? [],
     },
     onApprove,
     onDeny,
@@ -221,6 +224,78 @@ describe("PendingPane scope chip rendering", () => {
     const make = scopeRow.props.children.props.children;
     expect(make("capability").props.classList.selected).toBe(true);
     expect(make("once").props.classList.selected).toBe(false);
+  });
+});
+
+describe("PendingPane audit accordion", () => {
+  function auditDetailsOf(tree: unknown): {
+    type: string;
+    props: { class: string; children: unknown[] };
+  } {
+    const content = contentOf(tree);
+    const children = content.props.children as unknown[];
+    // children layout after the audit accordion was added:
+    //   [section-label, For(network), section-label, For(hostexec), details]
+    return children[4] as {
+      type: string;
+      props: { class: string; children: unknown[] };
+    };
+  }
+
+  test("renders a <details> element so it is closed by default", () => {
+    // Native <details> defaults to closed; PendingPane does not set the
+    // `open` attribute, so use of <details> is the closed-by-default
+    // contract. We pin the element type and the absence of `open`.
+    const { props } = makeProps({});
+    const tree = PendingPane(props) as unknown;
+    const details = auditDetailsOf(tree);
+    expect(details.type).toBe("details");
+    expect((details.props as Record<string, unknown>).open).toBeUndefined();
+  });
+
+  test("falls back to an empty-state line when there are no entries", () => {
+    const { props } = makeProps({ auditEntries: [] });
+    const tree = PendingPane(props) as unknown;
+    const details = auditDetailsOf(tree);
+    // children: [summary, For(...)]
+    const forBlock = details.props.children[1] as {
+      props: {
+        fallback: { props: { class: string; children: string } };
+      };
+    };
+    expect(forBlock.props.fallback.props.class).toBe("audit-empty");
+    expect(forBlock.props.fallback.props.children).toBe("no audit entries");
+  });
+
+  test("renders one row per audit entry via the For factory", () => {
+    const entries: AuditLogEntryRow[] = [
+      {
+        id: "a1",
+        timestamp: "2026-04-20T10:00:00.000Z",
+        domain: "network",
+        sessionId: "s1",
+        requestId: "r1",
+        decision: "allow",
+        reason: "ok",
+        scope: null,
+        target: "example.com:443",
+        command: null,
+      },
+    ];
+    const { props } = makeProps({ auditEntries: entries });
+    const tree = PendingPane(props) as unknown;
+    const details = auditDetailsOf(tree);
+    const forBlock = details.props.children[1] as {
+      props: {
+        each: AuditLogEntryRow[];
+        children: (row: AuditLogEntryRow) => {
+          props: { class: string; children: unknown[] };
+        };
+      };
+    };
+    expect(forBlock.props.each).toEqual(entries);
+    const row = forBlock.props.children(entries[0] as AuditLogEntryRow);
+    expect(row.props.class).toBe("audit-row");
   });
 });
 

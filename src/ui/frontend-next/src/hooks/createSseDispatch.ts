@@ -21,16 +21,18 @@
  * snapshot drop their selected scope, busy flag, and error message,
  * while rows still present keep their state untouched.
  *
- * Event names not present in the switch (for example `sessions` or
- * `audit:logs`) fall into the default branch and are no-ops.
+ * Event names not present in the switch (for example `sessions`) fall
+ * into the default branch and are no-ops.
  */
 
+import type { AuditStore } from "../stores/auditStore";
 import type { PendingActionStore } from "../stores/pendingActionStore";
 import { pendingRequestKey } from "../stores/pendingRequestKey";
 import type { PendingStore } from "../stores/pendingStore";
 import type { SessionsStore } from "../stores/sessionsStore";
 import type { TerminalsStore } from "../stores/terminalsStore";
 import type {
+  AuditLogEntryLike,
   ContainerInfoLike,
   DtachSessionLike,
   HostExecPendingItemLike,
@@ -42,6 +44,7 @@ export interface SseDispatchStores {
   pending: PendingStore;
   pendingAction: PendingActionStore;
   terminals: TerminalsStore;
+  audit: AuditStore;
 }
 
 export type SseDispatch = (name: string, data: unknown) => void;
@@ -57,6 +60,7 @@ export const SSE_EVENT_NAMES = [
   "network:pending",
   "hostexec:pending",
   "terminal:sessions",
+  "audit:logs",
 ] as const;
 
 /**
@@ -102,6 +106,11 @@ export function createSseDispatch(stores: SseDispatchStores): SseDispatch {
       case "terminal:sessions": {
         const items = extractItems<DtachSessionLike>(data);
         if (items !== null) stores.terminals.setDtachSessions(items);
+        return;
+      }
+      case "audit:logs": {
+        const items = extractItems<AuditLogEntryLike>(data);
+        if (items !== null) stores.audit.setEntries(items);
         return;
       }
       default:

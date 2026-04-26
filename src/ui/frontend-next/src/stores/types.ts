@@ -47,6 +47,23 @@ export type DtachSessionLike = {
   createdAt: number;
 };
 
+// SSE-received payload subset describing one audit log entry, mirroring
+// the wire shape of `AuditLogEntry` in `src/audit/types.ts`. Optional
+// fields are typed as `T | null | undefined` so the store's normalizer
+// can absorb either representation.
+export type AuditLogEntryLike = {
+  id: string;
+  timestamp: string; // ISO-8601
+  domain: "network" | "hostexec";
+  sessionId: string;
+  requestId: string;
+  decision: "allow" | "deny";
+  reason: string;
+  scope?: string | null;
+  target?: string | null;
+  command?: string | null;
+};
+
 export type SessionTurn = "user-turn" | "ack-turn" | "agent-turn" | "done";
 
 /**

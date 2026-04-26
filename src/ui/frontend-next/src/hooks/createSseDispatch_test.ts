@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, mock, test } from "bun:test";
+import type { AuditStore } from "../stores/auditStore";
 import type { PendingActionStore } from "../stores/pendingActionStore";
 import { pendingRequestKey } from "../stores/pendingRequestKey";
 import type {
@@ -20,6 +21,7 @@ import type {
 import type { SessionsStore } from "../stores/sessionsStore";
 import type { TerminalsStore } from "../stores/terminalsStore";
 import type {
+  AuditLogEntryLike,
   ContainerInfoLike,
   DtachSessionLike,
   HostExecPendingItemLike,
@@ -40,6 +42,7 @@ interface FakeStores {
   terminals: TerminalsStore & {
     setDtachSessions: ReturnType<typeof mock>;
   };
+  audit: AuditStore & { setEntries: ReturnType<typeof mock> };
 }
 
 function makeFakeStores(): FakeStores {
@@ -76,7 +79,11 @@ function makeFakeStores(): FakeStores {
     clearShellSpawnInFlight: () => {},
     isShellSpawnInFlight: () => false,
   };
-  return { sessions, pending, pendingAction, terminals };
+  const audit: FakeStores["audit"] = {
+    entries: () => [],
+    setEntries: mock((_items: AuditLogEntryLike[]) => {}),
+  };
+  return { sessions, pending, pendingAction, terminals, audit };
 }
 
 describe("createSseDispatch", () => {
@@ -94,6 +101,7 @@ describe("createSseDispatch", () => {
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
+    expect(stores.audit.setEntries).not.toHaveBeenCalled();
   });
 
   test("'network:pending' with valid envelope routes to pending.setNetwork and reconciles pendingAction", () => {
@@ -125,6 +133,7 @@ describe("createSseDispatch", () => {
     ]);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
+    expect(stores.audit.setEntries).not.toHaveBeenCalled();
   });
 
   test("'hostexec:pending' with valid envelope routes to pending.setHostExec and reconciles pendingAction", () => {
@@ -150,6 +159,7 @@ describe("createSseDispatch", () => {
     ]);
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
+    expect(stores.audit.setEntries).not.toHaveBeenCalled();
   });
 
   test("'terminal:sessions' with valid envelope routes to terminals.setDtachSessions", () => {
@@ -172,6 +182,7 @@ describe("createSseDispatch", () => {
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
+    expect(stores.audit.setEntries).not.toHaveBeenCalled();
   });
 
   test("'terminal:sessions' with invalid envelope is ignored", () => {
@@ -197,11 +208,14 @@ describe("createSseDispatch", () => {
     dispatch("containers", 42);
     dispatch("network:pending", { other: [] });
     dispatch("hostexec:pending", undefined);
+    dispatch("audit:logs", null);
+    dispatch("audit:logs", { items: "not-an-array" });
 
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
+    expect(stores.audit.setEntries).not.toHaveBeenCalled();
   });
 
   test("SSE_EVENT_NAMES exposes the dispatched event vocabulary in a stable order", () => {
@@ -213,6 +227,7 @@ describe("createSseDispatch", () => {
       "network:pending",
       "hostexec:pending",
       "terminal:sessions",
+      "audit:logs",
     ]);
   });
 
@@ -221,13 +236,40 @@ describe("createSseDispatch", () => {
     const dispatch = createSseDispatch(stores);
 
     dispatch("sessions", { items: [] });
-    dispatch("audit:logs", { items: [] });
     dispatch("", { items: [] });
 
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
     expect(stores.pending.setHostExec).not.toHaveBeenCalled();
     expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
+    expect(stores.audit.setEntries).not.toHaveBeenCalled();
+  });
+
+  test("'audit:logs' with valid envelope routes to audit.setEntries", () => {
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+
+    const items: AuditLogEntryLike[] = [
+      {
+        id: "a1",
+        timestamp: "2026-04-20T10:00:00.000Z",
+        domain: "network",
+        sessionId: "s1",
+        requestId: "r1",
+        decision: "allow",
+        reason: "ok",
+        target: "example.com:443",
+      },
+    ];
+    dispatch("audit:logs", { items });
+
+    expect(stores.audit.setEntries).toHaveBeenCalledTimes(1);
+    expect(stores.audit.setEntries).toHaveBeenCalledWith(items);
+    expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.pending.setNetwork).not.toHaveBeenCalled();
+    expect(stores.pending.setHostExec).not.toHaveBeenCalled();
+    expect(stores.pendingAction.reconcile).not.toHaveBeenCalled();
+    expect(stores.terminals.setDtachSessions).not.toHaveBeenCalled();
   });
 
   test("empty network snapshot reconciles with an empty key list", () => {
@@ -246,5 +288,15 @@ describe("createSseDispatch", () => {
     dispatch("hostexec:pending", { items: [] });
     expect(stores.pendingAction.reconcile).toHaveBeenCalledTimes(1);
     expect(stores.pendingAction.reconcile).toHaveBeenCalledWith("hostexec", []);
+  });
+
+  test("empty audit snapshot still calls audit.setEntries with an empty list", () => {
+    // Symmetric to the pending case: an empty snapshot must still hit
+    // the setter so a previously-populated accordion is cleared.
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+    dispatch("audit:logs", { items: [] });
+    expect(stores.audit.setEntries).toHaveBeenCalledTimes(1);
+    expect(stores.audit.setEntries).toHaveBeenCalledWith([]);
   });
 });

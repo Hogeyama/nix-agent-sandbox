@@ -18,6 +18,7 @@ import { createPendingActionHandlers } from "./handlers/createPendingActionHandl
 import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
 import { useConnection } from "./hooks/useConnection";
 import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
+import { createAuditStore } from "./stores/auditStore";
 import { createPendingActionStore } from "./stores/pendingActionStore";
 import { createPendingStore } from "./stores/pendingStore";
 import { createSessionsStore } from "./stores/sessionsStore";
@@ -37,6 +38,7 @@ export function App() {
   const pending = createPendingStore();
   const pendingAction = createPendingActionStore();
   const terminals = createTerminalsStore();
+  const audit = createAuditStore();
   const ui = createUiStore();
   // Single instantiation: handlers close over the same store and client
   // for the entire app lifetime so a re-render of `PendingPane` cannot
@@ -50,6 +52,7 @@ export function App() {
     pending,
     pendingAction,
     terminals,
+    audit,
   });
   const { connected } = useConnection("/api/events", dispatch, {
     eventNames: SSE_EVENT_NAMES,
@@ -160,6 +163,7 @@ export function App() {
           setScope={pendingAction.setScope}
           onApprove={pendingHandlers.onApprove}
           onDeny={pendingHandlers.onDeny}
+          auditEntries={audit.entries}
         />
       </main>
       <StatusBar />

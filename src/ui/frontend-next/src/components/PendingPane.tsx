@@ -3,10 +3,12 @@ import {
   DEFAULT_HOSTEXEC_SCOPE,
   DEFAULT_NETWORK_SCOPE,
 } from "../handlers/createPendingActionHandlers";
+import type { AuditLogEntryRow } from "../stores/auditStore";
 import type {
   HostExecPendingRow,
   NetworkPendingRow,
 } from "../stores/pendingStore";
+import { formatAuditEntry, summaryFor } from "./auditEntryView";
 import { formatRelativeTime, sessionLabel } from "./pendingCardView";
 
 const NETWORK_SCOPES = ["once", "host-port", "host"] as const;
@@ -32,6 +34,9 @@ type Props = {
     scope: string,
   ) => Promise<void>;
   onDeny: (row: NetworkPendingRow | HostExecPendingRow) => Promise<void>;
+  // Audit log feed accessor. The store owns the recent-50 trim; the
+  // accordion only reads the rows here and renders them newest-first.
+  auditEntries: () => AuditLogEntryRow[];
 };
 
 // One-second tick is fine: the relative-time strings only change at
@@ -212,6 +217,28 @@ export function PendingPane(props: Props) {
               );
             }}
           </For>
+
+          <details class="audit-accordion">
+            <summary class="audit-summary">
+              <span>Audit · recent</span>
+              <span class="section-sub">
+                {formatSectionCount(props.auditEntries().length)}
+              </span>
+            </summary>
+            <For
+              each={props.auditEntries()}
+              fallback={<div class="audit-empty">no audit entries</div>}
+            >
+              {(row) => (
+                <div class="audit-row">
+                  <span class="audit-time">{formatAuditEntry(row)}</span>
+                  <span class="audit-body">
+                    {row.domain} · {row.decision} · {summaryFor(row)}
+                  </span>
+                </div>
+              )}
+            </For>
+          </details>
         </div>
       </Show>
     </aside>
