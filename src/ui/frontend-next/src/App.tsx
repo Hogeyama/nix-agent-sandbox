@@ -28,7 +28,11 @@ export function App() {
         onNewSession={() => setDialogOpen(true)}
       />
       <main class="workspace">
-        <SessionsPane sessions={sessions.rows} />
+        <SessionsPane
+          sessions={sessions.rows}
+          activeId={terminals.activeId}
+          onSelect={(id) => terminals.selectSession(id)}
+        />
         <TerminalPane terminals={terminals} wsToken={() => getWsToken()} />
         <PendingPane network={pending.network} hostexec={pending.hostexec} />
       </main>

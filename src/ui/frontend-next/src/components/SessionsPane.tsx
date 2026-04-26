@@ -4,6 +4,8 @@ import { describeSessionRow, formatSessionTree } from "./sessionRowView";
 
 type Props = {
   sessions: () => SessionRow[];
+  activeId: () => string | null;
+  onSelect: (sessionId: string) => void;
 };
 
 export function SessionsPane(props: Props) {
@@ -23,7 +25,30 @@ export function SessionsPane(props: Props) {
             const display = describeSessionRow(row);
             const tree = formatSessionTree(row);
             return (
-              <li class="session">
+              // biome-ignore lint/a11y/useSemanticElements: <dl> is not phrasing content, so wrapping the row in <button> is invalid HTML; the row uses <li> with role="button" instead.
+              // biome-ignore lint/a11y/useFocusableInteractive: tabindex={0} below makes the row focusable; biome does not recognise the lowercase Solid attribute.
+              <li
+                class="session"
+                classList={{ active: row.id === props.activeId() }}
+                // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: the row delegates selection to onSelect and exposes that intent through role="button"; replacing the <li> breaks the surrounding <ul> session-list semantics.
+                role="button"
+                tabindex={0}
+                onClick={(e) => {
+                  // Ignore clicks that originate inside .session-actions so inner action buttons own their own click handlers.
+                  if (
+                    (e.target as HTMLElement).closest(".session-actions") ===
+                    null
+                  ) {
+                    props.onSelect(row.id);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    props.onSelect(row.id);
+                  }
+                }}
+              >
                 <span class={display.dotClass} aria-hidden="true" />
                 <div class="session-title">{row.name}</div>
                 <Show when={display.badge}>
@@ -41,6 +66,7 @@ export function SessionsPane(props: Props) {
                     <span class="id">{row.shortId}</span>
                   </dd>
                 </dl>
+                <div class="session-actions" aria-hidden="true" />
               </li>
             );
           }}

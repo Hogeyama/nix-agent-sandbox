@@ -58,6 +58,11 @@ export type TerminalsStore = {
    * already-known session.
    */
   setActive: (sessionId: string | null) => void;
+  /**
+   * Sets `activeId` to the requested session. Used by the sessions row
+   * click handler to switch the center pane.
+   */
+  selectSession: (sessionId: string) => void;
 };
 
 export function createTerminalsStore(): TerminalsStore {
@@ -66,6 +71,10 @@ export function createTerminalsStore(): TerminalsStore {
     activeId: null,
     pendingActivateId: null,
   });
+
+  function setActive(sessionId: string | null): void {
+    setState("activeId", sessionId);
+  }
 
   return {
     dtachSessions: () => state.dtachSessions,
@@ -104,8 +113,9 @@ export function createTerminalsStore(): TerminalsStore {
         }),
       );
     },
-    setActive: (sessionId) => {
-      setState("activeId", sessionId);
+    setActive,
+    selectSession: (sessionId) => {
+      setActive(sessionId);
     },
   };
 }

@@ -53,6 +53,7 @@ function makeFakeStores(): FakeStores {
     setDtachSessions: mock((_items: DtachSessionLike[]) => {}),
     requestActivate: (_id: string) => {},
     setActive: (_id: string | null) => {},
+    selectSession: (_id: string) => {},
   };
   return { sessions, pending, terminals };
 }

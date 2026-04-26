@@ -86,6 +86,12 @@ describe("createTerminalsStore", () => {
     expect(store.pendingActivateId()).toBeNull();
   });
 
+  test("selectSession delegates to setActive", () => {
+    const store = createTerminalsStore();
+    store.selectSession("s1");
+    expect(store.activeId()).toBe("s1");
+  });
+
   test("pending wins over an existing activeId that disappears in the same snapshot", () => {
     const store = createTerminalsStore();
     store.setActive("a");
