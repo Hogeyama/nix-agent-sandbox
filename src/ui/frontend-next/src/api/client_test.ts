@@ -14,7 +14,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { getLaunchBranches, killTerminalClients, request } from "./client";
+import {
+  ackSessionTurn,
+  getLaunchBranches,
+  HttpError,
+  killTerminalClients,
+  renameSession,
+  request,
+  startShell,
+  stopContainer,
+} from "./client";
 
 type FetchFn = typeof globalThis.fetch;
 type FetchImpl = (
@@ -154,5 +163,219 @@ describe("URL encoding", () => {
     // in the path — otherwise the backend would route the request to
     // a different endpoint or interpret part of it as a query string.
     expect(url).not.toContain("weird/session&id");
+  });
+
+  test("ackSessionTurn encodes sessionId containing reserved characters", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({ item: { sessionId: "weird/sess&id" } }),
+    );
+    await ackSessionTurn("weird/sess&id");
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `/api/sessions/${encodeURIComponent("weird/sess&id")}/ack`,
+    );
+    expect(url).not.toContain("weird/sess&id");
+  });
+});
+
+describe("HttpError", () => {
+  test("preserves status code on 4xx responses", async () => {
+    installFetch(
+      async () =>
+        new Response(JSON.stringify({ error: "conflict" }), {
+          status: 409,
+          statusText: "Conflict",
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    let caught: unknown;
+    try {
+      await request("POST", "/api/x");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    expect((caught as HttpError).status).toBe(409);
+    expect((caught as HttpError).message).toBe("conflict");
+    // `name = "HttpError"` makes the class identifiable in stack traces
+    // and Error.toString() output.
+    expect((caught as HttpError).name).toBe("HttpError");
+  });
+
+  test("preserves status code on 5xx responses", async () => {
+    installFetch(
+      async () =>
+        new Response("not json", {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { "Content-Type": "text/plain" },
+        }),
+    );
+    let caught: unknown;
+    try {
+      await request("GET", "/api/x");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    expect((caught as HttpError).status).toBe(500);
+    // Falls back to statusText when the body is not parseable JSON.
+    expect((caught as HttpError).message).toBe("Internal Server Error");
+  });
+});
+
+describe("ackSessionTurn", () => {
+  test("posts to /api/sessions/:id/ack and parses {item} envelope on 200", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({
+        item: { sessionId: "sess-1", turn: "ack-turn", name: "renamed" },
+      }),
+    );
+    const result = await ackSessionTurn("sess-1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/sessions/sess-1/ack");
+    expect(init.method).toBe("POST");
+    // Bodyless POST: no Content-Type, no JSON body.
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(result.item.sessionId).toBe("sess-1");
+    expect(result.item.turn).toBe("ack-turn");
+    expect(result.item.name).toBe("renamed");
+  });
+
+  test("rejects with HttpError(409) on conflict (state mismatch)", async () => {
+    installFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: "Cannot acknowledge turn in state: agent-turn",
+          }),
+          {
+            status: 409,
+            statusText: "Conflict",
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+    let caught: unknown;
+    try {
+      await ackSessionTurn("sess-1");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    // Commit 5 silently absorbs 409 as a benign race; pin the contract here.
+    expect((caught as HttpError).status).toBe(409);
+    expect((caught as HttpError).message).toContain(
+      "Cannot acknowledge turn in state",
+    );
+  });
+
+  test("rejects with HttpError(500) on server error (distinct from 409)", async () => {
+    installFetch(
+      async () =>
+        new Response(JSON.stringify({ error: "boom" }), {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    let caught: unknown;
+    try {
+      await ackSessionTurn("sess-1");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    // 500 is intentionally distinct from 409 so callers can branch.
+    expect((caught as HttpError).status).toBe(500);
+    expect((caught as HttpError).status).not.toBe(409);
+  });
+
+  test("passes through item.name when omitted by the backend", async () => {
+    // Backend omits `name` when no custom name has been set; the wire
+    // contract makes the field optional and the client must accept it
+    // without throwing, leaving downstream consumers to treat undefined
+    // as "no custom name".
+    installFetch(async () =>
+      jsonResponse({ item: { sessionId: "sess-2", turn: "ack-turn" } }),
+    );
+    const result = await ackSessionTurn("sess-2");
+    expect(result.item.sessionId).toBe("sess-2");
+    expect(result.item.name).toBeUndefined();
+  });
+});
+
+describe("renameSession", () => {
+  test("sends PATCH with {name} body and parses {item} envelope", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({ item: { sessionId: "sess-3", name: "new name" } }),
+    );
+    const result = await renameSession("sess-3", "new name");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/sessions/sess-3/name");
+    expect(init.method).toBe("PATCH");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(init.body).toBe(JSON.stringify({ name: "new name" }));
+    expect(result.item.name).toBe("new name");
+  });
+
+  test("surfaces the sanitized name returned by the backend", async () => {
+    // The backend strips control characters (U+0000..U+001F, U+007F)
+    // before persisting and echoes the sanitized result back. The client
+    // must surface that rather than the user-typed input so the UI shows
+    // exactly what is stored. Mirrors the pattern in
+    // `src/ui/routes/api_integration_test.ts:655-681`.
+    const fetchMock = installFetch(async () =>
+      jsonResponse({ item: { sessionId: "sess-4", name: "abcd" } }),
+    );
+    const result = await renameSession("sess-4", "a\u0000b\u0007c\u007fd");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // The wire body still carries the raw user input; the backend does
+    // the stripping and replies with the sanitized form.
+    expect(init.body).toBe(JSON.stringify({ name: "a\u0000b\u0007c\u007fd" }));
+    expect(result.item.name).toBe("abcd");
+  });
+});
+
+describe("stopContainer", () => {
+  test("posts to /api/containers/:name/stop and parses {ok:true} envelope", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    const result = await stopContainer("nas-foo");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/containers/nas-foo/stop");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(result).toEqual({ ok: true });
+  });
+
+  test("encodes container name containing reserved characters", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await stopContainer("weird/name&id");
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `/api/containers/${encodeURIComponent("weird/name&id")}/stop`,
+    );
+    expect(url).not.toContain("weird/name&id");
+  });
+});
+
+describe("startShell", () => {
+  test("posts to /api/containers/:name/shell and parses {dtachSessionId} on 200", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({ dtachSessionId: "shell-abc123" }),
+    );
+    const result = await startShell("nas-foo");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/containers/nas-foo/shell");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(result).toEqual({ dtachSessionId: "shell-abc123" });
   });
 });
