@@ -42,6 +42,7 @@ import {
 import { describeShellToggle, type ShellView } from "../stores/shellMapping";
 import type { SessionRow } from "../stores/types";
 import type { TerminalHandle } from "../terminal/attachTerminalSession";
+import { EditableSessionName } from "./EditableSessionName";
 import {
   clampFontSize,
   decideSearchSubmit,
@@ -79,6 +80,7 @@ export interface TerminalToolbarProps {
   shellSpawnInFlight: (sessionId: string) => boolean;
   onAck: (sessionId: string) => Promise<void>;
   onKillClients: (sessionId: string) => Promise<void>;
+  onRename: (sessionId: string, name: string) => Promise<void>;
   onShellToggle: (row: SessionRow) => void | Promise<void>;
 }
 
@@ -217,7 +219,28 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
         {(row) => (
           <span class="term-context">
             <span class="dot" aria-hidden="true" />
-            <span class="name">{row().name}</span>
+            <EditableSessionName
+              currentName={row().name}
+              onSubmit={(next) => props.onRename(row().id, next)}
+              renderIdle={({ start, currentName }) => (
+                <button
+                  type="button"
+                  class="name"
+                  onDblClick={start}
+                  title="Double-click to rename"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "inherit",
+                    cursor: "inherit",
+                    font: "inherit",
+                    padding: "0",
+                  }}
+                >
+                  {currentName}
+                </button>
+              )}
+            />
             <span class="id-hint">{row().shortId}</span>
             <span class="agent-shell-badge">{shellToggle()?.currentBadge}</span>
           </span>

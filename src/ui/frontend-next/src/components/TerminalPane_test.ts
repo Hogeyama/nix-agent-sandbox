@@ -80,6 +80,7 @@ describe("TerminalPane", () => {
       wsToken: () => "token",
       onAck: async () => undefined,
       onKillClients: async () => undefined,
+      onRename: async () => undefined,
       onShellToggle: () => undefined,
     }) as unknown as {
       props: {

@@ -1,17 +1,19 @@
 /**
  * Inline rename affordance for a session row.
  *
- * In `idle` the component is a "Rename" button; clicking enters
- * `editing` with the current name as the draft. The input commits with
- * Enter, cancels with Escape or blur, and stays disabled while a save
- * is in flight. Validation runs locally via `validateName` before the
- * `commit` action is dispatched, so a malformed draft never reaches
- * the network; the resulting message is surfaced inline next to the
- * input. Backend errors flow through the reducer's `failure` action so
- * the input rehydrates with the rejected draft and the error chip.
+ * In `idle` the caller may delegate rendering via `renderIdle`; when the
+ * slot is absent the component shows a "Rename" button by default.
+ * Clicking enters `editing` with the current name as the draft. The
+ * input commits with Enter, cancels with Escape or blur, and stays
+ * disabled while a save is in flight. Validation runs locally via
+ * `validateName` before the `commit` action is dispatched, so a
+ * malformed draft never reaches the network; the resulting message is
+ * surfaced inline next to the input. Backend errors flow through the
+ * reducer's `failure` action so the input rehydrates with the rejected
+ * draft and the error chip.
  */
 
-import { createSignal, Show } from "solid-js";
+import { createSignal, type JSX, Show } from "solid-js";
 import {
   initialRenameState,
   type RenameAction,
@@ -23,6 +25,7 @@ import {
 export interface EditableSessionNameProps {
   currentName: string;
   onSubmit: (next: string) => Promise<void>;
+  renderIdle?: (api: { start: () => void; currentName: string }) => JSX.Element;
 }
 
 export function EditableSessionName(props: EditableSessionNameProps) {
@@ -107,17 +110,24 @@ export function EditableSessionName(props: EditableSessionNameProps) {
     <Show
       when={state().mode !== "idle"}
       fallback={
-        <button
-          type="button"
-          class="session-action-btn rename-trigger"
-          onClick={startEdit}
-          aria-label={`Rename session ${props.currentName}`}
-        >
-          Rename
-        </button>
+        props.renderIdle ? (
+          props.renderIdle({
+            start: startEdit,
+            currentName: props.currentName,
+          })
+        ) : (
+          <button
+            type="button"
+            class="session-action-btn rename-trigger"
+            onClick={startEdit}
+            aria-label={`Rename session ${props.currentName}`}
+          >
+            Rename
+          </button>
+        )
       }
     >
-      <span class="rename-edit">
+      <label class="rename-edit">
         <input
           type="text"
           class="rename-input"
@@ -127,6 +137,8 @@ export function EditableSessionName(props: EditableSessionNameProps) {
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
           aria-label="Rename session"
         />
         <Show when={inlineError()}>
@@ -136,7 +148,7 @@ export function EditableSessionName(props: EditableSessionNameProps) {
             </span>
           )}
         </Show>
-      </span>
+      </label>
     </Show>
   );
 }

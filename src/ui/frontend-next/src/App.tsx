@@ -123,6 +123,9 @@ export function App() {
           onKillClients={async (id) => {
             await killTerminalClients(id);
           }}
+          onRename={async (sessionId, name) => {
+            await renameSession(sessionId, name);
+          }}
           onShellToggle={handleShellToggle}
         />
         {/* The right resizer is unmounted while collapsed so that the

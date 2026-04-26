@@ -50,6 +50,7 @@ type Props = {
    * button while this promise is in flight and surfaces non-success.
    */
   onKillClients: (sessionId: string) => Promise<void>;
+  onRename: (sessionId: string, name: string) => Promise<void>;
   /**
    * Switch the center pane between the agent terminal and a shell on
    * the same container. The handler is shared with the left-pane Shell
@@ -243,6 +244,7 @@ export function TerminalPane(props: Props) {
         shellSpawnInFlight={(id) => props.terminals.isShellSpawnInFlight(id)}
         onAck={props.onAck}
         onKillClients={props.onKillClients}
+        onRename={props.onRename}
         onShellToggle={props.onShellToggle}
       />
     </section>
