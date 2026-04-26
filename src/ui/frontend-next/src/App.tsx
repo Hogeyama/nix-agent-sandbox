@@ -21,7 +21,7 @@ export function App() {
       <main class="workspace">
         <SessionsPane sessions={sessions.rows} />
         <TerminalPane />
-        <PendingPane />
+        <PendingPane network={pending.network} hostexec={pending.hostexec} />
       </main>
       <StatusBar />
     </div>
