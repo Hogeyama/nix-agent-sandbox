@@ -345,12 +345,27 @@ body::after {
 /* terminal (center) */
 .terminal {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
-  padding: 16px 24px 16px;
-  background:
-    radial-gradient(ellipse at 50% 0%, rgba(217,119,6,0.025) 0%, transparent 55%),
-    var(--bg);
+  background: var(--bg);
   position: relative;
+}
+
+/* xterm.css ships a default .xterm-viewport { background: #000 } that
+ * paints a black band between .terminal and the xterm screen. Force
+ * the viewport (and its inner screen) to inherit so the whole pane is
+ * a single uniform colour controlled by THEME_DARK.background. */
+.terminal .xterm,
+.terminal .xterm-viewport,
+.terminal .xterm-screen {
+  background-color: transparent !important;
+}
+
+/* Inner breathing room around the rendered xterm screen. Matches the
+ * legacy modal so the terminal does not look glued to the pane edges. */
+.terminal .xterm {
+  padding: 8px;
 }
 
 .terminal-empty {

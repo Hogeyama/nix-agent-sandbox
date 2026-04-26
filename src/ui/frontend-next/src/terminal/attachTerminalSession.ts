@@ -36,7 +36,7 @@ import {
  * re-typing the palette.
  */
 export const THEME_DARK = {
-  background: "#0b0f1a",
+  background: "#0a0908",
   foreground: "#f5f8ff",
   cursor: "#9dd2ff",
   selectionBackground: "rgba(157, 210, 255, 0.3)",
