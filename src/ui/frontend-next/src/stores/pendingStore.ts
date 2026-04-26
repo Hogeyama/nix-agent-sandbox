@@ -7,10 +7,19 @@
  */
 
 import { createStore } from "solid-js/store";
+import { pendingRequestKey } from "./pendingRequestKey";
 import { shortenSessionId } from "./sessionId";
 import type { HostExecPendingItemLike, NetworkPendingItemLike } from "./types";
 
 export type NetworkPendingRow = {
+  // Stable composite identity `(domain, sessionId, requestId)` produced by
+  // `pendingRequestKey`. Used to key per-card UI state (selected scope,
+  // busy flag, error message) so entries do not collide with hostexec
+  // rows that happen to share a `requestId`.
+  key: string;
+  // Alias of `requestId`. Retained as an informational handle for any
+  // consumer that already reads `id` from the row; per-card state lookup
+  // uses `key` instead.
   id: string;
   sessionId: string;
   sessionShortId: string;
@@ -21,6 +30,9 @@ export type NetworkPendingRow = {
 };
 
 export type HostExecPendingRow = {
+  // See `NetworkPendingRow.key`.
+  key: string;
+  // See `NetworkPendingRow.id`.
   id: string;
   sessionId: string;
   sessionShortId: string;
@@ -33,6 +45,7 @@ export function normalizeNetworkPending(
   items: NetworkPendingItemLike[],
 ): NetworkPendingRow[] {
   return items.map((it) => ({
+    key: pendingRequestKey("network", it.sessionId, it.requestId),
     id: it.requestId,
     sessionId: it.sessionId,
     sessionShortId: shortenSessionId(it.sessionId),
@@ -47,6 +60,7 @@ export function normalizeHostExecPending(
   items: HostExecPendingItemLike[],
 ): HostExecPendingRow[] {
   return items.map((it) => ({
+    key: pendingRequestKey("hostexec", it.sessionId, it.requestId),
     id: it.requestId,
     sessionId: it.sessionId,
     sessionShortId: shortenSessionId(it.sessionId),

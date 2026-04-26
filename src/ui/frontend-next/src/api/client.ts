@@ -194,3 +194,83 @@ export function startShell(
     `/api/containers/${encodeURIComponent(containerName)}/shell`,
   );
 }
+
+/**
+ * Approve a pending network request. The backend validates `scope`
+ * against `once | host-port | host` and persists the decision; an
+ * undefined `scope` falls back to the daemon-side default.
+ *
+ * `scope` is forwarded as-is to `request`, which delegates body
+ * serialization to `JSON.stringify`. When `scope` is `undefined` the
+ * key is dropped from the wire body, mirroring the legacy frontend's
+ * `request("POST", ..., { sessionId, requestId, scope })` shape.
+ */
+export function approveNetwork(
+  sessionId: string,
+  requestId: string,
+  scope?: string,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("POST", "/api/network/approve", {
+    sessionId,
+    requestId,
+    scope,
+  });
+}
+
+/**
+ * Deny a pending network request.
+ *
+ * Unlike `denyHostExec`, this endpoint accepts and forwards `scope`
+ * because the backend validates it and passes it to the daemon
+ * (`src/ui/routes/api.ts` `/network/deny` and
+ * `src/ui/data.ts` `denyNetwork`). The UI sends the currently selected
+ * scope so a "Deny once" stays a one-shot deny while a "Deny host-port"
+ * widens the deny rule.
+ */
+export function denyNetwork(
+  sessionId: string,
+  requestId: string,
+  scope?: string,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("POST", "/api/network/deny", {
+    sessionId,
+    requestId,
+    scope,
+  });
+}
+
+/**
+ * Approve a pending host-exec request. The backend validates `scope`
+ * against `once | capability` and persists the decision.
+ */
+export function approveHostExec(
+  sessionId: string,
+  requestId: string,
+  scope?: string,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("POST", "/api/hostexec/approve", {
+    sessionId,
+    requestId,
+    scope,
+  });
+}
+
+/**
+ * Deny a pending host-exec request.
+ *
+ * Unlike `denyNetwork`, this endpoint does **not** accept a `scope`
+ * argument: the backend route does not destructure it from the body
+ * (`src/ui/routes/api.ts` `/hostexec/deny`) and the daemon-side
+ * `denyHostExec` takes no scope (`src/ui/data.ts`). Adding `scope` here
+ * would silently send a field the backend ignores and would diverge
+ * from the legacy frontend contract.
+ */
+export function denyHostExec(
+  sessionId: string,
+  requestId: string,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>("POST", "/api/hostexec/deny", {
+    sessionId,
+    requestId,
+  });
+}

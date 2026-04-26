@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { pendingRequestKey } from "./pendingRequestKey";
 import {
   createPendingStore,
   normalizeHostExecPending,
@@ -86,6 +87,23 @@ describe("normalizeNetworkPending", () => {
     const rows = normalizeNetworkPending([makeNetwork()]);
     expect(rows[0]?.sessionName).toBeNull();
   });
+
+  test("key is the network composite of sessionId and requestId", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({ sessionId: "s_abc", requestId: "req-1" }),
+    ]);
+    expect(rows[0]?.key).toBe(pendingRequestKey("network", "s_abc", "req-1"));
+  });
+
+  test("id alias of requestId is preserved alongside key", () => {
+    // Regression guard: a future refactor must not silently drop the
+    // `id` field. Per-card state lookup migrates to `key`, but `id`
+    // stays available for any consumer that already reads it.
+    const rows = normalizeNetworkPending([
+      makeNetwork({ requestId: "req-zzz" }),
+    ]);
+    expect(rows[0]?.id).toBe("req-zzz");
+  });
 });
 
 describe("normalizeHostExecPending", () => {
@@ -112,6 +130,30 @@ describe("normalizeHostExecPending", () => {
 
   test("empty input yields empty output", () => {
     expect(normalizeHostExecPending([])).toEqual([]);
+  });
+
+  test("key is the hostexec composite of sessionId and requestId", () => {
+    const rows = normalizeHostExecPending([
+      makeHostExec({ sessionId: "s_abc", requestId: "exec-1" }),
+    ]);
+    expect(rows[0]?.key).toBe(pendingRequestKey("hostexec", "s_abc", "exec-1"));
+  });
+
+  test("hostexec key is distinct from network key with the same sessionId and requestId", () => {
+    const net = normalizeNetworkPending([
+      makeNetwork({ sessionId: "s_abc", requestId: "shared" }),
+    ]);
+    const exec = normalizeHostExecPending([
+      makeHostExec({ sessionId: "s_abc", requestId: "shared" }),
+    ]);
+    expect(net[0]?.key).not.toBe(exec[0]?.key);
+  });
+
+  test("id alias of requestId is preserved alongside key", () => {
+    const rows = normalizeHostExecPending([
+      makeHostExec({ requestId: "exec-zzz" }),
+    ]);
+    expect(rows[0]?.id).toBe("exec-zzz");
   });
 });
 

@@ -16,6 +16,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   ackSessionTurn,
+  approveHostExec,
+  approveNetwork,
+  denyHostExec,
+  denyNetwork,
   getLaunchBranches,
   HttpError,
   killTerminalClients,
@@ -377,5 +381,124 @@ describe("startShell", () => {
     expect(init.headers).toBeUndefined();
     expect(init.body).toBeUndefined();
     expect(result).toEqual({ dtachSessionId: "shell-abc123" });
+  });
+});
+
+function parseBody(init: RequestInit): Record<string, unknown> {
+  return JSON.parse(init.body as string) as Record<string, unknown>;
+}
+
+describe("approveNetwork", () => {
+  test("posts to /api/network/approve with sessionId, requestId, and scope when scope is provided", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await approveNetwork("sess-1", "req-1", "host-port");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/network/approve");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    const body = parseBody(init);
+    expect(body).toEqual({
+      sessionId: "sess-1",
+      requestId: "req-1",
+      scope: "host-port",
+    });
+    expect(body).toHaveProperty("scope");
+    expect(body.scope).toBe("host-port");
+  });
+
+  test("omits scope from the wire body when scope is not provided", async () => {
+    // `JSON.stringify` drops `undefined` values, so a missing scope
+    // argument must not surface as `"scope": null` or `"scope": ""` on
+    // the wire.
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await approveNetwork("sess-1", "req-1");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = parseBody(init);
+    expect(body).toEqual({ sessionId: "sess-1", requestId: "req-1" });
+    expect(body).not.toHaveProperty("scope");
+  });
+});
+
+describe("denyNetwork", () => {
+  test("posts to /api/network/deny and forwards scope into the wire body", async () => {
+    // The backend `/network/deny` route validates and forwards `scope`
+    // (`src/ui/routes/api.ts` lines 184-203 + `src/ui/data.ts`
+    // `denyNetwork`). This test pins that the frontend serializes the
+    // scope into the request body, not just into the function
+    // signature.
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await denyNetwork("sess-1", "req-1", "host-port");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/network/deny");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    const body = parseBody(init);
+    expect(body).toEqual({
+      sessionId: "sess-1",
+      requestId: "req-1",
+      scope: "host-port",
+    });
+    expect(body).toHaveProperty("scope");
+    expect(body.scope).toBe("host-port");
+  });
+
+  test("omits scope from the wire body when scope is not provided", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await denyNetwork("sess-1", "req-1");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = parseBody(init);
+    expect(body).toEqual({ sessionId: "sess-1", requestId: "req-1" });
+    expect(body).not.toHaveProperty("scope");
+  });
+});
+
+describe("approveHostExec", () => {
+  test("posts to /api/hostexec/approve with sessionId, requestId, and scope when scope is provided", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await approveHostExec("sess-1", "exec-1", "capability");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/hostexec/approve");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    const body = parseBody(init);
+    expect(body).toEqual({
+      sessionId: "sess-1",
+      requestId: "exec-1",
+      scope: "capability",
+    });
+    expect(body).toHaveProperty("scope");
+    expect(body.scope).toBe("capability");
+  });
+
+  test("omits scope from the wire body when scope is not provided", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await approveHostExec("sess-1", "exec-1");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = parseBody(init);
+    expect(body).toEqual({ sessionId: "sess-1", requestId: "exec-1" });
+    expect(body).not.toHaveProperty("scope");
+  });
+});
+
+describe("denyHostExec", () => {
+  test("posts to /api/hostexec/deny without scope in the wire body", async () => {
+    // The backend `/hostexec/deny` route does **not** destructure
+    // `scope` from the request body (`src/ui/routes/api.ts` lines
+    // 237-253) and the daemon-side `denyHostExec` takes no scope
+    // (`src/ui/data.ts`). This test is the canonical pin separating
+    // the two Deny paths: network forwards scope, hostexec does not.
+    const fetchMock = installFetch(async () => jsonResponse({ ok: true }));
+    await denyHostExec("sess-1", "exec-1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/hostexec/deny");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    const body = parseBody(init);
+    expect(body).toEqual({ sessionId: "sess-1", requestId: "exec-1" });
+    expect(body).not.toHaveProperty("scope");
   });
 });
