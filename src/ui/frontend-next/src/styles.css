@@ -536,9 +536,9 @@ body::after {
  * the viewport (and its inner screen) to inherit so the whole pane is
  * a single uniform colour controlled by THEME_DARK.background. */
 .terminal .xterm,
-.terminal .xterm-viewport,
-.terminal .xterm-screen {
-  background-color: transparent !important;
+.terminal .xterm .xterm-viewport,
+.terminal .xterm .xterm-screen {
+  background-color: transparent;
 }
 
 /* Inner breathing room around the rendered xterm screen. Matches the

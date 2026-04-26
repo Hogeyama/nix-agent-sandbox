@@ -45,7 +45,11 @@ test("solidPlugin transforms TSX into Solid template calls", async () => {
       "utf8",
     );
 
-    const out = await fake.registered!.handler({ path: file });
+    const registered = fake.registered;
+    if (!registered) {
+      throw new Error("solidPlugin did not register an onLoad handler");
+    }
+    const out = await registered.handler({ path: file });
     expect(out.loader).toBe("js");
     // babel-preset-solid + dom-expressions produces `_$template` (or
     // `template`) helper calls for static JSX. Match either to stay
