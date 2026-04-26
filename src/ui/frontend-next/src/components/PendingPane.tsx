@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup } from "solid-js";
+import { createSignal, For, onCleanup, Show } from "solid-js";
 import type {
   HostExecPendingRow,
   NetworkPendingRow,
@@ -8,6 +8,8 @@ import { formatRelativeTime, sessionLabel } from "./pendingCardView";
 type Props = {
   network: () => NetworkPendingRow[];
   hostexec: () => HostExecPendingRow[];
+  collapsed: () => boolean;
+  onToggleCollapse: () => void;
 };
 
 // One-second tick is fine: the relative-time strings only change at
@@ -27,135 +29,147 @@ export function PendingPane(props: Props) {
   onCleanup(() => clearInterval(interval));
 
   return (
-    <aside class="pane pane-right">
-      <div class="pane-header">
-        <div class="pane-title">
-          <span class="label">Pending</span>
+    <aside class="pane pane-right" classList={{ collapsed: props.collapsed() }}>
+      <Show
+        when={!props.collapsed()}
+        fallback={
+          <button
+            type="button"
+            class="collapsed-rail"
+            aria-label="Expand pending pane"
+            onClick={props.onToggleCollapse}
+          />
+        }
+      >
+        <div class="pane-header">
+          <div class="pane-title">
+            <span class="label">Pending</span>
+          </div>
+          <button
+            class="pane-collapse"
+            type="button"
+            aria-label="Collapse pending pane"
+            onClick={props.onToggleCollapse}
+          >
+            ⟩⟩
+          </button>
         </div>
-        <button
-          class="pane-collapse"
-          type="button"
-          disabled
-          aria-label="collapse"
-        >
-          ⟩⟩
-        </button>
-      </div>
-      <div class="content">
-        <div class="section-label">
-          <span>Network · out</span>
-          <span class="section-sub">
-            {formatSectionCount(props.network().length)}
-          </span>
-        </div>
-        <For
-          each={props.network()}
-          fallback={<div class="empty">No pending</div>}
-        >
-          {(row) => (
-            <article class="card">
-              <div class="card-head">
-                <span class="chip">{sessionLabel(row)}</span>
-                <span class="card-time">
-                  {formatRelativeTime(row.createdAtMs, now())}
-                </span>
-              </div>
-              <p class="card-req">
-                <span class="verb">{row.verb}</span>
-                {row.summary}
-              </p>
-              <div class="scope-row">
-                <button
-                  type="button"
-                  class="scope selected"
-                  disabled
-                  aria-disabled="true"
-                >
-                  once
-                </button>
-                <button
-                  type="button"
-                  class="scope"
-                  disabled
-                  aria-disabled="true"
-                >
-                  host:port
-                </button>
-                <button
-                  type="button"
-                  class="scope"
-                  disabled
-                  aria-disabled="true"
-                >
-                  host
-                </button>
-              </div>
-              <div class="action-row">
-                <button
-                  type="button"
-                  class="action approve"
-                  disabled
-                  aria-disabled="true"
-                >
-                  Allow
-                </button>
-                <button
-                  type="button"
-                  class="action deny"
-                  disabled
-                  aria-disabled="true"
-                >
-                  Deny
-                </button>
-              </div>
-            </article>
-          )}
-        </For>
+        <div class="content">
+          <div class="section-label">
+            <span>Network · out</span>
+            <span class="section-sub">
+              {formatSectionCount(props.network().length)}
+            </span>
+          </div>
+          <For
+            each={props.network()}
+            fallback={<div class="empty">No pending</div>}
+          >
+            {(row) => (
+              <article class="card">
+                <div class="card-head">
+                  <span class="chip">{sessionLabel(row)}</span>
+                  <span class="card-time">
+                    {formatRelativeTime(row.createdAtMs, now())}
+                  </span>
+                </div>
+                <p class="card-req">
+                  <span class="verb">{row.verb}</span>
+                  {row.summary}
+                </p>
+                <div class="scope-row">
+                  <button
+                    type="button"
+                    class="scope selected"
+                    disabled
+                    aria-disabled="true"
+                  >
+                    once
+                  </button>
+                  <button
+                    type="button"
+                    class="scope"
+                    disabled
+                    aria-disabled="true"
+                  >
+                    host:port
+                  </button>
+                  <button
+                    type="button"
+                    class="scope"
+                    disabled
+                    aria-disabled="true"
+                  >
+                    host
+                  </button>
+                </div>
+                <div class="action-row">
+                  <button
+                    type="button"
+                    class="action approve"
+                    disabled
+                    aria-disabled="true"
+                  >
+                    Allow
+                  </button>
+                  <button
+                    type="button"
+                    class="action deny"
+                    disabled
+                    aria-disabled="true"
+                  >
+                    Deny
+                  </button>
+                </div>
+              </article>
+            )}
+          </For>
 
-        <div class="section-label">
-          <span>Host exec · cmd</span>
-          <span class="section-sub">
-            {formatSectionCount(props.hostexec().length)}
-          </span>
+          <div class="section-label">
+            <span>Host exec · cmd</span>
+            <span class="section-sub">
+              {formatSectionCount(props.hostexec().length)}
+            </span>
+          </div>
+          <For
+            each={props.hostexec()}
+            fallback={<div class="empty">No pending</div>}
+          >
+            {(row) => (
+              <article class="card">
+                <div class="card-head">
+                  <span class="chip">{sessionLabel(row)}</span>
+                  <span class="card-time">
+                    {formatRelativeTime(row.createdAtMs, now())}
+                  </span>
+                </div>
+                <p class="card-req">
+                  <span class="verb">run</span>
+                  {row.command}
+                </p>
+                <div class="action-row">
+                  <button
+                    type="button"
+                    class="action approve"
+                    disabled
+                    aria-disabled="true"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    class="action deny"
+                    disabled
+                    aria-disabled="true"
+                  >
+                    Deny
+                  </button>
+                </div>
+              </article>
+            )}
+          </For>
         </div>
-        <For
-          each={props.hostexec()}
-          fallback={<div class="empty">No pending</div>}
-        >
-          {(row) => (
-            <article class="card">
-              <div class="card-head">
-                <span class="chip">{sessionLabel(row)}</span>
-                <span class="card-time">
-                  {formatRelativeTime(row.createdAtMs, now())}
-                </span>
-              </div>
-              <p class="card-req">
-                <span class="verb">run</span>
-                {row.command}
-              </p>
-              <div class="action-row">
-                <button
-                  type="button"
-                  class="action approve"
-                  disabled
-                  aria-disabled="true"
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  class="action deny"
-                  disabled
-                  aria-disabled="true"
-                >
-                  Deny
-                </button>
-              </div>
-            </article>
-          )}
-        </For>
-      </div>
+      </Show>
     </aside>
   );
 }

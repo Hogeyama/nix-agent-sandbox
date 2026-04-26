@@ -169,12 +169,31 @@ body::after {
   animation: none;
 }
 
-/* workspace (3 panes) */
+/* workspace: left pane + resizer + center + (resizer + right pane | rail).
+ * The grid template is set inline by App.tsx so user drags update it
+ * directly; this rule only carries the cross-cutting overflow + the
+ * easing applied during a collapse toggle. */
 .workspace {
   display: grid;
-  grid-template-columns: 288px 1fr 340px;
   overflow: hidden;
   transition: grid-template-columns 0.25s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+/* Vertical drag handle between two panes. The element is interactive
+ * (role=separator + tabindex=0) so it gets a focus-visible treatment
+ * and a hover treatment that share the amber accent. */
+.pane-resizer {
+  width: 4px;
+  cursor: col-resize;
+  background: var(--line-soft);
+  transition: background-color 0.15s;
+  user-select: none;
+  touch-action: none;
+}
+.pane-resizer:hover,
+.pane-resizer:focus-visible {
+  background: var(--amber);
+  outline: none;
 }
 
 .pane {
@@ -438,20 +457,25 @@ body::after {
   flex: 1;
   transition: opacity 0.2s;
 }
+
+/* Collapsed right pane: a 38px-wide rail rendered in place of the
+ * full pane, exposing the toggle as a single full-height button.
+ * The collapsed state inherits .pane-right's border-left, so no
+ * extra declaration is needed for the rail itself. */
 .collapsed-rail {
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 0 16px;
-  cursor: pointer;
+  display: block;
+  width: 100%;
   height: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
   position: relative;
 }
-.collapsed-rail .rail-bar {
-  flex: 1;
-  width: 1px;
-  background: var(--line);
+.collapsed-rail:hover,
+.collapsed-rail:focus-visible {
+  background: var(--surface);
+  outline: none;
 }
 
 /* statusbar */
