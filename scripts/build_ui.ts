@@ -5,7 +5,7 @@
  * index.html と合わせて src/ui/dist/ に出力する。
  */
 
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -77,7 +77,24 @@ ${css}
 
 await writeFile(path.join(DIST_DIR, "index.html"), html);
 
+// Bundle xterm.js MIT license alongside the built artifacts so distributions
+// (including the bun-compile + nix-bundle-elf binary that ships dist/ via
+// flake.nix) preserve the copyright notice required by the MIT license.
+// xterm.css content is concatenated into the inline <style> above; without
+// this file the license text would be missing from shipped binaries.
+const licenseDir = path.join(DIST_DIR, "assets", "licenses");
+await mkdir(licenseDir, { recursive: true });
+const xtermLicenseSrc = path.join(ROOT, "node_modules/@xterm/xterm/LICENSE");
+try {
+  await cp(xtermLicenseSrc, path.join(licenseDir, "xterm-MIT.txt"));
+} catch (e) {
+  throw new Error(
+    `xterm LICENSE not found at ${xtermLicenseSrc}: ${(e as Error).message}`,
+  );
+}
+
 // Print summary
 const jsSize = (await stat(path.join(DIST_DIR, "assets", jsBasename))).size;
 console.log(`dist/index.html`);
 console.log(`dist/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`);
+console.log(`dist/assets/licenses/xterm-MIT.txt`);
