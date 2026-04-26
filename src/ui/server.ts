@@ -37,8 +37,50 @@ import {
 } from "./security.ts";
 import { loadOrCreateWsToken } from "./ws_token.ts";
 
-const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
+
+export type UiMode = "next" | "classic";
+
+export interface DistBaseResolution {
+  distBase: string;
+  mode: UiMode;
+}
+
+/**
+ * Pick which built UI directory to serve, plus the mode label used in logs.
+ *
+ * `NAS_UI_NEXT=1` selects the Solid-based control room under
+ * `src/ui/dist-next/` (`mode: "next"`); any other value (including unset,
+ * "0", "true") keeps the classic Preact UI at `src/ui/dist/`
+ * (`mode: "classic"`). The match is strictly `"1"` so that ambiguous truthy
+ * strings cannot silently flip the mode.
+ *
+ * Returning both `distBase` and `mode` from a single call keeps the routing
+ * contract and the startup log label tied to the same condition; otherwise
+ * a future change to the env predicate would have to be made in two places
+ * and could drift.
+ *
+ * `env` is injected (rather than read directly from `process.env`) so
+ * tests can pin the routing contract without mutating global state.
+ */
+export function resolveDistBase(
+  env: Record<string, string | undefined>,
+): DistBaseResolution {
+  if (env.NAS_UI_NEXT === "1") {
+    return {
+      distBase: resolveAssetDir(
+        "ui/dist-next",
+        import.meta.url,
+        "./dist-next/",
+      ),
+      mode: "next",
+    };
+  }
+  return {
+    distBase: resolveAssetDir("ui/dist", import.meta.url, "./dist/"),
+    mode: "classic",
+  };
+}
 
 // Cap WebSocket frame size to kill the unbounded JSON.parse / FD-buffer DoS
 // vector noted in the threat review (F6). Terminal input is keystrokes —
@@ -98,13 +140,13 @@ export interface RuntimeAssets {
 /**
  * Load static UI assets from disk into memory.
  *
- * `distBase` is injectable so tests can exercise both the happy path
- * (ENOENT → fields are null / empty) and the error re-throw path
- * (e.g. EACCES from a `chmod 000` directory) without touching the
- * real `DIST_BASE`. Production callers omit the argument.
+ * `distBase` is required and resolved by the caller (typically via
+ * `resolveDistBase(process.env)`); injecting it lets tests exercise
+ * both the happy path (ENOENT → fields are null / empty) and the
+ * error re-throw path (e.g. EACCES from a `chmod 000` directory).
  */
 export async function preloadAssets(
-  distBase: string = DIST_BASE,
+  distBase: string,
 ): Promise<PreloadedAssets> {
   const files = new Map<string, Blob>();
   let indexHtmlTemplate: string | null = null;
@@ -231,7 +273,8 @@ export interface ServeOptions {
 
 export async function startServer(options: ServeOptions): Promise<void> {
   const ctx = await createDataContext();
-  const preloaded = await preloadAssets();
+  const { distBase, mode: uiMode } = resolveDistBase(process.env);
+  const preloaded = await preloadAssets(distBase);
 
   // Load or create the WS bearer token, then materialise it into the HTML
   // shell so the frontend can read it via `<meta name="nas-ws-token">`.
@@ -250,6 +293,7 @@ export async function startServer(options: ServeOptions): Promise<void> {
     );
   }
 
+  console.log(`[nas] UI mode: ${uiMode}`);
   console.log(`[nas] UI server starting on http://localhost:${options.port}`);
 
   if (options.open) {

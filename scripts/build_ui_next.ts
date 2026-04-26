@@ -59,7 +59,32 @@ async function buildOnce(): Promise<void> {
     path.join(FRONTEND_DIR, "index.html.tmpl"),
     "utf8",
   );
-  const css = await readFile(path.join(FRONTEND_DIR, "src/styles.css"), "utf8");
+  const styles = await readFile(
+    path.join(FRONTEND_DIR, "src/styles.css"),
+    "utf8",
+  );
+
+  // Inline the bundled CSS produced by Bun.build (e.g. fontsource @font-face
+  // rules with woff2 data URIs) BEFORE our handwritten styles. Keeping the
+  // font face declarations first guarantees `font-family: 'Geist Mono Variable'`
+  // resolves by the time component rules apply it. Without this inline step
+  // the emitted index.html never links assets/main.css and Geist Mono
+  // silently falls back to ui-monospace.
+  const cssOutputs = result.outputs.filter((o) => o.path.endsWith(".css"));
+  if (cssOutputs.length === 0) {
+    throw new Error(
+      "frontend-next build: no CSS output emitted by Bun.build. " +
+        "Geist Mono @font-face rules would be missing and the font would " +
+        "silently fall back to ui-monospace. Suspect: fontsource import " +
+        "removed from src/main.tsx, Bun CSS-in-JS handling changed, or " +
+        "solidPlugin no longer forwarding CSS imports.",
+    );
+  }
+  let bundledCss = "";
+  for (const out of cssOutputs) {
+    bundledCss += await readFile(out.path, "utf8");
+  }
+  const css = bundledCss + styles;
 
   // Order matters: substitute {{CSS}} and {{JS}} but leave {{NAS_WS_TOKEN}}
   // for the daemon. The build-time assertion below catches accidental
