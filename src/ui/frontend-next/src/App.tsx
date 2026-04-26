@@ -1,3 +1,4 @@
+import { getWsToken } from "./api/wsToken";
 import { PendingPane } from "./components/PendingPane";
 import { SessionsPane } from "./components/SessionsPane";
 import { StatusBar } from "./components/StatusBar";
@@ -22,7 +23,7 @@ export function App() {
       <Topbar connected={connected()} />
       <main class="workspace">
         <SessionsPane sessions={sessions.rows} />
-        <TerminalPane terminals={terminals} />
+        <TerminalPane terminals={terminals} wsToken={() => getWsToken()} />
         <PendingPane network={pending.network} hostexec={pending.hostexec} />
       </main>
       <StatusBar />
