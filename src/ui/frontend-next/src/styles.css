@@ -428,10 +428,95 @@ body::after {
 }
 
 .term-toolbar {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; gap: 8px;
   padding: 6px 14px 6px 18px;
   border-top: 1px solid var(--line);
   background: var(--panel);
+  font-size: 12px;
+}
+
+.term-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cream);
+  font-size: 12px;
+}
+.term-context .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 6px rgba(94, 234, 212, 0.5);
+}
+.term-context .name { font-weight: 500; }
+.term-context .id-hint { color: var(--muted); font-size: 11px; letter-spacing: 0.06em; }
+
+.tool {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--cream-dim);
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.tool:hover:not(:disabled) {
+  color: var(--cream);
+  border-color: var(--muted);
+  background: var(--surface);
+}
+.tool:disabled { opacity: 0.5; cursor: not-allowed; }
+.tool.primary {
+  border-color: var(--amber);
+  color: var(--amber-hi);
+}
+.tool.primary:hover:not(:disabled) {
+  background: rgba(217, 119, 6, 0.12);
+}
+.tool.danger {
+  border-color: rgba(244, 63, 94, 0.4);
+  color: var(--rose);
+}
+.tool.danger:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.12);
+}
+
+.term-toolbar .spacer { flex: 1; }
+
+.fontsize {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.fontsize .size-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  min-width: 36px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.search-input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--cream);
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  width: 180px;
+}
+.search-input:focus {
+  outline: none;
+  border-color: var(--amber);
+}
+
+.toolbar-error {
+  color: var(--rose);
+  font-size: 11px;
+  margin-left: 4px;
+  letter-spacing: 0.02em;
 }
 
 /* pending (right) */

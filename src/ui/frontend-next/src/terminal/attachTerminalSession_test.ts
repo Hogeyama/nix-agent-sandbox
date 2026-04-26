@@ -32,6 +32,7 @@ import {
   attachTerminalSession,
   buildWsUrl,
   type FitAddonLike,
+  type SearchAddonLike,
   type TerminalLike,
   type WebSocketLike,
 } from "./attachTerminalSession";
@@ -574,5 +575,103 @@ describe("attachTerminalSession", () => {
     handle.setFontSize(20);
     expect(fakeTerm.options.fontSize).toBe(20);
     expect(fitFit).toHaveBeenCalled();
+  });
+
+  test("default factory loads the search addon onto the terminal", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const fakeSearch: SearchAddonLike = {
+      findNext: () => false,
+      findPrevious: () => false,
+      clearDecorations: () => {},
+    };
+    const searchFactory = mock(() => fakeSearch);
+
+    attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createSearchAddon: searchFactory,
+      createWebSocket: () => sock,
+    });
+
+    expect(searchFactory).toHaveBeenCalledTimes(1);
+    expect(fakeTerm.loadedAddons).toContain(fakeSearch);
+  });
+
+  test("handle.search.findNext forwards the query to the search addon", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const findNext = mock((_q: string) => true);
+    const fakeSearch: SearchAddonLike = {
+      findNext,
+      findPrevious: () => false,
+      clearDecorations: () => {},
+    };
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createSearchAddon: () => fakeSearch,
+      createWebSocket: () => sock,
+    });
+
+    handle.search.findNext("foo");
+    expect(findNext).toHaveBeenCalledTimes(1);
+    expect(findNext.mock.calls[0]?.[0]).toBe("foo");
+  });
+
+  test("handle.search.findPrevious forwards the query to the search addon", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const findPrevious = mock((_q: string) => true);
+    const fakeSearch: SearchAddonLike = {
+      findNext: () => false,
+      findPrevious,
+      clearDecorations: () => {},
+    };
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createSearchAddon: () => fakeSearch,
+      createWebSocket: () => sock,
+    });
+
+    handle.search.findPrevious("bar");
+    expect(findPrevious).toHaveBeenCalledTimes(1);
+    expect(findPrevious.mock.calls[0]?.[0]).toBe("bar");
+  });
+
+  test("handle.search.clear delegates to the addon's clearDecorations", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const clearDecorations = mock(() => {});
+    const fakeSearch: SearchAddonLike = {
+      findNext: () => false,
+      findPrevious: () => false,
+      clearDecorations,
+    };
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createSearchAddon: () => fakeSearch,
+      createWebSocket: () => sock,
+    });
+
+    handle.search.clear();
+    expect(clearDecorations).toHaveBeenCalledTimes(1);
   });
 });

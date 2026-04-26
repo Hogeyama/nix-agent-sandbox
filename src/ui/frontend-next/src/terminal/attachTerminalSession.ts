@@ -20,6 +20,7 @@
 
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { ensureTerminalFocus } from "./terminalInput";
@@ -105,6 +106,17 @@ export interface FitAddonLike {
   proposeDimensions(): { cols: number; rows: number } | undefined;
 }
 
+/**
+ * Subset of `SearchAddon` consumed here. The toolbar drives match
+ * navigation and decoration cleanup through this surface; tests
+ * inject a fake matching this shape.
+ */
+export interface SearchAddonLike {
+  findNext(query: string): boolean;
+  findPrevious(query: string): boolean;
+  clearDecorations(): void;
+}
+
 export interface AttachOpts {
   sessionId: string;
   container: HTMLElement;
@@ -113,6 +125,8 @@ export interface AttachOpts {
   createTerminal?: () => TerminalLike;
   /** Override FitAddon construction (tests). */
   createFitAddon?: () => FitAddonLike;
+  /** Override SearchAddon construction (tests). */
+  createSearchAddon?: () => SearchAddonLike;
   /** Override WebSocket construction (tests). */
   createWebSocket?: (url: string, protocols: string[]) => WebSocketLike;
   /** Override `setTimeout` so timer-driven branches can be exercised. */
@@ -123,18 +137,38 @@ export interface AttachOpts {
   onError?: (msg: string) => void;
 }
 
+/**
+ * Search controls bridged from the toolbar to the underlying
+ * `SearchAddon`. The methods swallow no errors silently — addon
+ * exceptions are surfaced through the `onError` callback supplied
+ * to `attachTerminalSession`.
+ */
+export interface TerminalSearchHandle {
+  findNext(query: string): void;
+  findPrevious(query: string): void;
+  clear(): void;
+}
+
 export interface TerminalHandle {
   focus(): void;
   refit(): void;
   setFontSize(px: number): void;
   dispose(): void;
+  search: TerminalSearchHandle;
 }
+
+const NOOP_SEARCH_HANDLE: TerminalSearchHandle = {
+  findNext() {},
+  findPrevious() {},
+  clear() {},
+};
 
 const NOOP_HANDLE: TerminalHandle = {
   focus() {},
   refit() {},
   setFontSize() {},
   dispose() {},
+  search: NOOP_SEARCH_HANDLE,
 };
 
 /** WebSocket subprotocol prefix the daemon validates the token against. */
@@ -424,6 +458,7 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
     wsToken,
     createTerminal,
     createFitAddon,
+    createSearchAddon,
     createWebSocket,
     setTimeoutFn = (fn, ms) => globalThis.setTimeout(fn, ms),
     clearTimeoutFn = (h) => globalThis.clearTimeout(h as number),
@@ -440,6 +475,7 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
 
   let term: TerminalLike;
   let fitAddon: FitAddonLike;
+  let searchAddon: SearchAddonLike;
   let ws: WebSocketLike;
   let bindingDispose: () => void;
   let resizeObserver: ResizeObserver | null = null;
@@ -450,9 +486,13 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
 
   try {
     fitAddon = createFitAddon ? createFitAddon() : new FitAddon();
+    searchAddon = (createSearchAddon ?? (() => new SearchAddon()))();
     term = createTerminal ? createTerminal() : createDefaultTerminal();
     term.loadAddon(
       fitAddon as unknown as Parameters<TerminalLike["loadAddon"]>[0],
+    );
+    term.loadAddon(
+      searchAddon as unknown as Parameters<TerminalLike["loadAddon"]>[0],
     );
     if (!createTerminal) {
       // Default factory only constructs Terminal; load the rest of the
@@ -533,6 +573,45 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
     baseDispose();
   };
 
+  const search: TerminalSearchHandle = {
+    findNext(query: string) {
+      if (disposed) return;
+      try {
+        searchAddon.findNext(query);
+      } catch (e) {
+        reportError(
+          e instanceof Error
+            ? `Search findNext failed: ${e.message}`
+            : "Search findNext failed",
+        );
+      }
+    },
+    findPrevious(query: string) {
+      if (disposed) return;
+      try {
+        searchAddon.findPrevious(query);
+      } catch (e) {
+        reportError(
+          e instanceof Error
+            ? `Search findPrevious failed: ${e.message}`
+            : "Search findPrevious failed",
+        );
+      }
+    },
+    clear() {
+      if (disposed) return;
+      try {
+        searchAddon.clearDecorations();
+      } catch (e) {
+        reportError(
+          e instanceof Error
+            ? `Search clear failed: ${e.message}`
+            : "Search clear failed",
+        );
+      }
+    },
+  };
+
   return {
     focus() {
       if (disposed) return;
@@ -551,5 +630,6 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
       if (disposed) return;
       dispose();
     },
+    search,
   };
 }

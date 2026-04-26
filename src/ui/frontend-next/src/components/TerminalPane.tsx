@@ -1,4 +1,11 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  Show,
+} from "solid-js";
+import type { SessionsStore } from "../stores/sessionsStore";
 import type { TerminalsStore } from "../stores/terminalsStore";
 import {
   attachTerminalSession,
@@ -6,6 +13,7 @@ import {
 } from "../terminal/attachTerminalSession";
 import { applyTerminalActions } from "./applyTerminalActions";
 import { reconcileTerminals } from "./reconcileTerminals";
+import { TerminalToolbar } from "./TerminalToolbar";
 
 type Props = {
   /**
@@ -15,6 +23,12 @@ type Props = {
    */
   terminals: TerminalsStore;
   /**
+   * Sessions store consulted by the toolbar to resolve the active row's
+   * display name, short id, and turn. Kept separate from `terminals`
+   * because the agent-metadata snapshot lives there.
+   */
+  sessions: SessionsStore;
+  /**
    * Resolves the WebSocket bearer token at attach time. Injected (rather
    * than imported) so the host page is the single source of truth for
    * how the token is obtained, and so future tests of this component
@@ -22,6 +36,18 @@ type Props = {
    * missing — handled by the attach try/catch below.
    */
   wsToken: () => string;
+  /**
+   * Acknowledge the active session's turn. The toolbar disables its
+   * button while this promise is in flight and silently absorbs a
+   * 409 response (raced snapshot — SSE catches up).
+   */
+  onAck: (sessionId: string) => Promise<void>;
+  /**
+   * Disconnect every dtach client currently attached to a session,
+   * leaving the session itself running. The toolbar disables its
+   * button while this promise is in flight and surfaces non-success.
+   */
+  onKillClients: (sessionId: string) => Promise<void>;
 };
 
 /**
@@ -60,6 +86,8 @@ export function TerminalPane(props: Props) {
   >();
   let prevActiveId: string | null = null;
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+  // Bumps when handles map mutates so memos that read the map invalidate.
+  const [handlesVersion, setHandlesVersion] = createSignal(0);
 
   const mount = (sessionId: string) => {
     if (handles.has(sessionId)) return;
@@ -86,6 +114,7 @@ export function TerminalPane(props: Props) {
       return;
     }
     handles.set(sessionId, { handle, node: slot });
+    setHandlesVersion((v) => v + 1);
   };
 
   const dispose = (sessionId: string) => {
@@ -97,6 +126,7 @@ export function TerminalPane(props: Props) {
     entry.handle.dispose();
     entry.node.remove();
     handles.delete(sessionId);
+    setHandlesVersion((v) => v + 1);
   };
 
   const show = (sessionId: string) => {
@@ -140,6 +170,22 @@ export function TerminalPane(props: Props) {
     }
   });
 
+  // The toolbar reads handles through a memo so it re-evaluates whenever
+  // the active session changes or the handles map mutates. `activeId` is a
+  // signal already, and `handlesVersion` is bumped on every mount/dispose
+  // so a handle attached after the activeId change is also observable.
+  const activeHandle = createMemo<TerminalHandle | null>(() => {
+    handlesVersion();
+    const id = props.terminals.activeId();
+    if (!id) return null;
+    return handles.get(id)?.handle ?? null;
+  });
+  const activeRow = createMemo(() => {
+    const id = props.terminals.activeId();
+    if (!id) return null;
+    return props.sessions.rows().find((r) => r.id === id) ?? null;
+  });
+
   return (
     <section class="pane pane-center">
       <div
@@ -156,7 +202,12 @@ export function TerminalPane(props: Props) {
           {(msg) => <div class="terminal-error">{msg()}</div>}
         </Show>
       </div>
-      <footer class="term-toolbar"></footer>
+      <TerminalToolbar
+        activeRow={activeRow}
+        handle={activeHandle}
+        onAck={props.onAck}
+        onKillClients={props.onKillClients}
+      />
     </section>
   );
 }

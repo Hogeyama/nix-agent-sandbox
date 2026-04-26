@@ -1,4 +1,5 @@
 import { createSignal, Show } from "solid-js";
+import { ackSessionTurn, killTerminalClients } from "./api/client";
 import { getWsToken } from "./api/wsToken";
 import { PaneResizer } from "./components/PaneResizer";
 import { PendingPane } from "./components/PendingPane";
@@ -58,7 +59,17 @@ export function App() {
           width={ui.leftWidth}
           setWidth={ui.setLeftWidth}
         />
-        <TerminalPane terminals={terminals} wsToken={() => getWsToken()} />
+        <TerminalPane
+          terminals={terminals}
+          sessions={sessions}
+          wsToken={() => getWsToken()}
+          onAck={async (id) => {
+            await ackSessionTurn(id);
+          }}
+          onKillClients={async (id) => {
+            await killTerminalClients(id);
+          }}
+        />
         {/* The right resizer is unmounted while collapsed so that the
             workspace grid track count matches the children count. The
             .pane-right element drives the collapse animation; the
