@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type { SessionRow } from "../stores/types";
 import { EditableSessionName } from "./EditableSessionName";
+import type { PendingCount } from "./sessionPendingSummary";
 import { describeSessionRow, formatSessionTree } from "./sessionRowView";
 
 type Props = {
@@ -8,6 +9,10 @@ type Props = {
   activeId: () => string | null;
   onSelect: (sessionId: string) => void;
   onRename: (sessionId: string, name: string) => Promise<void>;
+  // Accessor for the per-session pending counts. Mirrors the `scopeFor`
+  // / `busyFor` accessor pattern used by `PendingPane` so the parent
+  // owns the underlying memo and SessionsPane only reads through here.
+  pendingFor: (sessionId: string) => PendingCount;
 };
 
 export function SessionsPane(props: Props) {
@@ -26,6 +31,7 @@ export function SessionsPane(props: Props) {
           {(row) => {
             const display = describeSessionRow(row);
             const tree = formatSessionTree(row);
+            const counts = () => props.pendingFor(row.id);
             return (
               // biome-ignore lint/a11y/useSemanticElements: <dl> is not phrasing content, so wrapping the row in <button> is invalid HTML; the row uses <li> with role="button" instead.
               // biome-ignore lint/a11y/useFocusableInteractive: tabindex={0} below makes the row focusable; biome does not recognise the lowercase Solid attribute.
@@ -88,6 +94,36 @@ export function SessionsPane(props: Props) {
                       </button>
                     )}
                   />
+                  <Show when={counts().network > 0}>
+                    <span
+                      class="row-pending-chip network"
+                      // role="img" upgrades the span from the implicit
+                      // `generic` role so `aria-label` is honoured (biome's
+                      // useAriaPropsSupportedByRole flags aria-label on a
+                      // bare <span>); the chip becomes a labelled
+                      // graphic with the visible "N net" text replaced
+                      // for assistive tech by the full form.
+                      role="img"
+                      aria-label={`${counts().network} network ${
+                        counts().network === 1 ? "approval" : "approvals"
+                      } waiting`}
+                    >
+                      {counts().network} net
+                    </span>
+                  </Show>
+                  <Show when={counts().hostexec > 0}>
+                    <span
+                      class="row-pending-chip hostexec"
+                      // See sibling chip above for the role="img"
+                      // rationale.
+                      role="img"
+                      aria-label={`${counts().hostexec} host-exec ${
+                        counts().hostexec === 1 ? "approval" : "approvals"
+                      } waiting`}
+                    >
+                      {counts().hostexec} host
+                    </span>
+                  </Show>
                 </div>
                 <Show when={display.badge}>
                   {(badge) => <span class={badge().class}>{badge().text}</span>}

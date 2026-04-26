@@ -41,38 +41,41 @@ type SessionsPaneTree = {
                     unknown,
                     {
                       props: {
-                        children: {
-                          type: typeof EditableSessionName;
-                          props: {
-                            currentName: string;
-                            onSubmit: (next: string) => Promise<void>;
-                            renderIdle: (api: {
-                              start: () => void;
+                        children: [
+                          {
+                            type: typeof EditableSessionName;
+                            props: {
                               currentName: string;
-                            }) => {
-                              type: string;
-                              props: {
+                              onSubmit: (next: string) => Promise<void>;
+                              renderIdle: (api: {
+                                start: () => void;
+                                currentName: string;
+                              }) => {
                                 type: string;
-                                class: string;
-                                "aria-label": string;
-                                title: string;
-                                onClick: (e: {
-                                  detail: number;
-                                  stopPropagation(): void;
-                                }) => void;
-                                onDblClick: (e: {
-                                  stopPropagation(): void;
-                                }) => void;
-                                onKeyDown: (e: {
-                                  key: string;
-                                  preventDefault(): void;
-                                  stopPropagation(): void;
-                                }) => void;
-                                children: string;
+                                props: {
+                                  type: string;
+                                  class: string;
+                                  "aria-label": string;
+                                  title: string;
+                                  onClick: (e: {
+                                    detail: number;
+                                    stopPropagation(): void;
+                                  }) => void;
+                                  onDblClick: (e: {
+                                    stopPropagation(): void;
+                                  }) => void;
+                                  onKeyDown: (e: {
+                                    key: string;
+                                    preventDefault(): void;
+                                    stopPropagation(): void;
+                                  }) => void;
+                                  children: string;
+                                };
                               };
                             };
-                          };
-                        };
+                          },
+                          ...unknown[],
+                        ];
                       };
                     },
                     ...unknown[],
@@ -95,11 +98,12 @@ describe("SessionsPane", () => {
       activeId: () => null,
       onSelect: () => undefined,
       onRename: async () => undefined,
+      pendingFor: () => ({ network: 0, hostexec: 0 }),
     }) as unknown as SessionsPaneTree;
 
     const sessionRow =
       tree.props.children[1].props.children.props.children(row);
-    const editable = sessionRow.props.children[1].props.children;
+    const editable = sessionRow.props.children[1].props.children[0];
     let starts = 0;
     const idle = editable.props.renderIdle({
       start: () => {
@@ -161,6 +165,7 @@ describe("SessionsPane", () => {
       activeId: () => null,
       onSelect,
       onRename: async () => undefined,
+      pendingFor: () => ({ network: 0, hostexec: 0 }),
     }) as unknown as SessionsPaneTree;
 
     const sessionRow =

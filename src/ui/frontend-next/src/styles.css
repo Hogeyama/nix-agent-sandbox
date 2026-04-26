@@ -412,11 +412,16 @@ body::after {
   grid-row: 1;
   grid-column: 2;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .session-title {
   display: block;
+  flex: 1;
   width: 100%;
+  min-width: 0;
   padding: 0;
   border: none;
   background: none;
@@ -434,6 +439,31 @@ body::after {
 }
 .session-title:hover {
   border-bottom: 1px dashed var(--muted-3);
+}
+
+/* Per-row pending indicator chips. Sit inside `.session-title-slot`
+ * alongside the title so they coexist with the trailing turn `.badge`
+ * without competing for the same grid cell. The two domain variants
+ * (network = amber, hostexec = rose) reuse existing palette tokens so
+ * the chips track the rest of the design system. */
+.row-pending-chip {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.row-pending-chip.network {
+  color: var(--amber-hi);
+  background: rgba(245, 158, 11, 0.14);
+}
+.row-pending-chip.hostexec {
+  color: var(--amber);
+  background: rgba(217, 119, 6, 0.18);
 }
 
 .badge {

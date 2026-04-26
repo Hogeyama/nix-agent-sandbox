@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import * as client from "./api/client";
 import {
   ackSessionTurn,
@@ -11,6 +11,7 @@ import { PaneResizer } from "./components/PaneResizer";
 import { PendingPane } from "./components/PendingPane";
 import { SessionsPane } from "./components/SessionsPane";
 import { StatusBar } from "./components/StatusBar";
+import { summarizePendingBySession } from "./components/sessionPendingSummary";
 import { TerminalPane } from "./components/TerminalPane";
 import { Topbar } from "./components/Topbar";
 import { NewSessionDialog } from "./dialogs/NewSessionDialog";
@@ -59,6 +60,16 @@ export function App() {
   });
   const [dialogOpen, setDialogOpen] = createSignal(false);
   useGlobalKeyboard({ onToggleRightCollapse: ui.toggleRightCollapsed });
+
+  // Per-session pending counts, derived once per pending-store change so
+  // every SessionsPane row reads from the same memo instead of re-folding
+  // both queues on every row reactive read. The accessor below returns a
+  // zero record for sessions that have no pending entries.
+  const pendingByKey = createMemo(() =>
+    summarizePendingBySession(pending.network(), pending.hostexec()),
+  );
+  const pendingFor = (sessionId: string) =>
+    pendingByKey().get(sessionId) ?? { network: 0, hostexec: 0 };
 
   const gridTemplateColumns = () =>
     ui.rightCollapsed()
@@ -119,6 +130,7 @@ export function App() {
           onRename={async (sessionId, name) => {
             await renameSession(sessionId, name);
           }}
+          pendingFor={pendingFor}
         />
         <PaneResizer
           side="left"
