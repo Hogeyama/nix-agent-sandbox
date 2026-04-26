@@ -17,8 +17,8 @@ import {
   type RenameAction,
   type RenameState,
   reduceRenameState,
+  validateName,
 } from "./editableSessionNameLogic";
-import { validateName } from "./sessionActionsLogic";
 
 export interface EditableSessionNameProps {
   currentName: string;
