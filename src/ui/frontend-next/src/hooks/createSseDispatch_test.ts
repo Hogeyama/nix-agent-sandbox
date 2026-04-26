@@ -14,8 +14,10 @@ import type {
   PendingStore,
 } from "../stores/pendingStore";
 import type { SessionsStore } from "../stores/sessionsStore";
+import type { TerminalsStore } from "../stores/terminalsStore";
 import type {
   ContainerInfoLike,
+  DtachSessionLike,
   HostExecPendingItemLike,
   NetworkPendingItemLike,
   SessionRow,
@@ -27,6 +29,9 @@ interface FakeStores {
   pending: PendingStore & {
     setNetwork: ReturnType<typeof mock>;
     setHostExec: ReturnType<typeof mock>;
+  };
+  terminals: TerminalsStore & {
+    setDtachSessions: ReturnType<typeof mock>;
   };
 }
 
@@ -41,7 +46,15 @@ function makeFakeStores(): FakeStores {
     setNetwork: mock((_items: NetworkPendingItemLike[]) => {}),
     setHostExec: mock((_items: HostExecPendingItemLike[]) => {}),
   };
-  return { sessions, pending };
+  const terminals: FakeStores["terminals"] = {
+    dtachSessions: () => [] as DtachSessionLike[],
+    activeId: () => null,
+    pendingActivateId: () => null,
+    setDtachSessions: mock((_items: DtachSessionLike[]) => {}),
+    requestActivate: (_id: string) => {},
+    setActive: (_id: string | null) => {},
+  };
+  return { sessions, pending, terminals };
 }
 
 describe("createSseDispatch", () => {
@@ -101,6 +114,40 @@ describe("createSseDispatch", () => {
     expect(stores.pending.setNetwork).not.toHaveBeenCalled();
   });
 
+  test("'terminal:sessions' with valid envelope routes to terminals.setDtachSessions", () => {
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+
+    const items: DtachSessionLike[] = [
+      {
+        name: "term-1",
+        sessionId: "s1",
+        socketPath: "/tmp/nas/s1.sock",
+        createdAt: 1700000000000,
+      },
+    ];
+    dispatch("terminal:sessions", { items });
+
+    expect(stores.terminals.setDtachSessions).toHaveBeenCalledTimes(1);
+    expect(stores.terminals.setDtachSessions).toHaveBeenCalledWith(items);
+    expect(stores.sessions.setSessions).not.toHaveBeenCalled();
+    expect(stores.pending.setNetwork).not.toHaveBeenCalled();
+    expect(stores.pending.setHostExec).not.toHaveBeenCalled();
+  });
+
+  test("'terminal:sessions' with invalid envelope is ignored", () => {
+    const stores = makeFakeStores();
+    const dispatch = createSseDispatch(stores);
+
+    dispatch("terminal:sessions", {});
+    dispatch("terminal:sessions", { items: "not-an-array" });
+    dispatch("terminal:sessions", null);
+    dispatch("terminal:sessions", 42);
+    dispatch("terminal:sessions", undefined);
+
+    expect(stores.terminals.setDtachSessions).not.toHaveBeenCalled();
+  });
+
   test("malformed envelope (missing items / not an array / null / primitive) does not invoke any setter", () => {
     const stores = makeFakeStores();
     const dispatch = createSseDispatch(stores);
@@ -125,6 +172,7 @@ describe("createSseDispatch", () => {
       "containers",
       "network:pending",
       "hostexec:pending",
+      "terminal:sessions",
     ]);
   });
 
@@ -134,7 +182,6 @@ describe("createSseDispatch", () => {
 
     dispatch("sessions", { items: [] });
     dispatch("audit:logs", { items: [] });
-    dispatch("terminal:sessions", { items: [] });
     dispatch("", { items: [] });
 
     expect(stores.sessions.setSessions).not.toHaveBeenCalled();

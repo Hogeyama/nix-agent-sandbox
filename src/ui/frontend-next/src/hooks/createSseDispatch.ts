@@ -14,15 +14,16 @@
  * each store's normalizer, so this dispatch only enforces the outer
  * envelope.
  *
- * Events that are not consumed by any pane in this dispatch (for example
- * `sessions`, `terminal:sessions`, `audit:logs`) are intentionally
- * ignored: they fall into the default branch of the switch.
+ * Event names not present in the switch (for example `sessions` or
+ * `audit:logs`) fall into the default branch and are no-ops.
  */
 
 import type { PendingStore } from "../stores/pendingStore";
 import type { SessionsStore } from "../stores/sessionsStore";
+import type { TerminalsStore } from "../stores/terminalsStore";
 import type {
   ContainerInfoLike,
+  DtachSessionLike,
   HostExecPendingItemLike,
   NetworkPendingItemLike,
 } from "../stores/types";
@@ -30,6 +31,7 @@ import type {
 export interface SseDispatchStores {
   sessions: SessionsStore;
   pending: PendingStore;
+  terminals: TerminalsStore;
 }
 
 export type SseDispatch = (name: string, data: unknown) => void;
@@ -44,6 +46,7 @@ export const SSE_EVENT_NAMES = [
   "containers",
   "network:pending",
   "hostexec:pending",
+  "terminal:sessions",
 ] as const;
 
 /**
@@ -67,6 +70,11 @@ export function createSseDispatch(stores: SseDispatchStores): SseDispatch {
       case "hostexec:pending": {
         const items = extractItems<HostExecPendingItemLike>(data);
         if (items !== null) stores.pending.setHostExec(items);
+        return;
+      }
+      case "terminal:sessions": {
+        const items = extractItems<DtachSessionLike>(data);
+        if (items !== null) stores.terminals.setDtachSessions(items);
         return;
       }
       default:

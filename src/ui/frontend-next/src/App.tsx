@@ -7,11 +7,13 @@ import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
 import { useConnection } from "./hooks/useConnection";
 import { createPendingStore } from "./stores/pendingStore";
 import { createSessionsStore } from "./stores/sessionsStore";
+import { createTerminalsStore } from "./stores/terminalsStore";
 
 export function App() {
   const sessions = createSessionsStore();
   const pending = createPendingStore();
-  const dispatch = createSseDispatch({ sessions, pending });
+  const terminals = createTerminalsStore();
+  const dispatch = createSseDispatch({ sessions, pending, terminals });
   const { connected } = useConnection("/api/events", dispatch, {
     eventNames: SSE_EVENT_NAMES,
   });
@@ -20,7 +22,7 @@ export function App() {
       <Topbar connected={connected()} />
       <main class="workspace">
         <SessionsPane sessions={sessions.rows} />
-        <TerminalPane />
+        <TerminalPane terminals={terminals} />
         <PendingPane network={pending.network} hostexec={pending.hostexec} />
       </main>
       <StatusBar />
