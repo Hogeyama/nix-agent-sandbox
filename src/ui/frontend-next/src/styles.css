@@ -589,6 +589,119 @@ body::after {
 }
 .action:disabled:hover { background: transparent; }
 
+/* dialog */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+}
+.dialog {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 22px 24px 20px;
+  width: 480px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  color: var(--cream);
+  font-family: var(--mono);
+  position: relative;
+}
+.dialog::before {
+  content: '';
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 1px;
+  background: var(--amber);
+  opacity: 0.5;
+}
+.dialog-title {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--cream);
+  margin: 0 0 14px;
+}
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dialog-label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: -4px;
+}
+.dialog-input {
+  background: var(--surface);
+  color: var(--cream);
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  width: 100%;
+}
+.dialog-input:focus {
+  outline: none;
+  border-color: var(--amber);
+}
+.dialog-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dialog-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--cream-dim);
+  cursor: pointer;
+}
+.dialog-muted {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}
+.dialog-error {
+  color: var(--rose);
+  background: rgba(244, 63, 94, 0.08);
+  border: 1px solid var(--rose);
+  padding: 6px 10px;
+  font-size: 11px;
+  margin: 0;
+  letter-spacing: 0.04em;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.dialog-btn {
+  padding: 7px 16px;
+  border: 1px solid currentColor;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.dialog-btn-cancel { color: var(--muted); }
+.dialog-btn-cancel:hover { color: var(--cream); }
+.dialog-btn-submit { color: var(--amber-hi); }
+.dialog-btn-submit:hover { background: rgba(217, 119, 6, 0.15); }
+.dialog-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+.dialog-btn:disabled:hover { background: transparent; }
+
 /* scrollbars */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
