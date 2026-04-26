@@ -54,6 +54,11 @@ function makeFakeStores(): FakeStores {
     requestActivate: (_id: string) => {},
     setActive: (_id: string | null) => {},
     selectSession: (_id: string) => {},
+    setViewFor: () => {},
+    getViewFor: () => undefined,
+    tryBeginShellSpawn: () => true,
+    clearShellSpawnInFlight: () => {},
+    isShellSpawnInFlight: () => false,
   };
   return { sessions, pending, terminals };
 }

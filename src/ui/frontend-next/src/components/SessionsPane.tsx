@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import type { ShellView } from "../stores/shellMapping";
 import type { SessionRow } from "../stores/types";
 import { SessionActions } from "./SessionActions";
 import { describeSessionRow, formatSessionTree } from "./sessionRowView";
@@ -6,10 +7,22 @@ import { describeSessionRow, formatSessionTree } from "./sessionRowView";
 type Props = {
   sessions: () => SessionRow[];
   activeId: () => string | null;
+  /**
+   * Resolves the agent's currently-recorded view position. Returning
+   * `undefined` means the user has not interacted with the toggle yet
+   * for that agent; SessionActions defaults to "agent" in that case.
+   */
+  viewFor: (sessionId: string) => ShellView | undefined;
+  /**
+   * Reports whether the agent has a shell-spawn HTTP request in flight.
+   * Drives the disabled state of the Shell button so a double-click
+   * cannot issue two parallel POSTs for the same container.
+   */
+  shellSpawnInFlight: (sessionId: string) => boolean;
   onSelect: (sessionId: string) => void;
   onStop: (containerName: string) => Promise<void>;
   onRename: (sessionId: string, name: string) => Promise<void>;
-  onShellToggle: (row: SessionRow) => void;
+  onShellToggle: (row: SessionRow) => void | Promise<void>;
 };
 
 export function SessionsPane(props: Props) {
@@ -82,6 +95,8 @@ export function SessionsPane(props: Props) {
                 <div class="session-actions">
                   <SessionActions
                     row={row}
+                    view={() => props.viewFor(row.id)}
+                    shellInFlight={() => props.shellSpawnInFlight(row.id)}
                     onStop={props.onStop}
                     onRename={props.onRename}
                     onShellToggle={props.onShellToggle}

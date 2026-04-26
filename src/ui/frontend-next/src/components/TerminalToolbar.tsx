@@ -1,10 +1,13 @@
 /**
- * Center-pane toolbar that surfaces the four affordances the keep-alive
- * terminal layer needs: Ack turn, Search, font-size, and Kill clients.
+ * Center-pane toolbar that surfaces the keep-alive terminal layer's
+ * affordances: Ack turn, Shell toggle, Search, font-size, and Kill
+ * clients.
  *
  * The component is rendering-only for the rules it depends on: visibility
- * / disable state for Ack, search-submit dispatch, and font-size clamping
- * are factored into `terminalToolbarLogic` so they stay pure.
+ * / disable state for Ack, the agent ⇄ shell toggle label, search-submit
+ * dispatch, and font-size clamping are factored into pure helpers so the
+ * Solid shell stays trivially testable (`terminalToolbarLogic` for Ack /
+ * search / font-size, `shellMapping` for the shell toggle).
  *
  * Behaviour notes
  * ---------------
@@ -14,6 +17,12 @@
  *     absorbed because the daemon returns 409 when the snapshot raced
  *     the ack; the next SSE push reconciles the state. All other errors
  *     surface in `aria-live="polite"` for 5 s.
+ *   - Shell: the button label names the destination view ("Shell" while
+ *     viewing the agent, "Agent" while viewing the shell). The click
+ *     delegates to `onShellToggle`; the toolbar owns no shell state of
+ *     its own. `shellSpawnInFlight` collapses the label to "Spawning…"
+ *     and disables the button so a double-click cannot issue a second
+ *     POST while the first is in flight.
  *   - Kill clients: same in-flight pattern as Ack, no benign-status
  *     branch.
  *   - Font-size: a Toolbar-local signal clamped via `clampFontSize`.
@@ -30,6 +39,7 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
+import { describeShellToggle, type ShellView } from "../stores/shellMapping";
 import type { SessionRow } from "../stores/types";
 import type { TerminalHandle } from "../terminal/attachTerminalSession";
 import {
@@ -44,8 +54,21 @@ import {
 export interface TerminalToolbarProps {
   activeRow: () => SessionRow | null;
   handle: () => TerminalHandle | null;
+  /**
+   * Resolves the active row's recorded view position. Returns
+   * `undefined` when the user has not interacted with the toggle yet,
+   * in which case the button defaults to the "agent" branch.
+   */
+  viewFor: (sessionId: string) => ShellView | undefined;
+  /**
+   * Reports whether a shell-spawn HTTP request is in flight for the
+   * active row. Drives the toolbar's Shell-toggle disabled state and
+   * its "Spawning…" label.
+   */
+  shellSpawnInFlight: (sessionId: string) => boolean;
   onAck: (sessionId: string) => Promise<void>;
   onKillClients: (sessionId: string) => Promise<void>;
+  onShellToggle: (row: SessionRow) => void | Promise<void>;
 }
 
 const ERROR_TIMEOUT_MS = 5000;
@@ -90,6 +113,27 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   const ack = createMemo(() =>
     describeAckButton(props.activeRow()?.turn ?? null, acking()),
   );
+
+  const shellToggle = createMemo(() => {
+    const row = props.activeRow();
+    if (!row) return null;
+    return describeShellToggle(
+      props.viewFor(row.id) ?? "agent",
+      props.shellSpawnInFlight(row.id),
+    );
+  });
+
+  const handleShellToggleClick = async () => {
+    const row = props.activeRow();
+    if (!row) return;
+    const state = shellToggle();
+    if (state === null || state.disabled) return;
+    try {
+      await props.onShellToggle(row);
+    } catch (e) {
+      surfaceError(e instanceof Error ? e.message : "Failed to toggle shell");
+    }
+  };
 
   const handleAck = async () => {
     const row = props.activeRow();
@@ -176,6 +220,19 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
         >
           {ack().label}
         </button>
+      </Show>
+      <Show when={shellToggle()}>
+        {(state) => (
+          <button
+            type="button"
+            class="tool"
+            disabled={state().disabled}
+            onClick={handleShellToggleClick}
+            aria-label={`Switch to ${state().label}`}
+          >
+            {state().label}
+          </button>
+        )}
       </Show>
       <button
         type="button"

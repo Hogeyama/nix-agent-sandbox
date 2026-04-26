@@ -7,6 +7,7 @@ import {
 } from "solid-js";
 import type { SessionsStore } from "../stores/sessionsStore";
 import type { TerminalsStore } from "../stores/terminalsStore";
+import type { SessionRow } from "../stores/types";
 import {
   attachTerminalSession,
   type TerminalHandle,
@@ -48,6 +49,13 @@ type Props = {
    * button while this promise is in flight and surfaces non-success.
    */
   onKillClients: (sessionId: string) => Promise<void>;
+  /**
+   * Switch the center pane between the agent terminal and a shell on
+   * the same container. The handler is shared with the left-pane Shell
+   * button so both surfaces drive a single toggle path; the toolbar
+   * delegates state to it without owning any of its own.
+   */
+  onShellToggle: (row: SessionRow) => void | Promise<void>;
 };
 
 /**
@@ -205,8 +213,11 @@ export function TerminalPane(props: Props) {
       <TerminalToolbar
         activeRow={activeRow}
         handle={activeHandle}
+        viewFor={(id) => props.terminals.getViewFor(id)}
+        shellSpawnInFlight={(id) => props.terminals.isShellSpawnInFlight(id)}
         onAck={props.onAck}
         onKillClients={props.onKillClients}
+        onShellToggle={props.onShellToggle}
       />
     </section>
   );

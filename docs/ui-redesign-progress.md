@@ -214,8 +214,13 @@ src/ui/
 - **routes 設計** (`docs/ui-redesign.md` §7): `#/settings/...` の hash routing か `@solidjs/router` か未決。**判断期限: P5 着手前**
 - **キーボードショートカットの上書き**: `docs/ui-redesign.md` §8 末尾 "Settings で上書き可（将来）" は P6 以降の判断事項
 - **行クリックでセッション切替**: P2 完了時点で `terminalsStore.setActive` API は確保済み、`SessionsPane` の `<li>` には listener 未配線。**判断期限: P3 着手時**
-- **`pendingActivateId` の TTL**: P2 では launch レスポンスの sessionId が SSE に永遠に出てこない場合 (dtach プロセス起動失敗等) に pending が leak する。1 セッション運用前提で当面実害なし。**判断期限: P3 で keep-alive を入れたあと、複数 session 並行運用での挙動を観察してから**
 - **キーボード操作の代替** (a11y): P2 の dialog overlay は `e.target === e.currentTarget` で backdrop click を判定し、biome の `useKeyWithClickEvents` を回避したが、行クリックでセッション切替を入れる P3 では `<li>` に keyboard alternative (Enter / Space) を持たせるか、`<button>` 化する判断が必要
+
+---
+
+## 設計メモ: `pendingActivateId` の流入経路
+
+`pendingActivateId` is driven by the launch flow and the shell-spawn flow only. Both routes set the value through `requestActivate` once the API call returns the dtach session id, and the next `setDtachSessions` snapshot promotes it to `activeId`. The keep-alive layer keys mount/dispose on `dtachSessions` membership rather than `activeId`, so a stale pending entry cannot pin a vanished session in memory: the next snapshot either confirms the id (promoting it) or carries a different shape (pending stays in place but no terminal handle is mounted on its behalf).
 
 ---
 

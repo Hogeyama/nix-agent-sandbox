@@ -19,19 +19,25 @@
  * pattern: `errorTimer !== null` iff a live timer is pending; the
  * callback nulls the field when it fires.
  *
- * Shell is wired as a callback delegation only; the toggle behaviour is
- * implemented elsewhere.
+ * Shell is a toggle: clicking it switches the center pane between the
+ * agent terminal and the spawned shell. The label and disabled state
+ * are derived from `describeShellToggle` so the button surfaces the
+ * destination view ("Shell" while viewing the agent, "Agent" while
+ * viewing the shell, "Spawning…" while a spawn request is in flight).
  */
 
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { describeShellToggle, type ShellView } from "../stores/shellMapping";
 import type { SessionRow } from "../stores/types";
 import { EditableSessionName } from "./EditableSessionName";
 
 export interface SessionActionsProps {
   row: SessionRow;
+  view: () => ShellView | undefined;
+  shellInFlight: () => boolean;
   onStop: (containerName: string) => Promise<void>;
   onRename: (sessionId: string, name: string) => Promise<void>;
-  onShellToggle: (row: SessionRow) => void;
+  onShellToggle: (row: SessionRow) => void | Promise<void>;
 }
 
 const ERROR_TIMEOUT_MS = 5000;
@@ -56,6 +62,19 @@ export function SessionActions(props: SessionActionsProps) {
 
   const stopDisabled = () => stopInFlight() || stopOptimisticBusy();
 
+  const shellToggle = createMemo(() =>
+    describeShellToggle(props.view() ?? "agent", props.shellInFlight()),
+  );
+
+  const handleShellToggleClick = async () => {
+    if (shellToggle().disabled) return;
+    try {
+      await props.onShellToggle(props.row);
+    } catch (e) {
+      surfaceError(e instanceof Error ? e.message : "Failed to toggle shell");
+    }
+  };
+
   const handleStop = async () => {
     if (stopDisabled()) return;
     setStopInFlight(true);
@@ -76,10 +95,11 @@ export function SessionActions(props: SessionActionsProps) {
       <button
         type="button"
         class="session-action-btn shell-trigger"
-        onClick={() => props.onShellToggle(props.row)}
-        aria-label="Open shell"
+        disabled={shellToggle().disabled}
+        onClick={handleShellToggleClick}
+        aria-label={`${shellToggle().label} for ${props.row.name}`}
       >
-        Shell
+        {shellToggle().label}
       </button>
       <EditableSessionName
         currentName={props.row.name}

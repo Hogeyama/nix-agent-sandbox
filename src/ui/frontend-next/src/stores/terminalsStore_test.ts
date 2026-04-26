@@ -86,7 +86,7 @@ describe("createTerminalsStore", () => {
     expect(store.pendingActivateId()).toBeNull();
   });
 
-  test("selectSession delegates to setActive", () => {
+  test("selectSession delegates to setActive when no shell view is recorded", () => {
     const store = createTerminalsStore();
     store.selectSession("s1");
     expect(store.activeId()).toBe("s1");
@@ -99,5 +99,69 @@ describe("createTerminalsStore", () => {
     store.setDtachSessions([makeDtach({ sessionId: "b" })]);
     expect(store.activeId()).toBe("b");
     expect(store.pendingActivateId()).toBeNull();
+  });
+
+  test("setViewFor / getViewFor round-trip the per-agent view position", () => {
+    const store = createTerminalsStore();
+    expect(store.getViewFor("agent-A")).toBeUndefined();
+    store.setViewFor("agent-A", "shell");
+    expect(store.getViewFor("agent-A")).toBe("shell");
+    store.setViewFor("agent-A", "agent");
+    expect(store.getViewFor("agent-A")).toBe("agent");
+  });
+
+  test("selectSession routes to the live shell id when the recorded view is shell", () => {
+    const store = createTerminalsStore();
+    store.setDtachSessions([
+      makeDtach({ sessionId: "agent-A" }),
+      makeDtach({ sessionId: "shell-agent-A.1" }),
+    ]);
+    store.setViewFor("agent-A", "shell");
+    store.selectSession("agent-A");
+    expect(store.activeId()).toBe("shell-agent-A.1");
+  });
+
+  test("selectSession falls back to agent and resets the view when no live shell exists", () => {
+    const store = createTerminalsStore();
+    store.setDtachSessions([makeDtach({ sessionId: "agent-A" })]);
+    store.setViewFor("agent-A", "shell");
+    store.selectSession("agent-A");
+    expect(store.activeId()).toBe("agent-A");
+    expect(store.getViewFor("agent-A")).toBe("agent");
+  });
+
+  test("setDtachSessions drops view entries for agents that are no longer in the snapshot", () => {
+    const store = createTerminalsStore();
+    store.setDtachSessions([makeDtach({ sessionId: "agent-A" })]);
+    store.setViewFor("agent-A", "shell");
+    store.setDtachSessions([]);
+    expect(store.getViewFor("agent-A")).toBeUndefined();
+  });
+
+  test("setDtachSessions reverts view to agent and re-attaches when the active shell exits", () => {
+    const store = createTerminalsStore();
+    store.setDtachSessions([
+      makeDtach({ sessionId: "agent-A" }),
+      makeDtach({ sessionId: "shell-agent-A.1" }),
+    ]);
+    store.setViewFor("agent-A", "shell");
+    store.setActive("shell-agent-A.1");
+    // Shell exits; agent is still live.
+    store.setDtachSessions([makeDtach({ sessionId: "agent-A" })]);
+    expect(store.getViewFor("agent-A")).toBe("agent");
+    expect(store.activeId()).toBe("agent-A");
+  });
+
+  test("inFlightShellSpawn guards a second startShell while the first is in flight", () => {
+    const store = createTerminalsStore();
+    expect(store.isShellSpawnInFlight("agent-A")).toBe(false);
+    expect(store.tryBeginShellSpawn("agent-A")).toBe(true);
+    expect(store.isShellSpawnInFlight("agent-A")).toBe(true);
+    expect(store.tryBeginShellSpawn("agent-A")).toBe(false);
+    // Another agent is independently allowed to spawn.
+    expect(store.tryBeginShellSpawn("agent-B")).toBe(true);
+    store.clearShellSpawnInFlight("agent-A");
+    expect(store.isShellSpawnInFlight("agent-A")).toBe(false);
+    expect(store.tryBeginShellSpawn("agent-A")).toBe(true);
   });
 });

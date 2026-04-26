@@ -3,6 +3,7 @@ import {
   ackSessionTurn,
   killTerminalClients,
   renameSession,
+  startShell,
   stopContainer,
 } from "./api/client";
 import { getWsToken } from "./api/wsToken";
@@ -18,7 +19,9 @@ import { useConnection } from "./hooks/useConnection";
 import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
 import { createPendingStore } from "./stores/pendingStore";
 import { createSessionsStore } from "./stores/sessionsStore";
+import { findShellForAgent } from "./stores/shellMapping";
 import { createTerminalsStore } from "./stores/terminalsStore";
+import type { SessionRow } from "./stores/types";
 import { createUiStore } from "./stores/uiStore";
 
 // Width of the collapsed-rail rendered in place of the right pane and
@@ -44,6 +47,43 @@ export function App() {
       ? `${ui.leftWidth()}px ${RESIZER_PX}px 1fr ${COLLAPSED_RAIL_PX}px`
       : `${ui.leftWidth()}px ${RESIZER_PX}px 1fr ${RESIZER_PX}px ${ui.rightWidth()}px`;
 
+  // The toggle has three branches:
+  //
+  //   - Currently viewing the shell → switch back to the agent terminal
+  //     by recording the view and pointing activeId at the agent id.
+  //   - Currently viewing the agent and a live shell already exists →
+  //     attach to the existing shell rather than spawning a new one;
+  //     the daemon allows multiple shells per container, but the UI
+  //     pins to the highest-seq shell to keep "1 container = 1 visible
+  //     shell" from the user's point of view.
+  //   - Currently viewing the agent and no live shell exists → start
+  //     a new shell. `tryBeginShellSpawn` is the per-agent guard that
+  //     turns a double-click into a single POST; the in-flight flag
+  //     is cleared in `finally` so a failed spawn does not leave the
+  //     button stuck on "Spawning…".
+  const handleShellToggle = async (row: SessionRow) => {
+    const view = terminals.getViewFor(row.id);
+    if (view === "shell") {
+      terminals.setViewFor(row.id, "agent");
+      terminals.setActive(row.id);
+      return;
+    }
+    const existing = findShellForAgent(row.id, terminals.dtachSessions());
+    if (existing !== null) {
+      terminals.setViewFor(row.id, "shell");
+      terminals.setActive(existing.sessionId);
+      return;
+    }
+    if (!terminals.tryBeginShellSpawn(row.id)) return;
+    try {
+      const { dtachSessionId } = await startShell(row.containerName);
+      terminals.setViewFor(row.id, "shell");
+      terminals.requestActivate(dtachSessionId);
+    } finally {
+      terminals.clearShellSpawnInFlight(row.id);
+    }
+  };
+
   return (
     <div class="app" classList={{ "right-collapsed": ui.rightCollapsed() }}>
       <Topbar
@@ -57,6 +97,8 @@ export function App() {
         <SessionsPane
           sessions={sessions.rows}
           activeId={terminals.activeId}
+          viewFor={(id) => terminals.getViewFor(id)}
+          shellSpawnInFlight={(id) => terminals.isShellSpawnInFlight(id)}
           onSelect={(id) => terminals.selectSession(id)}
           onStop={async (containerName) => {
             await stopContainer(containerName);
@@ -64,11 +106,7 @@ export function App() {
           onRename={async (sessionId, name) => {
             await renameSession(sessionId, name);
           }}
-          onShellToggle={(row) => {
-            // No-op stub: SessionsPane requires the callback to be present.
-            // The shell toggle behaviour lives in a separate module.
-            void row;
-          }}
+          onShellToggle={handleShellToggle}
         />
         <PaneResizer
           side="left"
@@ -85,6 +123,7 @@ export function App() {
           onKillClients={async (id) => {
             await killTerminalClients(id);
           }}
+          onShellToggle={handleShellToggle}
         />
         {/* The right resizer is unmounted while collapsed so that the
             workspace grid track count matches the children count. The
