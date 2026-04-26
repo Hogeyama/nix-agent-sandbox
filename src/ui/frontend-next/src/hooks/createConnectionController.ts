@@ -26,11 +26,10 @@ type SetTimeoutFn = (callback: () => void, ms: number) => number;
 type ClearTimeoutFn = (handle: number) => void;
 
 /**
- * Hook for named SSE events (e.g. `sessions`, `audit:logs`). The
- * controller defines the type and accepts it through `ConnectionDeps`,
- * but does not invoke `onEvent` itself; named-event dispatch is layered
- * on top of this controller by callers that need it. Declaring the slot
- * here keeps the DI surface stable for callers that wire such dispatch.
+ * Sink for named SSE events (e.g. `containers`, `network:pending`).
+ * Each event payload arrives as the JSON-parsed `data` field; parse
+ * failures are surfaced via `console.warn` and the sink is not invoked
+ * for that event.
  */
 type OnEvent = (name: string, data: unknown) => void;
 
@@ -40,11 +39,19 @@ export interface ConnectionDeps {
   setTimeout: SetTimeoutFn;
   clearTimeout: ClearTimeoutFn;
   /**
-   * Optional named-event sink. This controller does not invoke onEvent.
-   * It is accepted as a structural extension point so callers can wire
-   * named-event dispatch without changing the controller's signature.
+   * Optional named-event sink. When omitted, the controller does not
+   * register any `addEventListener` handlers, keeping side-effects
+   * minimal for callers that only need the connected/offline signal.
    */
   onEvent?: OnEvent;
+  /**
+   * Names of SSE events to subscribe to. The controller is intentionally
+   * agnostic about which events the application defines: when this is
+   * omitted (or empty), no `addEventListener` calls are made even if
+   * `onEvent` is provided. Callers own their event vocabulary and pass
+   * it in explicitly.
+   */
+  eventNames?: readonly string[];
 }
 
 export interface ConnectionController {
@@ -133,6 +140,32 @@ export function createConnectionController(
       scheduleOfflineFlip();
       scheduleReconnect();
     };
+
+    // Named-event subscriptions. Listeners are owned by `nextEs`; when
+    // `dispose()` (or the onerror branch) calls `es.close()`, the
+    // EventSource stops delivering events to its listeners, so no
+    // manual `removeEventListener` is required here.
+    if (deps.onEvent) {
+      const names = deps.eventNames ?? [];
+      const sink = deps.onEvent;
+      for (const name of names) {
+        nextEs.addEventListener(name, (e: Event) => {
+          if (disposed) return;
+          const msgEvent = e as MessageEvent<string>;
+          let data: unknown;
+          try {
+            data = JSON.parse(msgEvent.data);
+          } catch (parseErr) {
+            console.warn(
+              `[useConnection] failed to parse event '${name}':`,
+              parseErr,
+            );
+            return;
+          }
+          sink(name, data);
+        });
+      }
+    }
   }
 
   function dispose(): void {

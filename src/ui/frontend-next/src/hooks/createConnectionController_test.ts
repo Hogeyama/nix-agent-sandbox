@@ -85,6 +85,9 @@ interface FakeEventSource {
   closed: boolean;
   triggerOpen: () => void;
   triggerError: () => void;
+  triggerNamedEvent: (name: string, dataString: string) => void;
+  listeners: Map<string, Array<(e: Event) => void>>;
+  addEventListener: (name: string, cb: (e: Event) => void) => void;
   // Mutable fields set by the controller.
   onopen: ((this: FakeEventSource) => void) | null;
   onerror: ((this: FakeEventSource) => void) | null;
@@ -106,11 +109,13 @@ function makeHarness(clock: FakeClock): Harness {
       setConnectedCalls.push(v);
     },
     createEventSource: (url) => {
+      const listeners = new Map<string, Array<(e: Event) => void>>();
       const es: FakeEventSource = {
         url,
         closed: false,
         onopen: null,
         onerror: null,
+        listeners,
         close() {
           this.closed = true;
         },
@@ -119,6 +124,18 @@ function makeHarness(clock: FakeClock): Harness {
         },
         triggerError() {
           this.onerror?.call(this);
+        },
+        addEventListener(name, cb) {
+          const arr = listeners.get(name) ?? [];
+          arr.push(cb);
+          listeners.set(name, arr);
+        },
+        triggerNamedEvent(name, dataString) {
+          const arr = listeners.get(name) ?? [];
+          // Fake MessageEvent shape: only the `data` field is read by
+          // the controller.
+          const evt = { data: dataString } as unknown as Event;
+          for (const cb of arr) cb(evt);
         },
       };
       sources.push(es);
@@ -205,6 +222,86 @@ describe("createConnectionController", () => {
     h.sources[0].triggerError();
     clock.advance(10_000);
     expect(h.setConnectedCalls).toEqual([true]);
+  });
+
+  test("without onEvent, no addEventListener calls are registered", () => {
+    const clock = createFakeClock();
+    const h = makeHarness(clock);
+    const controller = createConnectionController(h.deps);
+
+    controller.start("test");
+    expect(h.sources.length).toBe(1);
+    // No listeners registered when onEvent is omitted.
+    expect(h.sources[0].listeners.size).toBe(0);
+    controller.dispose();
+  });
+
+  test("with onEvent, named event payload is JSON-parsed and dispatched", () => {
+    const clock = createFakeClock();
+    const h = makeHarness(clock);
+    const onEventCalls: Array<{ name: string; data: unknown }> = [];
+    const deps: ConnectionDeps = {
+      ...h.deps,
+      onEvent: (name, data) => {
+        onEventCalls.push({ name, data });
+      },
+      eventNames: ["containers", "network:pending"],
+    };
+    const controller = createConnectionController(deps);
+
+    controller.start("test");
+    h.sources[0].triggerOpen();
+
+    h.sources[0].triggerNamedEvent("containers", '{"items":[]}');
+    expect(onEventCalls).toEqual([{ name: "containers", data: { items: [] } }]);
+
+    h.sources[0].triggerNamedEvent("network:pending", '{"items":[{"id":"a"}]}');
+    expect(onEventCalls.length).toBe(2);
+    expect(onEventCalls[1]).toEqual({
+      name: "network:pending",
+      data: { items: [{ id: "a" }] },
+    });
+
+    controller.dispose();
+  });
+
+  test("malformed event payload logs console.warn and does not invoke onEvent", () => {
+    const clock = createFakeClock();
+    const h = makeHarness(clock);
+    const onEventCalls: Array<{ name: string; data: unknown }> = [];
+    const deps: ConnectionDeps = {
+      ...h.deps,
+      onEvent: (name, data) => {
+        onEventCalls.push({ name, data });
+      },
+      eventNames: ["containers"],
+    };
+
+    const originalConsoleWarn = console.warn;
+    const consoleWarnCalls: unknown[][] = [];
+    console.warn = (...args: unknown[]) => {
+      consoleWarnCalls.push(args);
+    };
+
+    try {
+      const controller = createConnectionController(deps);
+      controller.start("test");
+      h.sources[0].triggerOpen();
+
+      h.sources[0].triggerNamedEvent("containers", "not-json");
+      expect(onEventCalls).toEqual([]);
+      expect(consoleWarnCalls.length).toBe(1);
+
+      // After a parse failure, subsequent valid payloads still dispatch.
+      h.sources[0].triggerNamedEvent("containers", '{"items":[]}');
+      expect(onEventCalls).toEqual([
+        { name: "containers", data: { items: [] } },
+      ]);
+
+      controller.dispose();
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
   });
 
   test("createEventSource throw logs to console.error, flips offline at grace boundary, then retries on reconnect backoff", () => {

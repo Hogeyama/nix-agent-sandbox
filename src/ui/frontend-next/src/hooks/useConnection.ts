@@ -19,9 +19,19 @@ export interface UseConnectionResult {
   connected: Accessor<boolean>;
 }
 
+export interface UseConnectionOptions {
+  /**
+   * Names of SSE events to subscribe to. Forwarded to the underlying
+   * `ConnectionDeps.eventNames`; without this the controller stays in
+   * connection-only mode and registers no `addEventListener` handlers.
+   */
+  eventNames?: readonly string[];
+}
+
 export function useConnection(
   url: string,
   onEvent?: ConnectionDeps["onEvent"],
+  options?: UseConnectionOptions,
 ): UseConnectionResult {
   const [connected, setConnected] = createSignal<boolean>(false);
   const controller = createConnectionController({
@@ -30,6 +40,7 @@ export function useConnection(
     setTimeout: (cb, ms) => globalThis.setTimeout(cb, ms),
     clearTimeout: (h) => globalThis.clearTimeout(h),
     onEvent,
+    eventNames: options?.eventNames,
   });
   onMount(() => controller.start(url));
   onCleanup(() => controller.dispose());
