@@ -93,6 +93,36 @@ describe("normalizeContainersToSessions", () => {
     ]);
     expect(rows[0]?.dir).toBe("/home/user/repo");
   });
+
+  test("containerName equals container.name even when sessionName is missing", () => {
+    const rows = normalizeContainersToSessions([
+      makeContainer({ name: "agent-xyz", sessionName: null }),
+    ]);
+    // `name` falls back to container.name for display, but `containerName`
+    // always mirrors the Docker container name verbatim.
+    expect(rows[0]?.name).toBe("agent-xyz");
+    expect(rows[0]?.containerName).toBe("agent-xyz");
+  });
+
+  test("containerName is independent of sessionName when both are set", () => {
+    const rows = normalizeContainersToSessions([
+      makeContainer({ name: "agent-xyz", sessionName: "human-readable" }),
+    ]);
+    expect(rows[0]?.name).toBe("human-readable");
+    expect(rows[0]?.containerName).toBe("agent-xyz");
+  });
+
+  test("lastEventAt is null when payload omits it, copies the ISO string when present", () => {
+    const rowsWithout = normalizeContainersToSessions([
+      makeContainer({ lastEventAt: undefined }),
+    ]);
+    expect(rowsWithout[0]?.lastEventAt).toBeNull();
+
+    const rowsWith = normalizeContainersToSessions([
+      makeContainer({ lastEventAt: "2026-04-26T10:20:30.000Z" }),
+    ]);
+    expect(rowsWith[0]?.lastEventAt).toBe("2026-04-26T10:20:30.000Z");
+  });
 });
 
 describe("createSessionsStore", () => {

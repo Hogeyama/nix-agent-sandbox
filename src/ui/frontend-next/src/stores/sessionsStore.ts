@@ -25,11 +25,13 @@ export function normalizeContainersToSessions(
       id: sessionId,
       shortId: shortenSessionId(sessionId),
       name: c.sessionName ?? c.name,
+      containerName: c.name,
       dir: c.labels["nas.pwd"] ?? null,
       profile: c.sessionProfile ?? null,
       worktreeName: c.worktree?.name ?? null,
       baseBranch: c.worktree?.baseBranch ?? null,
       turn: c.turn ?? null,
+      lastEventAt: c.lastEventAt ?? null,
       isAgent: true,
     });
   }

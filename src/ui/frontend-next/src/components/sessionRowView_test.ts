@@ -7,11 +7,13 @@ function makeRow(overrides: Partial<SessionRow> = {}): SessionRow {
     id: "s_aaaaaaaa11111111",
     shortId: "s_aaaaaa",
     name: "default-session",
+    containerName: "default-container",
     dir: null,
     profile: null,
     worktreeName: null,
     baseBranch: null,
     turn: null,
+    lastEventAt: null,
     isAgent: true,
     ...overrides,
   };
