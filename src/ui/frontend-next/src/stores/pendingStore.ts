@@ -33,12 +33,12 @@ export function normalizeNetworkPending(
   items: NetworkPendingItemLike[],
 ): NetworkPendingRow[] {
   return items.map((it) => ({
-    id: it.id,
+    id: it.requestId,
     sessionId: it.sessionId,
     sessionShortId: shortenSessionId(it.sessionId),
-    sessionName: it.sessionName ?? null,
+    sessionName: null,
     verb: (it.method ?? "GET").toUpperCase(),
-    summary: `${it.host}:${it.port}`,
+    summary: `${it.target.host}:${it.target.port}`,
     createdAtMs: parseIsoToMs(it.createdAt),
   }));
 }
@@ -47,11 +47,11 @@ export function normalizeHostExecPending(
   items: HostExecPendingItemLike[],
 ): HostExecPendingRow[] {
   return items.map((it) => ({
-    id: it.id,
+    id: it.requestId,
     sessionId: it.sessionId,
     sessionShortId: shortenSessionId(it.sessionId),
-    sessionName: it.sessionName ?? null,
-    command: it.argv.join(" "),
+    sessionName: null,
+    command: [it.argv0, ...it.args].join(" "),
     createdAtMs: parseIsoToMs(it.createdAt),
   }));
 }

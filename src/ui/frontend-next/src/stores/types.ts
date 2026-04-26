@@ -22,21 +22,19 @@ export type ContainerInfoLike = {
 };
 
 export type NetworkPendingItemLike = {
-  id: string; // request id
+  requestId: string;
   sessionId: string;
-  sessionName?: string | null;
   createdAt: string; // ISO
   method?: string | null; // "GET" / "POST" / etc
-  host: string;
-  port: number;
+  target: { host: string; port: number };
 };
 
 export type HostExecPendingItemLike = {
-  id: string;
+  requestId: string;
   sessionId: string;
-  sessionName?: string | null;
   createdAt: string;
-  argv: string[]; // ["git", "push"] etc
+  argv0: string;
+  args: string[];
   cwd?: string | null;
 };
 

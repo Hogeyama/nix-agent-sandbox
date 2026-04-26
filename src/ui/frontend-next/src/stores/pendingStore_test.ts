@@ -10,13 +10,11 @@ function makeNetwork(
   overrides: Partial<NetworkPendingItemLike> = {},
 ): NetworkPendingItemLike {
   return {
-    id: "req-1",
+    requestId: "req-1",
     sessionId: "s_abcdef0123456789",
-    sessionName: "session-a",
     createdAt: "2026-04-26T03:00:00.000Z",
     method: "GET",
-    host: "api.github.com",
-    port: 443,
+    target: { host: "api.github.com", port: 443 },
     ...overrides,
   };
 }
@@ -25,11 +23,11 @@ function makeHostExec(
   overrides: Partial<HostExecPendingItemLike> = {},
 ): HostExecPendingItemLike {
   return {
-    id: "exec-1",
+    requestId: "exec-1",
     sessionId: "s_abcdef0123456789",
-    sessionName: "session-a",
     createdAt: "2026-04-26T03:00:00.000Z",
-    argv: ["git", "push"],
+    argv0: "git",
+    args: ["push"],
     ...overrides,
   };
 }
@@ -39,8 +37,7 @@ describe("normalizeNetworkPending", () => {
     const rows = normalizeNetworkPending([
       makeNetwork({
         method: "GET",
-        host: "api.github.com",
-        port: 443,
+        target: { host: "api.github.com", port: 443 },
       }),
     ]);
     expect(rows[0]?.verb).toBe("GET");
@@ -85,25 +82,25 @@ describe("normalizeNetworkPending", () => {
     expect(rows[0]?.sessionShortId).toBe("s_7a3f12");
   });
 
-  test("sessionName falls back to null when missing", () => {
-    const rows = normalizeNetworkPending([
-      makeNetwork({ sessionName: undefined }),
-    ]);
+  test("sessionName is always null because the SSE payload omits it", () => {
+    const rows = normalizeNetworkPending([makeNetwork()]);
     expect(rows[0]?.sessionName).toBeNull();
   });
 });
 
 describe("normalizeHostExecPending", () => {
-  test("argv joins with single space", () => {
+  test("argv0 + args join with single space", () => {
     const rows = normalizeHostExecPending([
-      makeHostExec({ argv: ["git", "push"] }),
+      makeHostExec({ argv0: "git", args: ["push"] }),
     ]);
     expect(rows[0]?.command).toBe("git push");
   });
 
-  test("empty argv produces empty command without throwing", () => {
-    const rows = normalizeHostExecPending([makeHostExec({ argv: [] })]);
-    expect(rows[0]?.command).toBe("");
+  test("empty args yields just argv0 in the command", () => {
+    const rows = normalizeHostExecPending([
+      makeHostExec({ argv0: "ls", args: [] }),
+    ]);
+    expect(rows[0]?.command).toBe("ls");
   });
 
   test("createdAtMs is null when ISO is unparseable", () => {
@@ -135,8 +132,8 @@ describe("createPendingStore", () => {
 
   test("setters replace previous rows", () => {
     const store = createPendingStore();
-    store.setNetwork([makeNetwork({ id: "a" })]);
-    store.setNetwork([makeNetwork({ id: "b" })]);
+    store.setNetwork([makeNetwork({ requestId: "a" })]);
+    store.setNetwork([makeNetwork({ requestId: "b" })]);
     expect(store.network()).toHaveLength(1);
     expect(store.network()[0]?.id).toBe("b");
   });

@@ -79,11 +79,10 @@ describe("createSseDispatch", () => {
 
     const items: NetworkPendingItemLike[] = [
       {
-        id: "r1",
+        requestId: "r1",
         sessionId: "s1",
         createdAt: "2026-01-01T00:00:00Z",
-        host: "example.com",
-        port: 443,
+        target: { host: "example.com", port: 443 },
       },
     ];
     dispatch("network:pending", { items });
@@ -100,10 +99,11 @@ describe("createSseDispatch", () => {
 
     const items: HostExecPendingItemLike[] = [
       {
-        id: "x1",
+        requestId: "x1",
         sessionId: "s1",
         createdAt: "2026-01-01T00:00:00Z",
-        argv: ["git", "push"],
+        argv0: "git",
+        args: ["push"],
       },
     ];
     dispatch("hostexec:pending", { items });
