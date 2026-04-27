@@ -6,12 +6,15 @@ import {
   type LaunchInfo,
   launchSession,
 } from "../api/client";
+import { createFocusTrap } from "./createFocusTrap";
 import {
   pickEffectiveCwd,
   pickWorktreeBase,
   reconcileWorktreeChoice,
   type WorktreeChoice,
 } from "./newSessionForm";
+
+const DIALOG_TITLE_ID = "new-session-dialog-title";
 
 type DirChoice = "default" | "recent" | "custom";
 
@@ -144,6 +147,45 @@ export function NewSessionDialog(props: Props) {
     onCleanup(() => window.removeEventListener("keydown", handler));
   });
 
+  // Focus trap: cycles Tab / Shift+Tab inside the dialog and restores
+  // focus to the opener (e.g. the topbar "+ new session" button or the
+  // element that held focus when Ctrl+N fired) on close. The form body
+  // sits behind a `Show when={!loading() && launchInfo()}` gate that
+  // waits on `/api/launch/info`, so the microtask-deferred `activate()`
+  // typically runs before any focusable descendant exists and the
+  // initial-focus call is a no-op. That is acceptable: the trap still
+  // engages immediately, so the first `Tab` press is captured and
+  // cycles within the root once the form mounts, and Esc / backdrop /
+  // restore-on-close all work independently of initial focus. The
+  // common entry pattern is opener -> open dialog -> Tab, which the
+  // trap handles correctly.
+  let dialogRef: HTMLDivElement | undefined;
+  const focusTrap = createFocusTrap({
+    getRoot: () => dialogRef ?? null,
+    getActiveElement: () =>
+      typeof document === "undefined" ? null : document.activeElement,
+    setFocus: (el) => {
+      el.focus();
+    },
+  });
+
+  createEffect(() => {
+    if (!props.open()) return;
+    // Defer activation past the synchronous render so `dialogRef` is
+    // assigned by the Show-gated subtree before the trap queries it.
+    // `activate()` is idempotent on `previouslyFocused`, so even if this
+    // effect re-runs while the dialog is already open the opener is
+    // preserved for restore.
+    queueMicrotask(() => {
+      if (props.open()) focusTrap.activate();
+    });
+    onCleanup(() => focusTrap.deactivate());
+  });
+
+  // Belt-and-braces: if the component itself unmounts (rather than the
+  // open() flag flipping) make sure focus is still restored.
+  onCleanup(() => focusTrap.deactivate());
+
   function handleSubmit() {
     const info = launchInfo();
     if (!info) return;
@@ -182,12 +224,18 @@ export function NewSessionDialog(props: Props) {
         onClick={handleBackdropClick}
       >
         <div
+          ref={(el) => {
+            dialogRef = el;
+          }}
           class="dialog"
           role="dialog"
           aria-modal="true"
-          aria-label="New Session"
+          aria-labelledby={DIALOG_TITLE_ID}
+          onKeyDown={(e) => focusTrap.handleKeyDown(e)}
         >
-          <h2 class="dialog-title">New Session</h2>
+          <h2 id={DIALOG_TITLE_ID} class="dialog-title">
+            New Session
+          </h2>
 
           <Show when={loading()}>
             <p class="dialog-muted">Loading...</p>
