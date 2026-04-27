@@ -18,6 +18,14 @@ export {
   type SessionNetworkPlan,
 } from "./proxy/envoy_service.ts";
 export {
+  type EnsureForwardPortRelaysOptions,
+  type ForwardPortRelayHandle,
+  ForwardPortRelayService,
+  type ForwardPortRelayServiceFakeConfig,
+  ForwardPortRelayServiceLive,
+  makeForwardPortRelayServiceFake,
+} from "./proxy/forward_port_relay_service.ts";
+export {
   makeNetworkRuntimeServiceFake,
   NetworkRuntimeService,
   type NetworkRuntimeServiceFakeConfig,

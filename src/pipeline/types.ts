@@ -19,6 +19,7 @@ import type { MountSetupService } from "../stages/mount.ts";
 import type {
   AuthRouterService,
   EnvoyService,
+  ForwardPortRelayService,
   NetworkRuntimeService,
   SessionBrokerService,
 } from "../stages/proxy.ts";
@@ -79,6 +80,7 @@ export type StageServices =
   | DisplayService
   | DockerBuildService
   | EnvoyService
+  | ForwardPortRelayService
   | FsService
   | GitWorktreeService
   | HostExecBrokerService

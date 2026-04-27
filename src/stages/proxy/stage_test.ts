@@ -25,6 +25,11 @@ import type {
 } from "../../pipeline/types.ts";
 import { makeAuthRouterServiceFake } from "./auth_router_service.ts";
 import { makeEnvoyServiceFake } from "./envoy_service.ts";
+import {
+  type EnsureForwardPortRelaysOptions,
+  type ForwardPortRelayHandle,
+  makeForwardPortRelayServiceFake,
+} from "./forward_port_relay_service.ts";
 import { makeNetworkRuntimeServiceFake } from "./network_runtime_service.ts";
 import { makeSessionBrokerServiceFake } from "./session_broker_service.ts";
 import {
@@ -415,6 +420,106 @@ test("ProxyStage: no NAS_FORWARD_PORTS when forwardPorts is empty", () => {
   expect(result.envVars.NAS_FORWARD_PORTS).toBeUndefined();
 });
 
+test("ProxyStage: forwardPorts adds per-port UDS bind-mounts to container", () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080, 5432] } },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+
+  // Both ports get their own bind-mount targeting /run/nas-fp/<port>.sock with
+  // the source matching forward_port_relay's canonical helper. Drift between
+  // these and the relay's actual listener path would make local-proxy fail
+  // socket lookup, so we pin both halves explicitly.
+  const expectedRuntimeDir = "/run/user/1000/nas/network";
+  const sessionId = "test-session-123";
+  const mounts = result.outputOverrides.container!.mounts;
+
+  const m8080 = mounts.find((m) => m.target === "/run/nas-fp/8080.sock");
+  const m5432 = mounts.find((m) => m.target === "/run/nas-fp/5432.sock");
+  expect(m8080).toBeDefined();
+  expect(m5432).toBeDefined();
+  expect(m8080!.source).toEqual(
+    `${expectedRuntimeDir}/forward-ports/${sessionId}/8080.sock`,
+  );
+  expect(m5432!.source).toEqual(
+    `${expectedRuntimeDir}/forward-ports/${sessionId}/5432.sock`,
+  );
+  expect(m8080!.readOnly).toEqual(false);
+  expect(m5432!.readOnly).toEqual(false);
+});
+
+test("ProxyStage: forwardPorts sets NAS_FORWARD_PORT_SOCKET_DIR env", () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080, 5432] } },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+  expect(
+    result.outputOverrides.container!.env.static.NAS_FORWARD_PORT_SOCKET_DIR,
+  ).toEqual("/run/nas-fp");
+});
+
+test("ProxyStage: no forward-port mounts or socket-dir env when forwardPorts is empty", () => {
+  const profile = makeProfile({
+    network: { allowlist: ["example.com"] },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+
+  const mounts = result.outputOverrides.container!.mounts;
+  const fpMounts = mounts.filter((m) => m.target.startsWith("/run/nas-fp/"));
+  expect(fpMounts.length).toEqual(0);
+
+  expect(
+    result.outputOverrides.container!.env.static.NAS_FORWARD_PORT_SOCKET_DIR,
+  ).toBeUndefined();
+});
+
+test("createProxyStage().run(): invokes forwardPortRelay.ensureRelays and close on release", async () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080] } },
+  });
+  const { shared, container } = makeInput(profile);
+
+  const ensureCalls: EnsureForwardPortRelaysOptions[] = [];
+  let closeCount = 0;
+
+  const layer = Layer.mergeAll(
+    makeNetworkRuntimeServiceFake(),
+    makeEnvoyServiceFake(),
+    makeSessionBrokerServiceFake(),
+    makeAuthRouterServiceFake(),
+    makeForwardPortRelayServiceFake({
+      ensureRelays: (opts) => {
+        ensureCalls.push(opts);
+        const handle: ForwardPortRelayHandle = {
+          socketPaths: new Map<number, string>([
+            [8080, "/run/user/1000/nas/network/forward-ports/sess/8080.sock"],
+          ]),
+          close: () =>
+            Effect.sync(() => {
+              closeCount += 1;
+            }),
+        };
+        return Effect.succeed(handle);
+      },
+    }),
+  );
+
+  const stage = createProxyStage(shared);
+  await Effect.runPromise(
+    stage.run({ container }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  expect(ensureCalls.length).toEqual(1);
+  expect(ensureCalls[0]!.ports).toEqual([8080]);
+  expect(ensureCalls[0]!.sessionId).toEqual("test-session-123");
+  expect(ensureCalls[0]!.runtimeDir).toEqual("/run/user/1000/nas/network");
+  // Scope finalization must run close() on the handle.
+  expect(closeCount).toEqual(1);
+});
+
 test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
   const host: HostEnv = {
     home: "/home/test",
@@ -463,6 +568,7 @@ test("createProxyStage().run(): skips when proxy is disabled", async () => {
     makeEnvoyServiceFake(),
     makeSessionBrokerServiceFake(),
     makeAuthRouterServiceFake(),
+    makeForwardPortRelayServiceFake(),
   );
 
   const result = await Effect.runPromise(
@@ -513,6 +619,15 @@ test("createProxyStage().run(): calls services and returns merged output", async
         return Effect.succeed({ abort: () => Effect.void });
       },
     }),
+    makeForwardPortRelayServiceFake({
+      ensureRelays: () => {
+        calls.push("forwardPortEnsureRelays");
+        return Effect.succeed({
+          socketPaths: new Map<number, string>(),
+          close: () => Effect.void,
+        });
+      },
+    }),
   );
 
   const stage = createProxyStageWithOptions(shared, {
@@ -523,12 +638,15 @@ test("createProxyStage().run(): calls services and returns merged output", async
     stage.run({ container }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
-  // All services were called in the expected order
+  // All services were called in the expected order. Relay ensure sits between
+  // auth-router daemon ensure and envoy ensure so LIFO release tears the
+  // relays down before envoy / session-network resources go away.
   expect(calls).toEqual([
     "gcStaleRuntime",
     "renderEnvoyConfig",
     "sessionBrokerStart",
     "authRouterEnsureDaemon",
+    "forwardPortEnsureRelays",
     "ensureSharedEnvoy",
     "createSessionNetwork",
   ]);

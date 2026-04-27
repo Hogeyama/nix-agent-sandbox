@@ -76,6 +76,7 @@ import {
   AuthRouterServiceLive,
   createProxyStage,
   EnvoyServiceLive,
+  ForwardPortRelayServiceLive,
   NetworkRuntimeServiceLive,
   SessionBrokerServiceLive,
 } from "./stages/proxy.ts";
@@ -276,6 +277,7 @@ export async function main(args: string[]): Promise<void> {
         Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
       ),
       EnvoyServiceLive.pipe(Layer.provide(dockerLayer)),
+      ForwardPortRelayServiceLive,
       FsServiceLive,
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,

@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { Effect, type Scope } from "effect";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { logInfo } from "../../log.ts";
+import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import {
   generateSessionToken as defaultGenerateToken,
   hashToken,
@@ -23,6 +24,7 @@ import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
   ContainerPlan,
+  MountSpec,
   NetworkState,
   PipelineState,
   PromptState,
@@ -34,6 +36,10 @@ import {
   AuthRouterService,
 } from "./auth_router_service.ts";
 import { EnvoyService } from "./envoy_service.ts";
+import {
+  type ForwardPortRelayHandle,
+  ForwardPortRelayService,
+} from "./forward_port_relay_service.ts";
 import { NetworkRuntimeService } from "./network_runtime_service.ts";
 import {
   type SessionBrokerHandle,
@@ -46,6 +52,15 @@ const ENVOY_ALIAS = "nas-envoy";
 const ENVOY_PROXY_PORT = 15001;
 const ENVOY_READY_TIMEOUT_MS = 15_000;
 export const LOCAL_PROXY_PORT = 18080;
+
+/**
+ * Mount target directory inside the agent container where per-port forward-port
+ * UDS sockets are bind-mounted. The local-proxy resolves connect attempts to
+ * `<FORWARD_PORT_SOCKET_DIR_IN_CONTAINER>/<port>.sock`. The value is exposed
+ * to the container via `NAS_FORWARD_PORT_SOCKET_DIR` and MUST match the mount
+ * targets we generate for each port — drift would cause socket lookup failure.
+ */
+const FORWARD_PORT_SOCKET_DIR_IN_CONTAINER = "/run/nas-fp";
 
 // ---------------------------------------------------------------------------
 // ProxyPlan
@@ -81,6 +96,7 @@ export interface ProxyPlan {
   >;
   readonly envVars: Record<string, string>;
   readonly container: ContainerPlan;
+  readonly forwardPorts: ReadonlyArray<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,13 +151,35 @@ export function planProxy(
     no_proxy: noProxyEntries.join(","),
     NO_PROXY: noProxyEntries.join(","),
   };
+
+  // forward-port mounts/env are gated on `forwardPorts.length > 0` so the
+  // fast path (no forward-ports declared) adds neither the dir env nor any
+  // bind-mounts. The socket source paths are computed via the canonical pure
+  // helper exported by forward_port_relay.ts; that same helper drives the
+  // actual relay listener path inside ForwardPortRelayService, so plan-time
+  // and runtime paths cannot drift.
+  const forwardPortMounts: MountSpec[] = [];
   if (forwardPorts.length > 0) {
     envVars.NAS_FORWARD_PORTS = forwardPorts.join(",");
+    envVars.NAS_FORWARD_PORT_SOCKET_DIR = FORWARD_PORT_SOCKET_DIR_IN_CONTAINER;
+    for (const port of forwardPorts) {
+      forwardPortMounts.push({
+        source: forwardPortSocketPath(
+          runtimePaths.runtimeDir,
+          input.sessionId,
+          port,
+        ),
+        target: `${FORWARD_PORT_SOCKET_DIR_IN_CONTAINER}/${port}.sock`,
+        // UDS connect requires write permission on the socket file.
+        readOnly: false,
+      });
+    }
   }
 
   const container = buildContainerState(input, {
     sessionNetworkName,
     envVars,
+    extraMounts: forwardPortMounts,
   });
 
   const network: NetworkState = {
@@ -183,6 +221,7 @@ export function planProxy(
     dindContainerName,
     envVars: container.env.static,
     container,
+    forwardPorts,
     outputOverrides: {
       network,
       prompt: promptState,
@@ -204,7 +243,8 @@ export function createProxyStage(
   | NetworkRuntimeService
   | EnvoyService
   | SessionBrokerService
-  | AuthRouterService,
+  | AuthRouterService
+  | ForwardPortRelayService,
   unknown
 > {
   return createProxyStageWithOptions(shared);
@@ -219,7 +259,8 @@ export function createProxyStageWithOptions(
   | NetworkRuntimeService
   | EnvoyService
   | SessionBrokerService
-  | AuthRouterService,
+  | AuthRouterService
+  | ForwardPortRelayService,
   unknown
 > {
   return {
@@ -236,6 +277,7 @@ export function createProxyStageWithOptions(
       | EnvoyService
       | SessionBrokerService
       | AuthRouterService
+      | ForwardPortRelayService
     > {
       const stageInput = {
         ...shared,
@@ -264,12 +306,14 @@ function runProxy(
   | EnvoyService
   | SessionBrokerService
   | AuthRouterService
+  | ForwardPortRelayService
 > {
   return Effect.gen(function* () {
     const networkRuntime = yield* NetworkRuntimeService;
     const envoy = yield* EnvoyService;
     const sessionBrokerService = yield* SessionBrokerService;
     const authRouterService = yield* AuthRouterService;
+    const forwardPortRelayService = yield* ForwardPortRelayService;
 
     // 1. GC stale sessions (read PID file, check alive, remove stale files)
     yield* networkRuntime.gcStaleRuntime(plan.runtimePaths);
@@ -313,13 +357,36 @@ function runProxy(
       (handle: AuthRouterHandle) => handle.abort(),
     );
 
-    // 5. Shared envoy container (acquireRelease — no teardown since it's shared)
+    // 5. Forward-port relays (acquireRelease).
+    // Always called regardless of plan.forwardPorts.length: the live impl
+    // fast-paths empty ports to a no-op.
+    //
+    // Placement between auth-router and shared-envoy is intentional. LIFO
+    // release closes shared-envoy first, which stops the agent container
+    // from sending new traffic; the relays are then idle and safe to close.
+    // Closing relays before envoy would instead kill in-flight forward-port
+    // connections while other envoy-routed traffic is still live.
+    //
+    // Relays do not depend on the auth-router daemon's UDS, but they do
+    // depend on `runtimeDir` existing on disk. Releasing relays before the
+    // auth-router release keeps relays clear of any runtimeDir cleanup the
+    // auth-router teardown may perform.
+    yield* Effect.acquireRelease(
+      forwardPortRelayService.ensureRelays({
+        runtimeDir: plan.runtimePaths.runtimeDir,
+        sessionId: plan.sessionId,
+        ports: plan.forwardPorts,
+      }),
+      (handle: ForwardPortRelayHandle) => handle.close(),
+    );
+
+    // 6. Shared envoy container (acquireRelease — no teardown since it's shared)
     yield* Effect.acquireRelease(
       envoy.ensureSharedEnvoy(plan),
       () => Effect.void,
     );
 
-    // 6. Session network + envoy/dind connect (acquireRelease)
+    // 7. Session network + envoy/dind connect (acquireRelease)
     yield* Effect.acquireRelease(
       envoy.createSessionNetwork(plan),
       (teardown: () => Effect.Effect<void>) => teardown(),
@@ -382,11 +449,18 @@ function buildContainerState(
   config: {
     readonly sessionNetworkName: string;
     readonly envVars: Readonly<Record<string, string>>;
+    readonly extraMounts?: ReadonlyArray<MountSpec>;
   },
 ): ContainerPlan {
   return mergeContainerPlan(resolveContainerBase(input), {
     env: { static: config.envVars },
     network: { name: config.sessionNetworkName },
+    // Skip the mounts patch entirely when there's nothing to add; passing an
+    // empty array still triggers mergeContainerPlan's append branch (a no-op
+    // here), but keeping the patch keyless makes intent clearer.
+    ...(config.extraMounts && config.extraMounts.length > 0
+      ? { mounts: config.extraMounts }
+      : {}),
   });
 }
 
