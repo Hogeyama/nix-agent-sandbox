@@ -1158,6 +1158,7 @@ test("CLI E2E: network gc removes stale runtime state", async () => {
     const sessionId = "sess_stale";
     const staleSocket = brokerSocketPath(paths, sessionId);
     await mkdir(pendingSessionDir(paths, sessionId), { recursive: true });
+    await mkdir(path.dirname(staleSocket), { recursive: true });
     await writeFile(staleSocket, "");
     await writeFile(paths.authRouterSocket, "");
     await writeFile(paths.authRouterPidFile, "999999\n");

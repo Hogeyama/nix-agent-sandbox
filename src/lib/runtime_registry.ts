@@ -199,7 +199,9 @@ export async function gcRuntime<S extends BaseSessionEntry>(
     await removeSessionRegistry(paths, entry.sessionId);
     await removePendingDir(paths, entry.sessionId);
     removedPendingDirs.push(entry.sessionId);
-    await safeRemove(entry.brokerSocket);
+    await safeRemove(sessionBrokerDir(paths, entry.sessionId), {
+      recursive: true,
+    });
     removedBrokerSockets.push(entry.brokerSocket);
   }
 
