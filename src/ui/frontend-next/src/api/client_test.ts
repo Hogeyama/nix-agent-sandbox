@@ -23,6 +23,7 @@ import {
   getAuditLogs,
   getInfo,
   getLaunchBranches,
+  getLaunchInfo,
   HttpError,
   killTerminalClients,
   renameSession,
@@ -655,6 +656,96 @@ describe("getAuditLogs", () => {
     expect(caught).toBeInstanceOf(HttpError);
     expect((caught as HttpError).status).toBe(400);
     expect((caught as HttpError).message).toBe("Invalid before");
+  });
+});
+
+describe("getLaunchInfo", () => {
+  test("with no argument, GETs the bare /api/launch/info path without a query string", async () => {
+    // `cwd === undefined` is the no-cwd branch: the daemon falls back
+    // to its default behaviour rather than receiving an empty `cwd=`
+    // query parameter that it would have to special-case.
+    const fetchMock = installFetch(async () =>
+      jsonResponse({
+        dtachAvailable: true,
+        profiles: ["default"],
+        recentDirectories: [],
+      }),
+    );
+    await getLaunchInfo();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/launch/info");
+    expect(url).not.toContain("?");
+    expect(init.method).toBe("GET");
+    // Bodyless GET: no Content-Type, no body — same shape as
+    // `getInfo` so the daemon's preflight policy is consistent.
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+  });
+
+  test("with cwd === '', GETs the bare /api/launch/info path (empty cwd is equivalent to omission)", async () => {
+    // Empty-string cwd must produce the same URL as the no-argument
+    // call so the bare path stays the canonical "no cwd" form.
+    const fetchMock = installFetch(async () =>
+      jsonResponse({
+        dtachAvailable: true,
+        profiles: ["default"],
+        recentDirectories: [],
+      }),
+    );
+    await getLaunchInfo("");
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/launch/info");
+    expect(url).not.toContain("?");
+  });
+
+  test("encodes cwd containing whitespace and non-ASCII characters", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({
+        dtachAvailable: true,
+        profiles: ["default"],
+        recentDirectories: [],
+      }),
+    );
+    await getLaunchInfo("/home/user/プロジェクト name");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      `/api/launch/info?cwd=${encodeURIComponent(
+        "/home/user/プロジェクト name",
+      )}`,
+    );
+    // Sanity-check: literal whitespace and Japanese characters are
+    // percent-encoded so they cannot be misread as path segments or
+    // unparseable query components.
+    expect(url).not.toContain(" ");
+    expect(url).not.toContain("プロジェクト");
+  });
+
+  test("encodes reserved query characters (?, &, #) in cwd to prevent URL injection", async () => {
+    // Reserved characters in the raw cwd would otherwise split or
+    // truncate the query string at the wire layer. Pin that
+    // `encodeURIComponent` percent-encodes them all so the backend's
+    // `searchParams.get("cwd")` round-trips the original value
+    // intact.
+    const fetchMock = installFetch(async () =>
+      jsonResponse({
+        dtachAvailable: true,
+        profiles: ["default"],
+        recentDirectories: [],
+      }),
+    );
+    const raw = "/path/with?question&amp/hash#";
+    await getLaunchInfo(raw);
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`/api/launch/info?cwd=${encodeURIComponent(raw)}`);
+    // The unsafe `?`, `&`, and `#` in the raw cwd must not appear
+    // literally past the fixed `?cwd=` prefix — otherwise the backend
+    // would see additional query parameters or a truncated value.
+    const tail = url.slice("/api/launch/info?cwd=".length);
+    expect(tail).not.toContain("?");
+    expect(tail).not.toContain("&");
+    expect(tail).not.toContain("#");
   });
 });
 

@@ -119,8 +119,18 @@ export async function request<T>(
   return (await res.json()) as T;
 }
 
-export function getLaunchInfo(): Promise<LaunchInfo> {
-  return request<LaunchInfo>("GET", "/api/launch/info");
+export function getLaunchInfo(cwd?: string): Promise<LaunchInfo> {
+  // Empty `cwd` is treated as "no cwd": the bare `/api/launch/info`
+  // path is sent so the daemon falls back to its default behaviour
+  // rather than receiving an empty `cwd=` query parameter that it
+  // would have to special-case. A non-empty `cwd` is percent-encoded
+  // so values containing `/`, `?`, `&`, or whitespace cannot escape
+  // the query parameter.
+  const path =
+    cwd === undefined || cwd === ""
+      ? "/api/launch/info"
+      : `/api/launch/info?cwd=${encodeURIComponent(cwd)}`;
+  return request<LaunchInfo>("GET", path);
 }
 
 export function getInfo(): Promise<Info> {
