@@ -51,4 +51,68 @@ describe("matchShortcut", () => {
     const e = makeEvent({ key: "]", ctrlKey: false, shiftKey: false });
     expect(matchShortcut(e, { ctrl: true, shift: true, key: "]" })).toBe(false);
   });
+
+  test("allowInTextField bypasses TEXTAREA guard", () => {
+    const e = makeEvent({
+      key: "]",
+      ctrlKey: true,
+      shiftKey: true,
+      target: { tagName: "TEXTAREA" } as unknown as EventTarget,
+    });
+    expect(
+      matchShortcut(e, {
+        ctrl: true,
+        shift: true,
+        key: "]",
+        allowInTextField: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("allowInTextField bypasses contenteditable guard", () => {
+    const e = makeEvent({
+      key: "]",
+      ctrlKey: true,
+      shiftKey: true,
+      target: {
+        tagName: "DIV",
+        isContentEditable: true,
+      } as unknown as EventTarget,
+    });
+    expect(
+      matchShortcut(e, {
+        ctrl: true,
+        shift: true,
+        key: "]",
+        allowInTextField: true,
+      }),
+    ).toBe(true);
+  });
+
+  test("Without allowInTextField, TEXTAREA target still blocks the match", () => {
+    const e = makeEvent({
+      key: "]",
+      ctrlKey: true,
+      shiftKey: true,
+      target: { tagName: "TEXTAREA" } as unknown as EventTarget,
+    });
+    expect(matchShortcut(e, { ctrl: true, shift: true, key: "]" })).toBe(false);
+  });
+
+  test("allowInTextField does not relax modifier-key checks", () => {
+    const e = makeEvent({
+      key: "]",
+      ctrlKey: true,
+      shiftKey: false,
+      target: { tagName: "TEXTAREA" } as unknown as EventTarget,
+    });
+    expect(
+      matchShortcut(e, {
+        ctrl: true,
+        shift: true,
+        key: "]",
+        allowInTextField: true,
+      }),
+    ).toBe(false);
+  });
 });
