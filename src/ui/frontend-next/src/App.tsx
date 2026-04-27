@@ -115,6 +115,17 @@ export function App() {
     ),
   );
 
+  // Reflect the chrome font size onto `<html>` as `--app-font-size`
+  // so the rest of the document tree can scale via CSS variables
+  // without subscribing to the store directly. The xterm font size
+  // is owned by `TerminalToolbar` and does not read this variable.
+  createEffect(() => {
+    document.documentElement.style.setProperty(
+      "--app-font-size",
+      `${ui.fontSizePx()}px`,
+    );
+  });
+
   const isSettingsRoute = () => router.route().kind === "settings";
   // While the route is the workspace, the SettingsShell is hidden via
   // `display: none`; its `page` prop still needs a valid value, so we
@@ -283,6 +294,7 @@ export function App() {
         auditActiveIds={activeIds}
         auditPageStore={auditPageStore}
         fetchAuditLogs={client.getAuditLogs}
+        ui={ui}
       />
       <StatusBar />
       <NewSessionDialog

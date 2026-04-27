@@ -16,8 +16,10 @@ import type { getAuditLogs } from "../../api/client";
 import type { SettingsPage } from "../../routes/router";
 import type { AuditPageStore } from "../../stores/auditPageStore";
 import type { AuditLogEntryLike } from "../../stores/types";
+import type { UiStore } from "../../stores/uiStore";
 import { AuditPage } from "./AuditPage";
 import { KeybindsPage } from "./KeybindsPage";
+import { PrefsPage } from "./PrefsPage";
 import { SidecarsPage } from "./SidecarsPage";
 import type { SidecarRow } from "./sidecarRowView";
 
@@ -49,6 +51,8 @@ interface SettingsShellProps {
   auditPageStore: AuditPageStore;
   /** Injected for testability; production passes the real client. */
   fetchAuditLogs: typeof getAuditLogs;
+  /** UI preferences store, forwarded to `PrefsPage`. */
+  ui: UiStore;
 }
 
 interface NavLink {
@@ -99,27 +103,10 @@ export function SettingsShell(props: SettingsShellProps) {
             <KeybindsPage />
           </Match>
           <Match when={props.page === "prefs"}>
-            <SettingsPageIntro
-              heading="Preferences"
-              note="Adjust per-user UI preferences such as font size and pane layout."
-            />
+            <PrefsPage ui={props.ui} />
           </Match>
         </Switch>
       </div>
     </section>
-  );
-}
-
-interface IntroProps {
-  heading: string;
-  note: string;
-}
-
-function SettingsPageIntro(props: IntroProps) {
-  return (
-    <div>
-      <h1 class="settings-page-heading">{props.heading}</h1>
-      <p class="settings-page-note">{props.note}</p>
-    </div>
   );
 }

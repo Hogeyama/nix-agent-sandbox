@@ -36,7 +36,7 @@ body {
   background: var(--bg);
   color: var(--cream);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--app-font-size, 13px);
   line-height: 1.5;
   font-feature-settings: "ss01", "ss02", "cv11";
   -webkit-font-smoothing: antialiased;
@@ -1188,6 +1188,76 @@ body::after {
 }
 .keybinds-label {
   color: var(--cream-dim);
+}
+
+/* preferences settings page: a stacked form with one fieldset per
+ * preference group. Each fieldset reuses the panel palette so the
+ * groups read as cards stacked vertically rather than as raw form
+ * controls; the radio group inside the font-size fieldset lays its
+ * options out as a horizontal row of label-wrapped inputs. */
+.prefs-page {
+  display: flex;
+  flex-direction: column;
+}
+.prefs-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.prefs-section {
+  margin: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.prefs-section-legend {
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.prefs-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 4px;
+}
+.prefs-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--cream-dim);
+  cursor: pointer;
+}
+.prefs-pane-status {
+  margin: 6px 0 12px;
+  font-size: 12px;
+  color: var(--cream-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.prefs-action-button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--cream-dim);
+  padding: 6px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background-color 0.15s;
+}
+.prefs-action-button:hover {
+  color: var(--cream);
+  border-color: var(--muted);
+  background: var(--surface-2);
 }
 
 /* statusbar */
