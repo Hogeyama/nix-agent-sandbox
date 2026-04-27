@@ -1,8 +1,8 @@
 /**
  * Frontend build for the Solid-based control room.
  *
- * Bundles src/ui/frontend-next/src/main.tsx with the Solid Babel plugin
- * and emits index.html + assets/ into src/ui/dist-next/. The
+ * Bundles src/ui/frontend/src/main.tsx with the Solid Babel plugin
+ * and emits index.html + assets/ into src/ui/dist/. The
  * `{{NAS_WS_TOKEN}}` placeholder is preserved for daemon-side
  * materializeAssets to substitute at runtime.
  */
@@ -20,8 +20,8 @@ import * as path from "node:path";
 import { solidPlugin } from "./solid_plugin.ts";
 
 const ROOT = path.resolve(import.meta.dir, "..");
-const FRONTEND_DIR = path.join(ROOT, "src/ui/frontend-next");
-const DIST_DIR = path.join(ROOT, "src/ui/dist-next");
+const FRONTEND_DIR = path.join(ROOT, "src/ui/frontend");
+const DIST_DIR = path.join(ROOT, "src/ui/dist");
 const ASSETS_DIR = path.join(DIST_DIR, "assets");
 const FONT_SRC_DIR = path.join(
   ROOT,
@@ -48,11 +48,11 @@ async function buildOnce(): Promise<void> {
 
   if (!result.success) {
     for (const msg of result.logs) console.error(msg);
-    throw new Error("frontend-next build failed");
+    throw new Error("frontend build failed");
   }
 
   const jsOutput = result.outputs.find((o) => o.path.endsWith(".js"));
-  if (!jsOutput) throw new Error("frontend-next build: no JS output");
+  if (!jsOutput) throw new Error("frontend build: no JS output");
   const jsBasename = path.basename(jsOutput.path);
 
   const tmpl = await readFile(
@@ -73,7 +73,7 @@ async function buildOnce(): Promise<void> {
   const cssOutputs = result.outputs.filter((o) => o.path.endsWith(".css"));
   if (cssOutputs.length === 0) {
     throw new Error(
-      "frontend-next build: no CSS output emitted by Bun.build. " +
+      "frontend build: no CSS output emitted by Bun.build. " +
         "Geist Mono @font-face rules would be missing and the font would " +
         "silently fall back to ui-monospace. Suspect: fontsource import " +
         "removed from src/main.tsx, Bun CSS-in-JS handling changed, or " +
@@ -81,7 +81,7 @@ async function buildOnce(): Promise<void> {
     );
   }
   // Prepend xterm's base stylesheet so terminal panes render correctly when
-  // mounted. Placing it first lets src/ui/frontend-next/src/styles.css
+  // mounted. Placing it first lets src/ui/frontend/src/styles.css
   // override xterm defaults via standard CSS cascade.
   const xtermCssPath = path.join(
     ROOT,
@@ -173,12 +173,10 @@ async function buildOnce(): Promise<void> {
   }
 
   const jsSize = (await stat(path.join(ASSETS_DIR, jsBasename))).size;
-  console.log(`dist-next/index.html`);
-  console.log(
-    `dist-next/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`,
-  );
-  console.log(`dist-next/assets/fonts/  ${fontCount} woff2 file(s)`);
-  console.log(`dist-next/assets/licenses/  ${licenseSources.length} file(s)`);
+  console.log(`dist/index.html`);
+  console.log(`dist/assets/${jsBasename}  ${(jsSize / 1024).toFixed(2)} kB`);
+  console.log(`dist/assets/fonts/  ${fontCount} woff2 file(s)`);
+  console.log(`dist/assets/licenses/  ${licenseSources.length} file(s)`);
 }
 
 await buildOnce();

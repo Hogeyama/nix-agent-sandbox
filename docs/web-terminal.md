@@ -38,7 +38,7 @@ dtach v0.9 のワイヤープロトコルは非対称:
 - [x] WebSocket エンドポイント (`/api/terminal/:sessionId`) — `Bun.serve` の websocket upgrade
 - [x] dtach ソケットブリッジ — dtach v0.9 パケットプロトコル準拠 (`src/ui/routes/terminal.ts`)
 - [x] dtach セッション一覧 API (`GET /api/terminal/sessions`)
-- [x] xterm.js フロントエンド (`src/ui/frontend/src/components/TerminalTab.tsx`)
+- [x] xterm.js フロントエンド (`src/ui/frontend/src/components/TerminalPane.tsx`)
 - [x] Terminal タブ (セッション一覧 → Attach → ターミナル表示)
 - [x] ウィンドウリサイズ対応 (MSG_WINCH)
 - [x] Ctrl-a / Ctrl-e / Ctrl-w の TTY 転送を優先するキーハンドリング

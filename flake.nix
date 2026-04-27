@@ -28,11 +28,11 @@
           module = "main.ts";
           bunDeps = b2n.fetchBunDeps { bunNix = ./bun.nix; };
           preBuild = ''
-            bun run build-ui-next
+            bun run build-ui
           '';
           postInstall = ''
             mkdir -p $out/share/nas
-            cp -r src/ui/dist-next $out/share/nas/dist
+            cp -r src/ui/dist $out/share/nas/dist
           '';
         };
 

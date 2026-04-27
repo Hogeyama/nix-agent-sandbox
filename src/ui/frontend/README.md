@@ -9,12 +9,12 @@ Run two processes in parallel.
 
 ```sh
 # terminal A — bundle + watch
-bun run build-ui-next --watch
+bun run build-ui --watch
 # fallback if --watch flakes:
-bun --watch run scripts/build_ui_next.ts
+bun --watch run scripts/build_ui.ts
 
 # terminal B — daemon serving the built assets
-NAS_UI_NEXT=1 bun run dev -- ui --port 3939 --no-open
+bun run dev -- ui --port 3939 --no-open
 ```
 
 Open http://localhost:3939 in a browser.
@@ -22,15 +22,15 @@ Open http://localhost:3939 in a browser.
 ## Production build
 
 ```sh
-bun run build-ui-next
+bun run build-ui
 ```
 
-Output lands in `src/ui/dist-next/`.
+Output lands in `src/ui/dist/`.
 
 ## Type check
 
 `bun run check` at the repository root type-checks both the daemon and
-this frontend (via `tsc -p src/ui/frontend-next/tsconfig.json`).
+this frontend (via `tsc -p src/ui/frontend/tsconfig.json`).
 
 ## Notes
 

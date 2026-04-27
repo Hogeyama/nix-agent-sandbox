@@ -1,5 +1,5 @@
 /**
- * Favicon badge hook for the frontend-next UI.
+ * Favicon badge hook for the control room UI.
  *
  * The hook reads a single `Lamp` accessor and re-renders the favicon
  * whenever the lamp changes. The actual canvas drawing is split out

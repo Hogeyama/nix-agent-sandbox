@@ -1,5 +1,5 @@
 /**
- * Pure dispatch from SSE named events to frontend-next stores.
+ * Pure dispatch from SSE named events to the frontend stores.
  *
  * The connection controller (`createConnectionController`) is responsible
  * for the EventSource lifecycle and for JSON-parsing each named event's

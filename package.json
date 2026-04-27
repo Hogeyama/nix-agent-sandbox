@@ -5,7 +5,7 @@
   "module": "main.ts",
   "scripts": {
     "dev": "bun run main.ts",
-    "build-ui-next": "bun run scripts/build_ui_next.ts",
+    "build-ui": "bun run scripts/build_ui.ts",
     "compile": "bun build --compile --outfile nas main.ts",
     "test": "bun test src/ tests/",
     "test:unit": "bash -c 'bun test $(find src -name \"*_test.ts\" ! -name \"*integration_test.ts\")'",
@@ -13,7 +13,7 @@
     "lint": "biome check src/ tests/ scripts/ main.ts",
     "lint:composed-effects": "bun scripts/lint-composed-effects.ts",
     "fmt": "biome format --write src/ tests/ scripts/ main.ts",
-    "check": "tsc --noEmit && tsc -p src/ui/frontend-next/tsconfig.json --noEmit && tsc -p src/ui/frontend-next/tsconfig.test.json --noEmit",
+    "check": "bun run lint && tsc --noEmit && tsc -p src/ui/frontend/tsconfig.json --noEmit && tsc -p src/ui/frontend/tsconfig.test.json --noEmit",
     "bun2nix": "bun2nix -o bun.nix"
   },
   "dependencies": {

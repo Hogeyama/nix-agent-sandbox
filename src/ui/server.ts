@@ -41,13 +41,13 @@ const IDLE_CHECK_INTERVAL_MS = 30_000;
 
 /**
  * Resolve the directory whose contents {@link preloadAssets} loads into
- * memory at startup. The daemon serves `dist-next/` as the single UI
+ * memory at startup. The daemon serves `dist/` as the single UI
  * build; the path is resolved through {@link resolveAssetDir} so that
- * both the dev tree (`src/ui/dist-next/`) and the bundled binary layout
- * (`<asset-root>/ui/dist-next/`) hit the same target.
+ * both the dev tree (`src/ui/dist/`) and the bundled binary layout
+ * (`<asset-root>/ui/dist/`) hit the same target.
  */
 export function resolveDistBase(): string {
-  return resolveAssetDir("ui/dist-next", import.meta.url, "./dist-next/");
+  return resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 }
 
 // Cap WebSocket frame size to kill the unbounded JSON.parse / FD-buffer DoS
@@ -148,7 +148,7 @@ export async function preloadAssets(
 
 // Walk the assets tree and yield every regular file with its path relative
 // to the assets root. Subdirectories (e.g. assets/fonts/) are required for
-// the self-hosted woff2 layout produced by build_ui_next.ts; a flat readdir
+// the self-hosted woff2 layout produced by build_ui.ts; a flat readdir
 // would EISDIR on the directory entry itself. Symlinks are not followed —
 // we only descend into entries that report as a directory through the
 // directory listing dirent, mirroring how the build script lays out files.

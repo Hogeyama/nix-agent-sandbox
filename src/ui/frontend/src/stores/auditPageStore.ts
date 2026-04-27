@@ -2,7 +2,7 @@
  * Solid store backing the Audit settings page.
  *
  * The store wraps `cursorReducer` (in
- * `src/ui/frontend-next/src/components/settings/auditPaginationLogic.ts`)
+ * `src/ui/frontend/src/components/settings/auditPaginationLogic.ts`)
  * with the network plumbing the reducer intentionally avoids:
  *
  *   - `setFilter` rebuilds the server filter from the new display

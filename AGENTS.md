@@ -14,7 +14,7 @@ bun test --test-name-pattern 'config' # Run specific test pattern
 bun run check              # Type check (uses strict mode)
 
 # Building
-bun run build-ui-next      # Build frontend UI
+bun run build-ui           # Build frontend UI
 bun run compile            # Build standalone binary (bun build --compile)
 ```
 
