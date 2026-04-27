@@ -231,10 +231,12 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
                   style={{
                     background: "none",
                     border: "none",
+                    "border-bottom": "1px solid transparent",
                     color: "inherit",
                     cursor: "inherit",
                     font: "inherit",
                     padding: "0",
+                    "box-sizing": "border-box",
                   }}
                 >
                   {currentName}

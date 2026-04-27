@@ -354,22 +354,25 @@ body::after {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex: 1;
+  min-width: 0;
 }
 .rename-input {
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: none;
+  border-bottom: 1px solid var(--line);
   color: var(--cream);
-  padding: 2px 6px;
-  font-family: var(--mono);
-  font-size: 11px;
+  padding: 0;
+  font: inherit;
   width: 140px;
+  box-sizing: border-box;
 }
 .session .rename-input {
   width: 100%;
 }
 .rename-input:focus {
   outline: none;
-  border-color: var(--amber);
+  border-bottom-color: var(--amber);
 }
 .rename-error {
   color: var(--rose);
@@ -441,6 +444,7 @@ body::after {
   min-width: 0;
   padding: 0;
   border: none;
+  border-bottom: 1px dashed transparent;
   background: none;
   font-size: 13px;
   font-weight: 500;
@@ -453,9 +457,10 @@ body::after {
   text-overflow: ellipsis;
   cursor: text;
   text-align: left;
+  box-sizing: border-box;
 }
 .session-title:hover {
-  border-bottom: 1px dashed var(--muted-3);
+  border-bottom-color: var(--muted-3);
 }
 
 /* Per-row pending indicator chips. Sit inside `.session-title-slot`
