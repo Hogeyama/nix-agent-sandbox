@@ -70,7 +70,7 @@
           cp ${self}/src/docker/embed/local-proxy.mjs $out/docker/embed/
           cp ${self}/src/docker/envoy/envoy.template.yaml $out/docker/envoy/
           cp ${self}/scripts/notify-send-wsl $out/scripts/
-          cp -r ${nasUnwrapped}/share/nas/dist $out/ui/ || true
+          cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
         '';
 

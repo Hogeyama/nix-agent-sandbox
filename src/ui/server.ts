@@ -37,8 +37,18 @@ import {
 } from "./security.ts";
 import { loadOrCreateWsToken } from "./ws_token.ts";
 
-const DIST_BASE = resolveAssetDir("ui/dist", import.meta.url, "./dist/");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
+
+/**
+ * Resolve the directory whose contents {@link preloadAssets} loads into
+ * memory at startup. The daemon serves `dist/` as the single UI
+ * build; the path is resolved through {@link resolveAssetDir} so that
+ * both the dev tree (`src/ui/dist/`) and the bundled binary layout
+ * (`<asset-root>/ui/dist/`) hit the same target.
+ */
+export function resolveDistBase(): string {
+  return resolveAssetDir("ui/dist", import.meta.url, "./dist/");
+}
 
 // Cap WebSocket frame size to kill the unbounded JSON.parse / FD-buffer DoS
 // vector noted in the threat review (F6). Terminal input is keystrokes —
@@ -98,13 +108,13 @@ export interface RuntimeAssets {
 /**
  * Load static UI assets from disk into memory.
  *
- * `distBase` is injectable so tests can exercise both the happy path
- * (ENOENT → fields are null / empty) and the error re-throw path
- * (e.g. EACCES from a `chmod 000` directory) without touching the
- * real `DIST_BASE`. Production callers omit the argument.
+ * `distBase` is required and resolved by the caller (typically via
+ * {@link resolveDistBase}); injecting it lets tests exercise both the
+ * happy path (ENOENT → fields are null / empty) and the error re-throw
+ * path (e.g. EACCES from a `chmod 000` directory).
  */
 export async function preloadAssets(
-  distBase: string = DIST_BASE,
+  distBase: string,
 ): Promise<PreloadedAssets> {
   const files = new Map<string, Blob>();
   let indexHtmlTemplate: string | null = null;
@@ -138,7 +148,7 @@ export async function preloadAssets(
 
 // Walk the assets tree and yield every regular file with its path relative
 // to the assets root. Subdirectories (e.g. assets/fonts/) are required for
-// the self-hosted woff2 layout produced by build_ui_next.ts; a flat readdir
+// the self-hosted woff2 layout produced by build_ui.ts; a flat readdir
 // would EISDIR on the directory entry itself. Symlinks are not followed —
 // we only descend into entries that report as a directory through the
 // directory listing dirent, mirroring how the build script lays out files.
@@ -231,7 +241,8 @@ export interface ServeOptions {
 
 export async function startServer(options: ServeOptions): Promise<void> {
   const ctx = await createDataContext();
-  const preloaded = await preloadAssets();
+  const distBase = resolveDistBase();
+  const preloaded = await preloadAssets(distBase);
 
   // Load or create the WS bearer token, then materialise it into the HTML
   // shell so the frontend can read it via `<meta name="nas-ws-token">`.

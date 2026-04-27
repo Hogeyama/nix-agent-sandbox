@@ -1,415 +1,389 @@
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useState,
-} from "preact/hooks";
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onMount,
+  Show,
+} from "solid-js";
+import * as client from "./api/client";
 import {
-  type AuditLogEntry,
-  api,
-  type ContainerInfo,
-  type DtachSession,
-  type HostExecPendingItem,
-  type NetworkPendingItem,
-  type SessionsData,
-} from "./api.ts";
-import { AuditTab } from "./components/AuditTab.tsx";
-import { ContainersTab } from "./components/ContainersTab.tsx";
-import { NewSessionDialog } from "./components/NewSessionDialog.tsx";
-import { PendingTab } from "./components/PendingTab.tsx";
-import { TerminalModal } from "./components/TerminalModal.tsx";
-import { useFaviconBadge } from "./hooks/useFaviconBadge.ts";
-import { useSSE } from "./hooks/useSSE.ts";
-import { buildTerminalSessionTabs } from "./terminalSessions.ts";
+  ackSessionTurn,
+  getInfo,
+  killTerminalClients,
+  renameSession,
+  startShell,
+  stopContainer,
+} from "./api/client";
+import { getWsToken } from "./api/wsToken";
+import { PaneResizer } from "./components/PaneResizer";
+import { PendingPane } from "./components/PendingPane";
+import { SessionsPane } from "./components/SessionsPane";
+import { StatusBar } from "./components/StatusBar";
+import { maxLamp } from "./components/sessionLamp";
+import { summarizePendingBySession } from "./components/sessionPendingSummary";
+import { SettingsShell } from "./components/settings/SettingsShell";
+import { TerminalPane } from "./components/TerminalPane";
+import { Topbar } from "./components/Topbar";
+import { NewSessionDialog } from "./dialogs/NewSessionDialog";
 import {
-  initialTerminalUiState,
-  terminalUiReducer,
-} from "./terminalUiState.ts";
+  createPendingActionHandlers,
+  DEFAULT_HOSTEXEC_SCOPE,
+  DEFAULT_NETWORK_SCOPE,
+} from "./handlers/createPendingActionHandlers";
+import { selectPendingTarget } from "./handlers/selectedPendingKey";
+import { createSseDispatch, SSE_EVENT_NAMES } from "./hooks/createSseDispatch";
+import { useConnection } from "./hooks/useConnection";
+import { useFaviconBadge } from "./hooks/useFaviconBadge";
+import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
+import { createRouter } from "./routes/router";
+import { createAuditPageStore } from "./stores/auditPageStore";
+import { createAuditStore } from "./stores/auditStore";
+import { createPendingActionStore } from "./stores/pendingActionStore";
+import { createPendingStore } from "./stores/pendingStore";
+import { createSessionsStore } from "./stores/sessionsStore";
+import { findShellForAgent } from "./stores/shellMapping";
+import { createSidecarsStore } from "./stores/sidecarsStore";
+import { createTerminalsStore } from "./stores/terminalsStore";
+import type { SessionRow } from "./stores/types";
+import { createUiStore } from "./stores/uiStore";
 
-type TabId = "pending" | "sessions" | "audit" | "sidecars";
-
-const TABS: { id: TabId; label: string }[] = [
-  { id: "sessions", label: "Sessions" },
-  { id: "pending", label: "Pending" },
-  { id: "audit", label: "Audit" },
-  { id: "sidecars", label: "Sidecars" },
-];
-
-export interface DeepLink {
-  type: "network" | "hostexec";
-  sessionId: string;
-  requestId: string;
-}
+// Width of the collapsed-rail rendered in place of the right pane and
+// of the drag-handle separators between panes; both are kept in sync
+// with `.collapsed-rail` and `.pane-resizer` in styles.css.
+const COLLAPSED_RAIL_PX = 38;
+const RESIZER_PX = 4;
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabId>("sessions");
-  const [networkPending, setNetworkPending] = useState<NetworkPendingItem[]>(
-    [],
-  );
-  const [hostExecPending, setHostExecPending] = useState<HostExecPendingItem[]>(
-    [],
-  );
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [sessions, setSessions] = useState<SessionsData>({
-    network: [],
-    hostexec: [],
+  const sessions = createSessionsStore();
+  const sidecars = createSidecarsStore();
+  const pending = createPendingStore();
+  const pendingAction = createPendingActionStore();
+  const terminals = createTerminalsStore();
+  const audit = createAuditStore();
+  // Owns the older-history pool of the Audit settings page. The store
+  // is created once for the lifetime of `App`, while the AuditPage
+  // component itself is mounted/unmounted by the SettingsShell's
+  // `<Switch>/<Match>`. Survival across route changes therefore comes
+  // from two cooperating moves: this long-lived store retains the
+  // filter selection and the loaded older entries, and AuditPage
+  // hydrates its local control signals from `store.state().displayFilter`
+  // on every mount (with a `defer: true` filter-effect so the
+  // remount itself does not dispatch a `reset` that would discard
+  // the pool). See `AuditPage.tsx` for the full lifecycle contract.
+  const auditPageStore = createAuditPageStore();
+  const ui = createUiStore();
+  // Single instantiation: handlers close over the same store and client
+  // for the entire app lifetime so a re-render of `PendingPane` cannot
+  // produce divergent closures.
+  const pendingHandlers = createPendingActionHandlers({
+    client,
+    pending: pendingAction,
   });
-  const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [terminalUi, dispatchTerminalUi] = useReducer(
-    terminalUiReducer,
-    initialTerminalUiState,
-  );
-  const {
-    dtachSessions,
-    openSessionIds: openTermSessionIds,
-    activeSessionId: activeTermSessionId,
-    visible: termVisible,
-  } = terminalUi;
-  const [dtachAvailable, setDtachAvailable] = useState(false);
-  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const dispatch = createSseDispatch({
+    sessions,
+    sidecars,
+    pending,
+    pendingAction,
+    terminals,
+    audit,
+  });
+  const { connected } = useConnection("/api/events", dispatch, {
+    eventNames: SSE_EVENT_NAMES,
+  });
+  const [dialogOpen, setDialogOpen] = createSignal(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getLaunchInfo()
-      .then((info) => {
-        if (!cancelled) setDtachAvailable(info.dtachAvailable);
-      })
-      .catch(() => {
-        setDtachAvailable(false);
+  // Host home directory used by SessionsPane to tildify session DIR
+  // entries. Fetched once on mount; we degrade gracefully when the call
+  // fails (the signal stays null and the UI shows absolute paths).
+  // Kept as a local App signal — no global — so any future consumer
+  // must take it via props, mirroring how `pendingFor` is wired.
+  //
+  // `/api/info` is fetched exactly once on boot. A transient failure
+  // (e.g. daemon momentarily unavailable at startup) leaves `homeDir`
+  // at `null` for the rest of the session, so paths render absolute
+  // until the user reloads. We deliberately do not retry here or hook
+  // into SSE reconnects — the degradation is cosmetic-only and the
+  // added complexity is not worth it.
+  const [homeDir, setHomeDir] = createSignal<string | null>(null);
+  onMount(() => {
+    void getInfo()
+      .then((info) => setHomeDir(info.home))
+      .catch((err) => {
+        console.warn("[ui-next] failed to fetch /api/info", err);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  });
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getContainers()
-      .then((res) => {
-        if (!cancelled) setContainers(res.items);
-      })
-      .catch((e) => {
-        console.error("Failed to fetch containers:", e);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Routing: parse `window.location.hash` into a `Route`. The router
+  // is instantiated once for the lifetime of `App` so the hashchange
+  // listener is shared across re-renders. Workspace and SettingsShell
+  // both stay mounted at all times — we toggle `display: none` on the
+  // hidden side instead. Unmounting the workspace would tear down
+  // every xterm instance and its dtach WebSocket on every gear click,
+  // which is exactly the lifecycle this design is built to avoid.
+  const router = createRouter();
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getTerminalSessions()
-      .then((res) => {
-        if (!cancelled) {
-          dispatchTerminalUi({
-            type: "set-dtach-sessions",
-            sessions: res.items,
-          });
-        }
-      })
-      .catch((e) => {
-        console.error("Failed to fetch terminal sessions:", e);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Resolves the row that `Ctrl+Shift+A` / `Ctrl+Shift+D` should act
+  // on: focused pending card first, then network[0], then hostexec[0],
+  // and `null` when the right pane is collapsed (the user cannot see
+  // which row would be acted on).
+  const resolvePendingTarget = () =>
+    selectPendingTarget({
+      activeElement: document.activeElement,
+      network: pending.network(),
+      hostexec: pending.hostexec(),
+      collapsed: ui.rightCollapsed(),
+    });
 
-  const deepLink = useMemo<DeepLink | null>(() => {
-    const params = new URLSearchParams(globalThis.location?.search ?? "");
-    const type = params.get("type");
-    const sessionId = params.get("sessionId");
-    const requestId = params.get("requestId");
-    if ((type === "network" || type === "hostexec") && sessionId && requestId) {
-      return { type, sessionId, requestId };
-    }
-    return null;
-  }, []);
-
-  useEffect(() => {
-    if (deepLink) {
-      setActiveTab("pending");
-    }
-  }, [deepLink]);
-
-  const SIDECAR_KINDS = new Set(["dind", "proxy", "envoy"]);
-  const sessionContainers = containers.filter(
-    (c) => !SIDECAR_KINDS.has(c.labels["nas.kind"] ?? ""),
-  );
-  const sidecarContainers = containers.filter((c) =>
-    SIDECAR_KINDS.has(c.labels["nas.kind"] ?? ""),
-  );
-
-  const totalPending = networkPending.length + hostExecPending.length;
-  const userTurnCount = sessionContainers.filter(
-    (c) => c.turn === "user-turn",
-  ).length;
-
-  useFaviconBadge(totalPending, userTurnCount);
-
-  const handleAttach = useCallback((sessionId: string) => {
-    dispatchTerminalUi({ type: "attach", sessionId });
-  }, []);
-
-  const handleShell = useCallback(async (containerName: string) => {
-    try {
-      const { dtachSessionId } = await api.startShell(containerName);
-      // Optimistically register the new session so the `set-dtach-sessions`
-      // reconcile path (driven by SSE) does not drop it (and reset the
-      // active tab) while we wait for the `terminal:sessions` event to
-      // catch up.
-      dispatchTerminalUi({
-        type: "shell-started",
-        sessionId: dtachSessionId,
-        createdAt: Math.floor(Date.now() / 1000),
-      });
-    } catch (e) {
-      console.error("Failed to start shell:", e);
-    }
-  }, []);
-
-  const handleTerminalShell = useCallback(
-    (sessionId: string) => {
-      const container = containers.find((c) => c.sessionId === sessionId);
-      if (!container) {
-        console.error(
-          `Cannot open shell: no container found for session ${sessionId}`,
-        );
-        return;
-      }
-      void handleShell(container.name);
+  useGlobalKeyboard({
+    onNewSession: () => setDialogOpen(true),
+    // Index is 1-based and follows the rendered order of SessionsPane,
+    // which mirrors the daemon's session-row delivery order.
+    onSelectSessionByIndex: (index) => {
+      const row = sessions.rows()[index - 1];
+      if (row) terminals.selectSession(row.id);
     },
-    [containers, handleShell],
+    onApproveSelected: () => {
+      const target = resolvePendingTarget();
+      if (target === null) return;
+      const fallback =
+        target.kind === "network"
+          ? DEFAULT_NETWORK_SCOPE
+          : DEFAULT_HOSTEXEC_SCOPE;
+      const scope = pendingAction.scopeFor(target.row.key) ?? fallback;
+      void pendingHandlers.onApprove(target.row, scope);
+    },
+    onDenySelected: () => {
+      const target = resolvePendingTarget();
+      if (target === null) return;
+      void pendingHandlers.onDeny(target.row);
+    },
+    onToggleRightCollapse: ui.toggleRightCollapsed,
+    onOpenSettings: () => router.navigate("#/settings/sidecars"),
+    onOpenShortcuts: () => router.navigate("#/settings/keybinds"),
+  });
+
+  // Refit trigger for the active terminal. When `display: none` hides
+  // the workspace while the Settings shell is open, xterm's fit addon
+  // measures a 0x0 viewport and stores garbage dimensions. Bumping
+  // this counter on the workspace return causes `TerminalPane` to
+  // schedule a refit on the next animation frame, after layout has
+  // settled and the viewport reports its real size again.
+  const [terminalRefitTrigger, setTerminalRefitTrigger] = createSignal(0);
+
+  // When the route transitions back to the workspace, request a refit
+  // so any terminal that was hidden through `display: none` recovers
+  // its real viewport dimensions. `on(..., { defer: true })` skips
+  // the initial run so the trigger does not fire on first paint, when
+  // the show action's own rAF refit already covers the active terminal.
+  createEffect(
+    on(
+      () => router.route().kind,
+      (kind) => {
+        if (kind === "workspace") {
+          setTerminalRefitTrigger((n) => n + 1);
+        }
+      },
+      { defer: true },
+    ),
   );
 
-  const handleAckTurn = useCallback(async (sessionId: string) => {
-    try {
-      const { item } = await api.ackSessionTurn(sessionId);
-      setContainers((current) =>
-        current.map((container) =>
-          container.sessionId === sessionId
-            ? {
-                ...container,
-                turn: item.turn,
-                lastEventAt: item.lastEventAt,
-                lastEventKind: item.lastEventKind,
-                lastEventMessage: item.lastEventMessage,
-              }
-            : container,
-        ),
-      );
-    } catch (e) {
-      console.error("Failed to acknowledge turn:", e);
-    }
-  }, []);
+  // Reflect the chrome font size onto `<html>` as `--app-font-size`
+  // so the rest of the document tree can scale via CSS variables
+  // without subscribing to the store directly. The xterm font size
+  // is owned by `TerminalToolbar` and does not read this variable.
+  createEffect(() => {
+    document.documentElement.style.setProperty(
+      "--app-font-size",
+      `${ui.fontSizePx()}px`,
+    );
+  });
 
-  const handleRename = useCallback(async (sessionId: string, name: string) => {
-    try {
-      await api.renameSession(sessionId, name);
-      setContainers((current) =>
-        current.map((container) =>
-          container.sessionId === sessionId
-            ? { ...container, sessionName: name }
-            : container,
-        ),
-      );
-    } catch (e) {
-      console.error("Failed to rename session:", e);
-    }
-  }, []);
+  const isSettingsRoute = () => router.route().kind === "settings";
+  // While the route is the workspace, the SettingsShell is hidden via
+  // `display: none`; its `page` prop still needs a valid value, so we
+  // pin it to the default page until the user navigates back into
+  // Settings and the route resolves to a real `SettingsPage`.
+  const settingsPage = () => {
+    const route = router.route();
+    return route.kind === "settings" ? route.page : "sidecars";
+  };
 
-  const handleTermMinimize = useCallback(() => {
-    dispatchTerminalUi({ type: "minimize" });
-  }, []);
-
-  const handleNewSession = useCallback(() => {
-    setNewSessionOpen(true);
-  }, []);
-
-  const handleSessionLaunched = useCallback((_sessionId: string) => {
-    setNewSessionOpen(false);
-  }, []);
-
-  const handleTermRestore = useCallback(() => {
-    dispatchTerminalUi({ type: "restore" });
-  }, []);
-
-  const handleTermSelect = useCallback((sessionId: string) => {
-    dispatchTerminalUi({ type: "select-tab", sessionId });
-  }, []);
-
-  const handleTermClose = useCallback((sessionId: string) => {
-    dispatchTerminalUi({ type: "close-tab", sessionId });
-  }, []);
-
-  const handleSSE = useCallback((event: string, data: unknown) => {
-    const d = data as Record<string, unknown>;
-    switch (event) {
-      case "network:pending":
-        setNetworkPending(d.items as NetworkPendingItem[]);
-        break;
-      case "hostexec:pending":
-        setHostExecPending(d.items as HostExecPendingItem[]);
-        break;
-      case "sessions":
-        setSessions(d as unknown as SessionsData);
-        break;
-      case "terminal:sessions":
-        dispatchTerminalUi({
-          type: "set-dtach-sessions",
-          sessions: d.items as DtachSession[],
-        });
-        break;
-      case "audit:logs":
-        setAuditLogs(d.items as AuditLogEntry[]);
-        break;
-      case "containers":
-        setContainers(d.items as ContainerInfo[]);
-        break;
-    }
-  }, []);
-
-  const { connected } = useSSE("/api/events", handleSSE);
-  const terminalMetadataCandidates = useMemo(
-    () =>
-      sessionContainers.filter(
-        (container): container is ContainerInfo & { sessionId: string } =>
-          typeof container.sessionId === "string",
-      ),
-    [sessionContainers],
+  // Per-session pending counts, derived once per pending-store change so
+  // every SessionsPane row reads from the same memo instead of re-folding
+  // both queues on every row reactive read. The accessor below returns a
+  // zero record for sessions that have no pending entries.
+  const pendingByKey = createMemo(() =>
+    summarizePendingBySession(pending.network(), pending.hostexec()),
   );
-  const terminalSessions = useMemo(() => {
-    return buildTerminalSessionTabs(
-      openTermSessionIds,
-      dtachSessions,
-      terminalMetadataCandidates,
-    );
-  }, [dtachSessions, openTermSessionIds, terminalMetadataCandidates]);
-  const activeTerminalLabel = useMemo(() => {
-    if (!activeTermSessionId) return null;
-    const activeSession = terminalSessions.find(
-      (session) => session.sessionId === activeTermSessionId,
-    );
-    return activeSession?.sessionName || activeTermSessionId;
-  }, [activeTermSessionId, terminalSessions]);
+  const pendingFor = (sessionId: string) =>
+    pendingByKey().get(sessionId) ?? { network: 0, hostexec: 0 };
+
+  // Favicon badge: re-rendered only when the aggregate lamp transitions
+  // (a `createMemo` with the default `===` equality dedupes per-row
+  // mutations that don't change the aggregate). The accessor adapts
+  // `SessionRow.id` to `sessionLamp`'s structural shape (`sessionId`).
+  const aggregateLamp = createMemo(() =>
+    maxLamp(
+      sessions.rows().map((row) => ({ sessionId: row.id, turn: row.turn })),
+      pendingFor,
+    ),
+  );
+  useFaviconBadge(aggregateLamp);
+
+  // Active session ids are derived from running agent containers and
+  // sessions with at least one pending approval. The Audit settings
+  // page consumes this set to filter rows when "Active only" is on
+  // and to build the server-side `sessions` membership filter.
+  const activeIds = createMemo<ReadonlySet<string>>(() => {
+    const ids = new Set<string>();
+    for (const row of sessions.rows()) ids.add(row.id);
+    for (const row of pending.network()) ids.add(row.sessionId);
+    for (const row of pending.hostexec()) ids.add(row.sessionId);
+    return ids;
+  });
+
+  const gridTemplateColumns = () =>
+    ui.rightCollapsed()
+      ? `${ui.leftWidth()}px ${RESIZER_PX}px 1fr ${COLLAPSED_RAIL_PX}px`
+      : `${ui.leftWidth()}px ${RESIZER_PX}px 1fr ${RESIZER_PX}px ${ui.rightWidth()}px`;
+
+  // The toggle has three branches:
+  //
+  //   - Currently viewing the shell → switch back to the agent terminal
+  //     by recording the view and pointing activeId at the agent id.
+  //   - Currently viewing the agent and a live shell already exists →
+  //     attach to the existing shell rather than spawning a new one;
+  //     the daemon allows multiple shells per container, but the UI
+  //     pins to the highest-seq shell to keep "1 container = 1 visible
+  //     shell" from the user's point of view.
+  //   - Currently viewing the agent and no live shell exists → start
+  //     a new shell. `tryBeginShellSpawn` is the per-agent guard that
+  //     turns a double-click into a single POST; the in-flight flag
+  //     is cleared in `finally` so a failed spawn does not leave the
+  //     button stuck on "Spawning…".
+  const handleShellToggle = async (row: SessionRow) => {
+    const view = terminals.getViewFor(row.id);
+    if (view === "shell") {
+      terminals.setViewFor(row.id, "agent");
+      terminals.setActive(row.id);
+      return;
+    }
+    const existing = findShellForAgent(row.id, terminals.dtachSessions());
+    if (existing !== null) {
+      terminals.setViewFor(row.id, "shell");
+      terminals.setActive(existing.sessionId);
+      return;
+    }
+    if (!terminals.tryBeginShellSpawn(row.id)) return;
+    try {
+      const { dtachSessionId } = await startShell(row.containerName);
+      terminals.setViewFor(row.id, "shell");
+      terminals.requestActivate(dtachSessionId);
+    } finally {
+      terminals.clearShellSpawnInFlight(row.id);
+    }
+  };
 
   return (
-    <div class="shell">
-      <header class="topbar">
-        <div class="brand">
-          <div class="logo" aria-hidden="true"></div>
-          <span class="name">nas</span>
-          <span class="sub">· dashboard</span>
-        </div>
-        <div
-          class={`status-dot${connected ? "" : " offline"}`}
-          title={connected ? "Live" : "Disconnected — retrying…"}
-        >
-          {connected ? "live" : "offline"}
-        </div>
-      </header>
-
-      <nav class="tabs">
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.id;
-          const badge: { count: number; warn?: boolean } | null =
-            tab.id === "pending" && totalPending > 0
-              ? { count: totalPending }
-              : tab.id === "sessions" && userTurnCount > 0
-                ? { count: userTurnCount, warn: true }
-                : null;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              class={`tab${isActive ? " active" : ""}`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-              {badge && (
-                <span class={`count${badge.warn ? " warn" : ""}`}>
-                  {badge.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      <div class="panel">
-        {activeTab === "pending" && (
-          <PendingTab
-            networkItems={networkPending}
-            hostExecItems={hostExecPending}
-            deepLink={deepLink}
-          />
-        )}
-        {activeTab === "sessions" && (
-          <ContainersTab
-            containers={sessionContainers}
-            onContainersChange={setContainers}
-            onAttach={handleAttach}
-            onShell={handleShell}
-            onAckTurn={handleAckTurn}
-            onRename={handleRename}
-            onNewSession={handleNewSession}
-            dtachAvailable={dtachAvailable}
-          />
-        )}
-        {activeTab === "audit" && (
-          <AuditTab liveItems={auditLogs} sessions={sessions} />
-        )}
-        {activeTab === "sidecars" && (
-          <ContainersTab
-            containers={sidecarContainers}
-            onContainersChange={setContainers}
-            title="Sidecars"
-          />
-        )}
-      </div>
-
-      <NewSessionDialog
-        open={newSessionOpen}
-        onClose={() => setNewSessionOpen(false)}
-        onLaunched={handleSessionLaunched}
+    <div class="app" classList={{ "right-collapsed": ui.rightCollapsed() }}>
+      <Topbar
+        connected={connected()}
+        onNewSession={() => setDialogOpen(true)}
       />
-
-      {terminalSessions.length > 0 && activeTermSessionId && (
-        <TerminalModal
-          sessions={terminalSessions}
-          activeSessionId={activeTermSessionId}
-          visible={termVisible}
-          onSelectSession={handleTermSelect}
-          onCloseSession={handleTermClose}
-          onRenameSession={handleRename}
-          onAckTurn={handleAckTurn}
-          onShell={handleTerminalShell}
-          onMinimize={handleTermMinimize}
+      {/* `inert` removes the workspace subtree from the focus order and
+          the accessibility tree while Settings is active. We prefer it
+          over `aria-hidden` because the workspace contains focusable
+          children (terminal, buttons, resizers); pairing `aria-hidden`
+          with focusable descendants is a WAI-ARIA violation. The
+          `workspace-hidden` class still applies `display: none` as a
+          second layer of defence and to drive the layout transition. */}
+      <main
+        class="workspace"
+        classList={{ "workspace-hidden": isSettingsRoute() }}
+        inert={isSettingsRoute() || undefined}
+        style={{ "grid-template-columns": gridTemplateColumns() }}
+      >
+        <SessionsPane
+          sessions={sessions.rows}
+          activeId={terminals.activeId}
+          onSelect={(id) => terminals.selectSession(id)}
+          onRename={async (sessionId, name) => {
+            await renameSession(sessionId, name);
+          }}
+          pendingFor={pendingFor}
+          homeDir={homeDir}
         />
-      )}
-
-      {openTermSessionIds.length > 0 && !termVisible && (
-        <button
-          type="button"
-          class="terminal-minimized-bar"
-          onClick={handleTermRestore}
-        >
-          <span class="chip chip-good">
-            terminal
-            {openTermSessionIds.length > 1
-              ? ` +${openTermSessionIds.length - 1}`
-              : ""}
-          </span>
-          <code>{activeTerminalLabel || openTermSessionIds[0]}</code>
-          <span class="terminal-minimized-restore">Restore</span>
-        </button>
-      )}
+        <PaneResizer
+          side="left"
+          width={ui.leftWidth}
+          setWidth={ui.setLeftWidth}
+        />
+        <TerminalPane
+          terminals={terminals}
+          sessions={sessions}
+          wsToken={() => getWsToken()}
+          onAck={async (id) => {
+            await ackSessionTurn(id);
+          }}
+          onKillClients={async (id) => {
+            await killTerminalClients(id);
+          }}
+          onRename={async (sessionId, name) => {
+            await renameSession(sessionId, name);
+          }}
+          onShellToggle={handleShellToggle}
+          refitTrigger={terminalRefitTrigger}
+        />
+        {/* The right resizer is unmounted while collapsed so that the
+            workspace grid track count matches the children count. The
+            .pane-right element drives the collapse animation; the
+            grid-template-columns transition cannot interpolate when the
+            track count changes. */}
+        <Show when={!ui.rightCollapsed()}>
+          <PaneResizer
+            side="right"
+            width={ui.rightWidth}
+            setWidth={ui.setRightWidth}
+          />
+        </Show>
+        <PendingPane
+          network={pending.network}
+          hostexec={pending.hostexec}
+          collapsed={ui.rightCollapsed}
+          onToggleCollapse={ui.toggleRightCollapsed}
+          scopeFor={pendingAction.scopeFor}
+          busyFor={pendingAction.busyFor}
+          errorFor={pendingAction.errorFor}
+          setScope={pendingAction.setScope}
+          onApprove={pendingHandlers.onApprove}
+          onDeny={pendingHandlers.onDeny}
+          auditEntries={audit.entries}
+        />
+      </main>
+      {/* SettingsShell stays mounted alongside the workspace and toggles
+          via `display: none` so its child state survives route changes
+          the same way the workspace's xterm instances do. The `page`
+          accessor reads the active settings page; while the route is
+          the workspace it falls back to the default page so the shell
+          still has a valid props value while it is hidden. */}
+      <SettingsShell
+        page={settingsPage()}
+        hidden={!isSettingsRoute()}
+        sidecars={sidecars.rows}
+        onStop={(name) => stopContainer(name)}
+        auditLiveRows={audit.entries}
+        auditActiveIds={activeIds}
+        auditPageStore={auditPageStore}
+        fetchAuditLogs={client.getAuditLogs}
+        ui={ui}
+      />
+      <StatusBar />
+      <NewSessionDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        onLaunched={(id) => terminals.requestActivate(id)}
+      />
     </div>
   );
 }

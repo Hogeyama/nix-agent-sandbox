@@ -4,8 +4,6 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "jsx": "react-jsx",
-    "jsxImportSource": "preact",
     "types": ["bun-types"],
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -20,5 +18,9 @@
     "scripts/**/*.ts",
     "tests/**/*.ts"
   ],
-  "exclude": ["node_modules", "src/ui/frontend", "src/ui/dist"]
+  "exclude": [
+    "node_modules",
+    "src/ui/dist",
+    "src/ui/frontend"
+  ]
 }

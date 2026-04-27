@@ -1,8 +1,10 @@
-import { render } from "preact";
-import { App } from "./App.tsx";
+import "@fontsource-variable/geist-mono";
+import "./styles.css";
+import { render } from "solid-js/web";
+import { App } from "./App";
 
 const root = document.getElementById("app");
 if (!root) {
-  throw new Error('Root element "#app" not found');
+  throw new Error("root element #app not found");
 }
-render(<App />, root);
+render(() => <App />, root);

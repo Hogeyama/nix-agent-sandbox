@@ -1,113 +1,141 @@
-import { useState } from "preact/hooks";
+/**
+ * Inline rename affordance for a session row.
+ *
+ * In `idle` the caller provides the visible affordance through
+ * `renderIdle`. Clicking enters `editing` with the current name as the
+ * draft. The
+ * input commits with Enter, cancels with Escape or blur, and stays
+ * disabled while a save is in flight. Validation runs locally via
+ * `validateName` before the `commit` action is dispatched, so a
+ * malformed draft never reaches the network; the resulting message is
+ * surfaced inline next to the input. Backend errors flow through the
+ * reducer's `failure` action so the input rehydrates with the rejected
+ * draft and the error chip.
+ */
+
+import { createSignal, type JSX, Show } from "solid-js";
 import {
-  nameCancelBtnStyle,
-  nameInputStyle,
-  nameSaveBtnStyle,
-} from "./containersTab.styles.ts";
+  initialRenameState,
+  type RenameAction,
+  type RenameState,
+  reduceRenameState,
+  validateName,
+} from "./editableSessionNameLogic";
 
-export function EditableSessionName({
-  sessionId,
-  currentName,
-  fallbackName,
-  onRename,
-}: {
-  sessionId: string;
-  currentName?: string;
-  fallbackName?: string;
-  onRename?: (sessionId: string, name: string) => Promise<void> | void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(currentName ?? "");
-  const [saving, setSaving] = useState(false);
+export interface EditableSessionNameProps {
+  currentName: string;
+  onSubmit: (next: string) => Promise<void>;
+  renderIdle: (api: { start: () => void; currentName: string }) => JSX.Element;
+}
 
-  async function handleSave() {
-    if (!onRename || !value.trim()) return;
-    setSaving(true);
-    try {
-      await onRename(sessionId, value.trim());
-      setEditing(false);
-    } catch (e) {
-      console.error("Rename failed:", e);
-    } finally {
-      setSaving(false);
+export function EditableSessionName(props: EditableSessionNameProps) {
+  const [state, setState] = createSignal<RenameState>(initialRenameState);
+  const [validationError, setValidationError] = createSignal<string | null>(
+    null,
+  );
+
+  const dispatch = (action: RenameAction) => {
+    setState((s) => reduceRenameState(s, action));
+  };
+
+  const startEdit = () => {
+    setValidationError(null);
+    dispatch({ type: "start", current: props.currentName });
+  };
+
+  const cancelEdit = () => {
+    setValidationError(null);
+    dispatch({ type: "cancel" });
+  };
+
+  const handleInput = (e: InputEvent & { currentTarget: HTMLInputElement }) => {
+    if (validationError() !== null) setValidationError(null);
+    dispatch({ type: "change", draft: e.currentTarget.value });
+  };
+
+  const handleKeyDown = async (e: KeyboardEvent) => {
+    const s = state();
+    if (s.mode !== "editing") return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const result = validateName(s.draft);
+      if (!result.ok) {
+        setValidationError(result.reason);
+        return;
+      }
+      setValidationError(null);
+      dispatch({ type: "commit" });
+      try {
+        await props.onSubmit(result.value);
+        dispatch({ type: "success" });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to rename";
+        dispatch({ type: "failure", error: message });
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
     }
-  }
+  };
 
-  if (!editing) {
-    if (!onRename) {
-      return (
-        <>
-          {currentName || fallbackName || (
-            <span style={{ color: "#64748b" }}>-</span>
-          )}
-        </>
-      );
-    }
+  const handleBlur = (e: FocusEvent) => {
+    // Cancel the edit when focus leaves the rename-edit scope; if focus
+    // stays inside (e.g. on the input itself), the draft is preserved.
+    const next = e.relatedTarget as HTMLElement | null;
+    if (next !== null && next.closest(".rename-edit") !== null) return;
+    if (state().mode === "editing") cancelEdit();
+  };
 
-    return (
-      <button
-        type="button"
-        style={{
-          cursor: "pointer",
-          border: 0,
-          padding: 0,
-          background: "transparent",
-          color: "inherit",
-          font: "inherit",
-          textAlign: "left",
-          borderBottom: "1px dashed #475569",
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          setValue(currentName ?? "");
-          setEditing(true);
-        }}
-      >
-        {currentName || fallbackName || (
-          <span style={{ color: "#64748b" }}>-</span>
-        )}
-      </button>
-    );
-  }
+  const focusOnMount = (el: HTMLInputElement | undefined) => {
+    queueMicrotask(() => el?.focus());
+  };
+
+  const inlineError = () => {
+    const s = state();
+    const local = validationError();
+    if (local !== null) return local;
+    if (s.mode === "editing" && s.error !== undefined) return s.error;
+    return null;
+  };
+
+  const draftValue = () => {
+    const s = state();
+    if (s.mode === "editing" || s.mode === "saving") return s.draft;
+    return "";
+  };
+
+  const isSaving = () => state().mode === "saving";
 
   return (
-    <span style={{ display: "inline-flex", gap: "4px", alignItems: "center" }}>
-      <input
-        type="text"
-        value={value}
-        onInput={(e) => setValue((e.target as HTMLInputElement).value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") void handleSave();
-          if (e.key === "Escape") setEditing(false);
-        }}
-        onClick={(e) => e.stopPropagation()}
-        disabled={saving}
-        style={nameInputStyle}
-        // biome-ignore lint/a11y/noAutofocus: intentional for inline edit
-        autoFocus
-      />
-      <button
-        type="button"
-        style={nameSaveBtnStyle}
-        disabled={saving || !value.trim()}
-        onClick={(e) => {
-          e.stopPropagation();
-          void handleSave();
-        }}
-      >
-        {saving ? "..." : "OK"}
-      </button>
-      <button
-        type="button"
-        style={nameCancelBtnStyle}
-        disabled={saving}
-        onClick={(e) => {
-          e.stopPropagation();
-          setEditing(false);
-        }}
-      >
-        Cancel
-      </button>
-    </span>
+    <Show
+      when={state().mode !== "idle"}
+      fallback={props.renderIdle({
+        start: startEdit,
+        currentName: props.currentName,
+      })}
+    >
+      <label class="rename-edit">
+        <input
+          type="text"
+          class="rename-input"
+          value={draftValue()}
+          disabled={isSaving()}
+          ref={focusOnMount}
+          onInput={handleInput}
+          onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          aria-label="Rename session"
+        />
+        <Show when={inlineError()}>
+          {(msg) => (
+            <span class="rename-error" role="status" aria-live="polite">
+              {msg()}
+            </span>
+          )}
+        </Show>
+      </label>
+    </Show>
   );
 }

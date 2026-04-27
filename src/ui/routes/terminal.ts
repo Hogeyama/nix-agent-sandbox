@@ -240,8 +240,6 @@ export function handleTerminalMessage(
     const bytes = Buffer.from(message, "utf-8");
     sendPushPackets(sock, bytes);
   } else {
-    // Binary data — terminal input
-    console.log(`[terminal] Binary input: ${(message as Buffer).length} bytes`);
     const bytes = Buffer.isBuffer(message)
       ? message
       : Buffer.from(message as ArrayBuffer);
