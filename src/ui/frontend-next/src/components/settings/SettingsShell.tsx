@@ -73,6 +73,7 @@ export function SettingsShell(props: SettingsShellProps) {
     <section
       class="settings-shell"
       classList={{ "settings-shell-hidden": props.hidden === true }}
+      inert={props.hidden === true || undefined}
       aria-label="Settings"
     >
       <nav class="settings-nav" aria-label="Settings sections">

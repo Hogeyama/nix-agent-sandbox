@@ -64,6 +64,8 @@ export function PendingPane(props: Props) {
             type="button"
             class="collapsed-rail"
             aria-label="Expand pending pane"
+            aria-expanded={!props.collapsed()}
+            aria-controls="pending-pane-content"
             onClick={props.onToggleCollapse}
           />
         }
@@ -76,12 +78,14 @@ export function PendingPane(props: Props) {
             class="pane-collapse"
             type="button"
             aria-label="Collapse pending pane"
+            aria-expanded={!props.collapsed()}
+            aria-controls="pending-pane-content"
             onClick={props.onToggleCollapse}
           >
             ⟩⟩
           </button>
         </div>
-        <div class="content">
+        <div class="content" id="pending-pane-content">
           <div class="section-label">
             <span>Network · out</span>
             <span class="section-sub">

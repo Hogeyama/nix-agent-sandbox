@@ -262,9 +262,17 @@ export function App() {
         connected={connected()}
         onNewSession={() => setDialogOpen(true)}
       />
+      {/* `inert` removes the workspace subtree from the focus order and
+          the accessibility tree while Settings is active. We prefer it
+          over `aria-hidden` because the workspace contains focusable
+          children (terminal, buttons, resizers); pairing `aria-hidden`
+          with focusable descendants is a WAI-ARIA violation. The
+          `workspace-hidden` class still applies `display: none` as a
+          second layer of defence and to drive the layout transition. */}
       <main
         class="workspace"
         classList={{ "workspace-hidden": isSettingsRoute() }}
+        inert={isSettingsRoute() || undefined}
         style={{ "grid-template-columns": gridTemplateColumns() }}
       >
         <SessionsPane
