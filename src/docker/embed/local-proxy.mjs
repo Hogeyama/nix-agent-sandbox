@@ -122,93 +122,79 @@ server.on("connect", (clientReq, clientSocket, head) => {
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {});
 
 // ---------------------------------------------------------------------------
-// TCP port forwarding — forward localhost:<port> to host via CONNECT tunnel
+// TCP port forwarding — forward localhost:<port> to host via per-port UDS
 // ---------------------------------------------------------------------------
+//
+// The host-side `nas` process listens on a UDS at
+// `${NAS_FORWARD_PORT_SOCKET_DIR}/<port>.sock` and bridges to host TCP via
+// envoy. Inside the agent container we just connect that UDS directly: there
+// is no in-band CONNECT tunnel and no proxy auth — the host's bind-mount of
+// the UDS into the container is itself the access boundary.
 
 const forwardPorts = (process.env.NAS_FORWARD_PORTS || "")
   .split(",")
   .map(Number)
   .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535);
 
-for (const port of forwardPorts) {
-  const tcpServer = createTcpServer((clientSocket) => {
-    const bufferedClientChunks = [];
-    const onClientData = (chunk) => {
-      bufferedClientChunks.push(chunk);
-    };
-    const cleanupBufferedClientData = () => {
-      clientSocket.removeListener("data", onClientData);
-      bufferedClientChunks.length = 0;
-    };
-    clientSocket.on("data", onClientData);
+const forwardPortSocketDir = process.env.NAS_FORWARD_PORT_SOCKET_DIR;
 
-    const proxySocket = netConnect(upstreamPort, upstreamHost, () => {
-      let connectReq = `CONNECT host.docker.internal:${port} HTTP/1.1\r\n`;
-      connectReq += `Host: host.docker.internal:${port}\r\n`;
-      if (upstreamAuth) {
-        connectReq += `Proxy-Authorization: ${upstreamAuth}\r\n`;
-      }
-      connectReq += "\r\n";
-      proxySocket.write(connectReq);
-    });
+if (forwardPorts.length > 0 && !forwardPortSocketDir) {
+  console.error(
+    "[local-proxy] NAS_FORWARD_PORT_SOCKET_DIR not set; skipping forward-port loop",
+  );
+} else {
+  for (const port of forwardPorts) {
+    const socketPath = `${forwardPortSocketDir}/${port}.sock`;
 
-    let responseBuffer = Buffer.alloc(0);
+    const tcpServer = createTcpServer((clientSocket) => {
+      // Defensive early-bytes buffering: although Node's net.Socket internally
+      // queues writes issued before the connection is established, we keep
+      // the explicit buffer-and-unshift pattern so that the same code path
+      // handles client bytes that arrive between accept() and the UDS being
+      // ready, and so that any future change to the upstream wiring (e.g.
+      // adding a handshake) does not silently drop those bytes.
+      const bufferedClientChunks = [];
+      const onClientData = (chunk) => {
+        bufferedClientChunks.push(chunk);
+      };
+      const cleanupBufferedClientData = () => {
+        clientSocket.removeListener("data", onClientData);
+        bufferedClientChunks.length = 0;
+      };
+      clientSocket.on("data", onClientData);
 
-    const onData = (chunk) => {
-      responseBuffer = Buffer.concat([responseBuffer, chunk]);
-      const headerEnd = responseBuffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) return;
-
-      proxySocket.removeListener("data", onData);
-
-      const headerStr = responseBuffer.subarray(0, headerEnd).toString();
-      const statusLine = headerStr.split("\r\n")[0];
-      const statusCode = parseInt(statusLine.split(" ")[1], 10);
-
-      if (statusCode === 200) {
+      const udsSocket = netConnect({ path: socketPath }, () => {
         clientSocket.removeListener("data", onClientData);
         clientSocket.pause();
         for (let i = bufferedClientChunks.length - 1; i >= 0; i -= 1) {
           clientSocket.unshift(bufferedClientChunks[i]);
         }
         bufferedClientChunks.length = 0;
-        const remainder = responseBuffer.subarray(headerEnd + 4);
-        if (remainder.length > 0) {
-          clientSocket.write(remainder);
-        }
-        proxySocket.pipe(clientSocket);
-        clientSocket.pipe(proxySocket);
+        udsSocket.pipe(clientSocket);
+        clientSocket.pipe(udsSocket);
         clientSocket.resume();
-      } else {
+      });
+
+      udsSocket.on("error", (err) => {
         cleanupBufferedClientData();
         console.error(
-          `[local-proxy] TCP forward port ${port}: CONNECT failed with ${statusCode}`,
+          `[local-proxy] TCP forward port ${port}: UDS connect failed: ${err.message}`,
         );
         clientSocket.destroy();
-        proxySocket.destroy();
-      }
-    };
-    proxySocket.on("data", onData);
+      });
 
-    proxySocket.on("error", (err) => {
-      cleanupBufferedClientData();
+      clientSocket.on("error", () => {
+        cleanupBufferedClientData();
+        udsSocket.destroy();
+      });
+    });
+
+    tcpServer.on("error", (err) => {
       console.error(
-        `[local-proxy] TCP forward port ${port}: upstream error: ${err.message}`,
+        `[local-proxy] TCP forward port ${port}: listen error: ${err.message}`,
       );
-      clientSocket.destroy();
     });
 
-    clientSocket.on("error", () => {
-      cleanupBufferedClientData();
-      proxySocket.destroy();
-    });
-  });
-
-  tcpServer.on("error", (err) => {
-    console.error(
-      `[local-proxy] TCP forward port ${port}: listen error: ${err.message}`,
-    );
-  });
-
-  tcpServer.listen(port, LISTEN_HOST, () => {});
+    tcpServer.listen(port, LISTEN_HOST, () => {});
+  }
 }

@@ -382,14 +382,35 @@ test("ProxyStage: forwardPorts-only enables proxy", () => {
   expect(result !== null).toEqual(true);
 });
 
-test("ProxyStage: forwardPorts adds host.docker.internal entries to allowlist", () => {
+test("ProxyStage: forwardPorts does NOT inject host.docker.internal entries into allowlist", () => {
+  // Forward-ports flow through per-port UDS bind-mounts, so the local-proxy
+  // does not dial host.docker.internal:<port> via CONNECT. The allowlist
+  // must therefore stay free of synthetic host.docker.internal entries —
+  // a stale allowlist injection would silently re-grant the host TCP
+  // escape route.
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080, 5432] } },
   });
   const { shared, container } = makeInput(profile);
   const result = planProxy({ ...shared, container })!;
-  expect(result.allowlist).toContain("host.docker.internal:8080");
-  expect(result.allowlist).toContain("host.docker.internal:5432");
+  expect(result.allowlist).not.toContain("host.docker.internal:8080");
+  expect(result.allowlist).not.toContain("host.docker.internal:5432");
+});
+
+test("ProxyStage: forwardPorts preserves user-declared host.docker.internal allowlist entries", () => {
+  // If a profile explicitly puts host.docker.internal:* in its allowlist,
+  // it must not be stripped — that is user intent, distinct from the
+  // implicit injection driven by forwardPorts.
+  const profile = makeProfile({
+    network: {
+      allowlist: ["host.docker.internal:9999"],
+      proxy: { forwardPorts: [8080] },
+    },
+  });
+  const { shared, container } = makeInput(profile);
+  const result = planProxy({ ...shared, container })!;
+  expect(result.allowlist).toContain("host.docker.internal:9999");
+  expect(result.allowlist).not.toContain("host.docker.internal:8080");
 });
 
 test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
@@ -401,14 +422,16 @@ test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
   expect(result.envVars.NAS_FORWARD_PORTS).toEqual("8080,5432");
 });
 
-test("ProxyStage: forwardPorts merges with existing allowlist", () => {
+test("ProxyStage: forwardPorts leaves existing allowlist untouched", () => {
+  // Profile-declared allowlist entries pass through verbatim; forwardPorts
+  // no longer contributes synthetic host.docker.internal entries.
   const profile = makeProfile({
     network: { allowlist: ["example.com"], proxy: { forwardPorts: [3000] } },
   });
   const { shared, container } = makeInput(profile);
   const result = planProxy({ ...shared, container })!;
   expect(result.allowlist).toContain("example.com");
-  expect(result.allowlist).toContain("host.docker.internal:3000");
+  expect(result.allowlist).not.toContain("host.docker.internal:3000");
 });
 
 test("ProxyStage: no NAS_FORWARD_PORTS when forwardPorts is empty", () => {

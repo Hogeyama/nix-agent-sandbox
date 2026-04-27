@@ -131,9 +131,6 @@ export function planProxy(
     input.container.env.static.NAS_DIND_CONTAINER_NAME ?? null;
 
   const forwardPorts = input.profile.network.proxy.forwardPorts;
-  const forwardPortEntries = forwardPorts.map(
-    (p) => `host.docker.internal:${p}`,
-  );
 
   const proxyUrl = `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
@@ -208,7 +205,7 @@ export function planProxy(
     runtimePaths,
     brokerSocket,
     token,
-    allowlist: [...input.profile.network.allowlist, ...forwardPortEntries],
+    allowlist: [...input.profile.network.allowlist],
     denylist: prompt.denylist,
     promptEnabled: prompt.enable,
     timeoutSeconds: prompt.timeoutSeconds,
