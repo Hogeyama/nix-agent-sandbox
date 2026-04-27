@@ -21,6 +21,7 @@ import {
   denyHostExec,
   denyNetwork,
   getAuditLogs,
+  getInfo,
   getLaunchBranches,
   HttpError,
   killTerminalClients,
@@ -654,6 +655,57 @@ describe("getAuditLogs", () => {
     expect(caught).toBeInstanceOf(HttpError);
     expect((caught as HttpError).status).toBe(400);
     expect((caught as HttpError).message).toBe("Invalid before");
+  });
+});
+
+describe("getInfo", () => {
+  test("GETs /api/info and returns the parsed {home} envelope", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({ home: "/home/foo" }),
+    );
+    const result = await getInfo();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/info");
+    expect(init.method).toBe("GET");
+    // Bodyless GET: no Content-Type, no body — same shape as
+    // `getLaunchInfo` so the daemon's preflight policy is consistent.
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(result).toEqual({ home: "/home/foo" });
+  });
+
+  test("passes through home: null when the daemon cannot resolve HOME", async () => {
+    // The backend returns `{ home: null }` when `HOME` is unset; the
+    // client must surface that as-is so the UI can degrade gracefully
+    // (i.e. leave paths in their absolute form).
+    installFetch(async () => jsonResponse({ home: null }));
+    const result = await getInfo();
+    expect(result).toEqual({ home: null });
+  });
+
+  test("rejects with HttpError on a 5xx response from the backend", async () => {
+    // `App.tsx`'s `onMount` relies on `.catch` to log the failure and
+    // leave `homeDir` at `null` so the UI degrades to absolute paths.
+    // Pin the rejection contract here so a refactor that silently
+    // resolves to `{ home: null }` on `!ok` does not slip through.
+    installFetch(
+      async () =>
+        new Response(JSON.stringify({ error: "boom" }), {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    let caught: unknown;
+    try {
+      await getInfo();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    expect((caught as HttpError).status).toBe(500);
+    expect((caught as HttpError).message).toBe("boom");
   });
 });
 

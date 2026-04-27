@@ -60,6 +60,18 @@ export interface LaunchInfo {
   recentDirectories: string[];
 }
 
+/**
+ * Host environment info exposed by `GET /api/info`.
+ *
+ * Currently only carries `home`, which the frontend uses to tildify
+ * absolute paths. `null` means the daemon could not resolve a home
+ * directory (e.g. `HOME` is unset); call sites must degrade gracefully
+ * by leaving paths in their absolute form.
+ */
+export interface Info {
+  home: string | null;
+}
+
 export interface LaunchBranches {
   currentBranch: string | null;
   hasMain: boolean;
@@ -109,6 +121,10 @@ export async function request<T>(
 
 export function getLaunchInfo(): Promise<LaunchInfo> {
   return request<LaunchInfo>("GET", "/api/launch/info");
+}
+
+export function getInfo(): Promise<Info> {
+  return request<Info>("GET", "/api/info");
 }
 
 export function getLaunchBranches(cwd: string): Promise<LaunchBranches> {

@@ -1,7 +1,15 @@
-import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onMount,
+  Show,
+} from "solid-js";
 import * as client from "./api/client";
 import {
   ackSessionTurn,
+  getInfo,
   killTerminalClients,
   renameSession,
   startShell,
@@ -84,6 +92,27 @@ export function App() {
     eventNames: SSE_EVENT_NAMES,
   });
   const [dialogOpen, setDialogOpen] = createSignal(false);
+
+  // Host home directory used by SessionsPane to tildify session DIR
+  // entries. Fetched once on mount; we degrade gracefully when the call
+  // fails (the signal stays null and the UI shows absolute paths).
+  // Kept as a local App signal — no global — so any future consumer
+  // must take it via props, mirroring how `pendingFor` is wired.
+  //
+  // `/api/info` is fetched exactly once on boot. A transient failure
+  // (e.g. daemon momentarily unavailable at startup) leaves `homeDir`
+  // at `null` for the rest of the session, so paths render absolute
+  // until the user reloads. We deliberately do not retry here or hook
+  // into SSE reconnects — the degradation is cosmetic-only and the
+  // added complexity is not worth it.
+  const [homeDir, setHomeDir] = createSignal<string | null>(null);
+  onMount(() => {
+    void getInfo()
+      .then((info) => setHomeDir(info.home))
+      .catch((err) => {
+        console.warn("[ui-next] failed to fetch /api/info", err);
+      });
+  });
 
   // Routing: parse `window.location.hash` into a `Route`. The router
   // is instantiated once for the lifetime of `App` so the hashchange
@@ -283,6 +312,7 @@ export function App() {
             await renameSession(sessionId, name);
           }}
           pendingFor={pendingFor}
+          homeDir={homeDir}
         />
         <PaneResizer
           side="left"

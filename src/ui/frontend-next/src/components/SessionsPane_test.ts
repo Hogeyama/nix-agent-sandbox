@@ -99,6 +99,7 @@ describe("SessionsPane", () => {
       onSelect: () => undefined,
       onRename: async () => undefined,
       pendingFor: () => ({ network: 0, hostexec: 0 }),
+      homeDir: () => null,
     }) as unknown as SessionsPaneTree;
 
     const sessionRow =
@@ -166,6 +167,7 @@ describe("SessionsPane", () => {
       onSelect,
       onRename: async () => undefined,
       pendingFor: () => ({ network: 0, hostexec: 0 }),
+      homeDir: () => null,
     }) as unknown as SessionsPaneTree;
 
     const sessionRow =

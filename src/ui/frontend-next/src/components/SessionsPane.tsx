@@ -3,6 +3,7 @@ import type { SessionRow } from "../stores/types";
 import { EditableSessionName } from "./EditableSessionName";
 import type { PendingCount } from "./sessionPendingSummary";
 import { describeSessionRow, formatSessionTree } from "./sessionRowView";
+import { tildifyPath } from "./tildifyPath";
 
 type Props = {
   sessions: () => SessionRow[];
@@ -13,6 +14,11 @@ type Props = {
   // / `busyFor` accessor pattern used by `PendingPane` so the parent
   // owns the underlying memo and SessionsPane only reads through here.
   pendingFor: (sessionId: string) => PendingCount;
+  // Accessor for the host's home directory, used to tildify the DIR
+  // entry of each session row. `null` means home is unknown (the
+  // `/api/info` round-trip failed or `HOME` is unset on the daemon
+  // host); the UI then degrades to showing absolute paths.
+  homeDir: () => string | null;
 };
 
 export function SessionsPane(props: Props) {
@@ -130,7 +136,7 @@ export function SessionsPane(props: Props) {
                 </Show>
                 <dl class="session-meta">
                   <dt>dir</dt>
-                  <dd>{row.dir ?? "—"}</dd>
+                  <dd>{tildifyPath(row.dir, props.homeDir()) ?? "—"}</dd>
                   <dt>prof</dt>
                   <dd>{row.profile ?? "—"}</dd>
                   <dt>tree</dt>
