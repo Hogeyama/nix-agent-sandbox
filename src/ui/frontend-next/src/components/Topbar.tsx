@@ -13,7 +13,12 @@ export function Topbar(props: TopbarProps) {
         <span class="sub">control room</span>
       </div>
       <div class="topbar-center">
-        <button class="btn" type="button" onClick={() => props.onNewSession()}>
+        <button
+          class="btn"
+          type="button"
+          onClick={() => props.onNewSession()}
+          aria-keyshortcuts="Control+N"
+        >
           <span class="plus">+</span>
           <span>new session</span>
         </button>

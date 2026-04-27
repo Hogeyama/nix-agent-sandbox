@@ -79,7 +79,6 @@ export function App() {
     eventNames: SSE_EVENT_NAMES,
   });
   const [dialogOpen, setDialogOpen] = createSignal(false);
-  useGlobalKeyboard({ onToggleRightCollapse: ui.toggleRightCollapsed });
 
   // Routing: parse `window.location.hash` into a `Route`. The router
   // is instantiated once for the lifetime of `App` so the hashchange
@@ -89,6 +88,19 @@ export function App() {
   // every xterm instance and its dtach WebSocket on every gear click,
   // which is exactly the lifecycle this design is built to avoid.
   const router = createRouter();
+
+  useGlobalKeyboard({
+    onNewSession: () => setDialogOpen(true),
+    // Index is 1-based and follows the rendered order of SessionsPane,
+    // which mirrors the daemon's session-row delivery order.
+    onSelectSessionByIndex: (index) => {
+      const row = sessions.rows()[index - 1];
+      if (row) terminals.selectSession(row.id);
+    },
+    onToggleRightCollapse: ui.toggleRightCollapsed,
+    onOpenSettings: () => router.navigate("#/settings/sidecars"),
+    onOpenShortcuts: () => router.navigate("#/settings/keybinds"),
+  });
 
   // Refit trigger for the active terminal. When `display: none` hides
   // the workspace while the Settings shell is open, xterm's fit addon
