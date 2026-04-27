@@ -9,7 +9,7 @@
  * the component body focused on rendering.
  */
 
-import type { LaunchBranches } from "../api/client";
+import type { LaunchBranches, LaunchInfo } from "../api/client";
 
 /**
  * Worktree-base radio choice.
@@ -102,4 +102,34 @@ export function reconcileWorktreeChoice(
     }
   }
   return choice;
+}
+
+/**
+ * Reconcile the profile selection against the latest `LaunchInfo`
+ * snapshot.
+ *
+ * A `null` snapshot means the fetch is still in flight, so the current
+ * choice is preserved unchanged. Otherwise a non-empty `current` is
+ * kept whenever it still appears in `info.profiles`; if it does not
+ * (or `current` is empty), the function falls back to `defaultProfile`
+ * when that name is itself present in `profiles`, then to
+ * `profiles[0]`, then to `""` for a fully empty list.
+ */
+export function reconcileProfileChoice(
+  current: string,
+  info: LaunchInfo | null,
+): string {
+  if (info === null) {
+    return current;
+  }
+  if (current !== "" && info.profiles.includes(current)) {
+    return current;
+  }
+  if (
+    info.defaultProfile !== undefined &&
+    info.profiles.includes(info.defaultProfile)
+  ) {
+    return info.defaultProfile;
+  }
+  return info.profiles[0] ?? "";
 }

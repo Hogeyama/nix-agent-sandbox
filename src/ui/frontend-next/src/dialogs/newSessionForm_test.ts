@@ -1,13 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import type { LaunchBranches } from "../api/client";
+import type { LaunchBranches, LaunchInfo } from "../api/client";
 import {
   pickEffectiveCwd,
   pickWorktreeBase,
+  reconcileProfileChoice,
   reconcileWorktreeChoice,
 } from "./newSessionForm";
 
 function branches(overrides: Partial<LaunchBranches> = {}): LaunchBranches {
   return { currentBranch: null, hasMain: false, ...overrides };
+}
+
+function info(overrides: Partial<LaunchInfo> = {}): LaunchInfo {
+  return {
+    dtachAvailable: true,
+    profiles: [],
+    recentDirectories: [],
+    ...overrides,
+  };
 }
 
 describe("pickWorktreeBase", () => {
@@ -126,5 +136,57 @@ describe("reconcileWorktreeChoice", () => {
         branches({ currentBranch: null, hasMain: false }),
       ),
     ).toBe("custom");
+  });
+});
+
+describe("reconcileProfileChoice", () => {
+  test("preserves current when info is null (in-flight fetch)", () => {
+    expect(reconcileProfileChoice("dev", null)).toBe("dev");
+  });
+
+  test("preserves current when it is included in profiles", () => {
+    expect(
+      reconcileProfileChoice(
+        "dev",
+        info({ profiles: ["dev", "prod"], defaultProfile: "prod" }),
+      ),
+    ).toBe("dev");
+  });
+
+  test("falls back to defaultProfile when current is missing from profiles", () => {
+    expect(
+      reconcileProfileChoice(
+        "stage",
+        info({ profiles: ["dev", "prod"], defaultProfile: "prod" }),
+      ),
+    ).toBe("prod");
+  });
+
+  test("falls back to profiles[0] when defaultProfile is undefined", () => {
+    expect(
+      reconcileProfileChoice("stage", info({ profiles: ["dev", "prod"] })),
+    ).toBe("dev");
+  });
+
+  test("returns '' when profiles is empty", () => {
+    expect(reconcileProfileChoice("dev", info({ profiles: [] }))).toBe("");
+  });
+
+  test("falls back to defaultProfile when current is '' (initial open)", () => {
+    expect(
+      reconcileProfileChoice(
+        "",
+        info({ profiles: ["dev", "prod"], defaultProfile: "prod" }),
+      ),
+    ).toBe("prod");
+  });
+
+  test("falls back to profiles[0] when defaultProfile is not included in profiles", () => {
+    expect(
+      reconcileProfileChoice(
+        "stage",
+        info({ profiles: ["dev", "prod"], defaultProfile: "ghost" }),
+      ),
+    ).toBe("dev");
   });
 });
