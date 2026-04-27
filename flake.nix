@@ -28,11 +28,11 @@
           module = "main.ts";
           bunDeps = b2n.fetchBunDeps { bunNix = ./bun.nix; };
           preBuild = ''
-            bun run build-ui
+            bun run build-ui-next
           '';
           postInstall = ''
             mkdir -p $out/share/nas
-            cp -r src/ui/dist $out/share/nas/dist
+            cp -r src/ui/dist-next $out/share/nas/dist
           '';
         };
 
@@ -70,7 +70,7 @@
           cp ${self}/src/docker/embed/local-proxy.mjs $out/docker/embed/
           cp ${self}/src/docker/envoy/envoy.template.yaml $out/docker/envoy/
           cp ${self}/scripts/notify-send-wsl $out/scripts/
-          cp -r ${nasUnwrapped}/share/nas/dist $out/ui/ || true
+          cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
         '';
 
