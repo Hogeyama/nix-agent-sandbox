@@ -92,7 +92,7 @@ DinD サイドカーを起動して、エージェントコンテナから隔離
 
 ### ホストの localhost ポート転送
 
-`network.proxy.forward-ports` を使うと、ホスト側で `localhost` に bind しているポートをコンテナ内から同じ `localhost:<port>` で利用できます。TCP 接続は nas の認証付き proxy を経由して `host.docker.internal:<port>` へ CONNECT トンネルされるため、ローカルで動かしている開発サーバーや DB にコンテナから安全に接続できます。
+`network.proxy.forward-ports` を使うと、ホスト側で `127.0.0.1` (loopback) に bind しているポートをコンテナ内から同じ `localhost:<port>` で利用できます。ポートごとに 1 本の Unix domain socket をホスト側 `nas` プロセスが立て (`<runtimeDir>/forward-ports/<sessionId>/<port>.sock`)、それをコンテナへ `/run/nas-fp/<port>.sock` として bind-mount します。コンテナ内の `local-proxy` が `127.0.0.1:<port>` を listen して受け取った TCP 接続をその UDS にそのまま流し込み、ホスト側 relay が UDS 受信を `127.0.0.1:<port>` の TCP に pipe します。envoy / 認証付き proxy / `host.docker.internal` 経由の経路ではないため、ホスト側のサービスを `0.0.0.0` で listen させる必要はなく、`127.0.0.1` のままでローカル開発サーバーや DB にコンテナから接続できます。
 
 ```yaml
 profiles:
@@ -649,7 +649,7 @@ session network
 |------|--------|
 | `nix.mount-socket: true` | ホストの nix-daemon ソケットをコンテナに渡す。nix-daemon 経由で任意のビルド実行・`/nix/store` への書き込み・後続の nix 操作への影響などが可能で、実質的にホストユーザーと同等の権限をコンテナに与えることになる。信頼できないプロジェクト／エージェントで有効化しない |
 | `docker.enable: true` | `docker:dind-rootless` サイドカーが `--privileged` で起動される（user namespace セットアップに必要）。エージェントコンテナ自体は非特権のまま。Docker 操作はサイドカー内に隔離され、ホストの Docker デーモンにはアクセスできない |
-| `network.proxy.forward-ports` | ホスト `localhost` に bind しているサービスがコンテナから到達可能になる。認証なしで動かしている開発用 DB・管理 UI・デーモンがあれば、コンテナ内のエージェントがフルアクセスできる点に注意 |
+| `network.proxy.forward-ports` | 指定した各ポートについて、ホスト `127.0.0.1:<port>` に bind しているサービスへコンテナから直接到達できるようになる（per-port UDS をコンテナへ bind-mount し、コンテナ内の `127.0.0.1:<port>` をホストの同ポートに pipe する）。ホスト側を `0.0.0.0` に晒す必要はないが、認証なしで動かしている開発用 DB・管理 UI・デーモンがあれば、コンテナ内のエージェントがそのままフルアクセスできる点に注意 |
 | `dbus.session.enable: true` | 許可した DBus service に対して host 側資産へ到達できる。session bus 全体の露出は減るが、許可先 service の権限そのものは残る |
 | `gpg.forward-agent: true` | ホストの gpg-agent ソケットと公開鍵リング・信頼 DB・設定ファイルがコンテナにマウントされる。agent が unlock されている間はコンテナから任意の署名・復号が可能 |
 | `extra-mounts` | 指定したホストディレクトリがコンテナにマウントされる（`mode: rw` の場合は書き込みも可能） |
@@ -768,7 +768,7 @@ nas ui stop --port 8080         # ポートを指定して停止
 | `network.prompt.timeout-seconds` | number | `300` | pending 承認の待機秒数。タイムアウト時は deny |
 | `network.prompt.default-scope` | `"once"` \| `"host-port"` \| `"host"` | `"host-port"` | `nas network approve` の既定 scope。`once`: そのリクエストのみ、`host-port`: 同じホスト+ポートへの通信を以降許可、`host`: 同じホストへの全ポート通信を以降許可 |
 | `network.prompt.notify` | `"auto"` \| `"desktop"` \| `"off"` | `"auto"` | pending 発生時の通知 backend。`ui.enable: true` なら通知クリックでブラウザ UI を開く。`false` なら通知ボタンで直接 approve/deny |
-| `network.proxy.forward-ports` | number[] | `[]` | ホストの `localhost:<port>` をコンテナ内の同じ `localhost:<port>` へ TCP 転送する。内部的には `host.docker.internal:<port>` への CONNECT トンネルを張る。`18080` は内部 proxy 用に予約済み |
+| `network.proxy.forward-ports` | number[] | `[]` | ホスト `127.0.0.1:<port>` をコンテナ内の同じ `localhost:<port>` から到達可能にする。ポートごとに per-session UDS (`<runtimeDir>/forward-ports/<sessionId>/<port>.sock`) を介して TCP を中継するため、ホスト側を `0.0.0.0` に bind し直す必要はない。`18080` は内部 proxy 用に予約済み |
 | `dbus.session.enable` | bool | `false` | host session bus に対する filtered proxy を有効化し、コンテナへ proxy socket だけを渡す |
 | `dbus.session.source-address` | string | 自動解決 | source の session bus address。省略時は `DBUS_SESSION_BUS_ADDRESS`、なければ `/run/user/$UID/bus` |
 | `dbus.session.see` | string[] | `[]` | `xdg-dbus-proxy --see` に渡す well-known name |

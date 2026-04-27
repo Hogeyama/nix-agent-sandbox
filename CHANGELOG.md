@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- **`network.proxy.forward-ports`**: host services bound to `127.0.0.1` are reachable from agent containers via per-port Unix domain sockets bind-mounted into the container (`/run/nas-fp/<port>.sock`), with a host-side relay piping each UDS to `127.0.0.1:<port>`. Listening on `0.0.0.0` on the host is not required.
+
 ## [0.10.1] - 2026-04-21
 
 ### Security
