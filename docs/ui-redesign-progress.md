@@ -5,7 +5,7 @@
 設計 (不変条件): `docs/ui-redesign.md`
 進捗 (生きた状態): 本ファイル
 
-最終更新: 2026-04-27 / P6 完了時点
+最終更新: 2026-04-27 / §11 メモ対応完了時点
 
 ---
 
@@ -321,10 +321,25 @@ src/ui/
 
 ---
 
+## §11 メモへの対応
+
+`docs/ui-redesign.md` §11 (ユーザー自筆メモ) の 4 項目それぞれの状態:
+
+| メモ項目 | 状態 | 該当 commit / 備考 |
+|---------|------|-------------------|
+| favicon が計画に入ってないのでは | 対応済 | `143d128 feat(ui-next): show favicon badge from max session lamp` (P4) |
+| 検索が実装されてないのでは | 部分対応 / 残りは見送り | 中央 Toolbar の検索 input + Enter / Shift+Enter / Escape は P3 で配線済 (`b760538 feat(ui-next): center-pane Toolbar with ack, search, font-size, kill-clients`)。Ctrl+F ショートカット / match counter / `onDidChangeResults` 配線 / `decorations` opt はユーザー判断で本ラウンド対象外。必要になったら別 phase で扱う候補 |
+| Session の DIR を tilde expand して表示 | 対応済 | `f1c8057 feat(ui-next): expose host home dir via /api/info endpoint` + `40a0cfe feat(ui-next): tildify session dir paths under home directory` |
+| Session の ID から `s_sess_` prefix を除去 | 対応済 | `2ca09aa fix(ui-next): drop sess_ prefix in shortenSessionId display` |
+
+将来 follow-up: Audit / Sidecars 側のパス表示も同じ tildify を適用すると asymmetry が消える (今回 scope 外)。
+
+---
+
 ## 既知の TBD / 未決事項
 
 - **キーボードショートカットの上書き**: `docs/ui-redesign.md` §8 末尾 "Settings で上書き可（将来）" は未着手。catalog (`keybindsCatalog.ts`) の `spec` を user override 可能にする道筋は P6 で `dispatchShortcut` が catalog を正本にした関係で素直に乗せやすい。**判断期限: なし (将来要望ベース)**
-- **`docs/ui-redesign.md` §11 メモ未対応分**: 「favicon が計画に入ってないのでは」(P4 で対応済) / 「検索が実装されてないのでは」(中央 Toolbar の Ctrl+F は P3 で実装、catalog の `terminal.search` 等は未追加) / 「Session の DIR を tilde expand」「Session の ID から `s_sess_` prefix を除去」は **未対応**。UX polish として P7 完了後に追加 phase で扱う候補
+- **terminal 検索の拡張機能**: 詳細は「§11 メモへの対応」表の "検索が実装されてないのでは" 行を参照。判断期限なし (将来要望ベース)
 
 ---
 
