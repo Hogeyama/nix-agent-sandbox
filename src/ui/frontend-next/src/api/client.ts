@@ -35,7 +35,7 @@
  *     the intended endpoint.
  */
 
-import type { SessionRecordLike } from "../stores/types";
+import type { AuditLogEntryLike, SessionRecordLike } from "../stores/types";
 
 /**
  * HTTP-level error that preserves the numeric response status.
@@ -273,4 +273,67 @@ export function denyHostExec(
     sessionId,
     requestId,
   });
+}
+
+/**
+ * Query parameters accepted by `GET /api/audit`.
+ *
+ * Mirrors `src/ui/routes/api.ts` lines 385-438. Each field is optional
+ * and is forwarded to the backend only when it carries a meaningful
+ * value:
+ *
+ *   - `domain`: limited to the two values the backend accepts. Omit to
+ *     query both domains.
+ *   - `sessions`: comma-joined membership filter. The backend treats an
+ *     explicit empty list as "no session ids match", so callers must
+ *     omit the field entirely when they want every session.
+ *   - `sessionContains`: substring match on the session id (the backend
+ *     applies it case-sensitively).
+ *   - `before`: ISO-8601 timestamp cursor; entries strictly older than
+ *     this value are returned.
+ *   - `limit`: positive integer page size.
+ */
+export type AuditLogsQuery = {
+  domain?: "network" | "hostexec";
+  sessions?: string[];
+  sessionContains?: string;
+  before?: string;
+  limit?: number;
+};
+
+/**
+ * Fetch audit log entries with filtering and an ISO-timestamp cursor.
+ *
+ * The function builds the query string with `URLSearchParams` so every
+ * value is percent-encoded automatically; reserved characters such as
+ * `&`, `=`, or whitespace inside `sessionContains` and `before` are
+ * therefore safe. When no parameters are supplied the request is sent
+ * without a `?` suffix, matching the bare path that the daemon also
+ * accepts.
+ */
+export function getAuditLogs(
+  query: AuditLogsQuery = {},
+): Promise<{ items: AuditLogEntryLike[] }> {
+  const params = new URLSearchParams();
+  if (query.domain !== undefined) params.set("domain", query.domain);
+  if (query.sessions !== undefined) {
+    // Comma-separated set membership. An explicit empty array is still
+    // forwarded so the backend's "no session ids match" semantics are
+    // preserved; callers that want every session must omit the field.
+    params.set("sessions", query.sessions.join(","));
+  }
+  if (query.sessionContains !== undefined && query.sessionContains !== "") {
+    params.set("sessionContains", query.sessionContains);
+  }
+  if (query.before !== undefined && query.before !== "") {
+    params.set("before", query.before);
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  const qs = params.toString();
+  return request<{ items: AuditLogEntryLike[] }>(
+    "GET",
+    qs.length === 0 ? "/api/audit" : `/api/audit?${qs}`,
+  );
 }

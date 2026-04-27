@@ -958,6 +958,177 @@ body::after {
   word-break: break-word;
 }
 
+/* Audit settings page: filter bar above an infinite-scrolling table.
+ * The filter bar reuses the surface palette so it sits flush with the
+ * sidecars page heading; the table reads as a denser variant of the
+ * sidecars table so the two settings pages share visual rhythm. */
+.audit-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.audit-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 10px 0 14px;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  margin: 0 0 12px;
+}
+.audit-filter-legend {
+  /* The fieldset legend is kept available for assistive tech but
+   * hidden visually so the bar reads as a single horizontal strip. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.audit-filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--cream-dim);
+}
+.audit-filter-label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.audit-filter-select,
+.audit-filter-input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--cream);
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.audit-filter-input {
+  width: 200px;
+}
+.audit-filter-select:focus,
+.audit-filter-input:focus {
+  outline: none;
+  border-color: var(--amber);
+}
+.audit-filter-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--cream-dim);
+  cursor: pointer;
+}
+.audit-filter-counter {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.audit-empty-state {
+  margin: 8px 0;
+  padding: 14px;
+  border: 1px dashed var(--line);
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted-2);
+  letter-spacing: 0.06em;
+}
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--cream-dim);
+}
+.audit-table thead th {
+  text-align: left;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.audit-table .audit-row td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+.audit-cell-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.audit-cell-domain {
+  color: var(--cream-dim);
+  letter-spacing: 0.04em;
+}
+.audit-cell-decision {
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.audit-cell-decision.decision-allow {
+  color: var(--teal);
+}
+.audit-cell-decision.decision-deny {
+  color: var(--rose);
+}
+.audit-cell-session {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.audit-cell-summary {
+  color: var(--cream);
+  word-break: break-all;
+}
+.scroll-sentinel {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 14px 0;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.scroll-sentinel-msg.muted {
+  color: var(--muted-3);
+}
+.audit-retry {
+  background: transparent;
+  border: 1px solid var(--rose);
+  color: var(--rose);
+  padding: 6px 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.audit-retry:hover {
+  background: rgba(244, 63, 94, 0.1);
+}
+
 /* statusbar */
 .statusbar {
   display: flex;

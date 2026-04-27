@@ -12,7 +12,11 @@
  */
 
 import { Match, Switch } from "solid-js";
+import type { getAuditLogs } from "../../api/client";
 import type { SettingsPage } from "../../routes/router";
+import type { AuditPageStore } from "../../stores/auditPageStore";
+import type { AuditLogEntryLike } from "../../stores/types";
+import { AuditPage } from "./AuditPage";
 import { SidecarsPage } from "./SidecarsPage";
 import type { SidecarRow } from "./sidecarRowView";
 
@@ -33,6 +37,17 @@ interface SettingsShellProps {
    * inspects the result.
    */
   onStop: (name: string) => Promise<unknown>;
+  /** Live SSE-driven audit window for the `#/settings/audit` page. */
+  auditLiveRows: () => AuditLogEntryLike[];
+  /**
+   * Set of session ids considered "active" — running containers plus
+   * sessions with pending approvals. Drives the "Active only"
+   * checkbox on the audit filter bar.
+   */
+  auditActiveIds: () => ReadonlySet<string>;
+  auditPageStore: AuditPageStore;
+  /** Injected for testability; production passes the real client. */
+  fetchAuditLogs: typeof getAuditLogs;
 }
 
 interface NavLink {
@@ -72,9 +87,11 @@ export function SettingsShell(props: SettingsShellProps) {
             <SidecarsPage sidecars={props.sidecars} onStop={props.onStop} />
           </Match>
           <Match when={props.page === "audit"}>
-            <SettingsPageIntro
-              heading="Audit"
-              note="Browse the durable audit log of approvals and denials."
+            <AuditPage
+              liveRows={props.auditLiveRows}
+              activeIds={props.auditActiveIds}
+              store={props.auditPageStore}
+              fetchAuditLogs={props.fetchAuditLogs}
             />
           </Match>
           <Match when={props.page === "keybinds"}>

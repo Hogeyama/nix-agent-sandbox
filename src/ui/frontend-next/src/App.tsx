@@ -24,6 +24,7 @@ import { useConnection } from "./hooks/useConnection";
 import { useFaviconBadge } from "./hooks/useFaviconBadge";
 import { useGlobalKeyboard } from "./hooks/useGlobalKeyboard";
 import { createRouter } from "./routes/router";
+import { createAuditPageStore } from "./stores/auditPageStore";
 import { createAuditStore } from "./stores/auditStore";
 import { createPendingActionStore } from "./stores/pendingActionStore";
 import { createPendingStore } from "./stores/pendingStore";
@@ -47,6 +48,17 @@ export function App() {
   const pendingAction = createPendingActionStore();
   const terminals = createTerminalsStore();
   const audit = createAuditStore();
+  // Owns the older-history pool of the Audit settings page. The store
+  // is created once for the lifetime of `App`, while the AuditPage
+  // component itself is mounted/unmounted by the SettingsShell's
+  // `<Switch>/<Match>`. Survival across route changes therefore comes
+  // from two cooperating moves: this long-lived store retains the
+  // filter selection and the loaded older entries, and AuditPage
+  // hydrates its local control signals from `store.state().displayFilter`
+  // on every mount (with a `defer: true` filter-effect so the
+  // remount itself does not dispatch a `reset` that would discard
+  // the pool). See `AuditPage.tsx` for the full lifecycle contract.
+  const auditPageStore = createAuditPageStore();
   const ui = createUiStore();
   // Single instantiation: handlers close over the same store and client
   // for the entire app lifetime so a re-render of `PendingPane` cannot
@@ -134,6 +146,18 @@ export function App() {
     ),
   );
   useFaviconBadge(aggregateLamp);
+
+  // Active session ids are derived from running agent containers and
+  // sessions with at least one pending approval. The Audit settings
+  // page consumes this set to filter rows when "Active only" is on
+  // and to build the server-side `sessions` membership filter.
+  const activeIds = createMemo<ReadonlySet<string>>(() => {
+    const ids = new Set<string>();
+    for (const row of sessions.rows()) ids.add(row.id);
+    for (const row of pending.network()) ids.add(row.sessionId);
+    for (const row of pending.hostexec()) ids.add(row.sessionId);
+    return ids;
+  });
 
   const gridTemplateColumns = () =>
     ui.rightCollapsed()
@@ -255,6 +279,10 @@ export function App() {
         hidden={!isSettingsRoute()}
         sidecars={sidecars.rows}
         onStop={(name) => stopContainer(name)}
+        auditLiveRows={audit.entries}
+        auditActiveIds={activeIds}
+        auditPageStore={auditPageStore}
+        fetchAuditLogs={client.getAuditLogs}
       />
       <StatusBar />
       <NewSessionDialog

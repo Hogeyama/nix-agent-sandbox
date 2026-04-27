@@ -20,6 +20,7 @@ import {
   approveNetwork,
   denyHostExec,
   denyNetwork,
+  getAuditLogs,
   getLaunchBranches,
   HttpError,
   killTerminalClients,
@@ -480,6 +481,179 @@ describe("approveHostExec", () => {
     const body = parseBody(init);
     expect(body).toEqual({ sessionId: "sess-1", requestId: "exec-1" });
     expect(body).not.toHaveProperty("scope");
+  });
+});
+
+describe("getAuditLogs", () => {
+  test("with no parameters, GETs the bare /api/audit path without a query string", async () => {
+    // `URLSearchParams.toString()` returns "" for an empty bag, and the
+    // function suppresses the `?` suffix in that case so the daemon
+    // sees a clean path.
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit");
+    expect(url).not.toContain("?");
+    expect(init.method).toBe("GET");
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+  });
+
+  test("with an empty query object, also GETs the bare /api/audit path", async () => {
+    // The default-parameter and explicit-empty-object call sites must
+    // produce identical URLs so the call site is free to pass either.
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({});
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit");
+  });
+
+  test("forwards domain=network as a single query parameter", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ domain: "network" });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit?domain=network");
+  });
+
+  test("forwards domain=hostexec as a single query parameter", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ domain: "hostexec" });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit?domain=hostexec");
+  });
+
+  test("joins sessions with commas and percent-encodes reserved characters", async () => {
+    // The backend splits on `,` (`src/ui/routes/api.ts` line 429) so the
+    // separator is a literal comma, while individual session ids that
+    // contain reserved characters such as `&` must be percent-encoded
+    // by `URLSearchParams` so they cannot leak into the query layer.
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ sessions: ["s1", "s&2"] });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit?sessions=s1%2Cs%262");
+    // The literal `&` in the second session id must not survive into
+    // the URL — that would split the query into two parameters.
+    expect(url).not.toContain("s&2");
+  });
+
+  test("forwards an explicit empty sessions array as `sessions=`", async () => {
+    // The backend interprets an explicit empty `sessions` value as
+    // "no session ids match" — return nothing rather than everything
+    // (`src/ui/routes/api.ts` lines 425-432). Callers who want every
+    // session must omit the field entirely; this test pins that the
+    // empty-array path forwards the field unchanged.
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ sessions: [] });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit?sessions=");
+  });
+
+  test("percent-encodes sessionContains containing whitespace and reserved characters", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ sessionContains: "foo bar&baz" });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // `URLSearchParams` encodes spaces as `+` and `&` as `%26`. The
+    // backend's `searchParams.get` decodes both back to the original
+    // input.
+    expect(url).toBe("/api/audit?sessionContains=foo+bar%26baz");
+    expect(url).not.toContain(" ");
+    expect(url).not.toContain("foo bar&baz");
+  });
+
+  test("omits sessionContains when the value is an empty string", async () => {
+    // An empty substring filter would match every session id, which is
+    // indistinguishable from "no filter". The function drops the empty
+    // value so the wire request reflects the intent.
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ sessionContains: "" });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit");
+  });
+
+  test("percent-encodes the before cursor as an ISO-8601 timestamp", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ before: "2026-04-20T10:00:00.000Z" });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // The colons in the ISO timestamp are reserved sub-delimiters;
+    // `URLSearchParams` percent-encodes them so the value round-trips
+    // intact through the backend's `searchParams.get`.
+    expect(url).toBe("/api/audit?before=2026-04-20T10%3A00%3A00.000Z");
+  });
+
+  test("omits before when the value is an empty string", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ before: "" });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit");
+  });
+
+  test("converts a numeric limit to its decimal string representation", async () => {
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({ limit: 200 });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/audit?limit=200");
+  });
+
+  test("composes every parameter into a single deterministic query string", async () => {
+    // Pin the exact insertion order so future changes that reorder the
+    // setters surface as test failures. The order matches the field
+    // order in `AuditLogsQuery`: domain, sessions, sessionContains,
+    // before, limit.
+    const fetchMock = installFetch(async () => jsonResponse({ items: [] }));
+    await getAuditLogs({
+      domain: "network",
+      sessions: ["s1", "s2"],
+      sessionContains: "abc",
+      before: "2026-04-20T10:00:00.000Z",
+      limit: 50,
+    });
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      "/api/audit?domain=network&sessions=s1%2Cs2&sessionContains=abc&before=2026-04-20T10%3A00%3A00.000Z&limit=50",
+    );
+  });
+
+  test("parses the {items} envelope on a 200 response", async () => {
+    installFetch(async () =>
+      jsonResponse({
+        items: [
+          {
+            id: "a-1",
+            timestamp: "2026-04-20T10:00:00.000Z",
+            domain: "network",
+            sessionId: "s_1",
+            requestId: "r_1",
+            decision: "allow",
+            reason: "ok",
+          },
+        ],
+      }),
+    );
+    const result = await getAuditLogs({ domain: "network" });
+    expect(result.items.length).toBe(1);
+    expect(result.items[0]?.id).toBe("a-1");
+    expect(result.items[0]?.domain).toBe("network");
+  });
+
+  test("rejects with HttpError on a 400 response from the backend", async () => {
+    installFetch(
+      async () =>
+        new Response(JSON.stringify({ error: "Invalid before" }), {
+          status: 400,
+          statusText: "Bad Request",
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    let caught: unknown;
+    try {
+      await getAuditLogs({ before: "not-an-iso" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    expect((caught as HttpError).status).toBe(400);
+    expect((caught as HttpError).message).toBe("Invalid before");
   });
 });
 
