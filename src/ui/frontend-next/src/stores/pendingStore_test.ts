@@ -12,7 +12,7 @@ function makeNetwork(
 ): NetworkPendingItemLike {
   return {
     requestId: "req-1",
-    sessionId: "s_abcdef0123456789",
+    sessionId: "sess_abcdef012345",
     createdAt: "2026-04-26T03:00:00.000Z",
     method: "GET",
     target: { host: "api.github.com", port: 443 },
@@ -25,7 +25,7 @@ function makeHostExec(
 ): HostExecPendingItemLike {
   return {
     requestId: "exec-1",
-    sessionId: "s_abcdef0123456789",
+    sessionId: "sess_abcdef012345",
     createdAt: "2026-04-26T03:00:00.000Z",
     argv0: "git",
     args: ["push"],
@@ -76,11 +76,11 @@ describe("normalizeNetworkPending", () => {
     expect(normalizeNetworkPending([])).toEqual([]);
   });
 
-  test("sessionShortId truncates after s_ to 6 chars", () => {
+  test("sessionShortId strips the sess_ prefix and returns the next 6 chars", () => {
     const rows = normalizeNetworkPending([
-      makeNetwork({ sessionId: "s_7a3f1234567890" }),
+      makeNetwork({ sessionId: "sess_7a3f12345abc" }),
     ]);
-    expect(rows[0]?.sessionShortId).toBe("s_7a3f12");
+    expect(rows[0]?.sessionShortId).toBe("7a3f12");
   });
 
   test("sessionName is always null because the SSE payload omits it", () => {

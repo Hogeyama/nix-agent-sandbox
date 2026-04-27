@@ -97,7 +97,7 @@ export interface SessionRecordLike {
 // Normalized row consumed by the sessions pane.
 export type SessionRow = {
   id: string; // sessionId, used as key
-  shortId: string; // e.g. "s_7a3f12"
+  shortId: string; // e.g. "7a3f12"
   name: string; // sessionName, falls back to container name
   // Docker container name. `containerName` is the destination of left-pane
   // Stop / Shell actions and is always populated from `ContainerInfoLike.name`.

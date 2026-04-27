@@ -12,7 +12,7 @@ function makeContainer(
     name: "default-name",
     running: true,
     labels: { "nas.kind": "agent" },
-    sessionId: "s_abcdef0123456789",
+    sessionId: "sess_abcdef012345",
     sessionName: "default-session",
     ...overrides,
   };
@@ -64,11 +64,11 @@ describe("normalizeContainersToSessions", () => {
     expect(rows[0]?.baseBranch).toBe("main");
   });
 
-  test("shortId truncates sessionId after the s_ prefix to 6 chars", () => {
+  test("shortId strips the sess_ prefix and returns the next 6 chars", () => {
     const rows = normalizeContainersToSessions([
-      makeContainer({ sessionId: "s_7a3f1234567890" }),
+      makeContainer({ sessionId: "sess_7a3f12345abc" }),
     ]);
-    expect(rows[0]?.shortId).toBe("s_7a3f12");
+    expect(rows[0]?.shortId).toBe("7a3f12");
   });
 
   test("turn is null when undefined on the payload", () => {
@@ -134,13 +134,13 @@ describe("createSessionsStore", () => {
         name: "agent-a",
         running: true,
         labels: { "nas.kind": "agent" },
-        sessionId: "s_aaaaaaaa11111111",
+        sessionId: "sess_aaaaaa111111",
         sessionName: "session-a",
       },
     ]);
     expect(store.rows()).toHaveLength(1);
-    expect(store.rows()[0]?.id).toBe("s_aaaaaaaa11111111");
-    expect(store.rows()[0]?.shortId).toBe("s_aaaaaa");
+    expect(store.rows()[0]?.id).toBe("sess_aaaaaa111111");
+    expect(store.rows()[0]?.shortId).toBe("aaaaaa");
   });
 
   test("setSessions replaces previous rows", () => {
@@ -150,7 +150,7 @@ describe("createSessionsStore", () => {
         name: "first",
         running: true,
         labels: { "nas.kind": "agent" },
-        sessionId: "s_1111111111",
+        sessionId: "sess_111111111111",
       },
     ]);
     store.setSessions([
@@ -158,10 +158,10 @@ describe("createSessionsStore", () => {
         name: "second",
         running: true,
         labels: { "nas.kind": "agent" },
-        sessionId: "s_2222222222",
+        sessionId: "sess_222222222222",
       },
     ]);
     expect(store.rows()).toHaveLength(1);
-    expect(store.rows()[0]?.id).toBe("s_2222222222");
+    expect(store.rows()[0]?.id).toBe("sess_222222222222");
   });
 });
