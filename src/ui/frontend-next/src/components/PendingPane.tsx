@@ -98,7 +98,7 @@ export function PendingPane(props: Props) {
               const busy = () => props.busyFor(row.key);
               const error = () => props.errorFor(row.key);
               return (
-                <article class="card">
+                <article class="card" data-pending-key={row.key} tabindex="-1">
                   <div class="card-head">
                     <span class="chip">{sessionLabel(row)}</span>
                     <span class="card-time">
@@ -166,7 +166,7 @@ export function PendingPane(props: Props) {
               const busy = () => props.busyFor(row.key);
               const error = () => props.errorFor(row.key);
               return (
-                <article class="card">
+                <article class="card" data-pending-key={row.key} tabindex="-1">
                   <div class="card-head">
                     <span class="chip">{sessionLabel(row)}</span>
                     <span class="card-time">
