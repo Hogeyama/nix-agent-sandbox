@@ -17,6 +17,7 @@ import type { SettingsPage } from "../../routes/router";
 import type { AuditPageStore } from "../../stores/auditPageStore";
 import type { AuditLogEntryLike } from "../../stores/types";
 import { AuditPage } from "./AuditPage";
+import { KeybindsPage } from "./KeybindsPage";
 import { SidecarsPage } from "./SidecarsPage";
 import type { SidecarRow } from "./sidecarRowView";
 
@@ -95,10 +96,7 @@ export function SettingsShell(props: SettingsShellProps) {
             />
           </Match>
           <Match when={props.page === "keybinds"}>
-            <SettingsPageIntro
-              heading="Keybinds"
-              note="Inspect the keyboard shortcuts the control room responds to."
-            />
+            <KeybindsPage />
           </Match>
           <Match when={props.page === "prefs"}>
             <SettingsPageIntro
