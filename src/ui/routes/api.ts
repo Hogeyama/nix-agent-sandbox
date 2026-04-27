@@ -103,9 +103,11 @@ export function createApiRoutes(ctx: UiDataContext): Router {
 
   // --- Launch ---
 
-  api.get("/launch/info", () =>
+  api.get("/launch/info", ({ url }) =>
     withErrorHandling(async () => {
-      const info = await getLaunchInfo(ctx);
+      const cwdParam = url.searchParams.get("cwd");
+      const cwd = cwdParam && cwdParam !== "" ? cwdParam : undefined;
+      const info = await getLaunchInfo(ctx, { cwd });
       return json(info);
     }),
   );

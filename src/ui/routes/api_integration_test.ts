@@ -752,6 +752,152 @@ test("GET /launch/branches with relative cwd returns 400 (LaunchValidationError)
   }
 });
 
+// --- /launch/info (cwd= query param) ---------------------------------------
+//
+// /api/launch/info accepts an optional ?cwd= query param and forwards it to
+// getLaunchInfo(ctx, { cwd }). Empty or missing cwd is equivalent to a bare
+// GET (no startDir override).
+//
+// Tests that exercise loadConfig() control XDG_CONFIG_HOME so the global
+// config lookup is deterministic regardless of the developer's environment.
+
+test("GET /launch/info without cwd returns 200 with LaunchInfo shape", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  const xdgDir = path.join(tmpDir, "xdg");
+  await mkdir(xdgDir, { recursive: true });
+  // Provide a minimal global config so loadConfig() at process.cwd() resolves
+  // without depending on whether the developer has a real .agent-sandbox.* in
+  // the project root or in ~/.config/nas. Note: process.cwd() may still find a
+  // local config and merge it; we only pin shape, not profile contents.
+  const nasDir = path.join(xdgDir, "nas");
+  await mkdir(nasDir, { recursive: true });
+  await writeFile(
+    path.join(nasDir, "agent-sandbox.yml"),
+    "default: g\nprofiles:\n  g:\n    agent: claude\n",
+  );
+
+  const originalXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdgDir;
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/launch/info");
+    expect(res.status).toEqual(200);
+    const body = await res.json();
+    expect(typeof body.dtachAvailable).toEqual("boolean");
+    expect(Array.isArray(body.profiles)).toEqual(true);
+    expect(Array.isArray(body.recentDirectories)).toEqual(true);
+  } finally {
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /launch/info?cwd=/abs/path uses the cwd-local config", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  const xdgDir = path.join(tmpDir, "xdg");
+  await mkdir(xdgDir, { recursive: true });
+  // Empty XDG: no global config so the cwd-local yml is the only source.
+  const projectDir = path.join(tmpDir, "proj");
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(
+    path.join(projectDir, ".agent-sandbox.yml"),
+    "default: cwdprofile\nprofiles:\n  cwdprofile:\n    agent: claude\n",
+  );
+
+  const originalXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdgDir;
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request(
+      `/api/launch/info?cwd=${encodeURIComponent(projectDir)}`,
+    );
+    expect(res.status).toEqual(200);
+    const body = await res.json();
+    expect(body.profiles).toEqual(["cwdprofile"]);
+    expect(body.defaultProfile).toEqual("cwdprofile");
+  } finally {
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /launch/info?cwd=relative returns 400 (LaunchValidationError)", async () => {
+  // validateCwd() rejects synchronously before loadConfig() is called, so no
+  // global/local config setup is needed for this case.
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const res = await app.request("/api/launch/info?cwd=relative-path");
+    expect(res.status).toEqual(400);
+    const body = await res.json();
+    expect(body.error).toEqual("Invalid cwd: must be an absolute path");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("GET /launch/info?cwd= (empty) is equivalent to bare GET", async () => {
+  // Empty string must be treated as cwd-unset; it should NOT be forwarded as
+  // a relative path (which would 400). This pins backward compatibility for
+  // a UI that builds the URL without checking whether the user selected a cwd.
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  const xdgDir = path.join(tmpDir, "xdg");
+  await mkdir(xdgDir, { recursive: true });
+  const nasDir = path.join(xdgDir, "nas");
+  await mkdir(nasDir, { recursive: true });
+  await writeFile(
+    path.join(nasDir, "agent-sandbox.yml"),
+    "default: g\nprofiles:\n  g:\n    agent: claude\n",
+  );
+
+  const originalXdg = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdgDir;
+  try {
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    const resEmpty = await app.request("/api/launch/info?cwd=");
+    expect(resEmpty.status).toEqual(200);
+    const bodyEmpty = await resEmpty.json();
+
+    const resBare = await app.request("/api/launch/info");
+    expect(resBare.status).toEqual(200);
+    const bodyBare = await resBare.json();
+
+    expect(bodyEmpty.profiles).toEqual(bodyBare.profiles);
+    expect(bodyEmpty.defaultProfile).toEqual(bodyBare.defaultProfile);
+  } finally {
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("POST /containers/clean requires {confirm:true} body", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
   try {
