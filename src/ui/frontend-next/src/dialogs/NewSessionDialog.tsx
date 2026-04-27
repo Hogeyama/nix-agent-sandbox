@@ -1,4 +1,11 @@
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  createEffect,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+  untrack,
+} from "solid-js";
 import {
   getLaunchBranches,
   getLaunchInfo,
@@ -10,6 +17,7 @@ import { createFocusTrap } from "./createFocusTrap";
 import {
   pickEffectiveCwd,
   pickWorktreeBase,
+  reconcileProfileChoice,
   reconcileWorktreeChoice,
   type WorktreeChoice,
 } from "./newSessionForm";
@@ -20,9 +28,12 @@ type DirChoice = "default" | "recent" | "custom";
 
 type Props = {
   /**
-   * Reactive accessor for the open/closed state. The dialog mounts only
-   * when this is true; closing it unmounts the body so the form resets
-   * naturally on the next open without manual state-clear plumbing.
+   * Reactive accessor for the open/closed state. When true, the dialog
+   * body JSX is rendered via the internal `<Show when={open()}>` gate.
+   * The component instance itself is mounted unconditionally by the
+   * parent, so form signals persist across open/close cycles; freshness
+   * on re-open is provided by the `recentDirsInitialized` reset path in
+   * the launch-info effect.
    */
   open: () => boolean;
   /** Invoked when the user dismisses the dialog (Cancel, Esc, backdrop). */
@@ -43,9 +54,11 @@ type Props = {
  *
  * Everything stateless about turning form values into a launch payload
  * lives in `./newSessionForm`. This component is the Solid binding:
- * signals for inputs, effects for the two fetches, and a
- * `<Show when={open()}>` gate that owns the mount/unmount lifecycle so
- * the form starts fresh every time the user reopens it.
+ * signals for inputs and effects for the two fetches. The internal
+ * `<Show when={open()}>` gates only the body JSX subtree; component
+ * signals persist across open/close cycles, and form re-initialisation
+ * is centralised in the launch-info effect via the
+ * `recentDirsInitialized` reset path.
  */
 export function NewSessionDialog(props: Props) {
   const [launchInfo, setLaunchInfo] = createSignal<LaunchInfo | null>(null);
@@ -67,44 +80,88 @@ export function NewSessionDialog(props: Props) {
   const effectiveCwd = () =>
     pickEffectiveCwd(dirChoice(), customDir(), selectedRecentDir());
 
-  // Fetch /api/launch/info every time the dialog opens. The Show-gated
-  // mount means this also resets the form on every open, since the
-  // signals above are recreated by the new component instance.
+  // Fetch /api/launch/info on dialog open and re-fetch whenever the
+  // effective cwd changes so profile list / defaultProfile are
+  // re-evaluated against the new directory.
+  //
+  // `recentDirsInitialized` is a plain boolean in component scope that
+  // gates the one-shot recent-dir / dirChoice initialisation against
+  // the first successful fetch of a given open cycle. The component
+  // body itself is mounted unconditionally (the parent never gates the
+  // dialog instance), so this flag must be reset whenever `props.open()`
+  // flips false; otherwise the second open would skip initialisation
+  // and inherit stale recent-dir state. The early-return branch below
+  // tracks `props.open()`, so close transitions also re-run this effect
+  // and execute the reset before bailing out.
+  //
+  // `profile()` is read via `untrack` further down because this effect
+  // writes `profile` via `setProfile`; tracking the read would re-trigger
+  // the effect on every successful fetch. The `cancelled` flag combined
+  // with `onCleanup` guards against stale responses overwriting newer
+  // results when cwd changes (or the dialog closes) mid-flight.
+  let recentDirsInitialized = false;
   createEffect(() => {
-    if (!props.open()) return;
+    if (!props.open()) {
+      recentDirsInitialized = false;
+      return;
+    }
+    const cwd = effectiveCwd();
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
     setLoading(true);
     setErrorMsg(null);
-    getLaunchInfo()
+    getLaunchInfo(cwd === "" ? undefined : cwd)
       .then((info) => {
+        if (cancelled) return;
         setLaunchInfo(info);
-        setProfile(info.defaultProfile ?? info.profiles[0] ?? "");
-        const firstRecent = info.recentDirectories[0] ?? "";
-        setSelectedRecentDir(firstRecent);
-        setDirChoice(firstRecent === "" ? "default" : "recent");
+        setProfile(reconcileProfileChoice(untrack(profile), info));
+        setErrorMsg(null);
+        if (!recentDirsInitialized) {
+          recentDirsInitialized = true;
+          const firstRecent = info.recentDirectories[0] ?? "";
+          setSelectedRecentDir(firstRecent);
+          setDirChoice(firstRecent === "" ? "default" : "recent");
+        }
       })
       .catch((e) => {
+        if (cancelled) return;
+        // Preserve the previous `launchInfo` snapshot so the profile
+        // select stays mounted across a transient cwd-driven failure;
+        // the inline error surfaces the issue without collapsing the
+        // form back to the loading state.
         setErrorMsg(e instanceof Error ? e.message : String(e));
       })
       .finally(() => {
+        if (cancelled) return;
         setLoading(false);
       });
   });
 
   // Re-fetch branch info whenever the effective cwd changes. Empty cwd
   // (the "default" choice) yields the no-git baseline so the radio
-  // collapses to just "none" / "custom".
+  // collapses to just "none" / "custom". The `cancelled` flag combined
+  // with `onCleanup` guards against stale responses overwriting newer
+  // results when cwd changes mid-flight.
   createEffect(() => {
     if (!props.open()) return;
     const cwd = effectiveCwd();
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
     if (cwd === "") {
       setLaunchBranches({ currentBranch: null, hasMain: false });
       return;
     }
     getLaunchBranches(cwd)
       .then((b) => {
+        if (cancelled) return;
         setLaunchBranches(b);
       })
       .catch(() => {
+        if (cancelled) return;
         // Branch lookup failure is non-fatal: degrade to the no-git
         // baseline so the radio still renders sensibly. The launch
         // endpoint will surface any real cwd error on submit.
