@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
-### Changed
+## [0.11.0] - 2026-04-28
 
-- **`network.proxy.forward-ports`**: host services bound to `127.0.0.1` are reachable from agent containers via per-port Unix domain sockets bind-mounted into the container (`/run/nas-fp/<port>.sock`), with a host-side relay piping each UDS to `127.0.0.1:<port>`. Listening on `0.0.0.0` on the host is not required.
+### Added
+
+- **UI**: rewrite the daemon web UI on SolidJS (hash router, drag-resizable panes, settings pages, inline session actions, shortcut dispatcher) ([300b6af])
+- **`network.proxy.forward-ports`**: forward host `127.0.0.1` ports via per-port UDS bind-mounted into the container; host `0.0.0.0` no longer required ([7bc290e], [685cfe9], [1ad6518])
+
+### Security
+
+- **UI**: require a bearer token on terminal WebSocket upgrades, cap WS payloads at 64 KiB, and add security response headers ([8bf2bd4], [9dcd636], [0ef86ca])
+- **Mount**: bind-mount `.agent-sandbox.{yml,nix}` read-only ([23f2af8])
+
+### Fixed
+
+- **Network**: `gcRuntime` removes the entire per-session `brokers/{sessionId}/` directory so stale sockets are no longer double-counted by the orphan-dir pass ([666df0c])
 
 ## [0.10.1] - 2026-04-21
 
