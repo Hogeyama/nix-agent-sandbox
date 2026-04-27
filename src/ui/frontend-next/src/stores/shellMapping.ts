@@ -2,7 +2,7 @@
  * Pure helpers backing the agent ⇄ shell toggle in the terminals pane.
  *
  * The shell-session id grammar is owned by `src/ui/shell_session_id.ts`
- * and consumed by both the daemon and the Preact frontend; this module
+ * and consumed by both the daemon and the frontend; this module
  * imports the same parser so the agent ⇄ shell mapping stays consistent
  * across all three surfaces.
  */

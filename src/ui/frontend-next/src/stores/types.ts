@@ -1,8 +1,8 @@
 /**
  * Minimal payload and view-row types for the Solid frontend stores.
  *
- * These shapes are intentionally kept local to `frontend-next` and do not
- * import from the Preact `frontend/src/api.ts`. The "Like" suffix denotes
+ * These shapes are intentionally kept local to the frontend module and do not
+ * import from the daemon's wire-payload types directly. The "Like" suffix denotes
  * a defensive subset of the wire payload: each upstream-optional field
  * is typed as `T | null | undefined` so normalizers can absorb both
  * representations via `?? null`.

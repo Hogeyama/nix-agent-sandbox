@@ -228,8 +228,9 @@ export function startShell(
  *
  * `scope` is forwarded as-is to `request`, which delegates body
  * serialization to `JSON.stringify`. When `scope` is `undefined` the
- * key is dropped from the wire body, mirroring the legacy frontend's
- * `request("POST", ..., { sessionId, requestId, scope })` shape.
+ * key is dropped from the wire body so the backend (`src/ui/routes/api.ts`)
+ * sees an absent `scope` instead of `scope: undefined` and falls through
+ * to its default.
  */
 export function approveNetwork(
   sessionId: string,
@@ -288,8 +289,9 @@ export function approveHostExec(
  * argument: the backend route does not destructure it from the body
  * (`src/ui/routes/api.ts` `/hostexec/deny`) and the daemon-side
  * `denyHostExec` takes no scope (`src/ui/data.ts`). Adding `scope` here
- * would silently send a field the backend ignores and would diverge
- * from the legacy frontend contract.
+ * would silently send a field the backend ignores. The asymmetry is
+ * intentional and locked in by `src/ui/routes/api.ts` (`/hostexec/deny`
+ * does not destructure `scope`).
  */
 export function denyHostExec(
   sessionId: string,

@@ -1,10 +1,8 @@
 /**
  * Presentation helpers for audit log rows in the pending pane accordion.
  *
- * Mirrors the legacy `formatTimestamp` in
- * `src/ui/frontend/src/components/AuditTab.tsx` so the two frontends
- * format timestamps identically: local TZ, `YYYY/MM/DD HH:mm:ss`, with
- * a fallback to the raw ISO string for unparseable input.
+ * Format timestamps as local-TZ `YYYY/MM/DD HH:mm:ss`, falling back to
+ * the raw ISO string on parse failure.
  */
 
 import type { AuditLogEntryRow } from "../stores/auditStore";

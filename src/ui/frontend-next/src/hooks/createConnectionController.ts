@@ -10,8 +10,8 @@
  * This module is pure: every side-effect channel (timer scheduling, DOM
  * `EventSource` construction, the connected setter) is injected through
  * `ConnectionDeps`, which lets the same controller drive Solid signals,
- * Preact `useState`, vanilla DOM, or a fake-timer test harness without
- * touching framework code.
+ * vanilla DOM, or a fake-timer test harness without touching framework
+ * code.
  */
 
 /** Grace window before a dropped SSE link is surfaced as offline. */

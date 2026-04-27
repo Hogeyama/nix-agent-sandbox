@@ -14,7 +14,7 @@
  *     module re-asserts focus after every container mousedown and on
  *     contextmenu.
  *
- * The module is Solid/Preact agnostic — every dependency comes in as a
+ * The module is framework-agnostic — every dependency comes in as a
  * function argument so the file can be used both from framework code
  * and from headless tests.
  */

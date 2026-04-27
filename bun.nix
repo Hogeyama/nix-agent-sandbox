@@ -345,10 +345,6 @@
     url = "https://registry.npmjs.org/playwright/-/playwright-1.60.0-alpha-2026-04-14.tgz";
     hash = "sha512-wrYNgIOWpw/vaC4TpFHx9mVYF7kM6bYyRbStIHfxfqHDZvj1rNcYKSiIBNSUA9qm4bye4PvPEDSpe3RqjYFX6A==";
   };
-  "preact@10.29.1" = fetchurl {
-    url = "https://registry.npmjs.org/preact/-/preact-10.29.1.tgz";
-    hash = "sha512-gQCLc/vWroE8lIpleXtdJhTFDogTdZG9AjMUpVkDf2iTCNwYNWA+u16dL41TqUDJO4gm2IgrcMv3uTpjd4Pwmg==";
-  };
   "pure-rand@6.1.0" = fetchurl {
     url = "https://registry.npmjs.org/pure-rand/-/pure-rand-6.1.0.tgz";
     hash = "sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA==";

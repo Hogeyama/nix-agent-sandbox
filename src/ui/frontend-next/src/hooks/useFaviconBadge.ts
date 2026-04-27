@@ -8,10 +8,8 @@
  * the link href is updated) without spinning up Solid's reactive
  * runtime: the hook itself only owns the `createEffect` wrapper.
  *
- * Mirrors the legacy `src/ui/frontend/src/hooks/useFaviconBadge.ts`
- * pixel-for-pixel — same 32×32 base, same #1e293b rounded-square,
- * same #38bdf8 "N", same `(SIZE-6, 6, r=6)` badge dot — so users
- * switching between the two UIs see the same icon. The DI seam
+ * Renders a 32×32 favicon: #1e293b rounded-square, #38bdf8 "N", with a
+ * (SIZE-6, 6, r=6) lamp-coloured badge dot. The DI seam
  * (`createCanvas` / `getLinkElement`) lets the test replace the DOM
  * surface area without touching `document` directly; production code
  * continues to use `document.createElement` / `document.querySelector`
@@ -79,8 +77,8 @@ export function renderFaviconBadge(
   const ctx = canvas.getContext("2d");
   if (ctx === null) return link.href;
 
-  // Base icon: dark rounded square with "N" letter — kept identical
-  // to the legacy frontend so the two builds render the same favicon.
+  // Base icon: dark rounded square with a #38bdf8 "N" — the
+  // lamp-agnostic baseline that the badge dot is layered on top of.
   ctx.fillStyle = "#1e293b";
   roundRect(ctx, 0, 0, SIZE, SIZE, 6);
   ctx.fill();
