@@ -25,6 +25,7 @@ import {
   startShellSession,
   stopContainer,
 } from "../data.ts";
+import { getInfo } from "../info.ts";
 import {
   getLaunchBranches,
   getLaunchInfo,
@@ -100,6 +101,15 @@ export function createApiRoutes(ctx: UiDataContext): Router {
   api.get("/health", () => {
     return json({ ok: true });
   });
+
+  // --- Info ---
+
+  api.get("/info", () =>
+    withErrorHandling(() => {
+      const info = getInfo();
+      return json(info);
+    }),
+  );
 
   // --- Launch ---
 
