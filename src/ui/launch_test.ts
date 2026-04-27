@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import * as path from "node:path";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type { SessionRuntimePaths } from "../sessions/store.ts";
@@ -7,6 +9,7 @@ import type { UiDataContext } from "./data.ts";
 import type { LaunchRequest } from "./launch.ts";
 import {
   getLaunchBranches,
+  getLaunchInfo,
   LaunchValidationError,
   launchSession,
   resolveStableNasCommand,
@@ -238,6 +241,120 @@ describe("getLaunchBranches", () => {
       typeof result.currentBranch === "string" || result.currentBranch === null,
     ).toEqual(true);
     expect(typeof result.hasMain).toEqual("boolean");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getLaunchInfo
+// ---------------------------------------------------------------------------
+
+/**
+ * getLaunchInfo は loadConfig を呼ぶため、global config (~/.config/nas) の
+ * 影響を受ける。テスト中は XDG_CONFIG_HOME を空ディレクトリに差し替えて、
+ * global の有無を明示的に制御する。
+ */
+describe("getLaunchInfo", () => {
+  let testRoot: string;
+  let xdgDir: string;
+  let originalXdg: string | undefined;
+
+  beforeEach(async () => {
+    testRoot = await mkdtemp(path.join(tmpdir(), "nas-launchinfo-"));
+    xdgDir = path.join(testRoot, "xdg");
+    await mkdir(xdgDir, { recursive: true });
+    originalXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdgDir;
+  });
+
+  afterEach(async () => {
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    await rm(testRoot, { recursive: true, force: true });
+  });
+
+  async function writeGlobalYml(yaml: string): Promise<void> {
+    const nasDir = path.join(xdgDir, "nas");
+    await mkdir(nasDir, { recursive: true });
+    await writeFile(path.join(nasDir, "agent-sandbox.yml"), yaml);
+  }
+
+  async function writeLocalYml(dir: string, yaml: string): Promise<void> {
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, ".agent-sandbox.yml"), yaml);
+  }
+
+  test("引数なし呼び出しは process.cwd() 起点で loadConfig() を呼ぶ", async () => {
+    // 引数なし呼び出しは loadConfig() (= process.cwd() 起点) を使う。
+    // process.cwd() に依存する具体値は環境依存なので assert せず、
+    // 「引数なし / 空 opts / cwd undefined はすべて同一結果」というシグネチャ互換を pin する。
+    await writeGlobalYml(`default: g\nprofiles:\n  g:\n    agent: claude\n`);
+    const a = await getLaunchInfo(dummyCtx);
+    const b = await getLaunchInfo(dummyCtx, {});
+    const c = await getLaunchInfo(dummyCtx, { cwd: undefined });
+    expect(a).toEqual(b);
+    expect(a).toEqual(c);
+  });
+
+  test("opts.cwd が指定された場合、その cwd 配下の local config を読む", async () => {
+    const dirA = path.join(testRoot, "projA");
+    const dirB = path.join(testRoot, "projB");
+    await writeLocalYml(
+      dirA,
+      `default: a\nprofiles:\n  a:\n    agent: claude\n`,
+    );
+    await writeLocalYml(
+      dirB,
+      `default: b\nprofiles:\n  b:\n    agent: claude\n`,
+    );
+
+    const infoA = await getLaunchInfo(dummyCtx, { cwd: dirA });
+    expect(infoA.profiles).toEqual(["a"]);
+    expect(infoA.defaultProfile).toEqual("a");
+
+    const infoB = await getLaunchInfo(dummyCtx, { cwd: dirB });
+    expect(infoB.profiles).toEqual(["b"]);
+    expect(infoB.defaultProfile).toEqual("b");
+  });
+
+  test("opts.cwd が相対パスの場合 LaunchValidationError を throw する", () => {
+    expect(getLaunchInfo(dummyCtx, { cwd: "relative" })).rejects.toThrow(
+      LaunchValidationError,
+    );
+  });
+
+  test("opts.cwd が空文字の場合は未指定と同等 (cwd 未指定の結果と一致)", async () => {
+    // 空文字は未指定と同じパス (loadConfig() = process.cwd() 起点) を辿るはず。
+    // 環境依存の値を直接 assert するのではなく、cwd 未指定の結果と同一であることを pin する。
+    await writeGlobalYml(`default: g\nprofiles:\n  g:\n    agent: claude\n`);
+    const infoEmpty = await getLaunchInfo(dummyCtx, { cwd: "" });
+    const infoUndef = await getLaunchInfo(dummyCtx);
+    expect(infoEmpty.profiles).toEqual(infoUndef.profiles);
+    expect(infoEmpty.defaultProfile).toEqual(infoUndef.defaultProfile);
+  });
+
+  test("opts.cwd 配下に local 無し + global あり の場合は throw しない (global の profiles が見える)", async () => {
+    await writeGlobalYml(`default: g\nprofiles:\n  g:\n    agent: claude\n`);
+    const emptyDir = path.join(testRoot, "no-config-here");
+    await mkdir(emptyDir, { recursive: true });
+
+    const info = await getLaunchInfo(dummyCtx, { cwd: emptyDir });
+    expect(info.profiles).toContain("g");
+    expect(info.defaultProfile).toEqual("g");
+  });
+
+  test("opts.cwd 配下に local 無し + global も無し の場合は loadConfig が throw する", () => {
+    // beforeEach で xdgDir は空。global ymlは書かない。
+    const emptyDir = path.join(testRoot, "no-config-anywhere");
+    // mkdir 同期は不要 — loadConfig は startDir を path.resolve して上方向に走査するだけで stat は ENOENT を catch するので存在しなくても問題ないが、念のためテスト前提を明確化するため mkdir する
+    expect(
+      (async () => {
+        await mkdir(emptyDir, { recursive: true });
+        return getLaunchInfo(dummyCtx, { cwd: emptyDir });
+      })(),
+    ).rejects.toThrow(/not found/);
   });
 });
 

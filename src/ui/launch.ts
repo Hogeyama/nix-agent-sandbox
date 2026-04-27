@@ -36,10 +36,17 @@ export interface LaunchBranches {
   hasMain: boolean;
 }
 
-export async function getLaunchInfo(_ctx: UiDataContext): Promise<LaunchInfo> {
+export async function getLaunchInfo(
+  _ctx: UiDataContext,
+  opts?: { cwd?: string },
+): Promise<LaunchInfo> {
+  const cwd = opts?.cwd;
+  if (cwd) {
+    validateCwd(cwd);
+  }
   const [dtachAvailable, config, recentDirectories] = await Promise.all([
     dtachIsAvailable(),
-    loadConfig(),
+    loadConfig({ startDir: cwd }),
     readRecentDirs(),
   ]);
 
@@ -136,7 +143,7 @@ export function resolveStableNasCommand(
   return { nasBin: execPath, nasArgs: [] };
 }
 
-function validateCwd(cwd: string): void {
+export function validateCwd(cwd: string): void {
   if (!cwd) {
     throw new LaunchValidationError("Invalid cwd: must be an absolute path");
   }
