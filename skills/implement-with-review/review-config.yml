@@ -32,7 +32,33 @@ rules:
   - name: tombstone-comments
     severity: warning
     stop_when: no_findings # tombstone comment の warning も差し戻す
-    description: "比較対象や作業履歴がないと意味が通らないコメントが残っていないか。例: 『新』『旧』『legacy』『移行後』『rewrite』『Commit 3では』など"
+    description: |
+      コメント・doc・commit message が、読者が時間軸の文脈
+      (過去の実装 / 未来の予定変更 / 別コミットの計画) を補わないと
+      意味が通らない書き方になっていないか。判定基準は「時間軸依存性」
+      であり、特定の単語パターンではない。
+
+      NG (過去依存 / 移行履歴):
+        - "previously was X" / "以前は X"
+        - "legacy approach" / "mirrors the old"
+        - "rewrite of" / "supersedes the old helper" / "移行後"
+        - "(see Commit 3)" / "Commit N で削除した"
+
+      NG (未来予告 / 未実装参照):
+        - "will be added in Commit N" / "次のコミットで X"
+        - "TODO: implement in next PR" / "Commit 8 で fatten"
+        - "to be filled in later" / "この後拡張する予定"
+        - 「将来の変更計画を読者が知らないと意味が通らない」記述全般
+
+      OK (現在の状態を declarative に記述):
+        - "X does Y" / "X handles Y"
+        - "does not touch ..." / "no longer contributes ..." (現在形の否定)
+        - "there is no in-band CONNECT tunnel" (現在の状態の打ち消し)
+        - "Currently delegates to X" / "for now ..." (現在の挙動の記述。
+          未来変更の緩い含みは OK だが、具体的な commit / PR / TODO 参照は NG)
+
+      判定: そのコメントを「過去の実装も未来の計画も知らない読者」が
+      読んで意味が通るかどうか。通れば OK。通らなければ NG。
 
   - name: test-coverage
     severity: warning
