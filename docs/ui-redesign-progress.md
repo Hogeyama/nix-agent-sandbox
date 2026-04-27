@@ -5,7 +5,7 @@
 設計 (不変条件): `docs/ui-redesign.md`
 進捗 (生きた状態): 本ファイル
 
-最終更新: 2026-04-26 / P3 完了時点
+最終更新: 2026-04-27 / P6 完了時点
 
 ---
 
@@ -17,9 +17,9 @@
 | P1 Sessions / Pending pane (読み取り) | ✅ done | 既存 API から一覧が出る |
 | P2 NewSessionDialog + 自動 attach | ✅ done | launch → 入力できる |
 | P3 セッション切替 + Rename + Shell + drag-resize | ✅ done | 痛点 (a)(b)(c) 解決 |
-| P4 Pending Approve/Deny + Audit accordion | ☐ todo | Pending 業務完結 |
-| P5 Settings (Sidecars / Audit / Keybinds / Prefs) | ☐ todo | 機能パリティ |
-| P6 Keyboard shortcuts + focus trap + a11y | ☐ todo | 完了 |
+| P4 Pending Approve/Deny + Audit accordion | ✅ done | Pending 業務完結 |
+| P5 Settings (Sidecars / Audit / Keybinds / Prefs) | ✅ done | 機能パリティ |
+| P6 Keyboard shortcuts + focus trap + a11y | ✅ done | 完了 |
 | P7 旧 `src/ui/frontend/` 削除 + build target 切替 | ☐ todo | ship |
 
 ---
@@ -83,6 +83,53 @@
 
 レビュー差し戻し: Commit 2 (design + test-coverage) / Commit 5 (design 4 + error-handling 1 + test-coverage 3) / Commit 6 (design 2) / Commit 7 (tombstone 1 + design 3)。いずれも 1 iteration で approve。Commit 4 で URL spec の typo を implementer が検出 (orchestrator 修正後に再投入)。Commit 7 は biome a11y (`useKeyWithClickEvents`) を pre-commit hook で捕捉、`stopPropagation` を `e.target === e.currentTarget` パターンに置換して解消。
 
+### P4 (6 commits + chore, landing order)
+
+| hash | message |
+|------|---------|
+| `b4de00a` | feat(ui-next): model pending request identity and approval actions |
+| `26f8cd4` | feat(ui-next): wire pending card actions with keyed scope state |
+| `7a04524` | feat(ui-next): stream audit logs into pending pane accordion |
+| `197efce` | feat(ui-next): show pending indicator on sessions with awaiting approvals |
+| `143d128` | feat(ui-next): show favicon badge from max session lamp |
+| `d546c31` | feat(ui-next): light session row dot when approvals pend |
+
+主要追加: `handlers/createPendingActionHandlers.ts` (approve/deny API + busy/error 配線) / `stores/pendingActionStore.ts` (key 単位の inFlight + scope 選択 + error message) / `stores/pendingRequestKey.ts` (`<domain>|<sessionId>|<requestId>` 形式の key 生成) / `stores/reconcilePendingActionState.ts` (SSE 更新で消えた key の状態を gc) / `components/sessionPendingSummary.ts` + `components/sessionLamp.ts` (Sessions 行への "Approvals pending" 表示と amber dot 同期) / `hooks/useFaviconBadge.ts` (max lamp を favicon に反映)。Audit accordion は default closed、展開で直近 50 件を fetch、Pending と SSE は独立に更新。
+
+検証状態: `bun run check` clean / `bun test src/ui/frontend-next/` pass / `bun run build-ui-next` success
+
+### P5 (5 commits, landing order)
+
+| hash | message |
+|------|---------|
+| `0e2845b` | feat(ui-next): add hash-based router with workspace and settings shell |
+| `7c34e9f` | feat(ui-next): render Sidecars settings page with stop action |
+| `0fc3886` | feat(ui-next): render Audit settings page with filter and infinite scroll |
+| `fad95ec` | feat(ui-next): render Keyboard shortcuts settings page from static catalog |
+| `fd3582f` | feat(ui-next): render Preferences settings page with font size and pane reset |
+
+主要追加: `routes/router.ts` + `routes/router_test.ts` (`#/` workspace / `#/settings/{sidecars,audit,keybinds,prefs}` の hash routing、`@solidjs/router` 不採用 — TBD 解消) / `components/settings/SettingsShell.tsx` (左 nav rail + 各 page の `<Show>` 切替、`workspace-hidden` / `settings-shell-hidden` の display:none で view 隔離) / `SidecarsPage.tsx` / `AuditPage.tsx` (filter + 無限スクロール) / `KeybindsPage.tsx` (`keybindsCatalog.ts` の §8 表を静的描画) / `PrefsPage.tsx` (font size + pane size reset) / Topbar の gear icon を anchor (`href="#/settings/sidecars"`) で実装。
+
+検証状態: `bun run check` clean / `bun test src/ui/frontend-next/` pass / `bun run build-ui-next` success
+
+### P6 (7 commits, landing order)
+
+| hash | message |
+|------|---------|
+| `eda6858` | feat(ui-next): extend matchShortcut with allowInTextField bypass |
+| `d6bff52` | feat(ui-next): wire ShortcutSpec into keybinds catalog with allowInTextField |
+| `d352de2` | feat(ui-next): build pure shortcut dispatcher driving global hook |
+| `0d4ed66` | feat(ui-next): wire global shortcuts to App handlers |
+| `abf0670` | feat(ui-next): add selectedPendingKey resolver and wire approve/deny shortcut |
+| `c773d9d` | feat(ui-next): add focus trap and aria polish to NewSessionDialog |
+| `e750bc5` | feat(ui-next): hide workspace from a11y tree while settings active |
+
+主要追加: `hooks/dispatchShortcut.ts` (catalog id → handler を純関数で dispatch、`Ctrl+1..9` と `Ctrl+Shift+]` は spec=null のためハードコード経路、`Ctrl+Shift+[` は左 pane 非対応で no-op) / `hooks/matchShortcut.ts` 拡張 (`allowInTextField?: boolean` で TEXTAREA / INPUT / contenteditable ガードを opt-out 可) / `keybindsCatalog.ts` 拡張 (`spec` を持つ全エントリに `allowInTextField: true`、`pane.toggleCollapse` に `note` で左非対応を明示) / `handlers/selectedPendingKey.ts` (`document.activeElement.closest('[data-pending-key]')` → network[0] → hostexec[0] の 3 段 fallback、collapsed 時は no-op) / `dialogs/createFocusTrap.ts` (純関数 + DI seam: `getRoot` / `getInitialFocus` / `getActiveElement` / `setFocus`、idempotent activate で再 activate 時に opener を保持) / NewSessionDialog の `aria-labelledby` 化と Tab cycle 配線 / `<main class="workspace">` / SettingsShell `<section>` への `inert` 属性 (a11y tree から外し focus も止める、`aria-hidden` は `noAriaHiddenOnFocusable` リスクで不採用) / PendingPane collapse/expand button の `aria-expanded` + `aria-controls`。
+
+検証状態: 各 commit で `bun run check` clean / `bun test src/ui/frontend-next/` 524 pass / 0 fail / `bun run build-ui-next` success
+
+レビュー差し戻し: Commit 3 (tombstone 2 + design metaKey 非対称 + test-coverage 1) / Commit 6 (design 2: initial focus comment 乖離 + idempotency 未 pin)。いずれも 1 iteration で approve。
+
 ---
 
 ## ビルド・起動方法 (動作確認)
@@ -103,7 +150,9 @@ NAS_UI_NEXT=1 bun run dev -- ui --port 3939 --no-open
 - P1 動作確認: 起動直後は左 `No sessions` / 右 `Network · out 00` `Host exec · cmd 00` の空表示。`nas <profile>` で agent 起動すると左 pane に行が追加され、turn 値で dot/badge が切り替わる (`user-turn` → amber pulse + `Turn` バッジ / `agent-turn` → teal dim + `Busy` バッジ)。allowlist 外 curl や hostexec 必要な操作で右 pane にカードが追加、相対時刻が 1 秒ごとに更新される。Approve/Deny/scope ボタンは `disabled` で無反応 (read-only 仕様)
 - P2 動作確認: 中央 pane は initial state で `Launch a session to attach a terminal` の placeholder。Topbar の `+ new session` をクリックすると dialog が開き、profile / cwd / worktree (none/main/current/custom) / sessionName を入力できる。cwd を切替えると `Loading branches...` を経て worktree 選択肢が更新される。Launch を押すと dialog が閉じ、左 pane に行が追加され、数秒以内に中央 pane で xterm が立ち上がりプロンプトが表示・入力可能になる (= 自動 attach)。launch validation エラー (profile 空など) では dialog 内に赤字でメッセージが出て dialog は閉じない。submit 中は Cancel / Esc / backdrop click のいずれも無視される (`tryClose` が `submitting()` でガード)。daemon を kill すると 5s 後に Topbar が offline になり、xterm 側に Disconnected エラーが出る
 - P3 動作確認: 左 pane の row click で中央 pane の terminal が切り替わり、行き来しても scrollback が残る。Toolbar context は `AGENT` / `SHELL` バッジと `Open shell` / `Return to agent` / `Spawning…` を切り替える。手動確認スコープは rename の未テスト DOM 経路に絞る: (1) SessionsPane title の double-click が inline edit を開き、Enter で確定し、Esc で破棄する (2) Toolbar context name の double-click が同じ edit 経路を開き、Enter で確定し、Esc で破棄する (3) 保存中に別 row へ切り替えても edit 状態が漏れない
-- 既知の未実装 (P4): Pending Approve/Deny / scope selector / Audit アコーディオンは未配線。右 pane は read-only 表示のまま
+- P4 動作確認: Network / HostExec カードの Approve / Deny ボタンが活性。scope chip を切り替えて Approve すると右 pane から該当カードが消え、Audit アコーディオン (default closed) を開くと decision がストリーム表示。busy 中の同カードへの再 Approve はストアの inFlight gate で抑止。Sessions pane の row には pending 件数バッジと amber lamp が出て、tab を切り替えなくても Pending 業務が分かる。favicon に最大 lamp の dot が反映 (network=red, hostexec=yellow)
+- P5 動作確認: Topbar の gear アイコンで `#/settings/sidecars` に遷移、左 nav から Sidecars / Audit / Keyboard shortcuts / Preferences を切り替え。`#/settings/...` の hash 直打ちでも遷移可能。Sidecars は Stop ボタンが working、Audit は session/domain/activeOnly フィルタと無限スクロールで全件閲覧、Keybinds は §8 表の静的レンダ、Prefs は font size とペイン幅 reset。workspace に戻るときは `#/` または gear から
+- P6 動作確認: 全 §8 shortcut が catalog 駆動で発火 — `Ctrl+N` で NewSessionDialog 開、`Ctrl+1..9` で左 pane の rendered order に従って中央 pane 切替、`Ctrl+,` で Sidecars / `Ctrl+?` で Keybinds、`Ctrl+Shift+]` で右 pane collapse、`Ctrl+Shift+A/D` で focused (or 先頭) Pending を Approve/Deny。terminal focus 中・dialog input focus 中いずれでも shortcut が届く (`allowInTextField` opt-in)。NewSessionDialog 内の Tab/Shift+Tab は dialog 内で循環、Esc / Cancel / backdrop で opener へ focus 復帰。Settings 表示中の workspace は `inert` で Tab 巡回・スクリーンリーダー読みから除外、PendingPane collapse/expand button に `aria-expanded` + `aria-controls`
 
 ---
 
@@ -119,6 +168,52 @@ NAS_UI_NEXT=1 bun run dev -- ui --port 3939 --no-open
 - テスト: `bun:test` + 純関数 + DI (Solid runtime に依存しない)
 
 ---
+
+## ディレクトリ構成 (P2 完了時点 — P3-P6 で追加された主要ファイルは以下に追記)
+
+P3-P6 で増えたファイル (それ以前の構成は下記ツリーが正本):
+
+```
+src/ui/frontend-next/src/
+  App.tsx                              # P3-P6 で hash router / pending action / global shortcuts / inert を配線
+  routes/
+    router.ts                          # P5: hash routing (`#/` workspace / `#/settings/{sidecars,audit,keybinds,prefs}`)
+    router_test.ts                     # 5 ケース
+  hooks/
+    matchShortcut.ts                   # P6: ShortcutSpec.allowInTextField? で TEXTAREA/contenteditable bypass を opt-in
+    matchShortcut_test.ts              # 9 ケース
+    dispatchShortcut.ts                # P6: catalog id → handler の純関数 dispatcher。Ctrl+1..9 / Ctrl+Shift+] はハードコード経路
+    dispatchShortcut_test.ts           # 21 ケース (catalog 経路 / hard-coded / handler 不在 / TEXTAREA bypass / metaKey 対称)
+    useGlobalKeyboard.ts               # P3 で右 pane collapse を捌いていた hook を P6 で全 ShortcutHandlers 受け入れに拡張
+    useFaviconBadge.ts                 # P4: max lamp を 16x16 Canvas で favicon に反映
+  handlers/
+    createPendingActionHandlers.ts     # P4: approve/deny API + busy/error 配線、DEFAULT_NETWORK_SCOPE / DEFAULT_HOSTEXEC_SCOPE export
+    selectedPendingKey.ts              # P6: focused card → network[0] → hostexec[0] の 3 段 fallback、collapsed 時 no-op
+    selectedPendingKey_test.ts         # 9 ケース
+  stores/
+    pendingActionStore.ts              # P4: key 単位 inFlight / scope 選択 / error message
+    pendingRequestKey.ts               # P4: `<domain>|<sessionId>|<requestId>` 形式の key 生成
+    reconcilePendingActionState.ts     # P4: SSE 更新で消えた key の状態 gc
+    uiStore.ts                         # P3 から、P5/P6 で settings 表示中の inert 連動を追加 (rightCollapsed / leftWidth / rightWidth)
+  components/
+    sessionPendingSummary.ts           # P4: session id → pending counts の純関数 (memoize 可能 shape)
+    sessionLamp.ts                     # P4: lamp 計算 (network/hostexec の優先, max severity)
+    PendingPane.tsx                    # P4 で Approve/Deny 配線、P5 で audit accordion、P6 で aria-expanded + aria-controls + data-pending-key + tabindex=-1
+    settings/
+      SettingsShell.tsx                # P5: 左 nav rail + page <Show>、display:none で workspace と独立、P6 で inert
+      SidecarsPage.tsx                 # P5: dind/proxy/envoy 一覧 + Stop ボタン
+      AuditPage.tsx                    # P5: filter (session/domain/activeOnly) + 無限スクロール
+      KeybindsPage.tsx                 # P5: catalog の §8 表を静的レンダ、P6 で note 表示
+      PrefsPage.tsx                    # P5: font size + pane size reset
+      keybindsCatalog.ts               # P5 静的 catalog、P6 で `allowInTextField` / `note?` 拡張
+      keybindsCatalog_test.ts          # 12+ ケース
+  dialogs/
+    NewSessionDialog.tsx               # P2 から、P6 で focus trap + aria-labelledby + ref
+    createFocusTrap.ts                 # P6: 純関数 + DI (getRoot/getInitialFocus/getActiveElement/setFocus)、idempotent activate
+    createFocusTrap_test.ts            # 10 ケース
+```
+
+P0-P2 で確立した構成 (下記) は変更なし。
 
 ## ディレクトリ構成 (P2 完了時点)
 
@@ -193,39 +288,43 @@ src/ui/
 
 ---
 
-## 次セッションで P4 に着手する手順
+## 次セッションで P7 に着手する手順
 
-**P4 完了条件**: Pending pane で Approve/Deny と scope selector が完結し、Audit アコーディオンで直近ログを確認できる。
+**P7 完了条件**: 旧 `src/ui/frontend/` (Preact) を削除し、build target を `dist-next/` 一本化。`NAS_UI_NEXT` env flag は除去、daemon は frontend-next のみを serve。
 
 ### 作業の流れ (planner 投入時の参考)
 
-1. **Pending Approve/Deny の配線**
-   - Network / HostExec の approve / deny API を右 pane から呼び出す
-   - busy / error 表示はカード単位で閉じる
-2. **scope selector の状態管理**
-   - Pending card ごとの選択値を UI state に寄せる
-   - SSE 更新後も requestId 単位で選択を維持するかどうかを helper で固定する
-3. **Audit アコーディオン**
-   - right pane 下段に default closed のアコーディオンを置く
-   - 直近ログの取得と再描画を Pending と干渉させない
-4. **手動確認**
-   - Approve / Deny 後に Pending からカードが消え、Audit に decision が出ることを確認する
-   - accordion 開閉が terminal 操作と干渉しないことを確認する
+1. **旧 frontend からの複製を解消**
+   - `terminalInput.ts` / `terminalSize.ts` / `api.ts` の一部は P2-P3 で旧 UI から複製した。frontend-next が正本になるので旧側を削除し、新側で完結させる
+   - 各 commit message で DRY 例外を明記してきた経緯があるので、削除 commit でも経緯を残す
+2. **`NAS_UI_NEXT` env flag の除去**
+   - `src/ui/server.ts` の `resolveDistBase(env)` を `dist-next/` 固定に
+   - 起動ログの `[nas] UI mode: next | classic` 分岐も除去
+   - regression 用に classic を呼ぶ手段が無くなる旨を doc に明記 (rollback は git revert で)
+3. **`scripts/build_ui.ts` (旧) と `dist/` 出力の削除**
+   - `package.json` から旧 `build-ui` script を削除
+   - `flake.nix` / `bun.nix` で旧 build に依存していた箇所があれば追従
+4. **`src/ui/frontend/` の物理削除**
+   - 残った旧 components / hooks / types / tests / styles を一括削除
+   - 旧 frontend だけが import していた deps があれば `package.json` からも除去
+5. **動作確認**
+   - daemon を立てて frontend-next が直接 serve されることを確認
+   - 旧 UI URL (`?classic` 等) が無効化されていることを確認
 
 ### `/implement-with-review` skill で進める場合のメモ
 
 - protected dirty paths: 着手時に `git status --short` で確認
-- scope 外: `src/ui/frontend/`, `scripts/build_ui.ts`, `flake.nix` (P7 まで不変)
+- scope 外: なし (P7 は scope 全開)。ただし `src/cli/` / `src/daemon/` / agent/pipeline 系は touch 不要のはず
 - review-config: `error-handling` / `security` / `design` / `tombstone-comments` / `test-coverage` がいずれも `no_findings` (warning でも差し戻し)
-- 旧 frontend からの複製 (`terminalInput.ts` / `terminalSize.ts` / `api.ts` 一部) は P7 で旧 UI 削除と同時に解消する。P3 で新 API を足すときも同じ規約で複製しつつ、各 commit message に DRY 例外を明記
-- a11y: P2 で `useKeyWithClickEvents` を `e.target === e.currentTarget` パターンで回避している。P4 でも button semantics を優先し、click handler を載せる要素の keyboard alternative を欠かさない
+- 旧 frontend からの複製 (`terminalInput.ts` / `terminalSize.ts` / `api.ts` 一部) はここで解消する。「旧側にしかなかった機能」が無いか先に grep で確認 (例: 検索機能、ショートカット、バッジロジックの差分)
+- a11y: P2 で `useKeyWithClickEvents` を `e.target === e.currentTarget` パターンで回避している。P6 で `aria-keyshortcuts` / `aria-labelledby` / `inert` / `aria-expanded` も導入済。P7 で削除する旧 UI に同等以上の a11y 対応がそろっていることを確認
 
 ---
 
 ## 既知の TBD / 未決事項
 
-- **routes 設計** (`docs/ui-redesign.md` §7): `#/settings/...` の hash routing か `@solidjs/router` か未決。**判断期限: P5 着手前**
-- **キーボードショートカットの上書き**: `docs/ui-redesign.md` §8 末尾 "Settings で上書き可（将来）" は P6 以降の判断事項
+- **キーボードショートカットの上書き**: `docs/ui-redesign.md` §8 末尾 "Settings で上書き可（将来）" は未着手。catalog (`keybindsCatalog.ts`) の `spec` を user override 可能にする道筋は P6 で `dispatchShortcut` が catalog を正本にした関係で素直に乗せやすい。**判断期限: なし (将来要望ベース)**
+- **`docs/ui-redesign.md` §11 メモ未対応分**: 「favicon が計画に入ってないのでは」(P4 で対応済) / 「検索が実装されてないのでは」(中央 Toolbar の Ctrl+F は P3 で実装、catalog の `terminal.search` 等は未追加) / 「Session の DIR を tilde expand」「Session の ID から `s_sess_` prefix を除去」は **未対応**。UX polish として P7 完了後に追加 phase で扱う候補
 
 ---
 
@@ -276,6 +375,35 @@ src/ui/
 - **`shellSpawnInFlight` の in-flight 表示は AGENT に固定する必要がある** → `describeShellToggle` の anchor コメントが `in-flight = AGENT` 契約を守る。spawn 中でも表示先は agent terminal のままなので badge は AGENT を保つ
 - **Toolbar rename と SessionsPane rename は同じ start 経路に揃える必要がある** → 両方の dblclick は `renderIdle` slot から start action を呼ぶ。`<input>` と `.rename-edit` wrapper は入力イベントを `stopPropagation` で隔離し、row selection や toolbar click へ漏らさない
 - **`renderIdle` の DOM 経路は reducer test だけでは固定できない** → 手動確認で rename の未テスト DOM 経路を押さえる。手順: (1) Toolbar context の session 名を dblclick して inline edit を開き、入力して Enter で確定する (2) SessionsPane の session 名でも同じ手順を通し、Esc で破棄する (3) 保存中に別 row へ切り替えても edit 状態が漏れないことを確認する
+
+---
+
+## P4 で踏んだ罠と回避策 (再発防止メモ)
+
+- **Pending request の identity を `requestId` 単独にすると network/hostexec 衝突しうる** → `pendingRequestKey.ts` で `<domain>|<sessionId>|<requestId>` 形式の合成 key を導入。store の `inFlight` Set と scope 選択 Map を同じ key で引く。SSE 更新で消えた key の状態は `reconcilePendingActionState` が gc
+- **scope 選択を card component の local state に置くと SSE 更新で reset する** → `pendingActionStore.scopeFor(key)` を store 側に集約。SSE で同じ requestId が再到着しても scope が保持される
+- **Approve/Deny 中の二重 click は disable だけでは漏れる** → `pendingActionStore.beginAction(key)` で in-flight gate を立てる。エラー時は `endAction(key, message)` でエラー文字列を card に表示
+- **Sessions pane に pending count を出すと SSE 更新ごとに rerender が走る** → `sessionPendingSummary.ts` に純関数を切り出し、map (`sessionId → counts`) を memoize。row 単位で `==` 比較できる shape にして `<For>` の reconcile が抑制される
+- **favicon の dot 描画はキャンバスから生成するため複数 lamp の優先順を決める必要がある** → `useFaviconBadge` 内で `network > hostexec` の優先で max lamp を計算し、Canvas で 16x16 redraw。lamp 0 件のときは originalFavicon に戻す
+
+## P5 で踏んだ罠と回避策 (再発防止メモ)
+
+- **`@solidjs/router` を入れると build size が膨らむ + SSR / nested route の機能が要らない** → 自前 hash router (`routes/router.ts`, ~60 行) を採用。`hashchange` event を listen して signal を更新、`navigate(hash)` は `window.location.hash = ...` を書くだけ。テストは fake `window` で 5 ケース pin
+- **Settings ↔ workspace を `<Show>` で切替えると terminal の WS が unmount で切断する** → `display: none` (`workspace-hidden` class) で **DOM は残したまま視覚だけ隠す**。terminal handles / SSE / WS state は全部 keep-alive
+- **`AuditPage` の無限スクロールで Pending pane の audit accordion と同じ API を叩くと race する** → settings 側は `#/settings/audit` で開いた瞬間に独自 fetch、Pending 側 accordion は audit の最近 50 件のみを取る別経路。互いに独立で SSE は両方が listen
+- **gear icon の `<a href="#/settings/sidecars">` は `aria-label` だけでは a11y warning が出る** → `<svg aria-hidden="true">` で SVG を装飾扱いにし、anchor 側に `aria-label="Settings"` を付与
+- **`KeybindsPage` の表が catalog 由来なので runtime と display が同期するべきだが、`Ctrl+1..9` のような range は `spec: null`** → P5 時点では catalog の `display` 文字列のみを使い、dispatch 連携は P6 で `note?: string` フィールド経由で説明補強
+
+## P6 で踏んだ罠と回避策 (再発防止メモ)
+
+- **catalog 経路 (`matchShortcut`) と hard-coded 経路 (`Ctrl+1..9` / `Ctrl+Shift+]`) で `metaKey` の扱いを揃えないと Cmd 押し下げ時に挙動が分岐する** → review で差し戻し、`matchShortcut` が metaKey を検査しないのに合わせて hard-coded 経路からも `!e.metaKey` を削除。`dispatchShortcut.ts` の doc コメントで対称性の WHY を現在形で明示し、`Ctrl+Meta+N` / `Ctrl+Meta+1` / `Ctrl+Meta+Shift+]` の 3 ケースで invariant を pin
+- **focus trap の `previouslyFocused` を毎回上書きすると open() 振動でレース** → review で差し戻し、`activate()` を `previouslyFocused === null` ガード付きの idempotent 操作に変更。「activate を二重に呼んでも opener を保持」をテスト 10 で pin。NewSessionDialog の `createEffect` + `queueMicrotask` で振動した場合でも restore 先は壊れない
+- **`<Show when={!loading() && launchInfo()}>` 配下のフォームは activate 時点で未 mount なので initial focus が当たらない** → review 1 周目で「コメントは radio に focus と謳っているが実際は body のまま」と指摘。コメントを実挙動 (loading 中は initial focus 空、Tab cycle と restore は loading 非依存で動く) に書き直し、再 activate で initial focus を当て直す機能は本 phase の scope 外と判断
+- **`aria-hidden` を focusable 子のある container に付けると `noAriaHiddenOnFocusable` を踏む** → plan-reviewer の critical 指摘で `aria-hidden` を **採用せず**、HTML5 標準の `inert` 属性に切替。Solid 1.9 の JSX 型に `inert?: boolean` が既に定義されており module augmentation 不要。`display: none` (workspace-hidden / settings-shell-hidden) と二重防御
+- **`Ctrl+Shift+A` / `Ctrl+Shift+D` の対象を新 store で持つと SSE で消えた card が selected として残る** → state-less な `selectPendingTarget(activeElement, network, hostexec, collapsed)` 純関数で毎回計算。focused card → network[0] → hostexec[0] の 3 段 fallback、collapsed 時は no-op
+- **`document.activeElement` を Solid signal 経由で読むと reactive scope に入って意味がない** → `resolvePendingTarget()` を keydown handler 内で毎回呼ぶ形にし、`pending.network()` / `pending.hostexec()` / `ui.rightCollapsed()` も毎回 accessor を叩く。closure で cache しない
+- **`useGlobalKeyboard` の signature を変えると App.tsx の既存呼び出しが壊れる** → 全 handler を optional にして後方互換 (App.tsx の `{ onToggleRightCollapse: ui.toggleRightCollapsed }` 単独呼び出しが Commit 3 完了時点でビルド通過する)。`App.tsx` の handler bind は Commit 4 で初めて拡張
+- **`commit -m` の HEREDOC が hostexec policy で permission denied になる** → 長文 commit message は `/tmp/commit*-msg.txt` に Write してから `git commit -F <file>` で渡す。`-m` の HEREDOC inline は短文 (Commit 1-3 で動いていた) と長文 (Commit 4-) で挙動差があるため、長文は file 経由が確実
 
 ---
 
