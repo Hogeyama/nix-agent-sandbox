@@ -107,6 +107,30 @@ describe("SHORTCUTS", () => {
       expect(specByid.get(id)).not.toBeNull();
     }
   });
+
+  test("every spec opts in to allowInTextField so terminal focus does not swallow the key", () => {
+    const specced = SHORTCUTS.filter((s) => s.spec !== null);
+    expect(specced.length).toBeGreaterThan(0);
+    for (const entry of specced) {
+      // Non-null asserted via the filter above; pin the runtime guard
+      // explicitly so a regression in the catalog surfaces as a fail
+      // for the offending row instead of a generic .every() collapse.
+      expect(entry.spec?.allowInTextField).toBe(true);
+    }
+  });
+
+  test("pane.toggleCollapse keeps spec=null; the dispatcher hard-codes Ctrl+Shift+]", () => {
+    const entry = SHORTCUTS.find((s) => s.id === "pane.toggleCollapse");
+    expect(entry).toBeDefined();
+    expect(entry?.spec).toBeNull();
+  });
+
+  test("pane.toggleCollapse carries a non-empty note for the settings page", () => {
+    const entry = SHORTCUTS.find((s) => s.id === "pane.toggleCollapse");
+    expect(entry).toBeDefined();
+    expect(typeof entry?.note).toBe("string");
+    expect((entry?.note ?? "").length).toBeGreaterThan(0);
+  });
 });
 
 describe("shortcutsByGroup", () => {

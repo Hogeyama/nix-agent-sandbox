@@ -8,6 +8,17 @@
  * Display strings written into this file are taken verbatim from
  * `docs/ui-redesign.md` §8 so the rendered table mirrors the design
  * doc one-to-one.
+ *
+ * Every spec carried by this catalog is a §8 shortcut that must keep
+ * working while the xterm textarea (or any other text input) holds
+ * focus. Each spec therefore opts in via `allowInTextField: true` so
+ * `matchShortcut()` does not bail out on INPUT / TEXTAREA /
+ * contenteditable targets.
+ *
+ * The `pane.toggleCollapse` row carries `spec: null` because a single
+ * `ShortcutSpec` cannot describe the `Ctrl+Shift+[ / ]` pair. The
+ * dispatcher routes those keys via a hard-coded path that lives in
+ * the keyboard hook, not in this catalog.
  */
 
 import type { ShortcutSpec } from "../../hooks/matchShortcut";
@@ -37,13 +48,20 @@ export interface ShortcutEntry {
   label: string;
   /** Group the entry belongs to in the settings table. */
   group: ShortcutGroup;
+  /**
+   * Optional supplementary note rendered under the row label on the
+   * settings page. Used to surface caveats that the display string
+   * alone cannot convey (e.g. an asymmetric pair where only one half
+   * is wired up).
+   */
+  note?: string;
 }
 
 export const SHORTCUTS: readonly ShortcutEntry[] = [
   {
     id: "session.new",
     display: "Ctrl+N",
-    spec: { ctrl: true, key: "n" },
+    spec: { ctrl: true, key: "n", allowInTextField: true },
     label: "New Session",
     group: "session",
   },
@@ -57,14 +75,14 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   {
     id: "action.approve",
     display: "Ctrl+Shift+A",
-    spec: { ctrl: true, shift: true, key: "A" },
+    spec: { ctrl: true, shift: true, key: "A", allowInTextField: true },
     label: "選択中 Pending を Approve (once)",
     group: "action",
   },
   {
     id: "action.deny",
     display: "Ctrl+Shift+D",
-    spec: { ctrl: true, shift: true, key: "D" },
+    spec: { ctrl: true, shift: true, key: "D", allowInTextField: true },
     label: "選択中 Pending を Deny",
     group: "action",
   },
@@ -74,18 +92,19 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     spec: null,
     label: "左 / 右 pane 折りたたみ",
     group: "pane",
+    note: "左 pane は折りたたみ非対応のため Ctrl+Shift+] のみ反応する",
   },
   {
     id: "settings.open",
     display: "Ctrl+,",
-    spec: { ctrl: true, key: "," },
+    spec: { ctrl: true, key: ",", allowInTextField: true },
     label: "Settings",
     group: "settings",
   },
   {
     id: "settings.shortcuts",
     display: "Ctrl+?",
-    spec: { ctrl: true, key: "?" },
+    spec: { ctrl: true, key: "?", allowInTextField: true },
     label: "ショートカット一覧",
     group: "settings",
   },

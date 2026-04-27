@@ -50,7 +50,14 @@ export function KeybindsPage() {
                         <td class="keybinds-key-col">
                           <kbd class="keybinds-key">{entry.display}</kbd>
                         </td>
-                        <td class="keybinds-label">{entry.label}</td>
+                        <td class="keybinds-label">
+                          {entry.label}
+                          <Show when={entry.note}>
+                            {(note) => (
+                              <small class="keybinds-note">{note()}</small>
+                            )}
+                          </Show>
+                        </td>
                       </tr>
                     )}
                   </For>

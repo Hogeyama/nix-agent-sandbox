@@ -1189,6 +1189,13 @@ body::after {
 .keybinds-label {
   color: var(--cream-dim);
 }
+.keybinds-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted-2);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
 
 /* preferences settings page: a stacked form with one fieldset per
  * preference group. Each fieldset reuses the panel palette so the
