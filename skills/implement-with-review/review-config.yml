@@ -31,7 +31,7 @@ rules:
 
   - name: tombstone-comments
     severity: warning
-    stop_when: no_findings # tombstone comment の warning も差し戻す
+    stop_when: no_critical_findings
     description: |
       コメント・doc・commit message が、読者が時間軸の文脈
       (過去の実装 / 未来の予定変更 / 別コミットの計画) を補わないと
