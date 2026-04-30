@@ -4,7 +4,6 @@
  */
 
 import { expect, test } from "bun:test";
-import { Effect } from "effect";
 import {
   createCliInitialState,
   pickPipelineStateSlices,
@@ -22,12 +21,11 @@ import {
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_SESSION_CONFIG,
 } from "./config/types.ts";
-import { runPipelineState } from "./pipeline/pipeline.ts";
 import type { PipelineState } from "./pipeline/state.ts";
 import type { HostEnv, ProbeResults } from "./pipeline/types.ts";
 import type { BuildProbes } from "./stages/docker_build.ts";
 import type { MountProbes } from "./stages/mount.ts";
-import { createProxyStage } from "./stages/proxy.ts";
+import { planProxy } from "./stages/proxy.ts";
 
 const baseProfile: Profile = {
   agent: "claude",
@@ -398,7 +396,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
   ]);
 });
 
-test("createProxyStage: preserves no-op path when proxy is disabled", async () => {
+test("planProxy: network proxy cannot be opted out", () => {
   const profile: Profile = {
     ...baseProfile,
     network: {
@@ -410,16 +408,14 @@ test("createProxyStage: preserves no-op path when proxy is disabled", async () =
       },
     },
   };
-  const initialState: Pick<PipelineState, "container"> = {
-    container: {
-      image: "nas-sandbox",
-      workDir: "/repo/worktree",
-      mounts: [],
-      env: { static: {}, dynamicOps: [] },
-      extraRunArgs: [],
-      command: { agentCommand: ["claude"], extraArgs: [] },
-      labels: {},
-    },
+  const container: PipelineState["container"] = {
+    image: "nas-sandbox",
+    workDir: "/repo/worktree",
+    mounts: [],
+    env: { static: {}, dynamicOps: [] },
+    extraRunArgs: [],
+    command: { agentCommand: ["claude"], extraArgs: [] },
+    labels: {},
   };
   const stageInput = {
     config: baseConfig,
@@ -428,20 +424,19 @@ test("createProxyStage: preserves no-op path when proxy is disabled", async () =
     sessionId: "sess_test123",
     host: baseHost,
     probes: baseProbes,
+    container: {
+      ...container,
+    },
   };
 
-  const result = await Effect.runPromise(
-    runPipelineState([createProxyStage(stageInput)], initialState).pipe(
-      Effect.scoped,
-    ) as Effect.Effect<
-      Pick<PipelineState, "container"> & Partial<PipelineState>,
-      unknown,
-      never
-    >,
-  );
+  const result = planProxy(stageInput);
 
-  expect(result.container).toEqual(initialState.container);
-  expect(result.network).toEqual(undefined);
-  expect(result.prompt).toEqual(undefined);
-  expect(result.proxy).toEqual(undefined);
+  expect(result.allowlist).toEqual([]);
+  expect(result.promptEnabled).toEqual(false);
+  expect(result.container.network).toEqual({
+    name: "nas-session-net-sess_test123",
+  });
+  expect(result.container.env.static.http_proxy).toEqual(
+    "http://127.0.0.1:18080",
+  );
 });

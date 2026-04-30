@@ -12,7 +12,6 @@
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
-import { logInfo } from "../../log.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import {
   generateSessionToken as defaultGenerateToken,
@@ -111,12 +110,7 @@ export interface ProxyStageOptions {
 export function planProxy(
   input: StageInput & Pick<PipelineState, "container">,
   options: ProxyStageOptions = {},
-): ProxyPlan | null {
-  if (!isProxyEnabled(input)) {
-    logInfo("[nas] Proxy: skipped (allowlist/prompt disabled)");
-    return null;
-  }
-
+): ProxyPlan {
   const envoyContainerName = options.envoyContainerName ?? ENVOY_CONTAINER_NAME;
   const generateSessionToken =
     options.generateSessionToken ?? defaultGenerateToken;
@@ -281,9 +275,6 @@ export function createProxyStageWithOptions(
         ...input,
       };
       const plan = planProxy(stageInput, options);
-      if (plan === null) {
-        return Effect.succeed({});
-      }
       return runProxy(plan);
     },
   };
@@ -398,14 +389,6 @@ function runProxy(
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
-
-function isProxyEnabled(input: StageInput): boolean {
-  return (
-    input.profile.network.allowlist.length > 0 ||
-    input.profile.network.prompt.enable ||
-    input.profile.network.proxy.forwardPorts.length > 0
-  );
-}
 
 export function buildNetworkRuntimePaths(host: HostEnv): NetworkRuntimePaths {
   const xdg = host.env.get("XDG_RUNTIME_DIR");

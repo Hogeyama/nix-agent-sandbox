@@ -4,7 +4,7 @@ import { Effect, Layer } from "effect";
 /**
  * ProxyStage unit テスト（Docker 不要）
  *
- * skip 判定, replaceNetwork, parseDindContainerName を検証する。
+ * planner, replaceNetwork, parseDindContainerName を検証する。
  * Envoy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
@@ -139,11 +139,14 @@ function makeInput(
   };
 }
 
-test("ProxyStage: skip when allowlist and prompt are disabled", () => {
+test("ProxyStage: always returns plan even when allowlist and prompt are disabled", () => {
   const profile = makeProfile();
   const { shared, container } = makeInput(profile);
   const result = planProxy({ ...shared, container });
-  expect(result).toEqual(null);
+  expect(result.sessionNetworkName).toEqual("nas-session-net-test-session-123");
+  expect(result.allowlist).toEqual([]);
+  expect(result.promptEnabled).toEqual(false);
+  expect(result.forwardPorts).toEqual([]);
 });
 
 test("ProxyStage: returns plan when allowlist is non-empty", () => {
@@ -581,24 +584,78 @@ test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
 // Orchestration tests — createProxyStage().run() with Fake services
 // ---------------------------------------------------------------------------
 
-test("createProxyStage().run(): skips when proxy is disabled", async () => {
+test("createProxyStage().run(): starts deny-by-default proxy when network controls are empty", async () => {
   const profile = makeProfile();
   const { shared, container } = makeInput(profile);
   const stage = createProxyStage(shared);
 
+  const calls: string[] = [];
+
   const layer = Layer.mergeAll(
-    makeNetworkRuntimeServiceFake(),
-    makeEnvoyServiceFake(),
-    makeSessionBrokerServiceFake(),
-    makeAuthRouterServiceFake(),
-    makeForwardPortRelayServiceFake(),
+    makeNetworkRuntimeServiceFake({
+      gcStaleRuntime: () => {
+        calls.push("gcStaleRuntime");
+        return Effect.void;
+      },
+      renderEnvoyConfig: () => {
+        calls.push("renderEnvoyConfig");
+        return Effect.void;
+      },
+    }),
+    makeEnvoyServiceFake({
+      ensureSharedEnvoy: () => {
+        calls.push("ensureSharedEnvoy");
+        return Effect.void;
+      },
+      createSessionNetwork: () => {
+        calls.push("createSessionNetwork");
+        return Effect.succeed(() => Effect.void);
+      },
+    }),
+    makeSessionBrokerServiceFake({
+      start: () => {
+        calls.push("sessionBrokerStart");
+        return Effect.succeed({ close: () => Effect.void });
+      },
+    }),
+    makeAuthRouterServiceFake({
+      ensureDaemon: () => {
+        calls.push("authRouterEnsureDaemon");
+        return Effect.succeed({ abort: () => Effect.void });
+      },
+    }),
+    makeForwardPortRelayServiceFake({
+      ensureRelays: () => {
+        calls.push("forwardPortEnsureRelays");
+        return Effect.succeed({
+          socketPaths: new Map<number, string>(),
+          close: () => Effect.void,
+        });
+      },
+    }),
   );
 
   const result = await Effect.runPromise(
     stage.run({ container }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
-  expect(result).toEqual({});
+  expect(calls).toEqual([
+    "gcStaleRuntime",
+    "renderEnvoyConfig",
+    "sessionBrokerStart",
+    "authRouterEnsureDaemon",
+    "forwardPortEnsureRelays",
+    "ensureSharedEnvoy",
+    "createSessionNetwork",
+  ]);
+  expect(result.network).toEqual({
+    networkName: "nas-session-net-test-session-123",
+    runtimeDir: "/run/user/1000/nas/network",
+  });
+  expect(result.prompt?.promptEnabled).toEqual(false);
+  expect(result.container?.network).toEqual({
+    name: "nas-session-net-test-session-123",
+  });
 });
 
 test("createProxyStage().run(): calls services and returns merged output", async () => {
