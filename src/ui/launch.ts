@@ -178,9 +178,17 @@ export async function launchSession(
   }
 
   if (req.name !== undefined) {
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(req.name)) {
-      throw new LaunchValidationError("Invalid session name");
+    // Strip ASCII control characters and trim — same sanitization as the
+    // rename endpoint (src/ui/routes/api.ts) so the two paths are consistent.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ASCII control characters is the explicit purpose of this regex
+    const sanitized = req.name.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+    if (sanitized.length > 200) {
+      throw new LaunchValidationError(
+        "Session name must be 200 characters or fewer",
+      );
     }
+    // Treat empty-after-sanitization as "no name provided".
+    req = { ...req, name: sanitized.length === 0 ? undefined : sanitized };
   }
 
   if (req.cwd !== undefined) {

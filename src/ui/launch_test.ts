@@ -173,25 +173,38 @@ describe("launchSession: worktreeBase validation", () => {
 // ---------------------------------------------------------------------------
 
 describe("launchSession: name validation", () => {
-  test("65-char name throws 'Invalid session name'", () => {
-    const longName = "a".repeat(65);
+  test("201-char name throws validation error", () => {
+    const longName = "a".repeat(201);
     expect(
       launchSession(dummyCtx, { ...validReq, name: longName }),
-    ).rejects.toThrow("Invalid session name");
+    ).rejects.toThrow("Session name must be 200 characters or fewer");
   });
 
-  test("special characters throw 'Invalid session name'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, name: "my session!" }),
-    ).rejects.toThrow("Invalid session name");
+  test("200-char name passes validation", async () => {
+    await expectNoValidationError(
+      { ...validReq, name: "a".repeat(200) },
+      "Session name must be 200 characters or fewer",
+    );
+  });
+
+  test("control characters are stripped", async () => {
+    // Name with only control chars becomes empty → treated as undefined (no error)
+    await expectNoValidationError(
+      { ...validReq, name: "\x01\x02\x03" },
+      "Session name",
+    );
   });
 
   test("valid names pass validation", async () => {
-    for (const name of ["my-session", "test_1"]) {
-      await expectNoValidationError(
-        { ...validReq, name },
-        "Invalid session name",
-      );
+    for (const name of [
+      "my-session",
+      "test_1",
+      "my session",
+      "テスト",
+      "v1.0-fix",
+      "hello world!",
+    ]) {
+      await expectNoValidationError({ ...validReq, name }, "Session name");
     }
   });
 });
