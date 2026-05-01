@@ -137,7 +137,7 @@ export function createHistorySseRoutes(
       pollIntervalMs,
       read: () => ({
         event: "history:list",
-        payload: ctx.history.readConversationList(),
+        payload: { conversations: ctx.history.readConversationList() },
       }),
     });
     return sseResponse(stream);

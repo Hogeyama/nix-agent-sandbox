@@ -235,15 +235,23 @@ test("conversations stream emits initial snapshot then a diff after a write", as
   const events = await readEventsFor(res, WINDOW_MS);
   expect(events.length).toBeGreaterThanOrEqual(2);
   expect(events[0].event).toBe("history:list");
-  expect(events[0].data).toEqual([]);
+  expect(events[0].data).toEqual({ conversations: [] });
   // At least one later event reflects the new row.
   expect(
     events
       .slice(1)
-      .some((e) => e.event === "history:list" && Array.isArray(e.data)),
+      .some(
+        (e) =>
+          e.event === "history:list" &&
+          Array.isArray((e.data as { conversations?: unknown }).conversations),
+      ),
   ).toBe(true);
   const last = events[events.length - 1];
-  expect((last.data as ConversationListRow[]).map((r) => r.id)).toEqual(["c1"]);
+  expect(
+    (last.data as { conversations: ConversationListRow[] }).conversations.map(
+      (r) => r.id,
+    ),
+  ).toEqual(["c1"]);
 });
 
 test("conversations stream stays silent across polls when payload is unchanged", async () => {
@@ -335,10 +343,12 @@ test("two concurrent connections keep independent per-connection state", async (
   ]);
 
   // r1 saw an initial empty list, r2 saw an initial 1-row list.
-  expect(e1[0].data).toEqual([]);
-  expect((e2[0].data as ConversationListRow[]).map((r) => r.id)).toEqual([
-    "c1",
-  ]);
+  expect(e1[0].data).toEqual({ conversations: [] });
+  expect(
+    (e2[0].data as { conversations: ConversationListRow[] }).conversations.map(
+      (r) => r.id,
+    ),
+  ).toEqual(["c1"]);
 });
 
 test("pollLoop swallows reader exceptions and the next successful poll still emits", async () => {
@@ -367,9 +377,11 @@ test("pollLoop swallows reader exceptions and the next successful poll still emi
   expect(events.length).toBeGreaterThanOrEqual(1);
   const list = events.find((e) => e.event === "history:list");
   expect(list).toBeDefined();
-  expect((list?.data as ConversationListRow[]).map((r) => r.id)).toEqual([
-    "c1",
-  ]);
+  expect(
+    (list?.data as { conversations: ConversationListRow[] }).conversations.map(
+      (r) => r.id,
+    ),
+  ).toEqual(["c1"]);
 });
 
 test("DEFAULT_POLL_INTERVAL_MS is 5000ms (matches OTEL batch flush cadence)", () => {
