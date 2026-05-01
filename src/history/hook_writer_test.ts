@@ -197,6 +197,22 @@ test("appendTurnEvent updates last_seen_at and preserves first_seen_at on re-app
   expect(conv?.last_seen_at).toBe("2026-04-11T11:00:00.000Z");
 });
 
+test("appendTurnEvent threads agent through to upsertConversation", () => {
+  seedInvocation("sess_agent");
+
+  appendTurnEvent({
+    invocationId: "sess_agent",
+    conversationId: "conv_agent",
+    ts: "2026-04-12T10:00:00.000Z",
+    kind: "start",
+    payload: {},
+    agent: "claude",
+  });
+
+  const conv = readConversation("conv_agent");
+  expect(conv?.agent).toBe("claude");
+});
+
 test("appendTurnEvent does not overwrite an existing non-null agent (COALESCE)", () => {
   seedInvocation("sess_e");
   // Simulate an OTLP receiver write that already classified the agent.

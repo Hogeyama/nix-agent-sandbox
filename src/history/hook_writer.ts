@@ -5,9 +5,9 @@
  * schema mismatch, write) is warned to stderr and swallowed. The function
  * returns void unconditionally.
  *
- * The `conversations` row is upserted with `agent = null` because the hook
- * does not know the agent type. The OTLP receiver fills in `agent` later via
- * COALESCE when spans for the same conversation are ingested.
+ * The `conversations` row is upserted with the agent type when the caller
+ * can supply one (read from SessionRecord on the host side). When unknown,
+ * agent stays null and a later OTLP write fills it in via COALESCE.
  */
 
 import type { Database } from "bun:sqlite";
@@ -34,6 +34,13 @@ export interface AppendTurnEventArgs {
   kind: string;
   /** Raw hook payload. JSON.stringify'd into turn_events.payload_json. */
   payload: unknown;
+  /**
+   * Agent type for the session ("claude" / "copilot" / "codex"), or null
+   * when the caller could not resolve it. Threaded into upsertConversation
+   * so the row is identifiable in the UI without waiting for an OTLP span
+   * to land. Optional so tests can omit it; defaults to null.
+   */
+  agent?: string | null;
 }
 
 /**
@@ -66,7 +73,7 @@ export function appendTurnEvent(args: AppendTurnEventArgs): void {
     try {
       upsertConversation(db, {
         id: args.conversationId,
-        agent: null,
+        agent: args.agent ?? null,
         firstSeenAt: args.ts,
         lastSeenAt: args.ts,
       });

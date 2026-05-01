@@ -121,6 +121,21 @@ export async function runHookCommand(
     );
   }
 
+  // Resolve the agent type from the SessionRecord so the history
+  // conversations row gets `agent` populated immediately, without having
+  // to wait for an OTLP span to surface the same value via resource
+  // attributes. SessionRecord is written by the host-side session_store
+  // stage at session start, so it is present before any hook fires.
+  let agent: string | null = null;
+  try {
+    const record = await readSession(paths, sessionId);
+    agent = record?.agent ?? null;
+  } catch (err) {
+    console.error(
+      `[nas] hook: session record read failed: ${(err as Error).message}`,
+    );
+  }
+
   // Persist a history turn_event row alongside the transient session
   // store update. Records every hook invocation that passes the --when
   // matcher above, independent of observability config. Never throws.
@@ -132,6 +147,7 @@ export async function runHookCommand(
     ts,
     kind,
     payload,
+    agent,
   });
 
   // Capture the first user prompt as a conversation summary. We accept
