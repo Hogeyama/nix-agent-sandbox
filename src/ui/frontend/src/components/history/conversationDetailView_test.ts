@@ -18,7 +18,6 @@ import {
   extractToolName,
   formatCountCell,
   formatDuration,
-  formatTurnTokens,
   truncatePayload,
 } from "./conversationDetailView";
 
@@ -159,41 +158,6 @@ describe("formatCountCell", () => {
   });
   test("kilo-bucket values use compact form", () => {
     expect(formatCountCell(1500)).toBe("1.5k");
-  });
-});
-
-describe("formatTurnTokens", () => {
-  test("joins all four numeric kinds with ' · ' via compact formatter", () => {
-    expect(
-      formatTurnTokens({
-        inputTokens: 100,
-        outputTokens: 200,
-        cacheReadTokens: 1000,
-        cacheWriteTokens: 50,
-      }),
-    ).toBe("100 · 200 · 1k · 50");
-  });
-
-  test("renders all four nulls as hyphen-minus placeholders", () => {
-    expect(
-      formatTurnTokens({
-        inputTokens: null,
-        outputTokens: null,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
-      }),
-    ).toBe("- · - · - · -");
-  });
-
-  test("mixes numeric values and hyphen-minus placeholders for nulls", () => {
-    expect(
-      formatTurnTokens({
-        inputTokens: 100,
-        outputTokens: null,
-        cacheReadTokens: 1000,
-        cacheWriteTokens: null,
-      }),
-    ).toBe("100 · - · 1k · -");
   });
 });
 
@@ -713,14 +677,10 @@ describe("buildSpanTreeByTurn", () => {
     expect(group.outputTokens).toBe(60);
     expect(group.cacheReadTokens).toBe(22);
     expect(group.cacheWriteTokens).toBe(20);
-    expect(group.tokensCell).toBe(
-      formatTurnTokens({
-        inputTokens: 108,
-        outputTokens: 60,
-        cacheReadTokens: 22,
-        cacheWriteTokens: 20,
-      }),
-    );
+    expect(group.inputTokensCell).toBe("108");
+    expect(group.outputTokensCell).toBe("60");
+    expect(group.cacheReadTokensCell).toBe("22");
+    expect(group.cacheWriteTokensCell).toBe("20");
   });
 
   test("aggregates chat / tool counts and token totals across mixed-kind spans", () => {
@@ -780,14 +740,10 @@ describe("buildSpanTreeByTurn", () => {
     expect(group.outputTokens).toBe(257);
     expect(group.cacheReadTokens).toBe(14);
     expect(group.cacheWriteTokens).toBe(11);
-    expect(group.tokensCell).toBe(
-      formatTurnTokens({
-        inputTokens: 123,
-        outputTokens: 257,
-        cacheReadTokens: 14,
-        cacheWriteTokens: 11,
-      }),
-    );
+    expect(group.inputTokensCell).toBe("123");
+    expect(group.outputTokensCell).toBe("257");
+    expect(group.cacheReadTokensCell).toBe("14");
+    expect(group.cacheWriteTokensCell).toBe("11");
   });
 
   test("token kind that is null on every span surfaces as null with hyphen-minus placeholder", () => {
@@ -820,10 +776,12 @@ describe("buildSpanTreeByTurn", () => {
     expect(group.outputTokens).toBe(30);
     expect(group.cacheReadTokens).toBeNull();
     expect(group.cacheWriteTokens).toBeNull();
-    // tokensCell renders the hyphen-minus placeholder for each null kind.
-    expect(group.tokensCell.split(" · ")[0]).toBe("-");
-    expect(group.tokensCell.split(" · ")[2]).toBe("-");
-    expect(group.tokensCell.split(" · ")[3]).toBe("-");
+    // Each null kind renders as the hyphen-minus placeholder so the
+    // operator can tell "no data" apart from a true zero.
+    expect(group.inputTokensCell).toBe("-");
+    expect(group.outputTokensCell).toBe("30");
+    expect(group.cacheReadTokensCell).toBe("-");
+    expect(group.cacheWriteTokensCell).toBe("-");
   });
 
   test("open turn renders empty durationLabel while still summarising tokens", () => {
@@ -850,14 +808,10 @@ describe("buildSpanTreeByTurn", () => {
     expect(group.toolCount).toBe(0);
     expect(group.inputTokens).toBe(10);
     expect(group.outputTokens).toBe(20);
-    expect(group.tokensCell).toBe(
-      formatTurnTokens({
-        inputTokens: 10,
-        outputTokens: 20,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-      }),
-    );
+    expect(group.inputTokensCell).toBe("10");
+    expect(group.outputTokensCell).toBe("20");
+    expect(group.cacheReadTokensCell).toBe("0");
+    expect(group.cacheWriteTokensCell).toBe("0");
   });
 
   test("siblings sharing a parent are sorted by startedAt ASC even when input is reversed", () => {

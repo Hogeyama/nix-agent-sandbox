@@ -174,12 +174,16 @@ export interface TurnSpanGroup {
   readonly cacheReadTokens: number | null;
   readonly cacheWriteTokens: number | null;
   /**
-   * Pre-formatted Tokens cell joining the four token kinds with " · "
-   * separators in `in · out · cacheR · cacheW` order. Built by
-   * `formatTurnTokens` from the four numeric fields above so the page
-   * just renders the string.
+   * Pre-formatted token cells, one per kind. Each cell is the
+   * `formatCompactNumber` string when the corresponding raw field is a
+   * number, or `"-"` (hyphen-minus) when it is `null`, so the header
+   * grid distinguishes "no data emitted" from a true zero without the
+   * caller re-deriving the placeholder.
    */
-  readonly tokensCell: string;
+  readonly inputTokensCell: string;
+  readonly outputTokensCell: string;
+  readonly cacheReadTokensCell: string;
+  readonly cacheWriteTokensCell: string;
   /** DFS-flattened span rows; each row carries `depth` for indentation. */
   readonly rows: SpanRowView[];
 }
@@ -466,25 +470,13 @@ function sumNullableColumn(
 }
 
 /**
- * Format a turn's four token kinds as a single dot-separated cell:
- * `in · out · cacheR · cacheW`. Tokens cell joins each kind with " · "
- * using `formatCompactNumber` for numeric values, and a `-`
- * (hyphen-minus) placeholder for `null` so the operator can tell
- * "backend never emitted this" apart from a true zero.
+ * Format a single turn-level token total for one cell of the header
+ * grid. Numeric values pass through `formatCompactNumber`; `null`
+ * collapses to a `"-"` (hyphen-minus) placeholder so the operator can
+ * tell "backend never emitted this" apart from a true zero.
  */
-export function formatTurnTokens(row: {
-  readonly inputTokens: number | null;
-  readonly outputTokens: number | null;
-  readonly cacheReadTokens: number | null;
-  readonly cacheWriteTokens: number | null;
-}): string {
-  const fmt = (n: number | null) => (n === null ? "-" : formatCompactNumber(n));
-  return [
-    fmt(row.inputTokens),
-    fmt(row.outputTokens),
-    fmt(row.cacheReadTokens),
-    fmt(row.cacheWriteTokens),
-  ].join(" · ");
+function formatTurnTokenCell(n: number | null): string {
+  return n === null ? "-" : formatCompactNumber(n);
 }
 
 /**
@@ -493,8 +485,8 @@ export function formatTurnTokens(row: {
  * `kind` literal (`"chat"` → `llmCount`, `"execute_tool"` →
  * `toolCount`); token totals use `sumNullableColumn` so a column that
  * is `null` on every span surfaces back to the caller as `null`. The
- * trailing `tokensCell` is the joined `formatTurnTokens` string the
- * header renders verbatim.
+ * four `*TokensCell` strings render each kind as its own grid cell so
+ * the header can place them in fixed-width slots aligned across turns.
  */
 function summariseTraceSpans(traceSpans: readonly SpanSummaryRow[]): {
   llmCount: number;
@@ -503,7 +495,10 @@ function summariseTraceSpans(traceSpans: readonly SpanSummaryRow[]): {
   outputTokens: number | null;
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
-  tokensCell: string;
+  inputTokensCell: string;
+  outputTokensCell: string;
+  cacheReadTokensCell: string;
+  cacheWriteTokensCell: string;
 } {
   let llmCount = 0;
   let toolCount = 0;
@@ -522,12 +517,10 @@ function summariseTraceSpans(traceSpans: readonly SpanSummaryRow[]): {
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
-    tokensCell: formatTurnTokens({
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheWriteTokens,
-    }),
+    inputTokensCell: formatTurnTokenCell(inputTokens),
+    outputTokensCell: formatTurnTokenCell(outputTokens),
+    cacheReadTokensCell: formatTurnTokenCell(cacheReadTokens),
+    cacheWriteTokensCell: formatTurnTokenCell(cacheWriteTokens),
   };
 }
 
@@ -674,7 +667,10 @@ export function buildSpanTreeByTurn(
       outputTokens: summary.outputTokens,
       cacheReadTokens: summary.cacheReadTokens,
       cacheWriteTokens: summary.cacheWriteTokens,
-      tokensCell: summary.tokensCell,
+      inputTokensCell: summary.inputTokensCell,
+      outputTokensCell: summary.outputTokensCell,
+      cacheReadTokensCell: summary.cacheReadTokensCell,
+      cacheWriteTokensCell: summary.cacheWriteTokensCell,
       rows,
     };
   });

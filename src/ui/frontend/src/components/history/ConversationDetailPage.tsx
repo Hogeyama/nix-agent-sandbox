@@ -293,6 +293,39 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                     <div class="history-detail-section-empty">No turns</div>
                   }
                 >
+                  {/* Decorative column-header row above the accordions; uses
+                   * the same grid template as the buttons below so each
+                   * label sits exactly above its column. role="row" carries
+                   * tabular semantics without claiming the cells are
+                   * interactive. A real <table> would fight the accordion
+                   * layout below; biome-ignore exempts the visual-only row
+                   * from the semantic-element and focusable-interactive
+                   * lints — the focusable elements are the accordion
+                   * buttons in the data rows that follow. */}
+                  {/* biome-ignore lint/a11y/useSemanticElements: see comment above */}
+                  {/* biome-ignore lint/a11y/useFocusableInteractive: see comment above */}
+                  <div class="history-detail-turn-acc-headerrow" role="row">
+                    <span class="history-detail-turn-acc-cell-caret" />
+                    <span class="history-detail-turn-acc-cell-label">Turn</span>
+                    <span class="history-detail-turn-acc-cell-duration">
+                      Duration
+                    </span>
+                    <span class="history-detail-turn-acc-cell-llm">LLM</span>
+                    <span class="history-detail-turn-acc-cell-tools">
+                      Tools
+                    </span>
+                    <span class="history-detail-turn-acc-cell-spans">
+                      Spans
+                    </span>
+                    <span class="history-detail-turn-acc-cell-token">In</span>
+                    <span class="history-detail-turn-acc-cell-token">Out</span>
+                    <span class="history-detail-turn-acc-cell-token">
+                      Cache R
+                    </span>
+                    <span class="history-detail-turn-acc-cell-token">
+                      Cache W
+                    </span>
+                  </div>
                   <For each={spanGroups()}>
                     {(group) => {
                       const isOpen = () => openTurns().has(group.traceId);
@@ -309,7 +342,7 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                             onClick={() => toggleTurn(group.traceId)}
                           >
                             <span
-                              class="history-detail-turn-acc-caret"
+                              class="history-detail-turn-acc-caret history-detail-turn-acc-cell-caret"
                               aria-hidden="true"
                             >
                               {isOpen() ? "▼" : "▶"}
@@ -317,22 +350,29 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                             <span class="history-detail-turn-acc-cell-label">
                               Turn {group.turnIndex}
                             </span>
-                            <Show when={group.durationLabel !== ""}>
-                              <span class="history-detail-turn-acc-cell-duration">
-                                {group.durationLabel}
-                              </span>
-                            </Show>
+                            <span class="history-detail-turn-acc-cell-duration">
+                              {group.durationLabel}
+                            </span>
                             <span class="history-detail-turn-acc-cell-llm">
-                              LLM {group.llmCount}
+                              {group.llmCount}
                             </span>
                             <span class="history-detail-turn-acc-cell-tools">
-                              Tools {group.toolCount}
+                              {group.toolCount}
                             </span>
                             <span class="history-detail-turn-acc-cell-spans">
-                              {group.spanCount} spans
+                              {group.spanCount}
                             </span>
-                            <span class="history-detail-turn-acc-cell-tokens">
-                              {group.tokensCell}
+                            <span class="history-detail-turn-acc-cell-token">
+                              {group.inputTokensCell}
+                            </span>
+                            <span class="history-detail-turn-acc-cell-token">
+                              {group.outputTokensCell}
+                            </span>
+                            <span class="history-detail-turn-acc-cell-token">
+                              {group.cacheReadTokensCell}
+                            </span>
+                            <span class="history-detail-turn-acc-cell-token">
+                              {group.cacheWriteTokensCell}
                             </span>
                           </button>
                           <Show when={isOpen()}>

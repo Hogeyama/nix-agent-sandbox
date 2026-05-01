@@ -2193,17 +2193,37 @@ body::after {
   margin-bottom: 8px;
   background-color: var(--surface-1);
 }
-.history-detail-turn-acc-header {
-  display: flex;
+/* Shared grid template for both the column-header row and each
+ * accordion button so columns line up vertically across every turn.
+ * Slot widths: caret | Turn N | duration | LLM | Tools | Spans
+ * | In | Out | Cache R | Cache W. The Turn label uses
+ * `minmax(80px, max-content)` so single-digit indices stay aligned with
+ * three-digit ones; numeric slots are fixed so adjacent rows agree. */
+.history-detail-turn-acc-header,
+.history-detail-turn-acc-headerrow {
+  display: grid;
+  grid-template-columns:
+    16px
+    minmax(80px, max-content)
+    64px
+    48px
+    48px
+    64px
+    64px
+    64px
+    72px
+    72px;
+  gap: 12px;
   align-items: baseline;
-  gap: 16px;
   width: 100%;
   padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.history-detail-turn-acc-header {
   background: transparent;
   border: 0;
   text-align: left;
-  font-family: var(--mono);
-  font-size: 12px;
   color: var(--cream);
   cursor: pointer;
 }
@@ -2213,27 +2233,36 @@ body::after {
 .history-detail-turn-acc-header[aria-expanded="true"] {
   border-bottom: 1px solid var(--rule-soft);
 }
-/* Caret has a fixed width so the Turn label column stays aligned across
- * adjacent accordions whether they are open (▼) or collapsed (▶). */
-.history-detail-turn-acc-caret {
-  display: inline-block;
-  width: 12px;
+/* Decorative column-header row above the accordion list. Same grid
+ * template as the buttons below, plus a subtle bottom rule so the
+ * heading reads as a separate band from the data rows. */
+.history-detail-turn-acc-headerrow {
   color: var(--cream-dim);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--rule-soft);
+  margin-bottom: 4px;
+}
+/* Caret occupies the leftmost grid slot; styling matches the existing
+ * caret glyph color so the open/closed indicator stays subtle. */
+.history-detail-turn-acc-caret {
+  color: var(--cream-dim);
+}
+.history-detail-turn-acc-cell-caret {
+  /* Empty caret slot in the column-header row keeps the grid aligned. */
 }
 .history-detail-turn-acc-cell-label {
   color: var(--cream);
+  text-align: left;
 }
 .history-detail-turn-acc-cell-duration,
 .history-detail-turn-acc-cell-llm,
 .history-detail-turn-acc-cell-tools,
-.history-detail-turn-acc-cell-spans {
+.history-detail-turn-acc-cell-spans,
+.history-detail-turn-acc-cell-token {
   color: var(--cream-dim);
-}
-/* Tokens cell pushes to the right edge so the four-kind summary aligns
- * down the column across stacked turn headers. */
-.history-detail-turn-acc-cell-tokens {
-  margin-left: auto;
-  color: var(--cream-dim);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .history-detail-turn-acc-body {
   /* Body holds a full-width <table> already styled by
