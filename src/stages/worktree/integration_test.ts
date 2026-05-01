@@ -18,6 +18,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
@@ -144,6 +145,7 @@ function createTestConfig(profile: Profile): Config {
     default: "test",
     profiles: { test: profile },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
 }
 
@@ -752,6 +754,7 @@ test("WorktreeStage teardown without execute is a no-op", async () => {
     default: "test",
     profiles: { test: profile },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
   const input = createTestInput(config, profile, "/tmp/nonexistent");
   // teardown should not throw
@@ -770,6 +773,7 @@ test("WorktreeStage execute skips when worktree is not configured", async () => 
     default: "test",
     profiles: { test: profile },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
   const input = createTestInput(config, profile, process.cwd());
   const result = await stage.execute(input);
@@ -793,6 +797,7 @@ test("WorktreeStage execute throws on invalid base branch", async () => {
       default: "test",
       profiles: { test: profile },
       ui: DEFAULT_UI_CONFIG,
+      observability: DEFAULT_OBSERVABILITY_CONFIG,
     };
     const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repoRoot);
@@ -890,6 +895,7 @@ test("WorktreeStage execute runs onCreate hook", async () => {
       default: "test",
       profiles: { test: profile },
       ui: DEFAULT_UI_CONFIG,
+      observability: DEFAULT_OBSERVABILITY_CONFIG,
     };
     const stage = makeWorktreeStage();
     const input = createTestInput(config, profile, repoRoot);

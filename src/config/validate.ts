@@ -4,7 +4,12 @@
 
 import { ZodError, type z } from "zod";
 import { logWarn } from "../log.ts";
-import { formatZodError, profileSchema, uiSchema } from "./schema.ts";
+import {
+  formatZodError,
+  observabilitySchema,
+  profileSchema,
+  uiSchema,
+} from "./schema.ts";
 import type {
   Config,
   HostExecRule,
@@ -39,6 +44,17 @@ export function validateConfig(raw: RawConfig): Config {
     }
   }
 
+  let observability: z.infer<typeof observabilitySchema> | undefined;
+  try {
+    observability = observabilitySchema.parse(raw.observability ?? {});
+  } catch (err) {
+    if (err instanceof ZodError) {
+      errors.push(`observability: ${formatZodError(err)}`);
+    } else {
+      throw err;
+    }
+  }
+
   const profiles: Record<string, Profile> = {};
   for (const [name, rawProfile] of Object.entries(raw.profiles)) {
     try {
@@ -67,9 +83,15 @@ export function validateConfig(raw: RawConfig): Config {
     throw new ConfigValidationError("ui: failed to parse");
   }
 
+  if (observability === undefined) {
+    // Unreachable: observability errors are pushed to `errors` and thrown above.
+    throw new ConfigValidationError("observability: failed to parse");
+  }
+
   return {
     default: raw.default,
     ui,
+    observability,
     profiles,
   };
 }

@@ -19,6 +19,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_SESSION_CONFIG,
 } from "./config/types.ts";
 import type { PipelineState } from "./pipeline/state.ts";
@@ -46,6 +47,7 @@ const baseProfile: Profile = {
 
 const baseConfig: Config = {
   ui: { enable: false, port: 7777, idleTimeout: 300 },
+  observability: DEFAULT_OBSERVABILITY_CONFIG,
   profiles: { dev: baseProfile },
 };
 
@@ -390,6 +392,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
       needs: ["container", "dbus", "display", "nix", "workspace"],
     },
     { name: "HostExecStage", needs: ["container", "workspace"] },
+    { name: "ObservabilityStage", needs: [] },
     { name: "DindStage", needs: ["container", "workspace"] },
     { name: "ProxyStage", needs: ["container"] },
     { name: "LaunchStage", needs: ["container"] },

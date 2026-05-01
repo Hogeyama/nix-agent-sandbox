@@ -13,6 +13,7 @@ import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
@@ -90,7 +91,11 @@ function makeProfile(
 }
 
 function makeConfig(profile: Profile): Config {
-  return { profiles: { default: profile }, ui: DEFAULT_UI_CONFIG };
+  return {
+    profiles: { default: profile },
+    ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
+  };
 }
 
 function makeHostEnv(): HostEnv {

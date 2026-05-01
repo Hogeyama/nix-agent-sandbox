@@ -86,6 +86,17 @@ export interface ProxyState {
   readonly proxyEndpoint: string;
 }
 
+/**
+ * Observability (OTLP receiver) state.
+ *
+ * Discriminated union — `enabled: true` requires `receiverPort` to be
+ * present, so downstream consumers can read the port without runtime
+ * null-checks.
+ */
+export type ObservabilityState =
+  | { readonly enabled: false }
+  | { readonly enabled: true; readonly receiverPort: number };
+
 // ---------------------------------------------------------------------------
 // ContainerPlan slice
 //
@@ -166,6 +177,7 @@ export interface PipelineState {
   readonly dbus: DbusState;
   readonly display: DisplayState;
   readonly hostexec: HostExecState;
+  readonly observability: ObservabilityState;
   readonly dind: DindState;
   readonly network: NetworkState;
   readonly prompt: PromptState;

@@ -138,6 +138,7 @@ export function mergeRawConfigs(
   return {
     default: local.default ?? global.default,
     ui: shallowMerge(global.ui, local.ui),
+    observability: shallowMerge(global.observability, local.observability),
     profiles: mergedProfiles,
   };
 }

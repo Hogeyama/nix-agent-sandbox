@@ -16,6 +16,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
   type RawConfig,
@@ -440,6 +441,7 @@ test("resolveProfile: resolves by explicit name", () => {
       },
     },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
 
   const { name, profile } = resolveProfile(config, "other-profile");
@@ -470,6 +472,7 @@ test("resolveProfile: falls back to default profile", () => {
       },
     },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
 
   const { name, profile } = resolveProfile(config);
@@ -498,6 +501,7 @@ test("resolveProfile: auto-selects when only one profile and no default", () => 
       },
     },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
 
   const { name, profile } = resolveProfile(config);
@@ -542,6 +546,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
       },
     },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
 
   expect(() => resolveProfile(config)).toThrow(
@@ -570,6 +575,7 @@ test("resolveProfile: throws for nonexistent profile name", () => {
       },
     },
     ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
   };
 
   expect(() => resolveProfile(config, "nonexistent")).toThrow(

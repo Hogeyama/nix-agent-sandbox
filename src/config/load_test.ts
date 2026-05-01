@@ -323,3 +323,16 @@ test("mergeRawConfigs: local ui overrides global ui fields", () => {
   const result = mergeRawConfigs(global, local);
   expect(result.ui).toEqual({ enable: true, port: 8080, "idle-timeout": 300 });
 });
+
+test("mergeRawConfigs: local observability overrides global observability fields", () => {
+  const global: RawConfig = {
+    observability: { enable: false },
+    profiles: { dev: { agent: "claude" } },
+  };
+  const local: RawConfig = {
+    observability: { enable: true },
+    profiles: {},
+  };
+  const result = mergeRawConfigs(global, local);
+  expect(result.observability).toEqual({ enable: true });
+});

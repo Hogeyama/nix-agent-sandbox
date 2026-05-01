@@ -208,10 +208,21 @@ export interface UiConfig {
   idleTimeout: number;
 }
 
+/**
+ * Observability (OpenTelemetry / OTLP receiver) 設定。
+ *
+ * Top-level — `ui` と並列。Profile 単位ではなく、`nas` プロセス全体の
+ * 観測可能性を制御する flag。Default false。
+ */
+export interface ObservabilityConfig {
+  enable: boolean;
+}
+
 /** トップレベル設定 */
 export interface Config {
   default?: string;
   ui: UiConfig;
+  observability: ObservabilityConfig;
   profiles: Record<string, Profile>;
 }
 
@@ -222,6 +233,9 @@ export interface RawConfig {
     enable?: boolean;
     port?: number;
     "idle-timeout"?: number;
+  };
+  observability?: {
+    enable?: boolean;
   };
   profiles?: Record<string, RawProfile>;
 }
@@ -345,6 +359,10 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   enable: true,
   port: 3939,
   idleTimeout: 300,
+};
+
+export const DEFAULT_OBSERVABILITY_CONFIG: ObservabilityConfig = {
+  enable: false,
 };
 
 export const DEFAULT_NIX_CONFIG: NixConfig = {

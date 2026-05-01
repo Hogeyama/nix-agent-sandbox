@@ -24,6 +24,7 @@ import {
   DEFAULT_HOSTEXEC_PROMPT_CONFIG,
   DEFAULT_NETWORK_PROMPT_CONFIG,
   DEFAULT_NIX_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_PROXY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
@@ -792,6 +793,19 @@ export const uiSchema = z
     enable: r.enable,
     port: r.port,
     idleTimeout: r["idle-timeout"],
+  }));
+
+// ---------------------------------------------------------------------------
+// Observability (top-level)
+// ---------------------------------------------------------------------------
+
+export const observabilitySchema = z
+  .object({
+    enable: z.boolean().default(DEFAULT_OBSERVABILITY_CONFIG.enable),
+  })
+  .prefault({})
+  .transform((r) => ({
+    enable: r.enable,
   }));
 
 // ---------------------------------------------------------------------------

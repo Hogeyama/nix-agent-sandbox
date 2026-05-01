@@ -15,6 +15,7 @@ import {
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
@@ -46,6 +47,7 @@ const baseConfig: Config = {
   default: "test",
   profiles: { test: baseProfile },
   ui: DEFAULT_UI_CONFIG,
+  observability: DEFAULT_OBSERVABILITY_CONFIG,
 };
 
 function getContainerHome(): string {

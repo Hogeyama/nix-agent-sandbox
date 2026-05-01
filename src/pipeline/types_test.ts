@@ -288,13 +288,14 @@ test("SliceKey: covers all expected slice names", () => {
     "dbus",
     "display",
     "hostexec",
+    "observability",
     "dind",
     "network",
     "prompt",
     "proxy",
     "container",
   ];
-  expect(keys).toHaveLength(11);
+  expect(keys).toHaveLength(12);
 });
 
 test("PipelineState: can construct with all slices", () => {
@@ -309,6 +310,7 @@ test("PipelineState: can construct with all slices", () => {
       brokerSocket: "/run/nas/hostexec/broker.sock",
       sessionTmpDir: "/run/nas/hostexec/sess_abc",
     },
+    observability: { enabled: false },
     dind: { containerName: "nas-dind-abc" },
     network: { networkName: "nas-net-abc", runtimeDir: "/run/nas/network" },
     prompt: { promptToken: "tok_abc", promptEnabled: true },

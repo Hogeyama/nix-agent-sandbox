@@ -77,6 +77,7 @@ import {
   resolveMountProbes,
 } from "./stages/mount.ts";
 import { createNixDetectStage } from "./stages/nix_detect.ts";
+import { createObservabilityStage } from "./stages/observability.ts";
 import {
   AuthRouterServiceLive,
   createProxyStage,
@@ -367,18 +368,23 @@ export function createCliPipelineBuilder({
   readonly mountProbes: MountProbes;
   readonly agentExtraArgs: string[];
 }) {
-  return createPipelineBuilder<Pick<PipelineState, "workspace" | "container">>()
-    .add(createWorktreeStage(input))
-    .add(createSessionStoreStage(input))
-    .add(createDockerBuildStage(buildProbes))
-    .add(createNixDetectStage(input))
-    .add(createDbusProxyStage(input))
-    .add(createDisplayStage(input, mountProbes))
-    .add(createMountStage(input, mountProbes))
-    .add(createHostExecStage(input))
-    .add(createDindStage(input))
-    .add(createProxyStage(input))
-    .add(createLaunchStage(input, agentExtraArgs));
+  return (
+    createPipelineBuilder<Pick<PipelineState, "workspace" | "container">>()
+      .add(createWorktreeStage(input))
+      .add(createSessionStoreStage(input))
+      .add(createDockerBuildStage(buildProbes))
+      .add(createNixDetectStage(input))
+      .add(createDbusProxyStage(input))
+      .add(createDisplayStage(input, mountProbes))
+      .add(createMountStage(input, mountProbes))
+      .add(createHostExecStage(input))
+      // ObservabilityStage materializes the observability slice so any
+      // downstream stage that consumes observability can rely on it.
+      .add(createObservabilityStage())
+      .add(createDindStage(input))
+      .add(createProxyStage(input))
+      .add(createLaunchStage(input, agentExtraArgs))
+  );
 }
 
 function randomHex(bytes: number): string {

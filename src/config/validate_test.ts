@@ -1412,6 +1412,35 @@ test("validateConfig: ui negative idle-timeout rejects", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Observability config
+// ---------------------------------------------------------------------------
+
+test("validateConfig: observability defaults when omitted", () => {
+  const raw: RawConfig = {
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.enable).toEqual(false);
+});
+
+test("validateConfig: observability explicit enable=true", () => {
+  const raw: RawConfig = {
+    observability: { enable: true },
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.enable).toEqual(true);
+});
+
+test("validateConfig: observability non-boolean enable rejects", () => {
+  const raw = {
+    observability: { enable: "yes" as unknown as boolean },
+    profiles: { test: { agent: "claude" } },
+  } as RawConfig;
+  expect(() => validateConfig(raw)).toThrow("observability:");
+});
+
+// ---------------------------------------------------------------------------
 // Error aggregation across profiles and fields
 // ---------------------------------------------------------------------------
 
