@@ -337,8 +337,13 @@ export function extractTranscriptPath(payload: unknown): string | null {
  * - Copilot: payload carries `prompt` (string) directly from the
  *   `userPromptSubmitted` hook. We truncate it to {@link SUMMARY_MAX_CHARS}.
  *
- * If both shapes are present (unusual), the transcript path wins — the
- * Claude transcript is the authoritative source for that agent.
+ * If both shapes are present, the transcript path is preferred — the
+ * Claude transcript is the authoritative source for that agent — but we
+ * fall back to `payload.prompt` when the transcript has not yet been
+ * populated. Claude Code's first SessionStart hook fires before the user's
+ * opening prompt is written to the JSONL, so without this fallback the
+ * summary would stay empty until a later `start` hook (the user's next
+ * prompt) lands and the JSONL has caught up.
  *
  * Restricted to `kind === "start"`: later attention/stop fires must not
  * synthesize a summary even if their payload happens to carry one of the
@@ -355,9 +360,10 @@ export function extractFirstUserPrompt(
 
   const transcriptPath = extractTranscriptPath(payload);
   if (transcriptPath !== null) {
-    return extractTranscriptSummary(transcriptPath, {
+    const fromTranscript = extractTranscriptSummary(transcriptPath, {
       maxChars: SUMMARY_MAX_CHARS,
     });
+    if (fromTranscript !== null) return fromTranscript;
   }
 
   if (typeof payload !== "object" || payload === null) return null;

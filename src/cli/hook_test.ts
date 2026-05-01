@@ -1044,6 +1044,29 @@ test("extractFirstUserPrompt: transcript_path wins when both transcript_path and
   ).toBe("from transcript");
 });
 
+test("extractFirstUserPrompt: falls back to payload.prompt when transcript_path yields nothing", async () => {
+  // Empty transcript file — Claude's first SessionStart hook fires before
+  // the user's opening prompt is written to the JSONL.
+  const file = path.join(tmpRoot, "et-empty.jsonl");
+  await writeFile(file, "");
+  expect(
+    extractFirstUserPrompt(
+      { transcript_path: file, prompt: "from prompt" },
+      "start",
+    ),
+  ).toBe("from prompt");
+});
+
+test("extractFirstUserPrompt: falls back to payload.prompt when transcript file is missing", () => {
+  const missing = path.join(tmpRoot, "et-missing.jsonl");
+  expect(
+    extractFirstUserPrompt(
+      { transcript_path: missing, prompt: "from prompt" },
+      "start",
+    ),
+  ).toBe("from prompt");
+});
+
 test("extractFirstUserPrompt: payload missing both fields returns null", () => {
   expect(extractFirstUserPrompt({}, "start")).toBeNull();
   expect(extractFirstUserPrompt({ session_id: "x" }, "start")).toBeNull();
