@@ -2,9 +2,11 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  Match,
   on,
   onMount,
   Show,
+  Switch,
 } from "solid-js";
 import * as client from "./api/client";
 import {
@@ -16,6 +18,10 @@ import {
   stopContainer,
 } from "./api/client";
 import { getWsToken } from "./api/wsToken";
+import {
+  HistoryShell,
+  type HistoryRoute as HistoryShellRoute,
+} from "./components/history/HistoryShell";
 import { PaneResizer } from "./components/PaneResizer";
 import { PendingPane } from "./components/PendingPane";
 import { SessionsPane } from "./components/SessionsPane";
@@ -200,6 +206,20 @@ export function App() {
   });
 
   const isSettingsRoute = () => router.route().kind === "settings";
+  const isHistoryRoute = () => {
+    const k = router.route().kind;
+    return (
+      k === "history" ||
+      k === "history-conversation" ||
+      k === "history-invocation"
+    );
+  };
+  // The workspace and the SettingsShell stay mounted at all times so
+  // their children's state (xterm instances, settings filter selections)
+  // survives a round-trip through any other route. The history shell
+  // is the exception: it mounts only while a history route is active so
+  // the SSE subscription closes the moment the user navigates away.
+  const isWorkspaceHidden = () => isSettingsRoute() || isHistoryRoute();
   // While the route is the workspace, the SettingsShell is hidden via
   // `display: none`; its `page` prop still needs a valid value, so we
   // pin it to the default page until the user navigates back into
@@ -300,8 +320,8 @@ export function App() {
           second layer of defence and to drive the layout transition. */}
       <main
         class="workspace"
-        classList={{ "workspace-hidden": isSettingsRoute() }}
-        inert={isSettingsRoute() || undefined}
+        classList={{ "workspace-hidden": isWorkspaceHidden() }}
+        inert={isWorkspaceHidden() || undefined}
         style={{ "grid-template-columns": gridTemplateColumns() }}
       >
         <SessionsPane
@@ -378,6 +398,16 @@ export function App() {
         fetchAuditLogs={client.getAuditLogs}
         ui={ui}
       />
+      {/* HistoryShell is mounted only while a history route is active,
+          unlike SettingsShell which is kept alive via `display: none`.
+          The lazy mount ties the SSE subscription's lifetime to the
+          user's presence on the page so the daemon does not keep an
+          open stream for users who never visit history. */}
+      <Switch>
+        <Match when={isHistoryRoute()}>
+          <HistoryShell route={router.route() as HistoryShellRoute} />
+        </Match>
+      </Switch>
       <StatusBar />
       <NewSessionDialog
         open={dialogOpen}

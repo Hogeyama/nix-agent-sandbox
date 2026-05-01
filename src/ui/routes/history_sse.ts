@@ -19,21 +19,13 @@
 import type { UiDataContext } from "../data.ts";
 import { Router } from "../router.ts";
 import { diffHistorySnapshot } from "./history_sse_diff.ts";
+import type { HistorySseEventName } from "./history_sse_events.ts";
 import { isSafeId } from "./validate_ids.ts";
 
-/**
- * Wire-name constants for history SSE events. Frontend page handlers and
- * this backend share these strings; centralising them keeps the contract
- * checkable in one place.
- */
-export const HISTORY_SSE_EVENT_NAMES = [
-  "history:list",
-  "history:conversation",
-  "history:invocation",
-  "history:not-found",
-] as const;
-
-export type HistorySseEventName = (typeof HISTORY_SSE_EVENT_NAMES)[number];
+export {
+  HISTORY_SSE_EVENT_NAMES,
+  type HistorySseEventName,
+} from "./history_sse_events.ts";
 
 export interface HistorySseRouteOptions {
   /**

@@ -28,6 +28,9 @@ export function Topbar(props: TopbarProps) {
           <span class="dot"></span>
           <span>{props.connected ? "live" : "offline"}</span>
         </div>
+        <a class="topbar-link" href="#/history">
+          History
+        </a>
         {/* biome-ignore lint/a11y/useAnchorContent: the visible content is the
             gear SVG (aria-hidden) and the link text is supplied via aria-label;
             biome only inspects child text and does not credit aria-label here. */}

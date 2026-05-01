@@ -16,6 +16,12 @@
  *   - `"#/settings"` (no page) resolves to the default settings page,
  *     `"sidecars"`, so the gear icon can link to `#/settings` and still
  *     land on a populated page.
+ *   - `"#/history"` resolves to the conversation list page.
+ *   - `"#/history/conversation/<id>"` and `"#/history/invocation/<id>"`
+ *     resolve to the per-detail pages. Ids that fail the safe-id
+ *     allowlist (or are empty) fall back to the workspace, mirroring
+ *     the unknown-settings-page branch so a malformed bookmark cannot
+ *     drive a fetch against an arbitrary path segment.
  *
  * `parseRoute` is pure so it can be unit-tested without a Solid runtime
  * or a real `window`. `createRouter` is a thin Solid + DOM wrapper that
@@ -29,7 +35,23 @@ export type SettingsPage = "sidecars" | "audit" | "keybinds" | "prefs";
 
 export type Route =
   | { kind: "workspace" }
-  | { kind: "settings"; page: SettingsPage };
+  | { kind: "settings"; page: SettingsPage }
+  | { kind: "history" }
+  | { kind: "history-conversation"; id: string }
+  | { kind: "history-invocation"; id: string };
+
+/**
+ * Allowlist for history ids that arrive in the hash. Mirrors the shape
+ * of `isSafeId` in `src/ui/routes/validate_ids.ts` (the backend gate)
+ * but is intentionally narrower at the frontend edge: we only need to
+ * stop a malformed hash from triggering a fetch against an arbitrary
+ * path segment. The backend remains the authoritative gate.
+ */
+const SAFE_HISTORY_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+function isSafeHistoryId(value: string): boolean {
+  return SAFE_HISTORY_ID_RE.test(value) && !value.includes("..");
+}
 
 const DEFAULT_SETTINGS_PAGE: SettingsPage = "sidecars";
 
@@ -57,16 +79,44 @@ export function parseRoute(hash: string): Route {
   if (body === "") return WORKSPACE_ROUTE;
 
   const segments = body.split("/");
-  if (segments[0] !== "settings") return WORKSPACE_ROUTE;
+  if (segments[0] === "settings") {
+    const pageSegment = segments[1];
+    if (pageSegment === undefined || pageSegment === "") {
+      return { kind: "settings", page: DEFAULT_SETTINGS_PAGE };
+    }
+    if (!SETTINGS_PAGES.has(pageSegment as SettingsPage)) {
+      return WORKSPACE_ROUTE;
+    }
+    // Reject anything past the page segment so `#/settings/audit/extra`
+    // does not silently resolve to the audit page.
+    if (segments.length > 2) return WORKSPACE_ROUTE;
+    return { kind: "settings", page: pageSegment as SettingsPage };
+  }
 
-  const pageSegment = segments[1];
-  if (pageSegment === undefined || pageSegment === "") {
-    return { kind: "settings", page: DEFAULT_SETTINGS_PAGE };
+  if (segments[0] === "history") {
+    const sub = segments[1];
+    if (sub === undefined || sub === "") {
+      // Reject `#/history/` with trailing junk; the bare list route only
+      // matches an exact segment count of 1.
+      if (segments.length > 2) return WORKSPACE_ROUTE;
+      return { kind: "history" };
+    }
+    if (sub !== "conversation" && sub !== "invocation") {
+      return WORKSPACE_ROUTE;
+    }
+    // Detail routes require exactly three segments: `history/<sub>/<id>`.
+    // A missing or extra segment falls back to workspace so a partially
+    // typed url cannot mount a detail page with an empty id.
+    if (segments.length !== 3) return WORKSPACE_ROUTE;
+    const id = segments[2];
+    if (!isSafeHistoryId(id)) return WORKSPACE_ROUTE;
+    if (sub === "conversation") {
+      return { kind: "history-conversation", id };
+    }
+    return { kind: "history-invocation", id };
   }
-  if (!SETTINGS_PAGES.has(pageSegment as SettingsPage)) {
-    return WORKSPACE_ROUTE;
-  }
-  return { kind: "settings", page: pageSegment as SettingsPage };
+
+  return WORKSPACE_ROUTE;
 }
 
 export interface Router {

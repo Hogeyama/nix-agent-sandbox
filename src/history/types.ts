@@ -69,3 +69,96 @@ export interface TurnEventRow {
   kind: string;
   payloadJson: string;
 }
+
+// ---------------------------------------------------------------------------
+// Reader row shapes (returned by query* helpers in store.ts and consumed by
+// the UI / SSE layers). Kept in this file — separately from store.ts — so
+// frontend bundles can `import type` them without dragging bun:sqlite into
+// the resolver.
+// ---------------------------------------------------------------------------
+
+/**
+ * Conversation list row with denormalized aggregates. Token totals collapse
+ * NULL columns to 0 so a conversation recorded by the hook but with no
+ * associated spans yet still produces 0 (never NULL).
+ */
+export interface ConversationListRow {
+  readonly id: string;
+  readonly agent: string | null;
+  readonly firstSeenAt: string;
+  readonly lastSeenAt: string;
+  readonly turnEventCount: number;
+  readonly spanCount: number;
+  readonly invocationCount: number;
+  readonly inputTokensTotal: number;
+  readonly outputTokensTotal: number;
+  readonly cacheReadTotal: number;
+  readonly cacheWriteTotal: number;
+}
+
+export interface TraceSummaryRow {
+  readonly traceId: string;
+  readonly invocationId: string;
+  readonly conversationId: string | null;
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+  readonly spanCount: number;
+}
+
+export interface SpanSummaryRow {
+  readonly spanId: string;
+  readonly parentSpanId: string | null;
+  readonly traceId: string;
+  readonly spanName: string;
+  readonly kind: string;
+  readonly model: string | null;
+  readonly inTok: number | null;
+  readonly outTok: number | null;
+  readonly cacheR: number | null;
+  readonly cacheW: number | null;
+  readonly durationMs: number | null;
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+  readonly attrsJson: string;
+}
+
+export interface InvocationSummaryRow {
+  readonly id: string;
+  readonly profile: string | null;
+  readonly agent: string | null;
+  readonly worktreePath: string | null;
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+  readonly exitReason: string | null;
+}
+
+export interface ConversationTurnEventRow {
+  readonly invocationId: string;
+  readonly ts: string;
+  readonly kind: string;
+  readonly payloadJson: string;
+}
+
+export interface InvocationTurnEventRow {
+  readonly conversationId: string | null;
+  readonly ts: string;
+  readonly kind: string;
+  readonly payloadJson: string;
+}
+
+export interface ConversationDetail {
+  readonly conversation: ConversationListRow;
+  readonly traces: TraceSummaryRow[];
+  readonly spans: SpanSummaryRow[];
+  readonly turnEvents: ConversationTurnEventRow[];
+  readonly invocations: InvocationSummaryRow[];
+}
+
+export interface InvocationDetail {
+  readonly invocation: InvocationSummaryRow;
+  readonly traces: TraceSummaryRow[];
+  readonly spans: SpanSummaryRow[];
+  readonly turnEvents: InvocationTurnEventRow[];
+  /** All conversations referenced by this invocation's traces (subagents may produce multiple). */
+  readonly conversations: ConversationListRow[];
+}

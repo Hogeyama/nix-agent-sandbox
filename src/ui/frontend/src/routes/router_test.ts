@@ -57,4 +57,84 @@ describe("parseRoute", () => {
   test("unrelated hash falls back to workspace", () => {
     expect(parseRoute("#/anything-else")).toEqual({ kind: "workspace" });
   });
+
+  test("trailing extra segment under settings falls back to workspace", () => {
+    expect(parseRoute("#/settings/audit/extra")).toEqual({ kind: "workspace" });
+  });
+
+  test("#/history resolves to the history list", () => {
+    expect(parseRoute("#/history")).toEqual({ kind: "history" });
+  });
+
+  test("#/history/ (trailing slash) resolves to the history list", () => {
+    expect(parseRoute("#/history/")).toEqual({ kind: "history" });
+  });
+
+  test("#/history/conversation/:id resolves with the id preserved", () => {
+    expect(parseRoute("#/history/conversation/sess_abc123")).toEqual({
+      kind: "history-conversation",
+      id: "sess_abc123",
+    });
+  });
+
+  test("#/history/invocation/:id resolves with the id preserved", () => {
+    expect(parseRoute("#/history/invocation/inv_xyz_456")).toEqual({
+      kind: "history-invocation",
+      id: "inv_xyz_456",
+    });
+  });
+
+  test("history detail with a missing id falls back to workspace", () => {
+    expect(parseRoute("#/history/conversation/")).toEqual({
+      kind: "workspace",
+    });
+    expect(parseRoute("#/history/conversation")).toEqual({ kind: "workspace" });
+    expect(parseRoute("#/history/invocation/")).toEqual({ kind: "workspace" });
+    expect(parseRoute("#/history/invocation")).toEqual({ kind: "workspace" });
+  });
+
+  test("history detail id containing '..' falls back to workspace", () => {
+    expect(parseRoute("#/history/conversation/..etc")).toEqual({
+      kind: "workspace",
+    });
+  });
+
+  test("history detail id with disallowed characters falls back to workspace", () => {
+    expect(parseRoute("#/history/conversation/abc/def")).toEqual({
+      kind: "workspace",
+    });
+    expect(parseRoute("#/history/conversation/abc def")).toEqual({
+      kind: "workspace",
+    });
+    expect(parseRoute("#/history/conversation/abc%2Fdef")).toEqual({
+      kind: "workspace",
+    });
+  });
+
+  test("history detail id starting with a dash or dot falls back to workspace", () => {
+    expect(parseRoute("#/history/conversation/-abc")).toEqual({
+      kind: "workspace",
+    });
+    expect(parseRoute("#/history/conversation/.abc")).toEqual({
+      kind: "workspace",
+    });
+  });
+
+  test("history detail id longer than 128 chars falls back to workspace", () => {
+    const tooLong = "a".repeat(129);
+    expect(parseRoute(`#/history/conversation/${tooLong}`)).toEqual({
+      kind: "workspace",
+    });
+  });
+
+  test("history with an unknown sub-page falls back to workspace", () => {
+    expect(parseRoute("#/history/unknown/abc")).toEqual({ kind: "workspace" });
+    expect(parseRoute("#/history/unknown")).toEqual({ kind: "workspace" });
+  });
+
+  test("history detail with an extra trailing segment falls back to workspace", () => {
+    expect(parseRoute("#/history/conversation/abc/extra")).toEqual({
+      kind: "workspace",
+    });
+  });
 });
