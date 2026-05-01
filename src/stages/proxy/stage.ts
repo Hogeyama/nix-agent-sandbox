@@ -108,7 +108,7 @@ export interface ProxyStageOptions {
 }
 
 export function planProxy(
-  input: StageInput & Pick<PipelineState, "container">,
+  input: StageInput & Pick<PipelineState, "container" | "observability">,
   options: ProxyStageOptions = {},
 ): ProxyPlan {
   const envoyContainerName = options.envoyContainerName ?? ENVOY_CONTAINER_NAME;
@@ -124,7 +124,19 @@ export function planProxy(
   const dindContainerName =
     input.container.env.static.NAS_DIND_CONTAINER_NAME ?? null;
 
-  const forwardPorts = input.profile.network.proxy.forwardPorts;
+  // The observability slice contributes its receiver port (when enabled) to
+  // the forward-ports set, alongside whatever the profile declares. We dedup
+  // before downstream so the relay layer never sees a duplicate entry — its
+  // duplicate-port contract throws, which would otherwise break sessions
+  // whose profile explicitly listed the same port.
+  const baseForwardPorts = input.profile.network.proxy.forwardPorts;
+  const observabilityPort = input.observability.enabled
+    ? input.observability.receiverPort
+    : null;
+  const forwardPorts =
+    observabilityPort !== null
+      ? Array.from(new Set([...baseForwardPorts, observabilityPort]))
+      : baseForwardPorts;
 
   const proxyUrl = `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
@@ -229,7 +241,7 @@ export function planProxy(
 export function createProxyStage(
   shared: StageInput,
 ): Stage<
-  "container",
+  "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
   | NetworkRuntimeService
   | EnvoyService
@@ -245,7 +257,7 @@ export function createProxyStageWithOptions(
   shared: StageInput,
   options: ProxyStageOptions = {},
 ): Stage<
-  "container",
+  "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
   | NetworkRuntimeService
   | EnvoyService
@@ -256,7 +268,7 @@ export function createProxyStageWithOptions(
 > {
   return {
     name: "ProxyStage",
-    needs: ["container"],
+    needs: ["container", "observability"],
 
     run(
       input,

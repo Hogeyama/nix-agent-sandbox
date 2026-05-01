@@ -9,5 +9,6 @@ export {
 } from "./observability/receiver_service.ts";
 export {
   createObservabilityStage,
-  planObservability,
+  type ObservabilityStageDeps,
+  shouldEnableObservability,
 } from "./observability/stage.ts";

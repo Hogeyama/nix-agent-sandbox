@@ -77,7 +77,10 @@ import {
   resolveMountProbes,
 } from "./stages/mount.ts";
 import { createNixDetectStage } from "./stages/nix_detect.ts";
-import { createObservabilityStage } from "./stages/observability.ts";
+import {
+  createObservabilityStage,
+  OtlpReceiverServiceLive,
+} from "./stages/observability.ts";
 import {
   AuthRouterServiceLive,
   createProxyStage,
@@ -290,6 +293,7 @@ export async function main(args: string[]): Promise<void> {
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
+      OtlpReceiverServiceLive,
       ProcessServiceLive,
       DockerServiceLive,
       PromptServiceLive,
@@ -378,9 +382,18 @@ export function createCliPipelineBuilder({
       .add(createDisplayStage(input, mountProbes))
       .add(createMountStage(input, mountProbes))
       .add(createHostExecStage(input))
-      // ObservabilityStage materializes the observability slice so any
-      // downstream stage that consumes observability can rely on it.
-      .add(createObservabilityStage())
+      // ObservabilityStage materializes the observability slice and, when
+      // enabled, acquires the per-session OTLP receiver and injects the OTLP
+      // envs into the container slice. ProxyStage downstream picks up the
+      // receiverPort and merges it into forwardPorts.
+      .add(
+        createObservabilityStage({
+          config: input.config,
+          profile: input.profile,
+          profileName: input.profileName,
+          sessionId: input.sessionId,
+        }),
+      )
       .add(createDindStage(input))
       .add(createProxyStage(input))
       .add(createLaunchStage(input, agentExtraArgs))

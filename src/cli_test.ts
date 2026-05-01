@@ -392,9 +392,9 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
       needs: ["container", "dbus", "display", "nix", "workspace"],
     },
     { name: "HostExecStage", needs: ["container", "workspace"] },
-    { name: "ObservabilityStage", needs: [] },
+    { name: "ObservabilityStage", needs: ["container"] },
     { name: "DindStage", needs: ["container", "workspace"] },
-    { name: "ProxyStage", needs: ["container"] },
+    { name: "ProxyStage", needs: ["container", "observability"] },
     { name: "LaunchStage", needs: ["container"] },
   ]);
 });
@@ -430,6 +430,7 @@ test("planProxy: network proxy cannot be opted out", () => {
     container: {
       ...container,
     },
+    observability: { enabled: false } as const,
   };
 
   const result = planProxy(stageInput);

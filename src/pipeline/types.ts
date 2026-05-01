@@ -16,6 +16,7 @@ import type {
 } from "../stages/hostexec.ts";
 import type { ContainerLaunchService } from "../stages/launch.ts";
 import type { MountSetupService } from "../stages/mount.ts";
+import type { OtlpReceiverService } from "../stages/observability.ts";
 import type {
   AuthRouterService,
   EnvoyService,
@@ -87,6 +88,7 @@ export type StageServices =
   | HostExecSetupService
   | MountSetupService
   | NetworkRuntimeService
+  | OtlpReceiverService
   | ProcessService
   | DockerService
   | PromptService

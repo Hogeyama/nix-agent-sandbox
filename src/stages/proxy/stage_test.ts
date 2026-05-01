@@ -18,7 +18,10 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
-import type { ContainerPlan } from "../../pipeline/state.ts";
+import type {
+  ContainerPlan,
+  ObservabilityState,
+} from "../../pipeline/state.ts";
 import type {
   HostEnv,
   ProbeResults,
@@ -119,12 +122,18 @@ function makeProbes(): ProbeResults {
   };
 }
 
+const DISABLED_OBSERVABILITY: ObservabilityState = { enabled: false };
+
 function makeInput(
   profile: Profile,
-  overrides: { container?: ContainerPlan } = {},
+  overrides: {
+    container?: ContainerPlan;
+    observability?: ObservabilityState;
+  } = {},
 ): {
   shared: StageInput;
   container: ContainerPlan;
+  observability: ObservabilityState;
 } {
   const config = makeConfig(profile);
   const container = overrides.container ?? {
@@ -141,13 +150,14 @@ function makeInput(
       probes: makeProbes(),
     },
     container,
+    observability: overrides.observability ?? DISABLED_OBSERVABILITY,
   };
 }
 
 test("ProxyStage: always returns plan even when allowlist and prompt are disabled", () => {
   const profile = makeProfile();
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container });
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability });
   expect(result.sessionNetworkName).toEqual("nas-session-net-test-session-123");
   expect(result.allowlist).toEqual([]);
   expect(result.promptEnabled).toEqual(false);
@@ -158,8 +168,8 @@ test("ProxyStage: returns plan when allowlist is non-empty", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container });
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability });
   expect(result !== null).toEqual(true);
   expect(result!.sessionNetworkName).toEqual(
     "nas-session-net-test-session-123",
@@ -170,8 +180,8 @@ test("ProxyStage: returns plan when prompt is enabled", () => {
   const profile = makeProfile({
     network: { prompt: { enable: true } },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container });
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability });
   expect(result !== null).toEqual(true);
   expect(result!.promptEnabled).toEqual(true);
 });
@@ -180,8 +190,8 @@ test("ProxyStage: sets proxy env vars", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(result.envVars.http_proxy).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
@@ -203,7 +213,7 @@ test("ProxyStage: includes dind container in no_proxy", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile, {
+  const { shared, container, observability } = makeInput(profile, {
     container: {
       ...emptyContainerPlan("test-image", "/tmp"),
       command: { agentCommand: ["claude"], extraArgs: [] },
@@ -213,7 +223,7 @@ test("ProxyStage: includes dind container in no_proxy", () => {
       },
     },
   });
-  const result = planProxy({ ...shared, container })!;
+  const result = planProxy({ ...shared, container, observability })!;
   expect(result.envVars.no_proxy).toEqual(
     "localhost,127.0.0.1,nas-dind-abc12345",
   );
@@ -223,8 +233,8 @@ test("ProxyStage: sets outputOverrides", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   const promptToken = result.outputOverrides.prompt!.promptToken;
   const proxyEndpoint = result.outputOverrides.proxy!.proxyEndpoint;
   expect(result.outputOverrides.network).toEqual({
@@ -245,8 +255,8 @@ test("ProxyStage: planner sets networkName in outputOverrides", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(
     result.outputOverrides.network?.networkName.startsWith("nas-session-net-"),
   ).toEqual(true);
@@ -268,10 +278,10 @@ test("ProxyStage: uses provided session token generator", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
+  const { shared, container, observability } = makeInput(profile);
   const generatedToken = "fixed-token-12345";
   const result = planProxy(
-    { ...shared, container },
+    { ...shared, container, observability },
     { generateSessionToken: () => generatedToken },
   )!;
   expect(result.outputOverrides.prompt?.promptToken).toEqual(generatedToken);
@@ -284,7 +294,7 @@ test("ProxyStage: uses profile prompt settings and dind env from container slice
   const profile = makeProfile({
     network: { allowlist: ["example.com"], prompt: { enable: true } },
   });
-  const { shared, container } = makeInput(profile, {
+  const { shared, container, observability } = makeInput(profile, {
     container: {
       ...emptyContainerPlan("test-image", "/tmp"),
       command: { agentCommand: ["claude"], extraArgs: [] },
@@ -296,7 +306,7 @@ test("ProxyStage: uses profile prompt settings and dind env from container slice
   });
 
   const result = planProxy(
-    { ...shared, container },
+    { ...shared, container, observability },
     {
       generateSessionToken: () => "slice-token",
     },
@@ -316,7 +326,7 @@ test("ProxyStage: planner merges proxy settings into existing container slice", 
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile, {
+  const { shared, container, observability } = makeInput(profile, {
     container: {
       ...emptyContainerPlan("slice-image", "/slice-workdir"),
       mounts: [{ source: "/existing-src", target: "/existing-target" }],
@@ -327,7 +337,7 @@ test("ProxyStage: planner merges proxy settings into existing container slice", 
     },
   });
 
-  const result = planProxy({ ...shared, container })!;
+  const result = planProxy({ ...shared, container, observability })!;
   const proxyEndpoint = result.outputOverrides.proxy!.proxyEndpoint;
 
   expect(result.outputOverrides.container).toEqual({
@@ -358,7 +368,7 @@ test("ProxyStage: stage metadata is stable", () => {
   const { shared } = makeInput(makeProfile());
   const stage = createProxyStage(shared);
   expect(stage.name).toEqual("ProxyStage");
-  expect(stage.needs).toEqual(["container"]);
+  expect(stage.needs).toEqual(["container", "observability"]);
 });
 
 test("replaceNetwork: replaces existing --network", () => {
@@ -385,8 +395,8 @@ test("ProxyStage: forwardPorts-only enables proxy", () => {
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080] } },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container });
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability });
   expect(result !== null).toEqual(true);
 });
 
@@ -399,8 +409,8 @@ test("ProxyStage: forwardPorts does NOT inject host.docker.internal entries into
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080, 5432] } },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(result.allowlist).not.toContain("host.docker.internal:8080");
   expect(result.allowlist).not.toContain("host.docker.internal:5432");
 });
@@ -415,8 +425,8 @@ test("ProxyStage: forwardPorts preserves user-declared host.docker.internal allo
       proxy: { forwardPorts: [8080] },
     },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(result.allowlist).toContain("host.docker.internal:9999");
   expect(result.allowlist).not.toContain("host.docker.internal:8080");
 });
@@ -425,8 +435,8 @@ test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080, 5432] } },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(result.envVars.NAS_FORWARD_PORTS).toEqual("8080,5432");
 });
 
@@ -436,8 +446,8 @@ test("ProxyStage: forwardPorts leaves existing allowlist untouched", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"], proxy: { forwardPorts: [3000] } },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(result.allowlist).toContain("example.com");
   expect(result.allowlist).not.toContain("host.docker.internal:3000");
 });
@@ -446,8 +456,8 @@ test("ProxyStage: no NAS_FORWARD_PORTS when forwardPorts is empty", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(result.envVars.NAS_FORWARD_PORTS).toBeUndefined();
 });
 
@@ -455,8 +465,8 @@ test("ProxyStage: forwardPorts adds per-port UDS bind-mounts to container", () =
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080, 5432] } },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
 
   // Both ports get their own bind-mount targeting /run/nas-fp/<port>.sock with
   // the source matching forward_port_relay's canonical helper. Drift between
@@ -484,8 +494,8 @@ test("ProxyStage: forwardPorts sets NAS_FORWARD_PORT_SOCKET_DIR env", () => {
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080, 5432] } },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
   expect(
     result.outputOverrides.container!.env.static.NAS_FORWARD_PORT_SOCKET_DIR,
   ).toEqual("/run/nas-fp");
@@ -495,8 +505,8 @@ test("ProxyStage: no forward-port mounts or socket-dir env when forwardPorts is 
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
-  const result = planProxy({ ...shared, container })!;
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
 
   const mounts = result.outputOverrides.container!.mounts;
   const fpMounts = mounts.filter((m) => m.target.startsWith("/run/nas-fp/"));
@@ -511,7 +521,7 @@ test("createProxyStage().run(): invokes forwardPortRelay.ensureRelays and close 
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080] } },
   });
-  const { shared, container } = makeInput(profile);
+  const { shared, container, observability } = makeInput(profile);
 
   const ensureCalls: EnsureForwardPortRelaysOptions[] = [];
   let closeCount = 0;
@@ -540,7 +550,9 @@ test("createProxyStage().run(): invokes forwardPortRelay.ensureRelays and close 
 
   const stage = createProxyStage(shared);
   await Effect.runPromise(
-    stage.run({ container }).pipe(Effect.scoped, Effect.provide(layer)),
+    stage
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
   );
 
   expect(ensureCalls.length).toEqual(1);
@@ -591,7 +603,7 @@ test("buildNetworkRuntimePaths: falls back to /tmp when no XDG", () => {
 
 test("createProxyStage().run(): starts deny-by-default proxy when network controls are empty", async () => {
   const profile = makeProfile();
-  const { shared, container } = makeInput(profile);
+  const { shared, container, observability } = makeInput(profile);
   const stage = createProxyStage(shared);
 
   const calls: string[] = [];
@@ -641,7 +653,9 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
   );
 
   const result = await Effect.runPromise(
-    stage.run({ container }).pipe(Effect.scoped, Effect.provide(layer)),
+    stage
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
   );
 
   expect(calls).toEqual([
@@ -667,7 +681,7 @@ test("createProxyStage().run(): calls services and returns merged output", async
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
   });
-  const { shared, container } = makeInput(profile);
+  const { shared, container, observability } = makeInput(profile);
 
   const calls: string[] = [];
 
@@ -720,7 +734,9 @@ test("createProxyStage().run(): calls services and returns merged output", async
   });
 
   const result = await Effect.runPromise(
-    stage.run({ container }).pipe(Effect.scoped, Effect.provide(layer)),
+    stage
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
   );
 
   // All services were called in the expected order. Relay ensure sits between
@@ -756,4 +772,64 @@ test("createProxyStage().run(): calls services and returns merged output", async
   expect(result.container?.env.static.http_proxy).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// observability slice → forwardPorts merge
+// ---------------------------------------------------------------------------
+
+test("ProxyStage: observability disabled => forwardPorts unchanged from profile", () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080, 5432] } },
+  });
+  const { shared, container, observability } = makeInput(profile);
+  const result = planProxy({ ...shared, container, observability })!;
+  expect([...result.forwardPorts]).toEqual([8080, 5432]);
+});
+
+test("ProxyStage: observability enabled => receiverPort appended to forwardPorts", () => {
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [8080] } },
+  });
+  const { shared, container } = makeInput(profile, {
+    observability: { enabled: true, receiverPort: 41234 },
+  });
+  const result = planProxy({
+    ...shared,
+    container,
+    observability: { enabled: true, receiverPort: 41234 },
+  })!;
+  expect([...result.forwardPorts]).toEqual([8080, 41234]);
+});
+
+test("ProxyStage: receiverPort already in profile.forwardPorts is deduped", () => {
+  // The forward-port relay throws on duplicate ports. If a profile already
+  // declares the same port the observability stage chose (e.g. the
+  // operator hard-coded forward-ports against an external collector and
+  // then turned on observability), we MUST dedup before the relay sees it.
+  const profile = makeProfile({
+    network: { proxy: { forwardPorts: [41234, 8080] } },
+  });
+  const { shared, container } = makeInput(profile, {
+    observability: { enabled: true, receiverPort: 41234 },
+  });
+  const result = planProxy({
+    ...shared,
+    container,
+    observability: { enabled: true, receiverPort: 41234 },
+  })!;
+  expect([...result.forwardPorts]).toEqual([41234, 8080]);
+});
+
+test("ProxyStage: empty profile.forwardPorts + observability enabled => only receiverPort", () => {
+  const profile = makeProfile();
+  const { shared, container } = makeInput(profile, {
+    observability: { enabled: true, receiverPort: 41234 },
+  });
+  const result = planProxy({
+    ...shared,
+    container,
+    observability: { enabled: true, receiverPort: 41234 },
+  })!;
+  expect([...result.forwardPorts]).toEqual([41234]);
 });
