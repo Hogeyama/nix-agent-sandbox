@@ -14,7 +14,7 @@
  *   - not-found: backend said the row does not exist; render a stub
  *     and a back link to the list.
  *   - loading: no payload yet → render a single placeholder.
- *   - populated: header + invocations / traces / spans / turn-events.
+ *   - populated: header + invocations / turns / spans / turn-events.
  *
  * A `createSignal`-driven 1-minute tick refreshes relative timestamps
  * without a fresh snapshot.
@@ -27,7 +27,7 @@ import {
   buildConversationTurnEventRows,
   buildInvocationLinks,
   buildSpanRows,
-  buildTraceRows,
+  buildTurnRows,
 } from "./conversationDetailView";
 import { formatCompactNumber } from "./historyListView";
 
@@ -69,9 +69,9 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
     const d = props.detail();
     return d === null ? [] : buildInvocationLinks(d, now());
   };
-  const traces = () => {
+  const turns = () => {
     const d = props.detail();
-    return d === null ? [] : buildTraceRows(d.traces, now());
+    return d === null ? [] : buildTurnRows(d, now());
   };
   const spans = () => {
     const d = props.detail();
@@ -273,51 +273,51 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
 
               <section class="history-detail-section">
                 <h2 class="history-detail-section-title">
-                  Traces
+                  Turns
                   <span class="history-detail-section-count">
-                    {traces().length} rows
+                    {turns().length} rows
                   </span>
                 </h2>
                 <Show
-                  when={traces().length > 0}
+                  when={turns().length > 0}
                   fallback={
-                    <div class="history-detail-section-empty">No traces</div>
+                    <div class="history-detail-section-empty">No turns</div>
                   }
                 >
                   <table class="history-detail-table">
                     <thead>
                       <tr>
-                        <th scope="col">Trace</th>
-                        <th scope="col">Invocation</th>
+                        <th scope="col">Id</th>
                         <th scope="col">Started</th>
-                        <th scope="col">Ended</th>
                         <th scope="col" class="is-numeric">
-                          Spans
+                          Duration
+                        </th>
+                        <th scope="col" class="is-numeric">
+                          LLM
+                        </th>
+                        <th scope="col" class="is-numeric">
+                          Tools
+                        </th>
+                        <th scope="col" class="is-numeric is-stacked">
+                          Tokens
+                          <span class="th-sub">in · out · cacheR · cacheW</span>
                         </th>
                       </tr>
                     </thead>
                     <tbody>
-                      <For each={traces()}>
+                      <For each={turns()}>
                         {(row) => (
                           <tr>
                             <td class="is-id" title={row.traceId}>
                               {row.traceIdLabel}
                             </td>
-                            <td class="is-id">
-                              <a
-                                class="history-row-link"
-                                href={row.invocationHref}
-                              >
-                                {row.invocationIdLabel}
-                              </a>
-                            </td>
                             <td title={row.startedAtAbsolute}>
                               {row.startedAt}
                             </td>
-                            <td title={row.endedAtAbsolute ?? undefined}>
-                              {row.endedAt ?? ""}
-                            </td>
-                            <td class="is-numeric">{row.spanCount}</td>
+                            <td class="is-numeric">{row.durationLabel}</td>
+                            <td class="is-numeric">{row.llmCount}</td>
+                            <td class="is-numeric">{row.toolCount}</td>
+                            <td class="is-numeric">{row.tokensCell}</td>
                           </tr>
                         )}
                       </For>

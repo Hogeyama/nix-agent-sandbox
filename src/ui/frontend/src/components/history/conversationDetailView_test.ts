@@ -13,9 +13,12 @@ import {
   buildInvocationLinks,
   buildSpanRows,
   buildTraceRows,
+  buildTurnRows,
+  compareTurnOrder,
   extractToolName,
   formatCountCell,
   formatDuration,
+  formatTurnTokens,
   truncatePayload,
 } from "./conversationDetailView";
 
@@ -156,6 +159,41 @@ describe("formatCountCell", () => {
   });
   test("kilo-bucket values use compact form", () => {
     expect(formatCountCell(1500)).toBe("1.5k");
+  });
+});
+
+describe("formatTurnTokens", () => {
+  test("joins all four numeric kinds with ' · ' via compact formatter", () => {
+    expect(
+      formatTurnTokens({
+        inputTokens: 100,
+        outputTokens: 200,
+        cacheReadTokens: 1000,
+        cacheWriteTokens: 50,
+      }),
+    ).toBe("100 · 200 · 1k · 50");
+  });
+
+  test("renders all four nulls as hyphen-minus placeholders", () => {
+    expect(
+      formatTurnTokens({
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+      }),
+    ).toBe("- · - · - · -");
+  });
+
+  test("mixes numeric values and hyphen-minus placeholders for nulls", () => {
+    expect(
+      formatTurnTokens({
+        inputTokens: 100,
+        outputTokens: null,
+        cacheReadTokens: 1000,
+        cacheWriteTokens: null,
+      }),
+    ).toBe("100 · - · 1k · -");
   });
 });
 
@@ -579,5 +617,201 @@ describe("buildConversationTurnEventRows", () => {
     expect(view[0]?.linkHref).toBe("#/history/invocation/inv_xxxxxxxxxxxxxxxx");
     expect(view[0]?.kind).toBe("user_message");
     expect(view[0]?.payloadPreview.endsWith("…")).toBe(true);
+  });
+});
+
+describe("compareTurnOrder", () => {
+  test("orders by startedAt ascending", () => {
+    const earlier = { startedAt: "2026-05-01T11:00:00.000Z", traceId: "z" };
+    const later = { startedAt: "2026-05-01T12:00:00.000Z", traceId: "a" };
+    expect(compareTurnOrder(earlier, later)).toBeLessThan(0);
+    expect(compareTurnOrder(later, earlier)).toBeGreaterThan(0);
+  });
+
+  test("uses traceId lexicographic ascending as tie-breaker", () => {
+    const a = { startedAt: "2026-05-01T11:00:00.000Z", traceId: "a" };
+    const b = { startedAt: "2026-05-01T11:00:00.000Z", traceId: "b" };
+    expect(compareTurnOrder(a, b)).toBeLessThan(0);
+    expect(compareTurnOrder(b, a)).toBeGreaterThan(0);
+  });
+
+  test("equal startedAt and traceId compare equal", () => {
+    const a = { startedAt: "2026-05-01T11:00:00.000Z", traceId: "x" };
+    const b = { startedAt: "2026-05-01T11:00:00.000Z", traceId: "x" };
+    expect(compareTurnOrder(a, b)).toBe(0);
+  });
+});
+
+describe("buildTurnRows", () => {
+  test("aggregates chat / tool counts and token totals across spans of one trace", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "trace_one",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:01.234Z",
+        }),
+      ],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          traceId: "trace_one",
+          kind: "chat",
+          inTok: 100,
+          outTok: 50,
+          cacheR: 10,
+          cacheW: 5,
+        }),
+        makeSpan({
+          spanId: "s2",
+          traceId: "trace_one",
+          kind: "execute_tool",
+          inTok: 1,
+          outTok: 2,
+          cacheR: 3,
+          cacheW: 4,
+        }),
+        makeSpan({
+          spanId: "s3",
+          traceId: "trace_one",
+          kind: "execute_tool",
+          inTok: 7,
+          outTok: 8,
+          cacheR: 9,
+          cacheW: 11,
+        }),
+      ],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view).toHaveLength(1);
+    expect(view[0]?.llmCount).toBe(1);
+    expect(view[0]?.toolCount).toBe(2);
+    expect(view[0]?.spanCount).toBe(3);
+    expect(view[0]?.inputTokens).toBe(108);
+    expect(view[0]?.outputTokens).toBe(60);
+    expect(view[0]?.cacheReadTokens).toBe(22);
+    expect(view[0]?.cacheWriteTokens).toBe(20);
+    expect(view[0]?.durationLabel).toBe("1.2s");
+    expect(view[0]?.traceIdLabel).toBe("trace_on");
+    expect(view[0]?.invocationHref).toBe(
+      "#/history/invocation/inv_xxxxxxxxxxxxxxxx",
+    );
+  });
+
+  test("open trace renders durationLabel as empty string", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ endedAt: null })],
+      spans: [],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view[0]?.durationLabel).toBe("");
+  });
+
+  test("token kind that is null on every span surfaces as null (not 0)", () => {
+    const detail = makeDetail({
+      traces: [makeTrace()],
+      spans: [
+        makeSpan({ spanId: "s1", inTok: null, outTok: 10 }),
+        makeSpan({ spanId: "s2", inTok: null, outTok: 20 }),
+      ],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view[0]?.inputTokens).toBeNull();
+    expect(view[0]?.outputTokens).toBe(30);
+  });
+
+  test("mixed null / numeric token entries sum only the numerics", () => {
+    const detail = makeDetail({
+      traces: [makeTrace()],
+      spans: [
+        makeSpan({ spanId: "s1", inTok: null }),
+        makeSpan({ spanId: "s2", inTok: 100 }),
+        makeSpan({ spanId: "s3", inTok: 23 }),
+      ],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view[0]?.inputTokens).toBe(123);
+  });
+
+  test("spans are partitioned by traceId across multiple traces", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "trace_a",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        makeTrace({
+          traceId: "trace_b",
+          startedAt: "2026-05-01T11:01:00.000Z",
+        }),
+      ],
+      spans: [
+        makeSpan({ spanId: "s1", traceId: "trace_a", kind: "chat" }),
+        makeSpan({
+          spanId: "s2",
+          traceId: "trace_b",
+          kind: "execute_tool",
+        }),
+        makeSpan({
+          spanId: "s3",
+          traceId: "trace_b",
+          kind: "execute_tool",
+        }),
+      ],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view[0]?.traceId).toBe("trace_a");
+    expect(view[0]?.llmCount).toBe(1);
+    expect(view[0]?.toolCount).toBe(0);
+    expect(view[0]?.spanCount).toBe(1);
+    expect(view[1]?.traceId).toBe("trace_b");
+    expect(view[1]?.llmCount).toBe(0);
+    expect(view[1]?.toolCount).toBe(2);
+    expect(view[1]?.spanCount).toBe(2);
+  });
+
+  test("turn with no chat / tool spans reports zero counts", () => {
+    const detail = makeDetail({
+      traces: [makeTrace()],
+      spans: [makeSpan({ kind: "other" })],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view[0]?.llmCount).toBe(0);
+    expect(view[0]?.toolCount).toBe(0);
+    expect(view[0]?.spanCount).toBe(1);
+  });
+
+  test("turn with no spans at all reports zero counts and null tokens", () => {
+    const detail = makeDetail({
+      traces: [makeTrace()],
+      spans: [],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view[0]?.llmCount).toBe(0);
+    expect(view[0]?.toolCount).toBe(0);
+    expect(view[0]?.spanCount).toBe(0);
+    expect(view[0]?.inputTokens).toBeNull();
+    expect(view[0]?.outputTokens).toBeNull();
+    expect(view[0]?.cacheReadTokens).toBeNull();
+    expect(view[0]?.cacheWriteTokens).toBeNull();
+  });
+
+  test("traces in reverse order are sorted by startedAt ASC", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "trace_late",
+          startedAt: "2026-05-01T12:00:00.000Z",
+        }),
+        makeTrace({
+          traceId: "trace_early",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+      ],
+      spans: [],
+    });
+    const view = buildTurnRows(detail, NOW_MS);
+    expect(view[0]?.traceId).toBe("trace_early");
+    expect(view[1]?.traceId).toBe("trace_late");
   });
 });

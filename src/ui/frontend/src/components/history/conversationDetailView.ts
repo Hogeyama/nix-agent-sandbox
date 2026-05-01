@@ -22,7 +22,11 @@ import type {
   SpanSummaryRow,
   TraceSummaryRow,
 } from "../../../../../history/types";
-import { formatRelativeTime, shortenId } from "./historyListView";
+import {
+  formatCompactNumber,
+  formatRelativeTime,
+  shortenId,
+} from "./historyListView";
 
 /** Maximum payload preview length (chars) before the trailing ellipsis. */
 const PAYLOAD_PREVIEW_MAX = 80;
@@ -85,6 +89,45 @@ export interface TraceRowView {
   readonly endedAt: string | null;
   readonly endedAtAbsolute: string | null;
   readonly spanCount: number;
+}
+
+/**
+ * Row shape for the Turns table on the conversation detail page.
+ *
+ * A "turn" is one user→assistant interaction, materialised as a single
+ * trace whose `claude_code.interaction` span sits at the trace root.
+ * Each row aggregates the spans inside the trace into a one-line
+ * summary (LLM call count, tool call count, token totals, duration).
+ *
+ * Token fields are `null` when every contributing span reports `null`
+ * for that token kind, distinguishing "no data emitted" from the
+ * legitimate zero of "emitted but counted no tokens". When at least
+ * one span carries a numeric value, the others' `null`s contribute
+ * nothing to the sum.
+ */
+export interface TurnRowView {
+  readonly traceId: string;
+  readonly traceIdLabel: string;
+  readonly startedAt: string;
+  readonly startedAtAbsolute: string;
+  /** Compact-formatted duration ("234ms", "1.2s", …); empty for an open turn. */
+  readonly durationLabel: string;
+  readonly llmCount: number;
+  readonly toolCount: number;
+  readonly spanCount: number;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  /**
+   * Pre-formatted Tokens cell joining the four token kinds with " · "
+   * separators in `in · out · cacheR · cacheW` order. Built by
+   * `formatTurnTokens` from the four numeric fields above so the page
+   * just renders the string.
+   */
+  readonly tokensCell: string;
+  readonly invocationHref: string;
+  readonly invocationIdLabel: string;
 }
 
 export interface SpanRowView {
@@ -369,6 +412,125 @@ export function buildTraceRows(
     endedAtAbsolute: row.endedAt,
     spanCount: row.spanCount,
   }));
+}
+
+/**
+ * Comparator that orders turns deterministically: by `startedAt`
+ * ascending, with `traceId` lexicographic ascending as the tie-breaker
+ * so two turns sharing a millisecond timestamp still sort stably.
+ *
+ * Exported so callers that need to walk turns in display order (for
+ * example when grouping spans under their parent turn) can reuse the
+ * same ordering without re-deriving it.
+ */
+export function compareTurnOrder(
+  a: { readonly startedAt: string; readonly traceId: string },
+  b: { readonly startedAt: string; readonly traceId: string },
+): number {
+  if (a.startedAt < b.startedAt) return -1;
+  if (a.startedAt > b.startedAt) return 1;
+  if (a.traceId < b.traceId) return -1;
+  if (a.traceId > b.traceId) return 1;
+  return 0;
+}
+
+/**
+ * Sum a token column across spans, treating `null` as "no data".
+ *
+ * Returns `null` when every span reports `null` for the column —
+ * "the backend never emitted this token kind" — so the caller can
+ * render a hyphen-minus placeholder instead of a misleading `0`.
+ * When at least one span carries a numeric value the result is the
+ * sum of those numerics, with `null` entries contributing nothing.
+ */
+function sumNullableColumn(
+  spans: readonly SpanSummaryRow[],
+  pick: (s: SpanSummaryRow) => number | null,
+): number | null {
+  let total = 0;
+  let sawNumeric = false;
+  for (const s of spans) {
+    const v = pick(s);
+    if (v === null) continue;
+    total += v;
+    sawNumeric = true;
+  }
+  return sawNumeric ? total : null;
+}
+
+/**
+ * Format a turn's four token kinds as a single dot-separated cell:
+ * `in · out · cacheR · cacheW`. Tokens cell joins each kind with " · "
+ * using `formatCompactNumber` for numeric values, and a `-`
+ * (hyphen-minus) placeholder for `null` so the operator can tell
+ * "backend never emitted this" apart from a true zero.
+ */
+export function formatTurnTokens(row: {
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+}): string {
+  const fmt = (n: number | null) => (n === null ? "-" : formatCompactNumber(n));
+  return [
+    fmt(row.inputTokens),
+    fmt(row.outputTokens),
+    fmt(row.cacheReadTokens),
+    fmt(row.cacheWriteTokens),
+  ].join(" · ");
+}
+
+/**
+ * Project a `ConversationDetail` into the per-turn summary rows
+ * rendered by the Turns table. See `TurnRowView` for the per-row
+ * contract; see `compareTurnOrder` for the row ordering.
+ */
+export function buildTurnRows(
+  detail: ConversationDetail,
+  nowMs: number,
+): TurnRowView[] {
+  const ordered = detail.traces.slice().sort(compareTurnOrder);
+  return ordered.map((trace) => {
+    const traceSpans = detail.spans.filter((s) => s.traceId === trace.traceId);
+    let llmCount = 0;
+    let toolCount = 0;
+    for (const s of traceSpans) {
+      if (s.kind === "chat") llmCount += 1;
+      else if (s.kind === "execute_tool") toolCount += 1;
+    }
+    const durationMs =
+      trace.endedAt === null
+        ? null
+        : Date.parse(trace.endedAt) - Date.parse(trace.startedAt);
+    const durationLabel =
+      durationMs === null ? "" : (formatDuration(durationMs) ?? "");
+    const inputTokens = sumNullableColumn(traceSpans, (s) => s.inTok);
+    const outputTokens = sumNullableColumn(traceSpans, (s) => s.outTok);
+    const cacheReadTokens = sumNullableColumn(traceSpans, (s) => s.cacheR);
+    const cacheWriteTokens = sumNullableColumn(traceSpans, (s) => s.cacheW);
+    return {
+      traceId: trace.traceId,
+      traceIdLabel: shortenId(trace.traceId),
+      startedAt: formatRelativeTime(trace.startedAt, nowMs),
+      startedAtAbsolute: trace.startedAt,
+      durationLabel,
+      llmCount,
+      toolCount,
+      spanCount: traceSpans.length,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      tokensCell: formatTurnTokens({
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+      }),
+      invocationHref: `#/history/invocation/${encodeURIComponent(trace.invocationId)}`,
+      invocationIdLabel: shortenId(trace.invocationId),
+    };
+  });
 }
 
 /**
