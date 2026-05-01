@@ -34,6 +34,11 @@ import {
   shellEscape,
   socketPathFor,
 } from "./dtach/client.ts";
+import {
+  recordInvocationEnd,
+  recordInvocationStart,
+  shouldRecordInvocation,
+} from "./history/cli_lifecycle.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
 import { setLogLevel } from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
@@ -294,32 +299,55 @@ export async function main(args: string[]): Promise<void> {
     // HostExec broker が nas hook を実行する際に参照する
     process.env.NAS_SESSION_ID = sessionId;
 
-    const initialState = createCliInitialState(process.cwd(), imageName, {
-      NAS_LOG_LEVEL: logLevel,
-      NAS_SESSION_ID: sessionId,
-    });
-    const builder = createCliPipelineBuilder({
-      input: {
-        config,
-        profile: effectiveProfile,
-        profileName: name,
-        sessionId,
-        sessionName,
-        host: hostEnv,
-        probes,
-      },
-      buildProbes,
-      mountProbes,
-      agentExtraArgs,
-    });
+    // history.db: invocation 行を materialize。telemetry は agent をブロック
+    // しない原則のため、open/upsert 失敗は warn のみで CLI 続行 (db=null)。
+    // Gap: SIGINT / SIGTERM / uncaughtException はこの try/catch を経由せず
+    // プロセスを終了させるため、それらの経路では recordInvocationEnd が呼ばれず
+    // ended_at は NULL のまま残る。signal handler を足さない trade-off。
+    const historyDb = shouldRecordInvocation(effectiveProfile, process.env)
+      ? recordInvocationStart({
+          sessionId,
+          profileName: name,
+          agent: effectiveProfile.agent,
+          worktreePath: process.cwd(),
+        })
+      : null;
 
-    const exit = await Effect.runPromiseExit(
-      builder.run(initialState).pipe(Effect.scoped, Effect.provide(liveLayer)),
-    );
+    try {
+      const initialState = createCliInitialState(process.cwd(), imageName, {
+        NAS_LOG_LEVEL: logLevel,
+        NAS_SESSION_ID: sessionId,
+      });
+      const builder = createCliPipelineBuilder({
+        input: {
+          config,
+          profile: effectiveProfile,
+          profileName: name,
+          sessionId,
+          sessionName,
+          host: hostEnv,
+          probes,
+        },
+        buildProbes,
+        mountProbes,
+        agentExtraArgs,
+      });
 
-    if (Exit.isFailure(exit)) {
-      const error = Cause.squash(exit.cause);
-      exitOnCliError(error);
+      const exit = await Effect.runPromiseExit(
+        builder
+          .run(initialState)
+          .pipe(Effect.scoped, Effect.provide(liveLayer)),
+      );
+
+      if (Exit.isFailure(exit)) {
+        recordInvocationEnd(historyDb, { sessionId, exitReason: "error" });
+        const error = Cause.squash(exit.cause);
+        exitOnCliError(error);
+      }
+      recordInvocationEnd(historyDb, { sessionId, exitReason: "ok" });
+    } catch (err) {
+      recordInvocationEnd(historyDb, { sessionId, exitReason: "error" });
+      throw err;
     }
   } catch (err) {
     exitOnCliError(err);
