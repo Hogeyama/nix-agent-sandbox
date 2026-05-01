@@ -98,6 +98,16 @@ export function HistoryListPage(props: HistoryListPageProps) {
                       <a class="history-row-link" href={row.href}>
                         {row.shortId}
                       </a>
+                      <div
+                        class={
+                          row.hasSummary
+                            ? "history-list-summary"
+                            : "history-list-summary history-list-summary-empty"
+                        }
+                        title={row.hasSummary ? row.summary : undefined}
+                      >
+                        {row.summary}
+                      </div>
                     </td>
                     <td class="history-cell-agent">{row.agent}</td>
                     <td class="history-cell-time" title={row.fullTimestamp}>

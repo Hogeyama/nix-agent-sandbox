@@ -21,6 +21,7 @@ function makeRow(
     outputTokensTotal: 500,
     cacheReadTotal: 0,
     cacheWriteTotal: 0,
+    summary: null,
     ...overrides,
   };
 }
@@ -133,5 +134,20 @@ describe("toHistoryListRowDisplay", () => {
     );
     expect(display.href).toBe("#/history/conversation/longid_xxx");
     expect(display.shortId).toBe("longid_x");
+  });
+
+  test("falls back to a placeholder when summary is null", () => {
+    const display = toHistoryListRowDisplay(makeRow({ summary: null }), nowMs);
+    expect(display.summary).toBe("(no summary)");
+    expect(display.hasSummary).toBe(false);
+  });
+
+  test("propagates a non-null summary verbatim", () => {
+    const display = toHistoryListRowDisplay(
+      makeRow({ summary: "Refactor the auth flow" }),
+      nowMs,
+    );
+    expect(display.summary).toBe("Refactor the auth flow");
+    expect(display.hasSummary).toBe(true);
   });
 });

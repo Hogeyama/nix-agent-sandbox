@@ -11,6 +11,7 @@ import {
   queryConversationList,
   queryInvocationDetail,
   upsertConversation,
+  upsertConversationSummary,
   upsertInvocation,
   upsertTrace,
 } from "./store.ts";
@@ -505,6 +506,104 @@ test("queryInvocationDetail: collects traces / spans / turn_events / conversatio
       "conv_main",
       "conv_sub",
     ]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationList: summary defaults to null when no row in conversation_summaries", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertConversation(db, conv({ id: "conv_no_sum" }));
+    const list = queryConversationList(db);
+    expect(list[0].summary).toBeNull();
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationList: summary surfaces the upserted value", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertConversation(db, conv({ id: "conv_with_sum" }));
+    upsertConversationSummary(db, {
+      id: "conv_with_sum",
+      summary: "Help me debug the test runner",
+      capturedAt: "2026-05-01T10:00:00Z",
+    });
+    const list = queryConversationList(db);
+    expect(list[0].summary).toBe("Help me debug the test runner");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("upsertConversationSummary: INSERT OR IGNORE — first write wins", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertConversation(db, conv({ id: "conv_idem" }));
+    upsertConversationSummary(db, {
+      id: "conv_idem",
+      summary: "First prompt",
+      capturedAt: "2026-05-01T10:00:00Z",
+    });
+    upsertConversationSummary(db, {
+      id: "conv_idem",
+      summary: "Different later prompt",
+      capturedAt: "2026-05-01T11:00:00Z",
+    });
+    const list = queryConversationList(db);
+    expect(list[0].summary).toBe("First prompt");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationDetail: includes summary in the conversation header", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertConversation(db, conv({ id: "conv_detail_sum" }));
+    upsertConversationSummary(db, {
+      id: "conv_detail_sum",
+      summary: "Original prompt",
+      capturedAt: "2026-05-01T10:00:00Z",
+    });
+    const detail = queryConversationDetail(db, "conv_detail_sum");
+    expect(detail?.conversation.summary).toBe("Original prompt");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("conversation_summaries table is added to existing db on writer re-open", async () => {
+  const t = await makeTempDb();
+  try {
+    // First open: creates db with v1 schema.
+    const db1 = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertConversation(db1, conv({ id: "conv_reopen" }));
+    _closeHistoryDb(t.dbPath);
+
+    // Second open re-runs SCHEMA_SQL with CREATE TABLE IF NOT EXISTS;
+    // user_version stays at 1 so this must succeed.
+    const db2 = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    const tables = db2
+      .query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_summaries'",
+      )
+      .all() as { name: string }[];
+    expect(tables).toHaveLength(1);
+
+    // And it is functional.
+    upsertConversationSummary(db2, {
+      id: "conv_reopen",
+      summary: "after reopen",
+      capturedAt: "2026-05-01T10:00:00Z",
+    });
+    expect(queryConversationList(db2)[0].summary).toBe("after reopen");
   } finally {
     await cleanup(t);
   }

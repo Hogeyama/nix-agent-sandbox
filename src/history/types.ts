@@ -94,6 +94,13 @@ export interface ConversationListRow {
   readonly outputTokensTotal: number;
   readonly cacheReadTotal: number;
   readonly cacheWriteTotal: number;
+  /**
+   * First user prompt of the conversation, captured by the hook from the
+   * agent's transcript. NULL when no transcript was available (e.g. agents
+   * that do not emit a `transcript_path` in the hook payload, or when the
+   * hook fired before the first user turn).
+   */
+  readonly summary: string | null;
 }
 
 export interface TraceSummaryRow {

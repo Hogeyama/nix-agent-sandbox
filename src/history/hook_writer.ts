@@ -17,6 +17,7 @@ import {
   openHistoryDb,
   resolveHistoryDbPath,
   upsertConversation,
+  upsertConversationSummary,
 } from "./store.ts";
 
 export interface AppendTurnEventArgs {
@@ -104,6 +105,71 @@ export function appendTurnEvent(args: AppendTurnEventArgs): void {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(
       `nas hook: history turn_event insert failed: ${msg}. Skipping.`,
+    );
+  }
+}
+
+export interface AppendConversationSummaryArgs {
+  /** Agent-issued conversation id (the FK target in conversation_summaries). */
+  conversationId: string;
+  /**
+   * The pre-extracted, pre-truncated first user prompt for the conversation.
+   *
+   * Agent-controlled: callers (the `nas hook` cli) lift this either from
+   * the agent's transcript JSONL (Claude `transcript_path`) or directly
+   * from the hook payload (Copilot `payload.prompt`). The agent can put any
+   * string here. See `extractTranscriptSummary` (transcript_reader.ts) for
+   * the matching note on why this is treated as agent-trusted rather than
+   * sandboxed.
+   */
+  summary: string;
+  /** ISO 8601 string with millisecond precision (Z-terminated). */
+  capturedAt: string;
+}
+
+/**
+ * Best-effort capture of a conversation's first user prompt as a summary.
+ *
+ * Writes `summary` to `conversation_summaries` for `conversationId`. Any
+ * failure (DB open, schema mismatch, write) is warned to stderr and
+ * swallowed — the hook never fails the agent.
+ *
+ * The conversation_summaries writer uses INSERT OR IGNORE, so a second
+ * call against an already-populated row is a no-op. This makes it safe to
+ * invoke this from every hook fire, not just the first one.
+ */
+export function appendConversationSummary(
+  args: AppendConversationSummaryArgs,
+): void {
+  const dbPath = resolveHistoryDbPath();
+  let db: Database;
+  try {
+    db = openHistoryDb({ path: dbPath, mode: "readwrite" });
+  } catch (e) {
+    if (e instanceof HistoryDbVersionMismatchError) {
+      console.error(
+        `nas hook: history db schema version mismatch (expected 1, got ${e.actual}). ` +
+          `Run 'rm ${dbPath}' and re-run nas. Skipping conversation summary.`,
+      );
+    } else {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(
+        `nas hook: history db open failed: ${msg}. Skipping conversation summary.`,
+      );
+    }
+    return;
+  }
+
+  try {
+    upsertConversationSummary(db, {
+      id: args.conversationId,
+      summary: args.summary,
+      capturedAt: args.capturedAt,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(
+      `nas hook: conversation summary upsert failed: ${msg}. Continuing.`,
     );
   }
 }

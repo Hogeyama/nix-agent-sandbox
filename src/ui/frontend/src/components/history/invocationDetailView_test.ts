@@ -43,6 +43,7 @@ function makeConversation(
     outputTokensTotal: 100,
     cacheReadTotal: 0,
     cacheWriteTotal: 0,
+    summary: null,
     ...overrides,
   };
 }

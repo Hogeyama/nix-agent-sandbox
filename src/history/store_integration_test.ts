@@ -421,7 +421,7 @@ test("opening with a mismatched user_version throws HistoryDbVersionMismatchErro
   }
 });
 
-test("schema introspection: expected 5 tables and 7 indexes are present", async () => {
+test("schema introspection: expected 6 tables and 7 indexes are present", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
@@ -433,6 +433,7 @@ test("schema introspection: expected 5 tables and 7 indexes are present", async 
       .all() as { name: string }[];
     const tableNames = tables.map((r) => r.name);
     expect(tableNames).toEqual([
+      "conversation_summaries",
       "conversations",
       "invocations",
       "spans",

@@ -40,6 +40,7 @@ function makeListRow(id: string): ConversationListRow {
     outputTokensTotal: 0,
     cacheReadTotal: 0,
     cacheWriteTotal: 0,
+    summary: null,
   };
 }
 

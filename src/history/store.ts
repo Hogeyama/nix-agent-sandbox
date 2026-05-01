@@ -141,6 +141,12 @@ CREATE TABLE IF NOT EXISTS turn_events (
   payload_json    TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+  id           TEXT PRIMARY KEY REFERENCES conversations(id),
+  summary      TEXT NOT NULL,
+  captured_at  TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_traces_invocation
   ON traces(invocation_id);
 CREATE INDEX IF NOT EXISTS idx_traces_conversation
@@ -400,6 +406,24 @@ export function insertSpans(db: Database, rows: SpanRow[]): void {
   tx(rows);
 }
 
+/**
+ * Insert the first-seen summary for a conversation.
+ *
+ * Invariant: the *first* summary persists. Subsequent calls are silent
+ * no-ops via INSERT OR IGNORE — a conversation's identity is anchored to
+ * its opening user prompt, and later turns must not rewrite the row.
+ */
+export function upsertConversationSummary(
+  db: Database,
+  row: { id: string; summary: string; capturedAt: string },
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO conversation_summaries
+       (id, summary, captured_at)
+     VALUES (?, ?, ?)`,
+  ).run(row.id, row.summary, row.capturedAt);
+}
+
 /** Append a single turn_events row. No PK; duplicates are allowed. */
 export function insertTurnEvent(db: Database, row: TurnEventRow): void {
   db.prepare(
@@ -432,6 +456,7 @@ interface ConversationListSqlRow {
   agent: string | null;
   first_seen_at: string;
   last_seen_at: string;
+  summary: string | null;
   turn_event_count: number;
   span_count: number;
   invocation_count: number;
@@ -483,6 +508,7 @@ const CONVERSATION_LIST_SELECT = `
     c.agent           AS agent,
     c.first_seen_at   AS first_seen_at,
     c.last_seen_at    AS last_seen_at,
+    cs.summary        AS summary,
     COALESCE(
       (SELECT COUNT(*) FROM turn_events te WHERE te.conversation_id = c.id),
       0
@@ -523,6 +549,13 @@ const CONVERSATION_LIST_SELECT = `
       0
     ) AS cache_write_total
   FROM conversations c
+  -- LEFT JOIN: depends on writer mode having run CREATE TABLE IF NOT EXISTS
+  -- conversation_summaries. Pre-existing v1 history.db files (created before
+  -- this table existed) lack the table on first readonly open; the UI reader
+  -- (history_data.ts) catches the resulting "no such table" and degrades to
+  -- [] with a warn until the next writer-mode caller (hook / observability
+  -- stage) materializes the table.
+  LEFT JOIN conversation_summaries cs ON cs.id = c.id
 `;
 
 function rowToConversationListRow(
@@ -540,6 +573,7 @@ function rowToConversationListRow(
     outputTokensTotal: r.output_tokens_total,
     cacheReadTotal: r.cache_read_total,
     cacheWriteTotal: r.cache_write_total,
+    summary: r.summary,
   };
 }
 

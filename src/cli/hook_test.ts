@@ -12,7 +12,9 @@ import type { SessionRuntimePaths } from "../sessions/store.ts";
 import { ensureSessionRuntimePaths, readSession } from "../sessions/store.ts";
 import {
   extractConversationId,
+  extractFirstUserPrompt,
   extractHookMessage,
+  extractTranscriptPath,
   parseHookKind,
   runHookCommand,
 } from "./hook.ts";
@@ -815,6 +817,126 @@ test("runHookCommand with history db schema mismatch exits 0 and writes no turn_
   expect(record?.turn).toBe("agent-turn");
 });
 
+// --- extractTranscriptPath ---
+
+test("extractTranscriptPath: snake_case transcript_path (Claude)", () => {
+  expect(extractTranscriptPath({ transcript_path: "/tmp/x.jsonl" })).toBe(
+    "/tmp/x.jsonl",
+  );
+});
+
+test("extractTranscriptPath: missing field returns null", () => {
+  expect(extractTranscriptPath({})).toBeNull();
+  expect(extractTranscriptPath({ session_id: "x" })).toBeNull();
+});
+
+test("extractTranscriptPath: non-object / empty / non-string return null", () => {
+  expect(extractTranscriptPath(null)).toBeNull();
+  expect(extractTranscriptPath(undefined)).toBeNull();
+  expect(extractTranscriptPath([])).toBeNull();
+  expect(extractTranscriptPath({ transcript_path: "" })).toBeNull();
+  expect(extractTranscriptPath({ transcript_path: 42 })).toBeNull();
+});
+
+// --- runHookCommand: conversation_summary persistence ---
+
+interface SummaryRowDb {
+  id: string;
+  summary: string;
+  captured_at: string;
+}
+
+function readSummary(id: string): SummaryRowDb | null {
+  const db = openHistoryDb({ path: historyDbPath, mode: "readonly" });
+  return (
+    (db
+      .query(
+        "SELECT id, summary, captured_at FROM conversation_summaries WHERE id = ?",
+      )
+      .get(id) as SummaryRowDb | null) ?? null
+  );
+}
+
+test("runHookCommand persists conversation summary when Claude payload carries transcript_path", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-trans";
+  seedInvocation("sess-hook-trans");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-trans",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  const transcriptFile = path.join(tmpRoot, "transcript.jsonl");
+  await writeFile(
+    transcriptFile,
+    `${JSON.stringify({
+      type: "user",
+      message: { content: "Refactor the auth flow" },
+    })}\n`,
+  );
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin(
+      JSON.stringify({
+        session_id: "conv_trans",
+        transcript_path: transcriptFile,
+      }),
+    ),
+  });
+
+  const row = readSummary("conv_trans");
+  expect(row?.summary).toBe("Refactor the auth flow");
+});
+
+test("runHookCommand: payload without transcript_path leaves conversation_summaries empty", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-no-trans";
+  seedInvocation("sess-hook-no-trans");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-no-trans",
+    agent: "copilot",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin('{"sessionId":"conv_no_trans"}'),
+  });
+
+  expect(readSummary("conv_no_trans")).toBeNull();
+});
+
+test("runHookCommand: missing transcript file does not fail the hook", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-trans-missing";
+  seedInvocation("sess-hook-trans-missing");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-trans-missing",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  let threw: unknown;
+  try {
+    await runHookCommand(["--kind", "start"], {
+      stdinReader: makeStdin(
+        JSON.stringify({
+          session_id: "conv_trans_missing",
+          transcript_path: path.join(tmpRoot, "no-such-file.jsonl"),
+        }),
+      ),
+    });
+  } catch (e) {
+    threw = e;
+  }
+
+  expect(threw).toBeUndefined();
+  expect(readSummary("conv_trans_missing")).toBeNull();
+});
+
 // Subagent observation: ADR §"turn_events への conversation_id 付与" notes
 // that subagent hook events fire under the *parent* session id. Subagent
 // internal LLM/tool calls flow through OTLP with the subagent's own
@@ -843,4 +965,174 @@ test("runHookCommand: subagent hook events land on the parent conversation_id", 
   expect(rows).toHaveLength(2);
   expect(rows[0].conversation_id).toBe("conv_parent");
   expect(rows[1].conversation_id).toBe("conv_parent");
+});
+
+// --- extractFirstUserPrompt ---
+
+test("extractFirstUserPrompt: Claude payload with transcript_path reads JSONL", async () => {
+  const file = path.join(tmpRoot, "et-claude.jsonl");
+  await writeFile(
+    file,
+    `${JSON.stringify({
+      type: "user",
+      message: { content: "hello from transcript" },
+    })}\n`,
+  );
+  expect(extractFirstUserPrompt({ transcript_path: file }, "start")).toBe(
+    "hello from transcript",
+  );
+});
+
+test("extractFirstUserPrompt: Copilot payload with prompt returns the string", () => {
+  expect(extractFirstUserPrompt({ prompt: "Hello, Copilot." }, "start")).toBe(
+    "Hello, Copilot.",
+  );
+});
+
+test("extractFirstUserPrompt: Copilot prompt is whitespace-normalized and truncated to 160", () => {
+  const long = `${"x".repeat(200)}`;
+  const out = extractFirstUserPrompt({ prompt: long }, "start");
+  expect(out).not.toBeNull();
+  expect(out).toHaveLength(160);
+  expect(out?.endsWith("…")).toBe(true);
+});
+
+test("extractFirstUserPrompt: collapses runs of whitespace in Copilot prompt", () => {
+  expect(extractFirstUserPrompt({ prompt: "one\n\ntwo\tthree" }, "start")).toBe(
+    "one two three",
+  );
+});
+
+test("extractFirstUserPrompt: empty / non-string prompt returns null", () => {
+  expect(extractFirstUserPrompt({ prompt: "" }, "start")).toBeNull();
+  expect(extractFirstUserPrompt({ prompt: "   " }, "start")).toBeNull();
+  expect(extractFirstUserPrompt({ prompt: 42 }, "start")).toBeNull();
+  expect(extractFirstUserPrompt({ prompt: null }, "start")).toBeNull();
+});
+
+test("extractFirstUserPrompt: kind != start returns null even when fields are present", async () => {
+  const file = path.join(tmpRoot, "et-attention.jsonl");
+  await writeFile(
+    file,
+    `${JSON.stringify({
+      type: "user",
+      message: { content: "should be ignored" },
+    })}\n`,
+  );
+  expect(
+    extractFirstUserPrompt({ transcript_path: file }, "attention"),
+  ).toBeNull();
+  expect(
+    extractFirstUserPrompt({ prompt: "should be ignored" }, "stop"),
+  ).toBeNull();
+});
+
+test("extractFirstUserPrompt: transcript_path wins when both transcript_path and prompt present", async () => {
+  const file = path.join(tmpRoot, "et-both.jsonl");
+  await writeFile(
+    file,
+    `${JSON.stringify({
+      type: "user",
+      message: { content: "from transcript" },
+    })}\n`,
+  );
+  expect(
+    extractFirstUserPrompt(
+      { transcript_path: file, prompt: "from prompt" },
+      "start",
+    ),
+  ).toBe("from transcript");
+});
+
+test("extractFirstUserPrompt: payload missing both fields returns null", () => {
+  expect(extractFirstUserPrompt({}, "start")).toBeNull();
+  expect(extractFirstUserPrompt({ session_id: "x" }, "start")).toBeNull();
+  expect(extractFirstUserPrompt(null, "start")).toBeNull();
+  expect(extractFirstUserPrompt(undefined, "start")).toBeNull();
+  expect(extractFirstUserPrompt([], "start")).toBeNull();
+});
+
+// --- runHookCommand: Copilot conversation_summary persistence ---
+
+test("runHookCommand persists Copilot conversation summary from payload.prompt", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-copilot-prompt";
+  seedInvocation("sess-hook-copilot-prompt");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-copilot-prompt",
+    agent: "copilot",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin(
+      JSON.stringify({
+        sessionId: "conv_copilot_prompt",
+        prompt: "Add a Copilot integration test",
+      }),
+    ),
+  });
+
+  const row = readSummary("conv_copilot_prompt");
+  expect(row?.summary).toBe("Add a Copilot integration test");
+});
+
+test("runHookCommand: Copilot fires twice; INSERT OR IGNORE keeps the first prompt", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-copilot-twice";
+  seedInvocation("sess-hook-copilot-twice");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-copilot-twice",
+    agent: "copilot",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin(
+      JSON.stringify({
+        sessionId: "conv_copilot_twice",
+        prompt: "First prompt",
+      }),
+    ),
+  });
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin(
+      JSON.stringify({
+        sessionId: "conv_copilot_twice",
+        prompt: "Second prompt should be ignored",
+      }),
+    ),
+  });
+
+  const row = readSummary("conv_copilot_twice");
+  expect(row?.summary).toBe("First prompt");
+});
+
+test("runHookCommand: kind=attention with Copilot prompt does not write a summary", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-copilot-attn";
+  seedInvocation("sess-hook-copilot-attn");
+  const { createSession, updateSessionTurn } = await import(
+    "../sessions/store.ts"
+  );
+  await createSession(paths, {
+    sessionId: "sess-hook-copilot-attn",
+    agent: "copilot",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+  await updateSessionTurn(paths, "sess-hook-copilot-attn", "start");
+
+  await runHookCommand(["--kind", "attention"], {
+    stdinReader: makeStdin(
+      JSON.stringify({
+        sessionId: "conv_copilot_attn",
+        prompt: "should not become a summary",
+      }),
+    ),
+    notifySender: noopNotify,
+  });
+
+  expect(readSummary("conv_copilot_attn")).toBeNull();
 });

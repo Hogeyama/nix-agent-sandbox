@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { recordInvocationStart } from "./cli_lifecycle.ts";
-import { appendTurnEvent } from "./hook_writer.ts";
+import { appendConversationSummary, appendTurnEvent } from "./hook_writer.ts";
 import { _closeHistoryDb, openHistoryDb } from "./store.ts";
 
 interface TempEnv {
@@ -400,6 +400,108 @@ test("appendTurnEvent: warns and continues when insertTurnEvent fails", () => {
   // The conversation upsert still ran: last_seen_at advanced.
   const conv = readConversation("conv_partial");
   expect(conv?.last_seen_at).toBe("2026-05-01T10:00:01.000Z");
+});
+
+// ---------------------------------------------------------------------------
+// appendConversationSummary
+// ---------------------------------------------------------------------------
+
+interface SummaryRowDb {
+  id: string;
+  summary: string;
+  captured_at: string;
+}
+
+function readSummary(id: string): SummaryRowDb | null {
+  const db = openHistoryDb({ path: env.dbPath, mode: "readonly" });
+  return (
+    (db
+      .query(
+        "SELECT id, summary, captured_at FROM conversation_summaries WHERE id = ?",
+      )
+      .get(id) as SummaryRowDb | null) ?? null
+  );
+}
+
+test("appendConversationSummary writes the supplied summary", () => {
+  seedInvocation("sess_sum1");
+  // Conversation row must exist for the FK on conversation_summaries.id.
+  appendTurnEvent({
+    invocationId: "sess_sum1",
+    conversationId: "conv_sum1",
+    ts: "2026-04-11T10:00:00.000Z",
+    kind: "start",
+    payload: {},
+  });
+
+  appendConversationSummary({
+    conversationId: "conv_sum1",
+    summary: "Refactor the auth flow",
+    capturedAt: "2026-04-11T10:00:01.000Z",
+  });
+
+  const row = readSummary("conv_sum1");
+  expect(row?.summary).toBe("Refactor the auth flow");
+  expect(row?.captured_at).toBe("2026-04-11T10:00:01.000Z");
+});
+
+test("appendConversationSummary is idempotent (INSERT OR IGNORE)", () => {
+  seedInvocation("sess_sum2");
+  appendTurnEvent({
+    invocationId: "sess_sum2",
+    conversationId: "conv_sum2",
+    ts: "2026-04-11T10:00:00.000Z",
+    kind: "start",
+    payload: {},
+  });
+  appendConversationSummary({
+    conversationId: "conv_sum2",
+    summary: "First prompt",
+    capturedAt: "2026-04-11T10:00:01.000Z",
+  });
+
+  // Second call with a different summary must NOT overwrite.
+  appendConversationSummary({
+    conversationId: "conv_sum2",
+    summary: "Different later prompt",
+    capturedAt: "2026-04-11T11:00:00.000Z",
+  });
+
+  const row = readSummary("conv_sum2");
+  expect(row?.summary).toBe("First prompt");
+  expect(row?.captured_at).toBe("2026-04-11T10:00:01.000Z");
+});
+
+test("appendConversationSummary: schema mismatch warns and skips", async () => {
+  await rm(path.dirname(env.dbPath), { recursive: true, force: true });
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.dirname(env.dbPath), { recursive: true });
+  const raw = new Database(env.dbPath, { create: true });
+  raw.run("PRAGMA user_version = 999");
+  raw.close();
+
+  const cap = captureStderr();
+  let threw: unknown;
+  try {
+    appendConversationSummary({
+      conversationId: "conv_sum_mismatch",
+      summary: "hello there",
+      capturedAt: "2026-04-11T10:00:01.000Z",
+    });
+  } catch (e) {
+    threw = e;
+  } finally {
+    cap.restore();
+  }
+
+  expect(threw).toBeUndefined();
+  expect(
+    cap.messages.some(
+      (m) =>
+        m.includes("schema version mismatch") &&
+        m.includes("Skipping conversation summary"),
+    ),
+  ).toBe(true);
 });
 
 test("appendTurnEvent: payload_json contains the serialized payload", () => {

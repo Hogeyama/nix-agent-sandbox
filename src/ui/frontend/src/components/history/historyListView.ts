@@ -31,7 +31,18 @@ export interface HistoryListRowDisplay {
   tokenTotal: number;
   /** Hash href for the row anchor. */
   href: string;
+  /**
+   * First user prompt of the conversation. When the backend has no summary
+   * yet, this falls back to a placeholder string so the row layout stays
+   * stable; pair with `hasSummary` to drive a muted CSS state.
+   */
+  summary: string;
+  /** True iff the backend row carried a non-null summary. */
+  hasSummary: boolean;
 }
+
+/** Placeholder shown for rows with no captured summary yet. */
+const SUMMARY_PLACEHOLDER = "(no summary)";
 
 const SHORT_ID_LEN = 8;
 
@@ -95,5 +106,7 @@ export function toHistoryListRowDisplay(
     // the workspace fallback. `encodeURIComponent` keeps the link
     // round-trippable through `decodeURIComponent` on the consuming side.
     href: `#/history/conversation/${encodeURIComponent(row.id)}`,
+    summary: row.summary ?? SUMMARY_PLACEHOLDER,
+    hasSummary: row.summary !== null,
   };
 }

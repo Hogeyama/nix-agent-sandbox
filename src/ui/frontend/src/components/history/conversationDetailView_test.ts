@@ -35,6 +35,7 @@ function makeConversation(
     outputTokensTotal: 500,
     cacheReadTotal: 100,
     cacheWriteTotal: 50,
+    summary: null,
     ...overrides,
   };
 }

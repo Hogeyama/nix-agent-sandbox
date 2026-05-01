@@ -11,7 +11,14 @@
  * our session store is unhappy.
  */
 
-import { appendTurnEvent } from "../history/hook_writer.ts";
+import {
+  appendConversationSummary,
+  appendTurnEvent,
+} from "../history/hook_writer.ts";
+import {
+  extractTranscriptSummary,
+  truncate,
+} from "../history/transcript_reader.ts";
 import {
   checkNotifySend,
   type NotifyBackend,
@@ -28,6 +35,9 @@ import { getFlagValue } from "./helpers.ts";
 
 /** Maximum length of the `message` field surfaced to the store. */
 const MAX_MESSAGE_LEN = 200;
+
+/** Maximum characters retained in `conversation_summaries.summary`. */
+const SUMMARY_MAX_CHARS = 160;
 
 /** Hard cap on how long we wait for stdin before giving up. */
 const STDIN_TIMEOUT_MS = 50;
@@ -114,13 +124,33 @@ export async function runHookCommand(
   // Persist a history turn_event row alongside the transient session
   // store update. Records every hook invocation that passes the --when
   // matcher above, independent of observability config. Never throws.
+  const conversationId = extractConversationId(payload);
+  const ts = new Date().toISOString();
   appendTurnEvent({
     invocationId: sessionId,
-    conversationId: extractConversationId(payload),
-    ts: new Date().toISOString(),
+    conversationId,
+    ts,
     kind,
     payload,
   });
+
+  // Capture the first user prompt as a conversation summary. We accept
+  // two payload shapes here:
+  //   - Claude: `payload.transcript_path` → first user message in the JSONL
+  //   - Copilot: `payload.prompt` → the prompt string itself (truncated)
+  // Limited to `kind === "start"` so we observe the conversation's opening
+  // prompt rather than later attention/stop fires. INSERT OR IGNORE in the
+  // writer keeps repeated start fires (Copilot emits one per prompt) harmless.
+  if (conversationId !== null) {
+    const summary = extractFirstUserPrompt(payload, kind);
+    if (summary !== null) {
+      appendConversationSummary({
+        conversationId,
+        summary,
+        capturedAt: ts,
+      });
+    }
+  }
 
   // Fire-and-forget desktop notification on attention (user-turn).
   if (kind === "attention") {
@@ -260,6 +290,66 @@ export function extractConversationId(payload: unknown): string | null {
   const camel = obj.sessionId;
   if (typeof camel === "string" && camel.length > 0) return camel;
   return null;
+}
+
+/**
+ * Extract the agent's transcript file path from a hook payload.
+ *
+ * Claude Code emits `transcript_path` (snake_case) pointing at the JSONL
+ * under `~/.claude/projects/<workspace>/<session>.jsonl`. Other agents
+ * (Copilot, Codex) do not emit this field and resolve to null.
+ *
+ * Exported for direct unit testing.
+ */
+export function extractTranscriptPath(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (Array.isArray(payload)) return null;
+  const obj = payload as Record<string, unknown>;
+  const value = obj.transcript_path;
+  if (typeof value === "string" && value.length > 0) return value;
+  return null;
+}
+
+/**
+ * Extract the conversation's opening user prompt from a hook payload, if
+ * it is observable.
+ *
+ * - Claude: payload carries `transcript_path` pointing at the JSONL
+ *   transcript. We walk that file via `extractTranscriptSummary`.
+ * - Copilot: payload carries `prompt` (string) directly from the
+ *   `userPromptSubmitted` hook. We truncate it to {@link SUMMARY_MAX_CHARS}.
+ *
+ * If both shapes are present (unusual), the transcript path wins — the
+ * Claude transcript is the authoritative source for that agent.
+ *
+ * Restricted to `kind === "start"`: later attention/stop fires must not
+ * synthesize a summary even if their payload happens to carry one of the
+ * recognised fields. Returns null when neither shape applies, the prompt
+ * is empty/non-string, or transcript extraction fails.
+ *
+ * Exported for direct unit testing.
+ */
+export function extractFirstUserPrompt(
+  payload: unknown,
+  kind: string,
+): string | null {
+  if (kind !== "start") return null;
+
+  const transcriptPath = extractTranscriptPath(payload);
+  if (transcriptPath !== null) {
+    return extractTranscriptSummary(transcriptPath, {
+      maxChars: SUMMARY_MAX_CHARS,
+    });
+  }
+
+  if (typeof payload !== "object" || payload === null) return null;
+  if (Array.isArray(payload)) return null;
+  const obj = payload as Record<string, unknown>;
+  const prompt = obj.prompt;
+  if (typeof prompt !== "string" || prompt.length === 0) return null;
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) return null;
+  return truncate(normalized, SUMMARY_MAX_CHARS);
 }
 
 /**
