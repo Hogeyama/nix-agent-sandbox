@@ -384,6 +384,50 @@ describe("buildSpanRows", () => {
     expect(view[0]?.kindLabel).toBe("producer");
     expect(view[0]?.kindClass).toBe("");
   });
+
+  test("toolName is populated for execute_tool spans with tool_name attr", () => {
+    const view = buildSpanRows(
+      [
+        makeSpan({
+          kind: "execute_tool",
+          attrsJson: JSON.stringify({ tool_name: "Bash" }),
+        }),
+      ],
+      NOW_MS,
+    );
+    expect(view[0]?.toolName).toBe("Bash");
+  });
+
+  test("toolName is null for non-execute_tool spans (e.g. chat)", () => {
+    const view = buildSpanRows([makeSpan()], NOW_MS);
+    expect(view[0]?.toolName).toBeNull();
+  });
+
+  test("attrsPretty re-serialises valid JSON with 2-space indent (round-trips)", () => {
+    const view = buildSpanRows(
+      [makeSpan({ attrsJson: JSON.stringify({ a: 1, b: { c: 2 } }) })],
+      NOW_MS,
+    );
+    const pretty = view[0]?.attrsPretty ?? "";
+    expect(pretty).toContain("\n");
+    expect(pretty).toContain('  "a": 1');
+    expect(JSON.parse(pretty)).toEqual({ a: 1, b: { c: 2 } });
+  });
+
+  test("attrsPretty passes malformed JSON through verbatim (no info loss)", () => {
+    const view = buildSpanRows([makeSpan({ attrsJson: "{not valid" })], NOW_MS);
+    expect(view[0]?.attrsPretty).toBe("{not valid");
+  });
+
+  test("attrsPretty collapses empty string to '{}' literal", () => {
+    const view = buildSpanRows([makeSpan({ attrsJson: "" })], NOW_MS);
+    expect(view[0]?.attrsPretty).toBe("{}");
+  });
+
+  test("attrsPretty collapses '{}' to '{}' literal (not '{\\n}')", () => {
+    const view = buildSpanRows([makeSpan({ attrsJson: "{}" })], NOW_MS);
+    expect(view[0]?.attrsPretty).toBe("{}");
+  });
 });
 
 describe("extractToolName", () => {

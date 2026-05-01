@@ -118,6 +118,20 @@ export interface SpanRowView {
   readonly durationLabel: string | null;
   readonly startedAt: string;
   readonly startedAtAbsolute: string;
+  /**
+   * Display tool name for `execute_tool` spans, or null otherwise.
+   * Result of `extractToolName(span)`; see that function for the
+   * resolution order.
+   */
+  readonly toolName: string | null;
+  /**
+   * Pretty-printed attrs JSON for the click-to-expand drawer. When the
+   * raw `attrsJson` parses cleanly it is re-serialised with 2-space
+   * indent; malformed input is passed through verbatim so the operator
+   * never loses information; empty / "{}" inputs collapse to the
+   * literal "{}" so the drawer always has something to render.
+   */
+  readonly attrsPretty: string;
 }
 
 /**
@@ -357,6 +371,23 @@ export function buildTraceRows(
   }));
 }
 
+/**
+ * Format `attrsJson` for the expandable drawer.
+ *
+ *   ""   / "{}"  → "{}"        (literal so the drawer is never blank)
+ *   valid JSON   → re-serialised with 2-space indent
+ *   malformed    → original string unchanged (no information lost)
+ */
+function formatAttrsPretty(attrsJson: string): string {
+  if (attrsJson === "" || attrsJson === "{}") return "{}";
+  try {
+    const parsed = JSON.parse(attrsJson);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return attrsJson;
+  }
+}
+
 export function buildSpanRows(
   spans: readonly SpanSummaryRow[],
   nowMs: number,
@@ -384,6 +415,8 @@ export function buildSpanRows(
       durationLabel: formatDuration(row.durationMs),
       startedAt: formatRelativeTime(row.startedAt, nowMs),
       startedAtAbsolute: row.startedAt,
+      toolName: extractToolName(row),
+      attrsPretty: formatAttrsPretty(row.attrsJson),
     };
   });
 }

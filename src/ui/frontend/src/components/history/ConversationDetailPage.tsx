@@ -42,10 +42,22 @@ export interface ConversationDetailPageProps {
 
 const RELATIVE_TICK_MS = 60_000;
 
+/** Total number of columns in the Spans table; used as the colspan for
+ * the click-to-expand attrs drawer row so it always spans the full width. */
+const SPANS_TABLE_COLSPAN = 10;
+
 export function ConversationDetailPage(props: ConversationDetailPageProps) {
   const [now, setNow] = createSignal(Date.now());
   const interval = setInterval(() => setNow(Date.now()), RELATIVE_TICK_MS);
   onCleanup(() => clearInterval(interval));
+
+  // Single-open accordion state for the Spans table: clicking a row
+  // toggles its attrs drawer; clicking another row closes the previous
+  // one and opens the new one. Null = no row expanded.
+  const [expandedSpanId, setExpandedSpanId] = createSignal<string | null>(null);
+  const toggleSpan = (id: string) => {
+    setExpandedSpanId((prev) => (prev === id ? null : id));
+  };
 
   const backHref = () => props.backHref ?? "#/history";
 
@@ -333,6 +345,7 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                         <th scope="col">Span</th>
                         <th scope="col">Parent</th>
                         <th scope="col">Name</th>
+                        <th scope="col">Tool</th>
                         <th scope="col">Kind</th>
                         <th scope="col">Model</th>
                         <th scope="col" class="is-numeric is-stacked">
@@ -351,35 +364,89 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                     </thead>
                     <tbody>
                       <For each={spans()}>
-                        {(row) => (
-                          <tr>
-                            <td class="is-id" title={row.spanId}>
-                              {row.spanIdLabel}
-                            </td>
-                            <td class="is-id">{row.parentSpanIdLabel ?? ""}</td>
-                            <td>{row.spanName}</td>
-                            <td>
-                              <span
-                                class={
-                                  row.kindClass === ""
-                                    ? "history-detail-kind"
-                                    : `history-detail-kind ${row.kindClass}`
-                                }
+                        {(row) => {
+                          const isExpanded = () =>
+                            expandedSpanId() === row.spanId;
+                          const attrsRowId = `attrs-${row.spanId}`;
+                          // Anchor clicks (e.g. nested links inside the row)
+                          // should not double as a row-toggle gesture.
+                          const handleClick = (
+                            e: MouseEvent & {
+                              currentTarget: HTMLTableRowElement;
+                            },
+                          ) => {
+                            const target = e.target as HTMLElement | null;
+                            if (target?.closest("a") !== null) return;
+                            toggleSpan(row.spanId);
+                          };
+                          const handleKeyDown = (
+                            e: KeyboardEvent & {
+                              currentTarget: HTMLTableRowElement;
+                            },
+                          ) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              toggleSpan(row.spanId);
+                            }
+                          };
+                          return (
+                            <>
+                              {/* biome-ignore lint/a11y/useSemanticElements: a real <button> cannot wrap a row of <td> cells without breaking the <table> layout; role="button" + tabindex + key handlers expose the same activation intent. */}
+                              <tr
+                                role="button"
+                                tabIndex={0}
+                                aria-expanded={isExpanded() ? "true" : "false"}
+                                aria-controls={attrsRowId}
+                                onClick={handleClick}
+                                onKeyDown={handleKeyDown}
                               >
-                                {row.kindLabel}
-                              </span>
-                            </td>
-                            <td>{row.model ?? ""}</td>
-                            <td class="is-numeric">{row.ioCell}</td>
-                            <td class="is-numeric">{row.cacheCell}</td>
-                            <td class="is-numeric">
-                              {row.durationLabel ?? ""}
-                            </td>
-                            <td title={row.startedAtAbsolute}>
-                              {row.startedAt}
-                            </td>
-                          </tr>
-                        )}
+                                <td class="is-id" title={row.spanId}>
+                                  {row.spanIdLabel}
+                                </td>
+                                <td class="is-id">
+                                  {row.parentSpanIdLabel ?? ""}
+                                </td>
+                                <td>{row.spanName}</td>
+                                <td>{row.toolName ?? ""}</td>
+                                <td>
+                                  <span
+                                    class={
+                                      row.kindClass === ""
+                                        ? "history-detail-kind"
+                                        : `history-detail-kind ${row.kindClass}`
+                                    }
+                                  >
+                                    {row.kindLabel}
+                                  </span>
+                                </td>
+                                <td>{row.model ?? ""}</td>
+                                <td class="is-numeric">{row.ioCell}</td>
+                                <td class="is-numeric">{row.cacheCell}</td>
+                                <td class="is-numeric">
+                                  {row.durationLabel ?? ""}
+                                </td>
+                                <td title={row.startedAtAbsolute}>
+                                  {row.startedAt}
+                                </td>
+                              </tr>
+                              <Show when={isExpanded()}>
+                                {/* biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: this drawer row is structurally a <tr> so the table layout stays intact; role="region" labels it as the expanded panel referenced by aria-controls. */}
+                                {/* biome-ignore lint/a11y/useSemanticElements: a <section> cannot be a child of <tbody>; the row needs to remain a <tr> so the colspan drawer renders inside the same table. */}
+                                <tr
+                                  id={attrsRowId}
+                                  role="region"
+                                  class="history-detail-attrs-row"
+                                >
+                                  <td colspan={SPANS_TABLE_COLSPAN}>
+                                    <pre class="history-detail-attrs-pre">
+                                      {row.attrsPretty}
+                                    </pre>
+                                  </td>
+                                </tr>
+                              </Show>
+                            </>
+                          );
+                        }}
                       </For>
                     </tbody>
                   </table>

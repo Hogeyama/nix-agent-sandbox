@@ -2161,6 +2161,29 @@ body::after {
   vertical-align: middle;
 }
 
+/* Click-to-expand attrs drawer attached to each span row in the
+ * Conversation detail Spans table. The drawer renders as a single
+ * full-width row directly below its trigger row; the <pre> inside
+ * keeps the JSON un-wrapped so structure stays scannable, and caps
+ * its height so a huge payload does not blow out the page. */
+.history-detail-attrs-row {
+  background-color: var(--surface-2);
+}
+.history-detail-attrs-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.history-detail-attrs-pre {
+  margin: 0;
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--cream-dim);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 60vh;
+}
+
 /* Topbar history link — sits between the live indicator and the gear
  * icon. Uses the same muted-cream typography as the settings nav so
  * the topbar reads as a single palette. */
