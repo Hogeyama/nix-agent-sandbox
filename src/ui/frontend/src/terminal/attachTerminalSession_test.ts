@@ -577,6 +577,46 @@ describe("attachTerminalSession", () => {
     expect(fitFit).toHaveBeenCalled();
   });
 
+  test("nudge brackets fontSize and refits, leaving the size unchanged", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const fitFit = mock(() => {});
+    const fit = makeFakeFitAddon(undefined, { fit: fitFit });
+
+    const observed: unknown[] = [];
+    const original = Object.getOwnPropertyDescriptor(
+      fakeTerm.options,
+      "fontSize",
+    );
+    let value = fakeTerm.options.fontSize;
+    Object.defineProperty(fakeTerm.options, "fontSize", {
+      configurable: true,
+      get: () => value,
+      set: (v) => {
+        value = v as number;
+        observed.push(v);
+      },
+    });
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => fit,
+      createWebSocket: () => sock,
+    });
+
+    handle.nudge();
+    expect(observed).toEqual([13, 14]);
+    expect(fakeTerm.options.fontSize).toBe(14);
+    expect(fitFit).toHaveBeenCalled();
+
+    if (original) {
+      Object.defineProperty(fakeTerm.options, "fontSize", original);
+    }
+  });
+
   test("default factory loads the search addon onto the terminal", () => {
     const fakeTerm = makeFakeTerminal();
     const sock = makeFakeSocket();

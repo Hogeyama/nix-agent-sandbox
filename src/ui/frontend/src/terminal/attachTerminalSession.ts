@@ -153,6 +153,13 @@ export interface TerminalHandle {
   focus(): void;
   refit(): void;
   setFontSize(px: number): void;
+  /**
+   * Bracket the font size (-1, then back) so xterm rebuilds its glyph
+   * cache and renderer state against the now-visible viewport. Mirrors
+   * the manual "press font-decrease" workaround the user otherwise has
+   * to do every time a terminal first appears.
+   */
+  nudge(): void;
   dispose(): void;
   search: TerminalSearchHandle;
 }
@@ -167,6 +174,7 @@ const NOOP_HANDLE: TerminalHandle = {
   focus() {},
   refit() {},
   setFontSize() {},
+  nudge() {},
   dispose() {},
   search: NOOP_SEARCH_HANDLE,
 };
@@ -624,6 +632,16 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
     setFontSize(px: number) {
       if (disposed) return;
       term.options.fontSize = px;
+      refit();
+    },
+    nudge() {
+      if (disposed) return;
+      const current =
+        typeof term.options.fontSize === "number"
+          ? term.options.fontSize
+          : DEFAULT_FONT_SIZE;
+      term.options.fontSize = current - 1;
+      term.options.fontSize = current;
       refit();
     },
     dispose() {

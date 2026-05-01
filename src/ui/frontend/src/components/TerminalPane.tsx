@@ -160,6 +160,15 @@ export function TerminalPane(props: Props) {
     }
     handles.set(sessionId, { handle, node: slot });
     setHandlesVersion((v) => v + 1);
+    // Mirror the manual "press font-decrease" workaround: after the slot
+    // becomes visible and layout settles, bracket the font size so xterm
+    // rebuilds its glyph cache against a real viewport. Double rAF lands
+    // this after the `show` action's own refit rAF.
+    globalThis.requestAnimationFrame(() => {
+      globalThis.requestAnimationFrame(() => {
+        handles.get(sessionId)?.handle.nudge();
+      });
+    });
   };
 
   const dispose = (sessionId: string) => {
