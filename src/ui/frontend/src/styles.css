@@ -105,6 +105,8 @@ body::after {
   display: flex;
   align-items: center;
   gap: 10px;
+  color: inherit;
+  text-decoration: none;
 }
 .brand .logo {
   width: 10px;
@@ -130,6 +132,10 @@ body::after {
   font-size: 13px;
   color: var(--cream-dim);
   letter-spacing: 0.02em;
+}
+.brand:hover .name,
+.brand:focus-visible .name {
+  color: var(--amber-hi);
 }
 
 .topbar-center {

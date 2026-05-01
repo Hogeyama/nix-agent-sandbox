@@ -6,12 +6,12 @@ interface TopbarProps {
 export function Topbar(props: TopbarProps) {
   return (
     <header class="topbar">
-      <div class="brand">
+      <a class="brand" href="#/" aria-label="Home">
         <span class="logo" aria-hidden="true"></span>
         <span class="name">nas</span>
         <span class="sep">/</span>
         <span class="sub">control room</span>
-      </div>
+      </a>
       <div class="topbar-center">
         <button
           class="btn"
