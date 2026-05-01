@@ -8,7 +8,7 @@
  * the link href is updated) without spinning up Solid's reactive
  * runtime: the hook itself only owns the `createEffect` wrapper.
  *
- * Renders a 32×32 favicon: #1e293b rounded-square, #38bdf8 "N", with a
+ * Renders a 32×32 favicon: #0a0908 rounded-square, #e7dcc6 "N", with a
  * (SIZE-6, 6, r=6) lamp-coloured badge dot. The DI seam
  * (`createCanvas` / `getLinkElement`) lets the test replace the DOM
  * surface area without touching `document` directly; production code
@@ -77,22 +77,24 @@ export function renderFaviconBadge(
   const ctx = canvas.getContext("2d");
   if (ctx === null) return link.href;
 
-  // Base icon: dark rounded square with a #38bdf8 "N" — the
-  // lamp-agnostic baseline that the badge dot is layered on top of.
-  ctx.fillStyle = "#1e293b";
+  // Base icon: control-room ink rounded square with a cream "N" —
+  // mirrors the app's `--bg` / `--cream` tokens so the favicon stays
+  // in sync with the surrounding UI.
+  ctx.fillStyle = "#0a0908";
   roundRect(ctx, 0, 0, SIZE, SIZE, 6);
   ctx.fill();
-  ctx.fillStyle = "#38bdf8";
+  ctx.fillStyle = "#e7dcc6";
   ctx.font = "bold 20px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("N", SIZE / 2, SIZE / 2 + 1);
 
-  // Badge dot — pending is red and wins over user-turn (yellow); a
+  // Badge dot — pending is rose and wins over user-turn (amber); a
   // `none` lamp deliberately skips the arc so the base icon shows
-  // through unchanged.
+  // through unchanged. Colours match the `--rose` / `--amber` tokens
+  // used by `.session-dot.pending` and `.session-dot.turn`.
   const badgeColor =
-    lamp === "pending" ? "#ef4444" : lamp === "user-turn" ? "#eab308" : null;
+    lamp === "pending" ? "#f43f5e" : lamp === "user-turn" ? "#d97706" : null;
   if (badgeColor !== null) {
     ctx.fillStyle = badgeColor;
     ctx.beginPath();

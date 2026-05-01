@@ -84,19 +84,19 @@ describe("renderFaviconBadge", () => {
     expect(toDataURL).toHaveBeenCalledWith("image/png");
     expect(link.href).toBe("data:image/png;base64,FAKEPNG");
     expect(url).toBe("data:image/png;base64,FAKEPNG");
-    // Base + badge fillStyles: dark square, sky-blue letter, red dot.
-    expect(fillStyleHistory).toEqual(["#1e293b", "#38bdf8", "#ef4444"]);
+    // Base + badge fillStyles: ink square, cream letter, rose dot.
+    expect(fillStyleHistory).toEqual(["#0a0908", "#e7dcc6", "#f43f5e"]);
     expect(arcCalls).toEqual([{ x: 32 - 6, y: 6, r: 6 }]);
   });
 
-  test("user-turn lamp paints a yellow dot", () => {
+  test("user-turn lamp paints an amber dot", () => {
     const { ctx, fillStyleHistory, arcCalls } = makeFakeCtx();
     const { canvas } = makeFakeCanvas(ctx);
     const link = makeFakeLink();
 
     renderFaviconBadge("user-turn", canvas, link);
 
-    expect(fillStyleHistory).toEqual(["#1e293b", "#38bdf8", "#eab308"]);
+    expect(fillStyleHistory).toEqual(["#0a0908", "#e7dcc6", "#d97706"]);
     expect(arcCalls).toEqual([{ x: 32 - 6, y: 6, r: 6 }]);
   });
 
@@ -110,7 +110,7 @@ describe("renderFaviconBadge", () => {
     expect(arcSpy).toHaveBeenCalledTimes(0);
     expect(arcCalls).toEqual([]);
     // Only the base icon's fillStyles are recorded; no badge colour.
-    expect(fillStyleHistory).toEqual(["#1e293b", "#38bdf8"]);
+    expect(fillStyleHistory).toEqual(["#0a0908", "#e7dcc6"]);
     // Even with no badge, link.href is still updated to the latest
     // toDataURL output so the favicon refreshes on every lamp change.
     expect(toDataURL).toHaveBeenCalledTimes(1);
@@ -147,8 +147,8 @@ describe("renderFaviconBadge", () => {
 
   test("each lamp value selects a distinct badge colour", () => {
     const colours: Record<Lamp, string | null> = {
-      pending: "#ef4444",
-      "user-turn": "#eab308",
+      pending: "#f43f5e",
+      "user-turn": "#d97706",
       none: null,
     };
     for (const [lamp, expected] of Object.entries(colours) as [
@@ -159,9 +159,9 @@ describe("renderFaviconBadge", () => {
       const { canvas } = makeFakeCanvas(ctx);
       renderFaviconBadge(lamp, canvas, makeFakeLink());
       if (expected === null) {
-        expect(fillStyleHistory).toEqual(["#1e293b", "#38bdf8"]);
+        expect(fillStyleHistory).toEqual(["#0a0908", "#e7dcc6"]);
       } else {
-        expect(fillStyleHistory).toEqual(["#1e293b", "#38bdf8", expected]);
+        expect(fillStyleHistory).toEqual(["#0a0908", "#e7dcc6", expected]);
       }
     }
   });
