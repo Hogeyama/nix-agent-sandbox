@@ -122,12 +122,10 @@ export interface AppendConversationSummaryArgs {
   /**
    * The pre-extracted, pre-truncated first user prompt for the conversation.
    *
-   * Agent-controlled: callers (the `nas hook` cli) lift this either from
-   * the agent's transcript JSONL (Claude `transcript_path`) or directly
-   * from the hook payload (Copilot `payload.prompt`). The agent can put any
-   * string here. See `extractTranscriptSummary` (transcript_reader.ts) for
-   * the matching note on why this is treated as agent-trusted rather than
-   * sandboxed.
+   * Agent-controlled: callers (the `nas hook` cli) lift this from
+   * `payload.prompt` of the agent's user-prompt-submit hook event. The
+   * agent can put any string here, so this is treated as agent-trusted
+   * rather than sandboxed.
    */
   summary: string;
   /** ISO 8601 string with millisecond precision (Z-terminated). */

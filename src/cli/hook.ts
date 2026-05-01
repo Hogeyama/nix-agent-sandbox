@@ -16,10 +16,6 @@ import {
   appendTurnEvent,
 } from "../history/hook_writer.ts";
 import {
-  extractTranscriptSummary,
-  truncate,
-} from "../history/transcript_reader.ts";
-import {
   checkNotifySend,
   type NotifyBackend,
   resolveNotifyBackend,
@@ -152,13 +148,13 @@ export async function runHookCommand(
     agent,
   });
 
-  // Capture the first user prompt as a conversation summary. We accept
-  // two payload shapes here:
-  //   - Claude: `payload.transcript_path` → first user message in the JSONL
-  //   - Copilot: `payload.prompt` → the prompt string itself (truncated)
-  // Limited to `kind === "start"` so we observe the conversation's opening
-  // prompt rather than later attention/stop fires. INSERT OR IGNORE in the
-  // writer keeps repeated start fires (Copilot emits one per prompt) harmless.
+  // Capture the first user prompt as a conversation summary from
+  // `payload.prompt`. Both Claude (UserPromptSubmit) and Copilot emit it as
+  // the literal string the user submitted. Limited to `kind === "start"` so
+  // we observe the conversation's opening prompt rather than later
+  // attention/stop fires. INSERT OR IGNORE in the writer keeps repeated
+  // start fires harmless (Copilot emits one per prompt; Claude's PreToolUse
+  // also routes to kind=start but carries no prompt and no-ops here).
   if (conversationId !== null) {
     const summary = extractFirstUserPrompt(payload, kind);
     if (summary !== null) {
@@ -311,44 +307,22 @@ export function extractConversationId(payload: unknown): string | null {
 }
 
 /**
- * Extract the agent's transcript file path from a hook payload.
+ * Extract the conversation's opening user prompt from a hook payload.
  *
- * Claude Code emits `transcript_path` (snake_case) pointing at the JSONL
- * under `~/.claude/projects/<workspace>/<session>.jsonl`. Other agents
- * (Copilot, Codex) do not emit this field and resolve to null.
+ * Both Claude (`UserPromptSubmit`) and Copilot (`userPromptSubmitted`) emit
+ * `payload.prompt` as the literal string the user just submitted. We
+ * normalize whitespace and truncate to {@link SUMMARY_MAX_CHARS}.
  *
- * Exported for direct unit testing.
- */
-export function extractTranscriptPath(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) return null;
-  if (Array.isArray(payload)) return null;
-  const obj = payload as Record<string, unknown>;
-  const value = obj.transcript_path;
-  if (typeof value === "string" && value.length > 0) return value;
-  return null;
-}
-
-/**
- * Extract the conversation's opening user prompt from a hook payload, if
- * it is observable.
- *
- * - Claude: payload carries `transcript_path` pointing at the JSONL
- *   transcript. We walk that file via `extractTranscriptSummary`.
- * - Copilot: payload carries `prompt` (string) directly from the
- *   `userPromptSubmitted` hook. We truncate it to {@link SUMMARY_MAX_CHARS}.
- *
- * If both shapes are present, the transcript path is preferred — the
- * Claude transcript is the authoritative source for that agent — but we
- * fall back to `payload.prompt` when the transcript has not yet been
- * populated. Claude Code's first SessionStart hook fires before the user's
- * opening prompt is written to the JSONL, so without this fallback the
- * summary would stay empty until a later `start` hook (the user's next
- * prompt) lands and the JSONL has caught up.
+ * We intentionally do NOT read Claude Code's `transcript_path` JSONL: its
+ * schema is undocumented and Claude Code injects synthetic `type:"user"`
+ * entries at the head of the file (e.g. `<local-command-caveat>` blocks
+ * when a `!cmd` runs first, or `<command-name>` wrappers for slash
+ * commands). Trusting the documented `prompt` field instead avoids those
+ * pitfalls. Claude's PreToolUse hook also routes here as kind=start but
+ * carries no `prompt` field, so it naturally no-ops.
  *
  * Restricted to `kind === "start"`: later attention/stop fires must not
- * synthesize a summary even if their payload happens to carry one of the
- * recognised fields. Returns null when neither shape applies, the prompt
- * is empty/non-string, or transcript extraction fails.
+ * synthesize a summary even if their payload happens to carry `prompt`.
  *
  * Exported for direct unit testing.
  */
@@ -357,15 +331,6 @@ export function extractFirstUserPrompt(
   kind: string,
 ): string | null {
   if (kind !== "start") return null;
-
-  const transcriptPath = extractTranscriptPath(payload);
-  if (transcriptPath !== null) {
-    const fromTranscript = extractTranscriptSummary(transcriptPath, {
-      maxChars: SUMMARY_MAX_CHARS,
-    });
-    if (fromTranscript !== null) return fromTranscript;
-  }
-
   if (typeof payload !== "object" || payload === null) return null;
   if (Array.isArray(payload)) return null;
   const obj = payload as Record<string, unknown>;
@@ -374,6 +339,18 @@ export function extractFirstUserPrompt(
   const normalized = prompt.replace(/\s+/g, " ").trim();
   if (normalized.length === 0) return null;
   return truncate(normalized, SUMMARY_MAX_CHARS);
+}
+
+/**
+ * Hard-truncate `s` to at most `maxChars` characters, replacing the final
+ * character with U+2026 (`…`) when truncation occurs. The ellipsis counts
+ * toward the length budget, so the returned string is always
+ * `<= maxChars` characters long.
+ */
+function truncate(s: string, maxChars: number): string {
+  if (maxChars <= 0) return "";
+  if (s.length <= maxChars) return s;
+  return `${s.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
 /**

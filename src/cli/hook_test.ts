@@ -14,7 +14,6 @@ import {
   extractConversationId,
   extractFirstUserPrompt,
   extractHookMessage,
-  extractTranscriptPath,
   parseHookKind,
   runHookCommand,
 } from "./hook.ts";
@@ -817,27 +816,6 @@ test("runHookCommand with history db schema mismatch exits 0 and writes no turn_
   expect(record?.turn).toBe("agent-turn");
 });
 
-// --- extractTranscriptPath ---
-
-test("extractTranscriptPath: snake_case transcript_path (Claude)", () => {
-  expect(extractTranscriptPath({ transcript_path: "/tmp/x.jsonl" })).toBe(
-    "/tmp/x.jsonl",
-  );
-});
-
-test("extractTranscriptPath: missing field returns null", () => {
-  expect(extractTranscriptPath({})).toBeNull();
-  expect(extractTranscriptPath({ session_id: "x" })).toBeNull();
-});
-
-test("extractTranscriptPath: non-object / empty / non-string return null", () => {
-  expect(extractTranscriptPath(null)).toBeNull();
-  expect(extractTranscriptPath(undefined)).toBeNull();
-  expect(extractTranscriptPath([])).toBeNull();
-  expect(extractTranscriptPath({ transcript_path: "" })).toBeNull();
-  expect(extractTranscriptPath({ transcript_path: 42 })).toBeNull();
-});
-
 // --- runHookCommand: conversation_summary persistence ---
 
 interface SummaryRowDb {
@@ -857,84 +835,59 @@ function readSummary(id: string): SummaryRowDb | null {
   );
 }
 
-test("runHookCommand persists conversation summary when Claude payload carries transcript_path", async () => {
-  process.env.NAS_SESSION_ID = "sess-hook-trans";
-  seedInvocation("sess-hook-trans");
+test("runHookCommand persists conversation summary from Claude UserPromptSubmit payload.prompt", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-claude-prompt";
+  seedInvocation("sess-hook-claude-prompt");
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
-    sessionId: "sess-hook-trans",
+    sessionId: "sess-hook-claude-prompt",
     agent: "claude",
     profile: "default",
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  const transcriptFile = path.join(tmpRoot, "transcript.jsonl");
-  await writeFile(
-    transcriptFile,
-    `${JSON.stringify({
-      type: "user",
-      message: { content: "Refactor the auth flow" },
-    })}\n`,
-  );
-
   await runHookCommand(["--kind", "start"], {
     stdinReader: makeStdin(
       JSON.stringify({
-        session_id: "conv_trans",
-        transcript_path: transcriptFile,
+        session_id: "conv_claude_prompt",
+        // Claude's UserPromptSubmit payload also carries transcript_path,
+        // but we deliberately ignore it: its undocumented JSONL schema can
+        // start with synthetic <local-command-caveat> / <command-name>
+        // entries that pollute the summary. payload.prompt is the literal
+        // user-typed text and is what we trust.
+        transcript_path: "/tmp/should-be-ignored.jsonl",
+        prompt: "Refactor the auth flow",
       }),
     ),
   });
 
-  const row = readSummary("conv_trans");
+  const row = readSummary("conv_claude_prompt");
   expect(row?.summary).toBe("Refactor the auth flow");
 });
 
-test("runHookCommand: payload without transcript_path leaves conversation_summaries empty", async () => {
-  process.env.NAS_SESSION_ID = "sess-hook-no-trans";
-  seedInvocation("sess-hook-no-trans");
+test("runHookCommand: payload without prompt leaves conversation_summaries empty (e.g. Claude PreToolUse)", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-no-prompt";
+  seedInvocation("sess-hook-no-prompt");
   const { createSession } = await import("../sessions/store.ts");
   await createSession(paths, {
-    sessionId: "sess-hook-no-trans",
-    agent: "copilot",
-    profile: "default",
-    startedAt: "2026-04-11T10:00:00.000Z",
-  });
-
-  await runHookCommand(["--kind", "start"], {
-    stdinReader: makeStdin('{"sessionId":"conv_no_trans"}'),
-  });
-
-  expect(readSummary("conv_no_trans")).toBeNull();
-});
-
-test("runHookCommand: missing transcript file does not fail the hook", async () => {
-  process.env.NAS_SESSION_ID = "sess-hook-trans-missing";
-  seedInvocation("sess-hook-trans-missing");
-  const { createSession } = await import("../sessions/store.ts");
-  await createSession(paths, {
-    sessionId: "sess-hook-trans-missing",
+    sessionId: "sess-hook-no-prompt",
     agent: "claude",
     profile: "default",
     startedAt: "2026-04-11T10:00:00.000Z",
   });
 
-  let threw: unknown;
-  try {
-    await runHookCommand(["--kind", "start"], {
-      stdinReader: makeStdin(
-        JSON.stringify({
-          session_id: "conv_trans_missing",
-          transcript_path: path.join(tmpRoot, "no-such-file.jsonl"),
-        }),
-      ),
-    });
-  } catch (e) {
-    threw = e;
-  }
+  // Mirrors a Claude PreToolUse payload: transcript_path present, prompt
+  // absent. We must not invent a summary from the JSONL.
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin(
+      JSON.stringify({
+        session_id: "conv_no_prompt",
+        transcript_path: "/tmp/whatever.jsonl",
+      }),
+    ),
+  });
 
-  expect(threw).toBeUndefined();
-  expect(readSummary("conv_trans_missing")).toBeNull();
+  expect(readSummary("conv_no_prompt")).toBeNull();
 });
 
 // Subagent observation: ADR §"turn_events への conversation_id 付与" notes
@@ -969,27 +922,11 @@ test("runHookCommand: subagent hook events land on the parent conversation_id", 
 
 // --- extractFirstUserPrompt ---
 
-test("extractFirstUserPrompt: Claude payload with transcript_path reads JSONL", async () => {
-  const file = path.join(tmpRoot, "et-claude.jsonl");
-  await writeFile(
-    file,
-    `${JSON.stringify({
-      type: "user",
-      message: { content: "hello from transcript" },
-    })}\n`,
-  );
-  expect(extractFirstUserPrompt({ transcript_path: file }, "start")).toBe(
-    "hello from transcript",
-  );
+test("extractFirstUserPrompt: payload.prompt is returned as-is", () => {
+  expect(extractFirstUserPrompt({ prompt: "Hello." }, "start")).toBe("Hello.");
 });
 
-test("extractFirstUserPrompt: Copilot payload with prompt returns the string", () => {
-  expect(extractFirstUserPrompt({ prompt: "Hello, Copilot." }, "start")).toBe(
-    "Hello, Copilot.",
-  );
-});
-
-test("extractFirstUserPrompt: Copilot prompt is whitespace-normalized and truncated to the summary cap", () => {
+test("extractFirstUserPrompt: prompt is whitespace-normalized and truncated to the summary cap", () => {
   const long = `${"x".repeat(400)}`;
   const out = extractFirstUserPrompt({ prompt: long }, "start");
   expect(out).not.toBeNull();
@@ -997,7 +934,7 @@ test("extractFirstUserPrompt: Copilot prompt is whitespace-normalized and trunca
   expect(out?.endsWith("…")).toBe(true);
 });
 
-test("extractFirstUserPrompt: collapses runs of whitespace in Copilot prompt", () => {
+test("extractFirstUserPrompt: collapses runs of whitespace", () => {
   expect(extractFirstUserPrompt({ prompt: "one\n\ntwo\tthree" }, "start")).toBe(
     "one two three",
   );
@@ -1010,64 +947,21 @@ test("extractFirstUserPrompt: empty / non-string prompt returns null", () => {
   expect(extractFirstUserPrompt({ prompt: null }, "start")).toBeNull();
 });
 
-test("extractFirstUserPrompt: kind != start returns null even when fields are present", async () => {
-  const file = path.join(tmpRoot, "et-attention.jsonl");
-  await writeFile(
-    file,
-    `${JSON.stringify({
-      type: "user",
-      message: { content: "should be ignored" },
-    })}\n`,
-  );
+test("extractFirstUserPrompt: kind != start returns null even when prompt is present", () => {
+  expect(extractFirstUserPrompt({ prompt: "ignored" }, "attention")).toBeNull();
+  expect(extractFirstUserPrompt({ prompt: "ignored" }, "stop")).toBeNull();
+});
+
+test("extractFirstUserPrompt: transcript_path alone (no prompt) returns null", () => {
+  // Claude's PreToolUse hook fires with transcript_path but no prompt; we
+  // deliberately do NOT walk the JSONL — its undocumented schema can start
+  // with synthetic <local-command-caveat> / <command-name> entries.
   expect(
-    extractFirstUserPrompt({ transcript_path: file }, "attention"),
-  ).toBeNull();
-  expect(
-    extractFirstUserPrompt({ prompt: "should be ignored" }, "stop"),
+    extractFirstUserPrompt({ transcript_path: "/tmp/x.jsonl" }, "start"),
   ).toBeNull();
 });
 
-test("extractFirstUserPrompt: transcript_path wins when both transcript_path and prompt present", async () => {
-  const file = path.join(tmpRoot, "et-both.jsonl");
-  await writeFile(
-    file,
-    `${JSON.stringify({
-      type: "user",
-      message: { content: "from transcript" },
-    })}\n`,
-  );
-  expect(
-    extractFirstUserPrompt(
-      { transcript_path: file, prompt: "from prompt" },
-      "start",
-    ),
-  ).toBe("from transcript");
-});
-
-test("extractFirstUserPrompt: falls back to payload.prompt when transcript_path yields nothing", async () => {
-  // Empty transcript file — Claude's first SessionStart hook fires before
-  // the user's opening prompt is written to the JSONL.
-  const file = path.join(tmpRoot, "et-empty.jsonl");
-  await writeFile(file, "");
-  expect(
-    extractFirstUserPrompt(
-      { transcript_path: file, prompt: "from prompt" },
-      "start",
-    ),
-  ).toBe("from prompt");
-});
-
-test("extractFirstUserPrompt: falls back to payload.prompt when transcript file is missing", () => {
-  const missing = path.join(tmpRoot, "et-missing.jsonl");
-  expect(
-    extractFirstUserPrompt(
-      { transcript_path: missing, prompt: "from prompt" },
-      "start",
-    ),
-  ).toBe("from prompt");
-});
-
-test("extractFirstUserPrompt: payload missing both fields returns null", () => {
+test("extractFirstUserPrompt: payload missing prompt returns null", () => {
   expect(extractFirstUserPrompt({}, "start")).toBeNull();
   expect(extractFirstUserPrompt({ session_id: "x" }, "start")).toBeNull();
   expect(extractFirstUserPrompt(null, "start")).toBeNull();
