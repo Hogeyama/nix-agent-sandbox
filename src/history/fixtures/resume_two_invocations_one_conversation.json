@@ -1,0 +1,76 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "nas.session.id", "value": { "stringValue": "sess_d1" } },
+          { "key": "nas.agent", "value": { "stringValue": "copilot" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "copilot-cli", "version": "0.1.0" },
+          "spans": [
+            {
+              "traceId": "trace_d1",
+              "spanId": "span_d1_chat",
+              "name": "chat gpt-4",
+              "startTimeUnixNano": "1714580000000000000",
+              "endTimeUnixNano": "1714580002000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": { "stringValue": "chat" }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": { "stringValue": "conv_resumed" }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": { "stringValue": "gpt-4" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "nas.session.id", "value": { "stringValue": "sess_d2" } },
+          { "key": "nas.agent", "value": { "stringValue": "copilot" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "copilot-cli", "version": "0.1.0" },
+          "spans": [
+            {
+              "traceId": "trace_d2",
+              "spanId": "span_d2_chat",
+              "name": "chat gpt-4",
+              "startTimeUnixNano": "1714590000000000000",
+              "endTimeUnixNano": "1714590002000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": { "stringValue": "chat" }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": { "stringValue": "conv_resumed" }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": { "stringValue": "gpt-4" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "nas.session.id", "value": { "stringValue": "sess_ccc" } },
+          { "key": "nas.agent", "value": { "stringValue": "claude" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "claude-code", "version": "0.1.0" },
+          "spans": [
+            {
+              "traceId": "trace_parent",
+              "spanId": "span_parent_llm",
+              "name": "claude_code.llm_request",
+              "startTimeUnixNano": "1714570000000000000",
+              "endTimeUnixNano": "1714570003000000000",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": { "stringValue": "conv_parent" }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": { "stringValue": "claude-opus-4-7" }
+                }
+              ]
+            },
+            {
+              "traceId": "trace_subagent",
+              "spanId": "span_sub_llm",
+              "name": "claude_code.llm_request",
+              "startTimeUnixNano": "1714570010000000000",
+              "endTimeUnixNano": "1714570013000000000",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": { "stringValue": "conv_subagent" }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": { "stringValue": "claude-opus-4-7" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
