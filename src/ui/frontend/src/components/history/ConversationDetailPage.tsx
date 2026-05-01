@@ -14,7 +14,7 @@
  *   - not-found: backend said the row does not exist; render a stub
  *     and a back link to the list.
  *   - loading: no payload yet → render a single placeholder.
- *   - populated: header + invocations / turns / spans / turn-events.
+ *   - populated: header + turns / spans + invocations.
  *
  * A `createSignal`-driven 1-minute tick refreshes relative timestamps
  * without a fresh snapshot.
@@ -24,7 +24,6 @@ import { createSignal, For, onCleanup, Show } from "solid-js";
 import type { ConversationDetail } from "../../../../../history/types";
 import {
   buildConversationHeader,
-  buildConversationTurnEventRows,
   buildInvocationLinks,
   buildSpanTreeByTurn,
 } from "./conversationDetailView";
@@ -85,12 +84,6 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
   const spanGroups = () => {
     const d = props.detail();
     return d === null ? [] : buildSpanTreeByTurn(d, now());
-  };
-  const turnEvents = () => {
-    const d = props.detail();
-    return d === null
-      ? []
-      : buildConversationTurnEventRows(d.turnEvents, now());
   };
 
   return (
@@ -227,58 +220,6 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                   </div>
                 </div>
               </header>
-
-              <section class="history-detail-section">
-                <h2 class="history-detail-section-title">
-                  Invocations
-                  <span class="history-detail-section-count">
-                    {invocations().length} rows
-                  </span>
-                </h2>
-                <Show
-                  when={invocations().length > 0}
-                  fallback={
-                    <div class="history-detail-section-empty">
-                      No invocations
-                    </div>
-                  }
-                >
-                  <table class="history-detail-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Id</th>
-                        <th scope="col">Profile</th>
-                        <th scope="col">Worktree</th>
-                        <th scope="col">Started</th>
-                        <th scope="col">Ended</th>
-                        <th scope="col">Exit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <For each={invocations()}>
-                        {(row) => (
-                          <tr>
-                            <td class="is-id">
-                              <a class="history-row-link" href={row.href}>
-                                {row.idLabel}
-                              </a>
-                            </td>
-                            <td>{row.profile ?? ""}</td>
-                            <td class="is-muted">{row.worktreePath ?? ""}</td>
-                            <td title={row.startedAtAbsolute}>
-                              {row.startedAt}
-                            </td>
-                            <td title={row.endedAtAbsolute ?? undefined}>
-                              {row.endedAt ?? ""}
-                            </td>
-                            <td>{row.exitReason ?? ""}</td>
-                          </tr>
-                        )}
-                      </For>
-                    </tbody>
-                  </table>
-                </Show>
-              </section>
 
               <section class="history-detail-section">
                 <h2 class="history-detail-section-title">
@@ -530,44 +471,48 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
 
               <section class="history-detail-section">
                 <h2 class="history-detail-section-title">
-                  Turn events
+                  Invocations
                   <span class="history-detail-section-count">
-                    {turnEvents().length} rows
+                    {invocations().length} rows
                   </span>
                 </h2>
                 <Show
-                  when={turnEvents().length > 0}
+                  when={invocations().length > 0}
                   fallback={
                     <div class="history-detail-section-empty">
-                      No turn events
+                      No invocations
                     </div>
                   }
                 >
                   <table class="history-detail-table">
                     <thead>
                       <tr>
-                        <th scope="col">Time</th>
-                        <th scope="col">Invocation</th>
-                        <th scope="col">Kind</th>
-                        <th scope="col">Payload</th>
+                        <th scope="col">Id</th>
+                        <th scope="col">Profile</th>
+                        <th scope="col">Worktree</th>
+                        <th scope="col">Started</th>
+                        <th scope="col">Ended</th>
+                        <th scope="col">Exit</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <For each={turnEvents()}>
+                      <For each={invocations()}>
                         {(row) => (
                           <tr>
-                            <td title={row.tsAbsolute}>{row.ts}</td>
                             <td class="is-id">
-                              <a class="history-row-link" href={row.linkHref}>
-                                {row.linkIdLabel}
+                              <a class="history-row-link" href={row.href}>
+                                {row.idLabel}
                               </a>
                             </td>
-                            <td>{row.kind}</td>
-                            <td>
-                              <code class="history-detail-payload-preview">
-                                {row.payloadPreview}
-                              </code>
+                            <td>{row.profile ?? ""}</td>
+                            <td class="is-muted">{row.worktreePath ?? ""}</td>
+                            <td title={row.startedAtAbsolute}>
+                              {row.startedAt}
                             </td>
+                            <td title={row.endedAtAbsolute ?? undefined}>
+                              {row.endedAt ?? ""}
+                            </td>
+                            <td>{row.exitReason ?? ""}</td>
                           </tr>
                         )}
                       </For>

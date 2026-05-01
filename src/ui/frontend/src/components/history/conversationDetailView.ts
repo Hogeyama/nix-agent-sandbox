@@ -17,7 +17,6 @@
 
 import type {
   ConversationDetail,
-  ConversationTurnEventRow,
   InvocationSummaryRow,
   SpanSummaryRow,
   TraceSummaryRow,
@@ -189,12 +188,11 @@ export interface TurnSpanGroup {
 }
 
 /**
- * Row shape for the turn-event tables on both detail pages.
+ * Row shape for the turn-event table on the invocation detail page.
  *
- * The link-* fields are deliberately neutral: on the conversation page
- * they point at the row's invocation, and on the invocation page they
- * point at the row's conversation. The page that owns the table picks
- * the column header ("Invocation" vs "Conversation") to match.
+ * `linkId` / `linkIdLabel` / `linkHref` point at the conversation that
+ * emitted the event; the invocation is already the page context, so the
+ * off-page jump is to the conversation.
  */
 export interface TurnEventRowView {
   readonly linkId: string;
@@ -721,19 +719,4 @@ export function extractToolName(span: SpanSummaryRow): string | null {
   const ccMatch = /^claude_code\.tool\.(.+)$/.exec(span.spanName);
   if (ccMatch !== null) return ccMatch[1] ?? null;
   return null;
-}
-
-export function buildConversationTurnEventRows(
-  events: readonly ConversationTurnEventRow[],
-  nowMs: number,
-): TurnEventRowView[] {
-  return events.map((row) => ({
-    linkId: row.invocationId,
-    linkIdLabel: shortenId(row.invocationId),
-    linkHref: `#/history/invocation/${encodeURIComponent(row.invocationId)}`,
-    ts: formatRelativeTime(row.ts, nowMs),
-    tsAbsolute: row.ts,
-    kind: row.kind,
-    payloadPreview: truncatePayload(row.payloadJson),
-  }));
 }

@@ -2,14 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type {
   ConversationDetail,
   ConversationListRow,
-  ConversationTurnEventRow,
   InvocationSummaryRow,
   SpanSummaryRow,
   TraceSummaryRow,
 } from "../../../../../history/types";
 import {
   buildConversationHeader,
-  buildConversationTurnEventRows,
   buildInvocationLinks,
   buildSpanRows,
   buildSpanTreeByTurn,
@@ -551,36 +549,6 @@ describe("extractToolName", () => {
       }),
     });
     expect(extractToolName(span)).toBe("shell");
-  });
-});
-
-describe("buildConversationTurnEventRows", () => {
-  function makeEvent(
-    overrides: Partial<ConversationTurnEventRow> = {},
-  ): ConversationTurnEventRow {
-    return {
-      invocationId: "inv_xxxxxxxxxxxxxxxx",
-      ts: "2026-05-01T11:30:00.000Z",
-      kind: "user_message",
-      payloadJson: `{"text":"hello"}`,
-      ...overrides,
-    };
-  }
-
-  test("returns empty for no events", () => {
-    expect(buildConversationTurnEventRows([], NOW_MS)).toEqual([]);
-  });
-
-  test("projects a single event with truncated payload preview", () => {
-    const huge = "y".repeat(200);
-    const view = buildConversationTurnEventRows(
-      [makeEvent({ payloadJson: huge })],
-      NOW_MS,
-    );
-    expect(view[0]?.linkIdLabel).toBe("inv_xxxx");
-    expect(view[0]?.linkHref).toBe("#/history/invocation/inv_xxxxxxxxxxxxxxxx");
-    expect(view[0]?.kind).toBe("user_message");
-    expect(view[0]?.payloadPreview.endsWith("…")).toBe(true);
   });
 });
 
