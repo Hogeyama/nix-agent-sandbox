@@ -2184,6 +2184,40 @@ body::after {
   max-height: 60vh;
 }
 
+/* Per-turn accordion in the Spans section. One container per turn
+ * stacks vertically; the header is a full-width <button> using the
+ * same muted-cream typography as the Turns table above, and the body
+ * (only rendered when open) hosts the existing spans <table>. */
+.history-detail-turn-acc {
+  border: 1px solid var(--rule-soft);
+  margin-bottom: 8px;
+  background-color: var(--surface-1);
+}
+.history-detail-turn-acc-header {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cream);
+  cursor: pointer;
+}
+.history-detail-turn-acc-header:hover {
+  background-color: var(--surface-2);
+}
+.history-detail-turn-acc-header[aria-expanded="true"] {
+  border-bottom: 1px solid var(--rule-soft);
+}
+.history-detail-turn-acc-body {
+  /* Body holds a full-width <table> already styled by
+   * .history-detail-table; no extra padding so the table edges align
+   * with the accordion border. */
+  overflow-x: auto;
+}
+
 /* Topbar history link — sits between the live indicator and the gear
  * icon. Uses the same muted-cream typography as the settings nav so
  * the topbar reads as a single palette. */

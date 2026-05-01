@@ -175,6 +175,30 @@ export interface SpanRowView {
    * literal "{}" so the drawer always has something to render.
    */
   readonly attrsPretty: string;
+  /**
+   * Tree depth (root = 0) within the per-turn span tree. Set by
+   * `buildSpanTreeByTurn`; left undefined by the flat `buildSpanRows`
+   * projection that the Invocation detail page consumes.
+   */
+  readonly depth?: number;
+}
+
+/**
+ * Per-turn group of span rows for the accordion rendering on the
+ * conversation detail page. One group per trace, ordered by
+ * `compareTurnOrder`; rows inside are DFS-flattened with `depth`
+ * populated for indentation.
+ */
+export interface TurnSpanGroup {
+  readonly traceId: string;
+  readonly traceIdLabel: string;
+  /** 1-based turn index assigned in `compareTurnOrder` order. */
+  readonly turnIndex: number;
+  /** Compact-formatted duration ("2m11s", …); empty for an open turn. */
+  readonly durationLabel: string;
+  readonly spanCount: number;
+  /** DFS-flattened span rows; each row carries `depth` for indentation. */
+  readonly rows: SpanRowView[];
 }
 
 /**
@@ -550,35 +574,124 @@ function formatAttrsPretty(attrsJson: string): string {
   }
 }
 
+/**
+ * Project a single `SpanSummaryRow` into the view-row consumed by both
+ * the flat Spans table on the Invocation page and the per-turn
+ * accordion tree on the Conversation page. `depth` is left undefined
+ * here; the tree builder fills it in for indentation.
+ */
+function toSpanRowView(row: SpanSummaryRow, nowMs: number): SpanRowView {
+  const { kindLabel, kindClass } = classifySpanKind(row.kind, row.spanName);
+  return {
+    spanId: row.spanId,
+    spanIdLabel: shortenId(row.spanId),
+    parentSpanIdLabel:
+      row.parentSpanId === null ? null : shortenId(row.parentSpanId),
+    traceId: row.traceId,
+    traceIdLabel: shortenId(row.traceId),
+    spanName: row.spanName,
+    kind: row.kind,
+    kindLabel,
+    kindClass,
+    model: row.model,
+    inTok: formatCountCell(row.inTok),
+    outTok: formatCountCell(row.outTok),
+    cacheRTok: formatCountCell(row.cacheR),
+    cacheWTok: formatCountCell(row.cacheW),
+    ioCell: joinPairCell(row.inTok, row.outTok),
+    cacheCell: joinPairCell(row.cacheR, row.cacheW),
+    durationLabel: formatDuration(row.durationMs),
+    startedAt: formatRelativeTime(row.startedAt, nowMs),
+    startedAtAbsolute: row.startedAt,
+    toolName: extractToolName(row),
+    attrsPretty: formatAttrsPretty(row.attrsJson),
+  };
+}
+
 export function buildSpanRows(
   spans: readonly SpanSummaryRow[],
   nowMs: number,
 ): SpanRowView[] {
-  return spans.map((row) => {
-    const { kindLabel, kindClass } = classifySpanKind(row.kind, row.spanName);
+  return spans.map((row) => toSpanRowView(row, nowMs));
+}
+
+/**
+ * Group `detail.spans` by their parent turn (= trace) and DFS-flatten
+ * each group so the Conversation detail page can render one
+ * accordion per turn with indented child spans.
+ *
+ * Rules:
+ *   - Turns are ordered by `compareTurnOrder`; `turnIndex` is 1-based
+ *     in that order.
+ *   - Within a turn, spans are filtered by `traceId`. A span is a tree
+ *     root when `parentSpanId === null` or when its parent is not part
+ *     of the same turn (orphans surface as roots so nothing is dropped).
+ *   - Siblings at any depth are sorted by `startedAt` ASC.
+ *   - DFS pre-order produces the row sequence; each row carries the
+ *     `depth` (root = 0) so the page can left-pad the Name cell.
+ *   - `durationLabel` uses the trace's wall-clock duration, or "" when
+ *     the trace is still open (`endedAt === null`).
+ */
+export function buildSpanTreeByTurn(
+  detail: ConversationDetail,
+  nowMs: number,
+): TurnSpanGroup[] {
+  const orderedTraces = detail.traces.slice().sort(compareTurnOrder);
+  return orderedTraces.map((trace, idx) => {
+    const traceSpans = detail.spans.filter((s) => s.traceId === trace.traceId);
+    const ids = new Set(traceSpans.map((s) => s.spanId));
+    // Bucket children by parent id; orphans (parent missing from the
+    // same turn) and true roots both land in the `roots` array.
+    const childrenByParent = new Map<string, SpanSummaryRow[]>();
+    const roots: SpanSummaryRow[] = [];
+    for (const span of traceSpans) {
+      if (span.parentSpanId === null || !ids.has(span.parentSpanId)) {
+        roots.push(span);
+        continue;
+      }
+      const arr = childrenByParent.get(span.parentSpanId);
+      if (arr === undefined) {
+        childrenByParent.set(span.parentSpanId, [span]);
+      } else {
+        arr.push(span);
+      }
+    }
+    const bySiblingTime = (a: SpanSummaryRow, b: SpanSummaryRow): number => {
+      if (a.startedAt < b.startedAt) return -1;
+      if (a.startedAt > b.startedAt) return 1;
+      if (a.spanId < b.spanId) return -1;
+      if (a.spanId > b.spanId) return 1;
+      return 0;
+    };
+    roots.sort(bySiblingTime);
+    for (const arr of childrenByParent.values()) arr.sort(bySiblingTime);
+
+    const rows: SpanRowView[] = [];
+    const visit = (span: SpanSummaryRow, depth: number): void => {
+      rows.push({ ...toSpanRowView(span, nowMs), depth });
+      const kids = childrenByParent.get(span.spanId);
+      if (kids === undefined) return;
+      for (const child of kids) visit(child, depth + 1);
+    };
+    for (const root of roots) visit(root, 0);
+
+    // Guard against unparseable timestamps; an invalid duration is
+    // reported as an open turn.
+    const durationMs =
+      trace.endedAt === null
+        ? null
+        : Date.parse(trace.endedAt) - Date.parse(trace.startedAt);
+    const durationLabel =
+      durationMs === null || !Number.isFinite(durationMs)
+        ? ""
+        : (formatDuration(durationMs) ?? "");
     return {
-      spanId: row.spanId,
-      spanIdLabel: shortenId(row.spanId),
-      parentSpanIdLabel:
-        row.parentSpanId === null ? null : shortenId(row.parentSpanId),
-      traceId: row.traceId,
-      traceIdLabel: shortenId(row.traceId),
-      spanName: row.spanName,
-      kind: row.kind,
-      kindLabel,
-      kindClass,
-      model: row.model,
-      inTok: formatCountCell(row.inTok),
-      outTok: formatCountCell(row.outTok),
-      cacheRTok: formatCountCell(row.cacheR),
-      cacheWTok: formatCountCell(row.cacheW),
-      ioCell: joinPairCell(row.inTok, row.outTok),
-      cacheCell: joinPairCell(row.cacheR, row.cacheW),
-      durationLabel: formatDuration(row.durationMs),
-      startedAt: formatRelativeTime(row.startedAt, nowMs),
-      startedAtAbsolute: row.startedAt,
-      toolName: extractToolName(row),
-      attrsPretty: formatAttrsPretty(row.attrsJson),
+      traceId: trace.traceId,
+      traceIdLabel: shortenId(trace.traceId),
+      turnIndex: idx + 1,
+      durationLabel,
+      spanCount: traceSpans.length,
+      rows,
     };
   });
 }

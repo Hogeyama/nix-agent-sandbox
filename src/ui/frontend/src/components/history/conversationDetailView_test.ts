@@ -12,6 +12,7 @@ import {
   buildConversationTurnEventRows,
   buildInvocationLinks,
   buildSpanRows,
+  buildSpanTreeByTurn,
   buildTraceRows,
   buildTurnRows,
   compareTurnOrder,
@@ -813,5 +814,195 @@ describe("buildTurnRows", () => {
     const view = buildTurnRows(detail, NOW_MS);
     expect(view[0]?.traceId).toBe("trace_early");
     expect(view[1]?.traceId).toBe("trace_late");
+  });
+});
+
+describe("buildSpanTreeByTurn", () => {
+  test("DFS-flattens a 3-level tree and assigns depths 0/1/2 in pre-order", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [
+        makeSpan({
+          spanId: "root",
+          parentSpanId: null,
+          traceId: "t1",
+          spanName: "claude_code.interaction",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        makeSpan({
+          spanId: "mid",
+          parentSpanId: "root",
+          traceId: "t1",
+          spanName: "claude_code.tool",
+          startedAt: "2026-05-01T11:00:01.000Z",
+        }),
+        makeSpan({
+          spanId: "leaf",
+          parentSpanId: "mid",
+          traceId: "t1",
+          spanName: "claude_code.tool.execution",
+          startedAt: "2026-05-01T11:00:02.000Z",
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    const rows = groups[0]?.rows ?? [];
+    expect(rows.map((r) => r.spanId)).toEqual(["root", "mid", "leaf"]);
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 2]);
+  });
+
+  test("siblings sharing a parent are sorted by startedAt ASC even when input is reversed", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [
+        makeSpan({
+          spanId: "root",
+          parentSpanId: null,
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        // Children supplied in reverse-time order.
+        makeSpan({
+          spanId: "later",
+          parentSpanId: "root",
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:02.000Z",
+        }),
+        makeSpan({
+          spanId: "earlier",
+          parentSpanId: "root",
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:01.000Z",
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    const ids = (groups[0]?.rows ?? []).map((r) => r.spanId);
+    expect(ids).toEqual(["root", "earlier", "later"]);
+  });
+
+  test("orphan spans (parent absent from same turn) surface as depth-0 roots", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [
+        makeSpan({
+          spanId: "orphan",
+          parentSpanId: "missing_in_turn",
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    const rows = groups[0]?.rows ?? [];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.spanId).toBe("orphan");
+    expect(rows[0]?.depth).toBe(0);
+  });
+
+  test("partitions spans across multiple traces; each group holds only its own", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "trace_a",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        makeTrace({
+          traceId: "trace_b",
+          startedAt: "2026-05-01T11:01:00.000Z",
+        }),
+      ],
+      spans: [
+        makeSpan({
+          spanId: "a1",
+          parentSpanId: null,
+          traceId: "trace_a",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        makeSpan({
+          spanId: "a2",
+          parentSpanId: "a1",
+          traceId: "trace_a",
+          startedAt: "2026-05-01T11:00:01.000Z",
+        }),
+        makeSpan({
+          spanId: "b1",
+          parentSpanId: null,
+          traceId: "trace_b",
+          startedAt: "2026-05-01T11:01:00.000Z",
+        }),
+        makeSpan({
+          spanId: "b2",
+          parentSpanId: "b1",
+          traceId: "trace_b",
+          startedAt: "2026-05-01T11:01:01.000Z",
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.traceId).toBe("trace_a");
+    expect((groups[0]?.rows ?? []).map((r) => r.spanId)).toEqual(["a1", "a2"]);
+    expect(groups[1]?.traceId).toBe("trace_b");
+    expect((groups[1]?.rows ?? []).map((r) => r.spanId)).toEqual(["b1", "b2"]);
+  });
+
+  test("turnIndex starts at 1 in startedAt ASC order even when input is reversed", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "trace_late",
+          startedAt: "2026-05-01T12:00:00.000Z",
+        }),
+        makeTrace({
+          traceId: "trace_early",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+      ],
+      spans: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.traceId).toBe("trace_early");
+    expect(groups[0]?.turnIndex).toBe(1);
+    expect(groups[1]?.traceId).toBe("trace_late");
+    expect(groups[1]?.turnIndex).toBe(2);
+  });
+
+  test("returns an empty array when the conversation has no traces", () => {
+    const detail = makeDetail({ traces: [], spans: [] });
+    expect(buildSpanTreeByTurn(detail, NOW_MS)).toEqual([]);
+  });
+
+  test("durationLabel is the empty string for an open trace (endedAt = null)", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ endedAt: null })],
+      spans: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.durationLabel).toBe("");
+  });
+
+  test("durationLabel reflects formatDuration output for a closed trace", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:01:00.000Z",
+        }),
+      ],
+      spans: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.durationLabel).toBe("1m");
+  });
+
+  test("durationLabel is the empty string when endedAt is unparseable", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ endedAt: "not-a-date" })],
+      spans: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.durationLabel).toBe("");
   });
 });
