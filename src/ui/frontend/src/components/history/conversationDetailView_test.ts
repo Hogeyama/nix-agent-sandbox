@@ -168,7 +168,9 @@ describe("buildConversationHeader", () => {
     expect(view.firstSeen).toBe("yesterday");
     expect(view.lastSeen).toBe("4h ago");
     expect(view.summary).toBeNull();
-    expect(view.turnCount).toBe(12);
+    // Header turn count reflects displayed (zero-token-filtered) turns,
+    // not the raw `turnEventCount`, so it matches the Turns table.
+    expect(view.turnCount).toBe(1);
     expect(view.spanCount).toBe(34);
     expect(view.invocationCount).toBe(2);
     expect(view.inputTokens).toBe(1500);

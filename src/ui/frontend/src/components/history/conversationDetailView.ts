@@ -380,7 +380,10 @@ export function buildConversationHeader(
     lastSeen: formatRelativeTime(c.lastSeenAt, nowMs),
     lastSeenAbsolute: c.lastSeenAt,
     summary: c.summary,
-    turnCount: c.turnEventCount,
+    // Match the Turns table on the page: count only turns that
+    // survive `buildSpanTreeByTurn`'s zero-token filter so the
+    // header total never diverges from the rows below.
+    turnCount: buildSpanTreeByTurn(detail, nowMs).length,
     spanCount: c.spanCount,
     invocationCount: c.invocationCount,
     inputTokens: c.inputTokensTotal,
