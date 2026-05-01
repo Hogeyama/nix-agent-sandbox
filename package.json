@@ -17,6 +17,7 @@
     "bun2nix": "bun2nix -o bun.nix"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.2.8",
     "@fontsource-variable/geist-mono": "^5",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",

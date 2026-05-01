@@ -169,6 +169,10 @@
     url = "https://registry.npmjs.org/@fontsource-variable/geist-mono/-/geist-mono-5.2.7.tgz";
     hash = "sha512-ZKlZ5sjtalb2TwXKs400mAGDlt/+2ENLNySPx0wTz3bP3mWARCsUW+rpxzZc7e05d2qGch70pItt3K4qttbIYA==";
   };
+  "@fontsource-variable/geist@5.2.8" = fetchurl {
+    url = "https://registry.npmjs.org/@fontsource-variable/geist/-/geist-5.2.8.tgz";
+    hash = "sha512-cJ6m9e+8MQ5dCYJsLylfZrgBh6KkG4bOLckB35Tr9J/EqdkEM6QllH5PxqP1dhTvFup+HtMRPuz9xOjxXJggxw==";
+  };
   "@jridgewell/gen-mapping@0.3.13" = fetchurl {
     url = "https://registry.npmjs.org/@jridgewell/gen-mapping/-/gen-mapping-0.3.13.tgz";
     hash = "sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==";

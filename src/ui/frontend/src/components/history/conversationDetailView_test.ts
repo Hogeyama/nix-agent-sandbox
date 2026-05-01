@@ -13,8 +13,8 @@ import {
   buildInvocationLinks,
   buildSpanRows,
   buildTraceRows,
-  formatDurationMs,
-  formatTokenCell,
+  formatCountCell,
+  formatDuration,
   truncatePayload,
 } from "./conversationDetailView";
 
@@ -117,21 +117,44 @@ describe("truncatePayload", () => {
   });
 });
 
-describe("formatDurationMs", () => {
-  test("renders null as the dash placeholder", () => {
-    expect(formatDurationMs(null)).toBe("—");
+describe("formatDuration", () => {
+  test("null propagates as null so the page can choose blank rendering", () => {
+    expect(formatDuration(null)).toBeNull();
   });
-  test("renders a number with the ms suffix", () => {
-    expect(formatDurationMs(1234)).toBe("1234ms");
+  test("sub-second durations render as integer ms", () => {
+    expect(formatDuration(0)).toBe("0ms");
+    expect(formatDuration(234)).toBe("234ms");
+    expect(formatDuration(999)).toBe("999ms");
+  });
+  test("sub-minute durations render as decimal seconds, truncated", () => {
+    expect(formatDuration(1000)).toBe("1s");
+    expect(formatDuration(1234)).toBe("1.2s");
+    expect(formatDuration(12_345)).toBe("12.3s");
+    expect(formatDuration(59_999)).toBe("59.9s");
+  });
+  test("sub-hour durations render as <m>m<s>s with no leading zeros", () => {
+    expect(formatDuration(60_000)).toBe("1m");
+    expect(formatDuration(84_000)).toBe("1m24s");
+    expect(formatDuration(3_599_000)).toBe("59m59s");
+  });
+  test("hour-or-greater durations render as <h>h<m>m", () => {
+    expect(formatDuration(3_600_000)).toBe("1h");
+    expect(formatDuration(4_980_000)).toBe("1h23m");
   });
 });
 
-describe("formatTokenCell", () => {
-  test("null becomes the dash placeholder", () => {
-    expect(formatTokenCell(null)).toBe("—");
+describe("formatCountCell", () => {
+  test("null becomes null so the row layout collapses to empty", () => {
+    expect(formatCountCell(null)).toBeNull();
   });
   test("zero stays as the number, not the dash", () => {
-    expect(formatTokenCell(0)).toBe("0");
+    expect(formatCountCell(0)).toBe("0");
+  });
+  test("small values render as bare integers", () => {
+    expect(formatCountCell(42)).toBe("42");
+  });
+  test("kilo-bucket values use compact form", () => {
+    expect(formatCountCell(1500)).toBe("1.5k");
   });
 });
 
@@ -143,6 +166,7 @@ describe("buildConversationHeader", () => {
     expect(view.agent).toBe("claude-code");
     expect(view.firstSeen).toBe("yesterday");
     expect(view.lastSeen).toBe("4h ago");
+    expect(view.summary).toBeNull();
     expect(view.turnCount).toBe(12);
     expect(view.spanCount).toBe(34);
     expect(view.invocationCount).toBe(2);
@@ -153,12 +177,22 @@ describe("buildConversationHeader", () => {
     expect(view.tokenTotal).toBe(2000);
   });
 
-  test("renders a null agent as the (unknown) placeholder", () => {
+  test("propagates a null agent verbatim (no placeholder)", () => {
     const view = buildConversationHeader(
       makeDetail({ conversation: makeConversation({ agent: null }) }),
       NOW_MS,
     );
-    expect(view.agent).toBe("(unknown)");
+    expect(view.agent).toBeNull();
+  });
+
+  test("propagates a non-null summary verbatim", () => {
+    const view = buildConversationHeader(
+      makeDetail({
+        conversation: makeConversation({ summary: "Refactor the auth flow" }),
+      }),
+      NOW_MS,
+    );
+    expect(view.summary).toBe("Refactor the auth flow");
   });
 });
 
@@ -171,7 +205,7 @@ describe("buildInvocationLinks", () => {
     expect(view[0]?.profile).toBe("default");
     expect(view[0]?.worktreePath).toBe("/work/repo");
     expect(view[0]?.exitReason).toBe("completed");
-    expect(view[0]?.endedAt).not.toBe("(running)");
+    expect(view[0]?.endedAt).not.toBeNull();
   });
 
   test("returns an empty array when no invocations are present", () => {
@@ -179,23 +213,24 @@ describe("buildInvocationLinks", () => {
     expect(view).toEqual([]);
   });
 
-  test("renders a running invocation with the (running) placeholder", () => {
+  test("running invocation surfaces null endedAt and null exitReason", () => {
     const view = buildInvocationLinks(
       makeDetail({
         invocations: [makeInvocation({ endedAt: null, exitReason: null })],
       }),
       NOW_MS,
     );
-    expect(view[0]?.endedAt).toBe("(running)");
-    expect(view[0]?.exitReason).toBe("(unknown)");
+    expect(view[0]?.endedAt).toBeNull();
+    expect(view[0]?.endedAtAbsolute).toBeNull();
+    expect(view[0]?.exitReason).toBeNull();
   });
 
-  test("substitutes (none) for a null profile", () => {
+  test("null profile flows through as null", () => {
     const view = buildInvocationLinks(
       makeDetail({ invocations: [makeInvocation({ profile: null })] }),
       NOW_MS,
     );
-    expect(view[0]?.profile).toBe("(none)");
+    expect(view[0]?.profile).toBeNull();
   });
 
   test("encodes hash-unsafe ids", () => {
@@ -216,12 +251,13 @@ describe("buildTraceRows", () => {
       "#/history/invocation/inv_xxxxxxxxxxxxxxxx",
     );
     expect(view[0]?.spanCount).toBe(7);
-    expect(view[0]?.endedAt).not.toBe("(running)");
+    expect(view[0]?.endedAt).not.toBeNull();
   });
 
-  test("renders an open trace as (running)", () => {
+  test("renders an open trace as a null endedAt", () => {
     const view = buildTraceRows([makeTrace({ endedAt: null })], NOW_MS);
-    expect(view[0]?.endedAt).toBe("(running)");
+    expect(view[0]?.endedAt).toBeNull();
+    expect(view[0]?.endedAtAbsolute).toBeNull();
   });
 
   test("returns empty for an empty input", () => {
@@ -230,7 +266,7 @@ describe("buildTraceRows", () => {
 });
 
 describe("buildSpanRows", () => {
-  test("projects each span and renders nullable cells with placeholders", () => {
+  test("projects each span and propagates null cells verbatim", () => {
     const view = buildSpanRows(
       [
         makeSpan({
@@ -243,20 +279,47 @@ describe("buildSpanRows", () => {
       ],
       NOW_MS,
     );
-    expect(view[0]?.parentSpanIdLabel).toBe("—");
-    expect(view[0]?.model).toBe("—");
-    expect(view[0]?.inTok).toBe("—");
-    expect(view[0]?.outTok).toBe("—");
-    expect(view[0]?.durationMs).toBe("—");
+    expect(view[0]?.parentSpanIdLabel).toBeNull();
+    expect(view[0]?.model).toBeNull();
+    expect(view[0]?.inTok).toBeNull();
+    expect(view[0]?.outTok).toBeNull();
+    expect(view[0]?.durationLabel).toBeNull();
   });
 
-  test("renders populated cells verbatim", () => {
+  test("renders populated cells with compact and short formatters", () => {
     const view = buildSpanRows([makeSpan()], NOW_MS);
     expect(view[0]?.parentSpanIdLabel).toBe("span_par");
     expect(view[0]?.model).toBe("gpt-4");
     expect(view[0]?.inTok).toBe("100");
     expect(view[0]?.outTok).toBe("50");
-    expect(view[0]?.durationMs).toBe("1234ms");
+    expect(view[0]?.durationLabel).toBe("1.2s");
+  });
+
+  test("classifies a chat.completion span as the chat variant", () => {
+    const view = buildSpanRows([makeSpan()], NOW_MS);
+    expect(view[0]?.kindLabel).toBe("chat");
+    expect(view[0]?.kindClass).toBe("is-chat");
+  });
+
+  test("classifies a tool.invoke span as the tool variant", () => {
+    const view = buildSpanRows([makeSpan({ spanName: "tool.invoke" })], NOW_MS);
+    expect(view[0]?.kindLabel).toBe("tool");
+    expect(view[0]?.kindClass).toBe("is-tool");
+  });
+
+  test("classifies an agent.run span as the agent variant", () => {
+    const view = buildSpanRows([makeSpan({ spanName: "agent.run" })], NOW_MS);
+    expect(view[0]?.kindLabel).toBe("agent");
+    expect(view[0]?.kindClass).toBe("is-agent");
+  });
+
+  test("falls back to raw kind with no class for unrecognised spans", () => {
+    const view = buildSpanRows(
+      [makeSpan({ spanName: "weirdo", kind: "producer" })],
+      NOW_MS,
+    );
+    expect(view[0]?.kindLabel).toBe("producer");
+    expect(view[0]?.kindClass).toBe("");
   });
 });
 

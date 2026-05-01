@@ -23,10 +23,10 @@ const ROOT = path.resolve(import.meta.dir, "..");
 const FRONTEND_DIR = path.join(ROOT, "src/ui/frontend");
 const DIST_DIR = path.join(ROOT, "src/ui/dist");
 const ASSETS_DIR = path.join(DIST_DIR, "assets");
-const FONT_SRC_DIR = path.join(
-  ROOT,
-  "node_modules/@fontsource-variable/geist-mono/files",
-);
+const FONT_SRC_DIRS = [
+  path.join(ROOT, "node_modules/@fontsource-variable/geist-mono/files"),
+  path.join(ROOT, "node_modules/@fontsource-variable/geist/files"),
+];
 const FONT_OUT_DIR = path.join(ASSETS_DIR, "fonts");
 
 const watch = process.argv.includes("--watch");
@@ -122,23 +122,28 @@ async function buildOnce(): Promise<void> {
   // referencing /assets/fonts/<name>.
   await mkdir(FONT_OUT_DIR, { recursive: true });
   let fontCount = 0;
-  try {
-    const entries = await readdir(FONT_SRC_DIR);
+  for (const fontSrc of FONT_SRC_DIRS) {
+    let entries: string[];
+    try {
+      entries = await readdir(fontSrc);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      throw new Error(
+        `font directory not found: ${fontSrc}. Run \`bun install\` first.`,
+      );
+    }
+    let perPkgCount = 0;
     for (const name of entries) {
       if (!name.endsWith(".woff2")) continue;
-      await cp(path.join(FONT_SRC_DIR, name), path.join(FONT_OUT_DIR, name));
+      await cp(path.join(fontSrc, name), path.join(FONT_OUT_DIR, name));
+      perPkgCount++;
       fontCount++;
     }
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    throw new Error(
-      `geist-mono font directory not found: ${FONT_SRC_DIR}. Run \`bun install\` first.`,
-    );
-  }
-  if (fontCount === 0) {
-    throw new Error(
-      `no .woff2 files copied from ${FONT_SRC_DIR}; geist-mono package layout may have changed`,
-    );
+    if (perPkgCount === 0) {
+      throw new Error(
+        `no .woff2 files copied from ${fontSrc}; package layout may have changed`,
+      );
+    }
   }
 
   // Bundle third-party license texts so distributions (including the
@@ -153,8 +158,13 @@ async function buildOnce(): Promise<void> {
         ROOT,
         "node_modules/@fontsource-variable/geist-mono/LICENSE",
       ),
-      dst: path.join(licenseDir, "Geist-OFL.txt"),
+      dst: path.join(licenseDir, "Geist-Mono-OFL.txt"),
       label: "geist-mono",
+    },
+    {
+      src: path.join(ROOT, "node_modules/@fontsource-variable/geist/LICENSE"),
+      dst: path.join(licenseDir, "Geist-Sans-OFL.txt"),
+      label: "geist-sans",
     },
     {
       src: path.join(ROOT, "node_modules/@xterm/xterm/LICENSE"),

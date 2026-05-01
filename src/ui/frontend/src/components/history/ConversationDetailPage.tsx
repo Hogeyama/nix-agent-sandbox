@@ -1,11 +1,12 @@
 /**
  * Conversation detail page for the history shell.
  *
- * Mirror of `HistoryListPage`: a thin presentation layer over the
+ * Mirror of `HistoryListPage`: thin presentation layer over the
  * SSE-delivered `ConversationDetail` payload owned by `HistoryShell`.
- * Per-row formatting (id shortening, relative time, payload preview)
- * lives in `conversationDetailView.ts` so it can be exercised without
- * a Solid runtime.
+ * Per-row formatting (id shortening, relative time, payload preview,
+ * compact duration, span-kind classification) lives in
+ * `conversationDetailView.ts` so it can be exercised without a Solid
+ * runtime.
  *
  * Display states:
  *   - error: render the connection-error banner above the body so a
@@ -28,6 +29,7 @@ import {
   buildSpanRows,
   buildTraceRows,
 } from "./conversationDetailView";
+import { formatCompactNumber } from "./historyListView";
 
 export interface ConversationDetailPageProps {
   detail: () => ConversationDetail | null;
@@ -71,7 +73,7 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
   };
 
   return (
-    <div class="history-detail">
+    <div class="history-shell-content">
       <a class="history-detail-back-link" href={backHref()}>
         ← Back to history
       </a>
@@ -85,11 +87,11 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
       </Show>
 
       <Show when={props.notFound()}>
-        <div class="history-detail-not-found">Conversation not found.</div>
+        <div class="history-detail-not-found">Conversation not found</div>
       </Show>
 
       <Show when={!props.notFound() && props.loading()}>
-        <div class="history-placeholder" aria-busy="true">
+        <div class="history-empty" aria-busy="true">
           Loading…
         </div>
       </Show>
@@ -100,38 +102,88 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
           return (
             <>
               <header class="history-detail-header">
-                <h1 class="settings-page-heading" title={h.id}>
-                  Conversation {h.idLabel}
-                </h1>
-                <dl class="history-detail-meta">
-                  <dt>Agent</dt>
-                  <dd>{h.agent}</dd>
-                  <dt>First seen</dt>
-                  <dd title={h.firstSeenAbsolute}>{h.firstSeen}</dd>
-                  <dt>Last seen</dt>
-                  <dd title={h.lastSeenAbsolute}>{h.lastSeen}</dd>
-                  <dt>Turns</dt>
-                  <dd>{h.turnCount}</dd>
-                  <dt>Spans</dt>
-                  <dd>{h.spanCount}</dd>
-                  <dt>Invocations</dt>
-                  <dd>{h.invocationCount}</dd>
-                  <dt>Tokens (in / out)</dt>
-                  <dd>
-                    {h.inputTokens} / {h.outputTokens}
-                  </dd>
-                  <dt>Cache (read / write)</dt>
-                  <dd>
-                    {h.cacheReadTokens} / {h.cacheWriteTokens}
-                  </dd>
-                </dl>
+                <div class="history-detail-header-left">
+                  <div class="history-detail-id" title={h.id}>
+                    {h.idLabel}
+                  </div>
+                  <Show when={h.summary}>
+                    {(summary) => (
+                      <div class="history-detail-summary">{summary()}</div>
+                    )}
+                  </Show>
+                  <div class="history-detail-meta">
+                    <Show when={h.agent}>
+                      {(agent) => (
+                        <div class="history-detail-meta-item">
+                          <span class="history-detail-meta-label">Agent</span>
+                          <span class="history-detail-meta-value">
+                            {agent()}
+                          </span>
+                        </div>
+                      )}
+                    </Show>
+                    <div class="history-detail-meta-item">
+                      <span class="history-detail-meta-label">First seen</span>
+                      <span
+                        class="history-detail-meta-value"
+                        title={h.firstSeenAbsolute}
+                      >
+                        {h.firstSeen}
+                      </span>
+                    </div>
+                    <div class="history-detail-meta-item">
+                      <span class="history-detail-meta-label">Last seen</span>
+                      <span
+                        class="history-detail-meta-value"
+                        title={h.lastSeenAbsolute}
+                      >
+                        {h.lastSeen}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div class="history-detail-stats">
+                  <div>
+                    <div class="history-detail-stat-label">Turns</div>
+                    <div class="history-detail-stat-value">
+                      {formatCompactNumber(h.turnCount)}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="history-detail-stat-label">Spans</div>
+                    <div class="history-detail-stat-value">
+                      {formatCompactNumber(h.spanCount)}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="history-detail-stat-label">Invocations</div>
+                    <div class="history-detail-stat-value">
+                      {formatCompactNumber(h.invocationCount)}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="history-detail-stat-label">Tokens</div>
+                    <div class="history-detail-stat-value">
+                      {formatCompactNumber(h.tokenTotal)}
+                    </div>
+                  </div>
+                </div>
               </header>
 
               <section class="history-detail-section">
-                <h2 class="history-detail-section-title">Invocations</h2>
+                <h2 class="history-detail-section-title">
+                  Invocations
+                  <span class="history-detail-section-count">
+                    {invocations().length} rows
+                  </span>
+                </h2>
                 <Show
                   when={invocations().length > 0}
-                  fallback={<p class="history-detail-empty">No invocations.</p>}
+                  fallback={
+                    <div class="history-detail-section-empty">
+                      No invocations
+                    </div>
+                  }
                 >
                   <table class="history-detail-table">
                     <thead>
@@ -147,19 +199,21 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                     <tbody>
                       <For each={invocations()}>
                         {(row) => (
-                          <tr class="history-detail-row">
-                            <td class="history-cell-id">
+                          <tr>
+                            <td class="is-id">
                               <a class="history-row-link" href={row.href}>
                                 {row.idLabel}
                               </a>
                             </td>
-                            <td>{row.profile}</td>
-                            <td>{row.worktreePath}</td>
+                            <td>{row.profile ?? ""}</td>
+                            <td class="is-muted">{row.worktreePath ?? ""}</td>
                             <td title={row.startedAtAbsolute}>
                               {row.startedAt}
                             </td>
-                            <td title={row.endedAtAbsolute}>{row.endedAt}</td>
-                            <td>{row.exitReason}</td>
+                            <td title={row.endedAtAbsolute ?? undefined}>
+                              {row.endedAt ?? ""}
+                            </td>
+                            <td>{row.exitReason ?? ""}</td>
                           </tr>
                         )}
                       </For>
@@ -169,10 +223,17 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
               </section>
 
               <section class="history-detail-section">
-                <h2 class="history-detail-section-title">Traces</h2>
+                <h2 class="history-detail-section-title">
+                  Traces
+                  <span class="history-detail-section-count">
+                    {traces().length} rows
+                  </span>
+                </h2>
                 <Show
                   when={traces().length > 0}
-                  fallback={<p class="history-detail-empty">No traces.</p>}
+                  fallback={
+                    <div class="history-detail-section-empty">No traces</div>
+                  }
                 >
                   <table class="history-detail-table">
                     <thead>
@@ -181,7 +242,7 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                         <th scope="col">Invocation</th>
                         <th scope="col">Started</th>
                         <th scope="col">Ended</th>
-                        <th scope="col" class="history-num-col">
+                        <th scope="col" class="is-numeric">
                           Spans
                         </th>
                       </tr>
@@ -189,11 +250,11 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                     <tbody>
                       <For each={traces()}>
                         {(row) => (
-                          <tr class="history-detail-row">
-                            <td class="history-cell-id" title={row.traceId}>
+                          <tr>
+                            <td class="is-id" title={row.traceId}>
                               {row.traceIdLabel}
                             </td>
-                            <td class="history-cell-id">
+                            <td class="is-id">
                               <a
                                 class="history-row-link"
                                 href={row.invocationHref}
@@ -204,8 +265,10 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                             <td title={row.startedAtAbsolute}>
                               {row.startedAt}
                             </td>
-                            <td title={row.endedAtAbsolute}>{row.endedAt}</td>
-                            <td class="history-cell-num">{row.spanCount}</td>
+                            <td title={row.endedAtAbsolute ?? undefined}>
+                              {row.endedAt ?? ""}
+                            </td>
+                            <td class="is-numeric">{row.spanCount}</td>
                           </tr>
                         )}
                       </For>
@@ -215,10 +278,17 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
               </section>
 
               <section class="history-detail-section">
-                <h2 class="history-detail-section-title">Spans</h2>
+                <h2 class="history-detail-section-title">
+                  Spans
+                  <span class="history-detail-section-count">
+                    {spans().length} rows
+                  </span>
+                </h2>
                 <Show
                   when={spans().length > 0}
-                  fallback={<p class="history-detail-empty">No spans.</p>}
+                  fallback={
+                    <div class="history-detail-section-empty">No spans</div>
+                  }
                 >
                   <table class="history-detail-table">
                     <thead>
@@ -228,13 +298,13 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                         <th scope="col">Name</th>
                         <th scope="col">Kind</th>
                         <th scope="col">Model</th>
-                        <th scope="col" class="history-num-col">
+                        <th scope="col" class="is-numeric">
                           In
                         </th>
-                        <th scope="col" class="history-num-col">
+                        <th scope="col" class="is-numeric">
                           Out
                         </th>
-                        <th scope="col" class="history-num-col">
+                        <th scope="col" class="is-numeric">
                           Duration
                         </th>
                         <th scope="col">Started</th>
@@ -243,19 +313,29 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                     <tbody>
                       <For each={spans()}>
                         {(row) => (
-                          <tr class="history-detail-row">
-                            <td class="history-cell-id" title={row.spanId}>
+                          <tr>
+                            <td class="is-id" title={row.spanId}>
                               {row.spanIdLabel}
                             </td>
-                            <td class="history-cell-id">
-                              {row.parentSpanIdLabel}
-                            </td>
+                            <td class="is-id">{row.parentSpanIdLabel ?? ""}</td>
                             <td>{row.spanName}</td>
-                            <td>{row.kind}</td>
-                            <td>{row.model}</td>
-                            <td class="history-cell-num">{row.inTok}</td>
-                            <td class="history-cell-num">{row.outTok}</td>
-                            <td class="history-cell-num">{row.durationMs}</td>
+                            <td>
+                              <span
+                                class={
+                                  row.kindClass === ""
+                                    ? "history-detail-kind"
+                                    : `history-detail-kind ${row.kindClass}`
+                                }
+                              >
+                                {row.kindLabel}
+                              </span>
+                            </td>
+                            <td>{row.model ?? ""}</td>
+                            <td class="is-numeric">{row.inTok ?? ""}</td>
+                            <td class="is-numeric">{row.outTok ?? ""}</td>
+                            <td class="is-numeric">
+                              {row.durationLabel ?? ""}
+                            </td>
                             <td title={row.startedAtAbsolute}>
                               {row.startedAt}
                             </td>
@@ -268,10 +348,19 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
               </section>
 
               <section class="history-detail-section">
-                <h2 class="history-detail-section-title">Turn events</h2>
+                <h2 class="history-detail-section-title">
+                  Turn events
+                  <span class="history-detail-section-count">
+                    {turnEvents().length} rows
+                  </span>
+                </h2>
                 <Show
                   when={turnEvents().length > 0}
-                  fallback={<p class="history-detail-empty">No turn events.</p>}
+                  fallback={
+                    <div class="history-detail-section-empty">
+                      No turn events
+                    </div>
+                  }
                 >
                   <table class="history-detail-table">
                     <thead>
@@ -285,16 +374,18 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                     <tbody>
                       <For each={turnEvents()}>
                         {(row) => (
-                          <tr class="history-detail-row">
+                          <tr>
                             <td title={row.tsAbsolute}>{row.ts}</td>
-                            <td class="history-cell-id">
+                            <td class="is-id">
                               <a class="history-row-link" href={row.linkHref}>
                                 {row.linkIdLabel}
                               </a>
                             </td>
                             <td>{row.kind}</td>
-                            <td class="history-cell-payload">
-                              {row.payloadPreview}
+                            <td>
+                              <code class="history-detail-payload-preview">
+                                {row.payloadPreview}
+                              </code>
                             </td>
                           </tr>
                         )}

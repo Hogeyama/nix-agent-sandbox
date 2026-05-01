@@ -6,6 +6,10 @@
  * for those tables. This module only adds the invocation-specific
  * header and the conversation-link list (which can be multi-row when a
  * subagent invocation drives more than one conversation).
+ *
+ * Nullable backend columns flow through as `string | null` rather than
+ * being mapped to placeholder strings; the page layer chooses how to
+ * render absence (empty cell, em-dash, omitted row).
  */
 
 import type {
@@ -19,22 +23,17 @@ import {
 } from "./conversationDetailView";
 import { formatRelativeTime, shortenId } from "./historyListView";
 
-const PROFILE_FALLBACK = "(none)";
-const AGENT_FALLBACK = "(unknown)";
-const TEXT_FALLBACK = "(unknown)";
-const RUNNING = "(running)";
-
 export interface InvocationHeaderView {
   readonly id: string;
   readonly idLabel: string;
-  readonly profile: string;
-  readonly agent: string;
-  readonly worktreePath: string;
+  readonly profile: string | null;
+  readonly agent: string | null;
+  readonly worktreePath: string | null;
   readonly startedAt: string;
   readonly startedAtAbsolute: string;
-  readonly endedAt: string;
-  readonly endedAtAbsolute: string;
-  readonly exitReason: string;
+  readonly endedAt: string | null;
+  readonly endedAtAbsolute: string | null;
+  readonly exitReason: string | null;
   readonly turnCount: number;
   readonly traceCount: number;
   readonly spanCount: number;
@@ -45,7 +44,7 @@ export interface InvocationHeaderView {
 export interface ConversationLinkRow {
   readonly id: string;
   readonly idLabel: string;
-  readonly agent: string;
+  readonly agent: string | null;
   readonly turnCount: number;
   readonly spanCount: number;
   readonly tokenTotal: number;
@@ -69,15 +68,15 @@ export function buildInvocationHeader(
   return {
     id: inv.id,
     idLabel: shortenId(inv.id),
-    profile: inv.profile ?? PROFILE_FALLBACK,
-    agent: inv.agent ?? AGENT_FALLBACK,
-    worktreePath: inv.worktreePath ?? TEXT_FALLBACK,
+    profile: inv.profile,
+    agent: inv.agent,
+    worktreePath: inv.worktreePath,
     startedAt: formatRelativeTime(inv.startedAt, nowMs),
     startedAtAbsolute: inv.startedAt,
     endedAt:
-      inv.endedAt === null ? RUNNING : formatRelativeTime(inv.endedAt, nowMs),
-    endedAtAbsolute: inv.endedAt ?? "",
-    exitReason: inv.exitReason ?? TEXT_FALLBACK,
+      inv.endedAt === null ? null : formatRelativeTime(inv.endedAt, nowMs),
+    endedAtAbsolute: inv.endedAt,
+    exitReason: inv.exitReason,
     turnCount: detail.turnEvents.length,
     traceCount: detail.traces.length,
     spanCount: detail.spans.length,
@@ -101,7 +100,7 @@ function toConversationLinkRow(row: ConversationListRow): ConversationLinkRow {
   return {
     id: row.id,
     idLabel: shortenId(row.id),
-    agent: row.agent ?? AGENT_FALLBACK,
+    agent: row.agent,
     turnCount: row.turnEventCount,
     spanCount: row.spanCount,
     tokenTotal: row.inputTokensTotal + row.outputTokensTotal,

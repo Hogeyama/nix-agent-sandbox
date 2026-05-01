@@ -1,4 +1,5 @@
 import "@fontsource-variable/geist-mono";
+import "@fontsource-variable/geist";
 import "./styles.css";
 import { render } from "solid-js/web";
 import { App } from "./App";

@@ -1,28 +1,27 @@
 /**
  * Conversation list page for the history shell.
  *
- * The page is a thin presentation layer over the SSE-delivered list:
- * data fetching is owned by the parent shell (which subscribes via
- * `useHistoryStream` and threads the accessor in). Per-row formatting
- * (short id, relative time, token total) lives in `historyListView.ts`
- * so it can be unit-tested without a Solid runtime.
+ * Thin presentation layer over the SSE-delivered list. Per-row
+ * formatting (short id, relative time, summary fallback, compact token
+ * total, agent variant) lives in `historyListView.ts` so it can be
+ * unit-tested without a Solid runtime. The page renders one anchor per
+ * row — clicking the anchor navigates via `#/history/conversation/:id`,
+ * which the router resolves on the next `hashchange`.
  *
  * Three display states:
  *   - loading: no payload has arrived yet → render a single placeholder
- *     row so the layout does not pop in.
+ *     so the layout does not pop in.
  *   - empty: payload arrived but contained zero rows → render a stub
  *     message rather than an empty table.
- *   - populated: render one anchor per conversation; clicking the
- *     anchor navigates via `#/history/conversation/:id` (the router
- *     resolves it on the next `hashchange`).
+ *   - populated: render one anchor row per conversation.
  *
  * A `createSignal`-driven 1-minute tick refreshes the relative-time
- * column without a snapshot from the daemon.
+ * column without a fresh snapshot from the daemon.
  */
 
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import type { ConversationListRow } from "../../../../../history/types";
-import { toHistoryListRowDisplay } from "./historyListView";
+import { toConversationListRowView } from "./historyListView";
 
 export interface HistoryListPageProps {
   /** Reactive accessor for the SSE-delivered list. */
@@ -44,14 +43,11 @@ export function HistoryListPage(props: HistoryListPageProps) {
   onCleanup(() => clearInterval(interval));
 
   const rows = () =>
-    props.conversations().map((row) => toHistoryListRowDisplay(row, now()));
+    props.conversations().map((row) => toConversationListRowView(row, now()));
 
   return (
-    <div class="history-list-page">
-      <h1 class="settings-page-heading">History</h1>
-      <p class="settings-page-note">
-        Browse recent conversations recorded by the OTLP receiver.
-      </p>
+    <div class="history-shell-content">
+      <h1 class="history-shell-title">History</h1>
 
       <Show when={props.error()}>
         {(msg) => (
@@ -64,63 +60,51 @@ export function HistoryListPage(props: HistoryListPageProps) {
       <Show
         when={!props.loading()}
         fallback={
-          <div class="history-placeholder" aria-busy="true">
+          <div class="history-empty" aria-busy="true">
             Loading…
           </div>
         }
       >
         <Show
           when={rows().length > 0}
-          fallback={<p class="history-empty">No conversations yet.</p>}
+          fallback={<div class="history-empty">No conversations yet</div>}
         >
-          <table class="history-list">
-            <thead>
-              <tr>
-                <th scope="col">Id</th>
-                <th scope="col">Agent</th>
-                <th scope="col">Last seen</th>
-                <th scope="col" class="history-num-col">
-                  Turns
-                </th>
-                <th scope="col" class="history-num-col">
-                  Spans
-                </th>
-                <th scope="col" class="history-num-col">
-                  Tokens
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={rows()}>
-                {(row) => (
-                  <tr class="history-list-row">
-                    <td class="history-cell-id">
-                      <a class="history-row-link" href={row.href}>
-                        {row.shortId}
-                      </a>
-                      <div
-                        class={
-                          row.hasSummary
-                            ? "history-list-summary"
-                            : "history-list-summary history-list-summary-empty"
-                        }
-                        title={row.hasSummary ? row.summary : undefined}
-                      >
-                        {row.summary}
-                      </div>
-                    </td>
-                    <td class="history-cell-agent">{row.agent}</td>
-                    <td class="history-cell-time" title={row.fullTimestamp}>
-                      {row.relativeTime}
-                    </td>
-                    <td class="history-cell-num">{row.turnCount}</td>
-                    <td class="history-cell-num">{row.spanCount}</td>
-                    <td class="history-cell-num">{row.tokenTotal}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
+          <div class="history-list">
+            <For each={rows()}>
+              {(row) => (
+                <a class="history-list-row" href={row.href}>
+                  <div class="history-list-primary">
+                    <div
+                      class={
+                        row.summaryIsEmpty
+                          ? "history-list-summary is-empty"
+                          : "history-list-summary"
+                      }
+                      title={row.summary}
+                    >
+                      {row.summary}
+                    </div>
+                    <Show when={row.metaLine !== ""}>
+                      <div class="history-list-meta">{row.metaLine}</div>
+                    </Show>
+                  </div>
+                  <div
+                    class={
+                      row.agentClass === ""
+                        ? "history-list-agent"
+                        : `history-list-agent ${row.agentClass}`
+                    }
+                  >
+                    {row.agentLabel === "" ? "—" : row.agentLabel}
+                  </div>
+                  <div class="history-list-time" title={row.fullTimestamp}>
+                    {row.lastSeen}
+                  </div>
+                  <div class="history-list-stats">{row.tokenTotal}</div>
+                </a>
+              )}
+            </For>
+          </div>
         </Show>
       </Show>
     </div>

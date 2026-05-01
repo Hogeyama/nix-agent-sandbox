@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ConversationListRow } from "../../../../../history/types";
 import {
+  formatCompactNumber,
   formatRelativeTime,
   shortenId,
-  toHistoryListRowDisplay,
+  toConversationListRowView,
 } from "./historyListView";
 
 function makeRow(
@@ -98,56 +99,140 @@ describe("formatRelativeTime", () => {
   });
 });
 
-describe("toHistoryListRowDisplay", () => {
+describe("formatCompactNumber", () => {
+  test("zero renders as bare 0", () => {
+    expect(formatCompactNumber(0)).toBe("0");
+  });
+  test("single-digit values stay unchanged", () => {
+    expect(formatCompactNumber(1)).toBe("1");
+    expect(formatCompactNumber(42)).toBe("42");
+  });
+  test("999 stays in the bare-integer bucket", () => {
+    expect(formatCompactNumber(999)).toBe("999");
+  });
+  test("1000 enters the kilo bucket and trims the trailing 0 decimal", () => {
+    expect(formatCompactNumber(1000)).toBe("1k");
+  });
+  test("kilo bucket truncates the fractional digit (not round)", () => {
+    expect(formatCompactNumber(1499)).toBe("1.4k");
+  });
+  test("kilo bucket reaches near the upper boundary", () => {
+    expect(formatCompactNumber(9999)).toBe("9.9k");
+  });
+  test("five-digit values drop the decimal once whole part is >= 10", () => {
+    expect(formatCompactNumber(10000)).toBe("10k");
+    expect(formatCompactNumber(42_000)).toBe("42k");
+  });
+  test("mega bucket truncates similarly", () => {
+    expect(formatCompactNumber(1_000_000)).toBe("1M");
+    expect(formatCompactNumber(1_499_000)).toBe("1.4M");
+    expect(formatCompactNumber(2_000_000)).toBe("2M");
+  });
+  test("giga bucket kicks in at the billion boundary", () => {
+    expect(formatCompactNumber(1_000_000_000)).toBe("1G");
+    expect(formatCompactNumber(2_500_000_000)).toBe("2.5G");
+  });
+  test("negative values keep the sign", () => {
+    expect(formatCompactNumber(-1500)).toBe("-1.5k");
+  });
+});
+
+describe("toConversationListRowView", () => {
   const nowMs = Date.parse("2026-05-01T12:00:00.000Z");
 
   test("projects every required field from the backend row", () => {
-    const display = toHistoryListRowDisplay(makeRow(), nowMs);
+    const display = toConversationListRowView(makeRow(), nowMs);
     expect(display.id).toBe("sess_aabbccdd11223344");
-    expect(display.shortId).toBe("sess_aab");
+    expect(display.idShort).toBe("sess_aab");
     expect(display.agent).toBe("claude-code");
-    expect(display.relativeTime).toBe("4h ago");
+    expect(display.agentLabel).toBe("claude");
+    expect(display.agentClass).toBe("is-claude");
+    expect(display.lastSeen).toBe("4h ago");
     expect(display.fullTimestamp).toBe("2026-05-01T08:00:00.000Z");
-    expect(display.turnCount).toBe(12);
-    expect(display.spanCount).toBe(34);
-    expect(display.tokenTotal).toBe(2000);
+    expect(display.tokenTotal).toBe("2k");
     expect(display.href).toBe("#/history/conversation/sess_aabbccdd11223344");
   });
 
-  test("renders a null agent as the dash placeholder", () => {
-    const display = toHistoryListRowDisplay(makeRow({ agent: null }), nowMs);
-    expect(display.agent).toBe("—");
+  test("null agent is exposed verbatim with empty label and class", () => {
+    const display = toConversationListRowView(makeRow({ agent: null }), nowMs);
+    expect(display.agent).toBeNull();
+    expect(display.agentLabel).toBe("");
+    expect(display.agentClass).toBe("");
   });
 
-  test("sums input and output tokens for the token total column", () => {
-    const display = toHistoryListRowDisplay(
-      makeRow({ inputTokensTotal: 7, outputTokensTotal: 3 }),
+  test("copilot agent maps to is-copilot variant", () => {
+    const display = toConversationListRowView(
+      makeRow({ agent: "github-copilot" }),
       nowMs,
     );
-    expect(display.tokenTotal).toBe(10);
+    expect(display.agentClass).toBe("is-copilot");
+    expect(display.agentLabel).toBe("copilot");
+  });
+
+  test("codex agent maps to is-codex variant", () => {
+    const display = toConversationListRowView(
+      makeRow({ agent: "openai-codex" }),
+      nowMs,
+    );
+    expect(display.agentClass).toBe("is-codex");
+    expect(display.agentLabel).toBe("codex");
   });
 
   test("href encodes the full id, not the shortened one", () => {
-    const display = toHistoryListRowDisplay(
+    const display = toConversationListRowView(
       makeRow({ id: "longid_xxx" }),
       nowMs,
     );
     expect(display.href).toBe("#/history/conversation/longid_xxx");
-    expect(display.shortId).toBe("longid_x");
+    expect(display.idShort).toBe("longid_x");
   });
 
-  test("falls back to a placeholder when summary is null", () => {
-    const display = toHistoryListRowDisplay(makeRow({ summary: null }), nowMs);
-    expect(display.summary).toBe("(no summary)");
-    expect(display.hasSummary).toBe(false);
+  test("missing summary falls back to the short id and marks summaryIsEmpty", () => {
+    const display = toConversationListRowView(
+      makeRow({ summary: null }),
+      nowMs,
+    );
+    expect(display.summary).toBe("sess_aab");
+    expect(display.summaryIsEmpty).toBe(true);
+    // metaLine omits the short id when summary already shows it.
+    expect(display.metaLine).toBe("12 turns · 34 spans · 2k tok");
   });
 
-  test("propagates a non-null summary verbatim", () => {
-    const display = toHistoryListRowDisplay(
+  test("non-null summary becomes primary text and metaLine carries the id", () => {
+    const display = toConversationListRowView(
       makeRow({ summary: "Refactor the auth flow" }),
       nowMs,
     );
     expect(display.summary).toBe("Refactor the auth flow");
-    expect(display.hasSummary).toBe(true);
+    expect(display.summaryIsEmpty).toBe(false);
+    expect(display.metaLine).toBe("sess_aab · 12 turns · 34 spans · 2k tok");
+  });
+
+  test("metaLine drops segments that are zero", () => {
+    const display = toConversationListRowView(
+      makeRow({
+        summary: "Hi",
+        turnEventCount: 0,
+        spanCount: 5,
+        inputTokensTotal: 0,
+        outputTokensTotal: 0,
+      }),
+      nowMs,
+    );
+    expect(display.metaLine).toBe("sess_aab · 5 spans");
+  });
+
+  test("metaLine singularises 1 turn / 1 span", () => {
+    const display = toConversationListRowView(
+      makeRow({
+        summary: "Single",
+        turnEventCount: 1,
+        spanCount: 1,
+        inputTokensTotal: 0,
+        outputTokensTotal: 0,
+      }),
+      nowMs,
+    );
+    expect(display.metaLine).toBe("sess_aab · 1 turn · 1 span");
   });
 });

@@ -9,42 +9,42 @@
 import type { ConversationListRow } from "../../../../../history/types";
 
 /**
- * Reduced row-shape consumed by the list page. Mirrors
- * `ConversationListRow` field-by-field but stays explicit so the
- * page does not silently start depending on backend-only fields.
+ * Reduced row-shape consumed by the list page. `summary` is the row's
+ * primary label (with `idShort` substituted when the backend has no
+ * captured summary yet). `metaLine` carries the secondary line — the
+ * id (when summary is present), turn / span counts, and token total.
  */
-export interface HistoryListRowDisplay {
+export interface ConversationListRowView {
   /** Full conversation id (used for the row href). */
-  id: string;
+  readonly id: string;
   /** Short display id, capped at 8 chars. */
-  shortId: string;
-  /** Agent label, or `"—"` when null. */
-  agent: string;
+  readonly idShort: string;
+  /** Raw agent label, or null when the backend reported none. */
+  readonly agent: string | null;
+  /** Bare display agent ("claude" / "copilot" / "codex" / ""). */
+  readonly agentLabel: string;
+  /** CSS class fragment for the agent pill ("is-claude", …) or "". */
+  readonly agentClass: string;
+  /** Primary row text — summary, falling back to idShort. */
+  readonly summary: string;
+  /** True iff `summary` is the idShort fallback (= no captured summary). */
+  readonly summaryIsEmpty: boolean;
+  /** Composed secondary line ("sess_aab · 3 turns · 12 spans · 1.2k tok"). */
+  readonly metaLine: string;
   /** Relative-time label of `last_seen_at`. */
-  relativeTime: string;
+  readonly lastSeen: string;
   /** Title attribute = full ISO timestamp; useful as a tooltip. */
-  fullTimestamp: string;
-  /** Aggregate counts, pre-formatted for display. */
-  turnCount: number;
-  spanCount: number;
-  /** Sum of in + out tokens. */
-  tokenTotal: number;
+  readonly fullTimestamp: string;
+  /** Token total formatted with the compact-number helper ("1.2k"). */
+  readonly tokenTotal: string;
   /** Hash href for the row anchor. */
-  href: string;
-  /**
-   * First user prompt of the conversation. When the backend has no summary
-   * yet, this falls back to a placeholder string so the row layout stays
-   * stable; pair with `hasSummary` to drive a muted CSS state.
-   */
-  summary: string;
-  /** True iff the backend row carried a non-null summary. */
-  hasSummary: boolean;
+  readonly href: string;
 }
 
-/** Placeholder shown for rows with no captured summary yet. */
-const SUMMARY_PLACEHOLDER = "(no summary)";
-
 const SHORT_ID_LEN = 8;
+
+/** U+00B7 mid-dot used as the meta-line segment separator. */
+const SEP = " · ";
 
 /**
  * Trim a long id to the first `SHORT_ID_LEN` characters. Short ids are
@@ -83,30 +83,130 @@ export function formatRelativeTime(iso: string, nowMs: number): string {
 }
 
 /**
+ * Render a non-negative integer as a short-form, k/M/G suffixed string
+ * with at most one decimal digit. Trailing-zero decimals collapse so
+ * `1000` formats as `"1k"` rather than `"1.0k"`. Truncates (does not
+ * round) so a near-boundary value stays in its own bucket — `1499`
+ * formats as `"1.4k"`, not `"1.5k"`.
+ *
+ * Negative values flip sign on the suffix output (`"-1.2k"`); zero stays
+ * `"0"` to match the bare-integer rendering used for small values.
+ */
+export function formatCompactNumber(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  if (n === 0) return "0";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (abs < 1000) return `${sign}${Math.trunc(abs)}`;
+  const buckets: Array<{ scale: number; suffix: string }> = [
+    { scale: 1_000_000_000, suffix: "G" },
+    { scale: 1_000_000, suffix: "M" },
+    { scale: 1_000, suffix: "k" },
+  ];
+  for (const { scale, suffix } of buckets) {
+    if (abs >= scale) {
+      // truncate to one decimal: floor(abs / scale * 10) / 10
+      const tenths = Math.floor((abs / scale) * 10);
+      const whole = Math.floor(tenths / 10);
+      const frac = tenths % 10;
+      const body = frac === 0 ? `${whole}` : `${whole}.${frac}`;
+      return `${sign}${body}${suffix}`;
+    }
+  }
+  return `${sign}${Math.trunc(abs)}`;
+}
+
+/**
+ * Map the raw backend agent string to a stable CSS class fragment.
+ * Returns `"is-claude" | "is-copilot" | "is-codex" | ""`. The empty
+ * string is intentional — the page falls back to the default pill
+ * border when the agent is null or an unknown variant.
+ */
+function classifyAgent(agent: string | null): string {
+  if (agent === null) return "";
+  const lower = agent.toLowerCase();
+  if (lower.includes("claude")) return "is-claude";
+  if (lower.includes("copilot")) return "is-copilot";
+  if (lower.includes("codex")) return "is-codex";
+  return "";
+}
+
+function bareAgentLabel(agent: string | null): string {
+  if (agent === null) return "";
+  const lower = agent.toLowerCase();
+  if (lower.includes("claude")) return "claude";
+  if (lower.includes("copilot")) return "copilot";
+  if (lower.includes("codex")) return "codex";
+  return agent;
+}
+
+/**
+ * Compose the secondary meta line. When `includeId` is true the short
+ * id is prepended; the page passes `false` when summary is the id
+ * fallback (so the same id does not appear on both lines). Numeric
+ * segments with a value of 0 are dropped — an empty conversation reads
+ * as "sess_aab" rather than "sess_aab · 0 turns · 0 spans · 0 tok".
+ */
+function composeMetaLine(opts: {
+  idShort: string;
+  includeId: boolean;
+  turns: number;
+  spans: number;
+  tokenTotal: number;
+}): string {
+  const parts: string[] = [];
+  if (opts.includeId) parts.push(opts.idShort);
+  if (opts.turns > 0) {
+    parts.push(`${opts.turns} ${opts.turns === 1 ? "turn" : "turns"}`);
+  }
+  if (opts.spans > 0) {
+    parts.push(`${opts.spans} ${opts.spans === 1 ? "span" : "spans"}`);
+  }
+  if (opts.tokenTotal > 0) {
+    parts.push(`${formatCompactNumber(opts.tokenTotal)} tok`);
+  }
+  return parts.join(SEP);
+}
+
+/**
  * Project a backend conversation row into the shape the page renders.
  * The function is total — every input produces a row, including ones
- * with a null agent (rendered as `"—"`).
+ * with a null agent or absent summary.
  */
-export function toHistoryListRowDisplay(
+export function toConversationListRowView(
   row: ConversationListRow,
   nowMs: number,
-): HistoryListRowDisplay {
+): ConversationListRowView {
+  const idShort = shortenId(row.id);
+  const tokenTotal = row.inputTokensTotal + row.outputTokensTotal;
+  const summary = row.summary;
+  const summaryIsEmpty = summary === null;
   return {
     id: row.id,
-    shortId: shortenId(row.id),
-    agent: row.agent ?? "—",
-    relativeTime: formatRelativeTime(row.lastSeenAt, nowMs),
+    idShort,
+    agent: row.agent,
+    agentLabel: bareAgentLabel(row.agent),
+    agentClass: classifyAgent(row.agent),
+    summary: summary ?? idShort,
+    summaryIsEmpty,
+    metaLine: composeMetaLine({
+      idShort,
+      // When summary stands in for the id (no backend summary), the id
+      // is already the row's primary text — re-emitting it on the meta
+      // line would just duplicate.
+      includeId: !summaryIsEmpty,
+      turns: row.turnEventCount,
+      spans: row.spanCount,
+      tokenTotal,
+    }),
+    lastSeen: formatRelativeTime(row.lastSeenAt, nowMs),
     fullTimestamp: row.lastSeenAt,
-    turnCount: row.turnEventCount,
-    spanCount: row.spanCount,
-    tokenTotal: row.inputTokensTotal + row.outputTokensTotal,
+    tokenTotal: formatCompactNumber(tokenTotal),
     // Defensive escape: backend ids flow into the hash unmodified, so a
     // value containing characters the router's safe-id allowlist rejects
     // (or url-reserved characters) would otherwise drop the user back to
     // the workspace fallback. `encodeURIComponent` keeps the link
     // round-trippable through `decodeURIComponent` on the consuming side.
     href: `#/history/conversation/${encodeURIComponent(row.id)}`,
-    summary: row.summary ?? SUMMARY_PLACEHOLDER,
-    hasSummary: row.summary !== null,
   };
 }

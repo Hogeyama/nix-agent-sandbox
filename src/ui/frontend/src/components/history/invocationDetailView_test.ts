@@ -107,7 +107,7 @@ describe("buildInvocationHeader", () => {
     expect(view.agent).toBe("claude-code");
     expect(view.worktreePath).toBe("/work/repo");
     expect(view.startedAt).toBe("1h ago");
-    expect(view.endedAt).not.toBe("(running)");
+    expect(view.endedAt).not.toBeNull();
     expect(view.exitReason).toBe("completed");
     expect(view.turnCount).toBe(2);
     expect(view.traceCount).toBe(1);
@@ -117,7 +117,7 @@ describe("buildInvocationHeader", () => {
     expect(view.tokenTotal).toBe(375);
   });
 
-  test("renders nullable invocation fields with their placeholders", () => {
+  test("propagates nullable invocation fields verbatim", () => {
     const view = buildInvocationHeader(
       makeDetail({
         invocation: makeInvocation({
@@ -130,11 +130,12 @@ describe("buildInvocationHeader", () => {
       }),
       NOW_MS,
     );
-    expect(view.profile).toBe("(none)");
-    expect(view.agent).toBe("(unknown)");
-    expect(view.worktreePath).toBe("(unknown)");
-    expect(view.endedAt).toBe("(running)");
-    expect(view.exitReason).toBe("(unknown)");
+    expect(view.profile).toBeNull();
+    expect(view.agent).toBeNull();
+    expect(view.worktreePath).toBeNull();
+    expect(view.endedAt).toBeNull();
+    expect(view.endedAtAbsolute).toBeNull();
+    expect(view.exitReason).toBeNull();
   });
 });
 
@@ -157,7 +158,7 @@ describe("buildConversationLinks", () => {
     expect(view[0]?.idLabel).toBe("sess_par");
     expect(view[0]?.href).toBe("#/history/conversation/sess_parent_xxxxxxxx");
     expect(view[1]?.idLabel).toBe("sess_sub");
-    expect(view[1]?.agent).toBe("(unknown)");
+    expect(view[1]?.agent).toBeNull();
     expect(view[1]?.tokenTotal).toBe(10);
   });
 
