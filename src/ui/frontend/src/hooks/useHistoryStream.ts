@@ -111,8 +111,15 @@ export function useHistoryStream<T>(
   // permanent failures alike, then reconnects on its own. We surface
   // a generic message so the page can render a banner; the next
   // successful payload arrival clears it.
+  //
+  // `notFound` is cleared at the same time so the two states stay
+  // mutually exclusive: once we've lost the connection, the previous
+  // not-found verdict is no longer trustworthy and the page should
+  // render only the connection-error banner. A subsequent payload or
+  // not-found event will set the new ground truth.
   es.onerror = () => {
     setError("connection lost");
+    setNotFound(false);
   };
 
   onCleanup(() => {

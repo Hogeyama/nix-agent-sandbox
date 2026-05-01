@@ -115,6 +115,33 @@ describe("useHistoryStream", () => {
     });
   });
 
+  test("error after not-found clears notFound (states stay exclusive)", () => {
+    const sources: FakeEventSource[] = [];
+    createRoot((dispose) => {
+      const stream = useHistoryStream<unknown>({
+        url: "/x",
+        payloadEventName: "history:conversation",
+        notFoundEventName: "history:not-found",
+        createEventSource: (u) => {
+          const es = makeFakeEventSource(u);
+          sources.push(es);
+          return es as unknown as EventSource;
+        },
+      });
+
+      sources[0].triggerNamedEvent("history:not-found", '{"id":"x"}');
+      expect(stream.notFound()).toBe(true);
+      expect(stream.error()).toBeNull();
+
+      sources[0].triggerError();
+      expect(stream.error()).toBe("connection lost");
+      // The previous not-found verdict is dropped: with the connection
+      // lost it is no longer a current statement about the entity.
+      expect(stream.notFound()).toBe(false);
+      dispose();
+    });
+  });
+
   test("payload after not-found clears notFound", () => {
     const sources: FakeEventSource[] = [];
     createRoot((dispose) => {
@@ -257,6 +284,56 @@ describe("useHistoryStream", () => {
       expect(stream.error()).toBeNull();
       expect(stream.data()).toEqual({ ok: true });
       dispose();
+    });
+  });
+
+  test("re-mounting against a new url closes the old EventSource and opens a new one", () => {
+    // Pins the lifecycle guarantee `HistoryShell`'s keyed `<Match>`
+    // depends on for id-only navigation: when the keyed value flips,
+    // Solid disposes the previous reactive root (closing this hook's
+    // EventSource) and constructs a fresh one against the new URL.
+    // The hook itself never sees a mid-life URL change — the contract
+    // is dispose-and-rebuild — so we exercise the same shape here.
+    const sources: FakeEventSource[] = [];
+    const factory = (u: string) => {
+      const es = makeFakeEventSource(u);
+      sources.push(es);
+      return es as unknown as EventSource;
+    };
+
+    const disposeA = createRoot((dispose) => {
+      useHistoryStream({
+        url: "/api/history/conversation/A/events",
+        payloadEventName: "history:conversation",
+        notFoundEventName: "history:not-found",
+        createEventSource: factory,
+      });
+      return dispose;
+    });
+    expect(sources.length).toBe(1);
+    expect(sources[0].url).toBe("/api/history/conversation/A/events");
+    expect(sources[0].closed).toBe(false);
+
+    // Dispose the previous owner — equivalent to `keyed` Match
+    // re-mount tearing down the old child.
+    disposeA();
+    expect(sources[0].closed).toBe(true);
+
+    // Fresh mount against the new id opens an independent EventSource.
+    createRoot((dispose) => {
+      useHistoryStream({
+        url: "/api/history/conversation/B/events",
+        payloadEventName: "history:conversation",
+        notFoundEventName: "history:not-found",
+        createEventSource: factory,
+      });
+      expect(sources.length).toBe(2);
+      expect(sources[1].url).toBe("/api/history/conversation/B/events");
+      expect(sources[1].closed).toBe(false);
+      // The old socket stays closed; the new one is independent.
+      expect(sources[0].closed).toBe(true);
+      dispose();
+      expect(sources[1].closed).toBe(true);
     });
   });
 
