@@ -1542,7 +1542,7 @@ body::after {
   letter-spacing: 0.04em;
   font-style: italic;
 }
-.audit-row {
+.audit-accordion .audit-row {
   display: grid;
   grid-template-columns: auto 1fr;
   column-gap: 10px;
@@ -1550,7 +1550,7 @@ body::after {
   font-size: 11px;
   border-bottom: 1px solid var(--line-soft);
 }
-.audit-row:last-child {
+.audit-accordion .audit-row:last-child {
   border-bottom: none;
 }
 .audit-time {
