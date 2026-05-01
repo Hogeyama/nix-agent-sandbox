@@ -329,7 +329,10 @@ export function App() {
           activeId={terminals.activeId}
           onSelect={(id) => terminals.selectSession(id)}
           onRename={async (sessionId, name) => {
-            await renameSession(sessionId, name);
+            const { item } = await renameSession(sessionId, name);
+            if (item.name !== undefined) {
+              sessions.applyRename(sessionId, item.name);
+            }
           }}
           pendingFor={pendingFor}
           homeDir={homeDir}
@@ -350,7 +353,10 @@ export function App() {
             await killTerminalClients(id);
           }}
           onRename={async (sessionId, name) => {
-            await renameSession(sessionId, name);
+            const { item } = await renameSession(sessionId, name);
+            if (item.name !== undefined) {
+              sessions.applyRename(sessionId, item.name);
+            }
           }}
           onShellToggle={handleShellToggle}
           refitTrigger={terminalRefitTrigger}

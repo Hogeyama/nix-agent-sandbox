@@ -41,6 +41,10 @@ export function normalizeContainersToSessions(
 export type SessionsStore = {
   rows: () => SessionRow[];
   setSessions: (items: ContainerInfoLike[]) => void;
+  // Apply a server-confirmed rename without waiting for the next SSE
+  // poll. The next `containers` snapshot will overwrite this row anyway,
+  // so a stale write here is self-correcting.
+  applyRename: (sessionId: string, name: string) => void;
 };
 
 export function createSessionsStore(): SessionsStore {
@@ -49,5 +53,7 @@ export function createSessionsStore(): SessionsStore {
     rows: () => state.rows,
     setSessions: (items) =>
       setState("rows", normalizeContainersToSessions(items)),
+    applyRename: (sessionId, name) =>
+      setState("rows", (row) => row.id === sessionId, "name", name),
   };
 }

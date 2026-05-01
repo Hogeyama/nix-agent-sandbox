@@ -52,6 +52,7 @@ function makeFakeStores(): FakeStores {
   const sessions: FakeStores["sessions"] = {
     rows: () => [] as SessionRow[],
     setSessions: mock((_items: ContainerInfoLike[]) => {}),
+    applyRename: mock((_sessionId: string, _name: string) => {}),
   };
   const sidecars: FakeStores["sidecars"] = {
     rows: () => [] as SidecarRow[],
