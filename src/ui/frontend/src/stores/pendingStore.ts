@@ -82,6 +82,12 @@ export type PendingStore = {
   hostexec: () => HostExecPendingRow[];
   setNetwork: (items: NetworkPendingItemLike[]) => void;
   setHostExec: (items: HostExecPendingItemLike[]) => void;
+  // Drop a row by `requestId` after the server has confirmed an
+  // approve/deny, so the UI does not have to wait for the next ~2s SSE
+  // poll. The next snapshot overwrites the whole array anyway, so any
+  // drift here is self-correcting.
+  removeNetwork: (requestId: string) => void;
+  removeHostExec: (requestId: string) => void;
 };
 
 export function createPendingStore(): PendingStore {
@@ -95,5 +101,9 @@ export function createPendingStore(): PendingStore {
     setNetwork: (items) => setState("network", normalizeNetworkPending(items)),
     setHostExec: (items) =>
       setState("hostexec", normalizeHostExecPending(items)),
+    removeNetwork: (requestId) =>
+      setState("network", (rows) => rows.filter((r) => r.id !== requestId)),
+    removeHostExec: (requestId) =>
+      setState("hostexec", (rows) => rows.filter((r) => r.id !== requestId)),
   };
 }

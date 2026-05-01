@@ -16,6 +16,7 @@ import type { PendingActionStore } from "../stores/pendingActionStore";
 import type {
   HostExecPendingRow,
   NetworkPendingRow,
+  PendingStore,
 } from "../stores/pendingStore";
 
 /**
@@ -57,7 +58,11 @@ export interface PendingActionHandlers {
 
 export interface CreatePendingActionHandlersDeps {
   client: PendingActionClient;
-  pending: PendingActionStore;
+  // Per-card UI state (busy / error / scope) keyed by composite `key`.
+  pendingAction: PendingActionStore;
+  // Row store; used to drop the row immediately after a successful
+  // approve/deny so the UI does not wait for the next SSE poll.
+  pending: PendingStore;
 }
 
 /**
@@ -76,19 +81,21 @@ function domainOf(key: string): "network" | "hostexec" {
 export function createPendingActionHandlers(
   deps: CreatePendingActionHandlersDeps,
 ): PendingActionHandlers {
-  const { client, pending } = deps;
+  const { client, pending, pendingAction } = deps;
 
   async function runWithBusy(
     key: string,
     op: () => Promise<unknown>,
+    onSuccess?: () => void,
   ): Promise<void> {
-    pending.beginAction(key);
+    pendingAction.beginAction(key);
     try {
       await op();
-      pending.endAction(key);
+      onSuccess?.();
+      pendingAction.endAction(key);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      pending.endAction(key, message);
+      pendingAction.endAction(key, message);
     }
   }
 
@@ -96,12 +103,16 @@ export function createPendingActionHandlers(
     onApprove(row, scope) {
       const domain = domainOf(row.key);
       if (domain === "network") {
-        return runWithBusy(row.key, () =>
-          client.approveNetwork(row.sessionId, row.id, scope),
+        return runWithBusy(
+          row.key,
+          () => client.approveNetwork(row.sessionId, row.id, scope),
+          () => pending.removeNetwork(row.id),
         );
       }
-      return runWithBusy(row.key, () =>
-        client.approveHostExec(row.sessionId, row.id, scope),
+      return runWithBusy(
+        row.key,
+        () => client.approveHostExec(row.sessionId, row.id, scope),
+        () => pending.removeHostExec(row.id),
       );
     },
     onDeny(row) {
@@ -111,15 +122,19 @@ export function createPendingActionHandlers(
         // user has not interacted with the chips) is forwarded to the
         // backend, which validates it and widens / narrows the deny
         // rule accordingly.
-        const scope = pending.scopeFor(row.key) ?? DEFAULT_NETWORK_SCOPE;
-        return runWithBusy(row.key, () =>
-          client.denyNetwork(row.sessionId, row.id, scope),
+        const scope = pendingAction.scopeFor(row.key) ?? DEFAULT_NETWORK_SCOPE;
+        return runWithBusy(
+          row.key,
+          () => client.denyNetwork(row.sessionId, row.id, scope),
+          () => pending.removeNetwork(row.id),
         );
       }
       // Hostexec deny intentionally omits scope: the backend route does
       // not destructure it (`src/ui/routes/api.ts` `/hostexec/deny`).
-      return runWithBusy(row.key, () =>
-        client.denyHostExec(row.sessionId, row.id),
+      return runWithBusy(
+        row.key,
+        () => client.denyHostExec(row.sessionId, row.id),
+        () => pending.removeHostExec(row.id),
       );
     },
   };

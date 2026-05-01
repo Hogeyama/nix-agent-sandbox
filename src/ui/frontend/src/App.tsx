@@ -84,7 +84,8 @@ export function App() {
   // produce divergent closures.
   const pendingHandlers = createPendingActionHandlers({
     client,
-    pending: pendingAction,
+    pending,
+    pendingAction,
   });
   const dispatch = createSseDispatch({
     sessions,

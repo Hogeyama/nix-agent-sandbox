@@ -63,6 +63,8 @@ function makeFakeStores(): FakeStores {
     hostexec: () => [] as HostExecPendingRow[],
     setNetwork: mock((_items: NetworkPendingItemLike[]) => {}),
     setHostExec: mock((_items: HostExecPendingItemLike[]) => {}),
+    removeNetwork: mock((_requestId: string) => {}),
+    removeHostExec: mock((_requestId: string) => {}),
   };
   const pendingAction: FakeStores["pendingAction"] = {
     scopeFor: () => undefined,

@@ -20,7 +20,9 @@ import { pendingRequestKey } from "../stores/pendingRequestKey";
 import type {
   HostExecPendingRow,
   NetworkPendingRow,
+  PendingStore,
 } from "../stores/pendingStore";
+import { createPendingStore } from "../stores/pendingStore";
 import {
   createPendingActionHandlers,
   DEFAULT_NETWORK_SCOPE,
@@ -62,7 +64,7 @@ function makeHostExecRow(
   };
 }
 
-function makeFakePending(): PendingActionStore & {
+function makeFakePendingAction(): PendingActionStore & {
   beginAction: ReturnType<typeof mock>;
   endAction: ReturnType<typeof mock>;
   setScope: ReturnType<typeof mock>;
@@ -81,6 +83,23 @@ function makeFakePending(): PendingActionStore & {
     endAction: ReturnType<typeof mock>;
     setScope: ReturnType<typeof mock>;
     reconcile: ReturnType<typeof mock>;
+  };
+}
+
+function makeFakePending(): PendingStore & {
+  removeNetwork: ReturnType<typeof mock>;
+  removeHostExec: ReturnType<typeof mock>;
+} {
+  return {
+    network: () => [],
+    hostexec: () => [],
+    setNetwork: mock(() => {}),
+    setHostExec: mock(() => {}),
+    removeNetwork: mock(() => {}),
+    removeHostExec: mock(() => {}),
+  } as PendingStore & {
+    removeNetwork: ReturnType<typeof mock>;
+    removeHostExec: ReturnType<typeof mock>;
   };
 }
 
@@ -109,8 +128,13 @@ function makeFakeClient(
 describe("createPendingActionHandlers — onApprove", () => {
   test("network row calls client.approveNetwork with (sessionId, requestId, scope)", async () => {
     const client = makeFakeClient();
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeNetworkRow({ sessionId: "sess-1", id: "req-1" });
     await handlers.onApprove(row, "host");
@@ -126,8 +150,13 @@ describe("createPendingActionHandlers — onApprove", () => {
 
   test("hostexec row calls client.approveHostExec with (sessionId, requestId, scope)", async () => {
     const client = makeFakeClient();
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeHostExecRow({ sessionId: "sess-1", id: "exec-1" });
     await handlers.onApprove(row, "capability");
@@ -145,11 +174,16 @@ describe("createPendingActionHandlers — onApprove", () => {
 describe("createPendingActionHandlers — onDeny", () => {
   test("network row forwards the currently selected scope", async () => {
     const client = makeFakeClient();
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeNetworkRow({ sessionId: "sess-1", id: "req-1" });
-    pending.setScope(row.key, "host");
+    pendingAction.setScope(row.key, "host");
     await handlers.onDeny(row);
 
     expect(client.denyNetwork).toHaveBeenCalledTimes(1);
@@ -158,8 +192,13 @@ describe("createPendingActionHandlers — onDeny", () => {
 
   test("network row defaults to host-port when no scope has been chosen", async () => {
     const client = makeFakeClient();
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeNetworkRow({ sessionId: "sess-1", id: "req-1" });
     await handlers.onDeny(row);
@@ -178,11 +217,16 @@ describe("createPendingActionHandlers — onDeny", () => {
     // body. Pin both that we hit the right client function and that
     // we do not pass a third argument by accident.
     const client = makeFakeClient();
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeHostExecRow({ sessionId: "sess-1", id: "exec-1" });
-    pending.setScope(row.key, "capability");
+    pendingAction.setScope(row.key, "capability");
     await handlers.onDeny(row);
 
     expect(client.denyHostExec).toHaveBeenCalledTimes(1);
@@ -196,14 +240,19 @@ describe("createPendingActionHandlers — onDeny", () => {
 describe("createPendingActionHandlers — busy / error wiring", () => {
   test("on resolution, busy clears and no error is recorded", async () => {
     const client = makeFakeClient();
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeNetworkRow();
     await handlers.onApprove(row, "host-port");
 
-    expect(pending.busyFor(row.key)).toBe(false);
-    expect(pending.errorFor(row.key)).toBeNull();
+    expect(pendingAction.busyFor(row.key)).toBe(false);
+    expect(pendingAction.errorFor(row.key)).toBeNull();
   });
 
   test("on rejection, busy clears and error message is recorded", async () => {
@@ -212,14 +261,19 @@ describe("createPendingActionHandlers — busy / error wiring", () => {
         throw new Error("network down");
       }),
     });
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeNetworkRow();
     await handlers.onDeny(row);
 
-    expect(pending.busyFor(row.key)).toBe(false);
-    expect(pending.errorFor(row.key)).toBe("network down");
+    expect(pendingAction.busyFor(row.key)).toBe(false);
+    expect(pendingAction.errorFor(row.key)).toBe("network down");
   });
 
   test("a successful retry after an error clears the prior error message", async () => {
@@ -231,16 +285,87 @@ describe("createPendingActionHandlers — busy / error wiring", () => {
         return { ok: true };
       }),
     });
-    const pending = createPendingActionStore();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row = makeNetworkRow();
     await handlers.onApprove(row, "host-port");
-    expect(pending.errorFor(row.key)).toBe("first failure");
+    expect(pendingAction.errorFor(row.key)).toBe("first failure");
 
     await handlers.onApprove(row, "host-port");
-    expect(pending.busyFor(row.key)).toBe(false);
-    expect(pending.errorFor(row.key)).toBeNull();
+    expect(pendingAction.busyFor(row.key)).toBe(false);
+    expect(pendingAction.errorFor(row.key)).toBeNull();
+  });
+});
+
+describe("createPendingActionHandlers — optimistic row removal", () => {
+  // The handler pulls the row out of `pending` once the API resolves so
+  // the UI does not have to wait for the next ~2s SSE poll to realise
+  // the request was approved/denied. On rejection the row stays so the
+  // user can retry; the failure path is covered by the busy/error suite
+  // above and the `removeNetwork`/`removeHostExec` no-call assertions
+  // here.
+
+  test("network onApprove removes the row from PendingStore on success", async () => {
+    const client = makeFakeClient();
+    const pendingAction = createPendingActionStore();
+    const pending = makeFakePending();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
+
+    const row = makeNetworkRow({ sessionId: "sess-1", id: "req-1" });
+    await handlers.onApprove(row, "host-port");
+
+    expect(pending.removeNetwork).toHaveBeenCalledTimes(1);
+    expect(pending.removeNetwork).toHaveBeenCalledWith("req-1");
+    expect(pending.removeHostExec).not.toHaveBeenCalled();
+  });
+
+  test("hostexec onDeny removes the row from PendingStore on success", async () => {
+    const client = makeFakeClient();
+    const pendingAction = createPendingActionStore();
+    const pending = makeFakePending();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
+
+    const row = makeHostExecRow({ sessionId: "sess-1", id: "exec-1" });
+    await handlers.onDeny(row);
+
+    expect(pending.removeHostExec).toHaveBeenCalledTimes(1);
+    expect(pending.removeHostExec).toHaveBeenCalledWith("exec-1");
+    expect(pending.removeNetwork).not.toHaveBeenCalled();
+  });
+
+  test("on API rejection the row is left in PendingStore so the user can retry", async () => {
+    const client = makeFakeClient({
+      approveNetwork: mock(async () => {
+        throw new Error("boom");
+      }),
+    });
+    const pendingAction = createPendingActionStore();
+    const pending = makeFakePending();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
+
+    const row = makeNetworkRow();
+    await handlers.onApprove(row, "host-port");
+
+    expect(pending.removeNetwork).not.toHaveBeenCalled();
+    expect(pending.removeHostExec).not.toHaveBeenCalled();
   });
 });
 
@@ -254,8 +379,13 @@ describe("createPendingActionHandlers — bad key prefix", () => {
 
   test("onApprove rejects with `unrecognized key prefix` and touches no side effects", async () => {
     const client = makeFakeClient();
+    const pendingAction = makeFakePendingAction();
     const pending = makeFakePending();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row: NetworkPendingRow = {
       ...makeNetworkRow({ sessionId: "sess", id: "req" }),
@@ -274,13 +404,20 @@ describe("createPendingActionHandlers — bad key prefix", () => {
     expect(client.approveHostExec).not.toHaveBeenCalled();
     expect(client.denyNetwork).not.toHaveBeenCalled();
     expect(client.denyHostExec).not.toHaveBeenCalled();
-    expect(pending.beginAction).not.toHaveBeenCalled();
+    expect(pendingAction.beginAction).not.toHaveBeenCalled();
+    expect(pending.removeNetwork).not.toHaveBeenCalled();
+    expect(pending.removeHostExec).not.toHaveBeenCalled();
   });
 
   test("onDeny rejects with `unrecognized key prefix` and touches no side effects", async () => {
     const client = makeFakeClient();
+    const pendingAction = makeFakePendingAction();
     const pending = makeFakePending();
-    const handlers = createPendingActionHandlers({ client, pending });
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
 
     const row: NetworkPendingRow = {
       ...makeNetworkRow({ sessionId: "sess", id: "req" }),
@@ -295,6 +432,8 @@ describe("createPendingActionHandlers — bad key prefix", () => {
     expect(client.approveHostExec).not.toHaveBeenCalled();
     expect(client.denyNetwork).not.toHaveBeenCalled();
     expect(client.denyHostExec).not.toHaveBeenCalled();
-    expect(pending.beginAction).not.toHaveBeenCalled();
+    expect(pendingAction.beginAction).not.toHaveBeenCalled();
+    expect(pending.removeNetwork).not.toHaveBeenCalled();
+    expect(pending.removeHostExec).not.toHaveBeenCalled();
   });
 });
