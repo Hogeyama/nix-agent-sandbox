@@ -177,10 +177,19 @@ async function readEventsFor(
       buffer = buffer.slice(idx + 2);
       let event = "message";
       let dataLine = "";
+      let hasField = false;
       for (const line of block.split("\n")) {
-        if (line.startsWith("event: ")) event = line.slice(7);
-        else if (line.startsWith("data: ")) dataLine = line.slice(6);
+        if (line.startsWith(":")) continue; // SSE comment — server keepalive
+        if (line.startsWith("event: ")) {
+          event = line.slice(7);
+          hasField = true;
+        } else if (line.startsWith("data: ")) {
+          dataLine = line.slice(6);
+          hasField = true;
+        }
       }
+      // Comment-only blocks carry no event payload — skip them.
+      if (!hasField) continue;
       events.push({ event, data: dataLine ? JSON.parse(dataLine) : null });
     }
   }
@@ -387,6 +396,38 @@ test("pollLoop swallows reader exceptions and the next successful poll still emi
 
 test("DEFAULT_POLL_INTERVAL_MS is 5000ms (matches OTEL batch flush cadence)", () => {
   expect(DEFAULT_POLL_INTERVAL_MS).toBe(5000);
+});
+
+test("conversations stream emits keepalive comments on every poll", async () => {
+  const reader = makeMockReader();
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversations/events");
+  const body = res.body;
+  if (!body) throw new Error("response has no body");
+  const decoder = new TextDecoder();
+  const streamReader = body.getReader();
+  let raw = "";
+  const deadline = Date.now() + WINDOW_MS;
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    const result = await Promise.race([
+      streamReader.read(),
+      new Promise<{ done: true }>((resolve) =>
+        setTimeout(() => resolve({ done: true }), remaining),
+      ),
+    ]);
+    if (result.done) break;
+    raw += decoder.decode(result.value, { stream: true });
+  }
+  await streamReader.cancel().catch(() => {});
+
+  // At least one keepalive line must appear over the read window. Several
+  // polls fire within WINDOW_MS / POLL_MS; each should emit a keepalive.
+  const keepalives = raw.split("\n").filter((l) => l.startsWith(":")).length;
+  expect(keepalives).toBeGreaterThanOrEqual(1);
 });
 
 test("cancelling the stream stops further polling", async () => {

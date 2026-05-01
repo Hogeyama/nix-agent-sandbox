@@ -44,6 +44,19 @@ function formatSseEvent(event: HistorySseEventName, data: unknown): Uint8Array {
   );
 }
 
+/**
+ * Pre-encoded SSE comment line. Sent on every poll tick to keep bytes
+ * flowing on otherwise-silent streams; without it `Bun.serve`'s default
+ * 10s idle timeout kills the socket between data changes (poll cadence
+ * is 5s but most polls produce no diff), and the browser reports a
+ * spurious "connection lost" while it auto-reconnects.
+ *
+ * SSE comments are lines that start with `:` per the HTML spec. The
+ * EventSource API silently discards them, so this never triggers a
+ * frontend handler.
+ */
+const SSE_KEEPALIVE_BYTES = new TextEncoder().encode(`: keepalive\n\n`);
+
 function sseResponse(stream: ReadableStream): Response {
   return new Response(stream, {
     headers: {
@@ -84,8 +97,21 @@ function createPollingStream(args: {
         }
       }
 
+      function sendKeepalive(): void {
+        if (closed) return;
+        try {
+          controller.enqueue(SSE_KEEPALIVE_BYTES);
+        } catch {
+          closed = true;
+        }
+      }
+
       function poll(): void {
         if (closed) return;
+        // Always tick the wire first. Bun.serve's idle timeout would
+        // otherwise drop the socket after 10s of silence on streams that
+        // mostly produce no diff between polls.
+        sendKeepalive();
         try {
           const { event, payload } = read();
           // Treat an event-name change as a change too, so a transition
