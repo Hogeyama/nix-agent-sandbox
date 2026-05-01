@@ -36,8 +36,10 @@ import { getFlagValue } from "./helpers.ts";
 /** Maximum length of the `message` field surfaced to the store. */
 const MAX_MESSAGE_LEN = 200;
 
-/** Maximum characters retained in `conversation_summaries.summary`. */
-const SUMMARY_MAX_CHARS = 160;
+/** Maximum characters retained in `conversation_summaries.summary`. Sized
+ * to hold roughly three wrapped lines at the detail-page summary's font
+ * (16px sans, ~660px column → ~75 chars/line × 3 lines, with slack). */
+const SUMMARY_MAX_CHARS = 240;
 
 /** Hard cap on how long we wait for stdin before giving up. */
 const STDIN_TIMEOUT_MS = 50;

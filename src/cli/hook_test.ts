@@ -989,11 +989,11 @@ test("extractFirstUserPrompt: Copilot payload with prompt returns the string", (
   );
 });
 
-test("extractFirstUserPrompt: Copilot prompt is whitespace-normalized and truncated to 160", () => {
-  const long = `${"x".repeat(200)}`;
+test("extractFirstUserPrompt: Copilot prompt is whitespace-normalized and truncated to the summary cap", () => {
+  const long = `${"x".repeat(400)}`;
   const out = extractFirstUserPrompt({ prompt: long }, "start");
   expect(out).not.toBeNull();
-  expect(out).toHaveLength(160);
+  expect(out).toHaveLength(240);
   expect(out?.endsWith("…")).toBe(true);
 });
 
