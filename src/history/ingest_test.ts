@@ -159,6 +159,45 @@ test("claude_llm_request_minimal: 2 spans, kinds chat/execute_tool, cache_r/cach
   }
 });
 
+test("claude_llm_request_flat_tokens: token columns populated from unprefixed attribute names", async () => {
+  // Real-world Claude Code emits `input_tokens` etc. without the
+  // `gen_ai.usage.` semconv prefix; the ingester must read those too.
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_flat",
+      profile: "default",
+      agent: "claude",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload = await loadFixture("claude_llm_request_flat_tokens.json");
+    const result = ingestResourceSpans(db, payload);
+    expect(result.acceptedSpans).toEqual(1);
+
+    const span = db
+      .query(
+        "SELECT in_tok, out_tok, cache_r, cache_w FROM spans WHERE span_id = ?",
+      )
+      .get("span_claude_flat_llm") as {
+      in_tok: number | null;
+      out_tok: number | null;
+      cache_r: number | null;
+      cache_w: number | null;
+    };
+    expect(span.in_tok).toEqual(201);
+    expect(span.out_tok).toEqual(101);
+    expect(span.cache_r).toEqual(81);
+    expect(span.cache_w).toEqual(21);
+  } finally {
+    await cleanup(t);
+  }
+});
+
 test("subagent_one_invocation_two_conversations: 1 invocation, 2 traces, 2 conversations", async () => {
   const t = await makeTempDb();
   try {

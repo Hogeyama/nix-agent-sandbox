@@ -126,6 +126,22 @@ function readNumberAttr(
   return null;
 }
 
+/**
+ * Read a token-count attribute, preferring the OTel GenAI semantic-convention
+ * name (`gen_ai.usage.<name>`) but falling back to the unprefixed `<name>`
+ * that real-world Claude Code spans currently emit (e.g. `input_tokens`,
+ * `cache_read_tokens`). Returns null when neither key is a finite number.
+ */
+function readTokenAttr(
+  attrs: Record<string, unknown>,
+  semconvKey: string,
+  flatKey: string,
+): number | null {
+  const fromSemconv = readNumberAttr(attrs, semconvKey);
+  if (fromSemconv !== null) return fromSemconv;
+  return readNumberAttr(attrs, flatKey);
+}
+
 // ---------------------------------------------------------------------------
 // Time helpers
 // ---------------------------------------------------------------------------
@@ -332,15 +348,25 @@ export function ingestResourceSpans(
             spanName: raw.name,
             kind: classifySpan(raw.name, attrs),
             model: readStringAttr(attrs, "gen_ai.request.model"),
-            inTok: readNumberAttr(attrs, "gen_ai.usage.input_tokens"),
-            outTok: readNumberAttr(attrs, "gen_ai.usage.output_tokens"),
-            cacheR: readNumberAttr(
+            inTok: readTokenAttr(
+              attrs,
+              "gen_ai.usage.input_tokens",
+              "input_tokens",
+            ),
+            outTok: readTokenAttr(
+              attrs,
+              "gen_ai.usage.output_tokens",
+              "output_tokens",
+            ),
+            cacheR: readTokenAttr(
               attrs,
               "gen_ai.usage.cache_read_input_tokens",
+              "cache_read_tokens",
             ),
-            cacheW: readNumberAttr(
+            cacheW: readTokenAttr(
               attrs,
               "gen_ai.usage.cache_creation_input_tokens",
+              "cache_creation_tokens",
             ),
             durationMs,
             startedAt: startedIso,
