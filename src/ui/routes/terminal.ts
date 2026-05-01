@@ -177,7 +177,6 @@ export function handleTerminalOpen(ws: ServerWebSocket<TerminalWSData>): void {
 
   sock.on("data", (data: Buffer) => {
     // Master→Client は生バイトストリーム → そのまま WebSocket へ
-    console.log(`[terminal] dtach→browser: ${data.length} bytes`);
     ws.sendBinary(data);
   });
 
