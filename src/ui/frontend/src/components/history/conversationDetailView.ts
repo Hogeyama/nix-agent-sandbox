@@ -581,13 +581,31 @@ export function buildSpanRows(
 }
 
 /**
+ * Return `true` for a turn whose four LLM token totals are each either
+ * `null` or `0`. Turns whose LLM spans report no token consumption
+ * (e.g. aborted requests) are hidden from the conversation detail page
+ * so the Turns section is dominated by turns that did real work.
+ */
+function isZeroTokenTurn(group: TurnSpanGroup): boolean {
+  const isZeroOrNull = (n: number | null): boolean => n === null || n === 0;
+  return (
+    isZeroOrNull(group.inputTokens) &&
+    isZeroOrNull(group.outputTokens) &&
+    isZeroOrNull(group.cacheReadTokens) &&
+    isZeroOrNull(group.cacheWriteTokens)
+  );
+}
+
+/**
  * Group `detail.spans` by their parent turn (= trace) and DFS-flatten
  * each group so the Conversation detail page can render one
  * accordion per turn with indented child spans.
  *
  * Rules:
  *   - Turns are ordered by `compareTurnOrder`; `turnIndex` is 1-based
- *     in that order.
+ *     in that order, assigned before zero-token filtering so the
+ *     surviving rows can show a gap (Turn 1, Turn 2, Turn 4, …) when
+ *     a turn has been hidden.
  *   - Within a turn, spans are filtered by `traceId`. A span is a tree
  *     root when `parentSpanId === null` or when its parent is not part
  *     of the same turn (orphans surface as roots so nothing is dropped).
@@ -596,13 +614,16 @@ export function buildSpanRows(
  *     `depth` (root = 0) so the page can left-pad the Name cell.
  *   - `durationLabel` uses the trace's wall-clock duration, or "" when
  *     the trace is still open (`endedAt === null`).
+ *   - Turns whose four LLM token totals are each `null` or `0` are
+ *     dropped from the result (see `isZeroTokenTurn`); the page consumes
+ *     only turns with measurable LLM activity.
  */
 export function buildSpanTreeByTurn(
   detail: ConversationDetail,
   nowMs: number,
 ): TurnSpanGroup[] {
   const orderedTraces = detail.traces.slice().sort(compareTurnOrder);
-  return orderedTraces.map((trace, idx) => {
+  const groups = orderedTraces.map((trace, idx) => {
     const traceSpans = detail.spans.filter((s) => s.traceId === trace.traceId);
     const ids = new Set(traceSpans.map((s) => s.spanId));
     // Bucket children by parent id; orphans (parent missing from the
@@ -672,6 +693,7 @@ export function buildSpanTreeByTurn(
       rows,
     };
   });
+  return groups.filter((g) => !isZeroTokenTurn(g));
 }
 
 /**

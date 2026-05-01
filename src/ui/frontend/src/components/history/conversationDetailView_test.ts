@@ -890,7 +890,30 @@ describe("buildSpanTreeByTurn", () => {
           startedAt: "2026-05-01T11:00:00.000Z",
         }),
       ],
-      spans: [],
+      spans: [
+        // One non-zero-token span per trace so neither turn is dropped
+        // by the zero-token filter.
+        makeSpan({
+          spanId: "early1",
+          parentSpanId: null,
+          traceId: "trace_early",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          inTok: 1,
+          outTok: 0,
+          cacheR: 0,
+          cacheW: 0,
+        }),
+        makeSpan({
+          spanId: "late1",
+          parentSpanId: null,
+          traceId: "trace_late",
+          startedAt: "2026-05-01T12:00:00.000Z",
+          inTok: 1,
+          outTok: 0,
+          cacheR: 0,
+          cacheW: 0,
+        }),
+      ],
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups[0]?.traceId).toBe("trace_early");
@@ -909,7 +932,7 @@ describe("buildSpanTreeByTurn", () => {
   test("durationLabel is the empty string for an open trace (endedAt = null)", () => {
     const detail = makeDetail({
       traces: [makeTrace({ endedAt: null })],
-      spans: [],
+      spans: [makeSpan()],
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups[0]?.durationLabel).toBe("");
@@ -923,7 +946,7 @@ describe("buildSpanTreeByTurn", () => {
           endedAt: "2026-05-01T11:01:00.000Z",
         }),
       ],
-      spans: [],
+      spans: [makeSpan()],
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups[0]?.durationLabel).toBe("1m");
@@ -932,9 +955,142 @@ describe("buildSpanTreeByTurn", () => {
   test("durationLabel is the empty string when endedAt is unparseable", () => {
     const detail = makeDetail({
       traces: [makeTrace({ endedAt: "not-a-date" })],
-      spans: [],
+      spans: [makeSpan()],
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups[0]?.durationLabel).toBe("");
+  });
+
+  test("drops a turn whose four token totals are all null (no LLM data)", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_aborted" })],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          parentSpanId: null,
+          traceId: "t_aborted",
+          inTok: null,
+          outTok: null,
+          cacheR: null,
+          cacheW: null,
+        }),
+      ],
+    });
+    expect(buildSpanTreeByTurn(detail, NOW_MS)).toEqual([]);
+  });
+
+  test("drops a turn whose four token totals are all zero", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_zero" })],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          parentSpanId: null,
+          traceId: "t_zero",
+          inTok: 0,
+          outTok: 0,
+          cacheR: 0,
+          cacheW: 0,
+        }),
+      ],
+    });
+    expect(buildSpanTreeByTurn(detail, NOW_MS)).toEqual([]);
+  });
+
+  test("drops a turn with mixed null and zero token totals (still no work)", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_mixed" })],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          parentSpanId: null,
+          traceId: "t_mixed",
+          inTok: null,
+          outTok: 0,
+          cacheR: null,
+          cacheW: 0,
+        }),
+      ],
+    });
+    expect(buildSpanTreeByTurn(detail, NOW_MS)).toEqual([]);
+  });
+
+  test("retains a turn when at least one token total is positive", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_kept" })],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          parentSpanId: null,
+          traceId: "t_kept",
+          inTok: 0,
+          outTok: 0,
+          cacheR: 0,
+          cacheW: 1,
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.traceId).toBe("t_kept");
+  });
+
+  test("preserves turnIndex (allowing gaps) when a middle turn is dropped", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t_first",
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        makeTrace({
+          traceId: "t_middle",
+          startedAt: "2026-05-01T11:01:00.000Z",
+        }),
+        makeTrace({
+          traceId: "t_third",
+          startedAt: "2026-05-01T11:02:00.000Z",
+        }),
+      ],
+      spans: [
+        makeSpan({
+          spanId: "first1",
+          parentSpanId: null,
+          traceId: "t_first",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          inTok: 5,
+          outTok: 0,
+          cacheR: 0,
+          cacheW: 0,
+        }),
+        // Middle turn has zero/null tokens across the board → dropped.
+        makeSpan({
+          spanId: "middle1",
+          parentSpanId: null,
+          traceId: "t_middle",
+          startedAt: "2026-05-01T11:01:00.000Z",
+          inTok: 0,
+          outTok: null,
+          cacheR: null,
+          cacheW: 0,
+        }),
+        makeSpan({
+          spanId: "third1",
+          parentSpanId: null,
+          traceId: "t_third",
+          startedAt: "2026-05-01T11:02:00.000Z",
+          inTok: 0,
+          outTok: 7,
+          cacheR: 0,
+          cacheW: 0,
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.traceId).toBe("t_first");
+    expect(groups[0]?.turnIndex).toBe(1);
+    expect(groups[1]?.traceId).toBe("t_third");
+    // Middle turn is hidden, so the third turn keeps its original index 3.
+    expect(groups[1]?.turnIndex).toBe(3);
   });
 });
