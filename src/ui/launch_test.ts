@@ -60,6 +60,12 @@ function createDummyCtx(): UiDataContext {
     sessionPaths,
     auditDir: "/tmp/nas-launch-test-unused/audit",
     terminalRuntimeDir: "/tmp/nas-launch-test-unused/dtach",
+    historyDbPath: "/tmp/nas-launch-test-unused/history.db",
+    history: {
+      readConversationList: () => [],
+      readConversationDetail: () => null,
+      readInvocationDetail: () => null,
+    },
   };
 }
 

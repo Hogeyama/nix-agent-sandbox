@@ -18,6 +18,12 @@ import { makeNetworkApprovalClient } from "../domain/network.ts";
 import { makeSessionUiClient } from "../domain/session.ts";
 import { makeTerminalSessionClient } from "../domain/terminal.ts";
 import { getSocketDir } from "../dtach/client.ts";
+import type {
+  ConversationDetail,
+  ConversationListRow,
+  InvocationDetail,
+} from "../history/store.ts";
+import { resolveHistoryDbPath } from "../history/store.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import {
   gcHostExecRuntime,
@@ -45,6 +51,11 @@ import {
   type SessionRuntimePaths,
 } from "../sessions/store.ts";
 import {
+  readConversationDetail,
+  readConversationList,
+  readInvocationDetail,
+} from "./history_data.ts";
+import {
   buildShellSessionId,
   type ParsedShellSessionId,
   parseShellSessionId,
@@ -53,12 +64,30 @@ import {
 export type { ParsedShellSessionId };
 export { buildShellSessionId, parseShellSessionId };
 
+export interface UiHistoryReader {
+  readConversationList(): ConversationListRow[];
+  readConversationDetail(id: string): ConversationDetail | null;
+  readInvocationDetail(id: string): InvocationDetail | null;
+}
+
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
   hostExecPaths: HostExecRuntimePaths;
   sessionPaths: SessionRuntimePaths;
   auditDir: string;
   terminalRuntimeDir: string;
+  historyDbPath: string;
+  history: UiHistoryReader;
+}
+
+function makeHistoryReader(historyDbPath: string): UiHistoryReader {
+  return {
+    readConversationList: () => readConversationList({ dbPath: historyDbPath }),
+    readConversationDetail: (id) =>
+      readConversationDetail(id, { dbPath: historyDbPath }),
+    readInvocationDetail: (id) =>
+      readInvocationDetail(id, { dbPath: historyDbPath }),
+  };
 }
 
 export async function createDataContext(): Promise<UiDataContext> {
@@ -87,12 +116,15 @@ export async function createDataContext(): Promise<UiDataContext> {
   }
   const auditDir = resolveAuditDir();
   const terminalRuntimeDir = getSocketDir();
+  const historyDbPath = resolveHistoryDbPath();
   return {
     networkPaths,
     hostExecPaths,
     sessionPaths,
     auditDir,
     terminalRuntimeDir,
+    historyDbPath,
+    history: makeHistoryReader(historyDbPath),
   };
 }
 

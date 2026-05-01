@@ -48,6 +48,12 @@ function createTestContext(dir: string): UiDataContext {
     sessionPaths,
     auditDir: `${dir}/audit`,
     terminalRuntimeDir: `${dir}/dtach`,
+    historyDbPath: `${dir}/history.db`,
+    history: {
+      readConversationList: () => [],
+      readConversationDetail: () => null,
+      readInvocationDetail: () => null,
+    },
   };
 }
 

@@ -165,7 +165,51 @@ test("joinSessionsToContainers: empty inputs produce empty output", () => {
   expect(joinSessionsToContainers([], [makeRecord("sess1")])).toEqual([]);
 });
 
-import { parseShellSessionId } from "./data.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import {
+  _closeHistoryDb,
+  openHistoryDb,
+  upsertConversation,
+} from "../history/store.ts";
+import { createDataContext, parseShellSessionId } from "./data.ts";
+
+test("UiDataContext.history: readConversationList round-trips a fixture row", async () => {
+  // Drive createDataContext via a temp $XDG_DATA_HOME so we don't touch the
+  // real user db.
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-uidata-history-"));
+  const originalXdg = process.env.XDG_DATA_HOME;
+  const dbPath = path.join(dir, "nas", "history.db");
+  try {
+    process.env.XDG_DATA_HOME = dir;
+    const ctx = await createDataContext();
+    expect(ctx.historyDbPath).toEqual(dbPath);
+    // Empty/no-db case
+    expect(ctx.history.readConversationList()).toEqual([]);
+    expect(ctx.history.readConversationDetail("x")).toBeNull();
+    expect(ctx.history.readInvocationDetail("x")).toBeNull();
+
+    // Write a conversation through a writer handle and read it back via ctx.
+    const writer = openHistoryDb({ path: dbPath, mode: "readwrite" });
+    upsertConversation(writer, {
+      id: "conv_z",
+      agent: "claude",
+      firstSeenAt: "2026-05-01T10:00:00Z",
+      lastSeenAt: "2026-05-01T10:00:00Z",
+    });
+    const list = ctx.history.readConversationList();
+    expect(list.map((r) => r.id)).toEqual(["conv_z"]);
+  } finally {
+    _closeHistoryDb(dbPath);
+    if (originalXdg !== undefined) {
+      process.env.XDG_DATA_HOME = originalXdg;
+    } else {
+      delete process.env.XDG_DATA_HOME;
+    }
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
 
 test("parseShellSessionId: well-formed ids", () => {
   expect(parseShellSessionId("shell-abc.1")).toEqual({
