@@ -91,45 +91,6 @@ export interface TraceRowView {
   readonly spanCount: number;
 }
 
-/**
- * Row shape for the Turns table on the conversation detail page.
- *
- * A "turn" is one user→assistant interaction, materialised as a single
- * trace whose `claude_code.interaction` span sits at the trace root.
- * Each row aggregates the spans inside the trace into a one-line
- * summary (LLM call count, tool call count, token totals, duration).
- *
- * Token fields are `null` when every contributing span reports `null`
- * for that token kind, distinguishing "no data emitted" from the
- * legitimate zero of "emitted but counted no tokens". When at least
- * one span carries a numeric value, the others' `null`s contribute
- * nothing to the sum.
- */
-export interface TurnRowView {
-  readonly traceId: string;
-  readonly traceIdLabel: string;
-  readonly startedAt: string;
-  readonly startedAtAbsolute: string;
-  /** Compact-formatted duration ("234ms", "1.2s", …); empty for an open turn. */
-  readonly durationLabel: string;
-  readonly llmCount: number;
-  readonly toolCount: number;
-  readonly spanCount: number;
-  readonly inputTokens: number | null;
-  readonly outputTokens: number | null;
-  readonly cacheReadTokens: number | null;
-  readonly cacheWriteTokens: number | null;
-  /**
-   * Pre-formatted Tokens cell joining the four token kinds with " · "
-   * separators in `in · out · cacheR · cacheW` order. Built by
-   * `formatTurnTokens` from the four numeric fields above so the page
-   * just renders the string.
-   */
-  readonly tokensCell: string;
-  readonly invocationHref: string;
-  readonly invocationIdLabel: string;
-}
-
 export interface SpanRowView {
   readonly spanId: string;
   readonly spanIdLabel: string;
@@ -187,16 +148,38 @@ export interface SpanRowView {
  * Per-turn group of span rows for the accordion rendering on the
  * conversation detail page. One group per trace, ordered by
  * `compareTurnOrder`; rows inside are DFS-flattened with `depth`
- * populated for indentation.
+ * populated for indentation. Each accordion header summarises its
+ * turn's LLM/tool counts and token totals.
+ *
+ * Token fields are `null` when every contributing span reports `null`
+ * for that token kind, distinguishing "no data emitted" from the
+ * legitimate zero of "emitted but counted no tokens". When at least
+ * one span carries a numeric value, the others' `null`s contribute
+ * nothing to the sum.
  */
 export interface TurnSpanGroup {
   readonly traceId: string;
   readonly traceIdLabel: string;
   /** 1-based turn index assigned in `compareTurnOrder` order. */
   readonly turnIndex: number;
+  readonly startedAt: string;
+  readonly startedAtAbsolute: string;
   /** Compact-formatted duration ("2m11s", …); empty for an open turn. */
   readonly durationLabel: string;
   readonly spanCount: number;
+  readonly llmCount: number;
+  readonly toolCount: number;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  /**
+   * Pre-formatted Tokens cell joining the four token kinds with " · "
+   * separators in `in · out · cacheR · cacheW` order. Built by
+   * `formatTurnTokens` from the four numeric fields above so the page
+   * just renders the string.
+   */
+  readonly tokensCell: string;
   /** DFS-flattened span rows; each row carries `depth` for indentation. */
   readonly rows: SpanRowView[];
 }
@@ -505,56 +488,47 @@ export function formatTurnTokens(row: {
 }
 
 /**
- * Project a `ConversationDetail` into the per-turn summary rows
- * rendered by the Turns table. See `TurnRowView` for the per-row
- * contract; see `compareTurnOrder` for the row ordering.
+ * Aggregate the spans of a single trace into the counts and token
+ * totals shown in the per-turn accordion header. Counts split by
+ * `kind` literal (`"chat"` → `llmCount`, `"execute_tool"` →
+ * `toolCount`); token totals use `sumNullableColumn` so a column that
+ * is `null` on every span surfaces back to the caller as `null`. The
+ * trailing `tokensCell` is the joined `formatTurnTokens` string the
+ * header renders verbatim.
  */
-export function buildTurnRows(
-  detail: ConversationDetail,
-  nowMs: number,
-): TurnRowView[] {
-  const ordered = detail.traces.slice().sort(compareTurnOrder);
-  return ordered.map((trace) => {
-    const traceSpans = detail.spans.filter((s) => s.traceId === trace.traceId);
-    let llmCount = 0;
-    let toolCount = 0;
-    for (const s of traceSpans) {
-      if (s.kind === "chat") llmCount += 1;
-      else if (s.kind === "execute_tool") toolCount += 1;
-    }
-    const durationMs =
-      trace.endedAt === null
-        ? null
-        : Date.parse(trace.endedAt) - Date.parse(trace.startedAt);
-    const durationLabel =
-      durationMs === null ? "" : (formatDuration(durationMs) ?? "");
-    const inputTokens = sumNullableColumn(traceSpans, (s) => s.inTok);
-    const outputTokens = sumNullableColumn(traceSpans, (s) => s.outTok);
-    const cacheReadTokens = sumNullableColumn(traceSpans, (s) => s.cacheR);
-    const cacheWriteTokens = sumNullableColumn(traceSpans, (s) => s.cacheW);
-    return {
-      traceId: trace.traceId,
-      traceIdLabel: shortenId(trace.traceId),
-      startedAt: formatRelativeTime(trace.startedAt, nowMs),
-      startedAtAbsolute: trace.startedAt,
-      durationLabel,
-      llmCount,
-      toolCount,
-      spanCount: traceSpans.length,
+function summariseTraceSpans(traceSpans: readonly SpanSummaryRow[]): {
+  llmCount: number;
+  toolCount: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  tokensCell: string;
+} {
+  let llmCount = 0;
+  let toolCount = 0;
+  for (const s of traceSpans) {
+    if (s.kind === "chat") llmCount += 1;
+    else if (s.kind === "execute_tool") toolCount += 1;
+  }
+  const inputTokens = sumNullableColumn(traceSpans, (s) => s.inTok);
+  const outputTokens = sumNullableColumn(traceSpans, (s) => s.outTok);
+  const cacheReadTokens = sumNullableColumn(traceSpans, (s) => s.cacheR);
+  const cacheWriteTokens = sumNullableColumn(traceSpans, (s) => s.cacheW);
+  return {
+    llmCount,
+    toolCount,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    tokensCell: formatTurnTokens({
       inputTokens,
       outputTokens,
       cacheReadTokens,
       cacheWriteTokens,
-      tokensCell: formatTurnTokens({
-        inputTokens,
-        outputTokens,
-        cacheReadTokens,
-        cacheWriteTokens,
-      }),
-      invocationHref: `#/history/invocation/${encodeURIComponent(trace.invocationId)}`,
-      invocationIdLabel: shortenId(trace.invocationId),
-    };
-  });
+    }),
+  };
 }
 
 /**
@@ -685,12 +659,22 @@ export function buildSpanTreeByTurn(
       durationMs === null || !Number.isFinite(durationMs)
         ? ""
         : (formatDuration(durationMs) ?? "");
+    const summary = summariseTraceSpans(traceSpans);
     return {
       traceId: trace.traceId,
       traceIdLabel: shortenId(trace.traceId),
       turnIndex: idx + 1,
+      startedAt: formatRelativeTime(trace.startedAt, nowMs),
+      startedAtAbsolute: trace.startedAt,
       durationLabel,
       spanCount: traceSpans.length,
+      llmCount: summary.llmCount,
+      toolCount: summary.toolCount,
+      inputTokens: summary.inputTokens,
+      outputTokens: summary.outputTokens,
+      cacheReadTokens: summary.cacheReadTokens,
+      cacheWriteTokens: summary.cacheWriteTokens,
+      tokensCell: summary.tokensCell,
       rows,
     };
   });

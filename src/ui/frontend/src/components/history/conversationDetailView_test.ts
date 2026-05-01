@@ -14,7 +14,6 @@ import {
   buildSpanRows,
   buildSpanTreeByTurn,
   buildTraceRows,
-  buildTurnRows,
   compareTurnOrder,
   extractToolName,
   formatCountCell,
@@ -643,190 +642,27 @@ describe("compareTurnOrder", () => {
   });
 });
 
-describe("buildTurnRows", () => {
-  test("aggregates chat / tool counts and token totals across spans of one trace", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "trace_one",
-          startedAt: "2026-05-01T11:00:00.000Z",
-          endedAt: "2026-05-01T11:00:01.234Z",
-        }),
-      ],
-      spans: [
-        makeSpan({
-          spanId: "s1",
-          traceId: "trace_one",
-          kind: "chat",
-          inTok: 100,
-          outTok: 50,
-          cacheR: 10,
-          cacheW: 5,
-        }),
-        makeSpan({
-          spanId: "s2",
-          traceId: "trace_one",
-          kind: "execute_tool",
-          inTok: 1,
-          outTok: 2,
-          cacheR: 3,
-          cacheW: 4,
-        }),
-        makeSpan({
-          spanId: "s3",
-          traceId: "trace_one",
-          kind: "execute_tool",
-          inTok: 7,
-          outTok: 8,
-          cacheR: 9,
-          cacheW: 11,
-        }),
-      ],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view).toHaveLength(1);
-    expect(view[0]?.llmCount).toBe(1);
-    expect(view[0]?.toolCount).toBe(2);
-    expect(view[0]?.spanCount).toBe(3);
-    expect(view[0]?.inputTokens).toBe(108);
-    expect(view[0]?.outputTokens).toBe(60);
-    expect(view[0]?.cacheReadTokens).toBe(22);
-    expect(view[0]?.cacheWriteTokens).toBe(20);
-    expect(view[0]?.durationLabel).toBe("1.2s");
-    expect(view[0]?.traceIdLabel).toBe("trace_on");
-    expect(view[0]?.invocationHref).toBe(
-      "#/history/invocation/inv_xxxxxxxxxxxxxxxx",
-    );
-  });
-
-  test("open trace renders durationLabel as empty string", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ endedAt: null })],
-      spans: [],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view[0]?.durationLabel).toBe("");
-  });
-
-  test("token kind that is null on every span surfaces as null (not 0)", () => {
-    const detail = makeDetail({
-      traces: [makeTrace()],
-      spans: [
-        makeSpan({ spanId: "s1", inTok: null, outTok: 10 }),
-        makeSpan({ spanId: "s2", inTok: null, outTok: 20 }),
-      ],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view[0]?.inputTokens).toBeNull();
-    expect(view[0]?.outputTokens).toBe(30);
-  });
-
-  test("mixed null / numeric token entries sum only the numerics", () => {
-    const detail = makeDetail({
-      traces: [makeTrace()],
-      spans: [
-        makeSpan({ spanId: "s1", inTok: null }),
-        makeSpan({ spanId: "s2", inTok: 100 }),
-        makeSpan({ spanId: "s3", inTok: 23 }),
-      ],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view[0]?.inputTokens).toBe(123);
-  });
-
-  test("spans are partitioned by traceId across multiple traces", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "trace_a",
-          startedAt: "2026-05-01T11:00:00.000Z",
-        }),
-        makeTrace({
-          traceId: "trace_b",
-          startedAt: "2026-05-01T11:01:00.000Z",
-        }),
-      ],
-      spans: [
-        makeSpan({ spanId: "s1", traceId: "trace_a", kind: "chat" }),
-        makeSpan({
-          spanId: "s2",
-          traceId: "trace_b",
-          kind: "execute_tool",
-        }),
-        makeSpan({
-          spanId: "s3",
-          traceId: "trace_b",
-          kind: "execute_tool",
-        }),
-      ],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view[0]?.traceId).toBe("trace_a");
-    expect(view[0]?.llmCount).toBe(1);
-    expect(view[0]?.toolCount).toBe(0);
-    expect(view[0]?.spanCount).toBe(1);
-    expect(view[1]?.traceId).toBe("trace_b");
-    expect(view[1]?.llmCount).toBe(0);
-    expect(view[1]?.toolCount).toBe(2);
-    expect(view[1]?.spanCount).toBe(2);
-  });
-
-  test("turn with no chat / tool spans reports zero counts", () => {
-    const detail = makeDetail({
-      traces: [makeTrace()],
-      spans: [makeSpan({ kind: "other" })],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view[0]?.llmCount).toBe(0);
-    expect(view[0]?.toolCount).toBe(0);
-    expect(view[0]?.spanCount).toBe(1);
-  });
-
-  test("turn with no spans at all reports zero counts and null tokens", () => {
-    const detail = makeDetail({
-      traces: [makeTrace()],
-      spans: [],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view[0]?.llmCount).toBe(0);
-    expect(view[0]?.toolCount).toBe(0);
-    expect(view[0]?.spanCount).toBe(0);
-    expect(view[0]?.inputTokens).toBeNull();
-    expect(view[0]?.outputTokens).toBeNull();
-    expect(view[0]?.cacheReadTokens).toBeNull();
-    expect(view[0]?.cacheWriteTokens).toBeNull();
-  });
-
-  test("traces in reverse order are sorted by startedAt ASC", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "trace_late",
-          startedAt: "2026-05-01T12:00:00.000Z",
-        }),
-        makeTrace({
-          traceId: "trace_early",
-          startedAt: "2026-05-01T11:00:00.000Z",
-        }),
-      ],
-      spans: [],
-    });
-    const view = buildTurnRows(detail, NOW_MS);
-    expect(view[0]?.traceId).toBe("trace_early");
-    expect(view[1]?.traceId).toBe("trace_late");
-  });
-});
-
 describe("buildSpanTreeByTurn", () => {
   test("DFS-flattens a 3-level tree and assigns depths 0/1/2 in pre-order", () => {
     const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t1" })],
+      traces: [
+        makeTrace({
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:02.500Z",
+        }),
+      ],
       spans: [
         makeSpan({
           spanId: "root",
           parentSpanId: null,
           traceId: "t1",
           spanName: "claude_code.interaction",
+          kind: "chat",
+          inTok: 100,
+          outTok: 50,
+          cacheR: 10,
+          cacheW: 5,
           startedAt: "2026-05-01T11:00:00.000Z",
         }),
         makeSpan({
@@ -834,6 +670,11 @@ describe("buildSpanTreeByTurn", () => {
           parentSpanId: "root",
           traceId: "t1",
           spanName: "claude_code.tool",
+          kind: "execute_tool",
+          inTok: 1,
+          outTok: 2,
+          cacheR: 3,
+          cacheW: 4,
           startedAt: "2026-05-01T11:00:01.000Z",
         }),
         makeSpan({
@@ -841,15 +682,182 @@ describe("buildSpanTreeByTurn", () => {
           parentSpanId: "mid",
           traceId: "t1",
           spanName: "claude_code.tool.execution",
+          kind: "execute_tool",
+          inTok: 7,
+          outTok: 8,
+          cacheR: 9,
+          cacheW: 11,
           startedAt: "2026-05-01T11:00:02.000Z",
         }),
       ],
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups).toHaveLength(1);
-    const rows = groups[0]?.rows ?? [];
+    const group = groups[0];
+    expect(group).toBeDefined();
+    if (!group) return;
+    const rows = group.rows;
     expect(rows.map((r) => r.spanId)).toEqual(["root", "mid", "leaf"]);
     expect(rows.map((r) => r.depth)).toEqual([0, 1, 2]);
+    // All eleven TurnSpanGroup fields surface on the same group.
+    expect(group.traceId).toBe("t1");
+    expect(group.traceIdLabel).toBe("t1");
+    expect(group.turnIndex).toBe(1);
+    expect(group.startedAtAbsolute).toBe("2026-05-01T11:00:00.000Z");
+    expect(typeof group.startedAt).toBe("string");
+    expect(group.durationLabel).toBe("2.5s");
+    expect(group.spanCount).toBe(3);
+    expect(group.llmCount).toBe(1);
+    expect(group.toolCount).toBe(2);
+    expect(group.inputTokens).toBe(108);
+    expect(group.outputTokens).toBe(60);
+    expect(group.cacheReadTokens).toBe(22);
+    expect(group.cacheWriteTokens).toBe(20);
+    expect(group.tokensCell).toBe(
+      formatTurnTokens({
+        inputTokens: 108,
+        outputTokens: 60,
+        cacheReadTokens: 22,
+        cacheWriteTokens: 20,
+      }),
+    );
+  });
+
+  test("aggregates chat / tool counts and token totals across mixed-kind spans", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:01.000Z",
+        }),
+      ],
+      spans: [
+        makeSpan({
+          spanId: "chat1",
+          parentSpanId: null,
+          traceId: "t1",
+          kind: "chat",
+          inTok: null,
+          outTok: 50,
+          cacheR: 10,
+          cacheW: 5,
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        makeSpan({
+          spanId: "tool1",
+          parentSpanId: "chat1",
+          traceId: "t1",
+          kind: "execute_tool",
+          inTok: 100,
+          outTok: 200,
+          cacheR: 1,
+          cacheW: 2,
+          startedAt: "2026-05-01T11:00:00.500Z",
+        }),
+        makeSpan({
+          spanId: "tool2",
+          parentSpanId: "chat1",
+          traceId: "t1",
+          kind: "execute_tool",
+          inTok: 23,
+          outTok: 7,
+          cacheR: 3,
+          cacheW: 4,
+          startedAt: "2026-05-01T11:00:00.700Z",
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    const group = groups[0];
+    expect(group).toBeDefined();
+    if (!group) return;
+    expect(group.llmCount).toBe(1);
+    expect(group.toolCount).toBe(2);
+    // input: null + 100 + 23 → 123 (null contributes nothing).
+    expect(group.inputTokens).toBe(123);
+    expect(group.outputTokens).toBe(257);
+    expect(group.cacheReadTokens).toBe(14);
+    expect(group.cacheWriteTokens).toBe(11);
+    expect(group.tokensCell).toBe(
+      formatTurnTokens({
+        inputTokens: 123,
+        outputTokens: 257,
+        cacheReadTokens: 14,
+        cacheWriteTokens: 11,
+      }),
+    );
+  });
+
+  test("token kind that is null on every span surfaces as null with hyphen-minus placeholder", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          traceId: "t1",
+          inTok: null,
+          outTok: 10,
+          cacheR: null,
+          cacheW: null,
+        }),
+        makeSpan({
+          spanId: "s2",
+          traceId: "t1",
+          inTok: null,
+          outTok: 20,
+          cacheR: null,
+          cacheW: null,
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    const group = groups[0];
+    expect(group).toBeDefined();
+    if (!group) return;
+    expect(group.inputTokens).toBeNull();
+    expect(group.outputTokens).toBe(30);
+    expect(group.cacheReadTokens).toBeNull();
+    expect(group.cacheWriteTokens).toBeNull();
+    // tokensCell renders the hyphen-minus placeholder for each null kind.
+    expect(group.tokensCell.split(" · ")[0]).toBe("-");
+    expect(group.tokensCell.split(" · ")[2]).toBe("-");
+    expect(group.tokensCell.split(" · ")[3]).toBe("-");
+  });
+
+  test("open turn renders empty durationLabel while still summarising tokens", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1", endedAt: null })],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          traceId: "t1",
+          kind: "chat",
+          inTok: 10,
+          outTok: 20,
+          cacheR: 0,
+          cacheW: 0,
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    const group = groups[0];
+    expect(group).toBeDefined();
+    if (!group) return;
+    expect(group.durationLabel).toBe("");
+    expect(group.llmCount).toBe(1);
+    expect(group.toolCount).toBe(0);
+    expect(group.inputTokens).toBe(10);
+    expect(group.outputTokens).toBe(20);
+    expect(group.tokensCell).toBe(
+      formatTurnTokens({
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }),
+    );
   });
 
   test("siblings sharing a parent are sorted by startedAt ASC even when input is reversed", () => {
@@ -965,8 +973,10 @@ describe("buildSpanTreeByTurn", () => {
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups[0]?.traceId).toBe("trace_early");
     expect(groups[0]?.turnIndex).toBe(1);
+    expect(groups[0]?.startedAtAbsolute).toBe("2026-05-01T11:00:00.000Z");
     expect(groups[1]?.traceId).toBe("trace_late");
     expect(groups[1]?.turnIndex).toBe(2);
+    expect(groups[1]?.startedAtAbsolute).toBe("2026-05-01T12:00:00.000Z");
   });
 
   test("returns an empty array when the conversation has no traces", () => {

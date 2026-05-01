@@ -27,7 +27,6 @@ import {
   buildConversationTurnEventRows,
   buildInvocationLinks,
   buildSpanTreeByTurn,
-  buildTurnRows,
 } from "./conversationDetailView";
 import { formatCompactNumber } from "./historyListView";
 
@@ -83,18 +82,9 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
     const d = props.detail();
     return d === null ? [] : buildInvocationLinks(d, now());
   };
-  const turns = () => {
-    const d = props.detail();
-    return d === null ? [] : buildTurnRows(d, now());
-  };
   const spanGroups = () => {
     const d = props.detail();
     return d === null ? [] : buildSpanTreeByTurn(d, now());
-  };
-  const totalSpanCount = () => {
-    let total = 0;
-    for (const g of spanGroups()) total += g.spanCount;
-    return total;
   };
   const turnEvents = () => {
     const d = props.detail();
@@ -294,68 +284,13 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                 <h2 class="history-detail-section-title">
                   Turns
                   <span class="history-detail-section-count">
-                    {turns().length} rows
-                  </span>
-                </h2>
-                <Show
-                  when={turns().length > 0}
-                  fallback={
-                    <div class="history-detail-section-empty">No turns</div>
-                  }
-                >
-                  <table class="history-detail-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Id</th>
-                        <th scope="col">Started</th>
-                        <th scope="col" class="is-numeric">
-                          Duration
-                        </th>
-                        <th scope="col" class="is-numeric">
-                          LLM
-                        </th>
-                        <th scope="col" class="is-numeric">
-                          Tools
-                        </th>
-                        <th scope="col" class="is-numeric is-stacked">
-                          Tokens
-                          <span class="th-sub">in · out · cacheR · cacheW</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <For each={turns()}>
-                        {(row) => (
-                          <tr>
-                            <td class="is-id" title={row.traceId}>
-                              {row.traceIdLabel}
-                            </td>
-                            <td title={row.startedAtAbsolute}>
-                              {row.startedAt}
-                            </td>
-                            <td class="is-numeric">{row.durationLabel}</td>
-                            <td class="is-numeric">{row.llmCount}</td>
-                            <td class="is-numeric">{row.toolCount}</td>
-                            <td class="is-numeric">{row.tokensCell}</td>
-                          </tr>
-                        )}
-                      </For>
-                    </tbody>
-                  </table>
-                </Show>
-              </section>
-
-              <section class="history-detail-section">
-                <h2 class="history-detail-section-title">
-                  Spans
-                  <span class="history-detail-section-count">
-                    {totalSpanCount()} rows
+                    {spanGroups().length} turns
                   </span>
                 </h2>
                 <Show
                   when={spanGroups().length > 0}
                   fallback={
-                    <div class="history-detail-section-empty">No spans</div>
+                    <div class="history-detail-section-empty">No turns</div>
                   }
                 >
                   <For each={spanGroups()}>
@@ -363,13 +298,6 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                       const isOpen = () => openTurns().has(group.traceId);
                       const headerId = `turn-acc-header-${group.traceId}`;
                       const bodyId = `turn-acc-body-${group.traceId}`;
-                      const headerLabel = () => {
-                        const tail =
-                          group.durationLabel === ""
-                            ? `${group.spanCount} spans`
-                            : `${group.durationLabel}, ${group.spanCount} spans`;
-                        return `Turn ${group.turnIndex} (${tail})`;
-                      };
                       return (
                         <div class="history-detail-turn-acc">
                           <button
@@ -380,7 +308,32 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                             aria-controls={bodyId}
                             onClick={() => toggleTurn(group.traceId)}
                           >
-                            {headerLabel()}
+                            <span
+                              class="history-detail-turn-acc-caret"
+                              aria-hidden="true"
+                            >
+                              {isOpen() ? "▼" : "▶"}
+                            </span>
+                            <span class="history-detail-turn-acc-cell-label">
+                              Turn {group.turnIndex}
+                            </span>
+                            <Show when={group.durationLabel !== ""}>
+                              <span class="history-detail-turn-acc-cell-duration">
+                                {group.durationLabel}
+                              </span>
+                            </Show>
+                            <span class="history-detail-turn-acc-cell-llm">
+                              LLM {group.llmCount}
+                            </span>
+                            <span class="history-detail-turn-acc-cell-tools">
+                              Tools {group.toolCount}
+                            </span>
+                            <span class="history-detail-turn-acc-cell-spans">
+                              {group.spanCount} spans
+                            </span>
+                            <span class="history-detail-turn-acc-cell-tokens">
+                              {group.tokensCell}
+                            </span>
                           </button>
                           <Show when={isOpen()}>
                             <section

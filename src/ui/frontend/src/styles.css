@@ -2194,7 +2194,9 @@ body::after {
   background-color: var(--surface-1);
 }
 .history-detail-turn-acc-header {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
   width: 100%;
   padding: 8px 12px;
   background: transparent;
@@ -2210,6 +2212,28 @@ body::after {
 }
 .history-detail-turn-acc-header[aria-expanded="true"] {
   border-bottom: 1px solid var(--rule-soft);
+}
+/* Caret has a fixed width so the Turn label column stays aligned across
+ * adjacent accordions whether they are open (▼) or collapsed (▶). */
+.history-detail-turn-acc-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--cream-dim);
+}
+.history-detail-turn-acc-cell-label {
+  color: var(--cream);
+}
+.history-detail-turn-acc-cell-duration,
+.history-detail-turn-acc-cell-llm,
+.history-detail-turn-acc-cell-tools,
+.history-detail-turn-acc-cell-spans {
+  color: var(--cream-dim);
+}
+/* Tokens cell pushes to the right edge so the four-kind summary aligns
+ * down the column across stacked turn headers. */
+.history-detail-turn-acc-cell-tokens {
+  margin-left: auto;
+  color: var(--cream-dim);
 }
 .history-detail-turn-acc-body {
   /* Body holds a full-width <table> already styled by
