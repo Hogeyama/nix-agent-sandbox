@@ -222,6 +222,47 @@ describe("toConversationListRowView", () => {
     expect(display.metaLine).toBe("sess_aab · 5 spans");
   });
 
+  test("tokenBreakdownTitle joins every non-zero kind with the mid-dot", () => {
+    const display = toConversationListRowView(
+      makeRow({
+        inputTokensTotal: 1500,
+        outputTokensTotal: 500,
+        cacheReadTotal: 100,
+        cacheWriteTotal: 50,
+      }),
+      nowMs,
+    );
+    expect(display.tokenBreakdownTitle).toBe(
+      "Input 1.5k · Output 500 · Cache R 100 · Cache W 50",
+    );
+  });
+
+  test("tokenBreakdownTitle drops zero-valued kinds", () => {
+    const display = toConversationListRowView(
+      makeRow({
+        inputTokensTotal: 1000,
+        outputTokensTotal: 0,
+        cacheReadTotal: 0,
+        cacheWriteTotal: 200,
+      }),
+      nowMs,
+    );
+    expect(display.tokenBreakdownTitle).toBe("Input 1k · Cache W 200");
+  });
+
+  test("tokenBreakdownTitle is empty when every kind is zero", () => {
+    const display = toConversationListRowView(
+      makeRow({
+        inputTokensTotal: 0,
+        outputTokensTotal: 0,
+        cacheReadTotal: 0,
+        cacheWriteTotal: 0,
+      }),
+      nowMs,
+    );
+    expect(display.tokenBreakdownTitle).toBe("");
+  });
+
   test("metaLine singularises 1 turn / 1 span", () => {
     const display = toConversationListRowView(
       makeRow({

@@ -27,6 +27,19 @@ import { formatRelativeTime, shortenId } from "./historyListView";
 /** Maximum payload preview length (chars) before the trailing ellipsis. */
 const PAYLOAD_PREVIEW_MAX = 80;
 
+/**
+ * Proportional split of the four token kinds for the stacked bar shown
+ * under the Tokens block. Percentages always sum to 100 (when the bar is
+ * defined) or the bar is `null` (sum of all four kinds was zero — caller
+ * renders nothing rather than a degenerate empty bar).
+ */
+export interface TokenBarShape {
+  readonly inputPct: number;
+  readonly outputPct: number;
+  readonly cacheReadPct: number;
+  readonly cacheWritePct: number;
+}
+
 export interface ConversationHeaderView {
   readonly id: string;
   readonly idLabel: string;
@@ -44,6 +57,7 @@ export interface ConversationHeaderView {
   readonly cacheReadTokens: number;
   readonly cacheWriteTokens: number;
   readonly tokenTotal: number;
+  readonly tokenBar: TokenBarShape | null;
 }
 
 export interface InvocationLinkRow {
@@ -90,6 +104,16 @@ export interface SpanRowView {
   /** Compact-formatted token cell, or null for an absent backend value. */
   readonly inTok: string | null;
   readonly outTok: string | null;
+  readonly cacheRTok: string | null;
+  readonly cacheWTok: string | null;
+  /**
+   * Joined "in / out" cell string for the merged I/O column. Empty when both
+   * raw values are null; otherwise renders each side individually with an
+   * em-dash placeholder for the missing side so the slash stays anchored.
+   */
+  readonly ioCell: string;
+  /** Joined "read / write" cell for the merged Cache column. Same rules as `ioCell`. */
+  readonly cacheCell: string;
   /** Compact-formatted duration ("234ms", "1.2s", …) or null. */
   readonly durationLabel: string | null;
   readonly startedAt: string;
@@ -168,6 +192,40 @@ export function formatCountCell(value: number | null): string | null {
   // Use the compact helper for big numbers; small ones already render
   // as bare integers via the same helper.
   return formatCompactCell(value);
+}
+
+/**
+ * Build the proportional split for the four token kinds. Returns `null`
+ * when every kind is zero so the caller can omit the bar entirely rather
+ * than render an empty rule.
+ */
+export function buildTokenBar(
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+): TokenBarShape | null {
+  const total = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  if (total <= 0) return null;
+  return {
+    inputPct: (inputTokens / total) * 100,
+    outputPct: (outputTokens / total) * 100,
+    cacheReadPct: (cacheReadTokens / total) * 100,
+    cacheWritePct: (cacheWriteTokens / total) * 100,
+  };
+}
+
+/**
+ * Join a pair of nullable counts into a "left / right" cell. Both null
+ * collapses to empty (caller renders no cell content); a single null falls
+ * back to an em-dash so the slash stays anchored and the reader can see at a
+ * glance which side is missing.
+ */
+function joinPairCell(a: number | null, b: number | null): string {
+  if (a === null && b === null) return "";
+  const left = formatCountCell(a) ?? "—";
+  const right = formatCountCell(b) ?? "—";
+  return `${left} / ${right}`;
 }
 
 function formatCompactCell(n: number): string {
@@ -264,6 +322,12 @@ export function buildConversationHeader(
     cacheReadTokens: c.cacheReadTotal,
     cacheWriteTokens: c.cacheWriteTotal,
     tokenTotal: c.inputTokensTotal + c.outputTokensTotal,
+    tokenBar: buildTokenBar(
+      c.inputTokensTotal,
+      c.outputTokensTotal,
+      c.cacheReadTotal,
+      c.cacheWriteTotal,
+    ),
   };
 }
 
@@ -313,6 +377,10 @@ export function buildSpanRows(
       model: row.model,
       inTok: formatCountCell(row.inTok),
       outTok: formatCountCell(row.outTok),
+      cacheRTok: formatCountCell(row.cacheR),
+      cacheWTok: formatCountCell(row.cacheW),
+      ioCell: joinPairCell(row.inTok, row.outTok),
+      cacheCell: joinPairCell(row.cacheR, row.cacheW),
       durationLabel: formatDuration(row.durationMs),
       startedAt: formatRelativeTime(row.startedAt, nowMs),
       startedAtAbsolute: row.startedAt,

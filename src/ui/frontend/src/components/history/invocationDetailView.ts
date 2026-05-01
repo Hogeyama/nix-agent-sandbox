@@ -18,10 +18,16 @@ import type {
   InvocationTurnEventRow,
 } from "../../../../../history/types";
 import {
+  buildTokenBar,
+  type TokenBarShape,
   type TurnEventRowView,
   truncatePayload,
 } from "./conversationDetailView";
-import { formatRelativeTime, shortenId } from "./historyListView";
+import {
+  formatCompactNumber,
+  formatRelativeTime,
+  shortenId,
+} from "./historyListView";
 
 export interface InvocationHeaderView {
   readonly id: string;
@@ -39,6 +45,11 @@ export interface InvocationHeaderView {
   readonly spanCount: number;
   readonly conversationCount: number;
   readonly tokenTotal: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  readonly tokenBar: TokenBarShape | null;
 }
 
 export interface ConversationLinkRow {
@@ -48,6 +59,12 @@ export interface ConversationLinkRow {
   readonly turnCount: number;
   readonly spanCount: number;
   readonly tokenTotal: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  /** "Input 1.5k · Output 500 · Cache R 100 · Cache W 50" — empty if all zero. */
+  readonly tokenBreakdownTitle: string;
   readonly href: string;
 }
 
@@ -61,10 +78,16 @@ export function buildInvocationHeader(
   nowMs: number,
 ): InvocationHeaderView {
   const inv = detail.invocation;
-  const tokenTotal = detail.conversations.reduce(
-    (acc, c) => acc + c.inputTokensTotal + c.outputTokensTotal,
-    0,
-  );
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  for (const c of detail.conversations) {
+    inputTokens += c.inputTokensTotal;
+    outputTokens += c.outputTokensTotal;
+    cacheReadTokens += c.cacheReadTotal;
+    cacheWriteTokens += c.cacheWriteTotal;
+  }
   return {
     id: inv.id,
     idLabel: shortenId(inv.id),
@@ -81,7 +104,17 @@ export function buildInvocationHeader(
     traceCount: detail.traces.length,
     spanCount: detail.spans.length,
     conversationCount: detail.conversations.length,
-    tokenTotal,
+    tokenTotal: inputTokens + outputTokens,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    tokenBar: buildTokenBar(
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+    ),
   };
 }
 
@@ -97,6 +130,19 @@ export function buildConversationLinks(
 }
 
 function toConversationLinkRow(row: ConversationListRow): ConversationLinkRow {
+  const breakdown: string[] = [];
+  if (row.inputTokensTotal > 0) {
+    breakdown.push(`Input ${formatCompactNumber(row.inputTokensTotal)}`);
+  }
+  if (row.outputTokensTotal > 0) {
+    breakdown.push(`Output ${formatCompactNumber(row.outputTokensTotal)}`);
+  }
+  if (row.cacheReadTotal > 0) {
+    breakdown.push(`Cache R ${formatCompactNumber(row.cacheReadTotal)}`);
+  }
+  if (row.cacheWriteTotal > 0) {
+    breakdown.push(`Cache W ${formatCompactNumber(row.cacheWriteTotal)}`);
+  }
   return {
     id: row.id,
     idLabel: shortenId(row.id),
@@ -104,6 +150,11 @@ function toConversationLinkRow(row: ConversationListRow): ConversationLinkRow {
     turnCount: row.turnEventCount,
     spanCount: row.spanCount,
     tokenTotal: row.inputTokensTotal + row.outputTokensTotal,
+    inputTokens: row.inputTokensTotal,
+    outputTokens: row.outputTokensTotal,
+    cacheReadTokens: row.cacheReadTotal,
+    cacheWriteTokens: row.cacheWriteTotal,
+    tokenBreakdownTitle: breakdown.join(" · "),
     // Mirrors the list-page anchor encoding so ids round-trip safely
     // back through `decodeURIComponent` on the consuming side.
     href: `#/history/conversation/${encodeURIComponent(row.id)}`,

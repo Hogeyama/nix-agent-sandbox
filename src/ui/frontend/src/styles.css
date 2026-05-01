@@ -1902,6 +1902,13 @@ body::after {
   font-size: 16px;
   color: var(--cream);
   line-height: 1.45;
+  /* Cap at three lines so a long summary doesn't push the rest of the
+   * header off-screen. Server-side `SUMMARY_MAX_CHARS` (240) is sized
+   * to fit comfortably within this visual budget. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .history-detail-meta {
   display: flex;
@@ -1926,11 +1933,48 @@ body::after {
   font-size: 13px;
   color: var(--cream);
 }
+/* Header stats are split into two semantic groups — Activity (counts) and
+ * Tokens (4 token kinds + proportional bar) — separated by a single hairline
+ * rule. The grouping is what makes the four token cards read as one block
+ * rather than seven flat cards. Stacked vertically because the header's
+ * right column (1fr of a 2fr/1fr split) does not have room for both groups
+ * side-by-side once the four token columns claim their natural widths. */
 .history-detail-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.history-detail-stats-rule {
+  height: 1px;
+  background: var(--rule);
+}
+.stats-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.stats-group-label {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cream-dim);
+}
+/* Two-row grid (labels on row 1, values on row 2) with column auto-flow.
+ * Each pair of DOM children fills one column, guaranteeing every label
+ * shares the same baseline as every other label and likewise for the
+ * values — flex with per-stat wrapper divs failed at this when label
+ * widths differed (e.g. "In" vs "Cache W"). */
+.stats-group-row {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px 16px;
-  align-content: start;
+  grid-template-rows: auto auto;
+  grid-auto-flow: column;
+  column-gap: 24px;
+  row-gap: 4px;
+  align-items: end;
 }
 .history-detail-stat-label {
   font-family: var(--sans);
@@ -1945,7 +1989,35 @@ body::after {
   font-size: 18px;
   color: var(--cream);
   font-feature-settings: "tnum";
-  margin-top: 2px;
+}
+
+/* Stacked proportional bar that sits under the four token values.
+ * Hidden via inline styles when every kind is zero. The four segment
+ * colors reuse existing palette variables — no new tokens introduced. */
+.stats-token-bar {
+  display: flex;
+  width: 100%;
+  height: 3px;
+  border-radius: 1px;
+  overflow: hidden;
+  margin-top: 6px;
+  background: var(--line-soft);
+}
+.stats-token-bar-seg {
+  height: 100%;
+  transition: width 0.2s ease;
+}
+.stats-token-bar-seg.is-input {
+  background: var(--cream);
+}
+.stats-token-bar-seg.is-output {
+  background: var(--amber-hi);
+}
+.stats-token-bar-seg.is-cache-r {
+  background: var(--cream-dim);
+}
+.stats-token-bar-seg.is-cache-w {
+  background: var(--muted);
 }
 
 .history-detail-section {
@@ -1999,6 +2071,23 @@ body::after {
 }
 .history-detail-table thead th.is-numeric {
   text-align: right;
+}
+/* Stacked column header for the merged I/O and Cache columns: the primary
+ * label sits on top, the per-half legend ("in · out") sits beneath in a
+ * smaller, dimmer mono so the column still discloses its semantics. */
+.history-detail-table thead th.is-stacked {
+  vertical-align: bottom;
+  line-height: 1.2;
+}
+.history-detail-table thead th.is-stacked .th-sub {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: var(--muted-2);
+  margin-top: 2px;
 }
 .history-detail-table tbody tr {
   border-bottom: 1px solid var(--rule-soft);

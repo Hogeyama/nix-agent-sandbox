@@ -37,6 +37,11 @@ export interface ConversationListRowView {
   readonly fullTimestamp: string;
   /** Token total formatted with the compact-number helper ("1.2k"). */
   readonly tokenTotal: string;
+  /**
+   * Human-readable per-kind breakdown ("Input 1.5k · Output 500 · Cache R 100
+   * · Cache W 50"), suitable as a `title` tooltip. Empty when every kind is 0.
+   */
+  readonly tokenBreakdownTitle: string;
   /** Hash href for the row anchor. */
   readonly href: string;
 }
@@ -169,6 +174,28 @@ function composeMetaLine(opts: {
 }
 
 /**
+ * Build the per-kind token breakdown shown in the row's tooltip. Each
+ * non-zero kind contributes one segment; an all-zero row returns an empty
+ * string so the caller can omit the `title` attribute entirely.
+ */
+function composeTokenBreakdownTitle(row: ConversationListRow): string {
+  const parts: string[] = [];
+  if (row.inputTokensTotal > 0) {
+    parts.push(`Input ${formatCompactNumber(row.inputTokensTotal)}`);
+  }
+  if (row.outputTokensTotal > 0) {
+    parts.push(`Output ${formatCompactNumber(row.outputTokensTotal)}`);
+  }
+  if (row.cacheReadTotal > 0) {
+    parts.push(`Cache R ${formatCompactNumber(row.cacheReadTotal)}`);
+  }
+  if (row.cacheWriteTotal > 0) {
+    parts.push(`Cache W ${formatCompactNumber(row.cacheWriteTotal)}`);
+  }
+  return parts.join(" · ");
+}
+
+/**
  * Project a backend conversation row into the shape the page renders.
  * The function is total — every input produces a row, including ones
  * with a null agent or absent summary.
@@ -179,6 +206,7 @@ export function toConversationListRowView(
 ): ConversationListRowView {
   const idShort = shortenId(row.id);
   const tokenTotal = row.inputTokensTotal + row.outputTokensTotal;
+  const tokenBreakdownTitle = composeTokenBreakdownTitle(row);
   const summary = row.summary;
   const summaryIsEmpty = summary === null;
   return {
@@ -202,6 +230,7 @@ export function toConversationListRowView(
     lastSeen: formatRelativeTime(row.lastSeenAt, nowMs),
     fullTimestamp: row.lastSeenAt,
     tokenTotal: formatCompactNumber(tokenTotal),
+    tokenBreakdownTitle,
     // Defensive escape: backend ids flow into the hash unmodified, so a
     // value containing characters the router's safe-id allowlist rejects
     // (or url-reserved characters) would otherwise drop the user back to

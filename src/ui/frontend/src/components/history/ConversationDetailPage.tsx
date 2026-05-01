@@ -143,29 +143,66 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                   </div>
                 </div>
                 <div class="history-detail-stats">
-                  <div>
-                    <div class="history-detail-stat-label">Turns</div>
-                    <div class="history-detail-stat-value">
-                      {formatCompactNumber(h.turnCount)}
+                  <div class="stats-group">
+                    <div class="stats-group-label">Activity</div>
+                    <div class="stats-group-row">
+                      <div class="history-detail-stat-label">Turns</div>
+                      <div class="history-detail-stat-value">
+                        {formatCompactNumber(h.turnCount)}
+                      </div>
+                      <div class="history-detail-stat-label">Spans</div>
+                      <div class="history-detail-stat-value">
+                        {formatCompactNumber(h.spanCount)}
+                      </div>
+                      <div class="history-detail-stat-label">Invoc.</div>
+                      <div class="history-detail-stat-value">
+                        {formatCompactNumber(h.invocationCount)}
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <div class="history-detail-stat-label">Spans</div>
-                    <div class="history-detail-stat-value">
-                      {formatCompactNumber(h.spanCount)}
+                  <div class="history-detail-stats-rule" aria-hidden="true" />
+                  <div class="stats-group">
+                    <div class="stats-group-label">Tokens</div>
+                    <div class="stats-group-row">
+                      <div class="history-detail-stat-label">In</div>
+                      <div class="history-detail-stat-value">
+                        {formatCompactNumber(h.inputTokens)}
+                      </div>
+                      <div class="history-detail-stat-label">Out</div>
+                      <div class="history-detail-stat-value">
+                        {formatCompactNumber(h.outputTokens)}
+                      </div>
+                      <div class="history-detail-stat-label">Cache R</div>
+                      <div class="history-detail-stat-value">
+                        {formatCompactNumber(h.cacheReadTokens)}
+                      </div>
+                      <div class="history-detail-stat-label">Cache W</div>
+                      <div class="history-detail-stat-value">
+                        {formatCompactNumber(h.cacheWriteTokens)}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <div class="history-detail-stat-label">Invocations</div>
-                    <div class="history-detail-stat-value">
-                      {formatCompactNumber(h.invocationCount)}
-                    </div>
-                  </div>
-                  <div>
-                    <div class="history-detail-stat-label">Tokens</div>
-                    <div class="history-detail-stat-value">
-                      {formatCompactNumber(h.tokenTotal)}
-                    </div>
+                    <Show when={h.tokenBar}>
+                      {(bar) => (
+                        <div class="stats-token-bar" aria-hidden="true">
+                          <div
+                            class="stats-token-bar-seg is-input"
+                            style={{ width: `${bar().inputPct}%` }}
+                          />
+                          <div
+                            class="stats-token-bar-seg is-output"
+                            style={{ width: `${bar().outputPct}%` }}
+                          />
+                          <div
+                            class="stats-token-bar-seg is-cache-r"
+                            style={{ width: `${bar().cacheReadPct}%` }}
+                          />
+                          <div
+                            class="stats-token-bar-seg is-cache-w"
+                            style={{ width: `${bar().cacheWritePct}%` }}
+                          />
+                        </div>
+                      )}
+                    </Show>
                   </div>
                 </div>
               </header>
@@ -298,11 +335,13 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                         <th scope="col">Name</th>
                         <th scope="col">Kind</th>
                         <th scope="col">Model</th>
-                        <th scope="col" class="is-numeric">
-                          In
+                        <th scope="col" class="is-numeric is-stacked">
+                          I/O
+                          <span class="th-sub">in · out</span>
                         </th>
-                        <th scope="col" class="is-numeric">
-                          Out
+                        <th scope="col" class="is-numeric is-stacked">
+                          Cache
+                          <span class="th-sub">read · write</span>
                         </th>
                         <th scope="col" class="is-numeric">
                           Duration
@@ -331,8 +370,8 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                               </span>
                             </td>
                             <td>{row.model ?? ""}</td>
-                            <td class="is-numeric">{row.inTok ?? ""}</td>
-                            <td class="is-numeric">{row.outTok ?? ""}</td>
+                            <td class="is-numeric">{row.ioCell}</td>
+                            <td class="is-numeric">{row.cacheCell}</td>
                             <td class="is-numeric">
                               {row.durationLabel ?? ""}
                             </td>

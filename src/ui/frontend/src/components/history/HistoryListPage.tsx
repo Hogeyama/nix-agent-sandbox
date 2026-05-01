@@ -100,7 +100,16 @@ export function HistoryListPage(props: HistoryListPageProps) {
                   <div class="history-list-time" title={row.fullTimestamp}>
                     {row.lastSeen}
                   </div>
-                  <div class="history-list-stats">{row.tokenTotal}</div>
+                  <div
+                    class="history-list-stats"
+                    title={
+                      row.tokenBreakdownTitle === ""
+                        ? undefined
+                        : row.tokenBreakdownTitle
+                    }
+                  >
+                    {row.tokenTotal}
+                  </div>
                 </a>
               )}
             </For>

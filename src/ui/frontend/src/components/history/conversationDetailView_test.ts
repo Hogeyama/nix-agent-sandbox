@@ -194,6 +194,40 @@ describe("buildConversationHeader", () => {
     );
     expect(view.summary).toBe("Refactor the auth flow");
   });
+
+  test("tokenBar projects proportional split summing to 100", () => {
+    const view = buildConversationHeader(
+      makeDetail({
+        conversation: makeConversation({
+          inputTokensTotal: 750,
+          outputTokensTotal: 250,
+          cacheReadTotal: 0,
+          cacheWriteTotal: 0,
+        }),
+      }),
+      NOW_MS,
+    );
+    expect(view.tokenBar).not.toBeNull();
+    expect(view.tokenBar?.inputPct).toBe(75);
+    expect(view.tokenBar?.outputPct).toBe(25);
+    expect(view.tokenBar?.cacheReadPct).toBe(0);
+    expect(view.tokenBar?.cacheWritePct).toBe(0);
+  });
+
+  test("tokenBar is null when every kind is zero", () => {
+    const view = buildConversationHeader(
+      makeDetail({
+        conversation: makeConversation({
+          inputTokensTotal: 0,
+          outputTokensTotal: 0,
+          cacheReadTotal: 0,
+          cacheWriteTotal: 0,
+        }),
+      }),
+      NOW_MS,
+    );
+    expect(view.tokenBar).toBeNull();
+  });
 });
 
 describe("buildInvocationLinks", () => {
@@ -293,6 +327,34 @@ describe("buildSpanRows", () => {
     expect(view[0]?.inTok).toBe("100");
     expect(view[0]?.outTok).toBe("50");
     expect(view[0]?.durationLabel).toBe("1.2s");
+  });
+
+  test("ioCell joins in/out with a slash and cache cell empty when both zero", () => {
+    const view = buildSpanRows(
+      [makeSpan({ inTok: 1500, outTok: 500, cacheR: 0, cacheW: 0 })],
+      NOW_MS,
+    );
+    expect(view[0]?.ioCell).toBe("1.5k / 500");
+    // cacheR and cacheW are both 0 (not null) so the cell still renders both halves.
+    expect(view[0]?.cacheCell).toBe("0 / 0");
+  });
+
+  test("ioCell collapses to empty string when both halves are null", () => {
+    const view = buildSpanRows(
+      [makeSpan({ inTok: null, outTok: null, cacheR: null, cacheW: null })],
+      NOW_MS,
+    );
+    expect(view[0]?.ioCell).toBe("");
+    expect(view[0]?.cacheCell).toBe("");
+  });
+
+  test("ioCell uses em-dash placeholder when one half is null", () => {
+    const view = buildSpanRows(
+      [makeSpan({ inTok: 100, outTok: null, cacheR: null, cacheW: 50 })],
+      NOW_MS,
+    );
+    expect(view[0]?.ioCell).toBe("100 / —");
+    expect(view[0]?.cacheCell).toBe("— / 50");
   });
 
   test("classifies a chat.completion span as the chat variant", () => {
