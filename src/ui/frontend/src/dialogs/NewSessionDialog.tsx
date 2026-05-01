@@ -303,15 +303,6 @@ export function NewSessionDialog(props: Props) {
               <div class="dialog-form">
                 <span class="dialog-label">Directory</span>
                 <div class="dialog-radio-group">
-                  <label class="dialog-radio">
-                    <input
-                      type="radio"
-                      name="dir"
-                      checked={dirChoice() === "default"}
-                      onChange={() => setDirChoice("default")}
-                    />
-                    Default (daemon)
-                  </label>
                   <Show when={info.recentDirectories.length > 0}>
                     <label class="dialog-radio">
                       <input
