@@ -20,6 +20,7 @@ import { createDataContext } from "./data.ts";
 import { daemonStateDir } from "./paths.ts";
 import { html, Router, text } from "./router.ts";
 import { createApiRoutes } from "./routes/api.ts";
+import { createHistorySseRoutes } from "./routes/history_sse.ts";
 import { createSseRoutes } from "./routes/sse.ts";
 import {
   extractSessionId,
@@ -213,6 +214,7 @@ export function createApp(ctx: UiDataContext, assets: RuntimeAssets): Router {
   // API routes
   app.route("/api", createApiRoutes(ctx));
   app.route("/api", createSseRoutes(ctx));
+  app.route("/api", createHistorySseRoutes(ctx));
 
   // Static file serving (from preloaded memory)
   app.get("/assets/*", ({ url }) => {
