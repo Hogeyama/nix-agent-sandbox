@@ -19,6 +19,7 @@ test("buildObservabilityEnv: claude includes CLAUDE_CODE_* and the OTLP common e
     OTEL_RESOURCE_ATTRIBUTES:
       "nas.session.id=sess_abc123,nas.profile=dev,nas.agent=claude",
     OTEL_METRIC_EXPORT_INTERVAL: "5000",
+    OTEL_TRACES_EXPORTER: "otlp",
     CLAUDE_CODE_ENABLE_TELEMETRY: "1",
     CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
   });
@@ -37,6 +38,7 @@ test("buildObservabilityEnv: copilot includes COPILOT_OTEL_ENABLED and the OTLP 
     OTEL_RESOURCE_ATTRIBUTES:
       "nas.session.id=sess_xyz,nas.profile=p,nas.agent=copilot",
     OTEL_METRIC_EXPORT_INTERVAL: "5000",
+    OTEL_TRACES_EXPORTER: "otlp",
     COPILOT_OTEL_ENABLED: "true",
   });
 });

@@ -209,6 +209,7 @@ test("ObservabilityStage: enabled + claude => slice carries port, container env 
     "nas.session.id=sess_abc123,nas.profile=dev,nas.agent=claude",
   );
   expect(env.OTEL_METRIC_EXPORT_INTERVAL).toEqual("5000");
+  expect(env.OTEL_TRACES_EXPORTER).toEqual("otlp");
   expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toEqual("1");
   expect(env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toEqual("1");
   expect(env.COPILOT_OTEL_ENABLED).toBeUndefined();

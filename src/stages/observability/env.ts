@@ -18,6 +18,10 @@
  *   OTEL_EXPORTER_OTLP_PROTOCOL  http/json   (the receiver only accepts JSON)
  *   OTEL_RESOURCE_ATTRIBUTES     nas.session.id=<sessionId>,nas.profile=<profileName>,nas.agent=<agent>
  *   OTEL_METRIC_EXPORT_INTERVAL  5000        (5s, matched to the UI SSE polling cadence)
+ *   OTEL_TRACES_EXPORTER         otlp        (Claude Code 2.x adds no trace
+ *                                              exporter unless this is set
+ *                                              explicitly — endpoint alone
+ *                                              is not enough)
  */
 
 import type { AgentType } from "../../config/types.ts";
@@ -59,6 +63,15 @@ function buildCommonEnv(
     OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
     OTEL_RESOURCE_ATTRIBUTES: buildResourceAttributes(args),
     OTEL_METRIC_EXPORT_INTERVAL: "5000",
+    // Claude Code 2.x reads `OTEL_TRACES_EXPORTER` and only registers the
+    // OTLP trace exporter when this is explicitly set. Without it the SDK
+    // builds zero exporters for the trace signal, the endpoint is unused,
+    // and `traces` / `spans` stay empty no matter what `CLAUDE_CODE_*`
+    // flags are on. Confirmed empirically against claude 2.1.123. Metrics
+    // and logs are intentionally not wired here — the receiver only
+    // accepts `/v1/traces`, so enabling those exporters would just spam
+    // 404s into Claude's debug log.
+    OTEL_TRACES_EXPORTER: "otlp",
   };
 }
 
