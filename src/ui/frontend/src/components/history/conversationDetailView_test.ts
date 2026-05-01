@@ -13,6 +13,7 @@ import {
   buildInvocationLinks,
   buildSpanRows,
   buildTraceRows,
+  extractToolName,
   formatCountCell,
   formatDuration,
   truncatePayload,
@@ -382,6 +383,128 @@ describe("buildSpanRows", () => {
     );
     expect(view[0]?.kindLabel).toBe("producer");
     expect(view[0]?.kindClass).toBe("");
+  });
+});
+
+describe("extractToolName", () => {
+  test("returns null for chat spans even when attrs carry a tool_name", () => {
+    const span = makeSpan({
+      kind: "chat",
+      attrsJson: JSON.stringify({ tool_name: "Bash" }),
+    });
+    expect(extractToolName(span)).toBeNull();
+  });
+
+  test("reads tool_name from execute_tool attrs", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({ tool_name: "Bash" }),
+    });
+    expect(extractToolName(span)).toBe("Bash");
+  });
+
+  test("reads gen_ai.tool.name from execute_tool attrs", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({ "gen_ai.tool.name": "shell" }),
+    });
+    expect(extractToolName(span)).toBe("shell");
+  });
+
+  test("reads claude_code.tool.name from execute_tool attrs", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({ "claude_code.tool.name": "Read" }),
+    });
+    expect(extractToolName(span)).toBe("Read");
+  });
+
+  test("falls back to `execute_tool <name>` span-name regex (Copilot)", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      spanName: "execute_tool shell",
+      attrsJson: "{}",
+    });
+    expect(extractToolName(span)).toBe("shell");
+  });
+
+  test("falls back to `claude_code.tool.<subtype>` span-name regex", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      spanName: "claude_code.tool.execution",
+      attrsJson: "{}",
+    });
+    expect(extractToolName(span)).toBe("execution");
+  });
+
+  test("returns null when span name has no extractable suffix", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      spanName: "claude_code.tool",
+      attrsJson: "{}",
+    });
+    expect(extractToolName(span)).toBeNull();
+  });
+
+  test("returns null when attrsJson is malformed (no crash)", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: "{not valid json",
+    });
+    expect(extractToolName(span)).toBeNull();
+  });
+
+  test("prefers tool_name over gen_ai.tool.name when both are present", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({
+        tool_name: "Bash",
+        "gen_ai.tool.name": "shell",
+      }),
+    });
+    expect(extractToolName(span)).toBe("Bash");
+  });
+
+  test("array attrs fall through to span-name regex", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      spanName: "execute_tool shell",
+      attrsJson: "[]",
+    });
+    expect(extractToolName(span)).toBe("shell");
+  });
+
+  test("non-object attrs (number) fall through to span-name regex", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      spanName: "execute_tool shell",
+      attrsJson: "42",
+    });
+    expect(extractToolName(span)).toBe("shell");
+  });
+
+  test("empty-string tool_name falls through to next attr key", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      spanName: "x",
+      attrsJson: JSON.stringify({
+        tool_name: "",
+        "gen_ai.tool.name": "shell",
+      }),
+    });
+    expect(extractToolName(span)).toBe("shell");
+  });
+
+  test("non-string tool_name falls through to next attr key", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      spanName: "x",
+      attrsJson: JSON.stringify({
+        tool_name: 123,
+        "gen_ai.tool.name": "shell",
+      }),
+    });
+    expect(extractToolName(span)).toBe("shell");
   });
 });
 

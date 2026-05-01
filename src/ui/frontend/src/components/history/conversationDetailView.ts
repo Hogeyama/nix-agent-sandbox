@@ -388,6 +388,53 @@ export function buildSpanRows(
   });
 }
 
+/**
+ * Extract a display tool name from an `execute_tool` span.
+ *
+ * Gated on `kind === "execute_tool"` so chat spans that happen to carry a
+ * `tool_name`-shaped attribute (e.g. function-calling parameter echoes) do
+ * not bleed into the tool column.
+ *
+ * Resolution order:
+ *   1. `attrsJson` parsed object, keyed by `tool_name`,
+ *      `gen_ai.tool.name`, `claude_code.tool.name` (first non-empty string wins).
+ *   2. `spanName` regex fallbacks for emitters that put the name into the
+ *      span name itself: `execute_tool <name>` (Copilot) and
+ *      `claude_code.tool.<subtype>` (Claude Code).
+ *
+ * Returns `null` when no source resolves to a non-empty string, when the
+ * span kind is not `execute_tool`, or when `attrsJson` fails to parse
+ * (malformed JSON does not crash the caller).
+ */
+export function extractToolName(span: SpanSummaryRow): string | null {
+  if (span.kind !== "execute_tool") return null;
+  let attrs: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(span.attrsJson);
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ) {
+      attrs = parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  if (attrs !== null) {
+    const keys = ["tool_name", "gen_ai.tool.name", "claude_code.tool.name"];
+    for (const key of keys) {
+      const v = attrs[key];
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+  }
+  const execMatch = /^execute_tool\s+(.+)$/.exec(span.spanName);
+  if (execMatch !== null) return execMatch[1] ?? null;
+  const ccMatch = /^claude_code\.tool\.(.+)$/.exec(span.spanName);
+  if (ccMatch !== null) return ccMatch[1] ?? null;
+  return null;
+}
+
 export function buildConversationTurnEventRows(
   events: readonly ConversationTurnEventRow[],
   nowMs: number,
