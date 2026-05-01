@@ -11,6 +11,7 @@
  * our session store is unhappy.
  */
 
+import { appendTurnEvent } from "../history/hook_writer.ts";
 import {
   checkNotifySend,
   type NotifyBackend,
@@ -109,6 +110,17 @@ export async function runHookCommand(
       `[nas] hook: session store update failed: ${(err as Error).message}`,
     );
   }
+
+  // Persist a history turn_event row alongside the transient session
+  // store update. Records every hook invocation that passes the --when
+  // matcher above, independent of observability config. Never throws.
+  appendTurnEvent({
+    invocationId: sessionId,
+    conversationId: extractConversationId(payload),
+    ts: new Date().toISOString(),
+    kind,
+    payload,
+  });
 
   // Fire-and-forget desktop notification on attention (user-turn).
   if (kind === "attention") {
@@ -226,6 +238,28 @@ export function extractHookMessage(raw: unknown): string | undefined {
 function readNestedMessage(value: unknown): unknown {
   if (value === null || typeof value !== "object") return undefined;
   return (value as Record<string, unknown>).message;
+}
+
+/**
+ * Extract the agent's conversation/session id from a hook payload.
+ *
+ * - Claude Code emits `session_id` (snake_case)
+ * - Copilot CLI emits `sessionId` (camelCase)
+ *
+ * Snake_case wins when both are present (Claude is the primary observer
+ * for hook payloads). Returns null if neither is a non-empty string.
+ *
+ * Exported for direct unit testing.
+ */
+export function extractConversationId(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (Array.isArray(payload)) return null;
+  const obj = payload as Record<string, unknown>;
+  const snake = obj.session_id;
+  if (typeof snake === "string" && snake.length > 0) return snake;
+  const camel = obj.sessionId;
+  if (typeof camel === "string" && camel.length > 0) return camel;
+  return null;
 }
 
 /**

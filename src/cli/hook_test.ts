@@ -2,18 +2,31 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { recordInvocationStart } from "../history/cli_lifecycle.ts";
+import {
+  _closeHistoryDb,
+  openHistoryDb,
+  resolveHistoryDbPath,
+} from "../history/store.ts";
 import type { SessionRuntimePaths } from "../sessions/store.ts";
 import { ensureSessionRuntimePaths, readSession } from "../sessions/store.ts";
-import { extractHookMessage, parseHookKind, runHookCommand } from "./hook.ts";
+import {
+  extractConversationId,
+  extractHookMessage,
+  parseHookKind,
+  runHookCommand,
+} from "./hook.ts";
 
 const savedEnv = {
   sessionId: process.env.NAS_SESSION_ID,
   storeDir: process.env.NAS_SESSION_STORE_DIR,
+  xdgData: process.env.XDG_DATA_HOME,
 };
 
 let tmpRoot: string;
 let sessionsDir: string;
 let paths: SessionRuntimePaths;
+let historyDbPath: string;
 
 beforeEach(async () => {
   tmpRoot = await mkdtemp(path.join(tmpdir(), "nas-hook-test-"));
@@ -21,11 +34,16 @@ beforeEach(async () => {
   // Point the session store at our temp dir via the env var
   // that the store helpers read.
   process.env.NAS_SESSION_STORE_DIR = sessionsDir;
+  // Redirect history.db to a per-test temp path so the hook's
+  // appendTurnEvent does not touch the user's real ~/.local/share/nas.
+  process.env.XDG_DATA_HOME = tmpRoot;
+  historyDbPath = resolveHistoryDbPath();
   paths = await ensureSessionRuntimePaths();
 });
 
 afterEach(async () => {
   try {
+    _closeHistoryDb(historyDbPath);
     await rm(tmpRoot, { recursive: true, force: true });
   } finally {
     if (savedEnv.sessionId === undefined) {
@@ -38,8 +56,30 @@ afterEach(async () => {
     } else {
       process.env.NAS_SESSION_STORE_DIR = savedEnv.storeDir;
     }
+    if (savedEnv.xdgData === undefined) {
+      delete process.env.XDG_DATA_HOME;
+    } else {
+      process.env.XDG_DATA_HOME = savedEnv.xdgData;
+    }
   }
 });
+
+interface TurnEventRowDb {
+  invocation_id: string;
+  conversation_id: string | null;
+  ts: string;
+  kind: string;
+  payload_json: string;
+}
+
+function readTurnEvents(invocationId: string): TurnEventRowDb[] {
+  const db = openHistoryDb({ path: historyDbPath, mode: "readonly" });
+  return db
+    .query(
+      "SELECT invocation_id, conversation_id, ts, kind, payload_json FROM turn_events WHERE invocation_id = ? ORDER BY ts, rowid",
+    )
+    .all(invocationId) as TurnEventRowDb[];
+}
 
 // --- parseHookKind ---
 
@@ -116,6 +156,18 @@ function makeStdin(raw: string): () => Promise<string> {
 }
 
 const noopNotify = () => {};
+
+// Seed an invocations row so the FK on turn_events.invocation_id is satisfied.
+// In production, recordInvocationStart runs before any hook fires (cli.ts);
+// in tests we replicate that contract.
+function seedInvocation(sessionId: string): void {
+  const db = recordInvocationStart({
+    sessionId,
+    profileName: "default",
+    agent: "claude",
+  });
+  expect(db).not.toBeNull();
+}
 
 test("runHookCommand --kind start transitions pre-created record to agent-turn", async () => {
   process.env.NAS_SESSION_ID = "sess-hook-1";
@@ -550,4 +602,245 @@ test("start/stop hooks do not fire notification", async () => {
   await Bun.sleep(50);
 
   expect(calls).toHaveLength(0);
+});
+
+// --- extractConversationId ---
+
+test("extractConversationId: snake_case session_id (Claude)", () => {
+  expect(extractConversationId({ session_id: "conv_xxx" })).toBe("conv_xxx");
+});
+
+test("extractConversationId: camelCase sessionId (Copilot)", () => {
+  expect(extractConversationId({ sessionId: "conv_yyy" })).toBe("conv_yyy");
+});
+
+test("extractConversationId: snake_case wins over camelCase when both present", () => {
+  expect(
+    extractConversationId({ session_id: "snake", sessionId: "camel" }),
+  ).toBe("snake");
+});
+
+test("extractConversationId: empty string is treated as absent", () => {
+  expect(extractConversationId({ session_id: "", sessionId: "fallback" })).toBe(
+    "fallback",
+  );
+  expect(extractConversationId({ session_id: "", sessionId: "" })).toBeNull();
+});
+
+test("extractConversationId: non-string ids are rejected", () => {
+  expect(extractConversationId({ session_id: 42 })).toBeNull();
+  expect(extractConversationId({ sessionId: null })).toBeNull();
+  expect(extractConversationId({ session_id: { x: 1 } })).toBeNull();
+});
+
+test("extractConversationId: missing fields and non-objects return null", () => {
+  expect(extractConversationId({})).toBeNull();
+  expect(extractConversationId(null)).toBeNull();
+  expect(extractConversationId(undefined)).toBeNull();
+  expect(extractConversationId("hi")).toBeNull();
+  expect(extractConversationId(42)).toBeNull();
+  expect(extractConversationId([])).toBeNull();
+});
+
+// --- runHookCommand: turn_events history persistence ---
+
+test("runHookCommand persists turn_event with Claude session_id", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-claude";
+  seedInvocation("sess-hook-claude");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-claude",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin('{"session_id":"conv_xxx","other":"data"}'),
+  });
+
+  const rows = readTurnEvents("sess-hook-claude");
+  expect(rows).toHaveLength(1);
+  expect(rows[0].conversation_id).toBe("conv_xxx");
+  expect(rows[0].kind).toBe("start");
+  expect(JSON.parse(rows[0].payload_json)).toEqual({
+    session_id: "conv_xxx",
+    other: "data",
+  });
+});
+
+test("runHookCommand persists turn_event with Copilot sessionId", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-copilot";
+  seedInvocation("sess-hook-copilot");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-copilot",
+    agent: "copilot",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookCommand(["--kind", "attention"], {
+    stdinReader: makeStdin('{"sessionId":"conv_yyy","message":"hi"}'),
+    notifySender: noopNotify,
+  });
+
+  const rows = readTurnEvents("sess-hook-copilot");
+  expect(rows).toHaveLength(1);
+  expect(rows[0].conversation_id).toBe("conv_yyy");
+  expect(rows[0].kind).toBe("attention");
+});
+
+test("runHookCommand prefers snake_case over camelCase when payload has both", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-both";
+  seedInvocation("sess-hook-both");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-both",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin('{"session_id":"x","sessionId":"y"}'),
+  });
+
+  const rows = readTurnEvents("sess-hook-both");
+  expect(rows).toHaveLength(1);
+  expect(rows[0].conversation_id).toBe("x");
+});
+
+test("runHookCommand persists turn_event with NULL conversation_id when payload lacks session id", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-noconv";
+  seedInvocation("sess-hook-noconv");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-noconv",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin('{"unrelated":"data"}'),
+  });
+
+  const rows = readTurnEvents("sess-hook-noconv");
+  expect(rows).toHaveLength(1);
+  expect(rows[0].conversation_id).toBeNull();
+
+  // No conversations row should be created when conversation_id is null.
+  const reader = openHistoryDb({ path: historyDbPath, mode: "readonly" });
+  const convCount = (
+    reader.query("SELECT COUNT(*) AS n FROM conversations").get() as {
+      n: number;
+    }
+  ).n;
+  expect(convCount).toBe(0);
+});
+
+test("runHookCommand without NAS_SESSION_ID writes no turn_event", async () => {
+  delete process.env.NAS_SESSION_ID;
+
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin('{"session_id":"orphan"}'),
+  });
+
+  // history.db may not exist at all because nothing wrote to it.
+  // openHistoryDb readonly throws on missing file; assert no rows when present.
+  let rowCount = 0;
+  try {
+    const reader = openHistoryDb({ path: historyDbPath, mode: "readonly" });
+    rowCount = (
+      reader.query("SELECT COUNT(*) AS n FROM turn_events").get() as {
+        n: number;
+      }
+    ).n;
+  } catch {
+    rowCount = 0;
+  }
+  expect(rowCount).toBe(0);
+});
+
+test("runHookCommand with history db schema mismatch exits 0 and writes no turn_event", async () => {
+  // Pre-create the history.db with a wrong user_version so openHistoryDb
+  // throws HistoryDbVersionMismatchError during the hook's append step.
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.dirname(historyDbPath), { recursive: true });
+  const { Database } = await import("bun:sqlite");
+  const raw = new Database(historyDbPath, { create: true });
+  raw.run("PRAGMA user_version = 999");
+  raw.close();
+
+  process.env.NAS_SESSION_ID = "sess-hook-schemafail";
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-schemafail",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map((a) => String(a)).join(" "));
+  };
+
+  let threw: unknown;
+  try {
+    await runHookCommand(["--kind", "start"], {
+      stdinReader: makeStdin('{"session_id":"conv_z"}'),
+    });
+  } catch (err) {
+    threw = err;
+  } finally {
+    console.error = originalError;
+  }
+
+  // Hook never fails the agent.
+  expect(threw).toBeUndefined();
+  // Schema-mismatch warning was emitted.
+  expect(
+    errors.some(
+      (m) =>
+        m.includes("schema version mismatch") &&
+        m.includes("Skipping turn_event"),
+    ),
+  ).toBe(true);
+
+  // The session store update path is unaffected.
+  const record = await readSession(paths, "sess-hook-schemafail");
+  expect(record?.turn).toBe("agent-turn");
+});
+
+// Subagent observation: ADR §"turn_events への conversation_id 付与" notes
+// that subagent hook events fire under the *parent* session id. Subagent
+// internal LLM/tool calls flow through OTLP with the subagent's own
+// conversation_id, so the two are naturally separated; here we only assert
+// the hook side, which always sees the parent.
+test("runHookCommand: subagent hook events land on the parent conversation_id", async () => {
+  process.env.NAS_SESSION_ID = "sess-hook-subagent";
+  seedInvocation("sess-hook-subagent");
+  const { createSession } = await import("../sessions/store.ts");
+  await createSession(paths, {
+    sessionId: "sess-hook-subagent",
+    agent: "claude",
+    profile: "default",
+    startedAt: "2026-04-11T10:00:00.000Z",
+  });
+
+  // Two consecutive hooks under the same parent session_id.
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin('{"session_id":"conv_parent","step":"outer"}'),
+  });
+  await runHookCommand(["--kind", "start"], {
+    stdinReader: makeStdin('{"session_id":"conv_parent","step":"inner"}'),
+  });
+
+  const rows = readTurnEvents("sess-hook-subagent");
+  expect(rows).toHaveLength(2);
+  expect(rows[0].conversation_id).toBe("conv_parent");
+  expect(rows[1].conversation_id).toBe("conv_parent");
 });
