@@ -1157,6 +1157,40 @@ describe("summariseTraceSpansByModel", () => {
     expect(rows[2]?.model).toBeNull();
   });
 
+  test("buckets a span into above-200k when its effective input crosses the threshold", () => {
+    const rows = summariseTraceSpansByModel([
+      // Below: 100k + 50k + 30k = 180k.
+      makeSpan({
+        spanId: "below",
+        model: "claude-opus",
+        inTok: 100_000,
+        outTok: 5_000,
+        cacheR: 50_000,
+        cacheW: 30_000,
+      }),
+      // Above: 150k + 60k + 0 = 210k.
+      makeSpan({
+        spanId: "above",
+        model: "claude-opus",
+        inTok: 150_000,
+        outTok: 7_000,
+        cacheR: 60_000,
+        cacheW: 0,
+      }),
+    ]);
+    expect(rows).toHaveLength(1);
+    const r = rows[0];
+    expect(r?.inputTokens).toBe(250_000);
+    expect(r?.outputTokens).toBe(12_000);
+    expect(r?.cacheRead).toBe(110_000);
+    expect(r?.cacheWrite).toBe(30_000);
+    // Only the "above" span contributes to the 200k bucket.
+    expect(r?.inputTokensAbove200k).toBe(150_000);
+    expect(r?.outputTokensAbove200k).toBe(7_000);
+    expect(r?.cacheReadAbove200k).toBe(60_000);
+    expect(r?.cacheWriteAbove200k).toBe(0);
+  });
+
   test("buildSpanTreeByTurn attaches perModelTotals per turn", () => {
     const detail = makeDetail({
       traces: [
@@ -1210,6 +1244,10 @@ describe("summariseTraceSpansByModel", () => {
         outputTokens: 15,
         cacheRead: 0,
         cacheWrite: 0,
+        inputTokensAbove200k: 0,
+        outputTokensAbove200k: 0,
+        cacheReadAbove200k: 0,
+        cacheWriteAbove200k: 0,
       },
     ]);
     expect(groups[1]?.perModelTotals).toEqual([
@@ -1219,6 +1257,10 @@ describe("summariseTraceSpansByModel", () => {
         outputTokens: 2,
         cacheRead: 0,
         cacheWrite: 0,
+        inputTokensAbove200k: 0,
+        outputTokensAbove200k: 0,
+        cacheReadAbove200k: 0,
+        cacheWriteAbove200k: 0,
       },
     ]);
   });

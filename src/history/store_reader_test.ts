@@ -868,6 +868,69 @@ test("queryModelTokenTotals: single row, NULL cache columns coerced to 0", async
   }
 });
 
+test("queryModelTokenTotals: buckets per-span by 200k effective-input threshold", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(db, tr({ traceId: "trace_a", invocationId: "sess_a" }));
+    insertSpans(db, [
+      // Below threshold: in_tok 100k + cache_r 50k + cache_w 30k = 180k.
+      sp({
+        spanId: "below",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 100_000,
+        outTok: 5_000,
+        cacheR: 50_000,
+        cacheW: 30_000,
+        startedAt: "2026-04-15T10:00:00Z",
+      }),
+      // Above threshold: in_tok 150k + cache_r 60k + cache_w 0 = 210k.
+      sp({
+        spanId: "above",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 150_000,
+        outTok: 7_000,
+        cacheR: 60_000,
+        cacheW: 0,
+        startedAt: "2026-04-15T11:00:00Z",
+      }),
+      // Exactly at threshold (NOT above — the comparison is strict `> 200000`).
+      sp({
+        spanId: "at",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 100_000,
+        outTok: 1_000,
+        cacheR: 50_000,
+        cacheW: 50_000,
+        startedAt: "2026-04-15T12:00:00Z",
+      }),
+    ]);
+    const totals = queryModelTokenTotals(db, {
+      sinceIso: "2026-04-01T00:00:00Z",
+    });
+    expect(totals.length).toEqual(1);
+    const r = totals[0];
+    // Totals across all three spans.
+    expect(r.inputTokens).toEqual(350_000);
+    expect(r.outputTokens).toEqual(13_000);
+    expect(r.cacheRead).toEqual(160_000);
+    expect(r.cacheWrite).toEqual(80_000);
+    // Above-200k bucket: only the "above" span contributes (in 150k, out 7k,
+    // cache_r 60k, cache_w 0). The "at" span at exactly 200k stays in base.
+    expect(r.inputTokensAbove200k).toEqual(150_000);
+    expect(r.outputTokensAbove200k).toEqual(7_000);
+    expect(r.cacheReadAbove200k).toEqual(60_000);
+    expect(r.cacheWriteAbove200k).toEqual(0);
+  } finally {
+    await cleanup(t);
+  }
+});
+
 test("queryConversationModelTokenTotals: missing conversation_id returns []", async () => {
   const t = await makeTempDb();
   try {
@@ -1080,6 +1143,58 @@ test("queryConversationModelTokenTotals: NULL cache columns coerced to 0", async
     expect(totals[0].outputTokens).toEqual(6);
     expect(totals[0].cacheRead).toEqual(0);
     expect(totals[0].cacheWrite).toEqual(0);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationModelTokenTotals: buckets per-span by 200k effective-input threshold", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_a",
+        invocationId: "sess_a",
+        conversationId: "conv_a",
+      }),
+    );
+    insertSpans(db, [
+      // Below threshold: 100k + 50k + 30k = 180k.
+      sp({
+        spanId: "below",
+        traceId: "trace_a",
+        model: "claude-opus",
+        inTok: 100_000,
+        outTok: 5_000,
+        cacheR: 50_000,
+        cacheW: 30_000,
+      }),
+      // Above threshold: 200_001 + 0 + 0.
+      sp({
+        spanId: "above",
+        traceId: "trace_a",
+        model: "claude-opus",
+        inTok: 200_001,
+        outTok: 9_000,
+        cacheR: 0,
+        cacheW: 0,
+      }),
+    ]);
+    const totals = queryConversationModelTokenTotals(db, "conv_a");
+    expect(totals.length).toEqual(1);
+    const r = totals[0];
+    expect(r.inputTokens).toEqual(300_001);
+    expect(r.outputTokens).toEqual(14_000);
+    expect(r.cacheRead).toEqual(50_000);
+    expect(r.cacheWrite).toEqual(30_000);
+    expect(r.inputTokensAbove200k).toEqual(200_001);
+    expect(r.outputTokensAbove200k).toEqual(9_000);
+    expect(r.cacheReadAbove200k).toEqual(0);
+    expect(r.cacheWriteAbove200k).toEqual(0);
   } finally {
     await cleanup(t);
   }

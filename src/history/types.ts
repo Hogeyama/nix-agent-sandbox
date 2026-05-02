@@ -187,8 +187,32 @@ export interface InvocationDetail {
  */
 export interface ModelTokenTotalsRow {
   readonly model: string | null;
+  /** Total tokens across every span. Always equals base + above200k. */
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheRead: number;
   readonly cacheWrite: number;
+  /**
+   * Tokens contributed by spans whose effective input
+   * (`in_tok + cache_r + cache_w`) exceeded the long-context threshold
+   * of 200_000. Anthropic charges every cost field on such requests at
+   * the upper tier (`*_above_200k_tokens` in the LiteLLM catalogue),
+   * including output tokens generated for that request, so all four
+   * counters split into a base bucket (= total - above200k) and an
+   * above-threshold bucket priced at the higher rate. Models without an
+   * upper-tier rate fall back to the base rate so this split costs
+   * nothing for non-1M-context models.
+   */
+  readonly inputTokensAbove200k: number;
+  readonly outputTokensAbove200k: number;
+  readonly cacheReadAbove200k: number;
+  readonly cacheWriteAbove200k: number;
 }
+
+/**
+ * Per-span effective-input threshold (in tokens) at which Anthropic
+ * applies long-context (1M) pricing. Aggregation layers split totals
+ * around this number; pricing layers map the above-threshold bucket to
+ * `*_above_200k_tokens` rates from the LiteLLM catalogue.
+ */
+export const LONG_CONTEXT_THRESHOLD_TOKENS = 200_000;

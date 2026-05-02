@@ -22,6 +22,7 @@ import type {
   SpanSummaryRow,
   TraceSummaryRow,
 } from "../../../../../history/types";
+import { LONG_CONTEXT_THRESHOLD_TOKENS } from "../../../../../history/types";
 import {
   formatCompactNumber,
   formatRelativeTime,
@@ -561,6 +562,17 @@ export function summariseTraceSpansByModel(
     const outTok = s.outTok ?? 0;
     const cacheR = s.cacheR ?? 0;
     const cacheW = s.cacheW ?? 0;
+    // Anthropic 1M-context billing is all-or-nothing per request: when
+    // a single span's effective input crosses 200_000 tokens, every cost
+    // field of that span (including the output it generates) maps to the
+    // upper-tier rate. We mirror the daemon's SQL bucketing here so the
+    // turn-level cost cell agrees with the conversation-level totals.
+    const overThreshold =
+      inTok + cacheR + cacheW > LONG_CONTEXT_THRESHOLD_TOKENS;
+    const inAbove = overThreshold ? inTok : 0;
+    const outAbove = overThreshold ? outTok : 0;
+    const cacheRAbove = overThreshold ? cacheR : 0;
+    const cacheWAbove = overThreshold ? cacheW : 0;
     if (existing === undefined) {
       byModel.set(key, {
         model: key,
@@ -568,6 +580,10 @@ export function summariseTraceSpansByModel(
         outputTokens: outTok,
         cacheRead: cacheR,
         cacheWrite: cacheW,
+        inputTokensAbove200k: inAbove,
+        outputTokensAbove200k: outAbove,
+        cacheReadAbove200k: cacheRAbove,
+        cacheWriteAbove200k: cacheWAbove,
       });
     } else {
       byModel.set(key, {
@@ -576,6 +592,10 @@ export function summariseTraceSpansByModel(
         outputTokens: existing.outputTokens + outTok,
         cacheRead: existing.cacheRead + cacheR,
         cacheWrite: existing.cacheWrite + cacheW,
+        inputTokensAbove200k: existing.inputTokensAbove200k + inAbove,
+        outputTokensAbove200k: existing.outputTokensAbove200k + outAbove,
+        cacheReadAbove200k: existing.cacheReadAbove200k + cacheRAbove,
+        cacheWriteAbove200k: existing.cacheWriteAbove200k + cacheWAbove,
       });
     }
   }

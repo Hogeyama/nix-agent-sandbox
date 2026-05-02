@@ -840,6 +840,49 @@ interface ModelTokenTotalsSqlRow {
   output_tokens: number;
   cache_read: number;
   cache_write: number;
+  input_tokens_above_200k: number;
+  output_tokens_above_200k: number;
+  cache_read_above_200k: number;
+  cache_write_above_200k: number;
+}
+
+/**
+ * Per-span effective-input bucket projected on to the GROUP BY level.
+ * Each span goes entirely into one bucket: when its
+ * `in_tok + cache_r + cache_w` exceeds 200_000, all four token columns
+ * for that span are folded into the `_above_200k` aggregate as well as
+ * the unconditional total. The base bucket is therefore the difference
+ * `total - above_200k`, computed once on the JS side.
+ *
+ * Anthropic's long-context (1M) pricing is "all-or-nothing per request":
+ * a single API call whose prompt input crosses the threshold pays the
+ * upper-tier rate on every cost field of that call (including its
+ * generated output tokens), so the bucket is keyed off the per-span
+ * effective input rather than off any individual column.
+ */
+const SPAN_BUCKETED_TOKEN_TOTALS_SELECT = `
+  COALESCE(SUM(in_tok), 0)  AS input_tokens,
+  COALESCE(SUM(out_tok), 0) AS output_tokens,
+  COALESCE(SUM(cache_r), 0) AS cache_read,
+  COALESCE(SUM(cache_w), 0) AS cache_write,
+  COALESCE(SUM(CASE WHEN COALESCE(in_tok,0) + COALESCE(cache_r,0) + COALESCE(cache_w,0) > 200000 THEN in_tok ELSE 0 END), 0)  AS input_tokens_above_200k,
+  COALESCE(SUM(CASE WHEN COALESCE(in_tok,0) + COALESCE(cache_r,0) + COALESCE(cache_w,0) > 200000 THEN out_tok ELSE 0 END), 0) AS output_tokens_above_200k,
+  COALESCE(SUM(CASE WHEN COALESCE(in_tok,0) + COALESCE(cache_r,0) + COALESCE(cache_w,0) > 200000 THEN cache_r ELSE 0 END), 0) AS cache_read_above_200k,
+  COALESCE(SUM(CASE WHEN COALESCE(in_tok,0) + COALESCE(cache_r,0) + COALESCE(cache_w,0) > 200000 THEN cache_w ELSE 0 END), 0) AS cache_write_above_200k
+`;
+
+function rowToModelTokenTotals(r: ModelTokenTotalsSqlRow): ModelTokenTotalsRow {
+  return {
+    model: r.model,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheRead: r.cache_read,
+    cacheWrite: r.cache_write,
+    inputTokensAbove200k: r.input_tokens_above_200k,
+    outputTokensAbove200k: r.output_tokens_above_200k,
+    cacheReadAbove200k: r.cache_read_above_200k,
+    cacheWriteAbove200k: r.cache_write_above_200k,
+  };
 }
 
 /**
@@ -866,24 +909,15 @@ export function queryModelTokenTotals(
   const rows = db
     .prepare(
       `SELECT
-         model                            AS model,
-         COALESCE(SUM(in_tok), 0)         AS input_tokens,
-         COALESCE(SUM(out_tok), 0)        AS output_tokens,
-         COALESCE(SUM(cache_r), 0)        AS cache_read,
-         COALESCE(SUM(cache_w), 0)        AS cache_write
+         model AS model,
+         ${SPAN_BUCKETED_TOKEN_TOTALS_SELECT}
        FROM spans
        WHERE started_at >= ?
        GROUP BY model
        ORDER BY model IS NULL, model`,
     )
     .all(options.sinceIso) as ModelTokenTotalsSqlRow[];
-  return rows.map((r) => ({
-    model: r.model,
-    inputTokens: r.input_tokens,
-    outputTokens: r.output_tokens,
-    cacheRead: r.cache_read,
-    cacheWrite: r.cache_write,
-  }));
+  return rows.map(rowToModelTokenTotals);
 }
 
 /**
@@ -903,11 +937,8 @@ export function queryConversationModelTokenTotals(
   const rows = db
     .prepare(
       `SELECT
-         s.model                            AS model,
-         COALESCE(SUM(s.in_tok), 0)         AS input_tokens,
-         COALESCE(SUM(s.out_tok), 0)        AS output_tokens,
-         COALESCE(SUM(s.cache_r), 0)        AS cache_read,
-         COALESCE(SUM(s.cache_w), 0)        AS cache_write
+         s.model AS model,
+         ${SPAN_BUCKETED_TOKEN_TOTALS_SELECT.replace(/\b(in_tok|out_tok|cache_r|cache_w)\b/g, "s.$1")}
        FROM spans s
        JOIN traces t ON s.trace_id = t.trace_id
        WHERE t.conversation_id = ?
@@ -915,11 +946,5 @@ export function queryConversationModelTokenTotals(
        ORDER BY s.model IS NULL, s.model`,
     )
     .all(conversationId) as ModelTokenTotalsSqlRow[];
-  return rows.map((r) => ({
-    model: r.model,
-    inputTokens: r.input_tokens,
-    outputTokens: r.output_tokens,
-    cacheRead: r.cache_read,
-    cacheWrite: r.cache_write,
-  }));
+  return rows.map(rowToModelTokenTotals);
 }

@@ -139,6 +139,10 @@ function totals(
     outputTokens: r.outputTokens ?? 0,
     cacheRead: r.cacheRead ?? 0,
     cacheWrite: r.cacheWrite ?? 0,
+    inputTokensAbove200k: r.inputTokensAbove200k ?? 0,
+    outputTokensAbove200k: r.outputTokensAbove200k ?? 0,
+    cacheReadAbove200k: r.cacheReadAbove200k ?? 0,
+    cacheWriteAbove200k: r.cacheWriteAbove200k ?? 0,
   }));
 }
 

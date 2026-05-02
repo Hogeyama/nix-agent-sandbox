@@ -468,6 +468,10 @@ test("conversations payload includes per-model totals and a daemon-clock since",
       outputTokens: 200,
       cacheRead: 0,
       cacheWrite: 0,
+      inputTokensAbove200k: 0,
+      outputTokensAbove200k: 0,
+      cacheReadAbove200k: 0,
+      cacheWriteAbove200k: 0,
     },
     {
       model: null,
@@ -475,6 +479,10 @@ test("conversations payload includes per-model totals and a daemon-clock since",
       outputTokens: 2,
       cacheRead: 0,
       cacheWrite: 0,
+      inputTokensAbove200k: 0,
+      outputTokensAbove200k: 0,
+      cacheReadAbove200k: 0,
+      cacheWriteAbove200k: 0,
     },
   ];
   reader.setModelTokenTotals(totals);
@@ -533,6 +541,10 @@ test("conversations stream emits when only modelTokenTotals changes", async () =
         outputTokens: 0,
         cacheRead: 0,
         cacheWrite: 0,
+        inputTokensAbove200k: 0,
+        outputTokensAbove200k: 0,
+        cacheReadAbove200k: 0,
+        cacheWriteAbove200k: 0,
       },
     ]);
   }, POLL_MS + 5);
@@ -639,6 +651,10 @@ test("conversation detail re-emits when only modelTokenTotals changes", async ()
           outputTokens: 0,
           cacheRead: 0,
           cacheWrite: 0,
+          inputTokensAbove200k: 0,
+          outputTokensAbove200k: 0,
+          cacheReadAbove200k: 0,
+          cacheWriteAbove200k: 0,
         },
       ],
     };
