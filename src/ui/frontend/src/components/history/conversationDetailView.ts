@@ -18,6 +18,7 @@
 import type {
   ConversationDetail,
   InvocationSummaryRow,
+  ModelTokenTotalsRow,
   SpanSummaryRow,
   TraceSummaryRow,
 } from "../../../../../history/types";
@@ -185,6 +186,15 @@ export interface TurnSpanGroup {
   readonly cacheWriteTokensCell: string;
   /** DFS-flattened span rows; each row carries `depth` for indentation. */
   readonly rows: SpanRowView[];
+  /**
+   * Per-model token totals over the spans of this turn, in the same shape
+   * the daemon emits for the conversation-wide breakdown. Order is
+   * deterministic — `model ASC` with the `null`-model row last — so the
+   * downstream cost projection can sort by the same rule the SQL aggregate
+   * uses for the whole conversation. Token=0 rows are retained; filtering
+   * is the cost-projection caller's responsibility.
+   */
+  readonly perModelTotals: ModelTokenTotalsRow[];
 }
 
 /**
@@ -526,6 +536,62 @@ function summariseTraceSpans(traceSpans: readonly SpanSummaryRow[]): {
 }
 
 /**
+ * Aggregate `traceSpans` into per-model token totals, mirroring the daemon's
+ * conversation-wide `modelTokenTotals` shape but scoped to one turn.
+ *
+ * Spans are grouped by their `model` value (with `null` as a distinct key, so
+ * model-less spans collapse to a single dedicated row rather than vanishing).
+ * Token columns COALESCE `null` to `0` so a span that emitted no number for
+ * a kind contributes nothing to that kind's total without forcing the whole
+ * row to `null`.
+ *
+ * Output order matches the SQL aggregate the daemon uses for the whole
+ * conversation: `model ASC` lexicographic, with the `null`-model row last.
+ * Zero-token rows are retained — filtering belongs to the cost projection
+ * downstream so this helper stays free of pricing concerns.
+ */
+export function summariseTraceSpansByModel(
+  traceSpans: ReadonlyArray<SpanSummaryRow>,
+): ModelTokenTotalsRow[] {
+  const byModel = new Map<string | null, ModelTokenTotalsRow>();
+  for (const s of traceSpans) {
+    const key = s.model;
+    const existing = byModel.get(key);
+    const inTok = s.inTok ?? 0;
+    const outTok = s.outTok ?? 0;
+    const cacheR = s.cacheR ?? 0;
+    const cacheW = s.cacheW ?? 0;
+    if (existing === undefined) {
+      byModel.set(key, {
+        model: key,
+        inputTokens: inTok,
+        outputTokens: outTok,
+        cacheRead: cacheR,
+        cacheWrite: cacheW,
+      });
+    } else {
+      byModel.set(key, {
+        model: key,
+        inputTokens: existing.inputTokens + inTok,
+        outputTokens: existing.outputTokens + outTok,
+        cacheRead: existing.cacheRead + cacheR,
+        cacheWrite: existing.cacheWrite + cacheW,
+      });
+    }
+  }
+  const rows = Array.from(byModel.values());
+  rows.sort((a, b) => {
+    if (a.model === null && b.model === null) return 0;
+    if (a.model === null) return 1;
+    if (b.model === null) return -1;
+    if (a.model < b.model) return -1;
+    if (a.model > b.model) return 1;
+    return 0;
+  });
+  return rows;
+}
+
+/**
  * Format `attrsJson` for the expandable drawer.
  *
  *   ""   / "{}"  → "{}"        (literal so the drawer is never blank)
@@ -675,6 +741,7 @@ export function buildSpanTreeByTurn(
         ? ""
         : (formatDuration(durationMs) ?? "");
     const summary = summariseTraceSpans(traceSpans);
+    const perModelTotals = summariseTraceSpansByModel(traceSpans);
     return {
       traceId: trace.traceId,
       traceIdLabel: shortenId(trace.traceId),
@@ -694,6 +761,7 @@ export function buildSpanTreeByTurn(
       cacheReadTokensCell: summary.cacheReadTokensCell,
       cacheWriteTokensCell: summary.cacheWriteTokensCell,
       rows,
+      perModelTotals,
     };
   });
   return groups.filter((g) => !isZeroTokenTurn(g));

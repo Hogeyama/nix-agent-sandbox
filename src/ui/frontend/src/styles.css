@@ -2196,9 +2196,11 @@ body::after {
 /* Shared grid template for both the column-header row and each
  * accordion button so columns line up vertically across every turn.
  * Slot widths: caret | Turn N | duration | LLM | Tools | Spans
- * | In | Out | Cache R | Cache W. The Turn label uses
+ * | In | Out | Cache R | Cache W | Cost. The Turn label uses
  * `minmax(80px, max-content)` so single-digit indices stay aligned with
- * three-digit ones; numeric slots are fixed so adjacent rows agree. */
+ * three-digit ones; numeric slots are fixed so adjacent rows agree. The
+ * trailing Cost slot is wider (80px) to fit a two-decimal USD label
+ * (`$123.45`) without truncation. */
 .history-detail-turn-acc-header,
 .history-detail-turn-acc-headerrow {
   display: grid;
@@ -2212,7 +2214,8 @@ body::after {
     64px
     64px
     72px
-    72px;
+    72px
+    80px;
   gap: 12px;
   align-items: baseline;
   width: 100%;
@@ -2263,6 +2266,22 @@ body::after {
   color: var(--cream-dim);
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+/* Cost cell sits at the right edge of the turn grid. Amber matches the
+ * TURNS-section accent palette so the priced value reads as a peer of
+ * the existing token cells; the left-side rule visually separates the
+ * cost column from the cache-write cell so the eye stops on it. The
+ * `--missing` modifier dims to the same muted tone the empty-state
+ * helpers use, keeping the em-dash visible without screaming. */
+.history-detail-turn-acc-cell-cost {
+  color: var(--amber);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  border-left: 1px solid var(--rule-soft);
+  padding-left: 12px;
+}
+.history-detail-turn-acc-cell-cost--missing {
+  color: var(--muted-2);
 }
 .history-detail-turn-acc-body {
   /* Body holds a full-width <table> already styled by

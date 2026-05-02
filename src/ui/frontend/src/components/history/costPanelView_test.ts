@@ -4,6 +4,7 @@ import type { PricingSnapshot } from "../../api/client";
 import {
   computeConversationCost,
   computeCostPanel,
+  computeTurnCost,
   formatRelativeFetched,
   formatTokenCount,
   formatUsd,
@@ -390,6 +391,64 @@ describe("computeConversationCost", () => {
       NOW,
     );
     expect(view.stale).toBe(true);
+  });
+});
+
+describe("computeTurnCost", () => {
+  test("known model only: totalUsd reflects priced rows and isUnknownOnly is false", () => {
+    const snap = snapshot({
+      "claude-3-5-sonnet": {
+        input_cost_per_token: 0.000003,
+        output_cost_per_token: 0.000015,
+      },
+    });
+    const cost = computeTurnCost(
+      totals([
+        {
+          model: "claude-3-5-sonnet",
+          inputTokens: 1_000_000,
+          outputTokens: 200_000,
+        },
+      ]),
+      snap,
+    );
+    // 1e6 * 3e-6 + 2e5 * 1.5e-5 = 3 + 3 = 6.
+    expect(cost.totalUsd).toBeCloseTo(6, 6);
+    expect(cost.isUnknownOnly).toBe(false);
+    expect(cost.rows).toHaveLength(1);
+    expect(cost.rows[0]?.isUnknown).toBe(false);
+  });
+
+  test("unknown model only: totalUsd is 0 and isUnknownOnly flips on", () => {
+    const snap = snapshot({
+      "claude-3-5-sonnet": { input_cost_per_token: 0.000003 },
+    });
+    const cost = computeTurnCost(
+      totals([{ model: "mystery", inputTokens: 1_000 }]),
+      snap,
+    );
+    expect(cost.totalUsd).toBe(0);
+    expect(cost.isUnknownOnly).toBe(true);
+    // Unknown row survives projection so the renderer can still surface
+    // it through the row list if it ever wants to; the cell just dashes.
+    expect(cost.rows).toHaveLength(1);
+    expect(cost.rows[0]?.isUnknown).toBe(true);
+  });
+
+  test("source 'unavailable' forces isUnknownOnly even when prices are present", () => {
+    const snap = snapshot(
+      {
+        "claude-3-5-sonnet": { input_cost_per_token: 0.000003 },
+      },
+      { source: "unavailable", stale: true },
+    );
+    const cost = computeTurnCost(
+      totals([{ model: "claude-3-5-sonnet", inputTokens: 1_000_000 }]),
+      snap,
+    );
+    expect(cost.totalUsd).toBe(0);
+    expect(cost.isUnknownOnly).toBe(true);
+    expect(cost.rows[0]?.isUnknown).toBe(true);
   });
 });
 

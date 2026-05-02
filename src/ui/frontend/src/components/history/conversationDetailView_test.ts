@@ -16,6 +16,7 @@ import {
   extractToolName,
   formatCountCell,
   formatDuration,
+  summariseTraceSpansByModel,
   truncatePayload,
 } from "./conversationDetailView";
 
@@ -1095,5 +1096,130 @@ describe("buildSpanTreeByTurn", () => {
     expect(groups[1]?.traceId).toBe("t_third");
     // Middle turn is hidden, so the third turn keeps its original index 3.
     expect(groups[1]?.turnIndex).toBe(3);
+  });
+});
+
+describe("summariseTraceSpansByModel", () => {
+  test("collapses multiple spans on the same model into a single row", () => {
+    const rows = summariseTraceSpansByModel([
+      makeSpan({
+        spanId: "s1",
+        model: "claude-3-5-sonnet",
+        inTok: 100,
+        outTok: 50,
+        cacheR: 10,
+        cacheW: 5,
+      }),
+      makeSpan({
+        spanId: "s2",
+        model: "claude-3-5-sonnet",
+        inTok: 200,
+        outTok: 60,
+        cacheR: null,
+        cacheW: 0,
+      }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.model).toBe("claude-3-5-sonnet");
+    expect(rows[0]?.inputTokens).toBe(300);
+    expect(rows[0]?.outputTokens).toBe(110);
+    // null token contributes 0 — no NaN, no ripple onto the rest.
+    expect(rows[0]?.cacheRead).toBe(10);
+    expect(rows[0]?.cacheWrite).toBe(5);
+  });
+
+  test("model=null spans collapse to a dedicated row sorted last", () => {
+    const rows = summariseTraceSpansByModel([
+      makeSpan({
+        spanId: "s_null",
+        model: null,
+        inTok: 7,
+        outTok: 3,
+        cacheR: 0,
+        cacheW: 0,
+      }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.model).toBeNull();
+    expect(rows[0]?.inputTokens).toBe(7);
+    expect(rows[0]?.outputTokens).toBe(3);
+  });
+
+  test("multiple models produce one row each in deterministic order (model ASC, null last)", () => {
+    const rows = summariseTraceSpansByModel([
+      makeSpan({ spanId: "s_z", model: "z-model", inTok: 1 }),
+      makeSpan({ spanId: "s_null", model: null, inTok: 2 }),
+      makeSpan({ spanId: "s_a", model: "a-model", inTok: 3 }),
+    ]);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.model).toBe("a-model");
+    expect(rows[1]?.model).toBe("z-model");
+    expect(rows[2]?.model).toBeNull();
+  });
+
+  test("buildSpanTreeByTurn attaches perModelTotals per turn", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t_a",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:30.000Z",
+        }),
+        makeTrace({
+          traceId: "t_b",
+          startedAt: "2026-05-01T11:01:00.000Z",
+          endedAt: "2026-05-01T11:01:30.000Z",
+        }),
+      ],
+      spans: [
+        makeSpan({
+          spanId: "a1",
+          parentSpanId: null,
+          traceId: "t_a",
+          model: "modelA",
+          inTok: 10,
+          outTok: 5,
+          startedAt: "2026-05-01T11:00:00.000Z",
+        }),
+        makeSpan({
+          spanId: "a2",
+          parentSpanId: null,
+          traceId: "t_a",
+          model: "modelA",
+          inTok: 20,
+          outTok: 10,
+          startedAt: "2026-05-01T11:00:10.000Z",
+        }),
+        makeSpan({
+          spanId: "b1",
+          parentSpanId: null,
+          traceId: "t_b",
+          model: "modelB",
+          inTok: 1,
+          outTok: 2,
+          startedAt: "2026-05-01T11:01:00.000Z",
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.perModelTotals).toEqual([
+      {
+        model: "modelA",
+        inputTokens: 30,
+        outputTokens: 15,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    ]);
+    expect(groups[1]?.perModelTotals).toEqual([
+      {
+        model: "modelB",
+        inputTokens: 1,
+        outputTokens: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    ]);
   });
 });

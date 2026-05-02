@@ -29,6 +29,7 @@ import {
   buildInvocationLinks,
   buildSpanTreeByTurn,
 } from "./conversationDetailView";
+import { computeTurnCost, formatUsd } from "./costPanelView";
 import { formatCompactNumber } from "./historyListView";
 
 export interface ConversationDetailPageProps {
@@ -275,12 +276,33 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                     <span class="history-detail-turn-acc-cell-token">
                       Cache W
                     </span>
+                    <span class="history-detail-turn-acc-cell-cost">Cost</span>
                   </div>
                   <For each={spanGroups()}>
                     {(group) => {
                       const isOpen = () => openTurns().has(group.traceId);
                       const headerId = `turn-acc-header-${group.traceId}`;
                       const bodyId = `turn-acc-body-${group.traceId}`;
+                      // Compute the Cost cell label reactively so a fresh
+                      // snapshot poll re-prices without a span-tree rebuild.
+                      // Pending snapshot, the unavailable sentinel, and a
+                      // turn whose models all resolved to unknown collapse
+                      // to the same em-dash placeholder — see
+                      // `computeTurnCost.isUnknownOnly` for the rule.
+                      const costLabel = () => {
+                        const snap = props.pricingSnapshot();
+                        if (snap === undefined) return "—";
+                        const cost = computeTurnCost(
+                          group.perModelTotals,
+                          snap,
+                        );
+                        if (cost.isUnknownOnly) return "—";
+                        return formatUsd(cost.totalUsd);
+                      };
+                      const costCellClass = () =>
+                        costLabel() === "—"
+                          ? "history-detail-turn-acc-cell-cost history-detail-turn-acc-cell-cost--missing"
+                          : "history-detail-turn-acc-cell-cost";
                       return (
                         <div class="history-detail-turn-acc">
                           <button
@@ -324,6 +346,7 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                             <span class="history-detail-turn-acc-cell-token">
                               {group.cacheWriteTokensCell}
                             </span>
+                            <span class={costCellClass()}>{costLabel()}</span>
                           </button>
                           <Show when={isOpen()}>
                             <section

@@ -409,6 +409,50 @@ export function computeConversationCost(
 }
 
 /**
+ * Compute the per-turn cost summary used by the conversation-detail Turns
+ * table. Shares row projection (`projectCostRows`) and ordering
+ * (`sortCostRows`) with the panel and the conversation-band views so all
+ * three surfaces resolve models, USD fields, and unknown handling the same
+ * way; the only difference is the input scope (one turn's per-model totals
+ * rather than a whole conversation or list window).
+ *
+ * `isUnknownOnly` collapses three "no priced data" states the renderer
+ * treats identically:
+ *   - `snapshot.source === "unavailable"` — daemon explicitly has no prices.
+ *   - all input rows had token=0 across every kind — turn did no measurable
+ *     work, so `projectCostRows` produces no surviving rows.
+ *   - every surviving row resolved to the unknown bucket — known prices
+ *     applied to zero models, so the total is 0 with nothing to attribute.
+ * The cell renderer turns `isUnknownOnly` into the em-dash placeholder so
+ * the Cost column never shows `$0.00` for "we have no priced data".
+ *
+ * Token=0 rows are dropped after projection (mirrors `computeConversationCost`),
+ * so an unused model on this turn does not add a 0-USD row to the breakdown.
+ */
+export function computeTurnCost(
+  perModel: ReadonlyArray<ModelTokenTotalsRow>,
+  snapshot: PricingSnapshot,
+): {
+  totalUsd: number;
+  isUnknownOnly: boolean;
+  rows: CostRow[];
+} {
+  const projected = projectCostRows(perModel, snapshot);
+  const rows = projected.filter((r) => !isZeroTokenRow(r));
+  sortCostRows(rows);
+
+  const totalUsd = rows
+    .filter((r) => !r.isUnknown)
+    .reduce((acc, r) => acc + r.totalUsd, 0);
+
+  const knownCount = rows.filter((r) => !r.isUnknown).length;
+  const isUnknownOnly =
+    snapshot.source === "unavailable" || rows.length === 0 || knownCount === 0;
+
+  return { totalUsd, isUnknownOnly, rows };
+}
+
+/**
  * Render the snapshot's `fetched_at` as a coarse relative-time label.
  * The bucket boundaries match the conversation list's relative-time
  * helper (under a minute, then minutes / hours / days) so the two
