@@ -21,7 +21,7 @@
  * EventSource lifetime to the user's presence on a history page.
  */
 
-import { createResource, Match, Switch } from "solid-js";
+import { Match, Switch } from "solid-js";
 import type {
   ConversationDetail,
   ConversationListRow,
@@ -34,25 +34,12 @@ import {
   HISTORY_SSE_LIST_EVENT,
   HISTORY_SSE_NOT_FOUND_EVENT,
 } from "../../../../routes/history_sse_events";
-import { fetchPricingSnapshot, type PricingSnapshot } from "../../api/client";
+import type { PricingSnapshot } from "../../api/client";
 import { useHistoryStream } from "../../hooks/useHistoryStream";
 import { ConversationDetailPage } from "./ConversationDetailPage";
 import { HistoryListPage } from "./HistoryListPage";
 import { InvocationDetailPage } from "./InvocationDetailPage";
-
-/**
- * Fallback snapshot used when the `/api/pricing/snapshot` resource
- * rejects (transport blip, daemon outage). Renders identically to the
- * daemon's own `unavailable` sentinel, so the panel degrades to the
- * "Pricing unavailable" header without dragging the conversation list
- * down with it.
- */
-const UNAVAILABLE_SNAPSHOT: PricingSnapshot = {
-  fetched_at: new Date(0).toISOString(),
-  source: "unavailable",
-  stale: true,
-  models: {},
-};
+import { createPricingSnapshotResource } from "./pricingSnapshotResource";
 
 export type HistoryRoute =
   | { kind: "history" }
@@ -82,18 +69,10 @@ interface HistoryListPayload {
 export function HistoryShell(props: HistoryShellProps) {
   // Single pricing resource owned by the shell: list view and
   // conversation detail share one snapshot so the two surfaces never
-  // disagree on source / fetched-at / stale state. The fetcher catches
-  // its own rejection and resolves with the unavailable sentinel so a
-  // daemon-side or transport-level failure renders the unavailable
-  // header band rather than blanking either view.
-  const [pricingSnapshot] = createResource<PricingSnapshot>(async () => {
-    try {
-      return await fetchPricingSnapshot();
-    } catch (err) {
-      console.warn("[HistoryShell] pricing snapshot fetch failed:", err);
-      return UNAVAILABLE_SNAPSHOT;
-    }
-  });
+  // disagree on source / fetched-at / stale state. The resource polls
+  // while History is mounted so a daemon background refresh after a
+  // stale-cache response re-prices the open page automatically.
+  const pricingSnapshot = createPricingSnapshotResource();
 
   return (
     <section class="history-shell" aria-label="History">
