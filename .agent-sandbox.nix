@@ -8,7 +8,7 @@ let
       multiplex = true;
     };
     docker = {
-      enable = true;
+      enable = false;
       shared = true;
     };
     gcloud = {
@@ -49,6 +49,12 @@ let
         dst = "~/nix-config";
         mode = "ro";
       }
+      {
+        # OTELのデバッグに
+        src = "~/.local/share/nas";
+        dst = "~/.local/share/nas";
+        mode = "rw";
+      }
     ];
   };
 
@@ -62,12 +68,14 @@ let
         "mcp-proxy.anthropic.com"
         "code.claude.com"
         "claude.ai"
+        "downloads.claude.ai"
 
         # OpenAI / ChatGPT
         "api.openai.com"
         "*.api.openai.com"
         "ab.chatgpt.com"
         "chatgpt.com"
+        "developers.openai.com"
 
         # Google
         "storage.googleapis.com"
@@ -123,7 +131,12 @@ let
         ];
       };
       proxy = {
-        forward-ports = [ 8080 5432 ];
+        forward-ports = [
+          8080
+          5432
+          # あんまりよくないけどuiのデバッグに
+          3939
+        ];
       };
     };
   };
@@ -139,13 +152,20 @@ let
       { key = "TERM"; val = "xterm-256color"; }
       {
         key = "GITHUB_TOKEN";
-        val_cmd = "pass github/token/for-agent";
+        # push禁止にするなら:
+        # val_cmd = "pass github/token/for-agent";
+        val_cmd = "gh auth token";
       }
       {
         key = "PATH";
         val = "~/.nix-profile/bin";
         mode = "suffix";
         separator = ":";
+      }
+      {
+        # ~/.nix-profile/bin/dateが間違ったTZDIRを参照することがあるようだ。なぞ
+        key = "TZDIR";
+        val = "/usr/share/zoneinfo";
       }
     ];
   };
@@ -158,18 +178,6 @@ let
         default-scope = "capability";
       };
       rules = [
-        {
-          id = "git-push";
-          match = {
-            argv0 = "git";
-            arg-regex = ''(?<!stash )push'';
-          };
-          cwd = {
-            mode = "workspace-or-session-tmp";
-          };
-          approval = "deny";
-          fallback = "deny";
-        }
         {
           id = "wl-paste";
           match = {
@@ -240,6 +248,10 @@ in
     enable = true;
     port = 3939;
     idle-timeout = 300;
+  };
+
+  observability = {
+    enable = true;
   };
 
   profiles = {
