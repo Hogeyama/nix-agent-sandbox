@@ -38,6 +38,14 @@ export interface HistorySseRouteOptions {
 
 export const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
+/**
+ * Window for the per-model token totals payload accompanying the list event.
+ * 30 days matches the dashboard "last 30 days" label rendered by the frontend.
+ * See the list-route handler for why the resulting `since` is computed once
+ * per SSE connection on the daemon clock rather than every poll.
+ */
+const MODEL_TOKEN_TOTALS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 function formatSseEvent(event: HistorySseEventName, data: unknown): Uint8Array {
   return new TextEncoder().encode(
     `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
@@ -159,11 +167,31 @@ export function createHistorySseRoutes(
   const app = new Router();
 
   app.get("/history/conversations/events", () => {
+    // `since` is computed ONCE per connection rather than per poll. The
+    // diff hashing layer (history_sse_diff) compares the JSON of the whole
+    // payload, so a `since` value that advanced every 5 s tick would force
+    // an emit on every poll even when neither the conversation list nor
+    // the per-model totals had changed — defeating the silence-when-quiet
+    // contract that lets idle clients hold a stream open cheaply. Holding
+    // `since` constant for the life of a connection keeps the diff stable;
+    // the frontend reconnects often enough (route navigation, page reload)
+    // that the window naturally tracks "the last 30 days".
+    //
+    // The clock source is intentionally the daemon — keeping `since` in
+    // the payload means the badge label and the SUM aggregate it
+    // describes are always derived from the same instant.
+    const sinceIso = new Date(
+      Date.now() - MODEL_TOKEN_TOTALS_WINDOW_MS,
+    ).toISOString();
     const stream = createPollingStream({
       pollIntervalMs,
       read: () => ({
         event: "history:list",
-        payload: { conversations: ctx.history.readConversationList() },
+        payload: {
+          conversations: ctx.history.readConversationList(),
+          modelTokenTotals: ctx.history.readModelTokenTotals(sinceIso),
+          since: sinceIso,
+        },
       }),
     });
     return sseResponse(stream);

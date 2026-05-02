@@ -26,6 +26,7 @@ import type {
   ConversationDetail,
   ConversationListRow,
   InvocationDetail,
+  ModelTokenTotalsRow,
 } from "../../../../../history/types";
 import {
   HISTORY_SSE_CONVERSATION_EVENT,
@@ -47,9 +48,20 @@ export interface HistoryShellProps {
   route: HistoryRoute;
 }
 
-/** Wire payload of the `history:list` SSE event. */
+/**
+ * Wire payload of the `history:list` SSE event.
+ *
+ * `modelTokenTotals` and `since` accompany the conversation list so the
+ * dashboard can render a "last 30 days" badge without having to compute
+ * its own clock — the daemon picks the window once per SSE connection
+ * (see `history_sse.ts`) and any consumer reflects whatever boundary it
+ * received in this same payload.
+ */
 interface HistoryListPayload {
   conversations: ConversationListRow[];
+  modelTokenTotals: ModelTokenTotalsRow[];
+  /** ISO-8601 boundary used by the daemon for `modelTokenTotals`. */
+  since: string;
 }
 
 export function HistoryShell(props: HistoryShellProps) {

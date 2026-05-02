@@ -12,6 +12,7 @@ import type {
   ConversationDetail,
   ConversationListRow,
   InvocationDetail,
+  ModelTokenTotalsRow,
 } from "../../history/store.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
@@ -76,19 +77,23 @@ interface MockReader extends UiHistoryReader {
   setList(rows: ConversationListRow[]): void;
   setConversation(id: string, d: ConversationDetail | null): void;
   setInvocation(id: string, d: InvocationDetail | null): void;
+  setModelTokenTotals(rows: ModelTokenTotalsRow[]): void;
   listCalls: number;
   conversationCalls: Array<string>;
   invocationCalls: Array<string>;
+  modelTokenTotalsCalls: Array<string>;
 }
 
 function makeMockReader(): MockReader {
   let list: ConversationListRow[] = [];
+  let modelTokenTotals: ModelTokenTotalsRow[] = [];
   const conversations = new Map<string, ConversationDetail | null>();
   const invocations = new Map<string, InvocationDetail | null>();
   const reader: MockReader = {
     listCalls: 0,
     conversationCalls: [],
     invocationCalls: [],
+    modelTokenTotalsCalls: [],
     readConversationList: () => {
       reader.listCalls++;
       return list;
@@ -101,7 +106,10 @@ function makeMockReader(): MockReader {
       reader.invocationCalls.push(id);
       return invocations.get(id) ?? null;
     },
-    readModelTokenTotals: () => [],
+    readModelTokenTotals: (sinceIso) => {
+      reader.modelTokenTotalsCalls.push(sinceIso);
+      return modelTokenTotals;
+    },
     setList: (rows) => {
       list = rows;
     },
@@ -110,6 +118,9 @@ function makeMockReader(): MockReader {
     },
     setInvocation: (id, d) => {
       invocations.set(id, d);
+    },
+    setModelTokenTotals: (rows) => {
+      modelTokenTotals = rows;
     },
   };
   return reader;
@@ -254,7 +265,12 @@ test("conversations stream emits initial snapshot then a diff after a write", as
   const events = await readEventsFor(res, WINDOW_MS);
   expect(events.length).toBeGreaterThanOrEqual(2);
   expect(events[0].event).toBe("history:list");
-  expect(events[0].data).toEqual({ conversations: [] });
+  expect(events[0].data).toMatchObject({
+    conversations: [],
+    modelTokenTotals: [],
+  });
+  // `since` is computed by the daemon clock — assert shape, not value.
+  expect(typeof (events[0].data as { since: unknown }).since).toBe("string");
   // At least one later event reflects the new row.
   expect(
     events
@@ -362,7 +378,9 @@ test("two concurrent connections keep independent per-connection state", async (
   ]);
 
   // r1 saw an initial empty list, r2 saw an initial 1-row list.
-  expect(e1[0].data).toEqual({ conversations: [] });
+  expect(
+    (e1[0].data as { conversations: ConversationListRow[] }).conversations,
+  ).toEqual([]);
   expect(
     (e2[0].data as { conversations: ConversationListRow[] }).conversations.map(
       (r) => r.id,
@@ -437,6 +455,119 @@ test("conversations stream emits keepalive comments on every poll", async () => 
   // polls fire within WINDOW_MS / POLL_MS; each should emit a keepalive.
   const keepalives = raw.split("\n").filter((l) => l.startsWith(":")).length;
   expect(keepalives).toBeGreaterThanOrEqual(1);
+});
+
+test("conversations payload includes per-model totals and a daemon-clock since", async () => {
+  const reader = makeMockReader();
+  const totals: ModelTokenTotalsRow[] = [
+    {
+      model: "claude-opus-4",
+      inputTokens: 100,
+      outputTokens: 200,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    {
+      model: null,
+      inputTokens: 1,
+      outputTokens: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  ];
+  reader.setModelTokenTotals(totals);
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversations/events");
+  const events = await readEventsFor(res, WINDOW_MS);
+
+  expect(events.length).toBeGreaterThanOrEqual(1);
+  const first = events[0].data as {
+    conversations: ConversationListRow[];
+    modelTokenTotals: ModelTokenTotalsRow[];
+    since: string;
+  };
+  expect(first.modelTokenTotals).toEqual(totals);
+  // since must be parseable as ISO and be in the past.
+  expect(typeof first.since).toBe("string");
+  expect(Number.isFinite(Date.parse(first.since))).toBe(true);
+  expect(Date.parse(first.since)).toBeLessThanOrEqual(Date.now());
+  // The reader must have been called with that exact ISO at least once.
+  expect(reader.modelTokenTotalsCalls).toContain(first.since);
+});
+
+test("conversations payload's since stays stable across polls so quiet streams stay silent", async () => {
+  const reader = makeMockReader();
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversations/events");
+  const events = await readEventsFor(res, WINDOW_MS);
+  // Despite re-polling, only the initial snapshot emits because `since`
+  // is computed once per connection — otherwise a moving timestamp would
+  // force a diff every tick.
+  expect(events.length).toBe(1);
+  // ...but the reader was called many times, each with the same sinceIso.
+  expect(reader.modelTokenTotalsCalls.length).toBeGreaterThanOrEqual(2);
+  const distinct = new Set(reader.modelTokenTotalsCalls);
+  expect(distinct.size).toBe(1);
+});
+
+test("conversations stream emits when only modelTokenTotals changes", async () => {
+  const reader = makeMockReader();
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversations/events");
+  setTimeout(() => {
+    reader.setModelTokenTotals([
+      {
+        model: "m1",
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    ]);
+  }, POLL_MS + 5);
+
+  const events = await readEventsFor(res, WINDOW_MS);
+  expect(events.length).toBeGreaterThanOrEqual(2);
+  // First event has empty totals; a later event reflects the new row.
+  const first = events[0].data as { modelTokenTotals: ModelTokenTotalsRow[] };
+  expect(first.modelTokenTotals).toEqual([]);
+  const later = events
+    .slice(1)
+    .find(
+      (e) =>
+        e.event === "history:list" &&
+        ((e.data as { modelTokenTotals: ModelTokenTotalsRow[] })
+          .modelTokenTotals.length ?? 0) > 0,
+    );
+  expect(later).toBeDefined();
+});
+
+test("conversations stream emits when only conversations change (totals stable)", async () => {
+  const reader = makeMockReader();
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversations/events");
+  setTimeout(() => reader.setList([makeListRow("c1")]), POLL_MS + 5);
+
+  const events = await readEventsFor(res, WINDOW_MS);
+  expect(events.length).toBeGreaterThanOrEqual(2);
+  const last = events[events.length - 1].data as {
+    conversations: ConversationListRow[];
+    modelTokenTotals: ModelTokenTotalsRow[];
+  };
+  expect(last.conversations.map((r) => r.id)).toEqual(["c1"]);
+  expect(last.modelTokenTotals).toEqual([]);
 });
 
 test("cancelling the stream stops further polling", async () => {
