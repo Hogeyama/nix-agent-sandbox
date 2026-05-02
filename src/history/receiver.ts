@@ -14,7 +14,12 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { ingestResourceSpans, type OtlpJsonExportPayload } from "./ingest.ts";
+import {
+  ingestResourceSpans,
+  type OtlpJsonExportPayload,
+  type OtlpJsonResourceSpans,
+  type OtlpKeyValue,
+} from "./ingest.ts";
 
 export interface OtlpReceiverHandle {
   /** Actual port the OS chose for the 127.0.0.1 listener. */
@@ -28,6 +33,18 @@ export interface StartOtlpReceiverOptions {
   db: Database;
   /** Optional override for testing / future per-session lifecycle. Default `0` (OS-chosen ephemeral). */
   port?: number;
+  /**
+   * Per-session metadata used when an exporter does not emit nas resource
+   * attributes. Existing resource attributes win; fallback values never
+   * overwrite payload-provided metadata.
+   */
+  fallbackMetadata?: OtlpReceiverFallbackMetadata;
+}
+
+export interface OtlpReceiverFallbackMetadata {
+  readonly sessionId: string;
+  readonly profileName?: string;
+  readonly agent?: string;
 }
 
 const JSON_HEADERS = { "content-type": "application/json" } as const;
@@ -47,7 +64,58 @@ function isJsonContentType(value: string | null): boolean {
   return base === "application/json";
 }
 
-async function handleTraces(req: Request, db: Database): Promise<Response> {
+function stringAttr(key: string, value: string): OtlpKeyValue {
+  return { key, value: { stringValue: value } };
+}
+
+function hasAttr(
+  attrs: ReadonlyArray<OtlpKeyValue> | undefined,
+  key: string,
+): boolean {
+  return Array.isArray(attrs) && attrs.some((attr) => attr?.key === key);
+}
+
+function applyFallbackMetadata(
+  payload: OtlpJsonExportPayload,
+  fallback: OtlpReceiverFallbackMetadata | undefined,
+): OtlpJsonExportPayload {
+  if (fallback === undefined) return payload;
+  const resourceSpans = payload.resourceSpans;
+  if (!Array.isArray(resourceSpans)) return payload;
+
+  return {
+    ...payload,
+    resourceSpans: resourceSpans.map((rs): OtlpJsonResourceSpans => {
+      const attrs = rs.resource?.attributes ?? [];
+      const patchedAttrs = [...attrs];
+      if (!hasAttr(attrs, "nas.session.id")) {
+        patchedAttrs.push(stringAttr("nas.session.id", fallback.sessionId));
+      }
+      if (
+        fallback.profileName !== undefined &&
+        !hasAttr(attrs, "nas.profile")
+      ) {
+        patchedAttrs.push(stringAttr("nas.profile", fallback.profileName));
+      }
+      if (fallback.agent !== undefined && !hasAttr(attrs, "nas.agent")) {
+        patchedAttrs.push(stringAttr("nas.agent", fallback.agent));
+      }
+      return {
+        ...rs,
+        resource: {
+          ...rs.resource,
+          attributes: patchedAttrs,
+        },
+      };
+    }),
+  };
+}
+
+async function handleTraces(
+  req: Request,
+  db: Database,
+  fallbackMetadata: OtlpReceiverFallbackMetadata | undefined,
+): Promise<Response> {
   if (!isJsonContentType(req.headers.get("content-type"))) {
     return new Response("Unsupported Media Type", { status: 415 });
   }
@@ -60,7 +128,7 @@ async function handleTraces(req: Request, db: Database): Promise<Response> {
   }
 
   try {
-    ingestResourceSpans(db, payload);
+    ingestResourceSpans(db, applyFallbackMetadata(payload, fallbackMetadata));
   } catch (e) {
     // Log + 500 but do NOT propagate: a single malformed batch should not
     // tear down the listener nor trigger SDK retries that would amplify
@@ -80,7 +148,11 @@ async function handleTraces(req: Request, db: Database): Promise<Response> {
   });
 }
 
-async function handle(req: Request, db: Database): Promise<Response> {
+async function handle(
+  req: Request,
+  db: Database,
+  fallbackMetadata: OtlpReceiverFallbackMetadata | undefined,
+): Promise<Response> {
   const url = new URL(req.url);
   if (url.pathname !== "/v1/traces") {
     return new Response("Not Found", { status: 404 });
@@ -91,7 +163,7 @@ async function handle(req: Request, db: Database): Promise<Response> {
       headers: { allow: "POST" },
     });
   }
-  return await handleTraces(req, db);
+  return await handleTraces(req, db, fallbackMetadata);
 }
 
 export async function startOtlpReceiver(
@@ -101,7 +173,7 @@ export async function startOtlpReceiver(
     hostname: "127.0.0.1",
     port: opts.port ?? 0,
     fetch: (req) =>
-      handle(req, opts.db).catch((e) => {
+      handle(req, opts.db, opts.fallbackMetadata).catch((e) => {
         // Defensive net: handle() already swallows ingest errors, but if any
         // other unexpected throw escapes (e.g. from URL parsing) we still
         // owe the client a response rather than letting Bun.serve emit a

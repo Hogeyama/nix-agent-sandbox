@@ -4,7 +4,11 @@
  */
 
 import { expect, test } from "bun:test";
-import { buildObservabilityEnv } from "./env.ts";
+import {
+  agentSupportsObservability,
+  buildCodexTraceExporterConfig,
+  buildObservabilityEnv,
+} from "./env.ts";
 
 test("buildObservabilityEnv: claude includes CLAUDE_CODE_* and the OTLP common envs", () => {
   const env = buildObservabilityEnv({
@@ -43,10 +47,7 @@ test("buildObservabilityEnv: copilot includes COPILOT_OTEL_ENABLED and the OTLP 
   });
 });
 
-test("buildObservabilityEnv: codex returns null (no env injected)", () => {
-  // Codex is intentionally out of ADR scope. Returning null forces the
-  // stage to omit the container patch entirely; if codex is ever added,
-  // changing this requires touching this test (and the planner).
+test("buildObservabilityEnv: codex returns null (configured via argv, not env)", () => {
   const env = buildObservabilityEnv({
     agent: "codex",
     sessionId: "s",
@@ -54,6 +55,18 @@ test("buildObservabilityEnv: codex returns null (no env injected)", () => {
     port: 4318,
   });
   expect(env).toBeNull();
+});
+
+test("buildCodexTraceExporterConfig: renders OTLP/HTTP JSON traces endpoint", () => {
+  expect(buildCodexTraceExporterConfig({ port: 4318 })).toEqual(
+    'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+  );
+});
+
+test("agentSupportsObservability: all supported agents include codex", () => {
+  expect(agentSupportsObservability("claude")).toEqual(true);
+  expect(agentSupportsObservability("copilot")).toEqual(true);
+  expect(agentSupportsObservability("codex")).toEqual(true);
 });
 
 test("buildObservabilityEnv: port is rendered into the endpoint URL", () => {

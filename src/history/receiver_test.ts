@@ -89,6 +89,113 @@ test("POST /v1/traces with valid OTLP/JSON: 200 + partialSuccess body, spans per
   }
 });
 
+test("POST /v1/traces applies fallback metadata when nas resource attrs are missing", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  upsertInvocation(db, {
+    id: "sess_codex",
+    profile: "dev",
+    agent: "codex",
+    worktreePath: null,
+    startedAt: "2026-05-01T00:00:00Z",
+    endedAt: null,
+    exitReason: null,
+  });
+
+  const fixture = await loadFixture("copilot_chat_minimal.json");
+  const first = fixture.resourceSpans?.[0];
+  if (first === undefined) throw new Error("fixture missing resourceSpans[0]");
+  const payload: OtlpJsonExportPayload = {
+    resourceSpans: [
+      {
+        ...first,
+        resource: { attributes: [] },
+      },
+    ],
+  };
+
+  const handle = await startOtlpReceiver({
+    db,
+    fallbackMetadata: {
+      sessionId: "sess_codex",
+      profileName: "dev",
+      agent: "codex",
+    },
+  });
+  try {
+    const res = await fetch(tracesUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toEqual(200);
+
+    const trace = db
+      .query("SELECT invocation_id FROM traces WHERE trace_id = ?")
+      .get("trace_copilot_1") as { invocation_id: string } | null;
+    expect(trace?.invocation_id).toEqual("sess_codex");
+  } finally {
+    await handle.close();
+  }
+});
+
+test("POST /v1/traces fallback metadata does not overwrite payload session", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  for (const id of ["sess_payload", "sess_fallback"]) {
+    upsertInvocation(db, {
+      id,
+      profile: "dev",
+      agent: "codex",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+  }
+
+  const fixture = await loadFixture("copilot_chat_minimal.json");
+  const first = fixture.resourceSpans?.[0];
+  if (first === undefined) throw new Error("fixture missing resourceSpans[0]");
+  const payload: OtlpJsonExportPayload = {
+    resourceSpans: [
+      {
+        ...first,
+        resource: {
+          attributes: [
+            {
+              key: "nas.session.id",
+              value: { stringValue: "sess_payload" },
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  const handle = await startOtlpReceiver({
+    db,
+    fallbackMetadata: {
+      sessionId: "sess_fallback",
+      profileName: "dev",
+      agent: "codex",
+    },
+  });
+  try {
+    const res = await fetch(tracesUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toEqual(200);
+
+    const trace = db
+      .query("SELECT invocation_id FROM traces WHERE trace_id = ?")
+      .get("trace_copilot_1") as { invocation_id: string } | null;
+    expect(trace?.invocation_id).toEqual("sess_payload");
+  } finally {
+    await handle.close();
+  }
+});
+
 test("POST /v1/traces with charset suffix on content-type: 200", async () => {
   const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
   upsertInvocation(db, {

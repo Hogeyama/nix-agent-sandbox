@@ -1,16 +1,15 @@
 /**
  * ObservabilityStage — materializes the `observability` slice of PipelineState
  * and, when enabled, acquires the per-session OTLP/HTTP receiver and injects
- * the matching OTLP envs into the container slice.
+ * the matching OTLP envs or Codex CLI config override into the container slice.
  *
  * Inputs:
  *   - `config.observability.enable` gates the entire stage. Disabled → the
  *     stage is a no-op fast-path: `{ enabled: false }` slice and an empty
  *     container patch.
- *   - `profile.agent` selects which env vars are injected. Agents whose env
- *     surface is not modeled (codex) are short-circuited to the disabled
- *     slice: receiver is not acquired and no envs are emitted, so the slice's
- *     {enabled, env, receiverPort} stay in lockstep.
+ *   - `profile.agent` selects how the agent is wired to the receiver. Claude
+ *     and Copilot receive OTEL env vars; Codex receives a `-c`
+ *     `otel.trace_exporter=...` argv override before profile/CLI args.
  *
  * Resource lifetime:
  *   - The receiver handle is bound to the stage's Effect scope via
@@ -51,7 +50,11 @@ import type {
   PipelineState,
 } from "../../pipeline/state.ts";
 import type { StageResult } from "../../pipeline/types.ts";
-import { agentSupportsObservability, buildObservabilityEnv } from "./env.ts";
+import {
+  agentSupportsObservability,
+  buildCodexTraceExporterConfig,
+  buildObservabilityEnv,
+} from "./env.ts";
 import { OtlpReceiverService } from "./receiver_service.ts";
 
 // ---------------------------------------------------------------------------
@@ -72,15 +75,16 @@ export interface ObservabilityStageDeps {
 /**
  * Pure decision: should this session run with the receiver wired up?
  *
- * The stage maintains the invariant "enabled ⇔ env injected ⇔ port acquired".
+ * The stage maintains the invariant "enabled ⇔ receiver wiring applied ⇔
+ * port acquired".
  * Two predicates must hold:
  *   - the operator opted in via `config.observability.enable`;
- *   - the selected agent has an env mapping in {@link buildObservabilityEnv}
+ *   - the selected agent has a supported receiver wiring
  *     (checked via {@link agentSupportsObservability}).
  *
- * Returning `false` for an agent without an env mapping (codex today) keeps
- * the slice consistent: no listener burned, no receiverPort exposed for a
- * stream that will never arrive, no OTLP envs that would mislead operators.
+ * Returning `false` for an unsupported agent keeps the slice consistent: no
+ * listener burned, no receiverPort exposed for a stream that will never
+ * arrive, and no container patch that would mislead operators.
  */
 export function shouldEnableObservability(deps: {
   readonly config: Pick<Config, "observability">;
@@ -120,6 +124,13 @@ function runObservability(
 > {
   return Effect.gen(function* () {
     if (!shouldEnableObservability(deps)) {
+      const slice: ObservabilityState = { enabled: false };
+      return { observability: slice };
+    }
+    if (
+      deps.profile.agent === "codex" &&
+      !canApplyCodexTraceExporterConfig(input.container.command.agentCommand)
+    ) {
       const slice: ObservabilityState = { enabled: false };
       return { observability: slice };
     }
@@ -165,24 +176,33 @@ function runObservability(
     const db: Database = dbOrNull;
 
     const receiver = yield* OtlpReceiverService;
-    const handle = yield* Effect.acquireRelease(receiver.start({ db }), (h) =>
-      // Use tryPromise so a rejection from h.close() surfaces as a typed
-      // failure rather than an unhandled defect. The failure is then
-      // demoted to a stderr warning and ignored, so a flaky teardown does
-      // not block release of other resources registered in the same scope.
-      Effect.tryPromise({
-        try: () => h.close(),
-        catch: (e) => (e instanceof Error ? e : new Error(String(e))),
-      }).pipe(
-        Effect.tapError((err) =>
-          Effect.sync(() =>
-            console.warn(
-              `nas: observability receiver close failed: ${err.message}`,
+    const handle = yield* Effect.acquireRelease(
+      receiver.start({
+        db,
+        fallbackMetadata: {
+          sessionId: deps.sessionId,
+          profileName: deps.profileName,
+          agent: deps.profile.agent,
+        },
+      }),
+      (h) =>
+        // Use tryPromise so a rejection from h.close() surfaces as a typed
+        // failure rather than an unhandled defect. The failure is then
+        // demoted to a stderr warning and ignored, so a flaky teardown does
+        // not block release of other resources registered in the same scope.
+        Effect.tryPromise({
+          try: () => h.close(),
+          catch: (e) => (e instanceof Error ? e : new Error(String(e))),
+        }).pipe(
+          Effect.tapError((err) =>
+            Effect.sync(() =>
+              console.warn(
+                `nas: observability receiver close failed: ${err.message}`,
+              ),
             ),
           ),
+          Effect.ignore,
         ),
-        Effect.ignore,
-      ),
     );
 
     const env = buildObservabilityEnv({
@@ -192,32 +212,48 @@ function runObservability(
       port: handle.port,
     });
 
-    // shouldEnableObservability has already filtered to agents with an env
-    // mapping (agentSupportsObservability), so env is non-null here. The
-    // type narrowing keeps the invariant "enabled ⇔ env injected" explicit.
-    if (env === null) {
-      // Unreachable given shouldEnableObservability + agentSupportsObservability
-      // agree on the same predicate. Throw so the inconsistency is loud rather
-      // than silently emitting a slice with a port but no env.
-      return yield* Effect.fail(
-        new Error(
-          `ObservabilityStage: agent '${deps.profile.agent}' passed shouldEnableObservability but buildObservabilityEnv returned null`,
-        ),
-      );
-    }
-
     const slice: ObservabilityState = {
       enabled: true,
       receiverPort: handle.port,
     };
 
-    // mergeContainerPlan with patch.env.static is patch-wins on key
-    // collisions, so any OTLP key already present in the upstream container
-    // slice (e.g. a profile-level env override) is replaced by the values
-    // produced here. This is the documented last-wins resolution.
+    const command =
+      deps.profile.agent === "codex"
+        ? buildCodexCommand(input.container.command.agentCommand, handle.port)
+        : undefined;
+
+    // mergeContainerPlan with patch.env.static is patch-wins on key collisions,
+    // so any OTLP key already present in the upstream container slice is
+    // replaced by the values produced here. Codex has no env patch; its config
+    // override is inserted into agentCommand so LaunchStage appends profile and
+    // CLI extra args after it.
     const container: ContainerPlan = mergeContainerPlan(input.container, {
-      env: { static: env },
+      env: env === null ? undefined : { static: env },
+      command:
+        command === undefined
+          ? undefined
+          : {
+              agentCommand: command,
+              extraArgs: input.container.command.extraArgs,
+            },
     });
     return { observability: slice, container };
   });
+}
+
+function buildCodexCommand(
+  agentCommand: readonly string[],
+  port: number,
+): readonly string[] {
+  const config = buildCodexTraceExporterConfig({ port });
+  if (agentCommand.length === 0) {
+    return ["codex", "-c", config];
+  }
+  return [agentCommand[0], "-c", config, ...agentCommand.slice(1)];
+}
+
+function canApplyCodexTraceExporterConfig(
+  agentCommand: readonly string[],
+): boolean {
+  return agentCommand.length === 0 || agentCommand[0] === "codex";
 }

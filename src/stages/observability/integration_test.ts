@@ -37,6 +37,7 @@ import type {
   ProbeResults,
   StageInput,
 } from "../../pipeline/types.ts";
+import { planLaunch } from "../launch/stage.ts";
 import { planProxy } from "../proxy/stage.ts";
 import {
   makeOtlpReceiverServiceFake,
@@ -105,10 +106,12 @@ function makeProbes(): ProbeResults {
   };
 }
 
-function makeContainer(): ContainerPlan {
+function makeContainer(
+  agentCommand: readonly string[] = ["claude"],
+): ContainerPlan {
   return {
     ...emptyContainerPlan("test-image", "/work"),
-    command: { agentCommand: ["claude"], extraArgs: [] },
+    command: { agentCommand, extraArgs: [] },
   };
 }
 
@@ -181,17 +184,15 @@ test("observability + proxy: claude => env endpoint port matches receiver port a
   }
 });
 
-test("observability + proxy: codex => receiver never started, slice disabled, no OTLP env, no forwardPorts entry", async () => {
-  // Provide the Fake (not Live) so we can assert the receiver service is
-  // never invoked for codex sessions. A non-zero startCount would mean the
-  // codex short-circuit in shouldEnableObservability has regressed and a
-  // listener is being burned for an agent that emits no OTLP.
+test("observability + proxy + launch: codex => receiver port is forwarded and argv override precedes user args", async () => {
   const profile = makeProfile("codex");
+  profile.agentArgs = ["--profile"];
   const config = makeConfig(profile, true);
   const sessionId = "sess_int_codex";
 
   let startCount = 0;
   const fake = makeOtlpReceiverServiceFake({
+    port: 4318,
     onStart: () => {
       startCount += 1;
     },
@@ -214,19 +215,48 @@ test("observability + proxy: codex => receiver never started, slice disabled, no
   });
 
   const program = Effect.gen(function* () {
-    const obsResult = yield* stage.run({ container: makeContainer() });
-    expect(obsResult.observability).toEqual({ enabled: false });
-    expect(obsResult.container).toBeUndefined();
+    const baseContainer: ContainerPlan = {
+      ...makeContainer(["codex"]),
+      command: { agentCommand: ["codex"], extraArgs: ["exec"] },
+    };
+    const obsResult = yield* stage.run({ container: baseContainer });
+    const observability = obsResult.observability;
+    if (observability === undefined) {
+      throw new Error("expected observability slice");
+    }
+    const containerOut = obsResult.container ?? baseContainer;
+
+    expect(observability).toEqual({
+      enabled: true,
+      receiverPort: 4318,
+    });
+    expect(containerOut.env.static).toEqual({});
 
     const proxyPlan = planProxy({
       ...stageInput,
-      container: makeContainer(),
-      observability: { enabled: false },
+      container: containerOut,
+      observability,
     });
-    expect([...proxyPlan.forwardPorts]).toEqual([]);
+    expect([...proxyPlan.forwardPorts]).toContain(4318);
+
+    const launchPlan = planLaunch(
+      {
+        ...stageInput,
+        container: containerOut,
+      },
+      ["--cli"],
+    );
+    expect(launchPlan.opts.command).toEqual([
+      "codex",
+      "-c",
+      'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+      "exec",
+      "--profile",
+      "--cli",
+    ]);
   });
 
   await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(fake)));
 
-  expect(startCount).toEqual(0);
+  expect(startCount).toEqual(1);
 });

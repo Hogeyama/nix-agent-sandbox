@@ -8,7 +8,7 @@ import { Effect } from "effect";
  * ObservabilityStage unit tests.
  *
  * Two branches:
- *   - Disabled (config.observability.enable = false, or agent = codex):
+ *   - Disabled (config.observability.enable = false):
  *     materializes `{ enabled: false }` and emits no container patch. The
  *     receiver service is never invoked.
  *   - Enabled: acquires the receiver via OtlpReceiverService, exposes the
@@ -45,10 +45,12 @@ afterEach(async () => {
   delete process.env.XDG_DATA_HOME;
 });
 
-function makeContainer(): ContainerPlan {
+function makeContainer(
+  agentCommand: readonly string[] = ["claude"],
+): ContainerPlan {
   return {
     ...emptyContainerPlan("test-image", "/work"),
-    command: { agentCommand: ["claude"], extraArgs: [] },
+    command: { agentCommand, extraArgs: [] },
   };
 }
 
@@ -86,7 +88,7 @@ test("shouldEnableObservability: disabled config => false for every agent", () =
   }
 });
 
-test("shouldEnableObservability: enabled config => true for claude/copilot, false for codex", () => {
+test("shouldEnableObservability: enabled config => true for claude/copilot/codex", () => {
   expect(
     shouldEnableObservability({
       config: { observability: { enable: true } },
@@ -104,7 +106,7 @@ test("shouldEnableObservability: enabled config => true for claude/copilot, fals
       config: { observability: { enable: true } },
       profile: { agent: "codex" },
     }),
-  ).toEqual(false);
+  ).toEqual(true);
 });
 
 // ---------------------------------------------------------------------------
@@ -144,12 +146,51 @@ test("ObservabilityStage: disabled config => slice { enabled: false }, no receiv
   expect(startCount).toEqual(0);
 });
 
-test("ObservabilityStage: enabled config + codex => slice { enabled: false }, no receiver acquired", async () => {
-  // Codex is intentionally skipped: it does not emit OTLP, so we don't burn
-  // a listener and we don't inject envs that would mislead operators into
-  // thinking codex is being observed.
+test("ObservabilityStage: enabled config + codex => receiver acquired and command patched", async () => {
+  let startCount = 0;
+  const seen: StartOtlpReceiverOptions[] = [];
+  const fake = makeOtlpReceiverServiceFake({
+    port: 4318,
+    onStart: (options) => {
+      startCount += 1;
+      seen.push(options);
+    },
+  });
+
+  const stage = createObservabilityStage(
+    makeDeps({ enable: true, agent: "codex" }),
+  );
+  const result = await Effect.runPromise(
+    stage
+      .run({ container: makeContainer(["codex"]) })
+      .pipe(Effect.scoped, Effect.provide(fake)),
+  );
+
+  expect(result.observability).toEqual({
+    enabled: true,
+    receiverPort: 4318,
+  });
+  expect(result.container?.env.static).toEqual({});
+  expect(result.container?.command).toEqual({
+    agentCommand: [
+      "codex",
+      "-c",
+      'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+    ],
+    extraArgs: [],
+  });
+  expect(startCount).toEqual(1);
+  expect(seen[0]?.fallbackMetadata).toEqual({
+    sessionId: "sess_abc123",
+    profileName: "dev",
+    agent: "codex",
+  });
+});
+
+test("ObservabilityStage: enabled config + codex with empty command => receiver acquired and codex command injected", async () => {
   let startCount = 0;
   const fake = makeOtlpReceiverServiceFake({
+    port: 4318,
     onStart: () => {
       startCount += 1;
     },
@@ -160,7 +201,46 @@ test("ObservabilityStage: enabled config + codex => slice { enabled: false }, no
   );
   const result = await Effect.runPromise(
     stage
-      .run({ container: makeContainer() })
+      .run({ container: makeContainer([]) })
+      .pipe(Effect.scoped, Effect.provide(fake)),
+  );
+
+  expect(result.observability).toEqual({
+    enabled: true,
+    receiverPort: 4318,
+  });
+  expect(result.container?.command).toEqual({
+    agentCommand: [
+      "codex",
+      "-c",
+      'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+    ],
+    extraArgs: [],
+  });
+  expect(startCount).toEqual(1);
+});
+
+test("ObservabilityStage: enabled config + codex fallback command => disabled and no receiver acquired", async () => {
+  let startCount = 0;
+  const fake = makeOtlpReceiverServiceFake({
+    port: 4318,
+    onStart: () => {
+      startCount += 1;
+    },
+  });
+
+  const stage = createObservabilityStage(
+    makeDeps({ enable: true, agent: "codex" }),
+  );
+  const result = await Effect.runPromise(
+    stage
+      .run({
+        container: makeContainer([
+          "bash",
+          "-c",
+          "echo 'codex binary not found'; exit 1",
+        ]),
+      })
       .pipe(Effect.scoped, Effect.provide(fake)),
   );
 
@@ -238,6 +318,32 @@ test("ObservabilityStage: enabled + copilot => COPILOT_OTEL_ENABLED + common env
   expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBeUndefined();
   expect(env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toBeUndefined();
   expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toEqual("http://127.0.0.1:53000");
+});
+
+test("ObservabilityStage: codex argv override is inserted before existing extra args", async () => {
+  const fake = makeOtlpReceiverServiceFake({ port: 4318 });
+  const stage = createObservabilityStage(
+    makeDeps({ enable: true, agent: "codex" }),
+  );
+  const baseContainer: ContainerPlan = {
+    ...emptyContainerPlan("base-image", "/work"),
+    command: { agentCommand: ["codex"], extraArgs: ["exec", "prompt"] },
+  };
+
+  const result = await Effect.runPromise(
+    stage
+      .run({ container: baseContainer })
+      .pipe(Effect.scoped, Effect.provide(fake)),
+  );
+
+  expect(result.container?.command).toEqual({
+    agentCommand: [
+      "codex",
+      "-c",
+      'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+    ],
+    extraArgs: ["exec", "prompt"],
+  });
 });
 
 test("ObservabilityStage: enabled path overrides any pre-existing OTEL_* keys in the container slice (last-wins)", async () => {

@@ -9,9 +9,8 @@
  *   - claude  → CLAUDE_CODE_ENABLE_TELEMETRY=1, CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
  *               plus the OTLP-common envs.
  *   - copilot → COPILOT_OTEL_ENABLED=true plus the OTLP-common envs.
- *   - codex   → no env injected. The codex CLI is intentionally out of scope
- *               for this ADR: returning `null` here keeps codex containers
- *               free of OTLP envs even if the receiver was acquired.
+ *   - codex   → no env injected. Codex is configured via CLI argv
+ *               (`codex -c otel.trace_exporter=...`) instead of OTEL envs.
  *
  * Common envs:
  *   OTEL_EXPORTER_OTLP_ENDPOINT  http://127.0.0.1:<port>
@@ -30,6 +29,10 @@ export interface BuildObservabilityEnvArgs {
   readonly agent: AgentType;
   readonly sessionId: string;
   readonly profileName: string;
+  readonly port: number;
+}
+
+export interface BuildCodexTraceExporterConfigArgs {
   readonly port: number;
 }
 
@@ -103,18 +106,21 @@ export function buildObservabilityEnv(
   }
 }
 
+export function buildCodexTraceExporterConfig(
+  args: BuildCodexTraceExporterConfigArgs,
+): string {
+  return `otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:${args.port}/v1/traces",protocol="json"}}`;
+}
+
 /**
- * Pure predicate: does {@link buildObservabilityEnv} produce an env map for
- * the given agent? Equivalent to `buildObservabilityEnv(...) !== null` but
- * independent of session identity / port — callable from the planner before
- * any resource is acquired.
+ * Pure predicate: can the selected agent be wired to the per-session
+ * receiver? Claude/Copilot use env vars; Codex uses a CLI config override.
  */
 export function agentSupportsObservability(agent: AgentType): boolean {
   switch (agent) {
     case "claude":
     case "copilot":
-      return true;
     case "codex":
-      return false;
+      return true;
   }
 }
