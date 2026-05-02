@@ -4,6 +4,8 @@ import {
   daemonStateDir,
   daemonStatePath,
   daemonTokenPath,
+  pricingCacheDir,
+  pricingCachePath,
 } from "./paths.ts";
 
 describe("daemonStateDir", () => {
@@ -53,5 +55,40 @@ describe("daemon path helpers", () => {
     expect(daemonStatePath()).toBe(`${dir}/daemon.json`);
     expect(daemonLogPath()).toBe(`${dir}/daemon.log`);
     expect(daemonTokenPath()).toBe(`${dir}/daemon.token`);
+  });
+});
+
+describe("pricingCacheDir", () => {
+  const origXdgCache = process.env.XDG_CACHE_HOME;
+  const origHome = process.env.HOME;
+
+  afterEach(() => {
+    if (origXdgCache === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = origXdgCache;
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+  });
+
+  test("uses XDG_CACHE_HOME when set", () => {
+    process.env.XDG_CACHE_HOME = "/xdg/cache";
+    process.env.HOME = "/home/u";
+    expect(pricingCacheDir()).toBe("/xdg/cache/nas/pricing");
+  });
+
+  test("falls back to HOME/.cache when XDG_CACHE_HOME unset", () => {
+    delete process.env.XDG_CACHE_HOME;
+    process.env.HOME = "/home/u";
+    expect(pricingCacheDir()).toBe("/home/u/.cache/nas/pricing");
+  });
+
+  test("falls back to /tmp/.cache when neither is set", () => {
+    delete process.env.XDG_CACHE_HOME;
+    delete process.env.HOME;
+    expect(pricingCacheDir()).toBe("/tmp/.cache/nas/pricing");
+  });
+
+  test("pricingCachePath sits under pricingCacheDir as litellm.json", () => {
+    process.env.XDG_CACHE_HOME = "/xdg/cache";
+    expect(pricingCachePath()).toBe(`${pricingCacheDir()}/litellm.json`);
   });
 });

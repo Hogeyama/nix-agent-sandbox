@@ -2451,9 +2451,6 @@ body::after {
   text-transform: uppercase;
   color: var(--muted);
 }
-.history-detail-cost-band-chip--bundled {
-  color: var(--cream-dim);
-}
 .history-detail-cost-band-chip--stale {
   color: var(--amber-hi);
   font-weight: 600;

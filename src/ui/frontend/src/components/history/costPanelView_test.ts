@@ -379,20 +379,6 @@ describe("computeConversationCost", () => {
     expect(view.mode).toBe("multi");
   });
 
-  test("source 'bundled' carries the 'bundled — ' prefix on fetchedAtRelative", () => {
-    const snap = snapshot(
-      { foo: { input_cost_per_token: 0.000001 } },
-      { source: "bundled" },
-    );
-    const view = computeConversationCost(
-      totals([{ model: "foo", inputTokens: 1_000 }]),
-      snap,
-      NOW,
-    );
-    expect(view.source).toBe("bundled");
-    expect(view.fetchedAtRelative.startsWith("bundled — ")).toBe(true);
-  });
-
   test("snapshot.stale is mirrored onto the view", () => {
     const snap = snapshot(
       { foo: { input_cost_per_token: 0.000001 } },
@@ -444,15 +430,6 @@ describe("formatRelativeFetched", () => {
     expect(
       formatRelativeFetched("2026-01-01T00:00:00.000Z", now, "litellm"),
     ).toBe("on 2026-01-01");
-  });
-
-  test("source 'bundled' prefixes every body with 'bundled — '", () => {
-    expect(
-      formatRelativeFetched("2026-05-02T11:59:30.000Z", now, "bundled"),
-    ).toBe("bundled — just now");
-    expect(
-      formatRelativeFetched("2026-04-20T12:00:00.000Z", now, "bundled"),
-    ).toBe("bundled — 12d ago");
   });
 });
 

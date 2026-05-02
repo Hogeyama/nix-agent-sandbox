@@ -55,7 +55,7 @@ export type CostPanelView = {
   totalUsd: number;
   /** True iff at least one row is in the unknown bucket. */
   hasUnknown: boolean;
-  source: "litellm" | "bundled" | "unavailable";
+  source: "litellm" | "unavailable";
   /** Human-readable "X ago" label. */
   fetchedAtRelative: string;
   /** Mirror of the snapshot's `stale` flag, for the badge. */
@@ -325,7 +325,7 @@ export interface ConversationCostView {
   /** Sum of `totalUsd` across known rows only. */
   totalUsd: number;
   hasUnknown: boolean;
-  source: "litellm" | "bundled" | "unavailable";
+  source: "litellm" | "unavailable";
   fetchedAtRelative: string;
   stale: boolean;
   /** Populated iff `mode === "single"`. */
@@ -412,49 +412,31 @@ export function computeConversationCost(
  * Render the snapshot's `fetched_at` as a coarse relative-time label.
  * The bucket boundaries match the conversation list's relative-time
  * helper (under a minute, then minutes / hours / days) so the two
- * displays read consistently. A `bundled` source carries the
- * "bundled — " prefix to flag that the price catalogue ships with the
- * binary rather than coming from a fresh fetch; `unavailable` collapses
- * to a single em-dash because there is no meaningful timestamp to
- * report.
+ * displays read consistently. `unavailable` collapses to a single
+ * em-dash because there is no meaningful timestamp to report.
  */
 export function formatRelativeFetched(
   fetchedAtIso: string,
   nowMs: number,
-  source: "litellm" | "bundled" | "unavailable",
+  source: "litellm" | "unavailable",
 ): string {
   if (source === "unavailable") return "—";
 
   const ts = Date.parse(fetchedAtIso);
-  let body: string;
-  if (Number.isNaN(ts)) {
-    body = fetchedAtIso;
-  } else {
-    const diffMs = Math.max(0, nowMs - ts);
-    const diffMin = Math.floor(diffMs / 60_000);
-    if (diffMin < 1) {
-      body = "just now";
-    } else if (diffMin < 60) {
-      body = `${diffMin}m ago`;
-    } else {
-      const diffHr = Math.floor(diffMin / 60);
-      if (diffHr < 24) {
-        body = `${diffHr}h ago`;
-      } else {
-        const diffDay = Math.floor(diffHr / 24);
-        if (diffDay < 30) {
-          body = `${diffDay}d ago`;
-        } else {
-          // Round-trip the ISO timestamp through Date so a value with
-          // a non-Z offset still produces the calendar date that the
-          // browser would display.
-          body = `on ${new Date(ts).toISOString().slice(0, 10)}`;
-        }
-      }
-    }
-  }
+  if (Number.isNaN(ts)) return fetchedAtIso;
 
-  return source === "bundled" ? `bundled — ${body}` : body;
+  const diffMs = Math.max(0, nowMs - ts);
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  // Round-trip the ISO timestamp through Date so a value with a non-Z
+  // offset still produces the calendar date that the browser would
+  // display.
+  return `on ${new Date(ts).toISOString().slice(0, 10)}`;
 }
 
 /**

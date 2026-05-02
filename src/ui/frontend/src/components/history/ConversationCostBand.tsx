@@ -18,8 +18,8 @@
  *     token cells (in / out / cache r / cache w).
  *   - multi: per-model table with a TOTAL row that sums the known rows.
  *
- * Unavailable / bundled / stale chips lean on the same accent tokens
- * the list-page panel uses so the two surfaces read as one family.
+ * Unavailable / stale chips lean on the same accent tokens the
+ * list-page panel uses so the two surfaces read as one family.
  */
 
 import { For, Show } from "solid-js";
@@ -67,23 +67,8 @@ export function ConversationCostBand(props: ConversationCostBandProps) {
                       Pricing unavailable
                     </span>
                   </Show>
-                  <Show when={view().source === "bundled"}>
-                    <span class="history-detail-cost-band-chip history-detail-cost-band-chip--bundled">
-                      bundled snapshot
-                    </span>
-                  </Show>
                   <Show when={view().source === "litellm"}>
                     <span class="history-detail-cost-band-chip">
-                      {view().fetchedAtRelative}
-                    </span>
-                  </Show>
-                  <Show
-                    when={
-                      view().source !== "litellm" &&
-                      view().source !== "unavailable"
-                    }
-                  >
-                    <span class="history-detail-cost-band-chip-meta">
                       {view().fetchedAtRelative}
                     </span>
                   </Show>

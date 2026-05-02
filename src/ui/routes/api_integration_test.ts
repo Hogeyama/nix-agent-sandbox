@@ -989,25 +989,6 @@ test("GET /pricing/snapshot returns litellm snapshot with 200", async () => {
   );
 });
 
-test("GET /pricing/snapshot returns bundled snapshot with stale=true and 200", async () => {
-  const snapshot: PricingSnapshot = {
-    fetched_at: "2026-04-01T00:00:00.000Z",
-    source: "bundled",
-    stale: true,
-    models: {
-      "gpt-4o": { input_cost_per_token: 0.0000025 },
-    },
-  };
-  const app = buildAppWithPricing(snapshot);
-
-  const res = await app.request("/api/pricing/snapshot");
-  expect(res.status).toEqual(200);
-  const body = (await res.json()) as PricingSnapshot;
-  expect(body.source).toEqual("bundled");
-  expect(body.stale).toEqual(true);
-  expect(Object.keys(body.models)).toContain("gpt-4o");
-});
-
 test("GET /pricing/snapshot returns unavailable sentinel with 200", async () => {
   // ADR pin: even when both cache and bundled fallback are absent we respond
   // 200 with `source: "unavailable"`, so the frontend can render "—" without

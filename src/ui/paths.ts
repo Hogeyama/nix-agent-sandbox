@@ -31,3 +31,23 @@ export function daemonLogPath(): string {
 export function daemonTokenPath(): string {
   return path.join(daemonStateDir(), "daemon.token");
 }
+
+/**
+ * Directory holding the LiteLLM pricing snapshot cache
+ * (`$XDG_CACHE_HOME/nas/pricing`, falling back to `~/.cache/nas/pricing`).
+ *
+ * Pricing data is regenerable from a public URL and from the
+ * bundled fallback, so it lives under the cache hierarchy rather
+ * than the state hierarchy.
+ */
+export function pricingCacheDir(): string {
+  const cacheRoot =
+    process.env.XDG_CACHE_HOME ||
+    path.join(process.env.HOME ?? "/tmp", ".cache");
+  return path.join(cacheRoot, "nas", "pricing");
+}
+
+/** Path of the cached LiteLLM pricing snapshot JSON. */
+export function pricingCachePath(): string {
+  return path.join(pricingCacheDir(), "litellm.json");
+}

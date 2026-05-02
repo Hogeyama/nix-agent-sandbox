@@ -15,8 +15,8 @@
  *     would not add information.
  *   - populated: header + per-model table. Header surfaces source,
  *     fetched-at relative time, total USD, and the daemon's "since"
- *     boundary; the stale badge appears when the snapshot is bundled or
- *     marked stale (cache passed its 24h freshness window).
+ *     boundary; the stale badge appears when the cached snapshot has
+ *     passed its 24h freshness window.
  */
 
 import { For, Show } from "solid-js";
@@ -66,7 +66,7 @@ export function CostPanel(props: CostPanelProps) {
                   Pricing unavailable
                 </span>
               </Show>
-              <Show when={view().source === "bundled" || view().stale === true}>
+              <Show when={view().stale === true}>
                 <span class="history-cost-stale-badge">stale</span>
               </Show>
               <span class="history-cost-total">
