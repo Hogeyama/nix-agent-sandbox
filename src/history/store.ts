@@ -8,6 +8,7 @@ import type {
   InvocationDetail,
   InvocationRow,
   InvocationSummaryRow,
+  ModelTokenTotalsRow,
   SpanRow,
   SpanSummaryRow,
   TraceRow,
@@ -22,6 +23,7 @@ export type {
   InvocationDetail,
   InvocationSummaryRow,
   InvocationTurnEventRow,
+  ModelTokenTotalsRow,
   SpanSummaryRow,
   TraceSummaryRow,
 } from "./types.ts";
@@ -827,4 +829,56 @@ export function queryInvocationDetail(
     })),
     conversations,
   };
+}
+
+interface ModelTokenTotalsSqlRow {
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_write: number;
+}
+
+/**
+ * Aggregate `(in_tok, out_tok, cache_r, cache_w)` per `model` over spans
+ * whose `started_at >= sinceIso`. The caller decides the window (e.g. 30d
+ * for the UI dashboard); the store layer is window-agnostic.
+ *
+ * Notes:
+ * - SQLite's `GROUP BY` collapses NULL values together, so a single row
+ *   with `model = null` covers all model-less spans.
+ * - `COALESCE(SUM(...), 0)` keeps an empty group from emitting NULL —
+ *   in practice `SUM` on an empty result is NULL, but on a non-empty
+ *   group with all-NULL values `SUM` is also NULL; both cases collapse
+ *   to 0.
+ * - Order is deterministic: `model ASC` with the NULL row last. This
+ *   stabilises downstream SSE diff hashing in commit 5.
+ * - `spans.started_at` is not currently indexed, so this is a full scan.
+ *   Acceptable at current scale; revisit if span counts grow.
+ */
+export function queryModelTokenTotals(
+  db: Database,
+  options: { sinceIso: string },
+): ModelTokenTotalsRow[] {
+  const rows = db
+    .prepare(
+      `SELECT
+         model                            AS model,
+         COALESCE(SUM(in_tok), 0)         AS input_tokens,
+         COALESCE(SUM(out_tok), 0)        AS output_tokens,
+         COALESCE(SUM(cache_r), 0)        AS cache_read,
+         COALESCE(SUM(cache_w), 0)        AS cache_write
+       FROM spans
+       WHERE started_at >= ?
+       GROUP BY model
+       ORDER BY model IS NULL, model`,
+    )
+    .all(options.sinceIso) as ModelTokenTotalsSqlRow[];
+  return rows.map((r) => ({
+    model: r.model,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheRead: r.cache_read,
+    cacheWrite: r.cache_write,
+  }));
 }

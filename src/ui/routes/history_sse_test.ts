@@ -101,6 +101,7 @@ function makeMockReader(): MockReader {
       reader.invocationCalls.push(id);
       return invocations.get(id) ?? null;
     },
+    readModelTokenTotals: () => [],
     setList: (rows) => {
       list = rows;
     },

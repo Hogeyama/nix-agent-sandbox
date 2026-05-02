@@ -22,6 +22,7 @@ import type {
   ConversationDetail,
   ConversationListRow,
   InvocationDetail,
+  ModelTokenTotalsRow,
 } from "../history/store.ts";
 import { resolveHistoryDbPath } from "../history/store.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
@@ -54,6 +55,7 @@ import {
   readConversationDetail,
   readConversationList,
   readInvocationDetail,
+  readModelTokenTotals,
 } from "./history_data.ts";
 import { getPricingSnapshot, type PricingSnapshot } from "./pricing.ts";
 import {
@@ -69,6 +71,11 @@ export interface UiHistoryReader {
   readConversationList(): ConversationListRow[];
   readConversationDetail(id: string): ConversationDetail | null;
   readInvocationDetail(id: string): InvocationDetail | null;
+  /**
+   * Per-model token totals for spans started at or after `sinceIso`.
+   * The window is chosen by the caller (e.g. UI dashboard: 30d).
+   */
+  readModelTokenTotals(sinceIso: string): ModelTokenTotalsRow[];
 }
 
 /**
@@ -99,6 +106,8 @@ function makeHistoryReader(historyDbPath: string): UiHistoryReader {
       readConversationDetail(id, { dbPath: historyDbPath }),
     readInvocationDetail: (id) =>
       readInvocationDetail(id, { dbPath: historyDbPath }),
+    readModelTokenTotals: (sinceIso) =>
+      readModelTokenTotals(sinceIso, { dbPath: historyDbPath }),
   };
 }
 

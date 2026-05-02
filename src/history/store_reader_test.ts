@@ -10,6 +10,7 @@ import {
   queryConversationDetail,
   queryConversationList,
   queryInvocationDetail,
+  queryModelTokenTotals,
   upsertConversation,
   upsertConversationSummary,
   upsertInvocation,
@@ -634,6 +635,232 @@ test("readonly handle does not block writer cache (separate handles by mode)", a
         .map((r) => r.id)
         .sort(),
     ).toEqual(["conv_a", "conv_b"]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryModelTokenTotals: empty db returns []", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    expect(
+      queryModelTokenTotals(db, { sinceIso: "2026-04-01T00:00:00Z" }),
+    ).toEqual([]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryModelTokenTotals: groups by model and sums tokens, NULL safe", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(db, tr({ traceId: "trace_a", invocationId: "sess_a" }));
+    insertSpans(db, [
+      sp({
+        spanId: "s1",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 100,
+        outTok: 200,
+        cacheR: 10,
+        cacheW: 20,
+        startedAt: "2026-04-15T10:00:00Z",
+      }),
+      sp({
+        spanId: "s2",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 50,
+        outTok: 60,
+        cacheR: null,
+        cacheW: null,
+        startedAt: "2026-04-15T11:00:00Z",
+      }),
+      sp({
+        spanId: "s3",
+        traceId: "trace_a",
+        model: "claude-haiku",
+        inTok: 7,
+        outTok: 8,
+        cacheR: 1,
+        cacheW: 2,
+        startedAt: "2026-04-15T12:00:00Z",
+      }),
+    ]);
+
+    const totals = queryModelTokenTotals(db, {
+      sinceIso: "2026-04-01T00:00:00Z",
+    });
+    const sonnet = totals.find((r) => r.model === "claude-sonnet");
+    expect(sonnet).toBeDefined();
+    expect(sonnet?.inputTokens).toEqual(150);
+    expect(sonnet?.outputTokens).toEqual(260);
+    // cache_r/cache_w with one NULL row → 10 + 0, 20 + 0
+    expect(sonnet?.cacheRead).toEqual(10);
+    expect(sonnet?.cacheWrite).toEqual(20);
+
+    const haiku = totals.find((r) => r.model === "claude-haiku");
+    expect(haiku).toBeDefined();
+    expect(haiku?.inputTokens).toEqual(7);
+    expect(haiku?.outputTokens).toEqual(8);
+    expect(haiku?.cacheRead).toEqual(1);
+    expect(haiku?.cacheWrite).toEqual(2);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryModelTokenTotals: filters by sinceIso (drops older spans)", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(db, tr({ traceId: "trace_a", invocationId: "sess_a" }));
+    insertSpans(db, [
+      sp({
+        spanId: "old",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 999,
+        outTok: 999,
+        startedAt: "2026-01-01T00:00:00Z",
+      }),
+      sp({
+        spanId: "new",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 100,
+        outTok: 200,
+        startedAt: "2026-04-15T00:00:00Z",
+      }),
+    ]);
+    const totals = queryModelTokenTotals(db, {
+      sinceIso: "2026-04-01T00:00:00Z",
+    });
+    expect(totals.length).toEqual(1);
+    expect(totals[0].model).toEqual("claude-sonnet");
+    expect(totals[0].inputTokens).toEqual(100);
+    expect(totals[0].outputTokens).toEqual(200);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryModelTokenTotals: model=NULL spans collapsed into a single row", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(db, tr({ traceId: "trace_a", invocationId: "sess_a" }));
+    insertSpans(db, [
+      sp({
+        spanId: "n1",
+        traceId: "trace_a",
+        model: null,
+        inTok: 11,
+        outTok: 22,
+        cacheR: 3,
+        cacheW: 4,
+        startedAt: "2026-04-15T10:00:00Z",
+      }),
+      sp({
+        spanId: "n2",
+        traceId: "trace_a",
+        model: null,
+        inTok: 1,
+        outTok: 2,
+        cacheR: null,
+        cacheW: null,
+        startedAt: "2026-04-15T10:00:01Z",
+      }),
+    ]);
+    const totals = queryModelTokenTotals(db, {
+      sinceIso: "2026-04-01T00:00:00Z",
+    });
+    expect(totals.length).toEqual(1);
+    expect(totals[0].model).toBeNull();
+    expect(totals[0].inputTokens).toEqual(12);
+    expect(totals[0].outputTokens).toEqual(24);
+    expect(totals[0].cacheRead).toEqual(3);
+    expect(totals[0].cacheWrite).toEqual(4);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryModelTokenTotals: deterministic order (model ASC, NULL last)", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(db, tr({ traceId: "trace_a", invocationId: "sess_a" }));
+    insertSpans(db, [
+      sp({
+        spanId: "z",
+        traceId: "trace_a",
+        model: "zeta",
+        startedAt: "2026-04-15T10:00:00Z",
+      }),
+      sp({
+        spanId: "n",
+        traceId: "trace_a",
+        model: null,
+        startedAt: "2026-04-15T10:00:01Z",
+      }),
+      sp({
+        spanId: "a",
+        traceId: "trace_a",
+        model: "alpha",
+        startedAt: "2026-04-15T10:00:02Z",
+      }),
+      sp({
+        spanId: "m",
+        traceId: "trace_a",
+        model: "mu",
+        startedAt: "2026-04-15T10:00:03Z",
+      }),
+    ]);
+    const totals = queryModelTokenTotals(db, {
+      sinceIso: "2026-04-01T00:00:00Z",
+    });
+    expect(totals.map((r) => r.model)).toEqual(["alpha", "mu", "zeta", null]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryModelTokenTotals: single row, NULL cache columns coerced to 0", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(db, tr({ traceId: "trace_a", invocationId: "sess_a" }));
+    insertSpans(db, [
+      sp({
+        spanId: "only",
+        traceId: "trace_a",
+        model: "claude-haiku",
+        inTok: 1,
+        outTok: 2,
+        cacheR: null,
+        cacheW: null,
+        startedAt: "2026-04-15T10:00:00Z",
+      }),
+    ]);
+    const totals = queryModelTokenTotals(db, {
+      sinceIso: "2026-04-01T00:00:00Z",
+    });
+    expect(totals.length).toEqual(1);
+    expect(totals[0].cacheRead).toEqual(0);
+    expect(totals[0].cacheWrite).toEqual(0);
   } finally {
     await cleanup(t);
   }

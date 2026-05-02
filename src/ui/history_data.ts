@@ -16,10 +16,12 @@ import {
   type ConversationListRow,
   HistoryDbVersionMismatchError,
   type InvocationDetail,
+  type ModelTokenTotalsRow,
   openHistoryDb,
   queryConversationDetail,
   queryConversationList,
   queryInvocationDetail,
+  queryModelTokenTotals,
   resolveHistoryDbPath,
 } from "../history/store.ts";
 
@@ -114,5 +116,27 @@ export function readInvocationDetail(
       `[nas:history] queryInvocationDetail failed at ${dbPath} (id=${id}): ${describeError(e)}`,
     );
     return null;
+  }
+}
+
+/**
+ * Per-model token totals for spans started at or after `sinceIso`. Returns
+ * [] when the db is unavailable or the underlying query fails. The caller
+ * (commit 5: SSE delivery) chooses the window — this layer is policy-free.
+ */
+export function readModelTokenTotals(
+  sinceIso: string,
+  opts?: ReadHistoryOptions,
+): ModelTokenTotalsRow[] {
+  const dbPath = resolvePath(opts);
+  const db = openReader(dbPath);
+  if (!db) return [];
+  try {
+    return queryModelTokenTotals(db, { sinceIso });
+  } catch (e) {
+    console.warn(
+      `[nas:history] queryModelTokenTotals failed at ${dbPath} (sinceIso=${sinceIso}): ${describeError(e)}`,
+    );
+    return [];
   }
 }

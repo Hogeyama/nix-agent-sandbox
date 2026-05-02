@@ -65,6 +65,7 @@ function createDummyCtx(): UiDataContext {
       readConversationList: () => [],
       readConversationDetail: () => null,
       readInvocationDetail: () => null,
+      readModelTokenTotals: () => [],
     },
     pricing: {
       getSnapshot: async () => ({

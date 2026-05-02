@@ -169,3 +169,17 @@ export interface InvocationDetail {
   /** All conversations referenced by this invocation's traces (subagents may produce multiple). */
   readonly conversations: ConversationListRow[];
 }
+
+/**
+ * Per-model token totals aggregated over a time window. One row per distinct
+ * `spans.model` value (including a single row for `model IS NULL` collected
+ * separately by SQLite's `GROUP BY` NULL-grouping). Cache columns COALESCE
+ * NULL to 0 so a row never carries a NULL aggregate.
+ */
+export interface ModelTokenTotalsRow {
+  readonly model: string | null;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+}

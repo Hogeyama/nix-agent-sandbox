@@ -54,6 +54,7 @@ function createTestContext(dir: string): UiDataContext {
       readConversationList: () => [],
       readConversationDetail: () => null,
       readInvocationDetail: () => null,
+      readModelTokenTotals: () => [],
     },
     pricing: {
       getSnapshot: async () => ({

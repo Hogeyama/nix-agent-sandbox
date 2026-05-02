@@ -5,13 +5,17 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   _closeHistoryDb,
+  insertSpans,
   openHistoryDb,
   upsertConversation,
+  upsertInvocation,
+  upsertTrace,
 } from "../history/store.ts";
 import {
   readConversationDetail,
   readConversationList,
   readInvocationDetail,
+  readModelTokenTotals,
 } from "./history_data.ts";
 
 interface Tmp {
@@ -119,6 +123,115 @@ test("schema mismatch is swallowed: reader returns []/null, no throw", async () 
     expect(readConversationDetail("x", { dbPath: t.dbPath })).toBeNull();
     expect(readInvocationDetail("x", { dbPath: t.dbPath })).toBeNull();
   } finally {
+    await cleanup(t);
+  }
+});
+
+test("readModelTokenTotals: returns [] when db file does not exist", async () => {
+  const t = await makeTempDir();
+  try {
+    expect(
+      readModelTokenTotals("2026-04-01T00:00:00Z", { dbPath: t.dbPath }),
+    ).toEqual([]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("readModelTokenTotals: aggregates per-model totals from a writer-populated db", async () => {
+  const t = await makeTempDir();
+  try {
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(writer, {
+      id: "sess_a",
+      profile: "default",
+      agent: "claude",
+      worktreePath: "/tmp/wt",
+      startedAt: "2026-04-15T10:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+    upsertConversation(writer, {
+      id: "conv_a",
+      agent: "claude",
+      firstSeenAt: "2026-04-15T10:00:00Z",
+      lastSeenAt: "2026-04-15T10:00:00Z",
+    });
+    upsertTrace(writer, {
+      traceId: "trace_a",
+      invocationId: "sess_a",
+      conversationId: "conv_a",
+      startedAt: "2026-04-15T10:00:00Z",
+      endedAt: null,
+    });
+    insertSpans(writer, [
+      {
+        spanId: "s1",
+        parentSpanId: null,
+        traceId: "trace_a",
+        spanName: "chat",
+        kind: "chat",
+        model: "claude-sonnet",
+        inTok: 100,
+        outTok: 200,
+        cacheR: 10,
+        cacheW: 20,
+        durationMs: 1234,
+        startedAt: "2026-04-15T10:00:00Z",
+        endedAt: "2026-04-15T10:00:01Z",
+        attrsJson: "{}",
+      },
+    ]);
+
+    const totals = readModelTokenTotals("2026-04-01T00:00:00Z", {
+      dbPath: t.dbPath,
+    });
+    expect(totals.length).toEqual(1);
+    expect(totals[0].model).toEqual("claude-sonnet");
+    expect(totals[0].inputTokens).toEqual(100);
+    expect(totals[0].outputTokens).toEqual(200);
+    expect(totals[0].cacheRead).toEqual(10);
+    expect(totals[0].cacheWrite).toEqual(20);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("readModelTokenTotals: returns [] when the db file is not a valid SQLite database", async () => {
+  const t = await makeTempDir();
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await writeFile(
+      t.dbPath,
+      Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd]),
+    );
+    expect(
+      readModelTokenTotals("2026-04-01T00:00:00Z", { dbPath: t.dbPath }),
+    ).toEqual([]);
+  } finally {
+    console.warn = originalWarn;
+    await cleanup(t);
+  }
+});
+
+test("readModelTokenTotals: schema mismatch is swallowed, returns []", async () => {
+  const t = await makeTempDir();
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    _closeHistoryDb(t.dbPath);
+
+    const raw = new Database(t.dbPath);
+    raw.run("PRAGMA user_version = 999");
+    raw.close();
+
+    expect(
+      readModelTokenTotals("2026-04-01T00:00:00Z", { dbPath: t.dbPath }),
+    ).toEqual([]);
+  } finally {
+    console.warn = originalWarn;
     await cleanup(t);
   }
 });
