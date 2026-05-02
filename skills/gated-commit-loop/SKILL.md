@@ -222,6 +222,8 @@ argument-hint: "[実装内容の説明]"
 
 `./.gated-commit-loop/<filename>` のパスと、入ったラベル数 / 未ラベル数を 1 行で報告して終了する。
 
+蓄積した summary.jsonl を使って `review-config.yml` を見直したいとユーザーが言ったら、`references/tuning-rules.md` を読んでその手順に従う。
+
 ## 実行時テンプレート
 
 ### planner 依頼テンプレート
