@@ -7,23 +7,39 @@ import { DEFAULT_UI_CONFIG } from "../config/types.ts";
 import { stopUiDaemon } from "../ui/daemon.ts";
 import { startServer } from "../ui/server.ts";
 import {
+  type MigrationOutcome,
+  migrateLegacyUiState,
+} from "../ui/state_migration.ts";
+import {
   exitOnCliError,
   findFirstNonFlagArg,
   getFlagValue,
 } from "./helpers.ts";
 
-export async function runUiCommand(nasArgs: string[]): Promise<void> {
+export interface RunUiCommandInternals {
+  migrate?: () => Promise<MigrationOutcome>;
+  stop?: (options: { port: number }) => Promise<void>;
+}
+
+export async function runUiCommand(
+  nasArgs: string[],
+  internals: RunUiCommandInternals = {},
+): Promise<void> {
   const config = await loadConfig().catch(() => null);
   const uiDefaults = config?.ui ?? DEFAULT_UI_CONFIG;
 
   const sub = findFirstNonFlagArg(nasArgs);
+  const stop = internals.stop ?? stopUiDaemon;
 
   if (sub === "stop") {
     const portStr = getFlagValue(nasArgs, "--port");
     const port = portStr ? parseInt(portStr, 10) : uiDefaults.port;
-    await stopUiDaemon({ port });
+    await stop({ port });
     return;
   }
+
+  const migrate = internals.migrate ?? migrateLegacyUiState;
+  await migrate();
 
   const portStr = getFlagValue(nasArgs, "--port");
   const port = portStr ? parseInt(portStr, 10) : uiDefaults.port;
