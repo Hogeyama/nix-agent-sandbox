@@ -55,7 +55,7 @@ harness を進める方向として 4 つを比較した:
 
 ### データソース: OTEL
 
-両 agent が OpenTelemetry をサポートしているので、agent 横断の単一経路に
+各 agent が OpenTelemetry をサポートしているので、agent 横断の単一経路に
 できる。
 
 - **Copilot CLI**: `COPILOT_OTEL_ENABLED=true` ほか env で有効化。spans は
@@ -65,10 +65,17 @@ harness を進める方向として 4 つを比較した:
   `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` で traces (beta)。span 名は
   `claude_code.interaction` / `claude_code.llm_request` / `claude_code.tool`
   等の独自命名
+- **OpenAI Codex CLI**: env ではなく `-c` config override で OTLP/HTTP JSON
+  traces を有効化。nas は argv に
+  `-c 'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:<port>/v1/traces",protocol="json"}}'`
+  相当を追加する。span 名は `session_task.*` / `mcp.tools.call` /
+  `codex.turn.token_usage` / `model_client.stream_responses` 等の独自命名
 
 → **agent 横断スキーマは GenAI semconv に寄せる**。Claude 側は nas が mapper を
 1 枚噛ませて正規化する (`claude_code.llm_request` → `chat`、`claude_code.tool`
-→ `execute_tool` 等)。
+→ `execute_tool` 等)。Codex 側も nas が mapper を噛ませて
+`session_task.turn` → `invoke_agent`、`mcp.tools.call` → `execute_tool`、
+response / stream / token usage spans → `chat` へ正規化する。
 
 ### 受信方式: per-session OTLP receiver process
 
@@ -113,8 +120,11 @@ per-session UDS forward-port relay が host 到達の唯一の経路となる:
   relay が **container `127.0.0.1:<port>` → UDS → host `127.0.0.1:<port>`**
   を肩代わりする
 - container 側 `local-proxy.mjs` が UDS dial を受け持つ
-- agent env: `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>`、
+- Claude/Copilot agent env:
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>`、
   `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`
+- Codex argv config override:
+  `codex -c 'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:<port>/v1/traces",protocol="json"}}' ...`
 - envoy allowlist 例外 / broker loopback deny 例外は **不要** (経路に
   envoy / broker が挟まらない)
 - Node OTLP HTTP exporter の `unix:` 非対応問題は agent からは見えない
@@ -161,7 +171,8 @@ CREATE TABLE invocations (
 -- agent が握る側。--resume 跨ぎで持続。/new で別 row が生まれる
 CREATE TABLE conversations (
   id              TEXT PRIMARY KEY,    -- agent-issued (Claude session.id /
-                                       -- Copilot gen_ai.conversation.id)
+                                       -- Copilot gen_ai.conversation.id /
+                                       -- Codex conversation.id or thread.id)
   agent           TEXT,                -- claude / copilot / codex
   first_seen_at   TEXT NOT NULL,
   last_seen_at    TEXT NOT NULL
@@ -237,16 +248,33 @@ CREATE INDEX idx_conversations_lastseen  ON conversations(last_seen_at DESC);
    - `claude_code.llm_request` → `chat`
    - `claude_code.tool` 完全一致 または `claude_code.tool.` で始まる name
      → `execute_tool`
-4. span.name の **空白区切り prefix** (Copilot CLI の `<op> <subject>` 形):
+4. Codex CLI の vendor span 名:
+   - `session_task.turn` / `session_task.review` / `session_task.compact`
+     → `invoke_agent`
+   - `session_task.user_shell` / `mcp.tools.call` → `execute_tool`
+   - `codex.turn.token_usage` / `codex.response` / `codex.responses` /
+     `model_client.stream_responses` /
+     `model_client.stream_responses_websocket` /
+     `responses.stream_request` /
+     `responses_websocket.stream_request` → `chat`
+5. span.name の **空白区切り prefix** (Copilot CLI の `<op> <subject>` 形):
    - `chat <model>` → `chat`
    - `execute_tool <name>` → `execute_tool`
    - `invoke_agent <name>` → `invoke_agent`
-5. `attrs["gen_ai.system"]` が文字列で存在 → `chat`
-6. いずれにも当たらなければ `other`
+6. `attrs["gen_ai.system"]` が文字列で存在 → `chat`
+7. いずれにも当たらなければ `other`
 
 Copilot CLI は全 span に `gen_ai.operation.name` を載せて出すため、Copilot
 由来の span は常に layer 1 で確定する。Claude Code は vendor 名で出る span が
-layer 3 に乗り、`chat` / `execute_tool` への正規化が掛かる。
+layer 3 に乗り、`chat` / `execute_tool` への正規化が掛かる。Codex CLI は
+vendor 名で出る span が layer 4 に乗り、turn / review / compact を
+`invoke_agent`、shell / MCP tool call を `execute_tool`、response / stream /
+token usage を `chat` に正規化する。
+
+Token usage は `spans` の token 列へ promotion するときに二重計上を避ける。
+Codex trace 内では `codex.turn.token_usage` span を最優先し、その span が無い
+場合だけ response / stream span の token を採用し、それも無い場合に限って
+`session_task.turn` 上の turn-only usage を採用する。
 
 ### Trace と conversation 紐付けの解決ルール
 
@@ -256,13 +284,17 @@ layer 3 に乗り、`chat` / `execute_tool` への正規化が掛かる。
   - Copilot CLI: `gen_ai.conversation.id`
   - Claude Code: `session.id` (resource attribute 側の `nas.session.id` とは
     別物。span attribute として乗ってくる方)
+  - Codex CLI: `conversation.id`、fallback として `thread.id`
 - `gen_ai.conversation.id` は **sparse**: Copilot は `chat` / `invoke_agent`
   span にしか載せず、`execute_tool` span には載らない。よって receiver は
-  span 単位ではなく **OTLP `trace_id` 単位で resolve** する: 同一 trace 内で、
-  入力順で最初に `gen_ai.conversation.id` または `session.id` のいずれかを
-  持つ span を見つけ、その値を当該 trace の `conversation_id` とする
-- 1 つの span が両方の属性を持つ場合、`gen_ai.conversation.id` を優先する。
-  `gen_ai.conversation.id` が無いか空文字のときに限り `session.id` を見る
+  span 単位ではなく **OTLP `trace_id` 単位で resolve** する
+- trace 全体での優先順は `gen_ai.conversation.id`、`session.id`、Codex
+  `conversation.id`、Codex `thread.id`。まず trace 内の全 span を入力順に
+  走査して `gen_ai.conversation.id` または `session.id` の最初の非空値を探し、
+  見つからない場合に trace 内の全 span を再走査して Codex `conversation.id`
+  または `thread.id` の最初の非空値を採用する
+- 1 つの span が複数の属性を持つ場合も同じ優先順を適用する。
+  空文字は無いものとして扱う
 - batch を跨いだ更新は `traces.conversation_id` の null / 既存値を上書き
   しない (`COALESCE(excluded.conversation_id, traces.conversation_id)`)。
   非 null の incoming 値は最初の 1 度だけ書かれる
@@ -272,7 +304,8 @@ resolve した値で `conversations` 行を upsert (`first_seen_at` は最古、
 
 ### turn_events への conversation_id 付与: hook payload から直接取る
 
-`nas hook` は両 agent の hook stdin payload から conversation id を取得できる:
+`nas hook` は Claude/Copilot の hook stdin payload から conversation id を
+取得できる:
 
 - Claude Code: 全 hook イベントの payload に `session_id` field
 - Copilot CLI: `sessionId` field (camelCase)
@@ -324,15 +357,23 @@ list と detail を同時に開かない route 構造になっており、global
 
 ### Resource attributes: nas 由来の identity を全 span に乗せる
 
-両 agent に共通で:
+Claude/Copilot は env で resource attributes を渡す:
 
 ```
 OTEL_RESOURCE_ATTRIBUTES=nas.session.id=<id>,nas.profile=<p>,nas.agent=<claude|copilot>
 ```
 
+Codex は `otel.trace_exporter` config override で exporter endpoint / protocol を
+指定し、resource attribute を exporter config としては渡さない。receiver は
+per-session listener が保持する metadata を fallback として使い、payload の
+resource attributes に `nas.session.id` / `nas.profile` / `nas.agent` が無い
+場合だけ補う。payload が同名 metadata を持つ場合は payload の値を上書きしない。
+この fallback により Codex の span も `nas.agent=codex` として保存される。
+
 `nas.session.id` は `invocations.id` の値 (= nas-issued sess_<hex>) を入れる。
 receiver はこれを使って **どの invocation に紐付ける trace か** を判定する。
-agent が emit する `session.id` / `gen_ai.conversation.id` とは独立。
+agent が emit する `session.id` / `gen_ai.conversation.id` / `conversation.id` /
+`thread.id` とは独立。
 
 ### 永続化のタイミング
 
@@ -380,7 +421,7 @@ file exporter 経路を取らないので「runtime tmpfs に buffer して sess
   format 変換コストを後出しにする利点が薄い
 - **OTEL を使わず agent transcript を parser で吸い上げる**:
   `~/.claude/projects/<ws>/<sid>.jsonl` 等を tail する案。agent 種別ごとに
-  parser を持つことになり、フォーマット変更にも弱い。OTEL は両 agent
+  parser を持つことになり、フォーマット変更にも弱い。OTEL は各 agent
   公式サポートなので素直
 - **Envoy / proxy 層で response header を抜く**: SSE / streaming で粒度が
   荒く、ヘッダ仕様変更に弱い。span 構造が取れないので autonomy 計測には
@@ -416,9 +457,9 @@ file exporter 経路を取らないので「runtime tmpfs に buffer して sess
   (subagent / `/new`) を表現できず、最初に観測された 1 値しか残らない。
   手元 DB で `sess_b96e28303ae6` が 6 trace × 5 conversation を持つことが
   実観測されており、情報損失が現実に発生する
-- **`turn_events.conversation_id` を後から OTLP 受信で backfill**: 両 agent
-  とも hook payload に session id field を提供しているので、書き手側で
-  直接埋められる。retroactive UPDATE 経路を持つほうが余計に複雑
+- **`turn_events.conversation_id` を後から OTLP 受信で backfill**:
+  Claude/Copilot は hook payload に session id field を提供しているので、
+  書き手側で直接埋められる。retroactive UPDATE 経路を持つほうが余計に複雑
 - **CLI (`nas history`) を提供する**: 表示面は UI daemon に集約する。CLI
   history は実装ライン (vocabulary / 出力レイアウト / test) を増やす割に、
   UI と機能が重複する。必要が再燃したら view 用 SQL を 1 つ追加するだけで
