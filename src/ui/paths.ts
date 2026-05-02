@@ -9,12 +9,12 @@
 
 import * as path from "node:path";
 
-/** Root directory for persisted UI daemon state (XDG_CACHE_HOME/nas/ui). */
+/** Root directory for persisted UI daemon state (XDG_STATE_HOME/nas/ui). */
 export function daemonStateDir(): string {
-  const xdgCache =
-    process.env.XDG_CACHE_HOME ||
-    path.join(process.env.HOME ?? "/tmp", ".cache");
-  return path.join(xdgCache, "nas", "ui");
+  const stateRoot =
+    process.env.XDG_STATE_HOME ||
+    path.join(process.env.HOME ?? "/tmp", ".local", "state");
+  return path.join(stateRoot, "nas", "ui");
 }
 
 /** Path of the JSON file holding pid/port/startedAt for the running daemon. */
