@@ -14,6 +14,7 @@ import {
 import {
   readConversationDetail,
   readConversationList,
+  readConversationModelTokenTotals,
   readInvocationDetail,
   readModelTokenTotals,
 } from "./history_data.ts";
@@ -232,6 +233,113 @@ test("readModelTokenTotals: schema mismatch is swallowed, returns []", async () 
     ).toEqual([]);
   } finally {
     console.warn = originalWarn;
+    await cleanup(t);
+  }
+});
+
+test("readConversationModelTokenTotals: returns [] when db file does not exist", async () => {
+  const t = await makeTempDir();
+  try {
+    expect(
+      readConversationModelTokenTotals("conv_a", { dbPath: t.dbPath }),
+    ).toEqual([]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("readConversationModelTokenTotals: returns [] when the db file is not a valid SQLite database", async () => {
+  const t = await makeTempDir();
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await writeFile(
+      t.dbPath,
+      Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd]),
+    );
+    expect(
+      readConversationModelTokenTotals("conv_a", { dbPath: t.dbPath }),
+    ).toEqual([]);
+  } finally {
+    console.warn = originalWarn;
+    await cleanup(t);
+  }
+});
+
+test("readConversationModelTokenTotals: aggregates per-model totals from a writer-populated db", async () => {
+  const t = await makeTempDir();
+  try {
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(writer, {
+      id: "sess_a",
+      profile: "default",
+      agent: "claude",
+      worktreePath: "/tmp/wt",
+      startedAt: "2026-04-15T10:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+    upsertConversation(writer, {
+      id: "conv_a",
+      agent: "claude",
+      firstSeenAt: "2026-04-15T10:00:00Z",
+      lastSeenAt: "2026-04-15T10:00:00Z",
+    });
+    upsertTrace(writer, {
+      traceId: "trace_a",
+      invocationId: "sess_a",
+      conversationId: "conv_a",
+      startedAt: "2026-04-15T10:00:00Z",
+      endedAt: null,
+    });
+    insertSpans(writer, [
+      {
+        spanId: "s1",
+        parentSpanId: null,
+        traceId: "trace_a",
+        spanName: "chat",
+        kind: "chat",
+        model: "claude-sonnet",
+        inTok: 100,
+        outTok: 200,
+        cacheR: 10,
+        cacheW: 20,
+        durationMs: 1234,
+        startedAt: "2026-04-15T10:00:00Z",
+        endedAt: "2026-04-15T10:00:01Z",
+        attrsJson: "{}",
+      },
+      {
+        spanId: "s2",
+        parentSpanId: null,
+        traceId: "trace_a",
+        spanName: "chat",
+        kind: "chat",
+        model: "claude-haiku",
+        inTok: 5,
+        outTok: 6,
+        cacheR: 1,
+        cacheW: 2,
+        durationMs: 100,
+        startedAt: "2026-04-15T10:01:00Z",
+        endedAt: "2026-04-15T10:01:01Z",
+        attrsJson: "{}",
+      },
+    ]);
+
+    const totals = readConversationModelTokenTotals("conv_a", {
+      dbPath: t.dbPath,
+    });
+    expect(totals.map((r) => r.model)).toEqual([
+      "claude-haiku",
+      "claude-sonnet",
+    ]);
+    const sonnet = totals.find((r) => r.model === "claude-sonnet");
+    expect(sonnet?.inputTokens).toEqual(100);
+    expect(sonnet?.outputTokens).toEqual(200);
+    expect(sonnet?.cacheRead).toEqual(10);
+    expect(sonnet?.cacheWrite).toEqual(20);
+  } finally {
     await cleanup(t);
   }
 });

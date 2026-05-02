@@ -54,6 +54,7 @@ import {
 import {
   readConversationDetail,
   readConversationList,
+  readConversationModelTokenTotals,
   readInvocationDetail,
   readModelTokenTotals,
 } from "./history_data.ts";
@@ -76,6 +77,13 @@ export interface UiHistoryReader {
    * The window is chosen by the caller (e.g. UI dashboard: 30d).
    */
   readModelTokenTotals(sinceIso: string): ModelTokenTotalsRow[];
+  /**
+   * Per-model token totals scoped to a single conversation, joined through
+   * `traces.conversation_id`.
+   */
+  readConversationModelTokenTotals(
+    conversationId: string,
+  ): ModelTokenTotalsRow[];
 }
 
 /**
@@ -108,6 +116,10 @@ function makeHistoryReader(historyDbPath: string): UiHistoryReader {
       readInvocationDetail(id, { dbPath: historyDbPath }),
     readModelTokenTotals: (sinceIso) =>
       readModelTokenTotals(sinceIso, { dbPath: historyDbPath }),
+    readConversationModelTokenTotals: (conversationId) =>
+      readConversationModelTokenTotals(conversationId, {
+        dbPath: historyDbPath,
+      }),
   };
 }
 

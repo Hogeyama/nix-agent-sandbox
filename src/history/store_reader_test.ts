@@ -9,6 +9,7 @@ import {
   openHistoryDb,
   queryConversationDetail,
   queryConversationList,
+  queryConversationModelTokenTotals,
   queryInvocationDetail,
   queryModelTokenTotals,
   upsertConversation,
@@ -859,6 +860,223 @@ test("queryModelTokenTotals: single row, NULL cache columns coerced to 0", async
       sinceIso: "2026-04-01T00:00:00Z",
     });
     expect(totals.length).toEqual(1);
+    expect(totals[0].cacheRead).toEqual(0);
+    expect(totals[0].cacheWrite).toEqual(0);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationModelTokenTotals: missing conversation_id returns []", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(db, tr({ traceId: "trace_a", invocationId: "sess_a" }));
+    insertSpans(db, [sp({ spanId: "s1", traceId: "trace_a" })]);
+
+    expect(queryConversationModelTokenTotals(db, "conv_missing")).toEqual([]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationModelTokenTotals: aggregates across multiple traces × multiple models", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_1",
+        invocationId: "sess_a",
+        conversationId: "conv_a",
+      }),
+    );
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_2",
+        invocationId: "sess_a",
+        conversationId: "conv_a",
+      }),
+    );
+    insertSpans(db, [
+      sp({
+        spanId: "s1",
+        traceId: "trace_1",
+        model: "claude-sonnet",
+        inTok: 100,
+        outTok: 200,
+        cacheR: 10,
+        cacheW: 20,
+      }),
+      sp({
+        spanId: "s2",
+        traceId: "trace_2",
+        model: "claude-sonnet",
+        inTok: 50,
+        outTok: 60,
+        cacheR: 5,
+        cacheW: 6,
+      }),
+      sp({
+        spanId: "s3",
+        traceId: "trace_2",
+        model: "claude-haiku",
+        inTok: 7,
+        outTok: 8,
+        cacheR: 1,
+        cacheW: 2,
+      }),
+    ]);
+
+    const totals = queryConversationModelTokenTotals(db, "conv_a");
+    const sonnet = totals.find((r) => r.model === "claude-sonnet");
+    expect(sonnet).toBeDefined();
+    expect(sonnet?.inputTokens).toEqual(150);
+    expect(sonnet?.outputTokens).toEqual(260);
+    expect(sonnet?.cacheRead).toEqual(15);
+    expect(sonnet?.cacheWrite).toEqual(26);
+
+    const haiku = totals.find((r) => r.model === "claude-haiku");
+    expect(haiku).toBeDefined();
+    expect(haiku?.inputTokens).toEqual(7);
+    expect(haiku?.outputTokens).toEqual(8);
+    expect(haiku?.cacheRead).toEqual(1);
+    expect(haiku?.cacheWrite).toEqual(2);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationModelTokenTotals: isolates spans of a different conversation", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertConversation(db, conv({ id: "conv_b" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "tr_a",
+        invocationId: "sess_a",
+        conversationId: "conv_a",
+      }),
+    );
+    upsertTrace(
+      db,
+      tr({
+        traceId: "tr_b",
+        invocationId: "sess_a",
+        conversationId: "conv_b",
+      }),
+    );
+    insertSpans(db, [
+      sp({
+        spanId: "sp_a",
+        traceId: "tr_a",
+        model: "claude-sonnet",
+        inTok: 11,
+        outTok: 22,
+        cacheR: 0,
+        cacheW: 0,
+      }),
+      sp({
+        spanId: "sp_b",
+        traceId: "tr_b",
+        model: "claude-sonnet",
+        inTok: 999,
+        outTok: 999,
+        cacheR: 999,
+        cacheW: 999,
+      }),
+    ]);
+
+    const totalsA = queryConversationModelTokenTotals(db, "conv_a");
+    expect(totalsA.length).toEqual(1);
+    expect(totalsA[0].model).toEqual("claude-sonnet");
+    expect(totalsA[0].inputTokens).toEqual(11);
+    expect(totalsA[0].outputTokens).toEqual(22);
+    expect(totalsA[0].cacheRead).toEqual(0);
+    expect(totalsA[0].cacheWrite).toEqual(0);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationModelTokenTotals: NULL model row sorts last", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_a",
+        invocationId: "sess_a",
+        conversationId: "conv_a",
+      }),
+    );
+    insertSpans(db, [
+      sp({ spanId: "z", traceId: "trace_a", model: "zeta" }),
+      sp({ spanId: "n", traceId: "trace_a", model: null }),
+      sp({ spanId: "a", traceId: "trace_a", model: "alpha" }),
+      sp({ spanId: "m", traceId: "trace_a", model: "mu" }),
+    ]);
+
+    const totals = queryConversationModelTokenTotals(db, "conv_a");
+    expect(totals.map((r) => r.model)).toEqual(["alpha", "mu", "zeta", null]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationModelTokenTotals: NULL cache columns coerced to 0", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_a",
+        invocationId: "sess_a",
+        conversationId: "conv_a",
+      }),
+    );
+    insertSpans(db, [
+      sp({
+        spanId: "s1",
+        traceId: "trace_a",
+        model: "claude-haiku",
+        inTok: 1,
+        outTok: 2,
+        cacheR: null,
+        cacheW: null,
+      }),
+      sp({
+        spanId: "s2",
+        traceId: "trace_a",
+        model: "claude-haiku",
+        inTok: 3,
+        outTok: 4,
+        cacheR: null,
+        cacheW: null,
+      }),
+    ]);
+
+    const totals = queryConversationModelTokenTotals(db, "conv_a");
+    expect(totals.length).toEqual(1);
+    expect(totals[0].model).toEqual("claude-haiku");
+    expect(totals[0].inputTokens).toEqual(4);
+    expect(totals[0].outputTokens).toEqual(6);
     expect(totals[0].cacheRead).toEqual(0);
     expect(totals[0].cacheWrite).toEqual(0);
   } finally {

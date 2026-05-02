@@ -110,6 +110,7 @@ function makeMockReader(): MockReader {
       reader.modelTokenTotalsCalls.push(sinceIso);
       return modelTokenTotals;
     },
+    readConversationModelTokenTotals: () => [],
     setList: (rows) => {
       list = rows;
     },

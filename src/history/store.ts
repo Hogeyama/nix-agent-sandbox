@@ -882,3 +882,41 @@ export function queryModelTokenTotals(
     cacheWrite: r.cache_write,
   }));
 }
+
+/**
+ * Aggregate `(in_tok, out_tok, cache_r, cache_w)` per `model` over spans
+ * belonging to a single conversation (joined through `traces.conversation_id`).
+ *
+ * Notes:
+ * - Spans whose `model` is NULL collapse into one row per the GROUP BY rules,
+ *   and `COALESCE(SUM(...), 0)` keeps all-NULL groups at 0 instead of NULL.
+ * - Order is deterministic: `model ASC` with the NULL row last.
+ * - Returns `[]` when no traces match the conversation_id.
+ */
+export function queryConversationModelTokenTotals(
+  db: Database,
+  conversationId: string,
+): ModelTokenTotalsRow[] {
+  const rows = db
+    .prepare(
+      `SELECT
+         s.model                            AS model,
+         COALESCE(SUM(s.in_tok), 0)         AS input_tokens,
+         COALESCE(SUM(s.out_tok), 0)        AS output_tokens,
+         COALESCE(SUM(s.cache_r), 0)        AS cache_read,
+         COALESCE(SUM(s.cache_w), 0)        AS cache_write
+       FROM spans s
+       JOIN traces t ON s.trace_id = t.trace_id
+       WHERE t.conversation_id = ?
+       GROUP BY s.model
+       ORDER BY s.model IS NULL, s.model`,
+    )
+    .all(conversationId) as ModelTokenTotalsSqlRow[];
+  return rows.map((r) => ({
+    model: r.model,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheRead: r.cache_read,
+    cacheWrite: r.cache_write,
+  }));
+}

@@ -20,6 +20,7 @@ import {
   openHistoryDb,
   queryConversationDetail,
   queryConversationList,
+  queryConversationModelTokenTotals,
   queryInvocationDetail,
   queryModelTokenTotals,
   resolveHistoryDbPath,
@@ -136,6 +137,28 @@ export function readModelTokenTotals(
   } catch (e) {
     console.warn(
       `[nas:history] queryModelTokenTotals failed at ${dbPath} (sinceIso=${sinceIso}): ${describeError(e)}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Per-model token totals scoped to one conversation (joined through
+ * `traces.conversation_id`). Returns [] when the db is unavailable or the
+ * underlying query fails.
+ */
+export function readConversationModelTokenTotals(
+  conversationId: string,
+  opts?: ReadHistoryOptions,
+): ModelTokenTotalsRow[] {
+  const dbPath = resolvePath(opts);
+  const db = openReader(dbPath);
+  if (!db) return [];
+  try {
+    return queryConversationModelTokenTotals(db, conversationId);
+  } catch (e) {
+    console.warn(
+      `[nas:history] queryConversationModelTokenTotals failed at ${dbPath} (id=${conversationId}): ${describeError(e)}`,
     );
     return [];
   }
