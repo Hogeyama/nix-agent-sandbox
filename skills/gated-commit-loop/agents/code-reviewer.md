@@ -16,27 +16,43 @@ tools: Read, Grep, Glob, Bash
 
 ## 出力フォーマット
 
+**JSON 単一オブジェクトを返す**。前後に説明文を出さない。orchestrator はこの JSON をそのまま summary.jsonl に転記する。
+
+```json
+{
+  "passed": true,
+  "findings": [
+    {
+      "rule": "error-handling",
+      "severity": "critical",
+      "file": "src/foo.ts:42",
+      "message": "1〜2 文に要約した指摘内容"
+    }
+  ],
+  "summary": {
+    "critical": 0,
+    "warning": 1,
+    "info": 0
+  }
+}
 ```
-## Findings
 
-### CRITICAL
-- **[ルール名]** ファイル:行番号 - 具体的な指摘内容
+### フィールド規約
 
-### WARNING
-- **[ルール名]** ファイル:行番号 - 具体的な指摘内容
+- `passed`: 全ルールが `stop_when` を満たしているなら `true`、未通過ルールが 1 つでもあれば `false`
+- `findings[]`: 検出した指摘を 1 件 1 オブジェクトで列挙
+  - `rule`: review-config.yml の rule name と一致させる。コミット固有のレビュー観点は `commit-specific:<短い識別子>` の形にする
+  - `severity`: `critical` / `warning` / `info` のいずれか
+  - `file`: `path/to/file.ts:行番号` 形式。行範囲なら `:42-58`
+  - `message`: 1〜2 文の要約。長文の根拠は書かない（orchestrator は message 全文を summary.jsonl に保管する）
+- `summary`: 各 severity の件数
 
-### INFO
-- **[ルール名]** ファイル:行番号 - 具体的な指摘内容
-
-## Summary
-- Critical: N件
-- Warning: N件
-- Info: N件
-```
+findings が 0 件なら `findings: []` と `summary` を全 0 で返す。
 
 ## 制約
 
 - コードを変更してはいけない。指摘のみ行う
 - 推測で指摘しない。コードを読んで根拠のある指摘だけ行う
 - 変更されていないコードについては指摘しない
-- 各指摘には必ずファイル名と行番号を含める
+- 各指摘には必ず `file` を含める
+- JSON 以外の文字を出力しない（説明・前置き・コードフェンス外のテキスト禁止）

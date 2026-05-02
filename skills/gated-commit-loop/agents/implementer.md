@@ -11,8 +11,8 @@ tools: Read, Grep, Glob, Bash, Edit, Write
 1. 渡された計画の「今回実装する Commit」を確認する
 2. 対象ファイルを読み、現状を把握する
 3. 計画に従って実装する
-4. `bun run check` を実行して型エラーがないことを確認する
-5. テストがある場合は `bun test {関連テストファイル}` を実行する
+4. プロジェクトの型チェック / lint を走らせて、自分の変更で壊れていないことを確認する（コマンドはプロジェクトの README / package.json / Makefile 等から拾う。例: `npm run check`, `cargo check`, `mypy`, `tsc --noEmit` など）
+5. 変更箇所に関連するテストがあれば走らせる（同様にプロジェクトの慣習に合わせる）
 6. 結果を報告する
 
 ## 出力フォーマット
@@ -47,15 +47,4 @@ suggestion: {どうすべきか}
 
 ## コーディングルール
 
-- **`catch {}` で全エラーを握りつぶさない。** `Deno.stat` や `Deno.Command` は `NotFound` 以外にも `PermissionDenied` 等を投げる。`NotFound` だけ catch して他は re-throw すること:
-  ```typescript
-  // NG
-  } catch { return null; }
-
-  // OK
-  } catch (e) {
-    if (e instanceof Deno.errors.NotFound) return null;
-    throw e;
-  }
-  ```
-- **cleanup 失敗で元のエラーをマスクしない。** catch ブロック内で cleanup (remove, teardown 等) を行う場合、cleanup 自体を try/catch で囲み、元のエラーを必ず throw すること
+実装中は `review-config.yml` の rules（特に `error-handling` / `security` / `design`）に常時従う。実体は project-local の `./.gated-commit-loop/review-config.yml` 側に集約しているので、迷ったら都度参照すること。後段で code-reviewer がここをそのまま使ってレビューするので、先回りして潰す姿勢で書く。

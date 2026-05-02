@@ -14,7 +14,9 @@ argument-hint: "[実装内容の説明]"
 ## 原則
 
 - **orchestrator（あなた）はソースコードを直接読んだり編集したりしない。** 調査・実装・レビューはすべてサブエージェントに委任する。
-- **ただし進行管理のための git bookkeeping はしてよい。** `git status --short` / `git diff --name-only` / `git log --oneline` のような、差分境界とコミット記録を扱う操作は orchestrator の責務。
+- **ただし進行管理のための git bookkeeping はしてよい。** ファイル名・コミット境界・履歴ヘッダー単位で完結する操作は orchestrator の責務:
+  - OK: `git status --short` / `git diff --name-only` / `git diff --stat HEAD` / `git log --oneline` / `git show --stat <hash>`
+  - NG: `git diff <file>` / `git show <hash>` の本文・`git blame` など、**差分の中身を読む** 操作。差分の意味判定は code-reviewer に委ねる。
 - **実装開始前に、計画をユーザーへ提示し、明示的な承認を得る。** `LGTM` / `go` / `進めて` のような肯定が出るまで Step 3 に進んではいけない。
 - **承認は会話上で可視化する。** plan を提示したメッセージと、それに対するユーザー承認が会話履歴で確認できる形にする。内部状態だけ更新して先へ進んではいけない。
 - **1 implementer = 1 コミット。** 承認済み計画の 1 commit セクションだけを実装させる。
@@ -23,16 +25,18 @@ argument-hint: "[実装内容の説明]"
 
 ## サブエージェント
 
-| 役割 | 定義ファイル | 役割 |
-|------|-------------|------|
-| planner | `agents/planner.md` | コードベース調査 + コミット粒度の計画作成 |
-| plan-reviewer | `agents/plan-reviewer.md` | 計画の approve / reject 判定 |
-| implementer | `agents/implementer.md` | 1コミット分の実装 |
-| code-reviewer | `agents/code-reviewer.md` | 1コミット分のコードレビュー |
+| 役割 | subagent_type | 概要 |
+|------|---------------|------|
+| planner | `planner` | コードベース調査 + コミット粒度の計画作成 |
+| plan-reviewer | `plan-reviewer` | 計画の approve / reject 判定 |
+| implementer | `implementer` | 1コミット分の実装 |
+| code-reviewer | `code-reviewer` | 1コミット分のコードレビュー |
 
-各定義ファイルに詳細はあるが、**orchestrator は「何を渡せば次の agent が迷わないか」を理解して渡す必要がある。** 「雑にタスク内容だけ渡す」は不可。
+呼び出しは `Agent` ツールに `subagent_type: <name>` を渡す。
 
-## 実行前セットアップ
+各エージェントの定義ファイルは skill に同梱されている (`agents/*.md`)。`subagent_type` がそのまま登録されていない環境では、プロジェクトルートの `./agents/<name>.md` を参照してよい（同名で登録されていればそちらが優先される）。各定義ファイルに詳細はあるが、**orchestrator は「何を渡せば次の agent が迷わないか」を理解して渡す必要がある。** 「雑にタスク内容だけ渡す」は不可。
+
+## Step 1: 実行前セットアップ
 
 1. **review-config を読み込む。** ルールの実体は project-local の `./.gated-commit-loop/review-config.yml`。
    - 既に存在する → そのまま読む
@@ -43,6 +47,7 @@ argument-hint: "[実装内容の説明]"
      - `max_review_iterations`
      - `stop_when`
      - `rules`
+   - **`./.gated-commit-loop/.gitignore` がなければ作る**。中身は `*` の 1 行のみ。review-config.yml と summary.jsonl を git に持ち込まない方針（チューニングは clone ローカルに閉じる）
 2. 開始時点の `git status --short` を記録し、そこで見えている変更を **protected dirty paths** として扱う。
    - protected dirty paths は、この workflow が作っていない既存変更である可能性が高い
    - 以降の commit には **明示的に対象 scope に含まれると確認できた場合を除き** 入れてはいけない
@@ -57,15 +62,15 @@ argument-hint: "[実装内容の説明]"
    - 各 plan iteration の verdict と reviewer の理由
    - ユーザーの plan 承認イベント
    - 各 commit の seq / title / hash / review_iters
-   - 各 finding の commit_seq / review_iter / rule / severity / file / message
-   - finding ごとの `resolution`（後述: 機械的に決まる）
+   - **code-reviewer の戻り値 (JSON) はそのまま保持する**。要約・再構成しない。Step 5 で `findings[]` を transcribe するときに使う一次データなので、原文のまま `(commit_seq, review_iter)` のキー付きで保管する。
+   - finding ごとの `resolution` は Step 5 で機械的に決まる（後述）
 
 ## 実行順序
 
 1. Step 1 を実行し、`./.gated-commit-loop/review-config.yml`（無ければテンプレからコピー）と初期 dirty paths を読み取る。
 2. Step 2 の plan loop で、`plan-reviewer` が approve し、かつユーザー承認が会話上で明示されるまで再計画または停止判断を行う。
 3. 承認済み計画が得られたら、各 commit を **1件ずつ** Step 3 で処理する。
-4. 各 commit では `implementer` → `code-reviewer` → `git-commit` の順で進める。
+4. 各 commit では `implementer` → `code-reviewer` → コミットの順で進める。
 5. `implementer` が blocked を返したら commit loop を中断し、残件を planner に再計画させて Step 2 に戻る。
 6. `code-reviewer` が未通過なら、その findings を implementer に渡して同じ commit をやり直す。
 7. 同じ根本原因の reject / review findings が続くか、各ループの上限に達したら、惰性で続けずユーザー判断へ戻す。
@@ -153,22 +158,24 @@ argument-hint: "[実装内容の説明]"
 
 1. `git status --short` / `git diff --name-only` で、今回 commit に含めるべきファイルを確認する
 2. protected dirty paths や他コミットの差分を混ぜない
-3. **`git-commit` skill を使う**
-   - タイトルは planner が出した conventional commit 案をベースにする
-   - 本文には「なぜこの分割にしたか」「レビューで何を潰したか」を含める
-   - placeholder っぽい短文（例: `ok`, `wip`, `おｋ`）は禁止
-4. コミット後、hash と message を記録して `completed_commits` に追加する
-
-`git-commit` skill が使えない環境なら、その時点で止まり、理由を明示してユーザーへ返す。雑に `git commit -m` して先へ進まない。
+3. **コミットメッセージの規約**:
+   - **タイトル**: planner が出した conventional commit 案 (`type(scope): subject`) をベースにする
+   - **本文** には次を含める:
+     - 変更の要点（何を変えたか）
+     - なぜこの commit 単位で切り出したか（scope の意図）
+     - レビューで何を潰したか（再実装が発生した場合のみ）
+   - **過去・未来の他コミットへの参照は書かない**（`tombstone-comments` ルールに準ずる）。現在の状態を declarative に書く。
+     - OK: 「このコミットでは X の責務だけを移動する。Y の差し替えは scope 外として独立させた。」
+     - NG: 「Commit 3 で消える Y を一旦残しておく。」/「次のコミットで X を fatten する。」
+4. `git commit` でコミットする
+5. コミット後、hash と message を記録して `completed_commits` に追加する
 
 ## Step 4: 完了報告
 
-全コミット完了後は、少なくとも次を報告する。
+全コミット完了後は、少なくとも次を報告する（findings の詳細は Step 5 の finding 表で出すので、ここでは件数や粒度のメタ情報だけにする）。
 
 - 実行したコミット一覧（hash + message）
-- 各コミットのレビュー結果サマリー
 - 実行した再計画 / 差し戻しの回数
-- 残っている warning / info（あれば）
 - 途中でユーザー判断を挟んだ箇所（あれば）
 
 報告が済んだら必ず Step 5 のラベル付け & ログ書き出しに進む。スキップして終わらせない。
@@ -185,77 +192,49 @@ argument-hint: "[実装内容の説明]"
 - `ignored` — 最終 review iteration まで残ったが、`stop_when` 通過で commit された（severity が条件未満など）
 - `dropped` — その commit が replan で消えたなど、レビュー外の理由で finding が無効になった
 
-### 2. デフォルトラベルを推定する
+### 2. orchestrator がデフォルトラベルを推定する
 
-ユーザー負担を減らすため、以下のヒューリスティックでデフォルト値を埋める。最終確定はユーザーが行う。
+以下のヒューリスティックで全 finding にラベルを **必ず付ける**。最終的にユーザーが修正してよいが、未推定で投げない。
 
 - `severity=critical` かつ `resolution=fixed` → `essential`
 - `severity=info` かつ `resolution=ignored` → `noise`
+- `severity=critical` かつ `resolution=ignored` → `config-smell`
+  - critical なのに commit を通している＝`stop_when` 設定不一致の疑い。tuning-rules.md 側で別動線で扱うため独立ラベルにする。完了報告でもこの件数を 1 行で別出しする。
 - それ以外 → `borderline`
 
-### 3. ユーザーにラベル付けを依頼する
+### 3. ユーザーには「差分確認だけ」依頼する
 
-会話上に **finding 一覧テーブル** を提示し、各行のデフォルトラベルとコメント欄を見せて修正してもらう。最低限のカラム:
+orchestrator がデフォルトラベルを付ける運用に倒す。ラベル付けの主担当は orchestrator、ユーザーは違和感のある行だけ書き換える。
 
-| # | commit | rule | severity | message (要約) | resolution | default label | label | comment |
+会話上に **finding 一覧テーブル** を提示する:
 
-依頼の言い回しは「以下のラベルを確認してください。違和感ある行だけ書き換えるか、コメントで補足してください。スキップしてもらってもよいです（その場合 `label: null` として記録します）」のようにする。**ラベル必須にしない**。
+| # | commit | rule | severity | message (要約) | resolution | label (推定) | comment |
 
-コミット単位の評価も同様に短い表で聞く:
+依頼の言い回し例: 「ラベルを以下のように推定しました。違和感のある行だけ書き換えるか、コメントで補足してください。修正不要ならスキップで OK です。」
 
-| # | commit | hash | rating (`good` / `mixed` / `bad`) | comment |
+ユーザー応答の扱い:
+- 修正なし / スキップ → 推定ラベルをそのまま記録
+- 行ごとの修正指示 → その行だけ書き換える
+- 明示的に `label: null` を要求された行のみ `null` 化
+
+コミット単位の評価は推定が難しいので別扱い。デフォルトを `null` で出して、ユーザーが任意で記入する:
+
+| # | commit | hash | rating (`good` / `mixed` / `bad` / null) | comment |
 
 ### 4. 出力先を準備する
 
 1. cwd 直下の `./.gated-commit-loop/` は実行前セットアップで作成済み（`review-config.yml` のコピー先と同じ場所）
-2. `./.gated-commit-loop/.gitignore` がなければ作成し、中身は `*` のみ。**review-config.yml と summary.jsonl の両方を git に見せない方針**（チューニングは clone ローカルに閉じる）
-3. ファイル名は `<yyyymmddHHMMSS>-summary.jsonl`（ローカルタイムでよい）
+2. ファイル名は `<yyyymmddHHMMSS>-summary.jsonl`（JST ローカルタイムでよい）
 
 ### 5. JSONL を書き出す
 
-スキーマは「Appendix: summary.jsonl スキーマ」を参照。1 行 1 イベントで、以下の順で並べる:
-
-1. `meta`（1 件）
-2. `plan` / `plan_user`（時系列順）
-3. 各 commit について `commit` → 紐づく `finding`(複数)
-4. `commit_rating`（commit ごと、ユーザー評価）
-
-ラベル未入力の `finding.label` / `commit_rating.rating` は JSON の `null` として明示的に書く（欠損 ≠ 未確認 を区別したい）。
+スキーマは `references/summary-schema.md` を読み込んでから書き出す（型・並び順・null 扱いの規約はそちらに置いている）。
 
 ### 6. 書き出した旨を報告する
 
 `./.gated-commit-loop/<filename>` のパスと、入ったラベル数 / 未ラベル数を 1 行で報告して終了する。
 
 蓄積した summary.jsonl を使って `review-config.yml` を見直したいとユーザーが言ったら、`references/tuning-rules.md` を読んでその手順に従う。
-
-## 実行時テンプレート
-
-### planner 依頼テンプレート
-
-以下を 1 つの依頼に含める:
-
-- ユーザー依頼
-- 今回の workflow が commit 単位の implement → review → commit で進むこと
-- 再計画なら reject / blocked の内容
-- 完了済み commit があれば再利用前提で残件だけ計画すること
-
-### implementer 差し戻しテンプレート
-
-以下を 1 つの依頼に含める:
-
-- 今回対象の commit セクション
-- code-reviewer findings 全文
-- scope 外変更禁止
-- ただし findings 修正で影響する関連分岐は scope 内として整合させてよい
-
-### code-reviewer 依頼テンプレート
-
-以下を 1 つの依頼に含める:
-
-- `review-config.yml` の rules
-- 今回の commit 計画
-- commit 固有のレビュー観点
-- 今回レビュー対象は current commit の差分のみであること
 
 ## Red flags
 
@@ -266,96 +245,5 @@ argument-hint: "[実装内容の説明]"
 - Step 4 の完了報告だけ出して Step 5 のラベル付け & ログ書き出しをスキップする
 - ラベル付けをユーザーに頼まず orchestrator が勝手にデフォルトのまま確定させる
 - protected dirty paths を巻き込んでコミットする
-- `git-commit` skill を使わず、雑な単文メッセージでコミットする
+- 他コミットへの過去・未来参照を含むメッセージでコミットする
 
-## Appendix: summary.jsonl スキーマ
-
-`./.gated-commit-loop/<yyyymmddHHMMSS>-summary.jsonl` の各行は以下のいずれか。`type` フィールドで判別する。タイムスタンプは ISO 8601。
-
-### `meta` (1 件、先頭)
-
-```json
-{
-  "type": "meta",
-  "run_id": "string",
-  "started_at": "2026-05-02T14:30:22+09:00",
-  "finished_at": "2026-05-02T15:12:08+09:00",
-  "user_request": "ユーザー依頼の原文",
-  "review_config_path": ".gated-commit-loop/review-config.yml",
-  "max_plan_iterations": 3,
-  "max_review_iterations": 3
-}
-```
-
-### `plan` (各 plan iteration)
-
-```json
-{
-  "type": "plan",
-  "iter": 1,
-  "verdict": "approve" | "reject",
-  "reviewer_reason": "reject の場合のみ。approve では空文字でよい"
-}
-```
-
-### `plan_user` (ユーザー判断)
-
-```json
-{
-  "type": "plan_user",
-  "iter": 2,
-  "verdict": "approve" | "revise" | "abort",
-  "comment": ""
-}
-```
-
-### `commit` (各コミット)
-
-```json
-{
-  "type": "commit",
-  "seq": 1,
-  "title": "feat(x): ...",
-  "hash": "abc1234",
-  "review_iters": 2,
-  "implementer_blocked_count": 0
-}
-```
-
-### `finding` (review iteration ごとに発生した指摘)
-
-```json
-{
-  "type": "finding",
-  "commit_seq": 1,
-  "review_iter": 1,
-  "rule": "effect-separation",
-  "severity": "critical" | "warning" | "info",
-  "file": "src/foo.ts:42",
-  "message": "指摘内容（1〜2 文に要約）",
-  "resolution": "fixed" | "ignored" | "dropped",
-  "label": "essential" | "noise" | "borderline" | null,
-  "label_comment": ""
-}
-```
-
-### `commit_rating` (commit ごとのユーザー評価)
-
-```json
-{
-  "type": "commit_rating",
-  "commit_seq": 1,
-  "hash": "abc1234",
-  "rating": "good" | "mixed" | "bad" | null,
-  "comment": ""
-}
-```
-
-### 並び順
-
-1. `meta`
-2. `plan` / `plan_user` を時系列順
-3. 各 commit について `commit` → 紐づく `finding` を `review_iter` 昇順
-4. 全 commit ぶん終わったら `commit_rating` を seq 順
-
-集計スクリプト側はこの順序を前提にしてよい（ファイル全体を読んでから集計する場合は順序非依存に処理してもよい）。
