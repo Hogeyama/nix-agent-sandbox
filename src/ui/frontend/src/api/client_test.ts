@@ -20,6 +20,7 @@ import {
   approveNetwork,
   denyHostExec,
   denyNetwork,
+  fetchPricingSnapshot,
   getAuditLogs,
   getInfo,
   getLaunchBranches,
@@ -791,6 +792,78 @@ describe("getInfo", () => {
     let caught: unknown;
     try {
       await getInfo();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(HttpError);
+    expect((caught as HttpError).status).toBe(500);
+    expect((caught as HttpError).message).toBe("boom");
+  });
+});
+
+describe("fetchPricingSnapshot", () => {
+  test("GETs /api/pricing/snapshot and parses the typed envelope on 200", async () => {
+    const fetchMock = installFetch(async () =>
+      jsonResponse({
+        fetched_at: "2026-05-02T12:34:56.000Z",
+        source: "litellm",
+        stale: false,
+        models: {
+          "claude-3-5-sonnet": {
+            input_cost_per_token: 0.000003,
+            output_cost_per_token: 0.000015,
+          },
+        },
+      }),
+    );
+    const result = await fetchPricingSnapshot();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/pricing/snapshot");
+    expect(init.method).toBe("GET");
+    // Bodyless GET: no Content-Type, no body — same shape as `getInfo`
+    // so the daemon's preflight policy is consistent.
+    expect(init.headers).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(result.source).toBe("litellm");
+    expect(result.stale).toBe(false);
+    expect(result.fetched_at).toBe("2026-05-02T12:34:56.000Z");
+    expect(result.models["claude-3-5-sonnet"]?.input_cost_per_token).toBe(
+      0.000003,
+    );
+  });
+
+  test("passes through the 'unavailable' sentinel without flattening it to an error", async () => {
+    // Pricing endpoint always responds 200 even when no catalogue is
+    // usable; the typed `source` field carries the verdict. Callers
+    // branch on `source === "unavailable"` rather than HTTP status, so
+    // the client must surface the body as-is.
+    installFetch(async () =>
+      jsonResponse({
+        fetched_at: "2026-05-02T00:00:00.000Z",
+        source: "unavailable",
+        stale: true,
+        models: {},
+      }),
+    );
+    const result = await fetchPricingSnapshot();
+    expect(result.source).toBe("unavailable");
+    expect(result.stale).toBe(true);
+    expect(result.models).toEqual({});
+  });
+
+  test("rejects with HttpError on a 5xx response from the daemon", async () => {
+    installFetch(
+      async () =>
+        new Response(JSON.stringify({ error: "boom" }), {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    let caught: unknown;
+    try {
+      await fetchPricingSnapshot();
     } catch (e) {
       caught = e;
     }

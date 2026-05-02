@@ -21,7 +21,7 @@
  * EventSource lifetime to the user's presence on a history page.
  */
 
-import { Match, Switch } from "solid-js";
+import { createResource, Match, Switch } from "solid-js";
 import type {
   ConversationDetail,
   ConversationListRow,
@@ -34,10 +34,25 @@ import {
   HISTORY_SSE_LIST_EVENT,
   HISTORY_SSE_NOT_FOUND_EVENT,
 } from "../../../../routes/history_sse_events";
+import { fetchPricingSnapshot, type PricingSnapshot } from "../../api/client";
 import { useHistoryStream } from "../../hooks/useHistoryStream";
 import { ConversationDetailPage } from "./ConversationDetailPage";
 import { HistoryListPage } from "./HistoryListPage";
 import { InvocationDetailPage } from "./InvocationDetailPage";
+
+/**
+ * Fallback snapshot used when the `/api/pricing/snapshot` resource
+ * rejects (transport blip, daemon outage). Renders identically to the
+ * daemon's own `unavailable` sentinel, so the panel degrades to the
+ * "Pricing unavailable" header without dragging the conversation list
+ * down with it.
+ */
+const UNAVAILABLE_SNAPSHOT: PricingSnapshot = {
+  fetched_at: new Date(0).toISOString(),
+  source: "unavailable",
+  stale: true,
+  models: {},
+};
 
 export type HistoryRoute =
   | { kind: "history" }
@@ -107,14 +122,34 @@ function HistoryListView() {
     payloadEventName: HISTORY_SSE_LIST_EVENT,
   });
 
+  // One-shot pricing fetch tied to the list view's lifetime. The
+  // fetcher catches its own rejection and resolves with the
+  // unavailable sentinel so a daemon-side or transport-level failure
+  // never propagates into Solid's resource error state — the cost
+  // panel renders the unavailable header band instead, leaving the
+  // conversation list below untouched.
+  const [pricingSnapshot] = createResource<PricingSnapshot>(async () => {
+    try {
+      return await fetchPricingSnapshot();
+    } catch (err) {
+      console.warn("[HistoryShell] pricing snapshot fetch failed:", err);
+      return UNAVAILABLE_SNAPSHOT;
+    }
+  });
+
   const conversations = () => stream.data()?.conversations ?? [];
   const loading = () => stream.data() === null;
+  const modelTokenTotals = () => stream.data()?.modelTokenTotals ?? [];
+  const since = () => stream.data()?.since ?? "";
 
   return (
     <HistoryListPage
       conversations={conversations}
       loading={loading}
       error={stream.error}
+      pricingSnapshot={pricingSnapshot}
+      modelTokenTotals={modelTokenTotals}
+      since={since}
     />
   );
 }

@@ -20,7 +20,12 @@
  */
 
 import { createSignal, For, onCleanup, Show } from "solid-js";
-import type { ConversationListRow } from "../../../../../history/types";
+import type {
+  ConversationListRow,
+  ModelTokenTotalsRow,
+} from "../../../../../history/types";
+import type { PricingSnapshot } from "../../api/client";
+import { CostPanel } from "./CostPanel";
 import { toConversationListRowView } from "./historyListView";
 
 export interface HistoryListPageProps {
@@ -30,6 +35,12 @@ export interface HistoryListPageProps {
   loading: () => boolean;
   /** Connection error message, or null while the stream looks healthy. */
   error: () => string | null;
+  /** Pricing snapshot accessor; `undefined` while the resource is pending. */
+  pricingSnapshot: () => PricingSnapshot | undefined;
+  /** Per-model token totals accessor from the SSE list payload. */
+  modelTokenTotals: () => ModelTokenTotalsRow[];
+  /** ISO-8601 boundary the daemon used when computing `modelTokenTotals`. */
+  since: () => string;
 }
 
 const RELATIVE_TICK_MS = 60_000;
@@ -48,6 +59,12 @@ export function HistoryListPage(props: HistoryListPageProps) {
   return (
     <div class="history-shell-content">
       <h1 class="history-shell-title">History</h1>
+
+      <CostPanel
+        snapshot={props.pricingSnapshot()}
+        totals={props.modelTokenTotals()}
+        since={props.since()}
+      />
 
       <Show when={props.error()}>
         {(msg) => (

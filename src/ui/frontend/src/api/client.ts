@@ -53,6 +53,41 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * The four token-cost fields the daemon extracts from each LiteLLM
+ * model entry. Each is independently optional — LiteLLM does not
+ * publish every field for every model, and the panel renders missing
+ * values as "—" rather than treating them as zero.
+ *
+ * Mirrors `FourCosts` in `src/ui/pricing.ts`. Defined locally here so
+ * frontend bundles never reach into the daemon module (which imports
+ * `node:fs`); the wire format is the contract pinned by the API
+ * integration tests.
+ */
+export interface FourCosts {
+  input_cost_per_token?: number;
+  output_cost_per_token?: number;
+  cache_creation_input_token_cost?: number;
+  cache_read_input_token_cost?: number;
+}
+
+/**
+ * Pricing snapshot returned by `GET /api/pricing/snapshot`.
+ *
+ * `source` distinguishes the three layers the daemon may have used
+ * (live LiteLLM fetch / bundled fallback / unavailable sentinel) so
+ * the frontend can branch on the typed value rather than treating
+ * "no prices" as an HTTP-level error. Mirrors `PricingSnapshot` in
+ * `src/ui/pricing.ts`; defined locally for the same bundle-isolation
+ * reason as `FourCosts`.
+ */
+export interface PricingSnapshot {
+  fetched_at: string;
+  source: "litellm" | "unavailable";
+  stale: boolean;
+  models: Record<string, FourCosts>;
+}
+
 export interface LaunchInfo {
   dtachAvailable: boolean;
   profiles: string[];
@@ -135,6 +170,19 @@ export function getLaunchInfo(cwd?: string): Promise<LaunchInfo> {
 
 export function getInfo(): Promise<Info> {
   return request<Info>("GET", "/api/info");
+}
+
+/**
+ * Fetch the current LiteLLM pricing snapshot. The endpoint always
+ * responds 200 — even when the daemon has no usable price catalogue
+ * (the `source: "unavailable"` sentinel) — so a rejection here is a
+ * genuine transport-level or daemon-level failure that the UI surfaces
+ * via the panel's pending → error path. Callers branch on the typed
+ * `source` field to decide how to render the panel, never on HTTP
+ * status alone.
+ */
+export function fetchPricingSnapshot(): Promise<PricingSnapshot> {
+  return request<PricingSnapshot>("GET", "/api/pricing/snapshot");
 }
 
 export function getLaunchBranches(cwd: string): Promise<LaunchBranches> {

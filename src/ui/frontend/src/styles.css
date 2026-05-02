@@ -2291,3 +2291,104 @@ body::after {
   color: var(--amber-hi);
   border-color: var(--line);
 }
+
+/* History cost panel — sits between the page title and the conversation
+ * list. The panel reuses the surface palette from the detail-page header
+ * card so the two history surfaces read as a single visual family; the
+ * stale and unavailable badges lean on the existing accent tokens
+ * (amber-hi for "stale but trustworthy", muted-2 for "no data"). */
+.history-cost-panel {
+  margin: 0 0 24px;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cream-dim);
+}
+.history-cost-panel-loading {
+  margin: 0 0 24px;
+  padding: 14px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  text-align: center;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.history-cost-panel-unavailable {
+  border-style: dashed;
+  color: var(--muted);
+}
+.history-cost-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  align-items: baseline;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.history-cost-source-badge {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.history-cost-stale-badge {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--amber-hi);
+  border: 1px solid currentColor;
+  padding: 1px 6px;
+  font-weight: 600;
+}
+.history-cost-total {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--cream);
+  font-feature-settings: "tnum";
+}
+.history-cost-since {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted-2);
+}
+.history-cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cream-dim);
+}
+.history-cost-table thead th {
+  text-align: left;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.history-cost-table thead th.history-cost-num {
+  text-align: right;
+}
+.history-cost-table tbody td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule-soft);
+  font-feature-settings: "tnum";
+}
+.history-cost-table tbody td.history-cost-num {
+  text-align: right;
+}
+.history-cost-row-known td {
+  color: var(--cream);
+}
+.history-cost-row-unknown td {
+  color: var(--muted);
+}
