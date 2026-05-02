@@ -66,6 +66,14 @@ function createDummyCtx(): UiDataContext {
       readConversationDetail: () => null,
       readInvocationDetail: () => null,
     },
+    pricing: {
+      getSnapshot: async () => ({
+        fetched_at: "2026-05-02T00:00:00.000Z",
+        source: "unavailable",
+        stale: true,
+        models: {},
+      }),
+    },
   };
 }
 

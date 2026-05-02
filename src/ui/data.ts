@@ -55,6 +55,7 @@ import {
   readConversationList,
   readInvocationDetail,
 } from "./history_data.ts";
+import { getPricingSnapshot, type PricingSnapshot } from "./pricing.ts";
 import {
   buildShellSessionId,
   type ParsedShellSessionId,
@@ -70,6 +71,16 @@ export interface UiHistoryReader {
   readInvocationDetail(id: string): InvocationDetail | null;
 }
 
+/**
+ * Pricing snapshot reader. Implementations must never throw — see
+ * `getPricingSnapshot()` for the documented "always return a snapshot"
+ * contract. Injected via `UiDataContext.pricing` so tests can substitute
+ * deterministic responses without monkey-patching the module.
+ */
+export interface UiPricingReader {
+  getSnapshot(): Promise<PricingSnapshot>;
+}
+
 export interface UiDataContext {
   networkPaths: NetworkRuntimePaths;
   hostExecPaths: HostExecRuntimePaths;
@@ -78,6 +89,7 @@ export interface UiDataContext {
   terminalRuntimeDir: string;
   historyDbPath: string;
   history: UiHistoryReader;
+  pricing: UiPricingReader;
 }
 
 function makeHistoryReader(historyDbPath: string): UiHistoryReader {
@@ -87,6 +99,17 @@ function makeHistoryReader(historyDbPath: string): UiHistoryReader {
       readConversationDetail(id, { dbPath: historyDbPath }),
     readInvocationDetail: (id) =>
       readInvocationDetail(id, { dbPath: historyDbPath }),
+  };
+}
+
+/**
+ * Default pricing reader binding. `getPricingSnapshot()` performs its own
+ * module-level cache + in-flight memoisation, so this thunk is a thin
+ * forwarder rather than another caching layer.
+ */
+function makePricingReader(): UiPricingReader {
+  return {
+    getSnapshot: () => getPricingSnapshot(),
   };
 }
 
@@ -125,6 +148,7 @@ export async function createDataContext(): Promise<UiDataContext> {
     terminalRuntimeDir,
     historyDbPath,
     history: makeHistoryReader(historyDbPath),
+    pricing: makePricingReader(),
   };
 }
 

@@ -17,6 +17,7 @@ import {
   updateSessionTurn,
 } from "../../sessions/store.ts";
 import type { UiDataContext } from "../data.ts";
+import type { PricingSnapshot } from "../pricing.ts";
 import { Router } from "../router.ts";
 import { createApiRoutes } from "./api.ts";
 
@@ -53,6 +54,14 @@ function createTestContext(dir: string): UiDataContext {
       readConversationList: () => [],
       readConversationDetail: () => null,
       readInvocationDetail: () => null,
+    },
+    pricing: {
+      getSnapshot: async () => ({
+        fetched_at: "2026-05-02T00:00:00.000Z",
+        source: "unavailable",
+        stale: true,
+        models: {},
+      }),
     },
   };
 }
@@ -926,4 +935,112 @@ test("POST /containers/clean requires {confirm:true} body", async () => {
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
+});
+
+// --- /pricing/snapshot -----------------------------------------------------
+//
+// The endpoint forwards `ctx.pricing.getSnapshot()` directly. We exercise all
+// three documented `source` branches (litellm / bundled / unavailable) and
+// pin the contract that the response status is always 200 — the frontend
+// branches on the typed `source` field, not HTTP status. Each test injects a
+// fake `UiPricingReader` so no network or filesystem state is needed.
+
+/**
+ * Build an api-routes app whose ctx returns the given pricing snapshot.
+ * Avoids per-test tmpdir setup since `/pricing/snapshot` does not touch any
+ * other ctx field.
+ */
+function buildAppWithPricing(snapshot: PricingSnapshot): Router {
+  const ctx = createTestContext("/tmp/nas-pricing-test-unused");
+  const ctxWithPricing: UiDataContext = {
+    ...ctx,
+    pricing: { getSnapshot: async () => snapshot },
+  };
+  const api = createApiRoutes(ctxWithPricing);
+  const app = new Router();
+  app.route("/api", api);
+  return app;
+}
+
+test("GET /pricing/snapshot returns litellm snapshot with 200", async () => {
+  const snapshot: PricingSnapshot = {
+    fetched_at: "2026-05-02T12:34:56.000Z",
+    source: "litellm",
+    stale: false,
+    models: {
+      "claude-3-5-sonnet": {
+        input_cost_per_token: 0.000003,
+        output_cost_per_token: 0.000015,
+      },
+    },
+  };
+  const app = buildAppWithPricing(snapshot);
+
+  const res = await app.request("/api/pricing/snapshot");
+  expect(res.status).toEqual(200);
+  const body = (await res.json()) as PricingSnapshot;
+  expect(body.source).toEqual("litellm");
+  expect(body.stale).toEqual(false);
+  expect(body.fetched_at).toEqual("2026-05-02T12:34:56.000Z");
+  expect(body.models["claude-3-5-sonnet"]?.input_cost_per_token).toEqual(
+    0.000003,
+  );
+});
+
+test("GET /pricing/snapshot returns bundled snapshot with stale=true and 200", async () => {
+  const snapshot: PricingSnapshot = {
+    fetched_at: "2026-04-01T00:00:00.000Z",
+    source: "bundled",
+    stale: true,
+    models: {
+      "gpt-4o": { input_cost_per_token: 0.0000025 },
+    },
+  };
+  const app = buildAppWithPricing(snapshot);
+
+  const res = await app.request("/api/pricing/snapshot");
+  expect(res.status).toEqual(200);
+  const body = (await res.json()) as PricingSnapshot;
+  expect(body.source).toEqual("bundled");
+  expect(body.stale).toEqual(true);
+  expect(Object.keys(body.models)).toContain("gpt-4o");
+});
+
+test("GET /pricing/snapshot returns unavailable sentinel with 200", async () => {
+  // ADR pin: even when both cache and bundled fallback are absent we respond
+  // 200 with `source: "unavailable"`, so the frontend can render "—" without
+  // mistaking a transient lookup failure for a server error.
+  const snapshot: PricingSnapshot = {
+    fetched_at: "2026-05-02T00:00:00.000Z",
+    source: "unavailable",
+    stale: true,
+    models: {},
+  };
+  const app = buildAppWithPricing(snapshot);
+
+  const res = await app.request("/api/pricing/snapshot");
+  expect(res.status).toEqual(200);
+  const body = (await res.json()) as PricingSnapshot;
+  expect(body.source).toEqual("unavailable");
+  expect(body.stale).toEqual(true);
+  expect(body.models).toEqual({});
+});
+
+test("GET /pricing/snapshot payload always contains the four documented fields", async () => {
+  // Lock the wire-format contract. The frontend reads exactly these four
+  // top-level fields; renaming or omitting any of them is a breaking change.
+  const snapshot: PricingSnapshot = {
+    fetched_at: "2026-05-02T01:02:03.000Z",
+    source: "litellm",
+    stale: false,
+    models: {},
+  };
+  const app = buildAppWithPricing(snapshot);
+
+  const res = await app.request("/api/pricing/snapshot");
+  expect(res.status).toEqual(200);
+  const body = (await res.json()) as Record<string, unknown>;
+  expect(Object.keys(body).sort()).toEqual(
+    ["fetched_at", "models", "source", "stale"].sort(),
+  );
 });

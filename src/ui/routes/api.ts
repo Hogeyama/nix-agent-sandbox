@@ -450,5 +450,19 @@ export function createApiRoutes(ctx: UiDataContext): Router {
     }),
   );
 
+  // --- Pricing ---
+  //
+  // Returns the current LiteLLM pricing snapshot used to compute history cost
+  // panels. Always responds 200 even when `source: "unavailable"` (no cache,
+  // no bundled, no network) so the frontend can branch on the typed `source`
+  // field instead of treating "no prices yet" as an HTTP-level error. See
+  // ADR for the rationale.
+  api.get("/pricing/snapshot", () =>
+    withErrorHandling(async () => {
+      const snapshot = await ctx.pricing.getSnapshot();
+      return json(snapshot);
+    }),
+  );
+
   return api;
 }

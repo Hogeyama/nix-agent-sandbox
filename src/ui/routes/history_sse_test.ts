@@ -143,6 +143,14 @@ function makeCtx(reader: UiHistoryReader): UiDataContext {
     terminalRuntimeDir: "/tmp/dtach",
     historyDbPath: "/tmp/history.db",
     history: reader,
+    pricing: {
+      getSnapshot: async () => ({
+        fetched_at: "2026-05-02T00:00:00.000Z",
+        source: "unavailable",
+        stale: true,
+        models: {},
+      }),
+    },
   };
 }
 
