@@ -181,17 +181,27 @@ export function normalizeModel(
 }
 
 /**
- * Multiply token count by unit price, returning `undefined` when the
- * unit price is absent. Keeping the per-field optionality through to
- * the row preserves the "—" rendering for fields LiteLLM does not
- * publish for a given model.
+ * Apply Anthropic's two-tier 1M-context pricing to a single token-cost
+ * field. The aggregator splits a column into a base bucket
+ * (= total - above) plus an above-200k bucket; this function multiplies
+ * each bucket by its own rate and sums.
+ *
+ * Falls back gracefully when a model lacks the upper-tier rate: the
+ * above bucket reuses the base rate, so non-1M-context models stay
+ * priced at a single tier with no behaviour change. When the base rate
+ * itself is absent the field returns `undefined` so the cell renders as
+ * "—" — it never silently zeroes out.
  */
-function maybeUsd(
-  tokens: number,
-  rate: number | undefined,
+function maybeUsdTiered(
+  totalTokens: number,
+  aboveTokens: number,
+  baseRate: number | undefined,
+  aboveRate: number | undefined,
 ): number | undefined {
-  if (rate === undefined) return undefined;
-  return tokens * rate;
+  if (baseRate === undefined) return undefined;
+  const baseTokens = totalTokens - aboveTokens;
+  const effectiveAboveRate = aboveRate ?? baseRate;
+  return baseTokens * baseRate + aboveTokens * effectiveAboveRate;
 }
 
 /**
@@ -233,15 +243,29 @@ function projectCostRows(
     }
 
     const rates = normalized.rates;
-    const inputUsd = maybeUsd(row.inputTokens, rates.input_cost_per_token);
-    const outputUsd = maybeUsd(row.outputTokens, rates.output_cost_per_token);
-    const cacheReadUsd = maybeUsd(
-      row.cacheRead,
-      rates.cache_read_input_token_cost,
+    const inputUsd = maybeUsdTiered(
+      row.inputTokens,
+      row.inputTokensAbove200k,
+      rates.input_cost_per_token,
+      rates.input_cost_per_token_above_200k_tokens,
     );
-    const cacheWriteUsd = maybeUsd(
+    const outputUsd = maybeUsdTiered(
+      row.outputTokens,
+      row.outputTokensAbove200k,
+      rates.output_cost_per_token,
+      rates.output_cost_per_token_above_200k_tokens,
+    );
+    const cacheReadUsd = maybeUsdTiered(
+      row.cacheRead,
+      row.cacheReadAbove200k,
+      rates.cache_read_input_token_cost,
+      rates.cache_read_input_token_cost_above_200k_tokens,
+    );
+    const cacheWriteUsd = maybeUsdTiered(
       row.cacheWrite,
+      row.cacheWriteAbove200k,
       rates.cache_creation_input_token_cost,
+      rates.cache_creation_input_token_cost_above_200k_tokens,
     );
 
     let totalUsd = 0;

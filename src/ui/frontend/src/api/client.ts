@@ -69,6 +69,17 @@ export interface FourCosts {
   output_cost_per_token?: number;
   cache_creation_input_token_cost?: number;
   cache_read_input_token_cost?: number;
+  /**
+   * Anthropic 1M-context upper-tier rates. Apply to spans whose
+   * effective input crossed 200_000 tokens (see
+   * `LONG_CONTEXT_THRESHOLD_TOKENS`); models without these fields fall
+   * back to the base rates so non-1M-context models remain priced at a
+   * single tier.
+   */
+  input_cost_per_token_above_200k_tokens?: number;
+  output_cost_per_token_above_200k_tokens?: number;
+  cache_creation_input_token_cost_above_200k_tokens?: number;
+  cache_read_input_token_cost_above_200k_tokens?: number;
 }
 
 /**

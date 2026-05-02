@@ -302,6 +302,62 @@ describe("computeCostPanel", () => {
     expect(view.rows[0]?.isUnknown).toBe(true);
     expect(view.rows[0]?.inputUsd).toBeUndefined();
   });
+
+  test("applies above-200k upper-tier rates to the bucketed token slice", () => {
+    const snap = snapshot({
+      "claude-opus-4-7": {
+        input_cost_per_token: 0.000015,
+        output_cost_per_token: 0.000075,
+        input_cost_per_token_above_200k_tokens: 0.00003,
+        output_cost_per_token_above_200k_tokens: 0.0001125,
+      },
+    });
+    const view = computeCostPanel(
+      totals([
+        {
+          model: "claude-opus-4-7",
+          inputTokens: 1_000_000,
+          outputTokens: 100_000,
+          inputTokensAbove200k: 400_000,
+          outputTokensAbove200k: 60_000,
+        },
+      ]),
+      snap,
+      SINCE,
+      NOW,
+    );
+    const row = view.rows[0];
+    // input: 600k @ $15/MTok + 400k @ $30/MTok = $9 + $12 = $21
+    expect(row?.inputUsd).toBeCloseTo(21, 6);
+    // output: 40k @ $75/MTok + 60k @ $112.5/MTok = $3 + $6.75 = $9.75
+    expect(row?.outputUsd).toBeCloseTo(9.75, 6);
+    expect(row?.totalUsd).toBeCloseTo(21 + 9.75, 6);
+  });
+
+  test("falls back to the base rate when an above-200k rate is missing", () => {
+    const snap = snapshot({
+      "claude-opus-4-7": {
+        input_cost_per_token: 0.000015,
+        // No input_cost_per_token_above_200k_tokens — base rate applies
+        // to the above bucket as well, mirroring non-1M-context models.
+      },
+    });
+    const view = computeCostPanel(
+      totals([
+        {
+          model: "claude-opus-4-7",
+          inputTokens: 1_000_000,
+          inputTokensAbove200k: 400_000,
+        },
+      ]),
+      snap,
+      SINCE,
+      NOW,
+    );
+    const row = view.rows[0];
+    // entire 1M @ base $15/MTok = $15 (no upcharge for above bucket)
+    expect(row?.inputUsd).toBeCloseTo(15, 6);
+  });
 });
 
 describe("computeConversationCost", () => {

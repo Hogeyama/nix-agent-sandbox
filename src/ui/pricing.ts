@@ -23,12 +23,25 @@ import * as path from "node:path";
 import { ensureDir } from "../lib/fs_utils.ts";
 import { pricingCachePath } from "./paths.ts";
 
-/** The four token-cost fields we extract from each LiteLLM model entry. */
+/**
+ * The token-cost fields we extract from each LiteLLM model entry.
+ * Includes both base rates and the upper-tier `*_above_200k_tokens`
+ * variants so consumers can apply Anthropic's 1M-context pricing on
+ * spans whose effective input exceeded 200_000 tokens.
+ *
+ * The "above 200k" rates are absent on most models; consumers fall
+ * back to the base rate when they are missing, which leaves
+ * non-1M-context models priced at a single tier as before.
+ */
 export type FourCosts = {
   input_cost_per_token?: number;
   output_cost_per_token?: number;
   cache_creation_input_token_cost?: number;
   cache_read_input_token_cost?: number;
+  input_cost_per_token_above_200k_tokens?: number;
+  output_cost_per_token_above_200k_tokens?: number;
+  cache_creation_input_token_cost_above_200k_tokens?: number;
+  cache_read_input_token_cost_above_200k_tokens?: number;
 };
 
 /** Provenance of a `PricingSnapshot`. */
@@ -86,22 +99,39 @@ export function reduceLitellmJson(raw: unknown): Record<string, FourCosts> {
     if (key === "sample_spec") continue;
     if (!rawEntry || typeof rawEntry !== "object") continue;
     const entry = rawEntry as Record<string, unknown>;
-    const four: FourCosts = {};
-    let any = false;
-    const fields: (keyof FourCosts)[] = [
+    const costs: FourCosts = {};
+    let anyBase = false;
+    const baseFields: (keyof FourCosts)[] = [
       "input_cost_per_token",
       "output_cost_per_token",
       "cache_creation_input_token_cost",
       "cache_read_input_token_cost",
     ];
-    for (const f of fields) {
+    for (const f of baseFields) {
       const v = entry[f];
       if (typeof v === "number" && Number.isFinite(v)) {
-        four[f] = v;
-        any = true;
+        costs[f] = v;
+        anyBase = true;
       }
     }
-    if (any) out[key] = four;
+    // Upper-tier rates are optional and only present on long-context
+    // models. They piggy-back on a key that already qualifies via the
+    // base rates above; we never admit a key that has only `*_above_*`
+    // rates with no base rate, since the consumer would have nothing to
+    // price the below-threshold bucket against.
+    const aboveFields: (keyof FourCosts)[] = [
+      "input_cost_per_token_above_200k_tokens",
+      "output_cost_per_token_above_200k_tokens",
+      "cache_creation_input_token_cost_above_200k_tokens",
+      "cache_read_input_token_cost_above_200k_tokens",
+    ];
+    for (const f of aboveFields) {
+      const v = entry[f];
+      if (typeof v === "number" && Number.isFinite(v)) {
+        costs[f] = v;
+      }
+    }
+    if (anyBase) out[key] = costs;
   }
   return out;
 }

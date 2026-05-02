@@ -129,6 +129,43 @@ describe("reduceLitellmJson", () => {
     expect(reduceLitellmJson("string")).toEqual({});
     expect(reduceLitellmJson(42)).toEqual({});
   });
+
+  test("preserves above-200k upper-tier rates alongside base rates", () => {
+    const out = reduceLitellmJson({
+      "claude-opus-4-7": {
+        input_cost_per_token: 0.000015,
+        output_cost_per_token: 0.000075,
+        cache_creation_input_token_cost: 0.00001875,
+        cache_read_input_token_cost: 0.0000015,
+        input_cost_per_token_above_200k_tokens: 0.00003,
+        output_cost_per_token_above_200k_tokens: 0.0001125,
+        cache_creation_input_token_cost_above_200k_tokens: 0.0000375,
+        cache_read_input_token_cost_above_200k_tokens: 0.000003,
+      },
+    });
+    expect(out["claude-opus-4-7"]).toEqual({
+      input_cost_per_token: 0.000015,
+      output_cost_per_token: 0.000075,
+      cache_creation_input_token_cost: 0.00001875,
+      cache_read_input_token_cost: 0.0000015,
+      input_cost_per_token_above_200k_tokens: 0.00003,
+      output_cost_per_token_above_200k_tokens: 0.0001125,
+      cache_creation_input_token_cost_above_200k_tokens: 0.0000375,
+      cache_read_input_token_cost_above_200k_tokens: 0.000003,
+    });
+  });
+
+  test("drops entries that have only above-200k rates without a base rate", () => {
+    // A key with no base rates is unusable: the consumer cannot price
+    // the below-threshold bucket. The reducer admits a key only when at
+    // least one base rate is present.
+    const out = reduceLitellmJson({
+      "above-only": {
+        input_cost_per_token_above_200k_tokens: 0.00003,
+      },
+    });
+    expect(out).not.toHaveProperty("above-only");
+  });
 });
 
 describe("getPricingSnapshot", () => {
