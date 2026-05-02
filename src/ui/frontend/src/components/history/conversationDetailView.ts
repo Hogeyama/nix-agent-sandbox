@@ -57,12 +57,6 @@ export interface ConversationHeaderView {
   readonly turnCount: number;
   readonly spanCount: number;
   readonly invocationCount: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
-  readonly tokenTotal: number;
-  readonly tokenBar: TokenBarShape | null;
 }
 
 export interface InvocationLinkRow {
@@ -397,17 +391,6 @@ export function buildConversationHeader(
     turnCount: buildSpanTreeByTurn(detail, nowMs).length,
     spanCount: c.spanCount,
     invocationCount: c.invocationCount,
-    inputTokens: c.inputTokensTotal,
-    outputTokens: c.outputTokensTotal,
-    cacheReadTokens: c.cacheReadTotal,
-    cacheWriteTokens: c.cacheWriteTotal,
-    tokenTotal: c.inputTokensTotal + c.outputTokensTotal,
-    tokenBar: buildTokenBar(
-      c.inputTokensTotal,
-      c.outputTokensTotal,
-      c.cacheReadTotal,
-      c.cacheWriteTotal,
-    ),
   };
 }
 

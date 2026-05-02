@@ -179,50 +179,6 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                       </div>
                     </div>
                   </div>
-                  <div class="history-detail-stats-rule" aria-hidden="true" />
-                  <div class="stats-group">
-                    <div class="stats-group-label">Tokens</div>
-                    <div class="stats-group-row">
-                      <div class="history-detail-stat-label">In</div>
-                      <div class="history-detail-stat-value">
-                        {formatCompactNumber(h.inputTokens)}
-                      </div>
-                      <div class="history-detail-stat-label">Out</div>
-                      <div class="history-detail-stat-value">
-                        {formatCompactNumber(h.outputTokens)}
-                      </div>
-                      <div class="history-detail-stat-label">Cache R</div>
-                      <div class="history-detail-stat-value">
-                        {formatCompactNumber(h.cacheReadTokens)}
-                      </div>
-                      <div class="history-detail-stat-label">Cache W</div>
-                      <div class="history-detail-stat-value">
-                        {formatCompactNumber(h.cacheWriteTokens)}
-                      </div>
-                    </div>
-                    <Show when={h.tokenBar}>
-                      {(bar) => (
-                        <div class="stats-token-bar" aria-hidden="true">
-                          <div
-                            class="stats-token-bar-seg is-input"
-                            style={{ width: `${bar().inputPct}%` }}
-                          />
-                          <div
-                            class="stats-token-bar-seg is-output"
-                            style={{ width: `${bar().outputPct}%` }}
-                          />
-                          <div
-                            class="stats-token-bar-seg is-cache-r"
-                            style={{ width: `${bar().cacheReadPct}%` }}
-                          />
-                          <div
-                            class="stats-token-bar-seg is-cache-w"
-                            style={{ width: `${bar().cacheWritePct}%` }}
-                          />
-                        </div>
-                      )}
-                    </Show>
-                  </div>
                 </div>
               </header>
 

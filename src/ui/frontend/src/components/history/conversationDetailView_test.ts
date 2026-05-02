@@ -162,7 +162,7 @@ describe("formatCountCell", () => {
 });
 
 describe("buildConversationHeader", () => {
-  test("projects every header field and sums input + output tokens", () => {
+  test("projects every visible header field", () => {
     const view = buildConversationHeader(makeDetail(), NOW_MS);
     expect(view.id).toBe("sess_aabbccdd11223344");
     expect(view.idLabel).toBe("sess_aab");
@@ -175,11 +175,6 @@ describe("buildConversationHeader", () => {
     expect(view.turnCount).toBe(1);
     expect(view.spanCount).toBe(34);
     expect(view.invocationCount).toBe(2);
-    expect(view.inputTokens).toBe(1500);
-    expect(view.outputTokens).toBe(500);
-    expect(view.cacheReadTokens).toBe(100);
-    expect(view.cacheWriteTokens).toBe(50);
-    expect(view.tokenTotal).toBe(2000);
   });
 
   test("propagates a null agent verbatim (no placeholder)", () => {
@@ -198,40 +193,6 @@ describe("buildConversationHeader", () => {
       NOW_MS,
     );
     expect(view.summary).toBe("Refactor the auth flow");
-  });
-
-  test("tokenBar projects proportional split summing to 100", () => {
-    const view = buildConversationHeader(
-      makeDetail({
-        conversation: makeConversation({
-          inputTokensTotal: 750,
-          outputTokensTotal: 250,
-          cacheReadTotal: 0,
-          cacheWriteTotal: 0,
-        }),
-      }),
-      NOW_MS,
-    );
-    expect(view.tokenBar).not.toBeNull();
-    expect(view.tokenBar?.inputPct).toBe(75);
-    expect(view.tokenBar?.outputPct).toBe(25);
-    expect(view.tokenBar?.cacheReadPct).toBe(0);
-    expect(view.tokenBar?.cacheWritePct).toBe(0);
-  });
-
-  test("tokenBar is null when every kind is zero", () => {
-    const view = buildConversationHeader(
-      makeDetail({
-        conversation: makeConversation({
-          inputTokensTotal: 0,
-          outputTokensTotal: 0,
-          cacheReadTotal: 0,
-          cacheWriteTotal: 0,
-        }),
-      }),
-      NOW_MS,
-    );
-    expect(view.tokenBar).toBeNull();
   });
 });
 
