@@ -85,6 +85,40 @@ test("empty conversation.id falls back to Codex thread.id", () => {
   ).toEqual("thread_x");
 });
 
+test("Codex shell_snapshot thread_id (underscore) is picked up", () => {
+  expect(
+    pickConversationIdFromSpans([
+      { attributes: { thread_id: "thread_underscore" } },
+    ]),
+  ).toEqual("thread_underscore");
+});
+
+test("thread.id (UUID string) wins over thread_id when both present", () => {
+  expect(
+    pickConversationIdFromSpans([
+      {
+        attributes: {
+          "thread.id": "uuid_dot",
+          thread_id: "uuid_underscore",
+        },
+      },
+    ]),
+  ).toEqual("uuid_dot");
+});
+
+test("OS thread.id as integer is ignored, thread_id string is taken", () => {
+  expect(
+    pickConversationIdFromSpans([
+      {
+        attributes: {
+          "thread.id": 21,
+          thread_id: "uuid_underscore",
+        },
+      },
+    ]),
+  ).toEqual("uuid_underscore");
+});
+
 test("later gen_ai.conversation.id wins over earlier Codex conversation.id", () => {
   expect(
     pickConversationIdFromSpans([

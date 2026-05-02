@@ -4,9 +4,16 @@
  * Per ADR 2026042901 §"Trace と conversation 紐付けの解決ルール":
  * first scan all spans in input order for `gen_ai.conversation.id` (Copilot
  * CLI) or `session.id` (Claude Code), then scan all spans again for Codex's
- * `conversation.id` / `thread.id` fallback. Empty strings are treated as
- * absent. The first non-empty value within the active scan wins. Pure
- * function, no I/O.
+ * `conversation.id` / `thread.id` / `thread_id` fallback. Empty strings are
+ * treated as absent. The first non-empty value within the active scan wins.
+ * Pure function, no I/O.
+ *
+ * Note on `thread.id` vs `thread_id`: Codex emits the thread UUID under
+ * `thread.id` on `session_task.turn` (overloading the OTel OS-thread
+ * attribute name; OS thread ids arrive as int64 and are filtered by the
+ * string-typeof check below), and under `thread_id` on `shell_snapshot`
+ * inside `thread/start` traces. Without the underscore variant, those
+ * thread-init traces would never resolve a conversation_id.
  */
 
 export interface ResolveConversationInput {
@@ -36,6 +43,13 @@ export function pickConversationIdFromSpans(
     const codexThread = attrs["thread.id"];
     if (typeof codexThread === "string" && codexThread.length > 0) {
       return codexThread;
+    }
+    const codexThreadUnderscore = attrs.thread_id;
+    if (
+      typeof codexThreadUnderscore === "string" &&
+      codexThreadUnderscore.length > 0
+    ) {
+      return codexThreadUnderscore;
     }
   }
   return null;
