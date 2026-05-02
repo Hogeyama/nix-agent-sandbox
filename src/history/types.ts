@@ -159,6 +159,15 @@ export interface ConversationDetail {
   readonly spans: SpanSummaryRow[];
   readonly turnEvents: ConversationTurnEventRow[];
   readonly invocations: InvocationSummaryRow[];
+  /**
+   * Per-model token totals over the whole life of this conversation. The
+   * `ConversationListRow` aggregates above collapse all models into one
+   * total; this breakdown carries the same numbers split by `spans.model`
+   * (with a single NULL-model row collapsing model-less spans). Order is
+   * deterministic — `model ASC` with the NULL row last — so SSE diff
+   * hashing stays stable across polls.
+   */
+  readonly modelTokenTotals: ModelTokenTotalsRow[];
 }
 
 export interface InvocationDetail {

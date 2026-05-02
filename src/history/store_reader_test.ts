@@ -343,6 +343,7 @@ test("queryConversationDetail: returns empty traces/spans/turn_events for a bare
     expect(detail?.spans).toEqual([]);
     expect(detail?.turnEvents).toEqual([]);
     expect(detail?.invocations).toEqual([]);
+    expect(detail?.modelTokenTotals).toEqual([]);
     // Aggregates default to 0, not NULL.
     expect(detail?.conversation.turnEventCount).toEqual(0);
     expect(detail?.conversation.spanCount).toEqual(0);
@@ -1079,6 +1080,66 @@ test("queryConversationModelTokenTotals: NULL cache columns coerced to 0", async
     expect(totals[0].outputTokens).toEqual(6);
     expect(totals[0].cacheRead).toEqual(0);
     expect(totals[0].cacheWrite).toEqual(0);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationDetail: includes modelTokenTotals matching queryConversationModelTokenTotals", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_a" }));
+    upsertConversation(db, conv({ id: "conv_a" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_a",
+        invocationId: "sess_a",
+        conversationId: "conv_a",
+      }),
+    );
+    insertSpans(db, [
+      sp({
+        spanId: "s1",
+        traceId: "trace_a",
+        model: "claude-sonnet",
+        inTok: 100,
+        outTok: 200,
+        cacheR: 10,
+        cacheW: 20,
+      }),
+      sp({
+        spanId: "s2",
+        traceId: "trace_a",
+        model: "claude-haiku",
+        inTok: 7,
+        outTok: 8,
+        cacheR: 1,
+        cacheW: 2,
+      }),
+      sp({
+        spanId: "s3",
+        traceId: "trace_a",
+        model: null,
+        inTok: 3,
+        outTok: 4,
+        cacheR: null,
+        cacheW: null,
+      }),
+    ]);
+
+    const detail = queryConversationDetail(db, "conv_a");
+    expect(detail).not.toBeNull();
+    const expected = queryConversationModelTokenTotals(db, "conv_a");
+    expect(detail?.modelTokenTotals).toEqual(expected);
+    // Sanity-check the breakdown itself, not just the equality with the
+    // standalone helper.
+    expect(detail?.modelTokenTotals.map((r) => r.model)).toEqual([
+      "claude-haiku",
+      "claude-sonnet",
+      null,
+    ]);
   } finally {
     await cleanup(t);
   }

@@ -97,6 +97,7 @@ function makeDetail(
     spans: [makeSpan()],
     turnEvents: [],
     invocations: [makeInvocation()],
+    modelTokenTotals: [],
     ...overrides,
   };
 }

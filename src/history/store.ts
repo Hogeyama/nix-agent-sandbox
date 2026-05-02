@@ -724,6 +724,8 @@ export function queryConversationDetail(
       .all(id) as InvocationSqlRow[]
   ).map(rowToInvocationSummary);
 
+  const modelTokenTotals = queryConversationModelTokenTotals(db, id);
+
   return {
     conversation: rowToConversationListRow(head),
     traces,
@@ -735,6 +737,7 @@ export function queryConversationDetail(
       payloadJson: r.payload_json,
     })),
     invocations,
+    modelTokenTotals,
   };
 }
 

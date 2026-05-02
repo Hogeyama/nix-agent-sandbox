@@ -52,6 +52,7 @@ function makeConversationDetail(id: string): ConversationDetail {
     spans: [],
     turnEvents: [],
     invocations: [],
+    modelTokenTotals: [],
   };
 }
 
@@ -585,4 +586,102 @@ test("cancelling the stream stops further polling", async () => {
   // No further reader calls after cancel — within scheduling tolerance,
   // exactly equal.
   expect(reader.listCalls).toBe(callsAfterCancel);
+});
+
+test("conversation detail payload carries an empty modelTokenTotals when the reader has no spans", async () => {
+  const reader = makeMockReader();
+  reader.setConversation("c1", makeConversationDetail("c1"));
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversation/c1/events");
+  const events = await readEventsFor(res, WINDOW_MS);
+
+  expect(events[0].event).toBe("history:conversation");
+  const payload = events[0].data as ConversationDetail;
+  // Exact-empty array, never undefined — frontend can rely on the field
+  // always being a list.
+  expect(payload.modelTokenTotals).toEqual([]);
+});
+
+test("conversation detail stays silent across polls when the detail is unchanged", async () => {
+  const reader = makeMockReader();
+  reader.setConversation("c1", makeConversationDetail("c1"));
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversation/c1/events");
+  const events = await readEventsFor(res, WINDOW_MS);
+
+  // Only the initial snapshot. The reader was polled multiple times.
+  expect(events.length).toBe(1);
+  expect(events[0].event).toBe("history:conversation");
+  expect(reader.conversationCalls.length).toBeGreaterThanOrEqual(2);
+});
+
+test("conversation detail re-emits when only modelTokenTotals changes", async () => {
+  const reader = makeMockReader();
+  reader.setConversation("c1", makeConversationDetail("c1"));
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversation/c1/events");
+  setTimeout(() => {
+    const next: ConversationDetail = {
+      ...makeConversationDetail("c1"),
+      modelTokenTotals: [
+        {
+          model: "claude-sonnet",
+          inputTokens: 1,
+          outputTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      ],
+    };
+    reader.setConversation("c1", next);
+  }, POLL_MS + 5);
+
+  const events = await readEventsFor(res, WINDOW_MS);
+  expect(events.length).toBeGreaterThanOrEqual(2);
+  const first = events[0].data as ConversationDetail;
+  expect(first.modelTokenTotals).toEqual([]);
+  const later = events
+    .slice(1)
+    .find(
+      (e) =>
+        e.event === "history:conversation" &&
+        (e.data as ConversationDetail).modelTokenTotals.length > 0,
+    );
+  expect(later).toBeDefined();
+  expect((later?.data as ConversationDetail).modelTokenTotals[0].model).toBe(
+    "claude-sonnet",
+  );
+});
+
+test("conversation detail re-emits when a non-totals field changes (totals stable)", async () => {
+  const reader = makeMockReader();
+  reader.setConversation("c1", makeConversationDetail("c1"));
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversation/c1/events");
+  setTimeout(() => {
+    const base = makeConversationDetail("c1");
+    const next: ConversationDetail = {
+      ...base,
+      conversation: { ...base.conversation, turnEventCount: 5 },
+    };
+    reader.setConversation("c1", next);
+  }, POLL_MS + 5);
+
+  const events = await readEventsFor(res, WINDOW_MS);
+  expect(events.length).toBeGreaterThanOrEqual(2);
+  const last = events[events.length - 1].data as ConversationDetail;
+  expect(last.conversation.turnEventCount).toBe(5);
+  expect(last.modelTokenTotals).toEqual([]);
 });
