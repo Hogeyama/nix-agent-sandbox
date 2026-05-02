@@ -1,11 +1,11 @@
 ---
-name: implement-with-review
+name: gated-commit-loop
 description: 計画・実装・レビューをサブエージェントで回し、コミット単位で品質を担保するワークフロー
 user-invocable: true
 argument-hint: "[実装内容の説明]"
 ---
 
-# Enterprise Implement-with-Review
+# Gated Commit Loop
 
 計画→計画レビュー→ユーザー承認→実装→コードレビュー→コミットを、**1 コミットずつ明示的に区切って**進めるワークフロー。
 
@@ -48,6 +48,13 @@ argument-hint: "[実装内容の説明]"
    - `completed_commits`
    - `protected_dirty_paths`
    - `current_commit_review_iteration`
+4. **イベントログを初期化する。** Step 5 で `./.gated-commit-loop/<timestamp>-summary.jsonl` に書き出すため、以下を会話内メモに溜めておく。
+   - `run_id`（適当なユニーク文字列）、`started_at`、ユーザー依頼の原文
+   - 各 plan iteration の verdict と reviewer の理由
+   - ユーザーの plan 承認イベント
+   - 各 commit の seq / title / hash / review_iters
+   - 各 finding の commit_seq / review_iter / rule / severity / file / message
+   - finding ごとの `resolution`（後述: 機械的に決まる）
 
 ## 実行順序
 
@@ -58,7 +65,7 @@ argument-hint: "[実装内容の説明]"
 5. `implementer` が blocked を返したら commit loop を中断し、残件を planner に再計画させて Step 2 に戻る。
 6. `code-reviewer` が未通過なら、その findings を implementer に渡して同じ commit をやり直す。
 7. 同じ根本原因の reject / review findings が続くか、各ループの上限に達したら、惰性で続けずユーザー判断へ戻す。
-8. 全 commit 完了後に Step 4 の完了報告を行う。
+8. 全 commit 完了後に Step 4 の完了報告を行い、続けて Step 5 のラベル付け & ログ書き出しを行う。
 
 ## Step 2: Plan Loop
 
@@ -160,6 +167,61 @@ argument-hint: "[実装内容の説明]"
 - 残っている warning / info（あれば）
 - 途中でユーザー判断を挟んだ箇所（あれば）
 
+報告が済んだら必ず Step 5 のラベル付け & ログ書き出しに進む。スキップして終わらせない。
+
+## Step 5: ラベル付け & ログ書き出し
+
+このログは `review-config.yml` の rule チューニングに使う一次データ。雑に書き出して終わりにせず、ラベル付けまで通す。
+
+### 1. finding ごとに `resolution` を確定する
+
+イベントログ上の各 finding に、機械的に `resolution` を付ける。
+
+- `fixed` — 同じ commit の **次の review iteration で同等の finding が消えている**（同じ rule + 近接行）
+- `ignored` — 最終 review iteration まで残ったが、`stop_when` 通過で commit された（severity が条件未満など）
+- `dropped` — その commit が replan で消えたなど、レビュー外の理由で finding が無効になった
+
+### 2. デフォルトラベルを推定する
+
+ユーザー負担を減らすため、以下のヒューリスティックでデフォルト値を埋める。最終確定はユーザーが行う。
+
+- `severity=critical` かつ `resolution=fixed` → `essential`
+- `severity=info` かつ `resolution=ignored` → `noise`
+- それ以外 → `borderline`
+
+### 3. ユーザーにラベル付けを依頼する
+
+会話上に **finding 一覧テーブル** を提示し、各行のデフォルトラベルとコメント欄を見せて修正してもらう。最低限のカラム:
+
+| # | commit | rule | severity | message (要約) | resolution | default label | label | comment |
+
+依頼の言い回しは「以下のラベルを確認してください。違和感ある行だけ書き換えるか、コメントで補足してください。スキップしてもらってもよいです（その場合 `label: null` として記録します）」のようにする。**ラベル必須にしない**。
+
+コミット単位の評価も同様に短い表で聞く:
+
+| # | commit | hash | rating (`good` / `mixed` / `bad`) | comment |
+
+### 4. 出力先を準備する
+
+1. cwd 直下に `./.gated-commit-loop/` を作る（既存ならそのまま）
+2. `./.gated-commit-loop/.gitignore` がなければ作成し、中身は `*` のみ（このディレクトリ自体を git に見せない方針）
+3. ファイル名は `<yyyymmddHHMMSS>-summary.jsonl`（ローカルタイムでよい）
+
+### 5. JSONL を書き出す
+
+スキーマは「Appendix: summary.jsonl スキーマ」を参照。1 行 1 イベントで、以下の順で並べる:
+
+1. `meta`（1 件）
+2. `plan` / `plan_user`（時系列順）
+3. 各 commit について `commit` → 紐づく `finding`(複数)
+4. `commit_rating`（commit ごと、ユーザー評価）
+
+ラベル未入力の `finding.label` / `commit_rating.rating` は JSON の `null` として明示的に書く（欠損 ≠ 未確認 を区別したい）。
+
+### 6. 書き出した旨を報告する
+
+`./.gated-commit-loop/<filename>` のパスと、入ったラベル数 / 未ラベル数を 1 行で報告して終了する。
+
 ## 実行時テンプレート
 
 ### planner 依頼テンプレート
@@ -195,5 +257,99 @@ argument-hint: "[実装内容の説明]"
 - ユーザー承認を表示せずに「たぶん OK だったはず」で進める
 - 同じ理由の reject を、ユーザー確認なしに回数上限まで機械的に回し続ける
 - review 未通過差分をコミットする
+- Step 4 の完了報告だけ出して Step 5 のラベル付け & ログ書き出しをスキップする
+- ラベル付けをユーザーに頼まず orchestrator が勝手にデフォルトのまま確定させる
 - protected dirty paths を巻き込んでコミットする
 - `git-commit` skill を使わず、雑な単文メッセージでコミットする
+
+## Appendix: summary.jsonl スキーマ
+
+`./.gated-commit-loop/<yyyymmddHHMMSS>-summary.jsonl` の各行は以下のいずれか。`type` フィールドで判別する。タイムスタンプは ISO 8601。
+
+### `meta` (1 件、先頭)
+
+```json
+{
+  "type": "meta",
+  "run_id": "string",
+  "started_at": "2026-05-02T14:30:22+09:00",
+  "finished_at": "2026-05-02T15:12:08+09:00",
+  "user_request": "ユーザー依頼の原文",
+  "review_config_path": "skills/gated-commit-loop/review-config.yml",
+  "max_plan_iterations": 3,
+  "max_review_iterations": 3
+}
+```
+
+### `plan` (各 plan iteration)
+
+```json
+{
+  "type": "plan",
+  "iter": 1,
+  "verdict": "approve" | "reject",
+  "reviewer_reason": "reject の場合のみ。approve では空文字でよい"
+}
+```
+
+### `plan_user` (ユーザー判断)
+
+```json
+{
+  "type": "plan_user",
+  "iter": 2,
+  "verdict": "approve" | "revise" | "abort",
+  "comment": ""
+}
+```
+
+### `commit` (各コミット)
+
+```json
+{
+  "type": "commit",
+  "seq": 1,
+  "title": "feat(x): ...",
+  "hash": "abc1234",
+  "review_iters": 2,
+  "implementer_blocked_count": 0
+}
+```
+
+### `finding` (review iteration ごとに発生した指摘)
+
+```json
+{
+  "type": "finding",
+  "commit_seq": 1,
+  "review_iter": 1,
+  "rule": "effect-separation",
+  "severity": "critical" | "warning" | "info",
+  "file": "src/foo.ts:42",
+  "message": "指摘内容（1〜2 文に要約）",
+  "resolution": "fixed" | "ignored" | "dropped",
+  "label": "essential" | "noise" | "borderline" | null,
+  "label_comment": ""
+}
+```
+
+### `commit_rating` (commit ごとのユーザー評価)
+
+```json
+{
+  "type": "commit_rating",
+  "commit_seq": 1,
+  "hash": "abc1234",
+  "rating": "good" | "mixed" | "bad" | null,
+  "comment": ""
+}
+```
+
+### 並び順
+
+1. `meta`
+2. `plan` / `plan_user` を時系列順
+3. 各 commit について `commit` → 紐づく `finding` を `review_iter` 昇順
+4. 全 commit ぶん終わったら `commit_rating` を seq 順
+
+集計スクリプト側はこの順序を前提にしてよい（ファイル全体を読んでから集計する場合は順序非依存に処理してもよい）。
