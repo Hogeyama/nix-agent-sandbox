@@ -2,10 +2,11 @@
  * Conversation-id resolution for an OTLP trace.
  *
  * Per ADR 2026042901 §"Trace と conversation 紐付けの解決ルール":
- * scan spans in input order; for each span prefer
- * `gen_ai.conversation.id` (Copilot CLI) and fall back to `session.id`
- * (Claude Code). Empty strings are treated as absent. The first non-empty
- * value wins. Pure function, no I/O.
+ * first scan all spans in input order for `gen_ai.conversation.id` (Copilot
+ * CLI) or `session.id` (Claude Code), then scan all spans again for Codex's
+ * `conversation.id` / `thread.id` fallback. Empty strings are treated as
+ * absent. The first non-empty value within the active scan wins. Pure
+ * function, no I/O.
  */
 
 export interface ResolveConversationInput {
@@ -24,6 +25,17 @@ export function pickConversationIdFromSpans(
     const sess = attrs["session.id"];
     if (typeof sess === "string" && sess.length > 0) {
       return sess;
+    }
+  }
+  for (const span of spans) {
+    const attrs = span.attributes ?? {};
+    const codexConversation = attrs["conversation.id"];
+    if (typeof codexConversation === "string" && codexConversation.length > 0) {
+      return codexConversation;
+    }
+    const codexThread = attrs["thread.id"];
+    if (typeof codexThread === "string" && codexThread.length > 0) {
+      return codexThread;
     }
   }
   return null;

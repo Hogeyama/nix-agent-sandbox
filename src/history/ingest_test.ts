@@ -3,7 +3,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { ingestResourceSpans, type OtlpJsonExportPayload } from "./ingest.ts";
-import { _closeHistoryDb, openHistoryDb, upsertInvocation } from "./store.ts";
+import {
+  _closeHistoryDb,
+  openHistoryDb,
+  queryConversationList,
+  upsertInvocation,
+} from "./store.ts";
 
 interface TmpHistoryDb {
   dir: string;
@@ -193,6 +198,354 @@ test("claude_llm_request_flat_tokens: token columns populated from unprefixed at
     expect(span.out_tok).toEqual(101);
     expect(span.cache_r).toEqual(81);
     expect(span.cache_w).toEqual(21);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("codex_otel_minimal: Codex spans classify, resolve fallback ids, and promote tokens without double counting", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_codex",
+      profile: "default",
+      agent: "codex",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload = await loadFixture("codex_otel_minimal.json");
+    const result = ingestResourceSpans(db, payload);
+
+    expect(result.acceptedSpans).toEqual(6);
+    expect(result.droppedTraces).toEqual(0);
+    expect(result.resolvedConversations).toEqual(2);
+
+    const traces = db
+      .query("SELECT trace_id, conversation_id FROM traces ORDER BY trace_id")
+      .all() as { trace_id: string; conversation_id: string | null }[];
+    expect(traces).toEqual([
+      {
+        trace_id: "trace_codex_conversation",
+        conversation_id: "conv_codex_1",
+      },
+      {
+        trace_id: "trace_codex_thread",
+        conversation_id: "thread_codex_1",
+      },
+    ]);
+
+    const spans = db
+      .query(
+        `SELECT span_id, span_name, kind, model, in_tok, out_tok, cache_r, cache_w
+           FROM spans
+          ORDER BY started_at`,
+      )
+      .all() as {
+      span_id: string;
+      span_name: string;
+      kind: string;
+      model: string | null;
+      in_tok: number | null;
+      out_tok: number | null;
+      cache_r: number | null;
+      cache_w: number | null;
+    }[];
+    expect(spans).toEqual([
+      {
+        span_id: "span_codex_turn",
+        span_name: "session_task.turn",
+        kind: "invoke_agent",
+        model: null,
+        in_tok: null,
+        out_tok: null,
+        cache_r: null,
+        cache_w: null,
+      },
+      {
+        span_id: "span_codex_response",
+        span_name: "model_client.stream_responses_websocket",
+        kind: "chat",
+        model: null,
+        in_tok: null,
+        out_tok: null,
+        cache_r: null,
+        cache_w: null,
+      },
+      {
+        span_id: "span_codex_usage",
+        span_name: "codex.turn.token_usage",
+        kind: "chat",
+        model: "gpt-5.5",
+        in_tok: 1200,
+        out_tok: 345,
+        cache_r: 90,
+        cache_w: 12,
+      },
+      {
+        span_id: "span_codex_mcp",
+        span_name: "mcp.tools.call",
+        kind: "execute_tool",
+        model: null,
+        in_tok: null,
+        out_tok: null,
+        cache_r: null,
+        cache_w: null,
+      },
+      {
+        span_id: "span_codex_user_shell",
+        span_name: "session_task.user_shell",
+        kind: "execute_tool",
+        model: null,
+        in_tok: null,
+        out_tok: null,
+        cache_r: null,
+        cache_w: null,
+      },
+      {
+        span_id: "span_codex_review",
+        span_name: "session_task.review",
+        kind: "invoke_agent",
+        model: null,
+        in_tok: null,
+        out_tok: null,
+        cache_r: null,
+        cache_w: null,
+      },
+    ]);
+
+    const threadConversation = queryConversationList(db).find(
+      (row) => row.id === "thread_codex_1",
+    );
+    expect(threadConversation?.inputTokensTotal).toEqual(1200);
+    expect(threadConversation?.outputTokensTotal).toEqual(345);
+    expect(threadConversation?.cacheReadTotal).toEqual(90);
+    expect(threadConversation?.cacheWriteTotal).toEqual(12);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("codex response span promotes model and tokens when no token_usage span exists in the trace", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_codex_response",
+      profile: "default",
+      agent: "codex",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload: OtlpJsonExportPayload = {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              {
+                key: "nas.session.id",
+                value: { stringValue: "sess_codex_response" },
+              },
+              { key: "nas.agent", value: { stringValue: "codex" } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "trace_codex_response_only",
+                  spanId: "span_codex_response_only",
+                  name: "responses.stream_request",
+                  startTimeUnixNano: "1714570100000000000",
+                  endTimeUnixNano: "1714570101000000000",
+                  attributes: [
+                    {
+                      key: "conversation.id",
+                      value: { stringValue: "conv_codex_response_only" },
+                    },
+                    {
+                      key: "gen_ai.response.model",
+                      value: { stringValue: "gpt-5.5" },
+                    },
+                    {
+                      key: "gen_ai.usage.input_tokens",
+                      value: { intValue: "77" },
+                    },
+                    {
+                      key: "gen_ai.usage.output_tokens",
+                      value: { intValue: "33" },
+                    },
+                    {
+                      key: "gen_ai.usage.cache_read.input_tokens",
+                      value: { intValue: "11" },
+                    },
+                    {
+                      key: "gen_ai.usage.cache_creation.input_tokens",
+                      value: { intValue: "5" },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = ingestResourceSpans(db, payload);
+    expect(result.acceptedSpans).toEqual(1);
+    expect(result.droppedTraces).toEqual(0);
+    expect(result.resolvedConversations).toEqual(1);
+
+    const span = db
+      .query(
+        `SELECT span_name, kind, model, in_tok, out_tok, cache_r, cache_w
+           FROM spans
+          WHERE span_id = ?`,
+      )
+      .get("span_codex_response_only") as {
+      span_name: string;
+      kind: string;
+      model: string | null;
+      in_tok: number | null;
+      out_tok: number | null;
+      cache_r: number | null;
+      cache_w: number | null;
+    };
+    expect(span).toEqual({
+      span_name: "responses.stream_request",
+      kind: "chat",
+      model: "gpt-5.5",
+      in_tok: 77,
+      out_tok: 33,
+      cache_r: 11,
+      cache_w: 5,
+    });
+
+    const conv = queryConversationList(db).find(
+      (row) => row.id === "conv_codex_response_only",
+    );
+    expect(conv?.inputTokensTotal).toEqual(77);
+    expect(conv?.outputTokensTotal).toEqual(33);
+    expect(conv?.cacheReadTotal).toEqual(11);
+    expect(conv?.cacheWriteTotal).toEqual(5);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("codex turn span promotes model and tokens when no usage or response span exists in the trace", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_codex_turn",
+      profile: "default",
+      agent: "codex",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload: OtlpJsonExportPayload = {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              {
+                key: "nas.session.id",
+                value: { stringValue: "sess_codex_turn" },
+              },
+              { key: "nas.agent", value: { stringValue: "codex" } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "trace_codex_turn_only",
+                  spanId: "span_codex_turn_only",
+                  name: "session_task.turn",
+                  startTimeUnixNano: "1714570200000000000",
+                  endTimeUnixNano: "1714570201000000000",
+                  attributes: [
+                    {
+                      key: "thread.id",
+                      value: { stringValue: "thread_codex_turn_only" },
+                    },
+                    {
+                      key: "model",
+                      value: { stringValue: "gpt-5.5" },
+                    },
+                    {
+                      key: "codex.turn.token_usage.input_tokens",
+                      value: { intValue: "88" },
+                    },
+                    {
+                      key: "codex.turn.token_usage.output_tokens",
+                      value: { intValue: "44" },
+                    },
+                    {
+                      key: "codex.turn.token_usage.cache_read_input_tokens",
+                      value: { intValue: "22" },
+                    },
+                    {
+                      key: "codex.turn.token_usage.cache_creation_input_tokens",
+                      value: { intValue: "6" },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = ingestResourceSpans(db, payload);
+    expect(result.acceptedSpans).toEqual(1);
+    expect(result.droppedTraces).toEqual(0);
+    expect(result.resolvedConversations).toEqual(1);
+
+    const span = db
+      .query(
+        `SELECT span_name, kind, model, in_tok, out_tok, cache_r, cache_w
+           FROM spans
+          WHERE span_id = ?`,
+      )
+      .get("span_codex_turn_only") as {
+      span_name: string;
+      kind: string;
+      model: string | null;
+      in_tok: number | null;
+      out_tok: number | null;
+      cache_r: number | null;
+      cache_w: number | null;
+    };
+    expect(span).toEqual({
+      span_name: "session_task.turn",
+      kind: "invoke_agent",
+      model: "gpt-5.5",
+      in_tok: 88,
+      out_tok: 44,
+      cache_r: 22,
+      cache_w: 6,
+    });
+
+    const conv = queryConversationList(db).find(
+      (row) => row.id === "thread_codex_turn_only",
+    );
+    expect(conv?.inputTokensTotal).toEqual(88);
+    expect(conv?.outputTokensTotal).toEqual(44);
+    expect(conv?.cacheReadTotal).toEqual(22);
+    expect(conv?.cacheWriteTotal).toEqual(6);
   } finally {
     await cleanup(t);
   }

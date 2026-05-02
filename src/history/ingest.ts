@@ -117,6 +117,17 @@ function readStringAttr(
   return typeof v === "string" ? v : null;
 }
 
+function readFirstStringAttr(
+  attrs: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | null {
+  for (const key of keys) {
+    const value = readStringAttr(attrs, key);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
 function readNumberAttr(
   attrs: Record<string, unknown>,
   key: string,
@@ -127,19 +138,53 @@ function readNumberAttr(
 }
 
 /**
- * Read a token-count attribute, preferring the OTel GenAI semantic-convention
- * name (`gen_ai.usage.<name>`) but falling back to the unprefixed `<name>`
- * that real-world Claude Code spans currently emit (e.g. `input_tokens`,
- * `cache_read_tokens`). Returns null when neither key is a finite number.
+ * Read a token-count attribute from the first finite number among known
+ * vendor/semantic-convention keys.
  */
 function readTokenAttr(
   attrs: Record<string, unknown>,
-  semconvKey: string,
-  flatKey: string,
+  keys: ReadonlyArray<string>,
 ): number | null {
-  const fromSemconv = readNumberAttr(attrs, semconvKey);
-  if (fromSemconv !== null) return fromSemconv;
-  return readNumberAttr(attrs, flatKey);
+  for (const key of keys) {
+    const value = readNumberAttr(attrs, key);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function isCodexTokenUsageSpan(name: string): boolean {
+  return name === "codex.turn.token_usage";
+}
+
+function isCodexResponseOrStreamSpan(name: string): boolean {
+  return (
+    name === "codex.response" ||
+    name === "codex.responses" ||
+    name === "model_client.stream_responses" ||
+    name === "model_client.stream_responses_websocket" ||
+    name === "responses.stream_request" ||
+    name === "responses_websocket.stream_request"
+  );
+}
+
+function isCodexTurnSpan(name: string): boolean {
+  return name === "session_task.turn";
+}
+
+function shouldPromoteUsageColumns(
+  kind: string,
+  spanName: string,
+  traceHasCodexTokenUsage: boolean,
+  traceHasCodexResponseOrStream: boolean,
+): boolean {
+  if (isCodexTurnSpan(spanName)) {
+    return !traceHasCodexTokenUsage && !traceHasCodexResponseOrStream;
+  }
+  if (kind !== "chat") return false;
+  if (traceHasCodexTokenUsage && isCodexResponseOrStreamSpan(spanName)) {
+    return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +370,12 @@ export function ingestResourceSpans(
         });
 
         const spanRows: SpanRow[] = [];
+        const traceHasCodexTokenUsage = acc.spansInOrder.some(({ raw }) =>
+          isCodexTokenUsageSpan(raw.name),
+        );
+        const traceHasCodexResponseOrStream = acc.spansInOrder.some(({ raw }) =>
+          isCodexResponseOrStreamSpan(raw.name),
+        );
         for (const { raw, attrs } of acc.spansInOrder) {
           const startNano = nanoToNumber(raw.startTimeUnixNano);
           const endNano = nanoToNumber(raw.endTimeUnixNano);
@@ -337,6 +388,14 @@ export function ingestResourceSpans(
             nanoToIso(raw.startTimeUnixNano) ?? "1970-01-01T00:00:00.000Z";
           const endedIso = nanoToIso(raw.endTimeUnixNano);
 
+          const kind = classifySpan(raw.name, attrs);
+          const promoteUsage = shouldPromoteUsageColumns(
+            kind,
+            raw.name,
+            traceHasCodexTokenUsage,
+            traceHasCodexResponseOrStream,
+          );
+
           spanRows.push({
             spanId: raw.spanId,
             parentSpanId:
@@ -346,28 +405,46 @@ export function ingestResourceSpans(
                 : null,
             traceId: raw.traceId,
             spanName: raw.name,
-            kind: classifySpan(raw.name, attrs),
-            model: readStringAttr(attrs, "gen_ai.request.model"),
-            inTok: readTokenAttr(
-              attrs,
-              "gen_ai.usage.input_tokens",
-              "input_tokens",
-            ),
-            outTok: readTokenAttr(
-              attrs,
-              "gen_ai.usage.output_tokens",
-              "output_tokens",
-            ),
-            cacheR: readTokenAttr(
-              attrs,
-              "gen_ai.usage.cache_read_input_tokens",
-              "cache_read_tokens",
-            ),
-            cacheW: readTokenAttr(
-              attrs,
-              "gen_ai.usage.cache_creation_input_tokens",
-              "cache_creation_tokens",
-            ),
+            kind,
+            model: promoteUsage
+              ? readFirstStringAttr(attrs, [
+                  "gen_ai.response.model",
+                  "gen_ai.request.model",
+                  "model",
+                ])
+              : null,
+            inTok: promoteUsage
+              ? readTokenAttr(attrs, [
+                  "gen_ai.usage.input_tokens",
+                  "input_tokens",
+                  "codex.turn.token_usage.input_tokens",
+                ])
+              : null,
+            outTok: promoteUsage
+              ? readTokenAttr(attrs, [
+                  "gen_ai.usage.output_tokens",
+                  "output_tokens",
+                  "codex.turn.token_usage.output_tokens",
+                ])
+              : null,
+            cacheR: promoteUsage
+              ? readTokenAttr(attrs, [
+                  "gen_ai.usage.cache_read.input_tokens",
+                  "gen_ai.usage.cache_read_input_tokens",
+                  "cache_read_tokens",
+                  "codex.turn.token_usage.cache_read_input_tokens",
+                  "codex.turn.token_usage.cache_read.input_tokens",
+                ])
+              : null,
+            cacheW: promoteUsage
+              ? readTokenAttr(attrs, [
+                  "gen_ai.usage.cache_creation.input_tokens",
+                  "gen_ai.usage.cache_creation_input_tokens",
+                  "cache_creation_tokens",
+                  "codex.turn.token_usage.cache_creation_input_tokens",
+                  "codex.turn.token_usage.cache_creation.input_tokens",
+                ])
+              : null,
             durationMs,
             startedAt: startedIso,
             endedAt: endedIso,

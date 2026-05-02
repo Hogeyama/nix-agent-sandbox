@@ -44,17 +44,40 @@ export function classifySpan(
     return "execute_tool";
   }
 
-  // Layer 4: Copilot CLI `<op> <subject>` whitespace-prefixed names.
+  // Layer 4: Codex CLI span names.
+  if (
+    name === "session_task.turn" ||
+    name === "session_task.review" ||
+    name === "session_task.compact"
+  ) {
+    return "invoke_agent";
+  }
+  if (name === "session_task.user_shell" || name === "mcp.tools.call") {
+    return "execute_tool";
+  }
+  if (
+    name === "codex.turn.token_usage" ||
+    name === "codex.response" ||
+    name === "codex.responses" ||
+    name === "model_client.stream_responses" ||
+    name === "model_client.stream_responses_websocket" ||
+    name === "responses.stream_request" ||
+    name === "responses_websocket.stream_request"
+  ) {
+    return "chat";
+  }
+
+  // Layer 5: Copilot CLI `<op> <subject>` whitespace-prefixed names.
   if (name.startsWith("chat ")) return "chat";
   if (name.startsWith("execute_tool ")) return "execute_tool";
   if (name.startsWith("invoke_agent ")) return "invoke_agent";
 
-  // Layer 5: presence of gen_ai.system marks the span as a chat regardless
+  // Layer 6: presence of gen_ai.system marks the span as a chat regardless
   // of an unrecognised name (catches vendor-specific naming we don't model).
   if (typeof attrs["gen_ai.system"] === "string") {
     return "chat";
   }
 
-  // Layer 6: fallback.
+  // Layer 7: fallback.
   return "other";
 }

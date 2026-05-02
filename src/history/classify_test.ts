@@ -61,27 +61,54 @@ test("layer 3: name='claude_code.tool.bash' → execute_tool", () => {
   expect(classifySpan("claude_code.tool.bash", {})).toEqual("execute_tool");
 });
 
-test("layer 4: name='chat gpt-4' → chat", () => {
+test("layer 4: Codex session_task.turn → invoke_agent", () => {
+  expect(classifySpan("session_task.turn", {})).toEqual("invoke_agent");
+});
+
+test("layer 4: Codex session_task.user_shell → execute_tool", () => {
+  expect(classifySpan("session_task.user_shell", {})).toEqual("execute_tool");
+});
+
+test("layer 4: Codex mcp.tools.call → execute_tool", () => {
+  expect(classifySpan("mcp.tools.call", {})).toEqual("execute_tool");
+});
+
+test("layer 4: Codex token usage span → chat", () => {
+  expect(classifySpan("codex.turn.token_usage", {})).toEqual("chat");
+});
+
+test.each([
+  "codex.response",
+  "codex.responses",
+  "model_client.stream_responses",
+  "model_client.stream_responses_websocket",
+  "responses.stream_request",
+  "responses_websocket.stream_request",
+])("layer 4: Codex response/stream span %s → chat", (name) => {
+  expect(classifySpan(name, {})).toEqual("chat");
+});
+
+test("layer 5: name='chat gpt-4' → chat", () => {
   expect(classifySpan("chat gpt-4", {})).toEqual("chat");
 });
 
-test("layer 4: name='execute_tool shell' → execute_tool", () => {
+test("layer 5: name='execute_tool shell' → execute_tool", () => {
   expect(classifySpan("execute_tool shell", {})).toEqual("execute_tool");
 });
 
-test("layer 4: name='invoke_agent agent_default' → invoke_agent", () => {
+test("layer 5: name='invoke_agent agent_default' → invoke_agent", () => {
   expect(classifySpan("invoke_agent agent_default", {})).toEqual(
     "invoke_agent",
   );
 });
 
-test("layer 5: gen_ai.system attribute → chat", () => {
+test("layer 6: gen_ai.system attribute → chat", () => {
   expect(
     classifySpan("something_random", { "gen_ai.system": "anthropic" }),
   ).toEqual("chat");
 });
 
-test("layer 6: nothing matches → other", () => {
+test("layer 7: nothing matches → other", () => {
   expect(classifySpan("something_random", {})).toEqual("other");
 });
 
