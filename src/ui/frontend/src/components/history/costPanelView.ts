@@ -112,9 +112,10 @@ function resolveAgainstSnapshot(
 
 /**
  * Normalise `raw` against the snapshot. Walks a fixed sequence of
- * fallbacks — exact, provider-prefixed, version-suffix-stripped,
- * alias — and reports the matched key on success. A null/empty raw
- * is treated as unknown without inspecting the snapshot at all.
+ * fallbacks — exact, provider-prefixed, bracketed-tag-stripped,
+ * version-suffix-stripped, alias — and reports the matched key on
+ * success. A null/empty raw is treated as unknown without inspecting
+ * the snapshot at all.
  */
 export function normalizeModel(
   raw: string | null | undefined,
@@ -130,8 +131,20 @@ export function normalizeModel(
     return { kind: "known", key: direct.key, rates: direct.rates };
   }
 
+  // 2.5: drop a trailing bracketed tag (e.g. "[1M]" 1M-context beta).
+  // Anthropic publishes the upper-tier price on the same key via
+  // `*_above_200k_tokens` rather than as a separate variant key, so
+  // the base lookup is the right canonical form.
+  const bracketStripped = raw.replace(/\[[^\]]+\]$/, "");
+  if (bracketStripped !== raw) {
+    const hit = resolveAgainstSnapshot(bracketStripped, snapshot);
+    if (hit !== null) {
+      return { kind: "known", key: hit.key, rates: hit.rates };
+    }
+  }
+
   // 3a: drop a single Bedrock-style `-v\d+:\d+` suffix and retry.
-  const bedrockStripped = raw.replace(/-v\d+:\d+$/, "");
+  const bedrockStripped = bracketStripped.replace(/-v\d+:\d+$/, "");
   if (bedrockStripped !== raw) {
     const hit = resolveAgainstSnapshot(bedrockStripped, snapshot);
     if (hit !== null) {

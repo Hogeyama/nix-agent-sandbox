@@ -79,6 +79,37 @@ describe("normalizeModel", () => {
     }
   });
 
+  test("strips a trailing [1M]-style bracketed tag and matches the base key", () => {
+    const snap = snapshot({
+      "claude-opus-4-7": { input_cost_per_token: 15 },
+    });
+    const r = normalizeModel("claude-opus-4-7[1M]", snap);
+    expect(r.kind).toBe("known");
+    if (r.kind === "known") {
+      expect(r.key).toBe("claude-opus-4-7");
+    }
+  });
+
+  test("bracketed-tag stripping composes with the date-suffix peel", () => {
+    const snap = snapshot({
+      "claude-opus-4-7": { input_cost_per_token: 15 },
+    });
+    const r = normalizeModel("claude-opus-4-7-20260416[1M]", snap);
+    expect(r.kind).toBe("known");
+    if (r.kind === "known") {
+      expect(r.key).toBe("claude-opus-4-7");
+    }
+  });
+
+  test("bracketed tag falls through to unknown when the base key is absent", () => {
+    const snap = snapshot({});
+    const r = normalizeModel("claude-opus-9-9[1M]", snap);
+    expect(r.kind).toBe("unknown");
+    if (r.kind === "unknown") {
+      expect(r.raw).toBe("claude-opus-9-9[1M]");
+    }
+  });
+
   test("unrecognised model falls through to the unknown bucket", () => {
     const snap = snapshot({});
     const r = normalizeModel("totally-made-up-model", snap);
