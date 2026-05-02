@@ -34,11 +34,15 @@ argument-hint: "[実装内容の説明]"
 
 ## 実行前セットアップ
 
-1. この SKILL.md と同じディレクトリにある `review-config.yml` を読み、以下を把握する。
-   - `max_plan_iterations`
-   - `max_review_iterations`
-   - `stop_when`
-   - `rules`
+1. **review-config を読み込む。** ルールの実体は project-local の `./.gated-commit-loop/review-config.yml`。
+   - 既に存在する → そのまま読む
+   - 存在しない → SKILL.md と同じディレクトリの `review-config.template.yml` を `./.gated-commit-loop/review-config.yml` にコピーしてから読む（`./.gated-commit-loop/` がなければ作る）
+   - **テンプレートを直接編集しない。** 編集対象は常に project-local のコピー。テンプレ更新は project-local に追従させない（既存の調整を上書きしないため）
+   - 把握すべき項目:
+     - `max_plan_iterations`
+     - `max_review_iterations`
+     - `stop_when`
+     - `rules`
 2. 開始時点の `git status --short` を記録し、そこで見えている変更を **protected dirty paths** として扱う。
    - protected dirty paths は、この workflow が作っていない既存変更である可能性が高い
    - 以降の commit には **明示的に対象 scope に含まれると確認できた場合を除き** 入れてはいけない
@@ -58,7 +62,7 @@ argument-hint: "[実装内容の説明]"
 
 ## 実行順序
 
-1. Step 1 を実行し、`review-config.yml` と初期 dirty paths を読み取る。
+1. Step 1 を実行し、`./.gated-commit-loop/review-config.yml`（無ければテンプレからコピー）と初期 dirty paths を読み取る。
 2. Step 2 の plan loop で、`plan-reviewer` が approve し、かつユーザー承認が会話上で明示されるまで再計画または停止判断を行う。
 3. 承認済み計画が得られたら、各 commit を **1件ずつ** Step 3 で処理する。
 4. 各 commit では `implementer` → `code-reviewer` → `git-commit` の順で進める。
@@ -203,8 +207,8 @@ argument-hint: "[実装内容の説明]"
 
 ### 4. 出力先を準備する
 
-1. cwd 直下に `./.gated-commit-loop/` を作る（既存ならそのまま）
-2. `./.gated-commit-loop/.gitignore` がなければ作成し、中身は `*` のみ（このディレクトリ自体を git に見せない方針）
+1. cwd 直下の `./.gated-commit-loop/` は実行前セットアップで作成済み（`review-config.yml` のコピー先と同じ場所）
+2. `./.gated-commit-loop/.gitignore` がなければ作成し、中身は `*` のみ。**review-config.yml と summary.jsonl の両方を git に見せない方針**（チューニングは clone ローカルに閉じる）
 3. ファイル名は `<yyyymmddHHMMSS>-summary.jsonl`（ローカルタイムでよい）
 
 ### 5. JSONL を書き出す
@@ -277,7 +281,7 @@ argument-hint: "[実装内容の説明]"
   "started_at": "2026-05-02T14:30:22+09:00",
   "finished_at": "2026-05-02T15:12:08+09:00",
   "user_request": "ユーザー依頼の原文",
-  "review_config_path": "skills/gated-commit-loop/review-config.yml",
+  "review_config_path": ".gated-commit-loop/review-config.yml",
   "max_plan_iterations": 3,
   "max_review_iterations": 3
 }

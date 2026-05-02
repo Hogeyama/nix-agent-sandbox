@@ -1,6 +1,8 @@
 # review-config.yml チューニングガイド
 
-`./.gated-commit-loop/*-summary.jsonl` を読んで `review-config.yml` の rules を見直すためのガイド。`gated-commit-loop` スキル本体とは独立した活動なので、ユーザーが「review-config を見直したい」「ルールチューニングしたい」と言ったときにこのファイルを開く。
+`./.gated-commit-loop/*-summary.jsonl` を読んで `./.gated-commit-loop/review-config.yml`（project-local copy）の rules を見直すためのガイド。`gated-commit-loop` スキル本体とは独立した活動なので、ユーザーが「review-config を見直したい」「ルールチューニングしたい」と言ったときにこのファイルを開く。
+
+**編集対象は常に `./.gated-commit-loop/review-config.yml`。** スキル側の `skills/gated-commit-loop/review-config.template.yml` はテンプレートなので触らない（触ると新規 project の初期値が変わる）。
 
 ## このガイドの前提
 
