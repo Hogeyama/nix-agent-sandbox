@@ -80,11 +80,26 @@ interface HistoryListPayload {
 }
 
 export function HistoryShell(props: HistoryShellProps) {
+  // Single pricing resource owned by the shell: list view and
+  // conversation detail share one snapshot so the two surfaces never
+  // disagree on source / fetched-at / stale state. The fetcher catches
+  // its own rejection and resolves with the unavailable sentinel so a
+  // daemon-side or transport-level failure renders the unavailable
+  // header band rather than blanking either view.
+  const [pricingSnapshot] = createResource<PricingSnapshot>(async () => {
+    try {
+      return await fetchPricingSnapshot();
+    } catch (err) {
+      console.warn("[HistoryShell] pricing snapshot fetch failed:", err);
+      return UNAVAILABLE_SNAPSHOT;
+    }
+  });
+
   return (
     <section class="history-shell" aria-label="History">
       <Switch>
         <Match when={props.route.kind === "history"}>
-          <HistoryListView />
+          <HistoryListView pricingSnapshot={pricingSnapshot} />
         </Match>
         <Match
           keyed
@@ -94,7 +109,9 @@ export function HistoryShell(props: HistoryShellProps) {
               : undefined
           }
         >
-          {(id) => <ConversationDetailView id={id} />}
+          {(id) => (
+            <ConversationDetailView id={id} pricingSnapshot={pricingSnapshot} />
+          )}
         </Match>
         <Match
           keyed
@@ -114,27 +131,16 @@ export function HistoryShell(props: HistoryShellProps) {
 /**
  * Owns the conversation-list SSE subscription. Split out so the
  * EventSource is created lazily — only when the list route is the
- * active match, never when the user is on a detail route.
+ * active match, never when the user is on a detail route. The
+ * pricing snapshot accessor is owned one level up by `HistoryShell`
+ * so the conversation detail view can share the same fetch.
  */
-function HistoryListView() {
+function HistoryListView(props: {
+  pricingSnapshot: () => PricingSnapshot | undefined;
+}) {
   const stream = useHistoryStream<HistoryListPayload>({
     url: "/api/history/conversations/events",
     payloadEventName: HISTORY_SSE_LIST_EVENT,
-  });
-
-  // One-shot pricing fetch tied to the list view's lifetime. The
-  // fetcher catches its own rejection and resolves with the
-  // unavailable sentinel so a daemon-side or transport-level failure
-  // never propagates into Solid's resource error state — the cost
-  // panel renders the unavailable header band instead, leaving the
-  // conversation list below untouched.
-  const [pricingSnapshot] = createResource<PricingSnapshot>(async () => {
-    try {
-      return await fetchPricingSnapshot();
-    } catch (err) {
-      console.warn("[HistoryShell] pricing snapshot fetch failed:", err);
-      return UNAVAILABLE_SNAPSHOT;
-    }
   });
 
   const conversations = () => stream.data()?.conversations ?? [];
@@ -147,7 +153,7 @@ function HistoryListView() {
       conversations={conversations}
       loading={loading}
       error={stream.error}
-      pricingSnapshot={pricingSnapshot}
+      pricingSnapshot={props.pricingSnapshot}
       modelTokenTotals={modelTokenTotals}
       since={since}
     />
@@ -161,7 +167,10 @@ function HistoryListView() {
  * is a defence in depth so an unexpected route value still produces
  * a syntactically valid URL.
  */
-function ConversationDetailView(props: { id: string }) {
+function ConversationDetailView(props: {
+  id: string;
+  pricingSnapshot: () => PricingSnapshot | undefined;
+}) {
   const stream = useHistoryStream<ConversationDetail>({
     url: `/api/history/conversation/${encodeURIComponent(props.id)}/events`,
     payloadEventName: HISTORY_SSE_CONVERSATION_EVENT,
@@ -177,6 +186,7 @@ function ConversationDetailView(props: { id: string }) {
       notFound={stream.notFound}
       loading={loading}
       error={stream.error}
+      pricingSnapshot={props.pricingSnapshot}
     />
   );
 }

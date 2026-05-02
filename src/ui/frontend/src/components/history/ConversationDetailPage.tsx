@@ -22,6 +22,8 @@
 
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import type { ConversationDetail } from "../../../../../history/types";
+import type { PricingSnapshot } from "../../api/client";
+import { ConversationCostBand } from "./ConversationCostBand";
 import {
   buildConversationHeader,
   buildInvocationLinks,
@@ -34,6 +36,8 @@ export interface ConversationDetailPageProps {
   notFound: () => boolean;
   loading: () => boolean;
   error: () => string | null;
+  /** Pricing snapshot accessor owned by `HistoryShell`. */
+  pricingSnapshot: () => PricingSnapshot | undefined;
   /** Hash href to the list page; defaults to `#/history`. */
   backHref?: string;
 }
@@ -220,6 +224,11 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                   </div>
                 </div>
               </header>
+
+              <ConversationCostBand
+                perModel={props.detail()?.modelTokenTotals ?? []}
+                pricingSnapshot={props.pricingSnapshot}
+              />
 
               <section class="history-detail-section">
                 <h2 class="history-detail-section-title">

@@ -2392,3 +2392,189 @@ body::after {
 .history-cost-row-unknown td {
   color: var(--muted);
 }
+
+/* Conversation-detail full-width COST band — sits between the header
+ * card and the Turns section. The amber left rail mirrors the Turns
+ * accordion's accent so the two stacked surfaces read as part of the
+ * same column. Hero USD borrows the amber-glow text-shadow already used
+ * elsewhere on the detail page; the unavailable variant collapses the
+ * accent to muted-2 so a missing-price snapshot does not draw the eye. */
+.history-detail-cost-band {
+  margin: 0 0 32px;
+  padding: 18px 20px 20px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 1px solid var(--amber);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cream-dim);
+}
+.history-detail-cost-band--unavailable {
+  border-left-color: var(--muted-2);
+  border-style: dashed;
+}
+.history-detail-cost-band-loading {
+  margin: 0 0 32px;
+  min-height: 110px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+}
+.history-detail-cost-band-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.history-detail-cost-band-title {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--cream-dim);
+}
+.history-detail-cost-band-chips {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.history-detail-cost-band-chip,
+.history-detail-cost-band-chip-meta {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.history-detail-cost-band-chip--bundled {
+  color: var(--cream-dim);
+}
+.history-detail-cost-band-chip--stale {
+  color: var(--amber-hi);
+  font-weight: 600;
+}
+.history-detail-cost-band-chip--unavailable {
+  color: var(--muted-2);
+  border: 1px solid currentColor;
+  padding: 1px 6px;
+}
+.history-detail-cost-band-hero {
+  font-family: var(--mono);
+  font-size: 28px;
+  color: var(--amber-hi);
+  text-shadow: 0 0 12px var(--amber-glow);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 12px;
+}
+.history-detail-cost-band-hero--unavailable {
+  color: var(--muted-2);
+  text-shadow: none;
+}
+/* Single-mode strip: model label, hero already rendered above (we
+ * re-use the hero block for both modes), and four token+USD cells in a
+ * row. The grid keeps the cells aligned regardless of label widths. */
+.history-detail-cost-band-strip {
+  display: grid;
+  grid-template-columns: minmax(140px, auto) auto 1fr;
+  gap: 16px 24px;
+  align-items: baseline;
+}
+.history-detail-cost-band-strip-model {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--cream);
+}
+.history-detail-cost-band-strip-cells {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  justify-self: end;
+}
+.history-detail-cost-band-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-feature-settings: "tnum";
+}
+.history-detail-cost-band-cell--missing {
+  color: var(--muted);
+}
+.history-detail-cost-band-cell-label {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.history-detail-cost-band-cell-value {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+.history-detail-cost-band-cell-token {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--cream);
+  font-variant-numeric: tabular-nums;
+}
+.history-detail-cost-band-cell-usd {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--cream-dim);
+  font-variant-numeric: tabular-nums;
+}
+.history-detail-cost-band-cell--missing .history-detail-cost-band-cell-token,
+.history-detail-cost-band-cell--missing .history-detail-cost-band-cell-usd {
+  color: var(--muted);
+}
+.history-detail-cost-band-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cream-dim);
+}
+.history-detail-cost-band-table thead th {
+  text-align: left;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.history-detail-cost-band-table thead th.history-detail-cost-band-cell-token,
+.history-detail-cost-band-table thead th.history-detail-cost-band-cell-usd {
+  text-align: right;
+}
+.history-detail-cost-band-table tbody td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule-soft);
+  font-variant-numeric: tabular-nums;
+}
+.history-detail-cost-band-table tbody td.history-detail-cost-band-cell-token,
+.history-detail-cost-band-table tbody td.history-detail-cost-band-cell-usd {
+  text-align: right;
+}
+.history-detail-cost-band-row-known td {
+  color: var(--cream);
+}
+.history-detail-cost-band-row-unknown td {
+  color: var(--muted);
+  font-style: italic;
+}
+.history-detail-cost-band-row-total td {
+  border-top: 1px solid var(--rule);
+  border-bottom: none;
+  color: var(--cream);
+  font-weight: 600;
+}

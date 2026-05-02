@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ModelTokenTotalsRow } from "../../../../../history/types";
 import type { PricingSnapshot } from "../../api/client";
 import {
+  computeConversationCost,
   computeCostPanel,
   formatRelativeFetched,
   formatTokenCount,
@@ -264,6 +265,145 @@ describe("computeCostPanel", () => {
     expect(view.rows.length).toBe(1);
     expect(view.rows[0]?.isUnknown).toBe(true);
     expect(view.rows[0]?.inputUsd).toBeUndefined();
+  });
+});
+
+describe("computeConversationCost", () => {
+  test("single known model populates the single-mode payload with row USD totals", () => {
+    const snap = snapshot({
+      "claude-3-5-sonnet": {
+        input_cost_per_token: 0.000003,
+        output_cost_per_token: 0.000015,
+        cache_creation_input_token_cost: 0.00000375,
+        cache_read_input_token_cost: 0.0000003,
+      },
+    });
+    const view = computeConversationCost(
+      totals([
+        {
+          model: "claude-3-5-sonnet",
+          inputTokens: 1_000_000,
+          outputTokens: 200_000,
+          cacheRead: 500_000,
+          cacheWrite: 100_000,
+        },
+      ]),
+      snap,
+      NOW,
+    );
+    expect(view.mode).toBe("single");
+    expect(view.single).toBeDefined();
+    expect(view.single?.model).toBe("claude-3-5-sonnet");
+    expect(view.single?.isUnknown).toBe(false);
+    expect(view.single?.row.totalUsd).toBeCloseTo(3 + 3 + 0.15 + 0.375, 6);
+    expect(view.totalUsd).toBeCloseTo(view.single!.row.totalUsd, 6);
+    expect(view.hasUnknown).toBe(false);
+  });
+
+  test("multiple known models render in multi mode sorted by descending USD", () => {
+    const snap = snapshot({
+      cheap: { input_cost_per_token: 0.000001 },
+      pricey: { input_cost_per_token: 0.0001 },
+    });
+    const view = computeConversationCost(
+      totals([
+        { model: "cheap", inputTokens: 1_000_000 },
+        { model: "pricey", inputTokens: 1_000 },
+      ]),
+      snap,
+      NOW,
+    );
+    expect(view.mode).toBe("multi");
+    expect(view.single).toBeUndefined();
+    expect(view.rows.map((r) => r.model)).toEqual(["cheap", "pricey"]);
+    expect(view.totalUsd).toBeCloseTo(1.1, 6);
+  });
+
+  test("rows with all-zero token fields are dropped, leaving an empty mode", () => {
+    const snap = snapshot({
+      "claude-3-5-sonnet": { input_cost_per_token: 0.000003 },
+    });
+    const view = computeConversationCost(
+      totals([
+        {
+          model: "claude-3-5-sonnet",
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      ]),
+      snap,
+      NOW,
+    );
+    expect(view.mode).toBe("empty");
+    expect(view.rows.length).toBe(0);
+    expect(view.totalUsd).toBe(0);
+  });
+
+  test("one known + one unknown places the unknown row at the tail with no USD contribution", () => {
+    const snap = snapshot({
+      known: { input_cost_per_token: 0.000001 },
+    });
+    const view = computeConversationCost(
+      totals([
+        { model: "known", inputTokens: 1_000_000 },
+        { model: "mystery", inputTokens: 50 },
+      ]),
+      snap,
+      NOW,
+    );
+    expect(view.mode).toBe("multi");
+    expect(view.rows.map((r) => r.model)).toEqual(["known", "mystery"]);
+    expect(view.rows[1]?.isUnknown).toBe(true);
+    expect(view.rows[1]?.inputUsd).toBeUndefined();
+    expect(view.rows[1]?.totalUsd).toBe(0);
+    expect(view.hasUnknown).toBe(true);
+    expect(view.totalUsd).toBeCloseTo(1, 6);
+  });
+
+  test("source 'unavailable' forces every row into the unknown bucket and zeroes the total", () => {
+    const snap = snapshot(
+      { "claude-3-5-sonnet": { input_cost_per_token: 0.000003 } },
+      { source: "unavailable", stale: true },
+    );
+    const view = computeConversationCost(
+      totals([{ model: "claude-3-5-sonnet", inputTokens: 1_000_000 }]),
+      snap,
+      NOW,
+    );
+    expect(view.source).toBe("unavailable");
+    expect(view.totalUsd).toBe(0);
+    expect(view.rows.length).toBe(1);
+    expect(view.rows[0]?.isUnknown).toBe(true);
+    expect(view.mode).toBe("multi");
+  });
+
+  test("source 'bundled' carries the 'bundled — ' prefix on fetchedAtRelative", () => {
+    const snap = snapshot(
+      { foo: { input_cost_per_token: 0.000001 } },
+      { source: "bundled" },
+    );
+    const view = computeConversationCost(
+      totals([{ model: "foo", inputTokens: 1_000 }]),
+      snap,
+      NOW,
+    );
+    expect(view.source).toBe("bundled");
+    expect(view.fetchedAtRelative.startsWith("bundled — ")).toBe(true);
+  });
+
+  test("snapshot.stale is mirrored onto the view", () => {
+    const snap = snapshot(
+      { foo: { input_cost_per_token: 0.000001 } },
+      { stale: true },
+    );
+    const view = computeConversationCost(
+      totals([{ model: "foo", inputTokens: 1_000 }]),
+      snap,
+      NOW,
+    );
+    expect(view.stale).toBe(true);
   });
 });
 

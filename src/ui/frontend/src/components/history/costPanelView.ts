@@ -182,24 +182,25 @@ function maybeUsd(
 }
 
 /**
- * Compute the cost-panel projection. Pure: every input — totals, the
- * snapshot, the daemon's "since" boundary, and a clock — flows in
- * explicitly so the function can be tested deterministically.
+ * Project per-model token totals into `CostRow[]` against `snapshot`.
+ * Shared between the list-page panel and the conversation-detail band;
+ * neither caller drops zero-token rows here, so a downstream consumer
+ * that wants that filter (only the conversation band does) applies it
+ * after the projection.
+ *
+ * The "unavailable" sentinel forces every row into the unknown bucket
+ * regardless of what `snapshot.models` happens to contain. This keeps
+ * the silent-miscount invariant trivial: when the daemon has no prices
+ * to apply, the row total is 0 even if a stale `models` payload were
+ * attached to the sentinel.
  */
-export function computeCostPanel(
+function projectCostRows(
   totals: ReadonlyArray<ModelTokenTotalsRow>,
   snapshot: PricingSnapshot,
-  sinceIso: string,
-  nowMs: number,
-): CostPanelView {
-  // The "unavailable" sentinel forces every row into the unknown
-  // bucket regardless of what `models` happens to contain. This keeps
-  // the silent-miscount invariant trivial: when the daemon has no
-  // prices to apply, the panel total is 0 even if a stale `models`
-  // payload were attached to the sentinel.
+): CostRow[] {
   const forceUnknown = snapshot.source === "unavailable";
 
-  const rows: CostRow[] = totals.map((row) => {
+  return totals.map((row) => {
     const rawLabel = row.model ?? "";
     const normalized = forceUnknown
       ? ({ kind: "unknown", raw: rawLabel } as NormalizedModel)
@@ -251,11 +252,15 @@ export function computeCostPanel(
       totalUsd,
     };
   });
+}
 
-  // Sort: known rows first by descending USD, then unknown rows at the
-  // tail in ascending raw-model order. The two-section layout makes
-  // the unknown bucket visible without letting it interleave with
-  // priced rows where a sort by USD would put it first (USD = 0).
+/**
+ * Sort `rows` in place: known rows first by descending USD, then
+ * unknown rows at the tail in ascending raw-model order. The two-section
+ * layout keeps the unknown bucket visible without letting it interleave
+ * with priced rows where a sort by USD would put it first (USD = 0).
+ */
+function sortCostRows(rows: CostRow[]): void {
   rows.sort((a, b) => {
     if (a.isUnknown !== b.isUnknown) return a.isUnknown ? 1 : -1;
     if (a.isUnknown && b.isUnknown) {
@@ -263,6 +268,21 @@ export function computeCostPanel(
     }
     return b.totalUsd - a.totalUsd;
   });
+}
+
+/**
+ * Compute the cost-panel projection. Pure: every input — totals, the
+ * snapshot, the daemon's "since" boundary, and a clock — flows in
+ * explicitly so the function can be tested deterministically.
+ */
+export function computeCostPanel(
+  totals: ReadonlyArray<ModelTokenTotalsRow>,
+  snapshot: PricingSnapshot,
+  sinceIso: string,
+  nowMs: number,
+): CostPanelView {
+  const rows = projectCostRows(totals, snapshot);
+  sortCostRows(rows);
 
   const totalUsd = rows
     .filter((r) => !r.isUnknown)
@@ -281,6 +301,110 @@ export function computeCostPanel(
     ),
     stale: snapshot.stale,
     sinceIso,
+  };
+}
+
+/** Display mode for the conversation-detail cost band. */
+export type ConversationCostMode = "single" | "multi" | "empty";
+
+/** Single-mode payload — populated only when `mode === "single"`. */
+export interface ConversationCostSingle {
+  /** Resolved snapshot key, or the raw model string for unknown rows. */
+  model: string;
+  /** Backend-supplied raw model string (kept for tooltips). */
+  rawModel: string;
+  isUnknown: boolean;
+  row: CostRow;
+}
+
+/** Top-level projection consumed by the conversation cost band. */
+export interface ConversationCostView {
+  mode: ConversationCostMode;
+  /** `CostRow[]` after token=0 drop, sorted (known desc, unknown tail). */
+  rows: CostRow[];
+  /** Sum of `totalUsd` across known rows only. */
+  totalUsd: number;
+  hasUnknown: boolean;
+  source: "litellm" | "bundled" | "unavailable";
+  fetchedAtRelative: string;
+  stale: boolean;
+  /** Populated iff `mode === "single"`. */
+  single?: ConversationCostSingle;
+}
+
+/**
+ * True iff every token field on `row` is exactly zero. Conversations
+ * surface a single per-model band; rows with no tokens at all add no
+ * information and are dropped before sorting.
+ */
+function isZeroTokenRow(row: CostRow): boolean {
+  return (
+    row.inputTokens === 0 &&
+    row.outputTokens === 0 &&
+    row.cacheRead === 0 &&
+    row.cacheWrite === 0
+  );
+}
+
+/**
+ * Compute the conversation-detail cost band projection. Shares the
+ * row-projection and sort helpers with `computeCostPanel` so the two
+ * views stay consistent on rate lookup, unknown handling, and ordering.
+ *
+ * Differs from the list panel in two ways:
+ *   - Token=0 rows are dropped (a conversation that never used a model
+ *     gets no row, rather than a "0 tok / —" placeholder).
+ *   - The `mode` flag tells the renderer whether to draw a single-row
+ *     stat strip, a per-model table, or nothing at all.
+ */
+export function computeConversationCost(
+  perModel: ReadonlyArray<ModelTokenTotalsRow>,
+  snapshot: PricingSnapshot,
+  nowMs: number,
+): ConversationCostView {
+  const projected = projectCostRows(perModel, snapshot);
+  const rows = projected.filter((r) => !isZeroTokenRow(r));
+  sortCostRows(rows);
+
+  const totalUsd = rows
+    .filter((r) => !r.isUnknown)
+    .reduce((acc, r) => acc + r.totalUsd, 0);
+  const hasUnknown = rows.some((r) => r.isUnknown);
+
+  let mode: ConversationCostMode;
+  let single: ConversationCostSingle | undefined;
+  if (rows.length === 0) {
+    mode = "empty";
+  } else if (rows.length === 1 && rows[0]?.isUnknown === false) {
+    const only = rows[0];
+    if (only !== undefined) {
+      mode = "single";
+      single = {
+        model: only.model,
+        rawModel: only.rawModel,
+        isUnknown: only.isUnknown,
+        row: only,
+      };
+    } else {
+      mode = "multi";
+    }
+  } else {
+    mode = "multi";
+  }
+
+  return {
+    mode,
+    rows,
+    totalUsd,
+    hasUnknown,
+    source: snapshot.source,
+    fetchedAtRelative: formatRelativeFetched(
+      snapshot.fetched_at,
+      nowMs,
+      snapshot.source,
+    ),
+    stale: snapshot.stale,
+    single,
   };
 }
 
