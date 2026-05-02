@@ -68,6 +68,33 @@ export interface IngestResult {
 }
 
 // ---------------------------------------------------------------------------
+// PII redaction
+// ---------------------------------------------------------------------------
+
+/**
+ * OTLP attribute keys that carry user-identifying PII (real email, account ids,
+ * hashed user id). Stripped from attrs before persistence; nothing in this
+ * codebase consumes them.
+ */
+const PII_ATTR_KEYS: ReadonlySet<string> = new Set([
+  "user.id",
+  "user.email",
+  "user.account_id",
+  "user.account_uuid",
+]);
+
+function stripPiiAttrs(
+  attrs: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(attrs)) {
+    if (PII_ATTR_KEYS.has(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Attribute helpers
 // ---------------------------------------------------------------------------
 
@@ -448,7 +475,7 @@ export function ingestResourceSpans(
             durationMs,
             startedAt: startedIso,
             endedAt: endedIso,
-            attrsJson: JSON.stringify(attrs),
+            attrsJson: JSON.stringify(stripPiiAttrs(attrs)),
           });
         }
         if (spanRows.length > 0) {

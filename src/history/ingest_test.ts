@@ -893,6 +893,85 @@ test("ingestResourceSpans drops spans missing required ids while accepting sibli
   }
 });
 
+test("user.* PII attributes are stripped from attrs_json before persistence", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_pii",
+      profile: "default",
+      agent: "claude",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload: OtlpJsonExportPayload = {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              { key: "nas.session.id", value: { stringValue: "sess_pii" } },
+              { key: "nas.agent", value: { stringValue: "claude" } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "trace_pii",
+                  spanId: "span_pii",
+                  name: "claude_code.llm_request",
+                  startTimeUnixNano: "1714521600000000000",
+                  endTimeUnixNano: "1714521601000000000",
+                  attributes: [
+                    {
+                      key: "session.id",
+                      value: { stringValue: "keep-me" },
+                    },
+                    {
+                      key: "user.id",
+                      value: { stringValue: "hashed-user-id" },
+                    },
+                    {
+                      key: "user.email",
+                      value: { stringValue: "person@example.com" },
+                    },
+                    {
+                      key: "user.account_id",
+                      value: { stringValue: "acct_123" },
+                    },
+                    {
+                      key: "user.account_uuid",
+                      value: { stringValue: "uuid_abc" },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = ingestResourceSpans(db, payload);
+    expect(result.acceptedSpans).toEqual(1);
+
+    const row = db
+      .query("SELECT attrs_json FROM spans WHERE span_id = ?")
+      .get("span_pii") as { attrs_json: string };
+    const attrs = JSON.parse(row.attrs_json) as Record<string, unknown>;
+    expect(attrs["session.id"]).toEqual("keep-me");
+    expect(attrs["user.id"]).toBeUndefined();
+    expect(attrs["user.email"]).toBeUndefined();
+    expect(attrs["user.account_id"]).toBeUndefined();
+    expect(attrs["user.account_uuid"]).toBeUndefined();
+  } finally {
+    await cleanup(t);
+  }
+});
+
 test("payload with no resourceSpans returns zero counters and does not throw", () => {
   // No DB needed; the early-return path triggers before any query.
   const result = ingestResourceSpans(
