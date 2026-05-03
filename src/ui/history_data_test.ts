@@ -6,6 +6,7 @@ import * as path from "node:path";
 import {
   _closeHistoryDb,
   insertSpans,
+  insertTurnEvent,
   openHistoryDb,
   upsertConversation,
   upsertInvocation,
@@ -62,6 +63,22 @@ test("readConversationList: reads rows written by a separate writer handle", asy
       agent: "claude",
       firstSeenAt: "2026-05-01T10:00:00Z",
       lastSeenAt: "2026-05-01T10:00:00Z",
+    });
+    upsertInvocation(writer, {
+      id: "sess_a",
+      profile: "default",
+      agent: "claude",
+      worktreePath: "/tmp/wt",
+      startedAt: "2026-05-01T10:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+    insertTurnEvent(writer, {
+      invocationId: "sess_a",
+      conversationId: "conv_a",
+      ts: "2026-05-01T10:00:00Z",
+      kind: "user_prompt",
+      payloadJson: "{}",
     });
 
     const list = readConversationList({ dbPath: t.dbPath });

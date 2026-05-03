@@ -446,12 +446,11 @@ export function insertTurnEvent(db: Database, row: TurnEventRow): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Conversation list row, including aggregate columns derived from related
- * traces / spans / turn_events / invocations.
+ * Conversation row projection, including aggregate columns derived from
+ * related traces / spans / turn_events / invocations.
  *
- * Aggregates use COALESCE/SUM-with-default-0 so a conversation that has been
- * recorded by the hook but has no associated spans yet still produces 0
- * (never NULL).
+ * Aggregates use COALESCE/SUM-with-default-0 so a conversation can have no
+ * associated spans and still produce 0 (never NULL).
  */
 interface ConversationListSqlRow {
   id: string;
@@ -632,6 +631,10 @@ function rowToInvocationSummary(r: InvocationSqlRow): InvocationSummaryRow {
 
 /**
  * List conversations sorted by `last_seen_at DESC` with aggregate counts.
+ * Conversations with zero turn_events are hidden from the list: Codex may
+ * assign separate conversation ids to subagent-only traces, and those rows are
+ * still queryable by detail routes but should not clutter the top-level
+ * history list.
  *
  * Default limit is 200; callers can override but should keep results bounded
  * since the consumer renders them as a single list.
@@ -644,6 +647,10 @@ export function queryConversationList(
   const rows = db
     .prepare(
       `${CONVERSATION_LIST_SELECT}
+       WHERE EXISTS (
+         SELECT 1 FROM turn_events te
+         WHERE te.conversation_id = c.id
+       )
        ORDER BY c.last_seen_at DESC
        LIMIT ?`,
     )

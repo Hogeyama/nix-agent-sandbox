@@ -170,8 +170,10 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   _closeHistoryDb,
+  insertTurnEvent,
   openHistoryDb,
   upsertConversation,
+  upsertInvocation,
 } from "../history/store.ts";
 import { createDataContext, parseShellSessionId } from "./data.ts";
 
@@ -197,6 +199,22 @@ test("UiDataContext.history: readConversationList round-trips a fixture row", as
       agent: "claude",
       firstSeenAt: "2026-05-01T10:00:00Z",
       lastSeenAt: "2026-05-01T10:00:00Z",
+    });
+    upsertInvocation(writer, {
+      id: "sess_z",
+      profile: "default",
+      agent: "claude",
+      worktreePath: "/tmp/wt",
+      startedAt: "2026-05-01T10:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+    insertTurnEvent(writer, {
+      invocationId: "sess_z",
+      conversationId: "conv_z",
+      ts: "2026-05-01T10:00:00Z",
+      kind: "user_prompt",
+      payloadJson: "{}",
     });
     const list = ctx.history.readConversationList();
     expect(list.map((r) => r.id)).toEqual(["conv_z"]);
