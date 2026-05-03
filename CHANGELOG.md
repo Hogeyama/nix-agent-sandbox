@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.12.0] - 2026-05-03
+
+### Added
+
+- **Observability + History UI**: capture agent OTLP traces (Claude Code / Codex / Copilot CLI) into a SQLite history store and expose them on a new `#/history` UI with per-turn spans, per-model token totals, and LiteLLM-priced cost panels ([53ba327]–[1ea0bd0])
+
+### Changed
+
+- **Breaking — `network.proxy`**: always on. Sessions can no longer launch without the Envoy / auth-router / broker chain; empty allowlist & prompt now mean deny-by-default ([6d4e59d])
+- **UI state**: daemon state relocated from `XDG_CACHE_HOME` to `XDG_STATE_HOME`, with one-shot migration on start ([cc87add], [2979282])
+
+### Performance
+
+- **Launch**: disable Docker log driver for agent containers ([531051c])
+
+### Fixed
+
+- **UI**: small fixes — xterm initial-font nudge, favicon palette, history SSE keepalive, rename apply-immediate, pending-row clearing on approve/deny, relaxed session-name validation ([99f7fbd], [eeb62ec], [b3ee423], [a07024a], [4d3c8c4], [a3f6b80])
+
 ## [0.11.0] - 2026-04-28
 
 ### Added
