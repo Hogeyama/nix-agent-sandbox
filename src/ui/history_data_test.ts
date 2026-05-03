@@ -63,6 +63,22 @@ test("readConversationList: reads rows written by a separate writer handle", asy
       firstSeenAt: "2026-05-01T10:00:00Z",
       lastSeenAt: "2026-05-01T10:00:00Z",
     });
+    upsertInvocation(writer, {
+      id: "sess_a",
+      profile: "default",
+      agent: "claude",
+      worktreePath: "/tmp/wt",
+      startedAt: "2026-05-01T10:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+    upsertTrace(writer, {
+      traceId: "trace_a",
+      invocationId: "sess_a",
+      conversationId: "conv_a",
+      startedAt: "2026-05-01T10:00:00Z",
+      endedAt: null,
+    });
 
     const list = readConversationList({ dbPath: t.dbPath });
     expect(list.length).toEqual(1);

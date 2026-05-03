@@ -6,7 +6,7 @@ import { ingestResourceSpans, type OtlpJsonExportPayload } from "./ingest.ts";
 import {
   _closeHistoryDb,
   openHistoryDb,
-  queryConversationList,
+  queryConversationDetail,
   upsertInvocation,
 } from "./store.ts";
 
@@ -317,9 +317,10 @@ test("codex_otel_minimal: Codex spans classify, resolve fallback ids, and promot
       },
     ]);
 
-    const threadConversation = queryConversationList(db).find(
-      (row) => row.id === "thread_codex_1",
-    );
+    const threadConversation = queryConversationDetail(
+      db,
+      "thread_codex_1",
+    )?.conversation;
     expect(threadConversation?.inputTokensTotal).toEqual(1200);
     expect(threadConversation?.outputTokensTotal).toEqual(345);
     expect(threadConversation?.cacheReadTotal).toEqual(90);
@@ -428,9 +429,10 @@ test("codex response span promotes model and tokens when no token_usage span exi
       cache_w: 5,
     });
 
-    const conv = queryConversationList(db).find(
-      (row) => row.id === "conv_codex_response_only",
-    );
+    const conv = queryConversationDetail(
+      db,
+      "conv_codex_response_only",
+    )?.conversation;
     expect(conv?.inputTokensTotal).toEqual(77);
     expect(conv?.outputTokensTotal).toEqual(33);
     expect(conv?.cacheReadTotal).toEqual(11);
@@ -539,9 +541,10 @@ test("codex turn span promotes model and tokens when no usage or response span e
       cache_w: 6,
     });
 
-    const conv = queryConversationList(db).find(
-      (row) => row.id === "thread_codex_turn_only",
-    );
+    const conv = queryConversationDetail(
+      db,
+      "thread_codex_turn_only",
+    )?.conversation;
     expect(conv?.inputTokensTotal).toEqual(88);
     expect(conv?.outputTokensTotal).toEqual(44);
     expect(conv?.cacheReadTotal).toEqual(22);
@@ -646,9 +649,7 @@ test("codex turn promotes session_task.turn usage when response span has no toke
       model: "gpt-5.4-mini",
     });
 
-    const conv = queryConversationList(db).find(
-      (row) => row.id === "thread_codex_mini",
-    );
+    const conv = queryConversationDetail(db, "thread_codex_mini")?.conversation;
     expect(conv?.inputTokensTotal).toEqual(11496);
     expect(conv?.outputTokensTotal).toEqual(144);
     expect(conv?.cacheReadTotal).toEqual(6528);

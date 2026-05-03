@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -105,6 +106,29 @@ function te(overrides: Partial<TurnEventRow> = {}): TurnEventRow {
   };
 }
 
+function makeConversationVisibleInList(
+  db: Database,
+  conversationId: string,
+  invocationId = `sess_${conversationId}`,
+): void {
+  upsertInvocation(db, inv({ id: invocationId }));
+  upsertTrace(
+    db,
+    tr({
+      traceId: `trace_${conversationId}`,
+      invocationId,
+      conversationId,
+    }),
+  );
+  insertTurnEvent(
+    db,
+    te({
+      invocationId,
+      conversationId,
+    }),
+  );
+}
+
 test("queryConversationList: empty db returns []", async () => {
   const t = await makeTempDb();
   try {
@@ -160,7 +184,7 @@ test("queryConversationList: aggregates counts and tokens, NULL safe (returns 0)
       }),
     );
 
-    // A second conversation with no spans / no events — aggregates must be 0, not NULL.
+    // A second listed conversation with no spans — aggregates must be 0, not NULL.
     upsertConversation(
       db,
       conv({
@@ -170,6 +194,7 @@ test("queryConversationList: aggregates counts and tokens, NULL safe (returns 0)
         lastSeenAt: "2026-05-01T09:00:00Z",
       }),
     );
+    makeConversationVisibleInList(db, "conv_b", "sess_b");
 
     const list = queryConversationList(db);
     expect(list.length).toEqual(2);
@@ -187,14 +212,69 @@ test("queryConversationList: aggregates counts and tokens, NULL safe (returns 0)
 
     const b = list.find((r) => r.id === "conv_b");
     expect(b).toBeDefined();
-    expect(b?.turnEventCount).toEqual(0);
+    expect(b?.turnEventCount).toEqual(1);
     expect(b?.spanCount).toEqual(0);
-    expect(b?.invocationCount).toEqual(0);
+    expect(b?.invocationCount).toEqual(1);
     expect(b?.inputTokensTotal).toEqual(0);
     expect(b?.outputTokensTotal).toEqual(0);
     expect(b?.cacheReadTotal).toEqual(0);
     expect(b?.cacheWriteTotal).toEqual(0);
     expect(b?.agent).toBeNull();
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationList: hides conversations with zero traces", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertConversation(
+      db,
+      conv({
+        id: "conv_visible",
+        lastSeenAt: "2026-05-01T11:00:00Z",
+        firstSeenAt: "2026-05-01T11:00:00Z",
+      }),
+    );
+    makeConversationVisibleInList(db, "conv_visible", "sess_visible");
+    upsertConversation(
+      db,
+      conv({
+        id: "conv_noise",
+        lastSeenAt: "2026-05-01T12:00:00Z",
+        firstSeenAt: "2026-05-01T12:00:00Z",
+      }),
+    );
+    // A turn_event alone (e.g. a hook-recorded `stop` for a session that
+    // never produced a trace) must not be enough to keep the row visible.
+    upsertConversation(
+      db,
+      conv({
+        id: "conv_te_only",
+        lastSeenAt: "2026-05-01T13:00:00Z",
+        firstSeenAt: "2026-05-01T13:00:00Z",
+      }),
+    );
+    upsertInvocation(db, inv({ id: "sess_te_only" }));
+    insertTurnEvent(
+      db,
+      te({
+        invocationId: "sess_te_only",
+        conversationId: "conv_te_only",
+        kind: "stop",
+      }),
+    );
+
+    expect(queryConversationList(db).map((r) => r.id)).toEqual([
+      "conv_visible",
+    ]);
+    expect(queryConversationDetail(db, "conv_noise")?.conversation.id).toEqual(
+      "conv_noise",
+    );
+    expect(
+      queryConversationDetail(db, "conv_te_only")?.conversation.id,
+    ).toEqual("conv_te_only");
   } finally {
     await cleanup(t);
   }
@@ -212,6 +292,7 @@ test("queryConversationList: ORDER BY last_seen_at DESC", async () => {
         firstSeenAt: "2026-01-01T00:00:00Z",
       }),
     );
+    makeConversationVisibleInList(db, "old", "sess_old");
     upsertConversation(
       db,
       conv({
@@ -220,6 +301,7 @@ test("queryConversationList: ORDER BY last_seen_at DESC", async () => {
         firstSeenAt: "2026-05-01T00:00:00Z",
       }),
     );
+    makeConversationVisibleInList(db, "new", "sess_new");
     upsertConversation(
       db,
       conv({
@@ -228,6 +310,7 @@ test("queryConversationList: ORDER BY last_seen_at DESC", async () => {
         firstSeenAt: "2026-03-01T00:00:00Z",
       }),
     );
+    makeConversationVisibleInList(db, "mid", "sess_mid");
 
     const list = queryConversationList(db);
     expect(list.map((r) => r.id)).toEqual(["new", "mid", "old"]);
@@ -249,6 +332,7 @@ test("queryConversationList: LIMIT honoured", async () => {
           lastSeenAt: `2026-05-01T0${i}:00:00Z`,
         }),
       );
+      makeConversationVisibleInList(db, `c${i}`, `sess_c${i}`);
     }
     const list = queryConversationList(db, { limit: 2 });
     expect(list.length).toEqual(2);
@@ -519,6 +603,7 @@ test("queryConversationList: summary defaults to null when no row in conversatio
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     upsertConversation(db, conv({ id: "conv_no_sum" }));
+    makeConversationVisibleInList(db, "conv_no_sum", "sess_no_sum");
     const list = queryConversationList(db);
     expect(list[0].summary).toBeNull();
   } finally {
@@ -531,6 +616,7 @@ test("queryConversationList: summary surfaces the upserted value", async () => {
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     upsertConversation(db, conv({ id: "conv_with_sum" }));
+    makeConversationVisibleInList(db, "conv_with_sum", "sess_with_sum");
     upsertConversationSummary(db, {
       id: "conv_with_sum",
       summary: "Help me debug the test runner",
@@ -548,6 +634,7 @@ test("upsertConversationSummary: INSERT OR IGNORE — first write wins", async (
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     upsertConversation(db, conv({ id: "conv_idem" }));
+    makeConversationVisibleInList(db, "conv_idem", "sess_idem");
     upsertConversationSummary(db, {
       id: "conv_idem",
       summary: "First prompt",
@@ -588,6 +675,7 @@ test("conversation_summaries table is added to existing db on writer re-open", a
     // First open: creates db with v1 schema.
     const db1 = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     upsertConversation(db1, conv({ id: "conv_reopen" }));
+    makeConversationVisibleInList(db1, "conv_reopen", "sess_reopen");
     _closeHistoryDb(t.dbPath);
 
     // Second open re-runs SCHEMA_SQL with CREATE TABLE IF NOT EXISTS;
@@ -617,6 +705,7 @@ test("readonly handle does not block writer cache (separate handles by mode)", a
   try {
     const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     upsertConversation(writer, conv({ id: "conv_a" }));
+    makeConversationVisibleInList(writer, "conv_a", "sess_reader_a");
 
     const reader = openHistoryDb({ path: t.dbPath, mode: "readonly" });
     expect(reader).not.toBe(writer);
@@ -632,6 +721,7 @@ test("readonly handle does not block writer cache (separate handles by mode)", a
         lastSeenAt: "2026-05-01T11:00:00Z",
       }),
     );
+    makeConversationVisibleInList(writer, "conv_b", "sess_reader_b");
     expect(
       queryConversationList(reader)
         .map((r) => r.id)
