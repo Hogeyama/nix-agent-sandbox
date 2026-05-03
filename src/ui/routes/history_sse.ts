@@ -39,12 +39,19 @@ export interface HistorySseRouteOptions {
 export const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
 /**
- * Window for the per-model token totals payload accompanying the list event.
- * 30 days matches the dashboard "last 30 days" label rendered by the frontend.
- * See the list-route handler for why the resulting `since` is computed once
- * per SSE connection on the daemon clock rather than every poll.
+ * Compute the calendar-month boundary the cost panel uses as its window
+ * start. Returns the ISO instant of `YYYY-MM-01T00:00:00.000Z` for the
+ * UTC month that contains `nowMs`. Boundaries on the daemon clock so
+ * the badge label and the SUM aggregate it describes are always
+ * derived from the same instant; UTC keeps the boundary deterministic
+ * across daemon timezones.
  */
-const MODEL_TOKEN_TOTALS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+function startOfMonthUtcIso(nowMs: number): string {
+  const d = new Date(nowMs);
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0),
+  ).toISOString();
+}
 
 function formatSseEvent(event: HistorySseEventName, data: unknown): Uint8Array {
   return new TextEncoder().encode(
@@ -173,16 +180,12 @@ export function createHistorySseRoutes(
     // an emit on every poll even when neither the conversation list nor
     // the per-model totals had changed — defeating the silence-when-quiet
     // contract that lets idle clients hold a stream open cheaply. Holding
-    // `since` constant for the life of a connection keeps the diff stable;
-    // the frontend reconnects often enough (route navigation, page reload)
-    // that the window naturally tracks "the last 30 days".
-    //
-    // The clock source is intentionally the daemon — keeping `since` in
-    // the payload means the badge label and the SUM aggregate it
-    // describes are always derived from the same instant.
-    const sinceIso = new Date(
-      Date.now() - MODEL_TOKEN_TOTALS_WINDOW_MS,
-    ).toISOString();
+    // `since` constant for the life of a connection keeps the diff stable
+    // until the calendar rolls over to the next month; the frontend
+    // reconnects often enough (route navigation, page reload, daemon
+    // restart) that a long-lived connection straddling the month boundary
+    // is rare in practice.
+    const sinceIso = startOfMonthUtcIso(Date.now());
     const stream = createPollingStream({
       pollIntervalMs,
       read: () => ({

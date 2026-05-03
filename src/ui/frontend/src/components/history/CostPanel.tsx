@@ -73,7 +73,7 @@ export function CostPanel(props: CostPanelProps) {
                 Total: {formatUsd(view().totalUsd)}
               </span>
               <span class="history-cost-since">
-                Last 30 days (since {props.since.slice(0, 10)})
+                This month (since {props.since.slice(0, 10)})
               </span>
             </div>
 

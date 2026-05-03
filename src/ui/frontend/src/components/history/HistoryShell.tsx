@@ -54,7 +54,7 @@ export interface HistoryShellProps {
  * Wire payload of the `history:list` SSE event.
  *
  * `modelTokenTotals` and `since` accompany the conversation list so the
- * dashboard can render a "last 30 days" badge without having to compute
+ * dashboard can render a "this month" badge without having to compute
  * its own clock — the daemon picks the window once per SSE connection
  * (see `history_sse.ts`) and any consumer reflects whatever boundary it
  * received in this same payload.
