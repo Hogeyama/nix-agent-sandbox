@@ -2146,6 +2146,15 @@ body::after {
   color: var(--cream-dim);
 }
 
+.history-detail-tool-detail {
+  font-size: 11px;
+  color: var(--cream-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 .history-detail-payload-preview {
   font-family: var(--mono);
   font-size: 11px;

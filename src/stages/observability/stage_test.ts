@@ -292,6 +292,7 @@ test("ObservabilityStage: enabled + claude => slice carries port, container env 
   expect(env.OTEL_TRACES_EXPORTER).toEqual("otlp");
   expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toEqual("1");
   expect(env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toEqual("1");
+  expect(env.OTEL_LOG_TOOL_DETAILS).toEqual("1");
   expect(env.COPILOT_OTEL_ENABLED).toBeUndefined();
 });
 
@@ -317,6 +318,7 @@ test("ObservabilityStage: enabled + copilot => COPILOT_OTEL_ENABLED + common env
   expect(env.COPILOT_OTEL_ENABLED).toEqual("true");
   expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBeUndefined();
   expect(env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toBeUndefined();
+  expect(env.OTEL_LOG_TOOL_DETAILS).toBeUndefined();
   expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toEqual("http://127.0.0.1:53000");
 });
 

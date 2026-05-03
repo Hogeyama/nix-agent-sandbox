@@ -6,8 +6,11 @@
  * in observability).
  *
  * Per ADR (and the agent SDKs' actual env surfaces):
- *   - claude  → CLAUDE_CODE_ENABLE_TELEMETRY=1, CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1
- *               plus the OTLP-common envs.
+ *   - claude  → CLAUDE_CODE_ENABLE_TELEMETRY=1, CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1,
+ *               OTEL_LOG_TOOL_DETAILS=1 (so `claude_code.tool` spans carry
+ *               `tool_input` / `subagent_type` / `full_command` / `file_path` /
+ *               `skill_name` — the UI uses these to disambiguate parallel
+ *               Agent invocations) plus the OTLP-common envs.
  *   - copilot → COPILOT_OTEL_ENABLED=true plus the OTLP-common envs.
  *   - codex   → no env injected. Codex is configured via CLI argv
  *               (`codex -c otel.trace_exporter=...`) instead of OTEL envs.
@@ -95,6 +98,7 @@ export function buildObservabilityEnv(
         ...buildCommonEnv(args),
         CLAUDE_CODE_ENABLE_TELEMETRY: "1",
         CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+        OTEL_LOG_TOOL_DETAILS: "1",
       };
     case "copilot":
       return {

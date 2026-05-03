@@ -401,7 +401,17 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                                             >
                                               {row.spanName}
                                             </td>
-                                            <td>{row.toolName ?? ""}</td>
+                                            <td>
+                                              {row.toolName ?? ""}
+                                              {row.toolDetail !== null && (
+                                                <div
+                                                  class="history-detail-tool-detail"
+                                                  title={row.toolDetail}
+                                                >
+                                                  {row.toolDetail}
+                                                </div>
+                                              )}
+                                            </td>
                                             <td>
                                               <span
                                                 class={

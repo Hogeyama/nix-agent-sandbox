@@ -26,7 +26,40 @@ test("buildObservabilityEnv: claude includes CLAUDE_CODE_* and the OTLP common e
     OTEL_TRACES_EXPORTER: "otlp",
     CLAUDE_CODE_ENABLE_TELEMETRY: "1",
     CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+    OTEL_LOG_TOOL_DETAILS: "1",
   });
+});
+
+test("buildObservabilityEnv: claude sets OTEL_LOG_TOOL_DETAILS=1 so tool spans carry tool_input/etc.", () => {
+  const env = buildObservabilityEnv({
+    agent: "claude",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env?.OTEL_LOG_TOOL_DETAILS).toEqual("1");
+});
+
+test("buildObservabilityEnv: copilot does not set OTEL_LOG_TOOL_DETAILS (claude-only)", () => {
+  const env = buildObservabilityEnv({
+    agent: "copilot",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env?.OTEL_LOG_TOOL_DETAILS).toBeUndefined();
+});
+
+test("buildObservabilityEnv: codex does not set OTEL_LOG_TOOL_DETAILS (env not used)", () => {
+  // codex returns null entirely; this just pins the contract that the flag
+  // does not leak via some shared common-env path.
+  const env = buildObservabilityEnv({
+    agent: "codex",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env).toBeNull();
 });
 
 test("buildObservabilityEnv: copilot includes COPILOT_OTEL_ENABLED and the OTLP common envs", () => {
