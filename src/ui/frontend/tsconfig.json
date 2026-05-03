@@ -9,6 +9,6 @@
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "skipLibCheck": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../../agents/display.ts"],
   "exclude": ["node_modules", "src/**/*_test.ts"]
 }

@@ -197,6 +197,7 @@ if (watch) {
   const watchRoots = [
     path.join(FRONTEND_DIR, "src"),
     path.join(FRONTEND_DIR, "index.html.tmpl"),
+    path.join(ROOT, "src/agents/display.ts"),
   ];
   let lastBuild = Date.now();
   console.log("watching", watchRoots.join(", "));

@@ -3,6 +3,6 @@
   "compilerOptions": {
     "types": ["bun-types"]
   },
-  "include": ["src/**/*_test.ts"],
+  "include": ["src/**/*_test.ts", "../../agents/display.ts"],
   "exclude": ["node_modules"]
 }

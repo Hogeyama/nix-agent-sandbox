@@ -6,6 +6,7 @@
  * (`HistoryListPage.tsx`) is a thin presentation shell over these.
  */
 
+import { bareAgentLabel, classifyAgent } from "../../../../../agents/display";
 import type { ConversationListRow } from "../../../../../history/types";
 
 /**
@@ -176,30 +177,6 @@ export function formatCompactNumber(n: number): string {
     }
   }
   return `${sign}${Math.trunc(abs)}`;
-}
-
-/**
- * Map the raw backend agent string to a stable CSS class fragment.
- * Returns `"is-claude" | "is-copilot" | "is-codex" | ""`. The empty
- * string is intentional — the page falls back to the default pill
- * border when the agent is null or an unknown variant.
- */
-function classifyAgent(agent: string | null): string {
-  if (agent === null) return "";
-  const lower = agent.toLowerCase();
-  if (lower.includes("claude")) return "is-claude";
-  if (lower.includes("copilot")) return "is-copilot";
-  if (lower.includes("codex")) return "is-codex";
-  return "";
-}
-
-function bareAgentLabel(agent: string | null): string {
-  if (agent === null) return "";
-  const lower = agent.toLowerCase();
-  if (lower.includes("claude")) return "claude";
-  if (lower.includes("copilot")) return "copilot";
-  if (lower.includes("codex")) return "codex";
-  return agent;
 }
 
 /**
