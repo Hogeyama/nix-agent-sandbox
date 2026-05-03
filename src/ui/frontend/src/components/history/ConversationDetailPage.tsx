@@ -122,8 +122,22 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
             <>
               <header class="history-detail-header">
                 <div class="history-detail-header-left">
-                  <div class="history-detail-id" title={h.id}>
-                    {h.idLabel}
+                  <div class="history-detail-id-row">
+                    <div class="history-detail-id" title={h.id}>
+                      {h.idLabel}
+                    </div>
+                    <Show when={h.directory !== ""}>
+                      <div class="history-detail-directory" title={h.directory}>
+                        <Show when={h.directoryParent !== ""}>
+                          <span class="history-detail-directory-parent">
+                            {h.directoryParent}
+                          </span>
+                        </Show>
+                        <span class="history-detail-directory-base">
+                          {h.directoryBase}
+                        </span>
+                      </div>
+                    </Show>
                   </div>
                   <Show when={h.summary}>
                     {(summary) => (

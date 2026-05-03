@@ -196,6 +196,32 @@ describe("buildConversationHeader", () => {
     );
     expect(view.summary).toBe("Refactor the auth flow");
   });
+
+  test("derives the project directory from the conversation worktreePath", () => {
+    const view = buildConversationHeader(
+      makeDetail({
+        conversation: makeConversation({
+          worktreePath: "/home/me/proj/.nas/worktree/foo",
+        }),
+      }),
+      NOW_MS,
+    );
+    expect(view.directory).toBe("/home/me/proj");
+    expect(view.directoryParent).toBe("/home/me/");
+    expect(view.directoryBase).toBe("proj");
+  });
+
+  test("directory is empty when worktreePath is null", () => {
+    const view = buildConversationHeader(
+      makeDetail({
+        conversation: makeConversation({ worktreePath: null }),
+      }),
+      NOW_MS,
+    );
+    expect(view.directory).toBe("");
+    expect(view.directoryParent).toBe("");
+    expect(view.directoryBase).toBe("");
+  });
 });
 
 describe("buildInvocationLinks", () => {

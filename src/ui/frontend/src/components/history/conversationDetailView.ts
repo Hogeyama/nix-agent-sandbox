@@ -26,7 +26,9 @@ import { LONG_CONTEXT_THRESHOLD_TOKENS } from "../../../../../history/types";
 import {
   formatCompactNumber,
   formatRelativeTime,
+  projectDirectoryFromWorktree,
   shortenId,
+  splitDirectoryDisplay,
 } from "./historyListView";
 
 /** Maximum payload preview length (chars) before the trailing ellipsis. */
@@ -54,6 +56,18 @@ export interface ConversationHeaderView {
   readonly lastSeen: string;
   readonly lastSeenAbsolute: string;
   readonly summary: string | null;
+  /**
+   * Project directory for this conversation, derived from the latest
+   * invocation's worktree path with nas's `/.nas/worktree/<name>`
+   * suffix stripped. Empty when no invocation supplied a path. Mirrors
+   * the list-row treatment so the conversation detail header reads
+   * like the list row it was opened from.
+   */
+  readonly directory: string;
+  /** Dim parent half of `directory` (everything up to and including `/`). */
+  readonly directoryParent: string;
+  /** Bright basename half of `directory`. */
+  readonly directoryBase: string;
   readonly turnCount: number;
   readonly spanCount: number;
   readonly invocationCount: number;
@@ -384,6 +398,8 @@ export function buildConversationHeader(
   nowMs: number,
 ): ConversationHeaderView {
   const c = detail.conversation;
+  const directory = projectDirectoryFromWorktree(c.worktreePath);
+  const directoryParts = splitDirectoryDisplay(directory);
   return {
     id: c.id,
     idLabel: shortenId(c.id),
@@ -393,6 +409,9 @@ export function buildConversationHeader(
     lastSeen: formatRelativeTime(c.lastSeenAt, nowMs),
     lastSeenAbsolute: c.lastSeenAt,
     summary: c.summary,
+    directory,
+    directoryParent: directoryParts.parent,
+    directoryBase: directoryParts.base,
     // Match the Turns table on the page: count only turns that
     // survive `buildSpanTreeByTurn`'s zero-token filter so the
     // header total never diverges from the rows below.

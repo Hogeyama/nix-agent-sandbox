@@ -1953,6 +1953,45 @@ body::after {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* Conversation id + project-directory inline row. The id keeps its
+ * 18px monospace presence; the directory sits to its right at a
+ * smaller, dimmer weight so the project context is legible without
+ * competing with the id for emphasis. The row baseline-aligns the two
+ * so different font sizes still read as one line. */
+.history-detail-id-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+.history-detail-directory {
+  display: flex;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 0;
+  letter-spacing: 0.02em;
+  flex-shrink: 1;
+  flex-basis: auto;
+  text-transform: none;
+}
+.history-detail-directory-parent {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+  direction: rtl;
+  text-align: left;
+}
+.history-detail-directory-base {
+  color: var(--cream-dim);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .history-detail-meta {
   display: flex;
   flex-wrap: wrap;
