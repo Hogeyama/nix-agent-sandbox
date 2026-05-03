@@ -551,6 +551,112 @@ test("codex turn span promotes model and tokens when no usage or response span e
   }
 });
 
+test("codex turn promotes session_task.turn usage when response span has no token attrs (gpt-5.4-mini)", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_codex_mini",
+      profile: "default",
+      agent: "codex",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload: OtlpJsonExportPayload = {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              {
+                key: "nas.session.id",
+                value: { stringValue: "sess_codex_mini" },
+              },
+              { key: "nas.agent", value: { stringValue: "codex" } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "trace_codex_mini",
+                  spanId: "span_codex_mini_turn",
+                  name: "session_task.turn",
+                  startTimeUnixNano: "1714570300000000000",
+                  endTimeUnixNano: "1714570301000000000",
+                  attributes: [
+                    {
+                      key: "thread.id",
+                      value: { stringValue: "thread_codex_mini" },
+                    },
+                    { key: "model", value: { stringValue: "gpt-5.4-mini" } },
+                    {
+                      key: "codex.turn.token_usage.input_tokens",
+                      value: { intValue: "11496" },
+                    },
+                    {
+                      key: "codex.turn.token_usage.output_tokens",
+                      value: { intValue: "144" },
+                    },
+                    {
+                      key: "codex.turn.token_usage.cache_read_input_tokens",
+                      value: { intValue: "6528" },
+                    },
+                  ],
+                },
+                {
+                  traceId: "trace_codex_mini",
+                  spanId: "span_codex_mini_response",
+                  name: "model_client.stream_responses_websocket",
+                  startTimeUnixNano: "1714570300100000000",
+                  endTimeUnixNano: "1714570300900000000",
+                  attributes: [
+                    { key: "model", value: { stringValue: "gpt-5.4-mini" } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = ingestResourceSpans(db, payload);
+    expect(result.acceptedSpans).toEqual(2);
+
+    const turnSpan = db
+      .query(
+        `SELECT in_tok, out_tok, cache_r, cache_w, model
+           FROM spans WHERE span_id = ?`,
+      )
+      .get("span_codex_mini_turn") as {
+      in_tok: number | null;
+      out_tok: number | null;
+      cache_r: number | null;
+      cache_w: number | null;
+      model: string | null;
+    };
+    expect(turnSpan).toEqual({
+      in_tok: 11496,
+      out_tok: 144,
+      cache_r: 6528,
+      cache_w: null,
+      model: "gpt-5.4-mini",
+    });
+
+    const conv = queryConversationList(db).find(
+      (row) => row.id === "thread_codex_mini",
+    );
+    expect(conv?.inputTokensTotal).toEqual(11496);
+    expect(conv?.outputTokensTotal).toEqual(144);
+    expect(conv?.cacheReadTotal).toEqual(6528);
+  } finally {
+    await cleanup(t);
+  }
+});
+
 test("subagent_one_invocation_two_conversations: 1 invocation, 2 traces, 2 conversations", async () => {
   const t = await makeTempDb();
   try {
