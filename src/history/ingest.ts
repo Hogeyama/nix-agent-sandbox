@@ -9,7 +9,12 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { classifySpan, pickConversationIdFromSpans } from "../agents/otlp.ts";
+import {
+  analyzeTraceUsageSources,
+  classifySpan,
+  pickConversationIdFromSpans,
+  resolveSpanUsageColumns,
+} from "../agents/otlp.ts";
 import { insertSpans, upsertConversation, upsertTrace } from "./store.ts";
 import type { SpanRow } from "./types.ts";
 
@@ -141,101 +146,6 @@ function readStringAttr(
 ): string | null {
   const v = attrs[key];
   return typeof v === "string" ? v : null;
-}
-
-function readFirstStringAttr(
-  attrs: Record<string, unknown>,
-  keys: ReadonlyArray<string>,
-): string | null {
-  for (const key of keys) {
-    const value = readStringAttr(attrs, key);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function readNumberAttr(
-  attrs: Record<string, unknown>,
-  key: string,
-): number | null {
-  const v = attrs[key];
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  return null;
-}
-
-/**
- * Read a token-count attribute from the first finite number among known
- * vendor/semantic-convention keys.
- */
-function readTokenAttr(
-  attrs: Record<string, unknown>,
-  keys: ReadonlyArray<string>,
-): number | null {
-  for (const key of keys) {
-    const value = readNumberAttr(attrs, key);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function isCodexTokenUsageSpan(name: string): boolean {
-  return name === "codex.turn.token_usage";
-}
-
-function isCodexResponseOrStreamSpan(name: string): boolean {
-  return (
-    name === "codex.response" ||
-    name === "codex.responses" ||
-    name === "model_client.stream_responses" ||
-    name === "model_client.stream_responses_websocket" ||
-    name === "responses.stream_request" ||
-    name === "responses_websocket.stream_request"
-  );
-}
-
-function isCodexTurnSpan(name: string): boolean {
-  return name === "session_task.turn";
-}
-
-/**
- * Token-carrying attribute keys we recognise on Codex response/stream spans.
- * A response/stream span counts as a usage source only when at least one of
- * these resolves to a finite number. Older Codex builds emitted tokens here;
- * gpt-5.4-mini and newer leave these blank and put usage exclusively on
- * `session_task.turn` as `codex.turn.token_usage.*` attributes.
- */
-const RESPONSE_STREAM_USAGE_KEYS = [
-  "gen_ai.usage.input_tokens",
-  "gen_ai.usage.output_tokens",
-  "input_tokens",
-  "output_tokens",
-] as const;
-
-function spanHasResponseStreamUsage(attrs: Record<string, unknown>): boolean {
-  for (const key of RESPONSE_STREAM_USAGE_KEYS) {
-    if (readNumberAttr(attrs, key) !== null) return true;
-  }
-  return false;
-}
-
-function shouldPromoteUsageColumns(
-  kind: string,
-  spanName: string,
-  traceHasCodexTokenUsage: boolean,
-  traceHasCodexResponseOrStreamWithUsage: boolean,
-): boolean {
-  if (isCodexTurnSpan(spanName)) {
-    // session_task.turn is the lowest-priority fallback per ADR
-    // 2026042901: only promote it when neither a `codex.turn.token_usage`
-    // span nor a response/stream span carrying real token attrs is present
-    // in the trace.
-    return !traceHasCodexTokenUsage && !traceHasCodexResponseOrStreamWithUsage;
-  }
-  if (kind !== "chat") return false;
-  if (traceHasCodexTokenUsage && isCodexResponseOrStreamSpan(spanName)) {
-    return false;
-  }
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,13 +331,11 @@ export function ingestResourceSpans(
         });
 
         const spanRows: SpanRow[] = [];
-        const traceHasCodexTokenUsage = acc.spansInOrder.some(({ raw }) =>
-          isCodexTokenUsageSpan(raw.name),
-        );
-        const traceHasCodexResponseOrStreamWithUsage = acc.spansInOrder.some(
-          ({ raw, attrs }) =>
-            isCodexResponseOrStreamSpan(raw.name) &&
-            spanHasResponseStreamUsage(attrs),
+        const traceUsageSources = analyzeTraceUsageSources(
+          acc.spansInOrder.map(({ raw, attrs }) => ({
+            name: raw.name,
+            attributes: attrs,
+          })),
         );
         for (const { raw, attrs } of acc.spansInOrder) {
           const startNano = nanoToNumber(raw.startTimeUnixNano);
@@ -442,12 +350,12 @@ export function ingestResourceSpans(
           const endedIso = nanoToIso(raw.endTimeUnixNano);
 
           const kind = classifySpan(raw.name, attrs);
-          const promoteUsage = shouldPromoteUsageColumns(
+          const usage = resolveSpanUsageColumns({
             kind,
-            raw.name,
-            traceHasCodexTokenUsage,
-            traceHasCodexResponseOrStreamWithUsage,
-          );
+            spanName: raw.name,
+            attrs,
+            traceUsageSources,
+          });
 
           spanRows.push({
             spanId: raw.spanId,
@@ -459,45 +367,11 @@ export function ingestResourceSpans(
             traceId: raw.traceId,
             spanName: raw.name,
             kind,
-            model: promoteUsage
-              ? readFirstStringAttr(attrs, [
-                  "gen_ai.response.model",
-                  "gen_ai.request.model",
-                  "model",
-                ])
-              : null,
-            inTok: promoteUsage
-              ? readTokenAttr(attrs, [
-                  "gen_ai.usage.input_tokens",
-                  "input_tokens",
-                  "codex.turn.token_usage.input_tokens",
-                ])
-              : null,
-            outTok: promoteUsage
-              ? readTokenAttr(attrs, [
-                  "gen_ai.usage.output_tokens",
-                  "output_tokens",
-                  "codex.turn.token_usage.output_tokens",
-                ])
-              : null,
-            cacheR: promoteUsage
-              ? readTokenAttr(attrs, [
-                  "gen_ai.usage.cache_read.input_tokens",
-                  "gen_ai.usage.cache_read_input_tokens",
-                  "cache_read_tokens",
-                  "codex.turn.token_usage.cache_read_input_tokens",
-                  "codex.turn.token_usage.cache_read.input_tokens",
-                ])
-              : null,
-            cacheW: promoteUsage
-              ? readTokenAttr(attrs, [
-                  "gen_ai.usage.cache_creation.input_tokens",
-                  "gen_ai.usage.cache_creation_input_tokens",
-                  "cache_creation_tokens",
-                  "codex.turn.token_usage.cache_creation_input_tokens",
-                  "codex.turn.token_usage.cache_creation.input_tokens",
-                ])
-              : null,
+            model: usage.model,
+            inTok: usage.inTok,
+            outTok: usage.outTok,
+            cacheR: usage.cacheR,
+            cacheW: usage.cacheW,
             durationMs,
             startedAt: startedIso,
             endedAt: endedIso,

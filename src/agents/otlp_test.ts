@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { classifySpan, pickConversationIdFromSpans } from "./otlp.ts";
+import {
+  analyzeTraceUsageSources,
+  classifySpan,
+  pickConversationIdFromSpans,
+  resolveSpanUsageColumns,
+} from "./otlp.ts";
 
 test("layer 1: gen_ai.operation.name=chat overrides any name", () => {
   expect(
@@ -295,4 +300,197 @@ test("first span with non-empty gen_ai wins over later session.id", () => {
       { attributes: { "session.id": "conv_second" } },
     ]),
   ).toEqual("conv_first");
+});
+
+test("usage sources detect codex token_usage and response spans with finite token attrs", () => {
+  expect(
+    analyzeTraceUsageSources([
+      {
+        name: "codex.turn.token_usage",
+        attributes: { "gen_ai.usage.input_tokens": 10 },
+      },
+      {
+        name: "responses.stream_request",
+        attributes: { "gen_ai.usage.output_tokens": 20 },
+      },
+    ]),
+  ).toEqual({
+    hasCodexTokenUsage: true,
+    hasCodexResponseOrStreamWithUsage: true,
+  });
+});
+
+test("usage sources ignore response spans without finite token attrs", () => {
+  expect(
+    analyzeTraceUsageSources([
+      {
+        name: "model_client.stream_responses_websocket",
+        attributes: { model: "gpt-5.4-mini" },
+      },
+      {
+        name: "responses.stream_request",
+        attributes: { "gen_ai.usage.input_tokens": "42" },
+      },
+    ]),
+  ).toEqual({
+    hasCodexTokenUsage: false,
+    hasCodexResponseOrStreamWithUsage: false,
+  });
+});
+
+test("usage columns prefer semantic model and token keys over flat and Codex fallback keys", () => {
+  expect(
+    resolveSpanUsageColumns({
+      kind: "chat",
+      spanName: "chat",
+      traceUsageSources: {
+        hasCodexTokenUsage: false,
+        hasCodexResponseOrStreamWithUsage: false,
+      },
+      attrs: {
+        "gen_ai.response.model": "gpt-response",
+        "gen_ai.request.model": "gpt-request",
+        model: "gpt-flat",
+        "gen_ai.usage.input_tokens": 101,
+        input_tokens: 202,
+        "codex.turn.token_usage.input_tokens": 303,
+        "gen_ai.usage.output_tokens": 11,
+        output_tokens: 22,
+        "gen_ai.usage.cache_read.input_tokens": 7,
+        "gen_ai.usage.cache_read_input_tokens": 8,
+        cache_read_tokens: 9,
+        "gen_ai.usage.cache_creation.input_tokens": 3,
+        "gen_ai.usage.cache_creation_input_tokens": 4,
+        cache_creation_tokens: 5,
+      },
+    }),
+  ).toEqual({
+    model: "gpt-response",
+    inTok: 101,
+    outTok: 11,
+    cacheR: 7,
+    cacheW: 3,
+  });
+});
+
+test("usage columns do not promote non-chat spans except session_task.turn fallback", () => {
+  expect(
+    resolveSpanUsageColumns({
+      kind: "execute_tool",
+      spanName: "execute_tool",
+      traceUsageSources: {
+        hasCodexTokenUsage: false,
+        hasCodexResponseOrStreamWithUsage: false,
+      },
+      attrs: {
+        model: "gpt-tool",
+        input_tokens: 99,
+      },
+    }),
+  ).toEqual({
+    model: null,
+    inTok: null,
+    outTok: null,
+    cacheR: null,
+    cacheW: null,
+  });
+});
+
+test("codex token_usage span suppresses response stream usage columns to avoid double counting", () => {
+  expect(
+    resolveSpanUsageColumns({
+      kind: "chat",
+      spanName: "model_client.stream_responses_websocket",
+      traceUsageSources: {
+        hasCodexTokenUsage: true,
+        hasCodexResponseOrStreamWithUsage: true,
+      },
+      attrs: {
+        model: "gpt-stream",
+        input_tokens: 42,
+        output_tokens: 24,
+      },
+    }),
+  ).toEqual({
+    model: null,
+    inTok: null,
+    outTok: null,
+    cacheR: null,
+    cacheW: null,
+  });
+});
+
+test("codex response stream promotes usage when token_usage span is absent", () => {
+  expect(
+    resolveSpanUsageColumns({
+      kind: "chat",
+      spanName: "responses.stream_request",
+      traceUsageSources: {
+        hasCodexTokenUsage: false,
+        hasCodexResponseOrStreamWithUsage: true,
+      },
+      attrs: {
+        "gen_ai.request.model": "gpt-response",
+        "gen_ai.usage.input_tokens": 77,
+        "gen_ai.usage.output_tokens": 33,
+        "gen_ai.usage.cache_read_input_tokens": 11,
+        "gen_ai.usage.cache_creation_input_tokens": 5,
+      },
+    }),
+  ).toEqual({
+    model: "gpt-response",
+    inTok: 77,
+    outTok: 33,
+    cacheR: 11,
+    cacheW: 5,
+  });
+});
+
+test("session_task.turn fallback promotes Codex usage when no higher-priority source exists", () => {
+  expect(
+    resolveSpanUsageColumns({
+      kind: "invoke_agent",
+      spanName: "session_task.turn",
+      traceUsageSources: {
+        hasCodexTokenUsage: false,
+        hasCodexResponseOrStreamWithUsage: false,
+      },
+      attrs: {
+        model: "gpt-5.4-mini",
+        "codex.turn.token_usage.input_tokens": 11496,
+        "codex.turn.token_usage.output_tokens": 144,
+        "codex.turn.token_usage.cache_read_input_tokens": 6528,
+        "codex.turn.token_usage.cache_creation.input_tokens": 6,
+      },
+    }),
+  ).toEqual({
+    model: "gpt-5.4-mini",
+    inTok: 11496,
+    outTok: 144,
+    cacheR: 6528,
+    cacheW: 6,
+  });
+});
+
+test("session_task.turn fallback is suppressed when response stream has token usage", () => {
+  expect(
+    resolveSpanUsageColumns({
+      kind: "invoke_agent",
+      spanName: "session_task.turn",
+      traceUsageSources: {
+        hasCodexTokenUsage: false,
+        hasCodexResponseOrStreamWithUsage: true,
+      },
+      attrs: {
+        model: "gpt-turn",
+        "codex.turn.token_usage.input_tokens": 88,
+      },
+    }),
+  ).toEqual({
+    model: null,
+    inTok: null,
+    outTok: null,
+    cacheR: null,
+    cacheW: null,
+  });
 });
