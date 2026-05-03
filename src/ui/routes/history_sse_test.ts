@@ -42,6 +42,7 @@ function makeListRow(id: string): ConversationListRow {
     cacheReadTotal: 0,
     cacheWriteTotal: 0,
     summary: null,
+    worktreePath: null,
   };
 }
 

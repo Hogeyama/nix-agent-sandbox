@@ -1801,6 +1801,46 @@ body::after {
   font-family: var(--mono);
   color: var(--cream);
 }
+/* Project directory line — sits between summary and meta. The path
+ * splits visually so the project's own folder name (the "base") reads
+ * as the row's geographical anchor while the leading parent path
+ * recedes into a quieter tone. The leading glyph is decorative; it
+ * earns a small left-margin because the row's grid already separates
+ * it from the icon column. */
+.history-list-directory {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-top: 2px;
+  min-width: 0;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+.history-list-directory-glyph {
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.history-list-directory-parent {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+  /* Leading path collapses first when the row gets narrow; basename
+   * always survives. */
+  direction: rtl;
+  text-align: left;
+}
+.history-list-directory-base {
+  color: var(--cream-dim);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .history-list-meta {
   font-family: var(--mono);
   font-size: 12px;

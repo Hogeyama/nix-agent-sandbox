@@ -101,6 +101,24 @@ export function HistoryListPage(props: HistoryListPageProps) {
                     >
                       {row.summary}
                     </div>
+                    <Show when={row.directory !== ""}>
+                      <div class="history-list-directory" title={row.directory}>
+                        <span
+                          class="history-list-directory-glyph"
+                          aria-hidden="true"
+                        >
+                          ↳
+                        </span>
+                        <Show when={row.directoryParent !== ""}>
+                          <span class="history-list-directory-parent">
+                            {row.directoryParent}
+                          </span>
+                        </Show>
+                        <span class="history-list-directory-base">
+                          {row.directoryBase}
+                        </span>
+                      </div>
+                    </Show>
                     <Show when={row.metaLine !== ""}>
                       <div class="history-list-meta">{row.metaLine}</div>
                     </Show>

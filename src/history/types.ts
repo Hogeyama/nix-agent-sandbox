@@ -101,6 +101,14 @@ export interface ConversationListRow {
    * hook fired before the first user turn).
    */
   readonly summary: string | null;
+  /**
+   * `worktree_path` of the most recent invocation joined to this conversation
+   * (via `traces.conversation_id`). NULL when no invocation has been linked
+   * yet, or when every linked invocation recorded a NULL worktree path.
+   * The list page strips the `/.nas/worktree/<name>` suffix to derive the
+   * project directory shown in the row.
+   */
+  readonly worktreePath: string | null;
 }
 
 export interface TraceSummaryRow {

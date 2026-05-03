@@ -39,6 +39,7 @@ function makeConversation(
     cacheReadTotal: 100,
     cacheWriteTotal: 50,
     summary: null,
+    worktreePath: null,
     ...overrides,
   };
 }

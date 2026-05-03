@@ -35,6 +35,23 @@ export interface ConversationListRowView {
   readonly lastSeen: string;
   /** Title attribute = full ISO timestamp; useful as a tooltip. */
   readonly fullTimestamp: string;
+  /**
+   * Project directory shown alongside the row. Derived from the latest
+   * invocation's worktree path by stripping the `/.nas/worktree/<name>`
+   * suffix nas appends. Empty when no invocation supplied a path.
+   */
+  readonly directory: string;
+  /**
+   * Parent path of `directory` (everything up to and including the final
+   * `/`). Rendered dim so the basename can take visual focus. Empty when
+   * `directory` has no separator (e.g. a bare repo name).
+   */
+  readonly directoryParent: string;
+  /**
+   * Basename of `directory` — the project's own folder name. This is the
+   * focal token of the path; rendered bright while the parent fades.
+   */
+  readonly directoryBase: string;
   /** Token total formatted with the compact-number helper ("1.2k"). */
   readonly tokenTotal: string;
   /**
@@ -47,6 +64,46 @@ export interface ConversationListRowView {
 }
 
 const SHORT_ID_LEN = 8;
+
+/**
+ * Strip nas's `/.nas/worktree/<name>` suffix to recover the project
+ * directory the user actually invoked nas from. The trailing `<name>`
+ * segment is optional so a worktree path that bottoms out at
+ * `/.nas/worktree` (e.g. an unfinished setup) still collapses to the
+ * project root. Paths without the marker pass through unchanged.
+ */
+export function projectDirectoryFromWorktree(
+  worktreePath: string | null,
+): string {
+  if (worktreePath === null) return "";
+  const match = worktreePath.match(/^(.*?)\/\.nas\/worktree(?:\/[^/]*)?\/?$/);
+  if (match !== null && match[1] !== undefined) return match[1];
+  return worktreePath;
+}
+
+/**
+ * Split a project directory into a dim parent + bright basename so the
+ * row can render the project's own folder name as the visual anchor.
+ *
+ * - `/home/me/proj` → `{ parent: "/home/me/", base: "proj" }`
+ * - `/proj` → `{ parent: "/", base: "proj" }`
+ * - `proj` → `{ parent: "", base: "proj" }`
+ * - `""` → `{ parent: "", base: "" }`
+ * The parent retains its trailing slash so the two halves concatenate
+ * back to the original input.
+ */
+export function splitDirectoryDisplay(directory: string): {
+  parent: string;
+  base: string;
+} {
+  if (directory === "") return { parent: "", base: "" };
+  const lastSlash = directory.lastIndexOf("/");
+  if (lastSlash === -1) return { parent: "", base: directory };
+  return {
+    parent: directory.slice(0, lastSlash + 1),
+    base: directory.slice(lastSlash + 1),
+  };
+}
 
 /** U+00B7 mid-dot used as the meta-line segment separator. */
 const SEP = " · ";
@@ -209,6 +266,8 @@ export function toConversationListRowView(
   const tokenBreakdownTitle = composeTokenBreakdownTitle(row);
   const summary = row.summary;
   const summaryIsEmpty = summary === null;
+  const directory = projectDirectoryFromWorktree(row.worktreePath);
+  const directoryParts = splitDirectoryDisplay(directory);
   return {
     id: row.id,
     idShort,
@@ -229,6 +288,9 @@ export function toConversationListRowView(
     }),
     lastSeen: formatRelativeTime(row.lastSeenAt, nowMs),
     fullTimestamp: row.lastSeenAt,
+    directory: directory,
+    directoryParent: directoryParts.parent,
+    directoryBase: directoryParts.base,
     tokenTotal: formatCompactNumber(tokenTotal),
     tokenBreakdownTitle,
     // Defensive escape: backend ids flow into the hash unmodified, so a

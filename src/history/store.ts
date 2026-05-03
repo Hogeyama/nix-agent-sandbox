@@ -459,6 +459,7 @@ interface ConversationListSqlRow {
   first_seen_at: string;
   last_seen_at: string;
   summary: string | null;
+  worktree_path: string | null;
   turn_event_count: number;
   span_count: number;
   invocation_count: number;
@@ -511,6 +512,13 @@ const CONVERSATION_LIST_SELECT = `
     c.first_seen_at   AS first_seen_at,
     c.last_seen_at    AS last_seen_at,
     cs.summary        AS summary,
+    (SELECT i.worktree_path
+       FROM invocations i
+       JOIN traces t ON t.invocation_id = i.id
+      WHERE t.conversation_id = c.id
+        AND i.worktree_path IS NOT NULL
+      ORDER BY i.started_at DESC
+      LIMIT 1) AS worktree_path,
     COALESCE(
       (SELECT COUNT(*) FROM turn_events te WHERE te.conversation_id = c.id),
       0
@@ -576,6 +584,7 @@ function rowToConversationListRow(
     cacheReadTotal: r.cache_read_total,
     cacheWriteTotal: r.cache_write_total,
     summary: r.summary,
+    worktreePath: r.worktree_path,
   };
 }
 

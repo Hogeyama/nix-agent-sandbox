@@ -3,6 +3,7 @@ import type { ConversationListRow } from "../../../../../history/types";
 import {
   formatCompactNumber,
   formatRelativeTime,
+  projectDirectoryFromWorktree,
   shortenId,
   toConversationListRowView,
 } from "./historyListView";
@@ -23,6 +24,7 @@ function makeRow(
     cacheReadTotal: 0,
     cacheWriteTotal: 0,
     summary: null,
+    worktreePath: null,
     ...overrides,
   };
 }
@@ -134,6 +136,28 @@ describe("formatCompactNumber", () => {
   });
   test("negative values keep the sign", () => {
     expect(formatCompactNumber(-1500)).toBe("-1.5k");
+  });
+});
+
+describe("projectDirectoryFromWorktree", () => {
+  test("strips a single worktree segment", () => {
+    expect(
+      projectDirectoryFromWorktree("/home/me/proj/.nas/worktree/foo"),
+    ).toBe("/home/me/proj");
+  });
+
+  test("strips a trailing slash on the worktree segment", () => {
+    expect(
+      projectDirectoryFromWorktree("/home/me/proj/.nas/worktree/foo/"),
+    ).toBe("/home/me/proj");
+  });
+
+  test("returns the path unchanged when no worktree marker is present", () => {
+    expect(projectDirectoryFromWorktree("/home/me/proj")).toBe("/home/me/proj");
+  });
+
+  test("null produces empty string", () => {
+    expect(projectDirectoryFromWorktree(null)).toBe("");
   });
 });
 
@@ -261,6 +285,26 @@ describe("toConversationListRowView", () => {
       nowMs,
     );
     expect(display.tokenBreakdownTitle).toBe("");
+  });
+
+  test("directory strips the /.nas/worktree/<name> suffix", () => {
+    const display = toConversationListRowView(
+      makeRow({ worktreePath: "/home/me/proj/.nas/worktree/foo" }),
+      nowMs,
+    );
+    expect(display.directory).toBe("/home/me/proj");
+    expect(display.directoryParent).toBe("/home/me/");
+    expect(display.directoryBase).toBe("proj");
+  });
+
+  test("directory is empty when worktreePath is null", () => {
+    const display = toConversationListRowView(
+      makeRow({ worktreePath: null }),
+      nowMs,
+    );
+    expect(display.directory).toBe("");
+    expect(display.directoryParent).toBe("");
+    expect(display.directoryBase).toBe("");
   });
 
   test("metaLine singularises 1 turn / 1 span", () => {
