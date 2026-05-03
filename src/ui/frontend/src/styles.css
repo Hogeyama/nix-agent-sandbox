@@ -1753,18 +1753,21 @@ body::after {
   font-size: 13px;
 }
 
-/* Conversation list — one anchor per row in a CSS-grid layout (no
- * <table>) so the whole row reads as a clickable link rather than a
- * cell-by-cell hit target. */
+/* Conversation list — one anchor per row, but the column track lives
+ * on the parent so every row resolves the same widths. The row itself
+ * is a `subgrid` consumer so its four children land in the parent's
+ * tracks regardless of how long any one cell is in another row. The
+ * whole row remains a single clickable link — `display: grid` on an
+ * <a> keeps the hit target intact. */
 .history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  column-gap: 24px;
 }
 .history-list-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  gap: 24px;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
   padding: 14px 16px;
   border-bottom: 1px solid var(--rule-soft);
   border-left: 2px solid transparent;
