@@ -294,6 +294,7 @@ test("ObservabilityStage: enabled + claude => slice carries port, container env 
   expect(env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toEqual("1");
   expect(env.OTEL_LOG_TOOL_DETAILS).toEqual("1");
   expect(env.COPILOT_OTEL_ENABLED).toBeUndefined();
+  expect(env.COPILOT_OTEL_CAPTURE_CONTENT).toBeUndefined();
 });
 
 test("ObservabilityStage: enabled + copilot => COPILOT_OTEL_ENABLED + common envs, no CLAUDE_CODE", async () => {
@@ -316,6 +317,7 @@ test("ObservabilityStage: enabled + copilot => COPILOT_OTEL_ENABLED + common env
 
   const env = result.container?.env.static ?? {};
   expect(env.COPILOT_OTEL_ENABLED).toEqual("true");
+  expect(env.COPILOT_OTEL_CAPTURE_CONTENT).toEqual("true");
   expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBeUndefined();
   expect(env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA).toBeUndefined();
   expect(env.OTEL_LOG_TOOL_DETAILS).toBeUndefined();

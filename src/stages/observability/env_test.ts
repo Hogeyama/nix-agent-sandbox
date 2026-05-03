@@ -62,7 +62,7 @@ test("buildObservabilityEnv: codex does not set OTEL_LOG_TOOL_DETAILS (env not u
   expect(env).toBeNull();
 });
 
-test("buildObservabilityEnv: copilot includes COPILOT_OTEL_ENABLED and the OTLP common envs", () => {
+test("buildObservabilityEnv: copilot includes COPILOT_OTEL_* and the OTLP common envs", () => {
   const env = buildObservabilityEnv({
     agent: "copilot",
     sessionId: "sess_xyz",
@@ -77,7 +77,28 @@ test("buildObservabilityEnv: copilot includes COPILOT_OTEL_ENABLED and the OTLP 
     OTEL_METRIC_EXPORT_INTERVAL: "5000",
     OTEL_TRACES_EXPORTER: "otlp",
     COPILOT_OTEL_ENABLED: "true",
+    COPILOT_OTEL_CAPTURE_CONTENT: "true",
   });
+});
+
+test("buildObservabilityEnv: copilot sets COPILOT_OTEL_CAPTURE_CONTENT=true so spans carry tool args / messages", () => {
+  const env = buildObservabilityEnv({
+    agent: "copilot",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env?.COPILOT_OTEL_CAPTURE_CONTENT).toEqual("true");
+});
+
+test("buildObservabilityEnv: claude does not set COPILOT_OTEL_CAPTURE_CONTENT (copilot-only)", () => {
+  const env = buildObservabilityEnv({
+    agent: "claude",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env?.COPILOT_OTEL_CAPTURE_CONTENT).toBeUndefined();
 });
 
 test("buildObservabilityEnv: codex returns null (configured via argv, not env)", () => {

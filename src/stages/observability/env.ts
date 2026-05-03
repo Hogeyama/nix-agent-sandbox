@@ -11,7 +11,12 @@
  *               `tool_input` / `subagent_type` / `full_command` / `file_path` /
  *               `skill_name` — the UI uses these to disambiguate parallel
  *               Agent invocations) plus the OTLP-common envs.
- *   - copilot → COPILOT_OTEL_ENABLED=true plus the OTLP-common envs.
+ *   - copilot → COPILOT_OTEL_ENABLED=true, COPILOT_OTEL_CAPTURE_CONTENT=true
+ *               (the latter populates `gen_ai.input.messages`,
+ *               `gen_ai.tool.input`, `gen_ai.output.messages`, etc. on
+ *               `invoke_agent` / `execute_tool` spans — without it those
+ *               attrs are absent and parallel `task` calls cannot be
+ *               disambiguated). Plus the OTLP-common envs.
  *   - codex   → no env injected. Codex is configured via CLI argv
  *               (`codex -c otel.trace_exporter=...`) instead of OTEL envs.
  *
@@ -104,6 +109,7 @@ export function buildObservabilityEnv(
       return {
         ...buildCommonEnv(args),
         COPILOT_OTEL_ENABLED: "true",
+        COPILOT_OTEL_CAPTURE_CONTENT: "true",
       };
     case "codex":
       return null;
