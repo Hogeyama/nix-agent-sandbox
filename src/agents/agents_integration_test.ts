@@ -15,6 +15,7 @@ import type { CodexProbes } from "./codex.ts";
 import { configureCodex, resolveCodexProbes } from "./codex.ts";
 import type { CopilotProbes } from "./copilot.ts";
 import { configureCopilot, resolveCopilotProbes } from "./copilot.ts";
+import { configureAgent, resolveAgentProbes } from "./registry.ts";
 
 // ============================================================
 // テスト用ヘルパー
@@ -80,6 +81,88 @@ async function withoutBinary(
     else delete process.env.PATH;
   }
 }
+
+// ============================================================
+// registry dispatch
+// ============================================================
+
+test("configureAgent: dispatches claude configuration", () => {
+  const result = configureAgent({
+    agent: "claude",
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes: {
+      claudeDirExists: false,
+      claudeJsonExists: false,
+      claudeBinPath: "/usr/bin/claude",
+    },
+    priorDockerArgs: ["--existing"],
+    priorEnvVars: {},
+  });
+  expect(result.agentCommand).toEqual(["claude"]);
+  expect(result.dockerArgs[0]).toEqual("--existing");
+});
+
+test("configureAgent: dispatches copilot configuration", () => {
+  const result = configureAgent({
+    agent: "copilot",
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes: {
+      copilotBinPath: "/usr/bin/copilot",
+      copilotLegacyDirExists: false,
+    },
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.agentCommand).toEqual(["copilot"]);
+});
+
+test("configureAgent: dispatches codex configuration", () => {
+  const result = configureAgent({
+    agent: "codex",
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes: {
+      codexDirExists: false,
+      codexBinPath: "/usr/bin/codex",
+    },
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.agentCommand).toEqual(["codex"]);
+});
+
+test("resolveAgentProbes: dispatches claude probe resolver", async () => {
+  await withTempHome(async (tmpHome) => {
+    await mkdir(`${tmpHome}/.claude`);
+    await writeFile(`${tmpHome}/.claude.json`, "{}");
+
+    expect(resolveAgentProbes("claude", tmpHome)).toEqual(
+      resolveClaudeProbes(tmpHome),
+    );
+  });
+});
+
+test("resolveAgentProbes: dispatches copilot probe resolver", async () => {
+  await withTempHome(async (tmpHome) => {
+    await mkdir(`${tmpHome}/.copilot`);
+
+    expect(resolveAgentProbes("copilot", tmpHome)).toEqual(
+      resolveCopilotProbes(tmpHome),
+    );
+  });
+});
+
+test("resolveAgentProbes: dispatches codex probe resolver", async () => {
+  await withTempHome(async (tmpHome) => {
+    await mkdir(`${tmpHome}/.codex`);
+
+    expect(resolveAgentProbes("codex", tmpHome)).toEqual(
+      resolveCodexProbes(tmpHome),
+    );
+  });
+});
 
 // ============================================================
 // configureClaude (pure function tests)

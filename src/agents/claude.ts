@@ -2,6 +2,8 @@
  * Claude Code エージェント対応
  */
 
+import type { AgentConfigResult } from "./types.ts";
+
 const DEFAULT_CONTAINER_PATH =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
@@ -36,13 +38,6 @@ export interface ClaudeConfigInput {
   readonly probes: ClaudeProbes;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
-}
-
-/** configureClaude の出力 */
-export interface AgentConfigResult {
-  readonly dockerArgs: string[];
-  readonly envVars: Record<string, string>;
-  readonly agentCommand: string[];
 }
 
 /** Claude Code 固有のマウントと環境変数を決定する (純粋関数) */

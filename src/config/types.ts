@@ -1,7 +1,7 @@
-/** エージェント種別 */
-export type AgentType = "claude" | "copilot" | "codex";
-
+import type { AgentType } from "../agents/types.ts";
 import type { ApprovalScope } from "../network/protocol.ts";
+
+export type { AgentType } from "../agents/types.ts";
 
 /** Worktree 設定 */
 export interface WorktreeConfig {

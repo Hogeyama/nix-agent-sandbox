@@ -8,12 +8,7 @@
 
 import * as path from "node:path";
 import { Effect } from "effect";
-import type { ClaudeProbes } from "../../agents/claude.ts";
-import { configureClaude } from "../../agents/claude.ts";
-import type { CodexProbes } from "../../agents/codex.ts";
-import { configureCodex } from "../../agents/codex.ts";
-import type { CopilotProbes } from "../../agents/copilot.ts";
-import { configureCopilot } from "../../agents/copilot.ts";
+import { configureAgent } from "../../agents/registry.ts";
 import { logWarn } from "../../log.ts";
 import {
   type ContainerPatch,
@@ -453,41 +448,16 @@ export function planMount(
     agentCommand = agentResult.agentCommand;
   };
 
-  switch (profile.agent) {
-    case "claude":
-      applyAgentResult(
-        configureClaude({
-          containerHome,
-          hostHome: host.home,
-          probes: probes.agentProbes as ClaudeProbes,
-          priorDockerArgs,
-          priorEnvVars,
-        }),
-      );
-      break;
-    case "copilot":
-      applyAgentResult(
-        configureCopilot({
-          containerHome,
-          hostHome: host.home,
-          probes: probes.agentProbes as CopilotProbes,
-          priorDockerArgs,
-          priorEnvVars,
-        }),
-      );
-      break;
-    case "codex":
-      applyAgentResult(
-        configureCodex({
-          containerHome,
-          hostHome: host.home,
-          probes: probes.agentProbes as CodexProbes,
-          priorDockerArgs,
-          priorEnvVars,
-        }),
-      );
-      break;
-  }
+  applyAgentResult(
+    configureAgent({
+      agent: profile.agent,
+      containerHome,
+      hostHome: host.home,
+      probes: probes.agentProbes,
+      priorDockerArgs,
+      priorEnvVars,
+    }),
+  );
 
   const staticEnvVars = { ...envVars };
   delete staticEnvVars.NAS_ENV_OPS;

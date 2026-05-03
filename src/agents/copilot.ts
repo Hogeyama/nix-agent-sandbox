@@ -2,6 +2,8 @@
  * GitHub Copilot CLI エージェント対応
  */
 
+import type { AgentConfigResult } from "./types.ts";
+
 // ---------------------------------------------------------------------------
 // Probe types & resolver (side-effectful)
 // ---------------------------------------------------------------------------
@@ -31,13 +33,6 @@ export interface CopilotConfigInput {
   readonly probes: CopilotProbes;
   readonly priorDockerArgs: readonly string[];
   readonly priorEnvVars: Readonly<Record<string, string>>;
-}
-
-/** configureCopilot の出力 */
-export interface AgentConfigResult {
-  readonly dockerArgs: string[];
-  readonly envVars: Record<string, string>;
-  readonly agentCommand: string[];
 }
 
 /** Copilot CLI 固有のマウントと環境変数を決定する (純粋関数) */

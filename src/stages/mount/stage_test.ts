@@ -9,9 +9,7 @@ import { expect, test } from "bun:test";
  */
 
 import { Effect, Exit, Scope } from "effect";
-import type { ClaudeProbes } from "../../agents/claude.ts";
-import type { CodexProbes } from "../../agents/codex.ts";
-import type { CopilotProbes } from "../../agents/copilot.ts";
+import type { AgentProbes } from "../../agents/types.ts";
 import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
@@ -103,7 +101,7 @@ const defaultProbeResults: ProbeResults = {
   auditDir: "/tmp/audit",
 };
 
-const defaultClaudeProbes: ClaudeProbes = {
+const defaultClaudeProbes: AgentProbes = {
   claudeDirExists: false,
   claudeJsonExists: false,
   claudeBinPath: null,
@@ -1076,7 +1074,7 @@ test("MountStage: claude agent sets agentCommand and PATH", () => {
 });
 
 test("MountStage: copilot agent sets agentCommand", () => {
-  const copilotProbes: CopilotProbes = {
+  const copilotProbes: AgentProbes = {
     copilotBinPath: "/usr/bin/copilot",
     copilotLegacyDirExists: false,
   };
@@ -1088,7 +1086,7 @@ test("MountStage: copilot agent sets agentCommand", () => {
 });
 
 test("MountStage: codex agent sets agentCommand", () => {
-  const codexProbes: CodexProbes = {
+  const codexProbes: AgentProbes = {
     codexDirExists: false,
     codexBinPath: "/usr/bin/codex",
   };

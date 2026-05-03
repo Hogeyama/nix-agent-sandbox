@@ -7,12 +7,8 @@
 
 import { readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import type { ClaudeProbes } from "../../agents/claude.ts";
-import { resolveClaudeProbes } from "../../agents/claude.ts";
-import type { CodexProbes } from "../../agents/codex.ts";
-import { resolveCodexProbes } from "../../agents/codex.ts";
-import type { CopilotProbes } from "../../agents/copilot.ts";
-import { resolveCopilotProbes } from "../../agents/copilot.ts";
+import { resolveAgentProbes } from "../../agents/registry.ts";
+import type { AgentProbes } from "../../agents/types.ts";
 import type {
   EnvConfig,
   ExtraMountConfig,
@@ -55,7 +51,7 @@ export type ResolvedEnvEntry =
 /** MountStage が必要とする全ての I/O 結果 */
 export interface MountProbes {
   /** エージェント固有の probe 結果 */
-  agentProbes: ClaudeProbes | CopilotProbes | CodexProbes;
+  agentProbes: AgentProbes;
   /** /etc/nix/nix.conf の実体パス (readlink -f の結果, 存在しなければ null) */
   nixConfRealPath: string | null;
   /** nix バイナリの実体パス */
@@ -295,22 +291,6 @@ async function resolveX11UnixDirReadOnly(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 // I/O helper functions
 // ---------------------------------------------------------------------------
-
-function resolveAgentProbes(
-  agent: string,
-  hostHome: string,
-): ClaudeProbes | CopilotProbes | CodexProbes {
-  switch (agent) {
-    case "claude":
-      return resolveClaudeProbes(hostHome);
-    case "copilot":
-      return resolveCopilotProbes(hostHome);
-    case "codex":
-      return resolveCodexProbes(hostHome);
-    default:
-      throw new Error(`Unknown agent: ${agent}`);
-  }
-}
 
 function expandHostPath(rawPath: string, hostHome: string): string {
   if (rawPath === "~") return hostHome;
