@@ -9,8 +9,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { classifySpan } from "./classify.ts";
-import { pickConversationIdFromSpans } from "./resolve_conversation.ts";
+import { classifySpan, pickConversationIdFromSpans } from "../agents/otlp.ts";
 import { insertSpans, upsertConversation, upsertTrace } from "./store.ts";
 import type { SpanRow } from "./types.ts";
 

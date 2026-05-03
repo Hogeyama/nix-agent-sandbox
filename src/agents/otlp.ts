@@ -1,9 +1,11 @@
 /**
- * Span classification for the OTLP ingester.
+ * Agent-specific OTLP span identity rules.
  *
- * Implements the 6-layer priority order from ADR 2026042901
- * §"Span classification". The first layer that matches wins; lower layers
- * are not consulted. Pure function, no I/O.
+ * Span classification implements the priority order from ADR 2026042901
+ * "Span classification". The first layer that matches wins; lower layers are
+ * not consulted. Conversation-id resolution scans semantic-convention ids
+ * before Codex fallback ids so vendor fallback attributes cannot override a
+ * canonical conversation/session id observed anywhere in the trace.
  */
 
 export type SpanKind = "chat" | "execute_tool" | "invoke_agent" | "other";
@@ -80,4 +82,43 @@ export function classifySpan(
 
   // Layer 7: fallback.
   return "other";
+}
+
+export interface ResolveConversationInput {
+  spans: ReadonlyArray<{ attributes?: Record<string, unknown> }>;
+}
+
+export function pickConversationIdFromSpans(
+  spans: ResolveConversationInput["spans"],
+): string | null {
+  for (const span of spans) {
+    const attrs = span.attributes ?? {};
+    const genAi = attrs["gen_ai.conversation.id"];
+    if (typeof genAi === "string" && genAi.length > 0) {
+      return genAi;
+    }
+    const sess = attrs["session.id"];
+    if (typeof sess === "string" && sess.length > 0) {
+      return sess;
+    }
+  }
+  for (const span of spans) {
+    const attrs = span.attributes ?? {};
+    const codexConversation = attrs["conversation.id"];
+    if (typeof codexConversation === "string" && codexConversation.length > 0) {
+      return codexConversation;
+    }
+    const codexThread = attrs["thread.id"];
+    if (typeof codexThread === "string" && codexThread.length > 0) {
+      return codexThread;
+    }
+    const codexThreadUnderscore = attrs.thread_id;
+    if (
+      typeof codexThreadUnderscore === "string" &&
+      codexThreadUnderscore.length > 0
+    ) {
+      return codexThreadUnderscore;
+    }
+  }
+  return null;
 }
