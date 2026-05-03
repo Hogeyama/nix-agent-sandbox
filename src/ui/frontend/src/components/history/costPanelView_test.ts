@@ -213,7 +213,7 @@ describe("computeCostPanel", () => {
     expect(row?.totalUsd).toBeCloseTo(6, 6);
   });
 
-  test("unknown rows never contribute to the panel total even when token counts are huge", () => {
+  test("unknown rows are dropped from the panel and never contribute to the total", () => {
     const snap = snapshot({
       known: { input_cost_per_token: 0.000001 },
     });
@@ -228,12 +228,13 @@ describe("computeCostPanel", () => {
     );
     expect(view.hasUnknown).toBe(true);
     expect(view.totalUsd).toBeCloseTo(1, 6);
-    const unknownRow = view.rows.find((r) => r.isUnknown);
-    expect(unknownRow?.totalUsd).toBe(0);
-    expect(unknownRow?.inputUsd).toBeUndefined();
+    expect(view.rows.every((r) => !r.isUnknown)).toBe(true);
+    expect(
+      view.rows.find((r) => r.rawModel === "mystery-model"),
+    ).toBeUndefined();
   });
 
-  test("multiple distinct unknown raws produce separate rows", () => {
+  test("rows containing only unknown models render an empty table with hasUnknown set", () => {
     const snap = snapshot({});
     const view = computeCostPanel(
       totals([
@@ -245,17 +246,12 @@ describe("computeCostPanel", () => {
       SINCE,
       NOW,
     );
-    expect(view.rows.length).toBe(3);
-    expect(view.rows.every((r) => r.isUnknown)).toBe(true);
-    // Sorted ascending by raw model string; null becomes "" and sorts first.
-    expect(view.rows.map((r) => r.rawModel)).toEqual([
-      "",
-      "alpha-model",
-      "beta-model",
-    ]);
+    expect(view.rows.length).toBe(0);
+    expect(view.hasUnknown).toBe(true);
+    expect(view.totalUsd).toBe(0);
   });
 
-  test("known rows sort by descending USD; unknown rows trail at the end", () => {
+  test("known rows sort by descending USD; unknown rows are dropped", () => {
     const snap = snapshot({
       cheap: { input_cost_per_token: 0.000001 },
       pricey: { input_cost_per_token: 0.0001 },
@@ -264,7 +260,7 @@ describe("computeCostPanel", () => {
       totals([
         // cheap: 1_000_000 * 0.000001 = $1.00
         { model: "cheap", inputTokens: 1_000_000 },
-        // mystery: unknown → 0, must trail
+        // mystery: unknown → filtered out
         { model: "mystery", inputTokens: 1 },
         // pricey: 1_000 * 0.0001 = $0.10
         { model: "pricey", inputTokens: 1_000 },
@@ -273,14 +269,11 @@ describe("computeCostPanel", () => {
       SINCE,
       NOW,
     );
-    expect(view.rows.map((r) => r.model)).toEqual([
-      "cheap",
-      "pricey",
-      "mystery",
-    ]);
+    expect(view.rows.map((r) => r.model)).toEqual(["cheap", "pricey"]);
+    expect(view.hasUnknown).toBe(true);
   });
 
-  test("source 'unavailable' forces every row into the unknown bucket and zeroes the total", () => {
+  test("source 'unavailable' produces an empty table and zero total", () => {
     const snap = snapshot(
       { "claude-3-5-sonnet": { input_cost_per_token: 0.000003 } },
       { source: "unavailable", stale: true },
@@ -298,9 +291,8 @@ describe("computeCostPanel", () => {
     );
     expect(view.source).toBe("unavailable");
     expect(view.totalUsd).toBe(0);
-    expect(view.rows.length).toBe(1);
-    expect(view.rows[0]?.isUnknown).toBe(true);
-    expect(view.rows[0]?.inputUsd).toBeUndefined();
+    expect(view.rows.length).toBe(0);
+    expect(view.hasUnknown).toBe(true);
   });
 
   test("applies above-200k upper-tier rates to the bucketed token slice", () => {

@@ -311,6 +311,14 @@ function sortCostRows(rows: CostRow[]): void {
  * Compute the cost-panel projection. Pure: every input — totals, the
  * snapshot, the daemon's "since" boundary, and a clock — flows in
  * explicitly so the function can be tested deterministically.
+ *
+ * Unknown-model rows are dropped entirely (`hasUnknown` still tracks
+ * whether any input row failed lookup, so the renderer can surface a
+ * footnote if it ever needs to). The list-page panel is a coarse
+ * dashboard that prices what it can and stays silent on what it
+ * cannot — model-less spans, fixture rows, and pre-pricing-snapshot
+ * data all collapse off the table rather than showing up as `0`-USD
+ * placeholders.
  */
 export function computeCostPanel(
   totals: ReadonlyArray<ModelTokenTotalsRow>,
@@ -318,13 +326,12 @@ export function computeCostPanel(
   sinceIso: string,
   nowMs: number,
 ): CostPanelView {
-  const rows = projectCostRows(totals, snapshot);
+  const projected = projectCostRows(totals, snapshot);
+  const hasUnknown = projected.some((r) => r.isUnknown);
+  const rows = projected.filter((r) => !r.isUnknown);
   sortCostRows(rows);
 
-  const totalUsd = rows
-    .filter((r) => !r.isUnknown)
-    .reduce((acc, r) => acc + r.totalUsd, 0);
-  const hasUnknown = rows.some((r) => r.isUnknown);
+  const totalUsd = rows.reduce((acc, r) => acc + r.totalUsd, 0);
 
   return {
     rows,
