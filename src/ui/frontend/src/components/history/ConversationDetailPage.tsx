@@ -418,11 +418,27 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                                             <td>
                                               {row.toolName ?? ""}
                                               {row.toolDetail !== null && (
-                                                <div
-                                                  class="history-detail-tool-detail"
-                                                  title={row.toolDetail}
-                                                >
-                                                  {row.toolDetail}
+                                                <div class="history-detail-tool-detail-row">
+                                                  <span
+                                                    class="history-detail-tool-detail"
+                                                    title={row.toolDetail}
+                                                  >
+                                                    {row.toolDetail}
+                                                  </span>
+                                                  <button
+                                                    type="button"
+                                                    class="history-detail-tool-detail-copy"
+                                                    title="Copy"
+                                                    aria-label="Copy tool detail"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      void navigator.clipboard?.writeText(
+                                                        row.toolDetail ?? "",
+                                                      );
+                                                    }}
+                                                  >
+                                                    copy
+                                                  </button>
                                                 </div>
                                               )}
                                             </td>

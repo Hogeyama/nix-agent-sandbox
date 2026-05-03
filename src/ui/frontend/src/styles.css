@@ -2228,13 +2228,35 @@ body::after {
   color: var(--cream-dim);
 }
 
+.history-detail-tool-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+}
 .history-detail-tool-detail {
   font-size: 11px;
   color: var(--cream-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.history-detail-tool-detail-copy {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.history-detail-tool-detail-copy:hover {
+  color: var(--cream);
+  border-color: var(--rule-strong);
 }
 
 .history-detail-payload-preview {

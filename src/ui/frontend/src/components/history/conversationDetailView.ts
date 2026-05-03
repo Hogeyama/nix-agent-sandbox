@@ -138,11 +138,12 @@ export interface SpanRowView {
    */
   readonly toolName: string | null;
   /**
-   * Short, single-line summary of the tool invocation's input arguments,
+   * Trimmed, single-line summary of the tool invocation's input arguments,
    * resolved by `extractToolDetail`. `null` when the span is not an
    * `execute_tool` span or no recognised attribute is present. Used to
    * disambiguate parallel calls of the same tool (e.g. several Agent
-   * sub-agents kicked off in one turn).
+   * sub-agents kicked off in one turn). The page renders this with CSS
+   * truncation; the same string is used for hover (`title`) and copy.
    */
   readonly toolDetail: string | null;
   /**
@@ -845,116 +846,28 @@ export function extractToolName(span: SpanSummaryRow): string | null {
   return null;
 }
 
-// Hard cap on rendered detail length. The tool cell sits inside a fixed-width
-// column in the spans table; longer text would overflow the layout. 80 chars
-// is a comfortable single-line preview that still fits a typical Bash command
-// or Agent description.
-const TOOL_DETAIL_MAX_LEN = 80;
-
 /**
- * Truncate a string to `TOOL_DETAIL_MAX_LEN` after trimming surrounding
- * whitespace; appends a single ellipsis (U+2026) when the input exceeds the
- * cap. Returns `null` when the trimmed input is empty so callers can fall
- * through to the next resolution step.
- */
-function trimAndTruncate(value: string): string | null {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  if (trimmed.length <= TOOL_DETAIL_MAX_LEN) return trimmed;
-  return `${trimmed.slice(0, TOOL_DETAIL_MAX_LEN)}…`;
-}
-
-/**
- * Pull the first non-empty string-typed value from `obj` matching one of
- * `keys`, in order. Used to walk a small priority list of tool-input field
- * names without re-deriving the same defensive type checks at every site.
- */
-function firstStringField(
-  obj: Record<string, unknown>,
-  keys: readonly string[],
-): string | null {
-  for (const key of keys) {
-    const v = obj[key];
-    if (typeof v === "string" && v.trim().length > 0) return v;
-  }
-  return null;
-}
-
-/**
- * Resolve the Task/Agent tool's display detail. Prefers the agent's
- * human-readable `description`, falling back to a prefix of the longer
- * `prompt`. When `subagent_type` is also present, it is appended in
- * parentheses so two parallel `general-purpose` agents can still be
- * distinguished by their description rather than their type alone.
- */
-function extractAgentDetail(toolInput: Record<string, unknown>): string | null {
-  const description =
-    typeof toolInput.description === "string" ? toolInput.description : null;
-  const prompt = typeof toolInput.prompt === "string" ? toolInput.prompt : null;
-  const subagent =
-    typeof toolInput.subagent_type === "string"
-      ? toolInput.subagent_type.trim()
-      : "";
-  const base = description ?? prompt ?? null;
-  if (base === null) return null;
-  const truncated = trimAndTruncate(base);
-  if (truncated === null) return null;
-  if (subagent.length === 0) return truncated;
-  return `${truncated} (${subagent})`;
-}
-
-/**
- * Pick a generic single-field detail for non-Agent tools. The priority list
- * mirrors the Claude Code tool surfaces most operators recognise at a glance:
- * Bash's `command`, Read/Write/Edit's `file_path`, Glob's `pattern`, Grep's
- * `pattern`/`query`, WebFetch's `url`. `description` leads so any tool that
- * supplies one (Skill, custom tools) wins over a noisier raw arg.
- */
-function extractGenericToolDetail(
-  toolInput: Record<string, unknown>,
-): string | null {
-  const value = firstStringField(toolInput, [
-    "description",
-    "command",
-    "file_path",
-    "path",
-    "pattern",
-    "query",
-    "url",
-  ]);
-  return value === null ? null : trimAndTruncate(value);
-}
-
-/**
- * Extract a short, single-line description of an `execute_tool` span's
- * input — used in the Tool cell of the conversation-detail spans table to
- * disambiguate parallel calls of the same tool (e.g. multiple Agent
- * sub-agents kicked off in one turn).
+ * Extract an inline display detail for the Task/Agent tool span, used in
+ * the Tool cell of the conversation-detail spans table to disambiguate
+ * parallel sub-agents kicked off in one turn. Other tools (Bash, Read,
+ * Edit, …) intentionally return `null` here — their per-call inputs are
+ * already visible in the click-to-expand attrs drawer, so an inline
+ * preview only crowds the table.
  *
- * Requires Claude Code to be running with `OTEL_LOG_TOOL_DETAILS=1`
- * (set by `buildObservabilityEnv` for the claude agent), which causes the
- * SDK to emit `tool_input` (JSON-stringified args) and a small set of
- * top-level convenience attributes (`full_command`, `file_path`,
- * `skill_name`, `subagent_type`).
+ * Requires Claude Code with `OTEL_LOG_TOOL_DETAILS=1`, which emits
+ * `subagent_type` as a top-level attribute. The richer `description` /
+ * `prompt` fields are not currently emitted on the span (they live on
+ * the `tool_result` log event); the `tool_input` branch below is left
+ * for that future case but currently does not fire in practice.
  *
- * Resolution order, returning the first non-empty result:
- *   1. `tool_input` parses to an object:
- *      - Task/Agent tool (resolved tool name `Task` / `Agent`):
- *        prefer `description`, fall back to a prefix of `prompt`; suffix
- *        ` (subagent_type)` when present.
- *      - Otherwise: first string-typed field among `description`,
- *        `command`, `file_path`, `path`, `pattern`, `query`, `url`.
- *   2. Top-level `full_command` (Bash convenience attr).
- *   3. Top-level `file_path` or `skill_name` (Read/Edit/Write/Skill
- *      convenience attrs).
- *
- * All resolved strings are trimmed and capped at 80 chars with an ellipsis.
- * Returns `null` for non-`execute_tool` spans, malformed `attrsJson`, or a
- * malformed `tool_input` JSON string with no fallback attrs available.
- * Never throws.
+ * Returns the trimmed detail string, or `null` for non-`execute_tool`
+ * spans, non-Agent spans, malformed `attrsJson`, or when no relevant
+ * attribute is present. Never throws.
  */
 export function extractToolDetail(span: SpanSummaryRow): string | null {
   if (span.kind !== "execute_tool") return null;
+  const toolName = extractToolName(span);
+  if (toolName !== "Task" && toolName !== "Agent") return null;
   let attrs: Record<string, unknown> | null = null;
   try {
     const parsed = JSON.parse(span.attrsJson);
@@ -970,6 +883,9 @@ export function extractToolDetail(span: SpanSummaryRow): string | null {
   }
   if (attrs === null) return null;
 
+  const subagent =
+    typeof attrs.subagent_type === "string" ? attrs.subagent_type.trim() : "";
+
   const rawToolInput = attrs.tool_input;
   if (typeof rawToolInput === "string") {
     try {
@@ -980,44 +896,21 @@ export function extractToolDetail(span: SpanSummaryRow): string | null {
         !Array.isArray(parsedInput)
       ) {
         const toolInput = parsedInput as Record<string, unknown>;
-        const toolName = extractToolName(span);
-        if (toolName === "Task" || toolName === "Agent") {
-          const detail = extractAgentDetail(toolInput);
-          if (detail !== null) return detail;
-        } else {
-          const detail = extractGenericToolDetail(toolInput);
-          if (detail !== null) return detail;
+        const description =
+          typeof toolInput.description === "string"
+            ? toolInput.description.trim()
+            : "";
+        const prompt =
+          typeof toolInput.prompt === "string" ? toolInput.prompt.trim() : "";
+        const base = description.length > 0 ? description : prompt;
+        if (base.length > 0) {
+          return subagent.length === 0 ? base : `${base} (${subagent})`;
         }
       }
     } catch {
-      // Malformed tool_input JSON — fall through to top-level attrs.
+      // Malformed tool_input JSON — fall through to subagent-only.
     }
   }
 
-  const fullCommand = attrs.full_command;
-  if (typeof fullCommand === "string") {
-    const detail = trimAndTruncate(fullCommand);
-    if (detail !== null) return detail;
-  }
-  const filePath = attrs.file_path;
-  if (typeof filePath === "string") {
-    const detail = trimAndTruncate(filePath);
-    if (detail !== null) return detail;
-  }
-  const skillName = attrs.skill_name;
-  if (typeof skillName === "string") {
-    const detail = trimAndTruncate(skillName);
-    if (detail !== null) return detail;
-  }
-  // Claude Code emits `subagent_type` directly on the Task/Agent tool span
-  // but does NOT emit `tool_input` there — the agent's `description` and
-  // `prompt` only land on the `tool_result` log event, not the span. So
-  // when nothing else resolved, fall back to the subagent type alone; it
-  // still distinguishes a `general-purpose` worker from an `Explore` agent.
-  const subagentType = attrs.subagent_type;
-  if (typeof subagentType === "string") {
-    const detail = trimAndTruncate(subagentType);
-    if (detail !== null) return detail;
-  }
-  return null;
+  return subagent.length === 0 ? null : subagent;
 }

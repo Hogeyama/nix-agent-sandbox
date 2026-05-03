@@ -555,14 +555,13 @@ describe("extractToolDetail", () => {
         tool_input: JSON.stringify({
           description: "Echo test agent 1",
           prompt: "Run a quick echo and report",
-          subagent_type: "general-purpose",
         }),
       }),
     });
     expect(extractToolDetail(span)).toBe("Echo test agent 1 (general-purpose)");
   });
 
-  test("Agent tool with only prompt (no description) truncates to 80 chars + ellipsis", () => {
+  test("Agent tool with only prompt (no description) returns the full prompt", () => {
     const longPrompt = "x".repeat(200);
     const span = makeSpan({
       kind: "execute_tool",
@@ -571,12 +570,7 @@ describe("extractToolDetail", () => {
         tool_input: JSON.stringify({ prompt: longPrompt }),
       }),
     });
-    const out = extractToolDetail(span);
-    expect(out).not.toBeNull();
-    if (out === null) return;
-    expect(out.endsWith("…")).toBe(true);
-    // 80 chars of body + the ellipsis character.
-    expect(out.length).toBe(81);
+    expect(extractToolDetail(span)).toBe(longPrompt);
   });
 
   test("Agent tool prefers description over prompt when both are present", () => {
@@ -593,54 +587,44 @@ describe("extractToolDetail", () => {
     expect(extractToolDetail(span)).toBe("Short desc");
   });
 
-  test("Bash tool with full_command top-level attr returns the command, truncated", () => {
+  test("Agent span with only top-level subagent_type returns the type", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({
+        tool_name: "Agent",
+        subagent_type: "Explore",
+      }),
+    });
+    expect(extractToolDetail(span)).toBe("Explore");
+  });
+
+  test("Agent span with malformed tool_input falls back to subagent_type", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({
+        tool_name: "Agent",
+        subagent_type: "Explore",
+        tool_input: "{not valid",
+      }),
+    });
+    expect(extractToolDetail(span)).toBe("Explore");
+  });
+
+  test("Agent span with no relevant attrs returns null", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({ tool_name: "Agent" }),
+    });
+    expect(extractToolDetail(span)).toBeNull();
+  });
+
+  test("non-Agent execute_tool spans always return null", () => {
     const span = makeSpan({
       kind: "execute_tool",
       attrsJson: JSON.stringify({
         tool_name: "Bash",
-        full_command: "echo hello world",
+        full_command: "echo hi",
       }),
-    });
-    expect(extractToolDetail(span)).toBe("echo hello world");
-  });
-
-  test("Bash tool with tool_input.command (no full_command) returns command", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Bash",
-        tool_input: JSON.stringify({ command: "ls -la /tmp" }),
-      }),
-    });
-    expect(extractToolDetail(span)).toBe("ls -la /tmp");
-  });
-
-  test("Read tool with tool_input.file_path returns the file path", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Read",
-        tool_input: JSON.stringify({ file_path: "/repo/src/index.ts" }),
-      }),
-    });
-    expect(extractToolDetail(span)).toBe("/repo/src/index.ts");
-  });
-
-  test("Skill tool with top-level skill_name attr returns the skill name", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Skill",
-        skill_name: "post-change-checks",
-      }),
-    });
-    expect(extractToolDetail(span)).toBe("post-change-checks");
-  });
-
-  test("returns null when no relevant attrs are present", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({ tool_name: "Bash" }),
     });
     expect(extractToolDetail(span)).toBeNull();
   });
@@ -649,8 +633,8 @@ describe("extractToolDetail", () => {
     const span = makeSpan({
       kind: "chat",
       attrsJson: JSON.stringify({
-        tool_name: "Bash",
-        full_command: "echo hi",
+        tool_name: "Agent",
+        subagent_type: "Explore",
       }),
     });
     expect(extractToolDetail(span)).toBeNull();
@@ -662,65 +646,6 @@ describe("extractToolDetail", () => {
       attrsJson: "{not valid json",
     });
     expect(extractToolDetail(span)).toBeNull();
-  });
-
-  test("malformed tool_input string falls back to top-level keys (full_command)", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Bash",
-        tool_input: "{not valid",
-        full_command: "echo recovered",
-      }),
-    });
-    expect(extractToolDetail(span)).toBe("echo recovered");
-  });
-
-  test("malformed tool_input with no fallback attrs returns null", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Bash",
-        tool_input: "{not valid",
-      }),
-    });
-    expect(extractToolDetail(span)).toBeNull();
-  });
-
-  test("generic tool description in tool_input wins over command", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Bash",
-        tool_input: JSON.stringify({
-          description: "List tmp dir",
-          command: "ls /tmp",
-        }),
-      }),
-    });
-    expect(extractToolDetail(span)).toBe("List tmp dir");
-  });
-
-  test("trims surrounding whitespace before truncation", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Bash",
-        full_command: "   echo padded   ",
-      }),
-    });
-    expect(extractToolDetail(span)).toBe("echo padded");
-  });
-
-  test("Agent span without tool_input falls back to top-level subagent_type", () => {
-    const span = makeSpan({
-      kind: "execute_tool",
-      attrsJson: JSON.stringify({
-        tool_name: "Agent",
-        subagent_type: "Explore",
-      }),
-    });
-    expect(extractToolDetail(span)).toBe("Explore");
   });
 });
 
