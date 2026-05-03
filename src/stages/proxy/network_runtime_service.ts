@@ -21,6 +21,9 @@ export class NetworkRuntimeService extends Context.Tag(
 )<
   NetworkRuntimeService,
   {
+    readonly ensureRuntimeDirs: (
+      paths: NetworkRuntimePaths,
+    ) => Effect.Effect<void>;
     readonly gcStaleRuntime: (
       paths: NetworkRuntimePaths,
     ) => Effect.Effect<void>;
@@ -45,6 +48,14 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
     const proc = yield* ProcessService;
 
     return NetworkRuntimeService.of({
+      ensureRuntimeDirs: (paths) =>
+        Effect.gen(function* () {
+          yield* fs.mkdir(paths.runtimeDir, { recursive: true, mode: 0o755 });
+          yield* fs.mkdir(paths.sessionsDir, { recursive: true });
+          yield* fs.mkdir(paths.pendingDir, { recursive: true });
+          yield* fs.mkdir(paths.brokersDir, { recursive: true });
+        }),
+
       gcStaleRuntime: (paths) =>
         Effect.gen(function* () {
           const pidFileExists = yield* fs.exists(paths.authRouterPidFile);
@@ -62,7 +73,7 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
 
           const alive = yield* proc.exec(["kill", "-0", pid.toString()]).pipe(
             Effect.as(true),
-            Effect.catchAll(() => Effect.succeed(false)),
+            Effect.catchAllCause(() => Effect.succeed(false)),
           );
 
           if (!alive) {
@@ -94,6 +105,9 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
 // ---------------------------------------------------------------------------
 
 export interface NetworkRuntimeServiceFakeConfig {
+  readonly ensureRuntimeDirs?: (
+    paths: NetworkRuntimePaths,
+  ) => Effect.Effect<void>;
   readonly gcStaleRuntime?: (paths: NetworkRuntimePaths) => Effect.Effect<void>;
   readonly renderEnvoyConfig?: (
     paths: NetworkRuntimePaths,
@@ -106,6 +120,7 @@ export function makeNetworkRuntimeServiceFake(
   return Layer.succeed(
     NetworkRuntimeService,
     NetworkRuntimeService.of({
+      ensureRuntimeDirs: overrides.ensureRuntimeDirs ?? (() => Effect.void),
       gcStaleRuntime: overrides.gcStaleRuntime ?? (() => Effect.void),
       renderEnvoyConfig: overrides.renderEnvoyConfig ?? (() => Effect.void),
     }),

@@ -315,13 +315,16 @@ function runProxy(
     const authRouterService = yield* AuthRouterService;
     const forwardPortRelayService = yield* ForwardPortRelayService;
 
-    // 1. GC stale sessions (read PID file, check alive, remove stale files)
+    // 1. Ensure runtime dirs exist (runtimeDir, sessions, pending, brokers)
+    yield* networkRuntime.ensureRuntimeDirs(plan.runtimePaths);
+
+    // 2. GC stale sessions (read PID file, check alive, remove stale files)
     yield* networkRuntime.gcStaleRuntime(plan.runtimePaths);
 
-    // 2. Render envoy config (read template + write config)
+    // 3. Render envoy config (read template + write config)
     yield* networkRuntime.renderEnvoyConfig(plan.runtimePaths);
 
-    // 3. Session broker + registry (acquireRelease)
+    // 4. Session broker + registry (acquireRelease)
     const tokenHash = yield* Effect.tryPromise({
       try: () => hashToken(plan.token),
       catch: (e) =>
@@ -351,13 +354,13 @@ function runProxy(
       (handle: SessionBrokerHandle) => handle.close(),
     );
 
-    // 4. Auth-router daemon (acquireRelease)
+    // 5. Auth-router daemon (acquireRelease)
     yield* Effect.acquireRelease(
       authRouterService.ensureDaemon(plan.runtimePaths),
       (handle: AuthRouterHandle) => handle.abort(),
     );
 
-    // 5. Forward-port relays (acquireRelease).
+    // 6. Forward-port relays (acquireRelease).
     // Always called regardless of plan.forwardPorts.length: the live impl
     // fast-paths empty ports to a no-op.
     //
@@ -380,13 +383,13 @@ function runProxy(
       (handle: ForwardPortRelayHandle) => handle.close(),
     );
 
-    // 6. Shared envoy container (acquireRelease — no teardown since it's shared)
+    // 7. Shared envoy container (acquireRelease — no teardown since it's shared)
     yield* Effect.acquireRelease(
       envoy.ensureSharedEnvoy(plan),
       () => Effect.void,
     );
 
-    // 7. Session network + envoy/dind connect (acquireRelease)
+    // 8. Session network + envoy/dind connect (acquireRelease)
     yield* Effect.acquireRelease(
       envoy.createSessionNetwork(plan),
       (teardown: () => Effect.Effect<void>) => teardown(),
