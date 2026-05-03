@@ -990,5 +990,15 @@ export function extractToolDetail(span: SpanSummaryRow): string | null {
     const detail = trimAndTruncate(skillName);
     if (detail !== null) return detail;
   }
+  // Claude Code emits `subagent_type` directly on the Task/Agent tool span
+  // but does NOT emit `tool_input` there — the agent's `description` and
+  // `prompt` only land on the `tool_result` log event, not the span. So
+  // when nothing else resolved, fall back to the subagent type alone; it
+  // still distinguishes a `general-purpose` worker from an `Explore` agent.
+  const subagentType = attrs.subagent_type;
+  if (typeof subagentType === "string") {
+    const detail = trimAndTruncate(subagentType);
+    if (detail !== null) return detail;
+  }
   return null;
 }

@@ -684,6 +684,17 @@ describe("extractToolDetail", () => {
     });
     expect(extractToolDetail(span)).toBe("echo padded");
   });
+
+  test("Agent span without tool_input falls back to top-level subagent_type", () => {
+    const span = makeSpan({
+      kind: "execute_tool",
+      attrsJson: JSON.stringify({
+        tool_name: "Agent",
+        subagent_type: "Explore",
+      }),
+    });
+    expect(extractToolDetail(span)).toBe("Explore");
+  });
 });
 
 describe("compareTurnOrder", () => {
