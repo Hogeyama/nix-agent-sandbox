@@ -177,8 +177,6 @@ async function forceCleanup(
   await dockerVolumeRemove(volumeName).catch(() => {});
 }
 
-void forceCleanup; // suppress unused warning (available for manual cleanup)
-
 test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
   "DindStage: non-shared execute sets DOCKER_HOST and teardown removes resources",
   async () => {
@@ -193,6 +191,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
     expect(plan).not.toBeNull();
 
     const containerName = plan!.containerName;
+    await forceCleanup(containerName, plan!.networkName, plan!.sharedTmpVolume);
 
     const scope = Effect.runSync(Scope.make());
     try {
@@ -234,7 +233,15 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void));
       const afterRunning = await dockerIsRunning(containerName);
-      expect(afterRunning).toEqual(false);
+      try {
+        expect(afterRunning).toEqual(false);
+      } finally {
+        await forceCleanup(
+          containerName,
+          plan!.networkName,
+          plan!.sharedTmpVolume,
+        );
+      }
     }
   },
   30_000,
