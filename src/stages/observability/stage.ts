@@ -1,15 +1,14 @@
 /**
  * ObservabilityStage — materializes the `observability` slice of PipelineState
- * and, when enabled, acquires the per-session OTLP/HTTP receiver and injects
- * the matching OTLP envs or Codex CLI config override into the container slice.
+ * and, when enabled, acquires the per-session OTLP/HTTP receiver and merges
+ * the agent-specific container wiring patch.
  *
  * Inputs:
  *   - `config.observability.enable` gates the entire stage. Disabled → the
  *     stage is a no-op fast-path: `{ enabled: false }` slice and an empty
  *     container patch.
- *   - `profile.agent` selects how the agent is wired to the receiver. Claude
- *     and Copilot receive OTEL env vars; Codex receives a `-c`
- *     `otel.trace_exporter=...` argv override before profile/CLI args.
+ *   - `profile.agent` selects the pure wiring contract provided by
+ *     `src/agents/observability.ts`.
  *
  * Resource lifetime:
  *   - The receiver handle is bound to the stage's Effect scope via
@@ -36,6 +35,11 @@
 
 import type { Database } from "bun:sqlite";
 import { Effect } from "effect";
+import {
+  agentSupportsObservability,
+  buildAgentObservabilityContainerPatch,
+  canApplyAgentObservabilityConfig,
+} from "../../agents/observability.ts";
 import type { Config, Profile } from "../../config/types.ts";
 import {
   HistoryDbVersionMismatchError,
@@ -45,16 +49,10 @@ import {
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
-  ContainerPlan,
   ObservabilityState,
   PipelineState,
 } from "../../pipeline/state.ts";
 import type { StageResult } from "../../pipeline/types.ts";
-import {
-  agentSupportsObservability,
-  buildCodexTraceExporterConfig,
-  buildObservabilityEnv,
-} from "./env.ts";
 import { OtlpReceiverService } from "./receiver_service.ts";
 
 // ---------------------------------------------------------------------------
@@ -128,8 +126,10 @@ function runObservability(
       return { observability: slice };
     }
     if (
-      deps.profile.agent === "codex" &&
-      !canApplyCodexTraceExporterConfig(input.container.command.agentCommand)
+      !canApplyAgentObservabilityConfig(
+        deps.profile.agent,
+        input.container.command.agentCommand,
+      )
     ) {
       const slice: ObservabilityState = { enabled: false };
       return { observability: slice };
@@ -205,11 +205,13 @@ function runObservability(
         ),
     );
 
-    const env = buildObservabilityEnv({
+    const patch = buildAgentObservabilityContainerPatch({
       agent: deps.profile.agent,
       sessionId: deps.sessionId,
       profileName: deps.profileName,
       port: handle.port,
+      agentCommand: input.container.command.agentCommand,
+      extraArgs: input.container.command.extraArgs,
     });
 
     const slice: ObservabilityState = {
@@ -217,43 +219,9 @@ function runObservability(
       receiverPort: handle.port,
     };
 
-    const command =
-      deps.profile.agent === "codex"
-        ? buildCodexCommand(input.container.command.agentCommand, handle.port)
-        : undefined;
-
     // mergeContainerPlan with patch.env.static is patch-wins on key collisions,
-    // so any OTLP key already present in the upstream container slice is
-    // replaced by the values produced here. Codex has no env patch; its config
-    // override is inserted into agentCommand so LaunchStage appends profile and
-    // CLI extra args after it.
-    const container: ContainerPlan = mergeContainerPlan(input.container, {
-      env: env === null ? undefined : { static: env },
-      command:
-        command === undefined
-          ? undefined
-          : {
-              agentCommand: command,
-              extraArgs: input.container.command.extraArgs,
-            },
-    });
+    // so OTLP keys produced by the agent contract replace upstream values.
+    const container = mergeContainerPlan(input.container, patch);
     return { observability: slice, container };
   });
-}
-
-function buildCodexCommand(
-  agentCommand: readonly string[],
-  port: number,
-): readonly string[] {
-  const config = buildCodexTraceExporterConfig({ port });
-  if (agentCommand.length === 0) {
-    return ["codex", "-c", config];
-  }
-  return [agentCommand[0], "-c", config, ...agentCommand.slice(1)];
-}
-
-function canApplyCodexTraceExporterConfig(
-  agentCommand: readonly string[],
-): boolean {
-  return agentCommand.length === 0 || agentCommand[0] === "codex";
 }

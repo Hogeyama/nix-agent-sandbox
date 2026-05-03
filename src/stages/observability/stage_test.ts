@@ -246,6 +246,9 @@ test("ObservabilityStage: enabled config + codex fallback command => disabled an
 
   expect(result).toEqual({ observability: { enabled: false } });
   expect(startCount).toEqual(0);
+  expect(await Bun.file(path.join(tmpRoot, "nas", "history.db")).exists()).toBe(
+    false,
+  );
 });
 
 // ---------------------------------------------------------------------------

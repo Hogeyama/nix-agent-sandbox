@@ -6,9 +6,11 @@
 import { expect, test } from "bun:test";
 import {
   agentSupportsObservability,
+  buildAgentObservabilityContainerPatch,
   buildCodexTraceExporterConfig,
   buildObservabilityEnv,
-} from "./env.ts";
+  canApplyAgentObservabilityConfig,
+} from "./observability.ts";
 
 test("buildObservabilityEnv: claude includes CLAUDE_CODE_* and the OTLP common envs", () => {
   const env = buildObservabilityEnv({
@@ -121,6 +123,72 @@ test("agentSupportsObservability: all supported agents include codex", () => {
   expect(agentSupportsObservability("claude")).toEqual(true);
   expect(agentSupportsObservability("copilot")).toEqual(true);
   expect(agentSupportsObservability("codex")).toEqual(true);
+});
+
+test("canApplyAgentObservabilityConfig: claude/copilot do not depend on agentCommand", () => {
+  expect(canApplyAgentObservabilityConfig("claude", ["claude"])).toEqual(true);
+  expect(
+    canApplyAgentObservabilityConfig("copilot", [
+      "bash",
+      "-c",
+      "echo 'copilot binary not found'; exit 1",
+    ]),
+  ).toEqual(true);
+});
+
+test("canApplyAgentObservabilityConfig: codex allows direct or empty command", () => {
+  expect(canApplyAgentObservabilityConfig("codex", ["codex"])).toEqual(true);
+  expect(canApplyAgentObservabilityConfig("codex", [])).toEqual(true);
+});
+
+test("canApplyAgentObservabilityConfig: codex rejects fallback shell command", () => {
+  expect(
+    canApplyAgentObservabilityConfig("codex", [
+      "bash",
+      "-c",
+      "echo 'codex binary not found'; exit 1",
+    ]),
+  ).toEqual(false);
+});
+
+test("buildAgentObservabilityContainerPatch: codex inserts trace config into agentCommand", () => {
+  expect(
+    buildAgentObservabilityContainerPatch({
+      agent: "codex",
+      sessionId: "s",
+      profileName: "p",
+      port: 4318,
+      agentCommand: ["codex", "exec"],
+      extraArgs: ["--cli"],
+    }),
+  ).toEqual({
+    command: {
+      agentCommand: [
+        "codex",
+        "-c",
+        'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+        "exec",
+      ],
+      extraArgs: ["--cli"],
+    },
+  });
+});
+
+test("buildAgentObservabilityContainerPatch: codex empty command injects codex binary name", () => {
+  expect(
+    buildAgentObservabilityContainerPatch({
+      agent: "codex",
+      sessionId: "s",
+      profileName: "p",
+      port: 4318,
+      agentCommand: [],
+      extraArgs: [],
+    }).command?.agentCommand,
+  ).toEqual([
+    "codex",
+    "-c",
+    'otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:4318/v1/traces",protocol="json"}}',
+  ]);
 });
 
 test("buildObservabilityEnv: port is rendered into the endpoint URL", () => {

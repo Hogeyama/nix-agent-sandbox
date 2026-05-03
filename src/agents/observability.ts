@@ -31,7 +31,8 @@
  *                                              is not enough)
  */
 
-import type { AgentType } from "../../config/types.ts";
+import type { ContainerPatch } from "../pipeline/container_plan.ts";
+import type { AgentType } from "./types.ts";
 
 export interface BuildObservabilityEnvArgs {
   readonly agent: AgentType;
@@ -42,6 +43,12 @@ export interface BuildObservabilityEnvArgs {
 
 export interface BuildCodexTraceExporterConfigArgs {
   readonly port: number;
+}
+
+export interface BuildAgentObservabilityContainerPatchArgs
+  extends BuildObservabilityEnvArgs {
+  readonly agentCommand: readonly string[];
+  readonly extraArgs: readonly string[];
 }
 
 /**
@@ -120,6 +127,47 @@ export function buildCodexTraceExporterConfig(
   args: BuildCodexTraceExporterConfigArgs,
 ): string {
   return `otel.trace_exporter={otlp-http={endpoint="http://127.0.0.1:${args.port}/v1/traces",protocol="json"}}`;
+}
+
+export function canApplyAgentObservabilityConfig(
+  agent: AgentType,
+  agentCommand: readonly string[],
+): boolean {
+  switch (agent) {
+    case "claude":
+    case "copilot":
+      return true;
+    case "codex":
+      return agentCommand.length === 0 || agentCommand[0] === "codex";
+  }
+}
+
+export function buildAgentObservabilityContainerPatch(
+  args: BuildAgentObservabilityContainerPatchArgs,
+): ContainerPatch {
+  const env = buildObservabilityEnv(args);
+  return {
+    ...(env === null ? {} : { env: { static: env } }),
+    ...(args.agent === "codex"
+      ? {
+          command: {
+            agentCommand: buildCodexCommand(args.agentCommand, args.port),
+            extraArgs: args.extraArgs,
+          },
+        }
+      : {}),
+  };
+}
+
+function buildCodexCommand(
+  agentCommand: readonly string[],
+  port: number,
+): readonly string[] {
+  const config = buildCodexTraceExporterConfig({ port });
+  if (agentCommand.length === 0) {
+    return ["codex", "-c", config];
+  }
+  return [agentCommand[0], "-c", config, ...agentCommand.slice(1)];
 }
 
 /**
