@@ -34,7 +34,7 @@ function makeListRow(id: string): ConversationListRow {
     agent: "claude",
     firstSeenAt: "2025-01-01T00:00:00Z",
     lastSeenAt: "2025-01-01T00:00:01Z",
-    turnEventCount: 1,
+    turnCount: 1,
     spanCount: 1,
     invocationCount: 1,
     inputTokensTotal: 0,
@@ -51,7 +51,6 @@ function makeConversationDetail(id: string): ConversationDetail {
     conversation: makeListRow(id),
     traces: [],
     spans: [],
-    turnEvents: [],
     invocations: [],
     modelTokenTotals: [],
   };
@@ -70,7 +69,6 @@ function makeInvocationDetail(id: string): InvocationDetail {
     },
     traces: [],
     spans: [],
-    turnEvents: [],
     conversations: [],
   };
 }
@@ -691,7 +689,7 @@ test("conversation detail re-emits when a non-totals field changes (totals stabl
     const base = makeConversationDetail("c1");
     const next: ConversationDetail = {
       ...base,
-      conversation: { ...base.conversation, turnEventCount: 5 },
+      conversation: { ...base.conversation, turnCount: 5 },
     };
     reader.setConversation("c1", next);
   }, POLL_MS + 5);
@@ -699,6 +697,6 @@ test("conversation detail re-emits when a non-totals field changes (totals stabl
   const events = await readEventsFor(res, WINDOW_MS);
   expect(events.length).toBeGreaterThanOrEqual(2);
   const last = events[events.length - 1].data as ConversationDetail;
-  expect(last.conversation.turnEventCount).toBe(5);
+  expect(last.conversation.turnCount).toBe(5);
   expect(last.modelTokenTotals).toEqual([]);
 });

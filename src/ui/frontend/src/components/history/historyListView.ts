@@ -13,7 +13,7 @@ import type { ConversationListRow } from "../../../../../history/types";
  * Reduced row-shape consumed by the list page. `summary` is the row's
  * primary label (with `idShort` substituted when the backend has no
  * captured summary yet). `metaLine` carries the secondary line — the
- * id (when summary is present), turn / span counts, and token total.
+ * id (when summary is present), turn (= trace) / span counts, and token total.
  */
 export interface ConversationListRowView {
   /** Full conversation id (used for the row href). */
@@ -259,7 +259,7 @@ export function toConversationListRowView(
       // is already the row's primary text — re-emitting it on the meta
       // line would just duplicate.
       includeId: !summaryIsEmpty,
-      turns: row.turnEventCount,
+      turns: row.turnCount,
       spans: row.spanCount,
       tokenTotal,
     }),

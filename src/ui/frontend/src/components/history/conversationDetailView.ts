@@ -35,9 +35,6 @@ import {
   splitDirectoryDisplay,
 } from "./historyListView";
 
-/** Maximum payload preview length (chars) before the trailing ellipsis. */
-const PAYLOAD_PREVIEW_MAX = 80;
-
 /**
  * Proportional split of the four token kinds for the stacked bar shown
  * under the Tokens block. Percentages always sum to 100 (when the bar is
@@ -217,35 +214,6 @@ export interface TurnSpanGroup {
    * is the cost-projection caller's responsibility.
    */
   readonly perModelTotals: ModelTokenTotalsRow[];
-}
-
-/**
- * Row shape for the turn-event table on the invocation detail page.
- *
- * `linkId` / `linkIdLabel` / `linkHref` point at the conversation that
- * emitted the event; the invocation is already the page context, so the
- * off-page jump is to the conversation.
- */
-export interface TurnEventRowView {
-  readonly linkId: string;
-  readonly linkIdLabel: string;
-  readonly linkHref: string;
-  readonly ts: string;
-  readonly tsAbsolute: string;
-  readonly kind: string;
-  readonly payloadPreview: string;
-}
-
-/**
- * Truncate the payload JSON for inline display. Returned string is
- * either the original (when short) or the leading `PAYLOAD_PREVIEW_MAX`
- * characters with an ellipsis. Whitespace is collapsed so a multi-line
- * JSON blob does not break the row layout.
- */
-export function truncatePayload(json: string): string {
-  const collapsed = json.replace(/\s+/g, " ").trim();
-  if (collapsed.length <= PAYLOAD_PREVIEW_MAX) return collapsed;
-  return `${collapsed.slice(0, PAYLOAD_PREVIEW_MAX)}…`;
 }
 
 /**

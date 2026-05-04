@@ -19,10 +19,8 @@ import type {
 export type {
   ConversationDetail,
   ConversationListRow,
-  ConversationTurnEventRow,
   InvocationDetail,
   InvocationSummaryRow,
-  InvocationTurnEventRow,
   ModelTokenTotalsRow,
   SpanSummaryRow,
   TraceSummaryRow,
@@ -447,7 +445,7 @@ export function insertTurnEvent(db: Database, row: TurnEventRow): void {
 
 /**
  * Conversation row projection, including aggregate columns derived from
- * related traces / spans / turn_events / invocations.
+ * related traces / spans / invocations.
  *
  * Aggregates use COALESCE/SUM-with-default-0 so a conversation can have no
  * associated spans and still produce 0 (never NULL).
@@ -459,7 +457,7 @@ interface ConversationListSqlRow {
   last_seen_at: string;
   summary: string | null;
   worktree_path: string | null;
-  turn_event_count: number;
+  turn_count: number;
   span_count: number;
   invocation_count: number;
   input_tokens_total: number;
@@ -519,9 +517,9 @@ const CONVERSATION_LIST_SELECT = `
       ORDER BY i.started_at DESC
       LIMIT 1) AS worktree_path,
     COALESCE(
-      (SELECT COUNT(*) FROM turn_events te WHERE te.conversation_id = c.id),
+      (SELECT COUNT(*) FROM traces t WHERE t.conversation_id = c.id),
       0
-    ) AS turn_event_count,
+    ) AS turn_count,
     COALESCE(
       (SELECT COUNT(*) FROM spans s
         JOIN traces t ON s.trace_id = t.trace_id
@@ -575,7 +573,7 @@ function rowToConversationListRow(
     agent: r.agent,
     firstSeenAt: r.first_seen_at,
     lastSeenAt: r.last_seen_at,
-    turnEventCount: r.turn_event_count,
+    turnCount: r.turn_count,
     spanCount: r.span_count,
     invocationCount: r.invocation_count,
     inputTokensTotal: r.input_tokens_total,
@@ -660,12 +658,8 @@ export function queryConversationList(
 }
 
 /**
- * Fetch a conversation plus all its traces / spans / turn_events /
- * invocations. Returns null when no conversation matches `id`.
- *
- * `turnEvents` are filtered by `conversation_id = id` exactly; rows whose
- * `conversation_id` is NULL (= hook wrote them before resolution) are not
- * included here.
+ * Fetch a conversation plus all its traces / spans / invocations.
+ * Returns null when no conversation matches `id`.
  */
 export function queryConversationDetail(
   db: Database,
@@ -712,20 +706,6 @@ export function queryConversationDetail(
       .all(id) as SpanSummarySqlRow[]
   ).map(rowToSpanSummary);
 
-  const turnEvents = db
-    .prepare(
-      `SELECT invocation_id, ts, kind, payload_json
-       FROM turn_events
-       WHERE conversation_id = ?
-       ORDER BY ts ASC`,
-    )
-    .all(id) as {
-    invocation_id: string;
-    ts: string;
-    kind: string;
-    payload_json: string;
-  }[];
-
   const invocations = (
     db
       .prepare(
@@ -747,21 +727,15 @@ export function queryConversationDetail(
     conversation: rowToConversationListRow(head),
     traces,
     spans,
-    turnEvents: turnEvents.map((r) => ({
-      invocationId: r.invocation_id,
-      ts: r.ts,
-      kind: r.kind,
-      payloadJson: r.payload_json,
-    })),
     invocations,
     modelTokenTotals,
   };
 }
 
 /**
- * Fetch an invocation plus all its traces / spans / turn_events and the
- * conversations referenced by its traces (subagent fan-out yields multiple).
- * Returns null when no invocation matches `id`.
+ * Fetch an invocation plus all its traces / spans and the conversations
+ * referenced by its traces (subagent fan-out yields multiple). Returns
+ * null when no invocation matches `id`.
  */
 export function queryInvocationDetail(
   db: Database,
@@ -810,20 +784,6 @@ export function queryInvocationDetail(
       .all(id) as SpanSummarySqlRow[]
   ).map(rowToSpanSummary);
 
-  const turnEventRows = db
-    .prepare(
-      `SELECT conversation_id, ts, kind, payload_json
-       FROM turn_events
-       WHERE invocation_id = ?
-       ORDER BY ts ASC`,
-    )
-    .all(id) as {
-    conversation_id: string | null;
-    ts: string;
-    kind: string;
-    payload_json: string;
-  }[];
-
   const conversations = (
     db
       .prepare(
@@ -841,12 +801,6 @@ export function queryInvocationDetail(
     invocation: rowToInvocationSummary(invRow),
     traces,
     spans,
-    turnEvents: turnEventRows.map((r) => ({
-      conversationId: r.conversation_id,
-      ts: r.ts,
-      kind: r.kind,
-      payloadJson: r.payload_json,
-    })),
     conversations,
   };
 }

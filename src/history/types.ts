@@ -87,7 +87,12 @@ export interface ConversationListRow {
   readonly agent: string | null;
   readonly firstSeenAt: string;
   readonly lastSeenAt: string;
-  readonly turnEventCount: number;
+  /**
+   * Number of user turns. Sourced from `traces` (one trace per
+   * request → response cycle) — not from the `turn_events` stream, which
+   * over-counts because it logs every assistant message / tool use / etc.
+   */
+  readonly turnCount: number;
   readonly spanCount: number;
   readonly invocationCount: number;
   readonly inputTokensTotal: number;
@@ -147,25 +152,10 @@ export interface InvocationSummaryRow {
   readonly exitReason: string | null;
 }
 
-export interface ConversationTurnEventRow {
-  readonly invocationId: string;
-  readonly ts: string;
-  readonly kind: string;
-  readonly payloadJson: string;
-}
-
-export interface InvocationTurnEventRow {
-  readonly conversationId: string | null;
-  readonly ts: string;
-  readonly kind: string;
-  readonly payloadJson: string;
-}
-
 export interface ConversationDetail {
   readonly conversation: ConversationListRow;
   readonly traces: TraceSummaryRow[];
   readonly spans: SpanSummaryRow[];
-  readonly turnEvents: ConversationTurnEventRow[];
   readonly invocations: InvocationSummaryRow[];
   /**
    * Per-model token totals over the whole life of this conversation. The
@@ -182,7 +172,6 @@ export interface InvocationDetail {
   readonly invocation: InvocationSummaryRow;
   readonly traces: TraceSummaryRow[];
   readonly spans: SpanSummaryRow[];
-  readonly turnEvents: InvocationTurnEventRow[];
   /** All conversations referenced by this invocation's traces (subagents may produce multiple). */
   readonly conversations: ConversationListRow[];
 }

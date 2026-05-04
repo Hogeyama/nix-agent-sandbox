@@ -3,12 +3,10 @@ import type {
   ConversationListRow,
   InvocationDetail,
   InvocationSummaryRow,
-  InvocationTurnEventRow,
 } from "../../../../../history/types";
 import {
   buildConversationLinks,
   buildInvocationHeader,
-  buildInvocationTurnEventRows,
 } from "./invocationDetailView";
 
 const NOW_MS = Date.parse("2026-05-01T12:00:00.000Z");
@@ -36,7 +34,7 @@ function makeConversation(
     agent: "claude-code",
     firstSeenAt: "2026-04-30T12:00:00.000Z",
     lastSeenAt: "2026-05-01T08:00:00.000Z",
-    turnEventCount: 4,
+    turnCount: 4,
     spanCount: 6,
     invocationCount: 1,
     inputTokensTotal: 200,
@@ -56,7 +54,6 @@ function makeDetail(
     invocation: makeInvocation(),
     traces: [],
     spans: [],
-    turnEvents: [],
     conversations: [makeConversation()],
     ...overrides,
   };
@@ -77,20 +74,6 @@ describe("buildInvocationHeader", () => {
           },
         ],
         spans: [],
-        turnEvents: [
-          {
-            conversationId: "sess_aabbccdd11223344",
-            ts: "2026-05-01T11:08:00.000Z",
-            kind: "user_message",
-            payloadJson: "{}",
-          },
-          {
-            conversationId: "sess_aabbccdd11223344",
-            ts: "2026-05-01T11:09:00.000Z",
-            kind: "assistant_message",
-            payloadJson: "{}",
-          },
-        ],
         conversations: [
           makeConversation({ inputTokensTotal: 200, outputTokensTotal: 100 }),
           makeConversation({
@@ -110,8 +93,7 @@ describe("buildInvocationHeader", () => {
     expect(view.startedAt).toBe("1h ago");
     expect(view.endedAt).not.toBeNull();
     expect(view.exitReason).toBe("completed");
-    expect(view.turnCount).toBe(2);
-    expect(view.traceCount).toBe(1);
+    expect(view.turnCount).toBe(1);
     expect(view.spanCount).toBe(0);
     expect(view.conversationCount).toBe(2);
     // 200 + 100 + 50 + 25
@@ -176,40 +158,5 @@ describe("buildConversationLinks", () => {
       }),
     );
     expect(view[0]?.href).toBe("#/history/conversation/sess%20with%20space");
-  });
-});
-
-describe("buildInvocationTurnEventRows", () => {
-  function makeEvent(
-    overrides: Partial<InvocationTurnEventRow> = {},
-  ): InvocationTurnEventRow {
-    return {
-      conversationId: "sess_aabbccdd11223344",
-      ts: "2026-05-01T11:30:00.000Z",
-      kind: "user_message",
-      payloadJson: `{"text":"hi"}`,
-      ...overrides,
-    };
-  }
-
-  test("links the event row at the conversation, not the invocation", () => {
-    const view = buildInvocationTurnEventRows([makeEvent()], NOW_MS);
-    expect(view[0]?.linkHref).toBe(
-      "#/history/conversation/sess_aabbccdd11223344",
-    );
-    expect(view[0]?.linkIdLabel).toBe("sess_aab");
-  });
-
-  test("renders a null conversation id with the dash placeholder and no href", () => {
-    const view = buildInvocationTurnEventRows(
-      [makeEvent({ conversationId: null })],
-      NOW_MS,
-    );
-    expect(view[0]?.linkIdLabel).toBe("—");
-    expect(view[0]?.linkHref).toBe("");
-  });
-
-  test("returns empty for no events", () => {
-    expect(buildInvocationTurnEventRows([], NOW_MS)).toEqual([]);
   });
 });

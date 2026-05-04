@@ -5,9 +5,7 @@
  * invocation summary and replacing the invocation list with a
  * conversation list (a single invocation can drive multiple
  * conversations when subagents are involved). Trace and span tables
- * are rendered with the same row shapes; only the turn-event table
- * uses the invocation-side projection so each row can link off-page
- * to its conversation.
+ * are rendered with the same row shapes.
  */
 
 import { createSignal, For, onCleanup, Show } from "solid-js";
@@ -17,7 +15,6 @@ import { formatCompactNumber } from "./historyListView";
 import {
   buildConversationLinks,
   buildInvocationHeader,
-  buildInvocationTurnEventRows,
 } from "./invocationDetailView";
 
 export interface InvocationDetailPageProps {
@@ -54,11 +51,6 @@ export function InvocationDetailPage(props: InvocationDetailPageProps) {
     const d = props.detail();
     return d === null ? [] : buildSpanRows(d.spans, now());
   };
-  const turnEvents = () => {
-    const d = props.detail();
-    return d === null ? [] : buildInvocationTurnEventRows(d.turnEvents, now());
-  };
-
   return (
     <div class="history-shell-content">
       <a class="history-detail-back-link" href={backHref()}>
@@ -165,10 +157,6 @@ export function InvocationDetailPage(props: InvocationDetailPageProps) {
                       <div class="history-detail-stat-label">Turns</div>
                       <div class="history-detail-stat-value">
                         {formatCompactNumber(h.turnCount)}
-                      </div>
-                      <div class="history-detail-stat-label">Traces</div>
-                      <div class="history-detail-stat-value">
-                        {formatCompactNumber(h.traceCount)}
                       </div>
                       <div class="history-detail-stat-label">Spans</div>
                       <div class="history-detail-stat-value">
@@ -402,59 +390,6 @@ export function InvocationDetailPage(props: InvocationDetailPageProps) {
                             </td>
                             <td title={row.startedAtAbsolute}>
                               {row.startedAt}
-                            </td>
-                          </tr>
-                        )}
-                      </For>
-                    </tbody>
-                  </table>
-                </Show>
-              </section>
-
-              <section class="history-detail-section">
-                <h2 class="history-detail-section-title">
-                  Turn events
-                  <span class="history-detail-section-count">
-                    {turnEvents().length} rows
-                  </span>
-                </h2>
-                <Show
-                  when={turnEvents().length > 0}
-                  fallback={
-                    <div class="history-detail-section-empty">
-                      No turn events
-                    </div>
-                  }
-                >
-                  <table class="history-detail-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">Time</th>
-                        <th scope="col">Conversation</th>
-                        <th scope="col">Kind</th>
-                        <th scope="col">Payload</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <For each={turnEvents()}>
-                        {(row) => (
-                          <tr>
-                            <td title={row.tsAbsolute}>{row.ts}</td>
-                            <td class="is-id">
-                              <Show
-                                when={row.linkHref !== ""}
-                                fallback={row.linkIdLabel}
-                              >
-                                <a class="history-row-link" href={row.linkHref}>
-                                  {row.linkIdLabel}
-                                </a>
-                              </Show>
-                            </td>
-                            <td>{row.kind}</td>
-                            <td>
-                              <code class="history-detail-payload-preview">
-                                {row.payloadPreview}
-                              </code>
                             </td>
                           </tr>
                         )}

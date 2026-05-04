@@ -16,7 +16,7 @@ function makeRow(
     agent: "claude-code",
     firstSeenAt: "2026-04-30T12:00:00.000Z",
     lastSeenAt: "2026-05-01T08:00:00.000Z",
-    turnEventCount: 12,
+    turnCount: 12,
     spanCount: 34,
     invocationCount: 2,
     inputTokensTotal: 1500,
@@ -236,7 +236,7 @@ describe("toConversationListRowView", () => {
     const display = toConversationListRowView(
       makeRow({
         summary: "Hi",
-        turnEventCount: 0,
+        turnCount: 0,
         spanCount: 5,
         inputTokensTotal: 0,
         outputTokensTotal: 0,
@@ -311,7 +311,7 @@ describe("toConversationListRowView", () => {
     const display = toConversationListRowView(
       makeRow({
         summary: "Single",
-        turnEventCount: 1,
+        turnCount: 1,
         spanCount: 1,
         inputTokensTotal: 0,
         outputTokensTotal: 0,

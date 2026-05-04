@@ -16,7 +16,6 @@ import {
   formatCountCell,
   formatDuration,
   summariseTraceSpansByModel,
-  truncatePayload,
 } from "./conversationDetailView";
 
 const NOW_MS = Date.parse("2026-05-01T12:00:00.000Z");
@@ -29,7 +28,7 @@ function makeConversation(
     agent: "claude-code",
     firstSeenAt: "2026-04-30T12:00:00.000Z",
     lastSeenAt: "2026-05-01T08:00:00.000Z",
-    turnEventCount: 12,
+    turnCount: 12,
     spanCount: 34,
     invocationCount: 2,
     inputTokensTotal: 1500,
@@ -96,29 +95,11 @@ function makeDetail(
     conversation: makeConversation(),
     traces: [makeTrace()],
     spans: [makeSpan()],
-    turnEvents: [],
     invocations: [makeInvocation()],
     modelTokenTotals: [],
     ...overrides,
   };
 }
-
-describe("truncatePayload", () => {
-  test("returns short payloads unchanged", () => {
-    expect(truncatePayload(`{"k":"v"}`)).toBe(`{"k":"v"}`);
-  });
-
-  test("collapses internal whitespace", () => {
-    expect(truncatePayload(`{\n  "k":   "v"\n}`)).toBe(`{ "k": "v" }`);
-  });
-
-  test("truncates long payloads with an ellipsis", () => {
-    const long = "x".repeat(200);
-    const out = truncatePayload(long);
-    expect(out.length).toBe(81); // 80 chars + ellipsis char
-    expect(out.endsWith("…")).toBe(true);
-  });
-});
 
 describe("formatDuration", () => {
   test("null propagates as null so the page can choose blank rendering", () => {
@@ -171,7 +152,7 @@ describe("buildConversationHeader", () => {
     expect(view.lastSeen).toBe("4h ago");
     expect(view.summary).toBeNull();
     // Header turn count reflects displayed (zero-token-filtered) turns,
-    // not the raw `turnEventCount`, so it matches the Turns table.
+    // not the raw aggregate, so it matches the Turns table.
     expect(view.turnCount).toBe(1);
     expect(view.spanCount).toBe(34);
     expect(view.invocationCount).toBe(2);

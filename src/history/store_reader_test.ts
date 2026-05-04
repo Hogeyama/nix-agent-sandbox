@@ -201,7 +201,7 @@ test("queryConversationList: aggregates counts and tokens, NULL safe (returns 0)
 
     const a = list.find((r) => r.id === "conv_a");
     expect(a).toBeDefined();
-    expect(a?.turnEventCount).toEqual(2);
+    expect(a?.turnCount).toEqual(1);
     expect(a?.spanCount).toEqual(2);
     expect(a?.invocationCount).toEqual(1);
     expect(a?.inputTokensTotal).toEqual(100);
@@ -212,7 +212,7 @@ test("queryConversationList: aggregates counts and tokens, NULL safe (returns 0)
 
     const b = list.find((r) => r.id === "conv_b");
     expect(b).toBeDefined();
-    expect(b?.turnEventCount).toEqual(1);
+    expect(b?.turnCount).toEqual(1);
     expect(b?.spanCount).toEqual(0);
     expect(b?.invocationCount).toEqual(1);
     expect(b?.inputTokensTotal).toEqual(0);
@@ -414,7 +414,7 @@ test("queryConversationDetail: returns null for missing id", async () => {
   }
 });
 
-test("queryConversationDetail: returns empty traces/spans/turn_events for a bare conversation", async () => {
+test("queryConversationDetail: returns empty traces/spans for a bare conversation", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
@@ -425,11 +425,10 @@ test("queryConversationDetail: returns empty traces/spans/turn_events for a bare
     expect(detail?.conversation.id).toEqual("conv_bare");
     expect(detail?.traces).toEqual([]);
     expect(detail?.spans).toEqual([]);
-    expect(detail?.turnEvents).toEqual([]);
     expect(detail?.invocations).toEqual([]);
     expect(detail?.modelTokenTotals).toEqual([]);
     // Aggregates default to 0, not NULL.
-    expect(detail?.conversation.turnEventCount).toEqual(0);
+    expect(detail?.conversation.turnCount).toEqual(0);
     expect(detail?.conversation.spanCount).toEqual(0);
     expect(detail?.conversation.invocationCount).toEqual(0);
     expect(detail?.conversation.inputTokensTotal).toEqual(0);
@@ -441,7 +440,7 @@ test("queryConversationDetail: returns empty traces/spans/turn_events for a bare
   }
 });
 
-test("queryConversationDetail: returns conversation + traces + spans + turn_events + invocations", async () => {
+test("queryConversationDetail: returns conversation + traces + spans + invocations", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
@@ -458,15 +457,6 @@ test("queryConversationDetail: returns conversation + traces + spans + turn_even
     insertSpans(db, [
       sp({ spanId: "s1", traceId: "trace_a", inTok: 50, outTok: 60 }),
     ]);
-    insertTurnEvent(
-      db,
-      te({ invocationId: "sess_a", conversationId: "conv_a" }),
-    );
-    // turn_event whose conversation_id IS NULL — must NOT appear in the detail.
-    insertTurnEvent(
-      db,
-      te({ invocationId: "sess_a", conversationId: null, kind: "stray" }),
-    );
 
     const detail = queryConversationDetail(db, "conv_a");
     expect(detail).not.toBeNull();
@@ -478,8 +468,6 @@ test("queryConversationDetail: returns conversation + traces + spans + turn_even
     expect(detail?.traces[0].spanCount).toEqual(1);
     expect(detail?.spans.length).toEqual(1);
     expect(detail?.spans[0].spanId).toEqual("s1");
-    expect(detail?.turnEvents.length).toEqual(1);
-    expect(detail?.turnEvents[0].kind).toEqual("user_prompt");
     expect(detail?.invocations.length).toEqual(1);
     expect(detail?.invocations[0].id).toEqual("sess_a");
   } finally {
@@ -539,7 +527,7 @@ test("queryInvocationDetail: returns null for missing id", async () => {
   }
 });
 
-test("queryInvocationDetail: collects traces / spans / turn_events / conversations", async () => {
+test("queryInvocationDetail: collects traces / spans / conversations", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
@@ -566,14 +554,6 @@ test("queryInvocationDetail: collects traces / spans / turn_events / conversatio
       sp({ spanId: "sp_main", traceId: "tr_main", inTok: 11 }),
       sp({ spanId: "sp_sub", traceId: "tr_sub", inTok: 22 }),
     ]);
-    insertTurnEvent(
-      db,
-      te({ invocationId: "sess_x", conversationId: "conv_main" }),
-    );
-    insertTurnEvent(
-      db,
-      te({ invocationId: "sess_x", conversationId: null, kind: "stray" }),
-    );
 
     const detail = queryInvocationDetail(db, "sess_x");
     expect(detail).not.toBeNull();
@@ -586,8 +566,6 @@ test("queryInvocationDetail: collects traces / spans / turn_events / conversatio
       "sp_main",
       "sp_sub",
     ]);
-    // turn_events on this invocation — both rows including the conversation_id=null one.
-    expect(detail?.turnEvents.length).toEqual(2);
     // Subagent fan-out — both conversations referenced by this invocation's traces.
     expect(detail?.conversations.map((c) => c.id).sort()).toEqual([
       "conv_main",

@@ -15,14 +15,8 @@
 import type {
   ConversationListRow,
   InvocationDetail,
-  InvocationTurnEventRow,
 } from "../../../../../history/types";
-import {
-  buildTokenBar,
-  type TokenBarShape,
-  type TurnEventRowView,
-  truncatePayload,
-} from "./conversationDetailView";
+import { buildTokenBar, type TokenBarShape } from "./conversationDetailView";
 import {
   formatCompactNumber,
   formatRelativeTime,
@@ -40,8 +34,8 @@ export interface InvocationHeaderView {
   readonly endedAt: string | null;
   readonly endedAtAbsolute: string | null;
   readonly exitReason: string | null;
+  /** Number of user turns (one trace == one turn). */
   readonly turnCount: number;
-  readonly traceCount: number;
   readonly spanCount: number;
   readonly conversationCount: number;
   readonly tokenTotal: number;
@@ -100,8 +94,7 @@ export function buildInvocationHeader(
       inv.endedAt === null ? null : formatRelativeTime(inv.endedAt, nowMs),
     endedAtAbsolute: inv.endedAt,
     exitReason: inv.exitReason,
-    turnCount: detail.turnEvents.length,
-    traceCount: detail.traces.length,
+    turnCount: detail.traces.length,
     spanCount: detail.spans.length,
     conversationCount: detail.conversations.length,
     tokenTotal: inputTokens + outputTokens,
@@ -147,7 +140,7 @@ function toConversationLinkRow(row: ConversationListRow): ConversationLinkRow {
     id: row.id,
     idLabel: shortenId(row.id),
     agent: row.agent,
-    turnCount: row.turnEventCount,
+    turnCount: row.turnCount,
     spanCount: row.spanCount,
     tokenTotal: row.inputTokensTotal + row.outputTokensTotal,
     inputTokens: row.inputTokensTotal,
@@ -159,34 +152,4 @@ function toConversationLinkRow(row: ConversationListRow): ConversationLinkRow {
     // back through `decodeURIComponent` on the consuming side.
     href: `#/history/conversation/${encodeURIComponent(row.id)}`,
   };
-}
-
-/**
- * Project the invocation-scoped turn events. The shape mirrors the
- * conversation-side rows (same `TurnEventRowView`) but the link target
- * is the conversation, not the invocation, since the invocation is
- * already the page context.
- */
-export function buildInvocationTurnEventRows(
-  events: readonly InvocationTurnEventRow[],
-  nowMs: number,
-): TurnEventRowView[] {
-  return events.map((row) => {
-    const conversationId = row.conversationId;
-    return {
-      // The link-* fields point at the conversation here: the
-      // invocation is already the page context, so the off-page jump
-      // is to the conversation that emitted the event.
-      linkId: conversationId ?? "",
-      linkIdLabel: conversationId === null ? "—" : shortenId(conversationId),
-      linkHref:
-        conversationId === null
-          ? ""
-          : `#/history/conversation/${encodeURIComponent(conversationId)}`,
-      ts: formatRelativeTime(row.ts, nowMs),
-      tsAbsolute: row.ts,
-      kind: row.kind,
-      payloadPreview: truncatePayload(row.payloadJson),
-    };
-  });
 }
