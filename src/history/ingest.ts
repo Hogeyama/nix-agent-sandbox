@@ -357,6 +357,16 @@ export function ingestResourceSpans(
             traceUsageSources,
           });
 
+          // Copilot CLI (OpenAI convention) reports input_tokens inclusive
+          // of cached tokens, unlike Anthropic which reports them separately.
+          // Subtract cacheR so inTok represents only non-cached input.
+          const inTok =
+            work.nasAgent === "copilot" &&
+            usage.inTok !== null &&
+            usage.cacheR !== null
+              ? Math.max(usage.inTok - usage.cacheR, 0)
+              : usage.inTok;
+
           spanRows.push({
             spanId: raw.spanId,
             parentSpanId:
@@ -368,7 +378,7 @@ export function ingestResourceSpans(
             spanName: raw.name,
             kind,
             model: usage.model,
-            inTok: usage.inTok,
+            inTok,
             outTok: usage.outTok,
             cacheR: usage.cacheR,
             cacheW: usage.cacheW,

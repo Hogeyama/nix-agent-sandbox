@@ -110,6 +110,46 @@ test("copilot_chat_minimal: 3 spans / 1 trace / 1 conversation; classifications 
   }
 });
 
+test("copilot_chat_with_cache: inTok subtracts cacheR (OpenAI convention: input_tokens includes cached)", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_copilot_cache",
+      profile: "default",
+      agent: "copilot",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload = await loadFixture("copilot_chat_with_cache.json");
+    const result = ingestResourceSpans(db, payload);
+    expect(result.acceptedSpans).toEqual(1);
+
+    const spans = db
+      .query(
+        "SELECT in_tok, out_tok, cache_r, cache_w FROM spans WHERE span_id = ?",
+      )
+      .all("span_copilot_cache_chat") as {
+      in_tok: number | null;
+      out_tok: number | null;
+      cache_r: number | null;
+      cache_w: number | null;
+    }[];
+
+    // Copilot reports input_tokens=1000 inclusive of cache_read=800.
+    // ingest deducts cacheR so in_tok stores only non-cached input.
+    expect(spans[0].in_tok).toEqual(200);
+    expect(spans[0].out_tok).toEqual(50);
+    expect(spans[0].cache_r).toEqual(800);
+    expect(spans[0].cache_w).toEqual(100);
+  } finally {
+    await cleanup(t);
+  }
+});
+
 test("claude_llm_request_minimal: 2 spans, kinds chat/execute_tool, cache_r/cache_w populated", async () => {
   const t = await makeTempDb();
   try {

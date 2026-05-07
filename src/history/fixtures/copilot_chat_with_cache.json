@@ -1,0 +1,57 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "nas.session.id", "value": { "stringValue": "sess_copilot_cache" } },
+          { "key": "nas.profile", "value": { "stringValue": "default" } },
+          { "key": "nas.agent", "value": { "stringValue": "copilot" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "copilot-cli", "version": "1.0.0" },
+          "spans": [
+            {
+              "traceId": "trace_copilot_cache_1",
+              "spanId": "span_copilot_cache_chat",
+              "name": "chat gpt-4",
+              "startTimeUnixNano": "1714550401000000000",
+              "endTimeUnixNano": "1714550403000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": { "stringValue": "chat" }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": { "stringValue": "conv_copilot_cache" }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": { "stringValue": "gpt-4" }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": { "intValue": "1000" }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": { "intValue": "50" }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read_input_tokens",
+                  "value": { "intValue": "800" }
+                },
+                {
+                  "key": "gen_ai.usage.cache_creation_input_tokens",
+                  "value": { "intValue": "100" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
