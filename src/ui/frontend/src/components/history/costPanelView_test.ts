@@ -110,6 +110,46 @@ describe("normalizeModel", () => {
     }
   });
 
+  test("dot-to-hyphen normalisation resolves claude-opus-4.6 to claude-opus-4-6", () => {
+    const snap = snapshot({
+      "claude-opus-4-6": { input_cost_per_token: 20 },
+    });
+    const r = normalizeModel("claude-opus-4.6", snap);
+    expect(r.kind).toBe("known");
+    if (r.kind === "known") {
+      expect(r.key).toBe("claude-opus-4-6");
+    }
+  });
+
+  test("dot-to-hyphen normalisation works with provider prefix", () => {
+    const snap = snapshot({
+      "anthropic/claude-sonnet-4.5": { input_cost_per_token: 21 },
+      "anthropic/claude-sonnet-4-5": { input_cost_per_token: 22 },
+    });
+    // Exact provider-prefix match wins first (step 1+2), but if only
+    // the hyphen variant exists, dot normalisation kicks in.
+    const snap2 = snapshot({
+      "anthropic/claude-sonnet-4-5": { input_cost_per_token: 22 },
+    });
+    const r = normalizeModel("claude-sonnet-4.5", snap2);
+    expect(r.kind).toBe("known");
+    if (r.kind === "known") {
+      expect(r.key).toBe("anthropic/claude-sonnet-4-5");
+    }
+  });
+
+  test("dot-to-hyphen does not mangle non-version dots like anthropic.claude", () => {
+    const snap = snapshot({
+      "anthropic.claude-3-haiku": { input_cost_per_token: 23 },
+    });
+    // "anthropic.claude" has a dot between two non-digit chars — untouched.
+    const r = normalizeModel("anthropic.claude-3-haiku", snap);
+    expect(r.kind).toBe("known");
+    if (r.kind === "known") {
+      expect(r.key).toBe("anthropic.claude-3-haiku");
+    }
+  });
+
   test("unrecognised model falls through to the unknown bucket", () => {
     const snap = snapshot({});
     const r = normalizeModel("totally-made-up-model", snap);

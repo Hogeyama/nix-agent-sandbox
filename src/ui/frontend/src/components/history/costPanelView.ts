@@ -131,6 +131,20 @@ export function normalizeModel(
     return { kind: "known", key: direct.key, rates: direct.rates };
   }
 
+  // 1b: dot-to-hyphen normalisation. Agent SDKs often report model
+  // names with dots in the version segment (e.g. "claude-opus-4.6")
+  // while LiteLLM catalogues the same model with hyphens
+  // ("claude-opus-4-6"). Replace dots that sit between two digits
+  // so "claude-opus-4.6" → "claude-opus-4-6" without mangling
+  // non-version dots (e.g. "anthropic.claude-3-haiku").
+  const dotNormalized = raw.replace(/(\d)\.(\d)/g, "$1-$2");
+  if (dotNormalized !== raw) {
+    const hit = resolveAgainstSnapshot(dotNormalized, snapshot);
+    if (hit !== null) {
+      return { kind: "known", key: hit.key, rates: hit.rates };
+    }
+  }
+
   // 2.5: drop a trailing bracketed tag (e.g. "[1M]" 1M-context beta).
   // Anthropic publishes the upper-tier price on the same key via
   // `*_above_200k_tokens` rather than as a separate variant key, so
