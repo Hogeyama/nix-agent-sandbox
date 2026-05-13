@@ -14,7 +14,7 @@ import type { LaunchBranches, LaunchInfo } from "../api/client";
 /**
  * Worktree-base radio choice.
  *
- *   - "none":    use whatever default the chosen profile defines
+ *   - "none":    explicitly disable worktree creation
  *                (sent as `worktreeBase: undefined`).
  *   - "main":    branch off "main" — only valid when
  *                `LaunchBranches.hasMain` is true.
@@ -30,9 +30,7 @@ export type WorktreeChoice = "none" | "main" | "current" | "custom";
  *
  * Returns `undefined` whenever the chosen option does not produce a
  * usable branch name (no selection, custom field empty, current branch
- * unknown). The launch endpoint treats `undefined` as "use profile
- * default", which is the desired fallback for every degenerate case
- * here.
+ * unknown). The launch endpoint treats `undefined` as "disable worktree".
  */
 export function pickWorktreeBase(
   choice: WorktreeChoice,

@@ -79,7 +79,7 @@ export async function getLaunchBranches(cwd: string): Promise<LaunchBranches> {
 
 export interface LaunchRequest {
   profile: string;
-  worktreeBase?: string; // branch name. undefined = profile default
+  worktreeBase?: string; // branch name. undefined = disable worktree
   name?: string; // session name
   cwd?: string; // working directory
 }
@@ -218,6 +218,8 @@ export async function launchSession(
   const extraArgs: string[] = [];
   if (req.worktreeBase !== undefined) {
     extraArgs.push("--worktree", req.worktreeBase);
+  } else {
+    extraArgs.push("--no-worktree");
   }
   if (req.name !== undefined) {
     extraArgs.push("--name", req.name);

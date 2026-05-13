@@ -21,7 +21,7 @@ function info(overrides: Partial<LaunchInfo> = {}): LaunchInfo {
 }
 
 describe("pickWorktreeBase", () => {
-  test("'none' returns undefined regardless of other inputs", () => {
+  test("'none' returns undefined (disable worktree) regardless of other inputs", () => {
     expect(
       pickWorktreeBase("none", "feature/x", branches({ hasMain: true })),
     ).toBeUndefined();

@@ -370,7 +370,7 @@ export function NewSessionDialog(props: Props) {
                       checked={worktreeChoice() === "none"}
                       onChange={() => setWorktreeChoice("none")}
                     />
-                    None (use profile default)
+                    None
                   </label>
                   <Show when={launchBranches()?.hasMain === true}>
                     <label class="dialog-radio">
