@@ -2360,12 +2360,6 @@ body::after {
 .history-detail-turn-acc-header[aria-expanded="true"] {
   border-bottom: 1px solid var(--rule-soft);
 }
-/* Hide the inline preview when the body is open — the full
- * prompt text is already visible in the prompt-block below. */
-.history-detail-turn-acc-header[aria-expanded="true"]
-  .history-detail-turn-acc-prompt-preview {
-  display: none;
-}
 /* Decorative column-header row above the accordion list. Same grid
  * template as the buttons below, plus a subtle bottom rule so the
  * heading reads as a separate band from the data rows. */
@@ -2473,6 +2467,13 @@ body::after {
   text-transform: uppercase;
   color: var(--amber);
   user-select: none;
+}
+
+/* Hide the inline header preview when the accordion body is open —
+ * the full prompt text is already visible in the prompt-block above. */
+.history-detail-turn-acc-header[aria-expanded="true"]
+.history-detail-turn-acc-prompt-preview {
+  display: none;
 }
 
 /* Topbar history link — sits between the live indicator and the gear

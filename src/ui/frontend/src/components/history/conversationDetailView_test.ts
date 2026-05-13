@@ -85,6 +85,7 @@ function makeSpan(overrides: Partial<SpanSummaryRow> = {}): SpanSummaryRow {
     startedAt: "2026-05-01T11:10:00.000Z",
     endedAt: "2026-05-01T11:10:05.000Z",
     attrsJson: "{}",
+    eventsJson: null,
     ...overrides,
   };
 }

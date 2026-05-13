@@ -3,7 +3,10 @@
     {
       "resource": {
         "attributes": [
-          { "key": "nas.session.id", "value": { "stringValue": "sess_copilot_cache" } },
+          {
+            "key": "nas.session.id",
+            "value": { "stringValue": "sess_copilot_cache" }
+          },
           { "key": "nas.profile", "value": { "stringValue": "default" } },
           { "key": "nas.agent", "value": { "stringValue": "copilot" } }
         ]

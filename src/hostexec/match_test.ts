@@ -258,10 +258,8 @@ test("matchRule: relative argv0 rule does not match absolute invocation without 
   const rules = [
     makeRule("docker-compose", { argv0: "./dev/scripts/docker-compose" }),
   ];
-  const result = matchRule(
-    rules,
-    "/workspace/dev/scripts/docker-compose",
-    ["ps"],
-  );
+  const result = matchRule(rules, "/workspace/dev/scripts/docker-compose", [
+    "ps",
+  ]);
   expect(result).toEqual(null);
 });
