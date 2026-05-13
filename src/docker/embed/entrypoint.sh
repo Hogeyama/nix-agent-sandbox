@@ -38,27 +38,22 @@ nas_info() {
 }
 
 # --- 環境変数 prefix/suffix 適用 ---
-__nas_pfx() {
-  local key="$1" val="$2" sep="$3"
-  if [ -n "${!key+x}" ]; then
-    export "$key=${val}${sep}${!key}"
-  else
-    export "$key=${val}"
-  fi
-}
-__nas_sfx() {
-  local key="$1" val="$2" sep="$3"
-  if [ -n "${!key+x}" ]; then
-    export "$key=${!key}${sep}${val}"
-  else
-    export "$key=${val}"
-  fi
-}
+# Nix devShell が同名の変数を上書きするため、ここでは eval せず
+# ファイルに保存し、各 exec パスで nix 環境 source 後に適用する。
+NAS_ENV_OPS_FILE=""
 if [ -n "${NAS_ENV_OPS:-}" ]; then
-  eval "$NAS_ENV_OPS"
+  NAS_ENV_OPS_FILE="$(mktemp /tmp/nas-env-ops.XXXXXX)"
+  {
+    cat <<'EOFDEF'
+__nas_pfx() { local key="$1" val="$2" sep="$3"; if [ -n "${!key+x}" ]; then export "$key=${val}${sep}${!key}"; else export "$key=${val}"; fi; }
+__nas_sfx() { local key="$1" val="$2" sep="$3"; if [ -n "${!key+x}" ]; then export "$key=${!key}${sep}${val}"; else export "$key=${val}"; fi; }
+EOFDEF
+    echo "$NAS_ENV_OPS"
+    echo 'unset -f __nas_pfx __nas_sfx 2>/dev/null || true'
+  } > "$NAS_ENV_OPS_FILE"
+  chmod 644 "$NAS_ENV_OPS_FILE"
   unset NAS_ENV_OPS
 fi
-unset -f __nas_pfx __nas_sfx 2>/dev/null || true
 
 # --- Nix セットアップ ---
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_BIN_PATH:-}" ]; then
@@ -235,18 +230,23 @@ if [ "$NAS_SHELL_MODE" = "true" ]; then
     SHELL_RC_FILE="$(mktemp "/tmp/nas-shell-rc-${NAS_UID}.XXXXXX")"
     {
       echo "source '$SHELL_CACHE_FILE' 2>/dev/null || true"
+      if [ -n "$NAS_ENV_OPS_FILE" ]; then
+        echo "[ -f '$NAS_ENV_OPS_FILE' ] && source '$NAS_ENV_OPS_FILE' || true"
+      fi
       echo "export PATH=\"${SHELL_PATH_PREFIX}\$PATH\""
       echo "[ -f ~/.bashrc ] && source ~/.bashrc"
     } >"$SHELL_RC_FILE"
     chown "${NAS_UID}:${NAS_GID}" "$SHELL_RC_FILE" 2>/dev/null || true
     exec "${EXEC_PREFIX[@]}" bash --noprofile --rcfile "$SHELL_RC_FILE" -i
   else
+    [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
     export PATH="${SHELL_PATH_PREFIX}$PATH"
     exec "${EXEC_PREFIX[@]}" bash -i
   fi
 fi
 
 exec_agent_command() {
+  [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
   if [ -n "$HOSTEXEC_PATH_PREFIX" ] || [ -n "${NAS_BASH_OVERRIDE:-}" ]; then
     export PATH="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}$PATH"
   fi
@@ -315,10 +315,10 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
         if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
           exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
             nix develop "$WORKSPACE" --command \
-            bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+            bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
         else
           exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-            bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+            bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
         fi
       fi
     else
@@ -328,15 +328,15 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     # キャッシュ済み環境を source してエージェント起動
     if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
       exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-        bash -c "source '$CACHE_FILE'; export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+        bash -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
     else
       exec "${EXEC_PREFIX[@]}" \
-        bash -c "source '$CACHE_FILE'; export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+        bash -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
     fi
   elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
     nas_info "[nas] flake.nix not found, entering nix shell (via host daemon)..."
     exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-      bash -c "export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+      bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
   else
     exec_agent_command
   fi
