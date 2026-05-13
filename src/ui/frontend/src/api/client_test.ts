@@ -26,7 +26,6 @@ import {
   getLaunchBranches,
   getLaunchInfo,
   HttpError,
-  killTerminalClients,
   renameSession,
   request,
   startShell,
@@ -156,21 +155,6 @@ describe("URL encoding", () => {
     // or unparseable query components.
     expect(url).not.toContain(" ");
     expect(url).not.toContain("プロジェクト");
-  });
-
-  test("killTerminalClients encodes sessionId containing reserved characters", async () => {
-    const fetchMock = installFetch(async () => jsonResponse({ killed: 0 }));
-    await killTerminalClients("weird/session&id");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.method).toBe("POST");
-    expect(url).toBe(
-      `/api/terminal/${encodeURIComponent("weird/session&id")}/kill-clients`,
-    );
-    // The unsafe `/` and `&` in the raw id must not appear literally
-    // in the path — otherwise the backend would route the request to
-    // a different endpoint or interpret part of it as a query string.
-    expect(url).not.toContain("weird/session&id");
   });
 
   test("ackSessionTurn encodes sessionId containing reserved characters", async () => {

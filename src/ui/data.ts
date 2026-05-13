@@ -296,14 +296,6 @@ export async function getTerminalSessions(
   }));
 }
 
-/** dtach セッションにアタッチしている他クライアントを全て切断する */
-export async function killTerminalClients(
-  ctx: UiDataContext,
-  sessionId: string,
-): Promise<number> {
-  return await terminalClient.killClients(ctx.terminalRuntimeDir, sessionId);
-}
-
 export async function acknowledgeSessionTurn(
   ctx: UiDataContext,
   sessionId: string,

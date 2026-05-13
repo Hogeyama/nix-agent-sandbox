@@ -10,30 +10,24 @@
  * Live は `src/dtach/client.ts` の既存 primitive を薄くラップする。
  *
  * 設計メモ:
- *   - scope は listSessions / killClients の 2 method。
- *     shell session 起動 (`startShellSession` / `nextShellSessionId` /
+ *   - scope は listSessions のみ。shell session 起動
+ *     (`startShellSession` / `nextShellSessionId` /
  *     `removeShellSocketsForParent` / `removeOrphanShellSockets`) は
  *     SessionLaunchService 回に送るため意図的にここに入れない。
- *   - 引数順は `(runtimeDir, sessionId)` 固定。audit の `(auditDir, filter)` /
+ *   - 引数は `runtimeDir` 1 本。audit の `(auditDir, filter)` /
  *     network の `(paths, ...)` と対称な `(runtimeDir, ...)` 規約に揃える。
  *     `TerminalRuntimePaths` 型は作らず、dtach primitive の `runtimeDir?: string`
  *     と同じ 1 本 string 引数をそのまま service 契約にする。
  *   - `DtachSessionInfo` は `src/dtach/client.ts` の既存 export を type-only
  *     import で再利用する。domain 側で再定義しない。
- *   - `listSessions` が内部で呼ぶ `gcDtachRuntime` の副作用、および
- *     `killDtachClients` の master 除外 (`-a` / `-A` のみ kill) は primitive 側
+ *   - `listSessions` が内部で呼ぶ `gcDtachRuntime` の副作用は primitive 側
  *     で保たれる observable behavior。薄い wrap なので service 経由でも維持。
- *   - `socketPathFor` の path traversal check (`assertWithin`) も primitive で
- *     同期的に throw されるものが Effect の error channel に素通しされる。
- *     test 4 で明示的にこの経路を縛る。
  */
 
 import { Context, Effect, Layer } from "effect";
 import {
   type DtachSessionInfo,
   dtachListSessions,
-  killDtachClients,
-  socketPathFor,
 } from "../../dtach/client.ts";
 
 export type { DtachSessionInfo };
@@ -50,10 +44,6 @@ export class TerminalSessionService extends Context.Tag(
     readonly listSessions: (
       runtimeDir: string,
     ) => Effect.Effect<DtachSessionInfo[], Error>;
-    readonly killClients: (
-      runtimeDir: string,
-      sessionId: string,
-    ) => Effect.Effect<number, Error>;
   }
 >() {}
 
@@ -74,18 +64,6 @@ export const TerminalSessionServiceLive: Layer.Layer<TerminalSessionService> =
           try: () => dtachListSessions(runtimeDir),
           catch: toError,
         }),
-
-      killClients: (runtimeDir, sessionId) =>
-        Effect.tryPromise({
-          // socketPathFor は同期的に path traversal 等で throw する場合が
-          // あるため、try 内で呼んで error channel に流す。成功時は
-          // killDtachClients を await してその戻り値を service 結果にする。
-          try: async () => {
-            const socketPath = socketPathFor(sessionId, runtimeDir);
-            return await killDtachClients(socketPath);
-          },
-          catch: toError,
-        }),
     }),
   );
 
@@ -97,10 +75,6 @@ export interface TerminalSessionServiceFakeConfig {
   readonly listSessions?: (
     runtimeDir: string,
   ) => Effect.Effect<DtachSessionInfo[], Error>;
-  readonly killClients?: (
-    runtimeDir: string,
-    sessionId: string,
-  ) => Effect.Effect<number, Error>;
 }
 
 export function makeTerminalSessionServiceFake(
@@ -110,7 +84,6 @@ export function makeTerminalSessionServiceFake(
     TerminalSessionService,
     TerminalSessionService.of({
       listSessions: overrides.listSessions ?? (() => Effect.succeed([])),
-      killClients: overrides.killClients ?? (() => Effect.succeed(0)),
     }),
   );
 }
@@ -145,7 +118,5 @@ export function makeTerminalSessionClient(
   return {
     listSessions: (runtimeDir: string): Promise<DtachSessionInfo[]> =>
       run((svc) => svc.listSessions(runtimeDir)),
-    killClients: (runtimeDir: string, sessionId: string): Promise<number> =>
-      run((svc) => svc.killClients(runtimeDir, sessionId)),
   };
 }

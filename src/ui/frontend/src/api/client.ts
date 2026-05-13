@@ -215,13 +215,6 @@ export async function getTerminalSessions(): Promise<DtachSessionLike[]> {
   return body.items;
 }
 
-export function killTerminalClients(sessionId: string): Promise<void> {
-  return request<void>(
-    "POST",
-    `/api/terminal/${encodeURIComponent(sessionId)}/kill-clients`,
-  );
-}
-
 /**
  * Acknowledge the agent turn for a session. The daemon responds with the
  * updated `SessionRecord` envelope on success, or 409 when the session is

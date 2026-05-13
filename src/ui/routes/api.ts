@@ -20,7 +20,6 @@ import {
   getNetworkPending,
   getSessions,
   getTerminalSessions,
-  killTerminalClients,
   renameSession,
   startShellSession,
   stopContainer,
@@ -379,16 +378,6 @@ export function createApiRoutes(ctx: UiDataContext): Router {
     withErrorHandling(async () => {
       const items = await getTerminalSessions(ctx);
       return json({ items });
-    }),
-  );
-
-  api.post("/terminal/:sessionId/kill-clients", ({ params }) =>
-    withErrorHandling(async () => {
-      if (!isSafeId(params.sessionId)) {
-        return json({ error: "Invalid sessionId format" }, 400);
-      }
-      const killed = await killTerminalClients(ctx, params.sessionId);
-      return json({ killed });
     }),
   );
 
