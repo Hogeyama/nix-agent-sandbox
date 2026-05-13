@@ -2358,6 +2358,12 @@ body::after {
 .history-detail-turn-acc-header[aria-expanded="true"] {
   border-bottom: 1px solid var(--rule-soft);
 }
+/* Hide the inline preview when the body is open — the full
+ * prompt text is already visible in the prompt-block below. */
+.history-detail-turn-acc-header[aria-expanded="true"]
+  .history-detail-turn-acc-prompt-preview {
+  display: none;
+}
 /* Decorative column-header row above the accordion list. Same grid
  * template as the buttons below, plus a subtle bottom rule so the
  * heading reads as a separate band from the data rows. */
@@ -2412,33 +2418,59 @@ body::after {
   overflow-x: auto;
 }
 
-/* Turn accordion: user_prompt preview in collapsed header */
+/* Turn accordion: user_prompt preview in collapsed header.
+ * Rendered inline after "Turn N" inside the label cell. A soft
+ * vertical rule separates it from the turn number so the eye
+ * registers them as distinct pieces of information. Italic +
+ * --muted keeps it clearly secondary to the cell label. */
 .history-detail-turn-acc-prompt-preview {
   display: inline-block;
-  max-width: 300px; /* グリッドセルの幅を固定して列崩れを防ぐ */
+  max-width: 260px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  vertical-align: middle;
-  margin-left: 0.5em;
-  color: #666;
-  font-size: 0.85em;
+  vertical-align: baseline;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--muted-3);
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.82em;
 }
 
-/* Turn accordion: user_prompt full text block in expanded body */
+/* Turn accordion: user_prompt full text block in expanded body.
+ * Sits above the spans table. Amber left-rule ties visually to the
+ * cost column (both reflect the user's "spend" of a turn). The
+ * surface-2 background lifts the block slightly above the body
+ * background without introducing a competing light colour. */
 .history-detail-turn-acc-prompt-block {
-  padding: 0.5em 0.75em;
-  margin-bottom: 0.5em;
-  background: #f9f9f9;
-  border-left: 3px solid #ccc;
-  font-size: 0.9em;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 6px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--amber);
+  border-bottom: 1px solid var(--rule-soft);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
+  color: var(--cream);
 }
 
+/* "USER PROMPT" label above the prompt text.
+ * Uppercase mono badge — consistent with other section labels
+ * in this page (Turns, Spans, etc.) and coloured amber to match
+ * the block's left-border accent. */
 .history-detail-turn-acc-prompt-label {
-  font-weight: bold;
-  margin-bottom: 0.25em;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber);
+  user-select: none;
 }
 
 /* Topbar history link — sits between the live indicator and the gear
