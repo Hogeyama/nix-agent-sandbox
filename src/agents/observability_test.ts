@@ -31,6 +31,7 @@ test("buildObservabilityEnv: claude includes CLAUDE_CODE_* and the OTLP common e
     OTEL_LOG_TOOL_DETAILS: "1",
     OTEL_LOG_USER_PROMPTS: "1",
     OTEL_LOG_TOOL_CONTENT: "1",
+    OTEL_LOGS_EXPORTER: "otlp",
   });
 });
 
@@ -139,6 +140,26 @@ test("buildObservabilityEnv: codex returns null (configured via argv, not env)",
     port: 4318,
   });
   expect(env).toBeNull();
+});
+
+test("buildObservabilityEnv: claude sets OTEL_LOGS_EXPORTER=otlp to enable log record ingest", () => {
+  const env = buildObservabilityEnv({
+    agent: "claude",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env?.OTEL_LOGS_EXPORTER).toEqual("otlp");
+});
+
+test("buildObservabilityEnv: copilot does not set OTEL_LOGS_EXPORTER (logs not wired for copilot)", () => {
+  const env = buildObservabilityEnv({
+    agent: "copilot",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env?.OTEL_LOGS_EXPORTER).toBeUndefined();
 });
 
 test("buildCodexTraceExporterConfig: renders OTLP/HTTP JSON traces endpoint", () => {

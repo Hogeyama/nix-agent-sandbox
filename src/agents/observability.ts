@@ -17,6 +17,8 @@
  *               OTEL_LOG_TOOL_CONTENT=1 (un-redacts tool output/content
  *               within `claude_code.tool` spans — distinct from
  *               OTEL_LOG_TOOL_DETAILS which only governs input args),
+ *               OTEL_LOGS_EXPORTER=otlp (enables the OTLP logs signal so
+ *               Claude Code's LogRecord events are ingested via `/v1/logs`),
  *               plus the OTLP-common envs.
  *   - copilot → COPILOT_OTEL_ENABLED=true,
  *               OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
@@ -97,8 +99,8 @@ function buildCommonEnv(
     // builds zero exporters for the trace signal, the endpoint is unused,
     // and `traces` / `spans` stay empty no matter what `CLAUDE_CODE_*`
     // flags are on. Confirmed empirically against claude 2.1.123. Metrics
-    // and logs are intentionally not wired here — the receiver only
-    // accepts `/v1/traces`, so enabling those exporters would just spam
+    // are intentionally not wired here — the receiver only accepts
+    // `/v1/traces` and `/v1/logs`, so enabling metrics would just spam
     // 404s into Claude's debug log.
     OTEL_TRACES_EXPORTER: "otlp",
   };
@@ -124,6 +126,7 @@ export function buildObservabilityEnv(
         OTEL_LOG_TOOL_DETAILS: "1",
         OTEL_LOG_USER_PROMPTS: "1",
         OTEL_LOG_TOOL_CONTENT: "1",
+        OTEL_LOGS_EXPORTER: "otlp",
       };
     case "copilot":
       return {
