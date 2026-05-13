@@ -55,13 +55,24 @@ function argv0MatchesRule(
   context?: MatchContext,
 ): boolean {
   if (isRelativeHostExecArgv0(ruleArgv0)) {
-    if (!isRelativeHostExecArgv0(actualArgv0)) return false;
-    // 直接比較（同じ相対パス同士）
-    if (path.normalize(ruleArgv0) === path.normalize(actualArgv0)) return true;
-    // CWD考慮: 実際の argv0 を cwd 基準で解決し、ワークスペースルートからの相対パスで比較
-    if (context) {
-      const absActual = path.resolve(context.cwd, actualArgv0);
-      const relToWorkspace = path.relative(context.workspaceRoot, absActual);
+    if (isRelativeHostExecArgv0(actualArgv0)) {
+      // 直接比較（同じ相対パス同士）
+      if (path.normalize(ruleArgv0) === path.normalize(actualArgv0))
+        return true;
+      // CWD考慮: 実際の argv0 を cwd 基準で解決し、ワークスペースルートからの相対パスで比較
+      if (context) {
+        const absActual = path.resolve(context.cwd, actualArgv0);
+        const relToWorkspace = path.relative(context.workspaceRoot, absActual);
+        if (!relToWorkspace.startsWith("..")) {
+          return (
+            path.normalize(ruleArgv0) === path.normalize(`./${relToWorkspace}`)
+          );
+        }
+      }
+    } else if (path.isAbsolute(actualArgv0) && context) {
+      // 絶対パスで exec された場合（nix develop 等がパスを解決するケース）:
+      // ワークスペースルートからの相対パスでルールと比較
+      const relToWorkspace = path.relative(context.workspaceRoot, actualArgv0);
       if (!relToWorkspace.startsWith("..")) {
         return (
           path.normalize(ruleArgv0) === path.normalize(`./${relToWorkspace}`)

@@ -219,3 +219,49 @@ test("matchRule: nested relative argv0 matches via cwd resolution", () => {
   const result = matchRule(rules, "./mvnw", ["clean"], context);
   expect(result?.rule.id).toEqual("mvnw");
 });
+
+test("matchRule: relative argv0 rule matches absolute invocation via workspace root", () => {
+  const rules = [
+    makeRule("docker-compose", { argv0: "./dev/scripts/docker-compose" }),
+  ];
+  const context: MatchContext = {
+    cwd: "/workspace",
+    workspaceRoot: "/workspace",
+  };
+  const result = matchRule(
+    rules,
+    "/workspace/dev/scripts/docker-compose",
+    ["ps"],
+    context,
+  );
+  expect(result?.rule.id).toEqual("docker-compose");
+});
+
+test("matchRule: relative argv0 rule does not match absolute path outside workspace", () => {
+  const rules = [
+    makeRule("docker-compose", { argv0: "./dev/scripts/docker-compose" }),
+  ];
+  const context: MatchContext = {
+    cwd: "/workspace",
+    workspaceRoot: "/workspace",
+  };
+  const result = matchRule(
+    rules,
+    "/other/dev/scripts/docker-compose",
+    ["ps"],
+    context,
+  );
+  expect(result).toEqual(null);
+});
+
+test("matchRule: relative argv0 rule does not match absolute invocation without context", () => {
+  const rules = [
+    makeRule("docker-compose", { argv0: "./dev/scripts/docker-compose" }),
+  ];
+  const result = matchRule(
+    rules,
+    "/workspace/dev/scripts/docker-compose",
+    ["ps"],
+  );
+  expect(result).toEqual(null);
+});
