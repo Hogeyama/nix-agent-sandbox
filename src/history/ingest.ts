@@ -35,6 +35,12 @@ export interface OtlpKeyValue {
   value: OtlpAttributeValue;
 }
 
+export interface OtlpJsonSpanEvent {
+  name?: string;
+  timeUnixNano?: string | number;
+  attributes?: ReadonlyArray<OtlpKeyValue>;
+}
+
 export interface OtlpJsonSpan {
   traceId: string;
   spanId: string;
@@ -44,6 +50,7 @@ export interface OtlpJsonSpan {
   endTimeUnixNano?: string | number;
   kind?: number;
   attributes?: ReadonlyArray<OtlpKeyValue>;
+  events?: ReadonlyArray<OtlpJsonSpanEvent>;
 }
 
 export interface OtlpJsonScopeSpans {
@@ -96,6 +103,38 @@ function stripPiiAttrs(
     out[k] = v;
   }
   return out;
+}
+
+/**
+ * Persisted shape of a span event after ingest: ISO timestamp, sanitised
+ * attributes, anonymous (no span_id — it lives on the parent span row).
+ */
+interface PersistedSpanEvent {
+  name: string;
+  time: string | null;
+  attrs: Record<string, unknown>;
+}
+
+/**
+ * Flatten and sanitise OTLP span events. Events without a name are dropped
+ * (the OTLP spec requires `name` on span events). Returns `null` instead of
+ * `[]` so the column stays NULL for the majority of spans that carry no
+ * events.
+ */
+function extractSpanEvents(
+  events: ReadonlyArray<OtlpJsonSpanEvent> | undefined,
+): PersistedSpanEvent[] | null {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  const out: PersistedSpanEvent[] = [];
+  for (const ev of events) {
+    if (typeof ev?.name !== "string" || ev.name.length === 0) continue;
+    out.push({
+      name: ev.name,
+      time: nanoToIso(ev.timeUnixNano),
+      attrs: stripPiiAttrs(flattenAttributes(ev.attributes)),
+    });
+  }
+  return out.length === 0 ? null : out;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +406,7 @@ export function ingestResourceSpans(
               ? Math.max(usage.inTok - usage.cacheR, 0)
               : usage.inTok;
 
+          const persistedEvents = extractSpanEvents(raw.events);
           spanRows.push({
             spanId: raw.spanId,
             parentSpanId:
@@ -386,6 +426,8 @@ export function ingestResourceSpans(
             startedAt: startedIso,
             endedAt: endedIso,
             attrsJson: JSON.stringify(stripPiiAttrs(attrs)),
+            eventsJson:
+              persistedEvents === null ? null : JSON.stringify(persistedEvents),
           });
         }
         if (spanRows.length > 0) {

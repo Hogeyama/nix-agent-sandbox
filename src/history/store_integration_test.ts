@@ -88,6 +88,7 @@ function span(overrides: Partial<SpanRow> = {}): SpanRow {
     startedAt: "2026-05-01T10:00:00Z",
     endedAt: "2026-05-01T10:00:01Z",
     attrsJson: "{}",
+    eventsJson: null,
     ...overrides,
   };
 }

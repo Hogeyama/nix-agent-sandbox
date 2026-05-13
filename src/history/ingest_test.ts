@@ -1119,6 +1119,188 @@ test("user.* PII attributes are stripped from attrs_json before persistence", as
   }
 });
 
+test("span events: claude_code.tool.tool.output span event is persisted to events_json with PII stripped", async () => {
+  // Pins the fix for span events being silently dropped pre-v2 (the
+  // OtlpJsonSpan interface had no `events` field). With OTEL_LOG_TOOL_CONTENT=1,
+  // Claude Code attaches a `tool.output` event to claude_code.tool spans
+  // carrying the tool's input/output bodies — this test asserts those land
+  // in spans.events_json. Also exercises the PII strip on event attrs.
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_evt",
+      profile: "default",
+      agent: "claude",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload: OtlpJsonExportPayload = {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              { key: "nas.session.id", value: { stringValue: "sess_evt" } },
+              { key: "nas.agent", value: { stringValue: "claude" } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "trace_evt",
+                  spanId: "span_tool_with_output",
+                  name: "claude_code.tool",
+                  startTimeUnixNano: "1714630000000000000",
+                  endTimeUnixNano: "1714630001000000000",
+                  attributes: [
+                    {
+                      key: "session.id",
+                      value: { stringValue: "conv_evt" },
+                    },
+                    { key: "tool_name", value: { stringValue: "Bash" } },
+                  ],
+                  events: [
+                    {
+                      name: "tool.output",
+                      timeUnixNano: "1714630000500000000",
+                      attributes: [
+                        {
+                          key: "tool_input",
+                          value: { stringValue: "ls -la" },
+                        },
+                        {
+                          key: "tool_output",
+                          value: { stringValue: "total 0" },
+                        },
+                        {
+                          key: "user.email",
+                          value: { stringValue: "person@example.com" },
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  traceId: "trace_evt",
+                  spanId: "span_tool_no_events",
+                  name: "claude_code.tool",
+                  startTimeUnixNano: "1714630002000000000",
+                  endTimeUnixNano: "1714630003000000000",
+                  attributes: [
+                    { key: "tool_name", value: { stringValue: "Read" } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = ingestResourceSpans(db, payload);
+    expect(result.acceptedSpans).toEqual(2);
+
+    const rows = db
+      .query("SELECT span_id, events_json FROM spans ORDER BY started_at")
+      .all() as { span_id: string; events_json: string | null }[];
+
+    expect(rows[0].span_id).toEqual("span_tool_with_output");
+    expect(rows[0].events_json).not.toBeNull();
+    const events = JSON.parse(rows[0].events_json as string) as Array<{
+      name: string;
+      time: string | null;
+      attrs: Record<string, unknown>;
+    }>;
+    expect(events.length).toEqual(1);
+    expect(events[0].name).toEqual("tool.output");
+    expect(events[0].time).toEqual("2024-05-02T06:06:40.500Z");
+    expect(events[0].attrs.tool_input).toEqual("ls -la");
+    expect(events[0].attrs.tool_output).toEqual("total 0");
+    // PII keys are stripped from event attrs too.
+    expect(events[0].attrs["user.email"]).toBeUndefined();
+
+    // Spans without events keep events_json = NULL (not "[]" or "null").
+    expect(rows[1].span_id).toEqual("span_tool_no_events");
+    expect(rows[1].events_json).toBeNull();
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("span events: nameless events are dropped, and an all-dropped events array yields NULL events_json", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, {
+      id: "sess_evt2",
+      profile: null,
+      agent: "claude",
+      worktreePath: null,
+      startedAt: "2026-05-01T00:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+
+    const payload = {
+      resourceSpans: [
+        {
+          resource: {
+            attributes: [
+              { key: "nas.session.id", value: { stringValue: "sess_evt2" } },
+            ],
+          },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "trace_evt2",
+                  spanId: "span_evt2",
+                  name: "claude_code.tool",
+                  startTimeUnixNano: "1714640000000000000",
+                  endTimeUnixNano: "1714640001000000000",
+                  attributes: [
+                    {
+                      key: "session.id",
+                      value: { stringValue: "conv_evt2" },
+                    },
+                  ],
+                  // One valid event mixed in with two malformed ones; the
+                  // malformed siblings are silently dropped per OTLP spec
+                  // (events require a name).
+                  events: [
+                    { timeUnixNano: "1714640000100000000" },
+                    { name: "", timeUnixNano: "1714640000200000000" },
+                    {
+                      name: "real.event",
+                      timeUnixNano: "1714640000300000000",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as OtlpJsonExportPayload;
+
+    ingestResourceSpans(db, payload);
+    const row = db
+      .query("SELECT events_json FROM spans WHERE span_id = ?")
+      .get("span_evt2") as { events_json: string | null };
+    const parsed = JSON.parse(row.events_json as string) as Array<{
+      name: string;
+    }>;
+    expect(parsed.length).toEqual(1);
+    expect(parsed[0].name).toEqual("real.event");
+  } finally {
+    await cleanup(t);
+  }
+});
+
 test("payload with no resourceSpans returns zero counters and does not throw", () => {
   // No DB needed; the early-return path triggers before any query.
   const result = ingestResourceSpans(

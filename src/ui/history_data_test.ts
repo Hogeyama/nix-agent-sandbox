@@ -198,6 +198,7 @@ test("readModelTokenTotals: aggregates per-model totals from a writer-populated 
         startedAt: "2026-04-15T10:00:00Z",
         endedAt: "2026-04-15T10:00:01Z",
         attrsJson: "{}",
+        eventsJson: null,
       },
     ]);
 
@@ -325,6 +326,7 @@ test("readConversationModelTokenTotals: aggregates per-model totals from a write
         startedAt: "2026-04-15T10:00:00Z",
         endedAt: "2026-04-15T10:00:01Z",
         attrsJson: "{}",
+        eventsJson: null,
       },
       {
         spanId: "s2",
@@ -341,6 +343,7 @@ test("readConversationModelTokenTotals: aggregates per-model totals from a write
         startedAt: "2026-04-15T10:01:00Z",
         endedAt: "2026-04-15T10:01:01Z",
         attrsJson: "{}",
+        eventsJson: null,
       },
     ]);
 
@@ -432,6 +435,7 @@ test("readConversationModelTokenTotalsByConversationIds: aggregates per-model to
         startedAt: "2026-04-15T10:00:00Z",
         endedAt: "2026-04-15T10:00:01Z",
         attrsJson: "{}",
+        eventsJson: null,
       },
       {
         spanId: "s2",
@@ -448,6 +452,7 @@ test("readConversationModelTokenTotalsByConversationIds: aggregates per-model to
         startedAt: "2026-04-15T10:01:00Z",
         endedAt: "2026-04-15T10:01:01Z",
         attrsJson: "{}",
+        eventsJson: null,
       },
     ]);
 

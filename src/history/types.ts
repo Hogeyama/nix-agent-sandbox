@@ -60,6 +60,12 @@ export interface SpanRow {
   endedAt: string | null;
   /** Serialized JSON object of any attrs not promoted to dedicated columns. */
   attrsJson: string;
+  /**
+   * Serialized JSON array of OTLP span events, or `null` when the span
+   * carried no events. Each element: `{ name, time, attrs }` (time is an
+   * ISO-8601 Z string; attrs is an object with PII keys stripped).
+   */
+  eventsJson: string | null;
 }
 
 export interface TurnEventRow {
@@ -140,6 +146,7 @@ export interface SpanSummaryRow {
   readonly startedAt: string;
   readonly endedAt: string | null;
   readonly attrsJson: string;
+  readonly eventsJson: string | null;
 }
 
 export interface InvocationSummaryRow {

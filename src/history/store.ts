@@ -58,7 +58,7 @@ export function resolveHistoryDbPath(): string {
  * mode) when the on-disk value disagrees. Migrations are not attempted —
  * the operator is expected to `rm history.db` and let the writer recreate.
  */
-export const HISTORY_DB_USER_VERSION = 1;
+export const HISTORY_DB_USER_VERSION = 2;
 
 export class HistoryDbVersionMismatchError extends Error {
   readonly actual: number;
@@ -90,6 +90,10 @@ function cacheKey({ path: p, mode }: OpenHistoryDbParams): string {
   return `${mode}::${p}`;
 }
 
+// spans.events_json: optional JSON array of OTLP span events. NULL when the
+// span carried no events. Each element: { name, time, attrs }. Populated for
+// Claude Code's `tool.output` event (tool I/O bodies emitted under
+// OTEL_LOG_TOOL_CONTENT=1) and any other span-attached annotations.
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS invocations (
   id              TEXT PRIMARY KEY,
@@ -130,7 +134,8 @@ CREATE TABLE IF NOT EXISTS spans (
   duration_ms     INTEGER,
   started_at      TEXT NOT NULL,
   ended_at        TEXT,
-  attrs_json      TEXT NOT NULL DEFAULT '{}'
+  attrs_json      TEXT NOT NULL DEFAULT '{}',
+  events_json     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS turn_events (
@@ -380,8 +385,8 @@ export function insertSpans(db: Database, rows: SpanRow[]): void {
     `INSERT OR REPLACE INTO spans
        (span_id, parent_span_id, trace_id, span_name, kind,
         model, in_tok, out_tok, cache_r, cache_w,
-        duration_ms, started_at, ended_at, attrs_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        duration_ms, started_at, ended_at, attrs_json, events_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const tx = db.transaction((batch: SpanRow[]) => {
     for (const r of batch) {
@@ -400,6 +405,7 @@ export function insertSpans(db: Database, rows: SpanRow[]): void {
         r.startedAt,
         r.endedAt,
         r.attrsJson,
+        r.eventsJson,
       );
     }
   });
@@ -490,6 +496,7 @@ interface SpanSummarySqlRow {
   started_at: string;
   ended_at: string | null;
   attrs_json: string;
+  events_json: string | null;
 }
 
 interface InvocationSqlRow {
@@ -612,6 +619,7 @@ function rowToSpanSummary(r: SpanSummarySqlRow): SpanSummaryRow {
     startedAt: r.started_at,
     endedAt: r.ended_at,
     attrsJson: r.attrs_json,
+    eventsJson: r.events_json,
   };
 }
 
@@ -697,7 +705,7 @@ export function queryConversationDetail(
         `SELECT
            s.span_id, s.parent_span_id, s.trace_id, s.span_name, s.kind,
            s.model, s.in_tok, s.out_tok, s.cache_r, s.cache_w,
-           s.duration_ms, s.started_at, s.ended_at, s.attrs_json
+           s.duration_ms, s.started_at, s.ended_at, s.attrs_json, s.events_json
          FROM spans s
          JOIN traces t ON s.trace_id = t.trace_id
          WHERE t.conversation_id = ?
@@ -775,7 +783,7 @@ export function queryInvocationDetail(
         `SELECT
            s.span_id, s.parent_span_id, s.trace_id, s.span_name, s.kind,
            s.model, s.in_tok, s.out_tok, s.cache_r, s.cache_w,
-           s.duration_ms, s.started_at, s.ended_at, s.attrs_json
+           s.duration_ms, s.started_at, s.ended_at, s.attrs_json, s.events_json
          FROM spans s
          JOIN traces t ON s.trace_id = t.trace_id
          WHERE t.invocation_id = ?

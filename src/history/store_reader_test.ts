@@ -92,6 +92,7 @@ function sp(overrides: Partial<SpanRow> = {}): SpanRow {
     startedAt: "2026-05-01T10:00:00Z",
     endedAt: "2026-05-01T10:00:01Z",
     attrsJson: "{}",
+    eventsJson: null,
     ...overrides,
   };
 }
@@ -658,7 +659,7 @@ test("conversation_summaries table is added to existing db on writer re-open", a
     _closeHistoryDb(t.dbPath);
 
     // Second open re-runs SCHEMA_SQL with CREATE TABLE IF NOT EXISTS;
-    // user_version stays at 1 so this must succeed.
+    // user_version stays at HISTORY_DB_USER_VERSION so this must succeed.
     const db2 = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     const tables = db2
       .query(
