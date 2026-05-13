@@ -2319,8 +2319,10 @@ body::after {
  * accordion button so columns line up vertically across every turn.
  * Slot widths: caret | Turn N | duration | LLM | Tools | Spans
  * | In | Out | Cache R | Cache W | Cost. The Turn label uses
- * `minmax(80px, max-content)` so single-digit indices stay aligned with
- * three-digit ones; numeric slots are fixed so adjacent rows agree. The
+ * `minmax(120px, 1fr)` so all rows share the same label-column width
+ * regardless of prompt-preview length — using `max-content` would let
+ * each row's independent grid compute a different width, breaking
+ * cross-row alignment. Numeric slots are fixed for the same reason. The
  * trailing Cost slot is wider (80px) to fit a two-decimal USD label
  * (`$123.45`) without truncation. */
 .history-detail-turn-acc-header,
@@ -2328,7 +2330,7 @@ body::after {
   display: grid;
   grid-template-columns:
     16px
-    minmax(80px, max-content)
+    minmax(120px, 1fr)
     64px
     48px
     48px
