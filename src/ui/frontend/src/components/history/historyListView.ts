@@ -7,7 +7,12 @@
  */
 
 import { bareAgentLabel, classifyAgent } from "../../../../../agents/display";
-import type { ConversationListRow } from "../../../../../history/types";
+import type {
+  ConversationListRow,
+  ModelTokenTotalsRow,
+} from "../../../../../history/types";
+import type { PricingSnapshot } from "../../api/client";
+import { computeTurnCost, formatUsd } from "./costPanelView";
 
 /**
  * Reduced row-shape consumed by the list page. `summary` is the row's
@@ -60,6 +65,10 @@ export interface ConversationListRowView {
    * · Cache W 50"), suitable as a `title` tooltip. Empty when every kind is 0.
    */
   readonly tokenBreakdownTitle: string;
+  /** Estimated USD cost for this conversation, or "—" when unavailable. */
+  readonly cost: string;
+  /** Tooltip that explains the cost source/unavailability. */
+  readonly costTitle?: string;
   /** Hash href for the row anchor. */
   readonly href: string;
 }
@@ -229,6 +238,39 @@ function composeTokenBreakdownTitle(row: ConversationListRow): string {
   return parts.join(" · ");
 }
 
+function hasAnyTokens(row: ConversationListRow): boolean {
+  return (
+    row.inputTokensTotal > 0 ||
+    row.outputTokensTotal > 0 ||
+    row.cacheReadTotal > 0 ||
+    row.cacheWriteTotal > 0
+  );
+}
+
+function composeConversationCost(opts: {
+  row: ConversationListRow;
+  snapshot: PricingSnapshot | undefined;
+  modelTokenTotals: ReadonlyArray<ModelTokenTotalsRow>;
+}): { text: string; title: string } {
+  if (opts.snapshot === undefined) {
+    return { text: "—", title: "Pricing snapshot loading" };
+  }
+  if (opts.snapshot.source === "unavailable") {
+    return { text: "—", title: "Pricing unavailable" };
+  }
+  if (!hasAnyTokens(opts.row)) {
+    return { text: "$0.00", title: "No token usage" };
+  }
+  const turnCost = computeTurnCost(opts.modelTokenTotals, opts.snapshot);
+  if (turnCost.isUnknownOnly) {
+    return { text: "—", title: "Unable to price this conversation" };
+  }
+  return {
+    text: formatUsd(turnCost.totalUsd),
+    title: "Estimated with current pricing snapshot",
+  };
+}
+
 /**
  * Project a backend conversation row into the shape the page renders.
  * The function is total — every input produces a row, including ones
@@ -237,10 +279,19 @@ function composeTokenBreakdownTitle(row: ConversationListRow): string {
 export function toConversationListRowView(
   row: ConversationListRow,
   nowMs: number,
+  opts?: {
+    pricingSnapshot: PricingSnapshot | undefined;
+    modelTokenTotals: ReadonlyArray<ModelTokenTotalsRow>;
+  },
 ): ConversationListRowView {
   const idShort = shortenId(row.id);
   const tokenTotal = row.inputTokensTotal + row.outputTokensTotal;
   const tokenBreakdownTitle = composeTokenBreakdownTitle(row);
+  const cost = composeConversationCost({
+    row,
+    snapshot: opts?.pricingSnapshot,
+    modelTokenTotals: opts?.modelTokenTotals ?? [],
+  });
   const summary = row.summary;
   const summaryIsEmpty = summary === null;
   const directory = projectDirectoryFromWorktree(row.worktreePath);
@@ -270,6 +321,8 @@ export function toConversationListRowView(
     directoryBase: directoryParts.base,
     tokenTotal: formatCompactNumber(tokenTotal),
     tokenBreakdownTitle,
+    cost: cost.text,
+    costTitle: cost.title,
     // Defensive escape: backend ids flow into the hash unmodified, so a
     // value containing characters the router's safe-id allowlist rejects
     // (or url-reserved characters) would otherwise drop the user back to

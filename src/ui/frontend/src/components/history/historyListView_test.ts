@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { ConversationListRow } from "../../../../../history/types";
+import type {
+  ConversationListRow,
+  ModelTokenTotalsRow,
+} from "../../../../../history/types";
+import type { PricingSnapshot } from "../../api/client";
 import {
   formatCompactNumber,
   formatRelativeTime,
@@ -25,6 +29,35 @@ function makeRow(
     cacheWriteTotal: 0,
     summary: null,
     worktreePath: null,
+    ...overrides,
+  };
+}
+
+function pricingSnapshot(
+  models: PricingSnapshot["models"],
+  source: PricingSnapshot["source"] = "litellm",
+): PricingSnapshot {
+  return {
+    fetched_at: "2026-05-01T00:00:00.000Z",
+    source,
+    stale: false,
+    models,
+  };
+}
+
+function modelTotals(
+  overrides: Partial<ModelTokenTotalsRow> = {},
+): ModelTokenTotalsRow {
+  return {
+    model: "claude-sonnet-4-5",
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    inputTokensAbove200k: 0,
+    outputTokensAbove200k: 0,
+    cacheReadAbove200k: 0,
+    cacheWriteAbove200k: 0,
     ...overrides,
   };
 }
@@ -174,6 +207,7 @@ describe("toConversationListRowView", () => {
     expect(display.lastSeen).toBe("4h ago");
     expect(display.fullTimestamp).toBe("2026-05-01T08:00:00.000Z");
     expect(display.tokenTotal).toBe("2k");
+    expect(display.cost).toBe("—");
     expect(display.href).toBe("#/history/conversation/sess_aabbccdd11223344");
   });
 
@@ -319,5 +353,57 @@ describe("toConversationListRowView", () => {
       nowMs,
     );
     expect(display.metaLine).toBe("sess_aab · 1 turn · 1 span");
+  });
+
+  test("cost renders priced USD when snapshot + per-model totals are provided", () => {
+    const display = toConversationListRowView(makeRow(), nowMs, {
+      pricingSnapshot: pricingSnapshot({
+        "claude-sonnet-4-5": { input_cost_per_token: 0.001 },
+      }),
+      modelTokenTotals: [modelTotals({ inputTokens: 10 })],
+    });
+    expect(display.cost).toBe("$0.01");
+    expect(display.costTitle).toContain("Estimated");
+  });
+
+  test("cost renders em-dash when pricing snapshot is unavailable", () => {
+    const display = toConversationListRowView(makeRow(), nowMs, {
+      pricingSnapshot: pricingSnapshot({}, "unavailable"),
+      modelTokenTotals: [modelTotals({ inputTokens: 10 })],
+    });
+    expect(display.cost).toBe("—");
+    expect(display.costTitle).toBe("Pricing unavailable");
+  });
+
+  test("cost renders em-dash when all per-model rows are unknown", () => {
+    const display = toConversationListRowView(makeRow(), nowMs, {
+      pricingSnapshot: pricingSnapshot({
+        "claude-sonnet-4-5": { input_cost_per_token: 0.001 },
+      }),
+      modelTokenTotals: [
+        modelTotals({ model: "unknown-model", inputTokens: 10 }),
+      ],
+    });
+    expect(display.cost).toBe("—");
+  });
+
+  test("cost renders $0.00 for conversations with zero tokens", () => {
+    const display = toConversationListRowView(
+      makeRow({
+        inputTokensTotal: 0,
+        outputTokensTotal: 0,
+        cacheReadTotal: 0,
+        cacheWriteTotal: 0,
+      }),
+      nowMs,
+      {
+        pricingSnapshot: pricingSnapshot({
+          "claude-sonnet-4-5": { input_cost_per_token: 0.001 },
+        }),
+        modelTokenTotals: [],
+      },
+    );
+    expect(display.cost).toBe("$0.00");
+    expect(display.costTitle).toBe("No token usage");
   });
 });

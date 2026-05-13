@@ -15,6 +15,7 @@ import {
   readConversationDetail,
   readConversationList,
   readConversationModelTokenTotals,
+  readConversationModelTokenTotalsByConversationIds,
   readInvocationDetail,
   readModelTokenTotals,
 } from "./history_data.ts";
@@ -355,6 +356,110 @@ test("readConversationModelTokenTotals: aggregates per-model totals from a write
     expect(sonnet?.outputTokens).toEqual(200);
     expect(sonnet?.cacheRead).toEqual(10);
     expect(sonnet?.cacheWrite).toEqual(20);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("readConversationModelTokenTotalsByConversationIds: returns empty arrays when db file does not exist", async () => {
+  const t = await makeTempDir();
+  try {
+    expect(
+      readConversationModelTokenTotalsByConversationIds(["conv_a", "conv_b"], {
+        dbPath: t.dbPath,
+      }),
+    ).toEqual({
+      conv_a: [],
+      conv_b: [],
+    });
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("readConversationModelTokenTotalsByConversationIds: aggregates per-model totals for multiple conversations", async () => {
+  const t = await makeTempDir();
+  try {
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(writer, {
+      id: "sess_a",
+      profile: "default",
+      agent: "claude",
+      worktreePath: "/tmp/wt",
+      startedAt: "2026-04-15T10:00:00Z",
+      endedAt: null,
+      exitReason: null,
+    });
+    upsertConversation(writer, {
+      id: "conv_a",
+      agent: "claude",
+      firstSeenAt: "2026-04-15T10:00:00Z",
+      lastSeenAt: "2026-04-15T10:00:00Z",
+    });
+    upsertConversation(writer, {
+      id: "conv_b",
+      agent: "claude",
+      firstSeenAt: "2026-04-15T10:00:00Z",
+      lastSeenAt: "2026-04-15T10:00:00Z",
+    });
+    upsertTrace(writer, {
+      traceId: "trace_a",
+      invocationId: "sess_a",
+      conversationId: "conv_a",
+      startedAt: "2026-04-15T10:00:00Z",
+      endedAt: null,
+    });
+    upsertTrace(writer, {
+      traceId: "trace_b",
+      invocationId: "sess_a",
+      conversationId: "conv_b",
+      startedAt: "2026-04-15T10:00:00Z",
+      endedAt: null,
+    });
+    insertSpans(writer, [
+      {
+        spanId: "s1",
+        parentSpanId: null,
+        traceId: "trace_a",
+        spanName: "chat",
+        kind: "chat",
+        model: "claude-sonnet",
+        inTok: 100,
+        outTok: 200,
+        cacheR: 10,
+        cacheW: 20,
+        durationMs: 1234,
+        startedAt: "2026-04-15T10:00:00Z",
+        endedAt: "2026-04-15T10:00:01Z",
+        attrsJson: "{}",
+      },
+      {
+        spanId: "s2",
+        parentSpanId: null,
+        traceId: "trace_b",
+        spanName: "chat",
+        kind: "chat",
+        model: "claude-haiku",
+        inTok: 5,
+        outTok: 6,
+        cacheR: 1,
+        cacheW: 2,
+        durationMs: 100,
+        startedAt: "2026-04-15T10:01:00Z",
+        endedAt: "2026-04-15T10:01:01Z",
+        attrsJson: "{}",
+      },
+    ]);
+
+    const totals = readConversationModelTokenTotalsByConversationIds(
+      ["conv_a", "conv_b", "conv_missing"],
+      { dbPath: t.dbPath },
+    );
+    expect(totals.conv_a?.map((row) => row.model)).toEqual(["claude-sonnet"]);
+    expect(totals.conv_a?.[0]?.inputTokens).toEqual(100);
+    expect(totals.conv_b?.map((row) => row.model)).toEqual(["claude-haiku"]);
+    expect(totals.conv_b?.[0]?.inputTokens).toEqual(5);
+    expect(totals.conv_missing).toEqual([]);
   } finally {
     await cleanup(t);
   }

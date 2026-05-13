@@ -55,6 +55,7 @@ import {
   readConversationDetail,
   readConversationList,
   readConversationModelTokenTotals,
+  readConversationModelTokenTotalsByConversationIds,
   readInvocationDetail,
   readModelTokenTotals,
 } from "./history_data.ts";
@@ -84,6 +85,13 @@ export interface UiHistoryReader {
   readConversationModelTokenTotals(
     conversationId: string,
   ): ModelTokenTotalsRow[];
+  /**
+   * Bulk variant of `readConversationModelTokenTotals` keyed by conversation id.
+   * The returned object always contains every requested id with an array value.
+   */
+  readConversationModelTokenTotalsByConversationIds(
+    conversationIds: ReadonlyArray<string>,
+  ): Record<string, ModelTokenTotalsRow[]>;
 }
 
 /**
@@ -118,6 +126,10 @@ function makeHistoryReader(historyDbPath: string): UiHistoryReader {
       readModelTokenTotals(sinceIso, { dbPath: historyDbPath }),
     readConversationModelTokenTotals: (conversationId) =>
       readConversationModelTokenTotals(conversationId, {
+        dbPath: historyDbPath,
+      }),
+    readConversationModelTokenTotalsByConversationIds: (conversationIds) =>
+      readConversationModelTokenTotalsByConversationIds(conversationIds, {
         dbPath: historyDbPath,
       }),
   };

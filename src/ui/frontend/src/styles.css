@@ -1761,7 +1761,7 @@ body::after {
  * <a> keeps the hit target intact. */
 .history-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   column-gap: 24px;
 }
 .history-list-row {
@@ -1883,6 +1883,15 @@ body::after {
   color: var(--cream-dim);
   font-feature-settings: "tnum";
   white-space: nowrap;
+}
+.history-list-cost {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cream-dim);
+  text-align: right;
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+  min-width: 5ch;
 }
 .history-list-stats {
   font-family: var(--mono);

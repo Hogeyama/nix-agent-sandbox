@@ -842,6 +842,12 @@ const SPAN_BUCKETED_TOKEN_TOTALS_SELECT = `
   COALESCE(SUM(CASE WHEN COALESCE(in_tok,0) + COALESCE(cache_r,0) + COALESCE(cache_w,0) > 200000 THEN cache_w ELSE 0 END), 0) AS cache_write_above_200k
 `;
 
+const SPAN_BUCKETED_TOKEN_TOTALS_FROM_SPANS_SELECT =
+  SPAN_BUCKETED_TOKEN_TOTALS_SELECT.replace(
+    /\b(in_tok|out_tok|cache_r|cache_w)\b/g,
+    "s.$1",
+  );
+
 function rowToModelTokenTotals(r: ModelTokenTotalsSqlRow): ModelTokenTotalsRow {
   return {
     model: r.model,
@@ -909,7 +915,7 @@ export function queryConversationModelTokenTotals(
     .prepare(
       `SELECT
          s.model AS model,
-         ${SPAN_BUCKETED_TOKEN_TOTALS_SELECT.replace(/\b(in_tok|out_tok|cache_r|cache_w)\b/g, "s.$1")}
+         ${SPAN_BUCKETED_TOKEN_TOTALS_FROM_SPANS_SELECT}
        FROM spans s
        JOIN traces t ON s.trace_id = t.trace_id
        WHERE t.conversation_id = ?
@@ -918,4 +924,57 @@ export function queryConversationModelTokenTotals(
     )
     .all(conversationId) as ModelTokenTotalsSqlRow[];
   return rows.map(rowToModelTokenTotals);
+}
+
+interface ConversationModelTokenTotalsSqlRow extends ModelTokenTotalsSqlRow {
+  conversation_id: string;
+}
+
+const SQLITE_VARIABLE_CHUNK_SIZE = 500;
+
+/**
+ * Aggregate per-model token totals for many conversations in one reader call.
+ *
+ * The return shape always includes every requested id. Conversations with no
+ * matching spans map to an empty array. Each sub-array is deterministically
+ * ordered (`model ASC`, NULL last), and object keys are inserted in the same
+ * order as `conversationIds`.
+ */
+export function queryConversationModelTokenTotalsByConversationIds(
+  db: Database,
+  conversationIds: ReadonlyArray<string>,
+): Record<string, ModelTokenTotalsRow[]> {
+  const out: Record<string, ModelTokenTotalsRow[]> = {};
+  for (const id of conversationIds) {
+    if (out[id] === undefined) out[id] = [];
+  }
+  const dedupedIds = Object.keys(out);
+  if (dedupedIds.length === 0) return out;
+
+  for (
+    let offset = 0;
+    offset < dedupedIds.length;
+    offset += SQLITE_VARIABLE_CHUNK_SIZE
+  ) {
+    const chunk = dedupedIds.slice(offset, offset + SQLITE_VARIABLE_CHUNK_SIZE);
+    if (chunk.length === 0) continue;
+    const placeholders = chunk.map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `SELECT
+           t.conversation_id AS conversation_id,
+           s.model AS model,
+           ${SPAN_BUCKETED_TOKEN_TOTALS_FROM_SPANS_SELECT}
+         FROM spans s
+         JOIN traces t ON s.trace_id = t.trace_id
+         WHERE t.conversation_id IN (${placeholders})
+         GROUP BY t.conversation_id, s.model
+         ORDER BY t.conversation_id, s.model IS NULL, s.model`,
+      )
+      .all(...chunk) as ConversationModelTokenTotalsSqlRow[];
+    for (const row of rows) {
+      out[row.conversation_id]?.push(rowToModelTokenTotals(row));
+    }
+  }
+  return out;
 }

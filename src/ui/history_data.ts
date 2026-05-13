@@ -21,6 +21,7 @@ import {
   queryConversationDetail,
   queryConversationList,
   queryConversationModelTokenTotals,
+  queryConversationModelTokenTotalsByConversationIds,
   queryInvocationDetail,
   queryModelTokenTotals,
   resolveHistoryDbPath,
@@ -55,6 +56,16 @@ function openReader(dbPath: string): ReturnType<typeof openHistoryDb> | null {
 
 function describeError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function emptyPerConversationTotals(
+  conversationIds: ReadonlyArray<string>,
+): Record<string, ModelTokenTotalsRow[]> {
+  const out: Record<string, ModelTokenTotalsRow[]> = {};
+  for (const id of conversationIds) {
+    if (out[id] === undefined) out[id] = [];
+  }
+  return out;
 }
 
 /**
@@ -161,5 +172,31 @@ export function readConversationModelTokenTotals(
       `[nas:history] queryConversationModelTokenTotals failed at ${dbPath} (id=${conversationId}): ${describeError(e)}`,
     );
     return [];
+  }
+}
+
+/**
+ * Per-model token totals for multiple conversations. The returned object always
+ * contains every requested conversation id with an array value (possibly empty).
+ */
+export function readConversationModelTokenTotalsByConversationIds(
+  conversationIds: ReadonlyArray<string>,
+  opts?: ReadHistoryOptions,
+): Record<string, ModelTokenTotalsRow[]> {
+  const fallback = emptyPerConversationTotals(conversationIds);
+  if (conversationIds.length === 0) return fallback;
+  const dbPath = resolvePath(opts);
+  const db = openReader(dbPath);
+  if (!db) return fallback;
+  try {
+    return queryConversationModelTokenTotalsByConversationIds(
+      db,
+      conversationIds,
+    );
+  } catch (e) {
+    console.warn(
+      `[nas:history] queryConversationModelTokenTotalsByConversationIds failed at ${dbPath}: ${describeError(e)}`,
+    );
+    return fallback;
   }
 }

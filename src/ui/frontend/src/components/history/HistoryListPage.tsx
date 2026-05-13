@@ -37,6 +37,8 @@ export interface HistoryListPageProps {
   error: () => string | null;
   /** Pricing snapshot accessor; `undefined` while the resource is pending. */
   pricingSnapshot: () => PricingSnapshot | undefined;
+  /** Per-conversation per-model token totals keyed by conversation id. */
+  conversationModelTokenTotals: () => Record<string, ModelTokenTotalsRow[]>;
   /** Per-model token totals accessor from the SSE list payload. */
   modelTokenTotals: () => ModelTokenTotalsRow[];
   /** ISO-8601 boundary the daemon used when computing `modelTokenTotals`. */
@@ -53,8 +55,16 @@ export function HistoryListPage(props: HistoryListPageProps) {
   const interval = setInterval(() => setNow(Date.now()), RELATIVE_TICK_MS);
   onCleanup(() => clearInterval(interval));
 
-  const rows = () =>
-    props.conversations().map((row) => toConversationListRowView(row, now()));
+  const rows = () => {
+    const snapshot = props.pricingSnapshot();
+    const perConversation = props.conversationModelTokenTotals();
+    return props.conversations().map((row) =>
+      toConversationListRowView(row, now(), {
+        pricingSnapshot: snapshot,
+        modelTokenTotals: perConversation[row.id] ?? [],
+      }),
+    );
+  };
 
   return (
     <div class="history-shell-content">
@@ -134,6 +144,9 @@ export function HistoryListPage(props: HistoryListPageProps) {
                   </div>
                   <div class="history-list-time" title={row.fullTimestamp}>
                     {row.lastSeen}
+                  </div>
+                  <div class="history-list-cost" title={row.costTitle}>
+                    {row.cost}
                   </div>
                   <div
                     class="history-list-stats"

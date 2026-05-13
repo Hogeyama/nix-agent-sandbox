@@ -78,15 +78,23 @@ interface MockReader extends UiHistoryReader {
   setConversation(id: string, d: ConversationDetail | null): void;
   setInvocation(id: string, d: InvocationDetail | null): void;
   setModelTokenTotals(rows: ModelTokenTotalsRow[]): void;
+  setConversationModelTokenTotalsByConversationId(
+    rows: Record<string, ModelTokenTotalsRow[]>,
+  ): void;
   listCalls: number;
   conversationCalls: Array<string>;
   invocationCalls: Array<string>;
   modelTokenTotalsCalls: Array<string>;
+  conversationModelTokenTotalsCalls: Array<Array<string>>;
 }
 
 function makeMockReader(): MockReader {
   let list: ConversationListRow[] = [];
   let modelTokenTotals: ModelTokenTotalsRow[] = [];
+  let conversationModelTokenTotalsByConversationId: Record<
+    string,
+    ModelTokenTotalsRow[]
+  > = {};
   const conversations = new Map<string, ConversationDetail | null>();
   const invocations = new Map<string, InvocationDetail | null>();
   const reader: MockReader = {
@@ -94,6 +102,7 @@ function makeMockReader(): MockReader {
     conversationCalls: [],
     invocationCalls: [],
     modelTokenTotalsCalls: [],
+    conversationModelTokenTotalsCalls: [],
     readConversationList: () => {
       reader.listCalls++;
       return list;
@@ -111,6 +120,14 @@ function makeMockReader(): MockReader {
       return modelTokenTotals;
     },
     readConversationModelTokenTotals: () => [],
+    readConversationModelTokenTotalsByConversationIds: (conversationIds) => {
+      reader.conversationModelTokenTotalsCalls.push([...conversationIds]);
+      const out: Record<string, ModelTokenTotalsRow[]> = {};
+      for (const id of conversationIds) {
+        out[id] = conversationModelTokenTotalsByConversationId[id] ?? [];
+      }
+      return out;
+    },
     setList: (rows) => {
       list = rows;
     },
@@ -122,6 +139,9 @@ function makeMockReader(): MockReader {
     },
     setModelTokenTotals: (rows) => {
       modelTokenTotals = rows;
+    },
+    setConversationModelTokenTotalsByConversationId: (rows) => {
+      conversationModelTokenTotalsByConversationId = rows;
     },
   };
   return reader;
@@ -268,6 +288,7 @@ test("conversations stream emits initial snapshot then a diff after a write", as
   expect(events[0].event).toBe("history:list");
   expect(events[0].data).toMatchObject({
     conversations: [],
+    conversationModelTokenTotals: {},
     modelTokenTotals: [],
   });
   // `since` is computed by the daemon clock — assert shape, not value.
@@ -460,6 +481,7 @@ test("conversations stream emits keepalive comments on every poll", async () => 
 
 test("conversations payload includes per-model totals and a daemon-clock since", async () => {
   const reader = makeMockReader();
+  reader.setList([makeListRow("conv_a"), makeListRow("conv_b")]);
   const totals: ModelTokenTotalsRow[] = [
     {
       model: "claude-opus-4",
@@ -485,6 +507,10 @@ test("conversations payload includes per-model totals and a daemon-clock since",
     },
   ];
   reader.setModelTokenTotals(totals);
+  reader.setConversationModelTokenTotalsByConversationId({
+    conv_a: [totals[0]],
+    conv_b: [totals[1]],
+  });
   const ctx = makeCtx(reader);
   const app = new Router();
   app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
@@ -495,9 +521,18 @@ test("conversations payload includes per-model totals and a daemon-clock since",
   expect(events.length).toBeGreaterThanOrEqual(1);
   const first = events[0].data as {
     conversations: ConversationListRow[];
+    conversationModelTokenTotals: Record<string, ModelTokenTotalsRow[]>;
     modelTokenTotals: ModelTokenTotalsRow[];
     since: string;
   };
+  expect(first.conversations.map((row) => row.id)).toEqual([
+    "conv_a",
+    "conv_b",
+  ]);
+  expect(first.conversationModelTokenTotals).toEqual({
+    conv_a: [totals[0]],
+    conv_b: [totals[1]],
+  });
   expect(first.modelTokenTotals).toEqual(totals);
   // since must be parseable as ISO and be in the past.
   expect(typeof first.since).toBe("string");
@@ -505,6 +540,10 @@ test("conversations payload includes per-model totals and a daemon-clock since",
   expect(Date.parse(first.since)).toBeLessThanOrEqual(Date.now());
   // The reader must have been called with that exact ISO at least once.
   expect(reader.modelTokenTotalsCalls).toContain(first.since);
+  expect(reader.conversationModelTokenTotalsCalls).toContainEqual([
+    "conv_a",
+    "conv_b",
+  ]);
 });
 
 test("conversations payload's since stays stable across polls so quiet streams stay silent", async () => {

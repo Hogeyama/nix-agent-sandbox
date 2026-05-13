@@ -61,6 +61,12 @@ export interface HistoryShellProps {
  */
 interface HistoryListPayload {
   conversations: ConversationListRow[];
+  /**
+   * Per-conversation per-model token totals, keyed by conversation id.
+   * The map contains every id present in `conversations`; rows with no
+   * matching spans carry an empty array.
+   */
+  conversationModelTokenTotals: Record<string, ModelTokenTotalsRow[]>;
   modelTokenTotals: ModelTokenTotalsRow[];
   /** ISO-8601 boundary used by the daemon for `modelTokenTotals`. */
   since: string;
@@ -123,6 +129,8 @@ function HistoryListView(props: {
   });
 
   const conversations = () => stream.data()?.conversations ?? [];
+  const conversationModelTokenTotals = () =>
+    stream.data()?.conversationModelTokenTotals ?? {};
   const loading = () => stream.data() === null;
   const modelTokenTotals = () => stream.data()?.modelTokenTotals ?? [];
   const since = () => stream.data()?.since ?? "";
@@ -133,6 +141,7 @@ function HistoryListView(props: {
       loading={loading}
       error={stream.error}
       pricingSnapshot={props.pricingSnapshot}
+      conversationModelTokenTotals={conversationModelTokenTotals}
       modelTokenTotals={modelTokenTotals}
       since={since}
     />

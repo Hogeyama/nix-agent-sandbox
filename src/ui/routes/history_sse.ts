@@ -188,14 +188,22 @@ export function createHistorySseRoutes(
     const sinceIso = startOfMonthUtcIso(Date.now());
     const stream = createPollingStream({
       pollIntervalMs,
-      read: () => ({
-        event: "history:list",
-        payload: {
-          conversations: ctx.history.readConversationList(),
-          modelTokenTotals: ctx.history.readModelTokenTotals(sinceIso),
-          since: sinceIso,
-        },
-      }),
+      read: () => {
+        const conversations = ctx.history.readConversationList();
+        const conversationModelTokenTotals =
+          ctx.history.readConversationModelTokenTotalsByConversationIds(
+            conversations.map((row) => row.id),
+          );
+        return {
+          event: "history:list",
+          payload: {
+            conversations,
+            conversationModelTokenTotals,
+            modelTokenTotals: ctx.history.readModelTokenTotals(sinceIso),
+            since: sinceIso,
+          },
+        };
+      },
     });
     return sseResponse(stream);
   });
