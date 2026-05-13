@@ -291,6 +291,14 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                             </span>
                             <span class="history-detail-turn-acc-cell-label">
                               Turn {group.turnIndex}
+                              <Show when={group.userPromptText !== null}>
+                                <span
+                                  class="history-detail-turn-acc-prompt-preview"
+                                  title={group.userPromptText ?? undefined}
+                                >
+                                  {group.userPromptText}
+                                </span>
+                              </Show>
                             </span>
                             <span class="history-detail-turn-acc-cell-duration">
                               {group.durationLabel}
@@ -324,6 +332,16 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                               aria-labelledby={headerId}
                               class="history-detail-turn-acc-body"
                             >
+                              <Show when={group.userPromptText !== null}>
+                                <div class="history-detail-turn-acc-prompt-block">
+                                  <div class="history-detail-turn-acc-prompt-label">
+                                    User prompt
+                                  </div>
+                                  <div class="history-detail-turn-acc-prompt-text">
+                                    {group.userPromptText}
+                                  </div>
+                                </div>
+                              </Show>
                               <table class="history-detail-table">
                                 <thead>
                                   <tr>

@@ -2412,6 +2412,35 @@ body::after {
   overflow-x: auto;
 }
 
+/* Turn accordion: user_prompt preview in collapsed header */
+.history-detail-turn-acc-prompt-preview {
+  display: inline-block;
+  max-width: 300px; /* グリッドセルの幅を固定して列崩れを防ぐ */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  margin-left: 0.5em;
+  color: #666;
+  font-size: 0.85em;
+}
+
+/* Turn accordion: user_prompt full text block in expanded body */
+.history-detail-turn-acc-prompt-block {
+  padding: 0.5em 0.75em;
+  margin-bottom: 0.5em;
+  background: #f9f9f9;
+  border-left: 3px solid #ccc;
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.history-detail-turn-acc-prompt-label {
+  font-weight: bold;
+  margin-bottom: 0.25em;
+}
+
 /* Topbar history link — sits between the live indicator and the gear
  * icon. Uses the same muted-cream typography as the settings nav so
  * the topbar reads as a single palette. */
