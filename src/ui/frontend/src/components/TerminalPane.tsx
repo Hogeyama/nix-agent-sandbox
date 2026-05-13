@@ -46,11 +46,12 @@ type Props = {
    */
   onAck: (sessionId: string) => Promise<void>;
   /**
-   * Disconnect every dtach client currently attached to a session,
-   * leaving the session itself running. The toolbar disables its
-   * button while this promise is in flight and surfaces non-success.
+   * Stop the container backing the context agent row. The toolbar
+   * disables its button while this promise is in flight and surfaces
+   * non-success; on success the SessionsStore drops the row from the
+   * next SSE snapshot.
    */
-  onKillClients: (sessionId: string) => Promise<void>;
+  onStopContainer: (containerName: string) => Promise<unknown>;
   onRename: (sessionId: string, name: string) => Promise<void>;
   /**
    * Switch the center pane between the agent terminal and a shell on
@@ -285,7 +286,7 @@ export function TerminalPane(props: Props) {
         viewFor={(id) => props.terminals.getViewFor(id)}
         shellSpawnInFlight={(id) => props.terminals.isShellSpawnInFlight(id)}
         onAck={props.onAck}
-        onKillClients={props.onKillClients}
+        onStopContainer={props.onStopContainer}
         onRename={props.onRename}
         onShellToggle={props.onShellToggle}
       />

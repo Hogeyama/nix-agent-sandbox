@@ -2,7 +2,7 @@
  * Pure-function helpers backing `TerminalToolbar`.
  *
  * The toolbar exposes four affordances (Ack turn, Search, font-size,
- * Kill clients) and the rendering rules for each are factored out of
+ * Stop container) and the rendering rules for each are factored out of
  * the Solid component so they stay trivially testable. None of the
  * functions here read DOM or signals.
  */

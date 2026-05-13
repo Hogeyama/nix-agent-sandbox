@@ -12,7 +12,6 @@ import * as client from "./api/client";
 import {
   ackSessionTurn,
   getInfo,
-  killTerminalClients,
   renameSession,
   startShell,
   stopContainer,
@@ -350,9 +349,7 @@ export function App() {
           onAck={async (id) => {
             await ackSessionTurn(id);
           }}
-          onKillClients={async (id) => {
-            await killTerminalClients(id);
-          }}
+          onStopContainer={(name) => stopContainer(name)}
           onRename={async (sessionId, name) => {
             const { item } = await renameSession(sessionId, name);
             if (item.name !== undefined) {

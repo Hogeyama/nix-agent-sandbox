@@ -1,7 +1,7 @@
 /**
  * Center-pane toolbar that surfaces the keep-alive terminal layer's
- * affordances: Ack turn, Shell toggle, Search, font-size, and Kill
- * clients.
+ * affordances: Ack turn, Shell toggle, Search, font-size, and Stop
+ * container.
  *
  * The component is rendering-only for the rules it depends on: visibility
  * / disable state for Ack, the agent ⇄ shell toggle label, search-submit
@@ -23,8 +23,10 @@
  *     state of its own. `shellSpawnInFlight` collapses the label to
  *     "Spawning…" and disables the button so a double-click cannot issue
  *     a second POST while the first is in flight.
- *   - Kill clients: same in-flight pattern as Ack, no benign-status
- *     branch.
+ *   - Stop container: same in-flight pattern as Ack, no benign-status
+ *     branch. The button targets the context agent row's
+ *     `containerName`, so a shell view stops the parent agent's
+ *     container rather than the shell itself.
  *   - Font-size: a Toolbar-local signal clamped via `clampFontSize`.
  *     Persistence is intentionally out of scope for this layer.
  *   - Search: a terminal-scoped buffer. When the active terminal changes,
@@ -79,16 +81,22 @@ export interface TerminalToolbarProps {
    */
   shellSpawnInFlight: (sessionId: string) => boolean;
   onAck: (sessionId: string) => Promise<void>;
-  onKillClients: (sessionId: string) => Promise<void>;
   onRename: (sessionId: string, name: string) => Promise<void>;
   onShellToggle: (row: SessionRow) => void | Promise<void>;
+  /**
+   * Stop the container backing the context agent row. Resolves once the
+   * daemon has issued `docker stop`; the SessionsStore drops the row on
+   * the next SSE snapshot, which collapses `contextAgentRow` to null and
+   * disables the button on its own.
+   */
+  onStopContainer: (containerName: string) => Promise<unknown>;
 }
 
 const ERROR_TIMEOUT_MS = 5000;
 
 export function TerminalToolbar(props: TerminalToolbarProps) {
   const [acking, setAcking] = createSignal(false);
-  const [killing, setKilling] = createSignal(false);
+  const [stopping, setStopping] = createSignal(false);
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
   const [fontSize, setFontSize] = createSignal(FONT_SIZE_DEFAULT);
   const [searchOpen, setSearchOpen] = createSignal(false);
@@ -165,16 +173,16 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
     }
   };
 
-  const handleKillClients = async () => {
-    const terminalId = props.activeTerminalId();
-    if (terminalId === null || killing()) return;
-    setKilling(true);
+  const handleStopContainer = async () => {
+    const row = props.contextAgentRow();
+    if (row === null || stopping()) return;
+    setStopping(true);
     try {
-      await props.onKillClients(terminalId);
+      await props.onStopContainer(row.containerName);
     } catch (e) {
-      surfaceError(e instanceof Error ? e.message : "Failed to kill clients");
+      surfaceError(e instanceof Error ? e.message : "Failed to stop container");
     } finally {
-      setKilling(false);
+      setStopping(false);
     }
   };
 
@@ -313,10 +321,10 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
       <button
         type="button"
         class="tool danger"
-        disabled={killing() || props.activeTerminalId() === null}
-        onClick={handleKillClients}
+        disabled={stopping() || props.contextAgentRow() === null}
+        onClick={handleStopContainer}
       >
-        Kill clients
+        {stopping() ? "Stopping…" : "Stop container"}
       </button>
       <Show when={errorMessage()}>
         {(msg) => (
