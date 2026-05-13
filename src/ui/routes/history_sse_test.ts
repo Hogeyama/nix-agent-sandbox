@@ -53,6 +53,7 @@ function makeConversationDetail(id: string): ConversationDetail {
     spans: [],
     invocations: [],
     modelTokenTotals: [],
+    logRecords: [],
   };
 }
 
@@ -713,6 +714,50 @@ test("conversation detail re-emits when only modelTokenTotals changes", async ()
   expect(later).toBeDefined();
   expect((later?.data as ConversationDetail).modelTokenTotals[0].model).toBe(
     "claude-sonnet",
+  );
+});
+
+test("conversation detail re-emits when only logRecords changes", async () => {
+  const reader = makeMockReader();
+  reader.setConversation("c1", makeConversationDetail("c1"));
+  const ctx = makeCtx(reader);
+  const app = new Router();
+  app.route("/api", createHistorySseRoutes(ctx, { pollIntervalMs: POLL_MS }));
+
+  const res = await app.request("/api/history/conversation/c1/events");
+  setTimeout(() => {
+    const next: ConversationDetail = {
+      ...makeConversationDetail("c1"),
+      logRecords: [
+        {
+          invocationId: "sess_a",
+          conversationId: "c1",
+          promptId: "prompt_1",
+          sequence: 0,
+          eventName: "user_prompt",
+          time: "2025-01-01T00:00:00Z",
+          requestId: null,
+          attrsJson: "{}",
+        },
+      ],
+    };
+    reader.setConversation("c1", next);
+  }, POLL_MS + 5);
+
+  const events = await readEventsFor(res, WINDOW_MS);
+  expect(events.length).toBeGreaterThanOrEqual(2);
+  const first = events[0].data as ConversationDetail;
+  expect(first.logRecords).toEqual([]);
+  const later = events
+    .slice(1)
+    .find(
+      (e) =>
+        e.event === "history:conversation" &&
+        (e.data as ConversationDetail).logRecords.length > 0,
+    );
+  expect(later).toBeDefined();
+  expect((later?.data as ConversationDetail).logRecords[0].eventName).toBe(
+    "user_prompt",
   );
 });
 

@@ -76,6 +76,44 @@ export interface TurnEventRow {
   payloadJson: string;
 }
 
+/**
+ * A single log record row ingested from an OTLP log signal.
+ * Written by the log ingest stage; deduplicated by
+ * `(conversation_id, sequence)` PRIMARY KEY. `sequence` is a
+ * conversation-scoped monotonic counter, so this key uniquely identifies
+ * every record across all prompts within a conversation.
+ */
+export interface LogRecordRow {
+  invocationId: string;
+  conversationId: string;
+  promptId: string;
+  sequence: number;
+  eventName: string;
+  time: string;
+  requestId: string | null;
+  attrsJson: string;
+}
+
+/**
+ * Read projection of `log_records` returned by
+ * `queryLogRecordsByConversation`. All columns are included; the shape
+ * mirrors `LogRecordRow` exactly (camelCase, same nullability contract).
+ *
+ * 現時点では `LogRecordRow` と同一 shape だが、将来 reader 専用フィールド
+ * （集計値など）を追加する際に独立した interface として diverge できるよう
+ * 意図的に分離している。
+ */
+export interface LogRecordSummaryRow {
+  readonly invocationId: string;
+  readonly conversationId: string;
+  readonly promptId: string;
+  readonly sequence: number;
+  readonly eventName: string;
+  readonly time: string;
+  readonly requestId: string | null;
+  readonly attrsJson: string;
+}
+
 // ---------------------------------------------------------------------------
 // Reader row shapes (returned by query* helpers in store.ts and consumed by
 // the UI / SSE layers). Kept in this file — separately from store.ts — so
@@ -173,6 +211,13 @@ export interface ConversationDetail {
    * hashing stays stable across polls.
    */
   readonly modelTokenTotals: ModelTokenTotalsRow[];
+  /**
+   * Log records ingested for this conversation, ordered by `sequence ASC`.
+   * Because `sequence` is a conversation-scoped monotonic counter, this
+   * ordering reconstructs the exact emission order across all prompts.
+   * Empty array when no log records have been written yet.
+   */
+  readonly logRecords: LogRecordSummaryRow[];
 }
 
 export interface InvocationDetail {

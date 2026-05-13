@@ -8,6 +8,8 @@ import type {
   InvocationDetail,
   InvocationRow,
   InvocationSummaryRow,
+  LogRecordRow,
+  LogRecordSummaryRow,
   ModelTokenTotalsRow,
   SpanRow,
   SpanSummaryRow,
@@ -21,6 +23,7 @@ export type {
   ConversationListRow,
   InvocationDetail,
   InvocationSummaryRow,
+  LogRecordSummaryRow,
   ModelTokenTotalsRow,
   SpanSummaryRow,
   TraceSummaryRow,
@@ -58,7 +61,7 @@ export function resolveHistoryDbPath(): string {
  * mode) when the on-disk value disagrees. Migrations are not attempted —
  * the operator is expected to `rm history.db` and let the writer recreate.
  */
-export const HISTORY_DB_USER_VERSION = 2;
+export const HISTORY_DB_USER_VERSION = 3;
 
 export class HistoryDbVersionMismatchError extends Error {
   readonly actual: number;
@@ -166,6 +169,30 @@ CREATE INDEX IF NOT EXISTS idx_invocations_started
   ON invocations(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_lastseen
   ON conversations(last_seen_at DESC);
+
+-- ON DELETE 句は省略（暗黙の RESTRICT）。invocations / conversations テーブルと
+-- 同じ方針: 削除機能は現時点で未実装のため、RESTRICT のままで問題ない。
+CREATE TABLE IF NOT EXISTS log_records (
+  invocation_id    TEXT NOT NULL REFERENCES invocations(id),
+  conversation_id  TEXT NOT NULL REFERENCES conversations(id),
+  prompt_id        TEXT NOT NULL,
+  sequence         INTEGER NOT NULL,
+  event_name       TEXT NOT NULL,
+  time             TEXT NOT NULL,
+  request_id       TEXT,
+  attrs_json       TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (conversation_id, sequence)
+);
+-- invocation 単位でログをまとめて取得するためのインデックス（例: invocation 削除時の cascade 対象確認、invocation 単位のレコード数集計）
+CREATE INDEX IF NOT EXISTS idx_log_records_invocation ON log_records(invocation_id);
+-- prompt_id でフィルタする将来の turn 単位クエリ（WHERE conversation_id = ? AND prompt_id = ?）のためのインデックス。
+-- 現時点では queryLogRecordsByConversation が conversation 全件取得するのみ。
+CREATE INDEX IF NOT EXISTS idx_log_records_conv_prompt ON log_records(conversation_id, prompt_id);
+-- This index exists for the reader-side JS in-memory join (matching
+-- api_request event request_id against span trace_id). Currently only
+-- queryLogRecordsByConversation fetches full conversation batches, but
+-- the index is retained for future direct request_id lookups.
+CREATE INDEX IF NOT EXISTS idx_log_records_request_id ON log_records(request_id) WHERE request_id IS NOT NULL;
 `;
 
 interface UserVersionRow {
@@ -443,6 +470,50 @@ export function insertTurnEvent(db: Database, row: TurnEventRow): void {
     row.kind,
     row.payloadJson,
   );
+}
+
+/**
+ * Bulk-insert log records within a single transaction.
+ *
+ * Callers must ensure the referenced invocation and conversation rows already
+ * exist before calling this function — inserting without them will trigger a
+ * FK violation (foreign_keys=ON is enforced by the writer PRAGMA setup).
+ *
+ * Deduplication is done by `INSERT OR IGNORE` against the composite PRIMARY
+ * KEY `(conversation_id, sequence)`. This means the first write for a given
+ * key wins — retried deliveries of the same OTLP log batch are silently
+ * dropped, which matches the immutable-record semantics of log signals.
+ * Because `sequence` is a conversation-scoped monotonic counter (not
+ * prompt-local), `(conversation_id, sequence)` uniquely identifies every
+ * record across all prompts within a conversation.
+ *
+ * This store function trusts and persists the `sequence` values as-is.
+ * Ensuring that `sequence` is monotonically increasing within a conversation
+ * is the responsibility of the caller (the ingest layer).
+ */
+export function insertLogRecords(db: Database, rows: LogRecordRow[]): void {
+  if (rows.length === 0) return;
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO log_records
+       (invocation_id, conversation_id, prompt_id, sequence,
+        event_name, time, request_id, attrs_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const tx = db.transaction((batch: LogRecordRow[]) => {
+    for (const r of batch) {
+      stmt.run(
+        r.invocationId,
+        r.conversationId,
+        r.promptId,
+        r.sequence,
+        r.eventName,
+        r.time,
+        r.requestId,
+        r.attrsJson,
+      );
+    }
+  });
+  tx(rows);
 }
 
 // ---------------------------------------------------------------------------
@@ -730,6 +801,7 @@ export function queryConversationDetail(
   ).map(rowToInvocationSummary);
 
   const modelTokenTotals = queryConversationModelTokenTotals(db, id);
+  const logRecords = queryLogRecordsByConversation(db, id);
 
   return {
     conversation: rowToConversationListRow(head),
@@ -737,6 +809,7 @@ export function queryConversationDetail(
     spans,
     invocations,
     modelTokenTotals,
+    logRecords,
   };
 }
 
@@ -882,8 +955,8 @@ function rowToModelTokenTotals(r: ModelTokenTotalsSqlRow): ModelTokenTotalsRow {
  *   in practice `SUM` on an empty result is NULL, but on a non-empty
  *   group with all-NULL values `SUM` is also NULL; both cases collapse
  *   to 0.
- * - Order is deterministic: `model ASC` with the NULL row last. This
- *   stabilises downstream SSE diff hashing in commit 5.
+ * - Order is deterministic: `model ASC` with the NULL row last. Callers
+ *   can rely on this stable order for diff-based change detection.
  * - `spans.started_at` is not currently indexed, so this is a full scan.
  *   Acceptable at current scale; revisit if span counts grow.
  */
@@ -932,6 +1005,56 @@ export function queryConversationModelTokenTotals(
     )
     .all(conversationId) as ModelTokenTotalsSqlRow[];
   return rows.map(rowToModelTokenTotals);
+}
+
+interface LogRecordSqlRow {
+  invocation_id: string;
+  conversation_id: string;
+  prompt_id: string;
+  sequence: number;
+  event_name: string;
+  time: string;
+  request_id: string | null;
+  attrs_json: string;
+}
+
+function rowToLogRecordSummary(r: LogRecordSqlRow): LogRecordSummaryRow {
+  return {
+    invocationId: r.invocation_id,
+    conversationId: r.conversation_id,
+    promptId: r.prompt_id,
+    sequence: r.sequence,
+    eventName: r.event_name,
+    time: r.time,
+    requestId: r.request_id,
+    attrsJson: r.attrs_json,
+  };
+}
+
+/**
+ * Fetch all log records for a conversation, ordered by `sequence ASC`.
+ * Because `sequence` is a conversation-scoped monotonic counter (not
+ * prompt-local), a single `ORDER BY sequence ASC` is sufficient to
+ * reconstruct the exact emission order across all prompts within the
+ * conversation — no time-based or prompt_id tie-breaking is required.
+ *
+ * Returns `[]` when no log records have been written for the conversation.
+ */
+export function queryLogRecordsByConversation(
+  db: Database,
+  conversationId: string,
+): LogRecordSummaryRow[] {
+  const rows = db
+    .prepare(
+      `SELECT
+         invocation_id, conversation_id, prompt_id, sequence,
+         event_name, time, request_id, attrs_json
+       FROM log_records
+       WHERE conversation_id = ?
+       ORDER BY sequence ASC`,
+    )
+    .all(conversationId) as LogRecordSqlRow[];
+  return rows.map(rowToLogRecordSummary);
 }
 
 interface ConversationModelTokenTotalsSqlRow extends ModelTokenTotalsSqlRow {

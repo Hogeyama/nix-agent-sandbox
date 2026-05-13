@@ -7,17 +7,22 @@ import {
   _closeHistoryDb,
   HISTORY_DB_USER_VERSION,
   HistoryDbVersionMismatchError,
+  insertLogRecords,
   insertSpans,
   insertTurnEvent,
   markInvocationEnded,
   openHistoryDb,
+  queryConversationDetail,
+  queryLogRecordsByConversation,
   upsertConversation,
+  upsertConversationSummary,
   upsertInvocation,
   upsertTrace,
 } from "./store.ts";
 import type {
   ConversationRow,
   InvocationRow,
+  LogRecordRow,
   SpanRow,
   TraceRow,
   TurnEventRow,
@@ -367,7 +372,7 @@ test("upsertConversation: agent COALESCEs from null, then sticks even if a later
   }
 });
 
-test("user_version is stamped to 1 on writer creation and stays on reopen", async () => {
+test("user_version is stamped to HISTORY_DB_USER_VERSION on writer creation and stays on reopen", async () => {
   const t = await makeTempDb();
   try {
     const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
@@ -422,7 +427,7 @@ test("opening with a mismatched user_version throws HistoryDbVersionMismatchErro
   }
 });
 
-test("schema introspection: expected 6 tables and 7 indexes are present", async () => {
+test("schema introspection: expected 7 tables and 10 indexes are present", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
@@ -437,6 +442,7 @@ test("schema introspection: expected 6 tables and 7 indexes are present", async 
       "conversation_summaries",
       "conversations",
       "invocations",
+      "log_records",
       "spans",
       "traces",
       "turn_events",
@@ -451,6 +457,9 @@ test("schema introspection: expected 6 tables and 7 indexes are present", async 
     expect(indexNames).toEqual([
       "idx_conversations_lastseen",
       "idx_invocations_started",
+      "idx_log_records_conv_prompt",
+      "idx_log_records_invocation",
+      "idx_log_records_request_id",
       "idx_spans_trace",
       "idx_traces_conversation",
       "idx_traces_invocation",
@@ -507,6 +516,312 @@ test("insertTurnEvent: appends rows (no PK; duplicates allowed)", async () => {
       .query("SELECT COUNT(*) AS c FROM turn_events")
       .get() as CountRow;
     expect(count.c).toEqual(3);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+function logRec(overrides: Partial<LogRecordRow> = {}): LogRecordRow {
+  return {
+    invocationId: "sess_a",
+    conversationId: "conv_a",
+    promptId: "prompt_1",
+    sequence: 0,
+    eventName: "user_prompt",
+    time: "2026-05-01T10:00:00Z",
+    requestId: null,
+    attrsJson: "{}",
+    ...overrides,
+  };
+}
+
+test("insertLogRecords: basic CRUD and INSERT OR IGNORE dedup on (conversation_id, sequence)", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv());
+    upsertConversation(db, conv());
+
+    // Insert two records with different sequence numbers
+    insertLogRecords(db, [
+      logRec({ sequence: 0, eventName: "log.start" }),
+      logRec({ sequence: 1, eventName: "log.end" }),
+    ]);
+
+    let count = db
+      .query("SELECT COUNT(*) AS c FROM log_records")
+      .get() as CountRow;
+    expect(count.c).toEqual(2);
+
+    // INSERT OR IGNORE: same (conversation_id, sequence) — first write wins, count unchanged
+    insertLogRecords(db, [
+      logRec({ sequence: 0, eventName: "log.start_overwrite_attempt" }),
+    ]);
+    count = db.query("SELECT COUNT(*) AS c FROM log_records").get() as CountRow;
+    expect(count.c).toEqual(2);
+
+    // Verify original event_name was not overwritten
+    const row = db
+      .query(
+        "SELECT event_name FROM log_records WHERE conversation_id = ? AND sequence = ?",
+      )
+      .get("conv_a", 0) as { event_name: string } | null;
+    expect(row?.event_name).toEqual("log.start");
+
+    // Same (conv, seq) but different prompt_id is also deduplicated — first write wins
+    insertLogRecords(db, [
+      logRec({
+        sequence: 0,
+        promptId: "prompt_different",
+        eventName: "log.start_different_prompt",
+      }),
+    ]);
+    count = db.query("SELECT COUNT(*) AS c FROM log_records").get() as CountRow;
+    expect(count.c).toEqual(2);
+
+    const rowAfterDiffPrompt = db
+      .query(
+        "SELECT event_name, prompt_id FROM log_records WHERE conversation_id = ? AND sequence = ?",
+      )
+      .get("conv_a", 0) as { event_name: string; prompt_id: string } | null;
+    expect(rowAfterDiffPrompt?.event_name).toEqual("log.start");
+    expect(rowAfterDiffPrompt?.prompt_id).toEqual("prompt_1");
+
+    // Empty batch is a no-op
+    insertLogRecords(db, []);
+    count = db.query("SELECT COUNT(*) AS c FROM log_records").get() as CountRow;
+    expect(count.c).toEqual(2);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("insertLogRecords: attrsJson non-empty JSON string round-trips without modification", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv());
+    upsertConversation(db, conv());
+
+    const attrsJson = '{"model":"claude-opus-4-5","cost_usd":0.0042}';
+    insertLogRecords(db, [logRec({ sequence: 0, attrsJson })]);
+
+    const records = queryLogRecordsByConversation(db, "conv_a");
+    expect(records.length).toEqual(1);
+    expect(records[0]?.attrsJson).toEqual(attrsJson);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("insertLogRecords: within a single batch, duplicate (conversation_id, sequence) keeps the first entry and discards the later one", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv());
+    upsertConversation(db, conv());
+
+    // Pass two records with the same (conversation_id, sequence) in one call.
+    // INSERT OR IGNORE processes rows in order, so the first definition wins.
+    insertLogRecords(db, [
+      logRec({ sequence: 0, eventName: "log.first_in_batch" }),
+      logRec({ sequence: 0, eventName: "log.duplicate_in_batch" }),
+    ]);
+
+    const count = db
+      .query("SELECT COUNT(*) AS c FROM log_records")
+      .get() as CountRow;
+    expect(count.c).toEqual(1);
+
+    const row = db
+      .query(
+        "SELECT event_name FROM log_records WHERE conversation_id = ? AND sequence = ?",
+      )
+      .get("conv_a", 0) as { event_name: string } | null;
+    expect(row?.event_name).toEqual("log.first_in_batch");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryLogRecordsByConversation: returns records ordered by sequence ASC", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv());
+    upsertConversation(db, conv());
+
+    // Insert out-of-sequence order with non-monotonic timestamps to confirm
+    // that ordering is by sequence, not by time.
+    insertLogRecords(db, [
+      logRec({
+        sequence: 1,
+        eventName: "log.second",
+        time: "2026-05-01T10:00:02Z",
+      }),
+      logRec({
+        sequence: 0,
+        eventName: "log.first",
+        time: "2026-05-01T10:00:03Z", // later timestamp but earlier sequence
+      }),
+      logRec({
+        sequence: 2,
+        eventName: "log.third",
+        time: "2026-05-01T10:00:01Z",
+      }),
+    ]);
+
+    const records = queryLogRecordsByConversation(db, "conv_a");
+    expect(records.length).toEqual(3);
+    expect(records[0]?.eventName).toEqual("log.first");
+    expect(records[1]?.eventName).toEqual("log.second");
+    expect(records[2]?.eventName).toEqual("log.third");
+
+    // Unknown conversation returns empty array
+    const empty = queryLogRecordsByConversation(db, "conv_unknown");
+    expect(empty).toEqual([]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationDetail: includes logRecords", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    // queryConversationDetail は trace と conversationSummary が両方存在する場合のみ非 null を返すため、
+    // logRecords を検証するにはそれらの事前挿入が必要。
+    upsertInvocation(db, inv());
+    upsertConversation(db, conv());
+    upsertTrace(db, trace({ conversationId: "conv_a" }));
+    upsertConversationSummary(db, {
+      id: "conv_a",
+      summary: "test summary",
+      capturedAt: "2026-05-01T10:00:00Z",
+    });
+
+    insertLogRecords(db, [
+      logRec({ sequence: 0, eventName: "log.event", requestId: "req_1" }),
+    ]);
+
+    const detail = queryConversationDetail(db, "conv_a");
+    expect(detail).not.toBeNull();
+    expect(detail?.logRecords.length).toEqual(1);
+    expect(detail?.logRecords[0]?.eventName).toEqual("log.event");
+    expect(detail?.logRecords[0]?.requestId).toEqual("req_1");
+    expect(detail?.logRecords[0]?.conversationId).toEqual("conv_a");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationDetail: logRecords is empty array when no log_records have been inserted", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv());
+    upsertConversation(db, conv());
+    upsertTrace(db, trace({ conversationId: "conv_a" }));
+    upsertConversationSummary(db, {
+      id: "conv_a",
+      summary: "test summary",
+      capturedAt: "2026-05-01T10:00:00Z",
+    });
+    // log_records には何も挿入しない
+
+    const detail = queryConversationDetail(db, "conv_a");
+    expect(detail).not.toBeNull();
+    expect(detail?.logRecords).toEqual([]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryLogRecordsByConversation: records across multiple prompt_ids are ordered by sequence ASC (conversation-scoped)", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv());
+    upsertConversation(db, conv());
+
+    // sequence is conversation-scoped and monotonically increasing across
+    // prompt boundaries: prompt_1 uses seq 0-1, prompt_2 continues at 2-3.
+    insertLogRecords(db, [
+      logRec({
+        promptId: "prompt_1",
+        sequence: 0,
+        eventName: "p1.first",
+        time: "2026-05-01T10:00:00Z",
+      }),
+      logRec({
+        promptId: "prompt_1",
+        sequence: 1,
+        eventName: "p1.second",
+        time: "2026-05-01T10:00:01Z",
+      }),
+      logRec({
+        promptId: "prompt_2",
+        sequence: 2,
+        eventName: "p2.first",
+        time: "2026-05-01T10:00:02Z",
+      }),
+      logRec({
+        promptId: "prompt_2",
+        sequence: 3,
+        eventName: "p2.second",
+        time: "2026-05-01T10:00:03Z",
+      }),
+    ]);
+
+    const records = queryLogRecordsByConversation(db, "conv_a");
+    expect(records.length).toEqual(4);
+    expect(records[0]?.eventName).toEqual("p1.first");
+    expect(records[1]?.eventName).toEqual("p1.second");
+    expect(records[2]?.eventName).toEqual("p2.first");
+    expect(records[3]?.eventName).toEqual("p2.second");
+    // Confirm prompt_id attribution is preserved
+    expect(records[0]?.promptId).toEqual("prompt_1");
+    expect(records[2]?.promptId).toEqual("prompt_2");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("insertLogRecords: inserting a record with a non-existent conversation_id throws a FK violation", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv());
+    // Deliberately do NOT upsert any conversation
+
+    let err: unknown;
+    try {
+      insertLogRecords(db, [logRec({ conversationId: "conv_does_not_exist" })]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect(String(err)).toMatch(/FOREIGN KEY|constraint/i);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("insertLogRecords: inserting a record with a non-existent invocation_id throws a FK violation", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    // conversation exists but invocation does NOT
+    upsertConversation(db, conv());
+
+    let err: unknown;
+    try {
+      insertLogRecords(db, [logRec({ invocationId: "sess_does_not_exist" })]);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect(String(err)).toMatch(/FOREIGN KEY|constraint/i);
   } finally {
     await cleanup(t);
   }

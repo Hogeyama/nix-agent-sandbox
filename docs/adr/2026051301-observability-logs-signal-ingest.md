@@ -77,9 +77,12 @@ silently ingest しない安全側)。
 - OTLP top-level の `traceId` / `spanId` は **空** (全 record で確認)。
   Claude は logs を traces と紐付けて吐かない
 - 各 record の attr に `session.id` (= Claude conversation id) が必ず乗る
-  (33/33 で確認)
+  (2204/2204 で確認)
 - 各 record の attr に `prompt.id` (= user_prompt ごとに振られる turn
-  ローカル ID) が必ず乗る (33/33 で確認)
+  ローカル ID) が必ず乗る (2204/2204 で確認)
+- `event.sequence` は **conversation 単位の単調増加** (multi-turn 検証:
+  prompt #1: 0–348、prompt #2: 349–1508、prompt #3: 1509–2205。
+  prompt 境界で gap も reset もなし)
 - resource attr の `nas.session.id` で invocation が辿れる
 
 紐付け経路:
@@ -87,6 +90,7 @@ silently ingest しない安全側)。
 - log_records → invocation: `nas.session.id` (resource) 直
 - log_records → conversation: `session.id` (record attr) → conversations.id
 - 同一 turn の event 列: `prompt.id` で GROUP BY、`event.sequence` で ordering
+  (sequence は conversation 単位の単調増加のため、prompt サブセット内でも昇順が保たれる)
 - **prompt.id → trace_id**: logs `api_request` event の `request_id` と spans
   `claude_code.llm_request` の `request_id` が 1:1 で一致 (実機検証で
   7 / 7 一致、対応 spans の trace_id は単一)。turn 内のいずれかの
@@ -98,10 +102,9 @@ column と同様、span attrs は promote しない方針を踏襲)。
 
 ### 1 trace = 1 prompt.id = 1 user_prompt の invariant
 
-実機 DB 上の全 trace で `claude_code.interaction` span は trace 内 1 個、
-`interaction.sequence` も trace 内一意。logs dump 上も prompt.id ごとの
-user_prompt event は 1 件。すなわち **1 trace ⇔ 1 prompt.id ⇔ 1
-user_prompt event の 1:1:1** が前提。
+マルチターン (3 prompt.id / 3 trace_id) を含む実機検証 (2204 records) で
+violation 0。**1 trace ⇔ 1 prompt.id ⇔ 1 user_prompt event の 1:1:1**
+を前提とする。
 
 実装上の含意:
 - reader は trace ごとに `userPromptText: string | null` をスカラ 1 個と
@@ -127,29 +130,33 @@ CREATE TABLE log_records (
   time             TEXT NOT NULL,
   request_id       TEXT,
   attrs_json       TEXT NOT NULL DEFAULT '{}',
-  PRIMARY KEY (conversation_id, prompt_id, sequence)
+  PRIMARY KEY (conversation_id, sequence)
 );
 
 CREATE INDEX idx_log_records_invocation
   ON log_records(invocation_id);
-CREATE INDEX idx_log_records_conv_time
-  ON log_records(conversation_id, time);
+CREATE INDEX idx_log_records_conv_prompt
+  ON log_records(conversation_id, prompt_id);
 CREATE INDEX idx_log_records_request_id
   ON log_records(request_id) WHERE request_id IS NOT NULL;
 ```
 
 設計判断:
-- **PK = `(conversation_id, prompt_id, sequence)`**: OTLP 側に natural
-  id が無いので 3 列合成 PK で SDK retry の dedup を `INSERT OR IGNORE`
-  に任せる
+- **PK = `(conversation_id, sequence)`**: `event.sequence` が conversation
+  単位の単調増加であるため 2 列で自然な dedup キーになる。SDK retry で
+  同一 record が再送されても `INSERT OR IGNORE` で冪等。`prompt_id` を PK
+  から外すことで、同一 seq に異なる `prompt_id` が来た場合も先着勝ちで
+  dedup できる (defensive)
 - **`body` column 無し**: body は `"claude_code.<event_name>"` の冗長
   文字列なので `event_name` で十分。dropped
-- **3 キー (`conversation_id` / `prompt_id` / `sequence`) は NOT NULL**:
+- **`conversation_id` / `prompt_id` / `sequence` は NOT NULL**:
   欠けた record は ingest 時に warn drop。whitelist 外イベント drop と
   同じ policy
 - **`request_id` のみ独立 column として promote**: trace 結合の主キー
   として頻繁に JOIN される。partial index で api_request 以外の NULL
   を物理スキップ
+- **`idx_log_records_conv_prompt`**: turn 単位 GROUP BY のためのインデックス。
+  `idx_log_records_conv_time` は sequence が単調増加であるため不要となり削除
 - **`prompt` 本文 / `model` / token 系は attrs_json のまま**: 当面検索
   しないので promote 不要。必要になったら別 ADR
 - **`event_name` に CHECK 制約は付けない**: whitelist 拡張時の毎回
