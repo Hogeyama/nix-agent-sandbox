@@ -450,6 +450,36 @@ test("configureCopilot: mounts ~/.copilot when legacy dir exists", () => {
   );
 });
 
+test("configureCopilot: defaults REMOTE_CONTAINERS=true so /copy uses OSC52", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: "/usr/bin/copilot",
+    copilotLegacyDirExists: false,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: {},
+  });
+  expect(result.envVars.REMOTE_CONTAINERS).toEqual("true");
+});
+
+test("configureCopilot: keeps caller-supplied REMOTE_CONTAINERS value", () => {
+  const probes: CopilotProbes = {
+    copilotBinPath: "/usr/bin/copilot",
+    copilotLegacyDirExists: false,
+  };
+  const result = configureCopilot({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: [],
+    priorEnvVars: { REMOTE_CONTAINERS: "vscode" },
+  });
+  expect(result.envVars.REMOTE_CONTAINERS).toEqual("vscode");
+});
+
 test("configureCopilot: preserves existing dockerArgs and envVars", () => {
   const probes: CopilotProbes = {
     copilotBinPath: null,

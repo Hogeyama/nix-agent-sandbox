@@ -42,6 +42,12 @@ export function configureCopilot(input: CopilotConfigInput): AgentConfigResult {
   const args = [...priorDockerArgs];
   const envVars = { ...priorEnvVars };
 
+  // Copilot CLI の clipboard モジュールは X11/Wayland にネイティブで繋ぎに行くが、
+  // REMOTE_CONTAINERS が立っていると native クリップボードを諦めて OSC52 のみ使う。
+  // ホスト側ターミナル (xterm.js + @xterm/addon-clipboard) が OSC52 を受けるので
+  // これでコンテナ内 → ホストクリップボードのコピーが成立する。
+  envVars.REMOTE_CONTAINERS ??= "true";
+
   // ~/.copilot (legacy state dir) のマウント
   if (probes.copilotLegacyDirExists) {
     args.push("-v", `${hostHome}/.copilot:${containerHome}/.copilot`);
