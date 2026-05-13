@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type {
   ConversationDetail,
   ConversationListRow,
   InvocationSummaryRow,
+  LogRecordSummaryRow,
   SpanSummaryRow,
   TraceSummaryRow,
 } from "../../../../../history/types";
@@ -88,6 +89,22 @@ function makeSpan(overrides: Partial<SpanSummaryRow> = {}): SpanSummaryRow {
   };
 }
 
+function makeLogRecord(
+  overrides: Partial<LogRecordSummaryRow> = {},
+): LogRecordSummaryRow {
+  return {
+    invocationId: "inv_xxxxxxxxxxxxxxxx",
+    conversationId: "sess_aabbccdd11223344",
+    promptId: "prompt_default",
+    sequence: 0,
+    eventName: "user_prompt",
+    time: "2026-05-01T11:05:00.000Z",
+    requestId: null,
+    attrsJson: JSON.stringify({ prompt: "Hello" }),
+    ...overrides,
+  };
+}
+
 function makeDetail(
   overrides: Partial<ConversationDetail> = {},
 ): ConversationDetail {
@@ -97,6 +114,7 @@ function makeDetail(
     spans: [makeSpan()],
     invocations: [makeInvocation()],
     modelTokenTotals: [],
+    logRecords: [],
     ...overrides,
   };
 }
@@ -1109,5 +1127,282 @@ describe("summariseTraceSpansByModel", () => {
         cacheWriteAbove200k: 0,
       },
     ]);
+  });
+});
+
+describe("buildSpanTreeByTurn – userPromptText in-memory join", () => {
+  // Helpers for building a complete join chain:
+  // traceId "trace_t1" ← span claude_code.llm_request (request_id="req_1")
+  //   ← api_request log record (requestId="req_1", promptId="p1")
+  //   ← user_prompt log record (promptId="p1", attrs.prompt="Hello world")
+
+  function makeLlmRequestSpan(
+    traceId: string,
+    requestId: string,
+    spanOverrides: Partial<SpanSummaryRow> = {},
+  ): SpanSummaryRow {
+    return makeSpan({
+      spanId: `llm_${traceId}`,
+      parentSpanId: null,
+      traceId,
+      spanName: "claude_code.llm_request",
+      kind: "client",
+      inTok: 10,
+      outTok: 5,
+      cacheR: 0,
+      cacheW: 0,
+      attrsJson: JSON.stringify({ request_id: requestId }),
+      ...spanOverrides,
+    });
+  }
+
+  function makeApiRequestRecord(
+    requestId: string,
+    promptId: string,
+    sequence: number,
+  ): LogRecordSummaryRow {
+    return makeLogRecord({
+      eventName: "api_request",
+      requestId,
+      promptId,
+      sequence,
+      attrsJson: "{}",
+    });
+  }
+
+  function makeUserPromptRecord(
+    promptId: string,
+    prompt: string,
+    sequence: number,
+  ): LogRecordSummaryRow {
+    return makeLogRecord({
+      eventName: "user_prompt",
+      promptId,
+      sequence,
+      requestId: null,
+      attrsJson: JSON.stringify({ prompt }),
+    });
+  }
+
+  test("resolves userPromptText when all join links are present", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:05.000Z",
+        }),
+      ],
+      spans: [makeLlmRequestSpan("t1", "req_1")],
+      logRecords: [
+        makeApiRequestRecord("req_1", "p1", 1),
+        makeUserPromptRecord("p1", "Hello world", 0),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.userPromptText).toBe("Hello world");
+  });
+
+  test("userPromptText is null when logRecords is empty", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [makeLlmRequestSpan("t1", "req_1")],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("userPromptText is null when api_request record is absent", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [makeLlmRequestSpan("t1", "req_1")],
+      logRecords: [
+        // no api_request — join breaks at step 1
+        makeUserPromptRecord("p1", "Should not resolve", 0),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("userPromptText is null when api_request exists but user_prompt record is absent", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:05.000Z",
+        }),
+      ],
+      spans: [makeLlmRequestSpan("t1", "req_1")],
+      logRecords: [
+        // api_request is present (requestId + promptId), but no user_prompt record
+        makeApiRequestRecord("req_1", "p1", 1),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("userPromptText is null when llm_request span is absent", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [
+        // Only a regular chat span — no claude_code.llm_request span
+        makeSpan({
+          spanId: "chat1",
+          parentSpanId: null,
+          traceId: "t1",
+          spanName: "chat.completion",
+          kind: "chat",
+          inTok: 10,
+          outTok: 5,
+        }),
+      ],
+      logRecords: [
+        makeApiRequestRecord("req_1", "p1", 1),
+        makeUserPromptRecord("p1", "Should not resolve", 0),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("multiple turns get correct isolated userPromptText (no cross-contamination)", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t_a",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:05.000Z",
+        }),
+        makeTrace({
+          traceId: "t_b",
+          startedAt: "2026-05-01T11:01:00.000Z",
+          endedAt: "2026-05-01T11:01:05.000Z",
+        }),
+      ],
+      spans: [
+        makeLlmRequestSpan("t_a", "req_a"),
+        makeLlmRequestSpan("t_b", "req_b", { spanId: "llm_t_b" }),
+      ],
+      logRecords: [
+        makeApiRequestRecord("req_a", "p_a", 1),
+        makeApiRequestRecord("req_b", "p_b", 3),
+        makeUserPromptRecord("p_a", "Turn A prompt", 0),
+        makeUserPromptRecord("p_b", "Turn B prompt", 2),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.traceId).toBe("t_a");
+    expect(groups[0]?.userPromptText).toBe("Turn A prompt");
+    expect(groups[1]?.traceId).toBe("t_b");
+    expect(groups[1]?.userPromptText).toBe("Turn B prompt");
+  });
+
+  test("when multiple user_prompt records share a promptId, the lowest sequence wins", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const detail = makeDetail({
+        traces: [
+          makeTrace({
+            traceId: "t1",
+            startedAt: "2026-05-01T11:00:00.000Z",
+            endedAt: "2026-05-01T11:00:05.000Z",
+          }),
+        ],
+        spans: [makeLlmRequestSpan("t1", "req_1")],
+        logRecords: [
+          makeApiRequestRecord("req_1", "p1", 1),
+          // sequence=5 record arrives first in the array but should lose
+          makeUserPromptRecord("p1", "Later duplicate", 5),
+          // sequence=0 is the canonical first emission
+          makeUserPromptRecord("p1", "First canonical", 0),
+        ],
+      });
+      const groups = buildSpanTreeByTurn(detail, NOW_MS);
+      expect(groups[0]?.userPromptText).toBe("First canonical");
+      // Duplicate detection must emit exactly one warn (not silently swallowed).
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[0]).toContain("duplicate user_prompt");
+      expect(warnSpy.mock.calls[0]?.[0]).toContain("promptId=p1");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("when multiple api_request records share a requestId, the lowest sequence wins", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const detail = makeDetail({
+        traces: [
+          makeTrace({
+            traceId: "t1",
+            startedAt: "2026-05-01T11:00:00.000Z",
+            endedAt: "2026-05-01T11:00:05.000Z",
+          }),
+        ],
+        spans: [makeLlmRequestSpan("t1", "req_1")],
+        logRecords: [
+          // sequence=5 arrives first in the array but should lose
+          makeApiRequestRecord("req_1", "p_later", 5),
+          // sequence=0 is the canonical first emission — its promptId wins
+          makeApiRequestRecord("req_1", "p_first", 0),
+          makeUserPromptRecord("p_later", "Should not resolve", 2),
+          makeUserPromptRecord("p_first", "First canonical api", 1),
+        ],
+      });
+      const groups = buildSpanTreeByTurn(detail, NOW_MS);
+      expect(groups[0]?.userPromptText).toBe("First canonical api");
+      // Duplicate detection must emit exactly one warn.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[0]).toContain("duplicate api_request");
+      expect(warnSpy.mock.calls[0]?.[0]).toContain("requestId=req_1");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("handles non-ASCII prompt text correctly", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:05.000Z",
+        }),
+      ],
+      spans: [makeLlmRequestSpan("t1", "req_1")],
+      logRecords: [
+        makeApiRequestRecord("req_1", "p1", 1),
+        makeUserPromptRecord("p1", "日本語のプロンプト 🎉", 0),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBe("日本語のプロンプト 🎉");
+  });
+
+  test("sequence=0 is a valid sequence value (not treated as falsy)", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:05.000Z",
+        }),
+      ],
+      spans: [makeLlmRequestSpan("t1", "req_1")],
+      logRecords: [
+        makeApiRequestRecord("req_1", "p1", 1),
+        makeUserPromptRecord("p1", "Prompt at sequence zero", 0),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBe("Prompt at sequence zero");
   });
 });

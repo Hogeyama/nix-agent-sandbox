@@ -22,6 +22,7 @@ import {
 import type {
   ConversationDetail,
   InvocationSummaryRow,
+  LogRecordSummaryRow,
   ModelTokenTotalsRow,
   SpanSummaryRow,
   TraceSummaryRow,
@@ -214,6 +215,19 @@ export interface TurnSpanGroup {
    * is the cost-projection caller's responsibility.
    */
   readonly perModelTotals: ModelTokenTotalsRow[];
+  /**
+   * First user prompt text associated with this turn, resolved via an
+   * in-memory join through log_records. The join chain is:
+   *   traceId → (spans with spanName claude_code.llm_request) → requestId
+   *           → (log_records with eventName api_request) → promptId
+   *           → (log_records with eventName user_prompt) → attrsJson.prompt
+   *
+   * `null` when the join fails at any step (e.g. no log records ingested
+   * yet, or the span / log record for this turn is absent). When multiple
+   * `user_prompt` records share the same `promptId`, the one with the
+   * lowest `sequence` is adopted (ADR invariant: first emission wins).
+   */
+  readonly userPromptText: string | null;
 }
 
 /**
@@ -691,10 +705,119 @@ function isZeroTokenTurn(group: TurnSpanGroup): boolean {
  *     dropped from the result (see `isZeroTokenTurn`); the page consumes
  *     only turns with measurable LLM activity.
  */
+/**
+ * Build a `traceId → userPromptText` map by joining log_records against spans.
+ *
+ * Join chain (ADR §Reader):
+ *   1. api_request log records: requestId → promptId
+ *   2. claude_code.llm_request spans: requestId → traceId  (via attrs_json)
+ *   3. user_prompt log records: promptId → promptText  (via attrs_json.prompt)
+ *      When multiple user_prompt records share a promptId, the one with the
+ *      smallest sequence wins (first emission wins — ADR invariant).
+ *
+ * Any parse failure or missing link silently produces no entry for that traceId
+ * so the caller renders `null` without losing other entries.
+ */
+function buildTracePromptMap(
+  logRecords: readonly LogRecordSummaryRow[],
+  spans: readonly SpanSummaryRow[],
+): Map<string, string> {
+  // Step 1+3 combined: single pass over logRecords, branching by eventName.
+  //   api_request  → requestId → promptId  (lowest sequence wins)
+  //   user_prompt  → promptId  → promptText (lowest sequence wins)
+  const requestIdToPromptId = new Map<
+    string,
+    { sequence: number; promptId: string }
+  >();
+  const promptIdToText = new Map<string, { sequence: number; text: string }>();
+  for (const rec of logRecords) {
+    if (rec.eventName === "api_request" && rec.requestId !== null) {
+      const existing = requestIdToPromptId.get(rec.requestId);
+      if (existing === undefined) {
+        requestIdToPromptId.set(rec.requestId, {
+          sequence: rec.sequence,
+          promptId: rec.promptId,
+        });
+      } else if (rec.sequence < existing.sequence) {
+        console.warn(
+          `[conversationDetailView] duplicate api_request for requestId=${rec.requestId}, keeping sequence=${rec.sequence}`,
+        );
+        requestIdToPromptId.set(rec.requestId, {
+          sequence: rec.sequence,
+          promptId: rec.promptId,
+        });
+      } else {
+        console.warn(
+          `[conversationDetailView] duplicate api_request for requestId=${rec.requestId}, keeping sequence=${existing.sequence}`,
+        );
+      }
+    } else if (rec.eventName === "user_prompt") {
+      try {
+        const attrs = JSON.parse(rec.attrsJson) as Record<string, unknown>;
+        const prompt =
+          typeof attrs.prompt === "string" ? attrs.prompt : undefined;
+        if (prompt !== undefined) {
+          const existing = promptIdToText.get(rec.promptId);
+          if (existing === undefined) {
+            promptIdToText.set(rec.promptId, {
+              sequence: rec.sequence,
+              text: prompt,
+            });
+          } else if (rec.sequence < existing.sequence) {
+            console.warn(
+              `[conversationDetailView] duplicate user_prompt for promptId=${rec.promptId}, keeping sequence=${rec.sequence}`,
+            );
+            promptIdToText.set(rec.promptId, {
+              sequence: rec.sequence,
+              text: prompt,
+            });
+          } else {
+            console.warn(
+              `[conversationDetailView] duplicate user_prompt for promptId=${rec.promptId}, keeping sequence=${existing.sequence}`,
+            );
+          }
+        }
+      } catch {
+        // malformed attrsJson — skip this record
+      }
+    }
+  }
+
+  // Step 2: claude_code.llm_request spans → requestId → traceId
+  const requestIdToTraceId = new Map<string, string>();
+  for (const span of spans) {
+    if (span.spanName === "claude_code.llm_request") {
+      try {
+        const attrs = JSON.parse(span.attrsJson) as Record<string, unknown>;
+        const requestId =
+          typeof attrs.request_id === "string" ? attrs.request_id : undefined;
+        if (requestId !== undefined) {
+          requestIdToTraceId.set(requestId, span.traceId);
+        }
+      } catch {
+        // malformed attrsJson — skip this span
+      }
+    }
+  }
+
+  // Compose: traceId → promptId → promptText
+  const traceIdToPromptText = new Map<string, string>();
+  for (const [requestId, traceId] of requestIdToTraceId) {
+    const apiEntry = requestIdToPromptId.get(requestId);
+    if (apiEntry === undefined) continue;
+    const entry = promptIdToText.get(apiEntry.promptId);
+    if (entry === undefined) continue;
+    traceIdToPromptText.set(traceId, entry.text);
+  }
+
+  return traceIdToPromptText;
+}
+
 export function buildSpanTreeByTurn(
   detail: ConversationDetail,
   nowMs: number,
 ): TurnSpanGroup[] {
+  const tracePromptMap = buildTracePromptMap(detail.logRecords, detail.spans);
   const orderedTraces = detail.traces.slice().sort(compareTurnOrder);
   const groups = orderedTraces.map((trace, idx) => {
     const traceSpans = detail.spans.filter((s) => s.traceId === trace.traceId);
@@ -766,6 +889,7 @@ export function buildSpanTreeByTurn(
       cacheWriteTokensCell: summary.cacheWriteTokensCell,
       rows,
       perModelTotals,
+      userPromptText: tracePromptMap.get(trace.traceId) ?? null,
     };
   });
   return groups.filter((g) => !isZeroTokenTurn(g));
