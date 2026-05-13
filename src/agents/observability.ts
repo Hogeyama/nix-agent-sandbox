@@ -10,13 +10,24 @@
  *               OTEL_LOG_TOOL_DETAILS=1 (so `claude_code.tool` spans carry
  *               `tool_input` / `subagent_type` / `full_command` / `file_path` /
  *               `skill_name` — the UI uses these to disambiguate parallel
- *               Agent invocations) plus the OTLP-common envs.
- *   - copilot → COPILOT_OTEL_ENABLED=true, COPILOT_OTEL_CAPTURE_CONTENT=true
- *               (the latter populates `gen_ai.input.messages`,
- *               `gen_ai.tool.input`, `gen_ai.output.messages`, etc. on
- *               `invoke_agent` / `execute_tool` spans — without it those
- *               attrs are absent and parallel `task` calls cannot be
- *               disambiguated). Plus the OTLP-common envs.
+ *               Agent invocations),
+ *               OTEL_LOG_USER_PROMPTS=1 (un-redacts the user prompt text on
+ *               `claude_code.user_prompt` spans/events — by default only the
+ *               prompt length is emitted),
+ *               OTEL_LOG_TOOL_CONTENT=1 (un-redacts tool output/content
+ *               within `claude_code.tool` spans — distinct from
+ *               OTEL_LOG_TOOL_DETAILS which only governs input args),
+ *               plus the OTLP-common envs.
+ *   - copilot → COPILOT_OTEL_ENABLED=true,
+ *               OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+ *               (the latter, an OTEL GenAI semconv standard env, populates
+ *               `gen_ai.input.messages`, `gen_ai.tool.input`,
+ *               `gen_ai.output.messages`, etc. on `invoke_agent` /
+ *               `execute_tool` spans — without it those attrs are absent
+ *               and parallel `task` calls cannot be disambiguated. NOTE:
+ *               `COPILOT_OTEL_CAPTURE_CONTENT` is the VS Code extension's
+ *               setting, NOT the CLI's, and has no effect here). Plus the
+ *               OTLP-common envs.
  *   - codex   → no env injected. Codex is configured via CLI argv
  *               (`codex -c otel.trace_exporter=...`) instead of OTEL envs.
  *
@@ -111,12 +122,14 @@ export function buildObservabilityEnv(
         CLAUDE_CODE_ENABLE_TELEMETRY: "1",
         CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
         OTEL_LOG_TOOL_DETAILS: "1",
+        OTEL_LOG_USER_PROMPTS: "1",
+        OTEL_LOG_TOOL_CONTENT: "1",
       };
     case "copilot":
       return {
         ...buildCommonEnv(args),
         COPILOT_OTEL_ENABLED: "true",
-        COPILOT_OTEL_CAPTURE_CONTENT: "true",
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "true",
       };
     case "codex":
       return null;

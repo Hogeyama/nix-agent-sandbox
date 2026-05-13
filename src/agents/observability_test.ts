@@ -29,10 +29,17 @@ test("buildObservabilityEnv: claude includes CLAUDE_CODE_* and the OTLP common e
     CLAUDE_CODE_ENABLE_TELEMETRY: "1",
     CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
     OTEL_LOG_TOOL_DETAILS: "1",
+    OTEL_LOG_USER_PROMPTS: "1",
+    OTEL_LOG_TOOL_CONTENT: "1",
   });
 });
 
-test("buildObservabilityEnv: claude sets OTEL_LOG_TOOL_DETAILS=1 so tool spans carry tool_input/etc.", () => {
+test("buildObservabilityEnv: claude sets the three Claude Code un-redaction flags (tool details / user prompts / tool content)", () => {
+  // OTEL_LOG_TOOL_DETAILS, OTEL_LOG_USER_PROMPTS, and OTEL_LOG_TOOL_CONTENT
+  // each gate a separate slice of content that Claude Code redacts by
+  // default: tool input args, user prompt text, and tool output content.
+  // All three are required for full content capture per
+  // code.claude.com/docs/en/monitoring-usage.
   const env = buildObservabilityEnv({
     agent: "claude",
     sessionId: "s",
@@ -40,6 +47,8 @@ test("buildObservabilityEnv: claude sets OTEL_LOG_TOOL_DETAILS=1 so tool spans c
     port: 4318,
   });
   expect(env?.OTEL_LOG_TOOL_DETAILS).toEqual("1");
+  expect(env?.OTEL_LOG_USER_PROMPTS).toEqual("1");
+  expect(env?.OTEL_LOG_TOOL_CONTENT).toEqual("1");
 });
 
 test("buildObservabilityEnv: copilot does not set OTEL_LOG_TOOL_DETAILS (claude-only)", () => {
@@ -64,7 +73,7 @@ test("buildObservabilityEnv: codex does not set OTEL_LOG_TOOL_DETAILS (env not u
   expect(env).toBeNull();
 });
 
-test("buildObservabilityEnv: copilot includes COPILOT_OTEL_* and the OTLP common envs", () => {
+test("buildObservabilityEnv: copilot includes COPILOT_OTEL_ENABLED + GenAI semconv content-capture env + the OTLP common envs", () => {
   const env = buildObservabilityEnv({
     agent: "copilot",
     sessionId: "sess_xyz",
@@ -79,28 +88,47 @@ test("buildObservabilityEnv: copilot includes COPILOT_OTEL_* and the OTLP common
     OTEL_METRIC_EXPORT_INTERVAL: "5000",
     OTEL_TRACES_EXPORTER: "otlp",
     COPILOT_OTEL_ENABLED: "true",
-    COPILOT_OTEL_CAPTURE_CONTENT: "true",
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "true",
   });
 });
 
-test("buildObservabilityEnv: copilot sets COPILOT_OTEL_CAPTURE_CONTENT=true so spans carry tool args / messages", () => {
+test("buildObservabilityEnv: copilot sets OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true so spans carry tool args / messages", () => {
+  // This is the OTEL GenAI semconv standard env. The Copilot CLI honors it
+  // per docs.github.com/.../copilot-cli-reference. The previous
+  // COPILOT_OTEL_CAPTURE_CONTENT env is the VS Code extension setting and
+  // has no effect on the CLI — empirically confirmed by inspecting captured
+  // attrs (no gen_ai.input.messages present).
   const env = buildObservabilityEnv({
     agent: "copilot",
     sessionId: "s",
     profileName: "p",
     port: 4318,
   });
-  expect(env?.COPILOT_OTEL_CAPTURE_CONTENT).toEqual("true");
+  expect(env?.OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT).toEqual(
+    "true",
+  );
 });
 
-test("buildObservabilityEnv: claude does not set COPILOT_OTEL_CAPTURE_CONTENT (copilot-only)", () => {
+test("buildObservabilityEnv: copilot no longer sets the dead COPILOT_OTEL_CAPTURE_CONTENT env", () => {
+  const env = buildObservabilityEnv({
+    agent: "copilot",
+    sessionId: "s",
+    profileName: "p",
+    port: 4318,
+  });
+  expect(env?.COPILOT_OTEL_CAPTURE_CONTENT).toBeUndefined();
+});
+
+test("buildObservabilityEnv: claude does not set the copilot content-capture env", () => {
   const env = buildObservabilityEnv({
     agent: "claude",
     sessionId: "s",
     profileName: "p",
     port: 4318,
   });
-  expect(env?.COPILOT_OTEL_CAPTURE_CONTENT).toBeUndefined();
+  expect(
+    env?.OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+  ).toBeUndefined();
 });
 
 test("buildObservabilityEnv: codex returns null (configured via argv, not env)", () => {
