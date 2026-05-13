@@ -87,14 +87,14 @@ export interface IngestResult {
  * hashed user id). Stripped from attrs before persistence; nothing in this
  * codebase consumes them.
  */
-const PII_ATTR_KEYS: ReadonlySet<string> = new Set([
+export const PII_ATTR_KEYS: ReadonlySet<string> = new Set([
   "user.id",
   "user.email",
   "user.account_id",
   "user.account_uuid",
 ]);
 
-function stripPiiAttrs(
+export function stripPiiAttrs(
   attrs: Record<string, unknown>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -141,7 +141,7 @@ function extractSpanEvents(
 // Attribute helpers
 // ---------------------------------------------------------------------------
 
-function unwrapAttrValue(v: OtlpAttributeValue): unknown {
+export function unwrapAttrValue(v: OtlpAttributeValue): unknown {
   if (v === null || typeof v !== "object") return v;
   const obj = v as Record<string, unknown>;
   if (typeof obj.stringValue === "string") return obj.stringValue;
@@ -167,7 +167,7 @@ function unwrapAttrValue(v: OtlpAttributeValue): unknown {
   return v;
 }
 
-function flattenAttributes(
+export function flattenAttributes(
   rawAttrs: ReadonlyArray<OtlpKeyValue> | undefined,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -179,7 +179,7 @@ function flattenAttributes(
   return out;
 }
 
-function readStringAttr(
+export function readStringAttr(
   attrs: Record<string, unknown>,
   key: string,
 ): string | null {
@@ -197,7 +197,7 @@ function readStringAttr(
  * precision (the rest of the schema uses that). Returns null on absent /
  * non-finite input.
  */
-function nanoToIso(nano: string | number | undefined): string | null {
+export function nanoToIso(nano: string | number | undefined): string | null {
   if (nano === undefined || nano === null) return null;
   let ms: number;
   if (typeof nano === "number") {
