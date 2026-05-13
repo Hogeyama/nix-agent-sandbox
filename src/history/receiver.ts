@@ -1,7 +1,8 @@
 /**
  * OTLP/HTTP receiver — Bun.serve listener bound to 127.0.0.1 that accepts
  * OTLP/JSON `ExportTraceServiceRequest` payloads on `POST /v1/traces` and
- * forwards them to `ingestResourceSpans`.
+ * `ExportLogsServiceRequest` payloads on `POST /v1/logs`, forwarding them to
+ * `ingestResourceSpans` and `ingestLogRecords` respectively.
  *
  * Lifecycle is owned by the caller: `startOtlpReceiver` returns a handle
  * exposing the chosen port and an idempotent `close()`. The receiver is bound
@@ -20,6 +21,10 @@ import {
   type OtlpJsonResourceSpans,
   type OtlpKeyValue,
 } from "./ingest.ts";
+import {
+  ingestLogRecords,
+  type OtlpJsonExportLogsPayload,
+} from "./ingest_logs.ts";
 
 export interface OtlpReceiverHandle {
   /** Actual port the OS chose for the 127.0.0.1 listener. */
@@ -148,22 +153,73 @@ async function handleTraces(
   });
 }
 
+async function handleLogs(
+  req: Request,
+  db: Database,
+  sessionId: string,
+): Promise<Response> {
+  if (!isJsonContentType(req.headers.get("content-type"))) {
+    return new Response("Unsupported Media Type", { status: 415 });
+  }
+
+  let payload: OtlpJsonExportLogsPayload;
+  try {
+    payload = (await req.json()) as OtlpJsonExportLogsPayload;
+  } catch {
+    return new Response("Bad Request", { status: 400 });
+  }
+
+  try {
+    ingestLogRecords(db, payload, sessionId);
+  } catch (e) {
+    // Log + 500 but do NOT propagate: a single malformed batch should not
+    // tear down the listener nor trigger SDK retries that would amplify
+    // the failure.
+    console.warn(
+      `otlp receiver: ingest logs failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return new Response("Internal Server Error", { status: 500 });
+  }
+
+  // Empty `partialSuccess` per OTLP/HTTP spec: server accepted the entire
+  // batch. We don't surface per-record ingest drops to the client because the
+  // SDK has no useful retry strategy for them.
+  return new Response(JSON.stringify({ partialSuccess: {} }), {
+    status: 200,
+    headers: JSON_HEADERS,
+  });
+}
+
 async function handle(
   req: Request,
   db: Database,
   fallbackMetadata: OtlpReceiverFallbackMetadata | undefined,
 ): Promise<Response> {
   const url = new URL(req.url);
-  if (url.pathname !== "/v1/traces") {
-    return new Response("Not Found", { status: 404 });
+  if (url.pathname === "/v1/traces") {
+    if (req.method !== "POST") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: { allow: "POST" },
+      });
+    }
+    return await handleTraces(req, db, fallbackMetadata);
   }
-  if (req.method !== "POST") {
-    return new Response("Method Not Allowed", {
-      status: 405,
-      headers: { allow: "POST" },
-    });
+  if (url.pathname === "/v1/logs") {
+    if (req.method !== "POST") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: { allow: "POST" },
+      });
+    }
+    // `startOtlpReceiver` is always called with `fallbackMetadata.sessionId`
+    // set; the empty-string fallback never fires in practice. `ingestLogRecords`
+    // also warns when nasSessionId differs from invocationId on its side.
+    // `log_records` schema does not include agent/profile columns; only `invocationId` (sessionId) is needed to satisfy the FK to `invocations`
+    const sessionId = fallbackMetadata?.sessionId ?? "";
+    return await handleLogs(req, db, sessionId);
   }
-  return await handleTraces(req, db, fallbackMetadata);
+  return new Response("Not Found", { status: 404 });
 }
 
 export async function startOtlpReceiver(

@@ -969,6 +969,60 @@ test("multiple resourceLogs blocks with same session.id: last_seen_at reflects g
   }
 });
 
+test("event.sequence as non-integer float (e.g. '1.5') is warn-dropped", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = setupDb(t);
+    const payload: OtlpJsonExportLogsPayload = {
+      resourceLogs: [
+        {
+          resource: {
+            attributes: [
+              { key: "nas.session.id", value: { stringValue: "sess_logs_1" } },
+            ],
+          },
+          scopeLogs: [
+            {
+              logRecords: [
+                {
+                  timeUnixNano: "1746057600000000000",
+                  attributes: [
+                    {
+                      key: "event.name",
+                      value: { stringValue: "user_prompt" },
+                    },
+                    {
+                      key: "session.id",
+                      value: { stringValue: "conv_floatseq" },
+                    },
+                    {
+                      key: "prompt.id",
+                      value: { stringValue: "prompt_floatseq" },
+                    },
+                    // Non-integer float: Number.isInteger(1.5) → false, should be dropped
+                    { key: "event.sequence", value: { stringValue: "1.5" } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = ingestLogRecords(db, payload, "sess_logs_1");
+    expect(result.acceptedRecords).toEqual(0);
+    expect(result.droppedRecords).toEqual(1);
+
+    const count = db.query("SELECT COUNT(*) AS c FROM log_records").get() as {
+      c: number;
+    };
+    expect(count.c).toEqual(0);
+  } finally {
+    await cleanup(t);
+  }
+});
+
 test("event.sequence with trailing non-numeric characters (e.g. '42abc') is warn-dropped", async () => {
   const t = await makeTempDb();
   try {

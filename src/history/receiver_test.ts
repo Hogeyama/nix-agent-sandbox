@@ -12,6 +12,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { OtlpJsonExportPayload } from "./ingest.ts";
+import type { OtlpJsonExportLogsPayload } from "./ingest_logs.ts";
 import { type OtlpReceiverHandle, startOtlpReceiver } from "./receiver.ts";
 import { _closeHistoryDb, openHistoryDb, upsertInvocation } from "./store.ts";
 
@@ -43,6 +44,48 @@ async function loadFixture(name: string): Promise<OtlpJsonExportPayload> {
 
 function tracesUrl(handle: OtlpReceiverHandle): string {
   return `http://127.0.0.1:${handle.port}/v1/traces`;
+}
+
+function logsUrl(handle: OtlpReceiverHandle): string {
+  return `http://127.0.0.1:${handle.port}/v1/logs`;
+}
+
+/** Build a minimal valid OTLP logs payload for one user_prompt event. */
+function makeMinimalLogsPayload(
+  invocationId = "sess_logs_rcv",
+): OtlpJsonExportLogsPayload {
+  return {
+    resourceLogs: [
+      {
+        resource: {
+          attributes: [
+            { key: "nas.session.id", value: { stringValue: invocationId } },
+          ],
+        },
+        scopeLogs: [
+          {
+            logRecords: [
+              {
+                timeUnixNano: "1746057600000000000",
+                attributes: [
+                  {
+                    key: "event.name",
+                    value: { stringValue: "user_prompt" },
+                  },
+                  {
+                    key: "session.id",
+                    value: { stringValue: "conv_rcv_1" },
+                  },
+                  { key: "prompt.id", value: { stringValue: "prompt_rcv_1" } },
+                  { key: "event.sequence", value: { intValue: 1 } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
 }
 
 test("startOtlpReceiver: port:0 yields an OS-chosen non-zero port", async () => {
@@ -453,4 +496,228 @@ test("close(): idempotent — second call resolves without throwing", async () =
   await handle.close();
   await handle.close();
   await handle.close();
+});
+
+// ---------------------------------------------------------------------------
+// /v1/logs tests
+// ---------------------------------------------------------------------------
+
+test("POST /v1/logs with valid OTLP/JSON: 200 + partialSuccess body, log_records persisted", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  upsertInvocation(db, {
+    id: "sess_logs_rcv",
+    profile: "default",
+    agent: "claude",
+    worktreePath: null,
+    startedAt: "2026-05-01T00:00:00Z",
+    endedAt: null,
+    exitReason: null,
+  });
+
+  const payload = makeMinimalLogsPayload("sess_logs_rcv");
+  const handle = await startOtlpReceiver({
+    db,
+    fallbackMetadata: { sessionId: "sess_logs_rcv" },
+  });
+  try {
+    const res = await fetch(logsUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toEqual(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ partialSuccess: {} });
+
+    const rowCount = db
+      .query("SELECT COUNT(*) AS c FROM log_records")
+      .get() as { c: number };
+    expect(rowCount.c).toEqual(1);
+  } finally {
+    await handle.close();
+  }
+});
+
+test("POST /v1/logs with non-JSON content-type: 415", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  const handle = await startOtlpReceiver({ db });
+  try {
+    const res = await fetch(logsUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/x-protobuf" },
+      body: new Uint8Array([0x00, 0x01, 0x02]),
+    });
+    expect(res.status).toEqual(415);
+  } finally {
+    await handle.close();
+  }
+});
+
+test("POST /v1/logs with malformed JSON: 400, server still live", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  upsertInvocation(db, {
+    id: "sess_logs_rcv",
+    profile: "default",
+    agent: "claude",
+    worktreePath: null,
+    startedAt: "2026-05-01T00:00:00Z",
+    endedAt: null,
+    exitReason: null,
+  });
+  const handle = await startOtlpReceiver({
+    db,
+    fallbackMetadata: { sessionId: "sess_logs_rcv" },
+  });
+  try {
+    const bad = await fetch(logsUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    expect(bad.status).toEqual(400);
+
+    // Server must still process subsequent valid requests.
+    const payload = makeMinimalLogsPayload("sess_logs_rcv");
+    const ok = await fetch(logsUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(ok.status).toEqual(200);
+  } finally {
+    await handle.close();
+  }
+});
+
+test("GET /v1/logs: 405 with Allow: POST", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  const handle = await startOtlpReceiver({ db });
+  try {
+    const res = await fetch(logsUrl(handle), { method: "GET" });
+    expect(res.status).toEqual(405);
+    expect(res.headers.get("allow")).toEqual("POST");
+  } finally {
+    await handle.close();
+  }
+});
+
+test("POST /v1/logs without fallbackMetadata (sessionId falls back to empty string): ingest fails with 500, no rows inserted", async () => {
+  // `startOtlpReceiver` is invoked without `fallbackMetadata`.
+  // `handle()` resolves sessionId as `fallbackMetadata?.sessionId ?? ""`,
+  // so `ingestLogRecords` receives an empty string as invocationId.
+  // `log_records.invocation_id` carries a NOT NULL REFERENCES invocations(id)
+  // constraint, so the empty string violates the FK — the receiver converts
+  // that into a 500 and rolls back the transaction, leaving the table empty.
+  // This confirms that the real caller must always supply a valid sessionId via
+  // fallbackMetadata, as documented by the comment in receiver.ts.
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  upsertInvocation(db, {
+    id: "sess_nofallback",
+    profile: "default",
+    agent: "claude",
+    worktreePath: null,
+    startedAt: "2026-05-01T00:00:00Z",
+    endedAt: null,
+    exitReason: null,
+  });
+
+  // Payload carries the session id inside the resource attributes.
+  const payload = makeMinimalLogsPayload("sess_nofallback");
+
+  // Start receiver without fallbackMetadata — sessionId will be "".
+  const handle = await startOtlpReceiver({ db });
+  try {
+    const res = await fetch(logsUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    // The empty invocationId violates the FK on log_records.invocation_id,
+    // so the receiver must return 500.
+    expect(res.status).toEqual(500);
+
+    // No rows must have been committed (transaction was rolled back).
+    const rowCount = db
+      .query("SELECT COUNT(*) AS c FROM log_records")
+      .get() as { c: number };
+    expect(rowCount.c).toEqual(0);
+  } finally {
+    await handle.close();
+  }
+});
+
+test("POST /v1/logs ingestLogRecords throws (closed db handle): 500, server stays live", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  upsertInvocation(db, {
+    id: "sess_logs_rcv",
+    profile: "default",
+    agent: "claude",
+    worktreePath: null,
+    startedAt: "2026-05-01T00:00:00Z",
+    endedAt: null,
+    exitReason: null,
+  });
+  const handle = await startOtlpReceiver({
+    db,
+    fallbackMetadata: { sessionId: "sess_logs_rcv" },
+  });
+  try {
+    // Force the ingester to throw by closing the underlying DB handle.
+    // The receiver must convert that into a 500 rather than crashing.
+    db.close();
+    _closeHistoryDb(tmp.dbPath);
+
+    const payload = makeMinimalLogsPayload("sess_logs_rcv");
+    const res = await fetch(logsUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toEqual(500);
+
+    // Listener still answers a subsequent (also-failing) request without
+    // collapsing.
+    const res2 = await fetch(logsUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res2.status).toEqual(500);
+  } finally {
+    await handle.close();
+  }
+});
+
+test("POST /v1/traces regression: still works after /v1/logs route added", async () => {
+  const db = openHistoryDb({ path: tmp.dbPath, mode: "readwrite" });
+  upsertInvocation(db, {
+    id: "sess_aaa",
+    profile: "default",
+    agent: "copilot",
+    worktreePath: null,
+    startedAt: "2026-05-01T00:00:00Z",
+    endedAt: null,
+    exitReason: null,
+  });
+
+  const payload = await loadFixture("copilot_chat_minimal.json");
+  const handle = await startOtlpReceiver({ db });
+  try {
+    const res = await fetch(tracesUrl(handle), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    expect(res.status).toEqual(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ partialSuccess: {} });
+
+    const spanCount = db.query("SELECT COUNT(*) AS c FROM spans").get() as {
+      c: number;
+    };
+    expect(spanCount.c).toBeGreaterThan(0);
+  } finally {
+    await handle.close();
+  }
 });

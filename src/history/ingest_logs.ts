@@ -187,7 +187,7 @@ export function ingestLogRecords(
             ? String(attrs["event.sequence"])
             : null);
         const sequenceParsed = sequenceStr !== null ? Number(sequenceStr) : NaN;
-        const sequence = Number.isFinite(sequenceParsed)
+        const sequence = Number.isInteger(sequenceParsed)
           ? sequenceParsed
           : null;
         if (sequence === null) {
