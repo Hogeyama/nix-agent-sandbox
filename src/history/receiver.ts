@@ -134,13 +134,11 @@ async function handleTraces(
 
   try {
     ingestResourceSpans(db, applyFallbackMetadata(payload, fallbackMetadata));
-  } catch (e) {
-    // Log + 500 but do NOT propagate: a single malformed batch should not
+  } catch {
+    // Return 500 but do NOT propagate: a single malformed batch should not
     // tear down the listener nor trigger SDK retries that would amplify
-    // the failure.
-    console.warn(
-      `otlp receiver: ingest failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    // the failure. No log output — the agent terminal shares this process's
+    // stdout/stderr while the session is live.
     return new Response("Internal Server Error", { status: 500 });
   }
 
@@ -171,13 +169,8 @@ async function handleLogs(
 
   try {
     ingestLogRecords(db, payload, sessionId);
-  } catch (e) {
-    // Log + 500 but do NOT propagate: a single malformed batch should not
-    // tear down the listener nor trigger SDK retries that would amplify
-    // the failure.
-    console.warn(
-      `otlp receiver: ingest logs failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+  } catch {
+    // Return 500 but do NOT propagate: same reasoning as handleTraces.
     return new Response("Internal Server Error", { status: 500 });
   }
 
@@ -213,9 +206,9 @@ async function handle(
       });
     }
     // `startOtlpReceiver` is always called with `fallbackMetadata.sessionId`
-    // set; the empty-string fallback never fires in practice. `ingestLogRecords`
-    // also warns when nasSessionId differs from invocationId on its side.
-    // `log_records` schema does not include agent/profile columns; only `invocationId` (sessionId) is needed to satisfy the FK to `invocations`
+    // set; the empty-string fallback never fires in practice. The
+    // `log_records` schema does not include agent/profile columns, so only
+    // `invocationId` (sessionId) is needed to satisfy the FK to `invocations`.
     const sessionId = fallbackMetadata?.sessionId ?? "";
     return await handleLogs(req, db, sessionId);
   }
@@ -229,14 +222,12 @@ export async function startOtlpReceiver(
     hostname: "127.0.0.1",
     port: opts.port ?? 0,
     fetch: (req) =>
-      handle(req, opts.db, opts.fallbackMetadata).catch((e) => {
-        // Defensive net: handle() already swallows ingest errors, but if any
-        // other unexpected throw escapes (e.g. from URL parsing) we still
-        // owe the client a response rather than letting Bun.serve emit a
-        // generic 500 that drops the connection.
-        console.warn(
-          `otlp receiver: handler crashed: ${e instanceof Error ? e.message : String(e)}`,
-        );
+      handle(req, opts.db, opts.fallbackMetadata).catch(() => {
+        // Defensive net: handle() already swallows ingest errors, but if
+        // an unexpected throw escapes (e.g. from URL parsing) we still owe
+        // the client a response rather than letting Bun.serve drop the
+        // connection. No log output: stdout/stderr stays clean while the
+        // agent session owns this process.
         return new Response("Internal Server Error", { status: 500 });
       }),
   });

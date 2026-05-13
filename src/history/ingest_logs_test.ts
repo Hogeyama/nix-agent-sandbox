@@ -213,7 +213,58 @@ test("hook_execution_start and hook_execution_complete are ingested", async () =
   }
 });
 
-test("whitelist-unknown events (e.g. tool_result) are dropped and counted", async () => {
+test("known-excluded events (tool_result, internal_error, ...) are dropped without bumping unknownEvents", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = setupDb(t);
+    // One record per known-excluded event from ADR 2026051301, plus one
+    // user_prompt to confirm the rest of the batch keeps flowing.
+    const knownExcluded = [
+      "internal_error",
+      "tool_result",
+      "tool_decision",
+      "skill_activated",
+      "api_request_body",
+      "api_response_body",
+    ];
+    const payload = makePayload([
+      ...knownExcluded.map((name, i) => ({
+        timeUnixNano: `${1_746_057_600_000_000_000n + BigInt(i)}`,
+        attributes: makeAttrs({
+          "event.name": name,
+          "session.id": "conv_known_excluded",
+          "prompt.id": "prompt_ke",
+          "event.sequence": i + 1,
+        }),
+      })),
+      {
+        timeUnixNano: "1746057700000000000",
+        attributes: makeAttrs({
+          "event.name": "user_prompt",
+          "session.id": "conv_known_excluded",
+          "prompt.id": "prompt_ke",
+          "event.sequence": 100,
+        }),
+      },
+    ]);
+
+    const result = ingestLogRecords(db, payload, "sess_logs_1");
+    expect(result.acceptedRecords).toEqual(1);
+    expect(result.droppedRecords).toEqual(knownExcluded.length);
+    // Known-excluded events must NOT count toward unknownEvents — that
+    // counter is reserved for events outside both ALLOWED and EXCLUDED sets.
+    expect(result.unknownEvents).toEqual(0);
+
+    const count = db
+      .query("SELECT COUNT(*) AS c FROM log_records WHERE conversation_id = ?")
+      .get("conv_known_excluded") as { c: number };
+    expect(count.c).toEqual(1);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("truly-unknown events (outside ALLOWED and KNOWN_EXCLUDED) increment unknownEvents", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
@@ -221,38 +272,24 @@ test("whitelist-unknown events (e.g. tool_result) are dropped and counted", asyn
       {
         timeUnixNano: "1746057600000000000",
         attributes: makeAttrs({
-          "event.name": "tool_result",
-          "session.id": "conv_whitelist",
-          "prompt.id": "prompt_w",
+          "event.name": "some_event_added_in_a_future_release",
+          "session.id": "conv_unknown",
+          "prompt.id": "prompt_u",
           "event.sequence": 1,
-        }),
-      },
-      {
-        timeUnixNano: "1746057601000000000",
-        attributes: makeAttrs({
-          "event.name": "user_prompt",
-          "session.id": "conv_whitelist",
-          "prompt.id": "prompt_w",
-          "event.sequence": 2,
         }),
       },
     ]);
 
     const result = ingestLogRecords(db, payload, "sess_logs_1");
-    expect(result.acceptedRecords).toEqual(1);
+    expect(result.acceptedRecords).toEqual(0);
     expect(result.droppedRecords).toEqual(1);
     expect(result.unknownEvents).toEqual(1);
-
-    const count = db
-      .query("SELECT COUNT(*) AS c FROM log_records WHERE conversation_id = ?")
-      .get("conv_whitelist") as { c: number };
-    expect(count.c).toEqual(1);
   } finally {
     await cleanup(t);
   }
 });
 
-test("record missing session.id is warn-dropped", async () => {
+test("record missing session.id is dropped", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
@@ -299,7 +336,7 @@ test("record missing session.id is warn-dropped", async () => {
   }
 });
 
-test("record missing prompt.id is warn-dropped", async () => {
+test("record missing prompt.id is dropped", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
@@ -344,7 +381,7 @@ test("record missing prompt.id is warn-dropped", async () => {
   }
 });
 
-test("record missing event.sequence is warn-dropped", async () => {
+test("record missing event.sequence is dropped", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
@@ -599,7 +636,7 @@ test("same conversation_id multiple records: last_seen_at reflects latest record
   }
 });
 
-test("record with empty string event.name is warn-dropped", async () => {
+test("record with empty string event.name is dropped", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
@@ -664,20 +701,41 @@ test("payload with no resourceLogs returns zero counters and does not throw", as
   }
 });
 
-test("resource missing nas.session.id: warn is emitted and invocationId is used", async () => {
-  const t = await makeTempDb();
-  try {
-    const db = setupDb(t);
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
-      warnMessages.push(args.map(String).join(" "));
-    };
+test("invocationId is the authoritative FK regardless of payload-supplied nas.session.id", async () => {
+  // The caller-supplied invocationId always wins. Three scenarios cover the
+  // surface area: missing resource attrs, present-but-different nas.session.id,
+  // and present-and-matching. The ingester treats all three identically — the
+  // resource-level value is not read.
+  const cases: Array<{
+    label: string;
+    resourceAttrs: OtlpKeyValue[];
+    conversationId: string;
+  }> = [
+    { label: "missing", resourceAttrs: [], conversationId: "conv_missing" },
+    {
+      label: "mismatch",
+      resourceAttrs: [
+        { key: "nas.session.id", value: { stringValue: "wrong_id" } },
+      ],
+      conversationId: "conv_mismatch",
+    },
+    {
+      label: "matching",
+      resourceAttrs: [
+        { key: "nas.session.id", value: { stringValue: "sess_logs_1" } },
+      ],
+      conversationId: "conv_match",
+    },
+  ];
+
+  for (const c of cases) {
+    const t = await makeTempDb();
     try {
+      const db = setupDb(t);
       const payload: OtlpJsonExportLogsPayload = {
         resourceLogs: [
           {
-            resource: { attributes: [] }, // no nas.session.id
+            resource: { attributes: c.resourceAttrs },
             scopeLogs: [
               {
                 logRecords: [
@@ -685,8 +743,8 @@ test("resource missing nas.session.id: warn is emitted and invocationId is used"
                     timeUnixNano: "1746057600000000000",
                     attributes: makeAttrs({
                       "event.name": "user_prompt",
-                      "session.id": "conv_no_nasid",
-                      "prompt.id": "prompt_nonasid",
+                      "session.id": c.conversationId,
+                      "prompt.id": `prompt_${c.label}`,
                       "event.sequence": 1,
                     }),
                   },
@@ -700,84 +758,17 @@ test("resource missing nas.session.id: warn is emitted and invocationId is used"
       const result = ingestLogRecords(db, payload, "sess_logs_1");
       expect(result.acceptedRecords).toEqual(1);
       expect(result.droppedRecords).toEqual(0);
-      // A warn about absent nas.session.id must have been emitted.
-      expect(warnMessages.some((m) => m.includes("nas.session.id"))).toBe(true);
 
       const row = db
         .query(
           "SELECT invocation_id FROM log_records WHERE conversation_id = ?",
         )
-        .get("conv_no_nasid") as { invocation_id: string } | null;
+        .get(c.conversationId) as { invocation_id: string } | null;
       expect(row).not.toBeNull();
       expect(row!.invocation_id).toEqual("sess_logs_1");
     } finally {
-      console.warn = origWarn;
+      await cleanup(t);
     }
-  } finally {
-    await cleanup(t);
-  }
-});
-
-test("nas.session.id mismatch with invocationId: warn is emitted and invocationId is used", async () => {
-  const t = await makeTempDb();
-  try {
-    const db = setupDb(t);
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
-      warnMessages.push(args.map(String).join(" "));
-    };
-    try {
-      const payload: OtlpJsonExportLogsPayload = {
-        resourceLogs: [
-          {
-            resource: {
-              attributes: [
-                // Deliberately different from invocationId
-                { key: "nas.session.id", value: { stringValue: "wrong_id" } },
-              ],
-            },
-            scopeLogs: [
-              {
-                logRecords: [
-                  {
-                    timeUnixNano: "1746057600000000000",
-                    attributes: makeAttrs({
-                      "event.name": "user_prompt",
-                      "session.id": "conv_mismatch",
-                      "prompt.id": "prompt_mismatch",
-                      "event.sequence": 1,
-                    }),
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      };
-
-      const result = ingestLogRecords(db, payload, "sess_logs_1");
-      expect(result.acceptedRecords).toEqual(1);
-      expect(result.droppedRecords).toEqual(0);
-      // A warn about the mismatch must have been emitted.
-      expect(
-        warnMessages.some(
-          (m) => m.includes("wrong_id") && m.includes("sess_logs_1"),
-        ),
-      ).toBe(true);
-
-      const row = db
-        .query(
-          "SELECT invocation_id FROM log_records WHERE conversation_id = ?",
-        )
-        .get("conv_mismatch") as { invocation_id: string } | null;
-      expect(row).not.toBeNull();
-      expect(row!.invocation_id).toEqual("sess_logs_1");
-    } finally {
-      console.warn = origWarn;
-    }
-  } finally {
-    await cleanup(t);
   }
 });
 
@@ -811,7 +802,7 @@ test("event.sequence = 0 is accepted (not treated as falsy/missing)", async () =
   }
 });
 
-test("payload with resourceLogs: [] returns zero counters silently (no warn)", async () => {
+test("payload with resourceLogs: [] returns zero counters", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
@@ -834,61 +825,49 @@ test("payload with resourceLogs: [] returns zero counters silently (no warn)", a
   }
 });
 
-test("record with absent timeUnixNano uses epoch fallback and emits console.warn", async () => {
+test("record with absent timeUnixNano is persisted with the epoch fallback", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
-      warnMessages.push(args.map(String).join(" "));
-    };
-    try {
-      const payload: OtlpJsonExportLogsPayload = {
-        resourceLogs: [
-          {
-            resource: {
-              attributes: [
-                {
-                  key: "nas.session.id",
-                  value: { stringValue: "sess_logs_1" },
-                },
-              ],
-            },
-            scopeLogs: [
+    const payload: OtlpJsonExportLogsPayload = {
+      resourceLogs: [
+        {
+          resource: {
+            attributes: [
               {
-                logRecords: [
-                  {
-                    // timeUnixNano intentionally absent
-                    attributes: makeAttrs({
-                      "event.name": "user_prompt",
-                      "session.id": "conv_no_time",
-                      "prompt.id": "prompt_notime",
-                      "event.sequence": 1,
-                    }),
-                  },
-                ],
+                key: "nas.session.id",
+                value: { stringValue: "sess_logs_1" },
               },
             ],
           },
-        ],
-      };
+          scopeLogs: [
+            {
+              logRecords: [
+                {
+                  // timeUnixNano intentionally absent
+                  attributes: makeAttrs({
+                    "event.name": "user_prompt",
+                    "session.id": "conv_no_time",
+                    "prompt.id": "prompt_notime",
+                    "event.sequence": 1,
+                  }),
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
 
-      const result = ingestLogRecords(db, payload, "sess_logs_1");
-      expect(result.acceptedRecords).toEqual(1);
-      expect(result.droppedRecords).toEqual(0);
+    const result = ingestLogRecords(db, payload, "sess_logs_1");
+    expect(result.acceptedRecords).toEqual(1);
+    expect(result.droppedRecords).toEqual(0);
 
-      // A warn about missing timeUnixNano must have been emitted.
-      expect(warnMessages.some((m) => m.includes("timeUnixNano"))).toBe(true);
-
-      const row = db
-        .query("SELECT time FROM log_records WHERE conversation_id = ?")
-        .get("conv_no_time") as { time: string } | null;
-      expect(row).not.toBeNull();
-      expect(row!.time).toEqual("1970-01-01T00:00:00.000Z");
-    } finally {
-      console.warn = origWarn;
-    }
+    const row = db
+      .query("SELECT time FROM log_records WHERE conversation_id = ?")
+      .get("conv_no_time") as { time: string } | null;
+    expect(row).not.toBeNull();
+    expect(row!.time).toEqual("1970-01-01T00:00:00.000Z");
   } finally {
     await cleanup(t);
   }
@@ -969,7 +948,7 @@ test("multiple resourceLogs blocks with same session.id: last_seen_at reflects g
   }
 });
 
-test("event.sequence as non-integer float (e.g. '1.5') is warn-dropped", async () => {
+test("event.sequence as non-integer float (e.g. '1.5') is dropped", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);
@@ -1023,7 +1002,7 @@ test("event.sequence as non-integer float (e.g. '1.5') is warn-dropped", async (
   }
 });
 
-test("event.sequence with trailing non-numeric characters (e.g. '42abc') is warn-dropped", async () => {
+test("event.sequence with trailing non-numeric characters (e.g. '42abc') is dropped", async () => {
   const t = await makeTempDb();
   try {
     const db = setupDb(t);

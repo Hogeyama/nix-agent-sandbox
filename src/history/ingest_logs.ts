@@ -1,14 +1,21 @@
 /**
  * Ingester for OTLP/JSON `ExportLogsServiceRequest` payloads.
  *
- * Walks `resourceLogs`, warns when `nas.session.id` is absent or empty on the
- * resource (processing continues using `invocationId`), and for each log
- * record: validates the event whitelist, extracts required attributes
+ * Walks `resourceLogs`. The caller-supplied `invocationId` is the authoritative
+ * conversation invocation id; the resource-level `nas.session.id` is not read.
+ * For each log record: classifies the event, extracts required attributes
  * (`session.id`, `prompt.id`, `event.sequence`), strips PII, upserts the
  * conversation FK, and writes the record via `insertLogRecords`.
  *
- * Only events in `ALLOWED_EVENTS` are persisted; all others are dropped with a
- * `console.warn` and counted in `unknownEvents`.
+ * Drop semantics:
+ * - `ALLOWED_EVENTS` → persist
+ * - `KNOWN_EXCLUDED_EVENTS` → drop, NOT counted in `unknownEvents`
+ * - everything else → drop, counted in `unknownEvents` (signal that Claude
+ *   Code shipped a new event we haven't classified yet)
+ *
+ * No console output: the receiver runs inside the NAS host process during an
+ * agent session, where stdout/stderr must stay clean. All drops surface only
+ * via the returned `IngestLogsResult` counters.
  */
 
 import type { Database } from "bun:sqlite";
@@ -64,15 +71,29 @@ export interface IngestLogsResult {
 // Event whitelist
 // ---------------------------------------------------------------------------
 
-/**
- * Only log records whose `event.name` attribute matches one of these values
- * are persisted. All others are warn-dropped and counted in `unknownEvents`.
- */
+/** Persisted events (ADR 2026051301 §"ingest 対象 whitelist"). */
 const ALLOWED_EVENTS = new Set([
   "user_prompt",
   "api_request",
   "hook_execution_start",
   "hook_execution_complete",
+]);
+
+/**
+ * Events documented in ADR 2026051301 as deliberately not ingested. They are
+ * expected on every turn (especially `internal_error` and `tool_result`);
+ * keeping them out of `unknownEvents` preserves that counter's value as a
+ * signal for genuinely new events shipped by Claude Code.
+ *
+ * Kept in sync with the rejected rows of the ADR's whitelist table.
+ */
+const KNOWN_EXCLUDED_EVENTS = new Set([
+  "internal_error",
+  "tool_result",
+  "tool_decision",
+  "skill_activated",
+  "api_request_body",
+  "api_response_body",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -88,10 +109,11 @@ const ALLOWED_EVENTS = new Set([
  * - `prompt.id` attribute
  * - `event.sequence` attribute (conversation-scoped monotonic integer)
  *
- * Missing required attributes cause the record to be warn-dropped. The
- * `invocationId` parameter is the `nas.session.id` from the resource
- * attributes and is passed through by the caller (the OTLP receiver) which
- * already holds the current session id.
+ * Missing required attributes cause the record to be dropped (counted in
+ * `droppedRecords`). The `invocationId` parameter is supplied by the caller
+ * (the OTLP receiver, which already holds the current session id) and is the
+ * authoritative invocation FK regardless of what the payload's resource
+ * attributes claim.
  *
  * Records are written via `INSERT OR IGNORE` against the composite PRIMARY KEY
  * `(conversation_id, sequence)`, so re-delivering the same batch is safe.
@@ -108,11 +130,7 @@ export function ingestLogRecords(
   };
 
   const resourceLogs = payload?.resourceLogs;
-  if (!Array.isArray(resourceLogs)) {
-    console.warn("ingestLogRecords: payload has no resourceLogs");
-    return result;
-  }
-  if (resourceLogs.length === 0) {
+  if (!Array.isArray(resourceLogs) || resourceLogs.length === 0) {
     return result;
   }
 
@@ -120,67 +138,43 @@ export function ingestLogRecords(
   const rowsToInsert: Array<LogRecordRow> = [];
 
   for (const rl of resourceLogs) {
-    const resAttrs = flattenAttributes(rl?.resource?.attributes);
-    const nasSessionId = readStringAttr(resAttrs, "nas.session.id");
-    // The invocationId passed by the caller is authoritative; the resource
-    // attribute is used only for a sanity-warn when it disagrees or is absent.
-    if (nasSessionId === null || nasSessionId.length === 0) {
-      console.warn(
-        `ingestLogRecords: resource nas.session.id is absent or empty, using invocationId (${invocationId})`,
-      );
-    } else if (nasSessionId !== invocationId) {
-      console.warn(
-        `ingestLogRecords: resource nas.session.id (${nasSessionId}) differs from invocationId (${invocationId}), using invocationId`,
-      );
-    }
-
+    // invocationId is authoritative; resource-level nas.session.id is not read.
     const scopeLogs = Array.isArray(rl?.scopeLogs) ? rl.scopeLogs : [];
     for (const sl of scopeLogs) {
       const logRecords = Array.isArray(sl?.logRecords) ? sl.logRecords : [];
       for (const lr of logRecords) {
         const attrs = flattenAttributes(lr?.attributes);
 
-        // Resolve event name from `event.name` attribute.
         const eventName = readStringAttr(attrs, "event.name");
         if (eventName === null || eventName.length === 0) {
-          console.warn(
-            "ingestLogRecords: log record missing event.name attribute, dropping",
-          );
           result.droppedRecords += 1;
           continue;
         }
 
-        // Whitelist check
+        // Three-tier classification: persist / known-rejected / truly-unknown.
+        // Bumping unknownEvents only for the third tier keeps it useful as a
+        // "Claude Code shipped a new event we should classify" signal.
         if (!ALLOWED_EVENTS.has(eventName)) {
-          console.warn(
-            `ingestLogRecords: unknown event "${eventName}", dropping`,
-          );
-          result.unknownEvents += 1;
+          if (!KNOWN_EXCLUDED_EVENTS.has(eventName)) {
+            result.unknownEvents += 1;
+          }
           result.droppedRecords += 1;
           continue;
         }
 
-        // Required: session.id → conversation_id
         const conversationId = readStringAttr(attrs, "session.id");
         if (conversationId === null || conversationId.length === 0) {
-          console.warn(
-            `ingestLogRecords: log record for event "${eventName}" missing session.id, dropping`,
-          );
           result.droppedRecords += 1;
           continue;
         }
 
-        // Required: prompt.id
         const promptId = readStringAttr(attrs, "prompt.id");
         if (promptId === null || promptId.length === 0) {
-          console.warn(
-            `ingestLogRecords: log record for event "${eventName}" missing prompt.id, dropping`,
-          );
           result.droppedRecords += 1;
           continue;
         }
 
-        // Required: event.sequence (OTLP int64 may come as number or string)
+        // event.sequence: OTLP int64 may arrive as number or string.
         const sequenceStr =
           readStringAttr(attrs, "event.sequence") ??
           (attrs["event.sequence"] !== undefined
@@ -191,24 +185,15 @@ export function ingestLogRecords(
           ? sequenceParsed
           : null;
         if (sequence === null) {
-          console.warn(
-            `ingestLogRecords: log record for event "${eventName}" missing or invalid event.sequence, dropping`,
-          );
           result.droppedRecords += 1;
           continue;
         }
 
-        // Optional: request_id
         const requestId = readStringAttr(attrs, "request_id");
 
-        // Timestamp
-        const timeResolved = nanoToIso(lr?.timeUnixNano);
-        if (timeResolved === null) {
-          console.warn(
-            `ingestLogRecords: log record for event "${eventName}" missing timeUnixNano, using epoch fallback`,
-          );
-        }
-        const time = timeResolved ?? "1970-01-01T00:00:00.000Z";
+        // `time` is NOT NULL in the schema; fall back to epoch when the
+        // payload omits timeUnixNano rather than dropping the record.
+        const time = nanoToIso(lr?.timeUnixNano) ?? "1970-01-01T00:00:00.000Z";
 
         // Strip PII before persisting attrs
         const cleanAttrs = stripPiiAttrs(attrs);

@@ -1,11 +1,15 @@
 /**
  * Ingester for OTLP/JSON `ExportTraceServiceRequest` payloads.
  *
- * Walks `resourceSpans`, requires `nas.session.id` on the resource (warn-drop
- * otherwise), groups spans by `trace_id`, resolves a conversation id per
- * trace, and writes traces / conversations / spans through the writer
- * functions in `store.ts` inside a single transaction. Invocations are
- * assumed to already exist.
+ * Walks `resourceSpans`, requires `nas.session.id` on the resource (silent
+ * drop otherwise — counted in `droppedTraces`), groups spans by `trace_id`,
+ * resolves a conversation id per trace, and writes traces / conversations /
+ * spans through the writer functions in `store.ts` inside a single
+ * transaction. Invocations are assumed to already exist.
+ *
+ * No console output: the receiver runs inside the NAS host process during an
+ * agent session, where stdout/stderr must stay clean. All drops surface only
+ * via the returned `IngestResult` counters.
  */
 
 import type { Database } from "bun:sqlite";
@@ -256,7 +260,6 @@ export function ingestResourceSpans(
 
   const resourceSpans = payload?.resourceSpans;
   if (!Array.isArray(resourceSpans) || resourceSpans.length === 0) {
-    console.warn("ingestResourceSpans: payload has no resourceSpans");
     return result;
   }
 
@@ -273,9 +276,6 @@ export function ingestResourceSpans(
     const resAttrs = flattenAttributes(rs?.resource?.attributes);
     const nasSessionId = readStringAttr(resAttrs, "nas.session.id");
     if (nasSessionId === null || nasSessionId.length === 0) {
-      console.warn(
-        "ingestResourceSpans: resource missing nas.session.id, dropping",
-      );
       result.droppedTraces += 1;
       continue;
     }
@@ -293,9 +293,6 @@ export function ingestResourceSpans(
           sp.spanId.length === 0 ||
           typeof sp?.name !== "string"
         ) {
-          console.warn(
-            "ingestResourceSpans: span missing traceId/spanId/name, dropping span",
-          );
           continue;
         }
         const attrs = flattenAttributes(sp.attributes);
