@@ -12,7 +12,7 @@ import type { Database } from "bun:sqlite";
  * refused. Reader callers are expected to either upgrade their nas binary
  * or run the writer (cli / hook) once to migrate the file in place.
  */
-export const HISTORY_DB_USER_VERSION = 3;
+export const HISTORY_DB_USER_VERSION = 4;
 
 export class HistoryDbVersionMismatchError extends Error {
   readonly actual: number;
@@ -188,6 +188,30 @@ export const MIGRATION_V3: Migration = {
   },
 };
 
+// v4 schema delta: drop the hook-side tables (`turn_events` and
+// `conversation_summaries`) and their indexes. The reader derives the
+// conversation summary at read time from the earliest trace's OTEL log
+// records / spans (see `extractTracePrompts`), and the hook no longer writes
+// to history.db. Existing data in these tables is dropped along with the
+// schema: any v3-stamped operator carrying populated rows loses them on the
+// next writer open. `DROP TABLE IF EXISTS` automatically drops attached
+// indexes, but we drop indexes first under their own `IF EXISTS` so the step
+// stays explicit and safe even if a future refactor reattaches one of the
+// names elsewhere.
+const V4_DROP_HOOK_TABLES_SQL = `
+DROP INDEX IF EXISTS idx_turn_events_invocation;
+DROP INDEX IF EXISTS idx_turn_events_conversation;
+DROP TABLE IF EXISTS turn_events;
+DROP TABLE IF EXISTS conversation_summaries;
+`;
+
+export const MIGRATION_V4: Migration = {
+  target: 4,
+  apply: (db) => {
+    db.run(V4_DROP_HOOK_TABLES_SQL);
+  },
+};
+
 /**
  * Ordered list of forward migration steps. Each entry's `target` is the
  * `user_version` value after the step completes; entries must be sorted by
@@ -197,6 +221,7 @@ export const HISTORY_DB_MIGRATIONS: readonly Migration[] = [
   MIGRATION_V1,
   MIGRATION_V2,
   MIGRATION_V3,
+  MIGRATION_V4,
 ];
 
 interface UserVersionRow {

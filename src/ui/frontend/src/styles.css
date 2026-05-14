@@ -1956,8 +1956,7 @@ body::after {
   color: var(--cream);
   line-height: 1.45;
   /* Cap at three lines so a long summary doesn't push the rest of the
-   * header off-screen. Server-side `SUMMARY_MAX_CHARS` (240) is sized
-   * to fit comfortably within this visual budget. */
+   * header off-screen. */
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;

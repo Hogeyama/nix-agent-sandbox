@@ -12,10 +12,6 @@
  */
 
 import {
-  appendConversationSummary,
-  appendTurnEvent,
-} from "../history/hook_writer.ts";
-import {
   checkNotifySend,
   type NotifyBackend,
   resolveNotifyBackend,
@@ -31,11 +27,6 @@ import { getFlagValue } from "./helpers.ts";
 
 /** Maximum length of the `message` field surfaced to the store. */
 const MAX_MESSAGE_LEN = 200;
-
-/** Maximum characters retained in `conversation_summaries.summary`. Sized
- * to hold roughly three wrapped lines at the detail-page summary's font
- * (16px sans, ~660px column → ~75 chars/line × 3 lines, with slack). */
-const SUMMARY_MAX_CHARS = 240;
 
 /** Hard cap on how long we wait for stdin before giving up. */
 const STDIN_TIMEOUT_MS = 50;
@@ -117,53 +108,6 @@ export async function runHookCommand(
     console.error(
       `[nas] hook: session store update failed: ${(err as Error).message}`,
     );
-  }
-
-  // Resolve the agent type from the SessionRecord so the history
-  // conversations row gets `agent` populated immediately, without having
-  // to wait for an OTLP span to surface the same value via resource
-  // attributes. SessionRecord is written by the host-side session_store
-  // stage at session start, so it is present before any hook fires.
-  let agent: string | null = null;
-  try {
-    const record = await readSession(paths, sessionId);
-    agent = record?.agent ?? null;
-  } catch (err) {
-    console.error(
-      `[nas] hook: session record read failed: ${(err as Error).message}`,
-    );
-  }
-
-  // Persist a history turn_event row alongside the transient session
-  // store update. Records every hook invocation that passes the --when
-  // matcher above, independent of observability config. Never throws.
-  const conversationId = extractConversationId(payload);
-  const ts = new Date().toISOString();
-  appendTurnEvent({
-    invocationId: sessionId,
-    conversationId,
-    ts,
-    kind,
-    payload,
-    agent,
-  });
-
-  // Capture the first user prompt as a conversation summary from
-  // `payload.prompt`. Both Claude (UserPromptSubmit) and Copilot emit it as
-  // the literal string the user submitted. Limited to `kind === "start"` so
-  // we observe the conversation's opening prompt rather than later
-  // attention/stop fires. INSERT OR IGNORE in the writer keeps repeated
-  // start fires harmless (Copilot emits one per prompt; Claude's PreToolUse
-  // also routes to kind=start but carries no prompt and no-ops here).
-  if (conversationId !== null) {
-    const summary = extractFirstUserPrompt(payload, kind);
-    if (summary !== null) {
-      appendConversationSummary({
-        conversationId,
-        summary,
-        capturedAt: ts,
-      });
-    }
   }
 
   // Fire-and-forget desktop notification on attention (user-turn).
@@ -282,75 +226,6 @@ export function extractHookMessage(raw: unknown): string | undefined {
 function readNestedMessage(value: unknown): unknown {
   if (value === null || typeof value !== "object") return undefined;
   return (value as Record<string, unknown>).message;
-}
-
-/**
- * Extract the agent's conversation/session id from a hook payload.
- *
- * - Claude Code emits `session_id` (snake_case)
- * - Copilot CLI emits `sessionId` (camelCase)
- *
- * Snake_case wins when both are present (Claude is the primary observer
- * for hook payloads). Returns null if neither is a non-empty string.
- *
- * Exported for direct unit testing.
- */
-export function extractConversationId(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) return null;
-  if (Array.isArray(payload)) return null;
-  const obj = payload as Record<string, unknown>;
-  const snake = obj.session_id;
-  if (typeof snake === "string" && snake.length > 0) return snake;
-  const camel = obj.sessionId;
-  if (typeof camel === "string" && camel.length > 0) return camel;
-  return null;
-}
-
-/**
- * Extract the conversation's opening user prompt from a hook payload.
- *
- * Both Claude (`UserPromptSubmit`) and Copilot (`userPromptSubmitted`) emit
- * `payload.prompt` as the literal string the user just submitted. We
- * normalize whitespace and truncate to {@link SUMMARY_MAX_CHARS}.
- *
- * We intentionally do NOT read Claude Code's `transcript_path` JSONL: its
- * schema is undocumented and Claude Code injects synthetic `type:"user"`
- * entries at the head of the file (e.g. `<local-command-caveat>` blocks
- * when a `!cmd` runs first, or `<command-name>` wrappers for slash
- * commands). Trusting the documented `prompt` field instead avoids those
- * pitfalls. Claude's PreToolUse hook also routes here as kind=start but
- * carries no `prompt` field, so it naturally no-ops.
- *
- * Restricted to `kind === "start"`: later attention/stop fires must not
- * synthesize a summary even if their payload happens to carry `prompt`.
- *
- * Exported for direct unit testing.
- */
-export function extractFirstUserPrompt(
-  payload: unknown,
-  kind: string,
-): string | null {
-  if (kind !== "start") return null;
-  if (typeof payload !== "object" || payload === null) return null;
-  if (Array.isArray(payload)) return null;
-  const obj = payload as Record<string, unknown>;
-  const prompt = obj.prompt;
-  if (typeof prompt !== "string" || prompt.length === 0) return null;
-  const normalized = prompt.replace(/\s+/g, " ").trim();
-  if (normalized.length === 0) return null;
-  return truncate(normalized, SUMMARY_MAX_CHARS);
-}
-
-/**
- * Hard-truncate `s` to at most `maxChars` characters, replacing the final
- * character with U+2026 (`…`) when truncation occurs. The ellipsis counts
- * toward the length budget, so the returned string is always
- * `<= maxChars` characters long.
- */
-function truncate(s: string, maxChars: number): string {
-  if (maxChars <= 0) return "";
-  if (s.length <= maxChars) return s;
-  return `${s.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
 /**

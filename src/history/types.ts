@@ -68,14 +68,6 @@ export interface SpanRow {
   eventsJson: string | null;
 }
 
-export interface TurnEventRow {
-  invocationId: string;
-  conversationId: string | null;
-  ts: string;
-  kind: string;
-  payloadJson: string;
-}
-
 /**
  * A single log record row ingested from an OTLP log signal.
  * Written by the log ingest stage; deduplicated by
@@ -133,8 +125,7 @@ export interface ConversationListRow {
   readonly lastSeenAt: string;
   /**
    * Number of user turns. Sourced from `traces` (one trace per
-   * request → response cycle) — not from the `turn_events` stream, which
-   * over-counts because it logs every assistant message / tool use / etc.
+   * request → response cycle).
    */
   readonly turnCount: number;
   readonly spanCount: number;

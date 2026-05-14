@@ -7,7 +7,6 @@ import {
   _closeHistoryDb,
   insertLogRecords,
   insertSpans,
-  insertTurnEvent,
   openHistoryDb,
   queryConversationDetail,
   queryConversationList,
@@ -16,7 +15,6 @@ import {
   queryInvocationDetail,
   queryModelTokenTotals,
   upsertConversation,
-  upsertConversationSummary,
   upsertInvocation,
   upsertTrace,
 } from "./store.ts";
@@ -26,7 +24,6 @@ import type {
   LogRecordRow,
   SpanRow,
   TraceRow,
-  TurnEventRow,
 } from "./types.ts";
 
 interface TmpHistoryDb {
@@ -99,17 +96,6 @@ function sp(overrides: Partial<SpanRow> = {}): SpanRow {
   };
 }
 
-function te(overrides: Partial<TurnEventRow> = {}): TurnEventRow {
-  return {
-    invocationId: "sess_a",
-    conversationId: "conv_a",
-    ts: "2026-05-01T10:00:00Z",
-    kind: "user_prompt",
-    payloadJson: "{}",
-    ...overrides,
-  };
-}
-
 function makeConversationVisibleInList(
   db: Database,
   conversationId: string,
@@ -120,13 +106,6 @@ function makeConversationVisibleInList(
     db,
     tr({
       traceId: `trace_${conversationId}`,
-      invocationId,
-      conversationId,
-    }),
-  );
-  insertTurnEvent(
-    db,
-    te({
       invocationId,
       conversationId,
     }),
@@ -175,18 +154,6 @@ test("queryConversationList: aggregates counts and tokens, NULL safe (returns 0)
         cacheW: null,
       }),
     ]);
-    insertTurnEvent(
-      db,
-      te({ invocationId: "sess_a", conversationId: "conv_a" }),
-    );
-    insertTurnEvent(
-      db,
-      te({
-        invocationId: "sess_a",
-        conversationId: "conv_a",
-        kind: "tool_use",
-      }),
-    );
 
     // A second listed conversation with no spans — aggregates must be 0, not NULL.
     upsertConversation(
@@ -242,31 +209,15 @@ test("queryConversationList: hides conversations with zero traces", async () => 
       }),
     );
     makeConversationVisibleInList(db, "conv_visible", "sess_visible");
+    // A conversation without any associated trace must not appear in the
+    // top-level list, even though `queryConversationDetail` keeps it
+    // queryable by id.
     upsertConversation(
       db,
       conv({
         id: "conv_noise",
         lastSeenAt: "2026-05-01T12:00:00Z",
         firstSeenAt: "2026-05-01T12:00:00Z",
-      }),
-    );
-    // A turn_event alone (e.g. a hook-recorded `stop` for a session that
-    // never produced a trace) must not be enough to keep the row visible.
-    upsertConversation(
-      db,
-      conv({
-        id: "conv_te_only",
-        lastSeenAt: "2026-05-01T13:00:00Z",
-        firstSeenAt: "2026-05-01T13:00:00Z",
-      }),
-    );
-    upsertInvocation(db, inv({ id: "sess_te_only" }));
-    insertTurnEvent(
-      db,
-      te({
-        invocationId: "sess_te_only",
-        conversationId: "conv_te_only",
-        kind: "stop",
       }),
     );
 
@@ -276,9 +227,6 @@ test("queryConversationList: hides conversations with zero traces", async () => 
     expect(queryConversationDetail(db, "conv_noise")?.conversation.id).toEqual(
       "conv_noise",
     );
-    expect(
-      queryConversationDetail(db, "conv_te_only")?.conversation.id,
-    ).toEqual("conv_te_only");
   } finally {
     await cleanup(t);
   }
@@ -584,8 +532,9 @@ test("queryInvocationDetail: collects traces / spans / conversations", async () 
 // summary derivation: read-time extraction from OTEL log_records / spans
 //
 // `ConversationListRow.summary` and `ConversationDetail.conversation.summary`
-// are no longer joined from `conversation_summaries`; the reader runs
-// `extractTracePrompts` over the earliest trace's log_records and spans.
+// are derived at read time: the reader runs `extractTracePrompts` over the
+// earliest trace's log_records and spans rather than reading any persisted
+// summary column.
 // ---------------------------------------------------------------------------
 
 function claudeLlmRequestSpan(
@@ -819,42 +768,6 @@ test("queryConversationDetail: summary derives from first-trace prompt and is nu
     expect(empty).not.toBeNull();
     expect(empty?.traces).toEqual([]);
     expect(empty?.conversation.summary).toBeNull();
-  } finally {
-    await cleanup(t);
-  }
-});
-
-test("conversation_summaries table is added to existing db on writer re-open", async () => {
-  const t = await makeTempDb();
-  try {
-    // First open: creates db with v1 schema.
-    const db1 = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    upsertConversation(db1, conv({ id: "conv_reopen" }));
-    makeConversationVisibleInList(db1, "conv_reopen", "sess_reopen");
-    _closeHistoryDb(t.dbPath);
-
-    // Second open re-runs SCHEMA_SQL with CREATE TABLE IF NOT EXISTS;
-    // user_version stays at HISTORY_DB_USER_VERSION so this must succeed.
-    const db2 = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    const tables = db2
-      .query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_summaries'",
-      )
-      .all() as { name: string }[];
-    expect(tables).toHaveLength(1);
-
-    // And it is functional. The reader no longer joins
-    // `conversation_summaries`, so this checks the table directly rather
-    // than via `queryConversationList`.
-    upsertConversationSummary(db2, {
-      id: "conv_reopen",
-      summary: "after reopen",
-      capturedAt: "2026-05-01T10:00:00Z",
-    });
-    const stored = db2
-      .query("SELECT summary FROM conversation_summaries WHERE id = ?")
-      .get("conv_reopen") as { summary: string } | null;
-    expect(stored?.summary).toBe("after reopen");
   } finally {
     await cleanup(t);
   }

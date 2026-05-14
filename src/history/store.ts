@@ -22,7 +22,6 @@ import type {
   SpanSummaryRow,
   TraceRow,
   TraceSummaryRow,
-  TurnEventRow,
 } from "./types.ts";
 
 export {
@@ -313,39 +312,6 @@ export function insertSpans(db: Database, rows: SpanRow[]): void {
 }
 
 /**
- * Insert the first-seen summary for a conversation.
- *
- * Invariant: the *first* summary persists. Subsequent calls are silent
- * no-ops via INSERT OR IGNORE — a conversation's identity is anchored to
- * its opening user prompt, and later turns must not rewrite the row.
- */
-export function upsertConversationSummary(
-  db: Database,
-  row: { id: string; summary: string; capturedAt: string },
-): void {
-  db.prepare(
-    `INSERT OR IGNORE INTO conversation_summaries
-       (id, summary, captured_at)
-     VALUES (?, ?, ?)`,
-  ).run(row.id, row.summary, row.capturedAt);
-}
-
-/** Append a single turn_events row. No PK; duplicates are allowed. */
-export function insertTurnEvent(db: Database, row: TurnEventRow): void {
-  db.prepare(
-    `INSERT INTO turn_events
-       (invocation_id, conversation_id, ts, kind, payload_json)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(
-    row.invocationId,
-    row.conversationId,
-    row.ts,
-    row.kind,
-    row.payloadJson,
-  );
-}
-
-/**
  * Bulk-insert log records within a single transaction.
  *
  * Callers must ensure the referenced invocation and conversation rows already
@@ -578,11 +544,11 @@ function rowToInvocationSummary(r: InvocationSqlRow): InvocationSummaryRow {
 
 /**
  * List conversations sorted by `last_seen_at DESC` with aggregate counts.
- * Conversations with no associated traces are hidden from the list: hooks may
- * record `turn_events` (e.g. a lone `stop`) for sessions that never produced
- * an OTEL trace, and Codex assigns separate conversation ids to subagent
- * runs whose traces hang off the parent conversation. Both classes are still
- * queryable by detail routes but should not clutter the top-level list.
+ * Conversations with no associated traces are hidden from the list: Codex
+ * assigns separate conversation ids to subagent runs whose traces hang off
+ * the parent conversation, and any conversation row written without an
+ * accompanying trace would otherwise clutter the top-level list. Hidden
+ * rows are still queryable by detail routes.
  *
  * Default limit is 200; callers can override but should keep results bounded
  * since the consumer renders them as a single list.

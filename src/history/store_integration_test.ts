@@ -3,20 +3,23 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { MIGRATION_V1, MIGRATION_V2, readUserVersion } from "./migrations.ts";
+import {
+  MIGRATION_V1,
+  MIGRATION_V2,
+  MIGRATION_V3,
+  readUserVersion,
+} from "./migrations.ts";
 import {
   _closeHistoryDb,
   HISTORY_DB_USER_VERSION,
   HistoryDbVersionMismatchError,
   insertLogRecords,
   insertSpans,
-  insertTurnEvent,
   markInvocationEnded,
   openHistoryDb,
   queryConversationDetail,
   queryLogRecordsByConversation,
   upsertConversation,
-  upsertConversationSummary,
   upsertInvocation,
   upsertTrace,
 } from "./store.ts";
@@ -26,7 +29,6 @@ import type {
   LogRecordRow,
   SpanRow,
   TraceRow,
-  TurnEventRow,
 } from "./types.ts";
 
 interface TmpHistoryDb {
@@ -95,17 +97,6 @@ function span(overrides: Partial<SpanRow> = {}): SpanRow {
     endedAt: "2026-05-01T10:00:01Z",
     attrsJson: "{}",
     eventsJson: null,
-    ...overrides,
-  };
-}
-
-function turn(overrides: Partial<TurnEventRow> = {}): TurnEventRow {
-  return {
-    invocationId: "sess_a",
-    conversationId: null,
-    ts: "2026-05-01T10:00:00Z",
-    kind: "user_prompt",
-    payloadJson: "{}",
     ...overrides,
   };
 }
@@ -428,7 +419,7 @@ test("opening with a mismatched user_version throws HistoryDbVersionMismatchErro
   }
 });
 
-test("schema introspection: expected 7 tables and 10 indexes are present", async () => {
+test("schema introspection: expected 5 tables and 8 indexes are present", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
@@ -440,13 +431,11 @@ test("schema introspection: expected 7 tables and 10 indexes are present", async
       .all() as { name: string }[];
     const tableNames = tables.map((r) => r.name);
     expect(tableNames).toEqual([
-      "conversation_summaries",
       "conversations",
       "invocations",
       "log_records",
       "spans",
       "traces",
-      "turn_events",
     ]);
 
     const indexes = db
@@ -464,8 +453,6 @@ test("schema introspection: expected 7 tables and 10 indexes are present", async
       "idx_spans_trace",
       "idx_traces_conversation",
       "idx_traces_invocation",
-      "idx_turn_events_conversation",
-      "idx_turn_events_invocation",
     ]);
   } finally {
     await cleanup(t);
@@ -499,24 +486,6 @@ test("insertSpans: bulk insert and idempotent replace on same span_id", async ()
     insertSpans(db, []);
     count = db.query("SELECT COUNT(*) AS c FROM spans").get() as CountRow;
     expect(count.c).toEqual(2);
-  } finally {
-    await cleanup(t);
-  }
-});
-
-test("insertTurnEvent: appends rows (no PK; duplicates allowed)", async () => {
-  const t = await makeTempDb();
-  try {
-    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    upsertInvocation(db, inv());
-    insertTurnEvent(db, turn({ kind: "user_prompt" }));
-    insertTurnEvent(db, turn({ kind: "user_prompt" }));
-    insertTurnEvent(db, turn({ kind: "tool_use" }));
-
-    const count = db
-      .query("SELECT COUNT(*) AS c FROM turn_events")
-      .get() as CountRow;
-    expect(count.c).toEqual(3);
   } finally {
     await cleanup(t);
   }
@@ -691,8 +660,8 @@ test("queryConversationDetail: includes logRecords", async () => {
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     // logRecords を検証するための前提として invocation / conversation / trace
-    // を seed する。summary は reader 側で trace 由来の prompt から derive される
-    // 仕様なので、conversation_summaries への seed は不要。
+    // を seed する。summary は reader 側で trace 由来の prompt から derive する
+    // 仕様なので、summary 用の seed は不要。
     upsertInvocation(db, inv());
     upsertConversation(db, conv());
     upsertTrace(db, trace({ conversationId: "conv_a" }));
@@ -839,25 +808,30 @@ test("writer open auto-upgrades a v1-stamped db to HISTORY_DB_USER_VERSION", asy
     const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
     expect(readUserVersion(writer)).toEqual(HISTORY_DB_USER_VERSION);
 
-    // M2 additions are present.
+    // M2 added `spans.events_json`.
     const spansCols = (
       writer.query("PRAGMA table_info(spans)").all() as { name: string }[]
     ).map((r) => r.name);
     expect(spansCols).toContain("events_json");
-    const summariesTable = writer
-      .query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_summaries'",
-      )
-      .get();
-    expect(summariesTable).not.toBeNull();
 
-    // M3 additions are present.
+    // M3 added the log_records table.
     const logRecordsTable = writer
       .query(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='log_records'",
       )
       .get();
     expect(logRecordsTable).not.toBeNull();
+
+    // M4 dropped turn_events / conversation_summaries — both must be absent
+    // even though M2 created conversation_summaries earlier in the chain.
+    const hookTables = (
+      writer
+        .query(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('turn_events','conversation_summaries') ORDER BY name",
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(hookTables).toEqual([]);
   } finally {
     await cleanup(t);
   }
@@ -933,51 +907,6 @@ test("v1 stamp DB with spans rows: auto-migration preserves rows and events_json
   }
 });
 
-test("writer open auto-upgrades a v1-stamped db that already silently carries conversation_summaries", async () => {
-  const t = await makeTempDb();
-  try {
-    // Reproduce the historical out-of-band shape: a v1 stamp but the
-    // conversation_summaries table is already there (e.g. a manual patch).
-    // M2's IF NOT EXISTS / column probe must absorb this without erroring.
-    const raw = new Database(t.dbPath);
-    try {
-      MIGRATION_V1.apply(raw);
-      raw.run(`
-        CREATE TABLE conversation_summaries (
-          id           TEXT PRIMARY KEY REFERENCES conversations(id),
-          summary      TEXT NOT NULL,
-          captured_at  TEXT NOT NULL
-        );
-      `);
-      raw.run("PRAGMA user_version = 1");
-    } finally {
-      raw.close();
-    }
-
-    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    expect(readUserVersion(writer)).toEqual(HISTORY_DB_USER_VERSION);
-
-    // events_json column was added by M2; conversation_summaries remains usable.
-    const spansCols = (
-      writer.query("PRAGMA table_info(spans)").all() as { name: string }[]
-    ).map((r) => r.name);
-    expect(spansCols).toContain("events_json");
-    upsertInvocation(writer, inv());
-    upsertConversation(writer, conv());
-    upsertConversationSummary(writer, {
-      id: "conv_a",
-      summary: "auto-migrated summary",
-      capturedAt: "2026-05-01T10:00:00Z",
-    });
-    const row = writer
-      .query("SELECT summary FROM conversation_summaries WHERE id = ?")
-      .get("conv_a") as { summary: string } | null;
-    expect(row?.summary).toEqual("auto-migrated summary");
-  } finally {
-    await cleanup(t);
-  }
-});
-
 test("writer open auto-upgrades a v2-stamped db to HISTORY_DB_USER_VERSION", async () => {
   const t = await makeTempDb();
   try {
@@ -1012,6 +941,45 @@ test("writer open auto-upgrades a v2-stamped db to HISTORY_DB_USER_VERSION", asy
       "idx_log_records_invocation",
       "idx_log_records_request_id",
     ]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("writer open auto-upgrades a v3-stamped db to HISTORY_DB_USER_VERSION (=4)", async () => {
+  const t = await makeTempDb();
+  try {
+    const raw = new Database(t.dbPath);
+    try {
+      MIGRATION_V1.apply(raw);
+      MIGRATION_V2.apply(raw);
+      MIGRATION_V3.apply(raw);
+      raw.run("PRAGMA user_version = 3");
+    } finally {
+      raw.close();
+    }
+
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    expect(readUserVersion(writer)).toEqual(HISTORY_DB_USER_VERSION);
+    expect(HISTORY_DB_USER_VERSION).toEqual(4);
+
+    // M4 dropped the hook-side tables.
+    const droppedTables = (
+      writer
+        .query(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('turn_events','conversation_summaries')",
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(droppedTables).toEqual([]);
+
+    // log_records, established by M3, survives M4 untouched.
+    const logRecordsTable = writer
+      .query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='log_records'",
+      )
+      .get();
+    expect(logRecordsTable).not.toBeNull();
   } finally {
     await cleanup(t);
   }
