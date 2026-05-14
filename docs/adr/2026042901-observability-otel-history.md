@@ -1,9 +1,9 @@
 ---
-Status: Draft
+Status: Accepted
 Date: 2026-05-01
 ---
 
-# ADR (Draft): observability — per-session OTEL receiver + SQLite history store
+# ADR: observability — per-session OTEL receiver + SQLite history store
 
 ## Context
 

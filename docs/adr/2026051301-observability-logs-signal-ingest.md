@@ -1,9 +1,9 @@
 ---
-Status: Draft
+Status: Accepted
 Date: 2026-05-13
 ---
 
-# ADR (Draft): observability — /v1/logs 受理と event 単位 whitelist
+# ADR: observability — /v1/logs 受理と event 単位 whitelist
 
 ## Context
 

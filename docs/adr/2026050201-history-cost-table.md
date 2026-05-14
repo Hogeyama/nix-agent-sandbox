@@ -1,9 +1,9 @@
 ---
-Status: Draft
+Status: Accepted
 Date: 2026-05-02
 ---
 
-# ADR (Draft): history page — model × token-type cost table
+# ADR: history page — model × token-type cost table
 
 ## Context
 

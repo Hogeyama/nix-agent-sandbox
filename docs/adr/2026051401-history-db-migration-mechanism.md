@@ -1,9 +1,9 @@
 ---
-Status: Draft
+Status: Accepted
 Date: 2026-05-14
 ---
 
-# ADR (Draft): history.db schema migration mechanism
+# ADR: history.db schema migration mechanism
 
 ## Context
 
