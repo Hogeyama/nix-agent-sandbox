@@ -1,9 +1,16 @@
 import type { Database } from "bun:sqlite";
 
 /**
- * Schema version embedded in `PRAGMA user_version`. Open refuses (in either
- * mode) when the on-disk value disagrees. Migrations are not attempted —
- * the operator is expected to `rm history.db` and let the writer recreate.
+ * Schema version embedded in `PRAGMA user_version`.
+ *
+ * Writer-mode open auto-upgrades any file stamped at a known older version
+ * (0 — fresh file — or 1, 2, ...) up to `HISTORY_DB_USER_VERSION`. A value
+ * *greater* than this constant signals the file was written by a newer nas
+ * binary and is refused via {@link HistoryDbVersionMismatchError}.
+ *
+ * Reader-mode open does not migrate: any mismatch (older or newer) is
+ * refused. Reader callers are expected to either upgrade their nas binary
+ * or run the writer (cli / hook) once to migrate the file in place.
  */
 export const HISTORY_DB_USER_VERSION = 3;
 
@@ -205,20 +212,28 @@ export function readUserVersion(db: Database): number {
  * Bring `db` up to the latest `HISTORY_DB_USER_VERSION` by running every
  * pending migration step in order.
  *
+ * Writer-only: this is invoked from the readwrite open path. Reader-mode
+ * opens never call this — they refuse any mismatch (older or newer) so that
+ * a read-only consumer cannot mutate a writer's file out from under it.
+ *
  * Behaviour:
- * - `current === 0` (fresh file): every step runs, ending at the latest target.
+ * - `current > HISTORY_DB_USER_VERSION` (file from a newer nas build): throw
+ *   `HistoryDbVersionMismatchError`. We cannot reason about a schema we do
+ *   not know about.
  * - `current === HISTORY_DB_USER_VERSION`: no steps run.
- * - Any other value (older but non-zero, or newer than this build knows about):
- *   throw `HistoryDbVersionMismatchError`. We do not attempt to migrate
- *   partially-stamped databases; the operator is expected to remove the file.
+ * - `current < HISTORY_DB_USER_VERSION` (fresh file at 0, or any known older
+ *   stamp): every step with `target > current` runs in order, ending at the
+ *   latest target.
  *
  * Each step is wrapped in a transaction together with the `PRAGMA user_version`
  * stamp so a crash mid-step cannot leave the version pointer ahead of the
- * actual schema state.
+ * actual schema state. If a step throws, the transaction rolls back and
+ * `user_version` stays at its prior value, leaving the next open free to
+ * retry from the same point.
  */
 export function applyMigrations(db: Database, dbPath: string): void {
   const current = readUserVersion(db);
-  if (current !== 0 && current !== HISTORY_DB_USER_VERSION) {
+  if (current > HISTORY_DB_USER_VERSION) {
     throw new HistoryDbVersionMismatchError(dbPath, current);
   }
   for (const migration of HISTORY_DB_MIGRATIONS) {

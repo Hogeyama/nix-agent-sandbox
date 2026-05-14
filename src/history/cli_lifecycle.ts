@@ -8,6 +8,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { AgentType } from "../config/types.ts";
+import { HISTORY_DB_USER_VERSION } from "./migrations.ts";
 import {
   HistoryDbVersionMismatchError,
   markInvocationEnded,
@@ -63,11 +64,13 @@ export function recordInvocationStart(
       mode: "readwrite",
     });
   } catch (e) {
+    // openHistoryDb in readwrite mode auto-migrates any known older
+    // user_version stamp, so HistoryDbVersionMismatchError here only fires
+    // when the on-disk file was written by a newer nas binary than this one.
     if (e instanceof HistoryDbVersionMismatchError) {
       console.error(
-        `nas: history db schema version mismatch (expected 1, got ${e.actual}). ` +
-          `Run 'rm ${resolveHistoryDbPath()}' and re-run nas to recreate. ` +
-          `Continuing without history.`,
+        `nas: history db schema version mismatch: on-disk user_version=${e.actual} is newer than this binary supports (max ${HISTORY_DB_USER_VERSION}). ` +
+          `Upgrade nas to read it. Continuing without history.`,
       );
     } else {
       const msg = e instanceof Error ? e.message : String(e);

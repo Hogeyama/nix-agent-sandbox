@@ -274,6 +274,7 @@ test("appendTurnEvent on schema mismatch warns and skips, does not throw", async
     cap.messages.some(
       (m) =>
         m.includes("schema version mismatch") &&
+        m.includes("newer than this binary") &&
         m.includes("Skipping turn_event"),
     ),
   ).toBe(true);
@@ -515,6 +516,7 @@ test("appendConversationSummary: schema mismatch warns and skips", async () => {
     cap.messages.some(
       (m) =>
         m.includes("schema version mismatch") &&
+        m.includes("newer than this binary") &&
         m.includes("Skipping conversation summary"),
     ),
   ).toBe(true);

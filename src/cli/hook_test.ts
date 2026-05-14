@@ -807,6 +807,7 @@ test("runHookCommand with history db schema mismatch exits 0 and writes no turn_
     errors.some(
       (m) =>
         m.includes("schema version mismatch") &&
+        m.includes("newer than this binary") &&
         m.includes("Skipping turn_event"),
     ),
   ).toBe(true);

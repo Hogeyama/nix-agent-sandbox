@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { MIGRATION_V1, MIGRATION_V2, readUserVersion } from "./migrations.ts";
 import {
   _closeHistoryDb,
   HISTORY_DB_USER_VERSION,
@@ -822,6 +823,228 @@ test("insertLogRecords: inserting a record with a non-existent invocation_id thr
     }
     expect(err).toBeDefined();
     expect(String(err)).toMatch(/FOREIGN KEY|constraint/i);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// writer-side auto-migration: older user_version stamps are upgraded in place
+// ---------------------------------------------------------------------------
+
+test("writer open auto-upgrades a v1-stamped db to HISTORY_DB_USER_VERSION", async () => {
+  const t = await makeTempDb();
+  try {
+    // Lay down a v1-shape db with `user_version = 1` via a raw handle, then
+    // hand it off to openHistoryDb in readwrite mode.
+    const raw = new Database(t.dbPath);
+    try {
+      MIGRATION_V1.apply(raw);
+      raw.run("PRAGMA user_version = 1");
+    } finally {
+      raw.close();
+    }
+
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    expect(readUserVersion(writer)).toEqual(HISTORY_DB_USER_VERSION);
+
+    // M2 additions are present.
+    const spansCols = (
+      writer.query("PRAGMA table_info(spans)").all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(spansCols).toContain("events_json");
+    const summariesTable = writer
+      .query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_summaries'",
+      )
+      .get();
+    expect(summariesTable).not.toBeNull();
+
+    // M3 additions are present.
+    const logRecordsTable = writer
+      .query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='log_records'",
+      )
+      .get();
+    expect(logRecordsTable).not.toBeNull();
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("v1 stamp DB with spans rows: auto-migration preserves rows and events_json defaults to NULL", async () => {
+  const t = await makeTempDb();
+  try {
+    // Lay down a v1-shape db with `user_version = 1` and insert FK-consistent
+    // rows (invocations -> traces -> spans) using only v1 columns. M2 then
+    // adds `spans.events_json` via ALTER TABLE; the existing rows must
+    // survive and carry NULL in the new column.
+    const raw = new Database(t.dbPath);
+    try {
+      MIGRATION_V1.apply(raw);
+      raw.run(
+        "INSERT INTO invocations (id, profile, agent, worktree_path, started_at) VALUES (?, ?, ?, ?, ?)",
+        ["sess_a", "default", "claude", "/tmp/wt", "2026-05-01T10:00:00Z"],
+      );
+      raw.run(
+        "INSERT INTO traces (trace_id, invocation_id, started_at) VALUES (?, ?, ?)",
+        ["trace_a", "sess_a", "2026-05-01T10:00:00Z"],
+      );
+      raw.run(
+        "INSERT INTO spans (span_id, parent_span_id, trace_id, span_name, kind, started_at, attrs_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+          "span_a",
+          null,
+          "trace_a",
+          "chat",
+          "chat",
+          "2026-05-01T10:00:00Z",
+          '{"k":"v"}',
+        ],
+      );
+      raw.run(
+        "INSERT INTO spans (span_id, parent_span_id, trace_id, span_name, kind, started_at, attrs_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+          "span_b",
+          "span_a",
+          "trace_a",
+          "tool",
+          "tool",
+          "2026-05-01T10:00:01Z",
+          "{}",
+        ],
+      );
+      raw.run("PRAGMA user_version = 1");
+    } finally {
+      raw.close();
+    }
+
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    expect(readUserVersion(writer)).toEqual(HISTORY_DB_USER_VERSION);
+
+    // events_json column landed via M2.
+    const spansCols = (
+      writer.query("PRAGMA table_info(spans)").all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(spansCols).toContain("events_json");
+
+    // Pre-migration spans rows are still present and `events_json` defaults
+    // to NULL (the new column has no DEFAULT clause, so ALTER TABLE backfills
+    // existing rows with NULL).
+    const rows = writer
+      .query("SELECT span_id, events_json FROM spans ORDER BY span_id")
+      .all() as { span_id: string; events_json: string | null }[];
+    expect(rows.map((r) => r.span_id)).toEqual(["span_a", "span_b"]);
+    expect(rows[0]?.events_json).toBeNull();
+    expect(rows[1]?.events_json).toBeNull();
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("writer open auto-upgrades a v1-stamped db that already silently carries conversation_summaries", async () => {
+  const t = await makeTempDb();
+  try {
+    // Reproduce the historical out-of-band shape: a v1 stamp but the
+    // conversation_summaries table is already there (e.g. a manual patch).
+    // M2's IF NOT EXISTS / column probe must absorb this without erroring.
+    const raw = new Database(t.dbPath);
+    try {
+      MIGRATION_V1.apply(raw);
+      raw.run(`
+        CREATE TABLE conversation_summaries (
+          id           TEXT PRIMARY KEY REFERENCES conversations(id),
+          summary      TEXT NOT NULL,
+          captured_at  TEXT NOT NULL
+        );
+      `);
+      raw.run("PRAGMA user_version = 1");
+    } finally {
+      raw.close();
+    }
+
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    expect(readUserVersion(writer)).toEqual(HISTORY_DB_USER_VERSION);
+
+    // events_json column was added by M2; conversation_summaries remains usable.
+    const spansCols = (
+      writer.query("PRAGMA table_info(spans)").all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(spansCols).toContain("events_json");
+    upsertInvocation(writer, inv());
+    upsertConversation(writer, conv());
+    upsertConversationSummary(writer, {
+      id: "conv_a",
+      summary: "auto-migrated summary",
+      capturedAt: "2026-05-01T10:00:00Z",
+    });
+    const row = writer
+      .query("SELECT summary FROM conversation_summaries WHERE id = ?")
+      .get("conv_a") as { summary: string } | null;
+    expect(row?.summary).toEqual("auto-migrated summary");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("writer open auto-upgrades a v2-stamped db to HISTORY_DB_USER_VERSION", async () => {
+  const t = await makeTempDb();
+  try {
+    const raw = new Database(t.dbPath);
+    try {
+      MIGRATION_V1.apply(raw);
+      MIGRATION_V2.apply(raw);
+      raw.run("PRAGMA user_version = 2");
+    } finally {
+      raw.close();
+    }
+
+    const writer = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    expect(readUserVersion(writer)).toEqual(HISTORY_DB_USER_VERSION);
+
+    // M3 (log_records + its indexes) lands during the open.
+    const logRecordsTable = writer
+      .query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='log_records'",
+      )
+      .get();
+    expect(logRecordsTable).not.toBeNull();
+    const logIndexes = (
+      writer
+        .query(
+          "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_log_records_%' ORDER BY name",
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(logIndexes).toEqual([
+      "idx_log_records_conv_prompt",
+      "idx_log_records_invocation",
+      "idx_log_records_request_id",
+    ]);
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("readonly open on a v1-stamped db still throws (readers do not migrate)", async () => {
+  const t = await makeTempDb();
+  try {
+    const raw = new Database(t.dbPath);
+    try {
+      MIGRATION_V1.apply(raw);
+      raw.run("PRAGMA user_version = 1");
+    } finally {
+      raw.close();
+    }
+
+    let err: unknown;
+    try {
+      openHistoryDb({ path: t.dbPath, mode: "readonly" });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(HistoryDbVersionMismatchError);
+    expect((err as HistoryDbVersionMismatchError).actual).toEqual(1);
   } finally {
     await cleanup(t);
   }

@@ -252,7 +252,8 @@ test("recordInvocationStart returns null and warns on schema version mismatch", 
       cap.messages.some(
         (m) =>
           m.includes("schema version mismatch") &&
-          m.includes("rm ") &&
+          m.includes("newer than this binary") &&
+          m.includes("Upgrade nas") &&
           m.includes("Continuing without history"),
       ),
     ).toBe(true);

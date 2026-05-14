@@ -41,6 +41,7 @@ import {
   canApplyAgentObservabilityConfig,
 } from "../../agents/observability.ts";
 import type { Config, Profile } from "../../config/types.ts";
+import { HISTORY_DB_USER_VERSION } from "../../history/migrations.ts";
 import {
   HistoryDbVersionMismatchError,
   openHistoryDb,
@@ -154,9 +155,8 @@ function runObservability(
       } catch (e) {
         if (e instanceof HistoryDbVersionMismatchError) {
           console.warn(
-            `nas: history db schema version mismatch (expected 1, got ${e.actual}). ` +
-              `Run 'rm ${resolveHistoryDbPath()}' and re-run nas to recreate. ` +
-              `Continuing with observability disabled.`,
+            `nas: history db schema version mismatch: on-disk user_version=${e.actual} is newer than this binary supports (max ${HISTORY_DB_USER_VERSION}). ` +
+              `Upgrade nas to read it. Continuing with observability disabled.`,
           );
         } else {
           const msg = e instanceof Error ? e.message : String(e);

@@ -11,6 +11,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { HISTORY_DB_USER_VERSION } from "./migrations.ts";
 import {
   HistoryDbVersionMismatchError,
   insertTurnEvent,
@@ -57,8 +58,8 @@ export function appendTurnEvent(args: AppendTurnEventArgs): void {
   } catch (e) {
     if (e instanceof HistoryDbVersionMismatchError) {
       console.error(
-        `nas hook: history db schema version mismatch (expected 1, got ${e.actual}). ` +
-          `Run 'rm ${dbPath}' and re-run nas. Skipping turn_event.`,
+        `nas hook: history db schema version mismatch: on-disk user_version=${e.actual} is newer than this binary supports (max ${HISTORY_DB_USER_VERSION}). ` +
+          `Upgrade nas to read it. Skipping turn_event.`,
       );
     } else {
       const msg = e instanceof Error ? e.message : String(e);
@@ -153,8 +154,8 @@ export function appendConversationSummary(
   } catch (e) {
     if (e instanceof HistoryDbVersionMismatchError) {
       console.error(
-        `nas hook: history db schema version mismatch (expected 1, got ${e.actual}). ` +
-          `Run 'rm ${dbPath}' and re-run nas. Skipping conversation summary.`,
+        `nas hook: history db schema version mismatch: on-disk user_version=${e.actual} is newer than this binary supports (max ${HISTORY_DB_USER_VERSION}). ` +
+          `Upgrade nas to read it. Skipping conversation summary.`,
       );
     } else {
       const msg = e instanceof Error ? e.message : String(e);
