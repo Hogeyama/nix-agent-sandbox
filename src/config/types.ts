@@ -216,6 +216,8 @@ export interface UiConfig {
  */
 export interface ObservabilityConfig {
   enable: boolean;
+  /** Retention window in seconds. `null` means keep indefinitely. */
+  retention: number | null;
 }
 
 /** トップレベル設定 */
@@ -236,6 +238,7 @@ export interface RawConfig {
   };
   observability?: {
     enable?: boolean;
+    retention?: string | null;
   };
   profiles?: Record<string, RawProfile>;
 }
@@ -363,6 +366,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
 
 export const DEFAULT_OBSERVABILITY_CONFIG: ObservabilityConfig = {
   enable: false,
+  retention: null,
 };
 
 export const DEFAULT_NIX_CONFIG: NixConfig = {

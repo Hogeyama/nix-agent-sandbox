@@ -81,7 +81,7 @@ test("shouldEnableObservability: disabled config => false for every agent", () =
   for (const agent of ["claude", "copilot", "codex"] as const) {
     expect(
       shouldEnableObservability({
-        config: { observability: { enable: false } },
+        config: { observability: { enable: false, retention: null } },
         profile: { agent },
       }),
     ).toEqual(false);
@@ -91,19 +91,19 @@ test("shouldEnableObservability: disabled config => false for every agent", () =
 test("shouldEnableObservability: enabled config => true for claude/copilot/codex", () => {
   expect(
     shouldEnableObservability({
-      config: { observability: { enable: true } },
+      config: { observability: { enable: true, retention: null } },
       profile: { agent: "claude" },
     }),
   ).toEqual(true);
   expect(
     shouldEnableObservability({
-      config: { observability: { enable: true } },
+      config: { observability: { enable: true, retention: null } },
       profile: { agent: "copilot" },
     }),
   ).toEqual(true);
   expect(
     shouldEnableObservability({
-      config: { observability: { enable: true } },
+      config: { observability: { enable: true, retention: null } },
       profile: { agent: "codex" },
     }),
   ).toEqual(true);

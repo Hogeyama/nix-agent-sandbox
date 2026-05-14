@@ -1440,6 +1440,124 @@ test("validateConfig: observability non-boolean enable rejects", () => {
   expect(() => validateConfig(raw)).toThrow("observability:");
 });
 
+test("validateConfig: observability retention defaults to null when omitted", () => {
+  const raw: RawConfig = {
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.retention).toEqual(null);
+});
+
+test("validateConfig: observability retention explicit null", () => {
+  const raw: RawConfig = {
+    observability: { retention: null },
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.retention).toEqual(null);
+});
+
+test("validateConfig: observability retention 30d normalizes to seconds", () => {
+  const raw: RawConfig = {
+    observability: { retention: "30d" },
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.retention).toEqual(2_592_000);
+});
+
+test("validateConfig: observability retention 48h normalizes to seconds", () => {
+  const raw: RawConfig = {
+    observability: { retention: "48h" },
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.retention).toEqual(172_800);
+});
+
+test("validateConfig: observability retention 1w normalizes to seconds", () => {
+  const raw: RawConfig = {
+    observability: { retention: "1w" },
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.retention).toEqual(604_800);
+});
+
+test("validateConfig: observability retention 1h is the lower bound", () => {
+  const raw: RawConfig = {
+    observability: { retention: "1h" },
+    profiles: { test: { agent: "claude" } },
+  };
+  const config = validateConfig(raw);
+  expect(config.observability.retention).toEqual(3_600);
+});
+
+test("validateConfig: observability retention 30m below 1h rejects", () => {
+  const raw: RawConfig = {
+    observability: { retention: "30m" },
+    profiles: { test: { agent: "claude" } },
+  };
+  expect(() => validateConfig(raw)).toThrow("observability:");
+  expect(() => validateConfig(raw)).toThrow("must be at least 1h");
+});
+
+test("validateConfig: observability retention 59m below 1h rejects", () => {
+  const raw: RawConfig = {
+    observability: { retention: "59m" },
+    profiles: { test: { agent: "claude" } },
+  };
+  expect(() => validateConfig(raw)).toThrow("must be at least 1h");
+});
+
+test("validateConfig: observability retention 3599s below 1h rejects", () => {
+  const raw: RawConfig = {
+    observability: { retention: "3599s" },
+    profiles: { test: { agent: "claude" } },
+  };
+  expect(() => validateConfig(raw)).toThrow("must be at least 1h");
+});
+
+test("validateConfig: observability retention 0d below 1h rejects", () => {
+  const raw: RawConfig = {
+    observability: { retention: "0d" },
+    profiles: { test: { agent: "claude" } },
+  };
+  expect(() => validateConfig(raw)).toThrow("must be at least 1h");
+});
+
+test("validateConfig: observability retention without unit rejects", () => {
+  const raw: RawConfig = {
+    observability: { retention: "30" },
+    profiles: { test: { agent: "claude" } },
+  };
+  expect(() => validateConfig(raw)).toThrow("observability:");
+});
+
+test("validateConfig: observability retention with invalid unit rejects", () => {
+  const raw: RawConfig = {
+    observability: { retention: "30days" },
+    profiles: { test: { agent: "claude" } },
+  };
+  expect(() => validateConfig(raw)).toThrow("observability:");
+});
+
+test("validateConfig: observability retention negative rejects", () => {
+  const raw: RawConfig = {
+    observability: { retention: "-5d" },
+    profiles: { test: { agent: "claude" } },
+  };
+  expect(() => validateConfig(raw)).toThrow("observability:");
+});
+
+test("validateConfig: observability retention numeric value rejects", () => {
+  const raw = {
+    observability: { retention: 30 as unknown as string },
+    profiles: { test: { agent: "claude" } },
+  } as RawConfig;
+  expect(() => validateConfig(raw)).toThrow("observability:");
+});
+
 // ---------------------------------------------------------------------------
 // Error aggregation across profiles and fields
 // ---------------------------------------------------------------------------

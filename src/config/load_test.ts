@@ -336,3 +336,19 @@ test("mergeRawConfigs: local observability overrides global observability fields
   const result = mergeRawConfigs(global, local);
   expect(result.observability).toEqual({ enable: true });
 });
+
+test("mergeRawConfigs: observability fields merge per-field (local wins)", () => {
+  // Guard: a future refactor that replaces shallowMerge with an explicit
+  // field-by-field merge must still preserve `enable` from global while
+  // letting `retention` from local override it.
+  const global: RawConfig = {
+    observability: { enable: true, retention: "30d" },
+    profiles: { dev: { agent: "claude" } },
+  };
+  const local: RawConfig = {
+    observability: { retention: "7d" },
+    profiles: {},
+  };
+  const result = mergeRawConfigs(global, local);
+  expect(result.observability).toEqual({ enable: true, retention: "7d" });
+});
