@@ -23,17 +23,19 @@ export class HistoryDbVersionMismatchError extends Error {
  * stamped after `apply` succeeds. Steps are applied in `target` order; each
  * step is responsible for transitioning the db from `target - 1` (or any
  * earlier state covered by `apply`) up to `target`.
+ *
+ * Each step's DDL is immutable: once a step ships, its `apply` body is frozen
+ * so that historical version stamps remain meaningful. Schema evolution is
+ * expressed by appending new steps with higher `target` values.
  */
 export interface Migration {
   readonly target: number;
   apply(db: Database): void;
 }
 
-// spans.events_json: optional JSON array of OTLP span events. NULL when the
-// span carried no events. Each element: { name, time, attrs }. Populated for
-// Claude Code's `tool.output` event (tool I/O bodies emitted under
-// OTEL_LOG_TOOL_CONTENT=1) and any other span-attached annotations.
-const CONSOLIDATED_SCHEMA_SQL = `
+// v1 schema: initial set of 5 tables and 7 indexes. `spans.events_json` is
+// added in M2; `conversation_summaries` and `log_records` arrive later.
+const V1_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS invocations (
   id              TEXT PRIMARY KEY,
   profile         TEXT,
@@ -73,8 +75,7 @@ CREATE TABLE IF NOT EXISTS spans (
   duration_ms     INTEGER,
   started_at      TEXT NOT NULL,
   ended_at        TEXT,
-  attrs_json      TEXT NOT NULL DEFAULT '{}',
-  events_json     TEXT
+  attrs_json      TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS turn_events (
@@ -83,12 +84,6 @@ CREATE TABLE IF NOT EXISTS turn_events (
   ts              TEXT NOT NULL,
   kind            TEXT NOT NULL,
   payload_json    TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS conversation_summaries (
-  id           TEXT PRIMARY KEY REFERENCES conversations(id),
-  summary      TEXT NOT NULL,
-  captured_at  TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_traces_invocation
@@ -105,9 +100,36 @@ CREATE INDEX IF NOT EXISTS idx_invocations_started
   ON invocations(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_lastseen
   ON conversations(last_seen_at DESC);
+`;
 
--- ON DELETE 句は省略（暗黙の RESTRICT）。invocations / conversations テーブルと
--- 同じ方針: 削除機能は現時点で未実装のため、RESTRICT のままで問題ない。
+// v2 schema delta:
+//  - new table `conversation_summaries`
+//  - new column `spans.events_json TEXT` (optional JSON array of OTLP span
+//    events; NULL when the span carried no events; populated for Claude
+//    Code's `tool.output` event under OTEL_LOG_TOOL_CONTENT=1).
+const V2_CONVERSATION_SUMMARIES_SQL = `
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+  id           TEXT PRIMARY KEY REFERENCES conversations(id),
+  summary      TEXT NOT NULL,
+  captured_at  TEXT NOT NULL
+);
+`;
+
+interface SpansColumnRow {
+  name: string;
+}
+
+function spansHasEventsJsonColumn(db: Database): boolean {
+  const rows = db
+    .query("PRAGMA table_info(spans)")
+    .all() as readonly SpansColumnRow[];
+  return rows.some((row) => row.name === "events_json");
+}
+
+// v3 schema delta: log_records table plus three indexes.
+// ON DELETE clauses are omitted (implicit RESTRICT), matching the policy on
+// invocations / conversations: no delete paths exist yet, so RESTRICT is fine.
+const V3_LOG_RECORDS_SQL = `
 CREATE TABLE IF NOT EXISTS log_records (
   invocation_id    TEXT NOT NULL REFERENCES invocations(id),
   conversation_id  TEXT NOT NULL REFERENCES conversations(id),
@@ -131,18 +153,43 @@ CREATE INDEX IF NOT EXISTS idx_log_records_conv_prompt ON log_records(conversati
 CREATE INDEX IF NOT EXISTS idx_log_records_request_id ON log_records(request_id) WHERE request_id IS NOT NULL;
 `;
 
+export const MIGRATION_V1: Migration = {
+  target: 1,
+  apply: (db) => {
+    db.run(V1_SCHEMA_SQL);
+  },
+};
+
+export const MIGRATION_V2: Migration = {
+  target: 2,
+  apply: (db) => {
+    db.run(V2_CONVERSATION_SUMMARIES_SQL);
+    // `ALTER TABLE ... ADD COLUMN` is not idempotent in SQLite, so guard with
+    // a `PRAGMA table_info` probe. This makes the step safe both for new dbs
+    // arriving fresh through M1 and for any v1-stamped db that happens to
+    // already carry the column.
+    if (!spansHasEventsJsonColumn(db)) {
+      db.run("ALTER TABLE spans ADD COLUMN events_json TEXT");
+    }
+  },
+};
+
+export const MIGRATION_V3: Migration = {
+  target: 3,
+  apply: (db) => {
+    db.run(V3_LOG_RECORDS_SQL);
+  },
+};
+
 /**
  * Ordered list of forward migration steps. Each entry's `target` is the
  * `user_version` value after the step completes; entries must be sorted by
  * `target` ascending. New schema changes append a new step.
  */
 export const HISTORY_DB_MIGRATIONS: readonly Migration[] = [
-  {
-    target: 3,
-    apply: (db) => {
-      db.run(CONSOLIDATED_SCHEMA_SQL);
-    },
-  },
+  MIGRATION_V1,
+  MIGRATION_V2,
+  MIGRATION_V3,
 ];
 
 interface UserVersionRow {
