@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
   _closeHistoryDb,
+  insertLogRecords,
   insertSpans,
   insertTurnEvent,
   openHistoryDb,
@@ -22,6 +23,7 @@ import {
 import type {
   ConversationRow,
   InvocationRow,
+  LogRecordRow,
   SpanRow,
   TraceRow,
   TurnEventRow,
@@ -578,72 +580,245 @@ test("queryInvocationDetail: collects traces / spans / conversations", async () 
   }
 });
 
-test("queryConversationList: summary defaults to null when no row in conversation_summaries", async () => {
-  const t = await makeTempDb();
-  try {
-    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    upsertConversation(db, conv({ id: "conv_no_sum" }));
-    makeConversationVisibleInList(db, "conv_no_sum", "sess_no_sum");
-    const list = queryConversationList(db);
-    expect(list[0].summary).toBeNull();
-  } finally {
-    await cleanup(t);
-  }
-});
+// ---------------------------------------------------------------------------
+// summary derivation: read-time extraction from OTEL log_records / spans
+//
+// `ConversationListRow.summary` and `ConversationDetail.conversation.summary`
+// are no longer joined from `conversation_summaries`; the reader runs
+// `extractTracePrompts` over the earliest trace's log_records and spans.
+// ---------------------------------------------------------------------------
 
-test("queryConversationList: summary surfaces the upserted value", async () => {
+function claudeLlmRequestSpan(
+  traceId: string,
+  requestId: string,
+  overrides: Partial<SpanRow> = {},
+): SpanRow {
+  return sp({
+    spanId: `llm_${traceId}`,
+    traceId,
+    spanName: "claude_code.llm_request",
+    kind: "client",
+    attrsJson: JSON.stringify({ request_id: requestId }),
+    ...overrides,
+  });
+}
+
+function apiRequestLog(
+  conversationId: string,
+  invocationId: string,
+  promptId: string,
+  requestId: string,
+  sequence: number,
+): LogRecordRow {
+  return {
+    invocationId,
+    conversationId,
+    promptId,
+    sequence,
+    eventName: "api_request",
+    time: "2026-05-01T10:00:00Z",
+    requestId,
+    attrsJson: "{}",
+  };
+}
+
+function userPromptLog(
+  conversationId: string,
+  invocationId: string,
+  promptId: string,
+  prompt: string,
+  sequence: number,
+): LogRecordRow {
+  return {
+    invocationId,
+    conversationId,
+    promptId,
+    sequence,
+    eventName: "user_prompt",
+    time: "2026-05-01T10:00:00Z",
+    requestId: null,
+    attrsJson: JSON.stringify({ prompt }),
+  };
+}
+
+test("queryConversationList: summary derives from the first-trace user_prompt log record (Claude)", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    upsertConversation(db, conv({ id: "conv_with_sum" }));
-    makeConversationVisibleInList(db, "conv_with_sum", "sess_with_sum");
-    upsertConversationSummary(db, {
-      id: "conv_with_sum",
-      summary: "Help me debug the test runner",
-      capturedAt: "2026-05-01T10:00:00Z",
-    });
+    upsertInvocation(db, inv({ id: "sess_claude" }));
+    upsertConversation(db, conv({ id: "conv_claude" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_claude",
+        invocationId: "sess_claude",
+        conversationId: "conv_claude",
+      }),
+    );
+    insertSpans(db, [claudeLlmRequestSpan("trace_claude", "req_1")]);
+    insertLogRecords(db, [
+      apiRequestLog("conv_claude", "sess_claude", "prompt_1", "req_1", 1),
+      userPromptLog(
+        "conv_claude",
+        "sess_claude",
+        "prompt_1",
+        "Help me debug the test runner",
+        0,
+      ),
+    ]);
+
     const list = queryConversationList(db);
+    expect(list).toHaveLength(1);
     expect(list[0].summary).toBe("Help me debug the test runner");
   } finally {
     await cleanup(t);
   }
 });
 
-test("upsertConversationSummary: INSERT OR IGNORE — first write wins", async () => {
+test("queryConversationList: summary derives from the first-trace gen_ai.input.messages span (Copilot)", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    upsertConversation(db, conv({ id: "conv_idem" }));
-    makeConversationVisibleInList(db, "conv_idem", "sess_idem");
-    upsertConversationSummary(db, {
-      id: "conv_idem",
-      summary: "First prompt",
-      capturedAt: "2026-05-01T10:00:00Z",
-    });
-    upsertConversationSummary(db, {
-      id: "conv_idem",
-      summary: "Different later prompt",
-      capturedAt: "2026-05-01T11:00:00Z",
-    });
+    upsertInvocation(db, inv({ id: "sess_copilot", agent: "copilot" }));
+    upsertConversation(db, conv({ id: "conv_copilot", agent: "copilot" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_copilot",
+        invocationId: "sess_copilot",
+        conversationId: "conv_copilot",
+      }),
+    );
+    insertSpans(db, [
+      sp({
+        spanId: "invoke_root",
+        parentSpanId: null,
+        traceId: "trace_copilot",
+        spanName: "invoke_agent",
+        kind: "invoke_agent",
+        attrsJson: JSON.stringify({
+          "gen_ai.input.messages": JSON.stringify([
+            {
+              role: "user",
+              parts: [{ type: "text", content: "Hello copilot" }],
+            },
+          ]),
+        }),
+      }),
+    ]);
+
     const list = queryConversationList(db);
-    expect(list[0].summary).toBe("First prompt");
+    expect(list).toHaveLength(1);
+    expect(list[0].summary).toBe("Hello copilot");
   } finally {
     await cleanup(t);
   }
 });
 
-test("queryConversationDetail: includes summary in the conversation header", async () => {
+test("queryConversationList: summary is null when no log_records/spans carry a prompt", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    upsertConversation(db, conv({ id: "conv_detail_sum" }));
-    upsertConversationSummary(db, {
-      id: "conv_detail_sum",
-      summary: "Original prompt",
-      capturedAt: "2026-05-01T10:00:00Z",
-    });
-    const detail = queryConversationDetail(db, "conv_detail_sum");
-    expect(detail?.conversation.summary).toBe("Original prompt");
+    upsertConversation(db, conv({ id: "conv_bare" }));
+    makeConversationVisibleInList(db, "conv_bare", "sess_bare");
+    // makeConversationVisibleInList inserts a trace, but no
+    // claude_code.llm_request span and no log records — extraction yields
+    // no entry for the first trace, so summary stays null.
+    const list = queryConversationList(db);
+    expect(list).toHaveLength(1);
+    expect(list[0].summary).toBeNull();
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationList: when conversation has multiple traces, summary uses the earliest trace (started_at, then trace_id tie-break)", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+    upsertInvocation(db, inv({ id: "sess_m" }));
+    upsertConversation(db, conv({ id: "conv_m" }));
+    // Two traces sharing started_at; trace_id tie-break picks "trace_a".
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_b",
+        invocationId: "sess_m",
+        conversationId: "conv_m",
+        startedAt: "2026-05-01T10:00:00Z",
+      }),
+    );
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_a",
+        invocationId: "sess_m",
+        conversationId: "conv_m",
+        startedAt: "2026-05-01T10:00:00Z",
+      }),
+    );
+    // A third, strictly later trace must not win.
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_z",
+        invocationId: "sess_m",
+        conversationId: "conv_m",
+        startedAt: "2026-05-01T11:00:00Z",
+      }),
+    );
+    insertSpans(db, [
+      claudeLlmRequestSpan("trace_a", "req_a"),
+      claudeLlmRequestSpan("trace_b", "req_b"),
+      claudeLlmRequestSpan("trace_z", "req_z"),
+    ]);
+    insertLogRecords(db, [
+      apiRequestLog("conv_m", "sess_m", "prompt_a", "req_a", 1),
+      userPromptLog("conv_m", "sess_m", "prompt_a", "earliest prompt", 0),
+      apiRequestLog("conv_m", "sess_m", "prompt_b", "req_b", 3),
+      userPromptLog("conv_m", "sess_m", "prompt_b", "tie-break loser", 2),
+      apiRequestLog("conv_m", "sess_m", "prompt_z", "req_z", 5),
+      userPromptLog("conv_m", "sess_m", "prompt_z", "later prompt", 4),
+    ]);
+
+    const list = queryConversationList(db);
+    expect(list).toHaveLength(1);
+    expect(list[0].summary).toBe("earliest prompt");
+  } finally {
+    await cleanup(t);
+  }
+});
+
+test("queryConversationDetail: summary derives from first-trace prompt and is null when traces is empty", async () => {
+  const t = await makeTempDb();
+  try {
+    const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
+
+    // With traces: summary is the first-trace prompt.
+    upsertInvocation(db, inv({ id: "sess_d" }));
+    upsertConversation(db, conv({ id: "conv_d" }));
+    upsertTrace(
+      db,
+      tr({
+        traceId: "trace_d",
+        invocationId: "sess_d",
+        conversationId: "conv_d",
+      }),
+    );
+    insertSpans(db, [claudeLlmRequestSpan("trace_d", "req_d")]);
+    insertLogRecords(db, [
+      apiRequestLog("conv_d", "sess_d", "prompt_d", "req_d", 1),
+      userPromptLog("conv_d", "sess_d", "prompt_d", "Detail prompt", 0),
+    ]);
+    const detail = queryConversationDetail(db, "conv_d");
+    expect(detail?.conversation.summary).toBe("Detail prompt");
+
+    // Without traces: bare conversation — summary stays null.
+    upsertConversation(db, conv({ id: "conv_empty" }));
+    const empty = queryConversationDetail(db, "conv_empty");
+    expect(empty).not.toBeNull();
+    expect(empty?.traces).toEqual([]);
+    expect(empty?.conversation.summary).toBeNull();
   } finally {
     await cleanup(t);
   }
@@ -668,13 +843,18 @@ test("conversation_summaries table is added to existing db on writer re-open", a
       .all() as { name: string }[];
     expect(tables).toHaveLength(1);
 
-    // And it is functional.
+    // And it is functional. The reader no longer joins
+    // `conversation_summaries`, so this checks the table directly rather
+    // than via `queryConversationList`.
     upsertConversationSummary(db2, {
       id: "conv_reopen",
       summary: "after reopen",
       capturedAt: "2026-05-01T10:00:00Z",
     });
-    expect(queryConversationList(db2)[0].summary).toBe("after reopen");
+    const stored = db2
+      .query("SELECT summary FROM conversation_summaries WHERE id = ?")
+      .get("conv_reopen") as { summary: string } | null;
+    expect(stored?.summary).toBe("after reopen");
   } finally {
     await cleanup(t);
   }

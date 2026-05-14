@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import * as path from "node:path";
+import { extractTracePrompts } from "../agents/prompts.ts";
 import {
   applyMigrations,
   HISTORY_DB_USER_VERSION,
@@ -404,7 +405,6 @@ interface ConversationListSqlRow {
   agent: string | null;
   first_seen_at: string;
   last_seen_at: string;
-  summary: string | null;
   worktree_path: string | null;
   turn_count: number;
   span_count: number;
@@ -458,7 +458,6 @@ const CONVERSATION_LIST_SELECT = `
     c.agent           AS agent,
     c.first_seen_at   AS first_seen_at,
     c.last_seen_at    AS last_seen_at,
-    cs.summary        AS summary,
     (SELECT i.worktree_path
        FROM invocations i
        JOIN traces t ON t.invocation_id = i.id
@@ -506,15 +505,14 @@ const CONVERSATION_LIST_SELECT = `
       0
     ) AS cache_write_total
   FROM conversations c
-  -- LEFT JOIN: depends on writer mode having run CREATE TABLE IF NOT EXISTS
-  -- conversation_summaries. Pre-existing v1 history.db files (created before
-  -- this table existed) lack the table on first readonly open; the UI reader
-  -- (history_data.ts) catches the resulting "no such table" and degrades to
-  -- [] with a warn until the next writer-mode caller (hook / observability
-  -- stage) materializes the table.
-  LEFT JOIN conversation_summaries cs ON cs.id = c.id
 `;
 
+/**
+ * Build a list row from the SQL projection. `summary` is left at `null`
+ * here; reader entry points (`queryConversationList` /
+ * `queryConversationDetail`) overwrite it with the first-trace prompt
+ * derived from log_records / spans via `extractTracePrompts`.
+ */
 function rowToConversationListRow(
   r: ConversationListSqlRow,
 ): ConversationListRow {
@@ -530,7 +528,7 @@ function rowToConversationListRow(
     outputTokensTotal: r.output_tokens_total,
     cacheReadTotal: r.cache_read_total,
     cacheWriteTotal: r.cache_write_total,
-    summary: r.summary,
+    summary: null,
     worktreePath: r.worktree_path,
   };
 }
@@ -594,7 +592,7 @@ export function queryConversationList(
   options?: { limit?: number },
 ): ConversationListRow[] {
   const limit = options?.limit ?? 200;
-  const rows = db
+  const sqlRows = db
     .prepare(
       `${CONVERSATION_LIST_SELECT}
        WHERE EXISTS (
@@ -605,7 +603,17 @@ export function queryConversationList(
        LIMIT ?`,
     )
     .all(limit) as ConversationListSqlRow[];
-  return rows.map(rowToConversationListRow);
+  const rows = sqlRows.map(rowToConversationListRow);
+  if (rows.length === 0) return rows;
+
+  const summaries = queryFirstTracePromptsForConversations(
+    db,
+    rows.map((r) => r.id),
+  );
+  return rows.map((r) => {
+    const summary = summaries.get(r.id);
+    return summary === undefined ? r : { ...r, summary };
+  });
 }
 
 /**
@@ -675,8 +683,22 @@ export function queryConversationDetail(
   const modelTokenTotals = queryConversationModelTokenTotals(db, id);
   const logRecords = queryLogRecordsByConversation(db, id);
 
+  // Derive summary from the earliest trace's user prompt. The sort key
+  // here (started_at ASC, then trace_id ASC) matches the view-layer
+  // `compareTurnOrder` deterministic order. Empty traces → null summary.
+  let summary: string | null = null;
+  if (traces.length > 0) {
+    const firstTrace = traces.reduce((earliest, t) => {
+      if (t.startedAt < earliest.startedAt) return t;
+      if (t.startedAt > earliest.startedAt) return earliest;
+      return t.traceId < earliest.traceId ? t : earliest;
+    });
+    const prompts = extractTracePrompts(logRecords, spans);
+    summary = prompts.get(firstTrace.traceId) ?? null;
+  }
+
   return {
-    conversation: rowToConversationListRow(head),
+    conversation: { ...rowToConversationListRow(head), summary },
     traces,
     spans,
     invocations,
@@ -980,4 +1002,106 @@ export function queryConversationModelTokenTotalsByConversationIds(
     }
   }
   return out;
+}
+
+interface FirstTraceSqlRow {
+  conversation_id: string;
+  trace_id: string;
+}
+
+/**
+ * Resolve the first-trace user prompt for each conversation in three
+ * fixed reader queries (regardless of `conversationIds.length`):
+ *
+ *  1. Earliest trace per conversation. Tie-break is `started_at ASC,
+ *     trace_id ASC` to match the view-layer `compareTurnOrder` deterministic
+ *     order — kept inline here so this module stays free of view imports.
+ *  2. Spans belonging to those traces.
+ *  3. Log records for those conversations.
+ *
+ * `extractTracePrompts` then runs once per chunk to fold log_records +
+ * spans into a `traceId → prompt` map; we project that back onto each
+ * conversationId. Conversations with no traces, or whose first trace
+ * has no extractable prompt, do not appear in the returned Map (caller
+ * treats absent entries as `summary: null`).
+ *
+ * Chunked by `SQLITE_VARIABLE_CHUNK_SIZE` so a list of 500+
+ * conversations stays under SQLite's `?` placeholder limit.
+ */
+function queryFirstTracePromptsForConversations(
+  db: Database,
+  conversationIds: ReadonlyArray<string>,
+): Map<string, string> {
+  const summaries = new Map<string, string>();
+  if (conversationIds.length === 0) return summaries;
+
+  for (
+    let offset = 0;
+    offset < conversationIds.length;
+    offset += SQLITE_VARIABLE_CHUNK_SIZE
+  ) {
+    const chunk = conversationIds.slice(
+      offset,
+      offset + SQLITE_VARIABLE_CHUNK_SIZE,
+    );
+    if (chunk.length === 0) continue;
+    const placeholders = chunk.map(() => "?").join(", ");
+
+    // Earliest trace per conversation. The inner ORDER BY mirrors
+    // `compareTurnOrder` (started_at ASC, trace_id ASC) so reader-derived
+    // summaries agree with the view-layer turn order.
+    const firstTraceRows = db
+      .prepare(
+        `SELECT
+           c.id AS conversation_id,
+           (SELECT t.trace_id
+              FROM traces t
+             WHERE t.conversation_id = c.id
+             ORDER BY t.started_at ASC, t.trace_id ASC
+             LIMIT 1) AS trace_id
+         FROM conversations c
+         WHERE c.id IN (${placeholders})`,
+      )
+      .all(...chunk) as FirstTraceSqlRow[];
+
+    const traceIds = firstTraceRows
+      .map((r) => r.trace_id)
+      .filter((id): id is string => id !== null && id !== undefined);
+    if (traceIds.length === 0) continue;
+
+    const tracePlaceholders = traceIds.map(() => "?").join(", ");
+    const spans = (
+      db
+        .prepare(
+          `SELECT
+             span_id, parent_span_id, trace_id, span_name, kind,
+             model, in_tok, out_tok, cache_r, cache_w,
+             duration_ms, started_at, ended_at, attrs_json, events_json
+           FROM spans
+           WHERE trace_id IN (${tracePlaceholders})`,
+        )
+        .all(...traceIds) as SpanSummarySqlRow[]
+    ).map(rowToSpanSummary);
+
+    const logRecords = (
+      db
+        .prepare(
+          `SELECT
+             invocation_id, conversation_id, prompt_id, sequence,
+             event_name, time, request_id, attrs_json
+           FROM log_records
+           WHERE conversation_id IN (${placeholders})`,
+        )
+        .all(...chunk) as LogRecordSqlRow[]
+    ).map(rowToLogRecordSummary);
+
+    const prompts = extractTracePrompts(logRecords, spans);
+
+    for (const row of firstTraceRows) {
+      if (row.trace_id === null || row.trace_id === undefined) continue;
+      const prompt = prompts.get(row.trace_id);
+      if (prompt !== undefined) summaries.set(row.conversation_id, prompt);
+    }
+  }
+  return summaries;
 }

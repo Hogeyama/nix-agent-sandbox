@@ -144,10 +144,14 @@ export interface ConversationListRow {
   readonly cacheReadTotal: number;
   readonly cacheWriteTotal: number;
   /**
-   * First user prompt of the conversation, captured by the hook from the
-   * agent's transcript. NULL when no transcript was available (e.g. agents
-   * that do not emit a `transcript_path` in the hook payload, or when the
-   * hook fired before the first user turn).
+   * First user prompt of the conversation, derived at read time from the
+   * earliest trace's OTEL log records / spans via
+   * `extractTracePrompts`. NULL when no OTEL data is available for the
+   * conversation's first trace (e.g. the trace has no `claude_code.llm_request`
+   * span or root `invoke_agent` span carrying `gen_ai.input.messages`), or
+   * when extraction otherwise yields no entry for that traceId. Earliest
+   * trace is picked by `(started_at ASC, trace_id ASC)` to agree with
+   * the view-layer `compareTurnOrder`.
    */
   readonly summary: string | null;
   /**

@@ -690,16 +690,12 @@ test("queryConversationDetail: includes logRecords", async () => {
   const t = await makeTempDb();
   try {
     const db = openHistoryDb({ path: t.dbPath, mode: "readwrite" });
-    // queryConversationDetail は trace と conversationSummary が両方存在する場合のみ非 null を返すため、
-    // logRecords を検証するにはそれらの事前挿入が必要。
+    // logRecords を検証するための前提として invocation / conversation / trace
+    // を seed する。summary は reader 側で trace 由来の prompt から derive される
+    // 仕様なので、conversation_summaries への seed は不要。
     upsertInvocation(db, inv());
     upsertConversation(db, conv());
     upsertTrace(db, trace({ conversationId: "conv_a" }));
-    upsertConversationSummary(db, {
-      id: "conv_a",
-      summary: "test summary",
-      capturedAt: "2026-05-01T10:00:00Z",
-    });
 
     insertLogRecords(db, [
       logRec({ sequence: 0, eventName: "log.event", requestId: "req_1" }),
@@ -723,11 +719,6 @@ test("queryConversationDetail: logRecords is empty array when no log_records hav
     upsertInvocation(db, inv());
     upsertConversation(db, conv());
     upsertTrace(db, trace({ conversationId: "conv_a" }));
-    upsertConversationSummary(db, {
-      id: "conv_a",
-      summary: "test summary",
-      capturedAt: "2026-05-01T10:00:00Z",
-    });
     // log_records には何も挿入しない
 
     const detail = queryConversationDetail(db, "conv_a");
