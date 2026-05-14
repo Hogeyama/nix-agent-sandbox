@@ -225,6 +225,14 @@ CREATE INDEX idx_invocations_started     ON invocations(started_at DESC);
 CREATE INDEX idx_conversations_lastseen  ON conversations(last_seen_at DESC);
 ```
 
+> **Update 2026-05-15**: ADR 2026051501 で本節の `turn_events` テーブル
+> (および付随する `idx_turn_events_invocation` /
+> `idx_turn_events_conversation` index) と、運用上後から追加されていた
+> `conversation_summaries` テーブルは廃止 (schema v4 で drop)。
+> conversation summary は read-time に first trace の prompt から
+> derive する。invocations / conversations / traces / spans の定義は
+> 引き続き有効。
+
 設計上の含意:
 
 - 「invocation は補助、conversation が主軸」が物理に表れる: conversation は
@@ -331,6 +339,12 @@ COALESCE 上書き)。
 は NULL のまま挿入。retroactive backfill ロジックは持たない (この
 edge case は現実にほぼ起きないため、複雑性を入れない)。
 
+> **Update 2026-05-15**: ADR 2026051501 で本節の決定 (hook が turn_events
+> に conversation_id を書き込む経路) は廃止 (`turn_events` テーブルごと
+> schema v4 で drop)。hook は history.db に触れず、conversation summary
+> は read-time に first trace の prompt から derive する。本文は当時の
+> 意思決定の記録として残す。
+
 ### UI reader: SSE 3 endpoint + 5 秒 poll-and-diff
 
 reader は UI daemon に集約する (CLI 提供しない方針と同根)。frontend は SSE のみで
@@ -413,6 +427,11 @@ file exporter 経路を取らないので「runtime tmpfs に buffer して sess
   テーブルは作らず、UI 側で必要なら turn_events を ASC walk して span を
   bucket するロジックで対応する
 
+  > **Update 2026-05-15**: ADR 2026051501 で `turn_events` テーブルは廃止
+  > (schema v4 で drop)。turn 概念を再導入する必要が生じた場合は OTEL
+  > 由来の trace / log_records から bucket することになる。本文は当時の
+  > 意思決定の記録として残す。
+
 ## Rejected alternatives
 
 - **観測性を後回しにして並列運用 / 成果物パイプライン / policy as code を
@@ -465,6 +484,11 @@ file exporter 経路を取らないので「runtime tmpfs に buffer して sess
 - **`turn_events.conversation_id` を後から OTLP 受信で backfill**:
   Claude/Copilot は hook payload に session id field を提供しているので、
   書き手側で直接埋められる。retroactive UPDATE 経路を持つほうが余計に複雑
+
+  > **Update 2026-05-15**: ADR 2026051501 で本節が前提とする `turn_events`
+  > テーブル自体が廃止 (schema v4 で drop)。hook は history.db に書かないため、
+  > backfill 経路の議論ごと過去のものになる。本文は当時の意思決定の記録として
+  > 残す。
 - **CLI (`nas history`) を提供する**: 表示面は UI daemon に集約する。CLI
   history は実装ライン (vocabulary / 出力レイアウト / test) を増やす割に、
   UI と機能が重複する。必要が再燃したら view 用 SQL を 1 つ追加するだけで

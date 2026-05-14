@@ -110,3 +110,4 @@ inline note が一番ノイズの少ない着地点になる。
 | `2026050201-history-cost-table.md` | Accepted | history page の cost table |
 | `2026051301-observability-logs-signal-ingest.md` | Accepted | OTLP /v1/logs ingest |
 | `2026051401-history-db-migration-mechanism.md` | Accepted | history.db migration 機構 |
+| `2026051501-history-drop-turn-events-and-summary-table.md` | Accepted | turn_events / conversation_summaries 撤去と summary の read-time derive |
