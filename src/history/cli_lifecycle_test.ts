@@ -8,7 +8,15 @@ import {
   recordInvocationStart,
   shouldRecordInvocation,
 } from "./cli_lifecycle.ts";
-import { _closeHistoryDb, openHistoryDb } from "./store.ts";
+import { _resetPruneThrottle } from "./retention.ts";
+import {
+  _closeHistoryDb,
+  insertSpans,
+  openHistoryDb,
+  upsertConversation,
+  upsertInvocation,
+  upsertTrace,
+} from "./store.ts";
 
 interface CapturedStderr {
   messages: string[];
@@ -56,6 +64,9 @@ async function teardownTempXdg(t: TempEnv): Promise<void> {
 let env: TempEnv;
 beforeEach(async () => {
   env = await setupTempXdg();
+  // Reset throttle state so each test sees a clean slate; otherwise a prior
+  // test's throttle entry for the same XDG path could mask a fresh prune.
+  _resetPruneThrottle();
 });
 afterEach(async () => {
   await teardownTempXdg(env);
@@ -129,6 +140,7 @@ test("recordInvocationStart materialises an invocations row", () => {
     profileName: "dev",
     agent: "claude",
     worktreePath: "/tmp/wt",
+    retentionSeconds: null,
   });
   expect(db).not.toBeNull();
   const row = db!
@@ -158,6 +170,7 @@ test("recordInvocationStart twice with same sessionId preserves started_at", asy
     sessionId: "sess_dup",
     profileName: "dev",
     agent: "claude",
+    retentionSeconds: null,
   });
   expect(db1).not.toBeNull();
   const firstStartedAt = (
@@ -172,6 +185,7 @@ test("recordInvocationStart twice with same sessionId preserves started_at", asy
     sessionId: "sess_dup",
     profileName: "dev",
     agent: "claude",
+    retentionSeconds: null,
   });
   expect(db2).not.toBeNull();
   const secondRow = db2!
@@ -185,6 +199,7 @@ test("recordInvocationEnd fills ended_at and exit_reason", () => {
     sessionId: "sess_end",
     profileName: "dev",
     agent: "claude",
+    retentionSeconds: null,
   });
   expect(db).not.toBeNull();
   recordInvocationEnd(db, { sessionId: "sess_end", exitReason: "ok" });
@@ -232,6 +247,7 @@ test("recordInvocationStart returns null and warns on schema version mismatch", 
     sessionId: "sess_v1",
     profileName: "dev",
     agent: "claude",
+    retentionSeconds: null,
   });
   expect(created).not.toBeNull();
   _closeHistoryDb(env.dbPath);
@@ -246,6 +262,7 @@ test("recordInvocationStart returns null and warns on schema version mismatch", 
       sessionId: "sess_v2",
       profileName: "dev",
       agent: "claude",
+      retentionSeconds: null,
     });
     expect(db).toBeNull();
     expect(
@@ -277,6 +294,7 @@ test("recordInvocationStart returns null and warns when db open fails", async ()
       sessionId: "sess_open_fail",
       profileName: "dev",
       agent: "claude",
+      retentionSeconds: null,
     });
     expect(db).toBeNull();
     expect(
@@ -292,16 +310,134 @@ test("recordInvocationStart returns null and warns when db open fails", async ()
   }
 });
 
+// ---------------------------------------------------------------------------
+// retention prune integration
+// ---------------------------------------------------------------------------
+
+test("recordInvocationStart with retentionSeconds prunes old records", () => {
+  // Seed an old invocation with a related trace + span. We backdate
+  // started_at well past any positive retention window the test will use.
+  const writer = openHistoryDb({ path: env.dbPath, mode: "readwrite" });
+  const oldStartedAt = "2020-01-01T00:00:00.000Z";
+  upsertInvocation(writer, {
+    id: "old_inv",
+    profile: "dev",
+    agent: "claude",
+    worktreePath: null,
+    startedAt: oldStartedAt,
+    endedAt: null,
+    exitReason: null,
+  });
+  upsertConversation(writer, {
+    id: "old_conv",
+    agent: "claude",
+    firstSeenAt: oldStartedAt,
+    lastSeenAt: oldStartedAt,
+  });
+  upsertTrace(writer, {
+    traceId: "old_trace",
+    invocationId: "old_inv",
+    conversationId: "old_conv",
+    startedAt: oldStartedAt,
+    endedAt: null,
+  });
+  insertSpans(writer, [
+    {
+      spanId: "old_span",
+      parentSpanId: null,
+      traceId: "old_trace",
+      spanName: "test.span",
+      kind: "INTERNAL",
+      model: null,
+      inTok: null,
+      outTok: null,
+      cacheR: null,
+      cacheW: null,
+      durationMs: null,
+      startedAt: oldStartedAt,
+      endedAt: null,
+      attrsJson: "{}",
+      eventsJson: null,
+    },
+  ]);
+
+  // Ensure the throttle does not suppress the prune triggered below.
+  _resetPruneThrottle();
+
+  const db = recordInvocationStart({
+    sessionId: "new_inv",
+    profileName: "dev",
+    agent: "claude",
+    retentionSeconds: 3600,
+  });
+  expect(db).not.toBeNull();
+
+  // Old rows pruned (cutoff = now - 1h, oldStartedAt is years earlier).
+  const remainingOldInv = db!
+    .query("SELECT id FROM invocations WHERE id = ?")
+    .get("old_inv");
+  expect(remainingOldInv).toBeNull();
+  expect(
+    db!
+      .query("SELECT trace_id FROM traces WHERE trace_id = ?")
+      .get("old_trace"),
+  ).toBeNull();
+  expect(
+    db!.query("SELECT span_id FROM spans WHERE span_id = ?").get("old_span"),
+  ).toBeNull();
+
+  // The fresh invocation row written by recordInvocationStart survives —
+  // prune runs before upsert, and the row's started_at is newer than cutoff.
+  const newRow = db!
+    .query("SELECT id FROM invocations WHERE id = ?")
+    .get("new_inv") as { id: string } | null;
+  expect(newRow?.id).toEqual("new_inv");
+});
+
+test("recordInvocationStart with retentionSeconds=null does not prune and returns a Database", () => {
+  // Seed an old invocation; with retentionSeconds=null the prune branch is
+  // skipped entirely, so the row must still be present after the call. This
+  // also confirms the returned handle is non-null when the prune is a no-op.
+  const writer = openHistoryDb({ path: env.dbPath, mode: "readwrite" });
+  const oldStartedAt = "2020-01-01T00:00:00.000Z";
+  upsertInvocation(writer, {
+    id: "keep_inv",
+    profile: "dev",
+    agent: "claude",
+    worktreePath: null,
+    startedAt: oldStartedAt,
+    endedAt: null,
+    exitReason: null,
+  });
+
+  _resetPruneThrottle();
+
+  const db = recordInvocationStart({
+    sessionId: "noop_inv",
+    profileName: "dev",
+    agent: "claude",
+    retentionSeconds: null,
+  });
+  expect(db).not.toBeNull();
+
+  const kept = db!
+    .query("SELECT id FROM invocations WHERE id = ?")
+    .get("keep_inv") as { id: string } | null;
+  expect(kept?.id).toEqual("keep_inv");
+});
+
 test("recordInvocationStart writer cache survives within process", () => {
   const a = recordInvocationStart({
     sessionId: "sess_cache_a",
     profileName: "dev",
     agent: "claude",
+    retentionSeconds: null,
   });
   const b = recordInvocationStart({
     sessionId: "sess_cache_b",
     profileName: "dev",
     agent: "copilot",
+    retentionSeconds: null,
   });
   expect(a).not.toBeNull();
   expect(b).not.toBeNull();

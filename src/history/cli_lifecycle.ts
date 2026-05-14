@@ -9,6 +9,7 @@
 import type { Database } from "bun:sqlite";
 import type { AgentType } from "../config/types.ts";
 import { HISTORY_DB_USER_VERSION } from "./migrations.ts";
+import { pruneHistoryWithThrottle } from "./retention.ts";
 import {
   HistoryDbVersionMismatchError,
   markInvocationEnded,
@@ -22,6 +23,13 @@ export interface InvocationLifecycleArgs {
   profileName: string;
   agent: AgentType;
   worktreePath?: string;
+  /**
+   * History retention window in seconds. `null` disables pruning; positive
+   * values trigger a throttled prune pass right after the db is opened and
+   * before the invocation row is upserted, so the row added by this call is
+   * always newer than the cutoff.
+   */
+  retentionSeconds: number | null;
 }
 
 export type InvocationExitReason = "ok" | "error";
@@ -57,10 +65,11 @@ export function shouldRecordInvocation(
 export function recordInvocationStart(
   args: InvocationLifecycleArgs,
 ): Database | null {
+  const dbPath = resolveHistoryDbPath();
   let db: Database;
   try {
     db = openHistoryDb({
-      path: resolveHistoryDbPath(),
+      path: dbPath,
       mode: "readwrite",
     });
   } catch (e) {
@@ -79,6 +88,19 @@ export function recordInvocationStart(
       );
     }
     return null;
+  }
+
+  // Prune before upsert so the row written by this call is guaranteed to be
+  // newer than the cutoff and thus never self-deleted. Prune failure is
+  // best-effort: a corrupt or locked db should not block the invocation row
+  // that callers depend on for end-of-run bookkeeping.
+  if (args.retentionSeconds !== null && args.retentionSeconds > 0) {
+    try {
+      pruneHistoryWithThrottle(db, dbPath, args.retentionSeconds, new Date());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`nas: history retention prune failed: ${msg}. Continuing.`);
+    }
   }
 
   try {

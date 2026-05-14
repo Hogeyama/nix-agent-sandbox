@@ -315,6 +315,7 @@ export async function main(args: string[]): Promise<void> {
           profileName: name,
           agent: effectiveProfile.agent,
           worktreePath: process.cwd(),
+          retentionSeconds: config.observability.retention,
         })
       : null;
 

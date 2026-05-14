@@ -42,6 +42,7 @@ import {
 } from "../../agents/observability.ts";
 import type { Config, Profile } from "../../config/types.ts";
 import { HISTORY_DB_USER_VERSION } from "../../history/migrations.ts";
+import { pruneHistoryWithThrottle } from "../../history/retention.ts";
 import {
   HistoryDbVersionMismatchError,
   openHistoryDb,
@@ -174,6 +175,27 @@ function runObservability(
       return { observability: slice };
     }
     const db: Database = dbOrNull;
+
+    // Best-effort retention prune on the shared writer handle. The throttle
+    // map inside pruneHistoryWithThrottle amortises repeat opens within a
+    // long-running nas process, so this is cheap to call on every session.
+    // `typeof === "number"` guards against test fixtures that build
+    // `Pick<Config, "observability">` without the retention field — the
+    // pipeline always supplies it at runtime via config defaults.
+    const retention = deps.config.observability.retention;
+    if (typeof retention === "number" && retention > 0) {
+      const dbPath = resolveHistoryDbPath();
+      yield* Effect.sync(() => {
+        try {
+          pruneHistoryWithThrottle(db, dbPath, retention, new Date());
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn(
+            `nas: history retention prune failed: ${msg}. Continuing.`,
+          );
+        }
+      });
+    }
 
     const receiver = yield* OtlpReceiverService;
     const handle = yield* Effect.acquireRelease(
