@@ -168,6 +168,11 @@ CREATE INDEX idx_log_records_request_id
 `rm ~/.local/share/nas/history.db` を運用手順とする (既存 `store.ts:59`
 方針踏襲)。
 
+> **Update 2026-05-14**: 「migration は実装せず `rm` 運用」方針は ADR
+> 2026051401 で改められ、v2→v3 を含む writer 側 schema 進化は順序付き
+> migration step (MIGRATION_V3) として実装され自動適用される。本文は
+> 当時の意思決定の記録として残す。
+
 ### Reader: trace_id ⇔ prompt_id は query 時に JS で照合
 
 `log_records` も `spans` も `request_id` を持つ (logs は独立 column、

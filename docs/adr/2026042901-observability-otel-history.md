@@ -143,6 +143,11 @@ per-session UDS forward-port relay が host 到達の唯一の経路となる:
   試みず refuse する** (reader / writer どちらも)。既存ファイルが古いときの
   運用は手動 `rm` → 次回 writer 起動時に再生成
 
+> **Update 2026-05-14**: writer 側の migration 方針はこのバレットからは外れ、
+> ADR 2026051401 で記述される auto-migration 機構に置き換わった (reader は
+> ここの記述どおり据え置き)。当該 ADR を参照のこと。本文は当時の意思決定の
+> 記録として残す。
+
 ### データモデル: Invocation / Conversation / Trace の三層
 
 「実行」と「会話」を別 identity として持つ。両者は **trace を junction として
