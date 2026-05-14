@@ -19,10 +19,10 @@ import {
   extractToolDetail,
   extractToolName,
 } from "../../../../../agents/display";
+import { extractTracePrompts } from "../../../../../agents/prompts";
 import type {
   ConversationDetail,
   InvocationSummaryRow,
-  LogRecordSummaryRow,
   ModelTokenTotalsRow,
   SpanSummaryRow,
   TraceSummaryRow,
@@ -705,210 +705,11 @@ function isZeroTokenTurn(group: TurnSpanGroup): boolean {
  *     dropped from the result (see `isZeroTokenTurn`); the page consumes
  *     only turns with measurable LLM activity.
  */
-/**
- * Build a `traceId → userPromptText` map.
- *
- * Two sources, in priority order:
- *
- *   A. **Claude path — OTLP log-records join chain (ADR §Reader):**
- *      1. api_request log records: requestId → promptId
- *      2. claude_code.llm_request spans: requestId → traceId  (via attrs_json)
- *      3. user_prompt log records: promptId → promptText
- *         (via attrs_json.prompt). When multiple user_prompt records share a
- *         promptId, the one with the smallest sequence wins (first emission
- *         wins — ADR invariant).
- *
- *   B. **Copilot path — `gen_ai.input.messages` on the root invoke_agent span:**
- *      Copilot CLI emits one root `invoke_agent` span per user-turn (trace),
- *      and with `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` it
- *      attaches the OTEL GenAI semconv `gen_ai.input.messages` attribute — a
- *      JSON-stringified array of `{role, parts:[{type,content}]}`. We pick the
- *      last `role==="user"` text message whose content is not an
- *      auto-injected `<system_notification>…` block (those appear after a
- *      subagent finishes and would shadow the user's actual prompt).
- *
- * The Claude path runs first; the Copilot path only fills traces it did not
- * resolve. Any parse failure or missing link silently produces no entry for
- * that traceId so the caller renders `null` without losing other entries.
- */
-function buildTracePromptMap(
-  logRecords: readonly LogRecordSummaryRow[],
-  spans: readonly SpanSummaryRow[],
-): Map<string, string> {
-  // Step 1+3 combined: single pass over logRecords, branching by eventName.
-  //   api_request  → requestId → promptId  (lowest sequence wins)
-  //   user_prompt  → promptId  → promptText (lowest sequence wins)
-  const requestIdToPromptId = new Map<
-    string,
-    { sequence: number; promptId: string }
-  >();
-  const promptIdToText = new Map<string, { sequence: number; text: string }>();
-  for (const rec of logRecords) {
-    if (rec.eventName === "api_request" && rec.requestId !== null) {
-      const existing = requestIdToPromptId.get(rec.requestId);
-      if (existing === undefined) {
-        requestIdToPromptId.set(rec.requestId, {
-          sequence: rec.sequence,
-          promptId: rec.promptId,
-        });
-      } else if (rec.sequence < existing.sequence) {
-        console.warn(
-          `[conversationDetailView] duplicate api_request for requestId=${rec.requestId}, keeping sequence=${rec.sequence}`,
-        );
-        requestIdToPromptId.set(rec.requestId, {
-          sequence: rec.sequence,
-          promptId: rec.promptId,
-        });
-      } else {
-        console.warn(
-          `[conversationDetailView] duplicate api_request for requestId=${rec.requestId}, keeping sequence=${existing.sequence}`,
-        );
-      }
-    } else if (rec.eventName === "user_prompt") {
-      try {
-        const attrs = JSON.parse(rec.attrsJson) as Record<string, unknown>;
-        const prompt =
-          typeof attrs.prompt === "string" ? attrs.prompt : undefined;
-        if (prompt !== undefined) {
-          const existing = promptIdToText.get(rec.promptId);
-          if (existing === undefined) {
-            promptIdToText.set(rec.promptId, {
-              sequence: rec.sequence,
-              text: prompt,
-            });
-          } else if (rec.sequence < existing.sequence) {
-            console.warn(
-              `[conversationDetailView] duplicate user_prompt for promptId=${rec.promptId}, keeping sequence=${rec.sequence}`,
-            );
-            promptIdToText.set(rec.promptId, {
-              sequence: rec.sequence,
-              text: prompt,
-            });
-          } else {
-            console.warn(
-              `[conversationDetailView] duplicate user_prompt for promptId=${rec.promptId}, keeping sequence=${existing.sequence}`,
-            );
-          }
-        }
-      } catch {
-        // malformed attrsJson — skip this record
-      }
-    }
-  }
-
-  // Step 2: claude_code.llm_request spans → requestId → traceId
-  const requestIdToTraceId = new Map<string, string>();
-  for (const span of spans) {
-    if (span.spanName === "claude_code.llm_request") {
-      try {
-        const attrs = JSON.parse(span.attrsJson) as Record<string, unknown>;
-        const requestId =
-          typeof attrs.request_id === "string" ? attrs.request_id : undefined;
-        if (requestId !== undefined) {
-          requestIdToTraceId.set(requestId, span.traceId);
-        }
-      } catch {
-        // malformed attrsJson — skip this span
-      }
-    }
-  }
-
-  // Compose: traceId → promptId → promptText
-  const traceIdToPromptText = new Map<string, string>();
-  for (const [requestId, traceId] of requestIdToTraceId) {
-    const apiEntry = requestIdToPromptId.get(requestId);
-    if (apiEntry === undefined) continue;
-    const entry = promptIdToText.get(apiEntry.promptId);
-    if (entry === undefined) continue;
-    traceIdToPromptText.set(traceId, entry.text);
-  }
-
-  // Copilot path: fill any traces the Claude path did not resolve.
-  for (const [traceId, text] of extractCopilotTracePromptMap(spans)) {
-    if (!traceIdToPromptText.has(traceId)) {
-      traceIdToPromptText.set(traceId, text);
-    }
-  }
-
-  return traceIdToPromptText;
-}
-
-/**
- * Copilot CLI prompt extraction.
- *
- * Returns a `traceId → userPromptText` map mined from each trace's root
- * `invoke_agent` span (`kind==="invoke_agent"` and `parentSpanId===null`).
- * Subagent invocations have a non-null parent and are skipped — their
- * prompt is a synthesized handoff, not user-typed text.
- *
- * The `gen_ai.input.messages` attribute is a JSON-stringified array of
- * `{role, parts:[{type,content}]}` per the OTEL GenAI semconv. Within
- * that array we keep the *last* `role==="user"` text message whose
- * content does not begin with `<system_notification` — those blocks are
- * auto-injected when a subagent reports back, and we want the user's
- * actual prompt instead. "Last wins" so that, in a multi-turn trace
- * whose attribute happens to carry full history, the most recent user
- * input is what surfaces.
- */
-function extractCopilotTracePromptMap(
-  spans: readonly SpanSummaryRow[],
-): Map<string, string> {
-  const result = new Map<string, string>();
-  for (const span of spans) {
-    if (span.kind !== "invoke_agent") continue;
-    if (span.parentSpanId !== null) continue;
-    let attrs: Record<string, unknown>;
-    try {
-      attrs = JSON.parse(span.attrsJson) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    const rawMessages = attrs["gen_ai.input.messages"];
-    if (typeof rawMessages !== "string") continue;
-    let messages: unknown;
-    try {
-      messages = JSON.parse(rawMessages);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(messages)) continue;
-    let candidate: string | null = null;
-    for (const m of messages) {
-      if (typeof m !== "object" || m === null) continue;
-      if ((m as Record<string, unknown>).role !== "user") continue;
-      const text = extractGenAiUserText(m as Record<string, unknown>);
-      if (text === null) continue;
-      if (text.startsWith("<system_notification")) continue;
-      candidate = text;
-    }
-    if (candidate !== null) result.set(span.traceId, candidate);
-  }
-  return result;
-}
-
-/**
- * Concatenate the `parts[*].content` of a single OTEL GenAI message where
- * `parts[*].type === "text"`. Returns `null` if no text part survives.
- */
-function extractGenAiUserText(message: Record<string, unknown>): string | null {
-  const parts = message.parts;
-  if (!Array.isArray(parts)) return null;
-  let out = "";
-  for (const p of parts) {
-    if (typeof p !== "object" || p === null) continue;
-    const obj = p as Record<string, unknown>;
-    if (obj.type !== "text") continue;
-    if (typeof obj.content !== "string") continue;
-    out += obj.content;
-  }
-  return out.length > 0 ? out : null;
-}
-
 export function buildSpanTreeByTurn(
   detail: ConversationDetail,
   nowMs: number,
 ): TurnSpanGroup[] {
-  const tracePromptMap = buildTracePromptMap(detail.logRecords, detail.spans);
+  const tracePromptMap = extractTracePrompts(detail.logRecords, detail.spans);
   const orderedTraces = detail.traces.slice().sort(compareTurnOrder);
   const groups = orderedTraces.map((trace, idx) => {
     const traceSpans = detail.spans.filter((s) => s.traceId === trace.traceId);

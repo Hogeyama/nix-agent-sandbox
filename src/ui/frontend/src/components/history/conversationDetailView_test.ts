@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type {
   ConversationDetail,
   ConversationListRow,
@@ -1131,61 +1131,13 @@ describe("summariseTraceSpansByModel", () => {
   });
 });
 
-describe("buildSpanTreeByTurn – userPromptText in-memory join", () => {
-  // Helpers for building a complete join chain:
-  // traceId "trace_t1" ← span claude_code.llm_request (request_id="req_1")
-  //   ← api_request log record (requestId="req_1", promptId="p1")
-  //   ← user_prompt log record (promptId="p1", attrs.prompt="Hello world")
+describe("buildSpanTreeByTurn – userPromptText view wiring", () => {
+  // Detailed Claude/Copilot extraction is covered in
+  // `src/agents/claude_prompts_test.ts` and `copilot_prompts_test.ts`. This
+  // smoke test verifies only that buildSpanTreeByTurn forwards the
+  // aggregator's result onto the rendered `TurnSpanGroup.userPromptText`.
 
-  function makeLlmRequestSpan(
-    traceId: string,
-    requestId: string,
-    spanOverrides: Partial<SpanSummaryRow> = {},
-  ): SpanSummaryRow {
-    return makeSpan({
-      spanId: `llm_${traceId}`,
-      parentSpanId: null,
-      traceId,
-      spanName: "claude_code.llm_request",
-      kind: "client",
-      inTok: 10,
-      outTok: 5,
-      cacheR: 0,
-      cacheW: 0,
-      attrsJson: JSON.stringify({ request_id: requestId }),
-      ...spanOverrides,
-    });
-  }
-
-  function makeApiRequestRecord(
-    requestId: string,
-    promptId: string,
-    sequence: number,
-  ): LogRecordSummaryRow {
-    return makeLogRecord({
-      eventName: "api_request",
-      requestId,
-      promptId,
-      sequence,
-      attrsJson: "{}",
-    });
-  }
-
-  function makeUserPromptRecord(
-    promptId: string,
-    prompt: string,
-    sequence: number,
-  ): LogRecordSummaryRow {
-    return makeLogRecord({
-      eventName: "user_prompt",
-      promptId,
-      sequence,
-      requestId: null,
-      attrsJson: JSON.stringify({ prompt }),
-    });
-  }
-
-  test("resolves userPromptText when all join links are present", () => {
+  test("surfaces a resolved prompt on the corresponding TurnSpanGroup", () => {
     const detail = makeDetail({
       traces: [
         makeTrace({
@@ -1194,10 +1146,32 @@ describe("buildSpanTreeByTurn – userPromptText in-memory join", () => {
           endedAt: "2026-05-01T11:00:05.000Z",
         }),
       ],
-      spans: [makeLlmRequestSpan("t1", "req_1")],
+      spans: [
+        makeSpan({
+          spanId: "llm_t1",
+          parentSpanId: null,
+          traceId: "t1",
+          spanName: "claude_code.llm_request",
+          kind: "client",
+          inTok: 10,
+          outTok: 5,
+          attrsJson: JSON.stringify({ request_id: "req_1" }),
+        }),
+      ],
       logRecords: [
-        makeApiRequestRecord("req_1", "p1", 1),
-        makeUserPromptRecord("p1", "Hello world", 0),
+        makeLogRecord({
+          eventName: "api_request",
+          requestId: "req_1",
+          promptId: "p1",
+          sequence: 1,
+        }),
+        makeLogRecord({
+          eventName: "user_prompt",
+          promptId: "p1",
+          sequence: 0,
+          requestId: null,
+          attrsJson: JSON.stringify({ prompt: "Hello world" }),
+        }),
       ],
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
@@ -1205,55 +1179,10 @@ describe("buildSpanTreeByTurn – userPromptText in-memory join", () => {
     expect(groups[0]?.userPromptText).toBe("Hello world");
   });
 
-  test("userPromptText is null when logRecords is empty", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t1" })],
-      spans: [makeLlmRequestSpan("t1", "req_1")],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("userPromptText is null when api_request record is absent", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t1" })],
-      spans: [makeLlmRequestSpan("t1", "req_1")],
-      logRecords: [
-        // no api_request — join breaks at step 1
-        makeUserPromptRecord("p1", "Should not resolve", 0),
-      ],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("userPromptText is null when api_request exists but user_prompt record is absent", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "t1",
-          startedAt: "2026-05-01T11:00:00.000Z",
-          endedAt: "2026-05-01T11:00:05.000Z",
-        }),
-      ],
-      spans: [makeLlmRequestSpan("t1", "req_1")],
-      logRecords: [
-        // api_request is present (requestId + promptId), but no user_prompt record
-        makeApiRequestRecord("req_1", "p1", 1),
-      ],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("userPromptText is null when llm_request span is absent", () => {
+  test("renders null on TurnSpanGroup when no prompt resolves", () => {
     const detail = makeDetail({
       traces: [makeTrace({ traceId: "t1" })],
       spans: [
-        // Only a regular chat span — no claude_code.llm_request span
         makeSpan({
           spanId: "chat1",
           parentSpanId: null,
@@ -1264,448 +1193,9 @@ describe("buildSpanTreeByTurn – userPromptText in-memory join", () => {
           outTok: 5,
         }),
       ],
-      logRecords: [
-        makeApiRequestRecord("req_1", "p1", 1),
-        makeUserPromptRecord("p1", "Should not resolve", 0),
-      ],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("multiple turns get correct isolated userPromptText (no cross-contamination)", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "t_a",
-          startedAt: "2026-05-01T11:00:00.000Z",
-          endedAt: "2026-05-01T11:00:05.000Z",
-        }),
-        makeTrace({
-          traceId: "t_b",
-          startedAt: "2026-05-01T11:01:00.000Z",
-          endedAt: "2026-05-01T11:01:05.000Z",
-        }),
-      ],
-      spans: [
-        makeLlmRequestSpan("t_a", "req_a"),
-        makeLlmRequestSpan("t_b", "req_b", { spanId: "llm_t_b" }),
-      ],
-      logRecords: [
-        makeApiRequestRecord("req_a", "p_a", 1),
-        makeApiRequestRecord("req_b", "p_b", 3),
-        makeUserPromptRecord("p_a", "Turn A prompt", 0),
-        makeUserPromptRecord("p_b", "Turn B prompt", 2),
-      ],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups).toHaveLength(2);
-    expect(groups[0]?.traceId).toBe("t_a");
-    expect(groups[0]?.userPromptText).toBe("Turn A prompt");
-    expect(groups[1]?.traceId).toBe("t_b");
-    expect(groups[1]?.userPromptText).toBe("Turn B prompt");
-  });
-
-  test("when multiple user_prompt records share a promptId, the lowest sequence wins", () => {
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const detail = makeDetail({
-        traces: [
-          makeTrace({
-            traceId: "t1",
-            startedAt: "2026-05-01T11:00:00.000Z",
-            endedAt: "2026-05-01T11:00:05.000Z",
-          }),
-        ],
-        spans: [makeLlmRequestSpan("t1", "req_1")],
-        logRecords: [
-          makeApiRequestRecord("req_1", "p1", 1),
-          // sequence=5 record arrives first in the array but should lose
-          makeUserPromptRecord("p1", "Later duplicate", 5),
-          // sequence=0 is the canonical first emission
-          makeUserPromptRecord("p1", "First canonical", 0),
-        ],
-      });
-      const groups = buildSpanTreeByTurn(detail, NOW_MS);
-      expect(groups[0]?.userPromptText).toBe("First canonical");
-      // Duplicate detection must emit exactly one warn (not silently swallowed).
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0]?.[0]).toContain("duplicate user_prompt");
-      expect(warnSpy.mock.calls[0]?.[0]).toContain("promptId=p1");
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test("when multiple api_request records share a requestId, the lowest sequence wins", () => {
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const detail = makeDetail({
-        traces: [
-          makeTrace({
-            traceId: "t1",
-            startedAt: "2026-05-01T11:00:00.000Z",
-            endedAt: "2026-05-01T11:00:05.000Z",
-          }),
-        ],
-        spans: [makeLlmRequestSpan("t1", "req_1")],
-        logRecords: [
-          // sequence=5 arrives first in the array but should lose
-          makeApiRequestRecord("req_1", "p_later", 5),
-          // sequence=0 is the canonical first emission — its promptId wins
-          makeApiRequestRecord("req_1", "p_first", 0),
-          makeUserPromptRecord("p_later", "Should not resolve", 2),
-          makeUserPromptRecord("p_first", "First canonical api", 1),
-        ],
-      });
-      const groups = buildSpanTreeByTurn(detail, NOW_MS);
-      expect(groups[0]?.userPromptText).toBe("First canonical api");
-      // Duplicate detection must emit exactly one warn.
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0]?.[0]).toContain("duplicate api_request");
-      expect(warnSpy.mock.calls[0]?.[0]).toContain("requestId=req_1");
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  test("handles non-ASCII prompt text correctly", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "t1",
-          startedAt: "2026-05-01T11:00:00.000Z",
-          endedAt: "2026-05-01T11:00:05.000Z",
-        }),
-      ],
-      spans: [makeLlmRequestSpan("t1", "req_1")],
-      logRecords: [
-        makeApiRequestRecord("req_1", "p1", 1),
-        makeUserPromptRecord("p1", "日本語のプロンプト 🎉", 0),
-      ],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBe("日本語のプロンプト 🎉");
-  });
-
-  test("sequence=0 is a valid sequence value (not treated as falsy)", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "t1",
-          startedAt: "2026-05-01T11:00:00.000Z",
-          endedAt: "2026-05-01T11:00:05.000Z",
-        }),
-      ],
-      spans: [makeLlmRequestSpan("t1", "req_1")],
-      logRecords: [
-        makeApiRequestRecord("req_1", "p1", 1),
-        makeUserPromptRecord("p1", "Prompt at sequence zero", 0),
-      ],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBe("Prompt at sequence zero");
-  });
-});
-
-describe("buildSpanTreeByTurn – userPromptText (copilot invoke_agent path)", () => {
-  // Helpers for copilot: a root `invoke_agent` span carries the OTEL GenAI
-  // `gen_ai.input.messages` attribute (a JSON-stringified array of messages
-  // shaped `{role, parts:[{type:"text",content}]}`).
-
-  function makeCopilotInvokeAgent(
-    traceId: string,
-    messages: ReadonlyArray<{
-      role: string;
-      parts: ReadonlyArray<{ type: string; content?: string }>;
-    }>,
-    overrides: Partial<SpanSummaryRow> = {},
-  ): SpanSummaryRow {
-    return makeSpan({
-      spanId: `inv_${traceId}`,
-      parentSpanId: null,
-      traceId,
-      spanName: "invoke_agent",
-      kind: "invoke_agent",
-      inTok: 10,
-      outTok: 5,
-      cacheR: 0,
-      cacheW: 0,
-      attrsJson: JSON.stringify({
-        "gen_ai.input.messages": JSON.stringify(messages),
-      }),
-      ...overrides,
-    });
-  }
-
-  test("resolves userPromptText from root invoke_agent input.messages", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeCopilotInvokeAgent("t_cp1", [
-          { role: "user", parts: [{ type: "text", content: "Hello copilot" }] },
-        ]),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.userPromptText).toBe("Hello copilot");
-  });
-
-  test("concatenates multiple text parts in a single user message", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeCopilotInvokeAgent("t_cp1", [
-          {
-            role: "user",
-            parts: [
-              { type: "text", content: "part-one " },
-              { type: "text", content: "part-two" },
-            ],
-          },
-        ]),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBe("part-one part-two");
-  });
-
-  test("skips `<system_notification>` user messages so they don't shadow the real prompt", () => {
-    // Copilot injects a synthetic user-role `<system_notification>…` block
-    // after a subagent finishes. The real user prompt should win.
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeCopilotInvokeAgent("t_cp1", [
-          {
-            role: "user",
-            parts: [{ type: "text", content: "the real prompt" }],
-          },
-          {
-            role: "user",
-            parts: [
-              {
-                type: "text",
-                content:
-                  "<system_notification>Agent finished</system_notification>",
-              },
-            ],
-          },
-        ]),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBe("the real prompt");
-  });
-
-  test("last non-notification user message wins across multiple user turns in one span", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeCopilotInvokeAgent("t_cp1", [
-          { role: "user", parts: [{ type: "text", content: "older prompt" }] },
-          {
-            role: "assistant",
-            parts: [{ type: "text", content: "ack" }],
-          },
-          { role: "user", parts: [{ type: "text", content: "newest prompt" }] },
-        ]),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBe("newest prompt");
-  });
-
-  test("ignores subagent invoke_agent spans (parentSpanId !== null)", () => {
-    // A nested `invoke_agent <name>` describes a subagent handoff and must
-    // not surface as the parent trace's user prompt.
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeCopilotInvokeAgent("t_cp1", [
-          { role: "user", parts: [{ type: "text", content: "outer prompt" }] },
-        ]),
-        makeCopilotInvokeAgent(
-          "t_cp1",
-          [
-            {
-              role: "user",
-              parts: [{ type: "text", content: "subagent handoff" }],
-            },
-          ],
-          {
-            spanId: "sub_inv",
-            parentSpanId: "inv_t_cp1",
-            spanName: "invoke_agent explore",
-          },
-        ),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBe("outer prompt");
-  });
-
-  test("Claude path takes precedence over copilot path when both resolve", () => {
-    // Defensive: a trace should never have both signals in practice, but
-    // if it does, the log-records join wins (it carries the canonical
-    // first-emission prompt — see ADR invariant).
-    const traceId = "t_dual";
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId })],
-      spans: [
-        makeSpan({
-          spanId: `llm_${traceId}`,
-          parentSpanId: null,
-          traceId,
-          spanName: "claude_code.llm_request",
-          kind: "client",
-          attrsJson: JSON.stringify({ request_id: "req_x" }),
-        }),
-        makeCopilotInvokeAgent(traceId, [
-          { role: "user", parts: [{ type: "text", content: "copilot text" }] },
-        ]),
-      ],
-      logRecords: [
-        makeLogRecord({
-          eventName: "api_request",
-          requestId: "req_x",
-          promptId: "p_x",
-          sequence: 1,
-        }),
-        makeLogRecord({
-          eventName: "user_prompt",
-          promptId: "p_x",
-          sequence: 0,
-          requestId: null,
-          attrsJson: JSON.stringify({ prompt: "claude text" }),
-        }),
-      ],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBe("claude text");
-  });
-
-  test("userPromptText is null when input.messages is absent on the invoke_agent span", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeSpan({
-          spanId: "inv_t_cp1",
-          parentSpanId: null,
-          traceId: "t_cp1",
-          spanName: "invoke_agent",
-          kind: "invoke_agent",
-          inTok: 10,
-          outTok: 5,
-          attrsJson: "{}",
-        }),
-      ],
       logRecords: [],
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("userPromptText is null when attrs_json is malformed", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeSpan({
-          spanId: "inv_t_cp1",
-          parentSpanId: null,
-          traceId: "t_cp1",
-          spanName: "invoke_agent",
-          kind: "invoke_agent",
-          inTok: 10,
-          outTok: 5,
-          attrsJson: "not-json",
-        }),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("userPromptText is null when input.messages parses to a non-array", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeSpan({
-          spanId: "inv_t_cp1",
-          parentSpanId: null,
-          traceId: "t_cp1",
-          spanName: "invoke_agent",
-          kind: "invoke_agent",
-          inTok: 10,
-          outTok: 5,
-          attrsJson: JSON.stringify({
-            "gen_ai.input.messages": JSON.stringify({ not: "an array" }),
-          }),
-        }),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("userPromptText is null when every user message is a system_notification", () => {
-    const detail = makeDetail({
-      traces: [makeTrace({ traceId: "t_cp1" })],
-      spans: [
-        makeCopilotInvokeAgent("t_cp1", [
-          {
-            role: "user",
-            parts: [
-              {
-                type: "text",
-                content:
-                  "<system_notification>Agent x finished</system_notification>",
-              },
-            ],
-          },
-        ]),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups[0]?.userPromptText).toBeNull();
-  });
-
-  test("multiple copilot traces get isolated userPromptText", () => {
-    const detail = makeDetail({
-      traces: [
-        makeTrace({
-          traceId: "t_a",
-          startedAt: "2026-05-01T11:00:00.000Z",
-          endedAt: "2026-05-01T11:00:05.000Z",
-        }),
-        makeTrace({
-          traceId: "t_b",
-          startedAt: "2026-05-01T11:01:00.000Z",
-          endedAt: "2026-05-01T11:01:05.000Z",
-        }),
-      ],
-      spans: [
-        makeCopilotInvokeAgent("t_a", [
-          { role: "user", parts: [{ type: "text", content: "alpha" }] },
-        ]),
-        makeCopilotInvokeAgent("t_b", [
-          { role: "user", parts: [{ type: "text", content: "beta" }] },
-        ]),
-      ],
-      logRecords: [],
-    });
-    const groups = buildSpanTreeByTurn(detail, NOW_MS);
-    expect(groups).toHaveLength(2);
-    expect(groups[0]?.userPromptText).toBe("alpha");
-    expect(groups[1]?.userPromptText).toBe("beta");
   });
 });
