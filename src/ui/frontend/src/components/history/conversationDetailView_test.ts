@@ -1407,3 +1407,305 @@ describe("buildSpanTreeByTurn – userPromptText in-memory join", () => {
     expect(groups[0]?.userPromptText).toBe("Prompt at sequence zero");
   });
 });
+
+describe("buildSpanTreeByTurn – userPromptText (copilot invoke_agent path)", () => {
+  // Helpers for copilot: a root `invoke_agent` span carries the OTEL GenAI
+  // `gen_ai.input.messages` attribute (a JSON-stringified array of messages
+  // shaped `{role, parts:[{type:"text",content}]}`).
+
+  function makeCopilotInvokeAgent(
+    traceId: string,
+    messages: ReadonlyArray<{
+      role: string;
+      parts: ReadonlyArray<{ type: string; content?: string }>;
+    }>,
+    overrides: Partial<SpanSummaryRow> = {},
+  ): SpanSummaryRow {
+    return makeSpan({
+      spanId: `inv_${traceId}`,
+      parentSpanId: null,
+      traceId,
+      spanName: "invoke_agent",
+      kind: "invoke_agent",
+      inTok: 10,
+      outTok: 5,
+      cacheR: 0,
+      cacheW: 0,
+      attrsJson: JSON.stringify({
+        "gen_ai.input.messages": JSON.stringify(messages),
+      }),
+      ...overrides,
+    });
+  }
+
+  test("resolves userPromptText from root invoke_agent input.messages", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeCopilotInvokeAgent("t_cp1", [
+          { role: "user", parts: [{ type: "text", content: "Hello copilot" }] },
+        ]),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.userPromptText).toBe("Hello copilot");
+  });
+
+  test("concatenates multiple text parts in a single user message", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeCopilotInvokeAgent("t_cp1", [
+          {
+            role: "user",
+            parts: [
+              { type: "text", content: "part-one " },
+              { type: "text", content: "part-two" },
+            ],
+          },
+        ]),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBe("part-one part-two");
+  });
+
+  test("skips `<system_notification>` user messages so they don't shadow the real prompt", () => {
+    // Copilot injects a synthetic user-role `<system_notification>…` block
+    // after a subagent finishes. The real user prompt should win.
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeCopilotInvokeAgent("t_cp1", [
+          {
+            role: "user",
+            parts: [{ type: "text", content: "the real prompt" }],
+          },
+          {
+            role: "user",
+            parts: [
+              {
+                type: "text",
+                content:
+                  "<system_notification>Agent finished</system_notification>",
+              },
+            ],
+          },
+        ]),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBe("the real prompt");
+  });
+
+  test("last non-notification user message wins across multiple user turns in one span", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeCopilotInvokeAgent("t_cp1", [
+          { role: "user", parts: [{ type: "text", content: "older prompt" }] },
+          {
+            role: "assistant",
+            parts: [{ type: "text", content: "ack" }],
+          },
+          { role: "user", parts: [{ type: "text", content: "newest prompt" }] },
+        ]),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBe("newest prompt");
+  });
+
+  test("ignores subagent invoke_agent spans (parentSpanId !== null)", () => {
+    // A nested `invoke_agent <name>` describes a subagent handoff and must
+    // not surface as the parent trace's user prompt.
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeCopilotInvokeAgent("t_cp1", [
+          { role: "user", parts: [{ type: "text", content: "outer prompt" }] },
+        ]),
+        makeCopilotInvokeAgent(
+          "t_cp1",
+          [
+            {
+              role: "user",
+              parts: [{ type: "text", content: "subagent handoff" }],
+            },
+          ],
+          {
+            spanId: "sub_inv",
+            parentSpanId: "inv_t_cp1",
+            spanName: "invoke_agent explore",
+          },
+        ),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBe("outer prompt");
+  });
+
+  test("Claude path takes precedence over copilot path when both resolve", () => {
+    // Defensive: a trace should never have both signals in practice, but
+    // if it does, the log-records join wins (it carries the canonical
+    // first-emission prompt — see ADR invariant).
+    const traceId = "t_dual";
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId })],
+      spans: [
+        makeSpan({
+          spanId: `llm_${traceId}`,
+          parentSpanId: null,
+          traceId,
+          spanName: "claude_code.llm_request",
+          kind: "client",
+          attrsJson: JSON.stringify({ request_id: "req_x" }),
+        }),
+        makeCopilotInvokeAgent(traceId, [
+          { role: "user", parts: [{ type: "text", content: "copilot text" }] },
+        ]),
+      ],
+      logRecords: [
+        makeLogRecord({
+          eventName: "api_request",
+          requestId: "req_x",
+          promptId: "p_x",
+          sequence: 1,
+        }),
+        makeLogRecord({
+          eventName: "user_prompt",
+          promptId: "p_x",
+          sequence: 0,
+          requestId: null,
+          attrsJson: JSON.stringify({ prompt: "claude text" }),
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBe("claude text");
+  });
+
+  test("userPromptText is null when input.messages is absent on the invoke_agent span", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeSpan({
+          spanId: "inv_t_cp1",
+          parentSpanId: null,
+          traceId: "t_cp1",
+          spanName: "invoke_agent",
+          kind: "invoke_agent",
+          inTok: 10,
+          outTok: 5,
+          attrsJson: "{}",
+        }),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("userPromptText is null when attrs_json is malformed", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeSpan({
+          spanId: "inv_t_cp1",
+          parentSpanId: null,
+          traceId: "t_cp1",
+          spanName: "invoke_agent",
+          kind: "invoke_agent",
+          inTok: 10,
+          outTok: 5,
+          attrsJson: "not-json",
+        }),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("userPromptText is null when input.messages parses to a non-array", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeSpan({
+          spanId: "inv_t_cp1",
+          parentSpanId: null,
+          traceId: "t_cp1",
+          spanName: "invoke_agent",
+          kind: "invoke_agent",
+          inTok: 10,
+          outTok: 5,
+          attrsJson: JSON.stringify({
+            "gen_ai.input.messages": JSON.stringify({ not: "an array" }),
+          }),
+        }),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("userPromptText is null when every user message is a system_notification", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t_cp1" })],
+      spans: [
+        makeCopilotInvokeAgent("t_cp1", [
+          {
+            role: "user",
+            parts: [
+              {
+                type: "text",
+                content:
+                  "<system_notification>Agent x finished</system_notification>",
+              },
+            ],
+          },
+        ]),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups[0]?.userPromptText).toBeNull();
+  });
+
+  test("multiple copilot traces get isolated userPromptText", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t_a",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:05.000Z",
+        }),
+        makeTrace({
+          traceId: "t_b",
+          startedAt: "2026-05-01T11:01:00.000Z",
+          endedAt: "2026-05-01T11:01:05.000Z",
+        }),
+      ],
+      spans: [
+        makeCopilotInvokeAgent("t_a", [
+          { role: "user", parts: [{ type: "text", content: "alpha" }] },
+        ]),
+        makeCopilotInvokeAgent("t_b", [
+          { role: "user", parts: [{ type: "text", content: "beta" }] },
+        ]),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.userPromptText).toBe("alpha");
+    expect(groups[1]?.userPromptText).toBe("beta");
+  });
+});
