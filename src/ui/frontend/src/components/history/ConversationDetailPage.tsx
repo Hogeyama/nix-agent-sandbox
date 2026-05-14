@@ -494,9 +494,25 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                                               class="history-detail-attrs-row"
                                             >
                                               <td colspan={SPANS_TABLE_COLSPAN}>
-                                                <pre class="history-detail-attrs-pre">
-                                                  {row.attrsPretty}
-                                                </pre>
+                                                <div class="history-detail-attrs-wrap">
+                                                  <button
+                                                    type="button"
+                                                    class="history-detail-attrs-copy"
+                                                    title="Copy JSON"
+                                                    aria-label="Copy span attributes"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      void navigator.clipboard?.writeText(
+                                                        row.attrsPretty,
+                                                      );
+                                                    }}
+                                                  >
+                                                    copy
+                                                  </button>
+                                                  <pre class="history-detail-attrs-pre">
+                                                    {row.attrsPretty}
+                                                  </pre>
+                                                </div>
                                               </td>
                                             </tr>
                                           </Show>
