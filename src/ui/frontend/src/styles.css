@@ -1721,6 +1721,7 @@ body::after {
 }
 .history-shell-content {
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 32px 48px;
   max-width: 1200px;
   width: 100%;
