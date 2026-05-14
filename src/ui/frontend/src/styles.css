@@ -2304,7 +2304,15 @@ body::after {
   color: var(--cream-dim);
   white-space: pre;
   overflow-x: auto;
+  overflow-y: auto;
   max-height: 60vh;
+  /* width: 0 + min-width: 100% prevents the pre's intrinsic width
+   * (from white-space: pre) from inflating the colspan cell and
+   * blowing out table column widths. The table auto-layout sees a
+   * 0-width contribution; after columns are sized by normal rows,
+   * min-width expands the pre to fill the resolved cell width. */
+  width: 0;
+  min-width: 100%;
 }
 
 /* Per-turn accordion in the Spans section. One container per turn
