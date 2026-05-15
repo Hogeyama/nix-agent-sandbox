@@ -9,8 +9,6 @@ argument-hint: "[実装内容の説明]"
 
 計画→計画レビュー→ユーザー承認→実装→コードレビュー→コミットを、**1 コミットずつ明示的に区切って**進めるワークフロー。
 
-この skill の目的は「よさそうに流すこと」ではなく、**状態遷移を壊さずに品質を担保すること**。とくに plan confirmation、replan、review 差し戻し、commit 境界を曖昧にしない。
-
 ## 原則
 
 - **orchestrator（あなた）はソースコードを直接読んだり編集したりしない。** 調査・実装・レビューはすべてサブエージェントに委任する。
@@ -32,9 +30,9 @@ argument-hint: "[実装内容の説明]"
 | implementer | `implementer` | 1コミット分の実装 |
 | code-reviewer | `code-reviewer` | 1コミット分のコードレビュー |
 
-呼び出しは `Agent` ツールに `subagent_type: <name>` を渡す。
+呼び出しは `Agent` ツールに `subagent_type: <name>` を渡す。`<name>` の agent が登録されていない環境では、skill 同梱の `<skill-dir>/agents/<name>.md` を読み、その内容をプロンプトとして general-purpose agent を呼ぶ。
 
-各エージェントの定義ファイルは skill に同梱されている (`agents/*.md`)。`subagent_type` がそのまま登録されていない環境では、プロジェクトルートの `./agents/<name>.md` を参照してよい（同名で登録されていればそちらが優先される）。各定義ファイルに詳細はあるが、**orchestrator は「何を渡せば次の agent が迷わないか」を理解して渡す必要がある。** 「雑にタスク内容だけ渡す」は不可。
+各定義ファイルに詳細はあるが、**orchestrator は「何を渡せば次の agent が迷わないか」を理解して渡す必要がある。** 「雑にタスク内容だけ渡す」は不可。
 
 ## Step 1: 実行前セットアップ
 
