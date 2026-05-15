@@ -142,6 +142,28 @@ describe("extractCopilotTracePrompts", () => {
     expect(result.has("t1")).toBe(false);
   });
 
+  test("skips `<skill-context>` user messages injected by skill invocations", () => {
+    const result = extractCopilotTracePrompts([
+      makeCopilotInvokeAgent("t1", [
+        {
+          role: "user",
+          parts: [{ type: "text", content: "good. commit and push plz" }],
+        },
+        {
+          role: "user",
+          parts: [
+            {
+              type: "text",
+              content:
+                '<skill-context name="git-commit">Base directory for this skill: /home/user/.copilot/skills/git-commit ...</skill-context>',
+            },
+          ],
+        },
+      ]),
+    ]);
+    expect(result.get("t1")).toBe("good. commit and push plz");
+  });
+
   test("no entry when every user message is a system_notification", () => {
     const result = extractCopilotTracePrompts([
       makeCopilotInvokeAgent("t1", [

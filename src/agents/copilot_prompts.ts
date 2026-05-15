@@ -14,9 +14,13 @@
  * "prompt" is a synthesized handoff, not user-typed text.
  *
  * Within the messages array we keep the *last* `role==="user"` text
- * message whose content does not begin with `<system_notification` —
- * those blocks are auto-injected by Copilot when a subagent reports back
- * and would shadow the user's actual prompt. "Last wins" so that, in a
+ * message whose content is not an auto-injected block. Currently filtered:
+ *
+ *   - `<system_notification` — injected when a subagent reports back.
+ *   - `<skill-context` — injected when a skill is invoked, carrying the
+ *     skill's system-prompt / instructions.
+ *
+ * These would shadow the user's actual prompt. "Last wins" so that, in a
  * trace whose attribute happens to carry full history, the most recent
  * user input is what surfaces.
  *
@@ -54,12 +58,22 @@ export function extractCopilotTracePrompts(
       if ((m as Record<string, unknown>).role !== "user") continue;
       const text = extractGenAiUserText(m as Record<string, unknown>);
       if (text === null) continue;
-      if (text.startsWith("<system_notification")) continue;
+      if (isAutoInjectedBlock(text)) continue;
       candidate = text;
     }
     if (candidate !== null) result.set(span.traceId, candidate);
   }
   return result;
+}
+
+/** XML tag prefixes injected automatically by the runtime (not user-typed). */
+const AUTO_INJECTED_PREFIXES = [
+  "<system_notification",
+  "<skill-context",
+] as const;
+
+function isAutoInjectedBlock(text: string): boolean {
+  return AUTO_INJECTED_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
 /**
