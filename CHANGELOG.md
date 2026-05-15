@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.13.0] - 2026-05-16
+
+### Added
+
+- **History UI — user prompts**: surface each turn's user prompt on the
+  conversation detail page and on Copilot turn rows ([531b836],
+  [584ccb8], [d8b51e3])
+- **Observability — logs signal**: ingest OTLP `ExportLogsServiceRequest`
+  via `POST /v1/logs`, persist into a new `log_records` table, and
+  inject `OTEL_LOGS_EXPORTER=otlp` for Claude
+  ([681ea67], [6347f6a], [f789236], [735f3ec])
+- **History — span events**: persist OTLP span events into
+  `spans.events_json` ([b9699e8])
+- **History — auto-migration**: history.db migrates forward on writer
+  open; schema split into per-version steps ([1d6065b], [da3fa27],
+  [5083bba])
+- **History — retention**: `observability.retention` duration prunes
+  history.db on writer open ([40fdb6c], [b9466ce], [bcde814])
+- **UI — Stop container**: replace the "Kill clients" button with a
+  Stop-container action ([bea0753])
+- **UI — span attrs drawer**: add a copy button ([d82cb4e])
+- **History — conversation costs**: surface conversation costs in the
+  list view ([82fe80a])
+
+### Changed
+
+- **Breaking — history schema v4**: drop `turn_events` and
+  `conversation_summaries` (both unread); summaries are now derived from
+  the first trace's prompts at read time. Forward-only migration
+  discards rows in those tables ([b99834f], [5664032])
+- **Agents**: move trace-prompt extraction into per-agent modules
+  ([bcd6d52])
+
+### Fixed
+
+- **Copilot prompt extraction**: filter `<skill-context>` blocks
+  ([1e5cbc4])
+- **History ingest**: suppress receiver diagnostics during agent
+  sessions ([507e946])
+- **UI**: column alignment in Turns table, "None" worktree always
+  disables worktree, prompt-display colors in dark theme, layout shift
+  on accordion open, attrs drawer overflowing span columns
+  ([0fed808], [4c17a88], [4854239], [3303d4f], [896f8fd], [3375426])
+- **Observability**: correct content-capture env names for Copilot &
+  Claude; subtract cache reads from Copilot input tokens; resolve
+  dot-versioned model names against LiteLLM pricing
+  ([15ee87a], [554ccbf], [1031bbf])
+- **Entrypoint / hostexec**: apply env ops after Nix devShell source;
+  match relative argv0 against absolute exec paths
+  ([db977cf], [f0b5fb3])
+- **Copilot**: default `REMOTE_CONTAINERS=true` to enable OSC52
+  clipboard ([d443410])
+
 ## [0.12.0] - 2026-05-03
 
 ### Added
