@@ -4,7 +4,7 @@ import {
   classifySpan,
   pickConversationIdFromSpans,
   resolveSpanUsageColumns,
-} from "./otlp.ts";
+} from "./otlp_semantics.ts";
 
 test("layer 1: gen_ai.operation.name=chat overrides any name", () => {
   expect(

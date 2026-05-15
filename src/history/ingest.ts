@@ -18,7 +18,7 @@ import {
   classifySpan,
   pickConversationIdFromSpans,
   resolveSpanUsageColumns,
-} from "../agents/otlp.ts";
+} from "./otlp_semantics.ts";
 import {
   flattenAttributes,
   nanoToIso,
