@@ -11,10 +11,12 @@ argument-hint: "[実装内容の説明]"
 
 ## 原則
 
-- **orchestrator（あなた）はソースコードを直接読んだり編集したりしない。** 調査・実装・レビューはすべてサブエージェントに委任する。
-- **ただし進行管理のための git bookkeeping はしてよい。** ファイル名・コミット境界・履歴ヘッダー単位で完結する操作は orchestrator の責務:
-  - OK: `git status --short` / `git diff --name-only` / `git diff --stat HEAD` / `git log --oneline` / `git show --stat <hash>`
-  - NG: `git diff <file>` / `git show <hash>` の本文・`git blame` など、**差分の中身を読む** 操作。差分の意味判定は code-reviewer に委ねる。
+- **orchestrator（あなた）の責務は進行管理であり、コード品質の判定とコード本体の編集はしない。** 「このコードは正しいか／良いか」の判断は planner / implementer / code-reviewer に任せ、Edit / Write でコード本体を書かない（`./.gated-commit-loop/` 配下の config / log の bookkeeping は例外）。
+- **進行管理に必要な範囲では差分・コードを読んでよい。** 自分が責任をもつ意思決定（commit 境界、protected dirty paths、finding の重複検知、ループ打ち切り）の材料として読むのは OK:
+  - bookkeeping: `git status --short` / `git diff --name-only` / `git diff --stat` / `git log --oneline` / `git show --stat <hash>`
+  - scope 検証: 各 commit 直前に `git diff --cached` を読み、入る差分が今回の commit scope 通りか／protected dirty paths が混ざっていないかを確認する
+  - finding 解釈: code-reviewer が指す `file:line` を Read で開き、同じ趣旨の指摘が iteration を跨いで繰り返されていないかを判定する
+- **judgment（判定）と verification（確認）を混ぜない。** 読みの結果から自分が「この実装はこうあるべき」「ここは指摘されるべき」と結論を出しそうになったら、それは judgment であり、サブエージェントの担当。読みは verification まで。判定が必要になった時点でサブエージェントに戻す。
 - **実装開始前に、計画をユーザーへ提示し、明示的な承認を得る。** `LGTM` / `go` / `進めて` のような肯定が出るまで Step 3 に進んではいけない。
 - **承認は会話上で可視化する。** plan を提示したメッセージと、それに対するユーザー承認が会話履歴で確認できる形にする。内部状態だけ更新して先へ進んではいけない。
 - **1 implementer = 1 コミット。** 承認済み計画の 1 commit セクションだけを実装させる。
@@ -154,8 +156,8 @@ argument-hint: "[実装内容の説明]"
 
 レビュー通過後に初めてコミットしてよい。
 
-1. `git status --short` / `git diff --name-only` で、今回 commit に含めるべきファイルを確認する
-2. protected dirty paths や他コミットの差分を混ぜない
+1. `git status --short` / `git diff --name-only` で、今回 commit に含めるべきファイルを stage する
+2. stage した内容を `git diff --cached` で確認し、commit scope 通りであること／protected dirty paths が混ざっていないことを verify する（中身の良し悪し判定は code-reviewer 済みなので再評価しない）
 3. **コミットメッセージの規約**:
    - **タイトル**: planner が出した conventional commit 案 (`type(scope): subject`) をベースにする
    - **本文** には次を含める:
