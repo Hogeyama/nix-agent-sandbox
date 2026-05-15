@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { OtlpKeyValue } from "./ingest.ts";
 import {
   ingestLogRecords,
   type OtlpJsonExportLogsPayload,
 } from "./ingest_logs.ts";
+import type { OtlpKeyValue } from "./otlp_wire.ts";
 import { _closeHistoryDb, openHistoryDb, upsertInvocation } from "./store.ts";
 
 interface TmpHistoryDb {

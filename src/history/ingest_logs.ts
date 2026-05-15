@@ -19,13 +19,13 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { OtlpKeyValue } from "./ingest.ts";
 import {
   flattenAttributes,
   nanoToIso,
+  type OtlpKeyValue,
   readStringAttr,
   stripPiiAttrs,
-} from "./ingest.ts";
+} from "./otlp_wire.ts";
 import { insertLogRecords, upsertConversation } from "./store.ts";
 import type { LogRecordRow } from "./types.ts";
 

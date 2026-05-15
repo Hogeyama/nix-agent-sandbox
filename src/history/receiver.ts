@@ -19,12 +19,12 @@ import {
   ingestResourceSpans,
   type OtlpJsonExportPayload,
   type OtlpJsonResourceSpans,
-  type OtlpKeyValue,
 } from "./ingest.ts";
 import {
   ingestLogRecords,
   type OtlpJsonExportLogsPayload,
 } from "./ingest_logs.ts";
+import type { OtlpKeyValue } from "./otlp_wire.ts";
 
 export interface OtlpReceiverHandle {
   /** Actual port the OS chose for the 127.0.0.1 listener. */
