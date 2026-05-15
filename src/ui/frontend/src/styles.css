@@ -1543,9 +1543,9 @@ body::after {
   font-style: italic;
 }
 .audit-accordion .audit-row {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding: 4px 4px;
   font-size: 11px;
   border-bottom: 1px solid var(--line-soft);
@@ -1560,6 +1560,9 @@ body::after {
   white-space: nowrap;
 }
 .audit-body {
+  color: var(--cream-dim);
+}
+.audit-detail {
   color: var(--cream-dim);
   word-break: break-all;
 }

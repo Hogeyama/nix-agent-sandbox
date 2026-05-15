@@ -237,8 +237,9 @@ export function PendingPane(props: Props) {
                 <div class="audit-row">
                   <span class="audit-time">{formatAuditEntry(row)}</span>
                   <span class="audit-body">
-                    {row.domain} · {row.decision} · {summaryFor(row)}
+                    {row.domain} · {row.decision}
                   </span>
+                  <span class="audit-detail">{summaryFor(row)}</span>
                 </div>
               )}
             </For>
