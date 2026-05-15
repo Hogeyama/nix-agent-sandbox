@@ -136,35 +136,46 @@ interface PerTraceAccum {
   maxEndNano: number | null;
 }
 
-export function ingestResourceSpans(
-  db: Database,
-  payload: OtlpJsonExportPayload,
-): IngestResult {
-  const result: IngestResult = {
-    acceptedSpans: 0,
-    droppedTraces: 0,
-    resolvedConversations: 0,
-  };
+/**
+ * Module-internal plan describing a single trace ready to be written. Produced
+ * by the pure transform stage and consumed by the DB write stage. Not exported
+ * — internal split only.
+ */
+interface TraceIngestPlan {
+  nasSessionId: string;
+  nasAgent: string | null;
+  traceId: string;
+  conversationId: string | null;
+  traceStartedAt: string;
+  traceEndedAt: string | null;
+  spanRows: SpanRow[];
+}
+
+/**
+ * Pure transform: walk the OTLP payload, drop resources without
+ * `nas.session.id`, group spans by trace, and build a `TraceIngestPlan` per
+ * trace including fully constructed `SpanRow`s (with the copilot inTok/cacheR
+ * adjustment applied here — that is a semantic concern of the transform).
+ *
+ * No DB access; safe to call without a transaction.
+ */
+function transformResourceSpans(payload: OtlpJsonExportPayload): {
+  plans: TraceIngestPlan[];
+  droppedTraces: number;
+} {
+  const plans: TraceIngestPlan[] = [];
+  let droppedTraces = 0;
 
   const resourceSpans = payload?.resourceSpans;
   if (!Array.isArray(resourceSpans) || resourceSpans.length === 0) {
-    return result;
+    return { plans, droppedTraces };
   }
-
-  // Build per-resource work units: each carries the nas.session.id required
-  // to write traces, plus the per-trace span groups.
-  interface ResourceWork {
-    nasSessionId: string;
-    nasAgent: string | null;
-    traces: Map<string, PerTraceAccum>;
-  }
-  const resourceWorks: ResourceWork[] = [];
 
   for (const rs of resourceSpans) {
     const resAttrs = flattenAttributes(rs?.resource?.attributes);
     const nasSessionId = readStringAttr(resAttrs, "nas.session.id");
     if (nasSessionId === null || nasSessionId.length === 0) {
-      result.droppedTraces += 1;
+      droppedTraces += 1;
       continue;
     }
     const nasAgent = readStringAttr(resAttrs, "nas.agent");
@@ -209,120 +220,154 @@ export function ingestResourceSpans(
         }
       }
     }
-    resourceWorks.push({ nasSessionId, nasAgent, traces });
-  }
 
-  if (resourceWorks.length === 0) return result;
+    for (const acc of traces.values()) {
+      const conversationId = pickConversationIdFromSpans(
+        acc.spansInOrder.map((s) => ({ attributes: s.attrs })),
+      );
+      const traceStartedIso = nanoToIso(
+        acc.minStartNano !== null ? acc.minStartNano : undefined,
+      );
+      const traceEndedIso = nanoToIso(
+        acc.maxEndNano !== null ? acc.maxEndNano : undefined,
+      );
+      // started_at is NOT NULL in the schema; if every span lacked a start
+      // timestamp we fall back to ended_at, then to "epoch" as a last resort
+      // so the row can be written.
+      const startedAt =
+        traceStartedIso ?? traceEndedIso ?? "1970-01-01T00:00:00.000Z";
 
-  // Single transaction over all writes from this export so a failure mid-way
-  // doesn't leave partial trace/conversation rows behind.
-  const tx = db.transaction(() => {
-    for (const work of resourceWorks) {
-      for (const acc of work.traces.values()) {
-        const conversationId = pickConversationIdFromSpans(
-          acc.spansInOrder.map((s) => ({ attributes: s.attrs })),
-        );
-        const traceStartedIso = nanoToIso(
-          acc.minStartNano !== null ? acc.minStartNano : undefined,
-        );
-        const traceEndedIso = nanoToIso(
-          acc.maxEndNano !== null ? acc.maxEndNano : undefined,
-        );
-        // started_at is NOT NULL in the schema; if every span lacked a start
-        // timestamp we fall back to ended_at, then to "epoch" as a last resort
-        // so the row can be written.
-        const startedAt =
-          traceStartedIso ?? traceEndedIso ?? "1970-01-01T00:00:00.000Z";
-
-        // Insert the conversation row first so that traces.conversation_id's
-        // FK to conversations(id) holds when we then upsert the trace.
-        if (conversationId !== null) {
-          upsertConversation(db, {
-            id: conversationId,
-            agent: work.nasAgent,
-            firstSeenAt: startedAt,
-            lastSeenAt: traceEndedIso ?? startedAt,
-          });
-          result.resolvedConversations += 1;
+      const traceUsageSources = analyzeTraceUsageSources(
+        acc.spansInOrder.map(({ raw, attrs }) => ({
+          name: raw.name,
+          attributes: attrs,
+        })),
+      );
+      const spanRows: SpanRow[] = [];
+      for (const { raw, attrs } of acc.spansInOrder) {
+        const startNano = nanoToNumber(raw.startTimeUnixNano);
+        const endNano = nanoToNumber(raw.endTimeUnixNano);
+        let durationMs: number | null = null;
+        if (startNano !== null && endNano !== null) {
+          const d = Math.floor((endNano - startNano) / 1_000_000);
+          durationMs = d >= 0 ? d : null;
         }
+        const startedIso =
+          nanoToIso(raw.startTimeUnixNano) ?? "1970-01-01T00:00:00.000Z";
+        const endedIso = nanoToIso(raw.endTimeUnixNano);
 
-        upsertTrace(db, {
-          traceId: acc.traceId,
-          invocationId: work.nasSessionId,
-          conversationId,
-          startedAt,
-          endedAt: traceEndedIso,
+        const kind = classifySpan(raw.name, attrs);
+        const usage = resolveSpanUsageColumns({
+          kind,
+          spanName: raw.name,
+          attrs,
+          traceUsageSources,
         });
 
-        const spanRows: SpanRow[] = [];
-        const traceUsageSources = analyzeTraceUsageSources(
-          acc.spansInOrder.map(({ raw, attrs }) => ({
-            name: raw.name,
-            attributes: attrs,
-          })),
-        );
-        for (const { raw, attrs } of acc.spansInOrder) {
-          const startNano = nanoToNumber(raw.startTimeUnixNano);
-          const endNano = nanoToNumber(raw.endTimeUnixNano);
-          let durationMs: number | null = null;
-          if (startNano !== null && endNano !== null) {
-            const d = Math.floor((endNano - startNano) / 1_000_000);
-            durationMs = d >= 0 ? d : null;
-          }
-          const startedIso =
-            nanoToIso(raw.startTimeUnixNano) ?? "1970-01-01T00:00:00.000Z";
-          const endedIso = nanoToIso(raw.endTimeUnixNano);
+        // Copilot CLI (OpenAI convention) reports input_tokens inclusive
+        // of cached tokens, unlike Anthropic which reports them separately.
+        // Subtract cacheR so inTok represents only non-cached input.
+        const inTok =
+          nasAgent === "copilot" &&
+          usage.inTok !== null &&
+          usage.cacheR !== null
+            ? Math.max(usage.inTok - usage.cacheR, 0)
+            : usage.inTok;
 
-          const kind = classifySpan(raw.name, attrs);
-          const usage = resolveSpanUsageColumns({
-            kind,
-            spanName: raw.name,
-            attrs,
-            traceUsageSources,
-          });
+        const persistedEvents = extractSpanEvents(raw.events);
+        spanRows.push({
+          spanId: raw.spanId,
+          parentSpanId:
+            typeof raw.parentSpanId === "string" && raw.parentSpanId.length > 0
+              ? raw.parentSpanId
+              : null,
+          traceId: raw.traceId,
+          spanName: raw.name,
+          kind,
+          model: usage.model,
+          inTok,
+          outTok: usage.outTok,
+          cacheR: usage.cacheR,
+          cacheW: usage.cacheW,
+          durationMs,
+          startedAt: startedIso,
+          endedAt: endedIso,
+          attrsJson: JSON.stringify(stripPiiAttrs(attrs)),
+          eventsJson:
+            persistedEvents === null ? null : JSON.stringify(persistedEvents),
+        });
+      }
 
-          // Copilot CLI (OpenAI convention) reports input_tokens inclusive
-          // of cached tokens, unlike Anthropic which reports them separately.
-          // Subtract cacheR so inTok represents only non-cached input.
-          const inTok =
-            work.nasAgent === "copilot" &&
-            usage.inTok !== null &&
-            usage.cacheR !== null
-              ? Math.max(usage.inTok - usage.cacheR, 0)
-              : usage.inTok;
+      plans.push({
+        nasSessionId,
+        nasAgent,
+        traceId: acc.traceId,
+        conversationId,
+        traceStartedAt: startedAt,
+        traceEndedAt: traceEndedIso,
+        spanRows,
+      });
+    }
+  }
 
-          const persistedEvents = extractSpanEvents(raw.events);
-          spanRows.push({
-            spanId: raw.spanId,
-            parentSpanId:
-              typeof raw.parentSpanId === "string" &&
-              raw.parentSpanId.length > 0
-                ? raw.parentSpanId
-                : null,
-            traceId: raw.traceId,
-            spanName: raw.name,
-            kind,
-            model: usage.model,
-            inTok,
-            outTok: usage.outTok,
-            cacheR: usage.cacheR,
-            cacheW: usage.cacheW,
-            durationMs,
-            startedAt: startedIso,
-            endedAt: endedIso,
-            attrsJson: JSON.stringify(stripPiiAttrs(attrs)),
-            eventsJson:
-              persistedEvents === null ? null : JSON.stringify(persistedEvents),
-          });
-        }
-        if (spanRows.length > 0) {
-          insertSpans(db, spanRows);
-          result.acceptedSpans += spanRows.length;
-        }
+  return { plans, droppedTraces };
+}
+
+/**
+ * DB write stage: applies the prepared plans inside a single transaction so a
+ * mid-way failure doesn't leave partial trace / conversation rows behind.
+ * `resolvedConversations` counts actual `upsertConversation` calls so it stays
+ * consistent with a tx rollback.
+ */
+function applyIngestPlans(
+  db: Database,
+  plans: TraceIngestPlan[],
+): { acceptedSpans: number; resolvedConversations: number } {
+  const counters = { acceptedSpans: 0, resolvedConversations: 0 };
+  if (plans.length === 0) return counters;
+
+  const tx = db.transaction(() => {
+    for (const plan of plans) {
+      // Insert the conversation row first so that traces.conversation_id's
+      // FK to conversations(id) holds when we then upsert the trace.
+      if (plan.conversationId !== null) {
+        upsertConversation(db, {
+          id: plan.conversationId,
+          agent: plan.nasAgent,
+          firstSeenAt: plan.traceStartedAt,
+          lastSeenAt: plan.traceEndedAt ?? plan.traceStartedAt,
+        });
+        counters.resolvedConversations += 1;
+      }
+
+      upsertTrace(db, {
+        traceId: plan.traceId,
+        invocationId: plan.nasSessionId,
+        conversationId: plan.conversationId,
+        startedAt: plan.traceStartedAt,
+        endedAt: plan.traceEndedAt,
+      });
+
+      if (plan.spanRows.length > 0) {
+        insertSpans(db, plan.spanRows);
+        counters.acceptedSpans += plan.spanRows.length;
       }
     }
   });
   tx();
 
-  return result;
+  return counters;
+}
+
+export function ingestResourceSpans(
+  db: Database,
+  payload: OtlpJsonExportPayload,
+): IngestResult {
+  const { plans, droppedTraces } = transformResourceSpans(payload);
+  const counters = applyIngestPlans(db, plans);
+  return {
+    acceptedSpans: counters.acceptedSpans,
+    droppedTraces,
+    resolvedConversations: counters.resolvedConversations,
+  };
 }
