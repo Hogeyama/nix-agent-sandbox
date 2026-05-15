@@ -113,3 +113,4 @@ inline note が一番ノイズの少ない着地点になる。
 | `2026051501-history-drop-turn-events-and-summary-table.md` | Accepted | turn_events / conversation_summaries 撤去と summary の read-time derive |
 | `2026051502-history-db-retention.md` | Accepted | history.db OTEL レコードの保存期間 (retention) 機構 |
 | `2026051601-otel-ingest-module-structure.md` | Accepted | OTEL ingest module 構造 (otlp_wire 抽出 + transform/write 分離) |
+| `2026051602-otlp-semantics-module-location.md` | Accepted | OTLP semantics モジュールの所属 (src/agents/ → src/history/) |
