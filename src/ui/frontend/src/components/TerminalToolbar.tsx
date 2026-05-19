@@ -102,7 +102,7 @@ function describeMouseMode(handle: TerminalHandle | null): DisplayMouseMode {
   const mode = handle.getMouseTrackingMode();
   if (mode === "unknown") return "n/a";
   if (mode === "none") return "off";
-  return handle.isMouseModeForced() ? "on (forced)" : "on";
+  return "on";
 }
 
 export function TerminalToolbar(props: TerminalToolbarProps) {
@@ -174,25 +174,6 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   });
 
   const mouseModeLabel = createMemo(() => `mouse: ${mouseMode()}`);
-  const refreshMouseModeSoon = () => {
-    globalThis.requestAnimationFrame(() => {
-      setMouseMode(describeMouseMode(props.activeTerminalHandle()));
-    });
-  };
-
-  const handleForceMouseModeOn = () => {
-    const handle = props.activeTerminalHandle();
-    if (!handle) return;
-    handle.forceMouseModeOn();
-    refreshMouseModeSoon();
-  };
-
-  const handleResetMouseMode = () => {
-    const handle = props.activeTerminalHandle();
-    if (!handle) return;
-    handle.resetMouseMode();
-    refreshMouseModeSoon();
-  };
 
   const handleShellToggleClick = async () => {
     const row = props.contextAgentRow();
@@ -349,24 +330,6 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
         />
       </Show>
       <span class="term-mouse-mode">{mouseModeLabel()}</span>
-      <button
-        type="button"
-        class="tool"
-        disabled={props.activeTerminalHandle() === null}
-        onClick={handleForceMouseModeOn}
-        title="Debug: force xterm mouse mode on"
-      >
-        Force ON
-      </button>
-      <button
-        type="button"
-        class="tool"
-        disabled={props.activeTerminalHandle() === null}
-        onClick={handleResetMouseMode}
-        title="Debug: reset xterm mouse mode"
-      >
-        Reset
-      </button>
       <span class="spacer" />
       <span class="fontsize">
         <button
