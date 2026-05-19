@@ -65,6 +65,9 @@ const DEFAULT_FONT_SIZE = 14;
 const FORCE_MOUSE_MODE_ON_SEQUENCE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const RESET_MOUSE_MODE_SEQUENCE =
   "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l";
+const AUTO_MOUSE_FORCE_ON_DELAY_MS = 1500;
+const AUTO_MOUSE_RECOVERY_POLL_MS = 1000;
+const AUTO_MOUSE_RECOVERY_COOLDOWN_MS = 5000;
 
 /**
  * Narrow surface of `@xterm/xterm`'s `Terminal` actually consumed here.
@@ -125,6 +128,11 @@ export interface AttachOpts {
   sessionId: string;
   container: HTMLElement;
   wsToken: string;
+  /**
+   * When true, attach schedules a connect-time force-on and periodic
+   * off-state recovery for xterm mouse mode.
+   */
+  autoMouseModeRecovery?: boolean;
   /** Override xterm Terminal construction (tests). */
   createTerminal?: () => TerminalLike;
   /** Override FitAddon construction (tests). */
@@ -166,6 +174,7 @@ export interface TerminalHandle {
   refit(): void;
   setFontSize(px: number): void;
   getMouseTrackingMode(): MouseTrackingMode;
+  isMouseModeForced(): boolean;
   /** Debug helper: force xterm's local mouse mode on. */
   forceMouseModeOn(): void;
   /** Debug helper: clear xterm's local mouse mode flags. */
@@ -193,6 +202,9 @@ const NOOP_HANDLE: TerminalHandle = {
   setFontSize() {},
   getMouseTrackingMode() {
     return "unknown";
+  },
+  isMouseModeForced() {
+    return false;
   },
   forceMouseModeOn() {},
   resetMouseMode() {},
@@ -499,6 +511,7 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
     sessionId,
     container,
     wsToken,
+    autoMouseModeRecovery = false,
     createTerminal,
     createFitAddon,
     createSearchAddon,
@@ -522,10 +535,38 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
   let ws: WebSocketLike;
   let bindingDispose: () => void;
   let resizeObserver: ResizeObserver | null = null;
+  let mouseRecoveryInterval: ReturnType<typeof setInterval> | null = null;
   const timeoutHandles: unknown[] = [];
   let receivedData = false;
   let disposed = false;
+  let mouseModeForcedByUi = false;
+  let lastAutoMouseForceAtMs = 0;
   const isDisposed = () => disposed;
+  const applyForceMouseModeOn = (source: "manual" | "auto") => {
+    if (disposed) return;
+    term.write(FORCE_MOUSE_MODE_ON_SEQUENCE);
+    mouseModeForcedByUi = true;
+    if (source === "auto") {
+      lastAutoMouseForceAtMs = Date.now();
+    }
+  };
+  const applyResetMouseMode = () => {
+    if (disposed) return;
+    term.write(RESET_MOUSE_MODE_SEQUENCE);
+    mouseModeForcedByUi = false;
+  };
+  const maybeAutoRecoverMouseMode = () => {
+    if (disposed || !autoMouseModeRecovery) return;
+    const mode = readMouseTrackingMode(term);
+    if (mode !== "none") return;
+    mouseModeForcedByUi = false;
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const now = Date.now();
+    if (now - lastAutoMouseForceAtMs < AUTO_MOUSE_RECOVERY_COOLDOWN_MS) {
+      return;
+    }
+    applyForceMouseModeOn("auto");
+  };
 
   try {
     fitAddon = createFitAddon ? createFitAddon() : new FitAddon();
@@ -570,6 +611,12 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
           setTimeoutFn,
           handles: timeoutHandles,
         });
+        if (autoMouseModeRecovery) {
+          const handle = setTimeoutFn(() => {
+            maybeAutoRecoverMouseMode();
+          }, AUTO_MOUSE_FORCE_ON_DELAY_MS);
+          timeoutHandles.push(handle);
+        }
       },
       onError: reportError,
       onCloseAbnormal: reportError,
@@ -587,6 +634,13 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
   const refit = createRefitFn(fitAddon, ws);
   const onWindowResize = createWindowResizeHandler(term, fitAddon, ws);
   globalThis.addEventListener("resize", onWindowResize);
+  if (autoMouseModeRecovery) {
+    mouseRecoveryInterval = globalThis.setInterval(() => {
+      maybeAutoRecoverMouseMode();
+    }, AUTO_MOUSE_RECOVERY_POLL_MS);
+    const timer = mouseRecoveryInterval as { unref?: () => void };
+    if (typeof timer.unref === "function") timer.unref();
+  }
 
   const baseDispose = createDisposeFn({
     term,
@@ -601,6 +655,10 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
     },
   });
   const dispose = () => {
+    if (mouseRecoveryInterval !== null) {
+      globalThis.clearInterval(mouseRecoveryInterval);
+      mouseRecoveryInterval = null;
+    }
     if (resizeObserver) {
       try {
         resizeObserver.disconnect();
@@ -673,13 +731,15 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
       if (disposed) return "unknown";
       return readMouseTrackingMode(term);
     },
+    isMouseModeForced() {
+      if (disposed) return false;
+      return mouseModeForcedByUi;
+    },
     forceMouseModeOn() {
-      if (disposed) return;
-      term.write(FORCE_MOUSE_MODE_ON_SEQUENCE);
+      applyForceMouseModeOn("manual");
     },
     resetMouseMode() {
-      if (disposed) return;
-      term.write(RESET_MOUSE_MODE_SEQUENCE);
+      applyResetMouseMode();
     },
     nudge() {
       if (disposed) return;

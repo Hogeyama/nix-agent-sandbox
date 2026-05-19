@@ -95,12 +95,14 @@ export interface TerminalToolbarProps {
 
 const ERROR_TIMEOUT_MS = 5000;
 const MOUSE_MODE_POLL_MS = 250;
-type DisplayMouseMode = "on" | "off" | "n/a";
+type DisplayMouseMode = "on" | "on (forced)" | "off" | "n/a";
 
-function readMouseModeFromDom(): DisplayMouseMode {
-  const xterm = document.querySelector(".terminal-slot:not([hidden]) .xterm");
-  if (!(xterm instanceof HTMLElement)) return "n/a";
-  return xterm.classList.contains("enable-mouse-events") ? "on" : "off";
+function describeMouseMode(handle: TerminalHandle | null): DisplayMouseMode {
+  if (!handle) return "n/a";
+  const mode = handle.getMouseTrackingMode();
+  if (mode === "unknown") return "n/a";
+  if (mode === "none") return "off";
+  return handle.isMouseModeForced() ? "on (forced)" : "on";
 }
 
 export function TerminalToolbar(props: TerminalToolbarProps) {
@@ -125,16 +127,17 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   });
 
   // Debug-only mouse-mode indicator. Polling keeps this surface simple:
-  // xterm toggles `enable-mouse-events` on `.xterm` when a mouse tracking
-  // protocol is active. For debug visibility, poll that class and mirror
-  // the state in the lower bar.
+  // xterm updates mouse mode while parsing terminal output. Poll the
+  // current handle so the lower bar reflects both app-driven and
+  // UI-forced states.
   createEffect(() => {
     const id = props.activeTerminalId();
     if (!id) {
       setMouseMode("n/a");
       return;
     }
-    const tick = () => setMouseMode(readMouseModeFromDom());
+    const tick = () =>
+      setMouseMode(describeMouseMode(props.activeTerminalHandle()));
     tick();
     const interval = setInterval(tick, MOUSE_MODE_POLL_MS);
     onCleanup(() => clearInterval(interval));
@@ -173,7 +176,7 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   const mouseModeLabel = createMemo(() => `mouse: ${mouseMode()}`);
   const refreshMouseModeSoon = () => {
     globalThis.requestAnimationFrame(() => {
-      setMouseMode(readMouseModeFromDom());
+      setMouseMode(describeMouseMode(props.activeTerminalHandle()));
     });
   };
 

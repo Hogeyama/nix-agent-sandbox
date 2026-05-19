@@ -150,6 +150,7 @@ export function TerminalPane(props: Props) {
         sessionId,
         container: slot,
         wsToken: token,
+        autoMouseModeRecovery: true,
         onError: (msg) => setErrorMessage(msg),
       });
     } catch (e) {

@@ -542,6 +542,7 @@ describe("attachTerminalSession", () => {
     expect(() => handle.focus()).not.toThrow();
     expect(() => handle.refit()).not.toThrow();
     expect(() => handle.setFontSize(20)).not.toThrow();
+    expect(() => handle.isMouseModeForced()).not.toThrow();
     expect(() => handle.forceMouseModeOn()).not.toThrow();
     expect(() => handle.resetMouseMode()).not.toThrow();
   });
@@ -609,6 +610,7 @@ describe("attachTerminalSession", () => {
     handle.forceMouseModeOn();
     expect(fakeTerm.writes).toHaveLength(1);
     expect(fakeTerm.writes[0]).toBe(FORCE_MOUSE_MODE_ON_SEQUENCE);
+    expect(handle.isMouseModeForced()).toBe(true);
   });
 
   test("resetMouseMode writes the debug DECRST sequence into xterm", () => {
@@ -624,9 +626,68 @@ describe("attachTerminalSession", () => {
       createWebSocket: () => sock,
     });
 
+    expect(handle.isMouseModeForced()).toBe(false);
     handle.resetMouseMode();
     expect(fakeTerm.writes).toHaveLength(1);
     expect(fakeTerm.writes[0]).toBe(RESET_MOUSE_MODE_SEQUENCE);
+    expect(handle.isMouseModeForced()).toBe(false);
+  });
+
+  test("auto recovery forces mouse mode on after connect grace when mode stays off", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const timer = makeFakeTimer();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      autoMouseModeRecovery: true,
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+      setTimeoutFn: timer.setTimeoutFn.bind(timer),
+      clearTimeoutFn: timer.clearTimeoutFn.bind(timer),
+    });
+
+    sock.fireOpen();
+    const autoForce = timer.scheduled.find(
+      (entry) => entry.ms === 1500 && !entry.cancelled,
+    );
+    expect(autoForce).toBeDefined();
+    autoForce?.fn();
+    expect(fakeTerm.writes).toContain(FORCE_MOUSE_MODE_ON_SEQUENCE);
+    expect(handle.isMouseModeForced()).toBe(true);
+    handle.dispose();
+  });
+
+  test("auto recovery does not force when app already enabled mouse mode", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const timer = makeFakeTimer();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      autoMouseModeRecovery: true,
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+      setTimeoutFn: timer.setTimeoutFn.bind(timer),
+      clearTimeoutFn: timer.clearTimeoutFn.bind(timer),
+    });
+
+    sock.fireOpen();
+    fakeTerm.setMouseTrackingMode("drag");
+    const autoForce = timer.scheduled.find(
+      (entry) => entry.ms === 1500 && !entry.cancelled,
+    );
+    expect(autoForce).toBeDefined();
+    autoForce?.fn();
+    expect(fakeTerm.writes).toEqual([]);
+    expect(handle.isMouseModeForced()).toBe(false);
+    handle.dispose();
   });
 
   test("nudge brackets fontSize and refits, leaving the size unchanged", () => {
