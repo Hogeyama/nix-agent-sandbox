@@ -76,6 +76,7 @@ export type TerminalLike = Pick<
   | "onResize"
   | "loadAddon"
   | "focus"
+  | "modes"
   | "options"
   | "write"
   | "rows"
@@ -149,10 +150,19 @@ export interface TerminalSearchHandle {
   clear(): void;
 }
 
+export type MouseTrackingMode =
+  | "none"
+  | "x10"
+  | "vt200"
+  | "drag"
+  | "any"
+  | "unknown";
+
 export interface TerminalHandle {
   focus(): void;
   refit(): void;
   setFontSize(px: number): void;
+  getMouseTrackingMode(): MouseTrackingMode;
   /**
    * Bracket the font size (-1, then back) so xterm rebuilds its glyph
    * cache and renderer state against the now-visible viewport. Mirrors
@@ -174,6 +184,9 @@ const NOOP_HANDLE: TerminalHandle = {
   focus() {},
   refit() {},
   setFontSize() {},
+  getMouseTrackingMode() {
+    return "unknown";
+  },
   nudge() {},
   dispose() {},
   search: NOOP_SEARCH_HANDLE,
@@ -272,6 +285,19 @@ function armDtachInitialResizeNudge(deps: {
     handles.push(inner);
   }, 1000);
   handles.push(outer);
+}
+
+function readMouseTrackingMode(term: TerminalLike): MouseTrackingMode {
+  switch (term.modes.mouseTrackingMode) {
+    case "none":
+    case "x10":
+    case "vt200":
+    case "drag":
+    case "any":
+      return term.modes.mouseTrackingMode;
+    default:
+      return "unknown";
+  }
 }
 
 /**
@@ -633,6 +659,10 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
       if (disposed) return;
       term.options.fontSize = px;
       refit();
+    },
+    getMouseTrackingMode() {
+      if (disposed) return "unknown";
+      return readMouseTrackingMode(term);
     },
     nudge() {
       if (disposed) return;

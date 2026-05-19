@@ -32,6 +32,7 @@ import {
   attachTerminalSession,
   buildWsUrl,
   type FitAddonLike,
+  type MouseTrackingMode,
   type SearchAddonLike,
   type TerminalLike,
   type WebSocketLike,
@@ -49,6 +50,7 @@ function makeFakeTerminal(overrides?: { dispose?: () => void }): {
   term: TerminalLike;
   emitData(s: string): void;
   emitResize(cols: number, rows: number): void;
+  setMouseTrackingMode(mode: Exclude<MouseTrackingMode, "unknown">): void;
   openCalls: HTMLElement[];
   disposed: boolean;
   options: FakeTerminalOptions;
@@ -62,6 +64,7 @@ function makeFakeTerminal(overrides?: { dispose?: () => void }): {
     openCalls: [] as HTMLElement[],
     disposed: false,
     options: { fontSize: 14 } as FakeTerminalOptions,
+    mouseTrackingMode: "none" as Exclude<MouseTrackingMode, "unknown">,
     focusCalls: 0,
     writes: [] as (string | Uint8Array)[],
     loadedAddons: [] as unknown[],
@@ -96,6 +99,11 @@ function makeFakeTerminal(overrides?: { dispose?: () => void }): {
     focus() {
       state.focusCalls += 1;
     },
+    modes: {
+      get mouseTrackingMode() {
+        return state.mouseTrackingMode;
+      },
+    } as TerminalLike["modes"],
     options: state.options,
     write(data: string | Uint8Array) {
       state.writes.push(data);
@@ -110,6 +118,9 @@ function makeFakeTerminal(overrides?: { dispose?: () => void }): {
     },
     emitResize(cols, rows) {
       if (resizeListener) resizeListener({ cols, rows });
+    },
+    setMouseTrackingMode(mode) {
+      state.mouseTrackingMode = mode;
     },
     get openCalls() {
       return state.openCalls;
