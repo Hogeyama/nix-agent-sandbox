@@ -40,6 +40,9 @@ import {
 
 type Disposable = { dispose: () => void };
 type Listener<T> = (e: T) => void;
+const FORCE_MOUSE_MODE_ON_SEQUENCE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const RESET_MOUSE_MODE_SEQUENCE =
+  "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l";
 
 interface FakeTerminalOptions {
   fontSize?: number;
@@ -539,6 +542,8 @@ describe("attachTerminalSession", () => {
     expect(() => handle.focus()).not.toThrow();
     expect(() => handle.refit()).not.toThrow();
     expect(() => handle.setFontSize(20)).not.toThrow();
+    expect(() => handle.forceMouseModeOn()).not.toThrow();
+    expect(() => handle.resetMouseMode()).not.toThrow();
   });
 
   test("dispose surfaces term.dispose() failures through onError", () => {
@@ -586,6 +591,42 @@ describe("attachTerminalSession", () => {
     handle.setFontSize(20);
     expect(fakeTerm.options.fontSize).toBe(20);
     expect(fitFit).toHaveBeenCalled();
+  });
+
+  test("forceMouseModeOn writes the debug DECSET sequence into xterm", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+    });
+
+    handle.forceMouseModeOn();
+    expect(fakeTerm.writes).toHaveLength(1);
+    expect(fakeTerm.writes[0]).toBe(FORCE_MOUSE_MODE_ON_SEQUENCE);
+  });
+
+  test("resetMouseMode writes the debug DECRST sequence into xterm", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+    });
+
+    handle.resetMouseMode();
+    expect(fakeTerm.writes).toHaveLength(1);
+    expect(fakeTerm.writes[0]).toBe(RESET_MOUSE_MODE_SEQUENCE);
   });
 
   test("nudge brackets fontSize and refits, leaving the size unchanged", () => {

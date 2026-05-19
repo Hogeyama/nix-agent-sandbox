@@ -62,6 +62,9 @@ export const THEME_DARK = {
 const FONT_FAMILY =
   "'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace";
 const DEFAULT_FONT_SIZE = 14;
+const FORCE_MOUSE_MODE_ON_SEQUENCE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const RESET_MOUSE_MODE_SEQUENCE =
+  "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l";
 
 /**
  * Narrow surface of `@xterm/xterm`'s `Terminal` actually consumed here.
@@ -163,6 +166,10 @@ export interface TerminalHandle {
   refit(): void;
   setFontSize(px: number): void;
   getMouseTrackingMode(): MouseTrackingMode;
+  /** Debug helper: force xterm's local mouse mode on. */
+  forceMouseModeOn(): void;
+  /** Debug helper: clear xterm's local mouse mode flags. */
+  resetMouseMode(): void;
   /**
    * Bracket the font size (-1, then back) so xterm rebuilds its glyph
    * cache and renderer state against the now-visible viewport. Mirrors
@@ -187,6 +194,8 @@ const NOOP_HANDLE: TerminalHandle = {
   getMouseTrackingMode() {
     return "unknown";
   },
+  forceMouseModeOn() {},
+  resetMouseMode() {},
   nudge() {},
   dispose() {},
   search: NOOP_SEARCH_HANDLE,
@@ -663,6 +672,14 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
     getMouseTrackingMode() {
       if (disposed) return "unknown";
       return readMouseTrackingMode(term);
+    },
+    forceMouseModeOn() {
+      if (disposed) return;
+      term.write(FORCE_MOUSE_MODE_ON_SEQUENCE);
+    },
+    resetMouseMode() {
+      if (disposed) return;
+      term.write(RESET_MOUSE_MODE_SEQUENCE);
     },
     nudge() {
       if (disposed) return;
