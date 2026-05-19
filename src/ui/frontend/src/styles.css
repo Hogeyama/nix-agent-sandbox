@@ -753,13 +753,6 @@ body::after {
   border-color: var(--amber);
 }
 
-.term-mouse-mode {
-  color: var(--muted-2);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
-}
-
 .toolbar-error {
   color: var(--rose);
   font-size: 11px;

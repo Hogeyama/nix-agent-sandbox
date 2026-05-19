@@ -1,7 +1,6 @@
 /**
  * Center-pane toolbar that surfaces the keep-alive terminal layer's
- * affordances: Ack turn, Shell toggle, Search, font-size, debug mouse
- * mode, and Stop
+ * affordances: Ack turn, Shell toggle, Search, font-size, and Stop
  * container.
  *
  * The component is rendering-only for the rules it depends on: visibility
@@ -94,16 +93,6 @@ export interface TerminalToolbarProps {
 }
 
 const ERROR_TIMEOUT_MS = 5000;
-const MOUSE_MODE_POLL_MS = 250;
-type DisplayMouseMode = "on" | "on (forced)" | "off" | "n/a";
-
-function describeMouseMode(handle: TerminalHandle | null): DisplayMouseMode {
-  if (!handle) return "n/a";
-  const mode = handle.getMouseTrackingMode();
-  if (mode === "unknown") return "n/a";
-  if (mode === "none") return "off";
-  return "on";
-}
 
 export function TerminalToolbar(props: TerminalToolbarProps) {
   const [acking, setAcking] = createSignal(false);
@@ -112,7 +101,6 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
   const [fontSize, setFontSize] = createSignal(FONT_SIZE_DEFAULT);
   const [searchOpen, setSearchOpen] = createSignal(false);
   const [searchQuery, setSearchQuery] = createSignal("");
-  const [mouseMode, setMouseMode] = createSignal<DisplayMouseMode>("n/a");
 
   // Reset the search affordance whenever the active terminal changes so a
   // query typed against one terminal does not survive into the next.
@@ -124,23 +112,6 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
     setSearchOpen(false);
     setSearchQuery("");
     props.activeTerminalHandle()?.search.clear();
-  });
-
-  // Debug-only mouse-mode indicator. Polling keeps this surface simple:
-  // xterm updates mouse mode while parsing terminal output. Poll the
-  // current handle so the lower bar reflects both app-driven and
-  // UI-forced states.
-  createEffect(() => {
-    const id = props.activeTerminalId();
-    if (!id) {
-      setMouseMode("n/a");
-      return;
-    }
-    const tick = () =>
-      setMouseMode(describeMouseMode(props.activeTerminalHandle()));
-    tick();
-    const interval = setInterval(tick, MOUSE_MODE_POLL_MS);
-    onCleanup(() => clearInterval(interval));
   });
 
   // Auto-clear surfaced errors after `ERROR_TIMEOUT_MS` so a transient
@@ -172,8 +143,6 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
       props.shellSpawnInFlight(row.id),
     );
   });
-
-  const mouseModeLabel = createMemo(() => `mouse: ${mouseMode()}`);
 
   const handleShellToggleClick = async () => {
     const row = props.contextAgentRow();
@@ -329,7 +298,6 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
           aria-label="Search terminal output"
         />
       </Show>
-      <span class="term-mouse-mode">{mouseModeLabel()}</span>
       <span class="spacer" />
       <span class="fontsize">
         <button
