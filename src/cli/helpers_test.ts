@@ -127,6 +127,14 @@ test("parseLogLevel: default is info", () => {
   expect(parseLogLevel(["--other-flag"])).toEqual("info");
 });
 
+test("parseLogLevel: --verbose produces debug", () => {
+  expect(parseLogLevel(["--verbose"])).toEqual("debug");
+});
+
+test("parseLogLevel: -v produces debug", () => {
+  expect(parseLogLevel(["-v"])).toEqual("debug");
+});
+
 // ---------------------------------------------------------------------------
 // findFirstNonFlagArg
 // ---------------------------------------------------------------------------
@@ -177,6 +185,11 @@ test("findFirstNonFlagArg: skips standalone --quiet/--no-worktree/--no-open", ()
   expect(
     findFirstNonFlagArg(["--quiet", "--no-worktree", "--no-open", "profile"]),
   ).toEqual("profile");
+});
+
+test("findFirstNonFlagArg: skips --verbose and -v", () => {
+  expect(findFirstNonFlagArg(["--verbose", "profile"])).toEqual("profile");
+  expect(findFirstNonFlagArg(["-v", "profile"])).toEqual("profile");
 });
 
 test("findFirstNonFlagArg: undefined when only flags present", () => {

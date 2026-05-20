@@ -33,6 +33,7 @@ Options:
   -h, --help      Show this help
   -V, --version   Show version
   -q, --quiet     Suppress info logs
+  -v, --verbose   Show debug logs (stage timing, etc.)
   -b, --worktree <branch>  Create a git worktree for this session and base it on <branch>.
                            Use @ or HEAD for the current HEAD.
                            (This is a per-run option, not the same as the 'worktree' subcommand.)

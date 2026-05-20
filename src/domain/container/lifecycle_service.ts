@@ -49,6 +49,7 @@ import {
   isNasManagedContainer,
   NAS_SESSION_ID_LABEL,
 } from "../../docker/nas_resources.ts";
+import { formatElapsed, logDebug } from "../../log.ts";
 import { DockerService, DockerServiceLive } from "../../services/docker.ts";
 import { SessionLaunchService, SessionLaunchServiceLive } from "../launch.ts";
 import { SessionUiServiceLive } from "../session.ts";
@@ -180,17 +181,31 @@ export const ContainerLifecycleServiceLive: Layer.Layer<
 
       cleanContainers: (terminalRuntimeDir) =>
         Effect.gen(function* () {
+          const totalStart = performance.now();
+
           const backend = makeBackendFromDockerService(docker);
           const result = yield* Effect.tryPromise({
             try: () => cleanNasContainers(backend),
             catch: (e) => (e instanceof Error ? e : new Error(String(e))),
           });
-          // `removeOrphanShellSockets` は docker 依存を切り離した契約なので、
-          // running parent 集合は ContainerQueryService 経由で取得する。
+
+          let start = performance.now();
           const runningParents = yield* query.collectRunningParentIds();
+          logDebug(
+            `[nas]   ↳ collectRunningParentIds done (${formatElapsed(start)})`,
+          );
+
+          start = performance.now();
           yield* launch.removeOrphanShellSockets(
             terminalRuntimeDir,
             runningParents,
+          );
+          logDebug(
+            `[nas]   ↳ removeOrphanShellSockets done (${formatElapsed(start)})`,
+          );
+
+          logDebug(
+            `[nas] cleanContainers total (${formatElapsed(totalStart)})`,
           );
           return result;
         }),

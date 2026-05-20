@@ -3,6 +3,7 @@
  */
 
 import { InterruptedCommandError } from "../docker/client.ts";
+import type { LogLevel } from "../log.ts";
 
 export function exitOnCliError(err: unknown): never {
   if (err instanceof InterruptedCommandError) {
@@ -45,7 +46,7 @@ export function positionalArgsAfterSubcommand(
   return [positional[0], positional[1]];
 }
 
-export type LogLevel = "info" | "warn";
+export type { LogLevel };
 
 export function hasFormatJson(args: string[]): boolean {
   return (
@@ -55,7 +56,9 @@ export function hasFormatJson(args: string[]): boolean {
 }
 
 export function parseLogLevel(args: string[]): LogLevel {
-  return args.includes("--quiet") || args.includes("-q") ? "warn" : "info";
+  if (args.includes("--quiet") || args.includes("-q")) return "warn";
+  if (args.includes("--verbose") || args.includes("-v")) return "debug";
+  return "info";
 }
 
 export function findFirstNonFlagArg(args: string[]): string | undefined {
@@ -79,6 +82,7 @@ export function findFirstNonFlagArg(args: string[]): string | undefined {
       continue;
     }
     if (arg === "--quiet" || arg === "-q") continue;
+    if (arg === "--verbose" || arg === "-v") continue;
     if (arg.startsWith("-b") && arg.length > 2) continue;
     if (arg === "--no-worktree") continue;
     if (arg === "--no-open") continue;

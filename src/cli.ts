@@ -40,7 +40,7 @@ import {
   shouldRecordInvocation,
 } from "./history/cli_lifecycle.ts";
 import { checkNotifySend, resolveNotifyBackend } from "./lib/notify_utils.ts";
-import { setLogLevel } from "./log.ts";
+import { formatElapsed, logDebug, setLogLevel } from "./log.ts";
 import { buildHostEnv, resolveProbes } from "./pipeline/host_env.ts";
 import { createPipelineBuilder } from "./pipeline/stage_builder.ts";
 import type { PipelineState } from "./pipeline/state.ts";
@@ -102,7 +102,8 @@ import { ensureUiDaemon } from "./ui/daemon.ts";
 
 const VERSION: string = pkg.version;
 
-export async function main(args: string[]): Promise<void> {
+export async function main(args: string[], entryMs?: number): Promise<void> {
+  const mainStart = performance.now();
   // `--` 以降は常にエージェントに渡す引数。profile 名の後ろも同様に agent 引数として扱う。
   const dashDashIdx = args.indexOf("--");
   const argsBeforeDashDash =
@@ -110,6 +111,11 @@ export async function main(args: string[]): Promise<void> {
   const explicitAgentArgs = dashDashIdx >= 0 ? args.slice(dashDashIdx + 1) : [];
   const logLevel = parseLogLevel(argsBeforeDashDash);
   setLogLevel(logLevel);
+
+  if (entryMs !== undefined) {
+    logDebug(`[nas] Module import (${Math.round(mainStart - entryMs)}ms)`);
+  }
+  logDebug(`[nas] Bun startup → main() entry (${Math.round(mainStart)}ms)`);
 
   // サブコマンド処理
   const subcommand = findFirstNonFlagArg(argsBeforeDashDash);
@@ -217,7 +223,9 @@ export async function main(args: string[]): Promise<void> {
   }
 
   try {
+    let phaseStart = performance.now();
     const config = await loadConfig();
+    logDebug(`[nas] loadConfig done (${formatElapsed(phaseStart)})`);
     const { name, profile } = resolveProfile(config, profileName);
     const effectiveProfile = applyWorktreeOverride(profile, worktreeOverride);
     const sessionId = process.env.NAS_SESSION_ID || `sess_${randomHex(6)}`;
@@ -225,6 +233,7 @@ export async function main(args: string[]): Promise<void> {
     // session.multiplex かつ dtach 内でなければ、nas 自体を dtach でラップして再実行
     if (effectiveProfile.session.multiplex && !process.env.NAS_INSIDE_DTACH) {
       await runInsideDtach(sessionId, effectiveProfile.session.detachKey, args);
+      logDebug(`[nas] main() total (${formatElapsed(mainStart)})`);
       return;
     }
 
@@ -240,8 +249,10 @@ export async function main(args: string[]): Promise<void> {
     // propagate and abort the pipeline. This matches legacy stage behavior
     // where the same I/O happens inside each stage's execute().
     // NOTE: Probes are passed to StageInput and consumed by stages.
+    phaseStart = performance.now();
     const hostEnv = buildHostEnv();
     const probes = await resolveProbes(hostEnv);
+    logDebug(`[nas] resolveProbes done (${formatElapsed(phaseStart)})`);
 
     // notify-send の存在チェック（必要な場合のみ）
     {
@@ -257,22 +268,28 @@ export async function main(args: string[]): Promise<void> {
     }
 
     if (config.ui.enable) {
+      phaseStart = performance.now();
       await ensureUiDaemon({
         port: config.ui.port,
         idleTimeout: config.ui.idleTimeout,
       });
+      logDebug(`[nas] ensureUiDaemon done (${formatElapsed(phaseStart)})`);
     }
 
     // MountProbes を事前解決
+    phaseStart = performance.now();
     const mountProbes = await resolveMountProbes(
       hostEnv,
       effectiveProfile,
       process.cwd(),
       probes.gpgAgentSocket,
     );
+    logDebug(`[nas] resolveMountProbes done (${formatElapsed(phaseStart)})`);
 
     // BuildProbes を事前解決
+    phaseStart = performance.now();
     const buildProbes = await resolveBuildProbes(imageName);
+    logDebug(`[nas] resolveBuildProbes done (${formatElapsed(phaseStart)})`);
 
     const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
     const dockerLayer = DockerServiceLive;
@@ -351,6 +368,7 @@ export async function main(args: string[]): Promise<void> {
         exitOnCliError(error);
       }
       recordInvocationEnd(historyDb, { sessionId, exitReason: "ok" });
+      logDebug(`[nas] main() total (${formatElapsed(mainStart)})`);
     } catch (err) {
       recordInvocationEnd(historyDb, { sessionId, exitReason: "error" });
       throw err;
@@ -428,7 +446,10 @@ async function runInsideDtach(
     );
   }
 
+  let start = performance.now();
   await gcDtachRuntime();
+  logDebug(`[nas] gcDtachRuntime done (${formatElapsed(start)})`);
+
   const socketPath = socketPathFor(sessionId);
 
   // process.execPath で実際のバイナリパスを使う（Bun コンパイル済みだと
@@ -441,6 +462,7 @@ async function runInsideDtach(
   );
 
   // 1. master を -n で起動（即座に detach 状態になる）
+  start = performance.now();
   await dtachNewSession(socketPath, nasCommand, {
     env: {
       ...process.env,
@@ -448,9 +470,12 @@ async function runInsideDtach(
       NAS_SESSION_ID: sessionId,
     },
   });
+  logDebug(`[nas] dtachNewSession done (${formatElapsed(start)})`);
 
   // 2. ユーザーのターミナルを -a で attach
+  start = performance.now();
   await dtachAttach(socketPath, detachKey);
+  logDebug(`[nas] dtachAttach done (${formatElapsed(start)})`);
 
   console.log(`[nas] Detached. Reattach with: nas session attach ${sessionId}`);
 }

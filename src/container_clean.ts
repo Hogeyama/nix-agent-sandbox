@@ -7,6 +7,7 @@ import {
   isNasManagedSidecar,
   isNasManagedTmpVolume,
 } from "./docker/nas_resources.ts";
+import { formatElapsed, logDebug } from "./log.ts";
 
 export interface ContainerCleanResult {
   removedContainers: string[];
@@ -34,8 +35,16 @@ export interface ContainerCleanBackend {
 export async function cleanNasContainers(
   backend: ContainerCleanBackend,
 ): Promise<ContainerCleanResult> {
+  const totalStart = performance.now();
+
+  let start = performance.now();
   const containers = await loadContainers(backend);
+  logDebug(`[nas]   ↳ loadContainers done (${formatElapsed(start)})`);
+
+  start = performance.now();
   const networks = await loadNetworks(backend);
+  logDebug(`[nas]   ↳ loadNetworks done (${formatElapsed(start)})`);
+
   const containerMap = new Map(
     containers.map((container) => [container.name, container]),
   );
@@ -47,6 +56,7 @@ export async function cleanNasContainers(
     isNasManagedSidecar(container.labels, container.name),
   );
 
+  start = performance.now();
   const removedContainers: string[] = [];
   for (const container of managedSidecars) {
     if (!isUnusedNasSidecar(container, containerMap, networkMap)) {
@@ -58,9 +68,17 @@ export async function cleanNasContainers(
     await backend.removeContainer(container.name);
     removedContainers.push(container.name);
   }
+  logDebug(`[nas]   ↳ removeSidecars done (${formatElapsed(start)})`);
 
+  start = performance.now();
   const removedNetworks = await removeUnusedNetworks(backend);
+  logDebug(`[nas]   ↳ removeUnusedNetworks done (${formatElapsed(start)})`);
+
+  start = performance.now();
   const removedVolumes = await removeUnusedVolumes(backend);
+  logDebug(`[nas]   ↳ removeUnusedVolumes done (${formatElapsed(start)})`);
+
+  logDebug(`[nas] cleanNasContainers done (${formatElapsed(totalStart)})`);
 
   return {
     removedContainers,
