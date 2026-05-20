@@ -496,7 +496,7 @@ export async function dockerLogs(
 /** すべてのコンテナ名を取得 */
 export async function dockerListContainerNames(): Promise<string[]> {
   const fmt = "{{.Names}}";
-  const result = await $`docker ps -a --format=${fmt}`.quiet();
+  const result = await $`docker ps --format=${fmt}`.quiet();
   return splitNonEmptyLines(result.stdout.toString());
 }
 
