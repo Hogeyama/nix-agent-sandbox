@@ -6,6 +6,7 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
+import { parseShellSessionId } from "../../../shell_session_id";
 import type { SessionsStore } from "../stores/sessionsStore";
 import { resolveContextAgentRow } from "../stores/shellMapping";
 import type { TerminalsStore } from "../stores/terminalsStore";
@@ -150,7 +151,7 @@ export function TerminalPane(props: Props) {
         sessionId,
         container: slot,
         wsToken: token,
-        autoMouseModeRecovery: true,
+        autoMouseModeRecovery: parseShellSessionId(sessionId) === null,
         onError: (msg) => setErrorMessage(msg),
       });
     } catch (e) {
