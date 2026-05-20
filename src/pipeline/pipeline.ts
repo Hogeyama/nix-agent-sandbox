@@ -3,7 +3,7 @@
  */
 
 import { Effect, type Scope } from "effect";
-import { logInfo } from "../log.ts";
+import { formatElapsed, logDebug, logInfo } from "../log.ts";
 import type { Stage as PipelineStateStage } from "./stage_builder.ts";
 import type { PipelineState, SliceKey } from "./state.ts";
 import type { StageServices } from "./types.ts";
@@ -81,13 +81,22 @@ export function runPipelineState<
 > {
   const pipeline = Effect.gen(function* () {
     let current: Partial<PipelineState> = { ...initial };
+    const pipelineStart = performance.now();
 
     for (const stage of stages) {
       yield* Effect.sync(() => logInfo(`[nas] Running stage: ${stage.name}`));
+      const stageStart = performance.now();
       const stageInput = pickPipelineStateInput(stage, current);
       const result = yield* stage.run(stageInput);
       current = { ...current, ...result };
+      yield* Effect.sync(() =>
+        logDebug(`[nas]   ↳ ${stage.name} done (${formatElapsed(stageStart)})`),
+      );
     }
+
+    yield* Effect.sync(() =>
+      logDebug(`[nas] Pipeline completed (${formatElapsed(pipelineStart)})`),
+    );
 
     return current;
   });

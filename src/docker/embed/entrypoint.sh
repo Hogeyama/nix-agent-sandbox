@@ -37,9 +37,56 @@ nas_info() {
   echo "$@"
 }
 
+nas_debug_enabled=false
+if [ "$NAS_LOG_LEVEL" = "debug" ]; then
+  nas_debug_enabled=true
+fi
+
+nas_debug() {
+  if [ "$nas_debug_enabled" != "true" ]; then
+    return 0
+  fi
+  echo "$@" >&2
+}
+
+nas_now_ms() {
+  date +%s%3N
+}
+
+nas_measure_start() {
+  if [ "$nas_debug_enabled" != "true" ]; then
+    return 0
+  fi
+  nas_now_ms
+}
+
+nas_measure_done() {
+  if [ "$nas_debug_enabled" != "true" ]; then
+    return 0
+  fi
+  local label="$1"
+  local started_at="${2:-}"
+  if [ -z "$started_at" ]; then
+    return 0
+  fi
+  local ended_at elapsed
+  ended_at="$(nas_now_ms)"
+  elapsed=$((ended_at - started_at))
+  nas_debug "[nas]   ↳ entrypoint:${label} done (${elapsed}ms)"
+}
+
+exec_nas() {
+  nas_measure_done "total" "${ENTRYPOINT_TOTAL_START:-}"
+  exec "$@"
+}
+
+ENTRYPOINT_TOTAL_START="$(nas_measure_start)"
+nas_debug "[nas] entrypoint start (shell_mode=${NAS_SHELL_MODE}, nix_enabled=${NIX_ENABLED:-false})"
+
 # --- 環境変数 prefix/suffix 適用 ---
 # Nix devShell が同名の変数を上書きするため、ここでは eval せず
 # ファイルに保存し、各 exec パスで nix 環境 source 後に適用する。
+ENV_OPS_START="$(nas_measure_start)"
 NAS_ENV_OPS_FILE=""
 if [ -n "${NAS_ENV_OPS:-}" ]; then
   NAS_ENV_OPS_FILE="$(mktemp /tmp/nas-env-ops.XXXXXX)"
@@ -54,8 +101,10 @@ EOFDEF
   chmod 644 "$NAS_ENV_OPS_FILE"
   unset NAS_ENV_OPS
 fi
+nas_measure_done "env-ops" "$ENV_OPS_START"
 
 # --- Nix セットアップ ---
+NIX_SETUP_START="$(nas_measure_start)"
 if [ "${NIX_ENABLED:-false}" = "true" ] && [ -n "${NIX_BIN_PATH:-}" ]; then
   # ホストの nix バイナリ (/nix/store/... 内) へのシンボリックリンクを作成
   ln -sf "$NIX_BIN_PATH" /usr/local/bin/nix
@@ -68,6 +117,7 @@ if [ "$NAS_SHELL_MODE" != "true" ] && \
   mkdir -p /etc/nix
   cp "$NIX_CONF_PATH" /etc/nix/nix.conf
 fi
+nas_measure_done "nix-setup" "$NIX_SETUP_START"
 
 # --- ユーザーセットアップ ---
 NAS_UID="${NAS_UID:-0}"
@@ -76,6 +126,7 @@ NAS_USER="${NAS_USER:-${USER:-nas}}"
 NAS_HOME="/home/${NAS_USER}"
 WORKSPACE="${WORKSPACE:?WORKSPACE must be set}"
 
+USER_SETUP_START="$(nas_measure_start)"
 if [ "$NAS_UID" != "0" ]; then
   # 同じ UID/GID を持つ既存エントリを削除 (ubuntu:24.04 のデフォルト ubuntu ユーザー等)
   EXISTING_USER=$(awk -F: -v uid="$NAS_UID" '$3 == uid {print $1}' /etc/passwd)
@@ -136,6 +187,7 @@ if [ "$NAS_UID" != "0" ]; then
 else
   EXEC_PREFIX=()
 fi
+nas_measure_done "user-setup" "$USER_SETUP_START"
 
 # git safe.directory を設定
 # env var 方式: 直接実行されるコマンド向け
@@ -154,14 +206,17 @@ append_git_config_env() {
   export "${value_var}=${value}"
 }
 
+GIT_SETUP_START="$(nas_measure_start)"
 append_git_config_env "safe.directory" "$WORKSPACE"
 # /etc/gitconfig 方式: nix が内部で git を呼ぶ際に env var が渡らないため
 git config --system safe.directory "$WORKSPACE"
+nas_measure_done "git-safe-directory" "$GIT_SETUP_START"
 
 # --- ローカル認証プロキシ ---
 # NAS_UPSTREAM_PROXY が設定されている場合、認証代行ローカルプロキシを起動し
 # http_proxy/https_proxy を localhost:18080 に書き換える。
 # --shell モードでは初回起動時の proxy が既に走っているため env のみ書き換える。
+LOCAL_PROXY_SETUP_START="$(nas_measure_start)"
 if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
   if [ "$NAS_SHELL_MODE" != "true" ]; then
     bun /usr/local/bin/local-proxy.mjs &
@@ -185,6 +240,7 @@ if [ -n "${NAS_UPSTREAM_PROXY:-}" ]; then
   export HTTP_PROXY="http://127.0.0.1:18080"
   export HTTPS_PROXY="http://127.0.0.1:18080"
 fi
+nas_measure_done "local-proxy" "$LOCAL_PROXY_SETUP_START"
 
 # --- エージェントコマンド ---
 AGENT_COMMAND=("${@}")
@@ -206,6 +262,7 @@ fi
 # エージェント用の経路は入出力を expr/exec で回しているため、そのまま bash -i
 # を流すと source 結果や set オプションとの相互作用で無言即死しうる。
 # シェルは会話的に使えればよいので最短経路にする。
+SHELL_BOOTSTRAP_START="$(nas_measure_start)"
 if [ "$NAS_SHELL_MODE" = "true" ]; then
   NAS_BASH_OVERRIDE_DIR="/tmp/nas-bash-override"
   mkdir -p "$NAS_BASH_OVERRIDE_DIR"
@@ -227,6 +284,11 @@ if [ "$NAS_SHELL_MODE" = "true" ]; then
     fi
   fi
   if [ -n "$SHELL_CACHE_FILE" ]; then
+    nas_debug "[nas] entrypoint shell bootstrap (cache=hit)"
+  else
+    nas_debug "[nas] entrypoint shell bootstrap (cache=miss)"
+  fi
+  if [ -n "$SHELL_CACHE_FILE" ]; then
     SHELL_RC_FILE="$(mktemp "/tmp/nas-shell-rc-${NAS_UID}.XXXXXX")"
     {
       echo "source '$SHELL_CACHE_FILE' 2>/dev/null || true"
@@ -237,23 +299,33 @@ if [ "$NAS_SHELL_MODE" = "true" ]; then
       echo "[ -f ~/.bashrc ] && source ~/.bashrc"
     } >"$SHELL_RC_FILE"
     chown "${NAS_UID}:${NAS_GID}" "$SHELL_RC_FILE" 2>/dev/null || true
-    exec "${EXEC_PREFIX[@]}" bash --noprofile --rcfile "$SHELL_RC_FILE" -i
+    nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
+    exec_nas "${EXEC_PREFIX[@]}" bash --noprofile --rcfile "$SHELL_RC_FILE" -i
   else
     [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
     export PATH="${SHELL_PATH_PREFIX}$PATH"
-    exec "${EXEC_PREFIX[@]}" bash -i
+    nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
+    exec_nas "${EXEC_PREFIX[@]}" bash -i
   fi
 fi
+nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
 
 exec_agent_command() {
   [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
   if [ -n "$HOSTEXEC_PATH_PREFIX" ] || [ -n "${NAS_BASH_OVERRIDE:-}" ]; then
     export PATH="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}$PATH"
   fi
-  exec "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
+  local first_cmd="${AGENT_COMMAND[0]:-}"
+  local arg_count=0
+  if [ ${#AGENT_COMMAND[@]} -gt 0 ]; then
+    arg_count=$((${#AGENT_COMMAND[@]} - 1))
+  fi
+  nas_debug "[nas] entrypoint exec-agent (cmd=${first_cmd:-none}, extra_args=${arg_count})"
+  exec_nas "${EXEC_PREFIX[@]}" "${AGENT_COMMAND[@]}"
 }
 
 # --- nix 統合 ---
+NIX_INTEGRATION_START="$(nas_measure_start)"
 if [ "${NIX_ENABLED:-false}" = "true" ]; then
   NIX_EXTRA_PACKAGES_LIST=()
   if [ -n "${NIX_EXTRA_PACKAGES:-}" ]; then
@@ -274,6 +346,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
   fi
   HAS_DEVSHELL=false
+  DEV_SHELL_PROBE_START="$(nas_measure_start)"
   if [ -f "$WORKSPACE/flake.nix" ]; then
     # flake に devShells.<system>.default があるかチェック (nix flake show は derivation を評価しないため高速)
     SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
@@ -285,6 +358,7 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
       nas_info "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
     fi
   fi
+  nas_measure_done "nix-devshell-probe" "$DEV_SHELL_PROBE_START"
 
   if [ "$HAS_DEVSHELL" = "true" ]; then
     # --- nix-direnv 方式: nix print-dev-env でキャッシュ ---
@@ -302,22 +376,27 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     PROFILE_LINK="${NAS_NIX_CACHE}/profile-${FLAKE_HASH}"
 
     if [ ! -f "$CACHE_FILE" ]; then
+      NIX_PRINT_DEV_ENV_START="$(nas_measure_start)"
       nas_info "[nas] Caching nix dev environment via print-dev-env..."
       if "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
         nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CACHE_FILE}.tmp"; then
         mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
         chmod 644 "$CACHE_FILE"
         nas_info "[nas] Nix dev environment cached."
+        nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
       else
         nas_info "[nas] nix print-dev-env failed, falling back to nix develop..."
         rm -f "${CACHE_FILE}.tmp"
+        nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
         # フォールバック: 従来の nix develop
         if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-          exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+          nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
+          exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
             nix develop "$WORKSPACE" --command \
             bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
         else
-          exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
+          nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
+          exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
             bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
         fi
       fi
@@ -327,19 +406,24 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
 
     # キャッシュ済み環境を source してエージェント起動
     if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-      exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+      nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
+      exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
         bash -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
     else
-      exec "${EXEC_PREFIX[@]}" \
+      nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
+      exec_nas "${EXEC_PREFIX[@]}" \
         bash -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
     fi
   elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
     nas_info "[nas] flake.nix not found, entering nix shell (via host daemon)..."
-    exec "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+    nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
+    exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
       bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
   else
+    nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
     exec_agent_command
   fi
 else
+  nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
   exec_agent_command
 fi
