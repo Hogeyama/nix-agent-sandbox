@@ -410,6 +410,83 @@ describe("attachTerminalSession", () => {
     expect(ms).toEqual([1000, 1500, 200]);
   });
 
+  test("dtach nudge fires even after data has been received (agent SIGWINCH race)", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const timer = makeFakeTimer();
+    const fit = makeFakeFitAddon({ cols: 100, rows: 30 });
+
+    attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => fit,
+      createWebSocket: () => sock,
+      setTimeoutFn: timer.setTimeoutFn.bind(timer),
+      clearTimeoutFn: timer.clearTimeoutFn.bind(timer),
+    });
+
+    sock.fireOpen();
+    // Simulate dtach screen dump arriving before the nudge timer fires.
+    sock.fireMessage(new ArrayBuffer(64));
+
+    timer.runAll();
+
+    // The nudge must still fire: initial resize + nudge + restore = 3.
+    expect(sock.sent).toHaveLength(3);
+    const nudge = JSON.parse(sock.sent[1] as string);
+    const restore = JSON.parse(sock.sent[2] as string);
+    expect(nudge.cols).not.toBe(100);
+    expect(nudge.rows).toBe(30);
+    expect(restore).toEqual({ type: "resize", cols: 100, rows: 30 });
+  });
+
+  test("dtach nudge restore re-reads current size from fitAddon", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const timer = makeFakeTimer();
+    let currentDims: { cols: number; rows: number } | undefined = {
+      cols: 100,
+      rows: 30,
+    };
+    const fit: FitAddonLike = {
+      fit: () => {},
+      proposeDimensions: () => currentDims,
+    };
+
+    attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => fit,
+      createWebSocket: () => sock,
+      setTimeoutFn: timer.setTimeoutFn.bind(timer),
+      clearTimeoutFn: timer.clearTimeoutFn.bind(timer),
+    });
+
+    sock.fireOpen();
+    // Run the outer 1s nudge to register the inner restore timer.
+    const outer = timer.scheduled[0];
+    if (!outer) throw new Error("outer timer missing");
+    outer.fn();
+
+    // Simulate a window resize that changed the terminal dimensions
+    // between the nudge and the restore.
+    currentDims = { cols: 120, rows: 40 };
+
+    // Run the inner 200ms restore timer.
+    const inner = timer.scheduled.find((e) => e.ms === 200 && !e.cancelled);
+    if (!inner) throw new Error("inner timer missing");
+    inner.fn();
+
+    // The restore must use the re-read size (120x40), not the
+    // captured size at nudge time (100x30).
+    const restore = JSON.parse(sock.sent.at(-1) as string);
+    expect(restore).toEqual({ type: "resize", cols: 120, rows: 40 });
+  });
+
   test("dispose cancels the inner 200ms restore timer scheduled by the nudge", () => {
     // Pin the inner-timer cleanup: after dispose, neither the outer 1s
     // timer nor the inner 200ms restore timer is allowed to fire ws.send.

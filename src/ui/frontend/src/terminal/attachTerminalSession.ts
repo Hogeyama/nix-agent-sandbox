@@ -264,33 +264,43 @@ function connectWebSocket(
 }
 
 /**
- * dtach drops `SIGWINCH` notifications when the requested size matches
- * the size it already knows, which means the very first resize after
- * attach is silently ignored and the inner program never sees its
- * geometry. Schedule a one-off nudge: 1s after attach, if no data has
- * arrived yet, send a size that differs by 1 column from the real
- * geometry, then 200ms later restore the real size — the differing
- * frame forces dtach to emit a `SIGWINCH`, and the restore lands the
- * pty on the correct dimensions.
+ * Some agents (e.g. Copilot CLI) have not yet installed their SIGWINCH
+ * handler when the very first resize arrives during attach, so they
+ * never learn the real terminal geometry.  Additionally, dtach's kernel-
+ * level `ioctl(TIOCSWINSZ)` is a no-op when the requested size matches
+ * the size the pty already knows, which means a late resize with the
+ * same dimensions produces no kernel SIGWINCH at all.
  *
- * Both the outer 1s timer and the inner 200ms restore timer push their
- * handles into `handles`; the caller is expected to drain that array
- * during `dispose()` so post-teardown writes to the WebSocket are
- * impossible.
+ * To work around both problems unconditionally, schedule a one-off
+ * nudge 1 s after attach: send a size that differs by 1 column from
+ * the real geometry, then 200 ms later re-read and restore the real
+ * size.  The differing frame forces the kernel to emit a `SIGWINCH` to
+ * the foreground process group (reaching the agent even if it missed
+ * the earlier signal), and the restore lands the pty on the correct
+ * dimensions.
+ *
+ * The nudge sends `sendTerminalResize` directly over the WebSocket and
+ * does NOT call `fitAddon.fit()`, so xterm's local display is never
+ * reflowed — the only observable effect is the brief 200 ms mismatch
+ * in the server-side pty geometry, which is invisible unless the agent
+ * happens to emit output during that window.
+ *
+ * Both the outer 1 s timer and the inner 200 ms restore timer push
+ * their handles into `handles`; the caller is expected to drain that
+ * array during `dispose()` so post-teardown writes to the WebSocket
+ * are impossible.
  */
 function armDtachInitialResizeNudge(deps: {
   ws: WebSocketLike;
   fitAddon: Pick<FitAddon, "proposeDimensions">;
-  hasReceivedData: () => boolean;
   isDisposed: () => boolean;
   setTimeoutFn: (fn: () => void, ms: number) => unknown;
   handles: unknown[];
 }): void {
-  const { ws, fitAddon, hasReceivedData, isDisposed, setTimeoutFn, handles } =
-    deps;
+  const { ws, fitAddon, isDisposed, setTimeoutFn, handles } = deps;
   const outer = setTimeoutFn(() => {
     if (isDisposed()) return;
-    if (hasReceivedData() || ws.readyState !== WebSocket.OPEN) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
     const size = getTerminalSize(fitAddon);
     if (!size) return;
     const nudged: TerminalSize = {
@@ -301,7 +311,8 @@ function armDtachInitialResizeNudge(deps: {
     const inner = setTimeoutFn(() => {
       if (isDisposed()) return;
       if (ws.readyState !== WebSocket.OPEN) return;
-      sendTerminalResize(ws, size);
+      const currentSize = getTerminalSize(fitAddon);
+      if (currentSize) sendTerminalResize(ws, currentSize);
     }, 200);
     handles.push(inner);
   }, 1000);
@@ -337,7 +348,6 @@ function readMouseTrackingMode(term: TerminalLike): MouseTrackingMode {
 function bindTerminalToWebSocket(
   term: TerminalLike,
   ws: WebSocketLike,
-  onDataReceived: () => void,
 ): { dispose: () => void } {
   const encoder = new TextEncoder();
 
@@ -352,7 +362,6 @@ function bindTerminalToWebSocket(
   });
 
   ws.onmessage = (ev: MessageEvent) => {
-    onDataReceived();
     if (ev.data instanceof ArrayBuffer) {
       term.write(new Uint8Array(ev.data));
     } else {
@@ -537,7 +546,6 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
   let resizeObserver: ResizeObserver | null = null;
   let mouseRecoveryInterval: ReturnType<typeof setInterval> | null = null;
   const timeoutHandles: unknown[] = [];
-  let receivedData = false;
   let disposed = false;
   let mouseModeForcedByUi = false;
   let lastAutoMouseForceAtMs = 0;
@@ -606,7 +614,6 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
         armDtachInitialResizeNudge({
           ws,
           fitAddon,
-          hasReceivedData: () => receivedData,
           isDisposed,
           setTimeoutFn,
           handles: timeoutHandles,
@@ -630,9 +637,7 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
       onError: reportError,
       onCloseAbnormal: reportError,
     });
-    bindingDispose = bindTerminalToWebSocket(term, ws, () => {
-      receivedData = true;
-    }).dispose;
+    bindingDispose = bindTerminalToWebSocket(term, ws).dispose;
   } catch (e) {
     reportError(
       e instanceof Error ? e.message : "Failed to attach terminal session",
