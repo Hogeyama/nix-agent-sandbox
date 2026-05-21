@@ -369,8 +369,10 @@ describe("attachTerminalSession", () => {
       cols: 100,
       rows: 30,
     });
-    expect(timer.scheduled).toHaveLength(1);
+    // 1000ms dtach nudge + 1500ms shell mouse-off
+    expect(timer.scheduled).toHaveLength(2);
     expect(timer.scheduled[0]?.ms).toBe(1000);
+    expect(timer.scheduled[1]?.ms).toBe(1500);
   });
 
   test("dtach nudge: 1s timer sends a 1-col-different size, then 200ms restore", () => {
@@ -403,9 +405,9 @@ describe("attachTerminalSession", () => {
     expect(nudge.rows).toBe(30);
     expect(restore).toEqual({ type: "resize", cols: 100, rows: 30 });
 
-    // The schedule should record: 1000ms nudge then 200ms restore.
+    // 1000ms dtach nudge, 1500ms shell mouse-off, 200ms dtach restore.
     const ms = timer.scheduled.map((s) => s.ms);
-    expect(ms).toEqual([1000, 200]);
+    expect(ms).toEqual([1000, 1500, 200]);
   });
 
   test("dispose cancels the inner 200ms restore timer scheduled by the nudge", () => {
@@ -432,7 +434,8 @@ describe("attachTerminalSession", () => {
     const outer = timer.scheduled[0];
     if (!outer) throw new Error("outer timer missing");
     outer.fn();
-    expect(timer.scheduled).toHaveLength(2);
+    // 1000ms dtach nudge, 1500ms shell mouse-off, 200ms dtach restore.
+    expect(timer.scheduled).toHaveLength(3);
 
     handle.dispose();
     // Both the outer (already fired) and the inner pending timer must
@@ -686,6 +689,34 @@ describe("attachTerminalSession", () => {
     expect(autoForce).toBeDefined();
     autoForce?.fn();
     expect(fakeTerm.writes).toEqual([]);
+    expect(handle.isMouseModeForced()).toBe(false);
+    handle.dispose();
+  });
+
+  test("shell terminal sends mouse-off after connect when autoMouseModeRecovery is false", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+    const timer = makeFakeTimer();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      autoMouseModeRecovery: false,
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+      setTimeoutFn: timer.setTimeoutFn.bind(timer),
+      clearTimeoutFn: timer.clearTimeoutFn.bind(timer),
+    });
+
+    sock.fireOpen();
+    const resetTimer = timer.scheduled.find(
+      (entry) => entry.ms === 1500 && !entry.cancelled,
+    );
+    expect(resetTimer).toBeDefined();
+    resetTimer?.fn();
+    expect(fakeTerm.writes).toContain(RESET_MOUSE_MODE_SEQUENCE);
     expect(handle.isMouseModeForced()).toBe(false);
     handle.dispose();
   });

@@ -616,6 +616,15 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
             maybeAutoRecoverMouseMode();
           }, AUTO_MOUSE_FORCE_ON_DELAY_MS);
           timeoutHandles.push(handle);
+        } else {
+          // Shell terminals: explicitly disable mouse mode after the
+          // dtach screen dump so inherited mouse-tracking state from
+          // the agent pty does not interfere with normal text selection.
+          const handle = setTimeoutFn(() => {
+            if (disposed) return;
+            term.write(RESET_MOUSE_MODE_SEQUENCE);
+          }, AUTO_MOUSE_FORCE_ON_DELAY_MS);
+          timeoutHandles.push(handle);
         }
       },
       onError: reportError,
