@@ -5,7 +5,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { rawConfigToPklSource } from "./pkl.ts";
+import { normalizePklKeys, rawConfigToPklSource } from "./pkl.ts";
 import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -416,7 +416,7 @@ async function loadPklConfig(
     }
     let raw: RawConfig;
     try {
-      raw = JSON.parse(stdoutText) as RawConfig;
+      raw = normalizePklKeys(JSON.parse(stdoutText)) as RawConfig;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(
