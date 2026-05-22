@@ -129,6 +129,7 @@
             pkgs.chromium
             pkgs.dtach
             pkgs.zig
+            pkgs.pkl
           ];
           shellHook = ''
             if [ ! -f .playwright/cli.config.json ]; then
