@@ -856,6 +856,71 @@ profiles:
   }
 });
 
+test("loadConfig: .yml takes priority over .pkl", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-priority-"));
+  try {
+    await writeFile(
+      path.join(tmpDir, ".agent-sandbox.yml"),
+      `
+profiles:
+  from-yml:
+    agent: claude
+`,
+    );
+    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
+    const config = await loadConfig({
+      startDir: tmpDir,
+      globalConfigPath: null,
+    });
+    expect("from-yml" in config.profiles).toEqual(true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig: .nix takes priority over .pkl", async () => {
+  const tmpDir = await mkdtemp(
+    path.join(tmpdir(), "nas-cfg-nix-pkl-priority-"),
+  );
+  try {
+    await writeFile(
+      path.join(tmpDir, ".agent-sandbox.nix"),
+      `
+{
+  profiles = {
+    from-nix = {
+      agent = "claude";
+    };
+  };
+}
+`,
+    );
+    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
+    const config = await loadConfig({
+      startDir: tmpDir,
+      globalConfigPath: null,
+    });
+    expect("from-nix" in config.profiles).toEqual(true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig: .pkl CLI not available shows helpful error", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nocli-"));
+  const origPath = process.env.PATH;
+  process.env.PATH = "";
+  try {
+    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
+    await expect(
+      loadConfig({ startDir: tmpDir, globalConfigPath: null }),
+    ).rejects.toThrow("but 'pkl' command is not available on PATH");
+  } finally {
+    process.env.PATH = origPath;
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig: .nix with full profile fields", async () => {
   const nixExpr = `
 {
@@ -1047,6 +1112,25 @@ test("loadGlobalConfig: returns null when no global config file exists", async (
       expect(result).toEqual(null);
     });
   } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("loadGlobalConfig: .pkl CLI not available shows helpful error", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-pkl-nocli-"));
+  const origPath = process.env.PATH;
+  process.env.PATH = "";
+  try {
+    const nasDir = path.join(tmpDir, "nas");
+    await mkdir(nasDir);
+    await writeFile(path.join(nasDir, "agent-sandbox.pkl"), `// pkl content`);
+    await withXdgConfigHome(tmpDir, async () => {
+      await expect(loadGlobalConfig()).rejects.toThrow(
+        "but 'pkl' command is not available on PATH",
+      );
+    });
+  } finally {
+    process.env.PATH = origPath;
     await rm(tmpDir, { recursive: true, force: true });
   }
 });

@@ -10,6 +10,7 @@ import { validateConfig } from "./validate.ts";
 
 const CONFIG_FILENAME_YML = ".agent-sandbox.yml";
 const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
+const CONFIG_FILENAME_PKL = ".agent-sandbox.pkl";
 
 /** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
 function getGlobalConfigDir(): string {
@@ -47,13 +48,19 @@ export async function loadConfig(
 
   if (!globalRaw && !localRaw) {
     throw new Error(
-      `${CONFIG_FILENAME_YML} (or ${CONFIG_FILENAME_NIX}) not found in current directory or parent directories, and no global config found in ${getGlobalConfigDir()}`,
+      `${CONFIG_FILENAME_YML} (or ${CONFIG_FILENAME_NIX} / ${CONFIG_FILENAME_PKL}) not found in current directory or parent directories, and no global config found in ${getGlobalConfigDir()}`,
     );
   }
 
   // Nix 関数でマージ済みの場合は TypeScript マージをスキップ
   if (localRaw?._nixFunctionMerged) {
     const { _nixFunctionMerged: _, ...raw } = localRaw;
+    return validateConfig(raw);
+  }
+
+  // Pkl で自己完結している場合は TypeScript マージをスキップ
+  if (localRaw?._pklSelfContained) {
+    const { _pklSelfContained: _, ...raw } = localRaw;
     return validateConfig(raw);
   }
 
@@ -69,10 +76,11 @@ export async function loadGlobalConfig(
     // 明示パス指定時はそのまま読む（エラーはそのまま伝播）
     return await loadConfigByPath(configPath);
   }
-  // .yml → .nix の順で探す
+  // .yml → .nix → .pkl の順で探す
   for (const [filename, format] of [
     ["agent-sandbox.yml", "yml"],
     ["agent-sandbox.nix", "nix"],
+    ["agent-sandbox.pkl", "pkl"],
   ] as const) {
     const candidate = path.join(getGlobalConfigDir(), filename);
     try {
@@ -86,6 +94,9 @@ export async function loadGlobalConfig(
       const text = await readFile(candidate, "utf8");
       return Bun.YAML.parse(text) as RawConfig;
     }
+    if (format === "pkl") {
+      return await loadPklConfig(candidate);
+    }
     return await loadNixConfig(candidate);
   }
   return null;
@@ -95,6 +106,9 @@ export async function loadGlobalConfig(
 async function loadConfigByPath(filePath: string): Promise<RawConfig> {
   if (filePath.endsWith(".nix")) {
     return await loadNixConfig(filePath);
+  }
+  if (filePath.endsWith(".pkl")) {
+    return await loadPklConfig(filePath);
   }
   const text = await readFile(filePath, "utf8");
   return Bun.YAML.parse(text) as RawConfig;
@@ -223,16 +237,21 @@ function shallowMerge<T extends Record<string, unknown>>(
 /** 設定ファイルの検索結果 */
 interface ConfigFileFound {
   path: string;
-  format: "yml" | "nix";
+  format: "yml" | "nix" | "pkl";
 }
 
 /** ローカル設定ファイルを読み込む */
 async function loadLocalConfig(
   found: ConfigFileFound,
   globalRaw?: RawConfig | null,
-): Promise<RawConfig & { _nixFunctionMerged?: boolean }> {
+): Promise<
+  RawConfig & { _nixFunctionMerged?: boolean; _pklSelfContained?: boolean }
+> {
   if (found.format === "yml") {
     return Bun.YAML.parse(await readFile(found.path, "utf8")) as RawConfig;
+  }
+  if (found.format === "pkl") {
+    return await loadPklConfig(found.path, globalRaw ?? undefined);
   }
   return await loadNixConfig(found.path, globalRaw ?? undefined);
 }
@@ -322,7 +341,43 @@ async function loadNixConfig(
   }
 }
 
-/** 指定ディレクトリから上位に向かって設定ファイルを探す (.yml 優先、なければ .nix) */
+/** pkl コマンドが PATH 上に存在するか確認する */
+async function pklCommandExists(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["pkl", "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const code = await proc.exited;
+    return code === 0;
+  } catch (e) {
+    if (
+      e instanceof Error &&
+      "code" in e &&
+      (e as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw e;
+  }
+}
+
+/**
+ * .agent-sandbox.pkl を pkl eval で評価して RawConfig を得る。
+ */
+async function loadPklConfig(
+  pklPath: string,
+  _globalRaw?: RawConfig,
+): Promise<RawConfig & { _pklSelfContained?: boolean }> {
+  if (!(await pklCommandExists())) {
+    throw new Error(
+      `Found ${CONFIG_FILENAME_PKL} at ${pklPath}, but 'pkl' command is not available on PATH. Install Pkl or use ${CONFIG_FILENAME_YML} instead.`,
+    );
+  }
+  throw new Error("Pkl config loading is not yet implemented");
+}
+
+/** 指定ディレクトリから上位に向かって設定ファイルを探す (.yml 優先、なければ .nix、最後に .pkl) */
 async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
   let current = path.resolve(dir);
   const root = path.parse(current).root;
@@ -332,6 +387,7 @@ async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
     for (const [filename, format] of [
       [CONFIG_FILENAME_YML, "yml"],
       [CONFIG_FILENAME_NIX, "nix"],
+      [CONFIG_FILENAME_PKL, "pkl"],
     ] as const) {
       const candidate = path.join(current, filename);
       try {
