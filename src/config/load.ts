@@ -5,6 +5,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { rawConfigToPklSource } from "./pkl.ts";
 import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -347,6 +348,7 @@ async function pklCommandExists(): Promise<boolean> {
     const proc = Bun.spawn(["pkl", "--version"], {
       stdout: "ignore",
       stderr: "ignore",
+      env: process.env,
     });
     const code = await proc.exited;
     return code === 0;
@@ -364,17 +366,73 @@ async function pklCommandExists(): Promise<boolean> {
 
 /**
  * .agent-sandbox.pkl を pkl eval で評価して RawConfig を得る。
+ *
+ * globalRaw が渡された場合、それを Pkl ソースに変換して一時ディレクトリに
+ * `agent-sandbox.global.pkl` として書き出し、`--module-path` で提供する。
+ * ユーザの `.pkl` ファイルは `amends "modulepath:/agent-sandbox.global.pkl"` で継承できる。
  */
 async function loadPklConfig(
   pklPath: string,
-  _globalRaw?: RawConfig,
+  globalRaw?: RawConfig,
 ): Promise<RawConfig & { _pklSelfContained?: boolean }> {
   if (!(await pklCommandExists())) {
     throw new Error(
       `Found ${CONFIG_FILENAME_PKL} at ${pklPath}, but 'pkl' command is not available on PATH. Install Pkl or use ${CONFIG_FILENAME_YML} instead.`,
     );
   }
-  throw new Error("Pkl config loading is not yet implemented");
+
+  // globalRaw がある場合のみ一時ディレクトリを作成して agent-sandbox.global.pkl を提供する
+  const needsGlobalModule =
+    globalRaw !== undefined && Object.keys(globalRaw).length > 0;
+  let tmpDir: string | null = null;
+  try {
+    const cmdArgs = ["pkl", "eval"];
+    if (needsGlobalModule) {
+      tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-global-"));
+      const globalPklSource = rawConfigToPklSource(globalRaw);
+      await writeFile(
+        path.join(tmpDir, "agent-sandbox.global.pkl"),
+        globalPklSource,
+      );
+      cmdArgs.push("--module-path", tmpDir);
+    }
+    cmdArgs.push("-f", "json", pklPath);
+
+    const proc = Bun.spawn(cmdArgs, {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+    });
+    const [stdoutText, stderrText] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const code = await proc.exited;
+    if (code !== 0) {
+      const errMsg = stderrText.trim();
+      throw new Error(
+        `Failed to evaluate ${pklPath}: pkl eval exited with code ${code}\n${errMsg}`,
+      );
+    }
+    let raw: RawConfig;
+    try {
+      raw = JSON.parse(stdoutText) as RawConfig;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `Failed to parse pkl output for ${pklPath}: ${message}\nstdout: ${stdoutText.slice(0, 500)}`,
+      );
+    }
+    return { ...raw, _pklSelfContained: true };
+  } finally {
+    if (tmpDir !== null) {
+      try {
+        await rm(tmpDir, { recursive: true, force: true });
+      } catch {
+        // cleanup best-effort
+      }
+    }
+  }
 }
 
 /** 指定ディレクトリから上位に向かって設定ファイルを探す (.yml 優先、なければ .nix、最後に .pkl) */
