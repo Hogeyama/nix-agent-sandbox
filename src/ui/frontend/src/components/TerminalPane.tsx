@@ -6,6 +6,7 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
+import { getAgentTerminalTraits } from "../../../../agents/terminalTraits";
 import { parseShellSessionId } from "../../../shell_session_id";
 import type { SessionsStore } from "../stores/sessionsStore";
 import { resolveContextAgentRow } from "../stores/shellMapping";
@@ -136,6 +137,18 @@ export function TerminalPane(props: Props) {
   // Bumps when handles map mutates so memos that read the map invalidate.
   const [handlesVersion, setHandlesVersion] = createSignal(0);
 
+  // Resolves auto mouse-mode recovery for the session about to attach. Shell
+  // sessions opt out so the user's selection behavior is preserved. Agent
+  // sessions defer to `getAgentTerminalTraits` keyed by the matching row's
+  // agent identifier; an unresolved row (snapshot lags the attach) also opts
+  // out so the terminal does not steal mouse handling from an agent that
+  // declares its own DECSET sequences.
+  const resolveAutoMouseModeRecovery = (sessionId: string): boolean => {
+    if (parseShellSessionId(sessionId) !== null) return false;
+    const row = props.sessions.rows().find((r) => r.id === sessionId);
+    return getAgentTerminalTraits(row?.agent ?? null).autoForceMouseMode;
+  };
+
   const mount = (sessionId: string) => {
     if (handles.has(sessionId)) return;
     setErrorMessage(null);
@@ -151,7 +164,7 @@ export function TerminalPane(props: Props) {
         sessionId,
         container: slot,
         wsToken: token,
-        autoMouseModeRecovery: parseShellSessionId(sessionId) === null,
+        autoMouseModeRecovery: resolveAutoMouseModeRecovery(sessionId),
         onError: (msg) => setErrorMessage(msg),
       });
     } catch (e) {
