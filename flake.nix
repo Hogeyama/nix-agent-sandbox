@@ -20,7 +20,32 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         b2n = bun2nix.packages.${system}.default;
-        single-exe = nix-bundle-elf.lib.${system}.single-exe;
+        bundle-script = nix-bundle-elf.lib.${system}.bundle-script;
+
+        # nixpkgs.pkl は JVM 版なので Apple の release から直接取得する。
+        # （JVM版は起動に800msくらいかかる）
+        pklVersion = "0.31.1";
+        pklSourceBySystem = {
+          "x86_64-linux" = {
+            url = "https://github.com/apple/pkl/releases/download/${pklVersion}/pkl-linux-amd64";
+            hash = "sha256-YY8TlV11XK+/6MnLodJ2NYSM1J28ar/9OY0nUdsSMb8=";
+          };
+          "aarch64-linux" = {
+            url = "https://github.com/apple/pkl/releases/download/${pklVersion}/pkl-linux-aarch64";
+            hash = "sha256-fvEOdD2qkh+5Sue9uexphvNivyUMVYFLnqKusT8tCD4=";
+          };
+        };
+        pklSrc = pkgs.fetchurl pklSourceBySystem.${system};
+        # nix-store install 用: glibc/zlib を nix-store から RPATH で解決
+        pklNative = pkgs.stdenv.mkDerivation {
+          pname = "pkl";
+          version = pklVersion;
+          src = pklSrc;
+          dontUnpack = true;
+          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+          buildInputs = [ pkgs.zlib pkgs.stdenv.cc.cc.lib ];
+          installPhase = "install -Dm755 $src $out/bin/pkl";
+        };
         nasUnwrapped = b2n.mkDerivation {
           pname = "nas";
           version = (builtins.fromJSON (builtins.readFile ./package.json)).version;
@@ -88,16 +113,30 @@
           # daemon can spawn new sessions after its originating session
           # cleaned up /tmp (where the inner binary would otherwise go).
           export NAS_BIN_PATH="''${NAS_BIN_PATH:-$dir/share/nas/nas}"
+          # ネイティブ pkl を先頭に置く (loadPklConfig が PATH 経由で呼ぶ)
+          export PATH="${pklNative}/bin:''${PATH}"
           exec "$dir/share/nas/nas" "$@"
           EOF
           chmod +x $out/bin/nas
         '';
 
-        nasBundled = single-exe {
+        # nas 本体と pkl を同じバンドルへ。bundle-script が両方の ELF 依存を
+        # 一括解決して同梱するため、ユーザ系の glibc / libz には依存しない。
+        nasBundledEntry = pkgs.writeScript "nas-bundled-entry" ''
+          #!/bin/sh
+          exec nas "$@"
+        '';
+        nasBundled = bundle-script {
           name = "nas";
-          target = "${nasUnwrapped}/bin/nas";
+          script = nasBundledEntry;
           type = "preload";
-          extraFiles = { "share/nas/assets" = nasAssets; };
+          binaries = [
+            { name = "nas"; target = "${nasUnwrapped}/bin/nas"; }
+            { name = "pkl"; target = "${pklNative}/bin/pkl"; }
+          ];
+          extraFiles = {
+            "share/nas/assets" = nasAssets;
+          };
           resolveWith = [
             "${pkgs.glibc}/lib/libpthread.so.0"
             "${pkgs.glibc}/lib/libdl.so.2"
@@ -108,8 +147,8 @@
           ];
           env = [
             { key = "NAS_ASSET_DIR"; action = "replace"; value = "%ROOT/share/nas/assets"; }
-            # Point at the outer self-extracting script so the UI daemon can
-            # spawn fresh sessions after the originating one cleans up /tmp.
+            # nas ui の New Session で起動するバイナリもバンドル版を指すようにする。
+            # そうしないと /tmp に展開された削除済みのELFを指してしまう。
             { key = "NAS_BIN_PATH"; action = "replace"; value = "%ORIG"; }
           ];
         };
@@ -129,7 +168,7 @@
             pkgs.chromium
             pkgs.dtach
             pkgs.zig
-            pkgs.pkl
+            pklNative
           ];
           shellHook = ''
             if [ ! -f .playwright/cli.config.json ]; then
