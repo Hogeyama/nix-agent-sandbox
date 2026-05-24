@@ -29,6 +29,7 @@ function makeRow(id: string): SessionRow {
     turn: null,
     lastEventAt: null,
     isAgent: true,
+    agent: null,
   };
 }
 

@@ -16,6 +16,7 @@ function makeRow(overrides: Partial<SessionRow> = {}): SessionRow {
     turn: null,
     lastEventAt: null,
     isAgent: true,
+    agent: null,
     ...overrides,
   };
 }

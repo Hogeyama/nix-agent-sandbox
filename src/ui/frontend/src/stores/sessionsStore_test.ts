@@ -112,6 +112,27 @@ describe("normalizeContainersToSessions", () => {
     expect(rows[0]?.containerName).toBe("agent-xyz");
   });
 
+  test("agent propagates sessionAgent='copilot' onto the row", () => {
+    const rows = normalizeContainersToSessions([
+      makeContainer({ sessionAgent: "copilot" }),
+    ]);
+    expect(rows[0]?.agent).toBe("copilot");
+  });
+
+  test("agent propagates sessionAgent='claude' onto the row", () => {
+    const rows = normalizeContainersToSessions([
+      makeContainer({ sessionAgent: "claude" }),
+    ]);
+    expect(rows[0]?.agent).toBe("claude");
+  });
+
+  test("agent is null when sessionAgent is undefined on the payload", () => {
+    const rows = normalizeContainersToSessions([
+      makeContainer({ sessionAgent: undefined }),
+    ]);
+    expect(rows[0]?.agent).toBeNull();
+  });
+
   test("lastEventAt is null when payload omits it, copies the ISO string when present", () => {
     const rowsWithout = normalizeContainersToSessions([
       makeContainer({ lastEventAt: undefined }),

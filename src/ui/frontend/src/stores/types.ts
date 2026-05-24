@@ -25,6 +25,11 @@ export type ContainerInfoLike = {
   // ignores the field, so making it optional adds no regression to
   // any consumer that does not opt in.
   startedAt?: string | null;
+  // Agent identifier sourced from `SessionRecord.agent` (e.g. `"claude"`,
+  // `"copilot"`, `"codex"`, `"unknown"`). The backend overlays this onto
+  // the container payload so the frontend can resolve agent-specific
+  // terminal traits without re-querying the sessions API.
+  sessionAgent?: string | null;
 };
 
 export type NetworkPendingItemLike = {
@@ -111,4 +116,10 @@ export type SessionRow = {
   // the backend has not reported one yet. Drives Ack optimistic updates.
   lastEventAt: string | null;
   isAgent: boolean; // labels["nas.kind"] === "agent"
+  // Agent identifier propagated from `ContainerInfoLike.sessionAgent`
+  // (e.g. `"claude"`, `"copilot"`, `"codex"`, `"unknown"`), or `null`
+  // when the backend has not reported one. The terminal layer consults
+  // this field to resolve agent-specific traits (e.g. mouse-mode
+  // recovery rules) without coupling to the sessions wire shape.
+  agent: string | null;
 };

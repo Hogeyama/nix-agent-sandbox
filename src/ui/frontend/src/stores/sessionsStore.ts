@@ -33,6 +33,7 @@ export function normalizeContainersToSessions(
       turn: c.turn ?? null,
       lastEventAt: c.lastEventAt ?? null,
       isAgent: true,
+      agent: c.sessionAgent ?? null,
     });
   }
   return out;
