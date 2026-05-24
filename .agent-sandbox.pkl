@@ -299,7 +299,6 @@ profiles {
           id = "deno-task"
           match {
             argv0 = "deno"
-            subcommands = new Listing { "task" }
           }
           cwd {
             mode = "workspace-only"
