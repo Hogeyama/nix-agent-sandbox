@@ -5,6 +5,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { resolveAsset } from "../lib/asset.ts";
 import { normalizePklKeys, rawConfigToPklSource } from "./pkl.ts";
 import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
@@ -367,9 +368,14 @@ async function pklCommandExists(): Promise<boolean> {
 /**
  * .agent-sandbox.pkl を pkl eval で評価して RawConfig を得る。
  *
- * globalRaw が渡された場合、それを Pkl ソースに変換して一時ディレクトリに
- * `agent-sandbox.global.pkl` として書き出し、`--module-path` で提供する。
- * ユーザの `.pkl` ファイルは `amends "modulepath:/agent-sandbox.global.pkl"` で継承できる。
+ * 評価のたびに一時ディレクトリを作り、そこに以下を配置する:
+ *   - `Config.pkl`         : 型付きスキーマ（バンドルされたアセットからコピー）
+ *   - `agent-sandbox.global.pkl` : `amends "modulepath:/Config.pkl"` を先頭に持つ
+ *                                  グローバル設定。globalRaw が空でもヘッダだけのファイルを書き出す。
+ *
+ * tmpDir は `--module-path` として pkl eval に渡される。これによりユーザの
+ * `.pkl` ファイルは `amends "modulepath:/Config.pkl"` または
+ * `amends "modulepath:/agent-sandbox.global.pkl"` のいずれでも参照できる。
  */
 async function loadPklConfig(
   pklPath: string,
@@ -381,22 +387,48 @@ async function loadPklConfig(
     );
   }
 
-  // globalRaw がある場合のみ一時ディレクトリを作成して agent-sandbox.global.pkl を提供する
-  const needsGlobalModule =
-    globalRaw !== undefined && Object.keys(globalRaw).length > 0;
-  let tmpDir: string | null = null;
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-module-"));
   try {
-    const cmdArgs = ["pkl", "eval"];
-    if (needsGlobalModule) {
-      tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-global-"));
-      const globalPklSource = rawConfigToPklSource(globalRaw);
-      await writeFile(
-        path.join(tmpDir, "agent-sandbox.global.pkl"),
-        globalPklSource,
-      );
-      cmdArgs.push("--module-path", tmpDir);
+    // Config.pkl をアセットから解決して tmpDir にコピーする。
+    // NAS_ASSET_DIR があればそちらを優先し、なければソースツリー上の隣接ファイルを使う。
+    const configPklSrc = resolveAsset(
+      "config/Config.pkl",
+      import.meta.url,
+      "./Config.pkl",
+    );
+    let configPklText: string;
+    try {
+      configPklText = await readFile(configPklSrc, "utf8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `Config.pkl not found at ${configPklSrc}. ` +
+            `Set NAS_ASSET_DIR to a directory containing config/Config.pkl, ` +
+            `or ensure the file exists adjacent to src/config/load.ts.`,
+        );
+      }
+      throw e;
     }
-    cmdArgs.push("-f", "json", pklPath);
+    await writeFile(path.join(tmpDir, "Config.pkl"), configPklText);
+
+    // agent-sandbox.global.pkl は常に書き出す。
+    // globalRaw が空/未指定でも、ファイル自体は `amends "modulepath:/Config.pkl"` を含むので
+    // ユーザの `amends "modulepath:/agent-sandbox.global.pkl"` がそのまま解決できる。
+    const globalPklSource = rawConfigToPklSource(globalRaw ?? {});
+    await writeFile(
+      path.join(tmpDir, "agent-sandbox.global.pkl"),
+      globalPklSource,
+    );
+
+    const cmdArgs = [
+      "pkl",
+      "eval",
+      "--module-path",
+      tmpDir,
+      "-f",
+      "json",
+      pklPath,
+    ];
 
     const proc = Bun.spawn(cmdArgs, {
       stdout: "pipe",
@@ -425,12 +457,10 @@ async function loadPklConfig(
     }
     return { ...raw, _pklSelfContained: true };
   } finally {
-    if (tmpDir !== null) {
-      try {
-        await rm(tmpDir, { recursive: true, force: true });
-      } catch {
-        // cleanup best-effort
-      }
+    try {
+      await rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      // cleanup best-effort
     }
   }
 }

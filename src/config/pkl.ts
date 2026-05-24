@@ -71,15 +71,68 @@ export function normalizePklKeys(obj: unknown): unknown {
  * Convert a RawConfig object into a Pkl source string.
  *
  * The output is intended to be written as `agent-sandbox.global.pkl`
- * so that user `.pkl` files can amend it.
+ * so that user `.pkl` files can amend it.  The emitted source always
+ * begins with `amends "modulepath:/Config.pkl"` so that the typed
+ * schema (with structural defaults) is in scope regardless of whether
+ * the user provided any global overrides.
  *
  * Known kebab-case config keys are emitted as camelCase identifiers
  * so that Pkl users can write `mountSocket = true` instead of
  * `["mount-socket"] = true`.
  */
 export function rawConfigToPklSource(raw: RawConfig): string {
-  const lines = objectToLines(raw as Record<string, unknown>, 0);
-  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+  const header = 'amends "modulepath:/Config.pkl"\n';
+  const lines = objectToLines(raw as Record<string, unknown>, 0, "");
+  if (lines.length === 0) {
+    return header;
+  }
+  return `${header}\n${lines.join("\n")}\n`;
+}
+
+/**
+ * Pkl paths whose entries are typed as `Mapping<K, V>` in `Config.pkl`.
+ *
+ * Pkl 0.31 rejects bare-identifier entries inside a typed `Mapping`, so any
+ * object whose path matches one of these patterns must emit its keys via
+ * bracket syntax (`["key"] = ...`).  The `*` segment is a wildcard matching
+ * exactly one path segment.
+ *
+ * Path-threading convention used by `objectToLines` / `arrayToPkl`:
+ *   - the top-level call starts with path `""`
+ *   - recursing into an object child at key `k` yields `path === "" ? k : path + "." + k`
+ *   - recursing into a Listing item (object) appends `.*`
+ *
+ * So e.g. an entry inside `profiles.dev.hostexec.rules[0].env` is reached at
+ * path `profiles.*.hostexec.rules.*.env`, which matches the pattern below.
+ */
+const MAPPING_PARENT_PATHS: ReadonlySet<string> = new Set([
+  "profiles",
+  "profiles.*.hostexec.secrets",
+  "profiles.*.hostexec.rules.*.env",
+]);
+
+function matchPath(pattern: string, candidate: string): boolean {
+  // Segment-wise comparison.  Splitting on "." (and comparing segments
+  // literally) avoids treating "." as a regex metacharacter, which would
+  // happen if we joined the path and matched with a regex.
+  const ps = pattern.split(".");
+  const cs = candidate.split(".");
+  if (ps.length !== cs.length) return false;
+  for (let i = 0; i < ps.length; i++) {
+    if (ps[i] !== "*" && ps[i] !== cs[i]) return false;
+  }
+  return true;
+}
+
+function pathIsMappingParent(path: string): boolean {
+  for (const pattern of MAPPING_PARENT_PATHS) {
+    if (matchPath(pattern, path)) return true;
+  }
+  return false;
+}
+
+function bracketKey(key: string): string {
+  return `["${escapeString(key)}"]`;
 }
 
 /** Determine whether a key needs bracket quoting in Pkl. */
@@ -117,12 +170,13 @@ function valueToPkl(val: unknown, _indent: number): string {
 }
 
 /** Convert an array to a `new Listing { ... }` expression. */
-function arrayToPkl(arr: unknown[], indent: number): string {
+function arrayToPkl(arr: unknown[], indent: number, path: string): string {
   if (arr.length === 0) {
     return "new Listing {}";
   }
   const prefix = "  ".repeat(indent + 1);
   const closing = "  ".repeat(indent);
+  const itemPath = path === "" ? "*" : `${path}.*`;
   const items = arr
     .filter((item) => item !== null && item !== undefined)
     .map((item) => {
@@ -130,6 +184,7 @@ function arrayToPkl(arr: unknown[], indent: number): string {
         const innerLines = objectToLines(
           item as Record<string, unknown>,
           indent + 2,
+          itemPath,
         );
         if (innerLines.length === 0) {
           return `${prefix}new {}`;
@@ -144,25 +199,37 @@ function arrayToPkl(arr: unknown[], indent: number): string {
 /**
  * Convert an object's entries into Pkl property lines.
  *
- * Each returned line is already indented to `indent` level.
+ * Each returned line is already indented to `indent` level.  `path` is the
+ * dotted Pkl path of `obj` itself (the parent of the entries being emitted);
+ * see the comment on `MAPPING_PARENT_PATHS` for the threading convention.
  */
-function objectToLines(obj: Record<string, unknown>, indent: number): string[] {
+function objectToLines(
+  obj: Record<string, unknown>,
+  indent: number,
+  path: string,
+): string[] {
   const lines: string[] = [];
   const prefix = "  ".repeat(indent);
+  // The parent path is shared by all entries of this object, so compute the
+  // Mapping-mode decision once.  When true, keys are emitted via bracket
+  // syntax with no kebab→camel rename (Mapping keys are user-defined names).
+  const parentIsMapping = pathIsMappingParent(path);
 
   for (const [key, val] of Object.entries(obj)) {
     if (val === null || val === undefined) {
       continue;
     }
 
-    const fkey = formatKey(key);
+    const fkey = parentIsMapping ? bracketKey(key) : formatKey(key);
+    const childPath = path === "" ? key : `${path}.${key}`;
 
     if (Array.isArray(val)) {
-      lines.push(`${prefix}${fkey} = ${arrayToPkl(val, indent)}`);
+      lines.push(`${prefix}${fkey} = ${arrayToPkl(val, indent, childPath)}`);
     } else if (typeof val === "object") {
       const innerLines = objectToLines(
         val as Record<string, unknown>,
         indent + 1,
+        childPath,
       );
       if (innerLines.length === 0) {
         // Empty object block

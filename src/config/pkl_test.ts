@@ -3,9 +3,23 @@ import { normalizePklKeys, rawConfigToPklSource } from "./pkl.ts";
 import type { RawConfig } from "./types.ts";
 
 describe("rawConfigToPklSource", () => {
-  test("empty object produces empty string", () => {
+  test("empty object emits only the Config.pkl amends header", () => {
     const result = rawConfigToPklSource({});
-    expect(result).toBe("");
+    expect(result).toContain('amends "modulepath:/Config.pkl"');
+    // No property assignments should follow when the input is empty.
+    const withoutHeader = result.replace(
+      /^amends "modulepath:\/Config\.pkl"\s*/,
+      "",
+    );
+    expect(withoutHeader.trim()).toBe("");
+  });
+
+  test("output starts with the Config.pkl amends header", () => {
+    const raw: RawConfig = {
+      profiles: { dev: { agent: "claude" } },
+    };
+    const result = rawConfigToPklSource(raw);
+    expect(result.startsWith('amends "modulepath:/Config.pkl"')).toBe(true);
   });
 
   test("minimal RawConfig with a profile", () => {
@@ -13,8 +27,9 @@ describe("rawConfigToPklSource", () => {
       profiles: { dev: { agent: "claude" } },
     };
     const result = rawConfigToPklSource(raw);
+    expect(result).toContain('amends "modulepath:/Config.pkl"');
     expect(result).toContain("profiles {");
-    expect(result).toContain("dev {");
+    expect(result).toContain('["dev"] {');
     expect(result).toContain('agent = "claude"');
   });
 
@@ -200,8 +215,8 @@ describe("rawConfigToPklSource", () => {
     expect(result).toContain("ui {");
     expect(result).toContain("observability {");
     expect(result).toContain("profiles {");
-    expect(result).toContain("dev {");
-    expect(result).toContain("prod {");
+    expect(result).toContain('["dev"] {');
+    expect(result).toContain('["prod"] {');
   });
 
   test("string values with newline, carriage return, and tab are escaped", () => {
@@ -262,7 +277,7 @@ describe("rawConfigToPklSource", () => {
     expect(result).toContain('approval = "allow"');
   });
 
-  test("user-defined keys (profile names) stay as-is, not camelCased", () => {
+  test("Mapping keys use bracket syntax always, never camelCased", () => {
     const raw: RawConfig = {
       profiles: {
         "my-profile": { agent: "claude" },
@@ -270,10 +285,98 @@ describe("rawConfigToPklSource", () => {
       },
     };
     const result = rawConfigToPklSource(raw);
-    // profile name with hyphen still uses bracket syntax (not a whitelisted key)
+    // Both profile names use bracket syntax — they are Mapping entries.
     expect(result).toContain('["my-profile"] {');
-    // profile name without hyphen uses identifier syntax
-    expect(result).toContain("dev {");
+    expect(result).toContain('["dev"] {');
+  });
+
+  test("profiles entries always use bracket syntax (Mapping parent)", () => {
+    const raw: RawConfig = {
+      profiles: {
+        alpha: { agent: "claude" },
+        beta: { agent: "copilot" },
+      },
+    };
+    const result = rawConfigToPklSource(raw);
+    expect(result).toContain('["alpha"] {');
+    expect(result).toContain('["beta"] {');
+    // Bare identifier form must NOT be emitted for Mapping entries.
+    expect(result).not.toMatch(/^\s*alpha \{/m);
+    expect(result).not.toMatch(/^\s*beta \{/m);
+  });
+
+  test("hostexec.secrets entries use bracket syntax", () => {
+    const raw: RawConfig = {
+      profiles: {
+        dev: {
+          agent: "claude",
+          hostexec: {
+            secrets: {
+              mytoken: { from: "env:T", required: true },
+            },
+          },
+        },
+      },
+    };
+    const result = rawConfigToPklSource(raw);
+    expect(result).toContain('["mytoken"] {');
+    // Class field emission inside the SecretConfig must remain bare.
+    expect(result).toContain('from = "env:T"');
+    expect(result).toContain("required = true");
+  });
+
+  test("hostexec.rules[*].env entries use bracket syntax", () => {
+    const raw: RawConfig = {
+      profiles: {
+        dev: {
+          agent: "claude",
+          hostexec: {
+            rules: [
+              {
+                id: "r",
+                match: { argv0: "x" },
+                env: { FOO: "bar" },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const result = rawConfigToPklSource(raw);
+    expect(result).toContain('["FOO"] = "bar"');
+  });
+
+  test("Mapping keys with kebab/whitelist names bypass camelCase rename", () => {
+    const raw: RawConfig = {
+      profiles: {
+        "agent-args": { agent: "claude" },
+      },
+    };
+    const result = rawConfigToPklSource(raw);
+    // Even though "agent-args" is in KEBAB_KEYS, as a Mapping key it must be
+    // left untouched and emitted via bracket syntax.
+    expect(result).toContain('["agent-args"] {');
+    expect(result).not.toMatch(/agentArgs \{/);
+  });
+
+  test("extraMounts items still use bare identifiers", () => {
+    const raw: RawConfig = {
+      profiles: {
+        dev: {
+          agent: "claude",
+          "extra-mounts": [{ src: "/a", dst: "/b", mode: "ro" }],
+        },
+      },
+    };
+    const result = rawConfigToPklSource(raw);
+    expect(result).toContain("extraMounts = new Listing {");
+    // Listing items inside a Mapping value do NOT inherit Mapping-mode.
+    expect(result).toContain('src = "/a"');
+    expect(result).toContain('dst = "/b"');
+    expect(result).toContain('mode = "ro"');
+    // Bracketed form must NOT appear for these class fields.
+    expect(result).not.toContain('["src"]');
+    expect(result).not.toContain('["dst"]');
   });
 });
 
