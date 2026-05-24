@@ -4,9 +4,11 @@
 /// configuration (`agent-sandbox.global.pkl`) `amends` this module to
 /// obtain typed defaults and validation of the configuration shape.
 ///
-/// Field names are camelCase. Semantic validation (e.g. the mutual
-/// exclusivity of `key` and `keyCmd` on `EnvConfig`) is performed by the
-/// runtime; this module only describes the structural shape.
+/// Field names are camelCase, except `EnvConfig.key_cmd` / `EnvConfig.val_cmd`
+/// which mirror the raw schema's snake_case canonical form.
+/// Semantic validation (e.g. the mutual exclusivity of `key` and `key_cmd`
+/// on `EnvConfig`) is performed by the runtime; this module only describes
+/// the structural shape.
 open module nas.Config
 
 // ---------------------------------------------------------------------------
@@ -171,12 +173,12 @@ class ExtraMountConfig {
 }
 
 /// Environment-variable entry. The runtime enforces that exactly one of
-/// `key`/`keyCmd` is set, and exactly one of `val`/`valCmd` is set.
+/// `key`/`key_cmd` is set, and exactly one of `val`/`val_cmd` is set.
 class EnvConfig {
   key: String? = null
-  keyCmd: String? = null
+  key_cmd: String? = null
   val: String? = null
-  valCmd: String? = null
+  val_cmd: String? = null
   mode: "set"|"prefix"|"suffix" = "set"
   separator: String? = null
 }

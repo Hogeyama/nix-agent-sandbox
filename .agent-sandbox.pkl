@@ -2,7 +2,9 @@
 // 共通ブロック（各プロファイルから参照される共有設定）
 // ---------------------------------------------------------------------------
 
-local commonEnv = new Listing {
+amends "modulepath:/Config.pkl"
+
+local commonEnv: Listing<EnvConfig> = new {
   new { key = "TZ"; val = "Asia/Tokyo" }
   new { key = "LANG"; val = "en_US.UTF-8" }
   // hostexecのgpgで署名する
@@ -29,7 +31,7 @@ local commonEnv = new Listing {
   }
 }
 
-local commonNetwork = new Dynamic {
+local commonNetwork: NetworkConfig = new {
   allowlist = new Listing {
     // Anthropic / Claude
     "api.anthropic.com"
@@ -110,7 +112,7 @@ local commonNetwork = new Dynamic {
   }
 }
 
-local commonHostexecRules = new Listing {
+local commonHostexecRules: Listing<HostExecRule> = new {
   new {
     id = "wl-paste"
     match {
@@ -171,8 +173,10 @@ local commonHostexecRules = new Listing {
 }
 
 // 全共通ブロックを含むベースプロファイル
-// claude / claude-remote / codex / copilot はこれを amend して使う
-local baseProfile = new Dynamic {
+// claude / claude-remote / codex / copilot / hostexec-demo がこれを amend する
+local baseProfile: Profile = new {
+  // Profile class は agent を required とする。各プロファイルで上書きする。
+  agent = "claude"
   // common_infra
   nix {
     enable = "auto"
@@ -197,7 +201,7 @@ local baseProfile = new Dynamic {
   gpg {
     forwardAgent = false
   }
-  extraMounts = new Listing {
+  extraMounts {
     new { src = "~/.nix-profile/bin"; dst = "~/.nix-profile/bin"; mode = "ro" }
     new { src = "~/.config/nvim"; dst = "~/.config/nvim"; mode = "ro" }
     new { src = "~/.config/tmux"; dst = "~/.config/tmux"; mode = "ro" }
@@ -211,7 +215,7 @@ local baseProfile = new Dynamic {
   // common_env
   env = commonEnv
   // common_hostexec
-  hostexec {
+  hostexec = new HostExecConfig {
     prompt {
       enable = true
       timeoutSeconds = 300
@@ -238,7 +242,7 @@ observability {
 }
 
 profiles {
-  claude = (baseProfile) {
+  ["claude"] = (baseProfile) {
     agent = "claude"
     agentArgs = new Listing { "--dangerously-skip-permissions" }
   }
@@ -248,13 +252,13 @@ profiles {
     agentArgs = new Listing { "remote" }
   }
 
-  codex = (baseProfile) {
+  ["codex"] = (baseProfile) {
     agent = "codex"
     agentArgs = new Listing { "--dangerously-bypass-approvals-and-sandbox" }
     dbus {
       session {
         enable = true
-        calls = new Listing {
+        calls {
           new { name = "org.freedesktop.secrets"; rule = "org.freedesktop.Secret.Service.OpenSession" }
           new { name = "org.freedesktop.secrets"; rule = "org.freedesktop.Secret.Service.SearchItems" }
           new { name = "org.freedesktop.secrets"; rule = "org.freedesktop.Secret.Item.GetSecret" }
@@ -263,38 +267,37 @@ profiles {
     }
   }
 
-  copilot = (baseProfile) {
+  ["copilot"] = (baseProfile) {
     agent = "copilot"
     agentArgs = new Listing { "--allow-all" }
   }
 
-  // hostexec-demo は common_infra / common_hostexec を使わないため baseProfile を amend しない
-  ["hostexec-demo"] = new Dynamic {
+  // hostexec-demo は common_network / common_env を baseProfile から継承し、
+  // hostexec は demo 固有 (deno-task のみ) のルールセットで完全に置き換える
+  ["hostexec-demo"] = (baseProfile) {
     agent = "claude"
     agentArgs = new Listing {}
-    extraMounts = new Listing {
+    extraMounts = new {
       new { src = "/dev/null"; dst = ".env" }
       new { src = "./deno.json"; dst = "deno.json"; mode = "ro" }
     }
-    network = commonNetwork
-    env = commonEnv
-    hostexec {
+    hostexec = new HostExecConfig {
       prompt {
         enable = true
         timeoutSeconds = 300
         defaultScope = "capability"
       }
       secrets {
-        hostexec_demo_api_base_url {
+        ["hostexec_demo_api_base_url"] {
           from = "dotenv:.env#HOSTEXEC_DEMO_API_BASE_URL"
           required = true
         }
-        hostexec_demo_api_token {
+        ["hostexec_demo_api_token"] {
           from = "dotenv:.env#HOSTEXEC_DEMO_API_TOKEN"
           required = true
         }
       }
-      rules = new Listing {
+      rules {
         new {
           id = "deno-task"
           match {
@@ -304,8 +307,8 @@ profiles {
             mode = "workspace-only"
           }
           env {
-            HOSTEXEC_DEMO_API_BASE_URL = "secret:hostexec_demo_api_base_url"
-            HOSTEXEC_DEMO_API_TOKEN = "secret:hostexec_demo_api_token"
+            ["HOSTEXEC_DEMO_API_BASE_URL"] = "secret:hostexec_demo_api_base_url"
+            ["HOSTEXEC_DEMO_API_TOKEN"] = "secret:hostexec_demo_api_token"
           }
           approval = "prompt"
           fallback = "container"
