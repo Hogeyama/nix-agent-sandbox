@@ -15,8 +15,8 @@ local commonEnv: Listing<EnvConfig> = new {
   new {
     key = "GITHUB_TOKEN"
     // push禁止にするなら:
-    // val_cmd = "pass github/token/for-agent"
-    val_cmd = "gh auth token"
+    // valCmd = "pass github/token/for-agent"
+    valCmd = "gh auth token"
   }
   new {
     key = "PATH"
