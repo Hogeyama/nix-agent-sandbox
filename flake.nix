@@ -88,7 +88,7 @@
         # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
         # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
         nasAssets = pkgs.runCommand "nas-assets" { } ''
-          mkdir -p $out/docker/embed $out/docker/envoy $out/scripts $out/ui $out/hostexec
+          mkdir -p $out/docker/embed $out/docker/envoy $out/scripts $out/ui $out/hostexec $out/config
 
           cp ${self}/src/docker/embed/Dockerfile $out/docker/embed/
           cp ${self}/src/docker/embed/entrypoint.sh $out/docker/embed/
@@ -97,6 +97,7 @@
           cp ${self}/scripts/notify-send-wsl $out/scripts/
           cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
+          cp ${self}/src/config/Config.pkl $out/config/
         '';
 
         nas = pkgs.runCommand "nas" { } ''
