@@ -1,0 +1,229 @@
+/// Typed schema for nas (Nix Agent Sandbox) configuration.
+///
+/// User configuration files (`.agent-sandbox.pkl`) and the global
+/// configuration (`agent-sandbox.global.pkl`) `amends` this module to
+/// obtain typed defaults and validation of the configuration shape.
+///
+/// Field names are camelCase. Semantic validation (e.g. the mutual
+/// exclusivity of `key` and `keyCmd` on `EnvConfig`) is performed by the
+/// runtime; this module only describes the structural shape.
+open module nas.Config
+
+// ---------------------------------------------------------------------------
+// Top-level configuration
+// ---------------------------------------------------------------------------
+
+/// Name of the default profile, or `null` to require the user to pick one.
+default: String? = null
+
+ui: UiConfig = new {}
+
+observability: ObservabilityConfig = new {}
+
+profiles: Mapping<String, Profile> = new {}
+
+// ---------------------------------------------------------------------------
+// UI / Observability
+// ---------------------------------------------------------------------------
+
+class UiConfig {
+  enable: Boolean = true
+  port: Int = 3939
+  idleTimeout: Int = 300
+}
+
+class ObservabilityConfig {
+  enable: Boolean = false
+  /// Retention window in seconds. `null` keeps spans indefinitely.
+  retention: Int? = null
+}
+
+// ---------------------------------------------------------------------------
+// Profile
+// ---------------------------------------------------------------------------
+
+class Profile {
+  agent: "claude"|"copilot"|"codex"
+  agentArgs: Listing<String> = new {}
+  worktree: WorktreeConfig? = null
+  session: SessionConfig = new {}
+  nix: NixConfig = new {}
+  docker: DockerConfig = new {}
+  gcloud: GcloudConfig = new {}
+  aws: AwsConfig = new {}
+  gpg: GpgConfig = new {}
+  network: NetworkConfig = new {}
+  dbus: DbusConfig = new {}
+  display: DisplayConfig = new {}
+  extraMounts: Listing<ExtraMountConfig> = new {}
+  env: Listing<EnvConfig> = new {}
+  hook: HookConfig = new {}
+  hostexec: HostExecConfig? = null
+}
+
+class WorktreeConfig {
+  base: String
+  onCreate: String
+}
+
+// ---------------------------------------------------------------------------
+// Session / Hook
+// ---------------------------------------------------------------------------
+
+class SessionConfig {
+  multiplex: Boolean = false
+  detachKey: String = "^\\"
+}
+
+class HookConfig {
+  notify: "auto"|"desktop"|"off" = "auto"
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox feature toggles
+// ---------------------------------------------------------------------------
+
+class NixConfig {
+  enable: (Boolean|"auto") = "auto"
+  mountSocket: Boolean = true
+  extraPackages: Listing<String> = new {}
+}
+
+class DockerConfig {
+  enable: Boolean = false
+  shared: Boolean = false
+}
+
+class GcloudConfig {
+  mountConfig: Boolean = false
+}
+
+class AwsConfig {
+  mountConfig: Boolean = false
+}
+
+class GpgConfig {
+  forwardAgent: Boolean = false
+}
+
+// ---------------------------------------------------------------------------
+// Network
+// ---------------------------------------------------------------------------
+
+class ProxyConfig {
+  forwardPorts: Listing<Int> = new {}
+}
+
+class NetworkPromptConfig {
+  enable: Boolean = false
+  denylist: Listing<String> = new {}
+  timeoutSeconds: Int = 300
+  defaultScope: "once"|"host-port"|"host" = "host-port"
+  notify: "auto"|"desktop"|"off" = "auto"
+}
+
+class NetworkConfig {
+  allowlist: Listing<String> = new {}
+  prompt: NetworkPromptConfig = new {}
+  proxy: ProxyConfig = new {}
+}
+
+// ---------------------------------------------------------------------------
+// DBus
+// ---------------------------------------------------------------------------
+
+class DbusRuleConfig {
+  name: String
+  rule: String
+}
+
+class DbusSessionConfig {
+  enable: Boolean = false
+  sourceAddress: String? = null
+  see: Listing<String> = new {}
+  talk: Listing<String> = new {}
+  own: Listing<String> = new {}
+  calls: Listing<DbusRuleConfig> = new {}
+  broadcasts: Listing<DbusRuleConfig> = new {}
+}
+
+class DbusConfig {
+  session: DbusSessionConfig = new {}
+}
+
+// ---------------------------------------------------------------------------
+// Display
+// ---------------------------------------------------------------------------
+
+class DisplayConfig {
+  sandbox: "none"|"xpra" = "none"
+  size: String = "1920x1080"
+}
+
+// ---------------------------------------------------------------------------
+// Extra mounts and environment
+// ---------------------------------------------------------------------------
+
+class ExtraMountConfig {
+  src: String
+  dst: String
+  mode: "ro"|"rw" = "ro"
+}
+
+/// Environment-variable entry. The runtime enforces that exactly one of
+/// `key`/`keyCmd` is set, and exactly one of `val`/`valCmd` is set.
+class EnvConfig {
+  key: String? = null
+  keyCmd: String? = null
+  val: String? = null
+  valCmd: String? = null
+  mode: "set"|"prefix"|"suffix" = "set"
+  separator: String? = null
+}
+
+// ---------------------------------------------------------------------------
+// HostExec
+// ---------------------------------------------------------------------------
+
+class HostExecPromptConfig {
+  enable: Boolean = true
+  timeoutSeconds: Int = 300
+  defaultScope: "once"|"capability" = "capability"
+  notify: "auto"|"desktop"|"off" = "auto"
+}
+
+class HostExecCwdConfig {
+  mode: "workspace-only"|"workspace-or-session-tmp"|"allowlist"|"any" = "workspace-or-session-tmp"
+  allow: Listing<String> = new {}
+}
+
+class HostExecInheritEnvConfig {
+  mode: "minimal"|"unsafe-inherit-all" = "minimal"
+  keys: Listing<String> = new {}
+}
+
+class HostExecMatchConfig {
+  argv0: String
+  argRegex: String? = null
+}
+
+class SecretConfig {
+  from: String
+  required: Boolean
+}
+
+class HostExecRule {
+  id: String
+  match: HostExecMatchConfig
+  cwd: HostExecCwdConfig = new {}
+  env: Mapping<String, String> = new {}
+  inheritEnv: HostExecInheritEnvConfig = new {}
+  approval: "allow"|"prompt"|"deny" = "prompt"
+  fallback: "container"|"deny" = "container"
+}
+
+class HostExecConfig {
+  prompt: HostExecPromptConfig = new {}
+  secrets: Mapping<String, SecretConfig> = new {}
+  rules: Listing<HostExecRule> = new {}
+}
