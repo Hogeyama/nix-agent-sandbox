@@ -57,6 +57,42 @@ async function withPklLocalConfig(
   }
 }
 
+test.skipIf(!hasPkl)(
+  "pkl: env entry accepts camelCase keyCmd/valCmd",
+  async () => {
+    const localPkl = `
+profiles {
+  ["dev"] {
+    agent = "claude"
+    env {
+      new {
+        keyCmd = "printf DYNAMIC_KEY"
+        valCmd = "printf dynamic_value"
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-envcamel-"));
+    try {
+      await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), localPkl);
+      const config = await loadConfig({
+        startDir: tmpDir,
+        globalConfigPath: null,
+      });
+      expect(config.profiles.dev.env).toEqual([
+        {
+          keyCmd: "printf DYNAMIC_KEY",
+          valCmd: "printf dynamic_value",
+          mode: "set",
+        },
+      ]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
 test.skipIf(!hasPkl)("pkl: standalone .pkl file loads correctly", async () => {
   const localPkl = `
 profiles {

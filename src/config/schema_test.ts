@@ -3,7 +3,8 @@
  * Split from validate_test.ts — covers all "profileSchema:" test cases.
  */
 
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { getLogLevel, setLogLevel } from "../log.ts";
 import {
   dbusSessionSchema,
   displaySchema,
@@ -313,4 +314,119 @@ test("nixSchema: rejects extra-packages entry containing '..'", () => {
   expect(() =>
     nixSchema.parse({ "extra-packages": ["nixpkgs#../bad"] }),
   ).toThrow();
+});
+
+// ---------------------------------------------------------------------------
+// envEntrySchema: keyCmd / valCmd (camelCase) acceptance and snake_case
+// deprecation. snake_case forms remain accepted for backward compatibility
+// but emit a deprecation warning via logWarn (-> console.log).
+// ---------------------------------------------------------------------------
+
+// All env-camel tests stub console.log so the deprecation warning does not
+// pollute test output; the warning assertion test re-spies after restore.
+let consoleLogSpy: ReturnType<typeof spyOn>;
+let previousLogLevel: ReturnType<typeof getLogLevel>;
+beforeEach(() => {
+  previousLogLevel = getLogLevel();
+  consoleLogSpy = spyOn(console, "log").mockImplementation(() => {});
+});
+afterEach(() => {
+  consoleLogSpy.mockRestore();
+  setLogLevel(previousLogLevel);
+});
+
+test("envEntrySchema: accepts { key, valCmd } (camelCase val command)", () => {
+  const schema = profileSchema("test");
+  const result = schema.parse({
+    agent: "claude",
+    env: [{ key: "K", valCmd: "echo v" }],
+  });
+  expect(result.env).toEqual([{ key: "K", valCmd: "echo v", mode: "set" }]);
+});
+
+test("envEntrySchema: accepts { keyCmd, valCmd } (both camelCase)", () => {
+  const schema = profileSchema("test");
+  const result = schema.parse({
+    agent: "claude",
+    env: [{ keyCmd: "echo K", valCmd: "echo v" }],
+  });
+  expect(result.env).toEqual([
+    { keyCmd: "echo K", valCmd: "echo v", mode: "set" },
+  ]);
+});
+
+test("envEntrySchema: accepts legacy snake_case { key_cmd, val_cmd }", () => {
+  const schema = profileSchema("test");
+  const result = schema.parse({
+    agent: "claude",
+    env: [{ key_cmd: "echo K", val_cmd: "echo v" }],
+  });
+  // snake_case is normalized into camelCase output
+  expect(result.env).toEqual([
+    { keyCmd: "echo K", valCmd: "echo v", mode: "set" },
+  ]);
+});
+
+test("envEntrySchema: rejects mixing keyCmd and key_cmd, message mentions both names", () => {
+  const schema = profileSchema("test");
+  const result = schema.safeParse({
+    agent: "claude",
+    env: [{ keyCmd: "x", key_cmd: "y", val: "v" }],
+  });
+  expect(result.success).toEqual(false);
+  if (!result.success) {
+    const messages = result.error.issues.map((i) => i.message);
+    const combined = messages.join(" | ");
+    expect(combined.includes("keyCmd")).toEqual(true);
+    expect(combined.includes("key_cmd")).toEqual(true);
+  }
+});
+
+test("envEntrySchema: rejects mixing key and keyCmd", () => {
+  const schema = profileSchema("test");
+  const result = schema.safeParse({
+    agent: "claude",
+    env: [{ key: "K", keyCmd: "echo K", val: "v" }],
+  });
+  expect(result.success).toEqual(false);
+  if (!result.success) {
+    const messages = result.error.issues.map((i) => i.message);
+    expect(
+      messages.some((m) => m.includes("keyCmd") && m.includes("exactly one")),
+    ).toEqual(true);
+  }
+});
+
+test("envEntrySchema: snake_case usage emits one deprecation warning per entry", () => {
+  // logWarn writes through console.log at default "info" level.
+  setLogLevel("warn");
+  consoleLogSpy.mockClear();
+  const schema = profileSchema("test");
+  schema.parse({
+    agent: "claude",
+    env: [{ key_cmd: "echo K", val_cmd: "echo v" }],
+  });
+  const calls = consoleLogSpy.mock.calls;
+  const deprecationLines = calls
+    .map((args: unknown[]) => String(args[0] ?? ""))
+    .filter((line: string) => line.includes("[deprecation]"));
+  expect(deprecationLines.length).toEqual(1);
+  expect(deprecationLines[0].includes("key_cmd")).toEqual(true);
+  expect(deprecationLines[0].includes("val_cmd")).toEqual(true);
+  expect(deprecationLines[0].includes("keyCmd")).toEqual(true);
+  expect(deprecationLines[0].includes("valCmd")).toEqual(true);
+});
+
+test("envEntrySchema: camelCase-only usage emits no deprecation warning", () => {
+  setLogLevel("warn");
+  consoleLogSpy.mockClear();
+  const schema = profileSchema("test");
+  schema.parse({
+    agent: "claude",
+    env: [{ keyCmd: "echo K", valCmd: "echo v" }],
+  });
+  const deprecationLines = consoleLogSpy.mock.calls
+    .map((args: unknown[]) => String(args[0] ?? ""))
+    .filter((line: string) => line.includes("[deprecation]"));
+  expect(deprecationLines.length).toEqual(0);
 });

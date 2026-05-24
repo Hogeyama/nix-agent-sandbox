@@ -314,6 +314,8 @@ export interface RawProfile {
   env?: Array<{
     key?: string;
     val?: string;
+    keyCmd?: string;
+    valCmd?: string;
     key_cmd?: string;
     val_cmd?: string;
     mode?: string;
