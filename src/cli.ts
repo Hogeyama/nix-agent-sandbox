@@ -9,6 +9,7 @@ import {
   parseProfileAndWorktreeArgs,
 } from "./cli/args.ts";
 import { runAuditCommand } from "./cli/audit.ts";
+import { runConfigCommand } from "./cli/config.ts";
 import { runContainerCommand } from "./cli/container.ts";
 import {
   exitOnCliError,
@@ -129,7 +130,8 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
     subcommand === "hostexec" ||
     subcommand === "ui" ||
     subcommand === "audit" ||
-    subcommand === "hook"
+    subcommand === "hook" ||
+    subcommand === "config"
   ) {
     if (
       argsBeforeDashDash.includes("--help") ||
@@ -197,6 +199,17 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
 
   if (subcommand === "hook") {
     await runHookCommand(removeFirstOccurrence(argsBeforeDashDash, "hook"));
+    return;
+  }
+
+  if (subcommand === "config") {
+    try {
+      await runConfigCommand(
+        removeFirstOccurrence(argsBeforeDashDash, "config"),
+      );
+    } catch (err) {
+      exitOnCliError(err);
+    }
     return;
   }
 
