@@ -228,7 +228,7 @@ export interface Config {
   profiles: Record<string, Profile>;
 }
 
-/** YAML ファイルの生データ型 (バリデーション前) */
+/** 設定ファイルの生データ型 (バリデーション前) */
 export interface RawConfig {
   default?: string;
   ui?: {

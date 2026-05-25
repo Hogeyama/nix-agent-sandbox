@@ -1,5 +1,5 @@
 /**
- * .agent-sandbox.yml のバリデーション
+ * 設定ファイルのバリデーション
  */
 
 import { ZodError, type z } from "zod";

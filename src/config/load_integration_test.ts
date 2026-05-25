@@ -3,18 +3,13 @@ import { expect, spyOn, test } from "bun:test";
 /**
  * 設定ファイルの読み込み・検索・マージの統合テスト
  *
- * 実際のファイルシステム上に YAML ファイルを配置して loadConfig / resolveProfile を検証する。
+ * 実際のファイルシステム上に Pkl ファイルを配置して loadConfig / resolveProfile を検証する。
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import {
-  _resetDeprecationWarningForTesting,
-  loadConfig,
-  loadGlobalConfig,
-  resolveProfile,
-} from "./load.ts";
+import { loadConfig, loadGlobalConfig, resolveProfile } from "./load.ts";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -28,14 +23,37 @@ import {
 } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
-/** 一時ディレクトリに設定ファイルを配置してテストを実行するヘルパー */
+/** pkl コマンドが利用可能か確認する */
+async function pklAvailable(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["pkl", "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const code = await proc.exited;
+    return code === 0;
+  } catch (e) {
+    if (
+      e instanceof Error &&
+      "code" in e &&
+      (e as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw e;
+  }
+}
+
+const hasPkl = await pklAvailable();
+
+/** 一時ディレクトリに .pkl 設定ファイルを配置してテストを実行するヘルパー */
 async function withTempConfig(
-  yaml: string,
+  pkl: string,
   fn: (dir: string) => Promise<void>,
 ): Promise<void> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-test-"));
   try {
-    await writeFile(path.join(tmpDir, ".agent-sandbox.yml"), yaml);
+    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), pkl);
     await fn(tmpDir);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -61,195 +79,105 @@ async function withNestedDirs(
   }
 }
 
-// Note: stat mocking is done via bun:test mock.module in tests that need it.
-// The withMockedStat helper is kept for reference but stat from node:fs/promises
-// cannot be easily monkey-patched. Tests using this pattern should use file-system
-// based test fixtures instead.
-
 // --- loadConfig: ファイルシステムからの読み込み ---
 
-test("loadConfig: loads minimal YAML file from directory", async () => {
-  const yaml = `
-profiles:
-  dev:
-    agent: claude
+test.skipIf(!hasPkl)(
+  "loadConfig: loads minimal Pkl file from directory",
+  async () => {
+    const pkl = `
+profiles {
+  dev {
+    agent = "claude"
+  }
+}
 `;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles.dev.agent).toEqual("claude");
-    expect(config.profiles.dev.nix.enable).toEqual("auto");
-    expect(config.profiles.dev.docker.enable).toEqual(false);
-    expect(config.profiles.dev.env).toEqual([]);
-    expect(config.profiles.dev.extraMounts).toEqual([]);
-  });
-});
-
-test("loadConfig: loads minimal codex profile", async () => {
-  const yaml = `
-profiles:
-  codex-dev:
-    agent: codex
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles["codex-dev"].agent).toEqual("codex");
-    expect(config.profiles["codex-dev"].agentArgs).toEqual([]);
-  });
-});
-
-test("loadConfig: loads full YAML with all profile fields", async () => {
-  const yaml = `
-default: full
-profiles:
-  full:
-    agent: copilot
-    agent-args:
-      - "--yolo"
-      - "--verbose"
-    worktree:
-      base: origin/develop
-      on-create: "npm ci"
-    nix:
-      enable: true
-      mount-socket: true
-      extra-packages:
-        - nixpkgs#ripgrep
-        - nixpkgs#fd
-    docker:
-      enable: true
-    gcloud:
-      mount-config: true
-    aws:
-      mount-config: true
-    gpg:
-      forward-agent: true
-    extra-mounts:
-      - src: /tmp
-        dst: /mnt/host-tmp
-        mode: rw
-    env:
-      - key: MY_VAR
-        val: my_value
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    const p = config.profiles.full;
-    expect(config.default).toEqual("full");
-    expect(p.agent).toEqual("copilot");
-    expect(p.agentArgs).toEqual(["--yolo", "--verbose"]);
-    expect(p.worktree?.base).toEqual("origin/develop");
-    expect(p.worktree?.onCreate).toEqual("npm ci");
-    expect(p.nix.enable).toEqual(true);
-    expect(p.nix.mountSocket).toEqual(true);
-    expect(p.nix.extraPackages).toEqual(["nixpkgs#ripgrep", "nixpkgs#fd"]);
-    expect(p.docker.enable).toEqual(true);
-    expect(p.docker.shared).toEqual(false);
-    expect(p.aws.mountConfig).toEqual(true);
-    expect(p.gpg.forwardAgent).toEqual(true);
-    expect(p.extraMounts.length).toEqual(1);
-    expect(p.extraMounts[0]).toEqual({
-      src: "/tmp",
-      dst: "/mnt/host-tmp",
-      mode: "rw",
+    await withTempConfig(pkl, async (dir) => {
+      const config = await loadConfig({
+        startDir: dir,
+        globalConfigPath: null,
+      });
+      expect(config.profiles.dev.agent).toEqual("claude");
+      expect(config.profiles.dev.nix.enable).toEqual("auto");
+      expect(config.profiles.dev.docker.enable).toEqual(false);
+      expect(config.profiles.dev.env).toEqual([]);
+      expect(config.profiles.dev.extraMounts).toEqual([]);
     });
-    expect(p.env[0]).toEqual({ key: "MY_VAR", val: "my_value", mode: "set" });
-  });
-});
+  },
+);
 
-test("loadConfig: multiple profiles in single file", async () => {
-  const yaml = `
-default: claude-dev
-profiles:
-  claude-dev:
-    agent: claude
-  copilot-dev:
-    agent: copilot
-    agent-args:
-      - "--yolo"
-  codex-dev:
-    agent: codex
-  claude-nix:
-    agent: claude
-    nix:
-      enable: true
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(Object.keys(config.profiles).length).toEqual(4);
-    expect(config.profiles["claude-dev"].agent).toEqual("claude");
-    expect(config.profiles["copilot-dev"].agent).toEqual("copilot");
-    expect(config.profiles["codex-dev"].agent).toEqual("codex");
-    expect(config.profiles["copilot-dev"].agentArgs).toEqual(["--yolo"]);
-    expect(config.profiles["claude-nix"].nix.enable).toEqual(true);
-  });
-});
-
-test("loadConfig: searches upward for config file", async () => {
-  await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
-    // rootDir にだけ設定ファイルを置く
-    await writeFile(
-      path.join(rootDir, ".agent-sandbox.yml"),
-      `
-profiles:
-  test:
-    agent: claude
+test.skipIf(!hasPkl)(
+  "loadConfig: searches upward for .pkl config file",
+  async () => {
+    await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
+      await writeFile(
+        path.join(rootDir, ".agent-sandbox.pkl"),
+        `
+profiles {
+  ["test"] {
+    agent = "claude"
+  }
+}
 `,
-    );
-
-    // grandchildDir から検索開始 → rootDir の設定を見つける
-    const config = await loadConfig({
-      startDir: grandchildDir,
-      globalConfigPath: null,
+      );
+      const config = await loadConfig({
+        startDir: grandchildDir,
+        globalConfigPath: null,
+      });
+      expect(config.profiles.test.agent).toEqual("claude");
     });
-    expect(config.profiles.test.agent).toEqual("claude");
-  });
-});
+  },
+);
 
-test("loadConfig: nearest config file wins over parent", async () => {
-  await withNestedDirs(async (rootDir, childDir, grandchildDir) => {
-    // rootDir に設定
-    await writeFile(
-      path.join(rootDir, ".agent-sandbox.yml"),
-      `
-profiles:
-  parent-profile:
-    agent: copilot
+test.skipIf(!hasPkl)(
+  "loadConfig: nearest .pkl config file wins over parent",
+  async () => {
+    await withNestedDirs(async (rootDir, childDir, grandchildDir) => {
+      await writeFile(
+        path.join(rootDir, ".agent-sandbox.pkl"),
+        `
+profiles {
+  ["parent-profile"] {
+    agent = "copilot"
+  }
+}
 `,
-    );
-    // childDir にも設定
-    await writeFile(
-      path.join(childDir, ".agent-sandbox.yml"),
-      `
-profiles:
-  child-profile:
-    agent: claude
+      );
+      await writeFile(
+        path.join(childDir, ".agent-sandbox.pkl"),
+        `
+profiles {
+  ["child-profile"] {
+    agent = "claude"
+  }
+}
 `,
-    );
-
-    // grandchildDir から検索 → childDir の設定を見つける
-    const config = await loadConfig({
-      startDir: grandchildDir,
-      globalConfigPath: null,
+      );
+      const config = await loadConfig({
+        startDir: grandchildDir,
+        globalConfigPath: null,
+      });
+      expect("child-profile" in config.profiles).toEqual(true);
+      expect("parent-profile" in config.profiles).toEqual(false);
     });
-    expect("child-profile" in config.profiles).toEqual(true);
-    expect("parent-profile" in config.profiles).toEqual(false);
-  });
-});
+  },
+);
 
 import * as nodeFs from "node:fs/promises";
 
 test("loadConfig: propagates config discovery stat errors", async () => {
   await withNestedDirs(async (rootDir, childDir, grandchildDir) => {
     await writeFile(
-      path.join(rootDir, ".agent-sandbox.yml"),
+      path.join(rootDir, ".agent-sandbox.pkl"),
       `
-profiles:
-  parent-profile:
-    agent: claude
+profiles {
+  ["parent-profile"] {
+    agent = "claude"
+  }
+}
 `,
     );
 
-    const blockedPath = path.join(childDir, ".agent-sandbox.yml");
+    const blockedPath = path.join(childDir, ".agent-sandbox.pkl");
     const originalStat = nodeFs.stat;
     const statSpy = spyOn(nodeFs, "stat");
     statSpy.mockImplementation((async (target: any, ...rest: any[]) => {
@@ -284,127 +212,129 @@ test("loadConfig: throws when no config file found", async () => {
   }
 });
 
-test("loadConfig: throws for empty profiles", async () => {
-  const yaml = `
-profiles: {}
+test.skipIf(!hasPkl)("loadConfig: throws for empty profiles", async () => {
+  const pkl = `
+profiles {}
 `;
-  await withTempConfig(yaml, async (dir) => {
+  await withTempConfig(pkl, async (dir) => {
     await expect(
       loadConfig({ startDir: dir, globalConfigPath: null }),
     ).rejects.toThrow("at least one entry");
   });
 });
 
-test("loadConfig: throws for invalid agent type in YAML", async () => {
-  const yaml = `
-profiles:
-  test:
-    agent: invalid_agent
-`;
-  await withTempConfig(yaml, async (dir) => {
+test("loadConfig: .pkl CLI not available shows helpful error", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nocli-"));
+  const origPath = process.env.PATH;
+  process.env.PATH = "";
+  try {
+    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
     await expect(
-      loadConfig({ startDir: dir, globalConfigPath: null }),
-    ).rejects.toThrow("agent must be one of");
-  });
+      loadConfig({ startDir: tmpDir, globalConfigPath: null }),
+    ).rejects.toThrow("but 'pkl' command is not available on PATH");
+  } finally {
+    process.env.PATH = origPath;
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
-test("loadConfig: throws for YAML with no agent field", async () => {
-  const yaml = `
-profiles:
-  test:
-    nix:
-      enable: true
-`;
-  await withTempConfig(yaml, async (dir) => {
-    await expect(
-      loadConfig({ startDir: dir, globalConfigPath: null }),
-    ).rejects.toThrow("agent must be one of");
-  });
-});
+// --- .yml/.nix files are ignored ---
 
-test("loadConfig: handles nix enable=false from YAML", async () => {
-  const yaml = `
+test.skipIf(!hasPkl)(
+  "loadConfig: .yml file is ignored (only .pkl is recognized)",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-yml-ignored-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".agent-sandbox.yml"),
+        `
 profiles:
-  test:
+  from-yml:
     agent: claude
-    nix:
-      enable: false
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles.test.nix.enable).toEqual(false);
-  });
-});
+`,
+      );
+      // No .pkl file → should not find config
+      await expect(
+        loadConfig({ startDir: tmpDir, globalConfigPath: null }),
+      ).rejects.toThrow("not found");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
 
-test("loadConfig: handles nix enable=auto from YAML", async () => {
-  const yaml = `
-profiles:
-  test:
-    agent: claude
-    nix:
-      enable: auto
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles.test.nix.enable).toEqual("auto");
-  });
-});
+test.skipIf(!hasPkl)(
+  "loadConfig: .nix file is ignored (only .pkl is recognized)",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-nix-ignored-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".agent-sandbox.nix"),
+        `
+{
+  profiles = {
+    from-nix = {
+      agent = "claude";
+    };
+  };
+}
+`,
+      );
+      // No .pkl file → should not find config
+      await expect(
+        loadConfig({ startDir: tmpDir, globalConfigPath: null }),
+      ).rejects.toThrow("not found");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
 
-test("loadConfig: env with command entries from YAML", async () => {
-  const yaml = `
+test.skipIf(!hasPkl)(
+  "loadConfig: .pkl is loaded even when .yml and .nix coexist",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-wins-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".agent-sandbox.yml"),
+        `
 profiles:
-  test:
-    agent: claude
-    env:
-      - key: STATIC
-        val: hello
-      - key_cmd: "printf DYNAMIC"
-        val_cmd: "printf world"
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles.test.env.length).toEqual(2);
-    expect(config.profiles.test.env[0]).toEqual({
-      key: "STATIC",
-      val: "hello",
-      mode: "set",
-    });
-    expect(config.profiles.test.env[1]).toEqual({
-      keyCmd: "printf DYNAMIC",
-      valCmd: "printf world",
-      mode: "set",
-    });
-  });
-});
-
-test("loadConfig: worktree with defaults from YAML", async () => {
-  const yaml = `
-profiles:
-  test:
-    agent: claude
-    worktree: {}
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles.test.worktree?.base).toEqual("origin/main");
-    expect(config.profiles.test.worktree?.onCreate).toEqual("");
-  });
-});
-
-test("loadConfig: extra-mounts mode defaults to ro from YAML", async () => {
-  const yaml = `
-profiles:
-  test:
-    agent: claude
-    extra-mounts:
-      - src: /tmp
-        dst: /mnt/tmp
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles.test.extraMounts[0].mode).toEqual("ro");
-  });
-});
+  from-yml:
+    agent: copilot
+`,
+      );
+      await writeFile(
+        path.join(tmpDir, ".agent-sandbox.nix"),
+        `
+{
+  profiles = {
+    from-nix = { agent = "copilot"; };
+  };
+}
+`,
+      );
+      await writeFile(
+        path.join(tmpDir, ".agent-sandbox.pkl"),
+        `
+profiles {
+  ["from-pkl"] {
+    agent = "claude"
+  }
+}
+`,
+      );
+      const config = await loadConfig({
+        startDir: tmpDir,
+        globalConfigPath: null,
+      });
+      expect("from-pkl" in config.profiles).toEqual(true);
+      expect("from-yml" in config.profiles).toEqual(false);
+      expect("from-nix" in config.profiles).toEqual(false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
 
 // --- resolveProfile ---
 
@@ -661,344 +591,6 @@ test("validateConfig: nix.extra-packages preserved", () => {
   ]);
 });
 
-// --- loadConfig + resolveProfile 統合テスト (ファイル → プロファイル解決) ---
-
-test("loadConfig + resolveProfile: load YAML and resolve default profile", async () => {
-  const yaml = `
-default: production
-profiles:
-  staging:
-    agent: copilot
-  production:
-    agent: claude
-    agent-args:
-      - "--dangerously-skip-permissions"
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    const { name, profile } = resolveProfile(config);
-    expect(name).toEqual("production");
-    expect(profile.agent).toEqual("claude");
-    expect(profile.agentArgs).toEqual(["--dangerously-skip-permissions"]);
-  });
-});
-
-test("loadConfig + resolveProfile: load YAML and resolve explicit profile", async () => {
-  const yaml = `
-default: production
-profiles:
-  staging:
-    agent: copilot
-    agent-args:
-      - "--yolo"
-  production:
-    agent: claude
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    const { name, profile } = resolveProfile(config, "staging");
-    expect(name).toEqual("staging");
-    expect(profile.agent).toEqual("copilot");
-    expect(profile.agentArgs).toEqual(["--yolo"]);
-  });
-});
-
-test("loadConfig + resolveProfile: load YAML with single profile auto-resolves", async () => {
-  const yaml = `
-profiles:
-  only:
-    agent: claude
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    const { name, profile } = resolveProfile(config);
-    expect(name).toEqual("only");
-    expect(profile.agent).toEqual("claude");
-  });
-});
-
-test("loadConfig + resolveProfile: load YAML from nested directory and resolve", async () => {
-  await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
-    await writeFile(
-      path.join(rootDir, ".agent-sandbox.yml"),
-      `
-default: nested-test
-profiles:
-  nested-test:
-    agent: copilot
-    nix:
-      enable: false
-`,
-    );
-
-    const config = await loadConfig({
-      startDir: grandchildDir,
-      globalConfigPath: null,
-    });
-    const { name, profile } = resolveProfile(config);
-    expect(name).toEqual("nested-test");
-    expect(profile.agent).toEqual("copilot");
-    expect(profile.nix.enable).toEqual(false);
-  });
-});
-
-test("loadConfig + resolveProfile: complex YAML with worktree, env, extra-mounts all together", async () => {
-  const yaml = `
-default: full-stack
-profiles:
-  full-stack:
-    agent: claude
-    agent-args:
-      - "--dangerously-skip-permissions"
-    worktree:
-      base: origin/main
-      on-create: "npm install && npm run build"
-    nix:
-      enable: true
-      mount-socket: true
-      extra-packages:
-        - nixpkgs#ripgrep
-    docker:
-      enable: true
-    gcloud:
-      mount-config: true
-    aws:
-      mount-config: true
-    gpg:
-      forward-agent: true
-    extra-mounts:
-      - src: /tmp/data
-        dst: /data
-        mode: rw
-    env:
-      - key: NODE_ENV
-        val: development
-      - key_cmd: "printf REGION"
-        val_cmd: "printf us-east-1"
-`;
-  await withTempConfig(yaml, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    const { profile } = resolveProfile(config);
-    expect(profile.agent).toEqual("claude");
-    expect(profile.agentArgs).toEqual(["--dangerously-skip-permissions"]);
-    expect(profile.worktree?.base).toEqual("origin/main");
-    expect(profile.worktree?.onCreate).toEqual("npm install && npm run build");
-    expect(profile.nix.enable).toEqual(true);
-    expect(profile.nix.extraPackages).toEqual(["nixpkgs#ripgrep"]);
-    expect(profile.docker.enable).toEqual(true);
-    expect(profile.gcloud.mountConfig).toEqual(true);
-    expect(profile.aws.mountConfig).toEqual(true);
-    expect(profile.gpg.forwardAgent).toEqual(true);
-    expect(profile.extraMounts.length).toEqual(1);
-    expect(profile.env.length).toEqual(2);
-  });
-});
-
-// --- .agent-sandbox.nix support ---
-
-/** 一時ディレクトリに .nix 設定ファイルを配置してテストを実行するヘルパー */
-async function withTempNixConfig(
-  nixExpr: string,
-  fn: (dir: string) => Promise<void>,
-): Promise<void> {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-nix-test-"));
-  try {
-    await writeFile(path.join(tmpDir, ".agent-sandbox.nix"), nixExpr);
-    await fn(tmpDir);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-}
-
-test("loadConfig: loads .agent-sandbox.nix when no .yml exists", async () => {
-  const nixExpr = `
-{
-  profiles = {
-    dev = {
-      agent = "claude";
-    };
-  };
-}
-`;
-  await withTempNixConfig(nixExpr, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    expect(config.profiles.dev.agent).toEqual("claude");
-    expect(config.profiles.dev.nix.enable).toEqual("auto");
-  });
-});
-
-test("loadConfig: .yml takes priority over .nix", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-priority-"));
-  try {
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.yml"),
-      `
-profiles:
-  from-yml:
-    agent: claude
-`,
-    );
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.nix"),
-      `
-{
-  profiles = {
-    from-nix = {
-      agent = "copilot";
-    };
-  };
-}
-`,
-    );
-    const config = await loadConfig({
-      startDir: tmpDir,
-      globalConfigPath: null,
-    });
-    expect("from-yml" in config.profiles).toEqual(true);
-    expect("from-nix" in config.profiles).toEqual(false);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("loadConfig: .yml takes priority over .pkl", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-priority-"));
-  try {
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.yml"),
-      `
-profiles:
-  from-yml:
-    agent: claude
-`,
-    );
-    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
-    const config = await loadConfig({
-      startDir: tmpDir,
-      globalConfigPath: null,
-    });
-    expect("from-yml" in config.profiles).toEqual(true);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("loadConfig: .nix takes priority over .pkl", async () => {
-  const tmpDir = await mkdtemp(
-    path.join(tmpdir(), "nas-cfg-nix-pkl-priority-"),
-  );
-  try {
-    await writeFile(
-      path.join(tmpDir, ".agent-sandbox.nix"),
-      `
-{
-  profiles = {
-    from-nix = {
-      agent = "claude";
-    };
-  };
-}
-`,
-    );
-    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
-    const config = await loadConfig({
-      startDir: tmpDir,
-      globalConfigPath: null,
-    });
-    expect("from-nix" in config.profiles).toEqual(true);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("loadConfig: .pkl CLI not available shows helpful error", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nocli-"));
-  const origPath = process.env.PATH;
-  process.env.PATH = "";
-  try {
-    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
-    await expect(
-      loadConfig({ startDir: tmpDir, globalConfigPath: null }),
-    ).rejects.toThrow("but 'pkl' command is not available on PATH");
-  } finally {
-    process.env.PATH = origPath;
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("loadConfig: .nix with full profile fields", async () => {
-  const nixExpr = `
-{
-  default = "full";
-  profiles = {
-    full = {
-      agent = "copilot";
-      agent-args = [ "--yolo" "--verbose" ];
-      nix = {
-        enable = true;
-        mount-socket = true;
-        extra-packages = [ "nixpkgs#ripgrep" ];
-      };
-      docker = {
-        enable = true;
-      };
-      extra-mounts = [
-        { src = "/tmp"; dst = "/mnt/tmp"; mode = "rw"; }
-      ];
-      env = [
-        { key = "MY_VAR"; val = "my_value"; }
-      ];
-    };
-  };
-}
-`;
-  await withTempNixConfig(nixExpr, async (dir) => {
-    const config = await loadConfig({ startDir: dir, globalConfigPath: null });
-    const p = config.profiles.full;
-    expect(config.default).toEqual("full");
-    expect(p.agent).toEqual("copilot");
-    expect(p.agentArgs).toEqual(["--yolo", "--verbose"]);
-    expect(p.nix.enable).toEqual(true);
-    expect(p.nix.mountSocket).toEqual(true);
-    expect(p.nix.extraPackages).toEqual(["nixpkgs#ripgrep"]);
-    expect(p.docker.enable).toEqual(true);
-    expect(p.extraMounts.length).toEqual(1);
-    expect(p.extraMounts[0].mode).toEqual("rw");
-    expect(p.env[0]).toEqual({ key: "MY_VAR", val: "my_value", mode: "set" });
-  });
-});
-
-test("loadConfig: searches upward for .nix config file", async () => {
-  await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
-    await writeFile(
-      path.join(rootDir, ".agent-sandbox.nix"),
-      `
-{
-  profiles = {
-    test = {
-      agent = "claude";
-    };
-  };
-}
-`,
-    );
-    const config = await loadConfig({
-      startDir: grandchildDir,
-      globalConfigPath: null,
-    });
-    expect(config.profiles.test.agent).toEqual("claude");
-  });
-});
-
-test("loadConfig: throws for invalid nix expression", async () => {
-  const nixExpr = `{ invalid syntax !!!`;
-  await withTempNixConfig(nixExpr, async (dir) => {
-    await expect(
-      loadConfig({ startDir: dir, globalConfigPath: null }),
-    ).rejects.toThrow("Failed to evaluate");
-  });
-});
-
 // --- XDG_CONFIG_HOME サポート ---
 
 /** XDG_CONFIG_HOME を一時的に差し替えてテストを実行するヘルパー */
@@ -1019,107 +611,80 @@ async function withXdgConfigHome(
   }
 }
 
-test("loadGlobalConfig: uses XDG_CONFIG_HOME when set", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-test-"));
-  try {
-    const nasDir = path.join(tmpDir, "nas");
-    await mkdir(nasDir);
-    await writeFile(
-      path.join(nasDir, "agent-sandbox.yml"),
-      `
-profiles:
-  xdg-profile:
-    agent: claude
-`,
-    );
-    await withXdgConfigHome(tmpDir, async () => {
-      const result = await loadGlobalConfig();
-      expect(result?.profiles?.["xdg-profile"]?.agent).toEqual("claude");
-    });
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("loadGlobalConfig: falls back to HOME/.config/nas without XDG_CONFIG_HOME", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-home-test-"));
-  try {
-    const nasDir = path.join(tmpDir, ".config", "nas");
-    await mkdir(nasDir, { recursive: true });
-    await writeFile(
-      path.join(nasDir, "agent-sandbox.yml"),
-      `
-profiles:
-  home-profile:
-    agent: copilot
-`,
-    );
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = tmpDir;
-    if (prevXdg !== undefined) delete process.env.XDG_CONFIG_HOME;
+test.skipIf(!hasPkl)(
+  "loadGlobalConfig: uses XDG_CONFIG_HOME when set",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-test-"));
     try {
-      const result = await loadGlobalConfig();
-      expect(result?.profiles?.["home-profile"]?.agent).toEqual("copilot");
-    } finally {
-      if (prevHome !== undefined) process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
-    }
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
+      const nasDir = path.join(tmpDir, "nas");
+      await mkdir(nasDir);
+      await writeFile(
+        path.join(nasDir, "agent-sandbox.pkl"),
+        `
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["xdg-profile"] {
+    agent = "claude"
   }
-});
+}
+`,
+      );
+      await withXdgConfigHome(tmpDir, async () => {
+        const result = await loadGlobalConfig();
+        expect(result?.profiles?.["xdg-profile"]?.agent).toEqual("claude");
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadGlobalConfig: falls back to HOME/.config/nas without XDG_CONFIG_HOME",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-home-test-"));
+    try {
+      const nasDir = path.join(tmpDir, ".config", "nas");
+      await mkdir(nasDir, { recursive: true });
+      await writeFile(
+        path.join(nasDir, "agent-sandbox.pkl"),
+        `
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["home-profile"] {
+    agent = "copilot"
+  }
+}
+`,
+      );
+      const prevHome = process.env.HOME;
+      const prevXdg = process.env.XDG_CONFIG_HOME;
+      process.env.HOME = tmpDir;
+      if (prevXdg !== undefined) delete process.env.XDG_CONFIG_HOME;
+      try {
+        const result = await loadGlobalConfig();
+        expect(result?.profiles?.["home-profile"]?.agent).toEqual("copilot");
+      } finally {
+        if (prevHome !== undefined) process.env.HOME = prevHome;
+        if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      }
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
 
 // --- 明示パスのエラー伝播 ---
 
-test("loadGlobalConfig: throws for explicit path with malformed YAML", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-err-"));
-  try {
-    const cfgPath = path.join(tmpDir, "bad.yml");
-    await writeFile(cfgPath, "{{{{ : invalid yaml : }}}}");
-    await expect(loadGlobalConfig(cfgPath)).rejects.toThrow();
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
 test("loadGlobalConfig: throws for explicit path that does not exist", async () => {
   await expect(
-    loadGlobalConfig("/nonexistent/nas/config.yml"),
+    loadGlobalConfig("/nonexistent/nas/config.pkl"),
   ).rejects.toThrow();
 });
 
 // --- 自動検出グローバル設定のエラー伝播 ---
-
-test("loadGlobalConfig: throws for malformed YAML in discovered global config", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-err-"));
-  try {
-    const nasDir = path.join(tmpDir, "nas");
-    await mkdir(nasDir);
-    await writeFile(
-      path.join(nasDir, "agent-sandbox.yml"),
-      "{{{{ : invalid yaml : }}}}",
-    );
-    await withXdgConfigHome(tmpDir, async () => {
-      await expect(loadGlobalConfig()).rejects.toThrow();
-    });
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("loadGlobalConfig: returns null when no global config file exists", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-empty-"));
-  try {
-    // nasDir 自体を作らない → stat で NotFound → fall through → null
-    await withXdgConfigHome(tmpDir, async () => {
-      const result = await loadGlobalConfig();
-      expect(result).toEqual(null);
-    });
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
 
 test("loadGlobalConfig: .pkl CLI not available shows helpful error", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-pkl-nocli-"));
@@ -1140,148 +705,40 @@ test("loadGlobalConfig: .pkl CLI not available shows helpful error", async () =>
   }
 });
 
-// --- Deprecation warning tests ---
-
-/** pkl コマンドが利用可能か確認する */
-async function pklAvailable(): Promise<boolean> {
+test("loadGlobalConfig: returns null when no global config file exists", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-empty-"));
   try {
-    const proc = Bun.spawn(["pkl", "--version"], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    const code = await proc.exited;
-    return code === 0;
-  } catch (e) {
-    if (
-      e instanceof Error &&
-      "code" in e &&
-      (e as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return false;
-    }
-    throw e;
-  }
-}
-
-const hasPkl = await pklAvailable();
-
-test("deprecation warning: emitted when loading YAML config", async () => {
-  _resetDeprecationWarningForTesting();
-  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    const yaml = `
-profiles:
-  test:
-    agent: claude
-`;
-    await withTempConfig(yaml, async (dir) => {
-      await loadConfig({ startDir: dir, globalConfigPath: null });
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      const msg = warnSpy.mock.calls[0][0] as string;
-      expect(msg).toContain("[deprecation]");
-      expect(msg).toContain(".agent-sandbox.yml");
-      expect(msg).toContain("YAML config format is deprecated");
-      expect(msg).toContain("nas config migrate");
+    // nasDir 自体を作らない → stat で NotFound → null
+    await withXdgConfigHome(tmpDir, async () => {
+      const result = await loadGlobalConfig();
+      expect(result).toEqual(null);
     });
   } finally {
-    warnSpy.mockRestore();
-  }
-});
-
-test("deprecation warning: emitted when loading Nix config", async () => {
-  _resetDeprecationWarningForTesting();
-  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    const nixExpr = `
-{
-  profiles = {
-    dev = {
-      agent = "claude";
-    };
-  };
-}
-`;
-    await withTempNixConfig(nixExpr, async (dir) => {
-      await loadConfig({ startDir: dir, globalConfigPath: null });
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      const msg = warnSpy.mock.calls[0][0] as string;
-      expect(msg).toContain("[deprecation]");
-      expect(msg).toContain(".agent-sandbox.nix");
-      expect(msg).toContain("Nix config format is deprecated");
-    });
-  } finally {
-    warnSpy.mockRestore();
+    await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
 test.skipIf(!hasPkl)(
-  "deprecation warning: NOT emitted when loading Pkl config",
+  "loadGlobalConfig: ignores .yml in global config dir",
   async () => {
-    _resetDeprecationWarningForTesting();
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nowarn-"));
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-yml-ignored-"));
     try {
+      const nasDir = path.join(tmpDir, "nas");
+      await mkdir(nasDir);
       await writeFile(
-        path.join(tmpDir, ".agent-sandbox.pkl"),
+        path.join(nasDir, "agent-sandbox.yml"),
         `
-amends "modulepath:/Config.pkl"
-
-profiles {
-  ["dev"] {
-    agent = "claude"
-  }
-}
+profiles:
+  test:
+    agent: claude
 `,
       );
-      await loadConfig({ startDir: tmpDir, globalConfigPath: null });
-      expect(warnSpy).not.toHaveBeenCalled();
+      await withXdgConfigHome(tmpDir, async () => {
+        const result = await loadGlobalConfig();
+        expect(result).toEqual(null);
+      });
     } finally {
-      warnSpy.mockRestore();
       await rm(tmpDir, { recursive: true, force: true });
     }
   },
 );
-
-test("deprecation warning: emitted only once per process", async () => {
-  _resetDeprecationWarningForTesting();
-  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    const yaml = `
-profiles:
-  test:
-    agent: claude
-`;
-    await withTempConfig(yaml, async (dir) => {
-      await loadConfig({ startDir: dir, globalConfigPath: null });
-      await loadConfig({ startDir: dir, globalConfigPath: null });
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-    });
-  } finally {
-    warnSpy.mockRestore();
-  }
-});
-
-test("deprecation warning: suppressed when NAS_NO_DEPRECATION_WARN=1", async () => {
-  _resetDeprecationWarningForTesting();
-  const prev = process.env.NAS_NO_DEPRECATION_WARN;
-  process.env.NAS_NO_DEPRECATION_WARN = "1";
-  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    const yaml = `
-profiles:
-  test:
-    agent: claude
-`;
-    await withTempConfig(yaml, async (dir) => {
-      await loadConfig({ startDir: dir, globalConfigPath: null });
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-  } finally {
-    warnSpy.mockRestore();
-    if (prev !== undefined) {
-      process.env.NAS_NO_DEPRECATION_WARN = prev;
-    } else {
-      delete process.env.NAS_NO_DEPRECATION_WARN;
-    }
-  }
-});

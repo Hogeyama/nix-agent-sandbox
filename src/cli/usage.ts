@@ -110,16 +110,16 @@ Examples:
   nas my-profile -b feature/login       # Create worktree from feature/login
   nas --worktree @                      # Use default profile, base current HEAD
 
-Profile agent-args (in .agent-sandbox.yml):
-  profiles:
-    copilot-nix:
-      agent: copilot
-      agent-args:
-        - "--yolo"
-    codex-nix:
-      agent: codex
-      agent-args:
-        - "--model"
-        - "gpt-5-codex"
+Profile agent-args (in .agent-sandbox.pkl):
+  profiles {
+    ["copilot-nix"] {
+      agent = "copilot"
+      agentArgs = new Listing { "--yolo" }
+    }
+    ["codex-nix"] {
+      agent = "codex"
+      agentArgs = new Listing { "--model"; "gpt-5-codex" }
+    }
+  }
 `);
 }

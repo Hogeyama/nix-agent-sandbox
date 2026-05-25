@@ -1,5 +1,5 @@
 /**
- * YAML 設定ファイルの読み込み
+ * Pkl 設定ファイルの読み込み
  */
 
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -10,31 +10,7 @@ import { normalizePklKeys, rawConfigToPklSource } from "./pkl.ts";
 import type { Config, RawConfig, RawProfile } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
-const CONFIG_FILENAME_YML = ".agent-sandbox.yml";
-const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 const CONFIG_FILENAME_PKL = ".agent-sandbox.pkl";
-
-// --- Deprecation warning for YAML/Nix config formats ---
-
-let deprecationWarned = false;
-
-function warnDeprecatedConfigFormat(
-  format: "yml" | "nix",
-  filePath: string,
-): void {
-  if (deprecationWarned) return;
-  if (process.env.NAS_NO_DEPRECATION_WARN === "1") return;
-  deprecationWarned = true;
-  const formatLabel = format === "yml" ? "YAML" : "Nix";
-  console.warn(
-    `[deprecation] ${filePath}: ${formatLabel} config format is deprecated. Migrate to Pkl with \`nas config migrate\`. Support will be removed in a future release.`,
-  );
-}
-
-/** Reset the deprecation warning flag (for testing only). */
-export function _resetDeprecationWarningForTesting(): void {
-  deprecationWarned = false;
-}
 
 /** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
 function getGlobalConfigDir(): string {
@@ -67,19 +43,12 @@ export async function loadConfig(
       : await loadGlobalConfig(opts.globalConfigPath);
   const found = await findConfigFile(opts.startDir ?? process.cwd());
 
-  // Nix ローカル設定が関数の場合、グローバル設定を super として渡す
   const localRaw = found ? await loadLocalConfig(found, globalRaw) : null;
 
   if (!globalRaw && !localRaw) {
     throw new Error(
-      `${CONFIG_FILENAME_YML} (or ${CONFIG_FILENAME_NIX} / ${CONFIG_FILENAME_PKL}) not found in current directory or parent directories, and no global config found in ${getGlobalConfigDir()}`,
+      `${CONFIG_FILENAME_PKL} not found in current directory or parent directories, and no global config found in ${getGlobalConfigDir()}`,
     );
-  }
-
-  // Nix 関数でマージ済みの場合は TypeScript マージをスキップ
-  if (localRaw?._nixFunctionMerged) {
-    const { _nixFunctionMerged: _, ...raw } = localRaw;
-    return validateConfig(raw);
   }
 
   // Pkl で自己完結している場合は TypeScript マージをスキップ
@@ -97,49 +66,17 @@ export async function loadGlobalConfig(
   configPath?: string,
 ): Promise<RawConfig | null> {
   if (configPath) {
-    // 明示パス指定時はそのまま読む（エラーはそのまま伝播）
-    return await loadConfigByPath(configPath);
+    // 明示パス指定時は .pkl として読む（エラーはそのまま伝播）
+    return await loadPklConfig(configPath);
   }
-  // .yml → .nix → .pkl の順で探す
-  for (const [filename, format] of [
-    ["agent-sandbox.yml", "yml"],
-    ["agent-sandbox.nix", "nix"],
-    ["agent-sandbox.pkl", "pkl"],
-  ] as const) {
-    const candidate = path.join(getGlobalConfigDir(), filename);
-    try {
-      await stat(candidate);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw e; // 予期しない stat エラー（権限不足など）は伝播
-    }
-    // ファイルが存在する場合、読み込み・解析エラーは伝播させる
-    if (format === "yml") {
-      warnDeprecatedConfigFormat("yml", candidate);
-      const text = await readFile(candidate, "utf8");
-      return Bun.YAML.parse(text) as RawConfig;
-    }
-    if (format === "pkl") {
-      return await loadPklConfig(candidate);
-    }
-    warnDeprecatedConfigFormat("nix", candidate);
-    return await loadNixConfig(candidate);
+  const candidate = path.join(getGlobalConfigDir(), "agent-sandbox.pkl");
+  try {
+    await stat(candidate);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e; // 予期しない stat エラー（権限不足など）は伝播
   }
-  return null;
-}
-
-/** パスから形式を判定して読み込む（エラーはそのまま伝播） */
-async function loadConfigByPath(filePath: string): Promise<RawConfig> {
-  if (filePath.endsWith(".nix")) {
-    warnDeprecatedConfigFormat("nix", filePath);
-    return await loadNixConfig(filePath);
-  }
-  if (filePath.endsWith(".pkl")) {
-    return await loadPklConfig(filePath);
-  }
-  warnDeprecatedConfigFormat("yml", filePath);
-  const text = await readFile(filePath, "utf8");
-  return Bun.YAML.parse(text) as RawConfig;
+  return await loadPklConfig(candidate);
 }
 
 /** グローバルとローカルの RawConfig をマージする */
@@ -265,110 +202,14 @@ function shallowMerge<T extends Record<string, unknown>>(
 /** 設定ファイルの検索結果 */
 interface ConfigFileFound {
   path: string;
-  format: "yml" | "nix" | "pkl";
 }
 
 /** ローカル設定ファイルを読み込む */
 async function loadLocalConfig(
   found: ConfigFileFound,
   globalRaw?: RawConfig | null,
-): Promise<
-  RawConfig & { _nixFunctionMerged?: boolean; _pklSelfContained?: boolean }
-> {
-  if (found.format === "yml") {
-    warnDeprecatedConfigFormat("yml", found.path);
-    return Bun.YAML.parse(await readFile(found.path, "utf8")) as RawConfig;
-  }
-  if (found.format === "pkl") {
-    return await loadPklConfig(found.path, globalRaw ?? undefined);
-  }
-  warnDeprecatedConfigFormat("nix", found.path);
-  return await loadNixConfig(found.path, globalRaw ?? undefined);
-}
-
-/** nix コマンドが PATH 上に存在するか確認する */
-async function nixCommandExists(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn(["nix", "--version"], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    const code = await proc.exited;
-    return code === 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * .agent-sandbox.nix を nix eval で評価して RawConfig を得る。
- *
- * Nix 式が関数の場合、globalRaw を引数 (super) として適用する。
- * 関数でマージされた場合、返り値に _nixFunctionMerged: true を付与する。
- */
-async function loadNixConfig(
-  nixPath: string,
-  globalRaw?: RawConfig,
-): Promise<RawConfig & { _nixFunctionMerged?: boolean }> {
-  if (!(await nixCommandExists())) {
-    throw new Error(
-      `Found ${CONFIG_FILENAME_NIX} at ${nixPath}, but 'nix' command is not available on PATH. Install Nix or use ${CONFIG_FILENAME_YML} instead.`,
-    );
-  }
-
-  const globalJson = JSON.stringify(globalRaw ?? {});
-
-  // グローバル設定を一時ファイルに書き出す
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-global-"));
-  const globalFile = path.join(tmpDir, "global.json");
-  try {
-    await writeFile(globalFile, globalJson);
-
-    const nixPathArg = buildNixJsonStringLiteral(nixPath);
-    const globalFileArg = buildNixJsonStringLiteral(globalFile);
-
-    // Nix 式: 関数なら super を渡す、attrset ならそのまま返す
-    const nixExpr = `
-      let
-        local = import (builtins.fromJSON ${nixPathArg});
-        global = builtins.fromJSON (builtins.readFile (builtins.fromJSON ${globalFileArg}));
-      in
-        if builtins.isFunction local then
-          { value = local global; __nixFunctionMerged = true; }
-        else
-          { value = local; __nixFunctionMerged = false; }
-    `;
-    const proc = Bun.spawn(
-      ["nix", "eval", "--impure", "--json", "--expr", nixExpr],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const [stdoutText, stderrText] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const code = await proc.exited;
-    if (code !== 0) {
-      const errMsg = stderrText.trim();
-      throw new Error(
-        `Failed to evaluate ${nixPath}: nix eval exited with code ${code}\n${errMsg}`,
-      );
-    }
-    const json = stdoutText;
-    const result = JSON.parse(json) as {
-      value: RawConfig;
-      __nixFunctionMerged: boolean;
-    };
-    if (result.__nixFunctionMerged) {
-      return { ...result.value, _nixFunctionMerged: true };
-    }
-    return result.value;
-  } finally {
-    try {
-      await rm(tmpDir, { recursive: true, force: true });
-    } catch {
-      // cleanup best-effort
-    }
-  }
+): Promise<RawConfig & { _pklSelfContained?: boolean }> {
+  return await loadPklConfig(found.path, globalRaw ?? undefined);
 }
 
 /** pkl コマンドが PATH 上に存在するか確認する */
@@ -411,7 +252,7 @@ async function loadPklConfig(
 ): Promise<RawConfig & { _pklSelfContained?: boolean }> {
   if (!(await pklCommandExists())) {
     throw new Error(
-      `Found ${CONFIG_FILENAME_PKL} at ${pklPath}, but 'pkl' command is not available on PATH. Install Pkl or use ${CONFIG_FILENAME_YML} instead.`,
+      `Found ${CONFIG_FILENAME_PKL} at ${pklPath}, but 'pkl' command is not available on PATH. Install Pkl (https://pkl-lang.org/main/current/pkl-cli/index.html#installation).`,
     );
   }
 
@@ -442,7 +283,10 @@ async function loadPklConfig(
     // agent-sandbox.global.pkl は常に書き出す。
     // globalRaw が空/未指定でも、ファイル自体は `amends "modulepath:/Config.pkl"` を含むので
     // ユーザの `amends "modulepath:/agent-sandbox.global.pkl"` がそのまま解決できる。
-    const globalPklSource = rawConfigToPklSource(globalRaw ?? {});
+    // Strip internal flags before serializing to Pkl source.
+    const { _pklSelfContained: _, ...cleanGlobalRaw } = (globalRaw ??
+      {}) as RawConfig & { _pklSelfContained?: boolean };
+    const globalPklSource = rawConfigToPklSource(cleanGlobalRaw);
     await writeFile(
       path.join(tmpDir, "agent-sandbox.global.pkl"),
       globalPklSource,
@@ -493,26 +337,18 @@ async function loadPklConfig(
   }
 }
 
-/** 指定ディレクトリから上位に向かって設定ファイルを探す (.yml 優先、なければ .nix、最後に .pkl) */
+/** 指定ディレクトリから上位に向かって .agent-sandbox.pkl を探す */
 async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
   let current = path.resolve(dir);
   const root = path.parse(current).root;
 
   while (true) {
-    // .yml を優先
-    for (const [filename, format] of [
-      [CONFIG_FILENAME_YML, "yml"],
-      [CONFIG_FILENAME_NIX, "nix"],
-      [CONFIG_FILENAME_PKL, "pkl"],
-    ] as const) {
-      const candidate = path.join(current, filename);
-      try {
-        await stat(candidate);
-        return { path: candidate, format };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          continue;
-        }
+    const candidate = path.join(current, CONFIG_FILENAME_PKL);
+    try {
+      await stat(candidate);
+      return { path: candidate };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
     }
@@ -522,10 +358,6 @@ async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
     }
     current = parent;
   }
-}
-
-function buildNixJsonStringLiteral(value: string): string {
-  return JSON.stringify(JSON.stringify(value));
 }
 
 /** プロファイルを解決 (名前指定 or default) */

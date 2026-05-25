@@ -1,7 +1,7 @@
 /**
- * Zod schemas for .agent-sandbox.yml validation.
+ * Zod schemas for config validation.
  *
- * Each schema accepts YAML raw structure (kebab-case) and transforms to Parsed types (camelCase).
+ * Each schema accepts raw config structure (kebab-case) and transforms to Parsed types (camelCase).
  */
 
 import { z } from "zod";

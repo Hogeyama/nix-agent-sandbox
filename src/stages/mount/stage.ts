@@ -141,12 +141,12 @@ export function planMount(
   args.push("-w", containerWorkDir);
   envVars.WORKSPACE = containerWorkDir;
 
-  // .agent-sandbox.{yml,nix} を RO bind mount で保護する。
+  // .agent-sandbox.pkl を RO bind mount で保護する。
   // 親ディレクトリは RW マウントのため agent が個別ファイルを書き換え可能だが、
   // file bind mount の target は mount point 扱いとなり、
   // Linux では unlink/rename/open(O_WRONLY) 全てが EBUSY/EROFS で拒否される。
-  // これにより次回起動時に nas が信頼して読み込む設定（特に hostexec.rules や
-  // nix eval される .nix）の改ざんを防ぐ。
+  // これにより次回起動時に nas が信頼して読み込む設定（特に hostexec.rules）の
+  // 改ざんを防ぐ。
   for (const configPath of probes.localConfigPaths) {
     if (isPathWithin(configPath, mountSource)) {
       addMount(args, mounts, configPath, configPath, true);

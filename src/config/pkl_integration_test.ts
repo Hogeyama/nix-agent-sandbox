@@ -38,9 +38,9 @@ async function pklAvailable(): Promise<boolean> {
 
 const hasPkl = await pklAvailable();
 
-/** 一時ディレクトリにグローバル(YAML) + ローカル(Pkl) を配置してテスト */
+/** 一時ディレクトリにグローバル(Pkl) + ローカル(Pkl) を配置してテスト */
 async function withPklLocalConfig(
-  globalYaml: string,
+  globalPkl: string,
   localPkl: string,
   testBody: (localDir: string, globalPath: string) => Promise<void>,
 ): Promise<void> {
@@ -48,8 +48,8 @@ async function withPklLocalConfig(
   const localDir = path.join(tmpDir, "local");
   await mkdir(localDir, { recursive: true });
   try {
-    const globalPath = path.join(tmpDir, "global.yml");
-    await writeFile(globalPath, globalYaml);
+    const globalPath = path.join(tmpDir, "global.pkl");
+    await writeFile(globalPath, globalPkl);
     await writeFile(path.join(localDir, ".agent-sandbox.pkl"), localPkl);
     await testBody(localDir, globalPath);
   } finally {
@@ -117,13 +117,17 @@ profiles {
 test.skipIf(!hasPkl)(
   "pkl: amends agent-sandbox.global.pkl inherits global config",
   async () => {
-    const globalYaml = `
-profiles:
-  dev:
-    agent: claude
-    network:
-      allowlist:
-        - "api.github.com"
+    const globalPkl = `
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      allowlist = new Listing { "api.github.com" }
+    }
+  }
+}
 `;
     // amends でグローバルを継承し、agent を上書き
     // profiles は Mapping<String, Profile> なのでエントリはブラケット構文必須。
@@ -137,7 +141,7 @@ profiles {
 }
 `;
     await withPklLocalConfig(
-      globalYaml,
+      globalPkl,
       localPkl,
       async (localDir, globalPath) => {
         const config = await loadConfig({
@@ -187,13 +191,17 @@ test.skipIf(!hasPkl)(
       await mkdir(localDir, { recursive: true });
       await mkdir(tmpDirWithSpaces, { recursive: true });
 
-      const globalPath = path.join(baseDir, "global config.yml");
+      const globalPath = path.join(baseDir, "global config.pkl");
       await writeFile(
         globalPath,
         `
-profiles:
-  dev:
-    agent: claude
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+  }
+}
 `,
       );
       await writeFile(

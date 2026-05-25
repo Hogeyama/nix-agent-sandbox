@@ -826,8 +826,8 @@ test("GET /launch/info?cwd=/abs/path uses the cwd-local config", async () => {
   const projectDir = path.join(tmpDir, "proj");
   await mkdir(projectDir, { recursive: true });
   await writeFile(
-    path.join(projectDir, ".agent-sandbox.yml"),
-    "default: cwdprofile\nprofiles:\n  cwdprofile:\n    agent: claude\n",
+    path.join(projectDir, ".agent-sandbox.pkl"),
+    `default = "cwdprofile"\nprofiles {\n  cwdprofile {\n    agent = "claude"\n  }\n}\n`,
   );
 
   const originalXdg = process.env.XDG_CONFIG_HOME;

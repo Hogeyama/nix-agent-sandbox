@@ -305,22 +305,24 @@ describe("getLaunchInfo", () => {
     await rm(testRoot, { recursive: true, force: true });
   });
 
-  async function writeGlobalYml(yaml: string): Promise<void> {
+  async function writeGlobalPkl(pkl: string): Promise<void> {
     const nasDir = path.join(xdgDir, "nas");
     await mkdir(nasDir, { recursive: true });
-    await writeFile(path.join(nasDir, "agent-sandbox.yml"), yaml);
+    await writeFile(path.join(nasDir, "agent-sandbox.pkl"), pkl);
   }
 
-  async function writeLocalYml(dir: string, yaml: string): Promise<void> {
+  async function writeLocalPkl(dir: string, pkl: string): Promise<void> {
     await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, ".agent-sandbox.yml"), yaml);
+    await writeFile(path.join(dir, ".agent-sandbox.pkl"), pkl);
   }
 
   test("引数なし呼び出しは process.cwd() 起点で loadConfig() を呼ぶ", async () => {
     // 引数なし呼び出しは loadConfig() (= process.cwd() 起点) を使う。
     // process.cwd() に依存する具体値は環境依存なので assert せず、
     // 「引数なし / 空 opts / cwd undefined はすべて同一結果」というシグネチャ互換を pin する。
-    await writeGlobalYml(`default: g\nprofiles:\n  g:\n    agent: claude\n`);
+    await writeGlobalPkl(
+      `default = "g"\nprofiles {\n  g {\n    agent = "claude"\n  }\n}\n`,
+    );
     const a = await getLaunchInfo(dummyCtx);
     const b = await getLaunchInfo(dummyCtx, {});
     const c = await getLaunchInfo(dummyCtx, { cwd: undefined });
@@ -331,13 +333,13 @@ describe("getLaunchInfo", () => {
   test("opts.cwd が指定された場合、その cwd 配下の local config を読む", async () => {
     const dirA = path.join(testRoot, "projA");
     const dirB = path.join(testRoot, "projB");
-    await writeLocalYml(
+    await writeLocalPkl(
       dirA,
-      `default: a\nprofiles:\n  a:\n    agent: claude\n`,
+      `default = "a"\nprofiles {\n  a {\n    agent = "claude"\n  }\n}\n`,
     );
-    await writeLocalYml(
+    await writeLocalPkl(
       dirB,
-      `default: b\nprofiles:\n  b:\n    agent: claude\n`,
+      `default = "b"\nprofiles {\n  b {\n    agent = "claude"\n  }\n}\n`,
     );
 
     const infoA = await getLaunchInfo(dummyCtx, { cwd: dirA });
@@ -358,7 +360,9 @@ describe("getLaunchInfo", () => {
   test("opts.cwd が空文字の場合は未指定と同等 (cwd 未指定の結果と一致)", async () => {
     // 空文字は未指定と同じパス (loadConfig() = process.cwd() 起点) を辿るはず。
     // 環境依存の値を直接 assert するのではなく、cwd 未指定の結果と同一であることを pin する。
-    await writeGlobalYml(`default: g\nprofiles:\n  g:\n    agent: claude\n`);
+    await writeGlobalPkl(
+      `default = "g"\nprofiles {\n  g {\n    agent = "claude"\n  }\n}\n`,
+    );
     const infoEmpty = await getLaunchInfo(dummyCtx, { cwd: "" });
     const infoUndef = await getLaunchInfo(dummyCtx);
     expect(infoEmpty.profiles).toEqual(infoUndef.profiles);
@@ -366,7 +370,9 @@ describe("getLaunchInfo", () => {
   });
 
   test("opts.cwd 配下に local 無し + global あり の場合は throw しない (global の profiles が見える)", async () => {
-    await writeGlobalYml(`default: g\nprofiles:\n  g:\n    agent: claude\n`);
+    await writeGlobalPkl(
+      `default = "g"\nprofiles {\n  g {\n    agent = "claude"\n  }\n}\n`,
+    );
     const emptyDir = path.join(testRoot, "no-config-here");
     await mkdir(emptyDir, { recursive: true });
 
