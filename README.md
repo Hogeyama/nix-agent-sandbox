@@ -221,9 +221,24 @@ Deleted branch nas/claude/2026-03-17T13-35-20-819Z (was 48be913).
 
 ## 設定ファイル
 
-プロジェクトルートに `.agent-sandbox.yml` を配置します。カレントディレクトリから上位に向かって自動検索されます。
+プロジェクトルートに `.agent-sandbox.pkl` (Pkl 形式) または `.agent-sandbox.yml` を配置します。カレントディレクトリから上位に向かって自動検索されます。
 `XDG_CONFIG_HOME/nas/agent-sandbox.yml` にグローバル設定を配置できます。
 両方存在する場合は、グローバル設定をベースにプロジェクト設定を上書きする形でマージされます。
+
+> [!IMPORTANT]
+> **Pkl 形式 (`.agent-sandbox.pkl`) を推奨します。** `.agent-sandbox.yml` および `.agent-sandbox.nix` は将来のリリースで廃止される予定です。既存の YAML 設定は `nas config migrate` で Pkl 形式に変換できます。
+
+### YAML から Pkl への移行
+
+既存の `.agent-sandbox.yml` を Pkl 形式に変換するには:
+
+```sh
+nas config migrate
+```
+
+- カレントディレクトリ（または上位）の `.agent-sandbox.yml` を読み込み、同じディレクトリに `.agent-sandbox.pkl` を生成する
+- 既に `.agent-sandbox.pkl` が存在する場合はエラー。`--force` で上書き可能
+- 変換後、`.agent-sandbox.yml` は手動で削除する
 
 ```yaml
 # .agent-sandbox.yml
