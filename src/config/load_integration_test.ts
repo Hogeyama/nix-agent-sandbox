@@ -9,7 +9,12 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { loadConfig, loadGlobalConfig, resolveProfile } from "./load.ts";
+import {
+  _resetDeprecationWarningForTesting,
+  loadConfig,
+  loadGlobalConfig,
+  resolveProfile,
+} from "./load.ts";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -1132,5 +1137,151 @@ test("loadGlobalConfig: .pkl CLI not available shows helpful error", async () =>
   } finally {
     process.env.PATH = origPath;
     await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// --- Deprecation warning tests ---
+
+/** pkl コマンドが利用可能か確認する */
+async function pklAvailable(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["pkl", "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const code = await proc.exited;
+    return code === 0;
+  } catch (e) {
+    if (
+      e instanceof Error &&
+      "code" in e &&
+      (e as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw e;
+  }
+}
+
+const hasPkl = await pklAvailable();
+
+test("deprecation warning: emitted when loading YAML config", async () => {
+  _resetDeprecationWarningForTesting();
+  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const yaml = `
+profiles:
+  test:
+    agent: claude
+`;
+    await withTempConfig(yaml, async (dir) => {
+      await loadConfig({ startDir: dir, globalConfigPath: null });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = warnSpy.mock.calls[0][0] as string;
+      expect(msg).toContain("[deprecation]");
+      expect(msg).toContain(".agent-sandbox.yml");
+      expect(msg).toContain("YAML config format is deprecated");
+      expect(msg).toContain("nas config migrate");
+    });
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test("deprecation warning: emitted when loading Nix config", async () => {
+  _resetDeprecationWarningForTesting();
+  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const nixExpr = `
+{
+  profiles = {
+    dev = {
+      agent = "claude";
+    };
+  };
+}
+`;
+    await withTempNixConfig(nixExpr, async (dir) => {
+      await loadConfig({ startDir: dir, globalConfigPath: null });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = warnSpy.mock.calls[0][0] as string;
+      expect(msg).toContain("[deprecation]");
+      expect(msg).toContain(".agent-sandbox.nix");
+      expect(msg).toContain("Nix config format is deprecated");
+    });
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test.skipIf(!hasPkl)(
+  "deprecation warning: NOT emitted when loading Pkl config",
+  async () => {
+    _resetDeprecationWarningForTesting();
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nowarn-"));
+    try {
+      await writeFile(
+        path.join(tmpDir, ".agent-sandbox.pkl"),
+        `
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+  }
+}
+`,
+      );
+      await loadConfig({ startDir: tmpDir, globalConfigPath: null });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test("deprecation warning: emitted only once per process", async () => {
+  _resetDeprecationWarningForTesting();
+  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const yaml = `
+profiles:
+  test:
+    agent: claude
+`;
+    await withTempConfig(yaml, async (dir) => {
+      await loadConfig({ startDir: dir, globalConfigPath: null });
+      await loadConfig({ startDir: dir, globalConfigPath: null });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test("deprecation warning: suppressed when NAS_NO_DEPRECATION_WARN=1", async () => {
+  _resetDeprecationWarningForTesting();
+  const prev = process.env.NAS_NO_DEPRECATION_WARN;
+  process.env.NAS_NO_DEPRECATION_WARN = "1";
+  const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const yaml = `
+profiles:
+  test:
+    agent: claude
+`;
+    await withTempConfig(yaml, async (dir) => {
+      await loadConfig({ startDir: dir, globalConfigPath: null });
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+  } finally {
+    warnSpy.mockRestore();
+    if (prev !== undefined) {
+      process.env.NAS_NO_DEPRECATION_WARN = prev;
+    } else {
+      delete process.env.NAS_NO_DEPRECATION_WARN;
+    }
   }
 });

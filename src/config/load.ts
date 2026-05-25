@@ -14,6 +14,28 @@ const CONFIG_FILENAME_YML = ".agent-sandbox.yml";
 const CONFIG_FILENAME_NIX = ".agent-sandbox.nix";
 const CONFIG_FILENAME_PKL = ".agent-sandbox.pkl";
 
+// --- Deprecation warning for YAML/Nix config formats ---
+
+let deprecationWarned = false;
+
+function warnDeprecatedConfigFormat(
+  format: "yml" | "nix",
+  filePath: string,
+): void {
+  if (deprecationWarned) return;
+  if (process.env.NAS_NO_DEPRECATION_WARN === "1") return;
+  deprecationWarned = true;
+  const formatLabel = format === "yml" ? "YAML" : "Nix";
+  console.warn(
+    `[deprecation] ${filePath}: ${formatLabel} config format is deprecated. Migrate to Pkl with \`nas config migrate\`. Support will be removed in a future release.`,
+  );
+}
+
+/** Reset the deprecation warning flag (for testing only). */
+export function _resetDeprecationWarningForTesting(): void {
+  deprecationWarned = false;
+}
+
 /** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
 function getGlobalConfigDir(): string {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME;
@@ -93,12 +115,14 @@ export async function loadGlobalConfig(
     }
     // ファイルが存在する場合、読み込み・解析エラーは伝播させる
     if (format === "yml") {
+      warnDeprecatedConfigFormat("yml", candidate);
       const text = await readFile(candidate, "utf8");
       return Bun.YAML.parse(text) as RawConfig;
     }
     if (format === "pkl") {
       return await loadPklConfig(candidate);
     }
+    warnDeprecatedConfigFormat("nix", candidate);
     return await loadNixConfig(candidate);
   }
   return null;
@@ -107,11 +131,13 @@ export async function loadGlobalConfig(
 /** パスから形式を判定して読み込む（エラーはそのまま伝播） */
 async function loadConfigByPath(filePath: string): Promise<RawConfig> {
   if (filePath.endsWith(".nix")) {
+    warnDeprecatedConfigFormat("nix", filePath);
     return await loadNixConfig(filePath);
   }
   if (filePath.endsWith(".pkl")) {
     return await loadPklConfig(filePath);
   }
+  warnDeprecatedConfigFormat("yml", filePath);
   const text = await readFile(filePath, "utf8");
   return Bun.YAML.parse(text) as RawConfig;
 }
@@ -250,11 +276,13 @@ async function loadLocalConfig(
   RawConfig & { _nixFunctionMerged?: boolean; _pklSelfContained?: boolean }
 > {
   if (found.format === "yml") {
+    warnDeprecatedConfigFormat("yml", found.path);
     return Bun.YAML.parse(await readFile(found.path, "utf8")) as RawConfig;
   }
   if (found.format === "pkl") {
     return await loadPklConfig(found.path, globalRaw ?? undefined);
   }
+  warnDeprecatedConfigFormat("nix", found.path);
   return await loadNixConfig(found.path, globalRaw ?? undefined);
 }
 
