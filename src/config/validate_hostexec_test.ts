@@ -27,10 +27,10 @@ test("hostexec config: validates secrets and rules", () => {
               id: "git-readonly",
               match: {
                 argv0: "git",
-                "arg-regex": "^(pull|fetch)\\b",
+                argRegex: "^(pull|fetch)\\b",
               },
               env: { GITHUB_TOKEN: "secret:github_token" },
-              "inherit-env": { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },
+              inheritEnv: { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },
               cwd: { mode: "workspace-or-session-tmp" },
               approval: "prompt",
               fallback: "container",
@@ -119,14 +119,14 @@ test("hostexec config: rejects invalid inherit-env mode", () => {
               {
                 id: "git-readonly",
                 match: { argv0: "git" },
-                "inherit-env": { mode: "all" as never },
+                inheritEnv: { mode: "all" as never },
               },
             ],
           },
         },
       },
     }),
-  ).toThrow("inherit-env.mode");
+  ).toThrow("inheritEnv.mode");
 });
 
 test("hostexec config: rejects invalid notify backend", () => {
@@ -175,7 +175,7 @@ test("hostexec config: accepts once as default-scope", () => {
         agent: "claude",
         hostexec: {
           prompt: {
-            "default-scope": "once",
+            defaultScope: "once",
           },
         },
       },
@@ -192,13 +192,13 @@ test("hostexec config: rejects invalid default-scope", () => {
           agent: "claude",
           hostexec: {
             prompt: {
-              "default-scope": "session" as never,
+              defaultScope: "session" as never,
             },
           },
         },
       },
     }),
-  ).toThrow("hostexec.prompt.default-scope must be one of");
+  ).toThrow("hostexec.prompt.defaultScope must be one of");
 });
 
 test("hostexec config: rejects invalid arg-regex", () => {
@@ -211,14 +211,14 @@ test("hostexec config: rejects invalid arg-regex", () => {
             rules: [
               {
                 id: "git-any",
-                match: { argv0: "git", "arg-regex": "[invalid" },
+                match: { argv0: "git", argRegex: "[invalid" },
               },
             ],
           },
         },
       },
     }),
-  ).toThrow("arg-regex is not a valid regular expression");
+  ).toThrow("argRegex is not a valid regular expression");
 });
 
 test("hostexec config: warns on identical match rules", () => {
@@ -260,7 +260,7 @@ test("hostexec config: warns when catch-all shadows specific rule", () => {
               { id: "git-any", match: { argv0: "git" } },
               {
                 id: "git-pull",
-                match: { argv0: "git", "arg-regex": "^pull" },
+                match: { argv0: "git", argRegex: "^pull" },
               },
             ],
           },
@@ -288,7 +288,7 @@ test("hostexec config: no warning when specific rule comes before catch-all", ()
             rules: [
               {
                 id: "git-pull",
-                match: { argv0: "git", "arg-regex": "^pull" },
+                match: { argv0: "git", argRegex: "^pull" },
               },
               { id: "git-any", match: { argv0: "git" } },
             ],

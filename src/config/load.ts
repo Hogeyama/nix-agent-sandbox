@@ -13,7 +13,6 @@ import {
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
-import { normalizePklKeys } from "./pkl.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -194,7 +193,7 @@ async function loadPklConfig(
       );
     }
     try {
-      return normalizePklKeys(JSON.parse(stdoutText));
+      return JSON.parse(stdoutText);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(

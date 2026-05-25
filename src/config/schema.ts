@@ -1,7 +1,8 @@
 /**
  * Zod schemas for config validation.
  *
- * Each schema accepts raw config structure (kebab-case) and transforms to Parsed types (camelCase).
+ * Each schema accepts camelCase input (matching Pkl eval JSON output)
+ * and transforms to Parsed types.
  */
 
 import { z } from "zod";
@@ -11,7 +12,7 @@ import {
   normalizeHost,
   parseAllowlistEntry,
 } from "../network/protocol.ts";
-import type { EnvConfig, EnvMode, HostExecRule, Profile } from "./types.ts";
+import type { EnvConfig, EnvMode, HostExecRule } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_SESSION_CONFIG,
@@ -101,34 +102,25 @@ function hostListSchema(fieldPath: string) {
 // Leaf schemas
 // ---------------------------------------------------------------------------
 
-export const worktreeSchema = z
-  .object({
-    base: z.string().default("origin/main"),
-    "on-create": z.string().default(""),
-  })
-  .transform((r) => ({
-    base: r.base,
-    onCreate: r["on-create"],
-  }));
+export const worktreeSchema = z.object({
+  base: z.string().default("origin/main"),
+  onCreate: z.string().default(""),
+});
 
 export const sessionSchema = z
   .object({
     multiplex: z.boolean().default(DEFAULT_SESSION_CONFIG.multiplex),
-    "detach-key": z.string().default(DEFAULT_SESSION_CONFIG.detachKey),
+    detachKey: z.string().default(DEFAULT_SESSION_CONFIG.detachKey),
   })
-  .prefault({})
-  .transform((r) => ({
-    multiplex: r.multiplex,
-    detachKey: r["detach-key"],
-  }));
+  .prefault({});
 
 export const nixSchema = z
   .object({
     enable: z
       .union([z.boolean(), z.literal("auto")])
       .default(DEFAULT_NIX_CONFIG.enable),
-    "mount-socket": z.boolean().default(DEFAULT_NIX_CONFIG.mountSocket),
-    "extra-packages": z
+    mountSocket: z.boolean().default(DEFAULT_NIX_CONFIG.mountSocket),
+    extraPackages: z
       .array(
         z
           .string()
@@ -141,12 +133,7 @@ export const nixSchema = z
       )
       .default(DEFAULT_NIX_CONFIG.extraPackages),
   })
-  .prefault({})
-  .transform((r) => ({
-    enable: r.enable,
-    mountSocket: r["mount-socket"],
-    extraPackages: r["extra-packages"],
-  }));
+  .prefault({});
 
 export const dockerSchema = z
   .object({
@@ -157,34 +144,25 @@ export const dockerSchema = z
 
 export const gcloudSchema = z
   .object({
-    "mount-config": z.boolean().default(DEFAULT_GCLOUD_CONFIG.mountConfig),
+    mountConfig: z.boolean().default(DEFAULT_GCLOUD_CONFIG.mountConfig),
   })
-  .prefault({})
-  .transform((r) => ({
-    mountConfig: r["mount-config"],
-  }));
+  .prefault({});
 
 export const awsSchema = z
   .object({
-    "mount-config": z.boolean().default(DEFAULT_AWS_CONFIG.mountConfig),
+    mountConfig: z.boolean().default(DEFAULT_AWS_CONFIG.mountConfig),
   })
-  .prefault({})
-  .transform((r) => ({
-    mountConfig: r["mount-config"],
-  }));
+  .prefault({});
 
 export const gpgSchema = z
   .object({
-    "forward-agent": z.boolean().default(DEFAULT_GPG_CONFIG.forwardAgent),
+    forwardAgent: z.boolean().default(DEFAULT_GPG_CONFIG.forwardAgent),
   })
-  .prefault({})
-  .transform((r) => ({
-    forwardAgent: r["forward-agent"],
-  }));
+  .prefault({});
 
 export const proxySchema = z
   .object({
-    "forward-ports": z
+    forwardPorts: z
       .array(
         z
           .number()
@@ -217,10 +195,7 @@ export const proxySchema = z
         }
       }),
   })
-  .prefault({})
-  .transform((r) => ({
-    forwardPorts: r["forward-ports"],
-  }));
+  .prefault({});
 
 // ---------------------------------------------------------------------------
 // Extra mounts
@@ -236,7 +211,7 @@ const extraMountEntrySchema = z.object(
 );
 
 export const extraMountsSchema = z
-  .array(extraMountEntrySchema, { error: "extra-mounts must be a list" })
+  .array(extraMountEntrySchema, { error: "extraMounts must be a list" })
   .default([]);
 
 // ---------------------------------------------------------------------------
@@ -490,23 +465,14 @@ function dbusRulesSchema(field: string) {
 export const dbusSessionSchema = z
   .object({
     enable: z.boolean().default(DEFAULT_DBUS_SESSION_CONFIG.enable),
-    "source-address": nonEmptyString.optional(),
+    sourceAddress: nonEmptyString.optional(),
     see: dbusNameListSchema("dbus.session.see"),
     talk: dbusNameListSchema("dbus.session.talk"),
     own: dbusNameListSchema("dbus.session.own"),
     calls: dbusRulesSchema("dbus.session.calls"),
     broadcasts: dbusRulesSchema("dbus.session.broadcasts"),
   })
-  .prefault({})
-  .transform((r) => ({
-    enable: r.enable,
-    sourceAddress: r["source-address"],
-    see: r.see,
-    talk: r.talk,
-    own: r.own,
-    calls: r.calls,
-    broadcasts: r.broadcasts,
-  }));
+  .prefault({});
 
 export const dbusSchema = z
   .object({
@@ -585,10 +551,10 @@ export const networkPromptSchema = z
   .object({
     enable: z.boolean().default(DEFAULT_NETWORK_PROMPT_CONFIG.enable),
     denylist: hostListSchema("network.prompt.denylist"),
-    "timeout-seconds": parsePositiveInt(
-      "network.prompt.timeout-seconds",
-    ).default(DEFAULT_NETWORK_PROMPT_CONFIG.timeoutSeconds),
-    "default-scope": zodEnum(["once", "host-port", "host"] as const).default(
+    timeoutSeconds: parsePositiveInt("network.prompt.timeoutSeconds").default(
+      DEFAULT_NETWORK_PROMPT_CONFIG.timeoutSeconds,
+    ),
+    defaultScope: zodEnum(["once", "host-port", "host"] as const).default(
       DEFAULT_NETWORK_PROMPT_CONFIG.defaultScope,
     ),
     notify: zodEnum(["auto", "desktop", "off"] as const).default(
@@ -599,8 +565,8 @@ export const networkPromptSchema = z
   .transform((r) => ({
     enable: r.enable,
     denylist: r.denylist,
-    timeoutSeconds: r["timeout-seconds"],
-    defaultScope: r["default-scope"] as ApprovalScope,
+    timeoutSeconds: r.timeoutSeconds,
+    defaultScope: r.defaultScope as ApprovalScope,
     notify: r.notify,
   }));
 
@@ -659,23 +625,17 @@ export const hookSchema = z
 export const hostexecPromptSchema = z
   .object({
     enable: z.boolean().default(DEFAULT_HOSTEXEC_PROMPT_CONFIG.enable),
-    "timeout-seconds": parsePositiveInt(
-      "hostexec.prompt.timeout-seconds",
-    ).default(DEFAULT_HOSTEXEC_PROMPT_CONFIG.timeoutSeconds),
-    "default-scope": zodEnum(["once", "capability"] as const).default(
+    timeoutSeconds: parsePositiveInt("hostexec.prompt.timeoutSeconds").default(
+      DEFAULT_HOSTEXEC_PROMPT_CONFIG.timeoutSeconds,
+    ),
+    defaultScope: zodEnum(["once", "capability"] as const).default(
       DEFAULT_HOSTEXEC_PROMPT_CONFIG.defaultScope,
     ),
     notify: zodEnum(["auto", "desktop", "off"] as const).default(
       DEFAULT_HOSTEXEC_PROMPT_CONFIG.notify,
     ),
   })
-  .prefault({})
-  .transform((r) => ({
-    enable: r.enable,
-    timeoutSeconds: r["timeout-seconds"],
-    defaultScope: r["default-scope"],
-    notify: r.notify,
-  }));
+  .prefault({});
 
 const hostexecCwdSchema = z
   .object({
@@ -731,95 +691,78 @@ const hostexecInheritEnvSchema = z
   });
 
 function hostexecRuleSchema(_prefix: string, secretNames: Set<string>) {
-  return z
-    .object(
-      {
-        id: nonEmptyString,
-        match: z
-          .object(
-            {
-              argv0: nonEmptyString,
-              "arg-regex": nonEmptyString.optional(),
-            },
-            { error: "must be an object" },
-          )
-          .superRefine((val, ctx) => {
-            if (val["arg-regex"] !== undefined) {
-              try {
-                new RegExp(val["arg-regex"]);
-              } catch {
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  path: ["arg-regex"],
-                  message: `is not a valid regular expression: ${val["arg-regex"]}`,
-                });
-              }
+  return z.object(
+    {
+      id: nonEmptyString,
+      match: z
+        .object(
+          {
+            argv0: nonEmptyString,
+            argRegex: nonEmptyString.optional(),
+          },
+          { error: "must be an object" },
+        )
+        .superRefine((val, ctx) => {
+          if (val.argRegex !== undefined) {
+            try {
+              new RegExp(val.argRegex);
+            } catch {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["argRegex"],
+                message: `is not a valid regular expression: ${val.argRegex}`,
+              });
             }
-          }),
-        cwd: hostexecCwdSchema,
-        env: z
-          .record(z.string(), z.string(), {
-            error: "must be an object",
-          })
-          .prefault({})
-          .superRefine((val, ctx) => {
-            for (const [key, value] of Object.entries(val)) {
-              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  path: [key],
-                  message: `invalid env key name: ${key}`,
-                });
-                continue;
-              }
-              if (typeof value !== "string" || value.trim() === "") {
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  path: [key],
-                  message: "must be a non-empty string",
-                });
-                continue;
-              }
-              if (!value.startsWith("secret:")) {
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  path: [key],
-                  message: "must use secret:<name> reference",
-                });
-                continue;
-              }
-              const secretName = value.slice("secret:".length);
-              if (!secretNames.has(secretName)) {
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  path: [key],
-                  message: `references unknown secret "${secretName}"`,
-                });
-              }
+          }
+        }),
+      cwd: hostexecCwdSchema,
+      env: z
+        .record(z.string(), z.string(), {
+          error: "must be an object",
+        })
+        .prefault({})
+        .superRefine((val, ctx) => {
+          for (const [key, value] of Object.entries(val)) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [key],
+                message: `invalid env key name: ${key}`,
+              });
+              continue;
             }
-          }),
-        "inherit-env": hostexecInheritEnvSchema,
-        approval: zodEnum(["allow", "prompt", "deny"] as const).default(
-          "prompt",
-        ),
-        fallback: zodEnum(["container", "deny"] as const).default("container"),
-      },
-      { error: "must be an object" },
-    )
-    .transform(
-      (r): HostExecRule => ({
-        id: r.id,
-        match: {
-          argv0: r.match.argv0,
-          argRegex: r.match["arg-regex"],
-        },
-        cwd: r.cwd,
-        env: r.env,
-        inheritEnv: r["inherit-env"],
-        approval: r.approval,
-        fallback: r.fallback,
-      }),
-    );
+            if (typeof value !== "string" || value.trim() === "") {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [key],
+                message: "must be a non-empty string",
+              });
+              continue;
+            }
+            if (!value.startsWith("secret:")) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [key],
+                message: "must use secret:<name> reference",
+              });
+              continue;
+            }
+            const secretName = value.slice("secret:".length);
+            if (!secretNames.has(secretName)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [key],
+                message: `references unknown secret "${secretName}"`,
+              });
+            }
+          }
+        }),
+      inheritEnv: hostexecInheritEnvSchema,
+      approval: zodEnum(["allow", "prompt", "deny"] as const).default("prompt"),
+      fallback: zodEnum(["container", "deny"] as const).default("container"),
+    },
+    { error: "must be an object" },
+  );
 }
 
 export function hostexecSchema(_profileName: string) {
@@ -869,18 +812,13 @@ export const uiSchema = z
   .object({
     enable: z.boolean().default(DEFAULT_UI_CONFIG.enable),
     port: parsePositiveInt("ui.port").default(DEFAULT_UI_CONFIG.port),
-    "idle-timeout": z
+    idleTimeout: z
       .number()
       .int()
       .min(0, { message: "must be >= 0" })
       .default(DEFAULT_UI_CONFIG.idleTimeout),
   })
-  .prefault({})
-  .transform((r) => ({
-    enable: r.enable,
-    port: r.port,
-    idleTimeout: r["idle-timeout"],
-  }));
+  .prefault({});
 
 // ---------------------------------------------------------------------------
 // Observability (top-level)
@@ -936,46 +874,24 @@ export const observabilitySchema = z
 const VALID_AGENTS = ["claude", "copilot", "codex"] as const;
 
 export function profileSchema(profileName: string) {
-  return z
-    .object({
-      agent: zodEnum(VALID_AGENTS),
-      "agent-args": z.array(z.string()).default([]),
-      worktree: worktreeSchema.optional(),
-      session: sessionSchema,
-      nix: nixSchema,
-      docker: dockerSchema,
-      gcloud: gcloudSchema,
-      aws: awsSchema,
-      gpg: gpgSchema,
-      network: networkSchema(profileName),
-      dbus: dbusSchema,
-      display: displaySchema,
-      "extra-mounts": extraMountsSchema,
-      env: envSchema,
-      hook: hookSchema,
-      hostexec: hostexecSchema(profileName),
-    })
-    .transform(
-      (r) =>
-        ({
-          agent: r.agent,
-          agentArgs: r["agent-args"],
-          worktree: r.worktree,
-          session: r.session,
-          nix: r.nix,
-          docker: r.docker,
-          gcloud: r.gcloud,
-          aws: r.aws,
-          gpg: r.gpg,
-          network: r.network,
-          dbus: r.dbus,
-          display: r.display,
-          extraMounts: r["extra-mounts"],
-          env: r.env,
-          hook: r.hook,
-          hostexec: r.hostexec,
-        }) satisfies Profile,
-    );
+  return z.object({
+    agent: zodEnum(VALID_AGENTS),
+    agentArgs: z.array(z.string()).default([]),
+    worktree: worktreeSchema.optional(),
+    session: sessionSchema,
+    nix: nixSchema,
+    docker: dockerSchema,
+    gcloud: gcloudSchema,
+    aws: awsSchema,
+    gpg: gpgSchema,
+    network: networkSchema(profileName),
+    dbus: dbusSchema,
+    display: displaySchema,
+    extraMounts: extraMountsSchema,
+    env: envSchema,
+    hook: hookSchema,
+    hostexec: hostexecSchema(profileName),
+  });
 }
 
 // ---------------------------------------------------------------------------

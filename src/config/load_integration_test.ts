@@ -619,7 +619,7 @@ test("validateConfig: multiple profiles each independently validated", () => {
   const raw = {
     profiles: {
       a: { agent: "claude" },
-      b: { agent: "copilot", "agent-args": ["--flag"] },
+      b: { agent: "copilot", agentArgs: ["--flag"] },
       c: {
         agent: "claude",
         nix: { enable: true },
@@ -640,7 +640,7 @@ test("validateConfig: extra-mounts with all modes", () => {
     profiles: {
       test: {
         agent: "claude",
-        "extra-mounts": [
+        extraMounts: [
           { src: "/a", dst: "/b", mode: "ro" },
           { src: "/c", dst: "/d", mode: "rw" },
           { src: "/e", dst: "/f" }, // defaults to ro
@@ -673,7 +673,7 @@ test("validateConfig: nix.extra-packages preserved", () => {
       test: {
         agent: "claude",
         nix: {
-          "extra-packages": ["nixpkgs#gh", "nixpkgs#jq", "nixpkgs#ripgrep"],
+          extraPackages: ["nixpkgs#gh", "nixpkgs#jq", "nixpkgs#ripgrep"],
         },
       },
     },

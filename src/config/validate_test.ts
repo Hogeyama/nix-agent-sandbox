@@ -123,7 +123,7 @@ test("validate: agent-args preserved", () => {
     profiles: {
       test: {
         agent: "claude",
-        "agent-args": ["--flag1", "--flag2", "value"],
+        agentArgs: ["--flag1", "--flag2", "value"],
       },
     },
   });
@@ -169,7 +169,7 @@ test("validate: worktree with on-create only", () => {
     profiles: {
       test: {
         agent: "claude",
-        worktree: { "on-create": "make build" },
+        worktree: { onCreate: "make build" },
       },
     },
   });
@@ -184,7 +184,7 @@ test("validate: worktree with both fields", () => {
         agent: "claude",
         worktree: {
           base: "origin/develop",
-          "on-create": "npm ci && npm run build",
+          onCreate: "npm ci && npm run build",
         },
       },
     },
@@ -244,7 +244,7 @@ test("validate: nix mount-socket override", () => {
     profiles: {
       test: {
         agent: "claude",
-        nix: { "mount-socket": false },
+        nix: { mountSocket: false },
       },
     },
   });
@@ -257,7 +257,7 @@ test("validate: nix extra-packages", () => {
       test: {
         agent: "claude",
         nix: {
-          "extra-packages": ["nixpkgs#gh", "nixpkgs#jq"],
+          extraPackages: ["nixpkgs#gh", "nixpkgs#jq"],
         },
       },
     },
@@ -316,7 +316,7 @@ test("validate: gcloud mount-config=true", () => {
     profiles: {
       test: {
         agent: "claude",
-        gcloud: { "mount-config": true },
+        gcloud: { mountConfig: true },
       },
     },
   });
@@ -337,7 +337,7 @@ test("validate: aws mount-config=true", () => {
     profiles: {
       test: {
         agent: "claude",
-        aws: { "mount-config": true },
+        aws: { mountConfig: true },
       },
     },
   });
@@ -358,7 +358,7 @@ test("validate: gpg forward-agent=true", () => {
     profiles: {
       test: {
         agent: "claude",
-        gpg: { "forward-agent": true },
+        gpg: { forwardAgent: true },
       },
     },
   });
@@ -379,7 +379,7 @@ test("validate: extra-mounts with valid entries", () => {
     profiles: {
       test: {
         agent: "claude",
-        "extra-mounts": [
+        extraMounts: [
           { src: "/a", dst: "/b", mode: "ro" },
           { src: "/c", dst: "/d", mode: "rw" },
         ],
@@ -404,7 +404,7 @@ test("validate: extra-mounts mode defaults to ro", () => {
     profiles: {
       test: {
         agent: "claude",
-        "extra-mounts": [{ src: "/a", dst: "/b" }],
+        extraMounts: [{ src: "/a", dst: "/b" }],
       },
     },
   });
@@ -417,11 +417,11 @@ test("validate: extra-mounts missing src throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [{ dst: "/b" }],
+          extraMounts: [{ dst: "/b" }],
         },
       },
     }),
-  ).toThrow("extra-mounts[0].src");
+  ).toThrow("extraMounts[0].src");
 });
 
 test("validate: extra-mounts empty src throws", () => {
@@ -430,11 +430,11 @@ test("validate: extra-mounts empty src throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [{ src: "", dst: "/b" }],
+          extraMounts: [{ src: "", dst: "/b" }],
         },
       },
     }),
-  ).toThrow("extra-mounts[0].src");
+  ).toThrow("extraMounts[0].src");
 });
 
 test("validate: extra-mounts missing dst throws", () => {
@@ -443,11 +443,11 @@ test("validate: extra-mounts missing dst throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [{ src: "/a" }],
+          extraMounts: [{ src: "/a" }],
         },
       },
     }),
-  ).toThrow("extra-mounts[0].dst");
+  ).toThrow("extraMounts[0].dst");
 });
 
 test("validate: extra-mounts empty dst throws", () => {
@@ -456,11 +456,11 @@ test("validate: extra-mounts empty dst throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [{ src: "/a", dst: "" }],
+          extraMounts: [{ src: "/a", dst: "" }],
         },
       },
     }),
-  ).toThrow("extra-mounts[0].dst");
+  ).toThrow("extraMounts[0].dst");
 });
 
 test("validate: extra-mounts invalid mode throws", () => {
@@ -469,11 +469,11 @@ test("validate: extra-mounts invalid mode throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [{ src: "/a", dst: "/b", mode: "rwx" }],
+          extraMounts: [{ src: "/a", dst: "/b", mode: "rwx" }],
         },
       },
     }),
-  ).toThrow("extra-mounts[0].mode");
+  ).toThrow("extraMounts[0].mode");
 });
 
 test("validate: extra-mounts second entry error references index 1", () => {
@@ -482,14 +482,14 @@ test("validate: extra-mounts second entry error references index 1", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [
+          extraMounts: [
             { src: "/a", dst: "/b", mode: "ro" },
             { src: "/c", dst: "", mode: "ro" },
           ],
         },
       },
     }),
-  ).toThrow("extra-mounts[1].dst");
+  ).toThrow("extraMounts[1].dst");
 });
 
 // --- env バリデーション ---
@@ -771,11 +771,11 @@ test("validate: multiple valid profiles all validated", () => {
   const config = validateConfig({
     profiles: {
       a: { agent: "claude", nix: { enable: true } },
-      b: { agent: "copilot", "agent-args": ["--yolo"] },
+      b: { agent: "copilot", agentArgs: ["--yolo"] },
       c: {
         agent: "claude",
         docker: { enable: true, shared: false },
-        gpg: { "forward-agent": true },
+        gpg: { forwardAgent: true },
       },
     },
   });
@@ -824,17 +824,17 @@ test("validateConfig: full config", () => {
         agent: "claude",
         worktree: {
           base: "origin/main",
-          "on-create": "npm install",
+          onCreate: "npm install",
         },
         nix: {
           enable: true,
-          "mount-socket": true,
-          "extra-packages": ["nixpkgs.ripgrep"],
+          mountSocket: true,
+          extraPackages: ["nixpkgs.ripgrep"],
         },
         docker: {
           enable: true,
         },
-        "extra-mounts": [
+        extraMounts: [
           { src: "~/.cabal", dst: "~/.cabal" },
           { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
         ],
@@ -896,7 +896,7 @@ test("validateConfig: agent-args are parsed", () => {
     profiles: {
       test: {
         agent: "copilot",
-        "agent-args": ["--yolo"],
+        agentArgs: ["--yolo"],
       },
     },
   };
@@ -964,7 +964,7 @@ test("validateConfig: invalid extra-mounts mode throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [
+          extraMounts: [
             {
               src: "/tmp/src",
               dst: "/tmp/dst",
@@ -974,7 +974,7 @@ test("validateConfig: invalid extra-mounts mode throws", () => {
         },
       },
     }),
-  ).toThrow("extra-mounts[0].mode");
+  ).toThrow("extraMounts[0].mode");
 });
 
 test("validateConfig: missing extra-mounts src throws", () => {
@@ -983,11 +983,11 @@ test("validateConfig: missing extra-mounts src throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          "extra-mounts": [{ dst: "/tmp/dst", mode: "ro" }],
+          extraMounts: [{ dst: "/tmp/dst", mode: "ro" }],
         },
       },
     }),
-  ).toThrow("extra-mounts[0].src");
+  ).toThrow("extraMounts[0].src");
 });
 
 test("validateConfig: gpg.forward-agent defaults to false", () => {
@@ -1002,7 +1002,7 @@ test("validateConfig: gpg.forward-agent can be enabled", () => {
     profiles: {
       test: {
         agent: "claude",
-        gpg: { "forward-agent": true },
+        gpg: { forwardAgent: true },
       },
     },
   });
@@ -1024,7 +1024,7 @@ test("validateConfig: dbus.session config is parsed", () => {
         dbus: {
           session: {
             enable: true,
-            "source-address": "unix:path=/run/user/1000/bus",
+            sourceAddress: "unix:path=/run/user/1000/bus",
             see: ["org.freedesktop.secrets"],
             talk: ["org.freedesktop.secrets"],
             own: ["org.example.Owned"],
@@ -1062,13 +1062,13 @@ test("validateConfig: dbus.session invalid source-address throws", () => {
           agent: "claude",
           dbus: {
             session: {
-              "source-address": "",
+              sourceAddress: "",
             },
           },
         },
       },
     }),
-  ).toThrow("dbus.session.source-address");
+  ).toThrow("dbus.session.sourceAddress");
 });
 
 test("validateConfig: dbus.session invalid call rule throws", () => {
@@ -1106,7 +1106,7 @@ test("validateConfig: worktree on-create is preserved", () => {
     profiles: {
       test: {
         agent: "claude",
-        worktree: { "on-create": "npm install" },
+        worktree: { onCreate: "npm install" },
       },
     },
   });
@@ -1142,8 +1142,8 @@ test("validateConfig: network.prompt accepts explicit values", () => {
         network: {
           prompt: {
             enable: true,
-            "timeout-seconds": 42,
-            "default-scope": "host",
+            timeoutSeconds: 42,
+            defaultScope: "host",
             notify: "desktop",
           },
         },
@@ -1167,13 +1167,13 @@ test("validateConfig: network.prompt rejects invalid default-scope", () => {
           agent: "claude",
           network: {
             prompt: {
-              "default-scope": "invalid" as "host",
+              defaultScope: "invalid" as "host",
             },
           },
         },
       },
     }),
-  ).toThrow("network.prompt.default-scope must be one of");
+  ).toThrow("network.prompt.defaultScope must be one of");
 });
 
 test("validateConfig: network.prompt rejects invalid notify", () => {
@@ -1385,7 +1385,7 @@ test("validateConfig: ui defaults when omitted", () => {
 
 test("validateConfig: ui explicit values", () => {
   const raw = {
-    ui: { enable: false, port: 8080, "idle-timeout": 0 },
+    ui: { enable: false, port: 8080, idleTimeout: 0 },
     profiles: { test: { agent: "claude" } },
   };
   const config = validateConfig(raw);
@@ -1404,7 +1404,7 @@ test("validateConfig: ui invalid port rejects", () => {
 
 test("validateConfig: ui negative idle-timeout rejects", () => {
   const raw = {
-    ui: { "idle-timeout": -1 },
+    ui: { idleTimeout: -1 },
     profiles: { test: { agent: "claude" } },
   };
   expect(() => validateConfig(raw)).toThrow("ui:");
@@ -1570,7 +1570,7 @@ test("validateConfig: multiple errors in one profile are all reported", () => {
           agent: "claude",
           // deno-lint-ignore no-explicit-any
           network: { allowlist: "not-an-array" as any },
-          "extra-mounts": [{ dst: "/tmp/dst", mode: "invalid" }],
+          extraMounts: [{ dst: "/tmp/dst", mode: "invalid" }],
         },
       },
     });
@@ -1580,7 +1580,7 @@ test("validateConfig: multiple errors in one profile are all reported", () => {
   expect(err).toBeDefined();
   const msg = err!.message;
   expect(msg.includes("network.allowlist must be a list")).toEqual(true);
-  expect(msg.includes("extra-mounts[0].src")).toEqual(true);
+  expect(msg.includes("extraMounts[0].src")).toEqual(true);
 });
 
 test("validateConfig: errors from multiple profiles are reported together", () => {

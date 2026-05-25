@@ -23,7 +23,7 @@ test("proxySchema: defaults to empty forwardPorts", () => {
 });
 
 test("proxySchema: accepts forward-ports array", () => {
-  const result = proxySchema.parse({ "forward-ports": [8080, 3000] });
+  const result = proxySchema.parse({ forwardPorts: [8080, 3000] });
   expect(result).toEqual({ forwardPorts: [8080, 3000] });
 });
 
@@ -33,21 +33,21 @@ test("proxySchema: empty object defaults forward-ports", () => {
 });
 
 test("proxySchema: rejects out-of-range and non-integer ports", () => {
-  expect(() => proxySchema.parse({ "forward-ports": [0] })).toThrow();
-  expect(() => proxySchema.parse({ "forward-ports": [65536] })).toThrow();
-  expect(() => proxySchema.parse({ "forward-ports": [1.5] })).toThrow();
+  expect(() => proxySchema.parse({ forwardPorts: [0] })).toThrow();
+  expect(() => proxySchema.parse({ forwardPorts: [65536] })).toThrow();
+  expect(() => proxySchema.parse({ forwardPorts: [1.5] })).toThrow();
 });
 
 test("proxySchema: rejects reserved port 18080", () => {
-  expect(() => proxySchema.parse({ "forward-ports": [18080] })).toThrow(
+  expect(() => proxySchema.parse({ forwardPorts: [18080] })).toThrow(
     /18080.*reserved/,
   );
 });
 
 test("proxySchema: rejects duplicate ports", () => {
-  expect(() =>
-    proxySchema.parse({ "forward-ports": [8080, 3000, 8080] }),
-  ).toThrow(/duplicate/);
+  expect(() => proxySchema.parse({ forwardPorts: [8080, 3000, 8080] })).toThrow(
+    /duplicate/,
+  );
 });
 
 test("profileSchema: accepts network.proxy.forward-ports", () => {
@@ -56,7 +56,7 @@ test("profileSchema: accepts network.proxy.forward-ports", () => {
     agent: "claude",
     network: {
       proxy: {
-        "forward-ports": [8080, 5432],
+        forwardPorts: [8080, 5432],
       },
     },
   });
@@ -293,7 +293,7 @@ test("dbusSessionSchema: rejects invalid name characters", () => {
 
 test("nixSchema: accepts typical flake refs and plain names", () => {
   const result = nixSchema.parse({
-    "extra-packages": ["nixpkgs#gh", "github:NixOS/nixpkgs#ripgrep", "jq"],
+    extraPackages: ["nixpkgs#gh", "github:NixOS/nixpkgs#ripgrep", "jq"],
   });
   expect(result.extraPackages).toEqual([
     "nixpkgs#gh",
@@ -303,16 +303,14 @@ test("nixSchema: accepts typical flake refs and plain names", () => {
 });
 
 test("nixSchema: rejects extra-packages entry starting with '-'", () => {
-  expect(() =>
-    nixSchema.parse({ "extra-packages": ["--evil-flag"] }),
-  ).toThrow();
-  expect(() => nixSchema.parse({ "extra-packages": ["-x"] })).toThrow();
+  expect(() => nixSchema.parse({ extraPackages: ["--evil-flag"] })).toThrow();
+  expect(() => nixSchema.parse({ extraPackages: ["-x"] })).toThrow();
 });
 
 test("nixSchema: rejects extra-packages entry containing '..'", () => {
-  expect(() => nixSchema.parse({ "extra-packages": ["../escape"] })).toThrow();
+  expect(() => nixSchema.parse({ extraPackages: ["../escape"] })).toThrow();
   expect(() =>
-    nixSchema.parse({ "extra-packages": ["nixpkgs#../bad"] }),
+    nixSchema.parse({ extraPackages: ["nixpkgs#../bad"] }),
   ).toThrow();
 });
 
