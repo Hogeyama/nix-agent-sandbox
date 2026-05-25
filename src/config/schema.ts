@@ -6,7 +6,6 @@
  */
 
 import { z } from "zod";
-import { logWarn } from "../log.ts";
 import {
   type ApprovalScope,
   normalizeHost,
@@ -223,42 +222,27 @@ const envEntrySchema = z
     {
       key: z.string().optional(),
       keyCmd: z.string().optional(),
-      key_cmd: z.string().optional(),
       val: z.string().optional(),
       valCmd: z.string().optional(),
-      val_cmd: z.string().optional(),
       mode: z.enum(["set", "prefix", "suffix"]).optional(),
       separator: z.string().optional(),
     },
     { error: "must be an object" },
   )
   .superRefine((entry, ctx) => {
-    // ---- key / keyCmd / key_cmd exclusivity ----
+    // ---- key / keyCmd exclusivity ----
     const hasKey = entry.key !== undefined;
-    const hasKeyCmdCamel = entry.keyCmd !== undefined;
-    const hasKeyCmdSnake = entry.key_cmd !== undefined;
-    const keySetCount =
-      (hasKey ? 1 : 0) + (hasKeyCmdCamel ? 1 : 0) + (hasKeyCmdSnake ? 1 : 0);
+    const hasKeyCmd = entry.keyCmd !== undefined;
+    const keySetCount = (hasKey ? 1 : 0) + (hasKeyCmd ? 1 : 0);
 
     if (keySetCount !== 1) {
-      // Preserve the legacy "must have exactly one of key or key_cmd" wording
-      // for the existing snake-only / plain-only diagnostics. When the new
-      // camelCase form is involved, list only the fields the user actually
-      // supplied (or "key" when nothing is set at all) so the message points
-      // at the names that collided rather than a generic catch-all.
-      let baseMessage: string;
-      if (hasKeyCmdCamel) {
-        const setFields: string[] = [];
-        if (hasKey) setFields.push("key");
-        if (hasKeyCmdCamel) setFields.push("keyCmd");
-        if (hasKeyCmdSnake) setFields.push("key_cmd");
-        baseMessage =
-          setFields.length >= 2
-            ? `must have exactly one of ${setFields.join(", ")}`
-            : "must have exactly one of key, keyCmd, or key_cmd";
-      } else {
-        baseMessage = "must have exactly one of key or key_cmd";
-      }
+      const setFields: string[] = [];
+      if (hasKey) setFields.push("key");
+      if (hasKeyCmd) setFields.push("keyCmd");
+      const baseMessage =
+        setFields.length >= 2
+          ? `must have exactly one of ${setFields.join(", ")}`
+          : "must have exactly one of key or keyCmd";
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: baseMessage,
@@ -273,7 +257,7 @@ const envEntrySchema = z
           message: "must be a non-empty string",
         });
       }
-    } else if (hasKeyCmdCamel) {
+    } else {
       if (typeof entry.keyCmd !== "string" || entry.keyCmd.trim() === "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -281,40 +265,21 @@ const envEntrySchema = z
           message: "must be a non-empty string",
         });
       }
-    } else {
-      if (typeof entry.key_cmd !== "string" || entry.key_cmd.trim() === "") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["key_cmd"],
-          message: "must be a non-empty string",
-        });
-      }
     }
 
-    // ---- val / valCmd / val_cmd exclusivity ----
+    // ---- val / valCmd exclusivity ----
     const hasVal = entry.val !== undefined;
-    const hasValCmdCamel = entry.valCmd !== undefined;
-    const hasValCmdSnake = entry.val_cmd !== undefined;
-    const valSetCount =
-      (hasVal ? 1 : 0) + (hasValCmdCamel ? 1 : 0) + (hasValCmdSnake ? 1 : 0);
+    const hasValCmd = entry.valCmd !== undefined;
+    const valSetCount = (hasVal ? 1 : 0) + (hasValCmd ? 1 : 0);
 
     if (valSetCount !== 1) {
-      // Mirror the key-side handling: when camelCase is involved, list only
-      // the fields that actually collided; otherwise keep the legacy wording
-      // expected by existing snake/plain diagnostics.
-      let baseMessage: string;
-      if (hasValCmdCamel) {
-        const setFields: string[] = [];
-        if (hasVal) setFields.push("val");
-        if (hasValCmdCamel) setFields.push("valCmd");
-        if (hasValCmdSnake) setFields.push("val_cmd");
-        baseMessage =
-          setFields.length >= 2
-            ? `must have exactly one of ${setFields.join(", ")}`
-            : "must have exactly one of val, valCmd, or val_cmd";
-      } else {
-        baseMessage = "must have exactly one of val or val_cmd";
-      }
+      const setFields: string[] = [];
+      if (hasVal) setFields.push("val");
+      if (hasValCmd) setFields.push("valCmd");
+      const baseMessage =
+        setFields.length >= 2
+          ? `must have exactly one of ${setFields.join(", ")}`
+          : "must have exactly one of val or valCmd";
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: baseMessage,
@@ -329,19 +294,11 @@ const envEntrySchema = z
           message: "must be a string",
         });
       }
-    } else if (hasValCmdCamel) {
+    } else {
       if (typeof entry.valCmd !== "string" || entry.valCmd.trim() === "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["valCmd"],
-          message: "must be a non-empty string",
-        });
-      }
-    } else {
-      if (typeof entry.val_cmd !== "string" || entry.val_cmd.trim() === "") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["val_cmd"],
           message: "must be a non-empty string",
         });
       }
@@ -368,46 +325,22 @@ const envEntrySchema = z
     }
   })
   .transform((entry) => {
-    // superRefine above guarantees exactly-one-of and string types,
-    // but narrow at runtime so the transform is type-safe on its own.
-    // Precedence on the (already-validated) sole set field:
-    //   keyCmd (camel) > key_cmd (snake) > key (plain).
     let keySpec: { key: string } | { keyCmd: string };
     if (typeof entry.keyCmd === "string") {
       keySpec = { keyCmd: entry.keyCmd };
-    } else if (typeof entry.key_cmd === "string") {
-      keySpec = { keyCmd: entry.key_cmd };
     } else if (typeof entry.key === "string") {
       keySpec = { key: entry.key };
     } else {
-      throw new Error("env entry: missing key/keyCmd/key_cmd after refine");
+      throw new Error("env entry: missing key/keyCmd after refine");
     }
 
     let valSpec: { val: string } | { valCmd: string };
     if (typeof entry.valCmd === "string") {
       valSpec = { valCmd: entry.valCmd };
-    } else if (typeof entry.val_cmd === "string") {
-      valSpec = { valCmd: entry.val_cmd };
     } else if (typeof entry.val === "string") {
       valSpec = { val: entry.val };
     } else {
-      throw new Error("env entry: missing val/valCmd/val_cmd after refine");
-    }
-
-    // Emit a deprecation warning for snake_case usage. Each env entry that
-    // uses snake_case fields produces exactly one warning per config load.
-    if (entry.key_cmd !== undefined || entry.val_cmd !== undefined) {
-      const usedSnake: string[] = [];
-      if (entry.key_cmd !== undefined) usedSnake.push("key_cmd");
-      if (entry.val_cmd !== undefined) usedSnake.push("val_cmd");
-      const camelEquivalents = usedSnake.map((s) =>
-        s === "key_cmd" ? "keyCmd" : "valCmd",
-      );
-      logWarn(
-        `[deprecation] env entry uses snake_case "${usedSnake.join("/")}"; ` +
-          `rename to camelCase "${camelEquivalents.join("/")}" ` +
-          "(snake will be removed in a future release)",
-      );
+      throw new Error("env entry: missing val/valCmd after refine");
     }
 
     const mode = (entry.mode ?? "set") as EnvMode;

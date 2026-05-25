@@ -4,12 +4,9 @@
 /// configuration (`agent-sandbox.global.pkl`) `amends` this module to
 /// obtain typed defaults and validation of the configuration shape.
 ///
-/// Field names are camelCase. `EnvConfig.keyCmd` / `EnvConfig.valCmd` are the
-/// canonical forms; the legacy snake_case `key_cmd` / `val_cmd` fields are
-/// retained as deprecated aliases for backward compatibility.
-/// Semantic validation (e.g. the mutual exclusivity of `key` and `keyCmd`
-/// on `EnvConfig`) is performed by the runtime; this module only describes
-/// the structural shape.
+/// Field names are camelCase. Semantic validation (e.g. the mutual exclusivity
+/// of `key` and `keyCmd` on `EnvConfig`) is performed by the runtime; this
+/// module only describes the structural shape.
 open module nas.Config
 
 // ---------------------------------------------------------------------------
@@ -175,17 +172,11 @@ class ExtraMountConfig {
 
 /// Environment-variable entry. The runtime enforces that exactly one of
 /// `key`/`keyCmd` is set, and exactly one of `val`/`valCmd` is set.
-/// The snake_case `key_cmd` / `val_cmd` fields are deprecated aliases kept
-/// for backward compatibility.
 class EnvConfig {
   key: String? = null
   keyCmd: String? = null
-  @Deprecated { message = "Use keyCmd (camelCase) instead. snake_case will be removed in a future release."; since = "0.2" }
-  key_cmd: String? = null
   val: String? = null
   valCmd: String? = null
-  @Deprecated { message = "Use valCmd (camelCase) instead. snake_case will be removed in a future release."; since = "0.2" }
-  val_cmd: String? = null
   mode: "set"|"prefix"|"suffix" = "set"
   separator: String? = null
 }

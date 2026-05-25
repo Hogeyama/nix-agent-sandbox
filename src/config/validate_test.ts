@@ -522,7 +522,7 @@ test("validate: command env entry", () => {
     profiles: {
       test: {
         agent: "claude",
-        env: [{ key_cmd: "echo KEY", val_cmd: "echo VAL" }],
+        env: [{ keyCmd: "echo KEY", valCmd: "echo VAL" }],
       },
     },
   });
@@ -539,11 +539,11 @@ test("validate: mixed static and command throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          env: [{ key: "K", val: "V", key_cmd: "echo K", val_cmd: "echo V" }],
+          env: [{ key: "K", keyCmd: "echo K", val: "V" }],
         },
       },
     }),
-  ).toThrow("must have exactly one of key or key_cmd");
+  ).toThrow("must have exactly one of key, keyCmd");
 });
 
 test("validate: static env missing key throws", () => {
@@ -572,30 +572,30 @@ test("validate: static env empty key throws", () => {
   ).toThrow("env[0].key");
 });
 
-test("validate: command env empty key_cmd throws", () => {
+test("validate: command env empty keyCmd throws", () => {
   expect(() =>
     validateConfig({
       profiles: {
         test: {
           agent: "claude",
-          env: [{ key_cmd: "", val_cmd: "echo val" }],
+          env: [{ keyCmd: "", valCmd: "echo val" }],
         },
       },
     }),
-  ).toThrow("env[0].key_cmd");
+  ).toThrow("env[0].keyCmd");
 });
 
-test("validate: command env empty val_cmd throws", () => {
+test("validate: command env empty valCmd throws", () => {
   expect(() =>
     validateConfig({
       profiles: {
         test: {
           agent: "claude",
-          env: [{ key_cmd: "echo key", val_cmd: "" }],
+          env: [{ keyCmd: "echo key", valCmd: "" }],
         },
       },
     }),
-  ).toThrow("env[0].val_cmd");
+  ).toThrow("env[0].valCmd");
 });
 
 // --- env mode / separator バリデーション ---
@@ -641,7 +641,7 @@ test("validate: env suffix mode with separator", () => {
   });
 });
 
-test("validate: env prefix mode with val_cmd", () => {
+test("validate: env prefix mode with valCmd", () => {
   const config = validateConfig({
     profiles: {
       test: {
@@ -649,7 +649,7 @@ test("validate: env prefix mode with val_cmd", () => {
         env: [
           {
             key: "PYTHONPATH",
-            val_cmd: "echo /opt/py",
+            valCmd: "echo /opt/py",
             mode: "prefix",
             separator: ":",
           },
@@ -840,7 +840,7 @@ test("validateConfig: full config", () => {
         ],
         env: [
           { key: "FOO", val: "bar" },
-          { key_cmd: "printf BAR", val_cmd: "printf baz" },
+          { keyCmd: "printf BAR", valCmd: "printf baz" },
         ],
       },
     },
@@ -934,15 +934,14 @@ test("validateConfig: mixed env entry throws", () => {
           env: [
             {
               key: "A",
+              keyCmd: "echo C",
               val: "B",
-              key_cmd: "echo C",
-              val_cmd: "echo D",
             },
           ],
         },
       },
     }),
-  ).toThrow("must have exactly one of key or key_cmd");
+  ).toThrow("must have exactly one of key, keyCmd");
 });
 
 test("validateConfig: invalid env command entry throws", () => {
@@ -951,11 +950,11 @@ test("validateConfig: invalid env command entry throws", () => {
       profiles: {
         test: {
           agent: "claude",
-          env: [{ key_cmd: "", val_cmd: "echo x" }],
+          env: [{ keyCmd: "", valCmd: "echo x" }],
         },
       },
     }),
-  ).toThrow("env[0].key_cmd");
+  ).toThrow("env[0].keyCmd");
 });
 
 test("validateConfig: invalid extra-mounts mode throws", () => {
