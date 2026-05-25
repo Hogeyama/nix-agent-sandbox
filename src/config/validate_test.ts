@@ -9,7 +9,6 @@ import { expect, test } from "bun:test";
  *   - schema_test.ts — profileSchema tests
  */
 
-import type { RawConfig } from "./types.ts";
 import { DEFAULT_DBUS_CONFIG } from "./types.ts";
 import { type ConfigValidationError, validateConfig } from "./validate.ts";
 
@@ -20,7 +19,7 @@ import { type ConfigValidationError, validateConfig } from "./validate.ts";
 // --- profiles のバリデーション ---
 
 test("validate: profiles is required", () => {
-  expect(() => validateConfig({} as RawConfig)).toThrow("at least one entry");
+  expect(() => validateConfig({})).toThrow("at least one entry");
 });
 
 test("validate: empty profiles throws", () => {
@@ -31,7 +30,7 @@ test("validate: profiles with null value throws", () => {
   expect(() =>
     validateConfig({
       profiles: {
-        test: null as unknown as import("./types.ts").RawProfile,
+        test: null as never,
       },
     }),
   ).toThrow();
@@ -791,7 +790,7 @@ test("validate: multiple valid profiles all validated", () => {
 // ---------------------------------------------------------------------------
 
 test("validateConfig: valid minimal config", () => {
-  const raw: RawConfig = {
+  const raw = {
     default: "test",
     profiles: {
       test: {
@@ -818,7 +817,7 @@ test("validateConfig: valid minimal config", () => {
 });
 
 test("validateConfig: full config", () => {
-  const raw: RawConfig = {
+  const raw = {
     default: "claude-nix",
     profiles: {
       "claude-nix": {
@@ -881,7 +880,7 @@ test("validateConfig: invalid agent throws", () => {
 });
 
 test("validateConfig: codex agent is valid", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: {
       test: {
         agent: "codex",
@@ -893,7 +892,7 @@ test("validateConfig: codex agent is valid", () => {
 });
 
 test("validateConfig: agent-args are parsed", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: {
       test: {
         agent: "copilot",
@@ -906,7 +905,7 @@ test("validateConfig: agent-args are parsed", () => {
 });
 
 test("validateConfig: agent-args defaults to empty array", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: {
       test: {
         agent: "claude",
@@ -1375,7 +1374,7 @@ test("validateConfig: allowlist=sub.example.com and denylist=*.example.com is al
 // ---------------------------------------------------------------------------
 
 test("validateConfig: ui defaults when omitted", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: { test: { agent: "claude" } },
   };
   const config = validateConfig(raw);
@@ -1385,7 +1384,7 @@ test("validateConfig: ui defaults when omitted", () => {
 });
 
 test("validateConfig: ui explicit values", () => {
-  const raw: RawConfig = {
+  const raw = {
     ui: { enable: false, port: 8080, "idle-timeout": 0 },
     profiles: { test: { agent: "claude" } },
   };
@@ -1396,7 +1395,7 @@ test("validateConfig: ui explicit values", () => {
 });
 
 test("validateConfig: ui invalid port rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     ui: { port: 0 },
     profiles: { test: { agent: "claude" } },
   };
@@ -1404,7 +1403,7 @@ test("validateConfig: ui invalid port rejects", () => {
 });
 
 test("validateConfig: ui negative idle-timeout rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     ui: { "idle-timeout": -1 },
     profiles: { test: { agent: "claude" } },
   };
@@ -1416,7 +1415,7 @@ test("validateConfig: ui negative idle-timeout rejects", () => {
 // ---------------------------------------------------------------------------
 
 test("validateConfig: observability defaults when omitted", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: { test: { agent: "claude" } },
   };
   const config = validateConfig(raw);
@@ -1424,7 +1423,7 @@ test("validateConfig: observability defaults when omitted", () => {
 });
 
 test("validateConfig: observability explicit enable=true", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { enable: true },
     profiles: { test: { agent: "claude" } },
   };
@@ -1436,12 +1435,12 @@ test("validateConfig: observability non-boolean enable rejects", () => {
   const raw = {
     observability: { enable: "yes" as unknown as boolean },
     profiles: { test: { agent: "claude" } },
-  } as RawConfig;
+  };
   expect(() => validateConfig(raw)).toThrow("observability:");
 });
 
 test("validateConfig: observability retention defaults to null when omitted", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: { test: { agent: "claude" } },
   };
   const config = validateConfig(raw);
@@ -1449,7 +1448,7 @@ test("validateConfig: observability retention defaults to null when omitted", ()
 });
 
 test("validateConfig: observability retention explicit null", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: null },
     profiles: { test: { agent: "claude" } },
   };
@@ -1458,7 +1457,7 @@ test("validateConfig: observability retention explicit null", () => {
 });
 
 test("validateConfig: observability retention 30d normalizes to seconds", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "30d" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1467,7 +1466,7 @@ test("validateConfig: observability retention 30d normalizes to seconds", () => 
 });
 
 test("validateConfig: observability retention 48h normalizes to seconds", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "48h" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1476,7 +1475,7 @@ test("validateConfig: observability retention 48h normalizes to seconds", () => 
 });
 
 test("validateConfig: observability retention 1w normalizes to seconds", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "1w" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1485,7 +1484,7 @@ test("validateConfig: observability retention 1w normalizes to seconds", () => {
 });
 
 test("validateConfig: observability retention 1h is the lower bound", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "1h" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1494,7 +1493,7 @@ test("validateConfig: observability retention 1h is the lower bound", () => {
 });
 
 test("validateConfig: observability retention 30m below 1h rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "30m" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1503,7 +1502,7 @@ test("validateConfig: observability retention 30m below 1h rejects", () => {
 });
 
 test("validateConfig: observability retention 59m below 1h rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "59m" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1511,7 +1510,7 @@ test("validateConfig: observability retention 59m below 1h rejects", () => {
 });
 
 test("validateConfig: observability retention 3599s below 1h rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "3599s" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1519,7 +1518,7 @@ test("validateConfig: observability retention 3599s below 1h rejects", () => {
 });
 
 test("validateConfig: observability retention 0d below 1h rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "0d" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1527,7 +1526,7 @@ test("validateConfig: observability retention 0d below 1h rejects", () => {
 });
 
 test("validateConfig: observability retention without unit rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "30" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1535,7 +1534,7 @@ test("validateConfig: observability retention without unit rejects", () => {
 });
 
 test("validateConfig: observability retention with invalid unit rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "30days" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1543,7 +1542,7 @@ test("validateConfig: observability retention with invalid unit rejects", () => 
 });
 
 test("validateConfig: observability retention negative rejects", () => {
-  const raw: RawConfig = {
+  const raw = {
     observability: { retention: "-5d" },
     profiles: { test: { agent: "claude" } },
   };
@@ -1554,7 +1553,7 @@ test("validateConfig: observability retention numeric value rejects", () => {
   const raw = {
     observability: { retention: 30 as unknown as string },
     profiles: { test: { agent: "claude" } },
-  } as RawConfig;
+  };
   expect(() => validateConfig(raw)).toThrow("observability:");
 });
 

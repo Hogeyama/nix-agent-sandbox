@@ -10,13 +10,7 @@ import {
   profileSchema,
   uiSchema,
 } from "./schema.ts";
-import type {
-  Config,
-  HostExecRule,
-  Profile,
-  RawConfig,
-  RawProfile,
-} from "./types.ts";
+import type { Config, HostExecRule, Profile } from "./types.ts";
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -25,9 +19,11 @@ export class ConfigValidationError extends Error {
   }
 }
 
-/** RawConfig を検証して Config に変換 */
-export function validateConfig(raw: RawConfig): Config {
-  if (!raw.profiles || Object.keys(raw.profiles).length === 0) {
+/** unknown な生データを検証して Config に変換 */
+export function validateConfig(raw: unknown): Config {
+  const obj = raw as Record<string, unknown>;
+  const rawProfiles = obj.profiles as Record<string, unknown> | undefined;
+  if (!rawProfiles || Object.keys(rawProfiles).length === 0) {
     throw new ConfigValidationError("profiles must contain at least one entry");
   }
 
@@ -35,7 +31,7 @@ export function validateConfig(raw: RawConfig): Config {
 
   let ui: z.infer<typeof uiSchema> | undefined;
   try {
-    ui = uiSchema.parse(raw.ui ?? {});
+    ui = uiSchema.parse(obj.ui ?? {});
   } catch (err) {
     if (err instanceof ZodError) {
       errors.push(`ui: ${formatZodError(err)}`);
@@ -46,7 +42,7 @@ export function validateConfig(raw: RawConfig): Config {
 
   let observability: z.infer<typeof observabilitySchema> | undefined;
   try {
-    observability = observabilitySchema.parse(raw.observability ?? {});
+    observability = observabilitySchema.parse(obj.observability ?? {});
   } catch (err) {
     if (err instanceof ZodError) {
       errors.push(`observability: ${formatZodError(err)}`);
@@ -56,9 +52,12 @@ export function validateConfig(raw: RawConfig): Config {
   }
 
   const profiles: Record<string, Profile> = {};
-  for (const [name, rawProfile] of Object.entries(raw.profiles)) {
+  for (const [name, rawProfile] of Object.entries(rawProfiles)) {
     try {
-      profiles[name] = parseProfile(name, rawProfile);
+      profiles[name] = parseProfile(
+        name,
+        rawProfile as Record<string, unknown>,
+      );
     } catch (err) {
       if (err instanceof ConfigValidationError) {
         errors.push(err.message);
@@ -72,9 +71,10 @@ export function validateConfig(raw: RawConfig): Config {
     throw new ConfigValidationError(errors.join("\n"));
   }
 
-  if (raw.default && !(raw.default in profiles)) {
+  const defaultProfile = obj.default as string | undefined;
+  if (defaultProfile && !(defaultProfile in profiles)) {
     throw new ConfigValidationError(
-      `default profile "${raw.default}" not found in profiles`,
+      `default profile "${defaultProfile}" not found in profiles`,
     );
   }
 
@@ -89,14 +89,14 @@ export function validateConfig(raw: RawConfig): Config {
   }
 
   return {
-    default: raw.default,
+    default: defaultProfile,
     ui,
     observability,
     profiles,
   };
 }
 
-function parseProfile(name: string, raw: RawProfile): Profile {
+function parseProfile(name: string, raw: Record<string, unknown>): Profile {
   // Legacy secrets check
   if ("secrets" in raw) {
     throw new ConfigValidationError(

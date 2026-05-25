@@ -19,7 +19,6 @@ import {
   DEFAULT_OBSERVABILITY_CONFIG,
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
-  type RawConfig,
 } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -237,6 +236,102 @@ test("loadConfig: .pkl CLI not available shows helpful error", async () => {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// --- global-only (ローカルなし) → loadConfig がグローバル設定を返す ---
+
+test.skipIf(!hasPkl)(
+  "loadConfig: global-only path returns global config when no local .pkl exists",
+  async () => {
+    // ローカルに .pkl が無いディレクトリ
+    const localDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-no-local-"));
+    // グローバル設定ファイルを一時ディレクトリに配置
+    const globalDir = await mkdtemp(
+      path.join(tmpdir(), "nas-cfg-global-only-"),
+    );
+    const globalPklPath = path.join(globalDir, "agent-sandbox.pkl");
+    await writeFile(
+      globalPklPath,
+      `
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["global-profile"] {
+    agent = "copilot"
+  }
+}
+`,
+    );
+    try {
+      const config = await loadConfig({
+        startDir: localDir,
+        globalConfigPath: globalPklPath,
+      });
+      expect("global-profile" in config.profiles).toEqual(true);
+      expect(config.profiles["global-profile"].agent).toEqual("copilot");
+    } finally {
+      await rm(localDir, { recursive: true, force: true });
+      await rm(globalDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// --- global .pkl + local .pkl (amends) → マージされる ---
+
+test.skipIf(!hasPkl)(
+  "loadConfig: local .pkl amending global .pkl merges correctly",
+  async () => {
+    // グローバル設定ファイルを一時ディレクトリに配置
+    const globalDir = await mkdtemp(
+      path.join(tmpdir(), "nas-cfg-global-merge-"),
+    );
+    const globalPklPath = path.join(globalDir, "agent-sandbox.pkl");
+    await writeFile(
+      globalPklPath,
+      `
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["from-global"] {
+    agent = "copilot"
+  }
+}
+`,
+    );
+
+    // ローカル .pkl は global を amend して追加プロファイルを定義
+    const localDir = await mkdtemp(
+      path.join(tmpdir(), "nas-cfg-local-amends-"),
+    );
+    await writeFile(
+      path.join(localDir, ".agent-sandbox.pkl"),
+      `
+amends "modulepath:/agent-sandbox.global.pkl"
+
+profiles {
+  ["from-local"] {
+    agent = "claude"
+  }
+}
+`,
+    );
+
+    try {
+      const config = await loadConfig({
+        startDir: localDir,
+        globalConfigPath: globalPklPath,
+      });
+      // ローカルが global を amend しているので、global のプロファイルも引き継ぐ
+      expect("from-global" in config.profiles).toEqual(true);
+      expect(config.profiles["from-global"].agent).toEqual("copilot");
+      // ローカルで追加したプロファイルも存在する
+      expect("from-local" in config.profiles).toEqual(true);
+      expect(config.profiles["from-local"].agent).toEqual("claude");
+    } finally {
+      await rm(localDir, { recursive: true, force: true });
+      await rm(globalDir, { recursive: true, force: true });
+    }
+  },
+);
 
 // --- .yml/.nix files are ignored ---
 
@@ -521,7 +616,7 @@ test("resolveProfile: throws for nonexistent profile name", () => {
 // --- validateConfig: 追加のバリデーションテスト ---
 
 test("validateConfig: multiple profiles each independently validated", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: {
       a: { agent: "claude" },
       b: { agent: "copilot", "agent-args": ["--flag"] },
@@ -541,7 +636,7 @@ test("validateConfig: multiple profiles each independently validated", () => {
 });
 
 test("validateConfig: extra-mounts with all modes", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: {
       test: {
         agent: "claude",
@@ -560,7 +655,7 @@ test("validateConfig: extra-mounts with all modes", () => {
 });
 
 test("validateConfig: empty env list is valid", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: {
       test: {
         agent: "claude",
@@ -573,7 +668,7 @@ test("validateConfig: empty env list is valid", () => {
 });
 
 test("validateConfig: nix.extra-packages preserved", () => {
-  const raw: RawConfig = {
+  const raw = {
     profiles: {
       test: {
         agent: "claude",
@@ -632,7 +727,8 @@ profiles {
       );
       await withXdgConfigHome(tmpDir, async () => {
         const result = await loadGlobalConfig();
-        expect(result?.profiles?.["xdg-profile"]?.agent).toEqual("claude");
+        expect(result).not.toBeNull();
+        expect(result!.pklPath).toEqual(path.join(nasDir, "agent-sandbox.pkl"));
       });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -665,7 +761,8 @@ profiles {
       if (prevXdg !== undefined) delete process.env.XDG_CONFIG_HOME;
       try {
         const result = await loadGlobalConfig();
-        expect(result?.profiles?.["home-profile"]?.agent).toEqual("copilot");
+        expect(result).not.toBeNull();
+        expect(result!.pklPath).toEqual(path.join(nasDir, "agent-sandbox.pkl"));
       } finally {
         if (prevHome !== undefined) process.env.HOME = prevHome;
         if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
@@ -678,15 +775,14 @@ profiles {
 
 // --- 明示パスのエラー伝播 ---
 
-test("loadGlobalConfig: throws for explicit path that does not exist", async () => {
-  await expect(
-    loadGlobalConfig("/nonexistent/nas/config.pkl"),
-  ).rejects.toThrow();
+test("loadGlobalConfig: returns pklPath for explicit path (existence checked later)", async () => {
+  const result = await loadGlobalConfig("/nonexistent/nas/config.pkl");
+  expect(result).toEqual({ pklPath: "/nonexistent/nas/config.pkl" });
 });
 
 // --- 自動検出グローバル設定のエラー伝播 ---
 
-test("loadGlobalConfig: .pkl CLI not available shows helpful error", async () => {
+test("loadGlobalConfig: returns pklPath even when pkl CLI not available", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-pkl-nocli-"));
   const origPath = process.env.PATH;
   process.env.PATH = "";
@@ -695,9 +791,10 @@ test("loadGlobalConfig: .pkl CLI not available shows helpful error", async () =>
     await mkdir(nasDir);
     await writeFile(path.join(nasDir, "agent-sandbox.pkl"), `// pkl content`);
     await withXdgConfigHome(tmpDir, async () => {
-      await expect(loadGlobalConfig()).rejects.toThrow(
-        "but 'pkl' command is not available on PATH",
-      );
+      // loadGlobalConfig now only returns a path; pkl CLI errors surface in loadConfig
+      const result = await loadGlobalConfig();
+      expect(result).not.toBeNull();
+      expect(result!.pklPath).toEqual(path.join(nasDir, "agent-sandbox.pkl"));
     });
   } finally {
     process.env.PATH = origPath;
