@@ -512,11 +512,7 @@ export const displaySchema = z
       )
       .default(DEFAULT_DISPLAY_CONFIG.size),
   })
-  .prefault({})
-  .transform((r) => ({
-    sandbox: r.sandbox,
-    size: r.size,
-  }));
+  .prefault({});
 
 // ---------------------------------------------------------------------------
 // Secret config
@@ -824,36 +820,14 @@ export const uiSchema = z
 // Observability (top-level)
 // ---------------------------------------------------------------------------
 
-const DURATION_UNIT_SECONDS: Record<string, number> = {
-  s: 1,
-  m: 60,
-  h: 3600,
-  d: 86400,
-  w: 604800,
-};
-
-const DURATION_PATTERN = /^(\d{1,9})(s|m|h|d|w)$/;
-
-function parseDurationToSeconds(s: string): number {
-  const match = DURATION_PATTERN.exec(s);
-  if (!match) {
-    // Schema's regex guarantees a match before this runs, so this branch is
-    // defensive only. Throwing keeps the failure loud rather than silent.
-    throw new Error(`invalid duration: ${s}`);
-  }
-  const value = Number.parseInt(match[1], 10);
-  const unit = match[2];
-  return value * DURATION_UNIT_SECONDS[unit];
-}
-
 const retentionSchema = z
-  .string()
-  .regex(DURATION_PATTERN, {
-    message: "must match <number><s|m|h|d|w>, e.g. 30d",
-  })
-  .transform((s) => parseDurationToSeconds(s))
-  .refine((n) => n >= 3600, { message: "must be at least 1h (3600s)" })
-  .nullable()
+  .union([
+    z
+      .number()
+      .int({ message: "must be an integer" })
+      .min(3600, { message: "must be at least 1h (3600s)" }),
+    z.null(),
+  ])
   .default(null);
 
 export const observabilitySchema = z
@@ -861,11 +835,7 @@ export const observabilitySchema = z
     enable: z.boolean().default(DEFAULT_OBSERVABILITY_CONFIG.enable),
     retention: retentionSchema,
   })
-  .prefault({})
-  .transform((r) => ({
-    enable: r.enable,
-    retention: r.retention,
-  }));
+  .prefault({});
 
 // ---------------------------------------------------------------------------
 // Profile
