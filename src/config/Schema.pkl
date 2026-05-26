@@ -1,8 +1,7 @@
 /// @version 0.13.0
 /// Typed schema for nas (Nix Agent Sandbox) configuration.
 ///
-/// User configuration files (`.agent-sandbox.pkl`) and the global
-/// configuration (`agent-sandbox.global.pkl`) `amends` this module to
+/// User configuration files (`.nas/config.pkl`) `amends` this module to
 /// obtain typed defaults and validation of the configuration shape.
 ///
 /// Field names are camelCase. Semantic validation (e.g. the mutual exclusivity

@@ -110,7 +110,7 @@ Examples:
   nas my-profile -b feature/login       # Create worktree from feature/login
   nas --worktree @                      # Use default profile, base current HEAD
 
-Profile agent-args (in .agent-sandbox.pkl):
+Profile agent-args (in .nas/config.pkl):
   profiles {
     ["copilot-nix"] {
       agent = "copilot"

@@ -141,7 +141,7 @@ export function planMount(
   args.push("-w", containerWorkDir);
   envVars.WORKSPACE = containerWorkDir;
 
-  // .agent-sandbox.pkl を RO bind mount で保護する。
+  // .nas/config.pkl を RO bind mount で保護する。
   // 親ディレクトリは RW マウントのため agent が個別ファイルを書き換え可能だが、
   // file bind mount の target は mount point 扱いとなり、
   // Linux では unlink/rename/open(O_WRONLY) 全てが EBUSY/EROFS で拒否される。

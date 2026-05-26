@@ -82,7 +82,7 @@ export interface MountProbes {
   /** /tmp/.X11-unix が read-only か (WSL 等で ro マウントされている場合 true) */
   x11UnixDirReadOnly: boolean;
   /**
-   * workDir から上位へ walk して見つかった .agent-sandbox.pkl の絶対パス。
+   * workDir から上位へ walk して見つかった .nas/config.pkl の絶対パス。
    *
    * これらは次回 nas 起動時に loadConfig が読み込む候補であり、コンテナ内の
    * 悪意あるエージェントが書き換えると hostexec 等の設定を差し替えられるため、
@@ -197,11 +197,12 @@ export async function resolveMountProbes(
   };
 }
 
-const LOCAL_CONFIG_FILENAMES = [".agent-sandbox.pkl"] as const;
+const LOCAL_CONFIG_DIR = ".nas";
+const LOCAL_CONFIG_FILENAME = "config.pkl";
 
 /**
  * workDir から上位へ walk し、各ディレクトリ直下の
- * .agent-sandbox.pkl を列挙する。
+ * .nas/config.pkl を列挙する。
  *
  * loadConfig と異なり「最初に見つかった 1 件」ではなく、辿ったパス上で
  * 見つかった全てを返す。次回起動時の cwd が変わっても拾われる候補を
@@ -213,14 +214,16 @@ async function resolveLocalConfigPaths(workDir: string): Promise<string[]> {
   const root = path.parse(current).root;
 
   while (true) {
-    for (const filename of LOCAL_CONFIG_FILENAMES) {
-      const candidate = path.join(current, filename);
-      try {
-        await stat(candidate);
-        paths.push(candidate);
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
-        // 権限不足等は握りつぶさず伝播
+    const candidate = path.join(
+      current,
+      LOCAL_CONFIG_DIR,
+      LOCAL_CONFIG_FILENAME,
+    );
+    try {
+      await stat(candidate);
+      paths.push(candidate);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         throw e;
       }
     }

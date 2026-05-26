@@ -1191,11 +1191,11 @@ test("MountStage: no mount widening when not in a worktree", () => {
 });
 
 // ============================================================
-// .agent-sandbox.pkl RO bind mount (改ざん防止)
+// .nas/config.pkl RO bind mount (改ざん防止)
 // ============================================================
 
-test("MountStage: .agent-sandbox.pkl inside mountSource is RO bind mounted", () => {
-  const configPath = `${TEST_WORK_DIR}/.agent-sandbox.pkl`;
+test("MountStage: .nas/config.pkl inside mountSource is RO bind mounted", () => {
+  const configPath = `${TEST_WORK_DIR}/.nas/config.pkl`;
   const { input, mountProbes } = makeInput({
     mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
   });
@@ -1208,9 +1208,9 @@ test("MountStage: .agent-sandbox.pkl inside mountSource is RO bind mounted", () 
   });
 });
 
-test("MountStage: multiple .agent-sandbox.pkl at different levels are all RO bind mounted", () => {
-  const pklPath1 = `${TEST_WORK_DIR}/.agent-sandbox.pkl`;
-  const pklPath2 = `${TEST_WORK_DIR}/sub/.agent-sandbox.pkl`;
+test("MountStage: multiple .nas/config.pkl at different levels are all RO bind mounted", () => {
+  const pklPath1 = `${TEST_WORK_DIR}/.nas/config.pkl`;
+  const pklPath2 = `${TEST_WORK_DIR}/sub/.nas/config.pkl`;
   const { input, mountProbes } = makeInput({
     mountProbes: makeMountProbes({ localConfigPaths: [pklPath1, pklPath2] }),
   });
@@ -1220,9 +1220,9 @@ test("MountStage: multiple .agent-sandbox.pkl at different levels are all RO bin
 });
 
 test("MountStage: config path outside mountSource is skipped", () => {
-  // workspace = /workspace/project だが、config は /etc/other/.agent-sandbox.pkl
+  // workspace = /workspace/project だが、config は /etc/other/.nas/config.pkl
   // (mountSource 外なのでコンテナからは見えない → RO mount する必要もない)
-  const outsidePath = "/etc/other/.agent-sandbox.pkl";
+  const outsidePath = "/etc/other/.nas/config.pkl";
   const { input, mountProbes } = makeInput({
     mountProbes: makeMountProbes({ localConfigPaths: [outsidePath] }),
   });
@@ -1233,7 +1233,7 @@ test("MountStage: config path outside mountSource is skipped", () => {
 test("MountStage: with gitWorktreeMainRoot, config within main root is RO mounted", () => {
   // worktree 内にいるが、config は本体リポジトリルート直下にある
   const mainRoot = "/repo";
-  const configPath = `${mainRoot}/.agent-sandbox.pkl`;
+  const configPath = `${mainRoot}/.nas/config.pkl`;
   const { input, mountProbes } = makeInput({
     mountProbes: makeMountProbes({
       gitWorktreeMainRoot: mainRoot,
@@ -1246,7 +1246,7 @@ test("MountStage: with gitWorktreeMainRoot, config within main root is RO mounte
 
 test("MountStage: RO mount is emitted AFTER the workspace RW mount", () => {
   // Docker は後から指定された具体的なサブマウントで上書きするため順序が重要
-  const configPath = `${TEST_WORK_DIR}/.agent-sandbox.pkl`;
+  const configPath = `${TEST_WORK_DIR}/.nas/config.pkl`;
   const { input, mountProbes } = makeInput({
     mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
   });

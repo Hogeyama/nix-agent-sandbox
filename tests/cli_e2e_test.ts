@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditLog } from "../src/audit/store.ts";
+import { initConfig } from "../src/config/init.ts";
 import {
   HostExecBroker,
   sendHostExecBrokerRequest,
@@ -110,14 +111,18 @@ async function runNas(
   return { code, stdout, stderr };
 }
 
-/** 一時ディレクトリに設定ファイルを配置するヘルパー */
+/** 一時ディレクトリに .nas/ 構造を作成して設定ファイルを配置するヘルパー */
 async function withTempConfig(
   pkl: string,
   fn: (dir: string) => Promise<void>,
 ): Promise<void> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cli-test-"));
   try {
-    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), pkl);
+    await initConfig({ projectDir: tmpDir });
+    const configPkl = pkl.includes("amends")
+      ? pkl
+      : `amends "Schema.pkl"\n\n${pkl}`;
+    await writeFile(path.join(tmpDir, ".nas", "config.pkl"), configPkl);
     await fn(tmpDir);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -913,9 +918,12 @@ async function withFakeCodexProject(
     );
     await chmod(fakeCodexPath, 0o755);
 
+    await initConfig({ projectDir: projectDir });
     await writeFile(
-      path.join(projectDir, ".agent-sandbox.pkl"),
+      path.join(projectDir, ".nas", "config.pkl"),
       [
+        'amends "Schema.pkl"',
+        "",
         'default = "test"',
         "profiles {",
         '  ["test"] {',
