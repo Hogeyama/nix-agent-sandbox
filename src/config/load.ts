@@ -14,6 +14,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import * as path from "node:path";
+import { initConfig } from "./init.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -39,12 +40,26 @@ export async function loadConfig(
       ? { startDir: startDirOrOpts }
       : (startDirOrOpts ?? {});
 
-  const found = await findConfigFile(opts.startDir ?? process.cwd());
+  const startDir = opts.startDir ?? process.cwd();
+  let found = await findConfigFile(startDir);
 
   if (!found) {
-    throw new Error(
-      `.nas/config.pkl not found in current directory or any parent directory. Run "nas config init" to create one.`,
+    if (process.env.NAS_NO_AUTO_INIT === "1") {
+      throw new Error(
+        `.nas/config.pkl not found. Run \`nas config init\` to create it.`,
+      );
+    }
+    // Auto-init: create .nas/ with default config in the start directory
+    console.error(
+      `Auto-initializing .nas/ in ${startDir}. Run 'nas config init' in your project root to choose the location.`,
     );
+    await initConfig({ projectDir: startDir });
+    found = await findConfigFile(startDir);
+    if (!found) {
+      throw new Error(
+        `.nas/config.pkl not found even after auto-init. This is a bug — please report it.`,
+      );
+    }
   }
 
   const raw = await evalPklConfig(found.nasDir, found.configPath);

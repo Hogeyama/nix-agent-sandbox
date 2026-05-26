@@ -7,7 +7,14 @@ import { expect, spyOn, test } from "bun:test";
  * loadConfig / resolveProfile を検証する。
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
@@ -288,16 +295,98 @@ profiles {
   });
 });
 
-test("loadConfig: throws when no config file found", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-empty-"));
+test.skipIf(!hasPkl)(
+  "loadConfig: auto-inits when no config file found",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-empty-"));
+    // XDG_CONFIG_HOME を一時ディレクトリに向けてグローバル設定の隔離
+    const xdgDir = path.join(tmpDir, "xdg-config");
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdgDir;
+    try {
+      const config = await loadConfig({ startDir: tmpDir });
+
+      // .nas/ ディレクトリが自動生成されていること
+      const nasDir = path.join(tmpDir, ".nas");
+      const nasStat = await stat(nasDir);
+      expect(nasStat.isDirectory()).toBe(true);
+
+      // デフォルトプロファイルが返されること（テンプレートに "default" プロファイルがある）
+      expect("default" in config.profiles).toBe(true);
+      expect(config.profiles.default.agent).toBe("claude");
+
+      // グローバル設定も XDG_CONFIG_HOME 配下に生成されていること
+      const globalNasDir = path.join(xdgDir, "nas");
+      const globalStat = await stat(globalNasDir);
+      expect(globalStat.isDirectory()).toBe(true);
+    } finally {
+      if (origXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test("loadConfig: NAS_NO_AUTO_INIT=1 skips auto-init and throws", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-noinit-"));
+  const origVal = process.env.NAS_NO_AUTO_INIT;
+  process.env.NAS_NO_AUTO_INIT = "1";
   try {
     await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
-      ".nas/config.pkl not found",
+      "Run `nas config init` to create it",
     );
+    // .nas/ ディレクトリが作成されていないこと
+    await expect(stat(path.join(tmpDir, ".nas"))).rejects.toThrow();
   } finally {
+    if (origVal === undefined) {
+      delete process.env.NAS_NO_AUTO_INIT;
+    } else {
+      process.env.NAS_NO_AUTO_INIT = origVal;
+    }
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test.skipIf(!hasPkl)(
+  "loadConfig: auto-init prints stderr message with directory path",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-stderr-"));
+    const xdgDir = path.join(tmpDir, "xdg-config");
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdgDir;
+    // NAS_NO_AUTO_INIT が未設定であることを保証
+    const origNoInit = process.env.NAS_NO_AUTO_INIT;
+    delete process.env.NAS_NO_AUTO_INIT;
+
+    const stderrSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await loadConfig({ startDir: tmpDir });
+
+      // stderr にディレクトリパスを含むメッセージが出力されること
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const msg = stderrSpy.mock.calls[0][0] as string;
+      expect(msg).toContain("Auto-initializing .nas/");
+      expect(msg).toContain(tmpDir);
+      expect(msg).toContain("nas config init");
+    } finally {
+      stderrSpy.mockRestore();
+      if (origXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = origXdg;
+      }
+      if (origNoInit === undefined) {
+        delete process.env.NAS_NO_AUTO_INIT;
+      } else {
+        process.env.NAS_NO_AUTO_INIT = origNoInit;
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
 
 test.skipIf(!hasPkl)("loadConfig: throws for empty profiles", async () => {
   const configPkl = `amends "Schema.pkl"

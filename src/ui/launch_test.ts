@@ -333,16 +333,15 @@ describe("getLaunchInfo", () => {
   }
 
   test("引数なし呼び出しは process.cwd() 起点で loadConfig() を呼ぶ", async () => {
-    // 引数なし呼び出しは loadConfig() (= process.cwd() 起点) を使う。
-    // process.cwd() に依存する具体値は環境依存なので assert せず、
-    // 「引数なし / 空 opts / cwd undefined はすべて同一結果」というシグネチャ互換を pin する。
-    // Note: this test requires .nas/config.pkl to exist in cwd or a parent.
-    // If cwd has no .nas/ config, all three calls should fail identically.
-    const a = getLaunchInfo(dummyCtx).catch((e: Error) => e.message);
-    const b = getLaunchInfo(dummyCtx, {}).catch((e: Error) => e.message);
-    const c = getLaunchInfo(dummyCtx, { cwd: undefined }).catch(
-      (e: Error) => e.message,
-    );
+    // 引数なし / 空 opts / cwd undefined はすべて同一の profiles を返すことを pin する。
+    const extract = (p: Promise<{ profiles: string[] }>) =>
+      p.then(
+        (v) => v.profiles,
+        (e: Error) => `ERR:${e.constructor.name}`,
+      );
+    const a = extract(getLaunchInfo(dummyCtx));
+    const b = extract(getLaunchInfo(dummyCtx, {}));
+    const c = extract(getLaunchInfo(dummyCtx, { cwd: undefined }));
     expect(await a).toEqual(await b);
     expect(await a).toEqual(await c);
   });
@@ -377,23 +376,21 @@ describe("getLaunchInfo", () => {
   });
 
   test("opts.cwd が空文字の場合は未指定と同等 (cwd 未指定の結果と一致)", async () => {
-    // 空文字は未指定と同じパス (loadConfig() = process.cwd() 起点) を辿るはず。
-    // 環境依存の値を直接 assert するのではなく、cwd 未指定の結果と同一であることを pin する。
-    const infoEmpty = getLaunchInfo(dummyCtx, { cwd: "" }).catch(
-      (e: Error) => e.message,
-    );
-    const infoUndef = getLaunchInfo(dummyCtx).catch((e: Error) => e.message);
+    const extract = (p: Promise<{ profiles: string[] }>) =>
+      p.then(
+        (v) => v.profiles,
+        (e: Error) => `ERR:${e.constructor.name}`,
+      );
+    const infoEmpty = extract(getLaunchInfo(dummyCtx, { cwd: "" }));
+    const infoUndef = extract(getLaunchInfo(dummyCtx));
     expect(await infoEmpty).toEqual(await infoUndef);
   });
 
-  test("opts.cwd 配下に .nas/config.pkl 無しの場合は loadConfig が throw する", () => {
+  test("opts.cwd 配下に .nas/config.pkl 無しの場合は auto-init でデフォルト設定を返す", async () => {
     const emptyDir = path.join(testRoot, "no-config-anywhere");
-    expect(
-      (async () => {
-        await mkdir(emptyDir, { recursive: true });
-        return getLaunchInfo(dummyCtx, { cwd: emptyDir });
-      })(),
-    ).rejects.toThrow(/not found/);
+    await mkdir(emptyDir, { recursive: true });
+    const info = await getLaunchInfo(dummyCtx, { cwd: emptyDir });
+    expect(info.profiles).toContain("default");
   });
 });
 
