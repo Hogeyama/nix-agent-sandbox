@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
+import { resolveAsset } from "../lib/asset.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
 import type { SessionRuntimePaths } from "../sessions/store.ts";
 import type { UiDataContext } from "./data.ts";
@@ -305,41 +306,59 @@ describe("getLaunchInfo", () => {
     await rm(testRoot, { recursive: true, force: true });
   });
 
-  async function writeGlobalPkl(pkl: string): Promise<void> {
-    const nasDir = path.join(xdgDir, "nas");
-    await mkdir(nasDir, { recursive: true });
-    await writeFile(path.join(nasDir, "agent-sandbox.pkl"), pkl);
+  /** Read bundled Schema.pkl text for test setup. */
+  async function readBundledSchema(): Promise<string> {
+    const schemaSrc = resolveAsset(
+      "config/Schema.pkl",
+      import.meta.url,
+      "../config/Schema.pkl",
+    );
+    return readFile(schemaSrc, "utf8");
   }
 
-  async function writeLocalPkl(dir: string, pkl: string): Promise<void> {
-    await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, ".agent-sandbox.pkl"), pkl);
+  /** Set up a .nas/ directory with config.pkl, Schema.pkl, and PklProject. */
+  async function writeLocalNasConfig(dir: string, pkl: string): Promise<void> {
+    const nasDir = path.join(dir, ".nas");
+    await mkdir(nasDir, { recursive: true });
+    const schemaText = await readBundledSchema();
+    await writeFile(path.join(nasDir, "Schema.pkl"), schemaText);
+    await writeFile(
+      path.join(nasDir, "PklProject"),
+      `amends "pkl:Project"\nevaluatorSettings { modulePath { "." } }\n`,
+    );
+    await writeFile(
+      path.join(nasDir, "config.pkl"),
+      `amends "Schema.pkl"\n${pkl}`,
+    );
   }
 
   test("引数なし呼び出しは process.cwd() 起点で loadConfig() を呼ぶ", async () => {
     // 引数なし呼び出しは loadConfig() (= process.cwd() 起点) を使う。
     // process.cwd() に依存する具体値は環境依存なので assert せず、
     // 「引数なし / 空 opts / cwd undefined はすべて同一結果」というシグネチャ互換を pin する。
-    await writeGlobalPkl(
-      `default = "g"\nprofiles {\n  g {\n    agent = "claude"\n  }\n}\n`,
+    // Note: this test requires .nas/config.pkl to exist in cwd or a parent.
+    // If cwd has no .nas/ config, all three calls should fail identically.
+    const a = getLaunchInfo(dummyCtx).catch((e: Error) => e.message);
+    const b = getLaunchInfo(dummyCtx, {}).catch((e: Error) => e.message);
+    const c = getLaunchInfo(dummyCtx, { cwd: undefined }).catch(
+      (e: Error) => e.message,
     );
-    const a = await getLaunchInfo(dummyCtx);
-    const b = await getLaunchInfo(dummyCtx, {});
-    const c = await getLaunchInfo(dummyCtx, { cwd: undefined });
-    expect(a).toEqual(b);
-    expect(a).toEqual(c);
+    expect(await a).toEqual(await b);
+    expect(await a).toEqual(await c);
   });
 
   test("opts.cwd が指定された場合、その cwd 配下の local config を読む", async () => {
     const dirA = path.join(testRoot, "projA");
     const dirB = path.join(testRoot, "projB");
-    await writeLocalPkl(
+    await mkdir(dirA, { recursive: true });
+    await mkdir(dirB, { recursive: true });
+    await writeLocalNasConfig(
       dirA,
-      `default = "a"\nprofiles {\n  a {\n    agent = "claude"\n  }\n}\n`,
+      `default = "a"\nprofiles {\n  ["a"] {\n    agent = "claude"\n  }\n}\n`,
     );
-    await writeLocalPkl(
+    await writeLocalNasConfig(
       dirB,
-      `default = "b"\nprofiles {\n  b {\n    agent = "claude"\n  }\n}\n`,
+      `default = "b"\nprofiles {\n  ["b"] {\n    agent = "claude"\n  }\n}\n`,
     );
 
     const infoA = await getLaunchInfo(dummyCtx, { cwd: dirA });
@@ -360,31 +379,15 @@ describe("getLaunchInfo", () => {
   test("opts.cwd が空文字の場合は未指定と同等 (cwd 未指定の結果と一致)", async () => {
     // 空文字は未指定と同じパス (loadConfig() = process.cwd() 起点) を辿るはず。
     // 環境依存の値を直接 assert するのではなく、cwd 未指定の結果と同一であることを pin する。
-    await writeGlobalPkl(
-      `default = "g"\nprofiles {\n  g {\n    agent = "claude"\n  }\n}\n`,
+    const infoEmpty = getLaunchInfo(dummyCtx, { cwd: "" }).catch(
+      (e: Error) => e.message,
     );
-    const infoEmpty = await getLaunchInfo(dummyCtx, { cwd: "" });
-    const infoUndef = await getLaunchInfo(dummyCtx);
-    expect(infoEmpty.profiles).toEqual(infoUndef.profiles);
-    expect(infoEmpty.defaultProfile).toEqual(infoUndef.defaultProfile);
+    const infoUndef = getLaunchInfo(dummyCtx).catch((e: Error) => e.message);
+    expect(await infoEmpty).toEqual(await infoUndef);
   });
 
-  test("opts.cwd 配下に local 無し + global あり の場合は throw しない (global の profiles が見える)", async () => {
-    await writeGlobalPkl(
-      `default = "g"\nprofiles {\n  g {\n    agent = "claude"\n  }\n}\n`,
-    );
-    const emptyDir = path.join(testRoot, "no-config-here");
-    await mkdir(emptyDir, { recursive: true });
-
-    const info = await getLaunchInfo(dummyCtx, { cwd: emptyDir });
-    expect(info.profiles).toContain("g");
-    expect(info.defaultProfile).toEqual("g");
-  });
-
-  test("opts.cwd 配下に local 無し + global も無し の場合は loadConfig が throw する", () => {
-    // beforeEach で xdgDir は空。global ymlは書かない。
+  test("opts.cwd 配下に .nas/config.pkl 無しの場合は loadConfig が throw する", () => {
     const emptyDir = path.join(testRoot, "no-config-anywhere");
-    // mkdir 同期は不要 — loadConfig は startDir を path.resolve して上方向に走査するだけで stat は ENOENT を catch するので存在しなくても問題ないが、念のためテスト前提を明確化するため mkdir する
     expect(
       (async () => {
         await mkdir(emptyDir, { recursive: true });

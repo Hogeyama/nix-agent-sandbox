@@ -1,37 +1,33 @@
 /**
  * Pkl 設定ファイルの読み込み
+ *
+ * .nas/config.pkl を --project-dir 付きで pkl eval し、
+ * nonce ガードで評価結果の正当性を検証する。
  */
 
 import {
-  copyFile,
-  mkdtemp,
+  mkdir,
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { resolveAsset } from "../lib/asset.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
-const CONFIG_FILENAME_PKL = ".agent-sandbox.pkl";
+export { getGlobalConfigDir } from "./paths.ts";
 
-/** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
-export function getGlobalConfigDir(): string {
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
-  const configBase =
-    xdgConfigHome ?? path.join(process.env.HOME ?? "/", ".config");
-  return path.join(configBase, "nas");
-}
+const CONFIG_DIR = ".nas";
+const CONFIG_FILENAME = "config.pkl";
+const SCHEMA_FILENAME = "Schema.pkl";
+const PKL_PROJECT_FILENAME = "PklProject";
 
 /** loadConfig のオプション */
 export interface LoadConfigOptions {
   /** 開始ディレクトリ（デフォルト: process.cwd()） */
   startDir?: string;
-  /** グローバル設定ファイルのパス（null でグローバル読み込みを無効化） */
-  globalConfigPath?: string | null;
 }
 
 /** 設定ファイルを読み込んで検証済み Config を返す */
@@ -43,49 +39,48 @@ export async function loadConfig(
       ? { startDir: startDirOrOpts }
       : (startDirOrOpts ?? {});
 
-  const globalResult =
-    opts.globalConfigPath === null
-      ? null
-      : await loadGlobalConfig(opts.globalConfigPath);
   const found = await findConfigFile(opts.startDir ?? process.cwd());
 
-  if (found) {
-    // ローカル設定あり: グローバル .pkl パスを渡して pkl eval
-    const raw = await loadPklConfig(found.path, globalResult?.pklPath);
-    return validateConfig(raw);
+  if (!found) {
+    throw new Error(
+      `.nas/config.pkl not found in current directory or any parent directory. Run "nas config init" to create one.`,
+    );
   }
 
-  if (globalResult) {
-    // グローバルのみ: 直接読む
-    const raw = await loadPklConfig(globalResult.pklPath);
-    return validateConfig(raw);
-  }
-
-  throw new Error(
-    `${CONFIG_FILENAME_PKL} not found in current directory or parent directories, and no global config found in ${getGlobalConfigDir()}`,
-  );
-}
-
-/** グローバル設定ファイルの .pkl パスを返す。なければ null */
-export async function loadGlobalConfig(
-  configPath?: string,
-): Promise<{ pklPath: string } | null> {
-  if (configPath) {
-    return { pklPath: configPath };
-  }
-  const candidate = path.join(getGlobalConfigDir(), "agent-sandbox.pkl");
-  try {
-    await stat(candidate);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw e; // 予期しない stat エラー（権限不足など）は伝播
-  }
-  return { pklPath: candidate };
+  const raw = await evalPklConfig(found.nasDir, found.configPath);
+  return validateConfig(raw);
 }
 
 /** 設定ファイルの検索結果 */
 interface ConfigFileFound {
-  path: string;
+  /** .nas ディレクトリの絶対パス */
+  nasDir: string;
+  /** .nas/config.pkl の絶対パス */
+  configPath: string;
+}
+
+/** 指定ディレクトリから上位に向かって .nas/config.pkl を探す */
+async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
+  let current = path.resolve(dir);
+  const root = path.parse(current).root;
+
+  while (true) {
+    const nasDir = path.join(current, CONFIG_DIR);
+    const candidate = path.join(nasDir, CONFIG_FILENAME);
+    try {
+      await stat(candidate);
+      return { nasDir, configPath: candidate };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current || current === root) {
+      return null;
+    }
+    current = parent;
+  }
 }
 
 /** pkl コマンドが PATH 上に存在するか確認する */
@@ -110,72 +105,98 @@ async function pklCommandExists(): Promise<boolean> {
   }
 }
 
+/** 暗号学的に安全なランダム nonce を生成する */
+function generateNonce(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /**
- * .agent-sandbox.pkl を pkl eval で評価して設定オブジェクトを得る。
+ * .nas/config.pkl を pkl eval --project-dir で評価して設定オブジェクトを得る。
  *
- * 評価のたびに一時ディレクトリを作り、そこに以下を配置する:
- *   - `Schema.pkl`         : 型付きスキーマ（バンドルされたアセットからコピー）
- *   - `agent-sandbox.global.pkl` : グローバル .pkl ファイルのコピー、または
- *                                  空の amends ヘッダのみのファイル。
+ * nonce ガード（一時ディレクトリ方式）:
+ *   1. .nas/.eval-<random>/ 一時ディレクトリを作成
+ *   2. Schema.pkl をコピーし _nasNonce にランダム nonce をパッチ
+ *   3. PklProject をコピー
+ *   4. config.pkl へのシンボリックリンクを作成
+ *   5. pkl eval --project-dir .nas/.eval-<random>/ で評価
+ *   6. JSON 出力の _nasNonce が書き込んだ nonce と一致することを検証
+ *   7. finally で一時ディレクトリを削除
  *
- * tmpDir は `--module-path` として pkl eval に渡される。これによりユーザの
- * `.pkl` ファイルは `amends "modulepath:/Schema.pkl"` または
- * `amends "modulepath:/agent-sandbox.global.pkl"` のいずれでも参照できる。
+ * 元の .nas/Schema.pkl は一切変更されず、concurrent な呼び出しも安全。
  */
-async function loadPklConfig(
-  pklPath: string,
-  globalPklPath?: string,
+async function evalPklConfig(
+  nasDir: string,
+  configPath: string,
 ): Promise<unknown> {
   if (!(await pklCommandExists())) {
     throw new Error(
-      `Found ${CONFIG_FILENAME_PKL} at ${pklPath}, but 'pkl' command is not available on PATH. Install Pkl (https://pkl-lang.org/main/current/pkl-cli/index.html#installation).`,
+      `Found .nas/config.pkl at ${configPath}, but 'pkl' command is not available on PATH. Install Pkl (https://pkl-lang.org/main/current/pkl-cli/index.html#installation).`,
     );
   }
 
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-module-"));
+  const schemaPath = path.join(nasDir, SCHEMA_FILENAME);
+  let originalSchemaText: string;
   try {
-    // Schema.pkl をアセットから解決して tmpDir にコピーする。
-    // NAS_ASSET_DIR があればそちらを優先し、なければソースツリー上の隣接ファイルを使う。
-    const schemaPklSrc = resolveAsset(
-      "config/Schema.pkl",
-      import.meta.url,
-      "./Schema.pkl",
+    originalSchemaText = await readFile(schemaPath, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `Schema.pkl not found at ${schemaPath}. Run "nas config init" to regenerate it.`,
+      );
+    }
+    throw e;
+  }
+
+  const nonce = generateNonce();
+  const noncePattern = /^(_nasNonce:\s*String\s*=\s*)"[^"]*"/m;
+  const patchedSchemaText = originalSchemaText.replace(
+    noncePattern,
+    `$1"${nonce}"`,
+  );
+  if (patchedSchemaText === originalSchemaText) {
+    throw new Error(
+      `Schema.pkl at ${schemaPath} does not contain a _nasNonce field. Run "nas config init" to regenerate it.`,
     );
-    let schemaPklText: string;
+  }
+
+  // 一時ディレクトリを作成し、パッチ済み Schema.pkl + PklProject + config.pkl symlink を配置
+  const evalDirName = `.eval-${nonce.slice(0, 16)}`;
+  const evalDir = path.join(nasDir, evalDirName);
+  await mkdir(evalDir, { recursive: true });
+
+  try {
+    // パッチ済み Schema.pkl を一時ディレクトリに書き込む
+    await writeFile(path.join(evalDir, SCHEMA_FILENAME), patchedSchemaText);
+
+    // PklProject をコピー
+    const pklProjectPath = path.join(nasDir, PKL_PROJECT_FILENAME);
+    let pklProjectText: string;
     try {
-      schemaPklText = await readFile(schemaPklSrc, "utf8");
+      pklProjectText = await readFile(pklProjectPath, "utf8");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") {
         throw new Error(
-          `Schema.pkl not found at ${schemaPklSrc}. ` +
-            `Set NAS_ASSET_DIR to a directory containing config/Schema.pkl, ` +
-            `or ensure the file exists adjacent to src/config/load.ts.`,
+          `PklProject not found at ${pklProjectPath}. Run "nas config init" to regenerate it.`,
         );
       }
       throw e;
     }
-    await writeFile(path.join(tmpDir, "Schema.pkl"), schemaPklText);
-    // Config.pkl is a deprecated alias for Schema.pkl; user .pkl files may still reference it.
-    await writeFile(path.join(tmpDir, "Config.pkl"), schemaPklText);
+    await writeFile(path.join(evalDir, PKL_PROJECT_FILENAME), pklProjectText);
 
-    // agent-sandbox.global.pkl は常に配置する。
-    // globalPklPath が指定されていればそのファイルをコピーし、
-    // なければ空の amends ヘッダのみのファイルを書き出す。
-    const globalDst = path.join(tmpDir, "agent-sandbox.global.pkl");
-    if (globalPklPath) {
-      await copyFile(globalPklPath, globalDst);
-    } else {
-      await writeFile(globalDst, 'amends "modulepath:/Schema.pkl"\n');
-    }
+    // config.pkl へのシンボリックリンクを作成
+    const symlinkPath = path.join(evalDir, CONFIG_FILENAME);
+    await symlink(configPath, symlinkPath);
 
     const cmdArgs = [
       "pkl",
       "eval",
-      "--module-path",
-      tmpDir,
+      "--project-dir",
+      evalDir,
       "-f",
       "json",
-      pklPath,
+      symlinkPath,
     ];
 
     const proc = Bun.spawn(cmdArgs, {
@@ -191,46 +212,38 @@ async function loadPklConfig(
     if (code !== 0) {
       const errMsg = stderrText.trim();
       throw new Error(
-        `Failed to evaluate ${pklPath}: pkl eval exited with code ${code}\n${errMsg}`,
+        `Failed to evaluate ${configPath}: pkl eval exited with code ${code}\n${errMsg}`,
       );
     }
+
+    let parsed: Record<string, unknown>;
     try {
-      return JSON.parse(stdoutText);
+      parsed = JSON.parse(stdoutText) as Record<string, unknown>;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(
-        `Failed to parse pkl output for ${pklPath}: ${message}\nstdout: ${stdoutText.slice(0, 500)}`,
+        `Failed to parse pkl output for ${configPath}: ${message}\nstdout: ${stdoutText.slice(0, 500)}`,
       );
     }
+
+    // nonce ガード検証
+    if (parsed._nasNonce !== nonce) {
+      throw new Error(
+        `Nonce verification failed for ${configPath}. The evaluated config did not produce the expected nonce. ` +
+          `This may indicate the config file does not properly inherit from Schema.pkl.`,
+      );
+    }
+
+    // _nasNonce を除去してから返す
+    const { _nasNonce: _, ...configWithoutNonce } = parsed;
+    return configWithoutNonce;
   } finally {
+    // 一時ディレクトリを削除（best-effort: 失敗してもオリジナルのエラーを隠さない）
     try {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(evalDir, { recursive: true, force: true });
     } catch {
-      // cleanup best-effort
+      // cleanup failure is non-fatal — do not mask the original error
     }
-  }
-}
-
-/** 指定ディレクトリから上位に向かって .agent-sandbox.pkl を探す */
-async function findConfigFile(dir: string): Promise<ConfigFileFound | null> {
-  let current = path.resolve(dir);
-  const root = path.parse(current).root;
-
-  while (true) {
-    const candidate = path.join(current, CONFIG_FILENAME_PKL);
-    try {
-      await stat(candidate);
-      return { path: candidate };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-    const parent = path.dirname(current);
-    if (parent === current || current === root) {
-      return null;
-    }
-    current = parent;
   }
 }
 

@@ -1,15 +1,17 @@
 import { expect, spyOn, test } from "bun:test";
 
 /**
- * 設定ファイルの読み込み・検索・マージの統合テスト
+ * 設定ファイルの読み込み・検索の統合テスト
  *
- * 実際のファイルシステム上に Pkl ファイルを配置して loadConfig / resolveProfile を検証する。
+ * .nas/config.pkl + PklProject + Schema.pkl をセットアップし
+ * loadConfig / resolveProfile を検証する。
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { loadConfig, loadGlobalConfig, resolveProfile } from "./load.ts";
+import { resolveAsset } from "../lib/asset.ts";
+import { loadConfig, resolveProfile } from "./load.ts";
 import {
   type Config,
   DEFAULT_DBUS_CONFIG,
@@ -45,15 +47,70 @@ async function pklAvailable(): Promise<boolean> {
 
 const hasPkl = await pklAvailable();
 
-/** 一時ディレクトリに .pkl 設定ファイルを配置してテストを実行するヘルパー */
-async function withTempConfig(
-  pkl: string,
-  fn: (dir: string) => Promise<void>,
+/** バンドルされた Schema.pkl のテキストを読み込む */
+async function readBundledSchema(): Promise<string> {
+  const schemaSrc = resolveAsset(
+    "config/Schema.pkl",
+    import.meta.url,
+    "./Schema.pkl",
+  );
+  return readFile(schemaSrc, "utf8");
+}
+
+/**
+ * 一時ディレクトリに .nas/ 構造をセットアップしてテストを実行するヘルパー。
+ *
+ * @param configPkl - .nas/config.pkl に書き込む内容
+ * @param fn - テスト本体（dir は .nas/ の親ディレクトリ）
+ * @param opts.pklProjectOverride - PklProject の内容を上書きする場合に指定
+ * @param opts.globalDir - グローバル設定ディレクトリのパス（PklProject の modulePath に含まれる）
+ */
+async function withNasConfig(
+  configPkl: string,
+  fn: (dir: string, nasDir: string) => Promise<void>,
+  opts?: { pklProjectOverride?: string; globalDir?: string },
 ): Promise<void> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-test-"));
+  const nasDir = path.join(tmpDir, ".nas");
+  await mkdir(nasDir, { recursive: true });
+
+  // Schema.pkl
+  const schemaText = await readBundledSchema();
+  await writeFile(path.join(nasDir, "Schema.pkl"), schemaText);
+
+  // PklProject
+  if (opts?.pklProjectOverride) {
+    await writeFile(path.join(nasDir, "PklProject"), opts.pklProjectOverride);
+  } else if (opts?.globalDir) {
+    // PklProject that includes both local and global in modulePath
+    const pklProject = `amends "pkl:Project"
+
+evaluatorSettings {
+  modulePath {
+    "."
+    "${opts.globalDir}"
+  }
+}
+`;
+    await writeFile(path.join(nasDir, "PklProject"), pklProject);
+  } else {
+    // PklProject with only local modulePath
+    const pklProject = `amends "pkl:Project"
+
+evaluatorSettings {
+  modulePath {
+    "."
+  }
+}
+`;
+    await writeFile(path.join(nasDir, "PklProject"), pklProject);
+  }
+
+  // config.pkl
+  await writeFile(path.join(nasDir, "config.pkl"), configPkl);
+
   try {
-    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), pkl);
-    await fn(tmpDir);
+    await fn(tmpDir, nasDir);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -78,23 +135,60 @@ async function withNestedDirs(
   }
 }
 
+/** .nas/ 構造を指定ディレクトリにセットアップする */
+async function setupNasDir(
+  parentDir: string,
+  configPkl: string,
+  opts?: { globalDir?: string },
+): Promise<string> {
+  const nasDir = path.join(parentDir, ".nas");
+  await mkdir(nasDir, { recursive: true });
+
+  const schemaText = await readBundledSchema();
+  await writeFile(path.join(nasDir, "Schema.pkl"), schemaText);
+
+  if (opts?.globalDir) {
+    const pklProject = `amends "pkl:Project"
+
+evaluatorSettings {
+  modulePath {
+    "."
+    "${opts.globalDir}"
+  }
+}
+`;
+    await writeFile(path.join(nasDir, "PklProject"), pklProject);
+  } else {
+    const pklProject = `amends "pkl:Project"
+
+evaluatorSettings {
+  modulePath {
+    "."
+  }
+}
+`;
+    await writeFile(path.join(nasDir, "PklProject"), pklProject);
+  }
+
+  await writeFile(path.join(nasDir, "config.pkl"), configPkl);
+  return nasDir;
+}
+
 // --- loadConfig: ファイルシステムからの読み込み ---
 
 test.skipIf(!hasPkl)(
-  "loadConfig: loads minimal Pkl file from directory",
+  "loadConfig: loads minimal .nas/config.pkl from directory",
   async () => {
-    const pkl = `
+    const configPkl = `amends "Schema.pkl"
+
 profiles {
-  dev {
+  ["dev"] {
     agent = "claude"
   }
 }
 `;
-    await withTempConfig(pkl, async (dir) => {
-      const config = await loadConfig({
-        startDir: dir,
-        globalConfigPath: null,
-      });
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
       expect(config.profiles.dev.agent).toEqual("claude");
       expect(config.profiles.dev.nix.enable).toEqual("auto");
       expect(config.profiles.dev.docker.enable).toEqual(false);
@@ -105,12 +199,13 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
-  "loadConfig: searches upward for .pkl config file",
+  "loadConfig: searches upward for .nas/config.pkl",
   async () => {
     await withNestedDirs(async (rootDir, _childDir, grandchildDir) => {
-      await writeFile(
-        path.join(rootDir, ".agent-sandbox.pkl"),
-        `
+      await setupNasDir(
+        rootDir,
+        `amends "Schema.pkl"
+
 profiles {
   ["test"] {
     agent = "claude"
@@ -118,22 +213,20 @@ profiles {
 }
 `,
       );
-      const config = await loadConfig({
-        startDir: grandchildDir,
-        globalConfigPath: null,
-      });
+      const config = await loadConfig({ startDir: grandchildDir });
       expect(config.profiles.test.agent).toEqual("claude");
     });
   },
 );
 
 test.skipIf(!hasPkl)(
-  "loadConfig: nearest .pkl config file wins over parent",
+  "loadConfig: nearest .nas/config.pkl wins over parent",
   async () => {
     await withNestedDirs(async (rootDir, childDir, grandchildDir) => {
-      await writeFile(
-        path.join(rootDir, ".agent-sandbox.pkl"),
-        `
+      await setupNasDir(
+        rootDir,
+        `amends "Schema.pkl"
+
 profiles {
   ["parent-profile"] {
     agent = "copilot"
@@ -141,9 +234,10 @@ profiles {
 }
 `,
       );
-      await writeFile(
-        path.join(childDir, ".agent-sandbox.pkl"),
-        `
+      await setupNasDir(
+        childDir,
+        `amends "Schema.pkl"
+
 profiles {
   ["child-profile"] {
     agent = "claude"
@@ -151,10 +245,7 @@ profiles {
 }
 `,
       );
-      const config = await loadConfig({
-        startDir: grandchildDir,
-        globalConfigPath: null,
-      });
+      const config = await loadConfig({ startDir: grandchildDir });
       expect("child-profile" in config.profiles).toEqual(true);
       expect("parent-profile" in config.profiles).toEqual(false);
     });
@@ -165,9 +256,10 @@ import * as nodeFs from "node:fs/promises";
 
 test("loadConfig: propagates config discovery stat errors", async () => {
   await withNestedDirs(async (rootDir, childDir, grandchildDir) => {
-    await writeFile(
-      path.join(rootDir, ".agent-sandbox.pkl"),
-      `
+    await setupNasDir(
+      rootDir,
+      `amends "Schema.pkl"
+
 profiles {
   ["parent-profile"] {
     agent = "claude"
@@ -176,7 +268,7 @@ profiles {
 `,
     );
 
-    const blockedPath = path.join(childDir, ".agent-sandbox.pkl");
+    const blockedPath = path.join(childDir, ".nas", "config.pkl");
     const originalStat = nodeFs.stat;
     const statSpy = spyOn(nodeFs, "stat");
     statSpy.mockImplementation((async (target: any, ...rest: any[]) => {
@@ -188,12 +280,9 @@ profiles {
       return await originalStat(target, ...rest);
     }) as typeof nodeFs.stat);
     try {
-      await expect(
-        loadConfig({
-          startDir: grandchildDir,
-          globalConfigPath: null,
-        }),
-      ).rejects.toThrow("blocked child config");
+      await expect(loadConfig({ startDir: grandchildDir })).rejects.toThrow(
+        "blocked child config",
+      );
     } finally {
       statSpy.mockRestore();
     }
@@ -203,256 +292,171 @@ profiles {
 test("loadConfig: throws when no config file found", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-empty-"));
   try {
-    await expect(
-      loadConfig({ startDir: tmpDir, globalConfigPath: null }),
-    ).rejects.toThrow("not found");
+    await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
+      ".nas/config.pkl not found",
+    );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
 test.skipIf(!hasPkl)("loadConfig: throws for empty profiles", async () => {
-  const pkl = `
+  const configPkl = `amends "Schema.pkl"
+
 profiles {}
 `;
-  await withTempConfig(pkl, async (dir) => {
-    await expect(
-      loadConfig({ startDir: dir, globalConfigPath: null }),
-    ).rejects.toThrow("at least one entry");
+  await withNasConfig(configPkl, async (dir) => {
+    await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+      "at least one entry",
+    );
   });
 });
 
-test("loadConfig: .pkl CLI not available shows helpful error", async () => {
+test("loadConfig: pkl CLI not available shows helpful error", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nocli-"));
+  const nasDir = path.join(tmpDir, ".nas");
+  await mkdir(nasDir, { recursive: true });
+  const schemaText = await readBundledSchema();
+  await writeFile(path.join(nasDir, "Schema.pkl"), schemaText);
+  await writeFile(
+    path.join(nasDir, "PklProject"),
+    `amends "pkl:Project"\nevaluatorSettings { modulePath { "." } }\n`,
+  );
+  await writeFile(
+    path.join(nasDir, "config.pkl"),
+    `amends "Schema.pkl"\nprofiles { ["dev"] { agent = "claude" } }\n`,
+  );
+
   const origPath = process.env.PATH;
   process.env.PATH = "";
   try {
-    await writeFile(path.join(tmpDir, ".agent-sandbox.pkl"), `// pkl content`);
-    await expect(
-      loadConfig({ startDir: tmpDir, globalConfigPath: null }),
-    ).rejects.toThrow("but 'pkl' command is not available on PATH");
+    await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
+      "but 'pkl' command is not available on PATH",
+    );
   } finally {
     process.env.PATH = origPath;
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
 
-// --- global-only (ローカルなし) → loadConfig がグローバル設定を返す ---
+// --- nonce ガード検証 ---
 
 test.skipIf(!hasPkl)(
-  "loadConfig: global-only path returns global config when no local .pkl exists",
+  "loadConfig: nonce guard restores Schema.pkl after evaluation",
   async () => {
-    // ローカルに .pkl が無いディレクトリ
-    const localDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-no-local-"));
-    // グローバル設定ファイルを一時ディレクトリに配置
-    const globalDir = await mkdtemp(
-      path.join(tmpdir(), "nas-cfg-global-only-"),
-    );
-    const globalPklPath = path.join(globalDir, "agent-sandbox.pkl");
-    await writeFile(
-      globalPklPath,
-      `
-amends "modulepath:/Config.pkl"
+    const configPkl = `amends "Schema.pkl"
 
 profiles {
-  ["global-profile"] {
-    agent = "copilot"
+  ["dev"] {
+    agent = "claude"
   }
 }
-`,
-    );
-    try {
-      const config = await loadConfig({
-        startDir: localDir,
-        globalConfigPath: globalPklPath,
-      });
-      expect("global-profile" in config.profiles).toEqual(true);
-      expect(config.profiles["global-profile"].agent).toEqual("copilot");
-    } finally {
-      await rm(localDir, { recursive: true, force: true });
-      await rm(globalDir, { recursive: true, force: true });
-    }
+`;
+    await withNasConfig(configPkl, async (dir, nasDir) => {
+      const schemaBefore = await readFile(
+        path.join(nasDir, "Schema.pkl"),
+        "utf8",
+      );
+
+      await loadConfig({ startDir: dir });
+
+      const schemaAfter = await readFile(
+        path.join(nasDir, "Schema.pkl"),
+        "utf8",
+      );
+      expect(schemaAfter).toEqual(schemaBefore);
+
+      // .eval-* 一時ディレクトリが残っていないことを確認
+      const { readdirSync } = await import("node:fs");
+      const entries = readdirSync(nasDir);
+      const evalDirs = entries.filter((e: string) => e.startsWith(".eval-"));
+      expect(evalDirs).toEqual([]);
+    });
   },
 );
 
-// --- global .pkl + local .pkl (amends) → マージされる ---
+test.skipIf(!hasPkl)(
+  "loadConfig: nonce guard restores Schema.pkl even on pkl eval failure",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent =
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir, nasDir) => {
+      const schemaBefore = await readFile(
+        path.join(nasDir, "Schema.pkl"),
+        "utf8",
+      );
+
+      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+        /pkl eval exited with code/,
+      );
+
+      const schemaAfter = await readFile(
+        path.join(nasDir, "Schema.pkl"),
+        "utf8",
+      );
+      expect(schemaAfter).toEqual(schemaBefore);
+    });
+  },
+);
+
+// --- グローバル設定の modulePath 経由解決 ---
 
 test.skipIf(!hasPkl)(
-  "loadConfig: local .pkl amending global .pkl merges correctly",
+  "loadConfig: config amending global.pkl via modulePath resolves correctly",
   async () => {
-    // グローバル設定ファイルを一時ディレクトリに配置
-    const globalDir = await mkdtemp(
-      path.join(tmpdir(), "nas-cfg-global-merge-"),
-    );
-    const globalPklPath = path.join(globalDir, "agent-sandbox.pkl");
-    await writeFile(
-      globalPklPath,
-      `
-amends "modulepath:/Config.pkl"
+    const rootDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-global-"));
+    try {
+      // Set up a global dir with Schema.pkl and global.pkl
+      const globalDir = path.join(rootDir, "global-config");
+      await mkdir(globalDir, { recursive: true });
+      const schemaText = await readBundledSchema();
+      await writeFile(path.join(globalDir, "Schema.pkl"), schemaText);
+      await writeFile(
+        path.join(globalDir, "global.pkl"),
+        `amends "Schema.pkl"
 
 profiles {
   ["from-global"] {
     agent = "copilot"
+    network {
+      allowlist = new Listing { "api.github.com" }
+    }
   }
 }
 `,
-    );
+      );
 
-    // ローカル .pkl は global を amend して追加プロファイルを定義
-    const localDir = await mkdtemp(
-      path.join(tmpdir(), "nas-cfg-local-amends-"),
-    );
-    await writeFile(
-      path.join(localDir, ".agent-sandbox.pkl"),
-      `
-amends "modulepath:/agent-sandbox.global.pkl"
+      // Local config amends global.pkl via modulepath
+      const configPkl = `amends "modulepath:/global.pkl"
 
 profiles {
   ["from-local"] {
     agent = "claude"
   }
 }
-`,
-    );
-
-    try {
-      const config = await loadConfig({
-        startDir: localDir,
-        globalConfigPath: globalPklPath,
-      });
-      // ローカルが global を amend しているので、global のプロファイルも引き継ぐ
-      expect("from-global" in config.profiles).toEqual(true);
-      expect(config.profiles["from-global"].agent).toEqual("copilot");
-      // ローカルで追加したプロファイルも存在する
-      expect("from-local" in config.profiles).toEqual(true);
-      expect(config.profiles["from-local"].agent).toEqual("claude");
-    } finally {
-      await rm(localDir, { recursive: true, force: true });
-      await rm(globalDir, { recursive: true, force: true });
-    }
-  },
-);
-
-// --- Config.pkl backward-compat alias ---
-
-test.skipIf(!hasPkl)(
-  "loadConfig: Config.pkl deprecated alias still works for existing configs",
-  async () => {
-    // Existing user configs may use `amends "modulepath:/Config.pkl"` (the old name).
-    // The runtime writes Config.pkl as an alias for Schema.pkl so these keep working.
-    const pkl = `
-amends "modulepath:/Config.pkl"
-
-profiles {
-  ["compat"] {
-    agent = "claude"
-  }
-}
 `;
-    await withTempConfig(pkl, async (dir) => {
-      const config = await loadConfig({
-        startDir: dir,
-        globalConfigPath: null,
-      });
-      expect(config.profiles.compat.agent).toEqual("claude");
-    });
-  },
-);
-
-// --- .yml/.nix files are ignored ---
-
-test.skipIf(!hasPkl)(
-  "loadConfig: .yml file is ignored (only .pkl is recognized)",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-yml-ignored-"));
-    try {
-      await writeFile(
-        path.join(tmpDir, ".agent-sandbox.yml"),
-        `
-profiles:
-  from-yml:
-    agent: claude
-`,
+      await withNasConfig(
+        configPkl,
+        async (dir) => {
+          const config = await loadConfig({ startDir: dir });
+          expect("from-global" in config.profiles).toEqual(true);
+          expect(config.profiles["from-global"].agent).toEqual("copilot");
+          expect(config.profiles["from-global"].network.allowlist).toEqual([
+            "api.github.com",
+          ]);
+          expect("from-local" in config.profiles).toEqual(true);
+          expect(config.profiles["from-local"].agent).toEqual("claude");
+        },
+        { globalDir },
       );
-      // No .pkl file → should not find config
-      await expect(
-        loadConfig({ startDir: tmpDir, globalConfigPath: null }),
-      ).rejects.toThrow("not found");
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
-
-test.skipIf(!hasPkl)(
-  "loadConfig: .nix file is ignored (only .pkl is recognized)",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-nix-ignored-"));
-    try {
-      await writeFile(
-        path.join(tmpDir, ".agent-sandbox.nix"),
-        `
-{
-  profiles = {
-    from-nix = {
-      agent = "claude";
-    };
-  };
-}
-`,
-      );
-      // No .pkl file → should not find config
-      await expect(
-        loadConfig({ startDir: tmpDir, globalConfigPath: null }),
-      ).rejects.toThrow("not found");
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
-
-test.skipIf(!hasPkl)(
-  "loadConfig: .pkl is loaded even when .yml and .nix coexist",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-wins-"));
-    try {
-      await writeFile(
-        path.join(tmpDir, ".agent-sandbox.yml"),
-        `
-profiles:
-  from-yml:
-    agent: copilot
-`,
-      );
-      await writeFile(
-        path.join(tmpDir, ".agent-sandbox.nix"),
-        `
-{
-  profiles = {
-    from-nix = { agent = "copilot"; };
-  };
-}
-`,
-      );
-      await writeFile(
-        path.join(tmpDir, ".agent-sandbox.pkl"),
-        `
-profiles {
-  ["from-pkl"] {
-    agent = "claude"
-  }
-}
-`,
-      );
-      const config = await loadConfig({
-        startDir: tmpDir,
-        globalConfigPath: null,
-      });
-      expect("from-pkl" in config.profiles).toEqual(true);
-      expect("from-yml" in config.profiles).toEqual(false);
-      expect("from-nix" in config.profiles).toEqual(false);
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(rootDir, { recursive: true, force: true });
     }
   },
 );
@@ -639,6 +643,118 @@ test("resolveProfile: throws for nonexistent profile name", () => {
   );
 });
 
+// --- エラーパス: Schema.pkl 欠落・不正・nonce 不一致 ---
+
+test.skipIf(!hasPkl)(
+  "loadConfig: throws when Schema.pkl is missing from .nas directory",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-no-schema-"));
+    const nasDir = path.join(tmpDir, ".nas");
+    await mkdir(nasDir, { recursive: true });
+
+    // PklProject のみ作成（Schema.pkl は省略）
+    await writeFile(
+      path.join(nasDir, "PklProject"),
+      `amends "pkl:Project"\nevaluatorSettings { modulePath { "." } }\n`,
+    );
+    await writeFile(
+      path.join(nasDir, "config.pkl"),
+      `amends "Schema.pkl"\nprofiles { ["test"] { agent = "claude" } }\n`,
+    );
+
+    try {
+      const err = expect(loadConfig({ startDir: tmpDir })).rejects;
+      await err.toThrow("Schema.pkl not found");
+      await err.toThrow('Run "nas config init"');
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: throws when PklProject is missing from .nas directory",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-no-pklproj-"));
+    const nasDir = path.join(tmpDir, ".nas");
+    await mkdir(nasDir, { recursive: true });
+
+    // Schema.pkl と config.pkl は作成するが PklProject は省略
+    const schemaText = await readBundledSchema();
+    await writeFile(path.join(nasDir, "Schema.pkl"), schemaText);
+    await writeFile(
+      path.join(nasDir, "config.pkl"),
+      `amends "Schema.pkl"\nprofiles { ["test"] { agent = "claude" } }\n`,
+    );
+
+    try {
+      const err = expect(loadConfig({ startDir: tmpDir })).rejects;
+      await err.toThrow("PklProject not found");
+      await err.toThrow("nas config init");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: throws when Schema.pkl has no _nasNonce field",
+  async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-old-schema-"));
+    const nasDir = path.join(tmpDir, ".nas");
+    await mkdir(nasDir, { recursive: true });
+
+    // _nasNonce フィールドを含まない古い形式の Schema.pkl
+    const oldSchema = `open module nas.Config
+
+profiles: Mapping<String, Profile> = new {}
+
+class Profile {
+  agent: "claude"|"copilot"|"codex"
+}
+`;
+    await writeFile(path.join(nasDir, "Schema.pkl"), oldSchema);
+    await writeFile(
+      path.join(nasDir, "PklProject"),
+      `amends "pkl:Project"\nevaluatorSettings { modulePath { "." } }\n`,
+    );
+    await writeFile(
+      path.join(nasDir, "config.pkl"),
+      `amends "Schema.pkl"\nprofiles { ["test"] { agent = "claude" } }\n`,
+    );
+
+    try {
+      await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
+        "does not contain a _nasNonce field",
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: throws nonce verification failure for config not inheriting Schema.pkl",
+  async () => {
+    // config.pkl が amends を使わず _nasNonce を直接出力するケース。
+    // pkl eval は成功するが、出力の _nasNonce がパッチ済み Schema.pkl の
+    // nonce と一致しないため検証エラーになる。
+    const configPkl = `_nasNonce = "wrong-nonce"
+
+profiles {
+  ["test"] {
+    agent = "claude"
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+        "Nonce verification failed",
+      );
+    });
+  },
+);
+
 // --- validateConfig: 追加のバリデーションテスト ---
 
 test("validateConfig: multiple profiles each independently validated", () => {
@@ -711,157 +827,3 @@ test("validateConfig: nix.extra-packages preserved", () => {
     "nixpkgs#ripgrep",
   ]);
 });
-
-// --- XDG_CONFIG_HOME サポート ---
-
-/** XDG_CONFIG_HOME を一時的に差し替えてテストを実行するヘルパー */
-async function withXdgConfigHome(
-  xdgDir: string,
-  fn: () => Promise<void>,
-): Promise<void> {
-  const prev = process.env.XDG_CONFIG_HOME;
-  process.env.XDG_CONFIG_HOME = xdgDir;
-  try {
-    await fn();
-  } finally {
-    if (prev !== undefined) {
-      process.env.XDG_CONFIG_HOME = prev;
-    } else {
-      delete process.env.XDG_CONFIG_HOME;
-    }
-  }
-}
-
-test.skipIf(!hasPkl)(
-  "loadGlobalConfig: uses XDG_CONFIG_HOME when set",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-test-"));
-    try {
-      const nasDir = path.join(tmpDir, "nas");
-      await mkdir(nasDir);
-      await writeFile(
-        path.join(nasDir, "agent-sandbox.pkl"),
-        `
-amends "modulepath:/Config.pkl"
-
-profiles {
-  ["xdg-profile"] {
-    agent = "claude"
-  }
-}
-`,
-      );
-      await withXdgConfigHome(tmpDir, async () => {
-        const result = await loadGlobalConfig();
-        expect(result).not.toBeNull();
-        expect(result!.pklPath).toEqual(path.join(nasDir, "agent-sandbox.pkl"));
-      });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
-
-test.skipIf(!hasPkl)(
-  "loadGlobalConfig: falls back to HOME/.config/nas without XDG_CONFIG_HOME",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-home-test-"));
-    try {
-      const nasDir = path.join(tmpDir, ".config", "nas");
-      await mkdir(nasDir, { recursive: true });
-      await writeFile(
-        path.join(nasDir, "agent-sandbox.pkl"),
-        `
-amends "modulepath:/Config.pkl"
-
-profiles {
-  ["home-profile"] {
-    agent = "copilot"
-  }
-}
-`,
-      );
-      const prevHome = process.env.HOME;
-      const prevXdg = process.env.XDG_CONFIG_HOME;
-      process.env.HOME = tmpDir;
-      if (prevXdg !== undefined) delete process.env.XDG_CONFIG_HOME;
-      try {
-        const result = await loadGlobalConfig();
-        expect(result).not.toBeNull();
-        expect(result!.pklPath).toEqual(path.join(nasDir, "agent-sandbox.pkl"));
-      } finally {
-        if (prevHome !== undefined) process.env.HOME = prevHome;
-        if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
-      }
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
-
-// --- 明示パスのエラー伝播 ---
-
-test("loadGlobalConfig: returns pklPath for explicit path (existence checked later)", async () => {
-  const result = await loadGlobalConfig("/nonexistent/nas/config.pkl");
-  expect(result).toEqual({ pklPath: "/nonexistent/nas/config.pkl" });
-});
-
-// --- 自動検出グローバル設定のエラー伝播 ---
-
-test("loadGlobalConfig: returns pklPath even when pkl CLI not available", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-pkl-nocli-"));
-  const origPath = process.env.PATH;
-  process.env.PATH = "";
-  try {
-    const nasDir = path.join(tmpDir, "nas");
-    await mkdir(nasDir);
-    await writeFile(path.join(nasDir, "agent-sandbox.pkl"), `// pkl content`);
-    await withXdgConfigHome(tmpDir, async () => {
-      // loadGlobalConfig now only returns a path; pkl CLI errors surface in loadConfig
-      const result = await loadGlobalConfig();
-      expect(result).not.toBeNull();
-      expect(result!.pklPath).toEqual(path.join(nasDir, "agent-sandbox.pkl"));
-    });
-  } finally {
-    process.env.PATH = origPath;
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("loadGlobalConfig: returns null when no global config file exists", async () => {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-empty-"));
-  try {
-    // nasDir 自体を作らない → stat で NotFound → null
-    await withXdgConfigHome(tmpDir, async () => {
-      const result = await loadGlobalConfig();
-      expect(result).toEqual(null);
-    });
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test.skipIf(!hasPkl)(
-  "loadGlobalConfig: ignores .yml in global config dir",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-xdg-yml-ignored-"));
-    try {
-      const nasDir = path.join(tmpDir, "nas");
-      await mkdir(nasDir);
-      await writeFile(
-        path.join(nasDir, "agent-sandbox.yml"),
-        `
-profiles:
-  test:
-    agent: claude
-`,
-      );
-      await withXdgConfigHome(tmpDir, async () => {
-        const result = await loadGlobalConfig();
-        expect(result).toEqual(null);
-      });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);

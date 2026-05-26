@@ -15,8 +15,7 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
-import { getGlobalConfigDir } from "./load.ts";
-import { NAS_GITIGNORE_CONTENT } from "./paths.ts";
+import { getGlobalConfigDir, NAS_GITIGNORE_CONTENT } from "./paths.ts";
 
 /** Parse a `/// @version X.Y.Z` line from the first 5 lines of a pkl file. */
 export function parseVersionFromPkl(text: string): string | null {
