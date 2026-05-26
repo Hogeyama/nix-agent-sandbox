@@ -46,7 +46,7 @@ export function compareSemver(a: string, b: string): number {
 }
 
 /** Read a file's text content, returning null on ENOENT. */
-async function readFileOrNull(filePath: string): Promise<string | null> {
+export async function readFileOrNull(filePath: string): Promise<string | null> {
   try {
     return await readFile(filePath, "utf8");
   } catch (e) {
@@ -76,8 +76,49 @@ function resolveTemplate(name: string): string {
 }
 
 /** Resolve the bundled Schema.pkl asset path. */
-function resolveSchemaAsset(): string {
+export function resolveSchemaAsset(): string {
   return resolveAsset("config/Schema.pkl", import.meta.url, "./Schema.pkl");
+}
+
+export interface EnsureGlobalSchemaResult {
+  /** "written" if created or overwritten, "skipped" if left unchanged. */
+  action: "written" | "skipped";
+  path: string;
+}
+
+/**
+ * Ensure the global Schema.pkl is present and up-to-date (version-aware upsert).
+ *
+ * - If the file does not exist, it is created from the bundled asset.
+ * - If it exists but its `@version` is older than the bundled one, it is overwritten.
+ * - Otherwise it is left unchanged.
+ */
+export async function ensureGlobalSchema(
+  globalDir: string,
+): Promise<EnsureGlobalSchemaResult> {
+  const schemaPklSrc = resolveSchemaAsset();
+  const schemaPklText = await readFile(schemaPklSrc, "utf8");
+  const bundledVersion = parseVersionFromPkl(schemaPklText);
+
+  const globalSchemaPath = path.join(globalDir, "Schema.pkl");
+  const existingGlobalSchema = await readFileOrNull(globalSchemaPath);
+
+  if (existingGlobalSchema === null) {
+    await writeFile(globalSchemaPath, schemaPklText);
+    return { action: "written", path: globalSchemaPath };
+  }
+
+  const existingVersion = parseVersionFromPkl(existingGlobalSchema);
+  if (
+    bundledVersion &&
+    existingVersion &&
+    compareSemver(bundledVersion, existingVersion) > 0
+  ) {
+    await writeFile(globalSchemaPath, schemaPklText);
+    return { action: "written", path: globalSchemaPath };
+  }
+
+  return { action: "skipped", path: globalSchemaPath };
 }
 
 export interface InitConfigOptions {
@@ -102,33 +143,20 @@ export async function initConfig(
   const written: string[] = [];
   const skipped: string[] = [];
 
-  // Read the bundled Schema.pkl once.
+  // Read the bundled Schema.pkl once (needed for project-level copy below).
   const schemaPklSrc = resolveSchemaAsset();
   const schemaPklText = await readFile(schemaPklSrc, "utf8");
-  const bundledVersion = parseVersionFromPkl(schemaPklText);
 
   // --- Global config dir ---
   const globalDir = getGlobalConfigDir();
   await mkdir(globalDir, { recursive: true });
 
-  // Global Schema.pkl — overwrite only when bundled version is newer.
-  const globalSchemaPath = path.join(globalDir, "Schema.pkl");
-  const existingGlobalSchema = await readFileOrNull(globalSchemaPath);
-  if (existingGlobalSchema === null) {
-    await writeFile(globalSchemaPath, schemaPklText);
-    written.push(globalSchemaPath);
+  // Global Schema.pkl — version-aware upsert via shared helper.
+  const globalSchemaResult = await ensureGlobalSchema(globalDir);
+  if (globalSchemaResult.action === "written") {
+    written.push(globalSchemaResult.path);
   } else {
-    const existingVersion = parseVersionFromPkl(existingGlobalSchema);
-    if (
-      bundledVersion &&
-      existingVersion &&
-      compareSemver(bundledVersion, existingVersion) > 0
-    ) {
-      await writeFile(globalSchemaPath, schemaPklText);
-      written.push(globalSchemaPath);
-    } else {
-      skipped.push(globalSchemaPath);
-    }
+    skipped.push(globalSchemaResult.path);
   }
 
   // Global global.pkl — create only if missing.

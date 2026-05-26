@@ -1,5 +1,20 @@
-import { describe, expect, test } from "bun:test";
-import { normalizeEnvSnakeCaseKeys, objectToPklSource } from "./migrate.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import {
+  findYamlConfig,
+  migrateYml2Pkl,
+  normalizeEnvSnakeCaseKeys,
+  objectToPklSource,
+} from "./migrate.ts";
 
 // ---------------------------------------------------------------------------
 // objectToPklSource
@@ -319,5 +334,405 @@ describe("normalizeEnvSnakeCaseKeys", () => {
       .dev;
     expect(profile.agent).toEqual("claude");
     expect(profile.session).toEqual({ multiplex: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findYamlConfig
+// ---------------------------------------------------------------------------
+
+describe("findYamlConfig", () => {
+  let tmpDir: string;
+
+  function setup() {
+    tmpDir = mkdtempSync(path.join(tmpdir(), "nas-migrate-find-"));
+  }
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("finds .agent-sandbox.yml in the start directory", async () => {
+    setup();
+    const ymlPath = path.join(tmpDir, ".agent-sandbox.yml");
+    writeFileSync(ymlPath, "default: main\n");
+
+    const result = await findYamlConfig(tmpDir);
+    expect(result).toEqual(ymlPath);
+  });
+
+  test("finds .agent-sandbox.yml in a parent directory", async () => {
+    setup();
+    const ymlPath = path.join(tmpDir, ".agent-sandbox.yml");
+    writeFileSync(ymlPath, "default: main\n");
+
+    const childDir = path.join(tmpDir, "a", "b", "c");
+    mkdirSync(childDir, { recursive: true });
+
+    const result = await findYamlConfig(childDir);
+    expect(result).toEqual(ymlPath);
+  });
+
+  test("returns null when no .agent-sandbox.yml exists", async () => {
+    setup();
+    const childDir = path.join(tmpDir, "empty", "dir");
+    mkdirSync(childDir, { recursive: true });
+
+    const result = await findYamlConfig(childDir);
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// migrateYml2Pkl
+// ---------------------------------------------------------------------------
+
+describe("migrateYml2Pkl", () => {
+  let tmpDir: string;
+  let originalCwd: string;
+  let originalXdg: string | undefined;
+
+  function setup() {
+    tmpDir = mkdtempSync(path.join(tmpdir(), "nas-migrate-test-"));
+    originalCwd = process.cwd();
+    originalXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = path.join(tmpDir, "xdg-config");
+  }
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // -- Local mode -----------------------------------------------------------
+
+  describe("local mode", () => {
+    test("migrates YAML to .nas/config.pkl with scaffold", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+
+      // Place .agent-sandbox.yml in project dir
+      const ymlPath = path.join(projectDir, ".agent-sandbox.yml");
+      writeFileSync(ymlPath, "default: main\n");
+
+      process.chdir(projectDir);
+      const result = await migrateYml2Pkl({});
+
+      expect(result.inputPath).toEqual(ymlPath);
+      expect(result.outputPath).toEqual(
+        path.join(projectDir, ".nas", "config.pkl"),
+      );
+      expect(result.scaffoldResult).toBeDefined();
+
+      // Verify the output file content
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('amends "Schema.pkl"');
+      expect(content).toContain('default = "main"');
+    });
+
+    test("errors when output already exists", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      const nasDir = path.join(projectDir, ".nas");
+      mkdirSync(nasDir, { recursive: true });
+
+      // Place .agent-sandbox.yml
+      writeFileSync(
+        path.join(projectDir, ".agent-sandbox.yml"),
+        "default: main\n",
+      );
+
+      // Pre-create output
+      writeFileSync(path.join(nasDir, "config.pkl"), "existing content\n");
+
+      process.chdir(projectDir);
+      await expect(migrateYml2Pkl({})).rejects.toThrow(
+        /Output file already exists.*--force/,
+      );
+    });
+
+    test("--force overwrites existing output", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      const nasDir = path.join(projectDir, ".nas");
+      mkdirSync(nasDir, { recursive: true });
+
+      writeFileSync(
+        path.join(projectDir, ".agent-sandbox.yml"),
+        "default: dev\n",
+      );
+      writeFileSync(path.join(nasDir, "config.pkl"), "old content\n");
+
+      process.chdir(projectDir);
+      const result = await migrateYml2Pkl({ force: true });
+
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('default = "dev"');
+      expect(content).not.toContain("old content");
+    });
+
+    test("errors when YAML is not found", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "empty-project");
+      mkdirSync(projectDir, { recursive: true });
+
+      process.chdir(projectDir);
+      await expect(migrateYml2Pkl({})).rejects.toThrow(
+        /No \.agent-sandbox\.yml found/,
+      );
+    });
+  });
+
+  // -- Global mode ----------------------------------------------------------
+
+  describe("global mode", () => {
+    test("migrates YAML to global.pkl and creates Schema.pkl", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      // Place global YAML
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.yml"),
+        "default: prod\n",
+      );
+
+      // Use a dummy cwd (should not matter for global mode)
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+      process.chdir(projectDir);
+
+      const result = await migrateYml2Pkl({ global: true });
+
+      expect(result.inputPath).toEqual(
+        path.join(globalDir, ".agent-sandbox.yml"),
+      );
+      expect(result.outputPath).toEqual(path.join(globalDir, "global.pkl"));
+      expect(result.scaffoldResult).toBeUndefined();
+
+      // Verify output
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('amends "Schema.pkl"');
+      expect(content).toContain('default = "prod"');
+
+      // Schema.pkl should have been created
+      expect(existsSync(path.join(globalDir, "Schema.pkl"))).toBeTrue();
+    });
+
+    test("errors when output already exists", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.yml"),
+        "default: prod\n",
+      );
+      writeFileSync(path.join(globalDir, "global.pkl"), "existing\n");
+
+      process.chdir(tmpDir);
+      await expect(migrateYml2Pkl({ global: true })).rejects.toThrow(
+        /Output file already exists.*--force/,
+      );
+    });
+
+    test("--force overwrites existing output", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.yml"),
+        "default: staging\n",
+      );
+      writeFileSync(path.join(globalDir, "global.pkl"), "old\n");
+
+      process.chdir(tmpDir);
+      const result = await migrateYml2Pkl({ global: true, force: true });
+
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('default = "staging"');
+    });
+
+    test("errors when YAML is not found", async () => {
+      setup();
+      // Don't create any YAML file in global dir
+      process.chdir(tmpDir);
+      await expect(migrateYml2Pkl({ global: true })).rejects.toThrow(
+        /YAML config file not found/,
+      );
+    });
+
+    test("does not overwrite existing Schema.pkl", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      const existingSchema = "/// existing schema\n";
+      writeFileSync(path.join(globalDir, "Schema.pkl"), existingSchema);
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.yml"),
+        "default: main\n",
+      );
+
+      process.chdir(tmpDir);
+      await migrateYml2Pkl({ global: true });
+
+      // Schema.pkl should not be overwritten
+      const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
+      expect(content).toEqual(existingSchema);
+    });
+
+    test("overwrites existing Schema.pkl when bundled version is newer", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      // Pre-create Schema.pkl with an older version
+      const oldSchema =
+        "/// @version 0.0.1\n/// old schema\nopen module nas.Config\n";
+      writeFileSync(path.join(globalDir, "Schema.pkl"), oldSchema);
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.yml"),
+        "default: main\n",
+      );
+
+      process.chdir(tmpDir);
+      await migrateYml2Pkl({ global: true });
+
+      // Schema.pkl should be overwritten (bundled 0.13.0 > 0.0.1)
+      const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
+      expect(content).not.toEqual(oldSchema);
+      expect(content).toContain("@version 0.13.0");
+    });
+
+    test("does not overwrite existing Schema.pkl when existing version is newer", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      // Pre-create Schema.pkl with a newer version
+      const newerSchema =
+        "/// @version 999.0.0\n/// future schema\nopen module nas.Config\n";
+      writeFileSync(path.join(globalDir, "Schema.pkl"), newerSchema);
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.yml"),
+        "default: main\n",
+      );
+
+      process.chdir(tmpDir);
+      await migrateYml2Pkl({ global: true });
+
+      // Schema.pkl should NOT be overwritten (999.0.0 > 0.13.0)
+      const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
+      expect(content).toEqual(newerSchema);
+    });
+  });
+
+  // -- --input option -------------------------------------------------------
+
+  describe("--input option", () => {
+    test("uses specified input but writes to local mode default output", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+
+      // Put YAML in a custom location
+      const customYaml = path.join(tmpDir, "custom", "my-config.yml");
+      mkdirSync(path.dirname(customYaml), { recursive: true });
+      writeFileSync(customYaml, "default: custom\n");
+
+      process.chdir(projectDir);
+      const result = await migrateYml2Pkl({ inputPath: customYaml });
+
+      expect(result.inputPath).toEqual(customYaml);
+      // Output should be in cwd's .nas/config.pkl, not near the input
+      expect(result.outputPath).toEqual(
+        path.join(projectDir, ".nas", "config.pkl"),
+      );
+
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('default = "custom"');
+    });
+
+    test("uses specified input but writes to global mode default output", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+
+      const customYaml = path.join(tmpDir, "custom", "my-global.yml");
+      mkdirSync(path.dirname(customYaml), { recursive: true });
+      writeFileSync(customYaml, "default: from-custom\n");
+
+      process.chdir(tmpDir);
+      const result = await migrateYml2Pkl({
+        global: true,
+        inputPath: customYaml,
+      });
+
+      expect(result.inputPath).toEqual(customYaml);
+      // Output should be in global dir, not near the input
+      expect(result.outputPath).toEqual(path.join(globalDir, "global.pkl"));
+
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('default = "from-custom"');
+    });
+  });
+
+  // -- YAML parsing edge cases ----------------------------------------------
+
+  describe("YAML parsing", () => {
+    test("wraps YAML parse errors with file path", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+
+      const ymlPath = path.join(projectDir, ".agent-sandbox.yml");
+      writeFileSync(ymlPath, "---\n{invalid:: yaml:: content");
+
+      process.chdir(projectDir);
+      await expect(migrateYml2Pkl({})).rejects.toThrow(
+        new RegExp(
+          `Failed to parse YAML in ${ymlPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+        ),
+      );
+    });
+
+    test("errors when YAML top-level is an array", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+
+      writeFileSync(
+        path.join(projectDir, ".agent-sandbox.yml"),
+        "- item1\n- item2\n",
+      );
+
+      process.chdir(projectDir);
+      await expect(migrateYml2Pkl({})).rejects.toThrow(
+        /Expected an object.*got an array/,
+      );
+    });
+
+    test("errors when YAML top-level is a scalar", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+
+      writeFileSync(
+        path.join(projectDir, ".agent-sandbox.yml"),
+        "just a string\n",
+      );
+
+      process.chdir(projectDir);
+      await expect(migrateYml2Pkl({})).rejects.toThrow(
+        /Expected an object.*got string/,
+      );
+    });
   });
 });
