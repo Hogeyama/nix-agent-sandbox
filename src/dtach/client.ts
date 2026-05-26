@@ -95,6 +95,32 @@ export async function dtachNewSession(
   }
 }
 
+/**
+ * Reset terminal mouse tracking state.
+ *
+ * dtach does not restore terminal modes on detach, so any DECSET mouse
+ * tracking the inner process enabled leaks into the host terminal.  Writing
+ * the corresponding DECRST sequences is harmless when the modes are already
+ * off, but prevents garbage input (e.g. `0;57;50M`) on mouse clicks after
+ * detach.
+ *
+ * Ideally we would save the current mouse tracking state before attach
+ * (via DECRQM `\x1b[?1000$p` etc.) and restore it after detach.  In
+ * practice this is not worth the complexity: DECRQM support varies across
+ * terminal emulators, parsing the response requires raw-mode stdin reads
+ * with timing heuristics, and the host terminal realistically never has
+ * mouse tracking enabled before nas runs.  Unconditionally disabling is
+ * the pragmatic choice.
+ */
+function resetTerminalMouseTracking(): void {
+  const reset =
+    "\x1b[?1000l" + // Normal tracking mode
+    "\x1b[?1002l" + // Button-event tracking mode
+    "\x1b[?1003l" + // Any-event tracking mode
+    "\x1b[?1006l"; // SGR extended mouse mode
+  process.stdout.write(reset);
+}
+
 /** dtach セッションにアタッチ（stdin/stdout inherit） */
 export async function dtachAttach(
   socketPath: string,
@@ -107,6 +133,9 @@ export async function dtachAttach(
   await runInteractiveCommand("dtach", args, {
     errorLabel: "dtach attach",
   });
+  // dtach doesn't reset terminal state on detach; clean up mouse tracking
+  // so the host terminal stops interpreting clicks as input.
+  resetTerminalMouseTracking();
 }
 
 /** ソケットに実接続できるか確認する（stale socket を弾く） */
