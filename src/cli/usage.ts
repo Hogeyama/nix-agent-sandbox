@@ -15,7 +15,7 @@ Usage:
   nas hostexec [pending|approve|deny|review|test] [options]
   nas ui [stop] [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
-  nas config [subcommand]
+  nas config init
   nas hook --kind start|attention|stop [--when path=value ...]
 
 Subcommands:
@@ -27,7 +27,7 @@ Subcommands:
   hostexec  hostexec 承認キューの管理
   ui        Web ダッシュボードを起動する
   audit     監査ログを表示する
-  config    設定ファイルの管理
+  config    設定ファイルの管理 (init: 初期設定ファイルを生成)
   hook      Report a session event from an agent hook (internal use)
 
 Options:

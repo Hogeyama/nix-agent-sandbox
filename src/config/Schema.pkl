@@ -1,3 +1,4 @@
+/// @version 0.13.0
 /// Typed schema for nas (Nix Agent Sandbox) configuration.
 ///
 /// User configuration files (`.agent-sandbox.pkl`) and the global

@@ -19,7 +19,7 @@ import { validateConfig } from "./validate.ts";
 const CONFIG_FILENAME_PKL = ".agent-sandbox.pkl";
 
 /** グローバル設定ディレクトリ（XDG_CONFIG_HOME を優先） */
-function getGlobalConfigDir(): string {
+export function getGlobalConfigDir(): string {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME;
   const configBase =
     xdgConfigHome ?? path.join(process.env.HOME ?? "/", ".config");

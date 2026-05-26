@@ -8,6 +8,7 @@
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Effect, Exit } from "effect";
+import { NAS_GITIGNORE_CONTENT } from "../../../config/paths.ts";
 import { logInfo } from "../../../log.ts";
 import type { FsService } from "../../../services/fs.ts";
 import { FsService as FsServiceTag } from "../../../services/fs.ts";
@@ -87,7 +88,7 @@ export function ensureNasGitignore(
     const fileExists = yield* fs.exists(gitignorePath);
     if (!fileExists) {
       yield* fs.mkdir(path.join(repoRoot, ".nas"), { recursive: true });
-      yield* fs.writeFile(gitignorePath, "*\n");
+      yield* fs.writeFile(gitignorePath, NAS_GITIGNORE_CONTENT);
     }
   });
 }
