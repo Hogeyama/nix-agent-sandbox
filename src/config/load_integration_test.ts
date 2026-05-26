@@ -22,7 +22,6 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "./types.ts";
-import { validateConfig } from "./validate.ts";
 
 /** pkl コマンドが利用可能か確認する */
 async function pklAvailable(): Promise<boolean> {
@@ -754,76 +753,3 @@ profiles {
     });
   },
 );
-
-// --- validateConfig: 追加のバリデーションテスト ---
-
-test("validateConfig: multiple profiles each independently validated", () => {
-  const raw = {
-    profiles: {
-      a: { agent: "claude" },
-      b: { agent: "copilot", agentArgs: ["--flag"] },
-      c: {
-        agent: "claude",
-        nix: { enable: true },
-        docker: { enable: true, shared: false },
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.profiles.a.agent).toEqual("claude");
-  expect(config.profiles.b.agent).toEqual("copilot");
-  expect(config.profiles.b.agentArgs).toEqual(["--flag"]);
-  expect(config.profiles.c.nix.enable).toEqual(true);
-  expect(config.profiles.c.docker.enable).toEqual(true);
-});
-
-test("validateConfig: extra-mounts with all modes", () => {
-  const raw = {
-    profiles: {
-      test: {
-        agent: "claude",
-        extraMounts: [
-          { src: "/a", dst: "/b", mode: "ro" },
-          { src: "/c", dst: "/d", mode: "rw" },
-          { src: "/e", dst: "/f" }, // defaults to ro
-        ],
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.profiles.test.extraMounts[0].mode).toEqual("ro");
-  expect(config.profiles.test.extraMounts[1].mode).toEqual("rw");
-  expect(config.profiles.test.extraMounts[2].mode).toEqual("ro");
-});
-
-test("validateConfig: empty env list is valid", () => {
-  const raw = {
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [],
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.profiles.test.env).toEqual([]);
-});
-
-test("validateConfig: nix.extra-packages preserved", () => {
-  const raw = {
-    profiles: {
-      test: {
-        agent: "claude",
-        nix: {
-          extraPackages: ["nixpkgs#gh", "nixpkgs#jq", "nixpkgs#ripgrep"],
-        },
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.profiles.test.nix.extraPackages).toEqual([
-    "nixpkgs#gh",
-    "nixpkgs#jq",
-    "nixpkgs#ripgrep",
-  ]);
-});

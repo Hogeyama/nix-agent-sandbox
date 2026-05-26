@@ -1,45 +1,116 @@
 /**
  * Tests for hostexec-specific config validation.
  * Split from validate_test.ts — covers all "hostexec config:" test cases.
+ *
+ * Pkl の型検査で保証される構造・型・enum のテストは除去済み。
+ * ここではセマンティック検証（secret 参照、overlapping rules 等）のみテストする。
  */
 
 import { expect, test } from "bun:test";
+import type { Config, HostExecConfig, Profile } from "./types.ts";
+import {
+  DEFAULT_AWS_CONFIG,
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_DOCKER_CONFIG,
+  DEFAULT_GCLOUD_CONFIG,
+  DEFAULT_GPG_CONFIG,
+  DEFAULT_HOOK_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+  DEFAULT_NIX_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
+  DEFAULT_SESSION_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
 // ---------------------------------------------------------------------------
-// hostexec config tests
+// Helper: minimal valid Config / Profile
+// ---------------------------------------------------------------------------
+
+function makeProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    agent: "claude",
+    agentArgs: [],
+    session: DEFAULT_SESSION_CONFIG,
+    nix: DEFAULT_NIX_CONFIG,
+    docker: DEFAULT_DOCKER_CONFIG,
+    gcloud: DEFAULT_GCLOUD_CONFIG,
+    aws: DEFAULT_AWS_CONFIG,
+    gpg: DEFAULT_GPG_CONFIG,
+    network: DEFAULT_NETWORK_CONFIG,
+    dbus: DEFAULT_DBUS_CONFIG,
+    display: DEFAULT_DISPLAY_CONFIG,
+    extraMounts: [],
+    env: [],
+    hook: DEFAULT_HOOK_CONFIG,
+    ...overrides,
+  };
+}
+
+function makeConfig(
+  overrides: Partial<Config> & { profiles?: Record<string, Profile> } = {},
+): Config {
+  return {
+    ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
+    profiles: { test: makeProfile() },
+    ...overrides,
+  };
+}
+
+function makeHostexec(overrides: Partial<HostExecConfig> = {}): HostExecConfig {
+  return {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "auto",
+    },
+    secrets: {},
+    rules: [],
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// hostexec config: secret 参照検証
 // ---------------------------------------------------------------------------
 
 test("hostexec config: validates secrets and rules", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        hostexec: {
-          secrets: {
-            github_token: { from: "env:GITHUB_TOKEN", required: true },
-          },
-          prompt: {
-            notify: "desktop",
-          },
-          rules: [
-            {
-              id: "git-readonly",
-              match: {
-                argv0: "git",
-                argRegex: "^(pull|fetch)\\b",
-              },
-              env: { GITHUB_TOKEN: "secret:github_token" },
-              inheritEnv: { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },
-              cwd: { mode: "workspace-or-session-tmp" },
-              approval: "prompt",
-              fallback: "container",
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          hostexec: makeHostexec({
+            secrets: {
+              github_token: { from: "env:GITHUB_TOKEN", required: true },
             },
-          ],
-        },
+            prompt: {
+              enable: true,
+              timeoutSeconds: 300,
+              defaultScope: "capability",
+              notify: "desktop",
+            },
+            rules: [
+              {
+                id: "git-readonly",
+                match: {
+                  argv0: "git",
+                  argRegex: "^(pull|fetch)\\b",
+                },
+                env: { GITHUB_TOKEN: "secret:github_token" },
+                inheritEnv: { mode: "minimal", keys: ["SSH_AUTH_SOCK"] },
+                cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                approval: "prompt",
+                fallback: "container",
+              },
+            ],
+          }),
+        }),
       },
-    },
-  });
+    }),
+  );
 
   expect(config.profiles.test.hostexec?.secrets.github_token.from).toEqual(
     "env:GITHUB_TOKEN",
@@ -55,170 +126,28 @@ test("hostexec config: validates secrets and rules", () => {
 
 test("hostexec config: rejects unknown secret references", () => {
   expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              {
-                id: "git-readonly",
-                match: { argv0: "git" },
-                env: { GITHUB_TOKEN: "secret:missing" },
-              },
-            ],
-          },
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "git-readonly",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: { GITHUB_TOKEN: "secret:missing" },
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
         },
-      },
-    }),
+      }),
+    ),
   ).toThrow("unknown secret");
-});
-
-test("hostexec config: rejects legacy profile secrets", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          secrets: {
-            github_token: { from: "env:GITHUB_TOKEN", required: true },
-          },
-        } as never,
-      },
-    }),
-  ).toThrow("secrets has moved to hostexec.secrets");
-});
-
-test("hostexec config: rejects missing rule id", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              {
-                match: { argv0: "git" },
-              },
-            ],
-          },
-        },
-      },
-    }),
-  ).toThrow("hostexec.rules[0].id");
-});
-
-test("hostexec config: rejects invalid inherit-env mode", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              {
-                id: "git-readonly",
-                match: { argv0: "git" },
-                inheritEnv: { mode: "all" as never },
-              },
-            ],
-          },
-        },
-      },
-    }),
-  ).toThrow("inheritEnv.mode");
-});
-
-test("hostexec config: rejects invalid notify backend", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            prompt: {
-              notify: "dbus" as never,
-            },
-          },
-        },
-      },
-    }),
-  ).toThrow("hostexec.prompt.notify must be one of");
-});
-
-test("hostexec config: allows argv0-only match for catch-all", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        hostexec: {
-          rules: [
-            {
-              id: "git-any",
-              match: { argv0: "git" },
-            },
-          ],
-        },
-      },
-    },
-  });
-
-  expect(config.profiles.test.hostexec?.rules[0].match.argRegex).toEqual(
-    undefined,
-  );
-});
-
-test("hostexec config: accepts once as default-scope", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        hostexec: {
-          prompt: {
-            defaultScope: "once",
-          },
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.hostexec?.prompt.defaultScope).toEqual("once");
-});
-
-test("hostexec config: rejects invalid default-scope", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            prompt: {
-              defaultScope: "session" as never,
-            },
-          },
-        },
-      },
-    }),
-  ).toThrow("hostexec.prompt.defaultScope must be one of");
-});
-
-test("hostexec config: rejects invalid arg-regex", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              {
-                id: "git-any",
-                match: { argv0: "git", argRegex: "[invalid" },
-              },
-            ],
-          },
-        },
-      },
-    }),
-  ).toThrow("argRegex is not a valid regular expression");
 });
 
 test("hostexec config: warns on identical match rules", () => {
@@ -226,19 +155,36 @@ test("hostexec config: warns on identical match rules", () => {
   const origLog = console.log;
   console.log = (msg: string) => warnings.push(msg);
   try {
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              { id: "git-a", match: { argv0: "git" } },
-              { id: "git-b", match: { argv0: "git" } },
-            ],
-          },
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "git-a",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+                {
+                  id: "git-b",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
         },
-      },
-    });
+      }),
+    );
   } finally {
     console.log = origLog;
   }
@@ -251,22 +197,36 @@ test("hostexec config: warns when catch-all shadows specific rule", () => {
   const origLog = console.log;
   console.log = (msg: string) => warnings.push(msg);
   try {
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              { id: "git-any", match: { argv0: "git" } },
-              {
-                id: "git-pull",
-                match: { argv0: "git", argRegex: "^pull" },
-              },
-            ],
-          },
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "git-any",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+                {
+                  id: "git-pull",
+                  match: { argv0: "git", argRegex: "^pull" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
         },
-      },
-    });
+      }),
+    );
   } finally {
     console.log = origLog;
   }
@@ -280,22 +240,36 @@ test("hostexec config: no warning when specific rule comes before catch-all", ()
   const origLog = console.log;
   console.log = (msg: string) => warnings.push(msg);
   try {
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            rules: [
-              {
-                id: "git-pull",
-                match: { argv0: "git", argRegex: "^pull" },
-              },
-              { id: "git-any", match: { argv0: "git" } },
-            ],
-          },
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "git-pull",
+                  match: { argv0: "git", argRegex: "^pull" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+                {
+                  id: "git-any",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
         },
-      },
-    });
+      }),
+    );
   } finally {
     console.log = origLog;
   }
@@ -303,115 +277,348 @@ test("hostexec config: no warning when specific rule comes before catch-all", ()
   expect(shadowWarnings.length).toEqual(0);
 });
 
-test("hostexec config: allows relative argv0 with fallback container (LD_PRELOAD keeps original binary)", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        hostexec: {
-          rules: [
-            {
-              id: "gradlew",
-              match: { argv0: "./gradlew" },
-              fallback: "container",
-            },
-          ],
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("container");
-});
-
-test("hostexec config: allows relative argv0 with fallback deny", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        hostexec: {
-          rules: [
-            {
-              id: "gradlew",
-              match: { argv0: "./gradlew" },
-              fallback: "deny",
-            },
-          ],
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("deny");
-});
-
-test("hostexec config: allows absolute argv0 with fallback container (LD_PRELOAD keeps original binary)", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        hostexec: {
-          rules: [
-            {
-              id: "usr-bin-git",
-              match: { argv0: "/usr/bin/git" },
-              fallback: "container",
-            },
-          ],
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("container");
-});
-
-test("hostexec config: allows absolute argv0 with fallback deny", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        hostexec: {
-          rules: [
-            {
-              id: "usr-bin-git",
-              match: { argv0: "/usr/bin/git" },
-              fallback: "deny",
-            },
-          ],
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.hostexec?.rules[0].fallback).toEqual("deny");
-});
-
 // ---------------------------------------------------------------------------
-// Error aggregation: hostexec env superRefine collects multiple issues
+// hostexec env key validation (F4)
 // ---------------------------------------------------------------------------
 
-test("hostexec config: collects multiple env errors in a single rule", () => {
-  // hostexecSchema's transform calls ruleSchema.parse() and wraps ZodError
-  // into ConfigValidationError, so only the first env issue surfaces.
-  // But the env superRefine itself now collects all issues within a rule.
-  expect(() =>
-    validateConfig({
+test("hostexec config: accepts valid env key names", () => {
+  const config = validateConfig(
+    makeConfig({
       profiles: {
-        test: {
-          agent: "claude",
-          hostexec: {
-            secrets: { tok: { from: "env:TOK" } },
+        test: makeProfile({
+          hostexec: makeHostexec({
+            secrets: { tok: { from: "env:TOK", required: true } },
             rules: [
               {
                 id: "r1",
                 match: { argv0: "git" },
-                env: {
-                  "BAD-KEY": "secret:tok",
-                  NO_PREFIX: "plain-value",
-                  UNKNOWN: "secret:nope",
-                },
+                cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                env: { GITHUB_TOKEN: "secret:tok", _MY_VAR: "secret:tok" },
+                inheritEnv: { mode: "minimal", keys: [] },
+                approval: "prompt",
+                fallback: "container",
               },
             ],
-          },
-        },
+          }),
+        }),
       },
     }),
-  ).toThrow("BAD-KEY");
+  );
+  expect(Object.keys(config.profiles.test.hostexec!.rules[0].env)).toEqual([
+    "GITHUB_TOKEN",
+    "_MY_VAR",
+  ]);
+});
+
+test("hostexec config: rejects env key starting with digit", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              secrets: { tok: { from: "env:TOK", required: true } },
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: { "1BAD": "secret:tok" },
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
+        },
+      }),
+    ),
+  ).toThrow("not a valid environment variable name");
+});
+
+test("hostexec config: rejects env key with special characters", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              secrets: { tok: { from: "env:TOK", required: true } },
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: { "MY-VAR": "secret:tok" },
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
+        },
+      }),
+    ),
+  ).toThrow("not a valid environment variable name");
+});
+
+// ---------------------------------------------------------------------------
+// hostexec cwd.allow cross-field constraint (F5)
+// ---------------------------------------------------------------------------
+
+test("hostexec config: accepts cwd.allow with mode=allowlist", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          hostexec: makeHostexec({
+            rules: [
+              {
+                id: "r1",
+                match: { argv0: "git" },
+                cwd: { mode: "allowlist", allow: ["/home/user/projects"] },
+                env: {},
+                inheritEnv: { mode: "minimal", keys: [] },
+                approval: "prompt",
+                fallback: "container",
+              },
+            ],
+          }),
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.hostexec!.rules[0].cwd.allow).toEqual([
+    "/home/user/projects",
+  ]);
+});
+
+test("hostexec config: accepts empty cwd.allow with any mode", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          hostexec: makeHostexec({
+            rules: [
+              {
+                id: "r1",
+                match: { argv0: "git" },
+                cwd: { mode: "workspace-only", allow: [] },
+                env: {},
+                inheritEnv: { mode: "minimal", keys: [] },
+                approval: "prompt",
+                fallback: "container",
+              },
+            ],
+          }),
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.hostexec!.rules[0].cwd.mode).toEqual(
+    "workspace-only",
+  );
+});
+
+test("hostexec config: rejects non-empty cwd.allow when mode is not allowlist", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git" },
+                  cwd: {
+                    mode: "workspace-or-session-tmp",
+                    allow: ["/some/path"],
+                  },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
+        },
+      }),
+    ),
+  ).toThrow(
+    'cwd.allow is non-empty but cwd.mode is "workspace-or-session-tmp"',
+  );
+});
+
+test("hostexec config: rejects non-empty cwd.allow when mode is workspace-only", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-only", allow: ["/tmp"] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
+        },
+      }),
+    ),
+  ).toThrow('must be "allowlist"');
+});
+
+// ---------------------------------------------------------------------------
+// hostexec argRegex syntax validation (F7)
+// ---------------------------------------------------------------------------
+
+test("hostexec config: accepts valid argRegex", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          hostexec: makeHostexec({
+            rules: [
+              {
+                id: "r1",
+                match: { argv0: "git", argRegex: "^(pull|fetch)\\b" },
+                cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                env: {},
+                inheritEnv: { mode: "minimal", keys: [] },
+                approval: "prompt",
+                fallback: "container",
+              },
+            ],
+          }),
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.hostexec!.rules[0].match.argRegex).toEqual(
+    "^(pull|fetch)\\b",
+  );
+});
+
+test("hostexec config: accepts rule without argRegex", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          hostexec: makeHostexec({
+            rules: [
+              {
+                id: "r1",
+                match: { argv0: "git" },
+                cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                env: {},
+                inheritEnv: { mode: "minimal", keys: [] },
+                approval: "prompt",
+                fallback: "container",
+              },
+            ],
+          }),
+        }),
+      },
+    }),
+  );
+  expect(
+    config.profiles.test.hostexec!.rules[0].match.argRegex,
+  ).toBeUndefined();
+});
+
+test("hostexec config: rejects invalid argRegex syntax", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git", argRegex: "(unclosed" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
+        },
+      }),
+    ),
+  ).toThrow("not a valid regular expression");
+});
+
+test("hostexec config: rejects argRegex with invalid escape", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git", argRegex: "[invalid" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
+        },
+      }),
+    ),
+  ).toThrow("not a valid regular expression");
+});
+
+// ---------------------------------------------------------------------------
+// hostexec env: multiple errors collected
+// ---------------------------------------------------------------------------
+
+test("hostexec config: collects multiple env errors in a single rule", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: makeHostexec({
+              secrets: { tok: { from: "env:TOK", required: true } },
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {
+                    NO_PREFIX: "plain-value",
+                    UNKNOWN: "secret:nope",
+                  },
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            }),
+          }),
+        },
+      }),
+    ),
+  ).toThrow("NO_PREFIX");
 });

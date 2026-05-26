@@ -1,614 +1,428 @@
-import { expect, test } from "bun:test";
-
 /**
- * Tests for validateConfig function: general config validation.
- * Split from the original monolithic file — covers "validate:" and "validateConfig:" test cases.
+ * Tests for validateConfig function: semantic validation only.
+ *
+ * Pkl の型検査で保証される構造・型・enum・デフォルト値のテストは除去済み。
+ * ここではクロスフィールド制約や実行時セマンティクスの検証のみテストする。
  *
  * See also:
  *   - validate_hostexec_test.ts — hostexec-specific validation
- *   - schema_test.ts — profileSchema tests
  */
 
-import { DEFAULT_DBUS_CONFIG } from "./types.ts";
-import { type ConfigValidationError, validateConfig } from "./validate.ts";
+import { expect, test } from "bun:test";
+import type { Config, Profile } from "./types.ts";
+import {
+  DEFAULT_AWS_CONFIG,
+  DEFAULT_DBUS_CONFIG,
+  DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_DOCKER_CONFIG,
+  DEFAULT_GCLOUD_CONFIG,
+  DEFAULT_GPG_CONFIG,
+  DEFAULT_HOOK_CONFIG,
+  DEFAULT_NETWORK_CONFIG,
+  DEFAULT_NIX_CONFIG,
+  DEFAULT_OBSERVABILITY_CONFIG,
+  DEFAULT_SESSION_CONFIG,
+  DEFAULT_UI_CONFIG,
+} from "./types.ts";
+import { validateConfig } from "./validate.ts";
 
 // ---------------------------------------------------------------------------
-// validate tests
+// Helper: minimal valid Config / Profile
 // ---------------------------------------------------------------------------
 
-// --- profiles のバリデーション ---
+function makeProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    agent: "claude",
+    agentArgs: [],
+    session: DEFAULT_SESSION_CONFIG,
+    nix: DEFAULT_NIX_CONFIG,
+    docker: DEFAULT_DOCKER_CONFIG,
+    gcloud: DEFAULT_GCLOUD_CONFIG,
+    aws: DEFAULT_AWS_CONFIG,
+    gpg: DEFAULT_GPG_CONFIG,
+    network: DEFAULT_NETWORK_CONFIG,
+    dbus: DEFAULT_DBUS_CONFIG,
+    display: DEFAULT_DISPLAY_CONFIG,
+    extraMounts: [],
+    env: [],
+    hook: DEFAULT_HOOK_CONFIG,
+    ...overrides,
+  };
+}
+
+function makeConfig(
+  overrides: Partial<Config> & { profiles?: Record<string, Profile> } = {},
+): Config {
+  return {
+    ui: DEFAULT_UI_CONFIG,
+    observability: DEFAULT_OBSERVABILITY_CONFIG,
+    profiles: { test: makeProfile() },
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// profiles が存在し空でないこと
+// ---------------------------------------------------------------------------
 
 test("validate: profiles is required", () => {
-  expect(() => validateConfig({})).toThrow("at least one entry");
+  expect(() => validateConfig({ profiles: {} } as Config)).toThrow(
+    "at least one entry",
+  );
 });
 
 test("validate: empty profiles throws", () => {
-  expect(() => validateConfig({ profiles: {} })).toThrow("at least one entry");
-});
-
-test("validate: profiles with null value throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: null as never,
-      },
-    }),
-  ).toThrow();
-});
-
-// --- agent バリデーション ---
-
-test("validate: agent=claude is valid", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.agent).toEqual("claude");
-});
-
-test("validate: agent=copilot is valid", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "copilot" } },
-  });
-  expect(config.profiles.test.agent).toEqual("copilot");
-});
-
-test("validate: agent=codex is valid", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "codex" } },
-  });
-  expect(config.profiles.test.agent).toEqual("codex");
-});
-
-test("validate: missing agent throws", () => {
-  expect(() => validateConfig({ profiles: { test: {} } })).toThrow(
-    "agent must be one of",
+  expect(() => validateConfig(makeConfig({ profiles: {} }))).toThrow(
+    "at least one entry",
   );
 });
 
-test("validate: agent='' throws", () => {
-  expect(() => validateConfig({ profiles: { test: { agent: "" } } })).toThrow(
-    "agent must be one of",
-  );
-});
-
-test("validate: agent=gpt throws", () => {
-  expect(() =>
-    validateConfig({ profiles: { test: { agent: "gpt" } } }),
-  ).toThrow("agent must be one of");
-});
-
-test("validate: agent=Claude (case sensitive) throws", () => {
-  expect(() =>
-    validateConfig({ profiles: { test: { agent: "Claude" } } }),
-  ).toThrow("agent must be one of");
-});
-
-// --- default profile バリデーション ---
+// ---------------------------------------------------------------------------
+// default profile が profiles に存在すること
+// ---------------------------------------------------------------------------
 
 test("validate: default profile exists", () => {
-  const config = validateConfig({
-    default: "test",
-    profiles: { test: { agent: "claude" } },
-  });
+  const config = validateConfig(
+    makeConfig({ default: "test", profiles: { test: makeProfile() } }),
+  );
   expect(config.default).toEqual("test");
 });
 
 test("validate: default profile not in profiles throws", () => {
   expect(() =>
-    validateConfig({
-      default: "missing",
-      profiles: { test: { agent: "claude" } },
-    }),
+    validateConfig(
+      makeConfig({
+        default: "missing",
+        profiles: { test: makeProfile() },
+      }),
+    ),
   ).toThrow('default profile "missing" not found');
 });
 
 test("validate: no default is ok", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
+  const config = validateConfig(makeConfig());
   expect(config.default).toEqual(undefined);
 });
 
-// --- agent-args ---
+// ---------------------------------------------------------------------------
+// allowlist/denylist ホストリスト形式検証
+// ---------------------------------------------------------------------------
 
-test("validate: agent-args defaults to empty array", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.agentArgs).toEqual([]);
-});
-
-test("validate: agent-args preserved", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        agentArgs: ["--flag1", "--flag2", "value"],
+test("validate: network.allowlist accepts valid entries", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            allowlist: ["github.com", "api.anthropic.com"],
+          },
+        }),
       },
-    },
-  });
-  expect(config.profiles.test.agentArgs).toEqual([
-    "--flag1",
-    "--flag2",
-    "value",
-  ]);
-});
-
-// --- worktree バリデーション ---
-
-test("validate: worktree not present returns undefined", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.worktree).toEqual(undefined);
-});
-
-test("validate: worktree empty object gets defaults", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude", worktree: {} } },
-  });
-  expect(config.profiles.test.worktree?.base).toEqual("origin/main");
-  expect(config.profiles.test.worktree?.onCreate).toEqual("");
-});
-
-test("validate: worktree with base only", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        worktree: { base: "develop" },
-      },
-    },
-  });
-  expect(config.profiles.test.worktree?.base).toEqual("develop");
-  expect(config.profiles.test.worktree?.onCreate).toEqual("");
-});
-
-test("validate: worktree with on-create only", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        worktree: { onCreate: "make build" },
-      },
-    },
-  });
-  expect(config.profiles.test.worktree?.base).toEqual("origin/main");
-  expect(config.profiles.test.worktree?.onCreate).toEqual("make build");
-});
-
-test("validate: worktree with both fields", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        worktree: {
-          base: "origin/develop",
-          onCreate: "npm ci && npm run build",
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.worktree?.base).toEqual("origin/develop");
-  expect(config.profiles.test.worktree?.onCreate).toEqual(
-    "npm ci && npm run build",
+    }),
   );
-});
-
-test("validate: worktree base=HEAD is valid", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        worktree: { base: "HEAD" },
-      },
-    },
-  });
-  expect(config.profiles.test.worktree?.base).toEqual("HEAD");
-});
-
-// --- nix バリデーション ---
-
-test("validate: nix defaults", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.nix.enable).toEqual("auto");
-  expect(config.profiles.test.nix.mountSocket).toEqual(true);
-  expect(config.profiles.test.nix.extraPackages).toEqual([]);
-});
-
-test("validate: nix enable=true", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude", nix: { enable: true } } },
-  });
-  expect(config.profiles.test.nix.enable).toEqual(true);
-});
-
-test("validate: nix enable=false", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude", nix: { enable: false } } },
-  });
-  expect(config.profiles.test.nix.enable).toEqual(false);
-});
-
-test("validate: nix enable=auto", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude", nix: { enable: "auto" } } },
-  });
-  expect(config.profiles.test.nix.enable).toEqual("auto");
-});
-
-test("validate: nix mount-socket override", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        nix: { mountSocket: false },
-      },
-    },
-  });
-  expect(config.profiles.test.nix.mountSocket).toEqual(false);
-});
-
-test("validate: nix extra-packages", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        nix: {
-          extraPackages: ["nixpkgs#gh", "nixpkgs#jq"],
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.nix.extraPackages).toEqual([
-    "nixpkgs#gh",
-    "nixpkgs#jq",
+  expect(config.profiles.test.network.allowlist).toEqual([
+    "github.com",
+    "api.anthropic.com",
   ]);
 });
 
-// --- docker バリデーション ---
-
-test("validate: docker defaults", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.docker.enable).toEqual(false);
-  expect(config.profiles.test.docker.shared).toEqual(false);
-});
-
-test("validate: docker enable=true", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        docker: { enable: true, shared: false },
-      },
-    },
-  });
-  expect(config.profiles.test.docker.enable).toEqual(true);
-});
-
-test("validate: docker shared=true", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        docker: { enable: true, shared: true },
-      },
-    },
-  });
-  expect(config.profiles.test.docker.shared).toEqual(true);
-});
-
-// --- gcloud バリデーション ---
-
-test("validate: gcloud defaults", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.gcloud.mountConfig).toEqual(false);
-});
-
-test("validate: gcloud mount-config=true", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        gcloud: { mountConfig: true },
-      },
-    },
-  });
-  expect(config.profiles.test.gcloud.mountConfig).toEqual(true);
-});
-
-// --- aws バリデーション ---
-
-test("validate: aws defaults", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.aws.mountConfig).toEqual(false);
-});
-
-test("validate: aws mount-config=true", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        aws: { mountConfig: true },
-      },
-    },
-  });
-  expect(config.profiles.test.aws.mountConfig).toEqual(true);
-});
-
-// --- gpg バリデーション ---
-
-test("validate: gpg defaults", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.gpg.forwardAgent).toEqual(false);
-});
-
-test("validate: gpg forward-agent=true", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        gpg: { forwardAgent: true },
-      },
-    },
-  });
-  expect(config.profiles.test.gpg.forwardAgent).toEqual(true);
-});
-
-// --- extra-mounts バリデーション ---
-
-test("validate: extra-mounts defaults to empty", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.extraMounts).toEqual([]);
-});
-
-test("validate: extra-mounts with valid entries", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        extraMounts: [
-          { src: "/a", dst: "/b", mode: "ro" },
-          { src: "/c", dst: "/d", mode: "rw" },
-        ],
-      },
-    },
-  });
-  expect(config.profiles.test.extraMounts.length).toEqual(2);
-  expect(config.profiles.test.extraMounts[0]).toEqual({
-    src: "/a",
-    dst: "/b",
-    mode: "ro",
-  });
-  expect(config.profiles.test.extraMounts[1]).toEqual({
-    src: "/c",
-    dst: "/d",
-    mode: "rw",
-  });
-});
-
-test("validate: extra-mounts mode defaults to ro", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        extraMounts: [{ src: "/a", dst: "/b" }],
-      },
-    },
-  });
-  expect(config.profiles.test.extraMounts[0].mode).toEqual("ro");
-});
-
-test("validate: extra-mounts missing src throws", () => {
-  expect(() =>
-    validateConfig({
+test("validate: network.allowlist accepts wildcard prefix", () => {
+  const config = validateConfig(
+    makeConfig({
       profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [{ dst: "/b" }],
-        },
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            allowlist: ["*.github.com", "api.anthropic.com"],
+          },
+        }),
       },
     }),
-  ).toThrow("extraMounts[0].src");
+  );
+  expect(config.profiles.test.network.allowlist).toEqual([
+    "*.github.com",
+    "api.anthropic.com",
+  ]);
 });
 
-test("validate: extra-mounts empty src throws", () => {
+test("validate: network.allowlist rejects wildcard in middle", () => {
   expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [{ src: "", dst: "/b" }],
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              allowlist: ["git*hub.com"],
+            },
+          }),
         },
+      }),
+    ),
+  ).toThrow("contains wildcard");
+});
+
+test("validate: network.allowlist rejects trailing wildcard", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              allowlist: ["github.*"],
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("contains wildcard");
+});
+
+test("validate: network.prompt.denylist rejects wildcard in middle", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              prompt: {
+                ...DEFAULT_NETWORK_CONFIG.prompt,
+                denylist: ["ev*il.com"],
+              },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("contains wildcard");
+});
+
+test("validate: network.allowlist accepts host:port entries", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            allowlist: ["example.com:443", "*.api.com:8080", "plain.com"],
+          },
+        }),
       },
     }),
-  ).toThrow("extraMounts[0].src");
+  );
+  expect(config.profiles.test.network.allowlist).toEqual([
+    "example.com:443",
+    "*.api.com:8080",
+    "plain.com",
+  ]);
 });
 
-test("validate: extra-mounts missing dst throws", () => {
+// ---------------------------------------------------------------------------
+// allowlist/denylist の重複検出
+// ---------------------------------------------------------------------------
+
+test("validate: allowlist and denylist overlap throws", () => {
   expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [{ src: "/a" }],
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              allowlist: ["example.com"],
+              prompt: {
+                ...DEFAULT_NETWORK_CONFIG.prompt,
+                denylist: ["example.com"],
+              },
+            },
+          }),
         },
+      }),
+    ),
+  ).toThrow("appears in both network.allowlist and network.prompt.denylist");
+});
+
+test("validate: allowlist=*.example.com and denylist=sub.example.com is allowed", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            allowlist: ["*.example.com"],
+            prompt: {
+              ...DEFAULT_NETWORK_CONFIG.prompt,
+              denylist: ["sub.example.com"],
+            },
+          },
+        }),
       },
     }),
-  ).toThrow("extraMounts[0].dst");
+  );
+  expect(config.profiles.test.network.allowlist).toEqual(["*.example.com"]);
+  expect(config.profiles.test.network.prompt.denylist).toEqual([
+    "sub.example.com",
+  ]);
 });
 
-test("validate: extra-mounts empty dst throws", () => {
-  expect(() =>
-    validateConfig({
+test("validate: allowlist=sub.example.com and denylist=*.example.com is allowed", () => {
+  const config = validateConfig(
+    makeConfig({
       profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [{ src: "/a", dst: "" }],
-        },
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            allowlist: ["sub.example.com"],
+            prompt: {
+              ...DEFAULT_NETWORK_CONFIG.prompt,
+              denylist: ["*.example.com"],
+            },
+          },
+        }),
       },
     }),
-  ).toThrow("extraMounts[0].dst");
+  );
+  expect(config.profiles.test.network.allowlist).toEqual(["sub.example.com"]);
+  expect(config.profiles.test.network.prompt.denylist).toEqual([
+    "*.example.com",
+  ]);
 });
 
-test("validate: extra-mounts invalid mode throws", () => {
+test("validate: allowlist/denylist overlap with matching port", () => {
+  // same host:port in both -> overlap
   expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [{ src: "/a", dst: "/b", mode: "rwx" }],
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              allowlist: ["example.com:443"],
+              prompt: {
+                ...DEFAULT_NETWORK_CONFIG.prompt,
+                denylist: ["example.com:443"],
+              },
+            },
+          }),
         },
+      }),
+    ),
+  ).toThrow("appears in both");
+
+  // same host but different ports -> no overlap
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            allowlist: ["example.com:443"],
+            prompt: {
+              ...DEFAULT_NETWORK_CONFIG.prompt,
+              denylist: ["example.com:80"],
+            },
+          },
+        }),
       },
     }),
-  ).toThrow("extraMounts[0].mode");
+  );
+  expect(config.profiles.test.network.allowlist).toEqual(["example.com:443"]);
 });
 
-test("validate: extra-mounts second entry error references index 1", () => {
+test("validate: multiple allowlist/denylist overlaps are reported", () => {
   expect(() =>
-    validateConfig({
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              allowlist: ["a.com", "b.com", "c.com"],
+              prompt: {
+                ...DEFAULT_NETWORK_CONFIG.prompt,
+                denylist: ["a.com", "c.com"],
+              },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("appears in both");
+});
+
+// ---------------------------------------------------------------------------
+// forwardPorts の予約ポート(18080)・重複検出
+// ---------------------------------------------------------------------------
+
+test("validate: forwardPorts rejects reserved port 18080", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              proxy: { forwardPorts: [18080] },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow(/18080.*reserved/);
+});
+
+test("validate: forwardPorts rejects duplicate ports", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              proxy: { forwardPorts: [8080, 3000, 8080] },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow(/duplicate.*8080/);
+});
+
+test("validate: forwardPorts accepts valid ports", () => {
+  const config = validateConfig(
+    makeConfig({
       profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [
-            { src: "/a", dst: "/b", mode: "ro" },
-            { src: "/c", dst: "", mode: "ro" },
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            proxy: { forwardPorts: [8080, 5432] },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.network.proxy.forwardPorts).toEqual([8080, 5432]);
+});
+
+// ---------------------------------------------------------------------------
+// env の mode/separator 相互依存
+// ---------------------------------------------------------------------------
+
+test("validate: env prefix mode with separator is valid", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          env: [
+            { key: "PATH", val: "/opt/bin", mode: "prefix", separator: ":" },
           ],
-        },
+        }),
       },
     }),
-  ).toThrow("extraMounts[1].dst");
-});
-
-// --- env バリデーション ---
-
-test("validate: env defaults to empty", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.env).toEqual([]);
-});
-
-test("validate: static env entry", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [{ key: "FOO", val: "bar" }],
-      },
-    },
-  });
-  expect(config.profiles.test.env[0]).toEqual({
-    key: "FOO",
-    val: "bar",
-    mode: "set",
-  });
-});
-
-test("validate: command env entry", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [{ keyCmd: "echo KEY", valCmd: "echo VAL" }],
-      },
-    },
-  });
-  expect(config.profiles.test.env[0]).toEqual({
-    keyCmd: "echo KEY",
-    valCmd: "echo VAL",
-    mode: "set",
-  });
-});
-
-test("validate: mixed static and command throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ key: "K", keyCmd: "echo K", val: "V" }],
-        },
-      },
-    }),
-  ).toThrow("must have exactly one of key, keyCmd");
-});
-
-test("validate: static env missing key throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ val: "value" }],
-        },
-      },
-    }),
-  ).toThrow();
-});
-
-test("validate: static env empty key throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ key: "", val: "value" }],
-        },
-      },
-    }),
-  ).toThrow("env[0].key");
-});
-
-test("validate: command env empty keyCmd throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ keyCmd: "", valCmd: "echo val" }],
-        },
-      },
-    }),
-  ).toThrow("env[0].keyCmd");
-});
-
-test("validate: command env empty valCmd throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ keyCmd: "echo key", valCmd: "" }],
-        },
-      },
-    }),
-  ).toThrow("env[0].valCmd");
-});
-
-// --- env mode / separator バリデーション ---
-
-test("validate: env prefix mode with separator", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [{ key: "PATH", val: "/opt/bin", mode: "prefix", separator: ":" }],
-      },
-    },
-  });
+  );
   expect(config.profiles.test.env[0]).toEqual({
     key: "PATH",
     val: "/opt/bin",
@@ -617,22 +431,23 @@ test("validate: env prefix mode with separator", () => {
   });
 });
 
-test("validate: env suffix mode with separator", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [
-          {
-            key: "LD_LIBRARY_PATH",
-            val: "/opt/lib",
-            mode: "suffix",
-            separator: ":",
-          },
-        ],
+test("validate: env suffix mode with separator is valid", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          env: [
+            {
+              key: "LD_LIBRARY_PATH",
+              val: "/opt/lib",
+              mode: "suffix",
+              separator: ":",
+            },
+          ],
+        }),
       },
-    },
-  });
+    }),
+  );
   expect(config.profiles.test.env[0]).toEqual({
     key: "LD_LIBRARY_PATH",
     val: "/opt/lib",
@@ -641,936 +456,779 @@ test("validate: env suffix mode with separator", () => {
   });
 });
 
-test("validate: env prefix mode with valCmd", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [
-          {
-            key: "PYTHONPATH",
-            valCmd: "echo /opt/py",
-            mode: "prefix",
-            separator: ":",
-          },
-        ],
-      },
-    },
-  });
-  expect(config.profiles.test.env[0]).toEqual({
-    key: "PYTHONPATH",
-    valCmd: "echo /opt/py",
-    mode: "prefix",
-    separator: ":",
-  });
-});
-
-test("validate: env mode defaults to set when omitted", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [{ key: "FOO", val: "bar" }],
-      },
-    },
-  });
-  expect(config.profiles.test.env[0].mode).toEqual("set");
-});
-
 test("validate: env prefix without separator throws", () => {
   expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ key: "PATH", val: "/opt/bin", mode: "prefix" }],
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            env: [{ key: "PATH", val: "/opt/bin", mode: "prefix" }],
+          }),
         },
-      },
-    }),
+      }),
+    ),
   ).toThrow("separator is required");
 });
 
 test("validate: env suffix without separator throws", () => {
   expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ key: "PATH", val: "/opt/bin", mode: "suffix" }],
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            env: [{ key: "PATH", val: "/opt/bin", mode: "suffix" }],
+          }),
         },
-      },
-    }),
+      }),
+    ),
   ).toThrow("separator is required");
 });
 
 test("validate: env set mode with separator throws", () => {
   expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ key: "FOO", val: "bar", mode: "set", separator: ":" }],
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            env: [{ key: "FOO", val: "bar", mode: "set", separator: ":" }],
+          }),
         },
-      },
-    }),
+      }),
+    ),
   ).toThrow("separator is only allowed");
-});
-
-test("validate: env omitted mode with separator throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ key: "FOO", val: "bar", separator: ":" }],
-        },
-      },
-    }),
-  ).toThrow("separator is only allowed");
-});
-
-test("validate: env invalid mode throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ key: "FOO", val: "bar", mode: "prepend", separator: ":" }],
-        },
-      },
-    }),
-  ).toThrow();
 });
 
 test("validate: env prefix with empty separator allowed", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        env: [{ key: "FLAGS", val: "-Wall", mode: "prefix", separator: "" }],
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          env: [{ key: "FLAGS", val: "-Wall", mode: "prefix", separator: "" }],
+        }),
       },
-    },
-  });
+    }),
+  );
   expect(config.profiles.test.env[0].separator).toEqual("");
 });
 
-// --- 複数プロファイルの独立バリデーション ---
-
-test("validate: error in second profile references correct name", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        valid: { agent: "claude" },
-        invalid: { agent: "bad" },
-      },
-    }),
-  ).toThrow('profile "invalid"');
-});
-
-test("validate: multiple valid profiles all validated", () => {
-  const config = validateConfig({
-    profiles: {
-      a: { agent: "claude", nix: { enable: true } },
-      b: { agent: "copilot", agentArgs: ["--yolo"] },
-      c: {
-        agent: "claude",
-        docker: { enable: true, shared: false },
-        gpg: { forwardAgent: true },
-      },
-    },
-  });
-  expect(config.profiles.a.nix.enable).toEqual(true);
-  expect(config.profiles.b.agentArgs).toEqual(["--yolo"]);
-  expect(config.profiles.c.docker.enable).toEqual(true);
-  expect(config.profiles.c.gpg.forwardAgent).toEqual(true);
-});
-
 // ---------------------------------------------------------------------------
-// config tests
+// Multiple profiles: errors reference correct name
 // ---------------------------------------------------------------------------
 
-test("validateConfig: valid minimal config", () => {
-  const raw = {
-    default: "test",
-    profiles: {
-      test: {
-        agent: "claude",
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.default).toEqual("test");
-  expect(config.profiles.test.agent).toEqual("claude");
-  expect(config.profiles.test.nix.enable).toEqual("auto");
-  expect(config.profiles.test.docker.enable).toEqual(false);
-  expect(config.profiles.test.docker.shared).toEqual(false);
-  expect(config.profiles.test.gpg.forwardAgent).toEqual(false);
-  expect(config.profiles.test.network.allowlist).toEqual([]);
-  expect(config.profiles.test.network.prompt.enable).toEqual(false);
-  expect(config.profiles.test.network.prompt.denylist).toEqual([]);
-  expect(config.profiles.test.network.prompt.timeoutSeconds).toEqual(300);
-  expect(config.profiles.test.network.prompt.defaultScope).toEqual("host-port");
-  expect(config.profiles.test.network.prompt.notify).toEqual("auto");
-  expect(config.profiles.test.dbus).toEqual(DEFAULT_DBUS_CONFIG);
-  expect(config.profiles.test.extraMounts).toEqual([]);
-  expect(config.profiles.test.env).toEqual([]);
-});
-
-test("validateConfig: full config", () => {
-  const raw = {
-    default: "claude-nix",
-    profiles: {
-      "claude-nix": {
-        agent: "claude",
-        worktree: {
-          base: "origin/main",
-          onCreate: "npm install",
-        },
-        nix: {
-          enable: true,
-          mountSocket: true,
-          extraPackages: ["nixpkgs.ripgrep"],
-        },
-        docker: {
-          enable: true,
-        },
-        extraMounts: [
-          { src: "~/.cabal", dst: "~/.cabal" },
-          { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
-        ],
-        env: [
-          { key: "FOO", val: "bar" },
-          { keyCmd: "printf BAR", valCmd: "printf baz" },
-        ],
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  const p = config.profiles["claude-nix"];
-  expect(p.agent).toEqual("claude");
-  expect(p.worktree?.base).toEqual("origin/main");
-  expect(p.worktree?.onCreate).toEqual("npm install");
-  expect(p.nix.enable).toEqual(true);
-  expect(p.nix.mountSocket).toEqual(true);
-  expect(p.nix.extraPackages).toEqual(["nixpkgs.ripgrep"]);
-  expect(p.docker.enable).toEqual(true);
-  expect(p.docker.shared).toEqual(false);
-  expect(p.extraMounts).toEqual([
-    { src: "~/.cabal", dst: "~/.cabal", mode: "ro" },
-    { src: "/tmp/data", dst: "/mnt/data", mode: "rw" },
-  ]);
-  expect(p.env[0]).toEqual({ key: "FOO", val: "bar", mode: "set" });
-  expect(p.env[1]).toEqual({
-    keyCmd: "printf BAR",
-    valCmd: "printf baz",
-    mode: "set",
-  });
-});
-
-test("validateConfig: missing profiles throws", () => {
-  expect(() => validateConfig({ profiles: {} })).toThrow("at least one entry");
-});
-
-test("validateConfig: invalid agent throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: { test: { agent: "invalid" } },
-    }),
-  ).toThrow("agent must be one of");
-});
-
-test("validateConfig: codex agent is valid", () => {
-  const raw = {
-    profiles: {
-      test: {
-        agent: "codex",
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.profiles.test.agent).toEqual("codex");
-});
-
-test("validateConfig: agent-args are parsed", () => {
-  const raw = {
-    profiles: {
-      test: {
-        agent: "copilot",
-        agentArgs: ["--yolo"],
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.profiles.test.agentArgs).toEqual(["--yolo"]);
-});
-
-test("validateConfig: agent-args defaults to empty array", () => {
-  const raw = {
-    profiles: {
-      test: {
-        agent: "claude",
-      },
-    },
-  };
-  const config = validateConfig(raw);
-  expect(config.profiles.test.agentArgs).toEqual([]);
-});
-
-test("validateConfig: invalid default profile throws", () => {
-  expect(() =>
-    validateConfig({
-      default: "nonexistent",
-      profiles: { test: { agent: "claude" } },
-    }),
-  ).toThrow("not found in profiles");
-});
-
-test("validateConfig: mixed env entry throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [
-            {
-              key: "A",
-              keyCmd: "echo C",
-              val: "B",
-            },
-          ],
-        },
-      },
-    }),
-  ).toThrow("must have exactly one of key, keyCmd");
-});
-
-test("validateConfig: invalid env command entry throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          env: [{ keyCmd: "", valCmd: "echo x" }],
-        },
-      },
-    }),
-  ).toThrow("env[0].keyCmd");
-});
-
-test("validateConfig: invalid extra-mounts mode throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [
-            {
-              src: "/tmp/src",
-              dst: "/tmp/dst",
-              mode: "invalid",
-            },
-          ],
-        },
-      },
-    }),
-  ).toThrow("extraMounts[0].mode");
-});
-
-test("validateConfig: missing extra-mounts src throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          extraMounts: [{ dst: "/tmp/dst", mode: "ro" }],
-        },
-      },
-    }),
-  ).toThrow("extraMounts[0].src");
-});
-
-test("validateConfig: gpg.forward-agent defaults to false", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.gpg.forwardAgent).toEqual(false);
-});
-
-test("validateConfig: gpg.forward-agent can be enabled", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        gpg: { forwardAgent: true },
-      },
-    },
-  });
-  expect(config.profiles.test.gpg.forwardAgent).toEqual(true);
-});
-
-test("validateConfig: dbus.session defaults to disabled", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.dbus).toEqual(DEFAULT_DBUS_CONFIG);
-});
-
-test("validateConfig: dbus.session config is parsed", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        dbus: {
-          session: {
-            enable: true,
-            sourceAddress: "unix:path=/run/user/1000/bus",
-            see: ["org.freedesktop.secrets"],
-            talk: ["org.freedesktop.secrets"],
-            own: ["org.example.Owned"],
-            calls: [{ name: "org.freedesktop.secrets", rule: "*" }],
-            broadcasts: [{ name: "org.freedesktop.secrets", rule: "*" }],
-          },
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.dbus.session.enable).toEqual(true);
-  expect(config.profiles.test.dbus.session.sourceAddress).toEqual(
-    "unix:path=/run/user/1000/bus",
-  );
-  expect(config.profiles.test.dbus.session.see).toEqual([
-    "org.freedesktop.secrets",
-  ]);
-  expect(config.profiles.test.dbus.session.talk).toEqual([
-    "org.freedesktop.secrets",
-  ]);
-  expect(config.profiles.test.dbus.session.own).toEqual(["org.example.Owned"]);
-  expect(config.profiles.test.dbus.session.calls).toEqual([
-    { name: "org.freedesktop.secrets", rule: "*" },
-  ]);
-  expect(config.profiles.test.dbus.session.broadcasts).toEqual([
-    { name: "org.freedesktop.secrets", rule: "*" },
-  ]);
-});
-
-test("validateConfig: dbus.session invalid source-address throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          dbus: {
-            session: {
-              sourceAddress: "",
-            },
-          },
-        },
-      },
-    }),
-  ).toThrow("dbus.session.sourceAddress");
-});
-
-test("validateConfig: dbus.session invalid call rule throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          dbus: {
-            session: {
-              calls: [{ name: "", rule: "*" }],
-            },
-          },
-        },
-      },
-    }),
-  ).toThrow("dbus.session.calls[0].name");
-});
-
-test("validateConfig: worktree defaults", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        worktree: { base: "main" },
-      },
-    },
-  });
-  expect(config.profiles.test.worktree?.base).toEqual("main");
-  expect(config.profiles.test.worktree?.onCreate).toEqual("");
-});
-
-test("validateConfig: worktree on-create is preserved", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        worktree: { onCreate: "npm install" },
-      },
-    },
-  });
-  expect(config.profiles.test.worktree?.base).toEqual("origin/main");
-  expect(config.profiles.test.worktree?.onCreate).toEqual("npm install");
-});
-
-test("validateConfig: network.allowlist defaults to empty array", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.network.allowlist).toEqual([]);
-});
-
-test("validateConfig: network.prompt defaults are applied", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.network.prompt).toEqual({
-    enable: false,
-    denylist: [],
-    timeoutSeconds: 300,
-    defaultScope: "host-port",
-    notify: "auto",
-  });
-});
-
-test("validateConfig: network.prompt accepts explicit values", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        network: {
-          prompt: {
-            enable: true,
-            timeoutSeconds: 42,
-            defaultScope: "host",
-            notify: "desktop",
-          },
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.network.prompt).toEqual({
-    enable: true,
-    denylist: [],
-    timeoutSeconds: 42,
-    defaultScope: "host",
-    notify: "desktop",
-  });
-});
-
-test("validateConfig: network.prompt rejects invalid default-scope", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          network: {
-            prompt: {
-              defaultScope: "invalid" as "host",
-            },
-          },
-        },
-      },
-    }),
-  ).toThrow("network.prompt.defaultScope must be one of");
-});
-
-test("validateConfig: network.prompt rejects invalid notify", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          network: {
-            prompt: {
-              notify: "invalid" as "auto",
-            },
-          },
-        },
-      },
-    }),
-  ).toThrow("network.prompt.notify must be one of");
-});
-
-test("validateConfig: network.allowlist is parsed correctly", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        network: {
-          allowlist: ["github.com", "api.anthropic.com"],
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.network.allowlist).toEqual([
-    "github.com",
-    "api.anthropic.com",
-  ]);
-});
-
-test("validateConfig: network.allowlist invalid entry throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          network: { allowlist: ["github.com", ""] },
-        },
-      },
-    }),
-  ).toThrow("network.allowlist[1] must be a non-empty string");
-});
-
-test("validateConfig: network.allowlist accepts wildcard prefix", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        network: {
-          allowlist: ["*.github.com", "api.anthropic.com"],
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.network.allowlist).toEqual([
-    "*.github.com",
-    "api.anthropic.com",
-  ]);
-});
-
-test("validateConfig: network.allowlist rejects wildcard in middle", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          network: { allowlist: ["git*hub.com"] },
-        },
-      },
-    }),
-  ).toThrow("contains wildcard");
-});
-
-test("validateConfig: network.allowlist rejects trailing wildcard", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          network: { allowlist: ["github.*"] },
-        },
-      },
-    }),
-  ).toThrow("contains wildcard");
-});
-
-test("validateConfig: network.allowlist non-array throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          // deno-lint-ignore no-explicit-any
-          network: { allowlist: "not-an-array" as any },
-        },
-      },
-    }),
-  ).toThrow("network.allowlist must be a list");
-});
-
-test("validateConfig: network.prompt.denylist defaults to empty array", () => {
-  const config = validateConfig({
-    profiles: { test: { agent: "claude" } },
-  });
-  expect(config.profiles.test.network.prompt.denylist).toEqual([]);
-});
-
-test("validateConfig: network.prompt.denylist is parsed correctly", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        network: {
-          prompt: { denylist: ["evil.com", "*.bad.org"] },
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.network.prompt.denylist).toEqual([
-    "evil.com",
-    "*.bad.org",
-  ]);
-});
-
-test("validateConfig: network.prompt.denylist rejects wildcard in middle", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          network: { prompt: { denylist: ["ev*il.com"] } },
-        },
-      },
-    }),
-  ).toThrow("network.prompt.denylist[0]");
-});
-
-test("validateConfig: allowlist and denylist overlap throws", () => {
-  expect(() =>
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          network: {
-            allowlist: ["example.com"],
-            prompt: { denylist: ["example.com"] },
-          },
-        },
-      },
-    }),
-  ).toThrow("appears in both network.allowlist and network.prompt.denylist");
-});
-
-test("validateConfig: allowlist=*.example.com and denylist=sub.example.com is allowed", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        network: {
-          allowlist: ["*.example.com"],
-          prompt: { denylist: ["sub.example.com"] },
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.network.allowlist).toEqual(["*.example.com"]);
-  expect(config.profiles.test.network.prompt.denylist).toEqual([
-    "sub.example.com",
-  ]);
-});
-
-test("validateConfig: allowlist=sub.example.com and denylist=*.example.com is allowed", () => {
-  const config = validateConfig({
-    profiles: {
-      test: {
-        agent: "claude",
-        network: {
-          allowlist: ["sub.example.com"],
-          prompt: { denylist: ["*.example.com"] },
-        },
-      },
-    },
-  });
-  expect(config.profiles.test.network.allowlist).toEqual(["sub.example.com"]);
-  expect(config.profiles.test.network.prompt.denylist).toEqual([
-    "*.example.com",
-  ]);
-});
-
-// ---------------------------------------------------------------------------
-// UI config
-// ---------------------------------------------------------------------------
-
-test("validateConfig: ui defaults when omitted", () => {
-  const raw = {
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.ui.enable).toEqual(true);
-  expect(config.ui.port).toEqual(3939);
-  expect(config.ui.idleTimeout).toEqual(300);
-});
-
-test("validateConfig: ui explicit values", () => {
-  const raw = {
-    ui: { enable: false, port: 8080, idleTimeout: 0 },
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.ui.enable).toEqual(false);
-  expect(config.ui.port).toEqual(8080);
-  expect(config.ui.idleTimeout).toEqual(0);
-});
-
-test("validateConfig: ui invalid port rejects", () => {
-  const raw = {
-    ui: { port: 0 },
-    profiles: { test: { agent: "claude" } },
-  };
-  expect(() => validateConfig(raw)).toThrow("ui:");
-});
-
-test("validateConfig: ui negative idle-timeout rejects", () => {
-  const raw = {
-    ui: { idleTimeout: -1 },
-    profiles: { test: { agent: "claude" } },
-  };
-  expect(() => validateConfig(raw)).toThrow("ui:");
-});
-
-// ---------------------------------------------------------------------------
-// Observability config
-// ---------------------------------------------------------------------------
-
-test("validateConfig: observability defaults when omitted", () => {
-  const raw = {
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.observability.enable).toEqual(false);
-});
-
-test("validateConfig: observability explicit enable=true", () => {
-  const raw = {
-    observability: { enable: true },
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.observability.enable).toEqual(true);
-});
-
-test("validateConfig: observability non-boolean enable rejects", () => {
-  const raw = {
-    observability: { enable: "yes" as unknown as boolean },
-    profiles: { test: { agent: "claude" } },
-  };
-  expect(() => validateConfig(raw)).toThrow("observability:");
-});
-
-test("validateConfig: observability retention defaults to null when omitted", () => {
-  const raw = {
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.observability.retention).toEqual(null);
-});
-
-test("validateConfig: observability retention explicit null", () => {
-  const raw = {
-    observability: { retention: null },
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.observability.retention).toEqual(null);
-});
-
-test("validateConfig: observability retention 2592000 (30d in seconds) accepted", () => {
-  const raw = {
-    observability: { retention: 2_592_000 },
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.observability.retention).toEqual(2_592_000);
-});
-
-test("validateConfig: observability retention 3600 (1h) is the lower bound", () => {
-  const raw = {
-    observability: { retention: 3600 },
-    profiles: { test: { agent: "claude" } },
-  };
-  const config = validateConfig(raw);
-  expect(config.observability.retention).toEqual(3_600);
-});
-
-test("validateConfig: observability retention 3599 below 1h rejects", () => {
-  const raw = {
-    observability: { retention: 3599 },
-    profiles: { test: { agent: "claude" } },
-  };
-  expect(() => validateConfig(raw)).toThrow("observability:");
-  expect(() => validateConfig(raw)).toThrow("must be at least 1h");
-});
-
-test("validateConfig: observability retention 0 below 1h rejects", () => {
-  const raw = {
-    observability: { retention: 0 },
-    profiles: { test: { agent: "claude" } },
-  };
-  expect(() => validateConfig(raw)).toThrow("must be at least 1h");
-});
-
-test("validateConfig: observability retention string value rejects", () => {
-  const raw = {
-    observability: { retention: "30d" as unknown as number },
-    profiles: { test: { agent: "claude" } },
-  };
-  expect(() => validateConfig(raw)).toThrow("observability:");
-});
-
-test("validateConfig: observability retention non-integer rejects", () => {
-  const raw = {
-    observability: { retention: 3600.5 },
-    profiles: { test: { agent: "claude" } },
-  };
-  expect(() => validateConfig(raw)).toThrow("observability:");
-});
-
-// ---------------------------------------------------------------------------
-// Error aggregation across profiles and fields
-// ---------------------------------------------------------------------------
-
-test("validateConfig: multiple errors in one profile are all reported", () => {
-  let err: ConfigValidationError | undefined;
+test("validate: errors from multiple profiles are reported together", () => {
+  let caught: Error | undefined;
   try {
-    validateConfig({
-      profiles: {
-        test: {
-          agent: "claude",
-          // deno-lint-ignore no-explicit-any
-          network: { allowlist: "not-an-array" as any },
-          extraMounts: [{ dst: "/tmp/dst", mode: "invalid" }],
+    validateConfig(
+      makeConfig({
+        profiles: {
+          alpha: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              proxy: { forwardPorts: [18080] },
+            },
+          }),
+          beta: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              proxy: { forwardPorts: [18080] },
+            },
+          }),
         },
-      },
-    });
+      }),
+    );
   } catch (e) {
-    err = e as ConfigValidationError;
+    caught = e as Error;
   }
-  expect(err).toBeDefined();
-  const msg = err!.message;
-  expect(msg.includes("network.allowlist must be a list")).toEqual(true);
-  expect(msg.includes("extraMounts[0].src")).toEqual(true);
-});
-
-test("validateConfig: errors from multiple profiles are reported together", () => {
-  let err: ConfigValidationError | undefined;
-  try {
-    validateConfig({
-      profiles: {
-        alpha: { agent: "invalid" },
-        beta: { agent: "invalid" },
-      },
-    });
-  } catch (e) {
-    err = e as ConfigValidationError;
-  }
-  expect(err).toBeDefined();
-  const msg = err!.message;
+  expect(caught).toBeDefined();
+  const msg = caught!.message;
   expect(msg.includes('profile "alpha"')).toEqual(true);
   expect(msg.includes('profile "beta"')).toEqual(true);
 });
 
-test("validateConfig: hostexec rules errors are aggregated across rules", () => {
-  let err: ConfigValidationError | undefined;
-  try {
-    validateConfig({
+// ---------------------------------------------------------------------------
+// hostexec env: secret 参照検証
+// ---------------------------------------------------------------------------
+
+test("validate: hostexec env rejects unknown secret references", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: {
+              prompt: {
+                enable: true,
+                timeoutSeconds: 300,
+                defaultScope: "capability",
+                notify: "auto",
+              },
+              secrets: {},
+              rules: [
+                {
+                  id: "git-readonly",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: { GITHUB_TOKEN: "secret:missing" },
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("unknown secret");
+});
+
+test("validate: hostexec env rejects non-secret references", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: {
+              prompt: {
+                enable: true,
+                timeoutSeconds: 300,
+                defaultScope: "capability",
+                notify: "auto",
+              },
+              secrets: { tok: { from: "env:TOK", required: true } },
+              rules: [
+                {
+                  id: "r1",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: { NO_PREFIX: "plain-value" },
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("must use secret:<name> reference");
+});
+
+test("validate: hostexec env accepts valid secret references", () => {
+  const config = validateConfig(
+    makeConfig({
       profiles: {
-        test: {
-          agent: "claude",
+        test: makeProfile({
           hostexec: {
+            prompt: {
+              enable: true,
+              timeoutSeconds: 300,
+              defaultScope: "capability",
+              notify: "auto",
+            },
+            secrets: {
+              github_token: { from: "env:GITHUB_TOKEN", required: true },
+            },
             rules: [
-              { id: "", match: { argv0: "git" } },
-              { id: "", match: { argv0: "curl" } },
+              {
+                id: "git-readonly",
+                match: { argv0: "git" },
+                cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                env: { GITHUB_TOKEN: "secret:github_token" },
+                inheritEnv: { mode: "minimal", keys: [] },
+                approval: "prompt",
+                fallback: "container",
+              },
             ],
           },
-        },
+        }),
       },
-    });
-  } catch (e) {
-    err = e as ConfigValidationError;
+    }),
+  );
+  expect(config.profiles.test.hostexec?.rules[0].env.GITHUB_TOKEN).toEqual(
+    "secret:github_token",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// hostexec rules: overlapping 警告
+// ---------------------------------------------------------------------------
+
+test("validate: hostexec warns on identical match rules", () => {
+  const warnings: string[] = [];
+  const origLog = console.log;
+  console.log = (msg: string) => warnings.push(msg);
+  try {
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: {
+              prompt: {
+                enable: true,
+                timeoutSeconds: 300,
+                defaultScope: "capability",
+                notify: "auto",
+              },
+              secrets: {},
+              rules: [
+                {
+                  id: "git-a",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+                {
+                  id: "git-b",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+  } finally {
+    console.log = origLog;
   }
-  expect(err).toBeDefined();
-  const msg = err!.message;
-  expect(msg.includes("hostexec.rules[0]")).toEqual(true);
-  expect(msg.includes("hostexec.rules[1]")).toEqual(true);
+  expect(warnings.length).toEqual(1);
+  expect(warnings[0]).toMatch(/git-a.*git-b.*identical match/);
+});
+
+test("validate: hostexec warns when catch-all shadows specific rule", () => {
+  const warnings: string[] = [];
+  const origLog = console.log;
+  console.log = (msg: string) => warnings.push(msg);
+  try {
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: {
+              prompt: {
+                enable: true,
+                timeoutSeconds: 300,
+                defaultScope: "capability",
+                notify: "auto",
+              },
+              secrets: {},
+              rules: [
+                {
+                  id: "git-any",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+                {
+                  id: "git-pull",
+                  match: { argv0: "git", argRegex: "^pull" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+  } finally {
+    console.log = origLog;
+  }
+  expect(warnings.find((w) => /shadows/.test(w)) ?? "").toMatch(
+    /git-any.*shadows.*git-pull/,
+  );
+});
+
+test("validate: hostexec no warning when specific rule comes before catch-all", () => {
+  const warnings: string[] = [];
+  const origLog = console.log;
+  console.log = (msg: string) => warnings.push(msg);
+  try {
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            hostexec: {
+              prompt: {
+                enable: true,
+                timeoutSeconds: 300,
+                defaultScope: "capability",
+                notify: "auto",
+              },
+              secrets: {},
+              rules: [
+                {
+                  id: "git-pull",
+                  match: { argv0: "git", argRegex: "^pull" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+                {
+                  id: "git-any",
+                  match: { argv0: "git" },
+                  cwd: { mode: "workspace-or-session-tmp", allow: [] },
+                  env: {},
+                  inheritEnv: { mode: "minimal", keys: [] },
+                  approval: "prompt",
+                  fallback: "container",
+                },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+  } finally {
+    console.log = origLog;
+  }
+  const shadowWarnings = warnings.filter((w) => /shadows/.test(w));
+  expect(shadowWarnings.length).toEqual(0);
+});
+
+// ---------------------------------------------------------------------------
+// nix.extraPackages の入力検証 (F1)
+// ---------------------------------------------------------------------------
+
+test("validate: nix.extraPackages accepts valid package names", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          nix: {
+            ...DEFAULT_NIX_CONFIG,
+            extraPackages: ["ripgrep", "fd", "jq"],
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.nix.extraPackages).toEqual([
+    "ripgrep",
+    "fd",
+    "jq",
+  ]);
+});
+
+test("validate: nix.extraPackages rejects entries starting with dash", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            nix: { ...DEFAULT_NIX_CONFIG, extraPackages: ["--malicious"] },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("flag injection");
+});
+
+test("validate: nix.extraPackages rejects entries containing ..", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            nix: {
+              ...DEFAULT_NIX_CONFIG,
+              extraPackages: ["../../../etc/passwd"],
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("path traversal");
+});
+
+test("validate: nix.extraPackages reports both flag injection and path traversal", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            nix: {
+              ...DEFAULT_NIX_CONFIG,
+              extraPackages: ["-..evil"],
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("flag injection");
+});
+
+// ---------------------------------------------------------------------------
+// display.size フォーマット検証 (F2)
+// ---------------------------------------------------------------------------
+
+test("validate: display.size accepts valid format", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          display: { sandbox: "none", size: "1920x1080" },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.display.size).toEqual("1920x1080");
+});
+
+test("validate: display.size accepts minimum 1x1", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          display: { sandbox: "none", size: "1x1" },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.display.size).toEqual("1x1");
+});
+
+test("validate: display.size accepts maximum 16384x16384", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          display: { sandbox: "none", size: "16384x16384" },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.display.size).toEqual("16384x16384");
+});
+
+test("validate: display.size rejects invalid format", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            display: { sandbox: "none", size: "1920:1080" },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("display.size");
+});
+
+test("validate: display.size rejects non-numeric dimensions", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            display: { sandbox: "none", size: "abcxdef" },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("display.size");
+});
+
+test("validate: display.size rejects width 0", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            display: { sandbox: "none", size: "0x1080" },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("out of range");
+});
+
+test("validate: display.size rejects height exceeding 16384", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            display: { sandbox: "none", size: "1920x16385" },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("out of range");
+});
+
+// ---------------------------------------------------------------------------
+// D-Bus ルール名の検証 (F3)
+// ---------------------------------------------------------------------------
+
+test("validate: dbus.session.talk accepts valid D-Bus names", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          dbus: {
+            session: {
+              ...DEFAULT_DBUS_CONFIG.session,
+              enable: true,
+              talk: ["org.freedesktop.Notifications"],
+            },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.dbus.session.talk).toEqual([
+    "org.freedesktop.Notifications",
+  ]);
+});
+
+test("validate: dbus.session.see rejects names containing =", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            dbus: {
+              session: {
+                ...DEFAULT_DBUS_CONFIG.session,
+                enable: true,
+                see: ["org.foo=bar"],
+              },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("argument injection");
+});
+
+test("validate: dbus.session.own rejects invalid D-Bus name format", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            dbus: {
+              session: {
+                ...DEFAULT_DBUS_CONFIG.session,
+                enable: true,
+                own: ["123.invalid"],
+              },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("not a valid D-Bus well-known name");
+});
+
+test("validate: dbus.session.calls rejects rule with = in name", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            dbus: {
+              session: {
+                ...DEFAULT_DBUS_CONFIG.session,
+                enable: true,
+                calls: [{ name: "org.foo=evil", rule: "org.bar.Baz" }],
+              },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("argument injection");
+});
+
+test("validate: dbus.session.broadcasts accepts non-name rule values", () => {
+  // rule field is not validated as a D-Bus well-known name since it can
+  // contain xdg-dbus-proxy syntax (wildcards, member@path, etc.)
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          dbus: {
+            session: {
+              ...DEFAULT_DBUS_CONFIG.session,
+              enable: true,
+              broadcasts: [{ name: "org.valid.Name", rule: "SomeSignal" }],
+            },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.dbus.session.broadcasts).toHaveLength(1);
+});
+
+test("validate: dbus.session.broadcasts rejects rule with =", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            dbus: {
+              session: {
+                ...DEFAULT_DBUS_CONFIG.session,
+                enable: true,
+                broadcasts: [
+                  { name: "org.valid.Name", rule: "evil=injection" },
+                ],
+              },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("argument injection");
+});
+
+test("validate: dbus.session.talk accepts trailing wildcard", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          dbus: {
+            session: {
+              ...DEFAULT_DBUS_CONFIG.session,
+              enable: true,
+              talk: ["org.gnome.*"],
+            },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.dbus.session.talk).toEqual(["org.gnome.*"]);
+});
+
+test("validate: dbus.session.calls accepts non-name rule values", () => {
+  // xdg-dbus-proxy rules can contain wildcards and member@path syntax
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          dbus: {
+            session: {
+              ...DEFAULT_DBUS_CONFIG.session,
+              enable: true,
+              calls: [
+                {
+                  name: "org.freedesktop.Notifications",
+                  rule: "Notify@/org/freedesktop/Notifications",
+                },
+                {
+                  name: "org.freedesktop.portal.Desktop",
+                  rule: "*",
+                },
+              ],
+            },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.dbus.session.calls).toHaveLength(2);
+});
+
+test("validate: dbus.session.calls rejects rule with =", () => {
+  expect(() =>
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            dbus: {
+              session: {
+                ...DEFAULT_DBUS_CONFIG.session,
+                enable: true,
+                calls: [{ name: "org.valid.Name", rule: "evil=injection" }],
+              },
+            },
+          }),
+        },
+      }),
+    ),
+  ).toThrow("argument injection");
+});
+
+test("validate: dbus.session accepts valid calls and broadcasts", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          dbus: {
+            session: {
+              ...DEFAULT_DBUS_CONFIG.session,
+              enable: true,
+              see: ["org.freedesktop.DBus"],
+              talk: ["org.freedesktop.Notifications"],
+              own: ["com.example.MyApp"],
+              calls: [
+                {
+                  name: "org.freedesktop.portal.Desktop",
+                  rule: "org.freedesktop.portal.OpenURI",
+                },
+              ],
+              broadcasts: [
+                {
+                  name: "org.freedesktop.login1",
+                  rule: "org.freedesktop.login1.Manager",
+                },
+              ],
+            },
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.dbus.session.calls).toHaveLength(1);
+  expect(config.profiles.test.dbus.session.broadcasts).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------
+// Passthrough: valid config is returned as-is
+// ---------------------------------------------------------------------------
+
+test("validate: valid minimal config is returned unchanged", () => {
+  const input = makeConfig({
+    default: "test",
+    profiles: { test: makeProfile() },
+  });
+  const config = validateConfig(input);
+  expect(config.default).toEqual("test");
+  expect(config.profiles.test.agent).toEqual("claude");
+});
+
+test("validate: multiple valid profiles all pass", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        a: makeProfile({ agent: "claude" }),
+        b: makeProfile({ agent: "copilot" }),
+        c: makeProfile({ agent: "codex" }),
+      },
+    }),
+  );
+  expect(config.profiles.a.agent).toEqual("claude");
+  expect(config.profiles.b.agent).toEqual("copilot");
+  expect(config.profiles.c.agent).toEqual("codex");
 });

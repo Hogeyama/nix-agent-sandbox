@@ -48,7 +48,7 @@ export async function loadConfig(
   }
 
   const raw = await evalPklConfig(found.nasDir, found.configPath);
-  return validateConfig(raw);
+  return validateConfig(raw as Config);
 }
 
 /** 設定ファイルの検索結果 */
