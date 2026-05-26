@@ -114,12 +114,12 @@ async function pklCommandExists(): Promise<boolean> {
  * .agent-sandbox.pkl を pkl eval で評価して設定オブジェクトを得る。
  *
  * 評価のたびに一時ディレクトリを作り、そこに以下を配置する:
- *   - `Config.pkl`         : 型付きスキーマ（バンドルされたアセットからコピー）
+ *   - `Schema.pkl`         : 型付きスキーマ（バンドルされたアセットからコピー）
  *   - `agent-sandbox.global.pkl` : グローバル .pkl ファイルのコピー、または
  *                                  空の amends ヘッダのみのファイル。
  *
  * tmpDir は `--module-path` として pkl eval に渡される。これによりユーザの
- * `.pkl` ファイルは `amends "modulepath:/Config.pkl"` または
+ * `.pkl` ファイルは `amends "modulepath:/Schema.pkl"` または
  * `amends "modulepath:/agent-sandbox.global.pkl"` のいずれでも参照できる。
  */
 async function loadPklConfig(
@@ -134,27 +134,29 @@ async function loadPklConfig(
 
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-module-"));
   try {
-    // Config.pkl をアセットから解決して tmpDir にコピーする。
+    // Schema.pkl をアセットから解決して tmpDir にコピーする。
     // NAS_ASSET_DIR があればそちらを優先し、なければソースツリー上の隣接ファイルを使う。
-    const configPklSrc = resolveAsset(
-      "config/Config.pkl",
+    const schemaPklSrc = resolveAsset(
+      "config/Schema.pkl",
       import.meta.url,
-      "./Config.pkl",
+      "./Schema.pkl",
     );
-    let configPklText: string;
+    let schemaPklText: string;
     try {
-      configPklText = await readFile(configPklSrc, "utf8");
+      schemaPklText = await readFile(schemaPklSrc, "utf8");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") {
         throw new Error(
-          `Config.pkl not found at ${configPklSrc}. ` +
-            `Set NAS_ASSET_DIR to a directory containing config/Config.pkl, ` +
+          `Schema.pkl not found at ${schemaPklSrc}. ` +
+            `Set NAS_ASSET_DIR to a directory containing config/Schema.pkl, ` +
             `or ensure the file exists adjacent to src/config/load.ts.`,
         );
       }
       throw e;
     }
-    await writeFile(path.join(tmpDir, "Config.pkl"), configPklText);
+    await writeFile(path.join(tmpDir, "Schema.pkl"), schemaPklText);
+    // Config.pkl is a deprecated alias for Schema.pkl; user .pkl files may still reference it.
+    await writeFile(path.join(tmpDir, "Config.pkl"), schemaPklText);
 
     // agent-sandbox.global.pkl は常に配置する。
     // globalPklPath が指定されていればそのファイルをコピーし、
@@ -163,7 +165,7 @@ async function loadPklConfig(
     if (globalPklPath) {
       await copyFile(globalPklPath, globalDst);
     } else {
-      await writeFile(globalDst, 'amends "modulepath:/Config.pkl"\n');
+      await writeFile(globalDst, 'amends "modulepath:/Schema.pkl"\n');
     }
 
     const cmdArgs = [

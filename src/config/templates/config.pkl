@@ -1,0 +1,11 @@
+amends "modulepath:/global.pkl"
+
+// To amend the schema directly instead of inheriting from global.pkl,
+// replace the line above with:
+//   amends "Schema.pkl"
+
+profiles {
+  ["default"] {
+    agent = "claude"
+  }
+}

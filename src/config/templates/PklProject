@@ -1,0 +1,10 @@
+amends "pkl:Project"
+
+local globalConfigDir = (read?("env:XDG_CONFIG_HOME") ?? "\(read("env:HOME"))/.config") + "/nas"
+
+evaluatorSettings {
+  modulePath {
+    "."
+    globalConfigDir
+  }
+}

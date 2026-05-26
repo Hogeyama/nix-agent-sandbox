@@ -1,0 +1,7 @@
+amends "Schema.pkl"
+
+profiles {
+  ["default"] {
+    agent = "claude"
+  }
+}

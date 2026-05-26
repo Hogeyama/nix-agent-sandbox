@@ -13,6 +13,10 @@ open module nas.Config
 // Top-level configuration
 // ---------------------------------------------------------------------------
 
+/// Opaque token used by the runtime to associate a config evaluation with a
+/// specific `nas config init` invocation. Users should not set this manually.
+_nasNonce: String = ""
+
 /// Name of the default profile, or `null` to require the user to pick one.
 default: String? = null
 

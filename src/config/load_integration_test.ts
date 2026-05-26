@@ -333,6 +333,32 @@ profiles {
   },
 );
 
+// --- Config.pkl backward-compat alias ---
+
+test.skipIf(!hasPkl)(
+  "loadConfig: Config.pkl deprecated alias still works for existing configs",
+  async () => {
+    // Existing user configs may use `amends "modulepath:/Config.pkl"` (the old name).
+    // The runtime writes Config.pkl as an alias for Schema.pkl so these keep working.
+    const pkl = `
+amends "modulepath:/Config.pkl"
+
+profiles {
+  ["compat"] {
+    agent = "claude"
+  }
+}
+`;
+    await withTempConfig(pkl, async (dir) => {
+      const config = await loadConfig({
+        startDir: dir,
+        globalConfigPath: null,
+      });
+      expect(config.profiles.compat.agent).toEqual("claude");
+    });
+  },
+);
+
 // --- .yml/.nix files are ignored ---
 
 test.skipIf(!hasPkl)(
