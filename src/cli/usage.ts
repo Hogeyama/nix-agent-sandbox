@@ -17,6 +17,7 @@ Usage:
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
   nas config init
   nas config migrate yml2pkl [--global] [--input <path>] [-f, --force]
+  nas config migrate nix2pkl [--global] [--input <path>] [-f, --force]
   nas hook --kind start|attention|stop [--when path=value ...]
 
 Subcommands:
@@ -28,7 +29,7 @@ Subcommands:
   hostexec  hostexec 承認キューの管理
   ui        Web ダッシュボードを起動する
   audit     監査ログを表示する
-  config    設定ファイルの管理 (init: 初期設定ファイルを生成, migrate yml2pkl: YAML→Pkl変換)
+  config    設定ファイルの管理 (init: 初期設定ファイルを生成, migrate yml2pkl: YAML→Pkl変換, migrate nix2pkl: Nix→Pkl変換)
   hook      Report a session event from an agent hook (internal use)
 
 Options:

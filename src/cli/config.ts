@@ -2,9 +2,29 @@
  * nas config サブコマンド
  */
 
+import type { InitConfigResult } from "../config/init.ts";
 import { initConfig } from "../config/init.ts";
-import { migrateYml2Pkl } from "../config/migrate.ts";
+import { migrateNix2Pkl, migrateYml2Pkl } from "../config/migrate.ts";
 import { getFlagValue } from "./helpers.ts";
+
+/**
+ * Print the scaffold + conversion results shared by yml2pkl and nix2pkl.
+ */
+function printMigrateResult(result: {
+  scaffoldResult?: InitConfigResult;
+  inputPath: string;
+  outputPath: string;
+}): void {
+  if (result.scaffoldResult) {
+    for (const f of result.scaffoldResult.written) {
+      console.log(`  created: ${f}`);
+    }
+    for (const f of result.scaffoldResult.skipped) {
+      console.log(`  skipped: ${f} (already exists)`);
+    }
+  }
+  console.log(`  converted: ${result.inputPath} -> ${result.outputPath}`);
+}
 
 export async function runConfigCommand(args: string[]): Promise<void> {
   const sub = args.find((a) => !a.startsWith("-"));
@@ -25,28 +45,30 @@ export async function runConfigCommand(args: string[]): Promise<void> {
     const migrateArgs = args.slice(args.indexOf("migrate") + 1);
     const migrateSub = migrateArgs.find((a) => !a.startsWith("-"));
 
-    if (migrateSub !== "yml2pkl") {
-      throw new Error(
-        `Unknown migrate subcommand: ${migrateSub ?? "(none)"}. Available subcommands: yml2pkl`,
-      );
-    }
-
     const global = args.includes("--global");
     const inputPath = getFlagValue(args, "--input") ?? undefined;
     const force = args.includes("--force") || args.includes("-f");
 
-    const result = await migrateYml2Pkl({ global, inputPath, force });
-
-    if (result.scaffoldResult) {
-      for (const f of result.scaffoldResult.written) {
-        console.log(`  created: ${f}`);
-      }
-      for (const f of result.scaffoldResult.skipped) {
-        console.log(`  skipped: ${f} (already exists)`);
-      }
+    if (migrateSub === "yml2pkl") {
+      const result = await migrateYml2Pkl({ global, inputPath, force });
+      printMigrateResult(result);
+      return;
     }
-    console.log(`  converted: ${result.inputPath} -> ${result.outputPath}`);
-    return;
+
+    if (migrateSub === "nix2pkl") {
+      const result = await migrateNix2Pkl({ global, inputPath, force });
+      printMigrateResult(result);
+      if (result.isFunction) {
+        console.log(
+          `  note: Nix config was a function (takes super) — output uses amends "modulepath:/global.pkl"`,
+        );
+      }
+      return;
+    }
+
+    throw new Error(
+      `Unknown migrate subcommand: ${migrateSub ?? "(none)"}. Available subcommands: yml2pkl, nix2pkl`,
+    );
   }
 
   throw new Error(

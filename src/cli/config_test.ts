@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -102,6 +102,12 @@ describe("nas config", () => {
       );
     });
 
+    test("error message lists available migrate subcommands", async () => {
+      await expect(runConfigCommand(["migrate", "bad"])).rejects.toThrow(
+        "Available subcommands: yml2pkl, nix2pkl",
+      );
+    });
+
     test("migrate yml2pkl converts YAML to Pkl in local mode", async () => {
       setup();
       const projectDir = process.cwd();
@@ -185,5 +191,145 @@ describe("nas config", () => {
       expect(content).toContain('amends "Schema.pkl"');
       expect(content).toContain('default = "main"');
     });
+
+    // nix2pkl tests — require `nix` on PATH
+    let hasNix = false;
+    try {
+      const proc = Bun.spawnSync(["nix", "--version"]);
+      hasNix = proc.exitCode === 0;
+    } catch {}
+
+    test.skipIf(!hasNix)(
+      "migrate nix2pkl converts Nix to Pkl in local mode",
+      async () => {
+        setup();
+        const projectDir = process.cwd();
+        const nixContent =
+          '{ default = "main"; profiles = { dev = { agent = "claude"; }; }; }';
+        writeFileSync(path.join(projectDir, ".agent-sandbox.nix"), nixContent);
+
+        await runConfigCommand(["migrate", "nix2pkl"]);
+
+        const outputPath = path.join(projectDir, ".nas", "config.pkl");
+        expect(existsSync(outputPath)).toBe(true);
+        const content = readFileSync(outputPath, "utf8");
+        expect(content).toContain('amends "Schema.pkl"');
+        expect(content).toContain('default = "main"');
+      },
+    );
+
+    test.skipIf(!hasNix)(
+      "migrate nix2pkl shows note when Nix config is a function",
+      async () => {
+        setup();
+        const projectDir = process.cwd();
+        const nixContent = 'super: { default = "main"; }';
+        writeFileSync(path.join(projectDir, ".agent-sandbox.nix"), nixContent);
+
+        const spy = spyOn(console, "log");
+        let calls: unknown[][] = [];
+        try {
+          await runConfigCommand(["migrate", "nix2pkl"]);
+        } finally {
+          calls = [...spy.mock.calls];
+          spy.mockRestore();
+        }
+
+        const logs = calls.map((args) => args.map(String).join(" "));
+        const noteLog = logs.find((l) => l.includes("note:"));
+        expect(noteLog).toBeDefined();
+        expect(noteLog).toContain("Nix config was a function");
+        expect(noteLog).toContain('amends "modulepath:/global.pkl"');
+
+        const outputPath = path.join(projectDir, ".nas", "config.pkl");
+        const content = readFileSync(outputPath, "utf8");
+        expect(content).toContain('amends "modulepath:/global.pkl"');
+      },
+    );
+
+    test.skipIf(!hasNix)(
+      "migrate nix2pkl --force overwrites existing config.pkl",
+      async () => {
+        setup();
+        const projectDir = process.cwd();
+        const nixContent =
+          '{ default = "main"; profiles = { dev = { agent = "claude"; }; }; }';
+        writeFileSync(path.join(projectDir, ".agent-sandbox.nix"), nixContent);
+
+        // Create an existing .nas/config.pkl that would block migration
+        const nasDir = path.join(projectDir, ".nas");
+        mkdirSync(nasDir, { recursive: true });
+        writeFileSync(path.join(nasDir, "config.pkl"), "old content");
+
+        // Without --force it should fail
+        await expect(runConfigCommand(["migrate", "nix2pkl"])).rejects.toThrow(
+          "already exists",
+        );
+
+        // With --force it should succeed
+        await runConfigCommand(["migrate", "nix2pkl", "--force"]);
+
+        const content = readFileSync(path.join(nasDir, "config.pkl"), "utf8");
+        expect(content).toContain('amends "Schema.pkl"');
+        expect(content).toContain('default = "main"');
+      },
+    );
+
+    test.skipIf(!hasNix)(
+      "migrate nix2pkl --input reads Nix from a custom path",
+      async () => {
+        setup();
+        const projectDir = process.cwd();
+
+        // Place Nix file at an arbitrary path outside the project directory
+        const customNixPath = path.join(tmpDir, "custom-config.nix");
+        const nixContent =
+          '{ default = "dev"; profiles = { dev = { agent = "codex"; }; }; }';
+        writeFileSync(customNixPath, nixContent);
+
+        await runConfigCommand([
+          "migrate",
+          "nix2pkl",
+          "--input",
+          customNixPath,
+        ]);
+
+        const outputPath = path.join(projectDir, ".nas", "config.pkl");
+        expect(existsSync(outputPath)).toBe(true);
+        const content = readFileSync(outputPath, "utf8");
+        expect(content).toContain('amends "Schema.pkl"');
+        expect(content).toContain('default = "dev"');
+      },
+    );
+
+    test.skipIf(!hasNix)(
+      "migrate nix2pkl --global converts Nix to Pkl in global mode",
+      async () => {
+        setup();
+        const globalDir = path.join(tmpDir, "xdg-config", "nas");
+        mkdirSync(globalDir, { recursive: true });
+        const nixContent = '{ default = "main"; }';
+        writeFileSync(path.join(globalDir, ".agent-sandbox.nix"), nixContent);
+
+        await runConfigCommand(["migrate", "nix2pkl", "--global"]);
+
+        const outputPath = path.join(globalDir, "global.pkl");
+        expect(existsSync(outputPath)).toBe(true);
+        const content = readFileSync(outputPath, "utf8");
+        expect(content).toContain('amends "Schema.pkl"');
+        expect(content).toContain('default = "main"');
+      },
+    );
+
+    test.skipIf(!hasNix)(
+      "migrate nix2pkl throws when no Nix file is found",
+      async () => {
+        setup();
+        // No .agent-sandbox.nix is created — the command should throw
+        await expect(runConfigCommand(["migrate", "nix2pkl"])).rejects.toThrow(
+          "No .agent-sandbox.nix found",
+        );
+      },
+    );
   });
 });
