@@ -98,7 +98,7 @@ describe("objectToPklSource", () => {
     expect(result).toContain('["BAZ"] = "qux"');
   });
 
-  test("arrays produce Listing syntax", () => {
+  test("arrays produce amend syntax", () => {
     const result = objectToPklSource({
       profiles: {
         dev: {
@@ -106,12 +106,13 @@ describe("objectToPklSource", () => {
         },
       },
     });
-    expect(result).toContain("new Listing {");
+    expect(result).toContain("extraPackages {");
+    expect(result).not.toContain("new Listing");
     expect(result).toContain('"git"');
     expect(result).toContain('"curl"');
   });
 
-  test("empty array produces empty Listing", () => {
+  test("empty array produces empty amend block", () => {
     const result = objectToPklSource({
       profiles: {
         dev: {
@@ -119,7 +120,8 @@ describe("objectToPklSource", () => {
         },
       },
     });
-    expect(result).toContain("new Listing {}");
+    expect(result).toContain("extraPackages {}");
+    expect(result).not.toContain("new Listing");
   });
 
   test("null and undefined values are omitted", () => {
@@ -143,7 +145,7 @@ describe("objectToPklSource", () => {
     expect(result).toContain('detachKey = "^\\"\\\\n"');
   });
 
-  test("array of objects produces nested Listing", () => {
+  test("array of objects produces nested amend block", () => {
     const result = objectToPklSource({
       profiles: {
         dev: {
@@ -153,7 +155,8 @@ describe("objectToPklSource", () => {
         },
       },
     });
-    expect(result).toContain("new Listing {");
+    expect(result).toContain("extraMounts {");
+    expect(result).not.toContain("new Listing");
     expect(result).toContain('src = "/host/path"');
     expect(result).toContain('dst = "/container/path"');
     expect(result).toContain('mode = "ro"');

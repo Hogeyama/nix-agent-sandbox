@@ -5,7 +5,7 @@
  * Schema.pkl への適合を pkl の型システムで検証する。
  */
 
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { initConfig, resolveSchemaAsset, resolveTemplate } from "./init.ts";
 import { getGlobalConfigDir } from "./paths.ts";
@@ -145,20 +145,27 @@ async function evalPklConfig(
     throw e;
   }
 
-  // global.pkl をグローバル設定ディレクトリからコピー（pkl の modulePath は
-  // シンボリックリンクを辿れないため、実体を読み込んで .nas/ にコピーする）
+  // global.pkl が symlink の場合のみ .nas/ にコピーする。
+  // Pkl の ModulePathResolver は symlink を辿れないため、home-manager 環境で
+  // globalDir の global.pkl が /nix/store への symlink になるケースに対応。
+  // 通常ファイルなら PklProject の modulePath 経由で直接解決できるのでコピー不要。
   const globalDir = getGlobalConfigDir();
   const globalPklSrc = path.join(globalDir, "global.pkl");
   try {
-    // readFile はシンボリックリンクを辿るので Nix home-manager 管理でも動作する
-    const globalPklText = await readFile(globalPklSrc, "utf8");
-    await writeFile(path.join(nasDir, "global.pkl"), globalPklText);
+    const stats = await lstat(globalPklSrc);
+    if (stats.isSymbolicLink()) {
+      const globalPklText = await readFile(globalPklSrc, "utf8");
+      await writeFile(path.join(nasDir, "global.pkl"), globalPklText);
+    }
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
       throw e;
     }
-    // global.pkl が存在しない場合はスキップ — config.pkl が
-    // amends "Schema.pkl" を使っていれば問題ない
+    // global.pkl が存在しない場合、globalDir に空の global.pkl を生成する。
+    // .nas/ ではなく globalDir に書くことで、PklProject の modulePath 経由で
+    // 解決され、.nas/ 側の同名ファイルで shadow しない。
+    await mkdir(globalDir, { recursive: true });
+    await writeFile(globalPklSrc, 'amends "Schema.pkl"\n');
   }
 
   // Schema.pkl を CLI アセットから上書き
