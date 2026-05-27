@@ -39,17 +39,6 @@ jobs:
           name: nas-${{ github.ref_name }}_${{ matrix.system }}
           path: nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
 
-      - name: Stage Schema.pkl
-        if: matrix.system == 'x86_64-linux'
-        run: cp src/config/Schema.pkl Schema.pkl
-
-      - name: Upload Schema.pkl
-        if: matrix.system == 'x86_64-linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Schema.pkl
-          path: Schema.pkl
-
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -68,5 +57,4 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             "nas-${TAG}_x86_64-linux.tar.gz" \
-            "nas-${TAG}_aarch64-linux.tar.gz" \
-            "Schema.pkl"
+            "nas-${TAG}_aarch64-linux.tar.gz"
