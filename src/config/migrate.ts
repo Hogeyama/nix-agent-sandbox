@@ -175,13 +175,21 @@ function objectToLines(
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a plain JS object to a Pkl source string that amends Schema.pkl.
+ * Convert a plain JS object to a Pkl source string that amends a Pkl module.
  *
  * The returned string is a complete `.pkl` file with the header
- * `amends "Schema.pkl"` followed by the object fields in Pkl syntax.
+ * `amends "<amendsHeader>"` followed by the object fields in Pkl syntax.
+ *
+ * @param obj   - The plain JS object to convert.
+ * @param opts  - Optional settings.
+ * @param opts.amendsHeader - The module path for the `amends` header.
+ *                            Defaults to `"Schema.pkl"`.
  */
-export function objectToPklSource(obj: Record<string, unknown>): string {
-  const header = 'amends "Schema.pkl"\n';
+export function objectToPklSource(
+  obj: Record<string, unknown>,
+  opts?: { amendsHeader?: string },
+): string {
+  const header = `amends "${escapeString(opts?.amendsHeader ?? "Schema.pkl")}"\n`;
   const lines = objectToLines(obj, 0, "");
   if (lines.length === 0) {
     return header;

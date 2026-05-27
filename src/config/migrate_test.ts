@@ -190,6 +190,21 @@ describe("objectToPklSource", () => {
       expect(l).not.toContain("null");
     }
   });
+
+  test("custom amendsHeader is used in output", () => {
+    const result = objectToPklSource(
+      { default: "main" },
+      { amendsHeader: "modulepath:/global.pkl" },
+    );
+    expect(result).toContain('amends "modulepath:/global.pkl"');
+    expect(result).not.toContain("Schema.pkl");
+    expect(result).toContain('default = "main"');
+  });
+
+  test("omitting amendsHeader defaults to Schema.pkl", () => {
+    const result = objectToPklSource({ default: "main" });
+    expect(result).toContain('amends "Schema.pkl"');
+  });
 });
 
 // ---------------------------------------------------------------------------
