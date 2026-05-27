@@ -45,6 +45,15 @@ const MAPPING_PARENT_PATHS: ReadonlySet<string> = new Set([
   "profiles.*.hostexec.rules.*.env",
 ]);
 
+/**
+ * Nullable object fields that need `= new TypeName { ... }` instead of bare `{ ... }`.
+ * Bare block amendment of a null default creates a Dynamic, which fails type checking.
+ */
+const NULLABLE_OBJECT_PATHS: ReadonlyMap<string, string> = new Map([
+  ["profiles.*.worktree", "WorktreeConfig"],
+  ["profiles.*.hostexec", "HostExecConfig"],
+]);
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -89,6 +98,13 @@ function pathIsMappingParent(path: string): boolean {
   return false;
 }
 
+function nullableTypeName(path: string): string | undefined {
+  for (const [pattern, typeName] of NULLABLE_OBJECT_PATHS) {
+    if (matchPath(pattern, path)) return typeName;
+  }
+  return undefined;
+}
+
 function bracketKey(key: string): string {
   return `["${escapeString(key)}"]`;
 }
@@ -104,30 +120,30 @@ function formatKey(key: string): string {
   return needsBracketKey(key) ? bracketKey(key) : key;
 }
 
-function arrayToPkl(arr: unknown[], indent: number, path: string): string {
-  if (arr.length === 0) {
-    return "new Listing {}";
-  }
+function arrayToLines(arr: unknown[], indent: number, path: string): string[] {
   const prefix = "  ".repeat(indent + 1);
-  const closing = "  ".repeat(indent);
   const itemPath = path === "" ? "*" : `${path}.*`;
-  const items = arr
-    .filter((item) => item !== null && item !== undefined)
-    .map((item) => {
-      if (typeof item === "object" && item !== null && !Array.isArray(item)) {
-        const innerLines = objectToLines(
-          item as Record<string, unknown>,
-          indent + 2,
-          itemPath,
-        );
-        if (innerLines.length === 0) {
-          return `${prefix}new {}`;
-        }
-        return `${prefix}new {\n${innerLines.join("\n")}\n${prefix}}`;
+  const lines: string[] = [];
+  for (const item of arr) {
+    if (item === null || item === undefined) continue;
+    if (typeof item === "object" && !Array.isArray(item)) {
+      const innerLines = objectToLines(
+        item as Record<string, unknown>,
+        indent + 2,
+        itemPath,
+      );
+      if (innerLines.length === 0) {
+        lines.push(`${prefix}new {}`);
+      } else {
+        lines.push(`${prefix}new {`);
+        lines.push(...innerLines);
+        lines.push(`${prefix}}`);
       }
-      return `${prefix}${valueToPkl(item, indent + 1)}`;
-    });
-  return `new Listing {\n${items.join("\n")}\n${closing}}`;
+    } else {
+      lines.push(`${prefix}${valueToPkl(item, indent + 1)}`);
+    }
+  }
+  return lines;
 }
 
 function objectToLines(
@@ -148,17 +164,26 @@ function objectToLines(
     const childPath = path === "" ? key : `${path}.${key}`;
 
     if (Array.isArray(val)) {
-      lines.push(`${prefix}${fkey} = ${arrayToPkl(val, indent, childPath)}`);
+      const itemLines = arrayToLines(val, indent, childPath);
+      if (itemLines.length === 0) {
+        lines.push(`${prefix}${fkey} {}`);
+      } else {
+        lines.push(`${prefix}${fkey} {`);
+        lines.push(...itemLines);
+        lines.push(`${prefix}}`);
+      }
     } else if (typeof val === "object") {
       const innerLines = objectToLines(
         val as Record<string, unknown>,
         indent + 1,
         childPath,
       );
+      const typeName = nullableTypeName(childPath);
+      const opener = typeName ? `${fkey} = new ${typeName} {` : `${fkey} {`;
       if (innerLines.length === 0) {
-        lines.push(`${prefix}${fkey} {}`);
+        lines.push(`${prefix}${opener}}`);
       } else {
-        lines.push(`${prefix}${fkey} {`);
+        lines.push(`${prefix}${opener}`);
         lines.push(...innerLines);
         lines.push(`${prefix}}`);
       }
