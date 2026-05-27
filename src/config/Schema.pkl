@@ -27,8 +27,15 @@ profiles: Mapping<String, Profile> = new {}
 // ---------------------------------------------------------------------------
 
 class UiConfig {
+  /// `true`: セッション開始時に UI daemon を自動起動し、通知クリックでブラウザ UI を開く。
+  /// `false`: daemon を使わず、通知のアクションボタンで直接 approve/deny。
   enable: Boolean = true
+
+  /// UI daemon のリッスンポート。`nas ui` コマンドのデフォルトにも使われる。
   port: Int = 3939
+
+  /// 全セッション・pending が消滅してから daemon を自動停止するまでの秒数。
+  /// `0` で無期限。
   idleTimeout: Int = 300
 }
 
@@ -43,9 +50,15 @@ class ObservabilityConfig {
 // ---------------------------------------------------------------------------
 
 class Profile {
+  /// 使用するエージェント。
   agent: "claude"|"copilot"|"codex"
+
+  /// エージェントに渡す追加引数。
   agentArgs: Listing<String> = new {}
+
+  /// Worktree 設定。`null` で無効。
   worktree: WorktreeConfig? = null
+
   session: SessionConfig = new {}
   nix: NixConfig = new {}
   docker: DockerConfig = new {}
@@ -55,14 +68,24 @@ class Profile {
   network: NetworkConfig = new {}
   dbus: DbusConfig = new {}
   display: DisplayConfig = new {}
+
+  /// 任意の追加マウント。
   extraMounts: Listing<ExtraMountConfig> = new {}
+
+  /// 追加環境変数（固定値 or コマンド出力）。
   env: Listing<EnvConfig> = new {}
+
   hook: HookConfig = new {}
+
+  /// ホストへのコマンド移譲設定。`null` で無効。
   hostexec: HostExecConfig? = null
 }
 
 class WorktreeConfig {
+  /// Worktree のベースブランチ。
   base: String
+
+  /// Worktree 作成後に実行するコマンド。
   onCreate: String
 }
 
@@ -71,11 +94,17 @@ class WorktreeConfig {
 // ---------------------------------------------------------------------------
 
 class SessionConfig {
+  /// dtach セッション内で nas を起動する。
+  /// 複数ターミナルからの同時 attach や detach 後の再接続が可能になる。
   multiplex: Boolean = false
+
+  /// dtach のデタッチキー。
   detachKey: String = "^\\"
 }
 
 class HookConfig {
+  /// `nas hook` による状態通知の backend。
+  /// `"auto"`: `ui.enable` に応じて UI daemon 経由 or デスクトップ通知。
   notify: "auto"|"desktop"|"off" = "auto"
 }
 
@@ -84,25 +113,37 @@ class HookConfig {
 // ---------------------------------------------------------------------------
 
 class NixConfig {
+  /// Nix 統合。`"auto"` は `/nix` の有無で判定する。
   enable: (Boolean|"auto") = "auto"
+
+  /// ホストの nix daemon にソケット経由で接続する。
   mountSocket: Boolean = true
+
+  /// `nix shell` で追加するパッケージ（`nix develop` 前に適用）。
   extraPackages: Listing<String> = new {}
 }
 
 class DockerConfig {
+  /// DinD rootless サイドカーを起動して隔離された Docker 環境を提供する。
   enable: Boolean = false
+
+  /// サイドカーをセッション間で共有する。
+  /// `false` ではセッションごとに起動・破棄。
   shared: Boolean = false
 }
 
 class GcloudConfig {
+  /// gcloud 設定ディレクトリ (`~/.config/gcloud`) をマウントする。
   mountConfig: Boolean = false
 }
 
 class AwsConfig {
+  /// AWS 設定ディレクトリ (`~/.aws`) をマウントする。
   mountConfig: Boolean = false
 }
 
 class GpgConfig {
+  /// ホストの gpg-agent を転送する（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント）。
   forwardAgent: Boolean = false
 }
 
@@ -111,19 +152,43 @@ class GpgConfig {
 // ---------------------------------------------------------------------------
 
 class ProxyConfig {
+  /// ホスト `127.0.0.1:<port>` をコンテナ内の同じ `localhost:<port>` から
+  /// 到達可能にするポートのリスト。per-session UDS を介して TCP を中継するため、
+  /// ホスト側を `0.0.0.0` に bind し直す必要はない。
+  /// `18080` は内部 proxy 用に予約済み。
   forwardPorts: Listing<Int> = new {}
 }
 
 class NetworkPromptConfig {
+  /// allowlist 外通信を session ごとの承認キューに入れる。
+  /// 無効の場合、allowlist 外通信は即拒否される。
   enable: Boolean = false
+
+  /// 即時拒否するドメインのリスト。形式は allowlist と同じ。
+  /// allowlist と重複するエントリがある場合はバリデーションエラー。
   denylist: Listing<String> = new {}
+
+  /// pending 承認の待機秒数。タイムアウト時は deny。
   timeoutSeconds: Int = 300
+
+  /// 承認の既定スコープ。
+  /// - `"once"`: そのリクエストのみ
+  /// - `"host-port"`: 同じホスト+ポートへの通信を以降許可
+  /// - `"host"`: 同じホストへの全ポート通信を以降許可
   defaultScope: "once"|"host-port"|"host" = "host-port"
+
+  /// pending 発生時の通知 backend。
+  /// `"auto"`: `ui.enable` に応じて UI daemon 経由 or デスクトップ通知。
   notify: "auto"|"desktop"|"off" = "auto"
 }
 
 class NetworkConfig {
+  /// 即時許可する外部ドメインのリスト。
+  /// `"example.com"`（全ポート）、`"example.com:443"`（ポート指定）、
+  /// `"*.example.com:443"`（ワイルドカード + ポート指定）形式に対応。
+  /// allowlist 外通信は `prompt.enable` が無効なら拒否、有効なら pending。
   allowlist: Listing<String> = new {}
+
   prompt: NetworkPromptConfig = new {}
   proxy: ProxyConfig = new {}
 }
@@ -133,17 +198,35 @@ class NetworkConfig {
 // ---------------------------------------------------------------------------
 
 class DbusRuleConfig {
+  /// well-known name (e.g. `"org.freedesktop.secrets"`)。
   name: String
+
+  /// `xdg-dbus-proxy` に渡すルール文字列。
   rule: String
 }
 
 class DbusSessionConfig {
+  /// host session bus に対する filtered proxy を有効化し、
+  /// コンテナへ proxy socket だけを渡す。
   enable: Boolean = false
+
+  /// source の session bus address。
+  /// 省略時は `DBUS_SESSION_BUS_ADDRESS`、なければ `/run/user/$UID/bus`。
   sourceAddress: String? = null
+
+  /// `xdg-dbus-proxy --see` に渡す well-known name。
   see: Listing<String> = new {}
+
+  /// `xdg-dbus-proxy --talk` に渡す well-known name。
   talk: Listing<String> = new {}
+
+  /// `xdg-dbus-proxy --own` に渡す well-known name。
   own: Listing<String> = new {}
+
+  /// `xdg-dbus-proxy --call=name=rule` として渡すルール。
   calls: Listing<DbusRuleConfig> = new {}
+
+  /// `xdg-dbus-proxy --broadcast=name=rule` として渡すルール。
   broadcasts: Listing<DbusRuleConfig> = new {}
 }
 
@@ -156,7 +239,12 @@ class DbusConfig {
 // ---------------------------------------------------------------------------
 
 class DisplayConfig {
+  /// `"xpra"` にすると、ホスト上に xpra の detached X server (Xvfb backing) を
+  /// 起動し、その Xvfb ソケットと per-session cookie のみをコンテナへ渡す。
+  /// 前提: ホストに `xpra` が必要。
   sandbox: "none"|"xpra" = "none"
+
+  /// Xvfb のスクリーンサイズ。`"WIDTHxHEIGHT"` 形式（各値 1〜16384）。
   size: String = "1920x1080"
 }
 
@@ -165,19 +253,36 @@ class DisplayConfig {
 // ---------------------------------------------------------------------------
 
 class ExtraMountConfig {
+  /// マウント元パス。絶対パス、`~`、workDir 基準の相対パスが使用可能。
   src: String
+
+  /// マウント先パス。絶対パス、`~`、workDir 基準の相対パスが使用可能。
   dst: String
+
   mode: "ro"|"rw" = "ro"
 }
 
-/// Environment-variable entry. The runtime enforces that exactly one of
-/// `key`/`keyCmd` is set, and exactly one of `val`/`valCmd` is set.
+/// 環境変数エントリ。`key`/`keyCmd` の片方のみ、`val`/`valCmd` の片方のみを設定すること
+/// （ランタイムがバリデーションする）。
 class EnvConfig {
+  /// 環境変数名（固定値）。`keyCmd` と排他。
   key: String? = null
+
+  /// 環境変数名をコマンド出力から取得する。`key` と排他。
   keyCmd: String? = null
+
+  /// 環境変数の値（固定値）。`valCmd` と排他。
   val: String? = null
+
+  /// 環境変数の値をコマンド出力から取得する。`val` と排他。
   valCmd: String? = null
+
+  /// - `"set"`: 値を上書き
+  /// - `"prefix"`: 既存値の前に追加（`separator` 必須）
+  /// - `"suffix"`: 既存値の後に追加（`separator` 必須）
   mode: "set"|"prefix"|"suffix" = "set"
+
+  /// `"prefix"` / `"suffix"` モード時のセパレータ（必須）。
   separator: String? = null
 }
 
@@ -186,44 +291,88 @@ class EnvConfig {
 // ---------------------------------------------------------------------------
 
 class HostExecPromptConfig {
+  /// `approval = "prompt"` の hostexec 実行を承認キューに入れる。
   enable: Boolean = true
+
+  /// hostexec 承認の待機秒数。タイムアウト時は deny。
   timeoutSeconds: Int = 300
+
+  /// 承認再利用の単位。
+  /// - `"once"`: そのリクエストのみ許可（キャッシュしない）
+  /// - `"capability"`: 同じ capability（rule_id + argv0 + args 等）の組み合わせで再利用
   defaultScope: "once"|"capability" = "capability"
+
+  /// pending 発生時の通知 backend。
+  /// `"auto"`: `ui.enable` に応じて UI daemon 経由 or デスクトップ通知。
   notify: "auto"|"desktop"|"off" = "auto"
 }
 
 class HostExecCwdConfig {
+  /// ホスト実行時の作業ディレクトリ制限。
   mode: "workspace-only"|"workspace-or-session-tmp"|"allowlist"|"any" = "workspace-or-session-tmp"
+
+  /// `mode = "allowlist"` 用。
+  /// 絶対パスまたは `workspace:` / `session_tmp:` プレフィクス。
   allow: Listing<String> = new {}
 }
 
 class HostExecInheritEnvConfig {
+  /// - `"minimal"`: 最小限の環境変数のみ継承
+  /// - `"unsafe-inherit-all"`: ホストの環境変数を広く継承（secret 漏えいリスクあり）
   mode: "minimal"|"unsafe-inherit-all" = "minimal"
+
+  /// `"minimal"` に追加で継承するホスト環境変数。
   keys: Listing<String> = new {}
 }
 
 class HostExecMatchConfig {
+  /// host 実行へ委譲するコマンド名。
+  /// bare name (`git`)・絶対パス (`/usr/bin/git`)・相対パス (`./gradlew`) を指定可能。
+  /// bare name は PATH シンボリックリンク、絶対/相対パスは LD_PRELOAD による
+  /// execve インターセプトで委譲される。
   argv0: String
+
+  /// argv0 以降の引数をスペースで join した文字列に対する正規表現マッチ。
+  /// 省略時はその argv0 の全コマンドにマッチ。
   argRegex: String? = null
 }
 
 class SecretConfig {
+  /// secret の取得元。`env:VAR_NAME` / `file:/path` / `dotenv:/path#KEY` / `keyring:service/account`。
   from: String
+
+  /// secret が取得できない場合にエラーにするか。
   required: Boolean
 }
 
 class HostExecRule {
+  /// 監査・承認 fingerprint に使う安定 ID。
   id: String
+
   match: HostExecMatchConfig
   cwd: HostExecCwdConfig = new {}
+
+  /// `ENV_NAME: "secret:<name>"` 形式で host 実行時だけ secret を注入する。
   env: Mapping<String, String> = new {}
+
   inheritEnv: HostExecInheritEnvConfig = new {}
+
+  /// - `"allow"`: 常に許可
+  /// - `"prompt"`: 承認キューに入れる
+  /// - `"deny"`: 常に拒否
   approval: "allow"|"prompt"|"deny" = "prompt"
+
+  /// ルール不一致や不許可時の動作。
+  /// - `"container"`: コンテナ内で実行へフォールバック
+  /// - `"deny"`: 即拒否
   fallback: "container"|"deny" = "container"
 }
 
 class HostExecConfig {
   prompt: HostExecPromptConfig = new {}
+
+  /// `"secret:<name>"` で hostexec ルールの env から参照するシークレット。
   secrets: Mapping<String, SecretConfig> = new {}
+
   rules: Listing<HostExecRule> = new {}
 }
