@@ -99,6 +99,7 @@
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
           cp ${self}/src/config/Schema.pkl $out/config/
           cp ${self}/src/config/templates/config.pkl $out/config/templates/
+          cp ${self}/src/config/templates/eval.pkl $out/config/templates/
           cp ${self}/src/config/templates/global.pkl $out/config/templates/
           cp ${self}/src/config/templates/PklProject $out/config/templates/
         '';
