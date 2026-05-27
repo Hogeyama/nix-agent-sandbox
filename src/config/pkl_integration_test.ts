@@ -292,25 +292,3 @@ profiles {
     }
   },
 );
-
-test.skipIf(!hasPkl)(
-  "pkl: _nasNonce is not present in the returned config",
-  async () => {
-    const configPkl = `amends "Schema.pkl"
-
-profiles {
-  ["dev"] {
-    agent = "claude"
-  }
-}
-`;
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-nononce-"));
-    try {
-      await setupNasDir(tmpDir, configPkl);
-      const config = await loadConfig({ startDir: tmpDir });
-      expect("_nasNonce" in config).toEqual(false);
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);

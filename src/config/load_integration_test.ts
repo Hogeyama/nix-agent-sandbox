@@ -427,72 +427,6 @@ test("loadConfig: pkl CLI not available shows helpful error", async () => {
   }
 });
 
-// --- nonce ガード検証 ---
-
-test.skipIf(!hasPkl)(
-  "loadConfig: nonce guard restores Schema.pkl after evaluation",
-  async () => {
-    const configPkl = `amends "Schema.pkl"
-
-profiles {
-  ["dev"] {
-    agent = "claude"
-  }
-}
-`;
-    await withNasConfig(configPkl, async (dir, nasDir) => {
-      const schemaBefore = await readFile(
-        path.join(nasDir, "Schema.pkl"),
-        "utf8",
-      );
-
-      await loadConfig({ startDir: dir });
-
-      const schemaAfter = await readFile(
-        path.join(nasDir, "Schema.pkl"),
-        "utf8",
-      );
-      expect(schemaAfter).toEqual(schemaBefore);
-
-      // .eval-* 一時ディレクトリが残っていないことを確認
-      const { readdirSync } = await import("node:fs");
-      const entries = readdirSync(nasDir);
-      const evalDirs = entries.filter((e: string) => e.startsWith(".eval-"));
-      expect(evalDirs).toEqual([]);
-    });
-  },
-);
-
-test.skipIf(!hasPkl)(
-  "loadConfig: nonce guard restores Schema.pkl even on pkl eval failure",
-  async () => {
-    const configPkl = `amends "Schema.pkl"
-
-profiles {
-  ["dev"] {
-    agent =
-  }
-}
-`;
-    await withNasConfig(configPkl, async (dir, nasDir) => {
-      const schemaBefore = await readFile(
-        path.join(nasDir, "Schema.pkl"),
-        "utf8",
-      );
-
-      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
-        /pkl eval exited with code/,
-      );
-
-      const schemaAfter = await readFile(
-        path.join(nasDir, "Schema.pkl"),
-        "utf8",
-      );
-      expect(schemaAfter).toEqual(schemaBefore);
-    });
-  },
-);
-
 // --- グローバル設定の modulePath 経由解決 ---
 
 test.skipIf(!hasPkl)(
@@ -540,6 +474,51 @@ profiles {
           ]);
           expect("from-local" in config.profiles).toEqual(true);
           expect(config.profiles["from-local"].agent).toEqual("claude");
+        },
+        { globalDir },
+      );
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: throws when global.pkl does not amend Schema.pkl (broken amends chain)",
+  async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-broken-chain-"));
+    try {
+      // Set up a global dir with a global.pkl that does NOT amend Schema.pkl
+      const globalDir = path.join(rootDir, "global-config");
+      await mkdir(globalDir, { recursive: true });
+      const schemaText = await readBundledSchema();
+      await writeFile(path.join(globalDir, "Schema.pkl"), schemaText);
+      // global.pkl is plain text without amends — breaks the chain
+      await writeFile(
+        path.join(globalDir, "global.pkl"),
+        `profiles {
+  ["from-global"] {
+    agent = "copilot"
+  }
+}
+`,
+      );
+
+      // Local config amends global.pkl via modulepath
+      const configPkl = `amends "modulepath:/global.pkl"
+
+profiles {
+  ["from-local"] {
+    agent = "claude"
+  }
+}
+`;
+      await withNasConfig(
+        configPkl,
+        async (dir) => {
+          await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+            /pkl eval exited with code/,
+          );
         },
         { globalDir },
       );
@@ -731,34 +710,7 @@ test("resolveProfile: throws for nonexistent profile name", () => {
   );
 });
 
-// --- エラーパス: Schema.pkl 欠落・不正・nonce 不一致 ---
-
-test.skipIf(!hasPkl)(
-  "loadConfig: throws when Schema.pkl is missing from .nas directory",
-  async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-no-schema-"));
-    const nasDir = path.join(tmpDir, ".nas");
-    await mkdir(nasDir, { recursive: true });
-
-    // PklProject のみ作成（Schema.pkl は省略）
-    await writeFile(
-      path.join(nasDir, "PklProject"),
-      `amends "pkl:Project"\nevaluatorSettings { modulePath { "." } }\n`,
-    );
-    await writeFile(
-      path.join(nasDir, "config.pkl"),
-      `amends "Schema.pkl"\nprofiles { ["test"] { agent = "claude" } }\n`,
-    );
-
-    try {
-      const err = expect(loadConfig({ startDir: tmpDir })).rejects;
-      await err.toThrow("Schema.pkl not found");
-      await err.toThrow('Run "nas config init"');
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
+// --- エラーパス: PklProject 欠落・型不一致 ---
 
 test.skipIf(!hasPkl)(
   "loadConfig: throws when PklProject is missing from .nas directory",
@@ -786,50 +738,12 @@ test.skipIf(!hasPkl)(
 );
 
 test.skipIf(!hasPkl)(
-  "loadConfig: throws when Schema.pkl has no _nasNonce field",
+  "loadConfig: throws type error when config.pkl does not amend Schema.pkl",
   async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-old-schema-"));
-    const nasDir = path.join(tmpDir, ".nas");
-    await mkdir(nasDir, { recursive: true });
-
-    // _nasNonce フィールドを含まない古い形式の Schema.pkl
-    const oldSchema = `open module nas.Config
-
-profiles: Mapping<String, Profile> = new {}
-
-class Profile {
-  agent: "claude"|"copilot"|"codex"
-}
-`;
-    await writeFile(path.join(nasDir, "Schema.pkl"), oldSchema);
-    await writeFile(
-      path.join(nasDir, "PklProject"),
-      `amends "pkl:Project"\nevaluatorSettings { modulePath { "." } }\n`,
-    );
-    await writeFile(
-      path.join(nasDir, "config.pkl"),
-      `amends "Schema.pkl"\nprofiles { ["test"] { agent = "claude" } }\n`,
-    );
-
-    try {
-      await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
-        "does not contain a _nasNonce field",
-      );
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  },
-);
-
-test.skipIf(!hasPkl)(
-  "loadConfig: throws nonce verification failure for config not inheriting Schema.pkl",
-  async () => {
-    // config.pkl が amends を使わず _nasNonce を直接出力するケース。
-    // pkl eval は成功するが、出力の _nasNonce がパッチ済み Schema.pkl の
-    // nonce と一致しないため検証エラーになる。
-    const configPkl = `_nasNonce = "wrong-nonce"
-
-profiles {
+    // config.pkl が amends を使わずフィールドを直接定義するケース。
+    // eval.pkl の型注釈 `local validated: Schema = config` により
+    // pkl の型エラーが発生する。
+    const configPkl = `profiles {
   ["test"] {
     agent = "claude"
   }
@@ -837,7 +751,7 @@ profiles {
 `;
     await withNasConfig(configPkl, async (dir) => {
       await expect(loadConfig({ startDir: dir })).rejects.toThrow(
-        "Nonce verification failed",
+        /pkl eval exited with code/,
       );
     });
   },

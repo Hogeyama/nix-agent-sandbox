@@ -68,7 +68,7 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 /** Resolve a template asset file path. */
-function resolveTemplate(name: string): string {
+export function resolveTemplate(name: string): string {
   return resolveAsset(
     `config/templates/${name}`,
     import.meta.url,

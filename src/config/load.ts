@@ -1,20 +1,13 @@
 /**
  * Pkl 設定ファイルの読み込み
  *
- * .nas/config.pkl を --project-dir 付きで pkl eval し、
- * nonce ガードで評価結果の正当性を検証する。
+ * .nas/config.pkl を eval.pkl 経由の型注釈で評価し、
+ * Schema.pkl への適合を pkl の型システムで検証する。
  */
 
-import {
-  mkdir,
-  readFile,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import { initConfig } from "./init.ts";
+import { initConfig, resolveSchemaAsset, resolveTemplate } from "./init.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -24,6 +17,7 @@ const CONFIG_DIR = ".nas";
 const CONFIG_FILENAME = "config.pkl";
 const SCHEMA_FILENAME = "Schema.pkl";
 const PKL_PROJECT_FILENAME = "PklProject";
+const EVAL_FILENAME = "eval.pkl";
 
 /** loadConfig のオプション */
 export interface LoadConfigOptions {
@@ -120,26 +114,12 @@ async function pklCommandExists(): Promise<boolean> {
   }
 }
 
-/** 暗号学的に安全なランダム nonce を生成する */
-function generateNonce(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 /**
- * .nas/config.pkl を pkl eval --project-dir で評価して設定オブジェクトを得る。
+ * .nas/config.pkl を eval.pkl 経由で pkl eval し、設定オブジェクトを得る。
  *
- * nonce ガード（一時ディレクトリ方式）:
- *   1. .nas/.eval-<random>/ 一時ディレクトリを作成
- *   2. Schema.pkl をコピーし _nasNonce にランダム nonce をパッチ
- *   3. PklProject をコピー
- *   4. config.pkl へのシンボリックリンクを作成
- *   5. pkl eval --project-dir .nas/.eval-<random>/ で評価
- *   6. JSON 出力の _nasNonce が書き込んだ nonce と一致することを検証
- *   7. finally で一時ディレクトリを削除
- *
- * 元の .nas/Schema.pkl は一切変更されず、concurrent な呼び出しも安全。
+ * eval.pkl は `local validated: Schema = config` という型注釈を持ち、
+ * config.pkl が Schema.pkl を正しく amends していなければ pkl の型エラーになる。
+ * Schema.pkl と eval.pkl は CLI バンドルのアセットから毎回上書きする。
  */
 async function evalPklConfig(
   nasDir: string,
@@ -147,119 +127,79 @@ async function evalPklConfig(
 ): Promise<unknown> {
   if (!(await pklCommandExists())) {
     throw new Error(
-      `Found .nas/config.pkl at ${configPath}, but 'pkl' command is not available on PATH. Install Pkl (https://pkl-lang.org/main/current/pkl-cli/index.html#installation).`,
+      `Found .nas/config.pkl at ${configPath}, but 'pkl' command is not available on PATH.`,
     );
   }
 
-  const schemaPath = path.join(nasDir, SCHEMA_FILENAME);
-  let originalSchemaText: string;
+  // PklProject 存在確認
+  const pklProjectPath = path.join(nasDir, PKL_PROJECT_FILENAME);
   try {
-    originalSchemaText = await readFile(schemaPath, "utf8");
+    await stat(pklProjectPath);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
-        `Schema.pkl not found at ${schemaPath}. Run "nas config init" to regenerate it.`,
+        `PklProject not found at ${pklProjectPath}. Run "nas config init" to regenerate it.`,
       );
     }
     throw e;
   }
 
-  const nonce = generateNonce();
-  const noncePattern = /^(_nasNonce:\s*String\s*=\s*)"[^"]*"/m;
-  const patchedSchemaText = originalSchemaText.replace(
-    noncePattern,
-    `$1"${nonce}"`,
+  // Schema.pkl を CLI アセットから上書き
+  const schemaPklSrc = resolveSchemaAsset();
+  let schemaPklText: string;
+  try {
+    schemaPklText = await readFile(schemaPklSrc, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `Bundled Schema.pkl asset not found at ${schemaPklSrc}. This is a bug — please report it.`,
+      );
+    }
+    throw e;
+  }
+  await writeFile(path.join(nasDir, SCHEMA_FILENAME), schemaPklText);
+
+  // eval.pkl を CLI アセットから上書き
+  const evalPklSrc = resolveTemplate("eval.pkl");
+  let evalPklText: string;
+  try {
+    evalPklText = await readFile(evalPklSrc, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `Bundled eval.pkl asset not found at ${evalPklSrc}. This is a bug — please report it.`,
+      );
+    }
+    throw e;
+  }
+  const evalPklPath = path.join(nasDir, EVAL_FILENAME);
+  await writeFile(evalPklPath, evalPklText);
+
+  // pkl eval --project-dir .nas/ -f json .nas/eval.pkl
+  const proc = Bun.spawn(
+    ["pkl", "eval", "--project-dir", nasDir, "-f", "json", evalPklPath],
+    { stdout: "pipe", stderr: "pipe", env: process.env },
   );
-  if (patchedSchemaText === originalSchemaText) {
+  const [stdoutText, stderrText] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const code = await proc.exited;
+  if (code !== 0) {
     throw new Error(
-      `Schema.pkl at ${schemaPath} does not contain a _nasNonce field. Run "nas config init" to regenerate it.`,
+      `Failed to evaluate ${configPath}: pkl eval exited with code ${code}\n${stderrText.trim()}`,
     );
   }
 
-  // 一時ディレクトリを作成し、パッチ済み Schema.pkl + PklProject + config.pkl symlink を配置
-  const evalDirName = `.eval-${nonce.slice(0, 16)}`;
-  const evalDir = path.join(nasDir, evalDirName);
-  await mkdir(evalDir, { recursive: true });
-
+  let parsed: Record<string, unknown>;
   try {
-    // パッチ済み Schema.pkl を一時ディレクトリに書き込む
-    await writeFile(path.join(evalDir, SCHEMA_FILENAME), patchedSchemaText);
-
-    // PklProject をコピー
-    const pklProjectPath = path.join(nasDir, PKL_PROJECT_FILENAME);
-    let pklProjectText: string;
-    try {
-      pklProjectText = await readFile(pklProjectPath, "utf8");
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(
-          `PklProject not found at ${pklProjectPath}. Run "nas config init" to regenerate it.`,
-        );
-      }
-      throw e;
-    }
-    await writeFile(path.join(evalDir, PKL_PROJECT_FILENAME), pklProjectText);
-
-    // config.pkl へのシンボリックリンクを作成
-    const symlinkPath = path.join(evalDir, CONFIG_FILENAME);
-    await symlink(configPath, symlinkPath);
-
-    const cmdArgs = [
-      "pkl",
-      "eval",
-      "--project-dir",
-      evalDir,
-      "-f",
-      "json",
-      symlinkPath,
-    ];
-
-    const proc = Bun.spawn(cmdArgs, {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-    });
-    const [stdoutText, stderrText] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const code = await proc.exited;
-    if (code !== 0) {
-      const errMsg = stderrText.trim();
-      throw new Error(
-        `Failed to evaluate ${configPath}: pkl eval exited with code ${code}\n${errMsg}`,
-      );
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(stdoutText) as Record<string, unknown>;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      throw new Error(
-        `Failed to parse pkl output for ${configPath}: ${message}\nstdout: ${stdoutText.slice(0, 500)}`,
-      );
-    }
-
-    // nonce ガード検証
-    if (parsed._nasNonce !== nonce) {
-      throw new Error(
-        `Nonce verification failed for ${configPath}. The evaluated config did not produce the expected nonce. ` +
-          `This may indicate the config file does not properly inherit from Schema.pkl.`,
-      );
-    }
-
-    // _nasNonce を除去してから返す
-    const { _nasNonce: _, ...configWithoutNonce } = parsed;
-    return configWithoutNonce;
-  } finally {
-    // 一時ディレクトリを削除（best-effort: 失敗してもオリジナルのエラーを隠さない）
-    try {
-      await rm(evalDir, { recursive: true, force: true });
-    } catch {
-      // cleanup failure is non-fatal — do not mask the original error
-    }
+    parsed = JSON.parse(stdoutText) as Record<string, unknown>;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to parse pkl output for ${configPath}: ${message}`);
   }
+
+  return parsed;
 }
 
 /** プロファイルを解決 (名前指定 or default) */
