@@ -8,6 +8,12 @@
 import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { initConfig, resolveSchemaAsset, resolveTemplate } from "./init.ts";
+import {
+  findNixConfig,
+  findYamlConfig,
+  migrateNix2Pkl,
+  migrateYml2Pkl,
+} from "./migrate.ts";
 import { getGlobalConfigDir } from "./paths.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
@@ -39,26 +45,168 @@ export async function loadConfig(
   let found = await findConfigFile(startDir);
 
   if (!found) {
-    if (process.env.NAS_NO_AUTO_INIT === "1") {
+    // Check for legacy config files before auto-init
+    const legacyNix = await findNixConfig(startDir);
+    const legacyYaml = legacyNix ? null : await findYamlConfig(startDir);
+    const legacyPath = legacyNix ?? legacyYaml;
+
+    if (legacyPath) {
+      found = await handleLegacyConfig(legacyPath, !!legacyNix, startDir);
+    } else if (process.env.NAS_NO_AUTO_INIT === "1") {
       throw new Error(
         `.nas/config.pkl not found. Run \`nas config init\` to create it.`,
       );
-    }
-    // Auto-init: create .nas/ with default config in the start directory
-    console.error(
-      `Auto-initializing .nas/ in ${startDir}. Run 'nas config init' in your project root to choose the location.`,
-    );
-    await initConfig({ projectDir: startDir });
-    found = await findConfigFile(startDir);
-    if (!found) {
-      throw new Error(
-        `.nas/config.pkl not found even after auto-init. This is a bug — please report it.`,
+    } else {
+      console.error(
+        `Auto-initializing .nas/ in ${startDir}. Run 'nas config init' in your project root to choose the location.`,
       );
+      await initConfig({ projectDir: startDir });
+      found = await findConfigFile(startDir);
+      if (!found) {
+        throw new Error(
+          `.nas/config.pkl not found even after auto-init. This is a bug — please report it.`,
+        );
+      }
     }
   }
 
+  // Check for legacy global config before eval
+  await detectAndMigrateGlobalLegacy();
+
   const raw = await evalPklConfig(found.nasDir, found.configPath);
   return validateConfig(raw as Config);
+}
+
+/**
+ * レガシー設定ファイル検出時の移行ハンドリング。
+ * TTY なら confirm で確認、非 TTY ならエラーで案内。
+ */
+async function handleLegacyConfig(
+  legacyPath: string,
+  isNix: boolean,
+  startDir: string,
+): Promise<ConfigFileFound> {
+  const migrateSub = isNix ? "nix2pkl" : "yml2pkl";
+  const migrateCmd = `nas config migrate ${migrateSub}`;
+
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      `Found legacy config: ${legacyPath}\n` +
+        `Run \`${migrateCmd}\` to migrate to .nas/config.pkl.`,
+    );
+  }
+
+  const ok = confirm(
+    `Found legacy config: ${legacyPath}\nMigrate to .nas/config.pkl?`,
+  );
+  if (!ok) {
+    throw new Error(
+      `Run \`${migrateCmd}\` when ready, or delete ${path.basename(legacyPath)} and run \`nas config init\`.`,
+    );
+  }
+
+  console.error(`Migrating ${legacyPath} -> .nas/config.pkl ...`);
+  if (isNix) {
+    const result = await migrateNix2Pkl();
+    if (result.scaffoldResult) {
+      for (const f of result.scaffoldResult.written) {
+        console.error(`  created: ${f}`);
+      }
+    }
+    console.error(`  converted: ${result.inputPath} -> ${result.outputPath}`);
+    if (result.isFunction) {
+      console.error(
+        `  note: Nix config was a function — output uses amends "modulepath:/global.pkl"`,
+      );
+    }
+  } else {
+    const result = await migrateYml2Pkl();
+    if (result.scaffoldResult) {
+      for (const f of result.scaffoldResult.written) {
+        console.error(`  created: ${f}`);
+      }
+    }
+    console.error(`  converted: ${result.inputPath} -> ${result.outputPath}`);
+  }
+  console.error(
+    `\n  Verify the migrated config, then remove the old file:\n    rm ${legacyPath}`,
+  );
+
+  const found = await findConfigFile(startDir);
+  if (!found) {
+    throw new Error(
+      `.nas/config.pkl not found after migration. This is a bug — please report it.`,
+    );
+  }
+  return found;
+}
+
+/**
+ * グローバル設定ディレクトリにレガシー設定 (agent-sandbox.{nix,yml}) が
+ * あるのに global.pkl が存在しない場合、移行を促す。
+ */
+async function detectAndMigrateGlobalLegacy(): Promise<void> {
+  const globalDir = getGlobalConfigDir();
+  const globalPkl = path.join(globalDir, "global.pkl");
+
+  // global.pkl が既にあるなら何もしない
+  try {
+    await stat(globalPkl);
+    return;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+
+  const nixPath = path.join(globalDir, ".agent-sandbox.nix");
+  const ymlPath = path.join(globalDir, ".agent-sandbox.yml");
+
+  let legacyPath: string | null = null;
+  let isNix = false;
+  try {
+    await stat(nixPath);
+    legacyPath = nixPath;
+    isNix = true;
+  } catch {
+    try {
+      await stat(ymlPath);
+      legacyPath = ymlPath;
+    } catch {
+      return;
+    }
+  }
+
+  const migrateSub = isNix ? "nix2pkl" : "yml2pkl";
+  const migrateCmd = `nas config migrate ${migrateSub} --global`;
+
+  if (!process.stdin.isTTY) {
+    console.error(
+      `Found legacy global config: ${legacyPath}\n` +
+        `Run \`${migrateCmd}\` to migrate to ${globalPkl}.`,
+    );
+    return;
+  }
+
+  const ok = confirm(
+    `Found legacy global config: ${legacyPath}\nMigrate to ${globalPkl}?`,
+  );
+  if (!ok) {
+    console.error(
+      `Skipped global migration. Run \`${migrateCmd}\` when ready.`,
+    );
+    return;
+  }
+
+  console.error(`Migrating ${legacyPath} -> ${globalPkl} ...`);
+  if (isNix) {
+    const result = await migrateNix2Pkl({ global: true });
+    console.error(`  converted: ${result.inputPath} -> ${result.outputPath}`);
+  } else {
+    const result = await migrateYml2Pkl({ global: true });
+    console.error(`  converted: ${result.inputPath} -> ${result.outputPath}`);
+  }
+  console.error(
+    `\n  Verify the migrated config, then remove the old file:\n    rm ${legacyPath}`,
+  );
 }
 
 /** 設定ファイルの検索結果 */
