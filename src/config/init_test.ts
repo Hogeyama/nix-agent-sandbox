@@ -96,8 +96,8 @@ describe("initConfig", () => {
     setup();
     const result = await initConfig({ projectDir });
 
-    // All 6 files should be written
-    expect(result.written.length).toEqual(6);
+    // All 7 files should be written
+    expect(result.written.length).toEqual(7);
     expect(result.skipped.length).toEqual(0);
 
     // Global files
@@ -110,6 +110,7 @@ describe("initConfig", () => {
     expect(existsSync(path.join(nasDir, "Schema.pkl"))).toBeTrue();
     expect(existsSync(path.join(nasDir, "config.pkl"))).toBeTrue();
     expect(existsSync(path.join(nasDir, "PklProject"))).toBeTrue();
+    expect(existsSync(path.join(nasDir, "eval.pkl"))).toBeTrue();
     expect(existsSync(path.join(nasDir, ".gitignore"))).toBeTrue();
   });
 
@@ -123,7 +124,7 @@ describe("initConfig", () => {
     expect(content).toEqual("*\n");
   });
 
-  test("skips existing files on second init (except Schema.pkl)", async () => {
+  test("skips existing files on second init (except Schema.pkl and eval.pkl)", async () => {
     setup();
     // First init
     await initConfig({ projectDir });
@@ -131,11 +132,13 @@ describe("initConfig", () => {
     const result = await initConfig({ projectDir });
 
     // .nas/Schema.pkl is always overwritten (ADR policy).
+    // .nas/eval.pkl is always overwritten (CLI-managed).
     // Global Schema.pkl is skipped (same version).
     // global.pkl, config.pkl, PklProject, .gitignore are all skipped.
     expect(result.written).toContain(
       path.join(projectDir, ".nas", "Schema.pkl"),
     );
+    expect(result.written).toContain(path.join(projectDir, ".nas", "eval.pkl"));
     expect(result.skipped).toContain(
       path.join(tmpDir, "xdg-config", "nas", "Schema.pkl"),
     );
@@ -237,7 +240,7 @@ describe("initConfig", () => {
       path.dirname(new URL(import.meta.url).pathname),
       "templates",
     );
-    for (const name of ["global.pkl", "config.pkl", "PklProject"]) {
+    for (const name of ["global.pkl", "config.pkl", "PklProject", "eval.pkl"]) {
       const content = readFileSync(path.join(realTemplatesDir, name), "utf8");
       writeFileSync(path.join(fakeTemplatesDir, name), content);
     }
@@ -283,6 +286,23 @@ describe("initConfig", () => {
     // Verify the content was not changed
     const content = readFileSync(path.join(globalDir, "Schema.pkl"), "utf8");
     expect(content).toEqual(versionlessContent);
+  });
+
+  test("project .nas/eval.pkl is always overwritten", async () => {
+    setup();
+    // Create .nas/eval.pkl with custom content
+    const nasDir = path.join(projectDir, ".nas");
+    mkdirSync(nasDir, { recursive: true });
+    writeFileSync(path.join(nasDir, "eval.pkl"), "custom content\n");
+
+    const result = await initConfig({ projectDir });
+
+    // Should be overwritten regardless of existing content
+    expect(result.written).toContain(path.join(nasDir, "eval.pkl"));
+    const content = readFileSync(path.join(nasDir, "eval.pkl"), "utf8");
+    // Should match the bundled template, not the custom content
+    expect(content).not.toEqual("custom content\n");
+    expect(content).toContain('import "config.pkl"');
   });
 
   test("does not overwrite existing config.pkl", async () => {

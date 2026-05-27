@@ -1,0 +1,8 @@
+import "config.pkl"
+import "Schema.pkl"
+
+local validated: Schema = config
+
+output {
+  value = validated
+}

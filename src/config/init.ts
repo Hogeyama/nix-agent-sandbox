@@ -9,6 +9,7 @@
  *    - Schema.pkl  (always overwritten — ADR policy)
  *    - config.pkl  (created only if missing)
  *    - PklProject  (created only if missing)
+ *    - eval.pkl    (always overwritten — CLI-managed)
  *    - .gitignore  (created only if missing)
  */
 
@@ -197,6 +198,12 @@ export async function initConfig(
     await writeFile(pklProjectPath, templateText);
     written.push(pklProjectPath);
   }
+
+  // .nas/eval.pkl — always overwrite (CLI-managed file).
+  const evalPklPath = path.join(nasDir, "eval.pkl");
+  const evalPklText = await readFile(resolveTemplate("eval.pkl"), "utf8");
+  await writeFile(evalPklPath, evalPklText);
+  written.push(evalPklPath);
 
   // .nas/.gitignore — create only if missing.
   // Content kept in sync with ensureNasGitignore() via shared NAS_GITIGNORE_CONTENT.
