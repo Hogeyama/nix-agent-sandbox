@@ -275,7 +275,11 @@ test("CLI: exits with error when no config file found", async () => {
   try {
     const result = await runNas([], {
       cwd: tmpDir,
-      env: { HOME: tmpDir, XDG_CONFIG_HOME: path.join(tmpDir, ".config") },
+      env: {
+        HOME: tmpDir,
+        XDG_CONFIG_HOME: path.join(tmpDir, ".config"),
+        NAS_NO_AUTO_INIT: "1",
+      },
     });
     expect(result.code).toEqual(1);
     expect(result.stderr.includes("not found")).toEqual(true);
@@ -287,7 +291,7 @@ test("CLI: exits with error when no config file found", async () => {
 test("CLI: exits with error for nonexistent profile", async () => {
   const pkl = `
 profiles {
-  dev {
+  ["dev"] {
     agent = "claude"
   }
 }
@@ -332,10 +336,10 @@ profiles {}
 test("CLI: multiple profiles without default exits with error", async () => {
   const pkl = `
 profiles {
-  a {
+  ["a"] {
     agent = "claude"
   }
-  b {
+  ["b"] {
     agent = "copilot"
   }
 }
@@ -639,9 +643,9 @@ test("CLI: hostexec pending lists queued approvals", async () => {
 test("CLI: hostexec test forwards command args after --", async () => {
   const pkl = `
 profiles {
-  claude {
+  ["claude"] {
     agent = "claude"
-    hostexec {
+    hostexec = new HostExecConfig {
       rules {
         new {
           id = "gpg-sign"
@@ -675,15 +679,15 @@ profiles {
 test("CLI: hostexec test preserves positional args named like subcommand", async () => {
   const pkl = `
 profiles {
-  claude {
+  ["claude"] {
     agent = "claude"
-    hostexec {
+    hostexec = new HostExecConfig {
       rules {
         new {
           id = "deno-test"
           match {
             argv0 = "deno"
-            argRegex = #"^-As+test$"#
+            argRegex = #"^-A\\s+test$"#
           }
           cwd {
             mode = "workspace-or-session-tmp"
