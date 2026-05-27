@@ -16,6 +16,7 @@ Usage:
   nas ui [stop] [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
   nas config init
+  nas config migrate yml2pkl [--global] [--input <path>] [-f, --force]
   nas hook --kind start|attention|stop [--when path=value ...]
 
 Subcommands:
@@ -27,7 +28,7 @@ Subcommands:
   hostexec  hostexec 承認キューの管理
   ui        Web ダッシュボードを起動する
   audit     監査ログを表示する
-  config    設定ファイルの管理 (init: 初期設定ファイルを生成)
+  config    設定ファイルの管理 (init: 初期設定ファイルを生成, migrate yml2pkl: YAML→Pkl変換)
   hook      Report a session event from an agent hook (internal use)
 
 Options:
@@ -104,6 +105,8 @@ Examples:
   nas worktree clean --force             # Remove without confirmation
   nas worktree clean --delete-branch     # Remove worktrees and their branches
   nas worktree clean -f -B              # Force remove worktrees and branches
+  nas config migrate yml2pkl              # Migrate local .agent-sandbox.yml to .nas/config.pkl
+  nas config migrate yml2pkl --global    # Migrate global config
   nas audit                              # Show today's audit logs
   nas audit --since 2026-01-01           # Show logs since a date
   nas audit --session sess_abc --json    # JSON output for a session
