@@ -58,11 +58,6 @@ export async function runConfigCommand(args: string[]): Promise<void> {
     if (migrateSub === "nix2pkl") {
       const result = await migrateNix2Pkl({ global, inputPath, force });
       printMigrateResult(result);
-      if (result.isFunction) {
-        console.log(
-          `  note: Nix config was a function (takes super) — output uses amends "modulepath:/global.pkl"`,
-        );
-      }
       return;
     }
 

@@ -433,9 +433,13 @@ test.skipIf(!hasPkl)(
   "loadConfig: config amending global.pkl via modulePath resolves correctly",
   async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-global-"));
+    const origXdg = process.env.XDG_CONFIG_HOME;
     try {
       // Set up a global dir with Schema.pkl and global.pkl
-      const globalDir = path.join(rootDir, "global-config");
+      // evalPklConfig reads from getGlobalConfigDir() = $XDG_CONFIG_HOME/nas
+      const xdgConfig = path.join(rootDir, "xdg-config");
+      const globalDir = path.join(xdgConfig, "nas");
+      process.env.XDG_CONFIG_HOME = xdgConfig;
       await mkdir(globalDir, { recursive: true });
       const schemaText = await readBundledSchema();
       await writeFile(path.join(globalDir, "Schema.pkl"), schemaText);
@@ -463,21 +467,19 @@ profiles {
   }
 }
 `;
-      await withNasConfig(
-        configPkl,
-        async (dir) => {
-          const config = await loadConfig({ startDir: dir });
-          expect("from-global" in config.profiles).toEqual(true);
-          expect(config.profiles["from-global"].agent).toEqual("copilot");
-          expect(config.profiles["from-global"].network.allowlist).toEqual([
-            "api.github.com",
-          ]);
-          expect("from-local" in config.profiles).toEqual(true);
-          expect(config.profiles["from-local"].agent).toEqual("claude");
-        },
-        { globalDir },
-      );
+      await withNasConfig(configPkl, async (dir) => {
+        const config = await loadConfig({ startDir: dir });
+        expect("from-global" in config.profiles).toEqual(true);
+        expect(config.profiles["from-global"].agent).toEqual("copilot");
+        expect(config.profiles["from-global"].network.allowlist).toEqual([
+          "api.github.com",
+        ]);
+        expect("from-local" in config.profiles).toEqual(true);
+        expect(config.profiles["from-local"].agent).toEqual("claude");
+      });
     } finally {
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
       await rm(rootDir, { recursive: true, force: true });
     }
   },
@@ -487,9 +489,12 @@ test.skipIf(!hasPkl)(
   "loadConfig: throws when global.pkl does not amend Schema.pkl (broken amends chain)",
   async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-broken-chain-"));
+    const origXdg = process.env.XDG_CONFIG_HOME;
     try {
-      // Set up a global dir with a global.pkl that does NOT amend Schema.pkl
-      const globalDir = path.join(rootDir, "global-config");
+      // evalPklConfig reads from getGlobalConfigDir() = $XDG_CONFIG_HOME/nas
+      const xdgConfig = path.join(rootDir, "xdg-config");
+      const globalDir = path.join(xdgConfig, "nas");
+      process.env.XDG_CONFIG_HOME = xdgConfig;
       await mkdir(globalDir, { recursive: true });
       const schemaText = await readBundledSchema();
       await writeFile(path.join(globalDir, "Schema.pkl"), schemaText);
@@ -513,16 +518,14 @@ profiles {
   }
 }
 `;
-      await withNasConfig(
-        configPkl,
-        async (dir) => {
-          await expect(loadConfig({ startDir: dir })).rejects.toThrow(
-            /pkl eval exited with code/,
-          );
-        },
-        { globalDir },
-      );
+      await withNasConfig(configPkl, async (dir) => {
+        await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+          /pkl eval exited with code/,
+        );
+      });
     } finally {
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
       await rm(rootDir, { recursive: true, force: true });
     }
   },

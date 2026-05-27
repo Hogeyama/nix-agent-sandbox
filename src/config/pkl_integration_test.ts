@@ -147,9 +147,12 @@ test.skipIf(!hasPkl)(
   "pkl: amends global.pkl via modulePath inherits global config",
   async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-global-"));
+    const origXdg = process.env.XDG_CONFIG_HOME;
     try {
-      // Set up global config dir with Schema.pkl and global.pkl
-      const globalDir = path.join(rootDir, "global-config");
+      // evalPklConfig reads from getGlobalConfigDir() = $XDG_CONFIG_HOME/nas
+      const xdgConfig = path.join(rootDir, "xdg-config");
+      const globalDir = path.join(xdgConfig, "nas");
+      process.env.XDG_CONFIG_HOME = xdgConfig;
       await mkdir(globalDir, { recursive: true });
       const schemaText = await readBundledSchema();
       await writeFile(path.join(globalDir, "Schema.pkl"), schemaText);
@@ -178,14 +181,14 @@ profiles {
 `;
       const projectDir = path.join(rootDir, "project");
       await mkdir(projectDir, { recursive: true });
-      await setupNasDir(projectDir, configPkl, { globalDir });
+      await setupNasDir(projectDir, configPkl);
 
       const config = await loadConfig({ startDir: projectDir });
-      // agent はローカルで上書き
       expect(config.profiles.dev.agent).toEqual("copilot");
-      // allowlist はグローバルから継承
       expect(config.profiles.dev.network.allowlist).toEqual(["api.github.com"]);
     } finally {
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
       await rm(rootDir, { recursive: true, force: true });
     }
   },

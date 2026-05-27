@@ -5,9 +5,17 @@
  * Schema.pkl への適合を pkl の型システムで検証する。
  */
 
-import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import os from "node:os";
 import * as path from "node:path";
-import { initConfig, resolveSchemaAsset, resolveTemplate } from "./init.ts";
+import { initConfig, resolveSchemaAsset } from "./init.ts";
 import {
   findNixConfig,
   findYamlConfig,
@@ -24,7 +32,6 @@ const CONFIG_DIR = ".nas";
 const CONFIG_FILENAME = "config.pkl";
 const SCHEMA_FILENAME = "Schema.pkl";
 const PKL_PROJECT_FILENAME = "PklProject";
-const EVAL_FILENAME = "eval.pkl";
 
 /** loadConfig のオプション */
 export interface LoadConfigOptions {
@@ -42,33 +49,7 @@ export async function loadConfig(
       : (startDirOrOpts ?? {});
 
   const startDir = opts.startDir ?? process.cwd();
-  let found = await findConfigFile(startDir);
-
-  if (!found) {
-    // Check for legacy config files before auto-init
-    const legacyNix = await findNixConfig(startDir);
-    const legacyYaml = legacyNix ? null : await findYamlConfig(startDir);
-    const legacyPath = legacyNix ?? legacyYaml;
-
-    if (legacyPath) {
-      found = await handleLegacyConfig(legacyPath, !!legacyNix, startDir);
-    } else if (process.env.NAS_NO_AUTO_INIT === "1") {
-      throw new Error(
-        `.nas/config.pkl not found. Run \`nas config init\` to create it.`,
-      );
-    } else {
-      console.error(
-        `Auto-initializing .nas/ in ${startDir}. Run 'nas config init' in your project root to choose the location.`,
-      );
-      await initConfig({ projectDir: startDir });
-      found = await findConfigFile(startDir);
-      if (!found) {
-        throw new Error(
-          `.nas/config.pkl not found even after auto-init. This is a bug — please report it.`,
-        );
-      }
-    }
-  }
+  const found = await resolveConfigFile(startDir);
 
   // Check for legacy global config before eval
   await detectAndMigrateGlobalLegacy();
@@ -78,14 +59,49 @@ export async function loadConfig(
 }
 
 /**
+ * .nas/config.pkl を探し、見つからなければレガシー検出 or auto-init で解決する。
+ * handleLegacyConfig は process.exit するため、戻り値は常に非 null。
+ */
+async function resolveConfigFile(startDir: string): Promise<ConfigFileFound> {
+  const found = await findConfigFile(startDir);
+  if (found) return found;
+
+  const legacyNix = await findNixConfig(startDir);
+  const legacyYaml = legacyNix ? null : await findYamlConfig(startDir);
+  const legacyPath = legacyNix ?? legacyYaml;
+
+  if (legacyPath) {
+    // handleLegacyConfig never returns (exits or throws)
+    await handleLegacyConfig(legacyPath, !!legacyNix);
+  }
+
+  if (process.env.NAS_NO_AUTO_INIT === "1") {
+    throw new Error(
+      `.nas/config.pkl not found. Run \`nas config init\` to create it.`,
+    );
+  }
+
+  console.error(
+    `Auto-initializing .nas/ in ${startDir}. Run 'nas config init' in your project root to choose the location.`,
+  );
+  await initConfig({ projectDir: startDir });
+  const afterInit = await findConfigFile(startDir);
+  if (!afterInit) {
+    throw new Error(
+      `.nas/config.pkl not found even after auto-init. This is a bug — please report it.`,
+    );
+  }
+  return afterInit;
+}
+
+/**
  * レガシー設定ファイル検出時の移行ハンドリング。
  * TTY なら confirm で確認、非 TTY ならエラーで案内。
  */
 async function handleLegacyConfig(
   legacyPath: string,
   isNix: boolean,
-  startDir: string,
-): Promise<ConfigFileFound> {
+): Promise<never> {
   const migrateSub = isNix ? "nix2pkl" : "yml2pkl";
   const migrateCmd = `nas config migrate ${migrateSub}`;
 
@@ -114,11 +130,6 @@ async function handleLegacyConfig(
       }
     }
     console.error(`  converted: ${result.inputPath} -> ${result.outputPath}`);
-    if (result.isFunction) {
-      console.error(
-        `  note: Nix config was a function — output uses amends "modulepath:/global.pkl"`,
-      );
-    }
   } else {
     const result = await migrateYml2Pkl();
     if (result.scaffoldResult) {
@@ -131,14 +142,8 @@ async function handleLegacyConfig(
   console.error(
     `\n  Verify the migrated config, then remove the old file:\n    rm ${legacyPath}`,
   );
-
-  const found = await findConfigFile(startDir);
-  if (!found) {
-    throw new Error(
-      `.nas/config.pkl not found after migration. This is a bug — please report it.`,
-    );
-  }
-  return found;
+  console.error(`\n  Run \`nas\` again to start.`);
+  process.exit(0);
 }
 
 /**
@@ -264,11 +269,14 @@ async function pklCommandExists(): Promise<boolean> {
 }
 
 /**
- * .nas/config.pkl を eval.pkl 経由で pkl eval し、設定オブジェクトを得る。
+ * .nas/config.pkl を一時ディレクトリの eval.pkl 経由で pkl eval する。
  *
- * eval.pkl は `local validated: Schema = config` という型注釈を持ち、
- * config.pkl が Schema.pkl を正しく amends していなければ pkl の型エラーになる。
- * Schema.pkl と eval.pkl は CLI バンドルのアセットから毎回上書きする。
+ * eval.pkl と PklProject は tmp に生成し、.nas/ にはユーザーが触る
+ * ファイル (config.pkl, Schema.pkl, PklProject) だけを残す。
+ *
+ * eval.pkl は config.pkl を絶対パスで import し、Schema への型検証を行う。
+ * config.pkl 内の modulepath:/global.pkl は tmp の PklProject の modulePath
+ * 経由で解決される。
  */
 async function evalPklConfig(
   nasDir: string,
@@ -280,7 +288,7 @@ async function evalPklConfig(
     );
   }
 
-  // PklProject 存在確認
+  // PklProject 存在確認 (ユーザー向け; ここではエラーチェックのみ)
   const pklProjectPath = path.join(nasDir, PKL_PROJECT_FILENAME);
   try {
     await stat(pklProjectPath);
@@ -293,30 +301,7 @@ async function evalPklConfig(
     throw e;
   }
 
-  // global.pkl が symlink の場合のみ .nas/ にコピーする。
-  // Pkl の ModulePathResolver は symlink を辿れないため、home-manager 環境で
-  // globalDir の global.pkl が /nix/store への symlink になるケースに対応。
-  // 通常ファイルなら PklProject の modulePath 経由で直接解決できるのでコピー不要。
-  const globalDir = getGlobalConfigDir();
-  const globalPklSrc = path.join(globalDir, "global.pkl");
-  try {
-    const stats = await lstat(globalPklSrc);
-    if (stats.isSymbolicLink()) {
-      const globalPklText = await readFile(globalPklSrc, "utf8");
-      await writeFile(path.join(nasDir, "global.pkl"), globalPklText);
-    }
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw e;
-    }
-    // global.pkl が存在しない場合、globalDir に空の global.pkl を生成する。
-    // .nas/ ではなく globalDir に書くことで、PklProject の modulePath 経由で
-    // 解決され、.nas/ 側の同名ファイルで shadow しない。
-    await mkdir(globalDir, { recursive: true });
-    await writeFile(globalPklSrc, 'amends "Schema.pkl"\n');
-  }
-
-  // Schema.pkl を CLI アセットから上書き
+  // Schema.pkl を CLI アセットから .nas/ に上書き (エディタ補完用)
   const schemaPklSrc = resolveSchemaAsset();
   let schemaPklText: string;
   try {
@@ -331,47 +316,90 @@ async function evalPklConfig(
   }
   await writeFile(path.join(nasDir, SCHEMA_FILENAME), schemaPklText);
 
-  // eval.pkl を CLI アセットから上書き
-  const evalPklSrc = resolveTemplate("eval.pkl");
-  let evalPklText: string;
+  // --- tmp ディレクトリで eval を実行 ---
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "nas-eval-"));
   try {
-    evalPklText = await readFile(evalPklSrc, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+    // Schema.pkl と global.pkl を tmp にコピー。
+    // すべてを modulepath 経由で解決することで Pkl のモジュール identity を統一する。
+    // (file:// と modulepath:// で同じファイルを指しても Pkl は別モジュール扱いする)
+    await writeFile(path.join(tmpDir, "Schema.pkl"), schemaPklText);
+
+    const globalDir = getGlobalConfigDir();
+    const globalPklSrc = path.join(globalDir, "global.pkl");
+    try {
+      const globalPklText = await readFile(globalPklSrc, "utf8");
+      await writeFile(path.join(tmpDir, "global.pkl"), globalPklText);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      await mkdir(globalDir, { recursive: true });
+      const fallback = 'amends "Schema.pkl"\n';
+      await writeFile(globalPklSrc, fallback);
+      await writeFile(path.join(tmpDir, "global.pkl"), fallback);
+    }
+
+    // tmp/PklProject: tmpDir → Schema.pkl, global.pkl; nasDir → config.pkl
+    const pklProject = [
+      'amends "pkl:Project"',
+      "",
+      "evaluatorSettings {",
+      "  modulePath {",
+      `    "${escapePklString(tmpDir)}"`,
+      `    "${escapePklString(nasDir)}"`,
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(path.join(tmpDir, "PklProject"), pklProject);
+
+    // tmp/eval.pkl: すべて modulepath 経由で import
+    const evalContent = [
+      'import "modulepath:/config.pkl"',
+      'import "modulepath:/Schema.pkl"',
+      "",
+      "local validated: Schema = config",
+      "",
+      "output {",
+      "  value = validated",
+      "}",
+      "",
+    ].join("\n");
+    const evalPklPath = path.join(tmpDir, "eval.pkl");
+    await writeFile(evalPklPath, evalContent);
+
+    // pkl eval
+    const proc = Bun.spawn(
+      ["pkl", "eval", "--project-dir", tmpDir, "-f", "json", evalPklPath],
+      { stdout: "pipe", stderr: "pipe", env: process.env },
+    );
+    const [stdoutText, stderrText] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const code = await proc.exited;
+    if (code !== 0) {
       throw new Error(
-        `Bundled eval.pkl asset not found at ${evalPklSrc}. This is a bug — please report it.`,
+        `Failed to evaluate ${configPath}: pkl eval exited with code ${code}\n${stderrText.trim()}`,
       );
     }
-    throw e;
-  }
-  const evalPklPath = path.join(nasDir, EVAL_FILENAME);
-  await writeFile(evalPklPath, evalPklText);
 
-  // pkl eval --project-dir .nas/ -f json .nas/eval.pkl
-  const proc = Bun.spawn(
-    ["pkl", "eval", "--project-dir", nasDir, "-f", "json", evalPklPath],
-    { stdout: "pipe", stderr: "pipe", env: process.env },
-  );
-  const [stdoutText, stderrText] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const code = await proc.exited;
-  if (code !== 0) {
-    throw new Error(
-      `Failed to evaluate ${configPath}: pkl eval exited with code ${code}\n${stderrText.trim()}`,
-    );
-  }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(stdoutText) as Record<string, unknown>;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `Failed to parse pkl output for ${configPath}: ${message}`,
+      );
+    }
 
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(stdoutText) as Record<string, unknown>;
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`Failed to parse pkl output for ${configPath}: ${message}`);
+    return parsed;
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
+}
 
-  return parsed;
+function escapePklString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 /** プロファイルを解決 (名前指定 or default) */
