@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.14.0] - 2026-05-28
+
+### Added
+
+- **Config — Pkl migration**: full migration from YAML/Nix config to Pkl. New `nas config init` command scaffolds `.nas/` directory with typed `Config.pkl`, `Schema.pkl`, and `PklProject` ([155ddcd], [60d13b8], [c4381ea])
+- **Config — migrate commands**: `nas config migrate yml2pkl` and `nas config migrate nix2pkl` convert existing configs to Pkl format ([f0e3888], [f66cb8f], [1278a46], [6fd5878], [ec98948])
+- **Config — legacy detection**: auto-detect `.agent-sandbox.yml` / `.agent-sandbox.nix` and prompt users to migrate ([304a9a8], [6a0e73a])
+- **Config — auto-init**: automatically initialize `.nas/` on `nas run` when no `config.pkl` exists ([c4381ea])
+- **Config — Pkl loader**: `loadPklConfig` with `pkl eval`, typed `Config.pkl` module with structural defaults, camelCase key support ([8ac9c87], [f1d8629], [db27240], [05f2788])
+- **CLI**: `nas config` subcommand framework ([2eade93])
+- **Logging**: `--verbose` flag with debug-level timing instrumentation ([b2a22f7])
+- **UI — mouse mode**: auto-recover xterm mouse mode state after attach/detach ([70527c2])
+- **UI**: expose session agent type on frontend session rows ([e7b108e])
+- **Agents**: browser-safe terminal trait module ([54aec0a])
+- **Nix**: embed native `pkl` binary and `Config.pkl` into the Nix package ([79c1366], [c044260])
+
+### Changed
+
+- **Breaking — config format**: YAML and Nix config loaders removed; Pkl is now the only supported config format. Deprecated `snake_case` env keys dropped ([054a6cc], [20c8386])
+- **Config internals**: collapse `RawConfig` / `mergeRawConfigs`, remove kebab/camel bridge, simplify validation, replace zod with semantic-only validation ([8da81e4], [af8fac4], [28bfdd1], [eda03aa])
+- **Config resolution**: rewrite `loadConfig` to use `--project-dir` with nonce guard; move `eval.pkl` and `global.pkl` out of `.nas/` into tmpdir ([1be33f5], [e76b70a])
+- **History**: split `ingestResourceSpans` into transform + write; move OTLP semantics module out of `src/agents/`; extract OTLP wire helpers ([415cfed], [366b38a], [85eb466])
+- **UI**: drop manual xterm mouse mode controls from toolbar ([fd02aeb], [10e8992])
+
+### Fixed
+
+- **Config**: generate fallback `global.pkl` when missing; handle Pkl symlink limitation; restore `config.pkl` from deleted `.agent-sandbox.pkl`; emit typed constructors in migrate output ([c69c0da], [aedb75a], [95a1670], [947b203])
+- **dtach**: reset mouse tracking mode after detach ([d9175af])
+- **UI**: always fire dtach initial resize nudge for agent SIGWINCH race; disable mouse mode auto-recovery for shell terminals; scope auto mouse mode recovery to Copilot CLI sessions ([a85ca2b], [e11235c], [cdb5c38], [2db3f2e])
+- **Docker**: list only running containers in `dockerListContainerNames` ([5d29ee8])
+
 ## [0.13.0] - 2026-05-16
 
 ### Added
