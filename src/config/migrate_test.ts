@@ -10,6 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+  buildNixJsonStringLiteral,
+  findNixConfig,
   findYamlConfig,
   migrateYml2Pkl,
   normalizeEnvSnakeCaseKeys,
@@ -208,6 +210,68 @@ describe("objectToPklSource", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildNixJsonStringLiteral
+// ---------------------------------------------------------------------------
+
+describe("buildNixJsonStringLiteral", () => {
+  test("simple path", () => {
+    const result = buildNixJsonStringLiteral("/home/user/.agent-sandbox.nix");
+    // Double-encoded: inner JSON.stringify produces '"/home/user/.agent-sandbox.nix"',
+    // outer wraps it as '"\\"/home/user/.agent-sandbox.nix\\""'
+    const outer = JSON.parse(result) as string;
+    const inner = JSON.parse(outer) as string;
+    expect(inner).toEqual("/home/user/.agent-sandbox.nix");
+  });
+
+  test("path containing double quotes", () => {
+    const result = buildNixJsonStringLiteral('/path/with"quotes');
+    const outer = JSON.parse(result) as string;
+    const inner = JSON.parse(outer) as string;
+    expect(inner).toEqual('/path/with"quotes');
+  });
+
+  test("path containing backslashes", () => {
+    const result = buildNixJsonStringLiteral("C:\\Users\\foo\\file.nix");
+    const outer = JSON.parse(result) as string;
+    const inner = JSON.parse(outer) as string;
+    expect(inner).toEqual("C:\\Users\\foo\\file.nix");
+  });
+
+  test("path containing newlines", () => {
+    const result = buildNixJsonStringLiteral("/path/with\nnewline");
+    const outer = JSON.parse(result) as string;
+    const inner = JSON.parse(outer) as string;
+    expect(inner).toEqual("/path/with\nnewline");
+  });
+
+  test("path containing Nix interpolation", () => {
+    const nixInterp = `/path/${"$"}{builtins.getEnv}/evil`;
+    const result = buildNixJsonStringLiteral(nixInterp);
+    const outer = JSON.parse(result) as string;
+    const inner = JSON.parse(outer) as string;
+    expect(inner).toEqual(nixInterp);
+    // The result is a JSON string passed to builtins.fromJSON, so Nix
+    // interpolation cannot occur -- the value is never interpreted as a
+    // Nix string literal directly.
+  });
+
+  test("empty string", () => {
+    const result = buildNixJsonStringLiteral("");
+    const outer = JSON.parse(result) as string;
+    const inner = JSON.parse(outer) as string;
+    expect(inner).toEqual("");
+  });
+
+  test("path with mixed special characters", () => {
+    const value = '/a "b\\\nc ' + "$" + "{d}";
+    const result = buildNixJsonStringLiteral(value);
+    const outer = JSON.parse(result) as string;
+    const inner = JSON.parse(outer) as string;
+    expect(inner).toEqual(value);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // normalizeEnvSnakeCaseKeys
 // ---------------------------------------------------------------------------
 
@@ -394,6 +458,52 @@ describe("findYamlConfig", () => {
     mkdirSync(childDir, { recursive: true });
 
     const result = await findYamlConfig(childDir);
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findNixConfig
+// ---------------------------------------------------------------------------
+
+describe("findNixConfig", () => {
+  let tmpDir: string;
+
+  function setup() {
+    tmpDir = mkdtempSync(path.join(tmpdir(), "nas-migrate-findnix-"));
+  }
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("finds .agent-sandbox.nix in the start directory", async () => {
+    setup();
+    const nixPath = path.join(tmpDir, ".agent-sandbox.nix");
+    writeFileSync(nixPath, "{ }\n");
+
+    const result = await findNixConfig(tmpDir);
+    expect(result).toEqual(nixPath);
+  });
+
+  test("finds .agent-sandbox.nix in a parent directory", async () => {
+    setup();
+    const nixPath = path.join(tmpDir, ".agent-sandbox.nix");
+    writeFileSync(nixPath, "{ }\n");
+
+    const childDir = path.join(tmpDir, "a", "b", "c");
+    mkdirSync(childDir, { recursive: true });
+
+    const result = await findNixConfig(childDir);
+    expect(result).toEqual(nixPath);
+  });
+
+  test("returns null when no .agent-sandbox.nix exists", async () => {
+    setup();
+    const childDir = path.join(tmpDir, "empty", "dir");
+    mkdirSync(childDir, { recursive: true });
+
+    const result = await findNixConfig(childDir);
     expect(result).toBeNull();
   });
 });

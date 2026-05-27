@@ -274,6 +274,172 @@ export async function findYamlConfig(startDir: string): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Nix config discovery
+// ---------------------------------------------------------------------------
+
+const NIX_CONFIG_FILENAME = ".agent-sandbox.nix";
+
+/**
+ * Search for `.agent-sandbox.nix` starting from `startDir` and walking up
+ * to the filesystem root.
+ *
+ * Returns the absolute path to the file if found, or `null`.
+ */
+export async function findNixConfig(startDir: string): Promise<string | null> {
+  let current = path.resolve(startDir);
+  const root = path.parse(current).root;
+
+  while (true) {
+    const candidate = path.join(current, NIX_CONFIG_FILENAME);
+    try {
+      await stat(candidate);
+      return candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current || current === root) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Nix eval helpers
+// ---------------------------------------------------------------------------
+
+/** Cached result of nixCommandExists(). */
+let nixExistsCache: boolean | null = null;
+
+/** Check whether the `nix` command is available on PATH (cached). */
+async function nixCommandExists(): Promise<boolean> {
+  if (nixExistsCache !== null) return nixExistsCache;
+  try {
+    const proc = Bun.spawn(["nix", "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const code = await proc.exited;
+    nixExistsCache = code === 0;
+    return nixExistsCache;
+  } catch {
+    nixExistsCache = false;
+    return false;
+  }
+}
+
+/**
+ * Double-escape a string so it can be safely embedded as a Nix string literal
+ * inside a `builtins.fromJSON` call.
+ *
+ * The outer `JSON.stringify` produces a JSON string with proper escaping,
+ * and the inner `JSON.stringify` wraps it as a Nix-compatible JSON string
+ * literal value. This prevents path-injection attacks.
+ */
+export function buildNixJsonStringLiteral(value: string): string {
+  return JSON.stringify(JSON.stringify(value));
+}
+
+export interface EvalNixFileResult {
+  /** The evaluated Nix value (always a plain object). */
+  value: Record<string, unknown>;
+  /** Whether the Nix file exported a function (called with `{}`). */
+  isFunction: boolean;
+}
+
+/**
+ * Evaluate a `.agent-sandbox.nix` file and return the result as a JS object.
+ *
+ * If the Nix expression is a function, it is called with `{}` (empty attrset).
+ * The return value includes an `isFunction` flag so callers can distinguish
+ * between the two cases.
+ *
+ * Requires the `nix` CLI to be on PATH. Throws with a clear message if it is
+ * missing, if evaluation fails, or if the result is not a plain object.
+ *
+ * **Security**: Uses `--impure` so the Nix expression can access the local
+ * filesystem.  The user must trust the `.agent-sandbox.nix` file being evaluated.
+ */
+export async function evalNixFile(nixPath: string): Promise<EvalNixFileResult> {
+  if (!(await nixCommandExists())) {
+    throw new Error(
+      `Found ${nixPath}, but 'nix' command is not available on PATH. ` +
+        "Install Nix (https://nixos.org/download.html) to use .nix config files.",
+    );
+  }
+
+  const nixPathArg = buildNixJsonStringLiteral(nixPath);
+
+  const nixExpr = `
+    let
+      local = import (builtins.fromJSON ${nixPathArg});
+    in
+      if builtins.isFunction local then
+        { value = local {}; isFunction = true; }
+      else
+        { value = local; isFunction = false; }
+  `;
+
+  const proc = Bun.spawn(
+    ["nix", "eval", "--impure", "--json", "--expr", nixExpr],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+
+  const [stdoutText, stderrText] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const code = await proc.exited;
+
+  if (code !== 0) {
+    const lines = stderrText.trim().split("\n");
+    const errMsg =
+      lines.length > 50 ? lines.slice(-50).join("\n") : lines.join("\n");
+    throw new Error(
+      `Failed to evaluate ${nixPath}: nix eval exited with code ${code}\n${errMsg}`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdoutText);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `Failed to parse nix eval output for ${nixPath}: ${message}`,
+    );
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `Expected an object from nix eval of ${nixPath}, ` +
+        `but got ${Array.isArray(parsed) ? "an array" : typeof parsed}.`,
+    );
+  }
+
+  const result = parsed as Record<string, unknown>;
+
+  const value = result.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(
+      `Expected the Nix expression in ${nixPath} to evaluate to an attribute set, ` +
+        `but got ${Array.isArray(value) ? "an array" : typeof value}.`,
+    );
+  }
+
+  return {
+    value: value as Record<string, unknown>,
+    isFunction: result.isFunction as boolean,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // YAML -> Pkl migration
 // ---------------------------------------------------------------------------
 
