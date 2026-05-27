@@ -26,11 +26,17 @@ rules:
 
   - name: design
     severity: warning
-    stop_when: no_findings # 設計上の warning も差し戻す
-    description: "責務分離、副作用の置き場、抽象境界、依存関係、データフローに無理がないか"
+    stop_when: no_critical_findings # 設計上の critical のみ差し戻す
+    description: |
+      責務分離、副作用の置き場、抽象境界、依存関係、データフローに無理がないか。
+      severity の使い分け:
+        critical: 放置するとバグ・リグレッション・データ不整合を引き起こす設計問題
+          例: 未使用 export が外部契約を暗示、探索ロジックの不整合、検証ロジック除去によるリグレッション
+        warning: 改善が望ましいが放置しても壊れない
+          例: 命名の非対称、コメントの不正確さ、軽微な重複
 
   - name: tombstone-comments
-    severity: warning
+    severity: info
     stop_when: no_critical_findings
     description: |
       コメント・doc・commit message が、読者が時間軸の文脈
@@ -62,9 +68,15 @@ rules:
 
   - name: test-coverage
     severity: warning
-    stop_when: no_findings # テスト不足の warning も差し戻す
-    description: "変更箇所に対応するテストがあるか。主要なロジックにテストが書かれているか"
-
-  - name: naming
-    severity: info
-    description: "変数名・関数名がプロジェクトの命名規則に従っているか"
+    stop_when: no_critical_findings # テスト不足の critical のみ差し戻す
+    description: |
+      変更箇所に対応するテストがあるか。主要なロジックにテストが書かれているか。
+      特に以下を重視:
+        - 統合テスト: 複数モジュールを組み合わせた実行パスのカバー
+        - エッジケース: ファイル不在、環境差異、空入力、不正入力
+        - ビルド・パッケージング: アセットコピー漏れ、バンドル対象の網羅
+      severity の使い分け:
+        critical: そのテストがないと本番でバグが顕在化するリスクが高い
+          例: エラーパス (ENOENT等) のテスト欠落、検証ロジック変更後の回帰テスト欠落
+        warning: あると安心だが欠落しても即座にバグにはならない
+          例: 既存テストが暗黙的にカバーしているパス、info レベルの表示テスト
