@@ -8,6 +8,7 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { initConfig, resolveSchemaAsset, resolveTemplate } from "./init.ts";
+import { getGlobalConfigDir } from "./paths.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -142,6 +143,22 @@ async function evalPklConfig(
       );
     }
     throw e;
+  }
+
+  // global.pkl をグローバル設定ディレクトリからコピー（pkl の modulePath は
+  // シンボリックリンクを辿れないため、実体を読み込んで .nas/ にコピーする）
+  const globalDir = getGlobalConfigDir();
+  const globalPklSrc = path.join(globalDir, "global.pkl");
+  try {
+    // readFile はシンボリックリンクを辿るので Nix home-manager 管理でも動作する
+    const globalPklText = await readFile(globalPklSrc, "utf8");
+    await writeFile(path.join(nasDir, "global.pkl"), globalPklText);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw e;
+    }
+    // global.pkl が存在しない場合はスキップ — config.pkl が
+    // amends "Schema.pkl" を使っていれば問題ない
   }
 
   // Schema.pkl を CLI アセットから上書き
