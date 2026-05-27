@@ -86,7 +86,7 @@ commit_rating.comment に「X の観点が抜けていた」が複数件
 
 ### 6. 改定後の妥当性チェック
 
-直近 1〜2 件の summary.jsonl を持ち出して、「もし新ルールだったら」を目視シミュレートする。新ルールで noise が増えそう / 既存 essential を取りこぼしそう、という兆候があれば改定をやり直す。
+bad commit の blind re-review で新ルールの実効性を検証する。手順は `references/blind-review-validation.md` を参照。
 
 ## 注意点
 
