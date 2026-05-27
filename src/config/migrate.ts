@@ -600,3 +600,126 @@ async function yamlFileToPklSource(filePath: string): Promise<string> {
   );
   return objectToPklSource(normalized);
 }
+
+// ---------------------------------------------------------------------------
+// Nix -> Pkl migration
+// ---------------------------------------------------------------------------
+
+export interface MigrateNix2PklOptions {
+  /** When true, migrate the global config instead of the local project config. */
+  global?: boolean;
+  /** Override the input Nix file path. */
+  inputPath?: string;
+  /** When true, overwrite existing output files. */
+  force?: boolean;
+}
+
+export interface MigrateNix2PklResult {
+  /** Path of the Nix file that was read. */
+  inputPath: string;
+  /** Path of the Pkl file that was written. */
+  outputPath: string;
+  /** Whether the Nix file exported a function (called with `{}`). */
+  isFunction: boolean;
+  /** Scaffold result from initConfig (local mode only). */
+  scaffoldResult?: InitConfigResult;
+}
+
+/**
+ * Migrate a legacy `.agent-sandbox.nix` to a Pkl config file.
+ *
+ * - **Local mode** (default): Finds `.agent-sandbox.nix` from cwd upward,
+ *   evaluates it with `nix eval`, runs `initConfig()` to scaffold `.nas/`,
+ *   then writes the converted config to `.nas/config.pkl`.
+ *   If the Nix file is a function, the generated Pkl `amends "modulepath:/global.pkl"`;
+ *   otherwise it `amends "Schema.pkl"`.
+ * - **Global mode** (`global: true`): Reads
+ *   `$XDG_CONFIG_HOME/nas/.agent-sandbox.nix` and writes to
+ *   `$XDG_CONFIG_HOME/nas/global.pkl` (always `amends "Schema.pkl"`).
+ *   Creates Schema.pkl if missing.
+ *
+ * The `inputPath` option overrides only the input file location; the output
+ * path is always determined by the mode.
+ */
+export async function migrateNix2Pkl(
+  opts: MigrateNix2PklOptions = {},
+): Promise<MigrateNix2PklResult> {
+  if (opts.global) {
+    return migrateNixGlobal(opts);
+  }
+  return migrateNixLocal(opts);
+}
+
+async function migrateNixLocal(
+  opts: MigrateNix2PklOptions,
+): Promise<MigrateNix2PklResult> {
+  const cwd = process.cwd();
+
+  // Resolve input Nix file
+  const inputPath = opts.inputPath ?? (await findNixConfig(cwd));
+  if (!inputPath) {
+    throw new Error(
+      `No ${NIX_CONFIG_FILENAME} found from ${cwd} upward. ` +
+        "Use --input to specify the Nix file path.",
+    );
+  }
+
+  // Output is always relative to cwd
+  const outputPath = path.join(cwd, ".nas", "config.pkl");
+
+  // Check for existing output unless --force
+  if (!opts.force) {
+    await assertNotExists(outputPath);
+  }
+
+  // Evaluate Nix file
+  const { value, isFunction } = await evalNixFile(inputPath);
+
+  // Normalize and convert to Pkl
+  const normalized = normalizeEnvSnakeCaseKeys(value);
+  const amendsHeader = isFunction ? "modulepath:/global.pkl" : "Schema.pkl";
+  const pklSource = objectToPklSource(normalized, { amendsHeader });
+
+  // Scaffold .nas/ directory via initConfig
+  const scaffoldResult = await initConfig({ projectDir: cwd });
+
+  // Write output (initConfig may have created config.pkl, overwrite it)
+  await writeFile(outputPath, pklSource);
+
+  return { inputPath, outputPath, isFunction, scaffoldResult };
+}
+
+async function migrateNixGlobal(
+  opts: MigrateNix2PklOptions,
+): Promise<MigrateNix2PklResult> {
+  const globalDir = getGlobalConfigDir();
+
+  // Resolve input Nix file
+  const inputPath = opts.inputPath ?? path.join(globalDir, NIX_CONFIG_FILENAME);
+
+  // Output is always global.pkl
+  const outputPath = path.join(globalDir, "global.pkl");
+
+  // Check for existing output unless --force
+  if (!opts.force) {
+    await assertNotExists(outputPath);
+  }
+
+  // Evaluate Nix file
+  const { value, isFunction } = await evalNixFile(inputPath);
+
+  // Normalize and convert to Pkl (global always amends Schema.pkl)
+  const normalized = normalizeEnvSnakeCaseKeys(value);
+  const pklSource = objectToPklSource(normalized);
+
+  // Ensure global dir exists
+  await mkdir(globalDir, { recursive: true });
+
+  // Ensure Schema.pkl is up-to-date in global dir (version-aware upsert).
+  await ensureGlobalSchema(globalDir);
+
+  // Write output
+  await writeFile(outputPath, pklSource);
+
+  return { inputPath, outputPath, isFunction };
+}

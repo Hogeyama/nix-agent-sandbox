@@ -13,6 +13,7 @@ import {
   buildNixJsonStringLiteral,
   findNixConfig,
   findYamlConfig,
+  migrateNix2Pkl,
   migrateYml2Pkl,
   normalizeEnvSnakeCaseKeys,
   objectToPklSource,
@@ -857,6 +858,241 @@ describe("migrateYml2Pkl", () => {
       process.chdir(projectDir);
       await expect(migrateYml2Pkl({})).rejects.toThrow(
         /Expected an object.*got string/,
+      );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// migrateNix2Pkl
+// ---------------------------------------------------------------------------
+
+let hasNix = false;
+try {
+  const proc = Bun.spawnSync(["nix", "--version"]);
+  hasNix = proc.exitCode === 0;
+} catch {}
+
+describe("migrateNix2Pkl", () => {
+  let tmpDir: string;
+  let originalCwd: string;
+  let originalXdg: string | undefined;
+
+  function setup() {
+    tmpDir = mkdtempSync(path.join(tmpdir(), "nas-migrate-nix-"));
+    originalCwd = process.cwd();
+    originalXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = path.join(tmpDir, "xdg-config");
+  }
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // -- Local mode -----------------------------------------------------------
+
+  describe("local mode", () => {
+    test.skipIf(!hasNix)("plain attrset -> amends Schema.pkl", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+
+      // Plain attrset (not a function)
+      const nixPath = path.join(projectDir, ".agent-sandbox.nix");
+      writeFileSync(nixPath, '{ default = "main"; }\n');
+
+      process.chdir(projectDir);
+      const result = await migrateNix2Pkl({});
+
+      expect(result.inputPath).toEqual(nixPath);
+      expect(result.outputPath).toEqual(
+        path.join(projectDir, ".nas", "config.pkl"),
+      );
+      expect(result.isFunction).toBe(false);
+      expect(result.scaffoldResult).toBeDefined();
+
+      // Verify the output file content
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('amends "Schema.pkl"');
+      expect(content).toContain('default = "main"');
+    });
+
+    test.skipIf(!hasNix)(
+      "function -> amends modulepath:/global.pkl",
+      async () => {
+        setup();
+        const projectDir = path.join(tmpDir, "project");
+        mkdirSync(projectDir, { recursive: true });
+
+        // Function that takes an attrset and returns config
+        const nixPath = path.join(projectDir, ".agent-sandbox.nix");
+        writeFileSync(nixPath, '{ ... }: { default = "dev"; }\n');
+
+        process.chdir(projectDir);
+        const result = await migrateNix2Pkl({});
+
+        expect(result.inputPath).toEqual(nixPath);
+        expect(result.isFunction).toBe(true);
+
+        const content = readFileSync(result.outputPath, "utf8");
+        expect(content).toContain('amends "modulepath:/global.pkl"');
+        expect(content).toContain('default = "dev"');
+      },
+    );
+
+    test.skipIf(!hasNix)("--force overwrites existing output", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      const nasDir = path.join(projectDir, ".nas");
+      mkdirSync(nasDir, { recursive: true });
+
+      writeFileSync(
+        path.join(projectDir, ".agent-sandbox.nix"),
+        '{ default = "new"; }\n',
+      );
+      writeFileSync(path.join(nasDir, "config.pkl"), "old content\n");
+
+      process.chdir(projectDir);
+      const result = await migrateNix2Pkl({ force: true });
+
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('default = "new"');
+      expect(content).not.toContain("old content");
+    });
+
+    test.skipIf(!hasNix)("errors when output already exists", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      const nasDir = path.join(projectDir, ".nas");
+      mkdirSync(nasDir, { recursive: true });
+
+      writeFileSync(
+        path.join(projectDir, ".agent-sandbox.nix"),
+        '{ default = "main"; }\n',
+      );
+      writeFileSync(path.join(nasDir, "config.pkl"), "existing content\n");
+
+      process.chdir(projectDir);
+      await expect(migrateNix2Pkl({})).rejects.toThrow(
+        /Output file already exists.*--force/,
+      );
+    });
+
+    test.skipIf(!hasNix)("errors when .nix is not found", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "empty-project");
+      mkdirSync(projectDir, { recursive: true });
+
+      process.chdir(projectDir);
+      await expect(migrateNix2Pkl({})).rejects.toThrow(
+        /No \.agent-sandbox\.nix found/,
+      );
+    });
+
+    test.skipIf(!hasNix)("isFunction is included in result", async () => {
+      setup();
+      const projectDir = path.join(tmpDir, "project");
+      mkdirSync(projectDir, { recursive: true });
+
+      // Plain attrset
+      writeFileSync(
+        path.join(projectDir, ".agent-sandbox.nix"),
+        '{ default = "main"; }\n',
+      );
+
+      process.chdir(projectDir);
+      const result = await migrateNix2Pkl({});
+      expect(result).toHaveProperty("isFunction");
+      expect(typeof result.isFunction).toBe("boolean");
+    });
+  });
+
+  // -- Global mode ----------------------------------------------------------
+
+  describe("global mode", () => {
+    test.skipIf(!hasNix)(
+      "migrates Nix to global.pkl and creates Schema.pkl",
+      async () => {
+        setup();
+        const globalDir = path.join(tmpDir, "xdg-config", "nas");
+        mkdirSync(globalDir, { recursive: true });
+
+        // Place global Nix file
+        writeFileSync(
+          path.join(globalDir, ".agent-sandbox.nix"),
+          '{ default = "prod"; }\n',
+        );
+
+        // Use a dummy cwd (should not matter for global mode)
+        const projectDir = path.join(tmpDir, "project");
+        mkdirSync(projectDir, { recursive: true });
+        process.chdir(projectDir);
+
+        const result = await migrateNix2Pkl({ global: true });
+
+        expect(result.inputPath).toEqual(
+          path.join(globalDir, ".agent-sandbox.nix"),
+        );
+        expect(result.outputPath).toEqual(path.join(globalDir, "global.pkl"));
+        expect(result.scaffoldResult).toBeUndefined();
+
+        // Verify output — global always amends Schema.pkl
+        const content = readFileSync(result.outputPath, "utf8");
+        expect(content).toContain('amends "Schema.pkl"');
+        expect(content).toContain('default = "prod"');
+
+        // Schema.pkl should have been created
+        expect(existsSync(path.join(globalDir, "Schema.pkl"))).toBeTrue();
+      },
+    );
+
+    test.skipIf(!hasNix)("errors when output already exists", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.nix"),
+        '{ default = "prod"; }\n',
+      );
+      writeFileSync(path.join(globalDir, "global.pkl"), "existing\n");
+
+      process.chdir(tmpDir);
+      await expect(migrateNix2Pkl({ global: true })).rejects.toThrow(
+        /Output file already exists.*--force/,
+      );
+    });
+
+    test.skipIf(!hasNix)("--force overwrites existing output", async () => {
+      setup();
+      const globalDir = path.join(tmpDir, "xdg-config", "nas");
+      mkdirSync(globalDir, { recursive: true });
+
+      writeFileSync(
+        path.join(globalDir, ".agent-sandbox.nix"),
+        '{ default = "staging"; }\n',
+      );
+      writeFileSync(path.join(globalDir, "global.pkl"), "old\n");
+
+      process.chdir(tmpDir);
+      const result = await migrateNix2Pkl({ global: true, force: true });
+
+      const content = readFileSync(result.outputPath, "utf8");
+      expect(content).toContain('default = "staging"');
+    });
+
+    test.skipIf(!hasNix)("errors when .nix is not found", async () => {
+      setup();
+      // Don't create any Nix file in global dir
+      process.chdir(tmpDir);
+      await expect(migrateNix2Pkl({ global: true })).rejects.toThrow(
+        /Failed to evaluate/,
       );
     });
   });
