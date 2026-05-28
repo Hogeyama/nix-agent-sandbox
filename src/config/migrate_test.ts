@@ -917,7 +917,6 @@ describe("migrateNix2Pkl", () => {
       expect(result.outputPath).toEqual(
         path.join(projectDir, ".nas", "config.pkl"),
       );
-      expect(result.isFunction).toBe(false);
       expect(result.scaffoldResult).toBeDefined();
 
       // Verify the output file content
@@ -927,25 +926,43 @@ describe("migrateNix2Pkl", () => {
     });
 
     test.skipIf(!hasNix)(
-      "function -> amends modulepath:/global.pkl",
+      "function-style Nix is rejected with migration guidance",
       async () => {
         setup();
         const projectDir = path.join(tmpDir, "project");
         mkdirSync(projectDir, { recursive: true });
 
-        // Function that takes an attrset and returns config
+        // Function-style Nix config (super: ...)
         const nixPath = path.join(projectDir, ".agent-sandbox.nix");
         writeFileSync(nixPath, '{ ... }: { default = "dev"; }\n');
 
         process.chdir(projectDir);
-        const result = await migrateNix2Pkl({});
+        await expect(migrateNix2Pkl({})).rejects.toThrow(
+          /function-style Nix config.*Migrate manually/s,
+        );
+      },
+    );
 
-        expect(result.inputPath).toEqual(nixPath);
-        expect(result.isFunction).toBe(true);
+    test.skipIf(!hasNix)(
+      "function-style Nix is rejected even when it references super.X.Y",
+      async () => {
+        setup();
+        const projectDir = path.join(tmpDir, "project");
+        mkdirSync(projectDir, { recursive: true });
 
-        const content = readFileSync(result.outputPath, "utf8");
-        expect(content).toContain('amends "modulepath:/global.pkl"');
-        expect(content).toContain('default = "dev"');
+        // Function whose body would crash under `local {}` because it
+        // dereferences super attributes — the new code rejects before eval,
+        // so this must throw the guidance error rather than a Nix attr error.
+        const nixPath = path.join(projectDir, ".agent-sandbox.nix");
+        writeFileSync(
+          nixPath,
+          "super: super // { profiles = super.profiles // { x = super.profiles.x; }; }\n",
+        );
+
+        process.chdir(projectDir);
+        await expect(migrateNix2Pkl({})).rejects.toThrow(
+          /function-style Nix config/,
+        );
       },
     );
 
@@ -996,23 +1013,6 @@ describe("migrateNix2Pkl", () => {
       await expect(migrateNix2Pkl({})).rejects.toThrow(
         /No \.agent-sandbox\.nix found/,
       );
-    });
-
-    test.skipIf(!hasNix)("isFunction is included in result", async () => {
-      setup();
-      const projectDir = path.join(tmpDir, "project");
-      mkdirSync(projectDir, { recursive: true });
-
-      // Plain attrset
-      writeFileSync(
-        path.join(projectDir, ".agent-sandbox.nix"),
-        '{ default = "main"; }\n',
-      );
-
-      process.chdir(projectDir);
-      const result = await migrateNix2Pkl({});
-      expect(result).toHaveProperty("isFunction");
-      expect(typeof result.isFunction).toBe("boolean");
     });
   });
 

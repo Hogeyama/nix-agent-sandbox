@@ -369,21 +369,25 @@ export function buildNixJsonStringLiteral(value: string): string {
 }
 
 export interface EvalNixFileResult {
-  /** The evaluated Nix value (always a plain object). */
-  value: Record<string, unknown>;
-  /** Whether the Nix file exported a function (called with `{}`). */
+  /** The evaluated Nix value, or `null` when the file is a function. */
+  value: Record<string, unknown> | null;
+  /** Whether the Nix file exported a function. */
   isFunction: boolean;
 }
 
 /**
  * Evaluate a `.agent-sandbox.nix` file and return the result as a JS object.
  *
- * If the Nix expression is a function, it is called with `{}` (empty attrset).
- * The return value includes an `isFunction` flag so callers can distinguish
- * between the two cases.
+ * If the Nix expression is a function, it is **not** invoked — only the
+ * `isFunction: true` flag is returned with `value: null`. Function-style Nix
+ * configs depended on a `super` value (historically the global config) and
+ * cannot be faithfully translated to Pkl: list operations like `prof.env ++
+ * [...]` map to `amends` semantics that *replace* rather than *extend*.
+ * Callers should refuse the migration and direct the user to migrate manually.
  *
  * Requires the `nix` CLI to be on PATH. Throws with a clear message if it is
- * missing, if evaluation fails, or if the result is not a plain object.
+ * missing, if evaluation fails, or if the (non-function) result is not a plain
+ * object.
  *
  * **Security**: Uses `--impure` so the Nix expression can access the local
  * filesystem.  The user must trust the `.agent-sandbox.nix` file being evaluated.
@@ -398,12 +402,15 @@ export async function evalNixFile(nixPath: string): Promise<EvalNixFileResult> {
 
   const nixPathArg = buildNixJsonStringLiteral(nixPath);
 
+  // Note: when `local` is a function, its body is never evaluated (Nix is
+  // lazy), so this expression succeeds even for `super: super // {...}` style
+  // files that would fail under `local {}`.
   const nixExpr = `
     let
       local = import (builtins.fromJSON ${nixPathArg});
     in
       if builtins.isFunction local then
-        { value = local {}; isFunction = true; }
+        { value = null; isFunction = true; }
       else
         { value = local; isFunction = false; }
   `;
@@ -449,6 +456,11 @@ export async function evalNixFile(nixPath: string): Promise<EvalNixFileResult> {
   }
 
   const result = parsed as Record<string, unknown>;
+  const isFunction = result.isFunction as boolean;
+
+  if (isFunction) {
+    return { value: null, isFunction: true };
+  }
 
   const value = result.value;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -460,7 +472,7 @@ export async function evalNixFile(nixPath: string): Promise<EvalNixFileResult> {
 
   return {
     value: value as Record<string, unknown>,
-    isFunction: result.isFunction as boolean,
+    isFunction: false,
   };
 }
 
@@ -644,10 +656,33 @@ export interface MigrateNix2PklResult {
   inputPath: string;
   /** Path of the Pkl file that was written. */
   outputPath: string;
-  /** Whether the Nix file exported a function (called with `{}`). */
-  isFunction: boolean;
   /** Scaffold result from initConfig (local mode only). */
   scaffoldResult?: InitConfigResult;
+}
+
+/**
+ * Build the error message thrown when the input Nix file is a function.
+ *
+ * Function-style Nix configs (`super: super // { ... }`) cannot be migrated
+ * automatically: they relied on a `super` value (historically the global
+ * config) for both attribute existence and list concatenation, and Pkl's
+ * `amends` semantics replace rather than extend listings.
+ */
+function functionStyleMigrationError(nixPath: string): Error {
+  return new Error(
+    `${nixPath} is a function-style Nix config (e.g. \`super: super // { ... }\`).\n` +
+      "Automated migration is not supported for this form:\n" +
+      "  - The function depends on a `super` value that was historically the global config.\n" +
+      "  - List operations like `prof.env ++ [...]` cannot be faithfully translated to\n" +
+      "    Pkl's `amends` semantics, which replace listings rather than extend them.\n" +
+      "\n" +
+      "Migrate manually:\n" +
+      `  1. Create .nas/config.pkl by hand, starting with \`amends "modulepath:/global.pkl"\`\n` +
+      '     (or `amends "Schema.pkl"` if you want a self-contained config).\n' +
+      "  2. Port each modification, expanding `super.X.Y ++ [...]` into Pkl's listing\n" +
+      "     extension syntax: `Y = (super.Y) { new { ... } }`.\n" +
+      `  3. Remove ${nixPath} once the new config is verified.\n`,
+  );
 }
 
 /**
@@ -656,12 +691,13 @@ export interface MigrateNix2PklResult {
  * - **Local mode** (default): Finds `.agent-sandbox.nix` from cwd upward,
  *   evaluates it with `nix eval`, runs `initConfig()` to scaffold `.nas/`,
  *   then writes the converted config to `.nas/config.pkl`.
- *   If the Nix file is a function, the generated Pkl `amends "modulepath:/global.pkl"`;
- *   otherwise it `amends "Schema.pkl"`.
  * - **Global mode** (`global: true`): Reads
  *   `$XDG_CONFIG_HOME/nas/.agent-sandbox.nix` and writes to
  *   `$XDG_CONFIG_HOME/nas/global.pkl` (always `amends "Schema.pkl"`).
  *   Creates Schema.pkl if missing.
+ *
+ * Function-style Nix configs (`super: ...`) are rejected with a helpful error
+ * directing the user to migrate manually; see `functionStyleMigrationError`.
  *
  * The `inputPath` option overrides only the input file location; the output
  * path is always determined by the mode.
@@ -699,11 +735,13 @@ async function migrateNixLocal(
 
   // Evaluate Nix file
   const { value, isFunction } = await evalNixFile(inputPath);
+  if (isFunction || value === null) {
+    throw functionStyleMigrationError(inputPath);
+  }
 
   // Normalize and convert to Pkl
   const normalized = normalizeEnvSnakeCaseKeys(value);
-  const amendsHeader = isFunction ? "modulepath:/global.pkl" : "Schema.pkl";
-  const pklSource = objectToPklSource(normalized, { amendsHeader });
+  const pklSource = objectToPklSource(normalized);
 
   // Scaffold .nas/ directory via initConfig
   const scaffoldResult = await initConfig({ projectDir: cwd });
@@ -711,7 +749,7 @@ async function migrateNixLocal(
   // Write output (initConfig may have created config.pkl, overwrite it)
   await writeFile(outputPath, pklSource);
 
-  return { inputPath, outputPath, isFunction, scaffoldResult };
+  return { inputPath, outputPath, scaffoldResult };
 }
 
 async function migrateNixGlobal(
@@ -732,6 +770,9 @@ async function migrateNixGlobal(
 
   // Evaluate Nix file
   const { value, isFunction } = await evalNixFile(inputPath);
+  if (isFunction || value === null) {
+    throw functionStyleMigrationError(inputPath);
+  }
 
   // Normalize and convert to Pkl (global always amends Schema.pkl)
   const normalized = normalizeEnvSnakeCaseKeys(value);
@@ -746,5 +787,5 @@ async function migrateNixGlobal(
   // Write output
   await writeFile(outputPath, pklSource);
 
-  return { inputPath, outputPath, isFunction };
+  return { inputPath, outputPath };
 }

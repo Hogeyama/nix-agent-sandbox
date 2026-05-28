@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -219,31 +219,20 @@ describe("nas config", () => {
     );
 
     test.skipIf(!hasNix)(
-      "migrate nix2pkl shows note when Nix config is a function",
+      "migrate nix2pkl rejects function-style Nix with guidance",
       async () => {
         setup();
         const projectDir = process.cwd();
         const nixContent = 'super: { default = "main"; }';
         writeFileSync(path.join(projectDir, ".agent-sandbox.nix"), nixContent);
 
-        const spy = spyOn(console, "log");
-        let calls: unknown[][] = [];
-        try {
-          await runConfigCommand(["migrate", "nix2pkl"]);
-        } finally {
-          calls = [...spy.mock.calls];
-          spy.mockRestore();
-        }
+        await expect(runConfigCommand(["migrate", "nix2pkl"])).rejects.toThrow(
+          /function-style Nix config.*Migrate manually/s,
+        );
 
-        const logs = calls.map((args) => args.map(String).join(" "));
-        const noteLog = logs.find((l) => l.includes("note:"));
-        expect(noteLog).toBeDefined();
-        expect(noteLog).toContain("Nix config was a function");
-        expect(noteLog).toContain('amends "modulepath:/global.pkl"');
-
+        // No output should be written when rejected
         const outputPath = path.join(projectDir, ".nas", "config.pkl");
-        const content = readFileSync(outputPath, "utf8");
-        expect(content).toContain('amends "modulepath:/global.pkl"');
+        expect(existsSync(outputPath)).toBe(false);
       },
     );
 
