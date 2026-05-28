@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.14.1] - 2026-05-28
+
+### Fixed
+
+- **CI**: stop shipping `Schema.pkl` as a separate release artifact (the schema is embedded in the CLI binary and auto-written to `.nas/` at runtime). Also unblocks the v0.14.0 release pipeline that broke on the `Config.pkl` → `Schema.pkl` rename ([6065be7])
+- **Config — migrate nix2pkl**: reject function-style `.agent-sandbox.nix` instead of producing silently broken Pkl. Previous behavior evaluated such files with `local {}` and either crashed cryptically or dropped global config entries because Pkl `amends` *replaces* listings where Nix `++` extends. Migration now errors with manual-conversion guidance ([e168e79])
+
+### Docs
+
+- **README**: clarify that the GitHub Releases binary works on hosts without Nix installed (pkl / glibc / assets are bundled via nix-bundle-elf). Remove Nix from the required prerequisites ([0fc8a4b])
+
 ## [0.14.0] - 2026-05-28
 
 ### Added
