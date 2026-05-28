@@ -237,7 +237,7 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
 
 export const DEFAULT_OBSERVABILITY_CONFIG: ObservabilityConfig = {
   enable: false,
-  retention: null,
+  retention: 31 * 24 * 60 * 60,
 };
 
 export const DEFAULT_NIX_CONFIG: NixConfig = {

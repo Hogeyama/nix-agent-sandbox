@@ -41,8 +41,8 @@ class UiConfig {
 
 class ObservabilityConfig {
   enable: Boolean = false
-  /// Retention window in seconds. `null` keeps spans indefinitely.
-  retention: Int? = null
+  /// Retention window in seconds. `null` keeps spans indefinitely. Default: 31 days.
+  retention: Int? = 31 * 24 * 60 * 60
 }
 
 // ---------------------------------------------------------------------------
