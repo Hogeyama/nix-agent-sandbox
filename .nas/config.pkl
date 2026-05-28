@@ -112,68 +112,74 @@ local commonNetwork: NetworkConfig = new {
   }
 }
 
-local commonHostexecRules: Listing<HostExecRule> = new {
-  new {
-    id = "wl-paste"
-    match {
-      argv0 = "wl-paste"
-    }
-    cwd {
-      mode = "workspace-or-session-tmp"
-    }
-    inheritEnv {
-      mode = "minimal"
-      keys = new Listing { "WAYLAND_DISPLAY"; "XDG_RUNTIME_DIR" }
-    }
-    approval = "allow"
-    fallback = "container"
+local commonHostexec: HostExecConfig = new {
+  prompt {
+    enable = true
+    timeoutSeconds = 300
+    defaultScope = "capability"
   }
-  new {
-    // git commit/tag -S が呼ぶ形だけを通す:
-    //   gpg --status-fd=2 -bsau <keyid>
-    id = "gpg-git-sign"
-    match {
-      argv0 = "gpg"
-      argRegex = "^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$"
+  rules {
+    new {
+      id = "wl-paste"
+      match {
+        argv0 = "wl-paste"
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      inheritEnv {
+        mode = "minimal"
+        keys = new Listing { "WAYLAND_DISPLAY"; "XDG_RUNTIME_DIR" }
+      }
+      approval = "allow"
+      fallback = "container"
     }
-    cwd {
-      mode = "workspace-or-session-tmp"
+    new {
+      // git commit/tag -S が呼ぶ形だけを通す:
+      //   gpg --status-fd=2 -bsau <keyid>
+      id = "gpg-git-sign"
+      match {
+        argv0 = "gpg"
+        argRegex = "^--status-fd=2 -bsau [0-9A-Fa-f]{8,40}$"
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      approval = "allow"
+      fallback = "container"
     }
-    approval = "allow"
-    fallback = "container"
-  }
-  new {
-    // mo の危険引数を遮断：
-    //   --port/-p: forward-ports と衝突させるとホスト側 mo がコンテナから読める
-    //   --bind/-b: 非ループバックへ bind されるとネットワーク越しに露出
-    //   --dangerously-allow-remote-access: 安全プロンプトのバイパス
-    //   絶対パス / ~ / .. を含む位置引数・値: workspace 外の host ファイル参照を禁止
-    id = "mo-guard"
-    match {
-      argv0 = "mo"
-      argRegex = #"((^|\s)(--port|-p|--bind|-b|--dangerously-allow-remote-access)(\s|=|$))|((^|\s|=)/)|((^|\s|=)~)|((^|\s|=|/)\.\.(\s|$|/))"#
+    new {
+      // mo の危険引数を遮断：
+      //   --port/-p: forward-ports と衝突させるとホスト側 mo がコンテナから読める
+      //   --bind/-b: 非ループバックへ bind されるとネットワーク越しに露出
+      //   --dangerously-allow-remote-access: 安全プロンプトのバイパス
+      //   絶対パス / ~ / .. を含む位置引数・値: workspace 外の host ファイル参照を禁止
+      id = "mo-guard"
+      match {
+        argv0 = "mo"
+        argRegex = #"((^|\s)(--port|-p|--bind|-b|--dangerously-allow-remote-access)(\s|=|$))|((^|\s|=)/)|((^|\s|=)~)|((^|\s|=|/)\.\.(\s|$|/))"#
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      approval = "deny"
+      fallback = "deny"
     }
-    cwd {
-      mode = "workspace-or-session-tmp"
+    new {
+      id = "mo"
+      match {
+        argv0 = "mo"
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      approval = "allow"
+      fallback = "container"
     }
-    approval = "deny"
-    fallback = "deny"
-  }
-  new {
-    id = "mo"
-    match {
-      argv0 = "mo"
-    }
-    cwd {
-      mode = "workspace-or-session-tmp"
-    }
-    approval = "allow"
-    fallback = "container"
   }
 }
 
-// 全共通ブロックを含むベースプロファイル
-// claude / claude-remote / codex / copilot / hostexec-demo がこれを amend する
+// common_infra + common_network + common_env + common_hostexec を含むベースプロファイル
 local baseProfile: Profile = new {
   // Profile class は agent を required とする。各プロファイルで上書きする。
   agent = "claude"
@@ -202,27 +208,19 @@ local baseProfile: Profile = new {
     forwardAgent = false
   }
   extraMounts {
+    // gitignoreが居る
+    new { src = "~/nix-config"; dst = "~/nix-config"; mode = "ro" }
+    new { src = "~/.cache/nix-index/"; dst = "~/.cache/nix-index/"; mode = "ro" }
     new { src = "~/.nix-profile/bin"; dst = "~/.nix-profile/bin"; mode = "ro" }
     new { src = "~/.config/nvim"; dst = "~/.config/nvim"; mode = "ro" }
     new { src = "~/.config/tmux"; dst = "~/.config/tmux"; mode = "ro" }
     new { src = "~/.local/share/nvim"; dst = "~/.local/share/nvim"; mode = "ro" }
-    new { src = "~/nix-config"; dst = "~/nix-config"; mode = "ro" }
     // OTELのデバッグに
     new { src = "~/.local/share/nas"; dst = "~/.local/share/nas"; mode = "rw" }
   }
-  // common_network
   network = commonNetwork
-  // common_env
   env = commonEnv
-  // common_hostexec
-  hostexec = new HostExecConfig {
-    prompt {
-      enable = true
-      timeoutSeconds = 300
-      defaultScope = "capability"
-    }
-    rules = commonHostexecRules
-  }
+  hostexec = commonHostexec
 }
 
 // ---------------------------------------------------------------------------
