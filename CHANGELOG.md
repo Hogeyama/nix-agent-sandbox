@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.14.2] - 2026-05-29
+
+### Fixed
+
+- **Deps**: bump `nix-bundle-elf` to fix an infinite loop in binaries produced by `nas --extract` ([62fa608])
+
+### Changed
+
+- **Config — observability**: default `observability.retention` to 31 days. Keeping OTEL history records indefinitely is a privacy/disk-usage hazard; `null` (keep indefinitely) remains available as an explicit opt-in ([bec4f3c])
+
+### Docs
+
+- **README**: refresh content and screenshots ([aeb9080])
+
 ## [0.14.1] - 2026-05-28
 
 ### Fixed
