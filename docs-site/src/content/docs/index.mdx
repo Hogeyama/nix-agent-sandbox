@@ -1,0 +1,37 @@
+---
+title: nas — Nix Agent Sandbox
+description: AIコーディングエージェントを、ホストから隔離されたDockerサンドボックスの中で動かすためのCLIです
+template: splash
+hero:
+  tagline: AIコーディングエージェントを、ホストから隔離されたDockerサンドボックスの中で動かすためのCLIです
+  actions:
+    - text: クイックスタート
+      link: /nix-agent-sandbox/quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: GitHub
+      link: https://github.com/Hogeyama/nix-agent-sandbox
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## 特徴
+
+* 
+
+## 次のステップ
+
+<CardGrid>
+  <LinkCard title="インストール" href="/nix-agent-sandbox/install/" description="前提条件とインストール手順" />
+  <LinkCard title="クイックスタート" href="/nix-agent-sandbox/quickstart/" description="最小構成で起動するまで" />
+  <LinkCard title="機能ガイド" href="/nix-agent-sandbox/guide/nix/" description="opt-in できる主な機能" />
+  <LinkCard title="セキュリティについて" href="/nix-agent-sandbox/security/" description="各機能のリスクと信頼境界" />
+</CardGrid>
+
+---
+
+:::note[名前について]
+当初は Nix 統合を主目的として *nix-agent-sandbox* と命名しました。その後、ネットワーク制御・コマンド移譲・Worktree 管理など様々な機能が追加された結果、Nix 統合は数ある機能のひとつに過ぎなくなっています。この機能が不要な場合は、実行環境に Nix がインストールされている必要もありません。
+:::

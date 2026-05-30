@@ -1,0 +1,29 @@
+---
+title: UI daemon
+description: 稼働中のセッションを監視し、承認やコンテナ操作を行うブラウザ UI
+---
+
+import { Image } from 'astro:assets';
+import uiContainers from '../../../assets/ui-containers.png';
+
+`ui.enable = true` にすると、ブラウザ UI が使えるようになります。これは localhost で動く Web インターフェースで、稼働中のセッションをまとめて監視したり、ネットワークや hostexec の承認リクエストをその場で approve / deny したり、コンテナを操作したりするためのものです。
+
+この UI を支える daemon は、セッション開始時に `setsid` で完全にデタッチして起動されるため、起動元の nas プロセスが終了したあとも生き続けます。放置されたまま使われなくなると、`idleTimeout` 経過後に自動停止します（デフォルト 300 秒、`0` で自動停止しない）。
+
+`nas ui` コマンドで手動起動・停止することもできます:
+
+```sh
+nas ui                          # config のデフォルト設定で起動
+nas ui --port 8080              # ポートを指定
+nas ui --idle-timeout 0         # 自動停止しない
+nas ui --no-open                # ブラウザを自動で開かない
+nas ui stop                     # daemon を停止
+nas ui stop --port 8080         # ポートを指定して停止
+```
+
+<Image src={uiContainers} alt="ui container list" />
+
+## 信頼境界
+
+UI からは network / hostexec の approve・deny やコンテナ操作など、エージェントへ追加の権限を与える操作ができます。
+マルチユーザホストでは別ユーザも approve/deny API を叩けるため、**信頼できない相手とホストを共有している場合は UI daemon を有効にしないでください。**

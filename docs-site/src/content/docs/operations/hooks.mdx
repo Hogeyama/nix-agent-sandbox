@@ -1,0 +1,127 @@
+---
+title: セッション通知（エージェントフック経由）
+description: エージェントのフックからセッション状態を UI に伝える
+---
+
+import { Image } from 'astro:assets';
+import uiSessions from '../../../assets/ui-sessions.png';
+
+エージェントのフックから `nas hook --kind start|attention|stop [--when path=value ...]` を呼び出すと、そのセッションが今どの状態にあるか（「エージェントが作業中」= `busy` / 「ユーザーの入力待ち」= `user-turn` / 「終了済み」= `done`）を UI に伝えられます。複数セッションを並行で回しているときに、どれが手を止めて待っているかを一目で把握するための仕掛けとして用意されています。
+
+各エージェントごとのフック設定例を以下に示します。
+
+## Claude Code
+
+Claude Code のフック設定は `~/.claude/settings.json`（ユーザー共通）またはプロジェクト直下の `.claude/settings.json` に書きます。設定例:
+
+```jsonc
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "nas hook --kind start" }] }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "nas hook --kind start" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "nas hook --kind attention" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "nas hook --kind attention" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "nas hook --kind stop" }] }
+    ]
+  }
+}
+```
+
+## GitHub Copilot CLI
+
+GitHub Copilot CLI では、リポジトリ直下の `.github/hooks/*.json` を読み込みます。設定例:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "nas hook --kind start",
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "nas hook --kind start",
+        "timeoutSec": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "nas hook --kind attention --when toolName=ask_user",
+        "timeoutSec": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "nas hook --kind start --when toolName=ask_user",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "nas hook --kind stop",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+```
+
+:::caution
+`notification` フックを無条件に `attention` へつなぐと `permission_prompt` なども拾ってしまうため、この用途では設定しないでください。`--when` はドット区切りの JSON パスに対する完全一致です（例: `toolResult.resultType=success`）。
+:::
+
+## OpenAI Codex CLI
+
+OpenAI Codex CLI では、`~/.codex/config.toml`（ユーザー共通）またはリポジトリ直下の `.codex/config.toml` に書きます。設定例:
+
+```toml
+[features]
+codex_hooks = true
+
+[[hooks.SessionStart]]
+matcher = "startup|resume"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind start || true'"
+timeout = 10
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind start || true'"
+timeout = 10
+
+[[hooks.PreToolUse]]
+matcher = "*"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind start || true'"
+timeout = 10
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "sh -c 'test -n \"${NAS_SESSION_ID:-}\" && exec nas hook --kind attention || true'"
+timeout = 10
+```
+
+## UI 上の表示
+
+<Image src={uiSessions} alt="ui session list" />

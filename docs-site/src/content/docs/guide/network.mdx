@@ -1,0 +1,26 @@
+---
+title: ネットワーク制御
+description: allowlist による外部通信の制御と承認フロー
+sidebar:
+  order: 3
+---
+
+import { Image } from 'astro:assets';
+import networkPrompt from '../../../assets/network-prompt.png';
+import networkPromptUi from '../../../assets/network-prompt-ui.png';
+
+`network.allowlist` を使うと外部への通信を allowlist で制御できます。`"example.com"` のようなホスト名のほか、`"api.example.com:443"` や `"*.cdn.com:8080"` のようにポートやワイルドカードを含む形式も書けます。allowlist に載っていない通信が発生したときは、その場で approve / deny を尋ねられるようにできます。
+
+`ui.enable = true` なら[ブラウザの UI](/nix-agent-sandbox/operations/ui/) で判断できます。コマンドラインから承認・拒否する方法は[Network 承認キューの確認と操作](/nix-agent-sandbox/operations/commands/#network-承認キューの確認と操作)を参照してください。
+
+ネットワーク制御の内部的な仕組み（Envoy forward proxy / auth-router / broker）については[セキュリティ → ネットワーク制御の仕組み](/nix-agent-sandbox/security/#ネットワーク制御の仕組み)を参照してください。
+
+## 例
+
+通知:
+
+<Image src={networkPrompt} alt="network prompt" width={400} />
+
+UI 上の表示:
+
+<Image src={networkPromptUi} alt="network prompt UI" width={800} />

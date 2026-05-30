@@ -1,0 +1,28 @@
+---
+title: コマンド移譲（hostexec）
+description: 特定のコマンドだけをホスト側で実行させる
+sidebar:
+  order: 5
+---
+
+import { Image } from 'astro:assets';
+import hostexecPrompt from '../../../assets/hostexec-prompt.png';
+import hostexecResult from '../../../assets/hostexec-result.png';
+
+`hostexec.rules` を設定することで、特定のコマンドだけをコンテナ内ではなくホスト側で実行させることができます。これを使うと、API トークンや署名鍵のような秘匿情報を必要とするコマンドをホストで走らせ、その秘匿情報自体はコンテナに渡さない、という運用ができます。ネットワーク制御と同様に、実行のたびに approve / deny を尋ねることもできますし、ルールで自動許可することもできます。
+
+## 例
+
+エージェントには `.env` を空で見せつつ……
+
+<Image src={hostexecPrompt} alt="hostexec prompt" />
+
+ホスト側で実行されるコマンドでは `.env` を利用できる。
+
+<Image src={hostexecResult} alt="hostexec result" />
+
+詳細は[設定パターン → .env を隠しつつ、必要なコマンドはホストに移譲する](/nix-agent-sandbox/config/patterns/#env-を隠しつつ必要なコマンドはホストに移譲する)を参照してください。
+
+:::caution[リスク]
+hostexec で許可したコマンドが持つ能力はそのままエージェントの能力になります。ルール設計の指針は[セキュリティ → HostExec の注意点](/nix-agent-sandbox/security/#hostexec-の注意点)を必ず参照してください。
+:::
