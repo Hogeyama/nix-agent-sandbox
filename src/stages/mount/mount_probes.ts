@@ -41,8 +41,8 @@ interface ResolvedEnvEntryBase {
   value: string;
   /** 元の index (エラーメッセージ用) */
   index: number;
-  /** key の出典 ("key" | "key_cmd") */
-  keySource: "key" | "key_cmd";
+  /** key の出典 ("key" | "keyCmd") */
+  keySource: "key" | "keyCmd";
 }
 export type ResolvedEnvEntry =
   | (ResolvedEnvEntryBase & { mode: "set"; separator?: undefined })
@@ -157,7 +157,7 @@ export async function resolveMountProbes(
     home,
   );
 
-  // 環境変数エントリの解決 (val_cmd / key_cmd の実行)
+  // 環境変数エントリの解決 (valCmd / keyCmd の実行)
   const resolvedEnvEntries = await resolveEnvEntries(profile.env);
 
   // git worktree 検出: ワークスペースが worktree 内にある場合、本体リポジトリルートを取得
@@ -374,12 +374,12 @@ async function resolveEnvEntries(
     const key =
       "key" in entry
         ? entry.key
-        : await runCommandForEnv(entry.keyCmd, `profile.env[${index}].key_cmd`);
-    const keySource: "key" | "key_cmd" = "key" in entry ? "key" : "key_cmd";
+        : await runCommandForEnv(entry.keyCmd, `profile.env[${index}].keyCmd`);
+    const keySource: "key" | "keyCmd" = "key" in entry ? "key" : "keyCmd";
     const value =
       "val" in entry
         ? entry.val
-        : await runCommandForEnv(entry.valCmd, `profile.env[${index}].val_cmd`);
+        : await runCommandForEnv(entry.valCmd, `profile.env[${index}].valCmd`);
     if (entry.mode === "set") {
       results.push({ key, value, mode: "set", index, keySource });
     } else {

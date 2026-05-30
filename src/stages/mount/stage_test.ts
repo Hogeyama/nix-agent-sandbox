@@ -203,7 +203,7 @@ function envEntry(
   opts: {
     separator?: string;
     index?: number;
-    keySource?: "key" | "key_cmd";
+    keySource?: "key" | "keyCmd";
   } = {},
 ): ResolvedEnvEntry {
   const base = {
@@ -282,10 +282,10 @@ test("MountStage: invalid static env key (contains dot)", () => {
   expect(() => planMount(input, mountProbes)).toThrow("Invalid env var name");
 });
 
-test("MountStage: invalid dynamic key (key_cmd source)", () => {
+test("MountStage: invalid dynamic key (keyCmd source)", () => {
   const mountProbes = makeMountProbes({
     resolvedEnvEntries: [
-      envEntry("BAD KEY", "value", "set", { keySource: "key_cmd" }),
+      envEntry("BAD KEY", "value", "set", { keySource: "keyCmd" }),
     ],
   });
   const { input } = makeInput({ mountProbes });
@@ -296,9 +296,9 @@ test("MountStage: multiple env vars including both static and dynamic", () => {
   const mountProbes = makeMountProbes({
     resolvedEnvEntries: [
       envEntry("STATIC_A", "a", "set", { index: 0 }),
-      envEntry("DYNAMIC_B", "b", "set", { index: 1, keySource: "key_cmd" }),
+      envEntry("DYNAMIC_B", "b", "set", { index: 1, keySource: "keyCmd" }),
       envEntry("STATIC_C", "c", "set", { index: 2 }),
-      envEntry("DYNAMIC_D", "d", "set", { index: 3, keySource: "key_cmd" }),
+      envEntry("DYNAMIC_D", "d", "set", { index: 3, keySource: "keyCmd" }),
     ],
   });
   const { input } = makeInput({ mountProbes });
