@@ -3,8 +3,11 @@ import * as path from "node:path";
 import {
   type BaseRuntimePaths,
   brokerSocketPath,
+  execSocketDir,
+  execSocketPath,
   pendingRequestPath,
   pendingSessionDir,
+  sessionBrokerDir,
   sessionRegistryPath,
 } from "./runtime_registry.ts";
 
@@ -42,6 +45,54 @@ test("brokerSocketPath rejects traversal via ..", () => {
 test("brokerSocketPath accepts a plain sessionId", () => {
   expect(brokerSocketPath(paths, "sess_abc123")).toBe(
     path.join(paths.brokersDir, "sess_abc123", "sock"),
+  );
+});
+
+test("execSocketDir accepts a plain sessionId", () => {
+  expect(execSocketDir(paths, "sess_abc123")).toBe(
+    path.join(paths.brokersDir, "sess_abc123", "exec"),
+  );
+});
+
+test("execSocketDir is nested under the session broker dir", () => {
+  expect(execSocketDir(paths, "sess_abc123")).toBe(
+    path.join(paths.brokersDir, "sess_abc123", "exec"),
+  );
+});
+
+test("execSocketDir rejects traversal via ..", () => {
+  expect(() => execSocketDir(paths, "../escape")).toThrow(
+    /path traversal detected/,
+  );
+});
+
+test("execSocketDir rejects nested traversal", () => {
+  expect(() => execSocketDir(paths, "a/../../b")).toThrow(
+    /path traversal detected/,
+  );
+});
+
+test("execSocketPath accepts a plain sessionId", () => {
+  expect(execSocketPath(paths, "sess_abc123")).toBe(
+    path.join(paths.brokersDir, "sess_abc123", "exec", "sock"),
+  );
+});
+
+test("execSocketPath is nested under the session broker dir", () => {
+  expect(execSocketPath(paths, "sess_abc123")).toBe(
+    path.join(sessionBrokerDir(paths, "sess_abc123"), "exec", "sock"),
+  );
+});
+
+test("execSocketPath rejects traversal via ..", () => {
+  expect(() => execSocketPath(paths, "../escape")).toThrow(
+    /path traversal detected/,
+  );
+});
+
+test("execSocketPath rejects nested traversal", () => {
+  expect(() => execSocketPath(paths, "a/../../b")).toThrow(
+    /path traversal detected/,
   );
 });
 

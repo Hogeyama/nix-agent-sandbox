@@ -15,6 +15,8 @@ import type {
 // Re-export generic functions with domain-specific names.
 export {
   brokerSocketPath as hostExecBrokerSocketPath,
+  execSocketDir as hostExecExecSocketDir,
+  execSocketPath as hostExecExecSocketPath,
   pendingRequestPath as hostExecPendingRequestPath,
   pendingSessionDir as hostExecPendingSessionDir,
   removePendingDir as removeHostExecPendingDir,

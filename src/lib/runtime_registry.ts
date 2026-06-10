@@ -79,6 +79,22 @@ export function brokerSocketPath(
   return assertWithin(sessionDir, path.join(sessionDir, "sock"));
 }
 
+export function execSocketDir(
+  paths: BaseRuntimePaths,
+  sessionId: string,
+): string {
+  const sessionDir = sessionBrokerDir(paths, sessionId);
+  return assertWithin(sessionDir, path.join(sessionDir, "exec"));
+}
+
+export function execSocketPath(
+  paths: BaseRuntimePaths,
+  sessionId: string,
+): string {
+  const dir = execSocketDir(paths, sessionId);
+  return assertWithin(dir, path.join(dir, "sock"));
+}
+
 export function pendingSessionDir(
   paths: BaseRuntimePaths,
   sessionId: string,
