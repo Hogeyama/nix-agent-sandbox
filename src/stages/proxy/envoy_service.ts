@@ -33,7 +33,6 @@ export interface SessionNetworkPlan {
   readonly sessionNetworkName: string;
   readonly envoyContainerName: string;
   readonly envoyAlias: string;
-  readonly dindContainerName: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +132,6 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
         createSessionNetwork: (plan) =>
           Effect.gen(function* () {
             let envoyConnected = false;
-            let dindConnected = false;
 
             yield* docker
               .networkCreate(plan.sessionNetworkName, {
@@ -154,31 +152,11 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
               .pipe(Effect.orDie);
             envoyConnected = true;
 
-            if (plan.dindContainerName) {
-              yield* docker
-                .networkConnect(plan.sessionNetworkName, plan.dindContainerName)
-                .pipe(Effect.orDie);
-              dindConnected = true;
-            }
-
+            // DinD is attached to / detached from this session network by
+            // DindStage (which runs after ProxyStage); ProxyStage only owns the
+            // network itself and the Envoy attachment.
             const teardown = (): Effect.Effect<void> =>
               Effect.gen(function* () {
-                if (dindConnected && plan.dindContainerName) {
-                  yield* docker
-                    .networkDisconnect(
-                      plan.sessionNetworkName,
-                      plan.dindContainerName,
-                    )
-                    .pipe(
-                      Effect.catchAll((e) =>
-                        Effect.sync(() =>
-                          logInfo(
-                            `[nas] Proxy teardown: failed to disconnect dind from network: ${e}`,
-                          ),
-                        ),
-                      ),
-                    );
-                }
                 if (envoyConnected) {
                   yield* docker
                     .networkDisconnect(

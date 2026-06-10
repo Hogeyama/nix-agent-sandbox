@@ -16,7 +16,10 @@ import { ensureDindSidecar, teardownDindSidecar } from "../../docker/dind.ts";
 export interface DindSidecarOpts {
   readonly containerName: string;
   readonly sharedTmpVolume: string;
+  /** Session network the sidecar attaches to (replaces the old private net). */
   readonly networkName: string;
+  /** dockerd HTTP(S)_PROXY endpoint (token-bearing Envoy URL). */
+  readonly proxyEndpoint: string;
   readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
@@ -30,13 +33,17 @@ export class DindService extends Context.Tag("nas/DindService")<
   DindService,
   {
     readonly ensureSidecar: (opts: DindSidecarOpts) => Effect.Effect<void>;
-    readonly teardownSidecar: (opts: {
-      containerName: string;
-      sharedTmpVolume: string;
-      shared: boolean;
-    }) => Effect.Effect<void>;
+    readonly teardownSidecar: (opts: DindTeardownOpts) => Effect.Effect<void>;
   }
 >() {}
+
+export interface DindTeardownOpts {
+  readonly containerName: string;
+  readonly sharedTmpVolume: string;
+  /** Session network the sidecar was attached to (shared teardown detaches). */
+  readonly networkName: string;
+  readonly shared: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Live implementation
@@ -51,6 +58,8 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
           ensureDindSidecar({
             containerName: opts.containerName,
             sharedTmpVolume: opts.sharedTmpVolume,
+            sessionNetworkName: opts.networkName,
+            proxyEndpoint: opts.proxyEndpoint,
             shared: opts.shared,
             disableCache: opts.disableCache,
             readinessTimeoutMs: opts.readinessTimeoutMs,
@@ -67,6 +76,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
           teardownDindSidecar({
             containerName: opts.containerName,
             sharedTmpVolume: opts.sharedTmpVolume,
+            sessionNetworkName: opts.networkName,
             shared: opts.shared,
           }),
         catch: (e) =>
@@ -83,11 +93,7 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
 
 export interface DindServiceFakeConfig {
   readonly ensureSidecar?: (opts: DindSidecarOpts) => Effect.Effect<void>;
-  readonly teardownSidecar?: (opts: {
-    containerName: string;
-    sharedTmpVolume: string;
-    shared: boolean;
-  }) => Effect.Effect<void>;
+  readonly teardownSidecar?: (opts: DindTeardownOpts) => Effect.Effect<void>;
 }
 
 export function makeDindServiceFake(

@@ -350,7 +350,6 @@ function sessionPlan(
     sessionNetworkName: "nas-session-abc",
     envoyContainerName: "nas-envoy-shared",
     envoyAlias: "envoy.nas",
-    dindContainerName: null,
     ...overrides,
   };
 }
@@ -372,15 +371,13 @@ test("createSessionNetwork: creates internal network with correct labels", async
   });
 });
 
-test("createSessionNetwork: connects envoy with alias, skips dind when null", async () => {
+test("createSessionNetwork: connects only envoy with alias", async () => {
   const calls = freshCalls();
   const layer = makeDockerFake(calls);
 
-  await runWithEnvoy(
-    (svc) => svc.createSessionNetwork(sessionPlan({ dindContainerName: null })),
-    layer,
-  );
+  await runWithEnvoy((svc) => svc.createSessionNetwork(sessionPlan()), layer);
 
+  // DinD is wired up by DindStage, not ProxyStage — only envoy is connected.
   expect(calls.networkConnect).toEqual([
     {
       network: "nas-session-abc",
@@ -390,55 +387,12 @@ test("createSessionNetwork: connects envoy with alias, skips dind when null", as
   ]);
 });
 
-test("createSessionNetwork: connects dind when dindContainerName is set", async () => {
-  const calls = freshCalls();
-  const layer = makeDockerFake(calls);
-
-  await runWithEnvoy(
-    (svc) =>
-      svc.createSessionNetwork(
-        sessionPlan({ dindContainerName: "nas-dind-abc" }),
-      ),
-    layer,
-  );
-
-  expect(calls.networkConnect.length).toEqual(2);
-  expect(calls.networkConnect[0].container).toEqual("nas-envoy-shared");
-  expect(calls.networkConnect[1]).toEqual({
-    network: "nas-session-abc",
-    container: "nas-dind-abc",
-    opts: undefined,
-  });
-});
-
-test("createSessionNetwork: teardown disconnects both then removes network", async () => {
+test("createSessionNetwork: teardown disconnects envoy then removes network", async () => {
   const calls = freshCalls();
   const layer = makeDockerFake(calls);
 
   const teardown = await runWithEnvoy(
-    (svc) =>
-      svc.createSessionNetwork(
-        sessionPlan({ dindContainerName: "nas-dind-abc" }),
-      ),
-    layer,
-  );
-
-  await Effect.runPromise(teardown());
-
-  // disconnect dind first (it was connected last), then envoy, then remove network.
-  expect(calls.networkDisconnect).toEqual([
-    { network: "nas-session-abc", container: "nas-dind-abc" },
-    { network: "nas-session-abc", container: "nas-envoy-shared" },
-  ]);
-  expect(calls.networkRemove).toEqual(["nas-session-abc"]);
-});
-
-test("createSessionNetwork: teardown skips dind disconnect when dind wasn't connected", async () => {
-  const calls = freshCalls();
-  const layer = makeDockerFake(calls);
-
-  const teardown = await runWithEnvoy(
-    (svc) => svc.createSessionNetwork(sessionPlan({ dindContainerName: null })),
+    (svc) => svc.createSessionNetwork(sessionPlan()),
     layer,
   );
 
@@ -462,18 +416,15 @@ test("createSessionNetwork: teardown tolerates partial failure and still removes
   });
 
   const teardown = await runWithEnvoy(
-    (svc) =>
-      svc.createSessionNetwork(
-        sessionPlan({ dindContainerName: "nas-dind-abc" }),
-      ),
+    (svc) => svc.createSessionNetwork(sessionPlan()),
     layer,
   );
 
   // Must not throw even though every call fails internally.
   await Effect.runPromise(teardown());
 
-  // Both disconnects were attempted despite failures.
-  expect(calls.networkDisconnect.length).toEqual(2);
+  // The envoy disconnect was attempted despite failures.
+  expect(calls.networkDisconnect.length).toEqual(1);
   expect(calls.networkRemove).toEqual(["nas-session-abc"]);
 });
 
@@ -490,7 +441,7 @@ test("createSessionNetwork: teardown when envoy connect failed only removes netw
 
   const exit = await Effect.runPromiseExit(
     Effect.flatMap(EnvoyService, (svc) =>
-      svc.createSessionNetwork(sessionPlan({ dindContainerName: "nas-dind" })),
+      svc.createSessionNetwork(sessionPlan()),
     ).pipe(Effect.provide(Layer.provide(EnvoyServiceLive, layer))),
   );
 

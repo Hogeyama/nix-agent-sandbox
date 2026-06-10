@@ -20,6 +20,7 @@ import {
 } from "../../config/types.ts";
 import {
   dockerIsRunning,
+  dockerNetworkCreateInternal,
   dockerNetworkRemove,
   dockerRm,
   dockerStop,
@@ -110,9 +111,14 @@ function makeSharedInput(
   };
 }
 
+type DindSliceState = Pick<
+  PipelineState,
+  "workspace" | "container" | "network" | "proxy"
+>;
+
 function makeStageState(
-  overrides: Partial<Pick<PipelineState, "workspace" | "container">> = {},
-): Pick<PipelineState, "workspace" | "container"> {
+  overrides: Partial<DindSliceState> = {},
+): DindSliceState {
   const workspace = overrides.workspace ?? {
     workDir: "/tmp",
     imageName: "nas:latest",
@@ -121,7 +127,15 @@ function makeStageState(
     ...emptyContainerPlan(workspace.imageName, workspace.workDir),
     command: { agentCommand: ["claude"], extraArgs: [] },
   };
-  return { workspace, container };
+  const network = overrides.network ?? {
+    networkName: "nas-session-net-test-session-1234",
+    runtimeDir: "/run/user/1000/nas/network",
+  };
+  const proxy = overrides.proxy ?? {
+    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
+    proxyEndpoint: "http://test-session-1234:tok@nas-envoy:15001",
+  };
+  return { workspace, container, network, proxy };
 }
 
 /**
@@ -192,6 +206,13 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
 
     const containerName = plan!.containerName;
     await forceCleanup(containerName, plan!.networkName, plan!.sharedTmpVolume);
+
+    // In production the (internal) session network is created by the preceding
+    // ProxyStage; running DindStage standalone here we must create it ourselves
+    // so ensureDindSidecar's `network connect` has a target. Created after the
+    // pre-run forceCleanup (which removes any stale copy) so we start clean; the
+    // finally-block forceCleanup removes it again at the end.
+    await dockerNetworkCreateInternal(plan!.networkName);
 
     const scope = Effect.runSync(Scope.make());
     try {

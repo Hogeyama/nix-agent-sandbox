@@ -426,8 +426,8 @@ export function createCliPipelineBuilder({
           sessionId: input.sessionId,
         }),
       )
-      .add(createDindStage(input))
       .add(createProxyStage(input))
+      .add(createDindStage(input))
       .add(createLaunchStage(input, agentExtraArgs))
   );
 }

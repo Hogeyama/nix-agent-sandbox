@@ -209,26 +209,6 @@ test("ProxyStage: sets proxy env vars", () => {
   expect(typeof result.envVars.NAS_UPSTREAM_PROXY).toEqual("string");
 });
 
-test("ProxyStage: includes dind container in no_proxy", () => {
-  const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
-  });
-  const { shared, container, observability } = makeInput(profile, {
-    container: {
-      ...emptyContainerPlan("test-image", "/tmp"),
-      command: { agentCommand: ["claude"], extraArgs: [] },
-      env: {
-        static: { NAS_DIND_CONTAINER_NAME: "nas-dind-abc12345" },
-        dynamicOps: [],
-      },
-    },
-  });
-  const result = planProxy({ ...shared, container, observability })!;
-  expect(result.envVars.no_proxy).toEqual(
-    "localhost,127.0.0.1,nas-dind-abc12345",
-  );
-});
-
 test("ProxyStage: sets outputOverrides", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"] },
@@ -290,20 +270,11 @@ test("ProxyStage: uses provided session token generator", () => {
   );
 });
 
-test("ProxyStage: uses profile prompt settings and dind env from container slice", () => {
+test("ProxyStage: uses profile prompt settings", () => {
   const profile = makeProfile({
     network: { allowlist: ["example.com"], prompt: { enable: true } },
   });
-  const { shared, container, observability } = makeInput(profile, {
-    container: {
-      ...emptyContainerPlan("test-image", "/tmp"),
-      command: { agentCommand: ["claude"], extraArgs: [] },
-      env: {
-        static: { NAS_DIND_CONTAINER_NAME: "nas-dind-from-slice" },
-        dynamicOps: [],
-      },
-    },
-  });
+  const { shared, container, observability } = makeInput(profile);
 
   const result = planProxy(
     { ...shared, container, observability },
@@ -317,9 +288,7 @@ test("ProxyStage: uses profile prompt settings and dind env from container slice
     promptToken: "slice-token",
     promptEnabled: true,
   });
-  expect(result.envVars.no_proxy).toEqual(
-    "localhost,127.0.0.1,nas-dind-from-slice",
-  );
+  expect(result.envVars.no_proxy).toEqual("localhost,127.0.0.1");
 });
 
 test("ProxyStage: planner merges proxy settings into existing container slice", () => {

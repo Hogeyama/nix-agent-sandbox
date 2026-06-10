@@ -11,6 +11,8 @@ import {
   dockerExec,
   dockerIsRunning,
   dockerLogs,
+  dockerNetworkConnect,
+  dockerNetworkDisconnect,
   dockerRm,
   dockerRunDetached,
   dockerStop,
@@ -66,10 +68,16 @@ export async function ensureSharedTmpWritable(
 /**
  * Start the DinD sidecar.
  * Tries with cache volume first; on failure retries without cache.
+ *
+ * `proxyEndpoint` is injected into dockerd's HTTP(S)_PROXY env so that image
+ * pulls from inside DinD are forced through the Envoy proxy. It is independent
+ * of `DindStageOptions` (which only controls cache/readiness) so that the
+ * cache-reset retry paths below re-pass the same proxy config verbatim.
  */
 export async function startDindSidecar(
   containerName: string,
   sharedTmpVolume: string,
+  proxyEndpoint: string,
   options: DindStageOptions = {},
 ): Promise<void> {
   logInfo(`[nas] DinD: starting sidecar (${DIND_IMAGE})`);
@@ -80,7 +88,7 @@ export async function startDindSidecar(
     logInfo(`[nas] DinD: failed to create shared tmp volume: ${e}`),
   );
 
-  await runDindSidecar(containerName, sharedTmpVolume, options);
+  await runDindSidecar(containerName, sharedTmpVolume, proxyEndpoint, options);
   logInfo("[nas] DinD: waiting for daemon to be ready...");
   try {
     await waitForDindReady(
@@ -107,7 +115,12 @@ export async function startDindSidecar(
       logInfo(`[nas] DinD: failed to remove cache volume: ${e}`),
     );
 
-    await runDindSidecar(containerName, sharedTmpVolume, options);
+    await runDindSidecar(
+      containerName,
+      sharedTmpVolume,
+      proxyEndpoint,
+      options,
+    );
     logInfo("[nas] DinD: waiting for daemon to be ready (fresh cache)...");
     try {
       await waitForDindReady(
@@ -134,7 +147,7 @@ export async function startDindSidecar(
       );
     }
 
-    await runDindSidecar(containerName, sharedTmpVolume, {
+    await runDindSidecar(containerName, sharedTmpVolume, proxyEndpoint, {
       ...options,
       disableCache: true,
     });
@@ -157,6 +170,15 @@ export async function startDindSidecar(
 export interface EnsureDindSidecarParams {
   containerName: string;
   sharedTmpVolume: string;
+  /**
+   * Name of the (internal) session network the sidecar is attached to. After
+   * the sidecar boots on the default bridge, it is connected to this network
+   * and the bridge is then severed so all sidecar egress is funnelled through
+   * Envoy (reachable via the session network's embedded DNS).
+   */
+  sessionNetworkName: string;
+  /** dockerd HTTP(S)_PROXY endpoint (token-bearing Envoy URL). */
+  proxyEndpoint: string;
   shared: boolean;
   disableCache?: boolean;
   readinessTimeoutMs?: number;
@@ -179,6 +201,8 @@ export async function ensureDindSidecar(
   const {
     containerName,
     sharedTmpVolume,
+    sessionNetworkName,
+    proxyEndpoint,
     shared,
     disableCache,
     readinessTimeoutMs,
@@ -200,19 +224,80 @@ export async function ensureDindSidecar(
     }
 
     // DinD rootless サイドカーをデフォルト bridge で起動
-    await startDindSidecar(containerName, sharedTmpVolume, {
+    await startDindSidecar(containerName, sharedTmpVolume, proxyEndpoint, {
       disableCache,
       readinessTimeoutMs,
     });
     sidecarStarted = true;
   }
 
+  // Post-start setup. Any failure here cleans up the sidecar we just started
+  // (whether shared or non-shared) before re-throwing, so a half-wired sidecar
+  // — e.g. one still attached to the default bridge after a failed disconnect —
+  // is never left running as an egress hole. A reused shared sidecar
+  // (sidecarStarted=false) is left untouched.
   try {
     // 共有 tmp を全ユーザーから書き込み可能にする
     await ensureSharedTmpWritable(containerName);
+
+    // Attach the sidecar to the internal session network and only then sever
+    // the default bridge. Order matters: connecting first guarantees the
+    // sidecar always has at least one reachable network (so the agent's
+    // DOCKER_HOST DNS resolution never breaks), and severing the bridge
+    // afterwards is what actually confines the sidecar's egress to Envoy.
+    //
+    // Reusing a shared sidecar still needs the connect (each session gets a
+    // fresh session-network name); the bridge was already severed when the
+    // shared sidecar first booted, so we only connect here.
+    //
+    // `docker network connect` is NOT idempotent: connecting a container that is
+    // already attached to the network fails with "endpoint already exists" /
+    // "already attached". For a freshly-started sidecar this can only mean a
+    // genuine wiring failure, so we let it propagate (and the catch below tears
+    // the sidecar down). For a reused shared sidecar a residual attachment from
+    // a prior, not-fully-torn-down session can legitimately collide on the same
+    // session-network name, so we tolerate an already-attached error there only
+    // — every other connect failure is still fatal.
+    if (isReusingSharedSidecar) {
+      try {
+        await dockerNetworkConnect(sessionNetworkName, containerName);
+      } catch (connectErr) {
+        if (isAlreadyAttachedError(connectErr)) {
+          logInfo(
+            `[nas] DinD: shared sidecar already attached to session network (${sessionNetworkName}), continuing`,
+          );
+        } else {
+          throw connectErr;
+        }
+      }
+    } else {
+      await dockerNetworkConnect(sessionNetworkName, containerName);
+    }
+
+    if (sidecarStarted) {
+      // Bridge severance only applies to a sidecar we just booted on the
+      // bridge. A reused shared sidecar has no bridge attachment left.
+      try {
+        await dockerNetworkDisconnect("bridge", containerName);
+      } catch (bridgeErr) {
+        // SECURITY: a residual bridge attachment would let the sidecar (and
+        // therefore the inner containers it runs) reach the host network
+        // directly, bypassing Envoy egress control entirely. We refuse to
+        // proceed with a sidecar that still has the bridge — fail hard so the
+        // cleanup path below tears it down rather than silently leaving an
+        // egress hole.
+        throw new Error(
+          `Failed to disconnect DinD sidecar from default bridge (egress bypass risk): ${
+            bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr)
+          }`,
+        );
+      }
+    }
   } catch (error) {
-    // 途中で失敗した場合、起動済みサイドカーをクリーンアップしてから再 throw
-    if (sidecarStarted && !shared) {
+    // 途中で失敗した場合、この呼び出しで新規起動したサイドカーをクリーンアップ
+    // してから再 throw する。再利用した shared サイドカー（sidecarStarted=false）は
+    // 対象外なので誤って tear down することはない。
+    if (sidecarStarted) {
       try {
         await dockerStop(containerName, { timeoutSeconds: 0 });
       } catch (cleanupErr) {
@@ -246,6 +331,14 @@ export async function ensureDindSidecar(
 export interface TeardownDindSidecarParams {
   containerName: string;
   sharedTmpVolume: string;
+  /**
+   * Session network the sidecar was attached to. Only used for shared
+   * sidecars, which are kept alive: we must detach them from the session
+   * network here so ProxyStage's subsequent `network rm` does not fail with
+   * "network in use". Non-shared sidecars are removed outright, which
+   * auto-detaches from every network.
+   */
+  sessionNetworkName: string;
   shared: boolean;
 }
 
@@ -256,10 +349,21 @@ export interface TeardownDindSidecarParams {
 export async function teardownDindSidecar(
   params: TeardownDindSidecarParams,
 ): Promise<void> {
-  const { containerName, sharedTmpVolume, shared } = params;
+  const { containerName, sharedTmpVolume, sessionNetworkName, shared } = params;
 
   if (shared) {
     logInfo(`[nas] DinD: keeping shared sidecar (${containerName})`);
+    // Detach from the session network so ProxyStage can remove it. Best-effort:
+    // a stale/missing attachment must not abort teardown.
+    try {
+      await dockerNetworkDisconnect(sessionNetworkName, containerName);
+    } catch (e: unknown) {
+      logWarn(
+        `[nas] DinD teardown: failed to disconnect shared sidecar from session network: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
     return;
   }
 
@@ -298,24 +402,76 @@ export async function teardownDindSidecar(
 // Private helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Detect a `docker network connect` failure caused by the container already
+ * being attached to the target network ("endpoint already exists in network" /
+ * "already attached to network ..."). Used to tolerate a redundant connect when
+ * reusing a shared sidecar.
+ *
+ * Bun's `$` throws a ShellError whose `stderr` is a Buffer; `.quiet()` only
+ * suppresses live output, the captured stderr is still present. We inspect both
+ * the error message and that stderr buffer so the match works regardless of how
+ * the failure surfaces.
+ */
+function isAlreadyAttachedError(err: unknown): boolean {
+  const parts: string[] = [];
+  if (err instanceof Error && err.message) {
+    parts.push(err.message);
+  }
+  const stderr = (err as { stderr?: unknown } | null)?.stderr;
+  if (typeof stderr === "string") {
+    parts.push(stderr);
+  } else if (stderr instanceof Uint8Array) {
+    parts.push(Buffer.from(stderr).toString());
+  }
+  const haystack = parts.join("\n").toLowerCase();
+  return (
+    haystack.includes("already exists in network") ||
+    haystack.includes("already attached to network") ||
+    haystack.includes("endpoint with name") // "endpoint with name <c> already exists in network <n>"
+  );
+}
+
 async function runDindSidecar(
   containerName: string,
   sharedTmpVolume: string,
+  proxyEndpoint: string,
   options: DindStageOptions,
 ): Promise<void> {
   await dockerRunDetached({
     name: containerName,
     image: DIND_IMAGE,
     args: buildDindSidecarArgs(sharedTmpVolume, options),
-    envVars: {
-      DOCKER_TLS_CERTDIR: "",
-    },
+    envVars: buildDindSidecarEnv(proxyEndpoint),
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_DIND,
       [NAS_SHARED_LABEL]: String(containerName === SHARED_CONTAINER_NAME),
     },
   });
+}
+
+/**
+ * Build the dockerd environment for the DinD sidecar.
+ *
+ * Forces dockerd's outbound image pulls through Envoy: dockerd reads the
+ * upper-case HTTP(S)_PROXY forms, and we set both cases so any tooling inside
+ * the sidecar sees a consistent proxy config. NO_PROXY keeps loopback (the 2375
+ * listener / local socket) direct. DOCKER_TLS_CERTDIR is cleared so dockerd
+ * listens on plain TCP 2375.
+ */
+export function buildDindSidecarEnv(
+  proxyEndpoint: string,
+): Record<string, string> {
+  return {
+    DOCKER_TLS_CERTDIR: "",
+    HTTP_PROXY: proxyEndpoint,
+    HTTPS_PROXY: proxyEndpoint,
+    NO_PROXY: "localhost,127.0.0.1",
+    http_proxy: proxyEndpoint,
+    https_proxy: proxyEndpoint,
+    no_proxy: "localhost,127.0.0.1",
+  };
 }
 
 /**

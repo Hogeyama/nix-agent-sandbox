@@ -88,7 +88,6 @@ export interface ProxyPlan {
   readonly uiPort: number;
   readonly uiIdleTimeout: number;
   readonly auditDir: string;
-  readonly dindContainerName: string | null;
   readonly outputOverrides: Pick<
     StageResult,
     "network" | "prompt" | "proxy" | "container"
@@ -121,9 +120,6 @@ export function planProxy(
   const token = generateSessionToken();
   const sessionNetworkName = `nas-session-net-${input.sessionId}`;
 
-  const dindContainerName =
-    input.container.env.static.NAS_DIND_CONTAINER_NAME ?? null;
-
   // The observability slice contributes its receiver port (when enabled) to
   // the forward-ports set, alongside whatever the profile declares. We dedup
   // before downstream so the relay layer never sees a duplicate entry — its
@@ -140,10 +136,9 @@ export function planProxy(
 
   const proxyUrl = `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
+  // DinD's hostname is appended to no_proxy later by DindStage (which now runs
+  // after ProxyStage); here we only seed the loopback baseline.
   const noProxyEntries = ["localhost", "127.0.0.1"];
-  if (dindContainerName) {
-    noProxyEntries.push(dindContainerName);
-  }
 
   const envVars: Record<string, string> = {
     NAS_UPSTREAM_PROXY: proxyUrl,
@@ -221,7 +216,6 @@ export function planProxy(
     uiPort: input.config.ui.port,
     uiIdleTimeout: input.config.ui.idleTimeout,
     auditDir: input.probes.auditDir,
-    dindContainerName,
     envVars: container.env.static,
     container,
     forwardPorts,

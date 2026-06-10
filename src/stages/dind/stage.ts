@@ -32,7 +32,6 @@ import type { ContainerPlan, PipelineState } from "../../pipeline/state.ts";
 import type { StageInput, StageResult } from "../../pipeline/types.ts";
 import { DindService } from "./dind_service.ts";
 
-const SHARED_NETWORK_NAME = "nas-dind-shared";
 const SHARED_TMP_VOLUME = "nas-dind-shared-tmp";
 
 export type { DindStageOptions } from "../../docker/dind.ts";
@@ -44,14 +43,24 @@ export type { DindStageOptions } from "../../docker/dind.ts";
 export interface DindPlan {
   readonly containerName: string;
   readonly sharedTmpVolume: string;
+  /**
+   * Session network name the sidecar attaches to (e.g. `nas-session-net-<sid>`).
+   * Sourced from the `network` slice produced by ProxyStage, replacing the old
+   * per-session private DinD network.
+   */
   readonly networkName: string;
+  /** dockerd HTTP(S)_PROXY endpoint (token-bearing Envoy URL). */
+  readonly proxyEndpoint: string;
   readonly shared: boolean;
   readonly disableCache: boolean;
   readonly readinessTimeoutMs: number;
   readonly outputOverrides: Pick<StageResult, "container" | "dind">;
 }
 
-type DindStageState = Pick<PipelineState, "workspace" | "container">;
+type DindStageState = Pick<
+  PipelineState,
+  "workspace" | "container" | "network" | "proxy"
+>;
 type DindStageInput = StageInput & DindStageState;
 export interface DindStagePlanOptions {
   disableCache?: boolean;
@@ -75,17 +84,21 @@ export function planDind(
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
   const shared = input.profile.docker.shared;
 
-  let networkName: string;
+  // The session network (and the Envoy proxy endpoint) are produced by
+  // ProxyStage, which now runs before DindStage. The sidecar attaches to this
+  // internal session network instead of a private DinD-owned bridge, so its
+  // egress is funnelled through Envoy.
+  const networkName = input.network.networkName;
+  const proxyEndpoint = input.proxy.proxyEndpoint;
+
   let containerName: string;
   let sharedTmpVolume: string;
 
   if (shared) {
-    networkName = SHARED_NETWORK_NAME;
     containerName = SHARED_CONTAINER_NAME;
     sharedTmpVolume = SHARED_TMP_VOLUME;
   } else {
     const sessionId = input.sessionId.slice(0, 8);
-    networkName = `nas-dind-${sessionId}`;
     containerName = `nas-dind-${sessionId}`;
     sharedTmpVolume = `nas-dind-tmp-${sessionId}`;
   }
@@ -94,6 +107,7 @@ export function planDind(
     containerName,
     sharedTmpVolume,
     networkName,
+    proxyEndpoint,
     shared,
     disableCache,
     readinessTimeoutMs,
@@ -116,7 +130,7 @@ export function planDind(
 export function createDindStage(
   shared: StageInput,
 ): Stage<
-  "workspace" | "container",
+  "workspace" | "container" | "network" | "proxy",
   Partial<Pick<StageResult, "container" | "dind">>,
   DindService,
   unknown
@@ -128,14 +142,14 @@ export function createDindStageWithOptions(
   shared: StageInput,
   options: DindStagePlanOptions = {},
 ): Stage<
-  "workspace" | "container",
+  "workspace" | "container" | "network" | "proxy",
   Partial<Pick<StageResult, "container" | "dind">>,
   DindService,
   unknown
 > {
   return {
     name: "DindStage",
-    needs: ["workspace", "container"],
+    needs: ["workspace", "container", "network", "proxy"],
 
     run(
       input,
@@ -176,6 +190,7 @@ function runDind(
         containerName: plan.containerName,
         sharedTmpVolume: plan.sharedTmpVolume,
         networkName: plan.networkName,
+        proxyEndpoint: plan.proxyEndpoint,
         shared: plan.shared,
         disableCache: plan.disableCache,
         readinessTimeoutMs: plan.readinessTimeoutMs,
@@ -185,6 +200,7 @@ function runDind(
           .teardownSidecar({
             containerName: plan.containerName,
             sharedTmpVolume: plan.sharedTmpVolume,
+            networkName: plan.networkName,
             shared: plan.shared,
           })
           .pipe(Effect.ignoreLogged),
@@ -201,12 +217,25 @@ function buildContainerState(
     readonly sharedTmpVolume: string;
   },
 ): ContainerPlan {
+  // The agent talks to the sidecar over DOCKER_HOST=tcp://<dind>:2375. That
+  // hostname must bypass the agent's local proxy, so append the sidecar name to
+  // the no_proxy lists ProxyStage already seeded. env.static is key-merged
+  // (patch wins), so writing the full appended value here overrides ProxyStage's
+  // baseline cleanly. Fall back to the loopback baseline if (unexpectedly)
+  // ProxyStage left no value.
+  const baseNoProxyLower =
+    input.container.env.static.no_proxy ?? "localhost,127.0.0.1";
+  const baseNoProxyUpper =
+    input.container.env.static.NO_PROXY ?? "localhost,127.0.0.1";
+
   return mergeContainerPlan(input.container, {
     env: {
       static: {
         DOCKER_HOST: `tcp://${config.containerName}:${DIND_INTERNAL_PORT}`,
         NAS_DIND_CONTAINER_NAME: config.containerName,
         NAS_DIND_SHARED_TMP: SHARED_TMP_MOUNT_PATH,
+        no_proxy: `${baseNoProxyLower},${config.containerName}`,
+        NO_PROXY: `${baseNoProxyUpper},${config.containerName}`,
       },
     },
     extraRunArgs: ["-v", `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`],

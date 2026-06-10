@@ -18,6 +18,7 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
+import { buildDindSidecarEnv } from "../../docker/dind.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type {
@@ -109,9 +110,14 @@ function makeSharedInput(
   };
 }
 
+type DindSliceState = Pick<
+  PipelineState,
+  "workspace" | "container" | "network" | "proxy"
+>;
+
 function makeStageState(
-  overrides: Partial<Pick<PipelineState, "workspace" | "container">> = {},
-): Pick<PipelineState, "workspace" | "container"> {
+  overrides: Partial<DindSliceState> = {},
+): DindSliceState {
   const workspace = overrides.workspace ?? {
     workDir: "/tmp",
     imageName: "nas:latest",
@@ -120,7 +126,15 @@ function makeStageState(
     ...emptyContainerPlan(workspace.imageName, workspace.workDir),
     command: { agentCommand: ["claude"], extraArgs: [] },
   };
-  return { workspace, container };
+  const network = overrides.network ?? {
+    networkName: "nas-session-net-test-session-1234",
+    runtimeDir: "/run/user/1000/nas/network",
+  };
+  const proxy = overrides.proxy ?? {
+    brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
+    proxyEndpoint: "http://test-session-1234:tok@nas-envoy:15001",
+  };
+  return { workspace, container, network, proxy };
 }
 
 // ============================================================
@@ -145,7 +159,10 @@ test("DindStage: shared mode uses fixed names", () => {
   expect(plan).not.toBeNull();
   const p = plan as DindPlan;
   expect(p.containerName).toEqual("nas-dind-shared");
-  expect(p.networkName).toEqual("nas-dind-shared");
+  expect(p.networkName).toEqual("nas-session-net-test-session-1234");
+  expect(p.proxyEndpoint).toEqual(
+    "http://test-session-1234:tok@nas-envoy:15001",
+  );
   expect(p.sharedTmpVolume).toEqual("nas-dind-shared-tmp");
   expect(p.shared).toEqual(true);
   expect(p.disableCache).toEqual(true);
@@ -163,6 +180,8 @@ test("DindStage: shared mode uses fixed names", () => {
         DOCKER_HOST: "tcp://nas-dind-shared:2375",
         NAS_DIND_CONTAINER_NAME: "nas-dind-shared",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+        no_proxy: "localhost,127.0.0.1,nas-dind-shared",
+        NO_PROXY: "localhost,127.0.0.1,nas-dind-shared",
       },
       dynamicOps: [],
     },
@@ -184,13 +203,49 @@ test("DindStage: non-shared mode uses session-based names", () => {
   expect(plan).not.toBeNull();
   const p = plan as DindPlan;
   expect(p.containerName).toEqual("nas-dind-abcdef12");
-  expect(p.networkName).toEqual("nas-dind-abcdef12");
+  expect(p.networkName).toEqual("nas-session-net-test-session-1234");
   expect(p.sharedTmpVolume).toEqual("nas-dind-tmp-abcdef12");
   expect(p.shared).toEqual(false);
 
   expect(p.outputOverrides.container?.network).toBeUndefined();
   expect(p.outputOverrides.container?.env.static.DOCKER_HOST).toEqual(
     "tcp://nas-dind-abcdef12:2375",
+  );
+  expect(p.outputOverrides.container?.env.static.no_proxy).toEqual(
+    "localhost,127.0.0.1,nas-dind-abcdef12",
+  );
+  expect(p.outputOverrides.container?.env.static.NO_PROXY).toEqual(
+    "localhost,127.0.0.1,nas-dind-abcdef12",
+  );
+});
+
+test("DindStage: appends dind name to ProxyStage-seeded no_proxy", () => {
+  const profile = makeProfile({ docker: { enable: true, shared: false } });
+  const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+  const input = {
+    ...makeSharedInput(profile, sessionId),
+    ...makeStageState({
+      container: {
+        ...emptyContainerPlan("nas:latest", "/tmp"),
+        env: {
+          static: {
+            no_proxy: "localhost,127.0.0.1",
+            NO_PROXY: "localhost,127.0.0.1",
+          },
+          dynamicOps: [],
+        },
+        command: { agentCommand: ["claude"], extraArgs: [] },
+      },
+    }),
+  };
+
+  const plan = planDind(input);
+  expect(plan).not.toBeNull();
+  expect(plan!.outputOverrides.container?.env.static.no_proxy).toEqual(
+    "localhost,127.0.0.1,nas-dind-abcdef12",
+  );
+  expect(plan!.outputOverrides.container?.env.static.NO_PROXY).toEqual(
+    "localhost,127.0.0.1,nas-dind-abcdef12",
   );
 });
 
@@ -238,6 +293,8 @@ test("DindStage: planner merges into existing container slice and preserves exis
         DOCKER_HOST: "tcp://nas-dind-abcdef12:2375",
         NAS_DIND_CONTAINER_NAME: "nas-dind-abcdef12",
         NAS_DIND_SHARED_TMP: "/tmp/nas-shared",
+        no_proxy: "localhost,127.0.0.1,nas-dind-abcdef12",
+        NO_PROXY: "localhost,127.0.0.1,nas-dind-abcdef12",
       },
       dynamicOps: [],
     },
@@ -317,7 +374,12 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
 
   expect(ensureCalls.length).toEqual(1);
   expect(ensureCalls[0].containerName).toEqual("nas-dind-shared");
-  expect(ensureCalls[0].networkName).toEqual("nas-dind-shared");
+  expect(ensureCalls[0].networkName).toEqual(
+    "nas-session-net-test-session-1234",
+  );
+  expect(ensureCalls[0].proxyEndpoint).toEqual(
+    "http://test-session-1234:tok@nas-envoy:15001",
+  );
   expect(ensureCalls[0].sharedTmpVolume).toEqual("nas-dind-shared-tmp");
   expect(ensureCalls[0].shared).toEqual(true);
   expect(ensureCalls[0].disableCache).toEqual(true);
@@ -361,4 +423,27 @@ test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
   expect(
     buildDindSidecarArgs("nas-dind-shared-tmp", { disableCache: true }),
   ).toEqual(["--privileged", "-v", "nas-dind-shared-tmp:/tmp/nas-shared"]);
+});
+
+// ============================================================
+// buildDindSidecarEnv tests
+// ============================================================
+
+test("buildDindSidecarEnv: injects token-bearing proxy into both env casings", () => {
+  const proxyEndpoint = "http://test-session:tok@nas-envoy:15001";
+  const env = buildDindSidecarEnv(proxyEndpoint);
+
+  // dockerd's outbound pulls are forced through Envoy in both casings so
+  // tooling inside the sidecar sees a consistent proxy config.
+  expect(env.HTTP_PROXY).toEqual(proxyEndpoint);
+  expect(env.HTTPS_PROXY).toEqual(proxyEndpoint);
+  expect(env.http_proxy).toEqual(proxyEndpoint);
+  expect(env.https_proxy).toEqual(proxyEndpoint);
+
+  // Loopback (the 2375 listener / local socket) stays direct.
+  expect(env.NO_PROXY).toEqual("localhost,127.0.0.1");
+  expect(env.no_proxy).toEqual("localhost,127.0.0.1");
+
+  // Plain-TCP 2375 listener (no TLS cert dir).
+  expect(env.DOCKER_TLS_CERTDIR).toEqual("");
 });
