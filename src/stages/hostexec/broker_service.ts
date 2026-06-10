@@ -26,7 +26,8 @@ import { logInfo, logWarn } from "../../log.ts";
 export interface HostExecBrokerConfig {
   readonly paths: HostExecRuntimePaths;
   readonly sessionId: string;
-  readonly socketPath: string;
+  readonly execSocketPath: string;
+  readonly controlSocketPath: string;
   readonly profileName: string;
   readonly workspaceRoot: string;
   readonly sessionTmpDir: string;
@@ -86,12 +87,12 @@ export const HostExecBrokerServiceLive: Layer.Layer<HostExecBrokerService> =
               uiIdleTimeout: config.uiIdleTimeout,
               auditDir: config.auditDir,
             });
-            await broker.start(config.socketPath);
+            await broker.start(config.execSocketPath, config.controlSocketPath);
             try {
               await writeHostExecSessionRegistry(config.paths, {
                 version: 1,
                 sessionId: config.sessionId,
-                brokerSocket: config.socketPath,
+                brokerSocket: config.controlSocketPath,
                 profileName: config.profileName,
                 createdAt: new Date().toISOString(),
                 pid: process.pid,

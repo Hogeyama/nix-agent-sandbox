@@ -27,6 +27,7 @@ import {
 import {
   type HostExecRuntimePaths,
   hostExecBrokerSocketPath,
+  hostExecExecSocketPath,
   listHostExecPendingEntries,
   removeHostExecPendingDir,
   removeHostExecPendingEntry,
@@ -111,8 +112,10 @@ export class HostExecBroker {
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
   private readonly secretStore: SecretStore;
-  private socketPath: string | null = null;
-  private server: Server | null = null;
+  private execSocketPath: string | null = null;
+  private controlSocketPath: string | null = null;
+  private execServer: Server | null = null;
+  private controlServer: Server | null = null;
   private readonly approvedKeys = new Set<string>();
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestToApprovalKey = new Map<string, string>();
@@ -133,20 +136,39 @@ export class HostExecBroker {
     this.secretStore = new SecretStore(this.config.secrets);
   }
 
-  async start(socketPath: string): Promise<void> {
-    this.socketPath = socketPath;
-    await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
-    await rm(socketPath, { force: true });
-    this.server = await createUnixServer(
-      socketPath,
-      (socket) => void this.handleConnection(socket),
+  async start(
+    execSocketPath: string,
+    controlSocketPath: string,
+  ): Promise<void> {
+    this.execSocketPath = execSocketPath;
+    this.controlSocketPath = controlSocketPath;
+    // The control socket lives directly in the session broker dir; the exec
+    // socket lives in the `exec/` subdir (mounted into the container).
+    await mkdir(path.dirname(controlSocketPath), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await mkdir(path.dirname(execSocketPath), { recursive: true, mode: 0o700 });
+    await rm(controlSocketPath, { force: true });
+    await rm(execSocketPath, { force: true });
+    this.controlServer = await createUnixServer(
+      controlSocketPath,
+      (socket) => void this.handleConnection(socket, "control"),
+    );
+    this.execServer = await createUnixServer(
+      execSocketPath,
+      (socket) => void this.handleConnection(socket, "exec"),
     );
   }
 
   async close(): Promise<void> {
-    if (this.server) {
-      this.server.close();
-      this.server = null;
+    if (this.execServer) {
+      this.execServer.close();
+      this.execServer = null;
+    }
+    if (this.controlServer) {
+      this.controlServer.close();
+      this.controlServer = null;
     }
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
@@ -164,15 +186,32 @@ export class HostExecBroker {
     this.requestToApprovalKey.clear();
     await removeHostExecPendingDir(this.paths, this.sessionId);
     await removeHostExecSessionRegistry(this.paths, this.sessionId);
-    const target =
-      this.socketPath ?? hostExecBrokerSocketPath(this.paths, this.sessionId);
-    await rm(target, { force: true }).catch((e) => {
+    const controlTarget =
+      this.controlSocketPath ??
+      hostExecBrokerSocketPath(this.paths, this.sessionId);
+    const execTarget =
+      this.execSocketPath ?? hostExecExecSocketPath(this.paths, this.sessionId);
+    // Remove exec socket and its `exec/` dir first: leaving the subdir behind
+    // makes the session broker dir rmdir fail with ENOTEMPTY.
+    await rm(execTarget, { force: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-        logInfo(`[nas] HostExecBroker: failed to remove socket: ${e}`);
+        logInfo(`[nas] HostExecBroker: failed to remove exec socket: ${e}`);
       }
     });
-    await rmdir(path.dirname(target)).catch((e) => {
+    await rmdir(path.dirname(execTarget)).catch((e) => {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTEMPTY") {
+        logInfo(`[nas] HostExecBroker: failed to remove exec socket dir: ${e}`);
+      }
+    });
+    await rm(controlTarget, { force: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        logInfo(`[nas] HostExecBroker: failed to remove control socket: ${e}`);
+      }
+    });
+    await rmdir(path.dirname(controlTarget)).catch((e) => {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTEMPTY") {
         logInfo(
           `[nas] HostExecBroker: failed to remove session broker dir: ${e}`,
         );
@@ -184,13 +223,16 @@ export class HostExecBroker {
     return await listHostExecPendingEntries(this.paths, this.sessionId);
   }
 
-  private async handleConnection(socket: Socket): Promise<void> {
+  private async handleConnection(
+    socket: Socket,
+    channel: "exec" | "control",
+  ): Promise<void> {
     try {
       const line = await readJsonLine(socket);
       if (!line) return;
       const message = JSON.parse(line) as HostExecBrokerMessage;
-      const response = await this.handleMessage(message).catch((error) =>
-        toErrorResponse(message, (error as Error).message),
+      const response = await this.handleMessage(message, channel).catch(
+        (error) => toErrorResponse(message, (error as Error).message),
       );
       try {
         await writeJsonLine(socket, response);
@@ -206,7 +248,25 @@ export class HostExecBroker {
 
   private async handleMessage(
     message: HostExecBrokerMessage,
+    channel: "exec" | "control",
   ): Promise<HostExecBrokerResponse> {
+    // Enforce the channel contract before dispatching on message type. The
+    // exec socket is the only socket mounted into the agent container, so it
+    // must never be able to drive approve/deny/list_pending; otherwise a
+    // hostile agent could self-approve its own execute requests.
+    if (channel === "exec") {
+      if (message.type !== "execute") {
+        // Reject without touching any approval state (no pending change).
+        return {
+          type: "error",
+          requestId: message.type === "list_pending" ? "" : message.requestId,
+          message:
+            "approve/deny/list_pending are not accepted on the exec channel",
+        };
+      }
+      return await this.execute(message);
+    }
+    // control channel: host-side CLI/UI operations only.
     if (message.type === "list_pending") {
       return { type: "pending", items: await this.listPending() };
     }
@@ -216,7 +276,11 @@ export class HostExecBroker {
     if (message.type === "deny") {
       return await this.deny(message.requestId);
     }
-    return await this.execute(message);
+    return {
+      type: "error",
+      requestId: message.requestId,
+      message: "execute is not accepted on the control channel",
+    };
   }
 
   private async execute(

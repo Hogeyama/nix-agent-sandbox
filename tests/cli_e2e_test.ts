@@ -30,6 +30,7 @@ import {
 } from "../src/hostexec/broker.ts";
 import {
   hostExecBrokerSocketPath,
+  hostExecExecSocketPath,
   resolveHostExecRuntimePaths,
   writeHostExecSessionRegistry,
 } from "../src/hostexec/registry.ts";
@@ -596,18 +597,19 @@ test("CLI: hostexec pending lists queued approvals", async () => {
       ],
     },
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_cli");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_cli");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_cli");
+  await broker.start(execSocketPath, controlSocketPath);
   await writeHostExecSessionRegistry(paths, {
     version: 1,
     sessionId: "sess_cli",
-    brokerSocket: socketPath,
+    brokerSocket: controlSocketPath,
     profileName: "test",
     createdAt: new Date().toISOString(),
     pid: process.pid,
   });
   try {
-    const execPromise = sendHostExecBrokerRequest(socketPath, {
+    const execPromise = sendHostExecBrokerRequest(execSocketPath, {
       version: 1,
       type: "execute",
       sessionId: "sess_cli",
@@ -626,7 +628,7 @@ test("CLI: hostexec pending lists queued approvals", async () => {
     ]);
     expect(result.code).toEqual(0);
     expect(result.stdout.includes("sess_cli req_cli deno-eval")).toEqual(true);
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_cli",
     });

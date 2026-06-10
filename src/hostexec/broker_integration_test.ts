@@ -15,6 +15,7 @@ import type { HostExecConfig } from "../config/types.ts";
 import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
 import {
   hostExecBrokerSocketPath,
+  hostExecExecSocketPath,
   listHostExecPendingEntries,
   resolveHostExecRuntimePaths,
 } from "./registry.ts";
@@ -79,11 +80,12 @@ test("HostExecBroker: falls back when no rule matches", async () => {
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig(),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('x')"], process.cwd()),
     );
     expect(response.type).toEqual("fallback");
@@ -127,11 +129,12 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
-      socketPath,
+      execSocketPath,
       request(
         ["-e", "console.log(process.env['TOKEN'])"],
         workspace,
@@ -150,7 +153,7 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
     const pending = await waitForPendingEntries(paths, 1);
     expect(pending.length).toEqual(1);
     expect(pending[0].ruleId).toEqual("node-eval");
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_approve",
     });
@@ -213,16 +216,17 @@ test("HostExecBroker: pending request can be denied via broker", async () => {
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const executePromise = sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('x')"], workspace, "req_deny"),
     );
     const pending = await waitForPendingEntries(paths, 1);
     expect(pending.length).toEqual(1);
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_deny",
     });
@@ -242,6 +246,178 @@ test("HostExecBroker: pending request can be denied via broker", async () => {
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(workspace, { recursive: true, force: true }).catch(() => {});
     await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: exec channel cannot approve a pending request (self-approval blocked)", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    // Container (exec channel) submits a request that goes to pending.
+    const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      execSocketPath,
+      request(["-e", "console.log('x')"], workspace, "req_self_approve"),
+    );
+    await waitForPendingEntries(paths, 1);
+
+    // The container tries to self-approve via the exec channel: must be
+    // rejected with an error and must not resolve the pending request.
+    const approveResponse =
+      await sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
+        type: "approve",
+        requestId: "req_self_approve",
+      });
+    expect(approveResponse.type).toEqual("error");
+
+    // The execute request is still pending (was not approved).
+    const early = await Promise.race([
+      execPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 150)),
+    ]);
+    expect(early).toEqual(null);
+    const stillPending = await listHostExecPendingEntries(paths, "sess_test");
+    expect(
+      stillPending.some((e) => e.requestId === "req_self_approve"),
+    ).toEqual(true);
+
+    // Clean up: deny via the control channel and drain.
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId: "req_self_approve",
+    });
+    await execPromise;
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: exec channel list_pending does not act as a control operation", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      execSocketPath,
+      request(["-e", "console.log('x')"], workspace, "req_list_probe"),
+    );
+    await waitForPendingEntries(paths, 1);
+
+    // list_pending on the exec channel must not leak pending info or act as a
+    // control operation: it returns an error (no pending items disclosed).
+    const listResponse =
+      await sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
+        type: "list_pending",
+      });
+    expect(listResponse.type).toEqual("error");
+
+    // Clean up.
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId: "req_list_probe",
+    });
+    await execPromise;
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: control channel rejects execute", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-any",
+          match: { argv0: "node" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const response = await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      controlSocketPath,
+      request(["-e", "console.log('ok')"], workspace, "req_control_exec"),
+    );
+    expect(response.type).toEqual("error");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -289,17 +465,18 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const firstPromise = sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('a')"], workspace, "req_a"),
     );
     const nested = `${workspace}/nested`;
     await mkdir(nested, { recursive: true });
     const secondPromise = sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["fmt", "--help"], nested, "req_b"),
     );
     const earlyFirst = await Promise.race([
@@ -322,11 +499,11 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
     expect(entries[0].approvalKey).toMatch(/^[0-9a-f]{64}$/);
     expect(entries[1].approvalKey).toMatch(/^[0-9a-f]{64}$/);
     expect(entries[0].approvalKey === entries[1].approvalKey).toEqual(false);
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_a",
     });
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_b",
     });
@@ -370,11 +547,12 @@ test("HostExecBroker: argv0-only rule matches any args", async () => {
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('ok')"], workspace, "req_any"),
     );
     expect(response.type).toEqual("result");
@@ -416,11 +594,12 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(
         ["-c", "printf ok"],
         workspace,
@@ -469,11 +648,12 @@ test("HostExecBroker: relative rule executes original relative argv0", async () 
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request([], workspace, "req_gradlew", "./gradlew"),
     );
     expect(response.type).toEqual("result");
@@ -523,12 +703,13 @@ test("HostExecBroker: absolute rule executes exact absolute binary path", async 
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     // Request must use the exact absolute path — broker must execute it directly.
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request([], workspace, "req_helper_abs", helperScript),
     );
     expect(response.type).toEqual("result");
@@ -574,11 +755,12 @@ test("HostExecBroker: absolute rule does not match bare-name invocation", async 
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request([], workspace, "req_helper_bare", "helper.sh"),
     );
     // Bare 'helper.sh' should not match the absolute rule → fallback
@@ -617,11 +799,12 @@ test("HostExecBroker: argv0-only rule also matches no-args command", async () =>
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request([], workspace, "req_true_noargs", "true"),
     );
     expect(response.type).toEqual("result");
@@ -665,11 +848,12 @@ test("HostExecBroker: rejects cwd outside workspace with workspace-only mode", a
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('x')"], outsideDir, "req_cwd"),
     );
     expect(response.type).toEqual("error");
@@ -713,11 +897,12 @@ test("HostExecBroker: allows cwd in session tmp with workspace-or-session-tmp mo
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const response = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('ok')"], sessionTmpDir, "req_tmp"),
     );
     expect(response.type).toEqual("result");
@@ -757,19 +942,20 @@ test("HostExecBroker: fallback deny returns error for unmatched command", async 
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     // Unmatched command: no rule for "fmt"
     const fallbackResponse = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["fmt", "--help"], process.cwd(), "req_unmatched"),
     );
     expect(fallbackResponse.type).toEqual("fallback");
 
     // Matched command with approval: deny
     const denyResponse = await sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('x')"], process.cwd(), "req_deny"),
     );
     expect(denyResponse.type).toEqual("error");
@@ -825,15 +1011,16 @@ test("HostExecBroker: capability key differs by inheritEnv", async () => {
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     const firstPromise = sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('a')"], workspace, "req_ie_a"),
     );
     const secondPromise = sendHostExecBrokerRequest(
-      socketPath,
+      execSocketPath,
       request(["fmt", "--help"], workspace, "req_ie_b"),
     );
     await Promise.race([
@@ -847,11 +1034,11 @@ test("HostExecBroker: capability key differs by inheritEnv", async () => {
     const entries = await waitForPendingCount(paths, 2);
     expect(entries[0].approvalKey === entries[1].approvalKey).toEqual(false);
     // Clean up
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_ie_a",
     });
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_ie_b",
     });
@@ -891,16 +1078,17 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     // First request: approve with scope "once"
     const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_once_1"),
     );
     await waitForPendingEntries(paths, 1);
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_once_1",
       scope: "once",
@@ -913,7 +1101,7 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
 
     // Second identical request (same args) should go to pending again (not auto-approved)
     const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_once_2"),
     );
     const earlyResponse = await Promise.race([
@@ -923,7 +1111,7 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
     expect(earlyResponse).toEqual(null);
 
     // Clean up
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_once_2",
     });
@@ -962,16 +1150,17 @@ test("HostExecBroker: scope capability caches approval key", async () => {
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     // First request: approve with scope "capability"
     const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_cap_1"),
     );
     await waitForPendingEntries(paths, 1);
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_cap_1",
       scope: "capability",
@@ -982,7 +1171,7 @@ test("HostExecBroker: scope capability caches approval key", async () => {
     // Second identical request (same args) should be auto-approved (not pending)
     const secondResponse =
       await sendHostExecBrokerRequest<HostExecBrokerResponse>(
-        socketPath,
+        execSocketPath,
         request(["-e", "console.log('first')"], workspace, "req_cap_2"),
       );
     expect(secondResponse.type).toEqual("result");
@@ -1024,16 +1213,17 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
       ],
     }),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  await broker.start(socketPath);
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
   try {
     // First request: approve without explicit scope (defaultScope = "once")
     const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_def_1"),
     );
     await waitForPendingEntries(paths, 1);
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_def_1",
     });
@@ -1042,7 +1232,7 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
 
     // Second request (same args) should go to pending (defaultScope was "once", so not cached)
     const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
-      socketPath,
+      execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_def_2"),
     );
     const earlyResponse = await Promise.race([
@@ -1051,7 +1241,7 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
     ]);
     expect(earlyResponse).toEqual(null);
 
-    await sendHostExecBrokerRequest(socketPath, {
+    await sendHostExecBrokerRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_def_2",
     });
@@ -1106,35 +1296,43 @@ test("HostExecBroker: isolates sockets per session under 0o700 subdirs", async (
     hostexec: makeConfig(),
   });
 
-  const socketA = hostExecBrokerSocketPath(paths, "sess_alpha");
-  const socketB = hostExecBrokerSocketPath(paths, "sess_beta");
+  const controlA = hostExecBrokerSocketPath(paths, "sess_alpha");
+  const controlB = hostExecBrokerSocketPath(paths, "sess_beta");
+  const execA = hostExecExecSocketPath(paths, "sess_alpha");
+  const execB = hostExecExecSocketPath(paths, "sess_beta");
 
   try {
-    await brokerA.start(socketA);
-    await brokerB.start(socketB);
+    await brokerA.start(execA, controlA);
+    await brokerB.start(execB, controlB);
 
-    expect(path.dirname(socketA)).toBe(
+    expect(path.dirname(controlA)).toBe(
       path.join(paths.brokersDir, "sess_alpha"),
     );
-    expect(path.dirname(socketB)).toBe(
+    expect(path.dirname(controlB)).toBe(
       path.join(paths.brokersDir, "sess_beta"),
     );
-    expect(path.basename(socketA)).toBe("sock");
+    expect(path.basename(controlA)).toBe("sock");
 
-    const dirA = await stat(path.dirname(socketA));
-    const dirB = await stat(path.dirname(socketB));
+    const dirA = await stat(path.dirname(controlA));
+    const dirB = await stat(path.dirname(controlB));
     expect(dirA.mode & 0o777).toBe(0o700);
     expect(dirB.mode & 0o777).toBe(0o700);
 
     const entries = (await readdir(paths.brokersDir)).sort();
     expect(entries).toEqual(["sess_alpha", "sess_beta"]);
 
-    // Each session's subdir contains only its own socket — sibling
-    // sockets are not reachable by name from the other subdir.
-    const inA = await readdir(path.dirname(socketA));
-    const inB = await readdir(path.dirname(socketB));
-    expect(inA).toEqual(["sock"]);
-    expect(inB).toEqual(["sock"]);
+    // Each session's subdir holds its own control socket plus the `exec/`
+    // subdir carrying the container-facing exec socket — sibling sessions are
+    // not reachable by name from the other subdir.
+    const inA = (await readdir(path.dirname(controlA))).sort();
+    const inB = (await readdir(path.dirname(controlB))).sort();
+    expect(inA).toEqual(["exec", "sock"]);
+    expect(inB).toEqual(["exec", "sock"]);
+    // The exec socket lives under the `exec/` subdir of each session.
+    expect(path.basename(execA)).toBe("sock");
+    expect(path.dirname(execA)).toBe(
+      path.join(paths.brokersDir, "sess_alpha", "exec"),
+    );
   } finally {
     await brokerA.close();
     await brokerB.close();
@@ -1154,9 +1352,10 @@ test("HostExecBroker: close() removes both socket and session subdir", async () 
     sessionTmpDir: `${runtimeDir}/tmp`,
     hostexec: makeConfig(),
   });
-  const socketPath = hostExecBrokerSocketPath(paths, "sess_cleanup");
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_cleanup");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_cleanup");
   try {
-    await broker.start(socketPath);
+    await broker.start(execSocketPath, controlSocketPath);
     expect(await readdir(paths.brokersDir)).toEqual(["sess_cleanup"]);
     await broker.close();
     expect(await readdir(paths.brokersDir)).toEqual([]);

@@ -189,9 +189,16 @@ test("HostExecStage plan: produces correct docker args and env vars", async () =
     plan.outputOverrides.hostexec?.sessionTmpDir?.includes("test-session-id"),
   ).toEqual(true);
 
-  expect(plan.envVars.NAS_HOSTEXEC_SOCKET).toEqual(
-    plan.outputOverrides.hostexec!.brokerSocket,
-  );
+  // The container-facing socket (NAS_HOSTEXEC_SOCKET) is the exec socket; the
+  // host-facing registry socket (brokerSocket) is the control socket. They
+  // must differ so a hostile container cannot reach the control channel.
+  const execSocket = plan.envVars.NAS_HOSTEXEC_SOCKET;
+  const controlSocket = plan.outputOverrides.hostexec!.brokerSocket;
+  expect(execSocket).toBeDefined();
+  expect(controlSocket).toBeDefined();
+  expect(execSocket).not.toEqual(controlSocket);
+  expect(execSocket.includes("/exec/")).toEqual(true);
+  expect(controlSocket.includes("/exec/")).toEqual(false);
 });
 
 test("HostExecStage plan: creates symlinks for bare command argv0s", async () => {
@@ -257,6 +264,48 @@ test("HostExecStage plan: broker spec contains correct fields", async () => {
   expect(plan.broker.sessionId).toEqual("test-session-id");
   expect(plan.broker.auditDir).toEqual("/tmp/nas-test-audit");
   expect(plan.broker.notify).toEqual("off");
+  // The broker spec carries the split socket paths: exec (container-facing,
+  // under exec/) and control (host-facing, the session broker dir's sock).
+  expect(plan.broker.execSocketPath.includes("/exec/")).toEqual(true);
+  expect(plan.broker.controlSocketPath.includes("/exec/")).toEqual(false);
+  expect(plan.broker.execSocketPath).not.toEqual(plan.broker.controlSocketPath);
+});
+
+test("HostExecStage plan: mounts only the exec socket dir, never the control socket dir", async () => {
+  const profile = makeProfile();
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
+
+  expect(plan).not.toEqual(null);
+  if (!plan) return;
+
+  const execSocketDir = path.dirname(plan.broker.execSocketPath);
+  const controlSocketDir = path.dirname(plan.broker.controlSocketPath);
+
+  // The exec socket dir (exec/) is mounted into the container so the wrapper
+  // can reach the exec channel.
+  expect(plan.mounts.some((m) => m.source === execSocketDir)).toEqual(true);
+
+  // The control socket and its enclosing session broker dir must never be
+  // mounted into the container: that would re-enable self-approval.
+  for (const m of plan.mounts) {
+    expect(m.source).not.toEqual(plan.broker.controlSocketPath);
+    expect(m.source).not.toEqual(controlSocketDir);
+    expect(m.target).not.toEqual(plan.broker.controlSocketPath);
+    expect(m.target).not.toEqual(controlSocketDir);
+  }
+  for (const arg of plan.dockerArgs) {
+    expect(arg.includes(plan.broker.controlSocketPath)).toEqual(false);
+  }
+
+  // The exec socket dir is provisioned with 0o700 in the directories plan.
+  const execDirEntry = plan.directories.find((d) => d.path === execSocketDir);
+  expect(execDirEntry).toBeDefined();
+  expect(execDirEntry!.mode).toEqual(0o700);
 });
 
 test("HostExecStage plan: sets LD_PRELOAD for relative argv0 intercept", async () => {
@@ -713,7 +762,7 @@ test("HostExecStage: run merges hostexec mounts and env into container and hoste
   expect(result.container?.env.static).toEqual({
     EXISTING_ENV: "1",
     NAS_HOSTEXEC_SOCKET:
-      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id/sock",
+      "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id/exec/sock",
     NAS_HOSTEXEC_WRAPPER_DIR: "/opt/nas/hostexec/bin",
     NAS_HOSTEXEC_SESSION_ID: "test-session-id",
     NAS_HOSTEXEC_SESSION_TMP: "/tmp/nas-hostexec/test-session-id",

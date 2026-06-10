@@ -22,6 +22,8 @@ import {
 import {
   type HostExecRuntimePaths,
   hostExecBrokerSocketPath,
+  hostExecExecSocketDir,
+  hostExecExecSocketPath,
   hostExecSessionBrokerDir,
 } from "../../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
@@ -126,7 +128,8 @@ export interface HostExecPlan {
   readonly envVars: Record<string, string>;
   readonly outputOverrides: Pick<StageResult, "hostexec">;
   readonly broker: {
-    readonly socketPath: string;
+    readonly execSocketPath: string;
+    readonly controlSocketPath: string;
     readonly paths: HostExecRuntimePaths;
     readonly sessionId: string;
     readonly profileName: string;
@@ -227,7 +230,16 @@ export async function planHostExec(
     runtimePaths,
     input.sessionId,
   );
-  const socketPath = hostExecBrokerSocketPath(runtimePaths, input.sessionId);
+  // Two-socket split: the control socket (host CLI/UI only, approve/deny/
+  // list_pending) stays in the session broker dir and is never mounted into
+  // the container. The exec socket (execute/fallback only) lives in the
+  // `exec/` subdir, which is the only part mounted into the container.
+  const controlSocketPath = hostExecBrokerSocketPath(
+    runtimePaths,
+    input.sessionId,
+  );
+  const execSocketPath = hostExecExecSocketPath(runtimePaths, input.sessionId);
+  const execSocketDir = hostExecExecSocketDir(runtimePaths, input.sessionId);
   const wrapperRoot = path.join(runtimePaths.wrappersDir, input.sessionId);
   const wrapperBinDir = path.join(wrapperRoot, "bin");
   const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
@@ -240,6 +252,7 @@ export async function planHostExec(
     { path: runtimePaths.pendingDir, mode: 0o700 },
     { path: runtimePaths.brokersDir, mode: 0o700 },
     { path: sessionBrokerDirPath, mode: 0o700 },
+    { path: execSocketDir, mode: 0o700 },
     { path: runtimePaths.wrappersDir, mode: 0o700 },
     { path: wrapperBinDir, mode: 0o755 },
     { path: sessionTmpDir, mode: 0o700 },
@@ -290,13 +303,13 @@ export async function planHostExec(
     "-v",
     addMount(mounts, wrapperBinDir, WRAPPER_DIR, true),
     "-v",
-    addMount(mounts, sessionBrokerDirPath, sessionBrokerDirPath),
+    addMount(mounts, execSocketDir, execSocketDir),
     "-v",
     addMount(mounts, sessionTmpDir, containerSessionTmp),
   ];
 
   const envVars: Record<string, string> = {
-    NAS_HOSTEXEC_SOCKET: socketPath,
+    NAS_HOSTEXEC_SOCKET: execSocketPath,
     NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
     NAS_HOSTEXEC_SESSION_ID: input.sessionId,
     NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
@@ -334,12 +347,13 @@ export async function planHostExec(
     outputOverrides: {
       hostexec: {
         runtimeDir: runtimePaths.runtimeDir,
-        brokerSocket: socketPath,
+        brokerSocket: controlSocketPath,
         sessionTmpDir: containerSessionTmp,
       } satisfies HostExecState,
     },
     broker: {
-      socketPath,
+      execSocketPath,
+      controlSocketPath,
       paths: runtimePaths,
       sessionId: input.sessionId,
       profileName: input.profileName,
@@ -385,7 +399,8 @@ function runHostExec(
       brokerService.start({
         paths: spec.paths,
         sessionId: spec.sessionId,
-        socketPath: spec.socketPath,
+        execSocketPath: spec.execSocketPath,
+        controlSocketPath: spec.controlSocketPath,
         profileName: spec.profileName,
         workspaceRoot: spec.workspaceRoot,
         sessionTmpDir: spec.sessionTmpDir,
