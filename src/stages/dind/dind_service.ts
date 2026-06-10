@@ -32,7 +32,6 @@ export class DindService extends Context.Tag("nas/DindService")<
     readonly ensureSidecar: (opts: DindSidecarOpts) => Effect.Effect<void>;
     readonly teardownSidecar: (opts: {
       containerName: string;
-      networkName: string;
       sharedTmpVolume: string;
       shared: boolean;
     }) => Effect.Effect<void>;
@@ -52,7 +51,6 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
           ensureDindSidecar({
             containerName: opts.containerName,
             sharedTmpVolume: opts.sharedTmpVolume,
-            networkName: opts.networkName,
             shared: opts.shared,
             disableCache: opts.disableCache,
             readinessTimeoutMs: opts.readinessTimeoutMs,
@@ -68,7 +66,6 @@ export const DindServiceLive: Layer.Layer<DindService> = Layer.succeed(
         try: () =>
           teardownDindSidecar({
             containerName: opts.containerName,
-            networkName: opts.networkName,
             sharedTmpVolume: opts.sharedTmpVolume,
             shared: opts.shared,
           }),
@@ -88,7 +85,6 @@ export interface DindServiceFakeConfig {
   readonly ensureSidecar?: (opts: DindSidecarOpts) => Effect.Effect<void>;
   readonly teardownSidecar?: (opts: {
     containerName: string;
-    networkName: string;
     sharedTmpVolume: string;
     shared: boolean;
   }) => Effect.Effect<void>;

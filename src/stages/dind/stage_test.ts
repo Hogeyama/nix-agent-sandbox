@@ -166,7 +166,6 @@ test("DindStage: shared mode uses fixed names", () => {
       },
       dynamicOps: [],
     },
-    network: { name: "nas-dind-shared" },
     extraRunArgs: ["-v", "nas-dind-shared-tmp:/tmp/nas-shared"],
     command: { agentCommand: ["claude"], extraArgs: [] },
     labels: {},
@@ -189,9 +188,7 @@ test("DindStage: non-shared mode uses session-based names", () => {
   expect(p.sharedTmpVolume).toEqual("nas-dind-tmp-abcdef12");
   expect(p.shared).toEqual(false);
 
-  expect(p.outputOverrides.container?.network).toEqual({
-    name: "nas-dind-abcdef12",
-  });
+  expect(p.outputOverrides.container?.network).toBeUndefined();
   expect(p.outputOverrides.container?.env.static.DOCKER_HOST).toEqual(
     "tcp://nas-dind-abcdef12:2375",
   );
@@ -208,7 +205,7 @@ test("DindStage: default options", () => {
   expect(p.readinessTimeoutMs).toEqual(30_000);
 });
 
-test("DindStage: planner merges into existing container slice and replaces stale network attachment", () => {
+test("DindStage: planner merges into existing container slice and preserves existing network attachment", () => {
   const profile = makeProfile({ docker: { enable: true, shared: false } });
   const input = {
     ...makeSharedInput(profile, "abcdef12-3456-7890-abcd-ef1234567890"),
@@ -250,7 +247,7 @@ test("DindStage: planner merges into existing container slice and replaces stale
       "-v",
       "nas-dind-tmp-abcdef12:/tmp/nas-shared",
     ],
-    network: { name: "nas-dind-abcdef12" },
+    network: { name: "stale-net" },
     command: { agentCommand: ["copilot"], extraArgs: ["--safe"] },
     labels: { "nas.managed": "true" },
   });
@@ -285,7 +282,6 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   const ensureCalls: DindSidecarOpts[] = [];
   const teardownCalls: Array<{
     containerName: string;
-    networkName: string;
     sharedTmpVolume: string;
     shared: boolean;
   }> = [];
@@ -328,7 +324,7 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
   expect(ensureCalls[0].readinessTimeoutMs).toEqual(5000);
 
   expect(result.dind).toEqual({ containerName: "nas-dind-shared" });
-  expect(result.container?.network).toEqual({ name: "nas-dind-shared" });
+  expect(result.container?.network).toBeUndefined();
   expect(result.container?.env.static.DOCKER_HOST).toEqual(
     "tcp://nas-dind-shared:2375",
   );
@@ -343,7 +339,6 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
 
   expect(teardownCalls.length).toEqual(1);
   expect(teardownCalls[0].containerName).toEqual("nas-dind-shared");
-  expect(teardownCalls[0].networkName).toEqual("nas-dind-shared");
   expect(teardownCalls[0].sharedTmpVolume).toEqual("nas-dind-shared-tmp");
   expect(teardownCalls[0].shared).toEqual(true);
 });

@@ -221,9 +221,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
         "string",
       );
       expect(result.dind?.containerName).toEqual(containerName);
-      expect(result.container?.network?.name.startsWith("nas-dind-")).toEqual(
-        true,
-      );
+      expect(result.container?.network).toBeUndefined();
       expect(result.container?.env.static.DOCKER_HOST).toEqual(
         `tcp://${containerName}:2375`,
       );

@@ -11,9 +11,6 @@ import {
   dockerExec,
   dockerIsRunning,
   dockerLogs,
-  dockerNetworkConnect,
-  dockerNetworkCreateWithLabels,
-  dockerNetworkRemove,
   dockerRm,
   dockerRunDetached,
   dockerStop,
@@ -22,7 +19,6 @@ import {
 } from "./client.ts";
 import {
   NAS_KIND_DIND,
-  NAS_KIND_DIND_NETWORK,
   NAS_KIND_DIND_TMP,
   NAS_KIND_LABEL,
   NAS_MANAGED_LABEL,
@@ -64,33 +60,6 @@ export async function ensureSharedTmpWritable(
     throw new Error(
       `Failed to make shared tmp writable: ${SHARED_TMP_MOUNT_PATH}`,
     );
-  }
-}
-
-/** Create network (skip if exists) and connect container */
-export async function ensureNetwork(
-  networkName: string,
-  containerName: string,
-): Promise<void> {
-  try {
-    await dockerNetworkCreateWithLabels(networkName, {
-      labels: {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_DIND_NETWORK,
-      },
-    });
-    logInfo(`[nas] DinD: created network ${networkName}`);
-  } catch {
-    // Network may already exist; dax $`.quiet()` does not expose
-    // Docker's stderr in the error object, so we cannot distinguish
-    // "already exists" from other failures here. This matches the
-    // original implementation which ignored all creation errors.
-  }
-  try {
-    await dockerNetworkConnect(networkName, containerName);
-  } catch {
-    // Container may already be connected to this network.
-    // Same limitation as above: dax error lacks Docker stderr.
   }
 }
 
@@ -188,7 +157,6 @@ export async function startDindSidecar(
 export interface EnsureDindSidecarParams {
   containerName: string;
   sharedTmpVolume: string;
-  networkName: string;
   shared: boolean;
   disableCache?: boolean;
   readinessTimeoutMs?: number;
@@ -202,7 +170,7 @@ export interface EnsureDindSidecarResult {
 
 /**
  * Ensure a DinD sidecar is running: reuse shared if applicable,
- * start new if needed, configure shared tmp and network.
+ * start new if needed, configure shared tmp.
  * On error during post-start setup, cleans up the started sidecar.
  */
 export async function ensureDindSidecar(
@@ -211,7 +179,6 @@ export async function ensureDindSidecar(
   const {
     containerName,
     sharedTmpVolume,
-    networkName,
     shared,
     disableCache,
     readinessTimeoutMs,
@@ -243,9 +210,6 @@ export async function ensureDindSidecar(
   try {
     // 共有 tmp を全ユーザーから書き込み可能にする
     await ensureSharedTmpWritable(containerName);
-
-    // カスタムネットワーク作成（既存ならスキップ）& サイドカー接続
-    await ensureNetwork(networkName, containerName);
   } catch (error) {
     // 途中で失敗した場合、起動済みサイドカーをクリーンアップしてから再 throw
     if (sidecarStarted && !shared) {
@@ -281,19 +245,18 @@ export async function ensureDindSidecar(
 /** Parameters for teardownDindSidecar (decoupled from effect types). */
 export interface TeardownDindSidecarParams {
   containerName: string;
-  networkName: string;
   sharedTmpVolume: string;
   shared: boolean;
 }
 
 /**
- * Tear down a DinD sidecar: stop/rm container, remove network and volume.
+ * Tear down a DinD sidecar: stop/rm container, remove volume.
  * Shared sidecars are kept alive.
  */
 export async function teardownDindSidecar(
   params: TeardownDindSidecarParams,
 ): Promise<void> {
-  const { containerName, networkName, sharedTmpVolume, shared } = params;
+  const { containerName, sharedTmpVolume, shared } = params;
 
   if (shared) {
     logInfo(`[nas] DinD: keeping shared sidecar (${containerName})`);
@@ -315,16 +278,6 @@ export async function teardownDindSidecar(
   } catch (e: unknown) {
     logWarn(
       `[nas] DinD teardown: failed to remove container: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
-  }
-  try {
-    logInfo(`[nas] DinD: removing network ${networkName}`);
-    await dockerNetworkRemove(networkName);
-  } catch (e: unknown) {
-    logWarn(
-      `[nas] DinD teardown: failed to remove network: ${
         e instanceof Error ? e.message : String(e)
       }`,
     );

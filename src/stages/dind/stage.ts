@@ -12,8 +12,11 @@
  * 1. dind-rootless をデフォルト bridge で起動（rootlesskit が vpnkit + copy-up で
  *    ネットワーク名前空間をセットアップするため、カスタムネットワーク上では起動に失敗する）
  * 2. TCP 経由で daemon の readiness を確認
- * 3. docker network connect でカスタムネットワークに接続
- * 4. エージェントコンテナをカスタムネットワーク上で起動し、DNS でサイドカーに接続
+ * 3. エージェントコンテナに DOCKER_HOST env（tcp://<サイドカー名>:2375）を注入し、
+ *    サイドカーの Docker デーモンを利用可能にする
+ *
+ * エージェントコンテナの network は DindStage では設定しない（network の設定は
+ * 別ステージが担う）。
  */
 
 import { Effect, type Scope } from "effect";
@@ -181,7 +184,6 @@ function runDind(
         dind
           .teardownSidecar({
             containerName: plan.containerName,
-            networkName: plan.networkName,
             sharedTmpVolume: plan.sharedTmpVolume,
             shared: plan.shared,
           })
@@ -199,14 +201,7 @@ function buildContainerState(
     readonly sharedTmpVolume: string;
   },
 ): ContainerPlan {
-  const base = normalizeContainerBase(input);
-
-  return mergeContainerPlan(base, {
-    network: {
-      name: input.profile.docker.shared
-        ? SHARED_NETWORK_NAME
-        : `nas-dind-${input.sessionId.slice(0, 8)}`,
-    },
+  return mergeContainerPlan(input.container, {
     env: {
       static: {
         DOCKER_HOST: `tcp://${config.containerName}:${DIND_INTERNAL_PORT}`,
@@ -216,11 +211,6 @@ function buildContainerState(
     },
     extraRunArgs: ["-v", `${config.sharedTmpVolume}:${SHARED_TMP_MOUNT_PATH}`],
   });
-}
-
-function normalizeContainerBase(input: DindStageInput): ContainerPlan {
-  const { network: _network, ...containerWithoutNetwork } = input.container;
-  return containerWithoutNetwork;
 }
 
 // ---------------------------------------------------------------------------
