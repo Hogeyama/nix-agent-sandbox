@@ -16,8 +16,15 @@ describe("getAgentTerminalTraits", () => {
     expect(getAgentTerminalTraits("Copilot").autoForceMouseMode).toBe(true);
   });
 
-  test("leaves autoForceMouseMode off for claude", () => {
-    expect(getAgentTerminalTraits("claude").autoForceMouseMode).toBe(false);
+  test("enables autoForceMouseMode for claude", () => {
+    // Claude Code emits its mouse-tracking DECSET only at startup; dtach
+    // does not replay terminal modes on re-attach, so the UI terminal must
+    // force mouse mode itself.
+    expect(getAgentTerminalTraits("claude").autoForceMouseMode).toBe(true);
+  });
+
+  test("matches claude case-insensitively", () => {
+    expect(getAgentTerminalTraits("Claude").autoForceMouseMode).toBe(true);
   });
 
   test("leaves autoForceMouseMode off for codex", () => {

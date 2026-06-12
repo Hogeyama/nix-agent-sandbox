@@ -17,11 +17,13 @@
  */
 export interface AgentTerminalTraits {
   /**
-   * When true, the terminal forces xterm-side mouse-mode tracking on so the
-   * pane can drive its own pseudo-scrollback. Copilot CLI relies on this
-   * because it does not emit a DECSET mouse-tracking sequence itself, while
-   * other agents declare any needed DECSET on their own and must not be
-   * overridden.
+   * When true, the terminal forces xterm-side mouse-mode tracking on.
+   * Copilot CLI relies on this because it does not emit a DECSET
+   * mouse-tracking sequence itself. Claude Code does emit DECSET, but only
+   * once at startup — dtach does not replay terminal modes on re-attach, so
+   * a UI terminal attaching later never sees the sequence and must force
+   * mouse mode itself. Sessions left false get an explicit mouse-mode reset
+   * after attach to keep normal text selection working.
    */
   readonly autoForceMouseMode: boolean;
 }
@@ -30,9 +32,9 @@ export interface AgentTerminalTraits {
  * Resolve UI terminal traits for the given agent identifier.
  *
  * The lookup is a case-insensitive substring match: any agent string whose
- * lower-cased form contains `"copilot"` opts in to `autoForceMouseMode`.
- * Null, undefined, empty, and unrecognized identifiers map to an
- * all-defaults record with every trait disabled.
+ * lower-cased form contains `"copilot"` or `"claude"` opts in to
+ * `autoForceMouseMode`. Null, undefined, empty, and unrecognized
+ * identifiers map to an all-defaults record with every trait disabled.
  */
 export function getAgentTerminalTraits(
   agent: string | null | undefined,
@@ -41,7 +43,7 @@ export function getAgentTerminalTraits(
     return { autoForceMouseMode: false };
   }
   const lower = agent.toLowerCase();
-  if (lower.includes("copilot")) {
+  if (lower.includes("copilot") || lower.includes("claude")) {
     return { autoForceMouseMode: true };
   }
   return { autoForceMouseMode: false };
