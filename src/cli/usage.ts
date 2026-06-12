@@ -16,6 +16,8 @@ Usage:
   nas ui [stop] [--port PORT] [--no-open]
   nas audit [--since YYYY-MM-DD] [--session ID] [--domain network|hostexec] [--json]
   nas config init
+  nas config trust              # Trust the repo-local .nas/config.pkl in the cwd
+  nas config untrust            # Revoke trust for the repo-local config
   nas config migrate yml2pkl [--global] [--input <path>] [-f, --force]
   nas config migrate nix2pkl [--global] [--input <path>] [-f, --force]
   nas hook --kind start|attention|stop [--when path=value ...]

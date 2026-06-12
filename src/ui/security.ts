@@ -13,6 +13,17 @@
  *      open ws://127.0.0.1:<port>/api/terminal/... . Blocked by requiring
  *      the `Origin` header to match the loopback origin for mutating
  *      requests and for WebSocket upgrades.
+ *
+ * Threat model — the same host is a TRUST BOUNDARY. Another local user's
+ * process can connect to the loopback port and forge `Host`/`Origin` headers,
+ * and can fetch the (unauthenticated) HTML shell to read any bearer token we
+ * might embed in it. Defending against a hostile local user would require
+ * gating even `GET /` behind a token passed out-of-band (Jupyter-style URL
+ * tokens), which breaks "just type localhost:<port> in the browser". We
+ * deliberately do NOT take that trade-off: nas assumes every user account on
+ * the host is trusted, so loopback peers are in scope as trusted. The guards
+ * here exist to stop *remote* web origins (DNS rebinding, CSRF/CSWSH), not
+ * co-resident local users.
  */
 
 import { tokenEquals } from "./ws_token.ts";

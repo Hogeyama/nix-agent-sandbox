@@ -23,6 +23,7 @@ import {
   migrateYml2Pkl,
 } from "./migrate.ts";
 import { getGlobalConfigDir } from "./paths.ts";
+import { ensureConfigTrusted, recordConfigTrust } from "./trust.ts";
 import type { Config } from "./types.ts";
 import { validateConfig } from "./validate.ts";
 
@@ -50,6 +51,13 @@ export async function loadConfig(
 
   const startDir = opts.startDir ?? process.cwd();
   const found = await resolveConfigFile(startDir);
+
+  // Trust gate: a repo-local config can run host-side commands, mount host
+  // paths, and alter the network allowlist. Refuse to evaluate it (which is
+  // itself a code-execution surface via pkl `read(...)`) unless its exact
+  // contents have been trusted. Auto-init records trust for nas's own
+  // template, so a freshly initialized config passes here.
+  await ensureConfigTrusted(found.nasDir, found.configPath);
 
   // Check for legacy global config before eval
   await detectAndMigrateGlobalLegacy();
@@ -91,6 +99,9 @@ async function resolveConfigFile(startDir: string): Promise<ConfigFileFound> {
       `.nas/config.pkl not found even after auto-init. This is a bug — please report it.`,
     );
   }
+  // nas just generated this config from its own template, so trust it: the
+  // user did not author its contents but they did invoke nas here.
+  await recordConfigTrust(afterInit.nasDir);
   return afterInit;
 }
 
@@ -220,6 +231,16 @@ interface ConfigFileFound {
   nasDir: string;
   /** .nas/config.pkl の絶対パス */
   configPath: string;
+}
+
+/**
+ * 指定ディレクトリから上位に向かって .nas/config.pkl を探す。
+ * trust 系コマンドが nasDir を解決するために公開している。
+ */
+export async function findExistingConfig(
+  dir: string,
+): Promise<ConfigFileFound | null> {
+  return findConfigFile(dir);
 }
 
 /** 指定ディレクトリから上位に向かって .nas/config.pkl を探す */
@@ -366,9 +387,24 @@ async function evalPklConfig(
     const evalPklPath = path.join(tmpDir, "eval.pkl");
     await writeFile(evalPklPath, evalContent);
 
-    // pkl eval
+    // pkl eval, sandboxed. Restricting resources blocks `read("env:SECRET")` /
+    // `read("file:/etc/...")` exfiltration at eval time; modules are limited to
+    // the local schemes the config graph actually uses (no network/package
+    // fetches). `prop:` is kept so external properties still resolve.
     const proc = Bun.spawn(
-      ["pkl", "eval", "--project-dir", tmpDir, "-f", "json", evalPklPath],
+      [
+        "pkl",
+        "eval",
+        "--project-dir",
+        tmpDir,
+        "--allowed-modules",
+        "pkl:,file:,modulepath:",
+        "--allowed-resources",
+        "prop:",
+        "-f",
+        "json",
+        evalPklPath,
+      ],
       { stdout: "pipe", stderr: "pipe", env: process.env },
     );
     const [stdoutText, stderrText] = await Promise.all([

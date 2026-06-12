@@ -31,6 +31,11 @@ process.env.NAS_SESSION_STORE_DIR = path.join(
   "sessions",
 );
 
+// Bypass the repo-local config trust gate during tests. Fixtures construct
+// throwaway `.nas/config.pkl` files in temp dirs and load them directly; the
+// gate itself is covered by dedicated tests that clear this var.
+process.env.NAS_CONFIG_TRUST_ALL = "1";
+
 process.on("exit", () => {
   try {
     rmSync(root, { recursive: true, force: true });

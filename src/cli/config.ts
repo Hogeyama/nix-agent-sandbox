@@ -2,9 +2,12 @@
  * nas config サブコマンド
  */
 
+import * as path from "node:path";
 import type { InitConfigResult } from "../config/init.ts";
 import { initConfig } from "../config/init.ts";
+import { findExistingConfig } from "../config/load.ts";
 import { migrateNix2Pkl, migrateYml2Pkl } from "../config/migrate.ts";
+import { recordConfigTrust, removeConfigTrust } from "../config/trust.ts";
 import { getFlagValue } from "./helpers.ts";
 
 /**
@@ -38,6 +41,35 @@ export async function runConfigCommand(args: string[]): Promise<void> {
     for (const f of result.skipped) {
       console.log(`  skipped: ${f} (already exists)`);
     }
+    // The user explicitly created this config here; trust it so the gate does
+    // not immediately prompt on the next run.
+    await recordConfigTrust(path.join(projectDir, ".nas"));
+    return;
+  }
+
+  if (sub === "trust") {
+    const found = await findExistingConfig(process.cwd());
+    if (!found) {
+      throw new Error(
+        `No .nas/config.pkl found from ${process.cwd()}. Run \`nas config init\` first.`,
+      );
+    }
+    await recordConfigTrust(found.nasDir);
+    console.log(`  trusted: ${found.configPath}`);
+    return;
+  }
+
+  if (sub === "untrust") {
+    const found = await findExistingConfig(process.cwd());
+    if (!found) {
+      throw new Error(`No .nas/config.pkl found from ${process.cwd()}.`);
+    }
+    const removed = await removeConfigTrust(found.nasDir);
+    console.log(
+      removed
+        ? `  untrusted: ${found.configPath}`
+        : `  not trusted: ${found.configPath} (no change)`,
+    );
     return;
   }
 
@@ -67,6 +99,6 @@ export async function runConfigCommand(args: string[]): Promise<void> {
   }
 
   throw new Error(
-    `Unknown config subcommand: ${sub ?? "(none)"}. Available subcommands: init, migrate`,
+    `Unknown config subcommand: ${sub ?? "(none)"}. Available subcommands: init, migrate, trust, untrust`,
   );
 }
