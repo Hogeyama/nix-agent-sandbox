@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -107,6 +107,82 @@ test("AuthRouter: authorizes valid session credentials over unix socket", async 
     controller.abort();
     await server;
     await broker.close().catch(() => {});
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("AuthRouter: recovers from stale socket and accepts connections", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-auth-router-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const controller = new AbortController();
+
+  // Create a stale (non-listening) socket file before starting the server
+  await writeFile(paths.authRouterSocket, "stale");
+
+  const server = serveAuthRouter(runtimeDir, { signal: controller.signal });
+
+  try {
+    await waitForSocket(paths.authRouterSocket, 5_000);
+    const response = await sendUnixHttpRequest(
+      paths.authRouterSocket,
+      [
+        "GET /authorize HTTP/1.1",
+        "Host: auth-router",
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+
+    expect(response.status).toEqual(407);
+    expect(response.headers["proxy-authenticate"]).toEqual('Basic realm="nas"');
+    expect(response.body).toEqual("missing proxy credentials");
+  } finally {
+    controller.abort();
+    await server;
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("AuthRouter: concurrent restart does not leave socket unreachable", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-auth-router-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+
+  // Session A: start and confirm it is listening
+  const controllerA = new AbortController();
+  const serverA = serveAuthRouter(runtimeDir, { signal: controllerA.signal });
+
+  try {
+    await waitForSocket(paths.authRouterSocket, 5_000);
+  } finally {
+    // Shut down session A
+    controllerA.abort();
+    await serverA;
+  }
+
+  // Session B: start immediately after session A exits
+  const controllerB = new AbortController();
+  const serverB = serveAuthRouter(runtimeDir, { signal: controllerB.signal });
+
+  try {
+    await waitForSocket(paths.authRouterSocket, 5_000);
+    const response = await sendUnixHttpRequest(
+      paths.authRouterSocket,
+      [
+        "GET /authorize HTTP/1.1",
+        "Host: auth-router",
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+
+    expect(response.status).toEqual(407);
+    expect(response.headers["proxy-authenticate"]).toEqual('Basic realm="nas"');
+    expect(response.body).toEqual("missing proxy credentials");
+  } finally {
+    controllerB.abort();
+    await serverB;
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
