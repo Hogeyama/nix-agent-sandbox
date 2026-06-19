@@ -177,7 +177,7 @@ test("envoy template includes required proxy settings", async () => {
     "x-nas-original-method",
     "x-nas-original-authority",
     "x-nas-original-url",
-    "300000",
+    "timeouts = {5000, 1000, 1000}",
     'handle:headers():remove("proxy-authorization")',
   ]) {
     expect(template.includes(fragment)).toEqual(true);

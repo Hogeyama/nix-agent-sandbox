@@ -63,13 +63,20 @@ static_resources:
                               ["x-nas-original-url"] = path,
                             }
 
-                            local resp_headers, resp_body = handle:httpCall(
-                              "auth-router",
-                              check_headers,
-                              "",
-                              300000,
-                              false
-                            )
+                            local resp_headers, resp_body
+                            local timeouts = {5000, 1000, 1000}
+                            for i, timeout_ms in ipairs(timeouts) do
+                              resp_headers, resp_body = handle:httpCall(
+                                "auth-router",
+                                check_headers,
+                                "",
+                                timeout_ms,
+                                false
+                              )
+                              if resp_headers ~= nil then
+                                break
+                              end
+                            end
 
                             if resp_headers == nil then
                               handle:respond({[":status"] = "403"}, "auth-router unavailable")
@@ -117,7 +124,7 @@ static_resources:
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
     - name: auth-router
-      connect_timeout: 300s
+      connect_timeout: 5s
       type: STATIC
       load_assignment:
         cluster_name: auth-router
