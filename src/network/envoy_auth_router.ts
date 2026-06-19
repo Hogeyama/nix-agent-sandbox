@@ -47,7 +47,6 @@ export async function serveAuthRouter(
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
-  await removeSocketIfExists(paths.authRouterSocket);
 
   let server: Server;
   try {
@@ -57,7 +56,15 @@ export async function serveAuthRouter(
     );
   } catch (error) {
     if (options.signal?.aborted) return;
-    throw error;
+    if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") {
+      await rm(paths.authRouterSocket, { force: true });
+      server = await createUnixServer(
+        paths.authRouterSocket,
+        (socket) => void handleConnection(paths, socket),
+      );
+    } else {
+      throw error;
+    }
   }
 
   // Envoy runs as uid 101 inside its container and needs write access.
@@ -351,8 +358,4 @@ async function canConnect(socketPath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function removeSocketIfExists(socketPath: string): Promise<void> {
-  await rm(socketPath, { force: true });
 }
