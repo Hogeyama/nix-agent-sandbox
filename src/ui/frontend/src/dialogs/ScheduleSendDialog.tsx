@@ -6,6 +6,10 @@
  * result is previewed live below the input. On submit the entry is
  * added to the `ScheduledSendStore` and the dialog closes.
  *
+ * Below the input form, scheduled entries are listed with a message
+ * preview, scheduled time, a live-updating remaining-time display,
+ * and a cancel button. The list section is hidden when no entries exist.
+ *
  * Reuses the existing `.dialog-*` CSS classes from styles.css. The
  * focus trap follows the same pattern as `NewSessionDialog`.
  */
@@ -14,11 +18,15 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  For,
   onCleanup,
   Show,
 } from "solid-js";
 import type { ScheduledSendStore } from "../stores/scheduledSendStore";
-import { parseTimeInput } from "../terminal/scheduledSendLogic";
+import {
+  formatTimeRemaining,
+  parseTimeInput,
+} from "../terminal/scheduledSendLogic";
 import { createFocusTrap } from "./createFocusTrap";
 
 const DIALOG_TITLE_ID = "schedule-send-dialog-title";
@@ -96,6 +104,23 @@ export function ScheduleSendDialog(props: Props) {
   const canSubmit = createMemo(
     () => parsedTime() !== null && message().trim() !== "",
   );
+
+  // Live-updating "now" signal for remaining-time display.
+  // The interval is created when the dialog opens and cleaned up
+  // when it closes, preventing leaks.
+  const [now, setNow] = createSignal(new Date());
+  createEffect(() => {
+    if (!props.open()) return;
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 1000);
+    onCleanup(() => clearInterval(id));
+  });
+
+  const MAX_PREVIEW_LENGTH = 60;
+  function truncateMessage(msg: string): string {
+    if (msg.length <= MAX_PREVIEW_LENGTH) return msg;
+    return `${msg.slice(0, MAX_PREVIEW_LENGTH)}...`;
+  }
 
   return (
     <Show when={props.open()}>
@@ -179,6 +204,38 @@ export function ScheduleSendDialog(props: Props) {
               </button>
             </div>
           </div>
+
+          <Show when={props.store.entries().length > 0}>
+            <div class="scheduled-list">
+              <h3 class="scheduled-list-heading">Scheduled</h3>
+              <For each={props.store.entries()}>
+                {(entry) => (
+                  <div class="scheduled-item">
+                    <div class="scheduled-item-info">
+                      <span class="scheduled-item-message">
+                        {truncateMessage(entry.message)}
+                      </span>
+                      <span class="scheduled-item-meta">
+                        {entry.scheduledAt.toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                        {" — "}
+                        {formatTimeRemaining(entry.scheduledAt, now())}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      class="scheduled-item-cancel"
+                      onClick={() => props.store.remove(entry.id)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
       </div>
     </Show>
