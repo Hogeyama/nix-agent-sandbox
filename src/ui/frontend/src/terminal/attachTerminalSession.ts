@@ -186,6 +186,13 @@ export interface TerminalHandle {
    * to do every time a terminal first appears.
    */
   nudge(): void;
+  /**
+   * Send raw text to the terminal's stdin via the WebSocket. The text
+   * is UTF-8 encoded and sent as a binary frame, matching the encoding
+   * used by xterm's `onData` path. Callers are responsible for
+   * appending any newline characters if needed.
+   */
+  sendInput(text: string): void;
   dispose(): void;
   search: TerminalSearchHandle;
 }
@@ -209,6 +216,7 @@ const NOOP_HANDLE: TerminalHandle = {
   forceMouseModeOn() {},
   resetMouseMode() {},
   nudge() {},
+  sendInput() {},
   dispose() {},
   search: NOOP_SEARCH_HANDLE,
 };
@@ -764,6 +772,12 @@ export function attachTerminalSession(opts: AttachOpts): TerminalHandle {
       term.options.fontSize = current - 1;
       term.options.fontSize = current;
       refit();
+    },
+    sendInput(text: string) {
+      if (disposed) return;
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const encoder = new TextEncoder();
+      ws.send(encoder.encode(text));
     },
     dispose() {
       if (disposed) return;

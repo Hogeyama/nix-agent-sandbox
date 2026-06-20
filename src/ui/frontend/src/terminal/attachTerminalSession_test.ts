@@ -625,6 +625,7 @@ describe("attachTerminalSession", () => {
     expect(() => handle.isMouseModeForced()).not.toThrow();
     expect(() => handle.forceMouseModeOn()).not.toThrow();
     expect(() => handle.resetMouseMode()).not.toThrow();
+    expect(() => handle.sendInput("hello")).not.toThrow();
   });
 
   test("dispose surfaces term.dispose() failures through onError", () => {
@@ -934,5 +935,62 @@ describe("attachTerminalSession", () => {
 
     handle.search.clear();
     expect(clearDecorations).toHaveBeenCalledTimes(1);
+  });
+
+  test("sendInput encodes text as UTF-8 bytes and sends via WebSocket", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+    });
+
+    handle.sendInput("hi\n");
+    expect(sock.sent).toHaveLength(1);
+    const sent = sock.sent[0];
+    expect(sent).toBeInstanceOf(Uint8Array);
+    // "hi\n" → [0x68, 0x69, 0x0a]
+    expect(Array.from(sent as Uint8Array)).toEqual([0x68, 0x69, 0x0a]);
+  });
+
+  test("sendInput does not send when handle is disposed", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+    });
+
+    handle.dispose();
+    handle.sendInput("should not arrive");
+    expect(sock.sent).toEqual([]);
+  });
+
+  test("sendInput does not send when WebSocket readyState is not OPEN", () => {
+    const fakeTerm = makeFakeTerminal();
+    const sock = makeFakeSocket();
+
+    const handle = attachTerminalSession({
+      sessionId: "s1",
+      container: fakeContainer(),
+      wsToken: "t",
+      createTerminal: () => fakeTerm.term,
+      createFitAddon: () => makeFakeFitAddon({ cols: 80, rows: 24 }),
+      createWebSocket: () => sock,
+    });
+
+    sock.readyState = WebSocket.CLOSING;
+    handle.sendInput("should not arrive");
+    expect(sock.sent).toEqual([]);
   });
 });
