@@ -283,24 +283,26 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
           </button>
         )}
       </Show>
-      <button
-        type="button"
-        class="tool"
-        onClick={toggleSearch}
-        aria-pressed={searchOpen()}
-      >
-        Search
-      </button>
-      <Show when={searchOpen()}>
-        <input
-          type="text"
-          class="search-input"
-          placeholder="Search…"
-          value={searchQuery()}
-          onInput={(e) => setSearchQuery(e.currentTarget.value)}
-          onKeyDown={handleSearchKey}
-          aria-label="Search terminal output"
-        />
+      <Show when={props.activeTerminalId()}>
+        <button
+          type="button"
+          class="tool"
+          onClick={toggleSearch}
+          aria-pressed={searchOpen()}
+        >
+          Search
+        </button>
+        <Show when={searchOpen()}>
+          <input
+            type="text"
+            class="search-input"
+            placeholder="Search…"
+            value={searchQuery()}
+            onInput={(e) => setSearchQuery(e.currentTarget.value)}
+            onKeyDown={handleSearchKey}
+            aria-label="Search terminal output"
+          />
+        </Show>
       </Show>
       <Show when={props.activeTerminalId()}>
         <button
