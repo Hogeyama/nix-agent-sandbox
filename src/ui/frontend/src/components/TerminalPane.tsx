@@ -8,6 +8,9 @@ import {
 } from "solid-js";
 import { getAgentTerminalTraits } from "../../../../agents/terminalTraits";
 import { parseShellSessionId } from "../../../shell_session_id";
+import { ScheduleSendDialog } from "../dialogs/ScheduleSendDialog";
+import { useScheduledSendExecutor } from "../hooks/useScheduledSendExecutor";
+import { createScheduledSendStore } from "../stores/scheduledSendStore";
 import type { SessionsStore } from "../stores/sessionsStore";
 import { resolveContextAgentRow } from "../stores/shellMapping";
 import type { TerminalsStore } from "../stores/terminalsStore";
@@ -277,6 +280,16 @@ export function TerminalPane(props: Props) {
     describeTerminalToolbarContext(activeTerminalId(), props.sessions.rows()),
   );
 
+  // Scheduled send: store, executor, and dialog state.
+  const scheduledSendStore = createScheduledSendStore();
+  const executor = useScheduledSendExecutor({
+    store: scheduledSendStore,
+    getHandle: () => activeTerminalHandle(),
+  });
+  onCleanup(() => executor.dispose());
+
+  const [scheduleDialogOpen, setScheduleDialogOpen] = createSignal(false);
+
   return (
     <section class="pane pane-center">
       <div
@@ -304,6 +317,13 @@ export function TerminalPane(props: Props) {
         onStopContainer={props.onStopContainer}
         onRename={props.onRename}
         onShellToggle={props.onShellToggle}
+        scheduledCount={() => scheduledSendStore.count()}
+        onScheduleClick={() => setScheduleDialogOpen(true)}
+      />
+      <ScheduleSendDialog
+        open={scheduleDialogOpen}
+        onClose={() => setScheduleDialogOpen(false)}
+        store={scheduledSendStore}
       />
     </section>
   );

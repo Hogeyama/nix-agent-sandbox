@@ -753,6 +753,23 @@ body::after {
   border-color: var(--amber);
 }
 
+.toolbar-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 8px;
+  background: var(--amber);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 .toolbar-error {
   color: var(--rose);
   font-size: 11px;
@@ -1627,6 +1644,10 @@ body::after {
   font-size: 12px;
   width: 100%;
 }
+.dialog-input::placeholder {
+  color: var(--muted-2);
+  opacity: 1;
+}
 .dialog-input:focus {
   outline: none;
   border-color: var(--amber);
@@ -1694,6 +1715,11 @@ body::after {
 }
 .dialog-btn:disabled:hover {
   background: transparent;
+}
+.dialog-textarea {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.5;
 }
 
 /* scrollbars */

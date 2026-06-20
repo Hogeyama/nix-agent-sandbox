@@ -90,6 +90,10 @@ export interface TerminalToolbarProps {
    * disables the button on its own.
    */
   onStopContainer: (containerName: string) => Promise<unknown>;
+  /** Number of pending scheduled sends. Drives badge visibility. */
+  scheduledCount: () => number;
+  /** Opens the schedule-send dialog. */
+  onScheduleClick: () => void;
 }
 
 const ERROR_TIMEOUT_MS = 5000;
@@ -297,6 +301,19 @@ export function TerminalToolbar(props: TerminalToolbarProps) {
           onKeyDown={handleSearchKey}
           aria-label="Search terminal output"
         />
+      </Show>
+      <Show when={props.activeTerminalId()}>
+        <button
+          type="button"
+          class="tool"
+          onClick={() => props.onScheduleClick()}
+          aria-label="Schedule send"
+        >
+          Schedule
+          <Show when={props.scheduledCount() > 0}>
+            <span class="toolbar-badge">{props.scheduledCount()}</span>
+          </Show>
+        </button>
       </Show>
       <span class="spacer" />
       <span class="fontsize">
