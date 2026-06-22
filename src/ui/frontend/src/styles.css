@@ -2539,6 +2539,128 @@ body::after {
   display: none;
 }
 
+/* Events section inside a turn accordion body. Sits between the user
+ * prompt block and the spans table. Uses a native <details>/<summary>
+ * for collapse (default closed) so the event timeline stays out of the
+ * way until explicitly requested. The section is compact (11px base)
+ * to stay visually subordinate to the spans table. */
+.history-detail-events-section {
+  border-bottom: 1px solid var(--rule-soft);
+}
+.history-detail-events-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  user-select: none;
+  transition: color 0.15s;
+}
+.history-detail-events-summary::-webkit-details-marker {
+  display: none;
+}
+.history-detail-events-summary:hover {
+  color: var(--cream-dim);
+}
+.history-detail-events-label {
+  color: inherit;
+}
+.history-detail-events-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted-2);
+}
+.history-detail-events-skill {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+}
+
+/* Events table within the <details> body. Smaller than the spans table
+ * (11px vs 12px) so it reads as supplementary detail. */
+.history-detail-events-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--cream-dim);
+}
+.history-detail-events-table thead th {
+  font-family: var(--sans);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule-soft);
+  text-align: left;
+}
+.history-detail-events-table thead th:first-child {
+  text-align: right;
+}
+.history-detail-events-table tbody tr {
+  border-bottom: 1px solid var(--rule-soft);
+}
+.history-detail-events-table tbody tr:hover {
+  background-color: var(--surface-2);
+}
+.history-detail-events-table tbody td {
+  padding: 5px 12px;
+  font-feature-settings: "tnum";
+}
+.history-detail-events-table tbody td.is-numeric {
+  text-align: right;
+  color: var(--muted-2);
+}
+.history-detail-events-table tbody td.is-time {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.history-detail-events-table tbody td.is-detail {
+  color: var(--cream-dim);
+  word-break: break-word;
+}
+
+/* Event type badges — colour-coded by category, matching the ambient
+ * dark/amber palette. The base badge reuses the span-kind pill shape
+ * at a slightly smaller scale. */
+.history-detail-event-type {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--cream-dim);
+  white-space: nowrap;
+}
+.history-detail-event-type.is-prompt {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.history-detail-event-type.is-api {
+  border-color: var(--cream-dim);
+  color: var(--cream);
+}
+.history-detail-event-type.is-hook {
+  border-color: var(--muted);
+  color: var(--muted);
+}
+
 /* Topbar history link — sits between the live indicator and the gear
  * icon. Uses the same muted-cream typography as the settings nav so
  * the topbar reads as a single palette. */

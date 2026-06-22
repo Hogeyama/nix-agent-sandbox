@@ -63,6 +63,15 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
     setExpandedSpanId((prev) => (prev === id ? null : id));
   };
 
+  // Single-open accordion state for the Events table, following the
+  // same pattern as the Spans table above.
+  const [expandedEventId, setExpandedEventId] = createSignal<string | null>(
+    null,
+  );
+  const toggleEvent = (id: string) => {
+    setExpandedEventId((prev) => (prev === id ? null : id));
+  };
+
   // Per-turn accordion open-state: a Set of trace ids whose body is
   // currently rendered. Empty by default — every turn collapses on
   // first render so a long conversation does not flood the page.
@@ -341,6 +350,135 @@ export function ConversationDetailPage(props: ConversationDetailPageProps) {
                                     {group.userPromptText}
                                   </div>
                                 </div>
+                              </Show>
+                              <Show when={group.events.length > 0}>
+                                <details class="history-detail-events-section">
+                                  <summary class="history-detail-events-summary">
+                                    <span class="history-detail-events-label">
+                                      Events
+                                    </span>
+                                    <span class="history-detail-events-count">
+                                      {group.events.length}
+                                    </span>
+                                    <Show when={group.skillName !== null}>
+                                      <span class="history-detail-events-skill">
+                                        {group.skillName}
+                                      </span>
+                                    </Show>
+                                  </summary>
+                                  <table class="history-detail-events-table">
+                                    <thead>
+                                      <tr>
+                                        <th scope="col">Seq</th>
+                                        <th scope="col">Time</th>
+                                        <th scope="col">Type</th>
+                                        <th scope="col">Detail</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      <For each={group.events}>
+                                        {(ev) => {
+                                          const eventKey = `${group.traceId}-evt-${ev.sequence}`;
+                                          const isEvExpanded = () =>
+                                            expandedEventId() === eventKey;
+                                          const attrsRowId = `event-attrs-${eventKey}`;
+                                          const handleEvClick = (
+                                            e: MouseEvent & {
+                                              currentTarget: HTMLTableRowElement;
+                                            },
+                                          ) => {
+                                            const target =
+                                              e.target as HTMLElement | null;
+                                            if (target?.closest("a") !== null)
+                                              return;
+                                            toggleEvent(eventKey);
+                                          };
+                                          const handleEvKeyDown = (
+                                            e: KeyboardEvent & {
+                                              currentTarget: HTMLTableRowElement;
+                                            },
+                                          ) => {
+                                            if (
+                                              e.key === "Enter" ||
+                                              e.key === " "
+                                            ) {
+                                              e.preventDefault();
+                                              toggleEvent(eventKey);
+                                            }
+                                          };
+                                          return (
+                                            <>
+                                              {/* biome-ignore lint/a11y/useSemanticElements: a real <button> cannot wrap a row of <td> cells without breaking the <table> layout; role="button" + tabindex + key handlers expose the same activation intent. */}
+                                              <tr
+                                                role="button"
+                                                tabIndex={0}
+                                                aria-expanded={
+                                                  isEvExpanded()
+                                                    ? "true"
+                                                    : "false"
+                                                }
+                                                aria-controls={attrsRowId}
+                                                onClick={handleEvClick}
+                                                onKeyDown={handleEvKeyDown}
+                                              >
+                                                <td class="is-numeric">
+                                                  {ev.sequence}
+                                                </td>
+                                                <td
+                                                  title={ev.timeAbsolute}
+                                                  class="is-time"
+                                                >
+                                                  {ev.timeLabel}
+                                                </td>
+                                                <td>
+                                                  <span
+                                                    class={`history-detail-event-type ${ev.typeClass}`}
+                                                  >
+                                                    {ev.typeLabel}
+                                                  </span>
+                                                </td>
+                                                <td class="is-detail">
+                                                  {ev.detail}
+                                                </td>
+                                              </tr>
+                                              <Show when={isEvExpanded()}>
+                                                {/* biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: this drawer row is structurally a <tr> so the table layout stays intact; role="region" labels it as the expanded panel referenced by aria-controls. */}
+                                                {/* biome-ignore lint/a11y/useSemanticElements: a <section> cannot be a child of <tbody>; the row needs to remain a <tr> so the colspan drawer renders inside the same table. */}
+                                                <tr
+                                                  id={attrsRowId}
+                                                  role="region"
+                                                  class="history-detail-attrs-row"
+                                                >
+                                                  <td colspan={4}>
+                                                    <div class="history-detail-attrs-wrap">
+                                                      <button
+                                                        type="button"
+                                                        class="history-detail-attrs-copy"
+                                                        title="Copy JSON"
+                                                        aria-label="Copy event attributes"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          void navigator.clipboard?.writeText(
+                                                            ev.attrsPretty,
+                                                          );
+                                                        }}
+                                                      >
+                                                        copy
+                                                      </button>
+                                                      <pre class="history-detail-attrs-pre">
+                                                        {ev.attrsPretty}
+                                                      </pre>
+                                                    </div>
+                                                  </td>
+                                                </tr>
+                                              </Show>
+                                            </>
+                                          );
+                                        }}
+                                      </For>
+                                    </tbody>
+                                  </table>
+                                </details>
                               </Show>
                               <table class="history-detail-table">
                                 <thead>
