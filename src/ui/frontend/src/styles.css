@@ -2551,9 +2551,11 @@ body::after {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  width: 100%;
   padding: 8px 16px;
+  border: none;
+  background: transparent;
   cursor: pointer;
-  list-style: none;
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.18em;
@@ -2562,11 +2564,12 @@ body::after {
   user-select: none;
   transition: color 0.15s;
 }
-.history-detail-events-summary::-webkit-details-marker {
-  display: none;
-}
 .history-detail-events-summary:hover {
   color: var(--cream-dim);
+}
+.history-detail-events-caret {
+  font-size: 8px;
+  color: var(--muted-2);
 }
 .history-detail-events-label {
   color: inherit;
@@ -2586,7 +2589,7 @@ body::after {
   color: var(--amber);
 }
 
-/* Events table within the <details> body. Smaller than the spans table
+/* Events table within the collapsible body. Smaller than the spans table
  * (11px vs 12px) so it reads as supplementary detail. */
 .history-detail-events-table {
   width: 100%;
