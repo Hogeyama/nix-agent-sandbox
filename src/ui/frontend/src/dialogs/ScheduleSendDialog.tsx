@@ -35,6 +35,7 @@ type Props = {
   open: () => boolean;
   onClose: () => void;
   store: ScheduledSendStore;
+  activeSessionId: () => string | null;
 };
 
 export function ScheduleSendDialog(props: Props) {
@@ -96,13 +97,17 @@ export function ScheduleSendDialog(props: Props) {
   function handleSubmit() {
     const parsed = parsedTime();
     const msg = message().trim();
-    if (!parsed || msg === "") return;
-    props.store.add(msg, parsed);
+    const sid = props.activeSessionId();
+    if (!parsed || msg === "" || !sid) return;
+    props.store.add(sid, msg, parsed);
     props.onClose();
   }
 
   const canSubmit = createMemo(
-    () => parsedTime() !== null && message().trim() !== "",
+    () =>
+      parsedTime() !== null &&
+      message().trim() !== "" &&
+      props.activeSessionId() !== null,
   );
 
   // Live-updating "now" signal for remaining-time display.

@@ -284,7 +284,10 @@ export function TerminalPane(props: Props) {
   const scheduledSendStore = createScheduledSendStore();
   const executor = useScheduledSendExecutor({
     store: scheduledSendStore,
-    getHandle: () => activeTerminalHandle(),
+    getHandle: (sessionId) => {
+      handlesVersion();
+      return handles.get(sessionId)?.handle ?? null;
+    },
   });
   onCleanup(() => executor.dispose());
 
@@ -324,6 +327,7 @@ export function TerminalPane(props: Props) {
         open={scheduleDialogOpen}
         onClose={() => setScheduleDialogOpen(false)}
         store={scheduledSendStore}
+        activeSessionId={activeTerminalId}
       />
     </section>
   );

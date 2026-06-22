@@ -15,7 +15,7 @@ import type { ScheduledSend } from "../terminal/scheduledSendLogic";
 
 export interface ScheduledSendStore {
   entries(): ScheduledSend[];
-  add(message: string, scheduledAt: Date): string;
+  add(sessionId: string, message: string, scheduledAt: Date): string;
   remove(id: string): void;
   count(): number;
 }
@@ -37,10 +37,11 @@ export function createScheduledSendStore(
 
   return {
     entries,
-    add(message, scheduledAt) {
+    add(sessionId, message, scheduledAt) {
       const id = generateId();
       const entry: ScheduledSend = {
         id,
+        sessionId,
         message,
         scheduledAt,
         createdAt: now(),

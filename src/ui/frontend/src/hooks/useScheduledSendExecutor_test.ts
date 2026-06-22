@@ -45,10 +45,11 @@ function makeFakeStore(initial: ScheduledSend[] = []): ScheduledSendStore & {
     entries() {
       return [...state._entries];
     },
-    add(message: string, scheduledAt: Date): string {
+    add(sessionId: string, message: string, scheduledAt: Date): string {
       const id = crypto.randomUUID();
       state._entries.push({
         id,
+        sessionId,
         message,
         scheduledAt,
         createdAt: new Date(),
@@ -68,6 +69,7 @@ function makeEntry(
   overrides: Partial<ScheduledSend> & { id: string },
 ): ScheduledSend {
   return {
+    sessionId: "sess-1",
     message: "hello",
     scheduledAt: new Date("2026-01-01T10:00:00Z"),
     createdAt: new Date("2026-01-01T09:00:00Z"),
@@ -209,6 +211,78 @@ describe("useScheduledSendExecutor", () => {
 
     // Entry should still be in the store (never sent)
     expect(store._entries.length).toBe(1);
+  });
+
+  test("sends each entry to its own session handle", async () => {
+    const handleA = makeFakeHandle();
+    const handleB = makeFakeHandle();
+    const handles = new Map([
+      ["sess-a", handleA],
+      ["sess-b", handleB],
+    ]);
+
+    const entryA = makeEntry({
+      id: "ea",
+      sessionId: "sess-a",
+      message: "for A",
+      scheduledAt: new Date("2026-01-01T10:00:00Z"),
+    });
+    const entryB = makeEntry({
+      id: "eb",
+      sessionId: "sess-b",
+      message: "for B",
+      scheduledAt: new Date("2026-01-01T10:00:00Z"),
+    });
+    const store = makeFakeStore([entryA, entryB]);
+
+    const { dispose } = useScheduledSendExecutor({
+      store,
+      getHandle: (sid) => handles.get(sid) ?? null,
+      intervalMs: 10,
+      now: () => new Date("2026-01-01T10:00:01Z"),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    dispose();
+
+    expect(handleA.sendInputSpy).toHaveBeenCalled();
+    expect(handleA.sendInputSpy.mock.calls[0][0]).toBe("for A\r");
+    expect(handleB.sendInputSpy).toHaveBeenCalled();
+    expect(handleB.sendInputSpy.mock.calls[0][0]).toBe("for B\r");
+    expect(store._entries).toEqual([]);
+  });
+
+  test("skips entry whose session handle is missing but sends others", async () => {
+    const handleA = makeFakeHandle();
+
+    const entryA = makeEntry({
+      id: "ea",
+      sessionId: "sess-a",
+      message: "for A",
+      scheduledAt: new Date("2026-01-01T10:00:00Z"),
+    });
+    const entryGone = makeEntry({
+      id: "eg",
+      sessionId: "sess-gone",
+      message: "orphan",
+      scheduledAt: new Date("2026-01-01T10:00:00Z"),
+    });
+    const store = makeFakeStore([entryA, entryGone]);
+
+    const { dispose } = useScheduledSendExecutor({
+      store,
+      getHandle: (sid) => (sid === "sess-a" ? handleA : null),
+      intervalMs: 10,
+      now: () => new Date("2026-01-01T10:00:01Z"),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    dispose();
+
+    expect(handleA.sendInputSpy).toHaveBeenCalled();
+    expect(handleA.sendInputSpy.mock.calls[0][0]).toBe("for A\r");
+    expect(store._entries.length).toBe(1);
+    expect(store._entries[0].id).toBe("eg");
   });
 
   test("does not send entries that are not yet due", async () => {

@@ -103,6 +103,7 @@ describe("formatTimeRemaining", () => {
 describe("isScheduledSendDue", () => {
   const entry = {
     id: "test-1",
+    sessionId: "sess-1",
     message: "hello",
     scheduledAt: new Date(2026, 5, 20, 20, 0, 0, 0),
     createdAt: new Date(2026, 5, 20, 15, 0, 0, 0),

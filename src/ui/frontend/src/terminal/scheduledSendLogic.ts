@@ -1,5 +1,6 @@
 export interface ScheduledSend {
   readonly id: string;
+  readonly sessionId: string;
   readonly message: string;
   readonly scheduledAt: Date;
   readonly createdAt: Date;

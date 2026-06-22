@@ -28,12 +28,13 @@ describe("scheduledSendStore", () => {
     const store = makeStore();
     const scheduledAt = new Date("2026-06-20T12:00:00.000Z");
 
-    const id = store.add("hello", scheduledAt);
+    const id = store.add("sess-1", "hello", scheduledAt);
 
     expect(id).toBe("id-1");
     expect(store.entries()).toEqual([
       {
         id: "id-1",
+        sessionId: "sess-1",
         message: "hello",
         scheduledAt,
         createdAt: new Date("2026-06-20T10:00:00.000Z"),
@@ -47,8 +48,8 @@ describe("scheduledSendStore", () => {
     const t1 = new Date("2026-06-20T11:00:00.000Z");
     const t2 = new Date("2026-06-20T12:00:00.000Z");
 
-    store.add("first", t1);
-    store.add("second", t2);
+    store.add("sess-1", "first", t1);
+    store.add("sess-2", "second", t2);
 
     const entries = store.entries();
     expect(entries).toHaveLength(2);
@@ -61,8 +62,8 @@ describe("scheduledSendStore", () => {
     const store = makeStore();
     const t = new Date("2026-06-20T11:00:00.000Z");
 
-    const id1 = store.add("keep", t);
-    const id2 = store.add("drop", t);
+    const id1 = store.add("sess-1", "keep", t);
+    const id2 = store.add("sess-1", "drop", t);
 
     store.remove(id2);
 
@@ -73,7 +74,7 @@ describe("scheduledSendStore", () => {
 
   test("remove with a non-existent id is a no-op", () => {
     const store = makeStore();
-    store.add("msg", new Date("2026-06-20T11:00:00.000Z"));
+    store.add("sess-1", "msg", new Date("2026-06-20T11:00:00.000Z"));
 
     store.remove("no-such-id");
 
@@ -87,10 +88,10 @@ describe("scheduledSendStore", () => {
 
     expect(store.count()).toBe(0);
 
-    const id1 = store.add("a", t);
+    const id1 = store.add("sess-1", "a", t);
     expect(store.count()).toBe(1);
 
-    store.add("b", t);
+    store.add("sess-1", "b", t);
     expect(store.count()).toBe(2);
 
     store.remove(id1);

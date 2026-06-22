@@ -2,9 +2,11 @@
  * Scheduled-send executor hook.
  *
  * Periodically scans the `ScheduledSendStore` and sends any due
- * messages to the terminal via `TerminalHandle.sendInput`. A trailing
- * newline is appended automatically so the message is submitted as if
- * the user pressed Enter.
+ * messages to the terminal that was active when the message was
+ * scheduled, looked up via `getHandle(sessionId)`. A trailing newline
+ * is appended automatically so the message is submitted as if the user
+ * pressed Enter. If the target session's handle is unavailable, the
+ * entry is skipped (kept in the store) and retried on the next tick.
  *
  * Testability: both `now` (clock) and `intervalMs` (poll cadence) are
  * injectable so tests can drive time deterministically without fake
@@ -17,7 +19,7 @@ import { isScheduledSendDue } from "../terminal/scheduledSendLogic";
 
 export interface ScheduledSendExecutorDeps {
   store: ScheduledSendStore;
-  getHandle: () => TerminalHandle | null;
+  getHandle: (sessionId: string) => TerminalHandle | null;
   /** Poll interval in milliseconds. Defaults to 1000. */
   intervalMs?: number;
   /** Injectable clock for deterministic testing. */
@@ -38,14 +40,13 @@ export function useScheduledSendExecutor(deps: ScheduledSendExecutorDeps): {
   const { store, getHandle, intervalMs = 1000, now = () => new Date() } = deps;
 
   const id = setInterval(() => {
-    const handle = getHandle();
-    if (handle === null) return;
-
     const current = now();
     const due = store
       .entries()
       .filter((entry) => isScheduledSendDue(entry, current));
     for (const entry of due) {
+      const handle = getHandle(entry.sessionId);
+      if (handle === null) continue;
       handle.sendInput(`${entry.message}\r`);
       store.remove(entry.id);
     }
