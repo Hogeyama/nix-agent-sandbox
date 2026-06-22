@@ -22,10 +22,30 @@
 
 import type { LogRecordSummaryRow, SpanSummaryRow } from "../history/types";
 
-export function extractClaudeTracePrompts(
+// ---------------------------------------------------------------------------
+// Internal helper: shared join-map construction
+// ---------------------------------------------------------------------------
+
+interface JoinMaps {
+  /** api_request log records: requestId → { sequence, promptId } */
+  requestIdToPromptId: Map<string, { sequence: number; promptId: string }>;
+  /** user_prompt log records: promptId → { sequence, text } */
+  promptIdToText: Map<string, { sequence: number; text: string }>;
+  /** claude_code.llm_request spans: requestId → traceId */
+  requestIdToTraceId: Map<string, string>;
+}
+
+/**
+ * Build the three intermediate maps consumed by the public API functions.
+ *
+ * Deduplication invariant: when multiple records share a key the one with
+ * the smallest `sequence` wins (first emission wins). Duplicates emit a
+ * single `console.warn`.
+ */
+function buildJoinMaps(
   logRecords: readonly LogRecordSummaryRow[],
   spans: readonly SpanSummaryRow[],
-): Map<string, string> {
+): JoinMaps {
   const requestIdToPromptId = new Map<
     string,
     { sequence: number; promptId: string }
@@ -100,6 +120,25 @@ export function extractClaudeTracePrompts(
     }
   }
 
+  return { requestIdToPromptId, promptIdToText, requestIdToTraceId };
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve each trace's user prompt: `traceId → promptText`.
+ *
+ * Uses the three-step join chain documented in the module header.
+ */
+export function extractClaudeTracePrompts(
+  logRecords: readonly LogRecordSummaryRow[],
+  spans: readonly SpanSummaryRow[],
+): Map<string, string> {
+  const { requestIdToPromptId, promptIdToText, requestIdToTraceId } =
+    buildJoinMaps(logRecords, spans);
+
   const result = new Map<string, string>();
   for (const [requestId, traceId] of requestIdToTraceId) {
     const apiEntry = requestIdToPromptId.get(requestId);
@@ -107,6 +146,38 @@ export function extractClaudeTracePrompts(
     const entry = promptIdToText.get(apiEntry.promptId);
     if (entry === undefined) continue;
     result.set(traceId, entry.text);
+  }
+  return result;
+}
+
+/**
+ * Build a mapping from `promptId → traceId`.
+ *
+ * Joins `api_request` log records (requestId → promptId) against
+ * `claude_code.llm_request` spans (requestId → traceId) to produce the
+ * reverse lookup. When multiple requestIds map to the same promptId, the
+ * entry with the smallest sequence (from the api_request dedup) wins.
+ */
+export function buildClaudePromptToTraceMap(
+  logRecords: readonly LogRecordSummaryRow[],
+  spans: readonly SpanSummaryRow[],
+): Map<string, string> {
+  const { requestIdToPromptId, requestIdToTraceId } = buildJoinMaps(
+    logRecords,
+    spans,
+  );
+
+  const result = new Map<string, string>();
+  for (const [requestId, traceId] of requestIdToTraceId) {
+    const apiEntry = requestIdToPromptId.get(requestId);
+    if (apiEntry === undefined) continue;
+    const { promptId } = apiEntry;
+    // When multiple requestIds map to the same promptId, keep the first
+    // one encountered (iteration order of requestIdToTraceId is insertion
+    // order, which follows span array order).
+    if (!result.has(promptId)) {
+      result.set(promptId, traceId);
+    }
   }
   return result;
 }

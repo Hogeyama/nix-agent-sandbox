@@ -1,6 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import type { LogRecordSummaryRow, SpanSummaryRow } from "../history/types";
-import { extractClaudeTracePrompts } from "./claude_prompts";
+import {
+  buildClaudePromptToTraceMap,
+  extractClaudeTracePrompts,
+} from "./claude_prompts";
 
 // Helpers
 //
@@ -232,5 +235,117 @@ describe("extractClaudeTracePrompts", () => {
       [makeLlmRequestSpan("t1", "req_1")],
     );
     expect(result.has("t1")).toBe(false);
+  });
+});
+
+describe("buildClaudePromptToTraceMap", () => {
+  test("resolves promptId → traceId when the join chain is present", () => {
+    const result = buildClaudePromptToTraceMap(
+      [makeApiRequestRecord("req_1", "p1", 1)],
+      [makeLlmRequestSpan("t1", "req_1")],
+    );
+    expect(result.get("p1")).toBe("t1");
+  });
+
+  test("returns empty map when both inputs are empty", () => {
+    const result = buildClaudePromptToTraceMap([], []);
+    expect(result.size).toBe(0);
+  });
+
+  test("returns empty map when logRecords is empty", () => {
+    const result = buildClaudePromptToTraceMap(
+      [],
+      [makeLlmRequestSpan("t1", "req_1")],
+    );
+    expect(result.size).toBe(0);
+  });
+
+  test("returns empty map when spans is empty", () => {
+    const result = buildClaudePromptToTraceMap(
+      [makeApiRequestRecord("req_1", "p1", 1)],
+      [],
+    );
+    expect(result.size).toBe(0);
+  });
+
+  test("no entry when api_request record is missing for the requestId", () => {
+    // Only a user_prompt record exists — no api_request to link requestId → promptId
+    const result = buildClaudePromptToTraceMap(
+      [makeUserPromptRecord("p1", "some prompt", 0)],
+      [makeLlmRequestSpan("t1", "req_1")],
+    );
+    expect(result.size).toBe(0);
+  });
+
+  test("no entry when llm_request span is missing", () => {
+    const otherSpan: SpanSummaryRow = {
+      ...makeLlmRequestSpan("t1", "req_1"),
+      spanName: "chat.completion",
+      attrsJson: "{}",
+    };
+    const result = buildClaudePromptToTraceMap(
+      [makeApiRequestRecord("req_1", "p1", 1)],
+      [otherSpan],
+    );
+    expect(result.size).toBe(0);
+  });
+
+  test("duplicate api_request records: lowest sequence wins", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = buildClaudePromptToTraceMap(
+        [
+          makeApiRequestRecord("req_1", "p_later", 5),
+          makeApiRequestRecord("req_1", "p_first", 0),
+        ],
+        [makeLlmRequestSpan("t1", "req_1")],
+      );
+      // The api_request with sequence=0 maps req_1 → p_first
+      expect(result.get("p_first")).toBe("t1");
+      expect(result.has("p_later")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("malformed attrsJson on llm_request span is skipped silently", () => {
+    const result = buildClaudePromptToTraceMap(
+      [makeApiRequestRecord("req_1", "p1", 1)],
+      [makeLlmRequestSpan("t1", "req_1", { attrsJson: "not-json" })],
+    );
+    expect(result.size).toBe(0);
+  });
+
+  test("multiple traces map to distinct promptIds", () => {
+    const result = buildClaudePromptToTraceMap(
+      [
+        makeApiRequestRecord("req_a", "p_a", 1),
+        makeApiRequestRecord("req_b", "p_b", 3),
+      ],
+      [
+        makeLlmRequestSpan("t_a", "req_a"),
+        makeLlmRequestSpan("t_b", "req_b", { spanId: "llm_t_b" }),
+      ],
+    );
+    expect(result.get("p_a")).toBe("t_a");
+    expect(result.get("p_b")).toBe("t_b");
+    expect(result.size).toBe(2);
+  });
+
+  test("when multiple requestIds map to the same promptId, first encountered wins", () => {
+    // Two different requestIds both resolve to promptId "p_shared"
+    const result = buildClaudePromptToTraceMap(
+      [
+        makeApiRequestRecord("req_1", "p_shared", 1),
+        makeApiRequestRecord("req_2", "p_shared", 2),
+      ],
+      [
+        makeLlmRequestSpan("t_first", "req_1"),
+        makeLlmRequestSpan("t_second", "req_2", { spanId: "llm_t_second" }),
+      ],
+    );
+    expect(result.get("p_shared")).toBe("t_first");
+    expect(result.size).toBe(1);
   });
 });
