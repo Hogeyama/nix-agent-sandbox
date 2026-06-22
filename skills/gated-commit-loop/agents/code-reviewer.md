@@ -22,8 +22,15 @@ tools: Read, Grep, Glob, Bash
 
 **JSON 単一オブジェクトを返す**。前後に説明文を出さない。orchestrator はこの JSON をそのまま summary.jsonl に転記する。
 
+出力は 2 段階: まず手順 5-7 の分析結果を `review_trace` に記録し、その上で findings を構築する。`review_trace` を省略してはいけない。
+
 ```json
 {
+  "review_trace": {
+    "branch_paths": ["関数名: 分岐の要約（正常系、null ガード、early return 等）"],
+    "deleted_invariants": ["削除された行が守っていた不変条件の要約。なければ空配列"],
+    "callers_checked": ["呼び出し元ファイル:行 の要約。なければ空配列"]
+  },
   "passed": true,
   "findings": [
     {
@@ -44,6 +51,10 @@ tools: Read, Grep, Glob, Bash
 
 ### フィールド規約
 
+- `review_trace`: 手順 5-7 の実行結果。findings の有無に関わらず必須
+  - `branch_paths`: 手順 5 で列挙した分岐パスの要約（関数ごとに 1 行）
+  - `deleted_invariants`: 手順 6 で特定した削除された不変条件の要約
+  - `callers_checked`: 手順 7 で辿った呼び出し元・消費先の要約
 - `passed`: 全ルールが `stop_when` を満たしているなら `true`、未通過ルールが 1 つでもあれば `false`
 - `findings[]`: 検出した指摘を 1 件 1 オブジェクトで列挙
   - `rule`: review-config.yml の rule name と一致させる。コミット固有のレビュー観点は `commit-specific:<短い識別子>` の形にする
@@ -53,7 +64,7 @@ tools: Read, Grep, Glob, Bash
   - `failure_scenario`: 具体的な failure scenario（アクター・トリガー・帰結）。手順 8 で構築したもの
 - `summary`: 各 severity の件数
 
-findings が 0 件なら `findings: []` と `summary` を全 0 で返す。
+findings が 0 件なら `findings: []` と `summary` を全 0 で返す。`review_trace` は 0 件でも省略しない。
 
 ## 制約
 

@@ -16,6 +16,7 @@ argument-hint: "[実装内容の説明]"
   - bookkeeping: `git status --short` / `git diff --name-only` / `git diff --stat` / `git log --oneline` / `git show --stat <hash>`
   - scope 検証: 各 commit 直前に `git diff --cached` を読み、入る差分が今回の commit scope 通りか／protected dirty paths が混ざっていないかを確認する
   - finding 解釈: code-reviewer が指す `file:line` を Read で開き、同じ趣旨の指摘が iteration を跨いで繰り返されていないかを判定する
+  - review_trace 検証: code-reviewer の `review_trace` を読み、分析手順の網羅性を確認する（Step 3 §4）。不足があれば具体的な質問として差し戻す。コードの良し悪しの判定はしない
 - **judgment（判定）と verification（確認）を混ぜない。** 読みの結果から自分が「この実装はこうあるべき」「ここは指摘されるべき」と結論を出しそうになったら、それは judgment であり、サブエージェントの担当。読みは verification まで。判定が必要になった時点でサブエージェントに戻す。
 - **実装開始前に、計画をユーザーへ提示し、明示的な承認を得る。** `LGTM` / `go` / `進めて` のような肯定が出るまで Step 3 に進んではいけない。
 - **承認は会話上で可視化する。** plan を提示したメッセージと、それに対するユーザー承認が会話履歴で確認できる形にする。内部状態だけ更新して先へ進んではいけない。
@@ -63,6 +64,7 @@ argument-hint: "[実装内容の説明]"
    - ユーザーの plan 承認イベント
    - 各 commit の seq / title / hash / review_iters
    - **code-reviewer の戻り値 (JSON) はそのまま保持する**。要約・再構成しない。Step 5 で `findings[]` を transcribe するときに使う一次データなので、原文のまま `(commit_seq, review_iter)` のキー付きで保管する。
+   - review_trace 検証で差し戻した場合、差し戻し質問と再レビュー結果も保管する
    - finding ごとの `resolution` は Step 5 で機械的に決まる（後述）
 
 ## 実行順序
@@ -139,7 +141,22 @@ argument-hint: "[実装内容の説明]"
 - commit 固有の **レビュー観点**
 - 「今回レビューすべき差分はこの commit scope の変更だけ」であること
 
-### 4. レビュー判定
+### 4. review_trace の検証（orchestrator の責務）
+
+code-reviewer は `review_trace`（分析の中間出力）と `findings` を返す。orchestrator は findings を判定する**前に** review_trace の網羅性を検証する。これは verification（分析が手順通り行われたか）であり、judgment（コードの良し悪し）ではない。
+
+以下を確認する:
+
+1. **branch_paths の null/error パス**: 各パスについて、対応する finding があるか、または「問題ない」と判断できる明確な理由があるか。特に null/skip/continue で処理を飛ばすパスについて、**その状態が永続した場合の帰結**が考慮されているか
+2. **deleted_invariants の決着**: 各項目が findings で指摘されているか、新コードで再確立されているか。宙に浮いている項目がないか
+3. **callers_checked の網羅性**: 変更された公開 API（export された関数、props、コールバック）に対して、呼び出し元が漏れていないか。`git grep` で簡易確認してよい
+
+不足が見つかった場合:
+- **具体的な質問を添えて code-reviewer に差し戻す**（例: 「branch_paths に `getHandle → null → continue` があるが、session が永久に復帰しない場合の failure scenario は？」）
+- orchestrator 自身が「ここは問題だ」と結論を出してはいけない。質問として投げ、判定は code-reviewer に任せる
+- 差し戻しは review_trace 検証として 1 回まで。2 回目以降の不足はそのまま進める（過剰な差し戻しで review iteration を消費しない）
+
+### 5. レビュー判定
 
 各 finding について、そのルールの `stop_when`（未指定ならグローバル `stop_when`）を適用する。
 
@@ -152,7 +169,7 @@ argument-hint: "[実装内容の説明]"
 - **未通過ルールあり** → findings を implementer に渡して再実装
 - **同じ趣旨の findings が繰り返される / `max_review_iterations` 到達** → ユーザー判断に戻す
 
-### 5. コミットのしかた
+### 6. コミットのしかた
 
 レビュー通過後に初めてコミットしてよい。
 
