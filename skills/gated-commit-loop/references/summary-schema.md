@@ -63,6 +63,7 @@
   "severity": "critical" | "warning" | "info",
   "file": "src/foo.ts:42",
   "message": "指摘内容（1〜2 文に要約）",
+  "failure_scenario": "具体的な failure scenario（アクター・トリガー・帰結）",
   "resolution": "fixed" | "ignored" | "dropped",
   "label": "essential" | "noise" | "borderline" | "config-smell" | null,
   "label_comment": ""

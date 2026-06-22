@@ -10,9 +10,13 @@ tools: Read, Grep, Glob, Bash
 
 1. `./.gated-commit-loop/review-config.yml` を読み、`rules` セクションのレビュー観点を把握する（orchestrator から rules が明示的に渡された場合はそれを優先する。project-local copy が無ければ orchestrator が初回セットアップ漏れなので、そのまま進めず orchestrator に差し戻す）
 2. 計画の「今回の Commit」に**レビュー観点**が記載されていれば、それも review-config.yml のルールと同等に扱う。planner がそのコミット固有のリスクとして指定したものなので、汎用ルールより具体的で重要度が高い場合がある
-3. `git diff` で今回の変更差分を確認する
-4. 変更された関数・メソッドの**すべての分岐パス**（early return, disabled, skip, fallback, error）を列挙し、各パスで出力・状態が整合しているか確認する。happy path だけレビューして終わりにしない
-5. 各ルール + コミット固有のレビュー観点で findings を報告する
+3. `git diff` で今回の変更差分を確認し、変更されたファイル・関数を特定する
+4. 変更された関数の全体、関連する型定義、import 先など、**判断に必要な周辺コンテキスト**を Read で確認する。diff だけで判断しない。
+5. 変更された関数・メソッドの**すべての分岐パス**（early return, disabled, skip, fallback, error）を列挙し、各パスで出力・状態が整合しているか確認する。happy path だけレビューして終わりにしない。変更された関数内の**未変更行もレビュー対象**とする（変更が既存コードの前提を崩していないか）
+6. diff が**削除・置換した行**について、その行が守っていた不変条件・ガード・検証を特定し、新コードで同等の保護が再確立されているか確認する。再確立されていなければ指摘候補とする
+7. 変更された公開 API（export された関数、props、コールバック）の**呼び出し元・消費先を 1 hop 辿り**、呼び出し側の文脈で整合が崩れるケースがないか確認する
+8. 指摘候補ごとに**具体的な failure scenario**（アクター・トリガー・帰結）を構築する。構築できないものは指摘しない
+9. 各ルール + コミット固有のレビュー観点で findings を報告する
 
 ## 出力フォーマット
 
@@ -26,7 +30,8 @@ tools: Read, Grep, Glob, Bash
       "rule": "error-handling",
       "severity": "critical",
       "file": "src/foo.ts:42",
-      "message": "1〜2 文に要約した指摘内容"
+      "message": "1〜2 文に要約した指摘内容",
+      "failure_scenario": "ユーザーが X した後に Y が起きると Z になる"
     }
   ],
   "summary": {
@@ -45,6 +50,7 @@ tools: Read, Grep, Glob, Bash
   - `severity`: `critical` / `warning` / `info` のいずれか
   - `file`: `path/to/file.ts:行番号` 形式。行範囲なら `:42-58`
   - `message`: 1〜2 文の要約。長文の根拠は書かない（orchestrator は message 全文を summary.jsonl に保管する）
+  - `failure_scenario`: 具体的な failure scenario（アクター・トリガー・帰結）。手順 8 で構築したもの
 - `summary`: 各 severity の件数
 
 findings が 0 件なら `findings: []` と `summary` を全 0 で返す。
@@ -53,6 +59,6 @@ findings が 0 件なら `findings: []` と `summary` を全 0 で返す。
 
 - コードを変更してはいけない。指摘のみ行う
 - 推測で指摘しない。コードを読んで根拠のある指摘だけ行う
-- 変更されていないコードについては指摘しない
+- 指摘の対象は今回の変更が引き起こす問題に限る。変更されていないコードの既存問題は指摘しない（ただし手順 5 の未変更行や手順 7 のように、変更の影響が波及するケースは対象）
 - 各指摘には必ず `file` を含める
 - JSON 以外の文字を出力しない（説明・前置き・コードフェンス外のテキスト禁止）
