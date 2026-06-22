@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { LogRecordSummaryRow, SpanSummaryRow } from "../history/types";
-import { extractTracePrompts } from "./prompts";
+import { buildPromptToTraceMap, extractTracePrompts } from "./prompts";
 
 // Just enough of each agent's signal to make this aggregator-level test
 // self-contained. The per-agent extractors are exhaustively tested in
@@ -123,5 +123,44 @@ describe("extractTracePrompts (per-agent aggregator)", () => {
   test("empty inputs produce an empty map", () => {
     const result = extractTracePrompts([], []);
     expect(result.size).toBe(0);
+  });
+});
+
+describe("buildPromptToTraceMap (per-agent aggregator)", () => {
+  test("Claude path resolves promptId → traceId", () => {
+    const result = buildPromptToTraceMap(
+      [apiRecord("req_1", "p1"), userPromptRecord("p1", "claude text")],
+      [claudeSpan("t_claude", "req_1")],
+    );
+    expect(result.get("p1")).toBe("t_claude");
+  });
+
+  test("Copilot spans do not contribute to the promptId map", () => {
+    // Copilot is span-based; it has no promptId concept.
+    const result = buildPromptToTraceMap(
+      [],
+      [copilotSpan("t_copilot", "copilot text")],
+    );
+    expect(result.size).toBe(0);
+  });
+
+  test("empty inputs produce an empty map", () => {
+    const result = buildPromptToTraceMap([], []);
+    expect(result.size).toBe(0);
+  });
+
+  test("multiple Claude promptIds resolve independently", () => {
+    const result = buildPromptToTraceMap(
+      [
+        apiRecord("req_a", "p_a"),
+        apiRecord("req_b", "p_b"),
+        userPromptRecord("p_a", "prompt A"),
+        userPromptRecord("p_b", "prompt B"),
+      ],
+      [claudeSpan("t_a", "req_a"), claudeSpan("t_b", "req_b")],
+    );
+    expect(result.get("p_a")).toBe("t_a");
+    expect(result.get("p_b")).toBe("t_b");
+    expect(result.size).toBe(2);
   });
 });

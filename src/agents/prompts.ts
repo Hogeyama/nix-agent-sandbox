@@ -16,7 +16,10 @@
  */
 
 import type { LogRecordSummaryRow, SpanSummaryRow } from "../history/types";
-import { extractClaudeTracePrompts } from "./claude_prompts";
+import {
+  buildClaudePromptToTraceMap,
+  extractClaudeTracePrompts,
+} from "./claude_prompts";
 import { extractCopilotTracePrompts } from "./copilot_prompts";
 
 export function extractTracePrompts(
@@ -29,5 +32,31 @@ export function extractTracePrompts(
       result.set(traceId, text);
     }
   }
+  return result;
+}
+
+/**
+ * Build a mapping from `promptId → traceId` across all agents.
+ *
+ * Dispatches to each agent's builder and merges the results. Currently
+ * only Claude emits promptId-keyed records; Copilot is span-based and
+ * contributes nothing (empty Map). When Copilot or another agent gains a
+ * promptId-like concept, add its builder here.
+ *
+ * Shares the same argument signature as `extractTracePrompts` for API
+ * consistency — callers need not know which subset of data each agent
+ * consumes.
+ */
+export function buildPromptToTraceMap(
+  logRecords: readonly LogRecordSummaryRow[],
+  spans: readonly SpanSummaryRow[],
+): Map<string, string> {
+  // Claude: joins api_request log records against llm_request spans.
+  const result = buildClaudePromptToTraceMap(logRecords, spans);
+
+  // Copilot: no promptId concept (span-based extraction). Nothing to merge.
+  // Future agents: merge additional maps here, with Claude taking precedence
+  // on key collisions (same defensive rule as extractTracePrompts).
+
   return result;
 }
