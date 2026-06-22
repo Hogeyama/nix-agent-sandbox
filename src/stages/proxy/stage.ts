@@ -415,6 +415,7 @@ export function buildNetworkRuntimePaths(host: HostEnv): NetworkRuntimePaths {
     brokersDir: path.join(runtimeDir, "brokers"),
     authRouterSocket: path.join(runtimeDir, "auth-router.sock"),
     authRouterPidFile: path.join(runtimeDir, "auth-router.pid"),
+    authRouterLogFile: path.join(runtimeDir, "auth-router.log"),
     envoyConfigFile: path.join(runtimeDir, "envoy.yaml"),
   };
 }

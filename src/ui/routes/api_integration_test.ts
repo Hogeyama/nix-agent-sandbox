@@ -31,6 +31,7 @@ function createTestContext(dir: string): UiDataContext {
     brokersDir: `${dir}/network/brokers`,
     authRouterSocket: `${dir}/network/auth-router.sock`,
     authRouterPidFile: `${dir}/network/auth-router.pid`,
+    authRouterLogFile: `${dir}/network/auth-router.log`,
     envoyConfigFile: `${dir}/network/envoy.yaml`,
   };
   const hostExecPaths: HostExecRuntimePaths = {

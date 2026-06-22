@@ -139,6 +139,7 @@ function runtimePaths(): NetworkRuntimePaths {
     pendingDir: `${root}/pending`,
     brokersDir: `${root}/brokers`,
     authRouterPidFile: `${root}/auth-router.pid`,
+    authRouterLogFile: `${root}/auth-router.log`,
     authRouterSocket: `${root}/auth-router.sock`,
     envoyConfigFile: `${root}/envoy.yaml`,
   };

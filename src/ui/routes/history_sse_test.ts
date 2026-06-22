@@ -156,6 +156,7 @@ function makeCtx(reader: UiHistoryReader): UiDataContext {
     brokersDir: "/tmp/network/brokers",
     authRouterSocket: "/tmp/network/router.sock",
     authRouterPidFile: "/tmp/network/router.pid",
+    authRouterLogFile: "/tmp/network/router.log",
     envoyConfigFile: "/tmp/network/envoy.yaml",
   };
   const hostExecPaths: HostExecRuntimePaths = {

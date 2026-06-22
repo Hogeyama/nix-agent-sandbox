@@ -42,6 +42,7 @@ function createDummyCtx(): UiDataContext {
     brokersDir: "/tmp/nas-launch-test-unused/network/brokers",
     authRouterSocket: "/tmp/nas-launch-test-unused/network/auth-router.sock",
     authRouterPidFile: "/tmp/nas-launch-test-unused/network/auth-router.pid",
+    authRouterLogFile: "/tmp/nas-launch-test-unused/network/auth-router.log",
     envoyConfigFile: "/tmp/nas-launch-test-unused/network/envoy.yaml",
   };
   const hostExecPaths: HostExecRuntimePaths = {

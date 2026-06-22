@@ -1,4 +1,5 @@
 import { chmod, rm, writeFile } from "node:fs/promises";
+import { resolveNasCommand } from "../lib/notify_utils.ts";
 import {
   connectUnix,
   createUnixServer,
@@ -24,22 +25,58 @@ import {
 
 export async function ensureAuthRouterDaemon(
   paths: NetworkRuntimePaths,
-): Promise<AbortController | null> {
+): Promise<void> {
   await gcNetworkRuntime(paths);
   if (await canConnect(paths.authRouterSocket)) {
-    return null;
+    return;
   }
 
-  const ac = new AbortController();
-  void serveAuthRouter(paths.runtimeDir, { signal: ac.signal }).catch((e) =>
-    logInfo(`[nas] AuthRouter: daemon exited with error: ${e}`),
-  );
+  const { execPath, prefix } = resolveNasCommand();
+  const args = [
+    ...prefix,
+    "network",
+    "serve-auth-router",
+    "--runtime-dir",
+    paths.runtimeDir,
+  ];
 
-  await writeFile(paths.authRouterPidFile, `${process.pid}\n`, {
-    mode: 0o600,
+  const cmdLine = [execPath, ...args]
+    .map((a) => `'${a.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const escapedLog = `'${paths.authRouterLogFile.replaceAll("'", "'\\''")}'`;
+  const redirect = `</dev/null >>${escapedLog} 2>&1`;
+  const shellCmd = (await hasSetsid())
+    ? `setsid ${cmdLine} ${redirect} &`
+    : `(${cmdLine}) ${redirect} &`;
+
+  logInfo(`[nas] AuthRouter: starting detached daemon`);
+  logInfo(`[nas] AuthRouter: logs at ${paths.authRouterLogFile}`);
+
+  const { NAS_SESSION_ID, NAS_INSIDE_DTACH, ...cleanEnv } = process.env;
+  void NAS_SESSION_ID;
+  void NAS_INSIDE_DTACH;
+  const child = Bun.spawn(["sh", "-c", shellCmd], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+    env: cleanEnv,
   });
+  child.unref();
+
   await waitForSocket(paths.authRouterSocket, 10_000);
-  return ac;
+}
+
+async function hasSetsid(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["sh", "-c", "command -v setsid"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const code = await proc.exited;
+    return code === 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function serveAuthRouter(
@@ -69,6 +106,12 @@ export async function serveAuthRouter(
 
   // Envoy runs as uid 101 inside its container and needs write access.
   await chmod(paths.authRouterSocket, 0o777);
+
+  // Write PID file after socket bind so the parent (or any watcher) can
+  // correlate the listening daemon with a process ID for GC purposes.
+  await writeFile(paths.authRouterPidFile, `${process.pid}\n`, {
+    mode: 0o600,
+  });
 
   const abortHandler = () => server.close();
   options.signal?.addEventListener("abort", abortHandler);

@@ -32,6 +32,7 @@ export {
 export interface NetworkRuntimePaths extends BaseRuntimePaths {
   authRouterSocket: string;
   authRouterPidFile: string;
+  authRouterLogFile: string;
   envoyConfigFile: string;
 }
 
@@ -51,6 +52,7 @@ export async function resolveNetworkRuntimePaths(
     brokersDir: path.join(resolved, "brokers"),
     authRouterSocket: path.join(resolved, "auth-router.sock"),
     authRouterPidFile: path.join(resolved, "auth-router.pid"),
+    authRouterLogFile: path.join(resolved, "auth-router.log"),
     envoyConfigFile: path.join(resolved, "envoy.yaml"),
   };
   await ensureDir(paths.runtimeDir, 0o755);

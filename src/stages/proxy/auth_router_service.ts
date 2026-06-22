@@ -49,13 +49,10 @@ export const AuthRouterServiceLive: Layer.Layer<AuthRouterService> =
             ),
         }).pipe(
           Effect.map(
-            (controller): AuthRouterHandle => ({
-              abort: () =>
-                Effect.sync(() => {
-                  if (controller) {
-                    controller.abort();
-                  }
-                }),
+            (): AuthRouterHandle => ({
+              // The auth-router is a shared detached daemon; individual
+              // sessions do not own its lifecycle, so abort is a no-op.
+              abort: () => Effect.void,
             }),
           ),
           Effect.orDie,
