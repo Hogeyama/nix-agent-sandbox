@@ -20,7 +20,9 @@ flowchart LR
     CLI[nas CLI<br/>pipeline orchestrator]:::proc
     Dtach[dtach session]:::proc
     UI[UI Daemon<br/>HTTP + SSE + WS]:::proc
-    Brokers[Host Brokers<br/>auth-router / hostexec-broker]:::proc
+    AuthRouter[auth-router daemon<br/>detached shared process]:::proc
+    NetBroker[network broker<br/>per-session in-process]:::proc
+    HeBroker[hostexec-broker<br/>per-session in-process]:::proc
     Dockerd[Docker daemon]:::ext
 
     Cfg[("Config<br/>~/.config/nas/*.yml<br/>./.agent-sandbox.yml")]:::store
@@ -52,18 +54,23 @@ flowchart LR
   Dockerd --> Agent
   Dockerd --> Envoy
   Dockerd --> Dind
-  CLI -->|spawn| Brokers
+  CLI -->|detach spawn| AuthRouter
+  CLI -->|in-process| NetBroker
+  CLI -->|in-process| HeBroker
   CLI -->|auto-start| UI
   CLI -->|create| Worktree
   CLI -->|write turn state| Sess
 
   %% ===== Agent ランタイム =====
   Agent -->|outbound HTTPS| Envoy
-  Envoy -->|allow/deny 判定| Brokers
+  Envoy -->|auth check| AuthRouter
+  AuthRouter -->|dispatch| NetBroker
+  NetBroker -->|write pending| Approvals
+  NetBroker -->|write result| Approvals
   Envoy -->|approved| Ext
-  Agent -->|host command 依頼| Brokers
-  Brokers -->|write pending| Approvals
-  Brokers -->|write result| Approvals
+  Agent -->|host command 依頼| HeBroker
+  HeBroker -->|write pending| Approvals
+  HeBroker -->|write result| Approvals
   Agent -->|rw| Worktree
 
   %% ===== UI / Browser =====
@@ -88,7 +95,9 @@ flowchart LR
 | nas CLI | ユーザーが `nas [profile]` 実行 | config を読み、pipeline で各コンテナ・デーモンを組み立てる |
 | dtach session | `session.multiplex: true` のとき CLI が自己ラップ | 複数ターミナルからの attach を可能にする |
 | UI Daemon | `ui.enable: true` で CLI が auto-start、または `nas ui` | HTTP/SSE/WS でダッシュボードを配信、承認操作を受ける |
-| Host Brokers (auth-router / hostexec-broker) | pipeline stage で起動 | 外向き通信・ホストコマンド実行の承認窓口 |
+| auth-router daemon | 初回セッションの proxy stage がデタッチ起動（setsid）。以降のセッションは既存 daemon を再利用。起動元プロセスの exit 後も独立して生存 | Envoy からの auth check を受け、per-session network broker に振り分ける |
+| network broker | 各セッションの proxy stage で in-process 起動 | 外向き通信の allow/deny 判定、承認待ちキュー管理 |
+| hostexec-broker | 各セッションの hostexec stage で in-process 起動 | ホストコマンド実行の承認窓口 |
 | Agent container | launch stage | Claude Code / Copilot CLI / Codex CLI 本体が走る |
 | Envoy forward proxy | proxy stage（`network.prompt.enable`） | Agent の外向きトラフィックを allowlist/承認で制御 |
 | DinD sidecar | `docker.enable: true` | Agent 内から使える rootless Docker |
