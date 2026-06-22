@@ -30,10 +30,7 @@ import type {
   ProxyState,
 } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput, StageResult } from "../../pipeline/types.ts";
-import {
-  type AuthRouterHandle,
-  AuthRouterService,
-} from "./auth_router_service.ts";
+import { AuthRouterService } from "./auth_router_service.ts";
 import { EnvoyService } from "./envoy_service.ts";
 import {
   type ForwardPortRelayHandle,
@@ -348,10 +345,10 @@ function runProxy(
       (handle: SessionBrokerHandle) => handle.close(),
     );
 
-    // 5. Auth-router daemon (acquireRelease)
+    // 5. Auth-router daemon (shared daemon — no per-session teardown)
     yield* Effect.acquireRelease(
       authRouterService.ensureDaemon(plan.runtimePaths),
-      (handle: AuthRouterHandle) => handle.abort(),
+      () => Effect.void,
     );
 
     // 6. Forward-port relays (acquireRelease).

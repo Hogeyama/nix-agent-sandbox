@@ -607,7 +607,7 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
     makeAuthRouterServiceFake({
       ensureDaemon: () => {
         calls.push("authRouterEnsureDaemon");
-        return Effect.succeed({ abort: () => Effect.void });
+        return Effect.void;
       },
     }),
     makeForwardPortRelayServiceFake({
@@ -684,7 +684,7 @@ test("createProxyStage().run(): calls services and returns merged output", async
     makeAuthRouterServiceFake({
       ensureDaemon: () => {
         calls.push("authRouterEnsureDaemon");
-        return Effect.succeed({ abort: () => Effect.void });
+        return Effect.void;
       },
     }),
     makeForwardPortRelayServiceFake({

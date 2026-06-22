@@ -1,7 +1,7 @@
 /**
  * AuthRouterService — Effect-based abstraction over the auth-router daemon lifecycle.
  *
- * Encapsulates daemon startup and teardown (abort).
+ * Encapsulates ensuring the shared auth-router daemon is running.
  * Live implementation delegates to ensureAuthRouterDaemon from
  * src/network/envoy_auth_router.ts.
  * Fake implementation provides configurable stubs for testing.
@@ -12,14 +12,6 @@ import { ensureAuthRouterDaemon } from "../../network/envoy_auth_router.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 
 // ---------------------------------------------------------------------------
-// Handle
-// ---------------------------------------------------------------------------
-
-export interface AuthRouterHandle {
-  readonly abort: () => Effect.Effect<void>;
-}
-
-// ---------------------------------------------------------------------------
 // AuthRouterService tag
 // ---------------------------------------------------------------------------
 
@@ -28,7 +20,7 @@ export class AuthRouterService extends Context.Tag("nas/AuthRouterService")<
   {
     readonly ensureDaemon: (
       runtimePaths: NetworkRuntimePaths,
-    ) => Effect.Effect<AuthRouterHandle>;
+    ) => Effect.Effect<void>;
   }
 >() {}
 
@@ -47,16 +39,7 @@ export const AuthRouterServiceLive: Layer.Layer<AuthRouterService> =
             new Error(
               `AuthRouterService ensureDaemon failed: ${e instanceof Error ? e.message : String(e)}`,
             ),
-        }).pipe(
-          Effect.map(
-            (): AuthRouterHandle => ({
-              // The auth-router is a shared detached daemon; individual
-              // sessions do not own its lifecycle, so abort is a no-op.
-              abort: () => Effect.void,
-            }),
-          ),
-          Effect.orDie,
-        ),
+        }).pipe(Effect.asVoid, Effect.orDie),
     }),
   );
 
@@ -67,7 +50,7 @@ export const AuthRouterServiceLive: Layer.Layer<AuthRouterService> =
 export interface AuthRouterServiceFakeConfig {
   readonly ensureDaemon?: (
     runtimePaths: NetworkRuntimePaths,
-  ) => Effect.Effect<AuthRouterHandle>;
+  ) => Effect.Effect<void>;
 }
 
 export function makeAuthRouterServiceFake(
@@ -76,9 +59,7 @@ export function makeAuthRouterServiceFake(
   return Layer.succeed(
     AuthRouterService,
     AuthRouterService.of({
-      ensureDaemon:
-        overrides.ensureDaemon ??
-        (() => Effect.succeed({ abort: () => Effect.void })),
+      ensureDaemon: overrides.ensureDaemon ?? (() => Effect.void),
     }),
   );
 }

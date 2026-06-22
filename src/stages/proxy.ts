@@ -3,7 +3,6 @@
  */
 
 export {
-  type AuthRouterHandle,
   AuthRouterService,
   type AuthRouterServiceFakeConfig,
   AuthRouterServiceLive,
