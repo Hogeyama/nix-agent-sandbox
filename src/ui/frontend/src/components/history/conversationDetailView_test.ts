@@ -13,6 +13,7 @@ import {
   buildSpanRows,
   buildSpanTreeByTurn,
   buildTraceRows,
+  buildTurnEvents,
   compareTurnOrder,
   formatCountCell,
   formatDuration,
@@ -1197,5 +1198,402 @@ describe("buildSpanTreeByTurn – userPromptText view wiring", () => {
     });
     const groups = buildSpanTreeByTurn(detail, NOW_MS);
     expect(groups[0]?.userPromptText).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildTurnEvents
+// ---------------------------------------------------------------------------
+
+describe("buildTurnEvents", () => {
+  /**
+   * Helper: build a promptToTrace map from an array of [promptId, traceId]
+   * pairs, simulating what `buildPromptToTraceMap` produces.
+   */
+  function pmap(entries: [string, string][]): Map<string, string> {
+    return new Map(entries);
+  }
+
+  test("converts a user_prompt record into a PROMPT event with truncated detail", () => {
+    const longPrompt = "x".repeat(200);
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:30.000Z",
+        attrsJson: JSON.stringify({ prompt: longPrompt }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(events).toHaveLength(1);
+    const ev = events[0]!;
+    expect(ev.sequence).toBe(0);
+    expect(ev.typeLabel).toBe("PROMPT");
+    expect(ev.typeClass).toBe("is-prompt");
+    // Truncated to 120 + ellipsis.
+    expect(ev.detail.length).toBeLessThanOrEqual(122);
+    expect(ev.detail).toContain("…");
+    expect(ev.timeAbsolute).toBe("2026-05-01T11:05:30.000Z");
+  });
+
+  test("user_prompt with command_name appends [command_name] suffix", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: JSON.stringify({
+          prompt: "Fix the bug",
+          command_name: "/fix",
+        }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(events[0]?.detail).toBe("Fix the bug [/fix]");
+  });
+
+  test("converts an api_request record into an API event with model and tokens", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 1,
+        eventName: "api_request",
+        requestId: "req_1",
+        time: "2026-05-01T11:06:00.000Z",
+        attrsJson: JSON.stringify({
+          model: "claude-3-5-sonnet",
+          input_tokens: 1500,
+          output_tokens: 300,
+          cache_read_tokens: 5000,
+          cache_write_tokens: 200,
+          cost: 0.0123,
+          duration_ms: 2345,
+        }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(events).toHaveLength(1);
+    const ev = events[0]!;
+    expect(ev.typeLabel).toBe("API");
+    expect(ev.typeClass).toBe("is-api");
+    // Model has claude- prefix stripped.
+    expect(ev.detail).toContain("3-5-sonnet");
+    expect(ev.detail).not.toContain("claude-");
+    // Token counts.
+    expect(ev.detail).toContain("1.5k→300");
+    // Cache.
+    expect(ev.detail).toContain("↻5k/200");
+    // Cost.
+    expect(ev.detail).toContain("$0.0123");
+    // Duration.
+    expect(ev.detail).toContain("2.3s");
+  });
+
+  test("converts a hook_execution_start record into a HOOK ▸ event", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 2,
+        eventName: "hook_execution_start",
+        time: "2026-05-01T11:07:00.000Z",
+        attrsJson: JSON.stringify({
+          hook_event: "PostToolUse",
+          hook_name: "lint-check",
+        }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(events).toHaveLength(1);
+    const ev = events[0]!;
+    expect(ev.typeLabel).toBe("HOOK ▸");
+    expect(ev.typeClass).toBe("is-hook");
+    expect(ev.detail).toBe("PostToolUse · lint-check");
+  });
+
+  test("converts a hook_execution_complete record into a HOOK ◂ event", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 3,
+        eventName: "hook_execution_complete",
+        time: "2026-05-01T11:07:05.000Z",
+        attrsJson: JSON.stringify({
+          hook_event: "PostToolUse",
+          hook_name: "lint-check",
+          duration_ms: 1500,
+          ok_count: 1,
+          blocking_count: 0,
+        }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(events).toHaveLength(1);
+    const ev = events[0]!;
+    expect(ev.typeLabel).toBe("HOOK ◂");
+    expect(ev.typeClass).toBe("is-hook");
+    expect(ev.detail).toBe(
+      "PostToolUse · lint-check · 1.5s · ok:1 · blocking:0",
+    );
+  });
+
+  test("events are sorted by sequence ascending", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 3,
+        eventName: "api_request",
+        requestId: "req_1",
+        time: "2026-05-01T11:06:00.000Z",
+        attrsJson: JSON.stringify({ model: "claude-3-5-sonnet" }),
+      }),
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: JSON.stringify({ prompt: "Hello" }),
+      }),
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 1,
+        eventName: "hook_execution_start",
+        time: "2026-05-01T11:05:30.000Z",
+        attrsJson: JSON.stringify({
+          hook_event: "PreToolUse",
+          hook_name: "check",
+        }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(events).toHaveLength(3);
+    expect(events.map((e) => e.sequence)).toEqual([0, 1, 3]);
+    expect(events.map((e) => e.typeLabel)).toEqual(["PROMPT", "HOOK ▸", "API"]);
+  });
+
+  test("extracts skillName from user_prompt command_name", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: JSON.stringify({
+          prompt: "Do it",
+          command_name: "/deploy",
+        }),
+      }),
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 1,
+        eventName: "api_request",
+        requestId: "req_1",
+        time: "2026-05-01T11:06:00.000Z",
+        attrsJson: JSON.stringify({ "skill.name": "deploy-skill" }),
+      }),
+    ];
+    const { skillName } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    // command_name takes precedence over skill.name.
+    expect(skillName).toBe("/deploy");
+  });
+
+  test("falls back to api_request skill.name when command_name is absent", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: JSON.stringify({ prompt: "Hello" }),
+      }),
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 1,
+        eventName: "api_request",
+        requestId: "req_1",
+        time: "2026-05-01T11:06:00.000Z",
+        attrsJson: JSON.stringify({ "skill.name": "code-review" }),
+      }),
+    ];
+    const { skillName } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(skillName).toBe("code-review");
+  });
+
+  test("skillName is null when neither command_name nor skill.name exists", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: JSON.stringify({ prompt: "Hello" }),
+      }),
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 1,
+        eventName: "api_request",
+        requestId: "req_1",
+        time: "2026-05-01T11:06:00.000Z",
+        attrsJson: JSON.stringify({ model: "claude-3-5-sonnet" }),
+      }),
+    ];
+    const { skillName } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(skillName).toBeNull();
+  });
+
+  test("returns empty events and null skillName when no records match traceId", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p_other",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: JSON.stringify({ prompt: "Hello" }),
+      }),
+    ];
+    const { events, skillName } = buildTurnEvents(
+      records,
+      pmap([["p_other", "t_other"]]),
+      "t1",
+    );
+    expect(events).toEqual([]);
+    expect(skillName).toBeNull();
+  });
+
+  test("drops records with unrecognised event names", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "unknown_event_type",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: "{}",
+      }),
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 1,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:01.000Z",
+        attrsJson: JSON.stringify({ prompt: "Hello" }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    // Only the user_prompt survives; the unknown event is dropped.
+    expect(events).toHaveLength(1);
+    expect(events[0]?.typeLabel).toBe("PROMPT");
+  });
+
+  test("handles malformed attrsJson defensively", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "user_prompt",
+        time: "2026-05-01T11:05:00.000Z",
+        attrsJson: "{not valid json",
+      }),
+    ];
+    const { events, skillName } = buildTurnEvents(
+      records,
+      pmap([["p1", "t1"]]),
+      "t1",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.detail).toBe("");
+    expect(skillName).toBeNull();
+  });
+
+  test("api_request with non-claude model passes name through unchanged", () => {
+    const records: LogRecordSummaryRow[] = [
+      makeLogRecord({
+        promptId: "p1",
+        sequence: 0,
+        eventName: "api_request",
+        requestId: "req_1",
+        time: "2026-05-01T11:06:00.000Z",
+        attrsJson: JSON.stringify({ model: "gpt-4o" }),
+      }),
+    ];
+    const { events } = buildTurnEvents(records, pmap([["p1", "t1"]]), "t1");
+    expect(events[0]?.detail).toBe("gpt-4o");
+  });
+});
+
+describe("buildSpanTreeByTurn – events and skillName wiring", () => {
+  test("wires events and skillName onto TurnSpanGroup when log records resolve", () => {
+    const detail = makeDetail({
+      traces: [
+        makeTrace({
+          traceId: "t1",
+          startedAt: "2026-05-01T11:00:00.000Z",
+          endedAt: "2026-05-01T11:00:05.000Z",
+        }),
+      ],
+      spans: [
+        makeSpan({
+          spanId: "llm_t1",
+          parentSpanId: null,
+          traceId: "t1",
+          spanName: "claude_code.llm_request",
+          kind: "client",
+          inTok: 10,
+          outTok: 5,
+          attrsJson: JSON.stringify({ request_id: "req_1" }),
+        }),
+      ],
+      logRecords: [
+        makeLogRecord({
+          eventName: "user_prompt",
+          promptId: "p1",
+          sequence: 0,
+          requestId: null,
+          time: "2026-05-01T11:00:00.000Z",
+          attrsJson: JSON.stringify({
+            prompt: "Hello world",
+            command_name: "/test",
+          }),
+        }),
+        makeLogRecord({
+          eventName: "api_request",
+          promptId: "p1",
+          sequence: 1,
+          requestId: "req_1",
+          time: "2026-05-01T11:00:01.000Z",
+          attrsJson: JSON.stringify({
+            model: "claude-3-5-sonnet",
+            input_tokens: 10,
+            output_tokens: 5,
+          }),
+        }),
+      ],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    const g = groups[0]!;
+    expect(g.events).toHaveLength(2);
+    expect(g.events[0]?.typeLabel).toBe("PROMPT");
+    expect(g.events[1]?.typeLabel).toBe("API");
+    expect(g.skillName).toBe("/test");
+  });
+
+  test("events is empty and skillName is null when no log records exist", () => {
+    const detail = makeDetail({
+      traces: [makeTrace({ traceId: "t1" })],
+      spans: [
+        makeSpan({
+          spanId: "s1",
+          parentSpanId: null,
+          traceId: "t1",
+          inTok: 10,
+          outTok: 5,
+        }),
+      ],
+      logRecords: [],
+    });
+    const groups = buildSpanTreeByTurn(detail, NOW_MS);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.events).toEqual([]);
+    expect(groups[0]?.skillName).toBeNull();
   });
 });

@@ -19,10 +19,14 @@ import {
   extractToolDetail,
   extractToolName,
 } from "../../../../../agents/display";
-import { extractTracePrompts } from "../../../../../agents/prompts";
+import {
+  buildPromptToTraceMap,
+  extractTracePrompts,
+} from "../../../../../agents/prompts";
 import type {
   ConversationDetail,
   InvocationSummaryRow,
+  LogRecordSummaryRow,
   ModelTokenTotalsRow,
   SpanSummaryRow,
   TraceSummaryRow,
@@ -47,6 +51,28 @@ export interface TokenBarShape {
   readonly outputPct: number;
   readonly cacheReadPct: number;
   readonly cacheWritePct: number;
+}
+
+/**
+ * Single event row within a turn's event timeline. Built from OTLP log
+ * records grouped by promptId → traceId. Each row captures one emission
+ * (user_prompt, api_request, hook_execution_start, hook_execution_complete)
+ * with pre-formatted labels the UI can render without further processing.
+ */
+export interface TurnEventView {
+  readonly sequence: number;
+  /** HH:MM:SS local time for the event timeline column. */
+  readonly timeLabel: string;
+  /** ISO-8601 timestamp for tooltip / copy. */
+  readonly timeAbsolute: string;
+  /** Human-readable type pill: "PROMPT" | "API" | "HOOK ▸" | "HOOK ◂". */
+  readonly typeLabel: string;
+  /** CSS variant fragment for the type pill: "is-prompt" | "is-api" | "is-hook". */
+  readonly typeClass: string;
+  /** Free-form detail line (model, tokens, prompt excerpt, etc.). */
+  readonly detail: string;
+  /** Pretty-printed attrs JSON for the click-to-expand drawer. */
+  readonly attrsPretty: string;
 }
 
 export interface ConversationHeaderView {
@@ -228,6 +254,19 @@ export interface TurnSpanGroup {
    * lowest `sequence` is adopted (ADR invariant: first emission wins).
    */
   readonly userPromptText: string | null;
+  /**
+   * Chronological event timeline for this turn, built from log records
+   * grouped via `buildPromptToTraceMap`. Sorted by `sequence` ascending.
+   * Empty when no log records map to this turn's traceId.
+   */
+  readonly events: TurnEventView[];
+  /**
+   * Skill / command name associated with this turn, extracted from the
+   * first `user_prompt` record's `command_name` attribute. Falls back to
+   * the first `api_request` record's `skill.name` attribute. `null` when
+   * neither attribute is present on any record in the turn.
+   */
+  readonly skillName: string | null;
 }
 
 /**
@@ -667,6 +706,249 @@ export function buildSpanRows(
   return spans.map((row) => toSpanRowView(row, nowMs));
 }
 
+// ---------------------------------------------------------------------------
+// TurnEventView builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Format an ISO-8601 timestamp into a fixed-width `HH:MM:SS` local-time
+ * label. Uses `Date` arithmetic rather than `toLocaleTimeString` so tests
+ * are timezone-deterministic (tests pin `TZ=UTC` or accept local offsets).
+ */
+function formatTimeLabel(iso: string): string {
+  const d = new Date(iso);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+/**
+ * Strip the `claude-` prefix from a model name for compact display.
+ * Passes non-prefixed names through unchanged.
+ */
+function stripModelPrefix(model: string): string {
+  return model.startsWith("claude-") ? model.slice(7) : model;
+}
+
+/**
+ * Build the detail string for a `user_prompt` log record.
+ *
+ * Format: `<prompt excerpt> [command_name]` (command_name suffix only when
+ * the attribute is present). Prompt text is truncated to 120 chars.
+ */
+function buildUserPromptDetail(attrs: Record<string, unknown>): string {
+  const prompt = typeof attrs.prompt === "string" ? attrs.prompt : "";
+  const truncated = prompt.length > 120 ? `${prompt.slice(0, 120)}…` : prompt;
+  const command =
+    typeof attrs.command_name === "string" ? attrs.command_name : null;
+  return command !== null ? `${truncated} [${command}]` : truncated;
+}
+
+/**
+ * Build the detail string for an `api_request` log record.
+ *
+ * Format: `<model> <inTok>→<outTok> ↻<cacheR>/<cacheW> $<cost> <dur>`
+ * Each segment is omitted when the underlying attribute is absent.
+ */
+function buildApiRequestDetail(attrs: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof attrs.model === "string") {
+    parts.push(stripModelPrefix(attrs.model));
+  }
+  const inTok =
+    typeof attrs.input_tokens === "number" ? attrs.input_tokens : null;
+  const outTok =
+    typeof attrs.output_tokens === "number" ? attrs.output_tokens : null;
+  if (inTok !== null || outTok !== null) {
+    const inLabel = inTok !== null ? formatCompactNumber(inTok) : "?";
+    const outLabel = outTok !== null ? formatCompactNumber(outTok) : "?";
+    parts.push(`${inLabel}→${outLabel}`);
+  }
+  const cacheR =
+    typeof attrs.cache_read_tokens === "number"
+      ? attrs.cache_read_tokens
+      : null;
+  const cacheW =
+    typeof attrs.cache_write_tokens === "number"
+      ? attrs.cache_write_tokens
+      : null;
+  if (cacheR !== null || cacheW !== null) {
+    const rLabel = cacheR !== null ? formatCompactNumber(cacheR) : "0";
+    const wLabel = cacheW !== null ? formatCompactNumber(cacheW) : "0";
+    parts.push(`↻${rLabel}/${wLabel}`);
+  }
+  if (typeof attrs.cost === "number") {
+    parts.push(`$${attrs.cost.toFixed(4)}`);
+  }
+  if (typeof attrs.duration_ms === "number") {
+    const dur = formatDuration(attrs.duration_ms);
+    if (dur !== null) parts.push(dur);
+  }
+  return parts.join(" ");
+}
+
+/**
+ * Build the detail string for a `hook_execution_start` log record.
+ * Format: `<hook_event> · <hook_name>`
+ */
+function buildHookStartDetail(attrs: Record<string, unknown>): string {
+  const hookEvent =
+    typeof attrs.hook_event === "string" ? attrs.hook_event : "unknown";
+  const hookName =
+    typeof attrs.hook_name === "string" ? attrs.hook_name : "unknown";
+  return `${hookEvent} · ${hookName}`;
+}
+
+/**
+ * Build the detail string for a `hook_execution_complete` log record.
+ * Format: `<hook_event> · <hook_name> · <dur> · ok:<ok> blocking:<blocking>`
+ */
+function buildHookCompleteDetail(attrs: Record<string, unknown>): string {
+  const hookEvent =
+    typeof attrs.hook_event === "string" ? attrs.hook_event : "unknown";
+  const hookName =
+    typeof attrs.hook_name === "string" ? attrs.hook_name : "unknown";
+  const parts = [`${hookEvent} · ${hookName}`];
+  if (typeof attrs.duration_ms === "number") {
+    const dur = formatDuration(attrs.duration_ms);
+    if (dur !== null) parts.push(dur);
+  }
+  if (typeof attrs.ok_count === "number") {
+    parts.push(`ok:${attrs.ok_count}`);
+  }
+  if (typeof attrs.blocking_count === "number") {
+    parts.push(`blocking:${attrs.blocking_count}`);
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * Convert a single `LogRecordSummaryRow` into a `TurnEventView`.
+ * Returns `null` for unrecognised event names so the caller can filter.
+ */
+function toTurnEventView(rec: LogRecordSummaryRow): TurnEventView | null {
+  let attrs: Record<string, unknown> = {};
+  try {
+    attrs = JSON.parse(rec.attrsJson) as Record<string, unknown>;
+  } catch {
+    // malformed JSON — proceed with empty attrs
+  }
+
+  let typeLabel: string;
+  let typeClass: string;
+  let detail: string;
+
+  switch (rec.eventName) {
+    case "user_prompt":
+      typeLabel = "PROMPT";
+      typeClass = "is-prompt";
+      detail = buildUserPromptDetail(attrs);
+      break;
+    case "api_request":
+      typeLabel = "API";
+      typeClass = "is-api";
+      detail = buildApiRequestDetail(attrs);
+      break;
+    case "hook_execution_start":
+      typeLabel = "HOOK ▸";
+      typeClass = "is-hook";
+      detail = buildHookStartDetail(attrs);
+      break;
+    case "hook_execution_complete":
+      typeLabel = "HOOK ◂";
+      typeClass = "is-hook";
+      detail = buildHookCompleteDetail(attrs);
+      break;
+    default:
+      return null;
+  }
+
+  return {
+    sequence: rec.sequence,
+    timeLabel: formatTimeLabel(rec.time),
+    timeAbsolute: rec.time,
+    typeLabel,
+    typeClass,
+    detail,
+    attrsPretty: formatAttrsPretty(rec.attrsJson),
+  };
+}
+
+/**
+ * Build an ordered list of `TurnEventView` rows for a single turn, plus
+ * the extracted `skillName`.
+ *
+ * Log records are grouped to this turn's traceId via the `promptToTrace`
+ * map (promptId → traceId). Records whose promptId maps to a different
+ * traceId are skipped. Within the matching set, records are sorted by
+ * `sequence` ascending and converted to `TurnEventView`; unrecognised
+ * event names are silently dropped.
+ *
+ * `skillName` is resolved from the first `user_prompt` record's
+ * `command_name` attribute. If absent, falls back to the first
+ * `api_request` record's `skill.name` attribute. `null` when neither is
+ * found.
+ */
+export function buildTurnEvents(
+  logRecords: readonly LogRecordSummaryRow[],
+  promptToTrace: ReadonlyMap<string, string>,
+  traceId: string,
+): { events: TurnEventView[]; skillName: string | null } {
+  // Collect records belonging to this trace via promptId → traceId map.
+  const matched: LogRecordSummaryRow[] = [];
+  for (const rec of logRecords) {
+    const mappedTrace = promptToTrace.get(rec.promptId);
+    if (mappedTrace === traceId) {
+      matched.push(rec);
+    }
+  }
+
+  // Sort by sequence ascending.
+  matched.sort((a, b) => a.sequence - b.sequence);
+
+  // Convert to TurnEventView, dropping unrecognised events.
+  const events: TurnEventView[] = [];
+  for (const rec of matched) {
+    const view = toTurnEventView(rec);
+    if (view !== null) events.push(view);
+  }
+
+  // Extract skillName: prefer user_prompt.command_name, then api_request["skill.name"].
+  let skillName: string | null = null;
+  for (const rec of matched) {
+    if (rec.eventName === "user_prompt") {
+      try {
+        const attrs = JSON.parse(rec.attrsJson) as Record<string, unknown>;
+        if (typeof attrs.command_name === "string") {
+          skillName = attrs.command_name;
+          break;
+        }
+      } catch {
+        // skip
+      }
+    }
+  }
+  if (skillName === null) {
+    for (const rec of matched) {
+      if (rec.eventName === "api_request") {
+        try {
+          const attrs = JSON.parse(rec.attrsJson) as Record<string, unknown>;
+          const sn = attrs["skill.name"];
+          if (typeof sn === "string") {
+            skillName = sn;
+            break;
+          }
+        } catch {
+          // skip
+        }
+      }
+    }
+  }
+
+  return { events, skillName };
+}
+
 /**
  * Return `true` for a turn whose four LLM token totals are each either
  * `null` or `0`. Turns whose LLM spans report no token consumption
@@ -710,6 +992,7 @@ export function buildSpanTreeByTurn(
   nowMs: number,
 ): TurnSpanGroup[] {
   const tracePromptMap = extractTracePrompts(detail.logRecords, detail.spans);
+  const promptToTrace = buildPromptToTraceMap(detail.logRecords, detail.spans);
   const orderedTraces = detail.traces.slice().sort(compareTurnOrder);
   const groups = orderedTraces.map((trace, idx) => {
     const traceSpans = detail.spans.filter((s) => s.traceId === trace.traceId);
@@ -761,6 +1044,11 @@ export function buildSpanTreeByTurn(
         : (formatDuration(durationMs) ?? "");
     const summary = summariseTraceSpans(traceSpans);
     const perModelTotals = summariseTraceSpansByModel(traceSpans);
+    const turnEventsResult = buildTurnEvents(
+      detail.logRecords,
+      promptToTrace,
+      trace.traceId,
+    );
     return {
       traceId: trace.traceId,
       traceIdLabel: shortenId(trace.traceId),
@@ -782,6 +1070,8 @@ export function buildSpanTreeByTurn(
       rows,
       perModelTotals,
       userPromptText: tracePromptMap.get(trace.traceId) ?? null,
+      events: turnEventsResult.events,
+      skillName: turnEventsResult.skillName,
     };
   });
   return groups.filter((g) => !isZeroTokenTurn(g));
