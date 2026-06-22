@@ -25,7 +25,7 @@ flowchart LR
     HeBroker[hostexec-broker<br/>per-session in-process]:::proc
     Dockerd[Docker daemon]:::ext
 
-    Cfg[("Config<br/>~/.config/nas/*.yml<br/>./.agent-sandbox.yml")]:::store
+    Cfg[("Config<br/>~/.config/nas/global.pkl<br/>.nas/config.pkl")]:::store
     Sess[("Session store<br/>$XDG_RUNTIME/nas/sessions/*.json")]:::store
     Approvals[("Approval stores<br/>network/hostexec pending + registry")]:::store
     DtachSock[("dtach socket")]:::store
@@ -107,7 +107,7 @@ flowchart LR
 
 | ストア | 書き手 | 読み手 | 目的 |
 |---|---|---|---|
-| Config YAML | ユーザー | CLI / services | プロファイル定義・各機能の有効化 |
+| Config Pkl | ユーザー | CLI / services | プロファイル定義・各機能の有効化 |
 | Session store | CLI / Agent hooks | UI / CLI | turn state（user-turn / agent-turn / done） |
 | Approval stores (network + hostexec) | Agent → Brokers | UI / CLI / Brokers | 承認待ちリクエストと承認履歴 |
 | dtach socket | dtach | User terminal / UI | セッション多重化 |
