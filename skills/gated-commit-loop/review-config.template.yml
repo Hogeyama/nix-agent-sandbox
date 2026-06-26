@@ -1,10 +1,3 @@
-# レビュー設定
-# - ここにルールを足すだけでレビュー観点を拡張できる
-# - severity: critical (差し戻し), warning (推奨), info (参考)
-# - stop_when: ルールごとに設定可能。省略時は workflow.stop_when を使用
-#     no_critical_findings: critical がなければ OK
-#     no_findings: warning/info を含め findings が一切なければ OK
-
 workflow:
   # 計画フェーズのループ上限（reject が続いた場合）
   max_plan_iterations: 3
@@ -24,19 +17,51 @@ rules:
     stop_when: no_findings # セキュリティは warning でも差し戻す
     description: "SQLインジェクション、XSS、コマンドインジェクション等の脆弱性がないか"
 
+  - name: layer-boundary
+    severity: critical
+    stop_when: no_critical_findings
+    skill: backend-coding-guidelines
+    description: |
+      各層の責務と依存方向がプロジェクトのレイヤーの定義に
+      従っているか。
+
+      チェック手順:
+      1) 変更ファイルの属する層を特定する
+      2) その層の禁止事項に該当する処理がないか判定する
+      3) 違反があれば、正しい層への移譲を求める
+
+  - name: correctness
+    severity: critical
+    stop_when: no_findings # 機能が壊れる変更は差し戻す
+    description: |
+      変更後の挙動が機能として壊れないか。error-handling / security とは別に、
+      design が責務・可読性を見るのに対し、correctness は「実際に壊れるか」を
+      見る (壊れるなら warning ではなく critical として差し戻す)。
+      diff の行を静的に眺めるだけでは現れない破綻が主眼なので、次の手順で能動的に探す:
+
+      1) 行ごとの精査: 各 hunk を1行ずつ読み、さらにその行を含む関数・
+         コンポーネント全体を読む。変更行だけでなく、触れた箇所の未変更行のバグも
+         対象 (変更がそれを再露出させる / 直し損ねるため)。各行・各分岐について
+         「どんな入力・状態・順序・タイミングなら、この行は誤った結果になるか」を問う。
+         逆転した条件、off-by-one、null/undefined 参照、falsy(0/空)の取り違え、
+         コピペの変数取り違え、握り潰した例外、未確立の前提 などを疑う。
+      2) 消えた振る舞いの監査: diff が削除・置換した行が担っていた不変条件や
+         振る舞いを言語化し、新コードのどこで再確立されているか探す。見つからな
+         ければ指摘対象 (外したガード、落ちたエラー経路、緩めた検証、消えたテスト)。
+      3) 跨ぎの追跡: 変更した関数・値の呼び出し側 (Grep) と呼び出し先を確認し、
+         変更が前提条件・戻り値の形・例外・順序や状態の依存を壊していないか。
+         変更が未変更コード (スキーマ / 検証 / 共有状態 等) と相互作用して壊す
+         場合は、根因が未変更行でも指摘してよい。
+
+      happy path だけで終えない。具体的な不具合経路はコードから自分で発見すること。
+
   - name: design
     severity: warning
-    stop_when: no_critical_findings # 設計上の critical のみ差し戻す
-    description: |
-      責務分離、副作用の置き場、抽象境界、依存関係、データフローに無理がないか。
-      severity の使い分け:
-        critical: 放置するとバグ・リグレッション・データ不整合を引き起こす設計問題
-          例: 未使用 export が外部契約を暗示、探索ロジックの不整合、検証ロジック除去によるリグレッション
-        warning: 改善が望ましいが放置しても壊れない
-          例: 命名の非対称、コメントの不正確さ、軽微な重複
+    stop_when: no_findings # 設計上の warning も差し戻す
+    description: "責務分離、副作用の置き場、抽象境界、依存関係、データフローに無理がないか"
 
   - name: tombstone-comments
-    severity: info
+    severity: warning
     stop_when: no_critical_findings
     description: |
       コメント・doc・commit message が、読者が時間軸の文脈
@@ -68,15 +93,9 @@ rules:
 
   - name: test-coverage
     severity: warning
-    stop_when: no_critical_findings # テスト不足の critical のみ差し戻す
-    description: |
-      変更箇所に対応するテストがあるか。主要なロジックにテストが書かれているか。
-      特に以下を重視:
-        - 統合テスト: 複数モジュールを組み合わせた実行パスのカバー
-        - エッジケース: ファイル不在、環境差異、空入力、不正入力
-        - ビルド・パッケージング: アセットコピー漏れ、バンドル対象の網羅
-      severity の使い分け:
-        critical: そのテストがないと本番でバグが顕在化するリスクが高い
-          例: エラーパス (ENOENT等) のテスト欠落、検証ロジック変更後の回帰テスト欠落
-        warning: あると安心だが欠落しても即座にバグにはならない
-          例: 既存テストが暗黙的にカバーしているパス、info レベルの表示テスト
+    stop_when: no_findings # テスト不足の warning も差し戻す
+    description: "変更箇所に対応するテストがあるか。主要なロジックにテストが書かれているか"
+
+  - name: naming
+    severity: warning
+    description: "変数名・関数名がプロジェクトの命名規則に従っているか"

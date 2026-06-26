@@ -113,12 +113,12 @@ JSON 単一オブジェクトを返してください。前後に説明文を出
   "findings": [
     {
       "rule": "rule-name",
-      "severity": "critical/warning/info",
+      "severity": "critical/warning",
       "file": "path:line",
       "message": "1〜2文の指摘"
     }
   ],
-  "summary": { "critical": 0, "warning": 0, "info": 0 }
+  "summary": { "critical": 0, "warning": 0 }
 }
 ```
 

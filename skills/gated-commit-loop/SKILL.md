@@ -1,10 +1,9 @@
 ---
-name: gated-commit-loop
+argument-hint: '[実装内容の説明]'
 description: 計画・実装・レビューをサブエージェントで回し、コミット単位で品質を担保するワークフロー
+name: gated-commit-loop
 user-invocable: true
-argument-hint: "[実装内容の説明]"
 ---
-
 # Gated Commit Loop
 
 計画→計画レビュー→ユーザー承認→実装→コードレビュー→コミットを、**1 コミットずつ明示的に区切って**進めるワークフロー。
@@ -16,7 +15,6 @@ argument-hint: "[実装内容の説明]"
   - bookkeeping: `git status --short` / `git diff --name-only` / `git diff --stat` / `git log --oneline` / `git show --stat <hash>`
   - scope 検証: 各 commit 直前に `git diff --cached` を読み、入る差分が今回の commit scope 通りか／protected dirty paths が混ざっていないかを確認する
   - finding 解釈: code-reviewer が指す `file:line` を Read で開き、同じ趣旨の指摘が iteration を跨いで繰り返されていないかを判定する
-  - review_trace 検証: code-reviewer の `review_trace` を読み、分析手順の網羅性を確認する（Step 3 §4）。不足があれば具体的な質問として差し戻す。コードの良し悪しの判定はしない
 - **judgment（判定）と verification（確認）を混ぜない。** 読みの結果から自分が「この実装はこうあるべき」「ここは指摘されるべき」と結論を出しそうになったら、それは judgment であり、サブエージェントの担当。読みは verification まで。判定が必要になった時点でサブエージェントに戻す。
 - **実装開始前に、計画をユーザーへ提示し、明示的な承認を得る。** `LGTM` / `go` / `進めて` のような肯定が出るまで Step 3 に進んではいけない。
 - **承認は会話上で可視化する。** plan を提示したメッセージと、それに対するユーザー承認が会話履歴で確認できる形にする。内部状態だけ更新して先へ進んではいけない。
@@ -33,7 +31,7 @@ argument-hint: "[実装内容の説明]"
 | implementer | `implementer` | 1コミット分の実装 |
 | code-reviewer | `code-reviewer` | 1コミット分のコードレビュー |
 
-呼び出しは `Agent` ツールに `subagent_type: <name>` を渡す。`<name>` の agent が登録されていない環境では、skill 同梱の `<skill-dir>/agents/<name>.md` を読み、その内容をプロンプトとして general-purpose agent を呼ぶ。
+呼び出しは `Agent` ツールに `subagent_type: <name>` を渡す。`<name>` の agent が登録されていない環境では、skill 同梱の `<skill-dir>/agents/<name>.md` を読み、その内容をプロンプトとして general-purpose agent を呼ぶ。**一言一句そのまま渡すこと。**
 
 各定義ファイルに詳細はあるが、**orchestrator は「何を渡せば次の agent が迷わないか」を理解して渡す必要がある。** 「雑にタスク内容だけ渡す」は不可。
 
@@ -64,7 +62,6 @@ argument-hint: "[実装内容の説明]"
    - ユーザーの plan 承認イベント
    - 各 commit の seq / title / hash / review_iters
    - **code-reviewer の戻り値 (JSON) はそのまま保持する**。要約・再構成しない。Step 5 で `findings[]` を transcribe するときに使う一次データなので、原文のまま `(commit_seq, review_iter)` のキー付きで保管する。
-   - review_trace 検証で差し戻した場合、差し戻し質問と再レビュー結果も保管する
    - finding ごとの `resolution` は Step 5 で機械的に決まる（後述）
 
 ## 実行順序
@@ -108,6 +105,18 @@ argument-hint: "[実装内容の説明]"
    - `Plan approved by user`
    - `Proceeding with Commit 1: <title>`
    のように、どの計画が承認されたかを会話上で再掲してから進む。
+
+### 計画のファイル保存
+
+ユーザー承認後、Step 3 に入る前に、承認された計画をファイルに保存する。
+
+1. planner の承認済み出力全文を `./.gated-commit-loop/<run_id>-commit-plan.md` に書き出す（再計画の場合は上書き）
+2. ユーザーの依頼に上位計画（設計書・仕様書・実装計画など）が含まれているか確認する
+   - ファイルとして存在する場合 → そのパスを記録する
+   - インライン（会話上のテキスト）で渡されている場合 → `./.gated-commit-loop/<run_id>-upper-plan.md` に書き出す
+   - 上位計画がない場合 → スキップ
+3. 保存したファイルのパスを記録する。以降 implementer / code-reviewer にはインラインで計画全文を渡す代わりに、このパスを渡す
+
 4. ユーザーから修正指示が来たら、planner に戻して再計画し、再度 plan-reviewer を通す。
 5. **同じ根本原因の reject が 2 回続いたら、上限未満でもユーザーに返す。**
    - 例: 要求が既存アーキテクチャと衝突していて、planner が形を変えても reviewer が同じ趣旨で reject する
@@ -120,8 +129,8 @@ argument-hint: "[実装内容の説明]"
 
 ### 1. implementer に渡す情報
 
-- 承認済み計画全文
-- 今回実装する commit セクション
+- 計画ファイルのパス（`./.gated-commit-loop/<run_id>-commit-plan.md`）。上位計画があればそのパスも渡す
+- 今回実装する commit の番号（例: "Commit 2 を実装せよ"）
 - すでに完了した commit 一覧
 - protected dirty paths
 - 現在が review 差し戻しの再実装なら、その findings 全文
@@ -136,27 +145,11 @@ argument-hint: "[実装内容の説明]"
 
 ### 3. code-reviewer に渡す情報
 
-- `review-config.yml` の `rules`
-- 今回の commit 計画
-- commit 固有の **レビュー観点**
-- 「今回レビューすべき差分はこの commit scope の変更だけ」であること
+- 計画ファイルのパス（`./.gated-commit-loop/<run_id>-commit-plan.md`）。上位計画があればそのパスも渡す。
+- 今回のレビュー対象の Commit 番号
+- **findings を付ける対象はこの commit の変更だけ**（無関係な既存コードに指摘をぶら下げさせない）。何をどこまで読むかは reviewer の判断に任せ、読む範囲を縛る指示は足さない。
 
-### 4. review_trace の検証（orchestrator の責務）
-
-code-reviewer は `review_trace`（分析の中間出力）と `findings` を返す。orchestrator は findings を判定する**前に** review_trace の網羅性を検証する。これは verification（分析が手順通り行われたか）であり、judgment（コードの良し悪し）ではない。
-
-以下を確認する:
-
-1. **branch_paths の null/error パス**: 各パスについて、対応する finding があるか、または「問題ない」と判断できる明確な理由があるか。特に null/skip/continue で処理を飛ばすパスについて、**その状態が永続した場合の帰結**が考慮されているか
-2. **deleted_invariants の決着**: 各項目が findings で指摘されているか、新コードで再確立されているか。宙に浮いている項目がないか
-3. **callers_checked の網羅性**: 変更された公開 API（export された関数、props、コールバック）に対して、呼び出し元が漏れていないか。`git grep` で簡易確認してよい
-
-不足が見つかった場合:
-- **具体的な質問を添えて code-reviewer に差し戻す**（例: 「branch_paths に `getHandle → null → continue` があるが、session が永久に復帰しない場合の failure scenario は？」）
-- orchestrator 自身が「ここは問題だ」と結論を出してはいけない。質問として投げ、判定は code-reviewer に任せる
-- 差し戻しは review_trace 検証として 1 回まで。2 回目以降の不足はそのまま進める（過剰な差し戻しで review iteration を消費しない）
-
-### 5. レビュー判定
+### 4. レビュー判定
 
 各 finding について、そのルールの `stop_when`（未指定ならグローバル `stop_when`）を適用する。
 
@@ -169,7 +162,7 @@ code-reviewer は `review_trace`（分析の中間出力）と `findings` を返
 - **未通過ルールあり** → findings を implementer に渡して再実装
 - **同じ趣旨の findings が繰り返される / `max_review_iterations` 到達** → ユーザー判断に戻す
 
-### 6. コミットのしかた
+### 5. コミットのしかた
 
 レビュー通過後に初めてコミットしてよい。
 
@@ -214,7 +207,6 @@ code-reviewer は `review_trace`（分析の中間出力）と `findings` を返
 以下のヒューリスティックで全 finding にラベルを **必ず付ける**。最終的にユーザーが修正してよいが、未推定で投げない。
 
 - `severity=critical` かつ `resolution=fixed` → `essential`
-- `severity=info` かつ `resolution=ignored` → `noise`
 - `severity=critical` かつ `resolution=ignored` → `config-smell`
   - critical なのに commit を通している＝`stop_when` 設定不一致の疑い。tuning-rules.md 側で別動線で扱うため独立ラベルにする。完了報告でもこの件数を 1 行で別出しする。
 - それ以外 → `borderline`

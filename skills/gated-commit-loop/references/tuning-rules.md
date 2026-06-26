@@ -74,7 +74,7 @@ commit_rating.comment に「X の観点が抜けていた」が複数件
 集計結果と改定案をセットで出す。**数字を出さずに「直したほうがよい」とだけ言わない。** 例:
 
 ```
-- naming (info): total=12, noise_rate=0.75
+- naming (warning): total=12, noise_rate=0.75
   → 削除候補。label_comment で「個人差が大きい」「指摘されても直さない」が頻出
 - design (warning): total=8, essential_rate=0.83, fixed_rate=0.62
   → 維持。critical 格上げも検討余地あるが、誤検知時のコストが高いので warning のまま推奨
