@@ -1,11 +1,5 @@
 import * as path from "node:path";
-import {
-  defaultRuntimeDir,
-  ensureDir,
-  isPidAlive,
-  readPid,
-  removeIfExists,
-} from "../lib/fs_utils.ts";
+import { defaultRuntimeDir, ensureDir } from "../lib/fs_utils.ts";
 import {
   type BaseRuntimePaths,
   type GcResult,
@@ -30,15 +24,9 @@ export {
 } from "../lib/runtime_registry.ts";
 
 export interface NetworkRuntimePaths extends BaseRuntimePaths {
-  authRouterSocket: string;
-  authRouterPidFile: string;
-  authRouterLogFile: string;
-  envoyConfigFile: string;
-}
-
-export interface NetworkGcResult extends GcResult {
-  removedAuthRouterSocket: boolean;
-  removedAuthRouterPidFile: boolean;
+  caCertDir: string;
+  addonScriptPath: string;
+  reviewRulesDir: string;
 }
 
 export async function resolveNetworkRuntimePaths(
@@ -50,15 +38,16 @@ export async function resolveNetworkRuntimePaths(
     sessionsDir: path.join(resolved, "sessions"),
     pendingDir: path.join(resolved, "pending"),
     brokersDir: path.join(resolved, "brokers"),
-    authRouterSocket: path.join(resolved, "auth-router.sock"),
-    authRouterPidFile: path.join(resolved, "auth-router.pid"),
-    authRouterLogFile: path.join(resolved, "auth-router.log"),
-    envoyConfigFile: path.join(resolved, "envoy.yaml"),
+    caCertDir: path.join(resolved, "mitmproxy-ca"),
+    addonScriptPath: path.join(resolved, "nas_addon.py"),
+    reviewRulesDir: path.join(resolved, "review-rules"),
   };
   await ensureDir(paths.runtimeDir, 0o755);
   await ensureDir(paths.sessionsDir);
   await ensureDir(paths.pendingDir);
   await ensureDir(paths.brokersDir);
+  await ensureDir(paths.caCertDir);
+  await ensureDir(paths.reviewRulesDir);
   return paths;
 }
 
@@ -89,23 +78,6 @@ export async function listPendingEntries(
 
 export async function gcNetworkRuntime(
   paths: NetworkRuntimePaths,
-): Promise<NetworkGcResult> {
-  const base = await gcRuntime<SessionRegistryEntry>(paths);
-
-  // Network-specific: clean up auth router if its process is dead.
-  let removedAuthRouterSocket = false;
-  let removedAuthRouterPidFile = false;
-  const authRouterPid = await readPid(paths.authRouterPidFile);
-  const authRouterAlive =
-    authRouterPid !== null && (await isPidAlive(authRouterPid));
-  if (!authRouterAlive) {
-    removedAuthRouterSocket = await removeIfExists(paths.authRouterSocket);
-    removedAuthRouterPidFile = await removeIfExists(paths.authRouterPidFile);
-  }
-
-  return {
-    ...base,
-    removedAuthRouterSocket,
-    removedAuthRouterPidFile,
-  };
+): Promise<GcResult> {
+  return await gcRuntime<SessionRegistryEntry>(paths);
 }

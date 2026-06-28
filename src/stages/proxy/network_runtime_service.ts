@@ -1,8 +1,8 @@
 /**
  * NetworkRuntimeService — Effect-based abstraction over network runtime
- * directory management (GC stale sessions, render envoy config).
+ * directory management (GC stale sessions, copy mitmproxy addon, write review rules).
  *
- * Live implementation delegates to FsService + ProcessService.
+ * Live implementation delegates to FsService.
  * Fake implementation provides configurable stubs for testing.
  */
 
@@ -10,7 +10,6 @@ import { Context, Effect, Layer } from "effect";
 import { resolveAsset } from "../../lib/asset.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { FsService } from "../../services/fs.ts";
-import { ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // NetworkRuntimeService tag
@@ -27,8 +26,13 @@ export class NetworkRuntimeService extends Context.Tag(
     readonly gcStaleRuntime: (
       paths: NetworkRuntimePaths,
     ) => Effect.Effect<void>;
-    readonly renderEnvoyConfig: (
+    readonly copyAddonScript: (
       paths: NetworkRuntimePaths,
+    ) => Effect.Effect<void>;
+    readonly writeReviewRules: (
+      paths: NetworkRuntimePaths,
+      sessionId: string,
+      rules: import("../../config/types.ts").ReviewRule[],
     ) => Effect.Effect<void>;
   }
 >() {}
@@ -40,12 +44,11 @@ export class NetworkRuntimeService extends Context.Tag(
 export const NetworkRuntimeServiceLive: Layer.Layer<
   NetworkRuntimeService,
   never,
-  FsService | ProcessService
+  FsService
 > = Layer.effect(
   NetworkRuntimeService,
   Effect.gen(function* () {
     const fs = yield* FsService;
-    const proc = yield* ProcessService;
 
     return NetworkRuntimeService.of({
       ensureRuntimeDirs: (paths) =>
@@ -54,47 +57,29 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           yield* fs.mkdir(paths.sessionsDir, { recursive: true });
           yield* fs.mkdir(paths.pendingDir, { recursive: true });
           yield* fs.mkdir(paths.brokersDir, { recursive: true });
+          yield* fs.mkdir(paths.caCertDir, { recursive: true });
+          yield* fs.mkdir(paths.reviewRulesDir, { recursive: true });
         }),
 
-      gcStaleRuntime: (paths) =>
+      gcStaleRuntime: (_paths) => Effect.void,
+
+      copyAddonScript: (paths) =>
         Effect.gen(function* () {
-          const pidFileExists = yield* fs.exists(paths.authRouterPidFile);
-          if (!pidFileExists) return;
-
-          const pidStr = yield* fs.readFile(paths.authRouterPidFile);
-          const pid = Number.parseInt(pidStr.trim(), 10);
-          if (Number.isNaN(pid)) {
-            yield* fs.rm(paths.authRouterPidFile, { force: true });
-            yield* fs
-              .rm(paths.authRouterSocket, { force: true })
-              .pipe(Effect.catchAll(() => Effect.void));
-            return;
-          }
-
-          const alive = yield* proc.exec(["kill", "-0", pid.toString()]).pipe(
-            Effect.as(true),
-            Effect.catchAllCause(() => Effect.succeed(false)),
-          );
-
-          if (!alive) {
-            yield* fs
-              .rm(paths.authRouterSocket, { force: true })
-              .pipe(Effect.catchAll(() => Effect.void));
-            yield* fs
-              .rm(paths.authRouterPidFile, { force: true })
-              .pipe(Effect.catchAll(() => Effect.void));
-          }
-        }),
-
-      renderEnvoyConfig: (paths) =>
-        Effect.gen(function* () {
-          const envoyTemplatePath = resolveAsset(
-            "docker/envoy/envoy.template.yaml",
+          const addonSource = resolveAsset(
+            "docker/mitmproxy/nas_addon.py",
             import.meta.url,
-            "../../docker/envoy/envoy.template.yaml",
+            "../../docker/mitmproxy/nas_addon.py",
           );
-          const source = yield* fs.readFile(envoyTemplatePath);
-          yield* fs.writeFile(paths.envoyConfigFile, source, { mode: 0o644 });
+          const source = yield* fs.readFile(addonSource);
+          yield* fs.writeFile(paths.addonScriptPath, source, { mode: 0o644 });
+        }),
+
+      writeReviewRules: (paths, sessionId, rules) =>
+        Effect.gen(function* () {
+          const rulesPath = `${paths.reviewRulesDir}/${sessionId}.json`;
+          yield* fs.writeFile(rulesPath, JSON.stringify(rules), {
+            mode: 0o644,
+          });
         }),
     });
   }),
@@ -109,8 +94,13 @@ export interface NetworkRuntimeServiceFakeConfig {
     paths: NetworkRuntimePaths,
   ) => Effect.Effect<void>;
   readonly gcStaleRuntime?: (paths: NetworkRuntimePaths) => Effect.Effect<void>;
-  readonly renderEnvoyConfig?: (
+  readonly copyAddonScript?: (
     paths: NetworkRuntimePaths,
+  ) => Effect.Effect<void>;
+  readonly writeReviewRules?: (
+    paths: NetworkRuntimePaths,
+    sessionId: string,
+    rules: import("../../config/types.ts").ReviewRule[],
   ) => Effect.Effect<void>;
 }
 
@@ -122,7 +112,8 @@ export function makeNetworkRuntimeServiceFake(
     NetworkRuntimeService.of({
       ensureRuntimeDirs: overrides.ensureRuntimeDirs ?? (() => Effect.void),
       gcStaleRuntime: overrides.gcStaleRuntime ?? (() => Effect.void),
-      renderEnvoyConfig: overrides.renderEnvoyConfig ?? (() => Effect.void),
+      copyAddonScript: overrides.copyAddonScript ?? (() => Effect.void),
+      writeReviewRules: overrides.writeReviewRules ?? (() => Effect.void),
     }),
   );
 }

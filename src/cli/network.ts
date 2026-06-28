@@ -3,7 +3,6 @@
  */
 
 import { makeNetworkApprovalClient } from "../domain/network.ts";
-import { serveAuthRouter } from "../network/envoy_auth_router.ts";
 import type { ApprovalScope } from "../network/protocol.ts";
 import {
   gcNetworkRuntime,
@@ -19,11 +18,6 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
 
   try {
     const paths = await resolveNetworkRuntimePaths(runtimeDir ?? undefined);
-
-    if (sub === "serve-auth-router") {
-      await serveAuthRouter(paths.runtimeDir);
-      return;
-    }
 
     if (sub === "gc") {
       const result = await gcNetworkRuntime(paths);
