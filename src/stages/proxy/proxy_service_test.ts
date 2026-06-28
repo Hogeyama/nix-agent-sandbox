@@ -290,9 +290,14 @@ test("ensureSharedProxy: launches with correct labels, mounts, and command", asy
   expect(run.command).toEqual([
     "mitmdump",
     "--mode",
-    "transparent",
+    "regular@8080",
     "--set",
-    "ssl_insecure=true",
+    "connection_strategy=lazy",
+    "--set",
+    "confdir=/nas-network/mitmproxy-ca",
+    "--ssl-insecure",
+    "-s",
+    "/nas-network/nas_addon.py",
   ]);
 });
 

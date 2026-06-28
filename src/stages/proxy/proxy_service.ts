@@ -106,9 +106,14 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
                 command: [
                   "mitmdump",
                   "--mode",
-                  "transparent",
+                  "regular@8080",
                   "--set",
-                  "ssl_insecure=true",
+                  "connection_strategy=lazy",
+                  "--set",
+                  "confdir=/nas-network/mitmproxy-ca",
+                  "--ssl-insecure",
+                  "-s",
+                  "/nas-network/nas_addon.py",
                 ],
               })
               .pipe(Effect.orDie);
