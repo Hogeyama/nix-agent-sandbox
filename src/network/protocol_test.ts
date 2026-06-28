@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   decodeProxyAuthorization,
   denyReasonForTarget,
-  matchesAllowlist,
+  matchesHostPattern,
   normalizeHost,
   normalizeTarget,
   parseAllowlistEntry,
@@ -94,35 +94,35 @@ test("parseAllowlistEntry: parses IPv6 with brackets", () => {
   });
 });
 
-test("matchesAllowlist: supports wildcard subdomains", () => {
+test("matchesHostPattern: supports wildcard subdomains", () => {
   expect(
-    matchesAllowlist({ host: "api.github.com", port: 443 }, ["*.github.com"]),
+    matchesHostPattern({ host: "api.github.com", port: 443 }, ["*.github.com"]),
   ).toEqual(true);
   expect(
-    matchesAllowlist({ host: "github.com", port: 443 }, ["*.github.com"]),
+    matchesHostPattern({ host: "github.com", port: 443 }, ["*.github.com"]),
   ).toEqual(true);
   expect(
-    matchesAllowlist({ host: "gitlab.com", port: 443 }, ["*.github.com"]),
+    matchesHostPattern({ host: "gitlab.com", port: 443 }, ["*.github.com"]),
   ).toEqual(false);
 });
 
-test("matchesAllowlist: port-qualified entries", () => {
+test("matchesHostPattern: port-qualified entries", () => {
   expect(
-    matchesAllowlist({ host: "example.com", port: 443 }, ["example.com:443"]),
+    matchesHostPattern({ host: "example.com", port: 443 }, ["example.com:443"]),
   ).toEqual(true);
   expect(
-    matchesAllowlist({ host: "example.com", port: 80 }, ["example.com:443"]),
+    matchesHostPattern({ host: "example.com", port: 80 }, ["example.com:443"]),
   ).toEqual(false);
   expect(
-    matchesAllowlist({ host: "example.com", port: 80 }, ["example.com"]),
+    matchesHostPattern({ host: "example.com", port: 80 }, ["example.com"]),
   ).toEqual(true);
   expect(
-    matchesAllowlist({ host: "api.example.com", port: 443 }, [
+    matchesHostPattern({ host: "api.example.com", port: 443 }, [
       "*.example.com:443",
     ]),
   ).toEqual(true);
   expect(
-    matchesAllowlist({ host: "api.example.com", port: 80 }, [
+    matchesHostPattern({ host: "api.example.com", port: 80 }, [
       "*.example.com:443",
     ]),
   ).toEqual(false);

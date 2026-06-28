@@ -31,7 +31,6 @@ export interface AuthorizeRequest {
   requestKind: RequestKind;
   observedAt: string;
   reviewContext?: ReviewContext;
-  matchedReviewRule?: boolean;
 }
 
 export interface DecisionResponse {
@@ -63,10 +62,8 @@ export interface SessionRegistryEntry {
   tokenHash: string;
   brokerSocket: string;
   profileName: string;
-  allowlist: string[];
   createdAt: string;
   pid: number;
-  promptEnabled: boolean;
   agent?: string;
 }
 
@@ -203,12 +200,12 @@ export function parseAllowlistEntry(entry: string): {
   return { host: wildcardPrefix + hostPart, port };
 }
 
-export function matchesAllowlist(
+export function matchesHostPattern(
   target: NormalizedTarget,
-  allowlist: string[],
+  patterns: string[],
 ): boolean {
   const normalizedHost = normalizeHost(target.host);
-  return allowlist.some((entry) => {
+  return patterns.some((entry) => {
     const parsed = parseAllowlistEntry(entry);
     // If the entry specifies a port, both host and port must match.
     if (parsed.port !== null && parsed.port !== target.port) return false;
