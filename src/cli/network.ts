@@ -35,10 +35,13 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
         const items = await client.listPending(paths);
         return items.map((item) => {
           const target = `${item.target.host}:${item.target.port}`;
+          const reviewInfo = item.reviewContext
+            ? ` [${item.method} ${item.reviewContext.path}] body=${item.reviewContext.bodySize}B`
+            : "";
           return {
             sessionId: item.sessionId,
             requestId: item.requestId,
-            displayLine: `${item.sessionId} ${item.requestId} ${target} ${item.state} ${item.createdAt}`,
+            displayLine: `${item.sessionId} ${item.requestId} ${target}${reviewInfo} ${item.state} ${item.createdAt}`,
             structured: {
               sessionId: item.sessionId,
               requestId: item.requestId,
@@ -46,6 +49,8 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
               port: item.target.port,
               state: item.state,
               createdAt: item.createdAt,
+              method: item.method,
+              reviewContext: item.reviewContext ?? null,
             },
           };
         });
