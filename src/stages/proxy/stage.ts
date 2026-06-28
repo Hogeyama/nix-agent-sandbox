@@ -3,7 +3,7 @@
  *
  * 共有 Proxy コンテナ + session network + session broker を
  * セットアップし、エージェントコンテナのネットワークトラフィックを
- * allowlist/prompt ベースで制御する。
+ * reviewRules ベースで制御する。
  *
  * plan() は skip 判定と設定の計算のみ行い、run() は Effect.acquireRelease を
  * チェーンして各サブリソースのライフサイクルを管理する。
@@ -76,17 +76,14 @@ export interface ProxyPlan {
   readonly runtimePaths: NetworkRuntimePaths;
   readonly brokerSocket: string;
   readonly token: string;
-  readonly allowlist: string[];
-  readonly denylist: string[];
-  readonly promptEnabled: boolean;
-  readonly timeoutSeconds: number;
-  readonly defaultScope: import("../../network/protocol.ts").ApprovalScope;
-  readonly notify: import("../../lib/notify_utils.ts").ResolvedNotifyBackend;
+  readonly reviewRules: ReviewRule[];
+  readonly pendingTimeoutSeconds: number;
+  readonly pendingDefaultScope: import("../../network/protocol.ts").ApprovalScope;
+  readonly pendingNotify: import("../../lib/notify_utils.ts").ResolvedNotifyBackend;
   readonly uiEnabled: boolean;
   readonly uiPort: number;
   readonly uiIdleTimeout: number;
   readonly auditDir: string;
-  readonly reviewRules: ReviewRule[];
   readonly outputOverrides: Pick<
     StageResult,
     "network" | "prompt" | "proxy" | "container"
@@ -115,7 +112,6 @@ export function planProxy(
 
   const runtimePaths = buildNetworkRuntimePaths(input.host);
   const brokerSocket = brokerSocketPath(runtimePaths, input.sessionId);
-  const prompt = input.profile.network.prompt;
   const token = generateSessionToken();
   const sessionNetworkName = `nas-session-net-${input.sessionId}`;
 
@@ -192,7 +188,6 @@ export function planProxy(
   };
   const promptState: PromptState = {
     promptToken: token,
-    promptEnabled: prompt.enable,
   };
   const proxy: ProxyState = {
     brokerSocket,
@@ -212,17 +207,14 @@ export function planProxy(
     runtimePaths,
     brokerSocket,
     token,
-    allowlist: [...input.profile.network.allowlist],
-    denylist: prompt.denylist,
-    promptEnabled: prompt.enable,
-    timeoutSeconds: prompt.timeoutSeconds,
-    defaultScope: prompt.defaultScope,
-    notify: resolveNotifyBackend(prompt.notify),
+    reviewRules: [...input.profile.network.reviewRules],
+    pendingTimeoutSeconds: input.profile.network.pendingTimeoutSeconds,
+    pendingDefaultScope: input.profile.network.pendingDefaultScope,
+    pendingNotify: resolveNotifyBackend(input.profile.network.pendingNotify),
     uiEnabled: input.config.ui.enable,
     uiPort: input.config.ui.port,
     uiIdleTimeout: input.config.ui.idleTimeout,
     auditDir: input.probes.auditDir,
-    reviewRules: [...(prompt.reviewRules ?? [])],
     envVars: container.env.static,
     container,
     forwardPorts,
@@ -351,18 +343,15 @@ function runProxy(
         socketPath: plan.brokerSocket,
         profileName: plan.profileName,
         agent: plan.agent,
-        allowlist: plan.allowlist,
-        denylist: plan.denylist,
-        promptEnabled: plan.promptEnabled,
-        timeoutSeconds: plan.timeoutSeconds,
-        defaultScope: plan.defaultScope,
-        notify: plan.notify,
+        reviewRules: plan.reviewRules,
+        pendingTimeoutSeconds: plan.pendingTimeoutSeconds,
+        pendingDefaultScope: plan.pendingDefaultScope,
+        pendingNotify: plan.pendingNotify,
         uiEnabled: plan.uiEnabled,
         uiPort: plan.uiPort,
         uiIdleTimeout: plan.uiIdleTimeout,
         auditDir: plan.auditDir,
         tokenHash,
-        reviewRules: plan.reviewRules,
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );

@@ -30,18 +30,15 @@ export interface SessionBrokerConfig {
   readonly socketPath: string;
   readonly profileName: string;
   readonly agent?: string;
-  readonly allowlist: string[];
-  readonly denylist: string[];
-  readonly promptEnabled: boolean;
-  readonly timeoutSeconds: number;
-  readonly defaultScope: ApprovalScope;
-  readonly notify: ResolvedNotifyBackend;
+  readonly reviewRules: ReviewRule[];
+  readonly pendingTimeoutSeconds: number;
+  readonly pendingDefaultScope: ApprovalScope;
+  readonly pendingNotify: ResolvedNotifyBackend;
   readonly uiEnabled?: boolean;
   readonly uiPort?: number;
   readonly uiIdleTimeout?: number;
   readonly auditDir?: string;
   readonly tokenHash: string;
-  readonly reviewRules?: ReviewRule[];
 }
 
 // ---------------------------------------------------------------------------
@@ -81,17 +78,14 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
             const broker = new SessionBroker({
               paths: config.paths,
               sessionId: config.sessionId,
-              allowlist: config.allowlist,
-              denylist: config.denylist,
-              promptEnabled: config.promptEnabled,
-              timeoutSeconds: config.timeoutSeconds,
-              defaultScope: config.defaultScope,
-              notify: config.notify,
+              reviewRules: config.reviewRules,
+              pendingTimeoutSeconds: config.pendingTimeoutSeconds,
+              pendingDefaultScope: config.pendingDefaultScope,
+              pendingNotify: config.pendingNotify,
               uiEnabled: config.uiEnabled,
               uiPort: config.uiPort,
               uiIdleTimeout: config.uiIdleTimeout,
               auditDir: config.auditDir,
-              reviewRules: config.reviewRules,
             });
             await broker.start(config.socketPath);
             try {
@@ -101,10 +95,8 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
                 tokenHash: config.tokenHash,
                 brokerSocket: config.socketPath,
                 profileName: config.profileName,
-                allowlist: config.allowlist,
                 createdAt: new Date().toISOString(),
                 pid: process.pid,
-                promptEnabled: config.promptEnabled,
                 agent: config.agent,
               });
             } catch (error) {

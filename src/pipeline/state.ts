@@ -77,7 +77,6 @@ export interface NetworkState {
 /** Prompt-service token issued for the network session. */
 export interface PromptState {
   readonly promptToken: string;
-  readonly promptEnabled: boolean;
 }
 
 /** Session-broker endpoints. */

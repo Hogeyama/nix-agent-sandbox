@@ -45,35 +45,21 @@ import {
   replaceNetwork,
 } from "./stage.ts";
 
-const DEFAULT_PROMPT = {
-  enable: false,
-  denylist: [] as string[],
-  timeoutSeconds: 300,
-  defaultScope: "host-port" as const,
-  notify: "auto" as const,
-  reviewRules: [] as any[],
-};
-
 function makeProfile(
   overrides: Partial<Omit<Profile, "network">> & {
-    network?: Partial<Omit<Profile["network"], "prompt">> & {
-      prompt?: Partial<Profile["network"]["prompt"]>;
-    };
+    network?: Partial<Profile["network"]>;
   } = {},
 ): Profile {
   const networkOverrides = overrides.network ?? {};
   const { network: _ignored, ...rest } = overrides;
   const network: Profile["network"] = {
-    allowlist: networkOverrides.allowlist
-      ? [...networkOverrides.allowlist]
-      : [],
+    reviewRules: networkOverrides.reviewRules ?? [],
     proxy: networkOverrides.proxy
       ? { forwardPorts: [...networkOverrides.proxy.forwardPorts] }
       : { forwardPorts: [] },
-    prompt: {
-      ...DEFAULT_PROMPT,
-      ...(networkOverrides.prompt ?? {}),
-    },
+    pendingTimeoutSeconds: networkOverrides.pendingTimeoutSeconds ?? 300,
+    pendingDefaultScope: networkOverrides.pendingDefaultScope ?? "host-port",
+    pendingNotify: networkOverrides.pendingNotify ?? "auto",
   };
   return {
     agent: "claude",
@@ -155,19 +141,18 @@ function makeInput(
   };
 }
 
-test("ProxyStage: always returns plan even when allowlist and prompt are disabled", () => {
+test("ProxyStage: always returns plan even when reviewRules and prompt are disabled", () => {
   const profile = makeProfile();
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
   expect(result.sessionNetworkName).toEqual("nas-session-net-test-session-123");
-  expect(result.allowlist).toEqual([]);
-  expect(result.promptEnabled).toEqual(false);
+  expect(result.reviewRules).toEqual([]);
   expect(result.forwardPorts).toEqual([]);
 });
 
-test("ProxyStage: returns plan when allowlist is non-empty", () => {
+test("ProxyStage: returns plan when reviewRules is non-empty", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
@@ -177,19 +162,19 @@ test("ProxyStage: returns plan when allowlist is non-empty", () => {
   );
 });
 
-test("ProxyStage: returns plan when prompt is enabled", () => {
+test("ProxyStage: returns plan when reviewRules contains a review action", () => {
   const profile = makeProfile({
-    network: { prompt: { enable: true } },
+    network: { reviewRules: [{ action: "review" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
   expect(result !== null).toEqual(true);
-  expect(result!.promptEnabled).toEqual(true);
+  expect(result!.reviewRules).toEqual([{ action: "review" }]);
 });
 
 test("ProxyStage: sets proxy env vars", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -212,7 +197,7 @@ test("ProxyStage: sets proxy env vars", () => {
 
 test("ProxyStage: sets outputOverrides", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -224,7 +209,6 @@ test("ProxyStage: sets outputOverrides", () => {
   });
   expect(result.outputOverrides.prompt).toEqual({
     promptToken,
-    promptEnabled: false,
   });
   expect(result.outputOverrides.proxy).toEqual({
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123/sock",
@@ -234,7 +218,7 @@ test("ProxyStage: sets outputOverrides", () => {
 
 test("ProxyStage: planner sets networkName in outputOverrides", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -257,7 +241,7 @@ test("replaceNetwork: adds --network when not present", () => {
 
 test("ProxyStage: uses provided session token generator", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const generatedToken = "fixed-token-12345";
@@ -271,9 +255,14 @@ test("ProxyStage: uses provided session token generator", () => {
   );
 });
 
-test("ProxyStage: uses profile prompt settings", () => {
+test("ProxyStage: uses profile network settings", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"], prompt: { enable: true } },
+    network: {
+      reviewRules: [
+        { host: "example.com", action: "allow" },
+        { action: "review" },
+      ],
+    },
   });
   const { shared, container, observability } = makeInput(profile);
 
@@ -287,14 +276,13 @@ test("ProxyStage: uses profile prompt settings", () => {
   expect(result.token).toEqual("slice-token");
   expect(result.outputOverrides.prompt).toEqual({
     promptToken: "slice-token",
-    promptEnabled: true,
   });
   expect(result.envVars.no_proxy).toEqual("localhost,127.0.0.1");
 });
 
 test("ProxyStage: planner merges proxy settings into existing container slice", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile, {
     container: {
@@ -377,35 +365,42 @@ test("ProxyStage: forwardPorts-only enables proxy", () => {
   expect(result !== null).toEqual(true);
 });
 
-test("ProxyStage: forwardPorts does NOT inject host.docker.internal entries into allowlist", () => {
+test("ProxyStage: forwardPorts does NOT inject host.docker.internal entries into reviewRules", () => {
   // Forward-ports flow through per-port UDS bind-mounts, so the local-proxy
-  // does not dial host.docker.internal:<port> via CONNECT. The allowlist
+  // does not dial host.docker.internal:<port> via CONNECT. The reviewRules
   // must therefore stay free of synthetic host.docker.internal entries —
-  // a stale allowlist injection would silently re-grant the host TCP
-  // escape route.
+  // a stale entry would silently re-grant the host TCP escape route.
   const profile = makeProfile({
     network: { proxy: { forwardPorts: [8080, 5432] } },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
-  expect(result.allowlist).not.toContain("host.docker.internal:8080");
-  expect(result.allowlist).not.toContain("host.docker.internal:5432");
+  expect(
+    result.reviewRules.some((r) => r.host === "host.docker.internal:8080"),
+  ).toEqual(false);
+  expect(
+    result.reviewRules.some((r) => r.host === "host.docker.internal:5432"),
+  ).toEqual(false);
 });
 
-test("ProxyStage: forwardPorts preserves user-declared host.docker.internal allowlist entries", () => {
-  // If a profile explicitly puts host.docker.internal:* in its allowlist,
+test("ProxyStage: forwardPorts preserves user-declared host.docker.internal reviewRules entries", () => {
+  // If a profile explicitly puts host.docker.internal:* in its reviewRules,
   // it must not be stripped — that is user intent, distinct from the
   // implicit injection driven by forwardPorts.
   const profile = makeProfile({
     network: {
-      allowlist: ["host.docker.internal:9999"],
+      reviewRules: [{ host: "host.docker.internal:9999", action: "allow" }],
       proxy: { forwardPorts: [8080] },
     },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
-  expect(result.allowlist).toContain("host.docker.internal:9999");
-  expect(result.allowlist).not.toContain("host.docker.internal:8080");
+  expect(
+    result.reviewRules.some((r) => r.host === "host.docker.internal:9999"),
+  ).toEqual(true);
+  expect(
+    result.reviewRules.some((r) => r.host === "host.docker.internal:8080"),
+  ).toEqual(false);
 });
 
 test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
@@ -417,21 +412,28 @@ test("ProxyStage: forwardPorts sets NAS_FORWARD_PORTS env var", () => {
   expect(result.envVars.NAS_FORWARD_PORTS).toEqual("8080,5432");
 });
 
-test("ProxyStage: forwardPorts leaves existing allowlist untouched", () => {
-  // Profile-declared allowlist entries pass through verbatim; forwardPorts
+test("ProxyStage: forwardPorts leaves existing reviewRules untouched", () => {
+  // Profile-declared reviewRules entries pass through verbatim; forwardPorts
   // no longer contributes synthetic host.docker.internal entries.
   const profile = makeProfile({
-    network: { allowlist: ["example.com"], proxy: { forwardPorts: [3000] } },
+    network: {
+      reviewRules: [{ host: "example.com", action: "allow" }],
+      proxy: { forwardPorts: [3000] },
+    },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
-  expect(result.allowlist).toContain("example.com");
-  expect(result.allowlist).not.toContain("host.docker.internal:3000");
+  expect(result.reviewRules.some((r) => r.host === "example.com")).toEqual(
+    true,
+  );
+  expect(
+    result.reviewRules.some((r) => r.host === "host.docker.internal:3000"),
+  ).toEqual(false);
 });
 
 test("ProxyStage: no NAS_FORWARD_PORTS when forwardPorts is empty", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -480,7 +482,7 @@ test("ProxyStage: forwardPorts sets NAS_FORWARD_PORT_SOCKET_DIR env", () => {
 
 test("ProxyStage: no forward-port mounts or socket-dir env when forwardPorts is empty", () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
@@ -638,7 +640,7 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
     networkName: "nas-session-net-test-session-123",
     runtimeDir: "/run/user/1000/nas/network",
   });
-  expect(result.prompt?.promptEnabled).toEqual(false);
+  expect(result.prompt?.promptToken).toBeDefined();
   expect(result.container?.network).toEqual({
     name: "nas-session-net-test-session-123",
   });
@@ -646,7 +648,7 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
 
 test("createProxyStage().run(): calls services and returns merged output", async () => {
   const profile = makeProfile({
-    network: { allowlist: ["example.com"] },
+    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
   });
   const { shared, container, observability } = makeInput(profile);
 
@@ -713,7 +715,6 @@ test("createProxyStage().run(): calls services and returns merged output", async
   const proxyEndpoint = result.proxy!.proxyEndpoint;
   expect(result.prompt).toEqual({
     promptToken: "test-token-fixed",
-    promptEnabled: false,
   });
   expect(result.proxy).toEqual({
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-123/sock",

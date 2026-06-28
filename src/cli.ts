@@ -270,7 +270,7 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
     // notify-send の存在チェック（必要な場合のみ）
     {
       const networkNotify = resolveNotifyBackend(
-        effectiveProfile.network.prompt.notify,
+        effectiveProfile.network.pendingNotify,
       );
       const hostexecNotify = resolveNotifyBackend(
         effectiveProfile.hostexec?.prompt.notify ?? "auto",
