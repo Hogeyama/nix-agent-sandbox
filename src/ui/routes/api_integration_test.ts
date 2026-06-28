@@ -29,10 +29,9 @@ function createTestContext(dir: string): UiDataContext {
     sessionsDir: `${dir}/network/sessions`,
     pendingDir: `${dir}/network/pending`,
     brokersDir: `${dir}/network/brokers`,
-    authRouterSocket: `${dir}/network/auth-router.sock`,
-    authRouterPidFile: `${dir}/network/auth-router.pid`,
-    authRouterLogFile: `${dir}/network/auth-router.log`,
-    envoyConfigFile: `${dir}/network/envoy.yaml`,
+    caCertDir: `${dir}/network/mitmproxy-ca`,
+    addonScriptPath: `${dir}/network/nas_addon.py`,
+    reviewRulesDir: `${dir}/network/review-rules`,
   };
   const hostExecPaths: HostExecRuntimePaths = {
     runtimeDir: `${dir}/hostexec`,

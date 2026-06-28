@@ -83,11 +83,10 @@ import {
   OtlpReceiverServiceLive,
 } from "./stages/observability.ts";
 import {
-  AuthRouterServiceLive,
   createProxyStage,
-  EnvoyServiceLive,
   ForwardPortRelayServiceLive,
   NetworkRuntimeServiceLive,
+  ProxyServiceLive,
   SessionBrokerServiceLive,
 } from "./stages/proxy.ts";
 import {
@@ -307,7 +306,6 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
     const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
     const dockerLayer = DockerServiceLive;
     const liveLayer = Layer.mergeAll(
-      AuthRouterServiceLive,
       ContainerLaunchServiceLive.pipe(Layer.provide(dockerLayer)),
       DbusProxyServiceLive.pipe(Layer.provide(primitiveLayer)),
       DindServiceLive,
@@ -315,14 +313,14 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       DockerBuildServiceLive.pipe(
         Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
       ),
-      EnvoyServiceLive.pipe(Layer.provide(dockerLayer)),
+      ProxyServiceLive.pipe(Layer.provide(dockerLayer)),
       ForwardPortRelayServiceLive,
       FsServiceLive,
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-      NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
+      NetworkRuntimeServiceLive.pipe(Layer.provide(FsServiceLive)),
       OtlpReceiverServiceLive,
       ProcessServiceLive,
       DockerServiceLive,

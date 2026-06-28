@@ -154,10 +154,9 @@ function makeCtx(reader: UiHistoryReader): UiDataContext {
     sessionsDir: "/tmp/network/sessions",
     pendingDir: "/tmp/network/pending",
     brokersDir: "/tmp/network/brokers",
-    authRouterSocket: "/tmp/network/router.sock",
-    authRouterPidFile: "/tmp/network/router.pid",
-    authRouterLogFile: "/tmp/network/router.log",
-    envoyConfigFile: "/tmp/network/envoy.yaml",
+    caCertDir: "/tmp/network/mitmproxy-ca",
+    addonScriptPath: "/tmp/network/nas_addon.py",
+    reviewRulesDir: "/tmp/network/review-rules",
   };
   const hostExecPaths: HostExecRuntimePaths = {
     runtimeDir: "/tmp/hostexec",

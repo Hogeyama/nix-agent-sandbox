@@ -29,10 +29,7 @@ import { FsServiceLive } from "../../services/fs.ts";
 import { ProcessServiceLive } from "../../services/process.ts";
 import { DindServiceLive } from "../../stages/dind.ts";
 import { HostExecBrokerServiceLive } from "../../stages/hostexec.ts";
-import {
-  AuthRouterServiceLive,
-  SessionBrokerServiceLive,
-} from "../../stages/proxy.ts";
+import { SessionBrokerServiceLive } from "../../stages/proxy.ts";
 import { SessionStoreServiceLive } from "../session_store.ts";
 import {
   cleanNasWorktrees,
@@ -56,7 +53,6 @@ const insideNas = process.env.NAS_SESSION_ID !== undefined;
 
 const primitiveLayer = Layer.mergeAll(FsServiceLive, ProcessServiceLive);
 const liveLayer = Layer.mergeAll(
-  AuthRouterServiceLive,
   DindServiceLive,
   FsServiceLive,
   GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),

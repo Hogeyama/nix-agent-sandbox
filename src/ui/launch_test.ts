@@ -40,10 +40,9 @@ function createDummyCtx(): UiDataContext {
     sessionsDir: "/tmp/nas-launch-test-unused/network/sessions",
     pendingDir: "/tmp/nas-launch-test-unused/network/pending",
     brokersDir: "/tmp/nas-launch-test-unused/network/brokers",
-    authRouterSocket: "/tmp/nas-launch-test-unused/network/auth-router.sock",
-    authRouterPidFile: "/tmp/nas-launch-test-unused/network/auth-router.pid",
-    authRouterLogFile: "/tmp/nas-launch-test-unused/network/auth-router.log",
-    envoyConfigFile: "/tmp/nas-launch-test-unused/network/envoy.yaml",
+    caCertDir: "/tmp/nas-launch-test-unused/network/mitmproxy-ca",
+    addonScriptPath: "/tmp/nas-launch-test-unused/network/nas_addon.py",
+    reviewRulesDir: "/tmp/nas-launch-test-unused/network/review-rules",
   };
   const hostExecPaths: HostExecRuntimePaths = {
     runtimeDir: "/tmp/nas-launch-test-unused/hostexec",

@@ -1,7 +1,7 @@
 /**
  * ProxyStage (EffectStage)
  *
- * 共有 Envoy コンテナ + auth-router + session network + session broker を
+ * 共有 Proxy コンテナ + session network + session broker を
  * セットアップし、エージェントコンテナのネットワークトラフィックを
  * allowlist/prompt ベースで制御する。
  *
@@ -30,23 +30,22 @@ import type {
   ProxyState,
 } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput, StageResult } from "../../pipeline/types.ts";
-import { AuthRouterService } from "./auth_router_service.ts";
-import { EnvoyService } from "./envoy_service.ts";
 import {
   type ForwardPortRelayHandle,
   ForwardPortRelayService,
 } from "./forward_port_relay_service.ts";
 import { NetworkRuntimeService } from "./network_runtime_service.ts";
+import { ProxyService } from "./proxy_service.ts";
 import {
   type SessionBrokerHandle,
   SessionBrokerService,
 } from "./session_broker_service.ts";
 
-const ENVOY_IMAGE = "envoyproxy/envoy:v1.37.1";
-const ENVOY_CONTAINER_NAME = "nas-envoy-shared";
-const ENVOY_ALIAS = "nas-envoy";
+const PROXY_IMAGE = "mitmproxy/mitmproxy:latest";
+const PROXY_CONTAINER_NAME = "nas-proxy-shared";
+const PROXY_ALIAS = "nas-proxy";
 const ENVOY_PROXY_PORT = 15001;
-const ENVOY_READY_TIMEOUT_MS = 15_000;
+const PROXY_READY_TIMEOUT_MS = 15_000;
 export const LOCAL_PROXY_PORT = 18080;
 
 /**
@@ -107,7 +106,7 @@ export function planProxy(
   input: StageInput & Pick<PipelineState, "container" | "observability">,
   options: ProxyStageOptions = {},
 ): ProxyPlan {
-  const envoyContainerName = options.envoyContainerName ?? ENVOY_CONTAINER_NAME;
+  const envoyContainerName = options.envoyContainerName ?? PROXY_CONTAINER_NAME;
   const generateSessionToken =
     options.generateSessionToken ?? defaultGenerateToken;
 
@@ -131,7 +130,7 @@ export function planProxy(
       ? Array.from(new Set([...baseForwardPorts, observabilityPort]))
       : baseForwardPorts;
 
-  const proxyUrl = `http://${input.sessionId}:${token}@${ENVOY_ALIAS}:${ENVOY_PROXY_PORT}`;
+  const proxyUrl = `http://${input.sessionId}:${token}@${PROXY_ALIAS}:${ENVOY_PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
   // DinD's hostname is appended to no_proxy later by DindStage (which now runs
   // after ProxyStage); here we only seed the loopback baseline.
@@ -192,10 +191,10 @@ export function planProxy(
 
   return {
     envoyContainerName,
-    envoyImage: ENVOY_IMAGE,
-    envoyAlias: ENVOY_ALIAS,
+    envoyImage: PROXY_IMAGE,
+    envoyAlias: PROXY_ALIAS,
     envoyProxyPort: ENVOY_PROXY_PORT,
-    envoyReadyTimeoutMs: ENVOY_READY_TIMEOUT_MS,
+    envoyReadyTimeoutMs: PROXY_READY_TIMEOUT_MS,
     sessionId: input.sessionId,
     sessionNetworkName,
     profileName: input.profileName,
@@ -235,9 +234,8 @@ export function createProxyStage(
   "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
   | NetworkRuntimeService
-  | EnvoyService
+  | ProxyService
   | SessionBrokerService
-  | AuthRouterService
   | ForwardPortRelayService,
   unknown
 > {
@@ -251,9 +249,8 @@ export function createProxyStageWithOptions(
   "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
   | NetworkRuntimeService
-  | EnvoyService
+  | ProxyService
   | SessionBrokerService
-  | AuthRouterService
   | ForwardPortRelayService,
   unknown
 > {
@@ -268,9 +265,8 @@ export function createProxyStageWithOptions(
       unknown,
       | Scope.Scope
       | NetworkRuntimeService
-      | EnvoyService
+      | ProxyService
       | SessionBrokerService
-      | AuthRouterService
       | ForwardPortRelayService
     > {
       const stageInput = {
@@ -294,28 +290,23 @@ function runProxy(
   unknown,
   | Scope.Scope
   | NetworkRuntimeService
-  | EnvoyService
+  | ProxyService
   | SessionBrokerService
-  | AuthRouterService
   | ForwardPortRelayService
 > {
   return Effect.gen(function* () {
     const networkRuntime = yield* NetworkRuntimeService;
-    const envoy = yield* EnvoyService;
+    const proxy = yield* ProxyService;
     const sessionBrokerService = yield* SessionBrokerService;
-    const authRouterService = yield* AuthRouterService;
     const forwardPortRelayService = yield* ForwardPortRelayService;
 
     // 1. Ensure runtime dirs exist (runtimeDir, sessions, pending, brokers)
     yield* networkRuntime.ensureRuntimeDirs(plan.runtimePaths);
 
-    // 2. GC stale sessions (read PID file, check alive, remove stale files)
+    // 2. GC stale sessions
     yield* networkRuntime.gcStaleRuntime(plan.runtimePaths);
 
-    // 3. Render envoy config (read template + write config)
-    yield* networkRuntime.renderEnvoyConfig(plan.runtimePaths);
-
-    // 4. Session broker + registry (acquireRelease)
+    // 3. Session broker + registry (acquireRelease)
     const tokenHash = yield* Effect.tryPromise({
       try: () => hashToken(plan.token),
       catch: (e) =>
@@ -345,26 +336,9 @@ function runProxy(
       (handle: SessionBrokerHandle) => handle.close(),
     );
 
-    // 5. Auth-router daemon (shared daemon — no per-session teardown)
-    yield* Effect.acquireRelease(
-      authRouterService.ensureDaemon(plan.runtimePaths),
-      () => Effect.void,
-    );
-
-    // 6. Forward-port relays (acquireRelease).
+    // 4. Forward-port relays (acquireRelease).
     // Always called regardless of plan.forwardPorts.length: the live impl
     // fast-paths empty ports to a no-op.
-    //
-    // Placement between auth-router and shared-envoy is intentional. LIFO
-    // release closes shared-envoy first, which stops the agent container
-    // from sending new traffic; the relays are then idle and safe to close.
-    // Closing relays before envoy would instead kill in-flight forward-port
-    // connections while other envoy-routed traffic is still live.
-    //
-    // Relays do not depend on the auth-router daemon's UDS, but they do
-    // depend on `runtimeDir` existing on disk. Releasing relays before the
-    // auth-router release keeps relays clear of any runtimeDir cleanup the
-    // auth-router teardown may perform.
     yield* Effect.acquireRelease(
       forwardPortRelayService.ensureRelays({
         runtimeDir: plan.runtimePaths.runtimeDir,
@@ -374,15 +348,24 @@ function runProxy(
       (handle: ForwardPortRelayHandle) => handle.close(),
     );
 
-    // 7. Shared envoy container (acquireRelease — no teardown since it's shared)
+    // 5. Shared proxy container (acquireRelease — no teardown since it's shared)
     yield* Effect.acquireRelease(
-      envoy.ensureSharedEnvoy(plan),
+      proxy.ensureSharedProxy({
+        proxyContainerName: plan.envoyContainerName,
+        proxyImage: plan.envoyImage,
+        runtimePaths: plan.runtimePaths,
+        proxyReadyTimeoutMs: plan.envoyReadyTimeoutMs,
+      }),
       () => Effect.void,
     );
 
-    // 8. Session network + envoy/dind connect (acquireRelease)
+    // 6. Session network + proxy connect (acquireRelease)
     yield* Effect.acquireRelease(
-      envoy.createSessionNetwork(plan),
+      proxy.createSessionNetwork({
+        sessionNetworkName: plan.sessionNetworkName,
+        proxyContainerName: plan.envoyContainerName,
+        proxyAlias: plan.envoyAlias,
+      }),
       (teardown: () => Effect.Effect<void>) => teardown(),
     );
 
@@ -410,10 +393,9 @@ export function buildNetworkRuntimePaths(host: HostEnv): NetworkRuntimePaths {
     sessionsDir: path.join(runtimeDir, "sessions"),
     pendingDir: path.join(runtimeDir, "pending"),
     brokersDir: path.join(runtimeDir, "brokers"),
-    authRouterSocket: path.join(runtimeDir, "auth-router.sock"),
-    authRouterPidFile: path.join(runtimeDir, "auth-router.pid"),
-    authRouterLogFile: path.join(runtimeDir, "auth-router.log"),
-    envoyConfigFile: path.join(runtimeDir, "envoy.yaml"),
+    caCertDir: path.join(runtimeDir, "mitmproxy-ca"),
+    addonScriptPath: path.join(runtimeDir, "nas_addon.py"),
+    reviewRulesDir: path.join(runtimeDir, "review-rules"),
   };
 }
 

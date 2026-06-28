@@ -1,8 +1,8 @@
 /**
- * EnvoyService unit tests (no Docker required).
+ * ProxyService unit tests (no Docker required).
  *
- * Exercises EnvoyServiceLive against a fake DockerService to pin down:
- *   - ensureSharedEnvoy's idempotency + stale cleanup + readiness loop
+ * Exercises ProxyServiceLive against a fake DockerService to pin down:
+ *   - ensureSharedProxy's idempotency + stale cleanup + readiness loop
  *   - createSessionNetwork's connect order, optional dind wiring, and
  *     the teardown finalizer shape.
  */
@@ -10,8 +10,8 @@
 import { expect, test } from "bun:test";
 import { Cause, Effect, Exit, Layer } from "effect";
 import {
-  NAS_KIND_ENVOY,
   NAS_KIND_LABEL,
+  NAS_KIND_PROXY,
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
@@ -23,11 +23,11 @@ import {
   makeDockerServiceFake,
 } from "../../services/docker.ts";
 import {
-  type EnsureEnvoyPlan,
-  EnvoyService,
-  EnvoyServiceLive,
+  type EnsureProxyPlan,
+  ProxyService,
+  ProxyServiceLive,
   type SessionNetworkPlan,
-} from "./envoy_service.ts";
+} from "./proxy_service.ts";
 
 // ---------------------------------------------------------------------------
 // Docker fake with call recording
@@ -138,52 +138,51 @@ function runtimePaths(): NetworkRuntimePaths {
     sessionsDir: `${root}/sessions`,
     pendingDir: `${root}/pending`,
     brokersDir: `${root}/brokers`,
-    authRouterPidFile: `${root}/auth-router.pid`,
-    authRouterLogFile: `${root}/auth-router.log`,
-    authRouterSocket: `${root}/auth-router.sock`,
-    envoyConfigFile: `${root}/envoy.yaml`,
+    caCertDir: `${root}/mitmproxy-ca`,
+    addonScriptPath: `${root}/nas_addon.py`,
+    reviewRulesDir: `${root}/review-rules`,
   };
 }
 
-function envoyPlan(overrides: Partial<EnsureEnvoyPlan> = {}): EnsureEnvoyPlan {
+function proxyPlan(overrides: Partial<EnsureProxyPlan> = {}): EnsureProxyPlan {
   return {
-    envoyContainerName: "nas-envoy-shared",
-    envoyImage: "nas-envoy:latest",
+    proxyContainerName: "nas-proxy-shared",
+    proxyImage: "nas-proxy:latest",
     runtimePaths: runtimePaths(),
-    envoyReadyTimeoutMs: 1000,
+    proxyReadyTimeoutMs: 1000,
     ...overrides,
   };
 }
 
-function runWithEnvoy<A, E>(
+function runWithProxy<A, E>(
   effect: (
-    svc: Effect.Effect.Success<typeof EnvoyService>,
+    svc: Effect.Effect.Success<typeof ProxyService>,
   ) => Effect.Effect<A, E>,
   dockerLayer: Layer.Layer<DockerService>,
 ): Promise<A> {
-  const layer = Layer.provide(EnvoyServiceLive, dockerLayer);
+  const layer = Layer.provide(ProxyServiceLive, dockerLayer);
   return Effect.runPromise(
-    Effect.flatMap(EnvoyService, effect).pipe(Effect.provide(layer)),
+    Effect.flatMap(ProxyService, effect).pipe(Effect.provide(layer)),
   ) as Promise<A>;
 }
 
 // ---------------------------------------------------------------------------
-// ensureSharedEnvoy
+// ensureSharedProxy
 // ---------------------------------------------------------------------------
 
-test("ensureSharedEnvoy: skips when envoy is already running", async () => {
+test("ensureSharedProxy: skips when proxy is already running", async () => {
   const calls = freshCalls();
   const layer = makeDockerFake(calls, { isRunning: () => true });
 
-  await runWithEnvoy((svc) => svc.ensureSharedEnvoy(envoyPlan()), layer);
+  await runWithProxy((svc) => svc.ensureSharedProxy(proxyPlan()), layer);
 
-  expect(calls.isRunning).toEqual(["nas-envoy-shared"]);
+  expect(calls.isRunning).toEqual(["nas-proxy-shared"]);
   expect(calls.containerExists.length).toEqual(0);
   expect(calls.runDetached.length).toEqual(0);
   expect(calls.rm.length).toEqual(0);
 });
 
-test("ensureSharedEnvoy: removes stale container before launching", async () => {
+test("ensureSharedProxy: removes stale container before launching", async () => {
   const calls = freshCalls();
   let launched = false;
   const layer = makeDockerServiceFake({
@@ -206,15 +205,15 @@ test("ensureSharedEnvoy: removes stale container before launching", async () => 
     },
   });
 
-  await runWithEnvoy((svc) => svc.ensureSharedEnvoy(envoyPlan()), layer);
+  await runWithProxy((svc) => svc.ensureSharedProxy(proxyPlan()), layer);
 
-  expect(calls.rm).toEqual(["nas-envoy-shared"]);
+  expect(calls.rm).toEqual(["nas-proxy-shared"]);
   expect(calls.runDetached.length).toEqual(1);
   // First isRunning check happens before containerExists/rm
   expect(calls.isRunning.length).toBeGreaterThanOrEqual(2);
 });
 
-test("ensureSharedEnvoy: tolerates rm failure and still launches", async () => {
+test("ensureSharedProxy: tolerates rm failure and still launches", async () => {
   const calls = freshCalls();
   let launched = false;
   const wrappedLayer: Layer.Layer<DockerService> = makeDockerServiceFake({
@@ -241,13 +240,13 @@ test("ensureSharedEnvoy: tolerates rm failure and still launches", async () => {
     },
   });
 
-  await runWithEnvoy((svc) => svc.ensureSharedEnvoy(envoyPlan()), wrappedLayer);
+  await runWithProxy((svc) => svc.ensureSharedProxy(proxyPlan()), wrappedLayer);
 
-  expect(calls.rm).toEqual(["nas-envoy-shared"]);
+  expect(calls.rm).toEqual(["nas-proxy-shared"]);
   expect(calls.runDetached.length).toEqual(1);
 });
 
-test("ensureSharedEnvoy: launches with correct labels, mounts, and command", async () => {
+test("ensureSharedProxy: launches with correct labels, mounts, and command", async () => {
   const calls = freshCalls();
   let launched = false;
   const layer = makeDockerServiceFake({
@@ -266,16 +265,16 @@ test("ensureSharedEnvoy: launches with correct labels, mounts, and command", asy
     },
   });
 
-  const plan = envoyPlan({
-    envoyContainerName: "nas-envoy-shared",
-    envoyImage: "my-envoy:1.2",
+  const plan = proxyPlan({
+    proxyContainerName: "nas-proxy-shared",
+    proxyImage: "my-proxy:1.2",
   });
-  await runWithEnvoy((svc) => svc.ensureSharedEnvoy(plan), layer);
+  await runWithProxy((svc) => svc.ensureSharedProxy(plan), layer);
 
   expect(calls.runDetached.length).toEqual(1);
   const run = calls.runDetached[0];
-  expect(run.name).toEqual("nas-envoy-shared");
-  expect(run.image).toEqual("my-envoy:1.2");
+  expect(run.name).toEqual("nas-proxy-shared");
+  expect(run.image).toEqual("my-proxy:1.2");
   expect(run.args).toEqual(["--add-host=host.docker.internal:host-gateway"]);
   expect(run.mounts).toEqual([
     {
@@ -286,17 +285,18 @@ test("ensureSharedEnvoy: launches with correct labels, mounts, and command", asy
   ]);
   expect(run.labels).toEqual({
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-    [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
+    [NAS_KIND_LABEL]: NAS_KIND_PROXY,
   });
   expect(run.command).toEqual([
-    "-c",
-    "/nas-network/envoy.yaml",
-    "--log-level",
-    "info",
+    "mitmdump",
+    "--mode",
+    "transparent",
+    "--set",
+    "ssl_insecure=true",
   ]);
 });
 
-test("ensureSharedEnvoy: fails with logs when readiness times out", async () => {
+test("ensureSharedProxy: fails with logs when readiness times out", async () => {
   const calls = freshCalls();
   // runDetached succeeds but isRunning stays false so readiness times out.
   const layer = makeDockerServiceFake({
@@ -314,16 +314,16 @@ test("ensureSharedEnvoy: fails with logs when readiness times out", async () => 
     },
     logs: (name) => {
       calls.logs.push(name);
-      return Effect.succeed("envoy: fatal config error");
+      return Effect.succeed("proxy: fatal config error");
     },
   });
 
-  const plan = envoyPlan({ envoyReadyTimeoutMs: 100 });
-  const layerWithEnvoy = Layer.provide(EnvoyServiceLive, layer);
+  const plan = proxyPlan({ proxyReadyTimeoutMs: 100 });
+  const layerWithProxy = Layer.provide(ProxyServiceLive, layer);
 
   const exit = await Effect.runPromiseExit(
-    Effect.flatMap(EnvoyService, (svc) => svc.ensureSharedEnvoy(plan)).pipe(
-      Effect.provide(layerWithEnvoy),
+    Effect.flatMap(ProxyService, (svc) => svc.ensureSharedProxy(plan)).pipe(
+      Effect.provide(layerWithProxy),
     ),
   );
 
@@ -333,11 +333,11 @@ test("ensureSharedEnvoy: fails with logs when readiness times out", async () => 
     expect(failureOption._tag).toEqual("Some");
     if (failureOption._tag === "Some") {
       const err = failureOption.value as Error;
-      expect(err.message).toContain("Envoy sidecar failed to start");
-      expect(err.message).toContain("envoy: fatal config error");
+      expect(err.message).toContain("Proxy container failed to start");
+      expect(err.message).toContain("proxy: fatal config error");
     }
   }
-  expect(calls.logs).toEqual(["nas-envoy-shared"]);
+  expect(calls.logs).toEqual(["nas-proxy-shared"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -349,8 +349,8 @@ function sessionPlan(
 ): SessionNetworkPlan {
   return {
     sessionNetworkName: "nas-session-abc",
-    envoyContainerName: "nas-envoy-shared",
-    envoyAlias: "envoy.nas",
+    proxyContainerName: "nas-proxy-shared",
+    proxyAlias: "nas-proxy",
     ...overrides,
   };
 }
@@ -359,7 +359,7 @@ test("createSessionNetwork: creates internal network with correct labels", async
   const calls = freshCalls();
   const layer = makeDockerFake(calls);
 
-  await runWithEnvoy((svc) => svc.createSessionNetwork(sessionPlan()), layer);
+  await runWithProxy((svc) => svc.createSessionNetwork(sessionPlan()), layer);
 
   expect(calls.networkCreate.length).toEqual(1);
   expect(calls.networkCreate[0].name).toEqual("nas-session-abc");
@@ -372,27 +372,27 @@ test("createSessionNetwork: creates internal network with correct labels", async
   });
 });
 
-test("createSessionNetwork: connects only envoy with alias", async () => {
+test("createSessionNetwork: connects only proxy with alias", async () => {
   const calls = freshCalls();
   const layer = makeDockerFake(calls);
 
-  await runWithEnvoy((svc) => svc.createSessionNetwork(sessionPlan()), layer);
+  await runWithProxy((svc) => svc.createSessionNetwork(sessionPlan()), layer);
 
-  // DinD is wired up by DindStage, not ProxyStage — only envoy is connected.
+  // DinD is wired up by DindStage, not ProxyStage — only proxy is connected.
   expect(calls.networkConnect).toEqual([
     {
       network: "nas-session-abc",
-      container: "nas-envoy-shared",
-      opts: { aliases: ["envoy.nas"] },
+      container: "nas-proxy-shared",
+      opts: { aliases: ["nas-proxy"] },
     },
   ]);
 });
 
-test("createSessionNetwork: teardown disconnects envoy then removes network", async () => {
+test("createSessionNetwork: teardown disconnects proxy then removes network", async () => {
   const calls = freshCalls();
   const layer = makeDockerFake(calls);
 
-  const teardown = await runWithEnvoy(
+  const teardown = await runWithProxy(
     (svc) => svc.createSessionNetwork(sessionPlan()),
     layer,
   );
@@ -400,7 +400,7 @@ test("createSessionNetwork: teardown disconnects envoy then removes network", as
   await Effect.runPromise(teardown());
 
   expect(calls.networkDisconnect).toEqual([
-    { network: "nas-session-abc", container: "nas-envoy-shared" },
+    { network: "nas-session-abc", container: "nas-proxy-shared" },
   ]);
   expect(calls.networkRemove).toEqual(["nas-session-abc"]);
 });
@@ -416,7 +416,7 @@ test("createSessionNetwork: teardown tolerates partial failure and still removes
       Effect.fail(new Error("still in use")) as unknown as Effect.Effect<void>,
   });
 
-  const teardown = await runWithEnvoy(
+  const teardown = await runWithProxy(
     (svc) => svc.createSessionNetwork(sessionPlan()),
     layer,
   );
@@ -424,13 +424,13 @@ test("createSessionNetwork: teardown tolerates partial failure and still removes
   // Must not throw even though every call fails internally.
   await Effect.runPromise(teardown());
 
-  // The envoy disconnect was attempted despite failures.
+  // The proxy disconnect was attempted despite failures.
   expect(calls.networkDisconnect.length).toEqual(1);
   expect(calls.networkRemove).toEqual(["nas-session-abc"]);
 });
 
-test("createSessionNetwork: teardown when envoy connect failed only removes network", async () => {
-  // If createSessionNetwork fails at the envoy connect step, no resources
+test("createSessionNetwork: teardown when proxy connect failed only removes network", async () => {
+  // If createSessionNetwork fails at the proxy connect step, no resources
   // were successfully wired up; the Effect fails and no teardown runs.
   const calls = freshCalls();
   const layer = makeDockerFake(calls, {
@@ -441,9 +441,9 @@ test("createSessionNetwork: teardown when envoy connect failed only removes netw
   });
 
   const exit = await Effect.runPromiseExit(
-    Effect.flatMap(EnvoyService, (svc) =>
+    Effect.flatMap(ProxyService, (svc) =>
       svc.createSessionNetwork(sessionPlan()),
-    ).pipe(Effect.provide(Layer.provide(EnvoyServiceLive, layer))),
+    ).pipe(Effect.provide(Layer.provide(ProxyServiceLive, layer))),
   );
 
   expect(exit._tag).toEqual("Failure");

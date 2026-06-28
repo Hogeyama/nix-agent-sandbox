@@ -13,10 +13,6 @@ const EMBEDDED_ASSET_GROUPS = [
     baseDir: resolveAssetDir("docker/embed", import.meta.url, "./embed/"),
     files: ["Dockerfile", "entrypoint.sh", "local-proxy.mjs"],
   },
-  {
-    baseDir: resolveAssetDir("docker/envoy", import.meta.url, "./envoy/"),
-    files: ["envoy.template.yaml"],
-  },
 ] as const;
 
 export interface DockerRunOptions {

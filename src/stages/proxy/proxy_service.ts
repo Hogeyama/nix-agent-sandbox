@@ -1,5 +1,5 @@
 /**
- * EnvoyService — Effect-based abstraction over shared Envoy container
+ * ProxyService — Effect-based abstraction over shared proxy container
  * and session network lifecycle.
  *
  * Live implementation delegates to DockerService.
@@ -8,8 +8,8 @@
 
 import { Context, Effect, Layer } from "effect";
 import {
-  NAS_KIND_ENVOY,
   NAS_KIND_LABEL,
+  NAS_KIND_PROXY,
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
@@ -19,31 +19,31 @@ import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { DockerService } from "../../services/docker.ts";
 
 // ---------------------------------------------------------------------------
-// EnvoyService-local plan interfaces (avoids service → stage dependency)
+// ProxyService-local plan interfaces (avoids service → stage dependency)
 // ---------------------------------------------------------------------------
 
-export interface EnsureEnvoyPlan {
-  readonly envoyContainerName: string;
-  readonly envoyImage: string;
+export interface EnsureProxyPlan {
+  readonly proxyContainerName: string;
+  readonly proxyImage: string;
   readonly runtimePaths: NetworkRuntimePaths;
-  readonly envoyReadyTimeoutMs: number;
+  readonly proxyReadyTimeoutMs: number;
 }
 
 export interface SessionNetworkPlan {
   readonly sessionNetworkName: string;
-  readonly envoyContainerName: string;
-  readonly envoyAlias: string;
+  readonly proxyContainerName: string;
+  readonly proxyAlias: string;
 }
 
 // ---------------------------------------------------------------------------
-// EnvoyService tag
+// ProxyService tag
 // ---------------------------------------------------------------------------
 
-export class EnvoyService extends Context.Tag("nas/EnvoyService")<
-  EnvoyService,
+export class ProxyService extends Context.Tag("nas/ProxyService")<
+  ProxyService,
   {
-    readonly ensureSharedEnvoy: (
-      plan: EnsureEnvoyPlan,
+    readonly ensureSharedProxy: (
+      plan: EnsureProxyPlan,
     ) => Effect.Effect<void, unknown>;
     readonly createSessionNetwork: (
       plan: SessionNetworkPlan,
@@ -55,31 +55,31 @@ export class EnvoyService extends Context.Tag("nas/EnvoyService")<
 // Live implementation
 // ---------------------------------------------------------------------------
 
-export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
+export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
   Layer.effect(
-    EnvoyService,
+    ProxyService,
     Effect.gen(function* () {
       const docker = yield* DockerService;
 
-      return EnvoyService.of({
-        ensureSharedEnvoy: (plan) =>
+      return ProxyService.of({
+        ensureSharedProxy: (plan) =>
           Effect.gen(function* () {
             const running = yield* docker
-              .isRunning(plan.envoyContainerName)
+              .isRunning(plan.proxyContainerName)
               .pipe(Effect.orDie);
             if (running) return;
 
             const exists = yield* docker
-              .containerExists(plan.envoyContainerName)
+              .containerExists(plan.proxyContainerName)
               .pipe(Effect.orDie);
             if (exists) {
               yield* docker
-                .rm(plan.envoyContainerName)
+                .rm(plan.proxyContainerName)
                 .pipe(
                   Effect.catchAll((e) =>
                     Effect.sync(() =>
                       logInfo(
-                        `[nas] Proxy: failed to remove stale envoy container: ${e}`,
+                        `[nas] Proxy: failed to remove stale proxy container: ${e}`,
                       ),
                     ),
                   ),
@@ -88,8 +88,8 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
 
             yield* docker
               .runDetached({
-                name: plan.envoyContainerName,
-                image: plan.envoyImage,
+                name: plan.proxyContainerName,
+                image: plan.proxyImage,
                 args: ["--add-host=host.docker.internal:host-gateway"],
                 envVars: {},
                 mounts: [
@@ -101,37 +101,38 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
                 ],
                 labels: {
                   [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-                  [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
+                  [NAS_KIND_LABEL]: NAS_KIND_PROXY,
                 },
                 command: [
-                  "-c",
-                  "/nas-network/envoy.yaml",
-                  "--log-level",
-                  "info",
+                  "mitmdump",
+                  "--mode",
+                  "transparent",
+                  "--set",
+                  "ssl_insecure=true",
                 ],
               })
               .pipe(Effect.orDie);
 
-            // Wait for envoy readiness
+            // Wait for proxy readiness
             const started = Date.now();
-            while (Date.now() - started < plan.envoyReadyTimeoutMs) {
+            while (Date.now() - started < plan.proxyReadyTimeoutMs) {
               const isRunning = yield* docker
-                .isRunning(plan.envoyContainerName)
+                .isRunning(plan.proxyContainerName)
                 .pipe(Effect.orDie);
               if (isRunning) return;
               yield* Effect.sleep("200 millis");
             }
             const logs = yield* docker
-              .logs(plan.envoyContainerName)
+              .logs(plan.proxyContainerName)
               .pipe(Effect.orDie);
             yield* Effect.fail(
-              new Error(`Envoy sidecar failed to start:\n${logs}`),
+              new Error(`Proxy container failed to start:\n${logs}`),
             );
           }),
 
         createSessionNetwork: (plan) =>
           Effect.gen(function* () {
-            let envoyConnected = false;
+            let proxyConnected = false;
 
             yield* docker
               .networkCreate(plan.sessionNetworkName, {
@@ -146,28 +147,28 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
             yield* docker
               .networkConnect(
                 plan.sessionNetworkName,
-                plan.envoyContainerName,
-                { aliases: [plan.envoyAlias] },
+                plan.proxyContainerName,
+                { aliases: [plan.proxyAlias] },
               )
               .pipe(Effect.orDie);
-            envoyConnected = true;
+            proxyConnected = true;
 
             // DinD is attached to / detached from this session network by
             // DindStage (which runs after ProxyStage); ProxyStage only owns the
-            // network itself and the Envoy attachment.
+            // network itself and the proxy attachment.
             const teardown = (): Effect.Effect<void> =>
               Effect.gen(function* () {
-                if (envoyConnected) {
+                if (proxyConnected) {
                   yield* docker
                     .networkDisconnect(
                       plan.sessionNetworkName,
-                      plan.envoyContainerName,
+                      plan.proxyContainerName,
                     )
                     .pipe(
                       Effect.catchAll((e) =>
                         Effect.sync(() =>
                           logInfo(
-                            `[nas] Proxy teardown: failed to disconnect envoy from network: ${e}`,
+                            `[nas] Proxy teardown: failed to disconnect proxy from network: ${e}`,
                           ),
                         ),
                       ),
@@ -196,22 +197,22 @@ export const EnvoyServiceLive: Layer.Layer<EnvoyService, never, DockerService> =
 // Fake / test implementation
 // ---------------------------------------------------------------------------
 
-export interface EnvoyServiceFakeConfig {
-  readonly ensureSharedEnvoy?: (
-    plan: EnsureEnvoyPlan,
+export interface ProxyServiceFakeConfig {
+  readonly ensureSharedProxy?: (
+    plan: EnsureProxyPlan,
   ) => Effect.Effect<void, unknown>;
   readonly createSessionNetwork?: (
     plan: SessionNetworkPlan,
   ) => Effect.Effect<() => Effect.Effect<void>>;
 }
 
-export function makeEnvoyServiceFake(
-  overrides: EnvoyServiceFakeConfig = {},
-): Layer.Layer<EnvoyService> {
+export function makeProxyServiceFake(
+  overrides: ProxyServiceFakeConfig = {},
+): Layer.Layer<ProxyService> {
   return Layer.succeed(
-    EnvoyService,
-    EnvoyService.of({
-      ensureSharedEnvoy: overrides.ensureSharedEnvoy ?? (() => Effect.void),
+    ProxyService,
+    ProxyService.of({
+      ensureSharedProxy: overrides.ensureSharedProxy ?? (() => Effect.void),
       createSessionNetwork:
         overrides.createSessionNetwork ??
         (() => Effect.succeed(() => Effect.void)),

@@ -37,15 +37,6 @@ export const EMBEDDED_BUILD_ASSET_GROUPS: readonly EmbeddedAssetGroup[] = [
     outputDir: "",
     files: ["Dockerfile", "entrypoint.sh", "local-proxy.mjs"],
   },
-  {
-    baseDir: resolveAssetDir(
-      "docker/envoy",
-      import.meta.url,
-      "../../docker/envoy/",
-    ),
-    outputDir: "envoy",
-    files: ["envoy.template.yaml"],
-  },
 ] as const;
 
 // ---------------------------------------------------------------------------

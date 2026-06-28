@@ -27,14 +27,13 @@ import type {
   ProbeResults,
   StageInput,
 } from "../../pipeline/types.ts";
-import { makeAuthRouterServiceFake } from "./auth_router_service.ts";
-import { makeEnvoyServiceFake } from "./envoy_service.ts";
 import {
   type EnsureForwardPortRelaysOptions,
   type ForwardPortRelayHandle,
   makeForwardPortRelayServiceFake,
 } from "./forward_port_relay_service.ts";
 import { makeNetworkRuntimeServiceFake } from "./network_runtime_service.ts";
+import { makeProxyServiceFake } from "./proxy_service.ts";
 import { makeSessionBrokerServiceFake } from "./session_broker_service.ts";
 import {
   buildNetworkRuntimePaths,
@@ -498,9 +497,8 @@ test("createProxyStage().run(): invokes forwardPortRelay.ensureRelays and close 
 
   const layer = Layer.mergeAll(
     makeNetworkRuntimeServiceFake(),
-    makeEnvoyServiceFake(),
+    makeProxyServiceFake(),
     makeSessionBrokerServiceFake(),
-    makeAuthRouterServiceFake(),
     makeForwardPortRelayServiceFake({
       ensureRelays: (opts) => {
         ensureCalls.push(opts);
@@ -546,11 +544,12 @@ test("buildNetworkRuntimePaths: uses XDG_RUNTIME_DIR", () => {
   expect(paths.runtimeDir).toEqual("/run/user/1000/nas/network");
   expect(paths.sessionsDir).toEqual("/run/user/1000/nas/network/sessions");
   expect(paths.brokersDir).toEqual("/run/user/1000/nas/network/brokers");
-  expect(paths.authRouterSocket).toEqual(
-    "/run/user/1000/nas/network/auth-router.sock",
+  expect(paths.caCertDir).toEqual("/run/user/1000/nas/network/mitmproxy-ca");
+  expect(paths.addonScriptPath).toEqual(
+    "/run/user/1000/nas/network/nas_addon.py",
   );
-  expect(paths.envoyConfigFile).toEqual(
-    "/run/user/1000/nas/network/envoy.yaml",
+  expect(paths.reviewRulesDir).toEqual(
+    "/run/user/1000/nas/network/review-rules",
   );
 });
 
@@ -584,14 +583,10 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
         calls.push("gcStaleRuntime");
         return Effect.void;
       },
-      renderEnvoyConfig: () => {
-        calls.push("renderEnvoyConfig");
-        return Effect.void;
-      },
     }),
-    makeEnvoyServiceFake({
-      ensureSharedEnvoy: () => {
-        calls.push("ensureSharedEnvoy");
+    makeProxyServiceFake({
+      ensureSharedProxy: () => {
+        calls.push("ensureSharedProxy");
         return Effect.void;
       },
       createSessionNetwork: () => {
@@ -603,12 +598,6 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
       start: () => {
         calls.push("sessionBrokerStart");
         return Effect.succeed({ close: () => Effect.void });
-      },
-    }),
-    makeAuthRouterServiceFake({
-      ensureDaemon: () => {
-        calls.push("authRouterEnsureDaemon");
-        return Effect.void;
       },
     }),
     makeForwardPortRelayServiceFake({
@@ -630,11 +619,9 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
 
   expect(calls).toEqual([
     "gcStaleRuntime",
-    "renderEnvoyConfig",
     "sessionBrokerStart",
-    "authRouterEnsureDaemon",
     "forwardPortEnsureRelays",
-    "ensureSharedEnvoy",
+    "ensureSharedProxy",
     "createSessionNetwork",
   ]);
   expect(result.network).toEqual({
@@ -661,14 +648,10 @@ test("createProxyStage().run(): calls services and returns merged output", async
         calls.push("gcStaleRuntime");
         return Effect.void;
       },
-      renderEnvoyConfig: () => {
-        calls.push("renderEnvoyConfig");
-        return Effect.void;
-      },
     }),
-    makeEnvoyServiceFake({
-      ensureSharedEnvoy: () => {
-        calls.push("ensureSharedEnvoy");
+    makeProxyServiceFake({
+      ensureSharedProxy: () => {
+        calls.push("ensureSharedProxy");
         return Effect.void;
       },
       createSessionNetwork: () => {
@@ -680,12 +663,6 @@ test("createProxyStage().run(): calls services and returns merged output", async
       start: () => {
         calls.push("sessionBrokerStart");
         return Effect.succeed({ close: () => Effect.void });
-      },
-    }),
-    makeAuthRouterServiceFake({
-      ensureDaemon: () => {
-        calls.push("authRouterEnsureDaemon");
-        return Effect.void;
       },
     }),
     makeForwardPortRelayServiceFake({
@@ -709,16 +686,12 @@ test("createProxyStage().run(): calls services and returns merged output", async
       .pipe(Effect.scoped, Effect.provide(layer)),
   );
 
-  // All services were called in the expected order. Relay ensure sits between
-  // auth-router daemon ensure and envoy ensure so LIFO release tears the
-  // relays down before envoy / session-network resources go away.
+  // All services were called in the expected order.
   expect(calls).toEqual([
     "gcStaleRuntime",
-    "renderEnvoyConfig",
     "sessionBrokerStart",
-    "authRouterEnsureDaemon",
     "forwardPortEnsureRelays",
-    "ensureSharedEnvoy",
+    "ensureSharedProxy",
     "createSessionNetwork",
   ]);
 

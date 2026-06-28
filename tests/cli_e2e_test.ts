@@ -1207,8 +1207,6 @@ test("CLI E2E: network gc removes stale runtime state", async () => {
     await mkdir(pendingSessionDir(paths, sessionId), { recursive: true });
     await mkdir(path.dirname(staleSocket), { recursive: true });
     await writeFile(staleSocket, "");
-    await writeFile(paths.authRouterSocket, "");
-    await writeFile(paths.authRouterPidFile, "999999\n");
     await writeSessionRegistry(paths, {
       version: 1,
       sessionId,
@@ -1232,8 +1230,6 @@ test("CLI E2E: network gc removes stale runtime state", async () => {
         "GC removed 1 session(s), 1 pending dir(s), 1 broker socket(s).",
       ),
     ).toEqual(true);
-    expect(await exists(paths.authRouterSocket)).toEqual(false);
-    expect(await exists(paths.authRouterPidFile)).toEqual(false);
     expect(await exists(staleSocket)).toEqual(false);
   } finally {
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});

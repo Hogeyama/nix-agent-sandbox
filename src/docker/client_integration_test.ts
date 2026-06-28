@@ -155,35 +155,6 @@ test("computeEmbedHash changes compared with legacy hash that omitted local-prox
   expect(await computeEmbedHash()).not.toEqual(legacyHash);
 });
 
-test("envoy template includes required proxy settings", async () => {
-  const template = await readFile(
-    new URL("./envoy/envoy.template.yaml", import.meta.url),
-    "utf8",
-  );
-
-  for (const fragment of [
-    "0.0.0.0:15001",
-    "envoy.filters.http.dynamic_forward_proxy",
-    "envoy.filters.http.lua",
-    "request_timeout: 0s",
-    "timeout: 0s",
-    "access_log:",
-    "envoy.access_loggers.stdout",
-    "pipe: { path: /nas-network/auth-router.sock }",
-    "/authorize",
-    "proxy-authorization",
-    "host",
-    "x-request-id",
-    "x-nas-original-method",
-    "x-nas-original-authority",
-    "x-nas-original-url",
-    "timeouts = {5000, 1000, 1000}",
-    'handle:headers():remove("proxy-authorization")',
-  ]) {
-    expect(template.includes(fragment)).toEqual(true);
-  }
-});
-
 // --- dockerImageExists ---
 
 test.skipIf(!DOCKER_DAEMON_AVAILABLE)(

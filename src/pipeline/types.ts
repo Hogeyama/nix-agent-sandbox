@@ -18,10 +18,9 @@ import type { ContainerLaunchService } from "../stages/launch.ts";
 import type { MountSetupService } from "../stages/mount.ts";
 import type { OtlpReceiverService } from "../stages/observability.ts";
 import type {
-  AuthRouterService,
-  EnvoyService,
   ForwardPortRelayService,
   NetworkRuntimeService,
+  ProxyService,
   SessionBrokerService,
 } from "../stages/proxy.ts";
 import type { SessionStoreService } from "../stages/session_store.ts";
@@ -80,7 +79,6 @@ export type StageServices =
   | DindService
   | DisplayService
   | DockerBuildService
-  | EnvoyService
   | ForwardPortRelayService
   | FsService
   | GitWorktreeService
@@ -92,6 +90,6 @@ export type StageServices =
   | ProcessService
   | DockerService
   | PromptService
+  | ProxyService
   | SessionBrokerService
-  | SessionStoreService
-  | AuthRouterService;
+  | SessionStoreService;

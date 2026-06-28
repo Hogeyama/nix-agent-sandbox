@@ -3,20 +3,6 @@
  */
 
 export {
-  AuthRouterService,
-  type AuthRouterServiceFakeConfig,
-  AuthRouterServiceLive,
-  makeAuthRouterServiceFake,
-} from "./proxy/auth_router_service.ts";
-export {
-  type EnsureEnvoyPlan,
-  EnvoyService,
-  type EnvoyServiceFakeConfig,
-  EnvoyServiceLive,
-  makeEnvoyServiceFake,
-  type SessionNetworkPlan,
-} from "./proxy/envoy_service.ts";
-export {
   type EnsureForwardPortRelaysOptions,
   type ForwardPortRelayHandle,
   ForwardPortRelayService,
@@ -30,6 +16,14 @@ export {
   type NetworkRuntimeServiceFakeConfig,
   NetworkRuntimeServiceLive,
 } from "./proxy/network_runtime_service.ts";
+export {
+  type EnsureProxyPlan,
+  makeProxyServiceFake,
+  ProxyService,
+  type ProxyServiceFakeConfig,
+  ProxyServiceLive,
+  type SessionNetworkPlan,
+} from "./proxy/proxy_service.ts";
 export {
   makeSessionBrokerServiceFake,
   type SessionBrokerConfig,
