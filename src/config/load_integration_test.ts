@@ -451,7 +451,7 @@ profiles {
   ["from-global"] {
     agent = "copilot"
     network {
-      allowlist = new Listing { "api.github.com" }
+      reviewRules = new Listing { new ReviewRule { host = "api.github.com"; action = "allow" } }
     }
   }
 }
@@ -471,8 +471,8 @@ profiles {
         const config = await loadConfig({ startDir: dir });
         expect("from-global" in config.profiles).toEqual(true);
         expect(config.profiles["from-global"].agent).toEqual("copilot");
-        expect(config.profiles["from-global"].network.allowlist).toEqual([
-          "api.github.com",
+        expect(config.profiles["from-global"].network.reviewRules).toEqual([
+          { host: "api.github.com", action: "allow" },
         ]);
         expect("from-local" in config.profiles).toEqual(true);
         expect(config.profiles["from-local"].agent).toEqual("claude");

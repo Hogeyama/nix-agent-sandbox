@@ -164,7 +164,7 @@ profiles {
   ["dev"] {
     agent = "claude"
     network {
-      allowlist = new Listing { "api.github.com" }
+      reviewRules = new Listing { new ReviewRule { host = "api.github.com"; action = "allow" } }
     }
   }
 }
@@ -185,7 +185,9 @@ profiles {
 
       const config = await loadConfig({ startDir: projectDir });
       expect(config.profiles.dev.agent).toEqual("copilot");
-      expect(config.profiles.dev.network.allowlist).toEqual(["api.github.com"]);
+      expect(config.profiles.dev.network.reviewRules).toEqual([
+        { host: "api.github.com", action: "allow" },
+      ]);
     } finally {
       if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = origXdg;

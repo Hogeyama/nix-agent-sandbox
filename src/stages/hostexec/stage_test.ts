@@ -36,16 +36,11 @@ function makeProfile(): Profile {
     display: DEFAULT_DISPLAY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     network: {
-      allowlist: [],
+      reviewRules: [],
       proxy: { forwardPorts: [] },
-      prompt: {
-        enable: false,
-        denylist: [],
-        timeoutSeconds: 300,
-        defaultScope: "host-port",
-        notify: "off",
-        reviewRules: [],
-      },
+      pendingTimeoutSeconds: 300,
+      pendingDefaultScope: "host-port",
+      pendingNotify: "off",
     },
     dbus: {
       session: {

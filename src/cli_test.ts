@@ -306,7 +306,7 @@ test("pickPipelineStateSlices: preserves selected slices", () => {
     pickPipelineStateSlices(
       {
         network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
-        prompt: { promptToken: "token", promptEnabled: true },
+        prompt: { promptToken: "token" },
         proxy: {
           brokerSocket: "/runtime/broker.sock",
           proxyEndpoint: "http://endpoint",
@@ -331,7 +331,7 @@ test("pickPipelineStateSlices: preserves selected slices", () => {
     ),
   ).toEqual({
     network: { networkName: "nas-session-net", runtimeDir: "/runtime" },
-    prompt: { promptToken: "token", promptEnabled: true },
+    prompt: { promptToken: "token" },
     proxy: {
       brokerSocket: "/runtime/broker.sock",
       proxyEndpoint: "http://endpoint",
@@ -407,11 +407,7 @@ test("planProxy: network proxy cannot be opted out", () => {
     ...baseProfile,
     network: {
       ...structuredClone(DEFAULT_NETWORK_CONFIG),
-      allowlist: [],
-      prompt: {
-        ...structuredClone(DEFAULT_NETWORK_CONFIG).prompt,
-        enable: false,
-      },
+      reviewRules: [],
     },
   };
   const container: PipelineState["container"] = {
@@ -438,8 +434,7 @@ test("planProxy: network proxy cannot be opted out", () => {
 
   const result = planProxy(stageInput);
 
-  expect(result.allowlist).toEqual([]);
-  expect(result.promptEnabled).toEqual(false);
+  expect(result.reviewRules).toEqual([]);
   expect(result.container.network).toEqual({
     name: "nas-session-net-sess_test123",
   });

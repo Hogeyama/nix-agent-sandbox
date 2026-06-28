@@ -36,9 +36,7 @@ import type {
 import { DindServiceLive } from "../../stages/dind.ts";
 import { createDindStageWithOptions, planDind } from "../dind.ts";
 
-type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
-  prompt?: Partial<Profile["network"]["prompt"]>;
-};
+type NetworkOverrides = Partial<Profile["network"]>;
 
 type ProfileOverrides = Omit<Partial<Profile>, "network"> & {
   network?: NetworkOverrides;
@@ -59,10 +57,6 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     network: {
       ...baseNetwork,
       ...network,
-      prompt: {
-        ...baseNetwork.prompt,
-        ...network?.prompt,
-      },
     },
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),

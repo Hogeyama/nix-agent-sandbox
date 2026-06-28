@@ -47,9 +47,7 @@ const TEST_USER = "testuser";
 const CONTAINER_HOME = `/home/${TEST_USER}`;
 const TEST_WORK_DIR = "/workspace/project";
 
-type NetworkOverrides = Partial<Omit<Profile["network"], "prompt">> & {
-  prompt?: Partial<Profile["network"]["prompt"]>;
-};
+type NetworkOverrides = Partial<Profile["network"]>;
 
 type ProfileOverrides = Omit<Partial<Profile>, "network"> & {
   network?: NetworkOverrides;
@@ -70,10 +68,6 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     network: {
       ...baseNetwork,
       ...network,
-      prompt: {
-        ...baseNetwork.prompt,
-        ...network?.prompt,
-      },
     },
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
     display: structuredClone(DEFAULT_DISPLAY_CONFIG),

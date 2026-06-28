@@ -195,9 +195,9 @@ test("NetworkState: can construct", () => {
   expect(n.networkName).toEqual("nas-net-abc");
 });
 
-test("PromptState: can construct with promptEnabled false", () => {
-  const p: PromptState = { promptToken: "", promptEnabled: false };
-  expect(p.promptEnabled).toEqual(false);
+test("PromptState: can construct", () => {
+  const p: PromptState = { promptToken: "" };
+  expect(p.promptToken).toEqual("");
 });
 
 test("ProxyState: can construct", () => {
@@ -313,7 +313,7 @@ test("PipelineState: can construct with all slices", () => {
     observability: { enabled: false },
     dind: { containerName: "nas-dind-abc" },
     network: { networkName: "nas-net-abc", runtimeDir: "/run/nas/network" },
-    prompt: { promptToken: "tok_abc", promptEnabled: true },
+    prompt: { promptToken: "tok_abc" },
     proxy: {
       brokerSocket: "/run/nas/broker.sock",
       proxyEndpoint: "http://localhost:9901",

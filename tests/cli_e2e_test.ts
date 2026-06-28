@@ -1019,7 +1019,6 @@ interface BrokerFixture {
 
 async function withBrokerFixture(
   options: {
-    promptEnabled?: boolean;
     timeoutSeconds?: number;
   } = {},
   fn: (fixture: BrokerFixture) => Promise<void>,
@@ -1034,12 +1033,10 @@ async function withBrokerFixture(
   const broker = new SessionBroker({
     paths,
     sessionId,
-    allowlist: [],
-    denylist: [],
-    promptEnabled: options.promptEnabled ?? true,
-    timeoutSeconds: options.timeoutSeconds ?? 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [],
+    pendingTimeoutSeconds: options.timeoutSeconds ?? 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
   });
   await broker.start(socketPath);
   await writeSessionRegistry(paths, {
@@ -1048,8 +1045,6 @@ async function withBrokerFixture(
     tokenHash: await hashToken("test-token"),
     brokerSocket: socketPath,
     profileName: "test",
-    allowlist: [],
-    promptEnabled: options.promptEnabled ?? true,
     createdAt: new Date().toISOString(),
     pid: process.pid,
   });
@@ -1213,8 +1208,6 @@ test("CLI E2E: network gc removes stale runtime state", async () => {
       tokenHash: await hashToken("stale-token"),
       brokerSocket: staleSocket,
       profileName: "test",
-      allowlist: [],
-      promptEnabled: true,
       createdAt: new Date().toISOString(),
       pid: 999999,
     });
