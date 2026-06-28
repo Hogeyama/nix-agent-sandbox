@@ -120,22 +120,15 @@ export interface ReviewRule {
   method?: string;
   host?: string;
   pathPrefix?: string;
-  action: "review" | "deny";
-}
-
-export interface NetworkPromptConfig {
-  enable: boolean;
-  denylist: string[];
-  timeoutSeconds: number;
-  defaultScope: ApprovalScope;
-  notify: NetworkPromptNotify;
-  reviewRules: ReviewRule[];
+  action: "allow" | "review" | "deny";
 }
 
 export interface NetworkConfig {
-  allowlist: string[];
-  prompt: NetworkPromptConfig;
+  reviewRules: ReviewRule[];
   proxy: ProxyConfig;
+  pendingTimeoutSeconds: number;
+  pendingDefaultScope: ApprovalScope;
+  pendingNotify: NetworkPromptNotify;
 }
 
 /** DBus 設定 */
@@ -275,19 +268,12 @@ export const DEFAULT_PROXY_CONFIG: ProxyConfig = {
   forwardPorts: [],
 };
 
-export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {
-  enable: false,
-  denylist: [],
-  timeoutSeconds: 300,
-  defaultScope: "host-port",
-  notify: "auto",
-  reviewRules: [],
-};
-
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
-  allowlist: [],
-  prompt: DEFAULT_NETWORK_PROMPT_CONFIG,
+  reviewRules: [],
   proxy: DEFAULT_PROXY_CONFIG,
+  pendingTimeoutSeconds: 300,
+  pendingDefaultScope: "host-port",
+  pendingNotify: "auto",
 };
 
 export const DEFAULT_DBUS_SESSION_CONFIG: DbusSessionConfig = {

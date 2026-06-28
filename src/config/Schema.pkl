@@ -162,49 +162,29 @@ class ProxyConfig {
 class ReviewRule {
   /// HTTP メソッド（大文字小文字無視）。省略時は全メソッドにマッチ。
   method: String?
-  /// ホストパターン。allowlist と同じ形式（"*.example.com" 等）。省略時は全ホストにマッチ。
+  /// ホストパターン。"*.example.com" 等のワイルドカード対応。省略時は全ホストにマッチ。
   host: String?
   /// パスプレフィックス。省略時は全パスにマッチ。
   pathPrefix: String?
   /// マッチ時のアクション。
-  action: "review"|"deny" = "review"
-}
-
-class NetworkPromptConfig {
-  /// allowlist 外通信を session ごとの承認キューに入れる。
-  /// 無効の場合、allowlist 外通信は即拒否される。
-  enable: Boolean = false
-
-  /// 即時拒否するドメインのリスト。形式は allowlist と同じ。
-  /// allowlist と重複するエントリがある場合はバリデーションエラー。
-  denylist: Listing<String> = new {}
-
-  /// pending 承認の待機秒数。タイムアウト時は deny。
-  timeoutSeconds: Int = 300
-
-  /// 承認の既定スコープ。
-  /// - `"once"`: そのリクエストのみ
-  /// - `"host-port"`: 同じホスト+ポートへの通信を以降許可
-  /// - `"host"`: 同じホストへの全ポート通信を以降許可
-  defaultScope: "once"|"host-port"|"host" = "host-port"
-
-  /// pending 発生時の通知 backend。
-  /// `"auto"`: `ui.enable` に応じて UI daemon 経由 or デスクトップ通知。
-  notify: "auto"|"desktop"|"off" = "auto"
-
-  /// リクエストボディの内容に基づく review/deny ルール。
-  reviewRules: Listing<ReviewRule> = new {}
+  action: "allow"|"review"|"deny" = "review"
 }
 
 class NetworkConfig {
-  /// 即時許可する外部ドメインのリスト。
-  /// `"example.com"`（全ポート）、`"example.com:443"`（ポート指定）、
-  /// `"*.example.com:443"`（ワイルドカード + ポート指定）形式に対応。
-  /// allowlist 外通信は `prompt.enable` が無効なら拒否、有効なら pending。
-  allowlist: Listing<String> = new {}
+  /// ネットワークアクセス制御ルール。上から順に評価し、最初にマッチしたルールの
+  /// action を適用する。どのルールにもマッチしない場合は暗黙 deny。
+  reviewRules: Listing<ReviewRule> = new {}
 
-  prompt: NetworkPromptConfig = new {}
   proxy: ProxyConfig = new {}
+
+  /// review ルールで pending に回されたリクエストの待機秒数。タイムアウト時は deny。
+  pendingTimeoutSeconds: Int = 300
+
+  /// 承認の既定スコープ。
+  pendingDefaultScope: "once"|"host-port"|"host" = "host-port"
+
+  /// pending 発生時の通知 backend。
+  pendingNotify: "auto"|"desktop"|"off" = "auto"
 }
 
 // ---------------------------------------------------------------------------
