@@ -105,48 +105,30 @@ test("validate: no default is ok", () => {
 });
 
 // ---------------------------------------------------------------------------
-// allowlist/denylist ホストリスト形式検証
+// reviewRules ホストパターン検証
 // ---------------------------------------------------------------------------
 
-test("validate: network.allowlist accepts valid entries", () => {
+test("validate: reviewRules accepts valid host entries", () => {
   const config = validateConfig(
     makeConfig({
       profiles: {
         test: makeProfile({
           network: {
             ...DEFAULT_NETWORK_CONFIG,
-            allowlist: ["github.com", "api.anthropic.com"],
+            reviewRules: [
+              { host: "github.com", action: "allow" },
+              { host: "*.anthropic.com", action: "review" },
+              { host: "example.com:443", action: "deny" },
+            ],
           },
         }),
       },
     }),
   );
-  expect(config.profiles.test.network.allowlist).toEqual([
-    "github.com",
-    "api.anthropic.com",
-  ]);
+  expect(config.profiles.test.network.reviewRules).toHaveLength(3);
 });
 
-test("validate: network.allowlist accepts wildcard prefix", () => {
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          network: {
-            ...DEFAULT_NETWORK_CONFIG,
-            allowlist: ["*.github.com", "api.anthropic.com"],
-          },
-        }),
-      },
-    }),
-  );
-  expect(config.profiles.test.network.allowlist).toEqual([
-    "*.github.com",
-    "api.anthropic.com",
-  ]);
-});
-
-test("validate: network.allowlist rejects wildcard in middle", () => {
+test("validate: reviewRules rejects wildcard in middle of host", () => {
   expect(() =>
     validateConfig(
       makeConfig({
@@ -154,7 +136,7 @@ test("validate: network.allowlist rejects wildcard in middle", () => {
           test: makeProfile({
             network: {
               ...DEFAULT_NETWORK_CONFIG,
-              allowlist: ["git*hub.com"],
+              reviewRules: [{ host: "git*hub.com", action: "allow" }],
             },
           }),
         },
@@ -163,7 +145,7 @@ test("validate: network.allowlist rejects wildcard in middle", () => {
   ).toThrow("contains wildcard");
 });
 
-test("validate: network.allowlist rejects trailing wildcard", () => {
+test("validate: reviewRules rejects trailing wildcard in host", () => {
   expect(() =>
     validateConfig(
       makeConfig({
@@ -171,7 +153,7 @@ test("validate: network.allowlist rejects trailing wildcard", () => {
           test: makeProfile({
             network: {
               ...DEFAULT_NETWORK_CONFIG,
-              allowlist: ["github.*"],
+              reviewRules: [{ host: "github.*", action: "allow" }],
             },
           }),
         },
@@ -180,177 +162,38 @@ test("validate: network.allowlist rejects trailing wildcard", () => {
   ).toThrow("contains wildcard");
 });
 
-test("validate: network.prompt.denylist rejects wildcard in middle", () => {
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            network: {
-              ...DEFAULT_NETWORK_CONFIG,
-              prompt: {
-                ...DEFAULT_NETWORK_CONFIG.prompt,
-                denylist: ["ev*il.com"],
-              },
-            },
-          }),
-        },
-      }),
-    ),
-  ).toThrow("contains wildcard");
-});
-
-test("validate: network.allowlist accepts host:port entries", () => {
+test("validate: reviewRules accepts rule with no host (catch-all)", () => {
   const config = validateConfig(
     makeConfig({
       profiles: {
         test: makeProfile({
           network: {
             ...DEFAULT_NETWORK_CONFIG,
-            allowlist: ["example.com:443", "*.api.com:8080", "plain.com"],
+            reviewRules: [{ action: "review" }],
           },
         }),
       },
     }),
   );
-  expect(config.profiles.test.network.allowlist).toEqual([
+  expect(config.profiles.test.network.reviewRules).toHaveLength(1);
+});
+
+test("validate: reviewRules accepts host:port entries", () => {
+  const config = validateConfig(
+    makeConfig({
+      profiles: {
+        test: makeProfile({
+          network: {
+            ...DEFAULT_NETWORK_CONFIG,
+            reviewRules: [{ host: "example.com:443", action: "allow" }],
+          },
+        }),
+      },
+    }),
+  );
+  expect(config.profiles.test.network.reviewRules[0].host).toEqual(
     "example.com:443",
-    "*.api.com:8080",
-    "plain.com",
-  ]);
-});
-
-// ---------------------------------------------------------------------------
-// allowlist/denylist の重複検出
-// ---------------------------------------------------------------------------
-
-test("validate: allowlist and denylist overlap throws", () => {
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            network: {
-              ...DEFAULT_NETWORK_CONFIG,
-              allowlist: ["example.com"],
-              prompt: {
-                ...DEFAULT_NETWORK_CONFIG.prompt,
-                denylist: ["example.com"],
-              },
-            },
-          }),
-        },
-      }),
-    ),
-  ).toThrow("appears in both network.allowlist and network.prompt.denylist");
-});
-
-test("validate: allowlist=*.example.com and denylist=sub.example.com is allowed", () => {
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          network: {
-            ...DEFAULT_NETWORK_CONFIG,
-            allowlist: ["*.example.com"],
-            prompt: {
-              ...DEFAULT_NETWORK_CONFIG.prompt,
-              denylist: ["sub.example.com"],
-            },
-          },
-        }),
-      },
-    }),
   );
-  expect(config.profiles.test.network.allowlist).toEqual(["*.example.com"]);
-  expect(config.profiles.test.network.prompt.denylist).toEqual([
-    "sub.example.com",
-  ]);
-});
-
-test("validate: allowlist=sub.example.com and denylist=*.example.com is allowed", () => {
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          network: {
-            ...DEFAULT_NETWORK_CONFIG,
-            allowlist: ["sub.example.com"],
-            prompt: {
-              ...DEFAULT_NETWORK_CONFIG.prompt,
-              denylist: ["*.example.com"],
-            },
-          },
-        }),
-      },
-    }),
-  );
-  expect(config.profiles.test.network.allowlist).toEqual(["sub.example.com"]);
-  expect(config.profiles.test.network.prompt.denylist).toEqual([
-    "*.example.com",
-  ]);
-});
-
-test("validate: allowlist/denylist overlap with matching port", () => {
-  // same host:port in both -> overlap
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            network: {
-              ...DEFAULT_NETWORK_CONFIG,
-              allowlist: ["example.com:443"],
-              prompt: {
-                ...DEFAULT_NETWORK_CONFIG.prompt,
-                denylist: ["example.com:443"],
-              },
-            },
-          }),
-        },
-      }),
-    ),
-  ).toThrow("appears in both");
-
-  // same host but different ports -> no overlap
-  const config = validateConfig(
-    makeConfig({
-      profiles: {
-        test: makeProfile({
-          network: {
-            ...DEFAULT_NETWORK_CONFIG,
-            allowlist: ["example.com:443"],
-            prompt: {
-              ...DEFAULT_NETWORK_CONFIG.prompt,
-              denylist: ["example.com:80"],
-            },
-          },
-        }),
-      },
-    }),
-  );
-  expect(config.profiles.test.network.allowlist).toEqual(["example.com:443"]);
-});
-
-test("validate: multiple allowlist/denylist overlaps are reported", () => {
-  expect(() =>
-    validateConfig(
-      makeConfig({
-        profiles: {
-          test: makeProfile({
-            network: {
-              ...DEFAULT_NETWORK_CONFIG,
-              allowlist: ["a.com", "b.com", "c.com"],
-              prompt: {
-                ...DEFAULT_NETWORK_CONFIG.prompt,
-                denylist: ["a.com", "c.com"],
-              },
-            },
-          }),
-        },
-      }),
-    ),
-  ).toThrow("appears in both");
 });
 
 // ---------------------------------------------------------------------------

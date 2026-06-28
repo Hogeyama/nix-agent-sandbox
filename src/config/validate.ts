@@ -6,8 +6,8 @@
  */
 
 import { logWarn } from "../log.ts";
-import { normalizeHost, parseAllowlistEntry } from "../network/protocol.ts";
-import type { Config, HostExecRule, Profile } from "./types.ts";
+import { parseAllowlistEntry } from "../network/protocol.ts";
+import type { Config, HostExecRule, Profile, ReviewRule } from "./types.ts";
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -47,28 +47,20 @@ export function validateConfig(config: Config): Config {
 function validateProfile(name: string, profile: Profile): string[] {
   const errors: string[] = [];
 
-  // --- ホストリスト形式検証 ---
-  errors.push(
-    ...validateHostList(
-      `profile "${name}": network.allowlist`,
-      profile.network.allowlist,
-    ),
-  );
-  errors.push(
-    ...validateHostList(
-      `profile "${name}": network.prompt.denylist`,
-      profile.network.prompt.denylist,
-    ),
-  );
+  // --- reviewRules host pattern validation ---
+  for (const [i, rule] of profile.network.reviewRules.entries()) {
+    if (rule.host !== undefined) {
+      errors.push(
+        ...validateHostList(
+          `profile "${name}": network.reviewRules[${i}].host`,
+          [rule.host],
+        ),
+      );
+    }
+  }
 
-  // --- allowlist/denylist の重複検出 ---
-  errors.push(
-    ...validateAllowlistDenylistOverlap(
-      name,
-      profile.network.allowlist,
-      profile.network.prompt.denylist,
-    ),
-  );
+  // --- reviewRules shadowing warnings ---
+  warnShadowedReviewRules(name, profile.network.reviewRules);
 
   // --- forwardPorts の予約ポート(18080)・重複検出 ---
   errors.push(
@@ -138,36 +130,29 @@ function validateHostList(fieldPath: string, entries: string[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Allowlist / denylist overlap
+// ReviewRules shadowing warning
 // ---------------------------------------------------------------------------
 
-function validateAllowlistDenylistOverlap(
-  _profileName: string,
-  allowlist: string[],
-  denylist: string[],
-): string[] {
-  const errors: string[] = [];
-  // Skip overlap check if any entries are invalid
-  const allEntries = [...allowlist, ...denylist];
-  if (allEntries.some((e) => typeof e !== "string" || e.trim() === "")) {
-    return errors;
-  }
-  const normalizeEntry = (e: string) => {
-    const parsed = parseAllowlistEntry(e);
-    const host = parsed.host.startsWith("*.")
-      ? `*.${normalizeHost(parsed.host.slice(2))}`
-      : normalizeHost(parsed.host);
-    return parsed.port !== null ? `${host}:${parsed.port}` : host;
-  };
-  const normalizedAllowSet = new Set(allowlist.map(normalizeEntry));
-  for (const entry of denylist) {
-    if (normalizedAllowSet.has(normalizeEntry(entry))) {
-      errors.push(
-        `"${entry}" appears in both network.allowlist and network.prompt.denylist`,
-      );
+function warnShadowedReviewRules(
+  profileName: string,
+  rules: ReviewRule[],
+): void {
+  for (let i = 0; i < rules.length; i++) {
+    const earlier = rules[i];
+    if (
+      earlier.method === undefined &&
+      earlier.host === undefined &&
+      earlier.pathPrefix === undefined
+    ) {
+      for (let j = i + 1; j < rules.length; j++) {
+        logWarn(
+          `[warn] profile "${profileName}": network.reviewRules[${i}] (catch-all, action="${earlier.action}") ` +
+            `shadows reviewRules[${j}]; consider reordering`,
+        );
+      }
+      break;
     }
   }
-  return errors;
 }
 
 // ---------------------------------------------------------------------------
