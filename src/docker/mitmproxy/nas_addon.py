@@ -12,10 +12,9 @@ import json
 import os
 import socket
 import time
-import fnmatch
 from typing import Optional
 
-from mitmproxy import http, ctx
+from mitmproxy import http
 
 NETWORK_DIR = "/nas-network"
 SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")
@@ -111,10 +110,6 @@ def _normalize_host(host: str) -> str:
     return h
 
 
-def _default_port(scheme: str) -> int:
-    return 443 if scheme == "https" else 80
-
-
 def _match_host_pattern(host: str, pattern: str) -> bool:
     normalized = _normalize_host(host)
     if pattern.startswith("*."):
@@ -193,7 +188,7 @@ class NasAddon:
 
         if matched_rule:
             authorize_req["matchedReviewRule"] = True
-            body_bytes = flow.request.get_content(limit=BODY_PREVIEW_MAX + 1)
+            body_bytes = flow.request.content or b""
             body_preview = None
             if body_bytes:
                 try:
@@ -204,7 +199,7 @@ class NasAddon:
                 "path": request_path,
                 "contentType": flow.request.headers.get("content-type"),
                 "bodyPreview": body_preview,
-                "bodySize": len(flow.request.get_content()) if flow.request.content is not None else 0,
+                "bodySize": len(body_bytes),
             }
 
             if matched_rule.get("action") == "deny":
