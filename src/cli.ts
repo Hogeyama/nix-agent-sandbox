@@ -83,6 +83,7 @@ import {
   OtlpReceiverServiceLive,
 } from "./stages/observability.ts";
 import {
+  CaServiceLive,
   createProxyStage,
   ForwardPortRelayServiceLive,
   NetworkRuntimeServiceLive,
@@ -313,6 +314,7 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       DockerBuildServiceLive.pipe(
         Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
       ),
+      CaServiceLive.pipe(Layer.provide(FsServiceLive)),
       ProxyServiceLive.pipe(Layer.provide(dockerLayer)),
       ForwardPortRelayServiceLive,
       FsServiceLive,

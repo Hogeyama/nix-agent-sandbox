@@ -8,6 +8,7 @@
  */
 
 import { Context, Effect, Layer } from "effect";
+import type { ReviewRule } from "../../config/types.ts";
 import type { ResolvedNotifyBackend } from "../../lib/notify_utils.ts";
 import { logInfo, logWarn } from "../../log.ts";
 import { SessionBroker } from "../../network/broker.ts";
@@ -40,6 +41,7 @@ export interface SessionBrokerConfig {
   readonly uiIdleTimeout?: number;
   readonly auditDir?: string;
   readonly tokenHash: string;
+  readonly reviewRules?: ReviewRule[];
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
               uiPort: config.uiPort,
               uiIdleTimeout: config.uiIdleTimeout,
               auditDir: config.auditDir,
+              reviewRules: config.reviewRules,
             });
             await broker.start(config.socketPath);
             try {

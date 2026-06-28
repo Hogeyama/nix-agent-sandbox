@@ -11,6 +11,7 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
+import type { ReviewRule } from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import {
@@ -30,6 +31,7 @@ import type {
   ProxyState,
 } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput, StageResult } from "../../pipeline/types.ts";
+import { CaService } from "./ca_service.ts";
 import {
   type ForwardPortRelayHandle,
   ForwardPortRelayService,
@@ -41,10 +43,10 @@ import {
   SessionBrokerService,
 } from "./session_broker_service.ts";
 
-const PROXY_IMAGE = "mitmproxy/mitmproxy:latest";
+const PROXY_IMAGE = "mitmproxy/mitmproxy:11";
 const PROXY_CONTAINER_NAME = "nas-proxy-shared";
 const PROXY_ALIAS = "nas-proxy";
-const ENVOY_PROXY_PORT = 15001;
+const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
 export const LOCAL_PROXY_PORT = 18080;
 
@@ -62,11 +64,11 @@ const FORWARD_PORT_SOCKET_DIR_IN_CONTAINER = "/run/nas-fp";
 // ---------------------------------------------------------------------------
 
 export interface ProxyPlan {
-  readonly envoyContainerName: string;
-  readonly envoyImage: string;
-  readonly envoyAlias: string;
-  readonly envoyProxyPort: number;
-  readonly envoyReadyTimeoutMs: number;
+  readonly proxyContainerName: string;
+  readonly proxyImage: string;
+  readonly proxyAlias: string;
+  readonly proxyPort: number;
+  readonly proxyReadyTimeoutMs: number;
   readonly sessionId: string;
   readonly sessionNetworkName: string;
   readonly profileName: string;
@@ -84,6 +86,7 @@ export interface ProxyPlan {
   readonly uiPort: number;
   readonly uiIdleTimeout: number;
   readonly auditDir: string;
+  readonly reviewRules: ReviewRule[];
   readonly outputOverrides: Pick<
     StageResult,
     "network" | "prompt" | "proxy" | "container"
@@ -98,7 +101,7 @@ export interface ProxyPlan {
 // ---------------------------------------------------------------------------
 
 export interface ProxyStageOptions {
-  envoyContainerName?: string;
+  proxyContainerName?: string;
   generateSessionToken?: () => string;
 }
 
@@ -106,7 +109,7 @@ export function planProxy(
   input: StageInput & Pick<PipelineState, "container" | "observability">,
   options: ProxyStageOptions = {},
 ): ProxyPlan {
-  const envoyContainerName = options.envoyContainerName ?? PROXY_CONTAINER_NAME;
+  const proxyContainerName = options.proxyContainerName ?? PROXY_CONTAINER_NAME;
   const generateSessionToken =
     options.generateSessionToken ?? defaultGenerateToken;
 
@@ -130,7 +133,7 @@ export function planProxy(
       ? Array.from(new Set([...baseForwardPorts, observabilityPort]))
       : baseForwardPorts;
 
-  const proxyUrl = `http://${input.sessionId}:${token}@${PROXY_ALIAS}:${ENVOY_PROXY_PORT}`;
+  const proxyUrl = `http://${input.sessionId}:${token}@${PROXY_ALIAS}:${PROXY_PORT}`;
   const localProxyUrl = `http://127.0.0.1:${LOCAL_PROXY_PORT}`;
   // DinD's hostname is appended to no_proxy later by DindStage (which now runs
   // after ProxyStage); here we only seed the loopback baseline.
@@ -170,10 +173,17 @@ export function planProxy(
     }
   }
 
+  // CA cert mount for update-ca-certificates inside the agent container
+  const caCertMount: MountSpec = {
+    source: `${runtimePaths.caCertDir}/mitmproxy-ca-cert.pem`,
+    target: "/usr/local/share/ca-certificates/nas-proxy.crt",
+    readOnly: true,
+  };
+
   const container = buildContainerState(input, {
     sessionNetworkName,
     envVars,
-    extraMounts: forwardPortMounts,
+    extraMounts: [...forwardPortMounts, caCertMount],
   });
 
   const network: NetworkState = {
@@ -190,11 +200,11 @@ export function planProxy(
   };
 
   return {
-    envoyContainerName,
-    envoyImage: PROXY_IMAGE,
-    envoyAlias: PROXY_ALIAS,
-    envoyProxyPort: ENVOY_PROXY_PORT,
-    envoyReadyTimeoutMs: PROXY_READY_TIMEOUT_MS,
+    proxyContainerName,
+    proxyImage: PROXY_IMAGE,
+    proxyAlias: PROXY_ALIAS,
+    proxyPort: PROXY_PORT,
+    proxyReadyTimeoutMs: PROXY_READY_TIMEOUT_MS,
     sessionId: input.sessionId,
     sessionNetworkName,
     profileName: input.profileName,
@@ -212,6 +222,7 @@ export function planProxy(
     uiPort: input.config.ui.port,
     uiIdleTimeout: input.config.ui.idleTimeout,
     auditDir: input.probes.auditDir,
+    reviewRules: [...(prompt.reviewRules ?? [])],
     envVars: container.env.static,
     container,
     forwardPorts,
@@ -233,6 +244,7 @@ export function createProxyStage(
 ): Stage<
   "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
+  | CaService
   | NetworkRuntimeService
   | ProxyService
   | SessionBrokerService
@@ -248,6 +260,7 @@ export function createProxyStageWithOptions(
 ): Stage<
   "container" | "observability",
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
+  | CaService
   | NetworkRuntimeService
   | ProxyService
   | SessionBrokerService
@@ -264,6 +277,7 @@ export function createProxyStageWithOptions(
       Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
       unknown,
       | Scope.Scope
+      | CaService
       | NetworkRuntimeService
       | ProxyService
       | SessionBrokerService
@@ -289,6 +303,7 @@ function runProxy(
   Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>,
   unknown,
   | Scope.Scope
+  | CaService
   | NetworkRuntimeService
   | ProxyService
   | SessionBrokerService
@@ -299,14 +314,29 @@ function runProxy(
     const proxy = yield* ProxyService;
     const sessionBrokerService = yield* SessionBrokerService;
     const forwardPortRelayService = yield* ForwardPortRelayService;
+    const caService = yield* CaService;
 
-    // 1. Ensure runtime dirs exist (runtimeDir, sessions, pending, brokers)
+    // 1. Ensure runtime dirs exist (runtimeDir, sessions, pending, brokers,
+    //    caCertDir, reviewRulesDir)
     yield* networkRuntime.ensureRuntimeDirs(plan.runtimePaths);
 
     // 2. GC stale sessions
     yield* networkRuntime.gcStaleRuntime(plan.runtimePaths);
 
-    // 3. Session broker + registry (acquireRelease)
+    // 3. Ensure CA cert exists (generates via docker run --rm if missing)
+    yield* caService.ensureCaCert(plan.runtimePaths, plan.proxyImage);
+
+    // 4. Copy addon script to runtime dir
+    yield* networkRuntime.copyAddonScript(plan.runtimePaths);
+
+    // 5. Write per-session review rules
+    yield* networkRuntime.writeReviewRules(
+      plan.runtimePaths,
+      plan.sessionId,
+      plan.reviewRules,
+    );
+
+    // 6. Session broker + registry (acquireRelease)
     const tokenHash = yield* Effect.tryPromise({
       try: () => hashToken(plan.token),
       catch: (e) =>
@@ -332,11 +362,12 @@ function runProxy(
         uiIdleTimeout: plan.uiIdleTimeout,
         auditDir: plan.auditDir,
         tokenHash,
+        reviewRules: plan.reviewRules,
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );
 
-    // 4. Forward-port relays (acquireRelease).
+    // 7. Forward-port relays (acquireRelease).
     // Always called regardless of plan.forwardPorts.length: the live impl
     // fast-paths empty ports to a no-op.
     yield* Effect.acquireRelease(
@@ -348,23 +379,23 @@ function runProxy(
       (handle: ForwardPortRelayHandle) => handle.close(),
     );
 
-    // 5. Shared proxy container (acquireRelease — no teardown since it's shared)
+    // 8. Shared proxy container (acquireRelease — no teardown since it's shared)
     yield* Effect.acquireRelease(
       proxy.ensureSharedProxy({
-        proxyContainerName: plan.envoyContainerName,
-        proxyImage: plan.envoyImage,
+        proxyContainerName: plan.proxyContainerName,
+        proxyImage: plan.proxyImage,
         runtimePaths: plan.runtimePaths,
-        proxyReadyTimeoutMs: plan.envoyReadyTimeoutMs,
+        proxyReadyTimeoutMs: plan.proxyReadyTimeoutMs,
       }),
       () => Effect.void,
     );
 
-    // 6. Session network + proxy connect (acquireRelease)
+    // 9. Session network + proxy connect (acquireRelease)
     yield* Effect.acquireRelease(
       proxy.createSessionNetwork({
         sessionNetworkName: plan.sessionNetworkName,
-        proxyContainerName: plan.envoyContainerName,
-        proxyAlias: plan.envoyAlias,
+        proxyContainerName: plan.proxyContainerName,
+        proxyAlias: plan.proxyAlias,
       }),
       (teardown: () => Effect.Effect<void>) => teardown(),
     );

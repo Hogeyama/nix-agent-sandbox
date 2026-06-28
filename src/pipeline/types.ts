@@ -18,6 +18,7 @@ import type { ContainerLaunchService } from "../stages/launch.ts";
 import type { MountSetupService } from "../stages/mount.ts";
 import type { OtlpReceiverService } from "../stages/observability.ts";
 import type {
+  CaService,
   ForwardPortRelayService,
   NetworkRuntimeService,
   ProxyService,
@@ -74,6 +75,7 @@ export type StageResult = Partial<PipelineState>;
 
 // Union of all service tags that stages can depend on
 export type StageServices =
+  | CaService
   | ContainerLaunchService
   | DbusProxyService
   | DindService

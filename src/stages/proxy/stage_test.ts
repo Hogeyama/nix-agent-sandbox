@@ -27,6 +27,7 @@ import type {
   ProbeResults,
   StageInput,
 } from "../../pipeline/types.ts";
+import { makeCaServiceFake } from "./ca_service.ts";
 import {
   type EnsureForwardPortRelaysOptions,
   type ForwardPortRelayHandle,
@@ -312,7 +313,14 @@ test("ProxyStage: planner merges proxy settings into existing container slice", 
   expect(result.outputOverrides.container).toEqual({
     image: "slice-image",
     workDir: "/slice-workdir",
-    mounts: [{ source: "/existing-src", target: "/existing-target" }],
+    mounts: [
+      { source: "/existing-src", target: "/existing-target" },
+      {
+        source: "/run/user/1000/nas/network/mitmproxy-ca/mitmproxy-ca-cert.pem",
+        target: "/usr/local/share/ca-certificates/nas-proxy.crt",
+        readOnly: true,
+      },
+    ],
     env: {
       static: {
         EXISTING_ENV: "1",
@@ -496,6 +504,7 @@ test("createProxyStage().run(): invokes forwardPortRelay.ensureRelays and close 
   let closeCount = 0;
 
   const layer = Layer.mergeAll(
+    makeCaServiceFake(),
     makeNetworkRuntimeServiceFake(),
     makeProxyServiceFake(),
     makeSessionBrokerServiceFake(),
@@ -578,6 +587,7 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
   const calls: string[] = [];
 
   const layer = Layer.mergeAll(
+    makeCaServiceFake(),
     makeNetworkRuntimeServiceFake({
       gcStaleRuntime: () => {
         calls.push("gcStaleRuntime");
@@ -643,6 +653,7 @@ test("createProxyStage().run(): calls services and returns merged output", async
   const calls: string[] = [];
 
   const layer = Layer.mergeAll(
+    makeCaServiceFake(),
     makeNetworkRuntimeServiceFake({
       gcStaleRuntime: () => {
         calls.push("gcStaleRuntime");

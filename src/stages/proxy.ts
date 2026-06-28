@@ -3,6 +3,12 @@
  */
 
 export {
+  CaService,
+  type CaServiceFakeConfig,
+  CaServiceLive,
+  makeCaServiceFake,
+} from "./proxy/ca_service.ts";
+export {
   type EnsureForwardPortRelaysOptions,
   type ForwardPortRelayHandle,
   ForwardPortRelayService,
