@@ -14,7 +14,7 @@ import socket
 import time
 from typing import Optional
 
-from mitmproxy import http
+from mitmproxy import connection, http
 
 NETWORK_DIR = "/nas-network"
 SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")
@@ -135,10 +135,50 @@ def _generate_request_id() -> str:
     return f"req_{os.urandom(6).hex()}"
 
 
+def _verify_creds(session_id: str, token: str) -> Optional[dict]:
+    registry = _load_registry(session_id)
+    if not registry:
+        return None
+    token_hash = _hash_token(token)
+    if token_hash != registry.get("tokenHash"):
+        return None
+    return registry
+
+
 class NasAddon:
-    def request(self, flow: http.HTTPFlow) -> None:
+    def __init__(self):
+        # CONNECT credentials keyed by client connection id.
+        # For HTTPS, Proxy-Authorization is only on the CONNECT request,
+        # not on inner requests after TLS decryption.
+        self._connect_creds: dict[str, tuple[str, str]] = {}
+
+    def http_connect(self, flow: http.HTTPFlow) -> None:
         proxy_auth = flow.request.headers.get("proxy-authorization", "")
         creds = _decode_proxy_auth(proxy_auth)
+        if not creds:
+            flow.response = http.Response.make(
+                407, b"missing proxy credentials",
+                {"Proxy-Authenticate": 'Basic realm="nas"'},
+            )
+            return
+
+        session_id, token = creds
+        if not _verify_creds(session_id, token):
+            flow.response = http.Response.make(
+                407, b"invalid proxy credentials",
+                {"Proxy-Authenticate": 'Basic realm="nas"'},
+            )
+            return
+
+        self._connect_creds[flow.client_conn.id] = creds
+
+    def request(self, flow: http.HTTPFlow) -> None:
+        # Try request header first (HTTP forward proxy),
+        # fall back to stored CONNECT creds (HTTPS after MitM).
+        proxy_auth = flow.request.headers.get("proxy-authorization", "")
+        creds = _decode_proxy_auth(proxy_auth)
+        if not creds:
+            creds = self._connect_creds.get(flow.client_conn.id)
         if not creds:
             flow.response = http.Response.make(
                 407, b"missing proxy credentials",
@@ -182,7 +222,7 @@ class NasAddon:
             "sessionId": session_id,
             "target": {"host": host, "port": port},
             "method": method,
-            "requestKind": "connect" if method == "CONNECT" else "forward",
+            "requestKind": "forward",
             "observedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         }
 
@@ -215,7 +255,11 @@ class NasAddon:
             )
             return
 
-        del flow.request.headers["proxy-authorization"]
+        if "proxy-authorization" in flow.request.headers:
+            del flow.request.headers["proxy-authorization"]
+
+    def client_disconnected(self, client: connection.Client) -> None:
+        self._connect_creds.pop(client.id, None)
 
 
 addons = [NasAddon()]
