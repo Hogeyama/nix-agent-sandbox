@@ -227,7 +227,6 @@ class NasAddon:
         }
 
         if matched_rule:
-            authorize_req["matchedReviewRule"] = True
             body_bytes = flow.request.content or b""
             body_preview = None
             if body_bytes:
