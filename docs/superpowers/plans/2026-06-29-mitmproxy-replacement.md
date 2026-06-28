@@ -468,6 +468,53 @@ gcStaleRuntime: (_paths) => Effect.void,
 
 Or if generic gcRuntime needs to stay, wrap it with `Effect.tryPromise`. But given that `gcNetworkRuntime` is called in `runNetworkCommand` CLI, and the service-layer GC is only used in the stage, simplifying to a no-op Effect for now is acceptable. The CLI's `gc` subcommand calls `gcNetworkRuntime` directly, not through the service.
 
+Replace `renderEnvoyConfig` with two new methods — `copyAddonScript` and `writeReviewRules`. These belong in the service (not the stage) per effect-separation rules: stages must not perform I/O directly.
+
+```typescript
+export class NetworkRuntimeService extends Context.Tag(
+  "nas/NetworkRuntimeService",
+)<
+  NetworkRuntimeService,
+  {
+    readonly ensureRuntimeDirs: (
+      paths: NetworkRuntimePaths,
+    ) => Effect.Effect<void>;
+    readonly gcStaleRuntime: (
+      paths: NetworkRuntimePaths,
+    ) => Effect.Effect<void>;
+    readonly copyAddonScript: (
+      paths: NetworkRuntimePaths,
+    ) => Effect.Effect<void>;
+    readonly writeReviewRules: (
+      paths: NetworkRuntimePaths,
+      sessionId: string,
+      rules: import("../../config/types.ts").ReviewRule[],
+    ) => Effect.Effect<void>;
+  }
+>() {}
+```
+
+Live implementation for the new methods:
+
+```typescript
+copyAddonScript: (paths) =>
+  Effect.gen(function* () {
+    const addonSource = resolveAsset(
+      "docker/mitmproxy/nas_addon.py",
+      import.meta.url,
+      "../../docker/mitmproxy/nas_addon.py",
+    );
+    const source = yield* fs.readFile(addonSource);
+    yield* fs.writeFile(paths.addonScriptPath, source, { mode: 0o644 });
+  }),
+
+writeReviewRules: (paths, sessionId, rules) =>
+  Effect.gen(function* () {
+    const rulesPath = `${paths.reviewRulesDir}/${sessionId}.json`;
+    yield* fs.writeFile(rulesPath, JSON.stringify(rules), { mode: 0o644 });
+  }),
+```
+
 Remove `ProcessService` from the Live layer's dependency:
 
 ```typescript
@@ -492,6 +539,14 @@ export interface NetworkRuntimeServiceFakeConfig {
     paths: NetworkRuntimePaths,
   ) => Effect.Effect<void>;
   readonly gcStaleRuntime?: (paths: NetworkRuntimePaths) => Effect.Effect<void>;
+  readonly copyAddonScript?: (
+    paths: NetworkRuntimePaths,
+  ) => Effect.Effect<void>;
+  readonly writeReviewRules?: (
+    paths: NetworkRuntimePaths,
+    sessionId: string,
+    rules: import("../../config/types.ts").ReviewRule[],
+  ) => Effect.Effect<void>;
 }
 
 export function makeNetworkRuntimeServiceFake(
@@ -502,6 +557,8 @@ export function makeNetworkRuntimeServiceFake(
     NetworkRuntimeService.of({
       ensureRuntimeDirs: overrides.ensureRuntimeDirs ?? (() => Effect.void),
       gcStaleRuntime: overrides.gcStaleRuntime ?? (() => Effect.void),
+      copyAddonScript: overrides.copyAddonScript ?? (() => Effect.void),
+      writeReviewRules: overrides.writeReviewRules ?? (() => Effect.void),
     }),
   );
 }
@@ -1266,7 +1323,7 @@ const caCertMount: MountSpec = {
 };
 ```
 
-Update `runProxy` Effect chain:
+Update `runProxy` Effect chain. Per effect-separation rules, the stage only calls service methods — no direct I/O. `copyAddonScript` and `writeReviewRules` are now methods on `NetworkRuntimeService` (added in Task 3).
 
 ```typescript
 function runProxy(plan: ProxyPlan) {
@@ -1289,11 +1346,13 @@ function runProxy(plan: ProxyPlan) {
       () => Effect.void,
     );
 
-    // 4. Copy addon script to runtime dir
-    yield* copyAddonScript(plan.runtimePaths);
+    // 4. Copy addon script to runtime dir (service method, not inline I/O)
+    yield* networkRuntime.copyAddonScript(plan.runtimePaths);
 
-    // 5. Write per-session review rules
-    yield* writeReviewRules(plan);
+    // 5. Write per-session review rules (service method, not inline I/O)
+    yield* networkRuntime.writeReviewRules(
+      plan.runtimePaths, plan.sessionId, plan.reviewRules ?? [],
+    );
 
     // 6. Session broker (acquireRelease)
     // ... (same as before, but pass reviewRules)
@@ -1315,36 +1374,6 @@ function runProxy(plan: ProxyPlan) {
 
     return plan.outputOverrides;
   });
-}
-```
-
-Add helper effects:
-
-```typescript
-function copyAddonScript(paths: NetworkRuntimePaths): Effect.Effect<void> {
-  return Effect.tryPromise({
-    try: async () => {
-      const addonSource = resolveAsset(
-        "docker/mitmproxy/nas_addon.py",
-        import.meta.url,
-        "../../docker/mitmproxy/nas_addon.py",
-      );
-      const content = await Bun.file(addonSource).text();
-      await Bun.write(paths.addonScriptPath, content);
-    },
-    catch: (e) => new Error(`Failed to copy addon script: ${e}`),
-  }).pipe(Effect.orDie);
-}
-
-function writeReviewRules(plan: ProxyPlan): Effect.Effect<void> {
-  return Effect.tryPromise({
-    try: async () => {
-      const rulesPath = `${plan.runtimePaths.reviewRulesDir}/${plan.sessionId}.json`;
-      const rules = plan.reviewRules ?? [];
-      await Bun.write(rulesPath, JSON.stringify(rules));
-    },
-    catch: (e) => new Error(`Failed to write review rules: ${e}`),
-  }).pipe(Effect.orDie);
 }
 ```
 
