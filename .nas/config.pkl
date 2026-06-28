@@ -92,6 +92,7 @@ local commonNetwork: NetworkConfig = new {
     "deno.land"                   // Deno
     "dl.deno.land"                // Deno
     "esm.sh"
+    "httpbin.org"
   }
   prompt {
     enable = true
@@ -100,6 +101,13 @@ local commonNetwork: NetworkConfig = new {
       "http-intake.logs.us5.datadoghq.com"
       // Copilot CLIがなんか送ってるやつ
       "copilot-telemetry.githubusercontent.com"
+    }
+    reviewRules {
+      new {
+        method = "POST"
+        host = "httpbin.org"
+        action = "review"
+      }
     }
   }
   proxy {
