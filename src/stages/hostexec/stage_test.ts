@@ -44,6 +44,7 @@ function makeProfile(): Profile {
         timeoutSeconds: 300,
         defaultScope: "host-port",
         notify: "off",
+        reviewRules: [],
       },
     },
     dbus: {

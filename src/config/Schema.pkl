@@ -159,6 +159,17 @@ class ProxyConfig {
   forwardPorts: Listing<Int> = new {}
 }
 
+class ReviewRule {
+  /// HTTP メソッド（大文字小文字無視）。省略時は全メソッドにマッチ。
+  method: String?
+  /// ホストパターン。allowlist と同じ形式（"*.example.com" 等）。省略時は全ホストにマッチ。
+  host: String?
+  /// パスプレフィックス。省略時は全パスにマッチ。
+  pathPrefix: String?
+  /// マッチ時のアクション。
+  action: "review"|"deny" = "review"
+}
+
 class NetworkPromptConfig {
   /// allowlist 外通信を session ごとの承認キューに入れる。
   /// 無効の場合、allowlist 外通信は即拒否される。
@@ -180,6 +191,9 @@ class NetworkPromptConfig {
   /// pending 発生時の通知 backend。
   /// `"auto"`: `ui.enable` に応じて UI daemon 経由 or デスクトップ通知。
   notify: "auto"|"desktop"|"off" = "auto"
+
+  /// リクエストボディの内容に基づく review/deny ルール。
+  reviewRules: Listing<ReviewRule> = new {}
 }
 
 class NetworkConfig {

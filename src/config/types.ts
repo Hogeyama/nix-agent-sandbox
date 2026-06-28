@@ -116,12 +116,20 @@ export interface HostExecConfig {
 /** ネットワーク設定 */
 export type NetworkPromptNotify = "auto" | "desktop" | "off";
 
+export interface ReviewRule {
+  method?: string;
+  host?: string;
+  pathPrefix?: string;
+  action: "review" | "deny";
+}
+
 export interface NetworkPromptConfig {
   enable: boolean;
   denylist: string[];
   timeoutSeconds: number;
   defaultScope: ApprovalScope;
   notify: NetworkPromptNotify;
+  reviewRules: ReviewRule[];
 }
 
 export interface NetworkConfig {
@@ -273,6 +281,7 @@ export const DEFAULT_NETWORK_PROMPT_CONFIG: NetworkPromptConfig = {
   timeoutSeconds: 300,
   defaultScope: "host-port",
   notify: "auto",
+  reviewRules: [],
 };
 
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {

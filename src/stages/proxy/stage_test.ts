@@ -51,6 +51,7 @@ const DEFAULT_PROMPT = {
   timeoutSeconds: 300,
   defaultScope: "host-port" as const,
   notify: "auto" as const,
+  reviewRules: [] as any[],
 };
 
 function makeProfile(
