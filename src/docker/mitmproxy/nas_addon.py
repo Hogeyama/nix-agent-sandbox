@@ -33,7 +33,7 @@ def _load_registry(session_id: str) -> Optional[dict]:
     cached = _registry_cache.get(session_id)
     if cached and now - cached[0] < CACHE_TTL:
         return cached[1]
-    path = os.path.join(SESSIONS_DIR, session_id, "registry.json")
+    path = os.path.join(SESSIONS_DIR, f"{session_id}.json")
     try:
         with open(path) as f:
             data = json.load(f)
