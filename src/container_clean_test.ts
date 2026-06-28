@@ -15,8 +15,8 @@ import {
   NAS_KIND_DIND,
   NAS_KIND_DIND_NETWORK,
   NAS_KIND_DIND_TMP,
-  NAS_KIND_ENVOY,
   NAS_KIND_LABEL,
+  NAS_KIND_PROXY,
   NAS_KIND_SESSION_NETWORK,
   NAS_MANAGED_LABEL,
   NAS_MANAGED_VALUE,
@@ -34,18 +34,6 @@ test("isNasManagedSidecar: labeled sidecar is detected", () => {
         [NAS_KIND_LABEL]: NAS_KIND_DIND,
       },
       "custom-name",
-    ),
-  ).toEqual(true);
-});
-
-test("isNasManagedSidecar: labeled envoy sidecar is detected", () => {
-  expect(
-    isNasManagedSidecar(
-      {
-        [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-        [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
-      },
-      "custom-envoy",
     ),
   ).toEqual(true);
 });
@@ -136,13 +124,13 @@ test("isUnusedNasSidecar: only managed sidecars on network is unused", () => {
   ).toEqual(true);
 });
 
-test("isUnusedNasSidecar: session network with active container keeps envoy alive", () => {
-  const envoy: DockerContainerDetails = {
-    name: "nas-envoy-shared",
+test("isUnusedNasSidecar: session network with active container keeps proxy alive", () => {
+  const proxy: DockerContainerDetails = {
+    name: "nas-proxy-shared",
     running: true,
     labels: {
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
-      [NAS_KIND_LABEL]: NAS_KIND_ENVOY,
+      [NAS_KIND_LABEL]: NAS_KIND_PROXY,
     },
     networks: ["nas-session-example"],
     startedAt: "2026-01-01T00:00:00Z",
@@ -160,14 +148,14 @@ test("isUnusedNasSidecar: session network with active container keeps envoy aliv
       [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
       [NAS_KIND_LABEL]: NAS_KIND_SESSION_NETWORK,
     },
-    containers: ["nas-envoy-shared", "nas-sandbox"],
+    containers: ["nas-proxy-shared", "nas-sandbox"],
   };
 
   expect(
     isUnusedNasSidecar(
-      envoy,
+      proxy,
       new Map([
-        [envoy.name, envoy],
+        [proxy.name, proxy],
         [userContainer.name, userContainer],
       ]),
       new Map([[sessionNetwork.name, sessionNetwork]]),
@@ -317,7 +305,7 @@ test("cleanNasContainers: keeps sidecar when an active non-managed container sha
   const backend = new FakeBackend();
   backend.containers.set(
     "nas-proxy-sidecar",
-    createManagedContainer("nas-proxy-sidecar", NAS_KIND_ENVOY, {
+    createManagedContainer("nas-proxy-sidecar", NAS_KIND_PROXY, {
       networks: ["nas-session-example"],
     }),
   );
@@ -346,8 +334,8 @@ test("cleanNasContainers: keeps sidecar when an active non-managed container sha
 test("cleanNasContainers: removes stopped sidecar and orphaned managed resources", async () => {
   const backend = new FakeBackend();
   backend.containers.set(
-    "nas-envoy-shared",
-    createManagedContainer("nas-envoy-shared", NAS_KIND_ENVOY, {
+    "nas-proxy-shared",
+    createManagedContainer("nas-proxy-shared", NAS_KIND_PROXY, {
       running: false,
       networks: ["nas-session-orphan"],
     }),
@@ -355,13 +343,13 @@ test("cleanNasContainers: removes stopped sidecar and orphaned managed resources
   backend.networks.set(
     "nas-session-orphan",
     createManagedNetwork("nas-session-orphan", NAS_KIND_SESSION_NETWORK, [
-      "nas-envoy-shared",
+      "nas-proxy-shared",
     ]),
   );
 
   const result = await cleanNasContainers(backend);
 
-  expect(result.removedContainers).toEqual(["nas-envoy-shared"]);
+  expect(result.removedContainers).toEqual(["nas-proxy-shared"]);
   expect(result.removedNetworks).toEqual(["nas-session-orphan"]);
   expect(result.removedVolumes).toEqual([]);
   expect(backend.stopped).toEqual([]);

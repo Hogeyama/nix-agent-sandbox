@@ -49,7 +49,7 @@ export interface DindPlan {
    * per-session private DinD network.
    */
   readonly networkName: string;
-  /** dockerd HTTP(S)_PROXY endpoint (token-bearing Envoy URL). */
+  /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
   readonly shared: boolean;
   readonly disableCache: boolean;
@@ -84,10 +84,10 @@ export function planDind(
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
   const shared = input.profile.docker.shared;
 
-  // The session network (and the Envoy proxy endpoint) are produced by
-  // ProxyStage, which now runs before DindStage. The sidecar attaches to this
-  // internal session network instead of a private DinD-owned bridge, so its
-  // egress is funnelled through Envoy.
+  // The session network and proxy endpoint are produced by ProxyStage, which
+  // now runs before DindStage. The sidecar attaches to this internal session
+  // network instead of a private DinD-owned bridge, so its egress is
+  // funnelled through the proxy.
   const networkName = input.network.networkName;
   const proxyEndpoint = input.proxy.proxyEndpoint;
 

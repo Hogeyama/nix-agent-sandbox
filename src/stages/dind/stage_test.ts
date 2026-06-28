@@ -132,7 +132,7 @@ function makeStageState(
   };
   const proxy = overrides.proxy ?? {
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
-    proxyEndpoint: "http://test-session-1234:tok@nas-envoy:15001",
+    proxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
   };
   return { workspace, container, network, proxy };
 }
@@ -161,7 +161,7 @@ test("DindStage: shared mode uses fixed names", () => {
   expect(p.containerName).toEqual("nas-dind-shared");
   expect(p.networkName).toEqual("nas-session-net-test-session-1234");
   expect(p.proxyEndpoint).toEqual(
-    "http://test-session-1234:tok@nas-envoy:15001",
+    "http://test-session-1234:tok@nas-proxy:8080",
   );
   expect(p.sharedTmpVolume).toEqual("nas-dind-shared-tmp");
   expect(p.shared).toEqual(true);
@@ -378,7 +378,7 @@ test("DindStage: run calls ensureSidecar and teardownSidecar via DindService", a
     "nas-session-net-test-session-1234",
   );
   expect(ensureCalls[0].proxyEndpoint).toEqual(
-    "http://test-session-1234:tok@nas-envoy:15001",
+    "http://test-session-1234:tok@nas-proxy:8080",
   );
   expect(ensureCalls[0].sharedTmpVolume).toEqual("nas-dind-shared-tmp");
   expect(ensureCalls[0].shared).toEqual(true);
@@ -430,10 +430,10 @@ test("buildDindSidecarArgs: cache disabled only mounts shared tmp", () => {
 // ============================================================
 
 test("buildDindSidecarEnv: injects token-bearing proxy into both env casings", () => {
-  const proxyEndpoint = "http://test-session:tok@nas-envoy:15001";
+  const proxyEndpoint = "http://test-session:tok@nas-proxy:8080";
   const env = buildDindSidecarEnv(proxyEndpoint);
 
-  // dockerd's outbound pulls are forced through Envoy in both casings so
+  // dockerd's outbound pulls are forced through the proxy in both casings so
   // tooling inside the sidecar sees a consistent proxy config.
   expect(env.HTTP_PROXY).toEqual(proxyEndpoint);
   expect(env.HTTPS_PROXY).toEqual(proxyEndpoint);

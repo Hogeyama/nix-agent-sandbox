@@ -67,8 +67,8 @@ test("buildImage: copies assets into a tmp dir and invokes docker build", async 
     content: '#!/bin/sh\nexec "$@"',
     mode: 0o755,
   });
-  fsFake.store.set("/src/config/envoy.yaml", {
-    content: "static_resources: {}",
+  fsFake.store.set("/src/config/app.conf", {
+    content: "app_settings: {}",
     mode: 0o644,
   });
 
@@ -82,8 +82,8 @@ test("buildImage: copies assets into a tmp dir and invokes docker build", async 
       },
       {
         baseDir: "/src/config",
-        outputDir: "envoy",
-        files: ["envoy.yaml"],
+        outputDir: "config",
+        files: ["app.conf"],
       },
     ],
     imageName: "nas:test",

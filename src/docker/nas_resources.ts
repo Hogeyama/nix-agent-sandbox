@@ -5,7 +5,6 @@ export const NAS_MANAGED_VALUE = "true";
 
 export const NAS_KIND_DIND = "dind";
 export const NAS_KIND_PROXY = "proxy";
-export const NAS_KIND_ENVOY = "envoy";
 export const NAS_KIND_DIND_NETWORK = "dind-network";
 export const NAS_KIND_PROXY_NETWORK = "proxy-network";
 export const NAS_KIND_SESSION_NETWORK = "session-network";
@@ -32,8 +31,7 @@ export function isNasManagedSidecar(
   if (isNasManagedLabel(labels)) {
     return (
       labels[NAS_KIND_LABEL] === NAS_KIND_DIND ||
-      labels[NAS_KIND_LABEL] === NAS_KIND_PROXY ||
-      labels[NAS_KIND_LABEL] === NAS_KIND_ENVOY
+      labels[NAS_KIND_LABEL] === NAS_KIND_PROXY
     );
   }
   return isLegacyNasSidecarName(name);

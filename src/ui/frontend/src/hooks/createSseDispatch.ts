@@ -77,7 +77,7 @@ export function createSseDispatch(stores: SseDispatchStores): SseDispatch {
         const items = extractItems<ContainerInfoLike>(data);
         if (items === null) return;
         // The `containers` snapshot mixes session (agent-kind) and
-        // sidecar (dind / proxy / envoy) entries. Each store filters
+        // sidecar (dind / proxy) entries. Each store filters
         // by kind, so the two views are disjoint by construction.
         // Both setters are called on every snapshot — including the
         // empty array — so a snapshot that has lost all entries of

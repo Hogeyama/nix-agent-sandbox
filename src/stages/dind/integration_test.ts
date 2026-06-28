@@ -133,7 +133,7 @@ function makeStageState(
   };
   const proxy = overrides.proxy ?? {
     brokerSocket: "/run/user/1000/nas/network/brokers/test-session-1234/sock",
-    proxyEndpoint: "http://test-session-1234:tok@nas-envoy:15001",
+    proxyEndpoint: "http://test-session-1234:tok@nas-proxy:8080",
   };
   return { workspace, container, network, proxy };
 }

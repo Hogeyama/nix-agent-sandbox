@@ -5,7 +5,7 @@ import { Effect, Layer } from "effect";
  * ProxyStage unit テスト（Docker 不要）
  *
  * planner, replaceNetwork, parseDindContainerName を検証する。
- * Envoy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
+ * Proxy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
 import type { Config, Profile } from "../../config/types.ts";

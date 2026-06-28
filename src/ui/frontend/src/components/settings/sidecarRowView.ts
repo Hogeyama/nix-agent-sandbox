@@ -20,7 +20,7 @@
 
 import type { ContainerInfoLike } from "../../stores/types";
 
-export const SIDECAR_KINDS = ["dind", "proxy", "envoy"] as const;
+export const SIDECAR_KINDS = ["dind", "proxy"] as const;
 
 export type SidecarKind = (typeof SIDECAR_KINDS)[number];
 
@@ -57,7 +57,7 @@ export function isSidecarContainer(c: ContainerInfoLike): boolean {
  * Filter and project a raw container snapshot into table rows.
  *
  * Sort order:
- *   - primary: `kind` ascending (`dind` < `envoy` < `proxy`, lexicographic)
+ *   - primary: `kind` ascending (`dind` < `proxy`, lexicographic)
  *   - secondary: `name` ascending within the same `kind`
  *
  * The order is deterministic and pinned in tests. When two rows share

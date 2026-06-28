@@ -3,8 +3,8 @@
  *
  * These cover the three contracts the page component relies on:
  *
- *   - `isSidecarContainer` returns true exactly for the three sidecar
- *     `nas.kind` labels (`dind` / `proxy` / `envoy`) and false for any
+ *   - `isSidecarContainer` returns true exactly for the sidecar
+ *     `nas.kind` labels (`dind` / `proxy`) and false for any
  *     other label, including `"agent"` and missing labels.
  *   - `formatUptime` produces the short relative-duration format across
  *     each range boundary, and renders `"-"` for `null`, future deltas,
@@ -35,9 +35,9 @@ function makeContainer(
 }
 
 describe("SIDECAR_KINDS", () => {
-  test("contains exactly dind, proxy, envoy in declaration order", () => {
+  test("contains exactly dind, proxy in declaration order", () => {
     // Pin the public constant so a silent rename is caught by tests.
-    expect(SIDECAR_KINDS).toEqual(["dind", "proxy", "envoy"]);
+    expect(SIDECAR_KINDS).toEqual(["dind", "proxy"]);
   });
 });
 
@@ -154,16 +154,16 @@ describe("normalizeSidecars", () => {
     const rows = normalizeSidecars([
       makeContainer({ name: "proxy-main", labels: { "nas.kind": "proxy" } }),
       makeContainer({ name: "dind-server", labels: { "nas.kind": "dind" } }),
-      makeContainer({ name: "envoy-main", labels: { "nas.kind": "envoy" } }),
+      makeContainer({ name: "proxy-aux", labels: { "nas.kind": "proxy" } }),
       makeContainer({ name: "dind-client", labels: { "nas.kind": "dind" } }),
     ]);
     expect(rows.map((r) => r.name)).toEqual([
       "dind-client",
       "dind-server",
-      "envoy-main",
+      "proxy-aux",
       "proxy-main",
     ]);
-    expect(rows.map((r) => r.kind)).toEqual(["dind", "dind", "envoy", "proxy"]);
+    expect(rows.map((r) => r.kind)).toEqual(["dind", "dind", "proxy", "proxy"]);
   });
 
   test("propagates running and startedAt fields verbatim", () => {

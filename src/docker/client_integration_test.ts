@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 /**
  * Docker CLI ラッパー integration テスト
  *
- * - computeEmbedHash / envoy template: Docker daemon 不要、ファイル I/O のみ
+ * - computeEmbedHash: Docker daemon 不要、ファイル I/O のみ
  * - それ以外: 実 Docker daemon 必要（ignore ガードあり）
  * - unit テスト（Docker 不要・I/O 不要）は client_test.ts を参照
  */
@@ -110,7 +110,7 @@ async function inspectDockerObject(
   return JSON.parse(stdoutText)[0];
 }
 
-// --- computeEmbedHash / envoy template (Docker daemon 不要) ---
+// --- computeEmbedHash / embedded assets (Docker daemon 不要) ---
 
 test("computeEmbedHash returns consistent hash", async () => {
   const hash1 = await computeEmbedHash();
@@ -120,7 +120,7 @@ test("computeEmbedHash returns consistent hash", async () => {
   expect(hash1.length).toEqual(64);
 });
 
-test("computeEmbedHash matches embed and envoy assets", async () => {
+test("computeEmbedHash matches embedded assets", async () => {
   const parts: string[] = [];
   for (const group of EMBEDDED_BUILD_ASSET_GROUPS) {
     for (const name of group.files) {

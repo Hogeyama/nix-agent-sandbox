@@ -8,7 +8,7 @@
  *   - the same port flows into the proxy plan's forwardPorts list
  *     (so the per-port UDS relay in the agent container will route to it).
  *
- * No agents, no Docker, no Envoy — only ObservabilityStage + planProxy on
+ * No agents, no Docker — only ObservabilityStage + planProxy on
  * top of the live receiver. This is the smallest harness that catches
  * drift between env / forwardPorts / listener.
  */

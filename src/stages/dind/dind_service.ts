@@ -18,7 +18,7 @@ export interface DindSidecarOpts {
   readonly sharedTmpVolume: string;
   /** Session network the sidecar attaches to (replaces the old private net). */
   readonly networkName: string;
-  /** dockerd HTTP(S)_PROXY endpoint (token-bearing Envoy URL). */
+  /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   readonly proxyEndpoint: string;
   readonly shared: boolean;
   readonly disableCache: boolean;

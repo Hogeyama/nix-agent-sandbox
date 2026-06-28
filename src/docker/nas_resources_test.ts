@@ -20,7 +20,6 @@ import {
   NAS_KIND_DIND,
   NAS_KIND_DIND_NETWORK,
   NAS_KIND_DIND_TMP,
-  NAS_KIND_ENVOY,
   NAS_KIND_LABEL,
   NAS_KIND_PROXY,
   NAS_KIND_PROXY_NETWORK,
@@ -56,8 +55,8 @@ test("isNasManagedLabel: false when label is absent or mismatched", () => {
 // isNasManagedSidecar
 // ---------------------------------------------------------------------------
 
-test("isNasManagedSidecar: managed + dind/proxy/envoy kind → true", () => {
-  for (const kind of [NAS_KIND_DIND, NAS_KIND_PROXY, NAS_KIND_ENVOY]) {
+test("isNasManagedSidecar: managed + dind/proxy kind → true", () => {
+  for (const kind of [NAS_KIND_DIND, NAS_KIND_PROXY]) {
     expect(
       isNasManagedSidecar(
         { [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE, [NAS_KIND_LABEL]: kind },

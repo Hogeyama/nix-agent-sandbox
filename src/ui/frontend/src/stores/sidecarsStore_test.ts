@@ -74,13 +74,13 @@ describe("createSidecarsStore", () => {
     store.setSidecars([
       makeContainer({ name: "proxy-main", labels: { "nas.kind": "proxy" } }),
       makeContainer({ name: "dind-server", labels: { "nas.kind": "dind" } }),
-      makeContainer({ name: "envoy-main", labels: { "nas.kind": "envoy" } }),
+      makeContainer({ name: "proxy-aux", labels: { "nas.kind": "proxy" } }),
       makeContainer({ name: "dind-client", labels: { "nas.kind": "dind" } }),
     ]);
     expect(store.rows().map((r) => r.name)).toEqual([
       "dind-client",
       "dind-server",
-      "envoy-main",
+      "proxy-aux",
       "proxy-main",
     ]);
   });

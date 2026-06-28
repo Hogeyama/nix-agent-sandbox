@@ -70,7 +70,7 @@ export async function ensureSharedTmpWritable(
  * Tries with cache volume first; on failure retries without cache.
  *
  * `proxyEndpoint` is injected into dockerd's HTTP(S)_PROXY env so that image
- * pulls from inside DinD are forced through the Envoy proxy. It is independent
+ * pulls from inside DinD are forced through the session proxy. It is independent
  * of `DindStageOptions` (which only controls cache/readiness) so that the
  * cache-reset retry paths below re-pass the same proxy config verbatim.
  */
@@ -174,10 +174,10 @@ export interface EnsureDindSidecarParams {
    * Name of the (internal) session network the sidecar is attached to. After
    * the sidecar boots on the default bridge, it is connected to this network
    * and the bridge is then severed so all sidecar egress is funnelled through
-   * Envoy (reachable via the session network's embedded DNS).
+   * the proxy (reachable via the session network's embedded DNS).
    */
   sessionNetworkName: string;
-  /** dockerd HTTP(S)_PROXY endpoint (token-bearing Envoy URL). */
+  /** dockerd HTTP(S)_PROXY endpoint (token-bearing proxy URL). */
   proxyEndpoint: string;
   shared: boolean;
   disableCache?: boolean;
@@ -244,7 +244,7 @@ export async function ensureDindSidecar(
     // the default bridge. Order matters: connecting first guarantees the
     // sidecar always has at least one reachable network (so the agent's
     // DOCKER_HOST DNS resolution never breaks), and severing the bridge
-    // afterwards is what actually confines the sidecar's egress to Envoy.
+    // afterwards is what actually confines the sidecar's egress to the proxy.
     //
     // Reusing a shared sidecar still needs the connect (each session gets a
     // fresh session-network name); the bridge was already severed when the
@@ -282,7 +282,7 @@ export async function ensureDindSidecar(
       } catch (bridgeErr) {
         // SECURITY: a residual bridge attachment would let the sidecar (and
         // therefore the inner containers it runs) reach the host network
-        // directly, bypassing Envoy egress control entirely. We refuse to
+        // directly, bypassing proxy egress control entirely. We refuse to
         // proceed with a sidecar that still has the bridge — fail hard so the
         // cleanup path below tears it down rather than silently leaving an
         // egress hole.
@@ -454,7 +454,7 @@ async function runDindSidecar(
 /**
  * Build the dockerd environment for the DinD sidecar.
  *
- * Forces dockerd's outbound image pulls through Envoy: dockerd reads the
+ * Forces dockerd's outbound image pulls through the session proxy: dockerd reads the
  * upper-case HTTP(S)_PROXY forms, and we set both cases so any tooling inside
  * the sidecar sees a consistent proxy config. NO_PROXY keeps loopback (the 2375
  * listener / local socket) direct. DOCKER_TLS_CERTDIR is cleared so dockerd
