@@ -113,6 +113,26 @@ export function PendingPane(props: Props) {
                     <span class="verb">{row.verb}</span>
                     {row.summary}
                   </p>
+                  <Show when={row.reviewContext}>
+                    {(ctx) => (
+                      <div class="card-review-context">
+                        <div class="card-review-meta">
+                          <span>{ctx().path}</span>
+                          <Show when={ctx().contentType}>
+                            {(ct) => <span class="card-review-ct">{ct()}</span>}
+                          </Show>
+                          <span class="card-review-size">
+                            {ctx().bodySize}B
+                          </span>
+                        </div>
+                        <Show when={ctx().bodyPreview}>
+                          {(body) => (
+                            <pre class="card-review-body">{body()}</pre>
+                          )}
+                        </Show>
+                      </div>
+                    )}
+                  </Show>
                   <div class="scope-row">
                     <For each={NETWORK_SCOPES}>
                       {(opt) => (

@@ -9,7 +9,11 @@
 import { createStore } from "solid-js/store";
 import { pendingRequestKey } from "./pendingRequestKey";
 import { shortenSessionId } from "./sessionId";
-import type { HostExecPendingItemLike, NetworkPendingItemLike } from "./types";
+import type {
+  HostExecPendingItemLike,
+  NetworkPendingItemLike,
+  ReviewContextLike,
+} from "./types";
 
 export type NetworkPendingRow = {
   // Stable composite identity `(domain, sessionId, requestId)` produced by
@@ -27,6 +31,7 @@ export type NetworkPendingRow = {
   verb: string;
   summary: string;
   createdAtMs: number | null; // null when ISO parse fails
+  reviewContext: ReviewContextLike | null;
 };
 
 export type HostExecPendingRow = {
@@ -53,6 +58,7 @@ export function normalizeNetworkPending(
     verb: (it.method ?? "GET").toUpperCase(),
     summary: `${it.target.host}:${it.target.port}`,
     createdAtMs: parseIsoToMs(it.createdAt),
+    reviewContext: it.reviewContext ?? null,
   }));
 }
 

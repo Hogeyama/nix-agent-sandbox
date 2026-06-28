@@ -43,6 +43,7 @@ function makeNetworkRow(
     verb: "GET",
     summary: "example.com:443",
     createdAtMs: 0,
+    reviewContext: null,
     ...overrides,
   };
 }

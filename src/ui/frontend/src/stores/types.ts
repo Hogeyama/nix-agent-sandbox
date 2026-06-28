@@ -32,12 +32,20 @@ export type ContainerInfoLike = {
   sessionAgent?: string | null;
 };
 
+export type ReviewContextLike = {
+  path: string;
+  contentType: string | null;
+  bodyPreview: string | null;
+  bodySize: number;
+};
+
 export type NetworkPendingItemLike = {
   requestId: string;
   sessionId: string;
   createdAt: string; // ISO
   method?: string | null; // "GET" / "POST" / etc
   target: { host: string; port: number };
+  reviewContext?: ReviewContextLike | null;
 };
 
 export type HostExecPendingItemLike = {

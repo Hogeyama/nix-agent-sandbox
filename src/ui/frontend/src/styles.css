@@ -1432,6 +1432,42 @@ body::after {
   text-transform: uppercase;
 }
 
+/* -- Review context inside pending card -- */
+.card-review-context {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  margin: 0 0 10px;
+  overflow: hidden;
+}
+.card-review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--cream-dim);
+  border-bottom: 1px solid var(--line-soft);
+}
+.card-review-ct {
+  color: var(--muted);
+}
+.card-review-size {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.card-review-body {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--cream);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
 .scope-row {
   display: flex;
   gap: 4px;
