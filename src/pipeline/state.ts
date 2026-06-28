@@ -80,7 +80,7 @@ export interface PromptState {
   readonly promptEnabled: boolean;
 }
 
-/** Session-broker / auth-router endpoints. */
+/** Session-broker endpoints. */
 export interface ProxyState {
   readonly brokerSocket: string;
   readonly proxyEndpoint: string;

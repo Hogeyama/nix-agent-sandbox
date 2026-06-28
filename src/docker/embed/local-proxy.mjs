@@ -3,7 +3,7 @@
 // to an upstream authenticated proxy.
 //
 // Usage:
-//   NAS_UPSTREAM_PROXY=http://session:token@nas-envoy:15001 node local-proxy.mjs
+//   NAS_UPSTREAM_PROXY=http://session:token@nas-proxy:8080 node local-proxy.mjs
 //
 // Listens on 127.0.0.1:18080 (no auth required).
 // Forwards HTTP requests and CONNECT tunnels to the upstream proxy with auth.
@@ -127,7 +127,7 @@ server.listen(LISTEN_PORT, LISTEN_HOST, () => {});
 //
 // The host-side `nas` process listens on a UDS at
 // `${NAS_FORWARD_PORT_SOCKET_DIR}/<port>.sock` and bridges to host TCP via
-// envoy. Inside the agent container we just connect that UDS directly: there
+// the proxy. Inside the agent container we just connect that UDS directly: there
 // is no in-band CONNECT tunnel and no proxy auth — the host's bind-mount of
 // the UDS into the container is itself the access boundary.
 
