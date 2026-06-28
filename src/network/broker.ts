@@ -2,6 +2,7 @@ import { mkdir, rm, rmdir } from "node:fs/promises";
 import * as path from "node:path";
 import { appendAuditLog } from "../audit/store.ts";
 import type { AuditLogEntry } from "../audit/types.ts";
+import type { ReviewRule } from "../config/types.ts";
 import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
 import {
   connectUnix,
@@ -52,6 +53,7 @@ interface BrokerOptions {
   negativeCacheTtlMs?: number;
   /** Directory for audit JSONL logs. If set, decisions are recorded. */
   auditDir?: string;
+  reviewRules?: ReviewRule[];
 }
 
 interface PendingWaiter {
@@ -114,6 +116,7 @@ export class SessionBroker {
   private readonly uiPort?: number;
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
+  private readonly reviewRules: ReviewRule[];
   private socketPath: string | null = null;
   private server: Server | null = null;
   private readonly approvedTargets = new Set<string>();
@@ -138,6 +141,7 @@ export class SessionBroker {
     this.uiPort = options.uiPort;
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
+    this.reviewRules = options.reviewRules ?? [];
     this.negativeCache = new TtlLruCache<string, true>({
       maxSize: 1024,
       ttlMs: options.negativeCacheTtlMs ?? 30_000,
@@ -248,13 +252,17 @@ export class SessionBroker {
 
     const allowlistHit = matchesAllowlist(message.target, this.allowlist);
     if (allowlistHit) {
-      await this.recordAudit(
-        message.requestId,
-        "allow",
-        "allowlist",
-        targetStr,
-      );
-      return allowDecision(message.requestId, "allowlist");
+      if (message.matchedReviewRule) {
+        // Fall through to pending logic below
+      } else {
+        await this.recordAudit(
+          message.requestId,
+          "allow",
+          "allowlist",
+          targetStr,
+        );
+        return allowDecision(message.requestId, "allowlist");
+      }
     }
 
     const targetCacheKey = targetKey(message.target);
@@ -533,6 +541,7 @@ function toPendingEntry(
     state: "pending",
     createdAt,
     updatedAt: new Date().toISOString(),
+    reviewContext: message.reviewContext,
   };
 }
 

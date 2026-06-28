@@ -607,6 +607,89 @@ test("SessionBroker: approve with unknown scope is rejected and request stays pe
   }
 });
 
+test("SessionBroker: reviewRule match on allowlisted target sends to pending", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: ["api.openai.com"],
+    denylist: [],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+    reviewRules: [{ method: "POST", host: "*.openai.com", action: "review" }],
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    // POST to allowlisted host with matching reviewRule → pending
+    const authorizePromise = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize("sess_test", "req_review_1", "api.openai.com", 443),
+      method: "POST",
+      matchedReviewRule: true,
+      reviewContext: {
+        path: "/v1/chat/completions",
+        contentType: "application/json",
+        bodyPreview: '{"model":"gpt-4"}',
+        bodySize: 18,
+      },
+    });
+    const pending = await waitForPending(socketPath);
+    expect(pending.items.length).toEqual(1);
+    expect(pending.items[0].reviewContext).toBeDefined();
+    expect(pending.items[0].reviewContext!.path).toEqual(
+      "/v1/chat/completions",
+    );
+    expect(pending.items[0].reviewContext!.bodyPreview).toEqual(
+      '{"model":"gpt-4"}',
+    );
+
+    // Approve to unblock
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_review_1",
+      scope: "once",
+    });
+    const decision = await authorizePromise;
+    expect(decision.decision).toEqual("allow");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: GET to allowlisted host bypasses reviewRule", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    allowlist: ["api.openai.com"],
+    denylist: [],
+    promptEnabled: true,
+    timeoutSeconds: 30,
+    defaultScope: "host-port",
+    notify: "off",
+    reviewRules: [{ method: "POST", host: "*.openai.com", action: "review" }],
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    // GET to allowlisted host, reviewRule only matches POST → immediate allow
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_get", "api.openai.com", 443),
+    );
+    expect(response.decision).toEqual("allow");
+    expect(response.reason).toEqual("allowlist");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 async function waitForPending(
   socketPath: string,
   minCount = 1,

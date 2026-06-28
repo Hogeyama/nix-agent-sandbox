@@ -14,6 +14,13 @@ export interface NormalizedTarget {
   port: number;
 }
 
+export interface ReviewContext {
+  path: string;
+  contentType: string | null;
+  bodyPreview: string | null;
+  bodySize: number;
+}
+
 export interface AuthorizeRequest {
   version: 1;
   type: "authorize";
@@ -23,6 +30,8 @@ export interface AuthorizeRequest {
   method: string;
   requestKind: RequestKind;
   observedAt: string;
+  reviewContext?: ReviewContext;
+  matchedReviewRule?: boolean;
 }
 
 export interface DecisionResponse {
@@ -45,6 +54,7 @@ export interface PendingEntry {
   state: "pending";
   createdAt: string;
   updatedAt: string;
+  reviewContext?: ReviewContext;
 }
 
 export interface SessionRegistryEntry {
