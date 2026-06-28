@@ -83,6 +83,14 @@ exec_nas() {
 ENTRYPOINT_TOTAL_START="$(nas_measure_start)"
 nas_debug "[nas] entrypoint start (shell_mode=${NAS_SHELL_MODE}, nix_enabled=${NIX_ENABLED:-false})"
 
+# --- CA 証明書のインストール ---
+CA_CERT_START="$(nas_measure_start)"
+if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ]; then
+  update-ca-certificates 2>/dev/null || true
+  nas_info "[nas] mitmproxy CA certificate installed"
+fi
+nas_measure_done "ca-cert" "$CA_CERT_START"
+
 # --- 環境変数 prefix/suffix 適用 ---
 # Nix devShell が同名の変数を上書きするため、ここでは eval せず
 # ファイルに保存し、各 exec パスで nix 環境 source 後に適用する。
