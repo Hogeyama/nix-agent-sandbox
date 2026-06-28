@@ -12,19 +12,17 @@ import type {
 } from "./protocol.ts";
 import { resolveNetworkRuntimePaths } from "./registry.ts";
 
-test("SessionBroker: allowlist hit returns allow immediately", async () => {
+test("SessionBroker: allow rule returns allow immediately", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: ["example.com"],
-    denylist: [],
-    promptEnabled: false,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ host: "example.com", action: "allow" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
     auditDir,
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -35,12 +33,12 @@ test("SessionBroker: allowlist hit returns allow immediately", async () => {
       authorize("sess_test", "req_1", "example.com", 443),
     );
     expect(response.decision).toEqual("allow");
-    expect(response.reason).toEqual("allowlist");
+    expect(response.reason).toEqual("review-rule");
 
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
     expect(logs.length).toEqual(1);
     expect(logs[0].decision).toEqual("allow");
-    expect(logs[0].reason).toEqual("allowlist");
+    expect(logs[0].reason).toEqual("review-rule");
     expect(logs[0].target).toEqual("example.com:443");
     expect(logs[0].requestId).toEqual("req_1");
   } finally {
@@ -57,12 +55,10 @@ test("SessionBroker: pending request resumes after approve", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: [],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
     auditDir,
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -137,12 +133,10 @@ true
     const broker = new SessionBroker({
       paths,
       sessionId: "sess_test",
-      allowlist: [],
-      denylist: [],
-      promptEnabled: true,
-      timeoutSeconds: 30,
-      defaultScope: "host-port",
-      notify: "desktop",
+      reviewRules: [{ action: "review" }],
+      pendingTimeoutSeconds: 30,
+      pendingDefaultScope: "host-port",
+      pendingNotify: "desktop",
       uiPort: healthServer.port,
     });
     const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -192,19 +186,17 @@ function authorize(
   };
 }
 
-test("SessionBroker: denylist hit returns deny immediately", async () => {
+test("SessionBroker: deny rule returns deny immediately", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: [],
-    denylist: ["evil.com"],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ host: "evil.com", action: "deny" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
     auditDir,
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -215,12 +207,12 @@ test("SessionBroker: denylist hit returns deny immediately", async () => {
       authorize("sess_test", "req_deny", "evil.com", 443),
     );
     expect(response.decision).toEqual("deny");
-    expect(response.reason).toEqual("denylist");
+    expect(response.reason).toEqual("review-rule");
 
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
     expect(logs.length).toEqual(1);
     expect(logs[0].decision).toEqual("deny");
-    expect(logs[0].reason).toEqual("denylist");
+    expect(logs[0].reason).toEqual("review-rule");
     expect(logs[0].target).toEqual("evil.com:443");
   } finally {
     await broker.close();
@@ -229,18 +221,16 @@ test("SessionBroker: denylist hit returns deny immediately", async () => {
   }
 });
 
-test("SessionBroker: allowlist=*.example.com allows sub.example.com even if denylist=sub.example.com", async () => {
+test("SessionBroker: first-match: *.example.com allow rule matches sub.example.com", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: ["*.example.com"],
-    denylist: ["sub.example.com"],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ host: "*.example.com", action: "allow" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
@@ -250,44 +240,45 @@ test("SessionBroker: allowlist=*.example.com allows sub.example.com even if deny
       authorize("sess_test", "req_wild_allow", "sub.example.com", 443),
     );
     expect(response.decision).toEqual("allow");
-    expect(response.reason).toEqual("allowlist");
+    expect(response.reason).toEqual("review-rule");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-test("SessionBroker: allowlist=sub.example.com, denylist=*.example.com denies other.example.com", async () => {
+test("SessionBroker: first-match: sub.example.com allow wins over *.example.com deny for other.example.com", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: ["sub.example.com"],
-    denylist: ["*.example.com"],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [
+      { host: "sub.example.com", action: "allow" },
+      { host: "*.example.com", action: "deny" },
+    ],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
-    // sub.example.com is in allowlist → allow
+    // sub.example.com matches first rule → allow
     const allowResponse = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_allow_sub", "sub.example.com", 443),
     );
     expect(allowResponse.decision).toEqual("allow");
-    expect(allowResponse.reason).toEqual("allowlist");
+    expect(allowResponse.reason).toEqual("review-rule");
 
-    // other.example.com matches denylist *.example.com → deny
+    // other.example.com skips first rule, matches second → deny
     const denyResponse = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_deny_other", "other.example.com", 443),
     );
     expect(denyResponse.decision).toEqual("deny");
-    expect(denyResponse.reason).toEqual("denylist");
+    expect(denyResponse.reason).toEqual("review-rule");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -300,12 +291,10 @@ test("SessionBroker: denied target is cached as recent-deny", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: [],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
@@ -343,12 +332,10 @@ test("SessionBroker: negative cache expires after TTL", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: [],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
     negativeCacheTtlMs: 50,
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -404,12 +391,10 @@ test("SessionBroker: deny with host-port scope persists beyond negative-cache TT
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: [],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
     negativeCacheTtlMs: 50,
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -452,12 +437,10 @@ test("SessionBroker: approve after group already resolved returns error", async 
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: [],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
@@ -503,9 +486,9 @@ test("SessionBroker: approve after group already resolved returns error", async 
   }
 });
 
-test("SessionBroker: deny-by-default targets blocked even when in allowlist", async () => {
-  // Regression: allowlist used to be checked before denyReasonForTarget,
-  // allowing private/loopback addresses to bypass the deny-by-default rule.
+test("SessionBroker: deny-by-default targets blocked even with allow rule", async () => {
+  // Regression: allow rules must not bypass the deny-by-default rule for
+  // private/loopback addresses.
   const cases: Array<{ host: string; reason: string }> = [
     { host: "localhost", reason: "blocked-special-host" },
     { host: "127.0.0.1", reason: "blocked-private-ip" },
@@ -521,16 +504,14 @@ test("SessionBroker: deny-by-default targets blocked even when in allowlist", as
   for (const { host, reason } of cases) {
     const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
     const paths = await resolveNetworkRuntimePaths(runtimeDir);
-    // Put the deny-by-default host directly in the allowlist.
+    // Put the deny-by-default host in an allow rule.
     const broker = new SessionBroker({
       paths,
       sessionId: "sess_test",
-      allowlist: [host],
-      denylist: [],
-      promptEnabled: true,
-      timeoutSeconds: 30,
-      defaultScope: "host-port",
-      notify: "off",
+      reviewRules: [{ host: host, action: "allow" }],
+      pendingTimeoutSeconds: 30,
+      pendingDefaultScope: "host-port",
+      pendingNotify: "off",
     });
     const socketPath = `${paths.brokersDir}/sess_test/sock`;
     await broker.start(socketPath);
@@ -555,12 +536,10 @@ test("SessionBroker: approve with unknown scope is rejected and request stays pe
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_scope",
-    allowlist: [],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
     auditDir,
   });
   const socketPath = `${paths.brokersDir}/sess_scope/sock`;
@@ -607,28 +586,52 @@ test("SessionBroker: approve with unknown scope is rejected and request stays pe
   }
 });
 
-test("SessionBroker: reviewRule match on allowlisted target sends to pending", async () => {
+test("SessionBroker: close resolves pending request", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: ["api.openai.com"],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
-    reviewRules: [{ method: "POST", host: "*.openai.com", action: "review" }],
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  const authorizePromise = sendBrokerRequest<DecisionResponse>(
+    socketPath,
+    authorize("sess_test", "req_close2", "api.openai.com", 443),
+  );
+  await waitForPending(socketPath);
+  await broker.close();
+  const decision = await authorizePromise;
+  expect(decision.decision).toEqual("deny");
+  expect(decision.reason).toEqual("broker closed");
+  await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("SessionBroker: review rule on POST sends to pending, allow rule handles GET", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [
+      { method: "POST", host: "*.openai.com", action: "review" },
+      { host: "api.openai.com", action: "allow" },
+    ],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
-    // POST to allowlisted host with matching reviewRule → pending
+    // POST to api.openai.com: first rule matches (POST + *.openai.com) → pending
     const authorizePromise = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_test", "req_review_1", "api.openai.com", 443),
       method: "POST",
-      matchedReviewRule: true,
       reviewContext: {
         path: "/v1/chat/completions",
         contentType: "application/json",
@@ -660,30 +663,56 @@ test("SessionBroker: reviewRule match on allowlisted target sends to pending", a
   }
 });
 
-test("SessionBroker: GET to allowlisted host bypasses reviewRule", async () => {
+test("SessionBroker: GET to host with review-POST rule falls through to allow rule", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    allowlist: ["api.openai.com"],
-    denylist: [],
-    promptEnabled: true,
-    timeoutSeconds: 30,
-    defaultScope: "host-port",
-    notify: "off",
-    reviewRules: [{ method: "POST", host: "*.openai.com", action: "review" }],
+    reviewRules: [
+      { method: "POST", host: "*.openai.com", action: "review" },
+      { host: "api.openai.com", action: "allow" },
+    ],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
-    // GET to allowlisted host, reviewRule only matches POST → immediate allow
+    // GET to api.openai.com: first rule skipped (method mismatch), second rule matches → allow
     const response = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_get", "api.openai.com", 443),
     );
     expect(response.decision).toEqual("allow");
-    expect(response.reason).toEqual("allowlist");
+    expect(response.reason).toEqual("review-rule");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: no matching rule returns deny", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [{ host: "allowed.com", action: "allow" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_no_match", "other.com", 443),
+    );
+    expect(response.decision).toEqual("deny");
+    expect(response.reason).toEqual("no-matching-rule");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});

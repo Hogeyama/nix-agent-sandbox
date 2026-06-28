@@ -23,7 +23,7 @@ import {
   type AuthorizeRequest,
   type DecisionResponse,
   denyReasonForTarget,
-  matchesAllowlist,
+  matchesHostPattern,
   type PendingEntry,
   targetKey,
   targetKeyForScope,
@@ -40,12 +40,10 @@ import {
 interface BrokerOptions {
   paths: NetworkRuntimePaths;
   sessionId: string;
-  allowlist: string[];
-  denylist: string[];
-  promptEnabled: boolean;
-  timeoutSeconds: number;
-  defaultScope: ApprovalScope;
-  notify: ResolvedNotifyBackend;
+  reviewRules: ReviewRule[];
+  pendingTimeoutSeconds: number;
+  pendingDefaultScope: ApprovalScope;
+  pendingNotify: ResolvedNotifyBackend;
   uiEnabled?: boolean;
   uiPort?: number;
   uiIdleTimeout?: number;
@@ -53,7 +51,6 @@ interface BrokerOptions {
   negativeCacheTtlMs?: number;
   /** Directory for audit JSONL logs. If set, decisions are recorded. */
   auditDir?: string;
-  reviewRules?: ReviewRule[];
 }
 
 interface PendingWaiter {
@@ -106,9 +103,7 @@ type BrokerResponse =
 export class SessionBroker {
   private readonly paths: NetworkRuntimePaths;
   private readonly sessionId: string;
-  private readonly allowlist: string[];
-  private readonly denylist: string[];
-  private readonly promptEnabled: boolean;
+  private readonly reviewRules: ReviewRule[];
   private readonly timeoutSeconds: number;
   private readonly defaultScope: ApprovalScope;
   private readonly notify: ResolvedNotifyBackend;
@@ -116,7 +111,6 @@ export class SessionBroker {
   private readonly uiPort?: number;
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
-  private readonly reviewRules: ReviewRule[];
   private socketPath: string | null = null;
   private server: Server | null = null;
   private readonly approvedTargets = new Set<string>();
@@ -131,17 +125,14 @@ export class SessionBroker {
   constructor(options: BrokerOptions) {
     this.paths = options.paths;
     this.sessionId = options.sessionId;
-    this.allowlist = options.allowlist;
-    this.denylist = options.denylist;
-    this.promptEnabled = options.promptEnabled;
-    this.timeoutSeconds = options.timeoutSeconds;
-    this.defaultScope = options.defaultScope;
-    this.notify = options.notify;
+    this.reviewRules = options.reviewRules;
+    this.timeoutSeconds = options.pendingTimeoutSeconds;
+    this.defaultScope = options.pendingDefaultScope;
+    this.notify = options.pendingNotify;
     this.uiEnabled = options.uiEnabled;
     this.uiPort = options.uiPort;
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
-    this.reviewRules = options.reviewRules ?? [];
     this.negativeCache = new TtlLruCache<string, true>({
       maxSize: 1024,
       ttlMs: options.negativeCacheTtlMs ?? 30_000,
@@ -243,34 +234,17 @@ export class SessionBroker {
     const targetStr = `${message.target.host}:${message.target.port}`;
 
     // deny-by-default targets (localhost, loopback, RFC1918, link-local, ULA)
-    // are always blocked — even if they appear in the allowlist.
+    // are always blocked regardless of reviewRules.
     const denyReason = denyReasonForTarget(message.target);
     if (denyReason) {
       await this.recordAudit(message.requestId, "deny", denyReason, targetStr);
       return denyDecision(message.requestId, denyReason);
     }
 
-    const allowlistHit = matchesAllowlist(message.target, this.allowlist);
-    if (allowlistHit) {
-      if (message.matchedReviewRule) {
-        // Fall through to pending logic below
-      } else {
-        await this.recordAudit(
-          message.requestId,
-          "allow",
-          "allowlist",
-          targetStr,
-        );
-        return allowDecision(message.requestId, "allowlist");
-      }
-    }
-
     const targetCacheKey = targetKey(message.target);
-    if (matchesAllowlist(message.target, this.denylist)) {
-      await this.recordAudit(message.requestId, "deny", "denylist", targetStr);
-      return denyDecision(message.requestId, "denylist");
-    }
 
+    // Session-scoped deny/approve caches (set by user decisions) take priority
+    // over rule evaluation.
     if (
       this.deniedTargets.has(targetCacheKey) ||
       this.deniedHosts.has(message.target.host)
@@ -302,14 +276,37 @@ export class SessionBroker {
       return denyDecision(message.requestId, "recent-deny");
     }
 
-    if (!this.promptEnabled) {
+    // First-match evaluation of reviewRules.
+    const matchedRule = this.findMatchingRule(message);
+    if (matchedRule !== null) {
+      if (matchedRule.action === "allow") {
+        await this.recordAudit(
+          message.requestId,
+          "allow",
+          "review-rule",
+          targetStr,
+        );
+        return allowDecision(message.requestId, "review-rule");
+      }
+      if (matchedRule.action === "deny") {
+        await this.recordAudit(
+          message.requestId,
+          "deny",
+          "review-rule",
+          targetStr,
+        );
+        return denyDecision(message.requestId, "review-rule");
+      }
+      // action === "review": fall through to pending queue
+    } else {
+      // No rule matched — deny by default.
       await this.recordAudit(
         message.requestId,
         "deny",
-        "not-in-allowlist",
+        "no-matching-rule",
         targetStr,
       );
-      return denyDecision(message.requestId, "not-in-allowlist");
+      return denyDecision(message.requestId, "no-matching-rule");
     }
 
     const groupKey = `${this.sessionId}:${targetCacheKey}`;
@@ -481,6 +478,27 @@ export class SessionBroker {
       const waiter = group.waiters.get(requestId);
       waiter?.resolve(decision);
     }
+  }
+
+  private findMatchingRule(message: AuthorizeRequest): ReviewRule | null {
+    for (const rule of this.reviewRules) {
+      if (
+        rule.method !== undefined &&
+        rule.method.toUpperCase() !== message.method.toUpperCase()
+      )
+        continue;
+      if (
+        rule.host !== undefined &&
+        !matchesHostPattern(message.target, [rule.host])
+      )
+        continue;
+      if (rule.pathPrefix !== undefined) {
+        const p = message.reviewContext?.path ?? "";
+        if (!p.startsWith(rule.pathPrefix)) continue;
+      }
+      return rule;
+    }
+    return null;
   }
 
   private findGroupByRequestId(requestId: string): PendingGroup | null {
