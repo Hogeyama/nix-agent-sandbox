@@ -45,9 +45,10 @@ export class ProxyService extends Context.Tag("nas/ProxyService")<
     readonly ensureSharedProxy: (
       plan: EnsureProxyPlan,
     ) => Effect.Effect<void, unknown>;
-    readonly createSessionNetwork: (
-      plan: SessionNetworkPlan,
-    ) => Effect.Effect<() => Effect.Effect<void>>;
+    readonly createSessionNetwork: (plan: SessionNetworkPlan) => Effect.Effect<{
+      teardown: () => Effect.Effect<void>;
+      proxyIp: string | null;
+    }>;
   }
 >() {}
 
@@ -158,9 +159,13 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
               .pipe(Effect.orDie);
             proxyConnected = true;
 
-            // DinD is attached to / detached from this session network by
-            // DindStage (which runs after ProxyStage); ProxyStage only owns the
-            // network itself and the proxy attachment.
+            const proxyIp = yield* docker
+              .containerIpOnNetwork(
+                plan.proxyContainerName,
+                plan.sessionNetworkName,
+              )
+              .pipe(Effect.orDie);
+
             const teardown = (): Effect.Effect<void> =>
               Effect.gen(function* () {
                 if (proxyConnected) {
@@ -192,7 +197,7 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
                   );
               });
 
-            return teardown;
+            return { teardown, proxyIp };
           }),
       });
     }),
@@ -206,9 +211,10 @@ export interface ProxyServiceFakeConfig {
   readonly ensureSharedProxy?: (
     plan: EnsureProxyPlan,
   ) => Effect.Effect<void, unknown>;
-  readonly createSessionNetwork?: (
-    plan: SessionNetworkPlan,
-  ) => Effect.Effect<() => Effect.Effect<void>>;
+  readonly createSessionNetwork?: (plan: SessionNetworkPlan) => Effect.Effect<{
+    teardown: () => Effect.Effect<void>;
+    proxyIp: string | null;
+  }>;
 }
 
 export function makeProxyServiceFake(
@@ -220,7 +226,11 @@ export function makeProxyServiceFake(
       ensureSharedProxy: overrides.ensureSharedProxy ?? (() => Effect.void),
       createSessionNetwork:
         overrides.createSessionNetwork ??
-        (() => Effect.succeed(() => Effect.void)),
+        (() =>
+          Effect.succeed({
+            teardown: () => Effect.void,
+            proxyIp: "172.18.0.2",
+          })),
     }),
   );
 }

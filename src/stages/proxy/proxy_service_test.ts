@@ -397,7 +397,7 @@ test("createSessionNetwork: teardown disconnects proxy then removes network", as
   const calls = freshCalls();
   const layer = makeDockerFake(calls);
 
-  const teardown = await runWithProxy(
+  const { teardown } = await runWithProxy(
     (svc) => svc.createSessionNetwork(sessionPlan()),
     layer,
   );
@@ -421,7 +421,7 @@ test("createSessionNetwork: teardown tolerates partial failure and still removes
       Effect.fail(new Error("still in use")) as unknown as Effect.Effect<void>,
   });
 
-  const teardown = await runWithProxy(
+  const { teardown } = await runWithProxy(
     (svc) => svc.createSessionNetwork(sessionPlan()),
     layer,
   );

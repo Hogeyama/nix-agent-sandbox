@@ -18,6 +18,7 @@ import {
   dockerBuild,
   dockerContainerExists,
   dockerContainerIp,
+  dockerContainerIpOnNetwork,
   dockerExec,
   dockerInspectContainer,
   dockerInspectNetwork,
@@ -136,6 +137,10 @@ export class DockerService extends Context.Tag("nas/DockerService")<
       opts?: { user?: string },
     ) => Effect.Effect<string, Error>;
     readonly containerIp: (name: string) => Effect.Effect<string, Error>;
+    readonly containerIpOnNetwork: (
+      container: string,
+      network: string,
+    ) => Effect.Effect<string | null, Error>;
     readonly volumeCreate: (
       name: string,
       opts?: { labels?: Record<string, string> },
@@ -271,6 +276,12 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
         catch: wrapError("docker inspect failed"),
       }),
 
+    containerIpOnNetwork: (container, network) =>
+      Effect.tryPromise({
+        try: () => dockerContainerIpOnNetwork(container, network),
+        catch: wrapError("docker inspect failed"),
+      }),
+
     volumeCreate: (name, opts) =>
       Effect.tryPromise({
         try: () => dockerVolumeCreate(name, opts?.labels),
@@ -363,6 +374,10 @@ export interface DockerServiceFakeConfig {
     opts?: { user?: string },
   ) => Effect.Effect<string, Error>;
   readonly containerIp?: (name: string) => Effect.Effect<string, Error>;
+  readonly containerIpOnNetwork?: (
+    container: string,
+    network: string,
+  ) => Effect.Effect<string | null, Error>;
   readonly volumeCreate?: (
     name: string,
     opts?: { labels?: Record<string, string> },
@@ -404,6 +419,8 @@ export function makeDockerServiceFake(
       stop: overrides.stop ?? (() => Effect.void),
       exec: overrides.exec ?? (() => Effect.succeed("")),
       containerIp: overrides.containerIp ?? (() => Effect.succeed("")),
+      containerIpOnNetwork:
+        overrides.containerIpOnNetwork ?? (() => Effect.succeed("172.18.0.2")),
       volumeCreate: overrides.volumeCreate ?? (() => Effect.void),
       volumeRemove: overrides.volumeRemove ?? (() => Effect.void),
       inspect:

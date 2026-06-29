@@ -603,7 +603,10 @@ test("createProxyStage().run(): starts deny-by-default proxy when network contro
       },
       createSessionNetwork: () => {
         calls.push("createSessionNetwork");
-        return Effect.succeed(() => Effect.void);
+        return Effect.succeed({
+          teardown: () => Effect.void,
+          proxyIp: "172.18.0.2",
+        });
       },
     }),
     makeSessionBrokerServiceFake({
@@ -669,7 +672,10 @@ test("createProxyStage().run(): calls services and returns merged output", async
       },
       createSessionNetwork: () => {
         calls.push("createSessionNetwork");
-        return Effect.succeed(() => Effect.void);
+        return Effect.succeed({
+          teardown: () => Effect.void,
+          proxyIp: "172.18.0.2",
+        });
       },
     }),
     makeSessionBrokerServiceFake({

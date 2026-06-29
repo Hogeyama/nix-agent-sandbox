@@ -380,18 +380,30 @@ function runProxy(
     );
 
     // 9. Session network + proxy connect (acquireRelease)
-    yield* Effect.acquireRelease(
+    const { proxyIp } = yield* Effect.acquireRelease(
       proxy.createSessionNetwork({
         sessionNetworkName: plan.sessionNetworkName,
         proxyContainerName: plan.proxyContainerName,
         proxyAlias: plan.proxyAlias,
       }),
-      (teardown: () => Effect.Effect<void>) => teardown(),
+      ({ teardown }) => teardown(),
     );
 
-    return {
-      ...plan.outputOverrides,
-    };
+    // 10. Add --add-host so the agent container can resolve the proxy alias
+    //     without relying on Docker's embedded DNS (which returns SERVFAIL
+    //     on some Debian hosts with internal networks).
+    const overrides = { ...plan.outputOverrides };
+    if (proxyIp && overrides.container) {
+      overrides.container = {
+        ...overrides.container,
+        extraRunArgs: [
+          ...overrides.container.extraRunArgs,
+          `--add-host=${PROXY_ALIAS}:${proxyIp}`,
+        ],
+      };
+    }
+
+    return overrides;
   });
 }
 
