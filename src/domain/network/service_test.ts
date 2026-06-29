@@ -55,10 +55,8 @@ describe("NetworkApprovalService (Live): listPending", () => {
         tokenHash: "h",
         brokerSocket,
         profileName: "test",
-        allowlist: [],
         createdAt: new Date().toISOString(),
         pid: process.pid,
-        promptEnabled: false,
       });
       const now = new Date().toISOString();
       const entry: PendingEntry = {

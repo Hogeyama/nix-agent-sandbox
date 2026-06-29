@@ -354,10 +354,8 @@ test("GET /network/pending with pending entry returns it", async () => {
       tokenHash: "abc",
       brokerSocket: brokerSocketPath,
       profileName: "test",
-      allowlist: [],
       createdAt: new Date().toISOString(),
       pid: process.pid,
-      promptEnabled: true,
     };
     await writeFile(
       `${tmpDir}/network/sessions/${sessionId}.json`,

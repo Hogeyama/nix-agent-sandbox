@@ -105,6 +105,9 @@ local commonNetwork: NetworkConfig = new {
       "public.ecr.aws",              // AWS ECR
     )) { allow(h) }
 
+    // Review: specific patterns (must come BEFORE general allow)
+    new { method = "POST"; host = "httpbin.org"; action = "review" }
+
     // Allow: Package Registries
     for (h in List(
       "registry.npmjs.org",          // npm
@@ -114,9 +117,6 @@ local commonNetwork: NetworkConfig = new {
       "esm.sh",
       "httpbin.org",
     )) { allow(h) }
-
-    // Review: specific patterns
-    new { method = "POST"; host = "httpbin.org"; action = "review" }
 
     // Catch-all: send unknown traffic to pending queue
     new { action = "review" }
