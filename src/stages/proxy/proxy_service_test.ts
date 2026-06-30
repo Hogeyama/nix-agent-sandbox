@@ -10,6 +10,7 @@
 import { expect, test } from "bun:test";
 import { Cause, Effect, Exit, Layer } from "effect";
 import {
+  NAS_ADDON_HASH_LABEL,
   NAS_KIND_LABEL,
   NAS_KIND_PROXY,
   NAS_KIND_SESSION_NETWORK,
@@ -37,6 +38,8 @@ interface DockerCalls {
   isRunning: string[];
   containerExists: string[];
   rm: string[];
+  stop: string[];
+  inspect: string[];
   runDetached: DockerRunDetachedOpts[];
   logs: string[];
   networkCreate: Array<{
@@ -57,6 +60,8 @@ function freshCalls(): DockerCalls {
     isRunning: [],
     containerExists: [],
     rm: [],
+    stop: [],
+    inspect: [],
     runDetached: [],
     logs: [],
     networkCreate: [],
@@ -71,8 +76,15 @@ function makeDockerFake(
   overrides: {
     isRunning?: (name: string) => boolean;
     containerExists?: (name: string) => boolean;
+    inspect?: (
+      name: string,
+    ) => import("../../services/docker.ts").DockerContainerDetails;
     logs?: (name: string) => string;
     rm?: (name: string) => Effect.Effect<void>;
+    stop?: (
+      name: string,
+      opts?: { timeoutSeconds?: number },
+    ) => Effect.Effect<void>;
     networkCreate?: (
       name: string,
       opts: { internal?: boolean; labels?: Record<string, string> },
@@ -98,9 +110,25 @@ function makeDockerFake(
       calls.containerExists.push(name);
       return Effect.succeed(overrides.containerExists?.(name) ?? false);
     },
+    inspect: (name) => {
+      calls.inspect.push(name);
+      return Effect.succeed(
+        overrides.inspect?.(name) ?? {
+          name,
+          running: false,
+          labels: {},
+          networks: [],
+          startedAt: "",
+        },
+      );
+    },
     rm: (name) => {
       calls.rm.push(name);
       return overrides.rm?.(name) ?? Effect.void;
+    },
+    stop: (name, opts) => {
+      calls.stop.push(name);
+      return overrides.stop?.(name, opts) ?? Effect.void;
     },
     runDetached: (opts) => {
       calls.runDetached.push(opts);
@@ -150,6 +178,7 @@ function proxyPlan(overrides: Partial<EnsureProxyPlan> = {}): EnsureProxyPlan {
     proxyImage: "nas-proxy:latest",
     runtimePaths: runtimePaths(),
     proxyReadyTimeoutMs: 1000,
+    addonHash: "abc123",
     ...overrides,
   };
 }
@@ -170,16 +199,78 @@ function runWithProxy<A, E>(
 // ensureSharedProxy
 // ---------------------------------------------------------------------------
 
-test("ensureSharedProxy: skips when proxy is already running", async () => {
+test("ensureSharedProxy: skips when proxy is already running with matching addon hash", async () => {
   const calls = freshCalls();
-  const layer = makeDockerFake(calls, { isRunning: () => true });
+  const layer = makeDockerFake(calls, {
+    isRunning: () => true,
+    inspect: (name) => ({
+      name,
+      running: true,
+      labels: { [NAS_ADDON_HASH_LABEL]: "abc123" },
+      networks: [],
+      startedAt: "",
+    }),
+  });
 
-  await runWithProxy((svc) => svc.ensureSharedProxy(proxyPlan()), layer);
+  await runWithProxy(
+    (svc) => svc.ensureSharedProxy(proxyPlan({ addonHash: "abc123" })),
+    layer,
+  );
 
   expect(calls.isRunning).toEqual(["nas-proxy-shared"]);
-  expect(calls.containerExists.length).toEqual(0);
+  expect(calls.inspect).toEqual(["nas-proxy-shared"]);
+  expect(calls.stop.length).toEqual(0);
   expect(calls.runDetached.length).toEqual(0);
-  expect(calls.rm.length).toEqual(0);
+});
+
+test("ensureSharedProxy: recreates when proxy is running but addon hash differs", async () => {
+  const calls = freshCalls();
+  let launched = false;
+  const layer = makeDockerServiceFake({
+    isRunning: (name) => {
+      calls.isRunning.push(name);
+      return Effect.succeed(launched || calls.isRunning.length === 1);
+    },
+    inspect: (name) => {
+      calls.inspect.push(name);
+      return Effect.succeed({
+        name,
+        running: true,
+        labels: { [NAS_ADDON_HASH_LABEL]: "old-hash" },
+        networks: [],
+        startedAt: "",
+      });
+    },
+    stop: (name) => {
+      calls.stop.push(name);
+      return Effect.void;
+    },
+    containerExists: (name) => {
+      calls.containerExists.push(name);
+      return Effect.succeed(false);
+    },
+    rm: (name) => {
+      calls.rm.push(name);
+      return Effect.void;
+    },
+    runDetached: (opts) => {
+      calls.runDetached.push(opts);
+      launched = true;
+      return Effect.succeed(opts.name);
+    },
+  });
+
+  await runWithProxy(
+    (svc) => svc.ensureSharedProxy(proxyPlan({ addonHash: "new-hash" })),
+    layer,
+  );
+
+  expect(calls.stop).toEqual(["nas-proxy-shared"]);
+  expect(calls.rm).toEqual(["nas-proxy-shared"]);
+  expect(calls.runDetached.length).toEqual(1);
+  expect(calls.runDetached[0].labels?.[NAS_ADDON_HASH_LABEL]).toEqual(
+    "new-hash",
+  );
 });
 
 test("ensureSharedProxy: removes stale container before launching", async () => {
@@ -291,6 +382,7 @@ test("ensureSharedProxy: launches with correct labels, mounts, and command", asy
   expect(run.labels).toEqual({
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
     [NAS_KIND_LABEL]: NAS_KIND_PROXY,
+    [NAS_ADDON_HASH_LABEL]: "abc123",
   });
   expect(run.command).toEqual([
     "mitmdump",

@@ -376,13 +376,15 @@ function runProxy(
       (handle: ForwardPortRelayHandle) => handle.close(),
     );
 
-    // 8. Shared proxy container (acquireRelease — no teardown since it's shared)
+    // 8. Compute addon hash and ensure shared proxy container
+    const addonHash = yield* networkRuntime.computeAddonHash();
     yield* Effect.acquireRelease(
       proxy.ensureSharedProxy({
         proxyContainerName: plan.proxyContainerName,
         proxyImage: plan.proxyImage,
         runtimePaths: plan.runtimePaths,
         proxyReadyTimeoutMs: plan.proxyReadyTimeoutMs,
+        addonHash,
       }),
       () => Effect.void,
     );
