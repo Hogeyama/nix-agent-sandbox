@@ -123,8 +123,21 @@ export interface ReviewRule {
   action: "allow" | "review" | "deny";
 }
 
+/** Credential の値指定 */
+export type CredentialValSpec = { val: string } | { valCmd: string };
+
+/** ホスト別認証情報 */
+export interface CredentialRule {
+  host: string;
+  pathPrefix?: string;
+  method?: string;
+  header: string;
+  value: CredentialValSpec;
+}
+
 export interface NetworkConfig {
   reviewRules: ReviewRule[];
+  credentials: CredentialRule[];
   proxy: ProxyConfig;
   pendingTimeoutSeconds: number;
   pendingDefaultScope: ApprovalScope;
@@ -270,6 +283,7 @@ export const DEFAULT_PROXY_CONFIG: ProxyConfig = {
 
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
   reviewRules: [],
+  credentials: [],
   proxy: DEFAULT_PROXY_CONFIG,
   pendingTimeoutSeconds: 300,
   pendingDefaultScope: "host-port",

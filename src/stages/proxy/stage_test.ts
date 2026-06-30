@@ -54,6 +54,7 @@ function makeProfile(
   const { network: _ignored, ...rest } = overrides;
   const network: Profile["network"] = {
     reviewRules: networkOverrides.reviewRules ?? [],
+    credentials: networkOverrides.credentials ?? [],
     proxy: networkOverrides.proxy
       ? { forwardPorts: [...networkOverrides.proxy.forwardPorts] }
       : { forwardPorts: [] },

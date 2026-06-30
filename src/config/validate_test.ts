@@ -1075,3 +1075,91 @@ test("validate: multiple valid profiles all pass", () => {
   expect(config.profiles.b.agent).toEqual("copilot");
   expect(config.profiles.c.agent).toEqual("codex");
 });
+
+// ---------------------------------------------------------------------------
+// credentials の検証
+// ---------------------------------------------------------------------------
+
+test("validateConfig: credential with forbidden header rejects", () => {
+  const forbidden = [
+    "Host",
+    "Content-Length",
+    "Transfer-Encoding",
+    "Connection",
+    "Proxy-Authorization",
+    "Proxy-Connection",
+    "Keep-Alive",
+    "TE",
+    "Trailer",
+    "Upgrade",
+  ];
+  for (const header of forbidden) {
+    const profile = makeProfile({
+      network: {
+        ...DEFAULT_NETWORK_CONFIG,
+        credentials: [{ host: "example.com", header, value: { val: "x" } }],
+      },
+    });
+    expect(() =>
+      validateConfig(makeConfig({ profiles: { test: profile } })),
+    ).toThrow(/forbidden.*header/i);
+  }
+});
+
+test("validateConfig: credential with valid header passes", () => {
+  const profile = makeProfile({
+    network: {
+      ...DEFAULT_NETWORK_CONFIG,
+      credentials: [
+        {
+          host: "github.com",
+          header: "Authorization",
+          value: { val: "token abc" },
+        },
+      ],
+    },
+  });
+  expect(() =>
+    validateConfig(makeConfig({ profiles: { test: profile } })),
+  ).not.toThrow();
+});
+
+test("validateConfig: credential with invalid host pattern rejects", () => {
+  const profile = makeProfile({
+    network: {
+      ...DEFAULT_NETWORK_CONFIG,
+      credentials: [
+        { host: "foo.*.bar.com", header: "Authorization", value: { val: "x" } },
+      ],
+    },
+  });
+  expect(() =>
+    validateConfig(makeConfig({ profiles: { test: profile } })),
+  ).toThrow(/wildcard/i);
+});
+
+test("validateConfig: credential with empty header rejects", () => {
+  const profile = makeProfile({
+    network: {
+      ...DEFAULT_NETWORK_CONFIG,
+      credentials: [{ host: "example.com", header: "", value: { val: "x" } }],
+    },
+  });
+  expect(() =>
+    validateConfig(makeConfig({ profiles: { test: profile } })),
+  ).toThrow(/header.*empty/i);
+});
+
+test("validateConfig: credential with neither val nor valCmd rejects", () => {
+  const profile = makeProfile({
+    network: {
+      ...DEFAULT_NETWORK_CONFIG,
+      credentials: [
+        { host: "example.com", header: "Authorization", value: {} as any },
+      ],
+    },
+  });
+  expect(() =>
+    validateConfig(makeConfig({ profiles: { test: profile } })),
+  ).toThrow();
+});
