@@ -70,6 +70,8 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
               .pipe(Effect.orDie);
             if (running) return;
 
+            yield* docker.ensureImage(plan.proxyImage).pipe(Effect.orDie);
+
             const exists = yield* docker
               .containerExists(plan.proxyContainerName)
               .pipe(Effect.orDie);

@@ -231,6 +231,19 @@ export async function dockerRemoveImage(
   await $`docker rmi ${forceArgs} ${tag}`;
 }
 
+/** docker image を pull する */
+export async function dockerPull(tag: string): Promise<void> {
+  await $`docker pull ${tag}`;
+}
+
+/** ローカルになければ pull する */
+export async function dockerEnsureImage(tag: string): Promise<boolean> {
+  if (await dockerImageExists(tag)) return false;
+  console.log(`[nas] Pulling image ${tag} ...`);
+  await dockerPull(tag);
+  return true;
+}
+
 /** docker image が存在するか確認 */
 export async function dockerImageExists(tag: string): Promise<boolean> {
   try {
