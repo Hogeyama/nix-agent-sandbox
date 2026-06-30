@@ -11,7 +11,7 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import type { ReviewRule } from "../../config/types.ts";
+import type { CredentialRule, ReviewRule } from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import {
@@ -77,6 +77,7 @@ export interface ProxyPlan {
   readonly brokerSocket: string;
   readonly token: string;
   readonly reviewRules: ReviewRule[];
+  readonly credentials: CredentialRule[];
   readonly pendingTimeoutSeconds: number;
   readonly pendingDefaultScope: import("../../network/protocol.ts").ApprovalScope;
   readonly pendingNotify: import("../../lib/notify_utils.ts").ResolvedNotifyBackend;
@@ -208,6 +209,7 @@ export function planProxy(
     brokerSocket,
     token,
     reviewRules: [...input.profile.network.reviewRules],
+    credentials: [...input.profile.network.credentials],
     pendingTimeoutSeconds: input.profile.network.pendingTimeoutSeconds,
     pendingDefaultScope: input.profile.network.pendingDefaultScope,
     pendingNotify: resolveNotifyBackend(input.profile.network.pendingNotify),
@@ -328,6 +330,11 @@ function runProxy(
       plan.reviewRules,
     );
 
+    // 5.5. Resolve credential values (valCmd execution)
+    const resolvedCredentials = yield* networkRuntime.resolveCredentials(
+      plan.credentials,
+    );
+
     // 6. Session broker + registry (acquireRelease)
     const tokenHash = yield* Effect.tryPromise({
       try: () => hashToken(plan.token),
@@ -352,6 +359,7 @@ function runProxy(
         uiIdleTimeout: plan.uiIdleTimeout,
         auditDir: plan.auditDir,
         tokenHash,
+        resolvedCredentials,
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );

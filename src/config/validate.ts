@@ -251,8 +251,12 @@ function validateCredentials(
       );
     }
 
-    const hasVal = "val" in cred.value && cred.value.val !== undefined;
-    const hasValCmd = "valCmd" in cred.value && cred.value.valCmd !== undefined;
+    // Use != null (covers both null and undefined) to handle Pkl's null values
+    // which arrive as null at runtime despite the TypeScript type saying string.
+    const hasVal = "val" in cred.value && cred.value.val != null;
+    // After "valCmd" in check TypeScript narrows to { valCmd: string };
+    // the != null guard catches Pkl nulls that slip through the type.
+    const hasValCmd = "valCmd" in cred.value && cred.value.valCmd != null;
     if (hasVal && hasValCmd) {
       errors.push(`${prefix}.value: only one of val or valCmd may be set`);
     } else if (!hasVal && !hasValCmd) {

@@ -8,7 +8,7 @@ import { Effect, Layer } from "effect";
  * Proxy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
-import type { Config, Profile } from "../../config/types.ts";
+import type { Config, CredentialRule, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -17,6 +17,7 @@ import {
   DEFAULT_SESSION_CONFIG,
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
+import type { ResolvedCredential } from "../../network/protocol.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type {
   ContainerPlan,
@@ -35,7 +36,10 @@ import {
 } from "./forward_port_relay_service.ts";
 import { makeNetworkRuntimeServiceFake } from "./network_runtime_service.ts";
 import { makeProxyServiceFake } from "./proxy_service.ts";
-import { makeSessionBrokerServiceFake } from "./session_broker_service.ts";
+import {
+  makeSessionBrokerServiceFake,
+  type SessionBrokerConfig,
+} from "./session_broker_service.ts";
 import {
   buildNetworkRuntimePaths,
   createProxyStage,
@@ -794,4 +798,106 @@ test("ProxyStage: empty profile.forwardPorts + observability enabled => only rec
     observability: { enabled: true, receiverPort: 41234 },
   })!;
   expect([...result.forwardPorts]).toEqual([41234]);
+});
+
+// ---------------------------------------------------------------------------
+// Credential wiring tests
+// ---------------------------------------------------------------------------
+
+test("planProxy: includes credentials in plan", () => {
+  const profile = makeProfile({
+    network: {
+      credentials: [
+        {
+          host: "github.com",
+          header: "Authorization",
+          value: { val: "token abc" },
+        },
+      ],
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+  const plan = planProxy({ ...shared, container, observability });
+  expect(plan.credentials).toEqual([
+    {
+      host: "github.com",
+      header: "Authorization",
+      value: { val: "token abc" },
+    },
+  ]);
+});
+
+test("planProxy: credentials is empty array when profile has none", () => {
+  const profile = makeProfile();
+  const { shared, container, observability } = makeInput(profile);
+  const plan = planProxy({ ...shared, container, observability });
+  expect(plan.credentials).toEqual([]);
+});
+
+test("runProxy: resolves credentials and passes to broker", async () => {
+  const capturedCredRuleSets: CredentialRule[][] = [];
+  const capturedBrokerConfigs: SessionBrokerConfig[] = [];
+
+  const profile = makeProfile({
+    network: {
+      credentials: [
+        {
+          host: "github.com",
+          header: "Authorization",
+          value: { val: "token abc" },
+        },
+      ],
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+
+  const resolvedCred: ResolvedCredential = {
+    host: "github.com",
+    header: "Authorization",
+    value: "token abc",
+  };
+
+  const layer = Layer.mergeAll(
+    makeCaServiceFake(),
+    makeNetworkRuntimeServiceFake({
+      resolveCredentials: (creds) =>
+        Effect.sync(() => {
+          capturedCredRuleSets.push(creds);
+          return [resolvedCred];
+        }),
+    }),
+    makeProxyServiceFake({
+      createSessionNetwork: () =>
+        Effect.succeed({ teardown: () => Effect.void, proxyIp: null }),
+    }),
+    makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          capturedBrokerConfigs.push(config);
+          return { close: () => Effect.void };
+        }),
+    }),
+    makeForwardPortRelayServiceFake(),
+  );
+
+  const stage = createProxyStageWithOptions(shared, {
+    generateSessionToken: () => "test-token-creds",
+  });
+
+  await Effect.runPromise(
+    stage
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  expect(capturedCredRuleSets.length).toBe(1);
+  expect(capturedCredRuleSets[0]).toEqual([
+    {
+      host: "github.com",
+      header: "Authorization",
+      value: { val: "token abc" },
+    },
+  ]);
+  expect(capturedBrokerConfigs.length).toBe(1);
+  expect(capturedBrokerConfigs[0]!.resolvedCredentials).toEqual([resolvedCred]);
 });

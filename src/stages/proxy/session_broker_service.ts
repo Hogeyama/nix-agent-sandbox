@@ -12,7 +12,10 @@ import type { ReviewRule } from "../../config/types.ts";
 import type { ResolvedNotifyBackend } from "../../lib/notify_utils.ts";
 import { logInfo, logWarn } from "../../log.ts";
 import { SessionBroker } from "../../network/broker.ts";
-import type { ApprovalScope } from "../../network/protocol.ts";
+import type {
+  ApprovalScope,
+  ResolvedCredential,
+} from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
   removePendingDir,
@@ -39,6 +42,7 @@ export interface SessionBrokerConfig {
   readonly uiIdleTimeout?: number;
   readonly auditDir?: string;
   readonly tokenHash: string;
+  readonly resolvedCredentials?: ResolvedCredential[];
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +90,7 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
               uiPort: config.uiPort,
               uiIdleTimeout: config.uiIdleTimeout,
               auditDir: config.auditDir,
+              resolvedCredentials: config.resolvedCredentials,
             });
             await broker.start(config.socketPath);
             try {
