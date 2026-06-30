@@ -8,6 +8,7 @@
 
 import { Context, Effect, Layer } from "effect";
 import {
+  NAS_ADDON_HASH_LABEL,
   NAS_KIND_LABEL,
   NAS_KIND_PROXY,
   NAS_KIND_SESSION_NETWORK,
@@ -27,6 +28,7 @@ export interface EnsureProxyPlan {
   readonly proxyImage: string;
   readonly runtimePaths: NetworkRuntimePaths;
   readonly proxyReadyTimeoutMs: number;
+  readonly addonHash: string;
 }
 
 export interface SessionNetworkPlan {
@@ -68,7 +70,38 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
             const running = yield* docker
               .isRunning(plan.proxyContainerName)
               .pipe(Effect.orDie);
-            if (running) return;
+            if (running) {
+              const details = yield* docker
+                .inspect(plan.proxyContainerName)
+                .pipe(Effect.orDie);
+              const existingHash = details.labels[NAS_ADDON_HASH_LABEL] ?? null;
+              if (existingHash === plan.addonHash) return;
+              logInfo(
+                `[nas] Proxy: addon script changed, recreating proxy container`,
+              );
+              yield* docker
+                .stop(plan.proxyContainerName, { timeoutSeconds: 5 })
+                .pipe(
+                  Effect.catchAll((e) =>
+                    Effect.sync(() =>
+                      logInfo(
+                        `[nas] Proxy: failed to stop outdated proxy container: ${e}`,
+                      ),
+                    ),
+                  ),
+                );
+              yield* docker
+                .rm(plan.proxyContainerName)
+                .pipe(
+                  Effect.catchAll((e) =>
+                    Effect.sync(() =>
+                      logInfo(
+                        `[nas] Proxy: failed to remove outdated proxy container: ${e}`,
+                      ),
+                    ),
+                  ),
+                );
+            }
 
             yield* docker.ensureImage(plan.proxyImage).pipe(Effect.orDie);
 
@@ -110,6 +143,7 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
                 labels: {
                   [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
                   [NAS_KIND_LABEL]: NAS_KIND_PROXY,
+                  [NAS_ADDON_HASH_LABEL]: plan.addonHash,
                 },
                 command: [
                   "mitmdump",

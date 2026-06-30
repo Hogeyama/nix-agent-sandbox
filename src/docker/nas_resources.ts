@@ -12,6 +12,7 @@ export const NAS_KIND_DIND_TMP = "dind-tmp";
 export const NAS_KIND_AGENT = "agent";
 export const NAS_PWD_LABEL = "nas.pwd";
 export const NAS_SESSION_ID_LABEL = "nas.session_id";
+export const NAS_ADDON_HASH_LABEL = "nas.addon-hash";
 
 /** Build the docker container name for a given agent session ID. */
 export function containerNameForSession(sessionId: string): string {

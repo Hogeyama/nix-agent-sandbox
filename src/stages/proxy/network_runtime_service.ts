@@ -37,6 +37,7 @@ export class NetworkRuntimeService extends Context.Tag(
       sessionId: string,
       rules: import("../../config/types.ts").ReviewRule[],
     ) => Effect.Effect<void>;
+    readonly computeAddonHash: () => Effect.Effect<string>;
     readonly resolveCredentials: (
       credentials: CredentialRule[],
     ) => Effect.Effect<ResolvedCredential[]>;
@@ -82,6 +83,21 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           );
           const source = yield* fs.readFile(addonSource);
           yield* fs.writeFile(paths.addonScriptPath, source, { mode: 0o644 });
+        }),
+
+      computeAddonHash: () =>
+        Effect.gen(function* () {
+          const addonSource = resolveAsset(
+            "docker/mitmproxy/nas_addon.py",
+            import.meta.url,
+            "../../docker/mitmproxy/nas_addon.py",
+          );
+          const content = yield* fs.readFile(addonSource);
+          const data = new TextEncoder().encode(content);
+          const digest = yield* Effect.promise(() =>
+            crypto.subtle.digest("SHA-256", data),
+          );
+          return Buffer.from(new Uint8Array(digest)).toString("hex");
         }),
 
       writeReviewRules: (paths, sessionId, rules) =>
@@ -145,6 +161,7 @@ export interface NetworkRuntimeServiceFakeConfig {
     sessionId: string,
     rules: import("../../config/types.ts").ReviewRule[],
   ) => Effect.Effect<void>;
+  readonly computeAddonHash?: () => Effect.Effect<string>;
   readonly resolveCredentials?: (
     credentials: CredentialRule[],
   ) => Effect.Effect<ResolvedCredential[]>;
@@ -160,6 +177,8 @@ export function makeNetworkRuntimeServiceFake(
       gcStaleRuntime: overrides.gcStaleRuntime ?? (() => Effect.void),
       copyAddonScript: overrides.copyAddonScript ?? (() => Effect.void),
       writeReviewRules: overrides.writeReviewRules ?? (() => Effect.void),
+      computeAddonHash:
+        overrides.computeAddonHash ?? (() => Effect.succeed("fakehash")),
       resolveCredentials:
         overrides.resolveCredentials ?? (() => Effect.succeed([])),
     }),
