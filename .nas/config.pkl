@@ -29,6 +29,18 @@ local commonEnv: Listing<EnvConfig> = new {
     key = "TZDIR"
     val = "/usr/share/zoneinfo"
   }
+  new {
+    key = "PATH"
+    val = "~/.local/share/pnpm"
+    mode = "suffix"
+    separator = ":"
+  }
+  new {
+    key = "PATH"
+    val = "~/.cache/.bun/bin"
+    mode = "suffix"
+    separator = ":"
+  }
 }
 
 local function allow(h: String) = new ReviewRule { host = h; action = "allow" }
@@ -195,6 +207,17 @@ local commonHostexec: HostExecConfig = new {
       approval = "allow"
       fallback = "container"
     }
+    new {
+      id = "diffity"
+      match {
+        argv0 = "diffity"
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      approval = "allow"
+      fallback = "container"
+    }
   }
 }
 
@@ -234,6 +257,8 @@ local baseProfile: Profile = new {
     new { src = "~/.config/nvim"; dst = "~/.config/nvim"; mode = "ro" }
     new { src = "~/.config/tmux"; dst = "~/.config/tmux"; mode = "ro" }
     new { src = "~/.local/share/nvim"; dst = "~/.local/share/nvim"; mode = "ro" }
+    new { src = "~/.local/share/pnpm"; dst = "~/.local/share/pnpm"; mode = "ro" }
+    new { src = "~/.cache/.bun"; dst = "~/.cache/.bun"; mode = "ro" }
     // OTELのデバッグに
     new { src = "~/.local/share/nas"; dst = "~/.local/share/nas"; mode = "rw" }
   }
