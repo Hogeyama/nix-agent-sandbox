@@ -160,6 +160,7 @@ class NasAddon:
                 407, b"missing proxy credentials",
                 {"Proxy-Authenticate": 'Basic realm="nas"'},
             )
+            flow.kill()
             return
 
         session_id, token = creds
@@ -168,6 +169,7 @@ class NasAddon:
                 407, b"invalid proxy credentials",
                 {"Proxy-Authenticate": 'Basic realm="nas"'},
             )
+            flow.kill()
             return
 
         self._connect_creds[flow.client_conn.id] = creds
