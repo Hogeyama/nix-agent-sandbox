@@ -1,0 +1,58 @@
+workflow:
+  max_review_iterations: 3
+  stop_when: no_critical_findings
+
+rules:
+  - name: error-handling
+    severity: critical
+    stop_when: no_findings
+    description: "エラーが握りつぶされていないか。catchブロックが空、エラーを無視するコードがないか"
+
+  - name: security
+    severity: critical
+    stop_when: no_findings
+    description: "SQLインジェクション、XSS、コマンドインジェクション等の脆弱性がないか"
+
+  - name: layer-boundary
+    severity: critical
+    stop_when: no_critical_findings
+    description: |
+      各層の責務と依存方向がプロジェクトのレイヤーの定義に
+      従っているか。
+
+      チェック手順:
+      1) 変更ファイルの属する層を特定する
+      2) その層の禁止事項に該当する処理がないか判定する
+      3) 違反があれば、正しい層への移譲を求める
+
+  - name: correctness
+    severity: critical
+    stop_when: no_findings
+    description: |
+      変更後の挙動が機能として壊れないか。
+      diff の行を静的に眺めるだけでは現れない破綻が主眼なので、次の手順で能動的に探す:
+
+      1) 行ごとの精査: 各 hunk を1行ずつ読み、さらにその行を含む関数・
+         コンポーネント全体を読む。変更行だけでなく、触れた箇所の未変更行のバグも
+         対象。各行・各分岐について「どんな入力・状態・順序・タイミングなら、
+         この行は誤った結果になるか」を問う。
+      2) 消えた振る舞いの監査: diff が削除・置換した行が担っていた不変条件や
+         振る舞いを言語化し、新コードのどこで再確立されているか探す。
+      3) 跨ぎの追跡: 変更した関数・値の呼び出し側と呼び出し先を確認し、
+         変更が前提条件・戻り値の形・例外・順序や状態の依存を壊していないか。
+
+      happy path だけで終えない。
+
+  - name: design
+    severity: warning
+    stop_when: no_findings
+    description: "責務分離、副作用の置き場、抽象境界、依存関係、データフローに無理がないか"
+
+  - name: test-coverage
+    severity: warning
+    stop_when: no_findings
+    description: "変更箇所に対応するテストがあるか。主要なロジックにテストが書かれているか"
+
+  - name: naming
+    severity: warning
+    description: "変数名・関数名がプロジェクトの命名規則に従っているか"
