@@ -226,6 +226,15 @@ class NasAddon:
             "observedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
         }
 
+        # Always include path for credential matching (pathPrefix credentials
+        # need the path even when no review rule matched).
+        authorize_req["reviewContext"] = {
+            "path": request_path,
+            "contentType": None,
+            "bodyPreview": None,
+            "bodySize": 0,
+        }
+
         if matched_rule:
             body_bytes = flow.request.content or b""
             body_preview = None
@@ -253,6 +262,14 @@ class NasAddon:
                 403, message.encode() if isinstance(message, str) else b"denied"
             )
             return
+
+        # Inject credential headers from broker decision.
+        # Only inject if the header is not already present so that an agent
+        # that explicitly sets its own Authorization header is not overwritten.
+        # mitmproxy Headers.__contains__ is case-insensitive.
+        for h in decision.get("injectHeaders", []):
+            if h["name"] not in flow.request.headers:
+                flow.request.headers[h["name"]] = h["value"]
 
         if "proxy-authorization" in flow.request.headers:
             del flow.request.headers["proxy-authorization"]
