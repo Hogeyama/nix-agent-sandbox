@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import socket
+import sys
 import time
 from typing import Optional
 
@@ -156,6 +157,10 @@ class NasAddon:
         proxy_auth = flow.request.headers.get("proxy-authorization", "")
         creds = _decode_proxy_auth(proxy_auth)
         if not creds:
+            print(f"[nas-addon] CONNECT 407: missing creds, "
+                  f"client={flow.client_conn.id}, "
+                  f"target={flow.request.host}:{flow.request.port}",
+                  file=sys.stderr)
             flow.response = http.Response.make(
                 407, b"missing proxy credentials",
                 {"Proxy-Authenticate": 'Basic realm="nas"'},
@@ -165,6 +170,11 @@ class NasAddon:
 
         session_id, token = creds
         if not _verify_creds(session_id, token):
+            print(f"[nas-addon] CONNECT 407: invalid creds, "
+                  f"client={flow.client_conn.id}, "
+                  f"session={session_id}, "
+                  f"target={flow.request.host}:{flow.request.port}",
+                  file=sys.stderr)
             flow.response = http.Response.make(
                 407, b"invalid proxy credentials",
                 {"Proxy-Authenticate": 'Basic realm="nas"'},
@@ -179,9 +189,18 @@ class NasAddon:
         # fall back to stored CONNECT creds (HTTPS after MitM).
         proxy_auth = flow.request.headers.get("proxy-authorization", "")
         creds = _decode_proxy_auth(proxy_auth)
+        cred_source = "header" if creds else None
         if not creds:
             creds = self._connect_creds.get(flow.client_conn.id)
+            if creds:
+                cred_source = "connect_cache"
         if not creds:
+            print(f"[nas-addon] REQUEST 407: no creds found, "
+                  f"client={flow.client_conn.id}, "
+                  f"has_proxy_auth={bool(proxy_auth)}, "
+                  f"connect_cache_keys={list(self._connect_creds.keys())}, "
+                  f"url={flow.request.pretty_url}",
+                  file=sys.stderr)
             flow.response = http.Response.make(
                 407, b"missing proxy credentials",
                 {"Proxy-Authenticate": 'Basic realm="nas"'},
@@ -269,9 +288,18 @@ class NasAddon:
         # Only inject if the header is not already present so that an agent
         # that explicitly sets its own Authorization header is not overwritten.
         # mitmproxy Headers.__contains__ is case-insensitive.
-        for h in decision.get("injectHeaders", []):
+        inject_headers = decision.get("injectHeaders", [])
+        for h in inject_headers:
             if h["name"] not in flow.request.headers:
                 flow.request.headers[h["name"]] = h["value"]
+                print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{request_path} "
+                      f"(cred_source={cred_source})", file=sys.stderr)
+            else:
+                print(f"[nas-addon] INJECT SKIP: {h['name']} already present on "
+                      f"{host}:{port}{request_path}", file=sys.stderr)
+        if not inject_headers and decision.get("decision") == "allow":
+            print(f"[nas-addon] NO INJECT: no credentials matched for "
+                  f"{host}:{port}{request_path}", file=sys.stderr)
 
         if "proxy-authorization" in flow.request.headers:
             del flow.request.headers["proxy-authorization"]
