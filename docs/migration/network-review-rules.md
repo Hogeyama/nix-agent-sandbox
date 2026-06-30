@@ -64,8 +64,8 @@ reviewRules {
 Use Pkl helper functions to reduce verbosity:
 
 ```pkl
-local function allow(host: String) = new ReviewRule { host = host; action = "allow" }
-local function deny(host: String) = new ReviewRule { host = host; action = "deny" }
+local function allow(h: String) = new ReviewRule { host = h; action = "allow" }
+local function deny(h: String) = new ReviewRule { host = h; action = "deny" }
 
 reviewRules {
   deny("evil.com")
@@ -145,8 +145,8 @@ local commonNetwork: NetworkConfig = new {
 }
 
 // ===== AFTER =====
-local function allow(host: String) = new ReviewRule { host = host; action = "allow" }
-local function deny(host: String) = new ReviewRule { host = host; action = "deny" }
+local function allow(h: String) = new ReviewRule { host = h; action = "allow" }
+local function deny(h: String) = new ReviewRule { host = h; action = "deny" }
 
 local commonNetwork: NetworkConfig = new {
   reviewRules {
