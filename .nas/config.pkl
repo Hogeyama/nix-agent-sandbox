@@ -13,12 +13,6 @@ local commonEnv: Listing<EnvConfig> = new {
   new { key = "GIT_CONFIG_VALUE_0"; val = "gpg" }
   new { key = "TERM"; val = "xterm-256color" }
   new {
-    key = "GITHUB_TOKEN"
-    // push禁止にするなら:
-    // valCmd = "pass github/token/for-agent"
-    valCmd = "gh auth token"
-  }
-  new {
     key = "PATH"
     val = "~/.nix-profile/bin"
     mode = "suffix"
@@ -45,8 +39,17 @@ local commonEnv: Listing<EnvConfig> = new {
 
 local function allow(h: String) = new ReviewRule { host = h; action = "allow" }
 local function deny(h: String) = new ReviewRule { host = h; action = "deny" }
+local function ghCred(h: String) = new CredentialRule {
+  host = h
+  header = "Authorization"
+  value { valCmd = #"printf 'Basic %s' "$(printf 'x-access-token:%s' "$(gh auth token)" | base64 -w0)""# }
+}
 
 local commonNetwork: NetworkConfig = new {
+  credentials {
+    ghCred("github.com")
+    ghCred("api.github.com")
+  }
   reviewRules {
     // Deny: telemetry endpoints
     // Claude Codeがなんか送ってるやつ
