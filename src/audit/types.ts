@@ -24,6 +24,8 @@ export interface AuditLogEntry {
   scope?: string;
   /** Network-specific: the target host / URL. */
   target?: string;
+  /** Network-specific: header names injected by credential rules. */
+  injectedHeaders?: string[];
   /** Hostexec-specific: the command that was requested. */
   command?: string;
 }

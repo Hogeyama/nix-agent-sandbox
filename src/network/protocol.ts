@@ -4,6 +4,19 @@ export type ApprovalScope = "once" | "host-port" | "host";
 export type RequestKind = "connect" | "forward";
 export type Decision = "allow" | "deny";
 
+export interface InjectHeader {
+  name: string;
+  value: string;
+}
+
+export interface ResolvedCredential {
+  host: string;
+  pathPrefix?: string;
+  method?: string;
+  header: string;
+  value: string;
+}
+
 export interface SessionCredentials {
   sessionId: string;
   token: string;
@@ -41,6 +54,7 @@ export interface DecisionResponse {
   scope?: ApprovalScope;
   reason: string;
   message?: string;
+  injectHeaders?: InjectHeader[];
 }
 
 export interface PendingEntry {

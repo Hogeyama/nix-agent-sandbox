@@ -55,16 +55,17 @@ function openDatabase(dir: string): Database {
 
     db.run(`
       CREATE TABLE IF NOT EXISTS audit_log (
-        id         TEXT PRIMARY KEY,
-        timestamp  TEXT NOT NULL,
-        domain     TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        request_id TEXT NOT NULL,
-        decision   TEXT NOT NULL,
-        reason     TEXT NOT NULL,
-        scope      TEXT,
-        target     TEXT,
-        command    TEXT
+        id               TEXT PRIMARY KEY,
+        timestamp        TEXT NOT NULL,
+        domain           TEXT NOT NULL,
+        session_id       TEXT NOT NULL,
+        request_id       TEXT NOT NULL,
+        decision         TEXT NOT NULL,
+        reason           TEXT NOT NULL,
+        scope            TEXT,
+        target           TEXT,
+        command          TEXT,
+        injected_headers TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_audit_timestamp
         ON audit_log(timestamp);
@@ -73,6 +74,16 @@ function openDatabase(dir: string): Database {
       CREATE INDEX IF NOT EXISTS idx_audit_domain
         ON audit_log(domain);
     `);
+    // Add injected_headers column if it doesn't exist (migration for existing databases).
+    try {
+      db.run("ALTER TABLE audit_log ADD COLUMN injected_headers TEXT");
+    } catch (e) {
+      // Only ignore "duplicate column name" — any other error is unexpected.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.includes("duplicate column name")) {
+        throw e;
+      }
+    }
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
     // held for the rest of the process lifetime.
@@ -119,9 +130,9 @@ export async function appendAuditLog(
   db.prepare(
     `INSERT OR REPLACE INTO audit_log
        (id, timestamp, domain, session_id, request_id,
-        decision, reason, scope, target, command)
+        decision, reason, scope, target, command, injected_headers)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -133,6 +144,9 @@ export async function appendAuditLog(
     entry.scope ?? null,
     entry.target ?? null,
     entry.command ?? null,
+    entry.injectedHeaders !== undefined
+      ? JSON.stringify(entry.injectedHeaders)
+      : null,
   );
 }
 
@@ -220,7 +234,7 @@ export async function queryAuditLogs(
   }
 
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
-                      decision, reason, scope, target, command
+                      decision, reason, scope, target, command, injected_headers
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY timestamp ASC, id ASC`;
@@ -240,6 +254,7 @@ interface AuditLogRow {
   scope: string | null;
   target: string | null;
   command: string | null;
+  injected_headers: string | null;
 }
 
 function rowToEntry(row: AuditLogRow): AuditLogEntry {
@@ -255,6 +270,8 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
   if (row.scope !== null) entry.scope = row.scope;
   if (row.target !== null) entry.target = row.target;
   if (row.command !== null) entry.command = row.command;
+  if (row.injected_headers !== null)
+    entry.injectedHeaders = JSON.parse(row.injected_headers) as string[];
   return entry;
 }
 

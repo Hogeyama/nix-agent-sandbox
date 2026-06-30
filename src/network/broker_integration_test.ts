@@ -771,3 +771,111 @@ async function withTimeout<T>(
     }
   }
 }
+
+test("SessionBroker: allow decision includes injectHeaders for matching credentials", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_cred",
+    reviewRules: [{ host: "github.com", action: "allow" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    auditDir,
+    resolvedCredentials: [
+      {
+        host: "github.com",
+        header: "Authorization",
+        value: "token ghp_test123",
+      },
+    ],
+  });
+  const socketPath = `${paths.brokersDir}/sess_cred/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_cred", "req_cred_1", "github.com", 443),
+    );
+    expect(response.decision).toEqual("allow");
+    expect(response.injectHeaders).toEqual([
+      { name: "Authorization", value: "token ghp_test123" },
+    ]);
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs.length).toEqual(1);
+    expect(logs[0].injectedHeaders).toEqual(["Authorization"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: deny decision does not include injectHeaders", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_cred",
+    reviewRules: [{ host: "github.com", action: "deny" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    resolvedCredentials: [
+      {
+        host: "github.com",
+        header: "Authorization",
+        value: "token ghp_test123",
+      },
+    ],
+  });
+  const socketPath = `${paths.brokersDir}/sess_cred/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_cred", "req_cred_deny", "github.com", 443),
+    );
+    expect(response.decision).toEqual("deny");
+    expect(response.injectHeaders).toBeUndefined();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: all-match injects multiple credentials for same host", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_multi",
+    reviewRules: [{ host: "api.example.com", action: "allow" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    resolvedCredentials: [
+      { host: "api.example.com", header: "Authorization", value: "Bearer tok" },
+      { host: "api.example.com", header: "X-API-Key", value: "key123" },
+    ],
+  });
+  const socketPath = `${paths.brokersDir}/sess_multi/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_multi", "req_multi", "api.example.com", 443),
+    );
+    expect(response.decision).toEqual("allow");
+    expect(response.injectHeaders).toEqual([
+      { name: "Authorization", value: "Bearer tok" },
+      { name: "X-API-Key", value: "key123" },
+    ]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
