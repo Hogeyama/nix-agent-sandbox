@@ -314,7 +314,9 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       DockerBuildServiceLive.pipe(
         Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
       ),
-      CaServiceLive.pipe(Layer.provide(FsServiceLive)),
+      CaServiceLive.pipe(
+        Layer.provide(Layer.merge(FsServiceLive, dockerLayer)),
+      ),
       ProxyServiceLive.pipe(Layer.provide(dockerLayer)),
       ForwardPortRelayServiceLive,
       FsServiceLive,

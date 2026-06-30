@@ -12,6 +12,7 @@
 
 import { Context, Effect, Layer } from "effect";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import { DockerService } from "../../services/docker.ts";
 import { FsService } from "../../services/fs.ts";
 
 // ---------------------------------------------------------------------------
@@ -32,53 +33,59 @@ export class CaService extends Context.Tag("nas/CaService")<
 // Live implementation
 // ---------------------------------------------------------------------------
 
-export const CaServiceLive: Layer.Layer<CaService, never, FsService> =
-  Layer.effect(
-    CaService,
-    Effect.gen(function* () {
-      const fs = yield* FsService;
+export const CaServiceLive: Layer.Layer<
+  CaService,
+  never,
+  FsService | DockerService
+> = Layer.effect(
+  CaService,
+  Effect.gen(function* () {
+    const fs = yield* FsService;
+    const docker = yield* DockerService;
 
-      return CaService.of({
-        ensureCaCert: (paths, proxyImage) =>
-          Effect.gen(function* () {
-            const certPath = `${paths.caCertDir}/mitmproxy-ca-cert.pem`;
-            const certExists = yield* fs.exists(certPath);
-            if (certExists) return;
+    return CaService.of({
+      ensureCaCert: (paths, proxyImage) =>
+        Effect.gen(function* () {
+          const certPath = `${paths.caCertDir}/mitmproxy-ca-cert.pem`;
+          const certExists = yield* fs.exists(certPath);
 
-            yield* Effect.tryPromise({
-              try: async () => {
-                const proc = Bun.spawn(
-                  [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-v",
-                    `${paths.caCertDir}:/home/mitmproxy/.mitmproxy`,
-                    "--entrypoint",
-                    "python3",
-                    proxyImage,
-                    "-c",
-                    "from mitmproxy.certs import CertStore; CertStore.from_store('/home/mitmproxy/.mitmproxy', 'mitmproxy', 2048)",
-                  ],
-                  { stdout: "ignore", stderr: "pipe" },
+          if (certExists) return;
+
+          yield* docker.ensureImage(proxyImage).pipe(Effect.orDie);
+          yield* Effect.tryPromise({
+            try: async () => {
+              const proc = Bun.spawn(
+                [
+                  "docker",
+                  "run",
+                  "--rm",
+                  "-v",
+                  `${paths.caCertDir}:/home/mitmproxy/.mitmproxy`,
+                  "--entrypoint",
+                  "python3",
+                  proxyImage,
+                  "-c",
+                  "from mitmproxy.certs import CertStore; CertStore.from_store('/home/mitmproxy/.mitmproxy', 'mitmproxy', 2048)",
+                ],
+                { stdout: "ignore", stderr: "pipe" },
+              );
+              const exitCode = await proc.exited;
+              if (exitCode !== 0) {
+                const stderr = await new Response(proc.stderr).text();
+                throw new Error(
+                  `CA cert generation failed (exit ${exitCode}): ${stderr}`,
                 );
-                const exitCode = await proc.exited;
-                if (exitCode !== 0) {
-                  const stderr = await new Response(proc.stderr).text();
-                  throw new Error(
-                    `CA cert generation failed (exit ${exitCode}): ${stderr}`,
-                  );
-                }
-              },
-              catch: (e) =>
-                new Error(
-                  `CaService: ${e instanceof Error ? e.message : String(e)}`,
-                ),
-            }).pipe(Effect.orDie);
-          }),
-      });
-    }),
-  );
+              }
+            },
+            catch: (e) =>
+              new Error(
+                `CaService: ${e instanceof Error ? e.message : String(e)}`,
+              ),
+          }).pipe(Effect.orDie);
+        }),
+    });
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Fake / test implementation

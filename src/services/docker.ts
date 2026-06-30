@@ -19,6 +19,7 @@ import {
   dockerContainerExists,
   dockerContainerIp,
   dockerContainerIpOnNetwork,
+  dockerEnsureImage,
   dockerExec,
   dockerInspectContainer,
   dockerInspectNetwork,
@@ -158,6 +159,8 @@ export class DockerService extends Context.Tag("nas/DockerService")<
     readonly inspectVolume: (
       name: string,
     ) => Effect.Effect<DockerVolumeDetails, Error>;
+    /** Returns true if the image was pulled, false if already present. */
+    readonly ensureImage: (tag: string) => Effect.Effect<boolean, Error>;
   }
 >() {}
 
@@ -329,6 +332,12 @@ export const DockerServiceLive: Layer.Layer<DockerService> = Layer.succeed(
         try: () => dockerInspectVolume(name),
         catch: wrapError("docker volume inspect failed"),
       }),
+
+    ensureImage: (tag) =>
+      Effect.tryPromise({
+        try: () => dockerEnsureImage(tag),
+        catch: wrapError("docker pull failed"),
+      }),
   }),
 );
 
@@ -395,6 +404,7 @@ export interface DockerServiceFakeConfig {
   readonly inspectVolume?: (
     name: string,
   ) => Effect.Effect<DockerVolumeDetails, Error>;
+  readonly ensureImage?: (tag: string) => Effect.Effect<boolean, Error>;
 }
 
 export function makeDockerServiceFake(
@@ -454,6 +464,7 @@ export function makeDockerServiceFake(
             labels: {},
             containers: [],
           })),
+      ensureImage: overrides.ensureImage ?? (() => Effect.succeed(false)),
     }),
   );
 }
