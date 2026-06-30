@@ -54,11 +54,15 @@ export const CaServiceLive: Layer.Layer<
           yield* docker.ensureImage(proxyImage).pipe(Effect.orDie);
           yield* Effect.tryPromise({
             try: async () => {
+              const uid = process.getuid?.() ?? 0;
+              const gid = process.getgid?.() ?? 0;
               const proc = Bun.spawn(
                 [
                   "docker",
                   "run",
                   "--rm",
+                  "--user",
+                  `${uid}:${gid}`,
                   "-v",
                   `${paths.caCertDir}:/home/mitmproxy/.mitmproxy`,
                   "--entrypoint",
