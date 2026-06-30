@@ -7,7 +7,13 @@
 
 import { logWarn } from "../log.ts";
 import { parseAllowlistEntry } from "../network/protocol.ts";
-import type { Config, HostExecRule, Profile, ReviewRule } from "./types.ts";
+import type {
+  Config,
+  CredentialRule,
+  HostExecRule,
+  Profile,
+  ReviewRule,
+} from "./types.ts";
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -61,6 +67,9 @@ function validateProfile(name: string, profile: Profile): string[] {
 
   // --- reviewRules shadowing warnings ---
   warnShadowedReviewRules(name, profile.network.reviewRules);
+
+  // --- credentials validation ---
+  errors.push(...validateCredentials(name, profile.network.credentials));
 
   // --- forwardPorts の予約ポート(18080)・重複検出 ---
   errors.push(
@@ -202,6 +211,55 @@ function validateEnvEntries(
         );
       }
     }
+  }
+  return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Credential validation
+// ---------------------------------------------------------------------------
+
+const FORBIDDEN_CREDENTIAL_HEADERS = new Set([
+  "host",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "proxy-authorization",
+  "proxy-connection",
+  "keep-alive",
+  "te",
+  "trailer",
+  "upgrade",
+]);
+
+function validateCredentials(
+  profileName: string,
+  credentials: CredentialRule[],
+): string[] {
+  const errors: string[] = [];
+  for (const [i, cred] of credentials.entries()) {
+    const prefix = `profile "${profileName}": network.credentials[${i}]`;
+
+    const normalizedHeader = cred.header.trim();
+    if (!normalizedHeader) {
+      errors.push(`${prefix}.header must not be empty`);
+    } else if (
+      FORBIDDEN_CREDENTIAL_HEADERS.has(normalizedHeader.toLowerCase())
+    ) {
+      errors.push(
+        `${prefix}.header "${cred.header}" is a forbidden header for credential injection`,
+      );
+    }
+
+    const hasVal = "val" in cred.value && cred.value.val !== undefined;
+    const hasValCmd = "valCmd" in cred.value && cred.value.valCmd !== undefined;
+    if (hasVal && hasValCmd) {
+      errors.push(`${prefix}.value: only one of val or valCmd may be set`);
+    } else if (!hasVal && !hasValCmd) {
+      errors.push(`${prefix}.value: exactly one of val or valCmd must be set`);
+    }
+
+    errors.push(...validateHostList(`${prefix}.host`, [cred.host]));
   }
   return errors;
 }

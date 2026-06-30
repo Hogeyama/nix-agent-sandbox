@@ -37,6 +37,7 @@ function makeProfile(): Profile {
     session: DEFAULT_SESSION_CONFIG,
     network: {
       reviewRules: [],
+      credentials: [],
       proxy: { forwardPorts: [] },
       pendingTimeoutSeconds: 300,
       pendingDefaultScope: "host-port",

@@ -170,10 +170,39 @@ class ReviewRule {
   action: "allow"|"review"|"deny" = "review"
 }
 
+class CredentialValSpec {
+  /// ヘッダー値（固定値）。`valCmd` と排他。
+  val: String?
+
+  /// ヘッダー値をコマンド出力から取得する。`val` と排他。
+  valCmd: String?
+}
+
+class CredentialRule {
+  /// ホストパターン。"*.example.com" 等のワイルドカード対応。
+  host: String
+
+  /// パスプレフィックス。省略時は全パスにマッチ。
+  pathPrefix: String?
+
+  /// HTTP メソッド（大文字小文字無視）。省略時は全メソッドにマッチ。
+  method: String?
+
+  /// 注入するヘッダー名。"Authorization" 等。
+  header: String
+
+  /// ヘッダー値の指定。`val`（固定値）または `valCmd`（コマンド出力）のいずれか一方を設定する。
+  value: CredentialValSpec
+}
+
 class NetworkConfig {
   /// ネットワークアクセス制御ルール。上から順に評価し、最初にマッチしたルールの
   /// action を適用する。どのルールにもマッチしない場合は暗黙 deny。
   reviewRules: Listing<ReviewRule> = new {}
+
+  /// ホスト別認証情報。allow 判定されたリクエストにヘッダーを注入する。
+  /// アクセス許可は reviewRules で別途設定が必要。
+  credentials: Listing<CredentialRule> = new {}
 
   proxy: ProxyConfig = new {}
 
