@@ -248,6 +248,14 @@ export function targetKeyForScope(
   return targetKey(target);
 }
 
+export function matchesPathPrefix(path: string, prefix: string): boolean {
+  if (!path.startsWith(prefix)) return false;
+  if (path.length === prefix.length) return true;
+  if (prefix.endsWith("/")) return true;
+  const next = path[prefix.length];
+  return next === "/" || next === "?";
+}
+
 export function denyReasonForTarget(target: NormalizedTarget): string | null {
   const host = normalizeHost(target.host);
   if (host === "localhost") {

@@ -119,6 +119,17 @@ def _match_host_pattern(host: str, pattern: str) -> bool:
     return normalized == pattern.lower()
 
 
+def _matches_path_prefix(path: str, prefix: str) -> bool:
+    if not path.startswith(prefix):
+        return False
+    if len(path) == len(prefix):
+        return True
+    if prefix.endswith("/"):
+        return True
+    nxt = path[len(prefix)]
+    return nxt == "/" or nxt == "?"
+
+
 def _match_review_rule(rule: dict, method: str, host: str, path: str) -> bool:
     if "method" in rule and rule["method"]:
         if rule["method"].upper() != method.upper():
@@ -127,7 +138,7 @@ def _match_review_rule(rule: dict, method: str, host: str, path: str) -> bool:
         if not _match_host_pattern(host, rule["host"]):
             return False
     if "pathPrefix" in rule and rule["pathPrefix"]:
-        if not path.startswith(rule["pathPrefix"]):
+        if not _matches_path_prefix(path, rule["pathPrefix"]):
             return False
     return True
 

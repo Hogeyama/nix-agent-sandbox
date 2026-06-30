@@ -3,6 +3,7 @@ import {
   decodeProxyAuthorization,
   denyReasonForTarget,
   matchesHostPattern,
+  matchesPathPrefix,
   normalizeHost,
   normalizeTarget,
   parseAllowlistEntry,
@@ -184,4 +185,28 @@ test("denyReasonForTarget: blocks private and link-local IPv6", () => {
   ).toEqual(null);
   // fec0:: is NOT link-local (outside fe80::/10)
   expect(denyReasonForTarget({ host: "fec0::1", port: 443 })).toEqual(null);
+});
+
+test("matchesPathPrefix: exact match", () => {
+  expect(matchesPathPrefix("/api", "/api")).toBe(true);
+});
+
+test("matchesPathPrefix: segment boundary with slash", () => {
+  expect(matchesPathPrefix("/api/users", "/api")).toBe(true);
+});
+
+test("matchesPathPrefix: segment boundary with query string", () => {
+  expect(matchesPathPrefix("/api?key=1", "/api")).toBe(true);
+});
+
+test("matchesPathPrefix: rejects non-segment-boundary match", () => {
+  expect(matchesPathPrefix("/apiv2", "/api")).toBe(false);
+});
+
+test("matchesPathPrefix: trailing slash in prefix", () => {
+  expect(matchesPathPrefix("/api/users", "/api/")).toBe(true);
+});
+
+test("matchesPathPrefix: no match at all", () => {
+  expect(matchesPathPrefix("/other", "/api")).toBe(false);
 });

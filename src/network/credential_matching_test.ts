@@ -99,3 +99,32 @@ test("findMatchingCredentials: no match returns empty", () => {
   const result = findMatchingCredentials(creds, "unknown.com", 443, "GET", "/");
   expect(result).toEqual([]);
 });
+
+test("findMatchingCredentials: pathPrefix respects segment boundary", () => {
+  const segmentCreds: ResolvedCredential[] = [
+    {
+      host: "api.example.com",
+      pathPrefix: "/api",
+      header: "Authorization",
+      value: "Bearer tok",
+    },
+  ];
+  expect(
+    findMatchingCredentials(
+      segmentCreds,
+      "api.example.com",
+      443,
+      "GET",
+      "/api/users",
+    ),
+  ).toEqual([{ name: "Authorization", value: "Bearer tok" }]);
+  expect(
+    findMatchingCredentials(
+      segmentCreds,
+      "api.example.com",
+      443,
+      "GET",
+      "/apiv2",
+    ),
+  ).toEqual([]);
+});

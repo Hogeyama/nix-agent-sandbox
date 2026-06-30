@@ -1,6 +1,7 @@
 import type { InjectHeader, ResolvedCredential } from "./protocol.ts";
 import {
   matchesHostPattern,
+  matchesPathPrefix,
   normalizeHost,
   parseAllowlistEntry,
 } from "./protocol.ts";
@@ -27,7 +28,10 @@ export function findMatchingCredentials(
       cred.method.toUpperCase() !== method.toUpperCase()
     )
       continue;
-    if (cred.pathPrefix !== undefined && !path.startsWith(cred.pathPrefix))
+    if (
+      cred.pathPrefix !== undefined &&
+      !matchesPathPrefix(path, cred.pathPrefix)
+    )
       continue;
     headers.push({ name: cred.header, value: cred.value });
   }
