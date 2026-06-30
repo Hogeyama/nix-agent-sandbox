@@ -13,6 +13,7 @@ import {
   writeJsonLine,
 } from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
+import { findMatchingCredentials } from "./credential_matching.ts";
 import {
   closeNotification,
   notifyPendingRequest,
@@ -25,6 +26,7 @@ import {
   denyReasonForTarget,
   matchesHostPattern,
   type PendingEntry,
+  type ResolvedCredential,
   targetKey,
   targetKeyForScope,
 } from "./protocol.ts";
@@ -51,6 +53,8 @@ interface BrokerOptions {
   negativeCacheTtlMs?: number;
   /** Directory for audit JSONL logs. If set, decisions are recorded. */
   auditDir?: string;
+  /** Pre-resolved credentials to inject into matching allow responses. */
+  resolvedCredentials?: ResolvedCredential[];
 }
 
 interface PendingWaiter {
@@ -111,6 +115,7 @@ export class SessionBroker {
   private readonly uiPort?: number;
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
+  private readonly resolvedCredentials: ResolvedCredential[];
   private socketPath: string | null = null;
   private server: Server | null = null;
   private readonly approvedTargets = new Set<string>();
@@ -133,6 +138,7 @@ export class SessionBroker {
     this.uiPort = options.uiPort;
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
+    this.resolvedCredentials = options.resolvedCredentials ?? [];
     this.negativeCache = new TtlLruCache<string, true>({
       maxSize: 1024,
       ttlMs: options.negativeCacheTtlMs ?? 30_000,
@@ -262,8 +268,19 @@ export class SessionBroker {
       this.approvedTargets.has(targetCacheKey) ||
       this.approvedHosts.has(message.target.host)
     ) {
-      await this.recordAudit(message.requestId, "allow", "approved", targetStr);
-      return allowDecision(message.requestId, "approved");
+      const decision = this.injectCredentialHeaders(
+        allowDecision(message.requestId, "approved"),
+        message,
+      );
+      const headerNames = decision.injectHeaders?.map((h) => h.name);
+      await this.recordAudit(
+        message.requestId,
+        "allow",
+        "approved",
+        targetStr,
+        headerNames,
+      );
+      return decision;
     }
 
     if (this.negativeCache.get(targetCacheKey) !== undefined) {
@@ -280,13 +297,19 @@ export class SessionBroker {
     const matchedRule = this.findMatchingRule(message);
     if (matchedRule !== null) {
       if (matchedRule.action === "allow") {
+        const decision = this.injectCredentialHeaders(
+          allowDecision(message.requestId, "review-rule"),
+          message,
+        );
+        const headerNames = decision.injectHeaders?.map((h) => h.name);
         await this.recordAudit(
           message.requestId,
           "allow",
           "review-rule",
           targetStr,
+          headerNames,
         );
-        return allowDecision(message.requestId, "review-rule");
+        return decision;
       }
       if (matchedRule.action === "deny") {
         await this.recordAudit(
@@ -464,16 +487,22 @@ export class SessionBroker {
     for (const [requestId, request] of group.requests.entries()) {
       this.requestIndex.delete(requestId);
       await removePendingEntry(this.paths, this.sessionId, requestId);
-      const decision: DecisionResponse = {
+      const baseWithId: DecisionResponse = {
         ...baseDecision,
         requestId: request.requestId,
       };
+      const decision =
+        outcome === "allow"
+          ? this.injectCredentialHeaders(baseWithId, request)
+          : baseWithId;
       const targetStr = `${request.target.host}:${request.target.port}`;
+      const headerNames = decision.injectHeaders?.map((h) => h.name);
       await this.recordAudit(
         requestId,
         outcome === "allow" ? "allow" : "deny",
         baseDecision.reason,
         targetStr,
+        headerNames,
       );
       const waiter = group.waiters.get(requestId);
       waiter?.resolve(decision);
@@ -512,6 +541,7 @@ export class SessionBroker {
     decision: "allow" | "deny",
     reason: string,
     target: string,
+    injectedHeaders?: string[],
   ): Promise<void> {
     if (!this.auditDir) return;
     const entry: AuditLogEntry = {
@@ -523,8 +553,31 @@ export class SessionBroker {
       decision,
       reason,
       target,
+      injectedHeaders,
     };
     await appendAuditLog(entry, this.auditDir);
+  }
+
+  private injectCredentialHeaders(
+    decision: DecisionResponse,
+    message: AuthorizeRequest,
+  ): DecisionResponse {
+    if (
+      decision.decision !== "allow" ||
+      this.resolvedCredentials.length === 0
+    ) {
+      return decision;
+    }
+    const path = message.reviewContext?.path ?? "";
+    const headers = findMatchingCredentials(
+      this.resolvedCredentials,
+      message.target.host,
+      message.target.port,
+      message.method,
+      path,
+    );
+    if (headers.length === 0) return decision;
+    return { ...decision, injectHeaders: headers };
   }
 }
 
