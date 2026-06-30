@@ -10,6 +10,7 @@ import { expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { makeFsServiceFake } from "../../services/fs.ts";
+import { makeProcessServiceFake } from "../../services/process.ts";
 import {
   NetworkRuntimeService,
   NetworkRuntimeServiceLive,
@@ -32,10 +33,18 @@ function paths(): NetworkRuntimePaths {
   };
 }
 
+function makeLiveLayer(
+  fsFake: ReturnType<typeof makeFsServiceFake>,
+): Layer.Layer<NetworkRuntimeService> {
+  return NetworkRuntimeServiceLive.pipe(
+    Layer.provide(Layer.mergeAll(fsFake.layer, makeProcessServiceFake())),
+  );
+}
+
 async function runGc(
   fsFake: ReturnType<typeof makeFsServiceFake>,
 ): Promise<void> {
-  const live = NetworkRuntimeServiceLive.pipe(Layer.provide(fsFake.layer));
+  const live = makeLiveLayer(fsFake);
   await Effect.runPromise(
     Effect.flatMap(NetworkRuntimeService, (svc) =>
       svc.gcStaleRuntime(paths()),
@@ -62,7 +71,7 @@ test("gcStaleRuntime: is a no-op", async () => {
 test("writeReviewRules: writes JSON file to reviewRulesDir", async () => {
   const fsFake = makeFsServiceFake();
   const p = paths();
-  const live = NetworkRuntimeServiceLive.pipe(Layer.provide(fsFake.layer));
+  const live = makeLiveLayer(fsFake);
 
   const rules = [{ pattern: "*.example.com", action: "allow" as const }];
   await Effect.runPromise(

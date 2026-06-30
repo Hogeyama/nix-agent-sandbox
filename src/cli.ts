@@ -324,7 +324,7 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       HostExecBrokerServiceLive,
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
-      NetworkRuntimeServiceLive.pipe(Layer.provide(FsServiceLive)),
+      NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
       OtlpReceiverServiceLive,
       ProcessServiceLive,
       DockerServiceLive,

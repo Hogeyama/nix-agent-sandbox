@@ -7,9 +7,12 @@
  */
 
 import { Context, Effect, Layer } from "effect";
+import type { CredentialRule } from "../../config/types.ts";
 import { resolveAsset } from "../../lib/asset.ts";
+import type { ResolvedCredential } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { FsService } from "../../services/fs.ts";
+import { ProcessService } from "../../services/process.ts";
 
 // ---------------------------------------------------------------------------
 // NetworkRuntimeService tag
@@ -34,6 +37,9 @@ export class NetworkRuntimeService extends Context.Tag(
       sessionId: string,
       rules: import("../../config/types.ts").ReviewRule[],
     ) => Effect.Effect<void>;
+    readonly resolveCredentials: (
+      credentials: CredentialRule[],
+    ) => Effect.Effect<ResolvedCredential[]>;
   }
 >() {}
 
@@ -44,11 +50,12 @@ export class NetworkRuntimeService extends Context.Tag(
 export const NetworkRuntimeServiceLive: Layer.Layer<
   NetworkRuntimeService,
   never,
-  FsService
+  FsService | ProcessService
 > = Layer.effect(
   NetworkRuntimeService,
   Effect.gen(function* () {
     const fs = yield* FsService;
+    const proc = yield* ProcessService;
 
     return NetworkRuntimeService.of({
       ensureRuntimeDirs: (paths) =>
@@ -84,6 +91,39 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
             mode: 0o644,
           });
         }),
+
+      resolveCredentials: (credentials) =>
+        Effect.gen(function* () {
+          const resolved: ResolvedCredential[] = [];
+          for (const [i, cred] of credentials.entries()) {
+            let value: string;
+            // Null values are caught during config validation (validateCredentials);
+            // by the time we reach here the val field is a valid string.
+            if ("val" in cred.value) {
+              value = cred.value.val;
+            } else {
+              const raw = yield* proc.exec(["sh", "-c", cred.value.valCmd]);
+              // Take the first line only: trim() removes leading/trailing
+              // whitespace (including newlines), then we take the first element
+              // after splitting on newlines to discard any extra output lines.
+              const output = raw.trim().split(/\r?\n/)[0];
+              if (!output) {
+                throw new Error(
+                  `network.credentials[${i}].valCmd returned empty output`,
+                );
+              }
+              value = output;
+            }
+            resolved.push({
+              host: cred.host,
+              pathPrefix: cred.pathPrefix,
+              method: cred.method,
+              header: cred.header.trim(),
+              value,
+            });
+          }
+          return resolved;
+        }),
     });
   }),
 );
@@ -105,6 +145,9 @@ export interface NetworkRuntimeServiceFakeConfig {
     sessionId: string,
     rules: import("../../config/types.ts").ReviewRule[],
   ) => Effect.Effect<void>;
+  readonly resolveCredentials?: (
+    credentials: CredentialRule[],
+  ) => Effect.Effect<ResolvedCredential[]>;
 }
 
 export function makeNetworkRuntimeServiceFake(
@@ -117,6 +160,8 @@ export function makeNetworkRuntimeServiceFake(
       gcStaleRuntime: overrides.gcStaleRuntime ?? (() => Effect.void),
       copyAddonScript: overrides.copyAddonScript ?? (() => Effect.void),
       writeReviewRules: overrides.writeReviewRules ?? (() => Effect.void),
+      resolveCredentials:
+        overrides.resolveCredentials ?? (() => Effect.succeed([])),
     }),
   );
 }
