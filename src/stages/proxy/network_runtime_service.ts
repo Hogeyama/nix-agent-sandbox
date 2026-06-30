@@ -54,11 +54,14 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
       ensureRuntimeDirs: (paths) =>
         Effect.gen(function* () {
           yield* fs.mkdir(paths.runtimeDir, { recursive: true, mode: 0o755 });
-          yield* fs.mkdir(paths.sessionsDir, { recursive: true });
-          yield* fs.mkdir(paths.pendingDir, { recursive: true });
-          yield* fs.mkdir(paths.brokersDir, { recursive: true });
-          yield* fs.mkdir(paths.caCertDir, { recursive: true });
-          yield* fs.mkdir(paths.reviewRulesDir, { recursive: true });
+          yield* fs.mkdir(paths.sessionsDir, { recursive: true, mode: 0o755 });
+          yield* fs.mkdir(paths.pendingDir, { recursive: true, mode: 0o755 });
+          yield* fs.mkdir(paths.brokersDir, { recursive: true, mode: 0o755 });
+          yield* fs.mkdir(paths.caCertDir, { recursive: true, mode: 0o755 });
+          yield* fs.mkdir(paths.reviewRulesDir, {
+            recursive: true,
+            mode: 0o755,
+          });
         }),
 
       gcStaleRuntime: (_paths) => Effect.void,
