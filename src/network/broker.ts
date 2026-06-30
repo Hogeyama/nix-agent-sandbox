@@ -25,6 +25,7 @@ import {
   type DecisionResponse,
   denyReasonForTarget,
   matchesHostPattern,
+  matchesPathPrefix,
   type PendingEntry,
   type ResolvedCredential,
   targetKey,
@@ -523,7 +524,7 @@ export class SessionBroker {
         continue;
       if (rule.pathPrefix !== undefined) {
         const p = message.reviewContext?.path ?? "";
-        if (!p.startsWith(rule.pathPrefix)) continue;
+        if (!matchesPathPrefix(p, rule.pathPrefix)) continue;
       }
       return rule;
     }
