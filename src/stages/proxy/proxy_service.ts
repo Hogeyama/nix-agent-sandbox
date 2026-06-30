@@ -101,6 +101,11 @@ export const ProxyServiceLive: Layer.Layer<ProxyService, never, DockerService> =
                     target: "/nas-network",
                     mode: "rw",
                   },
+                  {
+                    source: plan.runtimePaths.caCertDir,
+                    target: "/home/mitmproxy/.mitmproxy",
+                    mode: "rw",
+                  },
                 ],
                 labels: {
                   [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,

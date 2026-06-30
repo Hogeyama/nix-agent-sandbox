@@ -282,6 +282,11 @@ test("ensureSharedProxy: launches with correct labels, mounts, and command", asy
       target: "/nas-network",
       mode: "rw",
     },
+    {
+      source: plan.runtimePaths.caCertDir,
+      target: "/home/mitmproxy/.mitmproxy",
+      mode: "rw",
+    },
   ]);
   expect(run.labels).toEqual({
     [NAS_MANAGED_LABEL]: NAS_MANAGED_VALUE,
