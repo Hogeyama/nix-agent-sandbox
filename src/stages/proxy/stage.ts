@@ -177,16 +177,10 @@ export function planProxy(
     readOnly: true,
   };
 
-  const jvmTrustStoreMount: MountSpec = {
-    source: `${runtimePaths.caCertDir}/mitmproxy-ca-cert.p12`,
-    target: "/etc/ssl/certs/nas-proxy-truststore.p12",
-    readOnly: true,
-  };
-
   const container = buildContainerState(input, {
     sessionNetworkName,
     envVars,
-    extraMounts: [...forwardPortMounts, caCertMount, jvmTrustStoreMount],
+    extraMounts: [...forwardPortMounts, caCertMount],
   });
 
   const network: NetworkState = {

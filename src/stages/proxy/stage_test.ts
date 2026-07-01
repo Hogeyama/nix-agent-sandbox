@@ -285,24 +285,6 @@ test("ProxyStage: uses profile network settings", () => {
   expect(result.envVars.no_proxy).toEqual("localhost,127.0.0.1");
 });
 
-test("ProxyStage: mounts JVM PKCS12 truststore alongside PEM cert", () => {
-  const profile = makeProfile({
-    network: { reviewRules: [{ host: "example.com", action: "allow" }] },
-  });
-  const { shared, container, observability } = makeInput(profile);
-  const result = planProxy({ ...shared, container, observability })!;
-  const mounts = result.outputOverrides.container!.mounts;
-
-  const p12Mount = mounts.find(
-    (m) => m.target === "/etc/ssl/certs/nas-proxy-truststore.p12",
-  );
-  expect(p12Mount).toBeDefined();
-  expect(p12Mount!.source).toEqual(
-    "/run/user/1000/nas/network/mitmproxy-ca/mitmproxy-ca-cert.p12",
-  );
-  expect(p12Mount!.readOnly).toEqual(true);
-});
-
 test("ProxyStage: planner merges proxy settings into existing container slice", () => {
   const profile = makeProfile({
     network: { reviewRules: [{ host: "example.com", action: "allow" }] },
@@ -329,11 +311,6 @@ test("ProxyStage: planner merges proxy settings into existing container slice", 
       {
         source: "/run/user/1000/nas/network/mitmproxy-ca/mitmproxy-ca-cert.pem",
         target: "/usr/local/share/ca-certificates/nas-proxy.crt",
-        readOnly: true,
-      },
-      {
-        source: "/run/user/1000/nas/network/mitmproxy-ca/mitmproxy-ca-cert.p12",
-        target: "/etc/ssl/certs/nas-proxy-truststore.p12",
         readOnly: true,
       },
     ],

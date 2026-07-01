@@ -89,10 +89,19 @@ if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ]; then
   update-ca-certificates 2>/dev/null || true
   nas_info "[nas] mitmproxy CA certificate installed"
 fi
-JVM_TRUSTSTORE="/etc/ssl/certs/nas-proxy-truststore.p12"
-if [ -f "$JVM_TRUSTSTORE" ]; then
-  export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djavax.net.ssl.trustStore=$JVM_TRUSTSTORE -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
-  nas_info "[nas] JVM trust store configured for proxy CA"
+JVM_TRUSTSTORE="/tmp/nas-proxy-truststore.p12"
+if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ] && command -v openssl &>/dev/null; then
+  openssl pkcs12 -export -nokeys \
+    -in /usr/local/share/ca-certificates/nas-proxy.crt \
+    -out "$JVM_TRUSTSTORE" \
+    -passout pass:changeit \
+    -name nas-proxy \
+    -certpbe PBE-SHA1-3DES \
+    -macalg sha1 2>/dev/null
+  if [ -f "$JVM_TRUSTSTORE" ]; then
+    export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djavax.net.ssl.trustStore=$JVM_TRUSTSTORE -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
+    nas_debug "[nas] JVM trust store configured for proxy CA"
+  fi
 fi
 nas_measure_done "ca-cert" "$CA_CERT_START"
 
