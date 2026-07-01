@@ -79,9 +79,10 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
             "../../docker/mitmproxy/nas_addon.py",
           );
           const source = yield* fs.readFile(addonSource);
-          const existing = yield* fs
-            .readFile(paths.addonScriptPath)
-            .pipe(Effect.catchAll(() => Effect.succeed("")));
+          const alreadyExists = yield* fs.exists(paths.addonScriptPath);
+          const existing = alreadyExists
+            ? yield* fs.readFile(paths.addonScriptPath)
+            : "";
           if (source === existing) return;
           yield* fs.writeFile(paths.addonScriptPath, source, { mode: 0o644 });
         }),
