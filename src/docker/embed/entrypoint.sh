@@ -91,7 +91,7 @@ if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ]; then
 fi
 JVM_TRUSTSTORE="/etc/ssl/certs/nas-proxy-truststore.p12"
 if [ -f "$JVM_TRUSTSTORE" ]; then
-  export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djavax.net.ssl.trustStore=$JVM_TRUSTSTORE -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
+  export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djavax.net.ssl.trustStore=$JVM_TRUSTSTORE -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
   nas_info "[nas] JVM trust store configured for proxy CA"
 fi
 nas_measure_done "ca-cert" "$CA_CERT_START"
