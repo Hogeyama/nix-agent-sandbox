@@ -47,45 +47,92 @@ export const CaServiceLive: Layer.Layer<
       ensureCaCert: (paths, proxyImage) =>
         Effect.gen(function* () {
           const certPath = `${paths.caCertDir}/mitmproxy-ca-cert.pem`;
+          const p12Path = `${paths.caCertDir}/mitmproxy-ca-cert.p12`;
           const certExists = yield* fs.exists(certPath);
+          const p12Exists = yield* fs.exists(p12Path);
 
-          if (certExists) return;
+          if (certExists && p12Exists) return;
 
           yield* docker.ensureImage(proxyImage).pipe(Effect.orDie);
-          yield* Effect.tryPromise({
-            try: async () => {
-              const uid = process.getuid?.() ?? 0;
-              const gid = process.getgid?.() ?? 0;
-              const proc = Bun.spawn(
-                [
-                  "docker",
-                  "run",
-                  "--rm",
-                  "--user",
-                  `${uid}:${gid}`,
-                  "-v",
-                  `${paths.caCertDir}:/home/mitmproxy/.mitmproxy`,
-                  "--entrypoint",
-                  "python3",
-                  proxyImage,
-                  "-c",
-                  "from mitmproxy.certs import CertStore; CertStore.from_store('/home/mitmproxy/.mitmproxy', 'mitmproxy', 2048)",
-                ],
-                { stdout: "ignore", stderr: "pipe" },
-              );
-              const exitCode = await proc.exited;
-              if (exitCode !== 0) {
-                const stderr = await new Response(proc.stderr).text();
-                throw new Error(
-                  `CA cert generation failed (exit ${exitCode}): ${stderr}`,
+
+          const uid = process.getuid?.() ?? 0;
+          const gid = process.getgid?.() ?? 0;
+
+          if (!certExists) {
+            yield* Effect.tryPromise({
+              try: async () => {
+                const proc = Bun.spawn(
+                  [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--user",
+                    `${uid}:${gid}`,
+                    "-v",
+                    `${paths.caCertDir}:/home/mitmproxy/.mitmproxy`,
+                    "--entrypoint",
+                    "python3",
+                    proxyImage,
+                    "-c",
+                    "from mitmproxy.certs import CertStore; CertStore.from_store('/home/mitmproxy/.mitmproxy', 'mitmproxy', 2048)",
+                  ],
+                  { stdout: "ignore", stderr: "pipe" },
                 );
-              }
-            },
-            catch: (e) =>
-              new Error(
-                `CaService: ${e instanceof Error ? e.message : String(e)}`,
-              ),
-          }).pipe(Effect.orDie);
+                const exitCode = await proc.exited;
+                if (exitCode !== 0) {
+                  const stderr = await new Response(proc.stderr).text();
+                  throw new Error(
+                    `CA cert generation failed (exit ${exitCode}): ${stderr}`,
+                  );
+                }
+              },
+              catch: (e) =>
+                new Error(
+                  `CaService: ${e instanceof Error ? e.message : String(e)}`,
+                ),
+            }).pipe(Effect.orDie);
+          }
+
+          if (!p12Exists) {
+            yield* Effect.tryPromise({
+              try: async () => {
+                const proc = Bun.spawn(
+                  [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--user",
+                    `${uid}:${gid}`,
+                    "-v",
+                    `${paths.caCertDir}:/home/mitmproxy/.mitmproxy`,
+                    "--entrypoint",
+                    "python3",
+                    proxyImage,
+                    "-c",
+                    [
+                      "from cryptography.x509 import load_pem_x509_certificate",
+                      "from cryptography.hazmat.primitives.serialization.pkcs12 import serialize_key_and_certificates",
+                      "from cryptography.hazmat.primitives.serialization import BestAvailableEncryption",
+                      "cert = load_pem_x509_certificate(open('/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem', 'rb').read())",
+                      "open('/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.p12', 'wb').write(serialize_key_and_certificates(b'nas-proxy', None, cert, None, BestAvailableEncryption(b'changeit')))",
+                    ].join("; "),
+                  ],
+                  { stdout: "ignore", stderr: "pipe" },
+                );
+                const exitCode = await proc.exited;
+                if (exitCode !== 0) {
+                  const stderr = await new Response(proc.stderr).text();
+                  throw new Error(
+                    `PKCS12 truststore generation failed (exit ${exitCode}): ${stderr}`,
+                  );
+                }
+              },
+              catch: (e) =>
+                new Error(
+                  `CaService: ${e instanceof Error ? e.message : String(e)}`,
+                ),
+            }).pipe(Effect.orDie);
+          }
         }),
     });
   }),
