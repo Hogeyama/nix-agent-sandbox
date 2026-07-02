@@ -186,7 +186,7 @@ profiles {
       const config = await loadConfig({ startDir: projectDir });
       expect(config.profiles.dev.agent).toEqual("copilot");
       expect(config.profiles.dev.network.reviewRules).toEqual([
-        { host: "api.github.com", action: "allow" },
+        { host: "api.github.com", action: "allow", audit: true },
       ]);
     } finally {
       if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;

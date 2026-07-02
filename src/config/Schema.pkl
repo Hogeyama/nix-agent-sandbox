@@ -168,6 +168,8 @@ class ReviewRule {
   pathPrefix: String?
   /// マッチ時のアクション。
   action: "allow"|"review"|"deny" = "review"
+  /// マッチ時に audit ログを記録するか。省略時は true。
+  audit: Boolean = true
 }
 
 class CredentialValSpec {

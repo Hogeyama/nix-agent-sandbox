@@ -296,29 +296,34 @@ export class SessionBroker {
 
     // First-match evaluation of reviewRules.
     const matchedRule = this.findMatchingRule(message);
+    const shouldAudit = matchedRule?.audit !== false;
     if (matchedRule !== null) {
       if (matchedRule.action === "allow") {
         const decision = this.injectCredentialHeaders(
           allowDecision(message.requestId, "review-rule"),
           message,
         );
-        const headerNames = decision.injectHeaders?.map((h) => h.name);
-        await this.recordAudit(
-          message.requestId,
-          "allow",
-          "review-rule",
-          targetStr,
-          headerNames,
-        );
+        if (shouldAudit) {
+          const headerNames = decision.injectHeaders?.map((h) => h.name);
+          await this.recordAudit(
+            message.requestId,
+            "allow",
+            "review-rule",
+            targetStr,
+            headerNames,
+          );
+        }
         return decision;
       }
       if (matchedRule.action === "deny") {
-        await this.recordAudit(
-          message.requestId,
-          "deny",
-          "review-rule",
-          targetStr,
-        );
+        if (shouldAudit) {
+          await this.recordAudit(
+            message.requestId,
+            "deny",
+            "review-rule",
+            targetStr,
+          );
+        }
         return denyDecision(message.requestId, "review-rule");
       }
       // action === "review": fall through to pending queue

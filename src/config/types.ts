@@ -121,6 +121,7 @@ export interface ReviewRule {
   host?: string;
   pathPrefix?: string;
   action: "allow" | "review" | "deny";
+  audit?: boolean;
 }
 
 /** Credential の値指定 */
