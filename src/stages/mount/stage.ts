@@ -131,6 +131,16 @@ export function planMount(
 ): MountPlan {
   const { host, profile } = input;
   const workspace = resolveWorkspace(input);
+
+  // Runtime ordering guard: MaskFsStage must run before MountStage when mask
+  // config is present. The type system cannot enforce this because maskedRoot
+  // is optional, so we assert at runtime.
+  if (profile.mask?.values?.length && !workspace.maskedRoot) {
+    throw new Error(
+      "[nas] BUG: mask config is set but workspace.maskedRoot is not — MaskFsStage must run before MountStage",
+    );
+  }
+
   const dbus = resolveDbusRuntime(input);
   const directories: MountPlanDirectory[] = [];
   const args: string[] = [];
