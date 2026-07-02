@@ -14,7 +14,7 @@
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
 import type { MaskValueConfig } from "../../config/types.ts";
-import { SecretStore } from "../../hostexec/secret_store.ts";
+import { resolveSecret } from "../../hostexec/secret_store.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService } from "../../services/process.ts";
@@ -151,21 +151,19 @@ async function resolveMaskSecrets(
   const env: Record<string, string | undefined> = {};
   for (const [k, v] of host.env) env[k] = v;
 
-  const store = new SecretStore(
-    Object.fromEntries(
-      values.map((v, i) => [String(i), { from: v.source, required: true }]),
-    ),
-    { env },
-  );
-
   const secrets: string[] = [];
   for (const [i, value] of values.entries()) {
-    let resolved: string;
+    let resolved: string | null;
     try {
-      resolved = await store.require(String(i));
+      resolved = await resolveSecret(value.source, env);
     } catch (e) {
       throw new Error(
         `[nas] mask: failed to resolve mask.values[${i}].source ("${value.source}"): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    if (resolved === null || resolved === "") {
+      throw new Error(
+        `[nas] mask: failed to resolve mask.values[${i}].source ("${value.source}"): Required secret is unavailable`,
       );
     }
     const bytes = new TextEncoder().encode(resolved);

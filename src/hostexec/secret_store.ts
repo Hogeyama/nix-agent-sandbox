@@ -71,7 +71,10 @@ export const SECRET_SOURCE_PREFIXES = [
 export async function resolveSecret(
   source: string,
   env: Record<string, string | undefined>,
-  keyringResolver: (service: string, account: string) => Promise<string | null>,
+  keyringResolver: (
+    service: string,
+    account: string,
+  ) => Promise<string | null> = defaultKeyringResolver,
 ): Promise<string | null> {
   if (source.startsWith("env:")) {
     return env[source.slice(4)] ?? null;
