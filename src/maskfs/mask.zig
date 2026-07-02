@@ -4,18 +4,38 @@
 const std = @import("std");
 
 /// buf 内の各 secret の全出現をバイトごとに '*' へ置換する (in-place)。
+///
+/// 2-pass 方式:
+///   1. mark: 元の buf に対して各 secret の全出現 (重複含む) を検出し、
+///      該当するバイト位置を bool 配列に記録する。
+///   2. replace: マークされたバイトをすべて '*' に置換する。
+///
+/// これにより、自己重複マッチ (secrets=["aaa"], buf="aaaaa") や
+/// secret 間の順序依存 (secrets=["ab","abc"], buf="xabcx") でも
+/// 関与する全バイトが漏れなくマスクされる。
+/// アロケーション失敗時は fail-closed でバッファ全体を '*' にする。
 pub fn maskAll(buf: []u8, secrets: []const []const u8) void {
+    const allocator = std.heap.page_allocator;
+    const mask_arr = allocator.alloc(bool, buf.len) catch {
+        @memset(buf, '*');
+        return;
+    };
+    defer allocator.free(mask_arr);
+    @memset(mask_arr, false);
+
     for (secrets) |secret| {
         if (secret.len == 0) continue;
         var i: usize = 0;
         while (i + secret.len <= buf.len) {
             if (std.mem.eql(u8, buf[i .. i + secret.len], secret)) {
-                @memset(buf[i .. i + secret.len], '*');
-                i += secret.len;
-            } else {
-                i += 1;
+                @memset(mask_arr[i .. i + secret.len], true);
             }
+            i += 1;
         }
+    }
+
+    for (mask_arr, 0..) |marked, idx| {
+        if (marked) buf[idx] = '*';
     }
 }
 
@@ -66,8 +86,21 @@ test "maskAll replaces multiple secrets and occurrences" {
 test "maskAll handles overlapping candidates without panic" {
     var buf = "aaaa".*;
     maskAll(&buf, &.{"aaa"});
-    // 先頭の1マッチを置換後、残り "a" はマッチしない
-    try std.testing.expectEqualStrings("***a", &buf);
+    // "aaa" は位置 0..3 と 1..4 の両方でマッチするため、全4バイトがマスクされる
+    try std.testing.expectEqualStrings("****", &buf);
+}
+
+test "maskAll masks cross-secret overlap regardless of order" {
+    var buf = "xabcx".*;
+    maskAll(&buf, &.{ "ab", "abc" });
+    // "ab" だけを先にマスクすると "abc" のマッチが壊れて "c" が漏れる旧実装の不具合を防ぐ
+    try std.testing.expectEqualStrings("x***x", &buf);
+}
+
+test "maskAll masks self-overlapping longer match fully" {
+    var buf = "aaaaa".*;
+    maskAll(&buf, &.{"aaa"});
+    try std.testing.expectEqualStrings("*****", &buf);
 }
 
 test "maskAll on binary bytes" {
