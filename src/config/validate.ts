@@ -11,6 +11,7 @@ import type {
   Config,
   CredentialRule,
   HostExecRule,
+  MaskValueConfig,
   Profile,
   ReviewRule,
 } from "./types.ts";
@@ -540,7 +541,7 @@ const MASK_SOURCE_PREFIXES = ["env:", "file:", "dotenv:", "keyring:"];
 
 function validateMaskValues(
   profileName: string,
-  values: { source: string }[],
+  values: MaskValueConfig[],
 ): string[] {
   const errors: string[] = [];
   for (const [i, value] of values.entries()) {
