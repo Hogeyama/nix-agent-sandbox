@@ -1,5 +1,4 @@
-import * as path from "node:path";
-import { resolveAsset } from "../lib/asset.ts";
+import { resolveAssetBinary } from "../lib/asset.ts";
 
 /**
  * Container-side path where the intercept shared library is bind-mounted.
@@ -18,16 +17,10 @@ export const INTERCEPT_LIB_CONTAINER_PATH =
 export async function resolveInterceptLibPath(opts?: {
   assetDir?: string;
 }): Promise<string | null> {
-  const resolved = opts?.assetDir
-    ? path.join(opts.assetDir, "hostexec/hostexec_intercept.so")
-    : resolveAsset(
-        "hostexec/hostexec_intercept.so",
-        import.meta.url,
-        "./intercept/zig-out/lib/libhostexec_intercept.so",
-      );
-
-  if (await Bun.file(resolved).exists()) {
-    return resolved;
-  }
-  return null;
+  return resolveAssetBinary(
+    "hostexec/hostexec_intercept.so",
+    import.meta.url,
+    "./intercept/zig-out/lib/libhostexec_intercept.so",
+    opts,
+  );
 }
