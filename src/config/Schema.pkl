@@ -319,7 +319,8 @@ class EnvConfig {
 // ---------------------------------------------------------------------------
 
 /// マスク対象の秘密値の取得元。
-/// 対応形式: `env:VAR` / `file:/path` / `dotenv:/path#KEY` / `keyring:service/account`
+/// 対応形式: `env:VAR` / `file:/path` / `dotenv:/path#KEY` / `keyring:service/account` / `lines:/path`
+/// `lines:` はファイルの各行を個別のシークレットとして扱う (空行は無視)。
 /// リテラル値は意図的に非対応 (config.pkl が git にコミットされると履歴経由で漏れるため)。
 class MaskValueConfig {
   source: String
