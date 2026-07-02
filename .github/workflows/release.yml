@@ -26,18 +26,27 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@1828eb4e5414b8dfe36daae53ea3e4b8c3fdec7a
 
       - name: Build bundled binary
-        run: nix build .#bundled --print-build-logs
+        run: nix build .#bundled --out-link result-nas --print-build-logs
 
-      - name: Prepare artifact
+      - name: Build maskfs bundled binary
+        run: nix build .#maskfs-bundled --out-link result-maskfs --print-build-logs
+
+      - name: Prepare artifacts
         run: |
-          cp -L result nas
+          cp -L result-nas nas
           chmod 755 nas
           tar czf nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz nas
 
+          cp -L result-maskfs maskfs
+          chmod 755 maskfs
+          tar czf maskfs-${{ github.ref_name }}_${{ matrix.system }}.tar.gz maskfs
+
       - uses: actions/upload-artifact@v4
         with:
-          name: nas-${{ github.ref_name }}_${{ matrix.system }}
-          path: nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
+          name: release-${{ github.ref_name }}_${{ matrix.system }}
+          path: |
+            nas-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
+            maskfs-${{ github.ref_name }}_${{ matrix.system }}.tar.gz
 
   release:
     needs: build
@@ -57,4 +66,6 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             "nas-${TAG}_x86_64-linux.tar.gz" \
-            "nas-${TAG}_aarch64-linux.tar.gz"
+            "nas-${TAG}_aarch64-linux.tar.gz" \
+            "maskfs-${TAG}_x86_64-linux.tar.gz" \
+            "maskfs-${TAG}_aarch64-linux.tar.gz"
