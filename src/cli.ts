@@ -71,6 +71,7 @@ import {
   ContainerLaunchServiceLive,
   createLaunchStage,
 } from "./stages/launch.ts";
+import { createMaskFsStage, MaskFsServiceLive } from "./stages/maskfs.ts";
 import {
   createMountStage,
   type MountProbes,
@@ -323,6 +324,7 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
+      MaskFsServiceLive.pipe(Layer.provide(primitiveLayer)),
       MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
       OtlpReceiverServiceLive,
@@ -414,6 +416,9 @@ export function createCliPipelineBuilder({
       .add(createNixDetectStage(input))
       .add(createDbusProxyStage(input))
       .add(createDisplayStage(input, mountProbes))
+      // MaskFsStage は MountStage が読む workspace.maskedRoot を確定させるため
+      // 必ず MountStage の直前に置く。
+      .add(createMaskFsStage(input, mountProbes))
       .add(createMountStage(input, mountProbes))
       .add(createHostExecStage(input))
       // ObservabilityStage materializes the observability slice and, when
