@@ -14,27 +14,33 @@ const std = @import("std");
 /// secret 間の順序依存 (secrets=["ab","abc"], buf="xabcx") でも
 /// 関与する全バイトが漏れなくマスクされる。
 /// アロケーション失敗時は fail-closed でバッファ全体を '*' にする。
-pub fn maskAll(buf: []u8, secrets: []const []const u8) void {
-    const allocator = std.heap.page_allocator;
-    const mask_arr = allocator.alloc(bool, buf.len) catch {
-        @memset(buf, '*');
-        return;
+pub fn maskAll(buf: []u8, secrets: []const []const u8, static_mask: ?[]bool) void {
+    const mask_arr = if (static_mask) |m| blk: {
+        if (m.len >= buf.len) break :blk m[0..buf.len];
+        break :blk null;
+    } else null;
+
+    const owned_mask = mask_arr orelse blk: {
+        break :blk std.heap.page_allocator.alloc(bool, buf.len) catch {
+            @memset(buf, '*');
+            return;
+        };
     };
-    defer allocator.free(mask_arr);
-    @memset(mask_arr, false);
+    defer if (mask_arr == null) std.heap.page_allocator.free(owned_mask);
+    @memset(owned_mask, false);
 
     for (secrets) |secret| {
         if (secret.len == 0) continue;
         var i: usize = 0;
         while (i + secret.len <= buf.len) {
             if (std.mem.eql(u8, buf[i .. i + secret.len], secret)) {
-                @memset(mask_arr[i .. i + secret.len], true);
+                @memset(owned_mask[i .. i + secret.len], true);
             }
             i += 1;
         }
     }
 
-    for (mask_arr, 0..) |marked, idx| {
+    for (owned_mask, 0..) |marked, idx| {
         if (marked) buf[idx] = '*';
     }
 }
@@ -73,39 +79,39 @@ pub fn containsAny(haystack: []const u8, secrets: []const []const u8) bool {
 
 test "maskAll replaces single occurrence with same length" {
     var buf = "DB_PASSWORD=hunter2secret\n".*;
-    maskAll(&buf, &.{"hunter2secret"});
+    maskAll(&buf, &.{"hunter2secret"}, null);
     try std.testing.expectEqualStrings("DB_PASSWORD=*************\n", &buf);
 }
 
 test "maskAll replaces multiple secrets and occurrences" {
     var buf = "a=tok1 b=tok22 c=tok1".*;
-    maskAll(&buf, &.{ "tok1", "tok22" });
+    maskAll(&buf, &.{ "tok1", "tok22" }, null);
     try std.testing.expectEqualStrings("a=**** b=***** c=****", &buf);
 }
 
 test "maskAll handles overlapping candidates without panic" {
     var buf = "aaaa".*;
-    maskAll(&buf, &.{"aaa"});
+    maskAll(&buf, &.{"aaa"}, null);
     // "aaa" は位置 0..3 と 1..4 の両方でマッチするため、全4バイトがマスクされる
     try std.testing.expectEqualStrings("****", &buf);
 }
 
 test "maskAll masks cross-secret overlap regardless of order" {
     var buf = "xabcx".*;
-    maskAll(&buf, &.{ "ab", "abc" });
+    maskAll(&buf, &.{ "ab", "abc" }, null);
     // "ab" だけを先にマスクすると "abc" のマッチが壊れて "c" が漏れる旧実装の不具合を防ぐ
     try std.testing.expectEqualStrings("x***x", &buf);
 }
 
 test "maskAll masks self-overlapping longer match fully" {
     var buf = "aaaaa".*;
-    maskAll(&buf, &.{"aaa"});
+    maskAll(&buf, &.{"aaa"}, null);
     try std.testing.expectEqualStrings("*****", &buf);
 }
 
 test "maskAll on binary bytes" {
     var buf = [_]u8{ 0x00, 's', 'e', 'c', 0xff };
-    maskAll(&buf, &.{"sec"});
+    maskAll(&buf, &.{"sec"}, null);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x00, '*', '*', '*', 0xff }, &buf);
 }
 
@@ -132,7 +138,7 @@ test "chunk-boundary straddling match is masked" {
     const end = @min(data.len, @as(usize, @intCast(w.start)) + w.len);
     const got = data[@intCast(w.start)..end];
     @memcpy(window_buf[0..got.len], got);
-    maskAll(window_buf[0..got.len], &secrets);
+    maskAll(window_buf[0..got.len], &secrets, null);
     // 中央スライス = 要求範囲 (offset 6..10 = "CRET" → "****")
     try std.testing.expectEqualStrings("****", window_buf[w.lead .. w.lead + 4]);
 }

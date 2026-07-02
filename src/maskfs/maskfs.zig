@@ -8,7 +8,7 @@ const std = @import("std");
 const mask = @import("mask.zig");
 
 const c = @cImport({
-    @cDefine("FUSE_USE_VERSION", "31");
+    @cDefine("FUSE_USE_VERSION", "317");
     @cDefine("_FILE_OFFSET_BITS", "64");
     @cInclude("fuse3/fuse.h");
     @cInclude("fcntl.h");
@@ -38,6 +38,12 @@ const FuseFileInfo = extern struct {
     backing_id: i32,
     compat_flags: u64,
     _reserved: [2]u64,
+
+    // FUSE 3.17 struct is 64 bytes. If this fires after a FUSE upgrade,
+    // update the field list above to match the new layout.
+    comptime {
+        if (@sizeOf(FuseFileInfo) != 64) @compileError("FuseFileInfo size mismatch — update to match fuse_file_info");
+    }
 };
 
 /// Cast opaque fuse_file_info pointer to our typed struct.
@@ -68,6 +74,21 @@ const CacheEntry = struct {
 };
 var scan_cache: [128]CacheEntry = [_]CacheEntry{.{}} ** 128;
 
+// シングルスレッド前提 (-s) の再利用バッファ。initStaticBufs() で確保。
+const FUSE_MAX_READ = 128 * 1024;
+const SCAN_CHUNK = 64 * 1024;
+var static_read_buf: ?[]u8 = null;
+var static_mask_buf: ?[]bool = null;
+var static_scan_buf: ?[]u8 = null;
+
+fn initStaticBufs() void {
+    const read_size = FUSE_MAX_READ + 2 * max_len;
+    static_read_buf = allocator.alloc(u8, read_size) catch null;
+    static_mask_buf = allocator.alloc(bool, read_size) catch null;
+    const scan_size = (max_len -| 1) + SCAN_CHUNK;
+    static_scan_buf = allocator.alloc(u8, scan_size) catch null;
+}
+
 fn errnoNeg() c_int {
     return -std.c._errno().*;
 }
@@ -86,11 +107,13 @@ fn relPath(path: [*c]const u8) [*c]const u8 {
 fn fdContainsSecret(fd: c_int) bool {
     if (max_len == 0) return false;
     const carry = max_len - 1;
-    const chunk = 64 * 1024;
-    const buf = allocator.alloc(u8, carry + chunk) catch return true; // fail-closed
-    defer allocator.free(buf);
+    const chunk = SCAN_CHUNK;
+    const need = carry + chunk;
+    const static_ok = if (static_scan_buf) |s| s.len >= need else false;
+    const buf = if (static_ok) static_scan_buf.?[0..need] else (allocator.alloc(u8, need) catch return true);
+    defer if (!static_ok) allocator.free(buf);
 
-    var filled: usize = 0; // buf 先頭に保持している carry バイト数
+    var filled: usize = 0;
     var pos: i64 = 0;
     while (true) {
         const n = c.pread(fd, buf.ptr + filled, chunk, pos);
@@ -99,7 +122,6 @@ fn fdContainsSecret(fd: c_int) bool {
         const got: usize = @intCast(n);
         if (mask.containsAny(buf[0 .. filled + got], secrets)) return true;
         pos += n;
-        // 末尾 carry バイトを次のチャンクの先頭に引き継ぐ
         const total = filled + got;
         const keep = @min(carry, total);
         std.mem.copyForwards(u8, buf[0..keep], buf[total - keep .. total]);
@@ -243,12 +265,13 @@ fn xRead(
         return @intCast(n);
     }
     const win = mask.computeWindow(@intCast(offset), size, max_len);
-    const wbuf = allocator.alloc(u8, win.len) catch return -c.ENOMEM;
-    defer allocator.free(wbuf);
+    const static_ok = if (static_read_buf) |s| s.len >= win.len else false;
+    const wbuf = if (static_ok) static_read_buf.?[0..win.len] else (allocator.alloc(u8, win.len) catch return -c.ENOMEM);
+    defer if (!static_ok) allocator.free(wbuf);
     const n = c.pread(fd, wbuf.ptr, win.len, @intCast(win.start));
     if (n == -1) return errnoNeg();
     const got: usize = @intCast(n);
-    mask.maskAll(wbuf[0..got], secrets);
+    mask.maskAll(wbuf[0..got], secrets, if (static_ok) static_mask_buf else null);
     if (got <= win.lead) return 0;
     const out_len = @min(got - win.lead, size);
     @memcpy(buf[0..out_len], wbuf[win.lead .. win.lead + out_len]);
@@ -419,6 +442,7 @@ pub fn main() !u8 {
         std.debug.print("nas-maskfs: refusing to start with zero secrets\n", .{});
         return 2;
     }
+    initStaticBufs();
 
     src_fd = c.open(source, c.O_RDONLY | c.O_DIRECTORY);
     if (src_fd == -1) {
