@@ -8,6 +8,7 @@
  */
 
 import { Effect } from "effect";
+import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { WorkspaceState } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput } from "../../pipeline/types.ts";
@@ -26,12 +27,7 @@ export interface MaskFsStageOptions {
 }
 
 export function resolveMaskFsRuntimeDir(host: HostEnv): string {
-  const xdg = host.env.get("XDG_RUNTIME_DIR");
-  if (xdg && xdg.trim().length > 0) {
-    return `${xdg}/nas/maskfs`;
-  }
-  const uid = host.uid ?? "unknown";
-  return `/tmp/nas-${uid}/maskfs`;
+  return resolveRuntimeSubdir(host, "maskfs");
 }
 
 export function createMaskFsStage(
