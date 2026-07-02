@@ -34,7 +34,7 @@ function makePlan(overrides: Partial<MaskFsStartPlan> = {}): MaskFsStartPlan {
   };
 }
 
-const skipPreflight = async () => {};
+const skipPreflight = () => Effect.void;
 
 describe("MaskFsService", () => {
   test("spawns daemon with source, mountpoint, policy and stdin frame", async () => {
@@ -131,9 +131,7 @@ describe("MaskFsService", () => {
         Effect.gen(function* () {
           const svc = yield* MaskFsService;
           yield* svc.startMaskFs(makePlan(), {
-            preflight: async () => {
-              throw new Error("fusermount3 not found");
-            },
+            preflight: () => Effect.fail(new Error("fusermount3 not found")),
             waitReady: () => Effect.void,
           });
         }),
