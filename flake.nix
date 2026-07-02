@@ -85,10 +85,34 @@
           '';
         };
 
+        maskfs = pkgs.stdenv.mkDerivation {
+          pname = "nas-maskfs";
+          version = "0.1.0";
+          src = ./src/maskfs;
+          nativeBuildInputs = [ pkgs.zig pkgs.pkg-config ];
+          buildInputs = [ pkgs.fuse3 ];
+          dontConfigure = true;
+          doCheck = true;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            zig build \
+              --global-cache-dir "$TMPDIR/zig-cache" \
+              -Doptimize=ReleaseSafe
+          '';
+          checkPhase = ''
+            export HOME=$TMPDIR
+            zig build test --global-cache-dir "$TMPDIR/zig-cache"
+          '';
+          installPhase = ''
+            mkdir -p $out/bin
+            cp zig-out/bin/nas-maskfs $out/bin/
+          '';
+        };
+
         # bun compile バイナリは import.meta.url がビルド時パス (/build/source/...)
         # を指すため、アセットを別途配置し NAS_ASSET_DIR で参照する。
         nasAssets = pkgs.runCommand "nas-assets" { } ''
-          mkdir -p $out/docker/embed $out/docker/mitmproxy $out/scripts $out/ui $out/hostexec $out/config/templates
+          mkdir -p $out/docker/embed $out/docker/mitmproxy $out/scripts $out/ui $out/hostexec $out/maskfs $out/config/templates
 
           cp ${self}/src/docker/embed/Dockerfile $out/docker/embed/
           cp ${self}/src/docker/embed/entrypoint.sh $out/docker/embed/
@@ -97,6 +121,7 @@
           cp ${self}/scripts/notify-send-wsl $out/scripts/
           cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
+          cp ${maskfs}/bin/nas-maskfs $out/maskfs/
           cp ${self}/src/config/Schema.pkl $out/config/
           cp ${self}/src/config/templates/config.pkl $out/config/templates/
           cp ${self}/src/config/templates/eval.pkl $out/config/templates/
