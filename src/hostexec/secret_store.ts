@@ -60,6 +60,14 @@ export class SecretStore {
   }
 }
 
+/** Recognised source-type prefixes for secret resolution. */
+export const SECRET_SOURCE_PREFIXES = [
+  "env:",
+  "file:",
+  "dotenv:",
+  "keyring:",
+] as const;
+
 export async function resolveSecret(
   source: string,
   env: Record<string, string | undefined>,
