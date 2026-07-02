@@ -168,8 +168,11 @@ export const MaskFsServiceLive: Layer.Layer<
                 // fusermount3 -u may fail (already unmounted, race, etc.) —
                 // the cleanup must never fail, and ProcessService.exec dies
                 // (rather than fails) on non-zero exit, so we must catch the
-                // defect too, not just the error channel.
-                Effect.catchAllCause(() => Effect.void),
+                // defect too, not just the error channel. Log rather than
+                // swallow so unexpected unmount failures are still visible.
+                Effect.catchAllCause(() =>
+                  Effect.logWarning("maskfs: fusermount3 unmount failed"),
+                ),
                 Effect.andThen(Effect.sync(() => handle.kill())),
               ),
           );
