@@ -387,6 +387,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
     { name: "NixDetectStage", needs: [] },
     { name: "DbusProxyStage", needs: [] },
     { name: "DisplayStage", needs: [] },
+    { name: "MaskFsStage", needs: ["workspace"] },
     {
       name: "MountStage",
       needs: ["container", "dbus", "display", "nix", "workspace"],
