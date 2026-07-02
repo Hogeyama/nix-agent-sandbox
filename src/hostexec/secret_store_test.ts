@@ -6,7 +6,14 @@
  */
 
 import { expect, test } from "bun:test";
-import { assertSafeSecretPath, parseDotEnv } from "./secret_store.ts";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  assertSafeSecretPath,
+  parseDotEnv,
+  resolveSecret,
+} from "./secret_store.ts";
 
 // ---------------------------------------------------------------------------
 // assertSafeSecretPath — positive cases
@@ -161,4 +168,22 @@ test("parseDotEnv: value may contain '='", () => {
 
 test("parseDotEnv: empty value becomes empty string", () => {
   expect(parseDotEnv("FOO=\n")).toEqual({ FOO: "" });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSecret: lines:
+// ---------------------------------------------------------------------------
+
+test("resolveSecret: lines: reads a file and returns one string per non-empty line", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-secret-store-lines-"));
+  try {
+    const filePath = path.join(tmpDir, "tokens.txt");
+    await writeFile(filePath, "first-secret\n\nsecond-secret\nthird-secret\n");
+
+    const result = await resolveSecret(`lines:${filePath}`, {});
+
+    expect(result).toEqual(["first-secret", "second-secret", "third-secret"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
 });

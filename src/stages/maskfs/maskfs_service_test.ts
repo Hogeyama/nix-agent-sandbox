@@ -11,7 +11,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Effect, Exit, Layer } from "effect";
+import type { HostEnv } from "../../pipeline/types.ts";
 import { makeFsServiceFake } from "../../services/fs.ts";
 import { makeProcessServiceFake } from "../../services/process.ts";
 import {
@@ -19,6 +23,18 @@ import {
   MaskFsServiceLive,
   type MaskFsStartPlan,
 } from "./maskfs_service.ts";
+
+function makeHost(overrides: Partial<HostEnv> = {}): HostEnv {
+  return {
+    home: "/home/u",
+    user: "u",
+    uid: 1000,
+    gid: 1000,
+    isWSL: false,
+    env: new Map(),
+    ...overrides,
+  };
+}
 
 function makePlan(overrides: Partial<MaskFsStartPlan> = {}): MaskFsStartPlan {
   return {
@@ -209,5 +225,63 @@ describe("MaskFsService", () => {
     );
 
     expect(killed).toEqual(true);
+  });
+});
+
+describe("MaskFsService.resolveSecrets", () => {
+  const layer = MaskFsServiceLive.pipe(
+    Layer.provide(
+      Layer.merge(makeFsServiceFake().layer, makeProcessServiceFake()),
+    ),
+  );
+
+  test("lines: source expands a multi-line file into multiple secrets", async () => {
+    const tmpDir = await mkdtemp(
+      path.join(tmpdir(), "nas-maskfs-lines-secret-"),
+    );
+    try {
+      const filePath = path.join(tmpDir, "tokens.txt");
+      await writeFile(filePath, "first-secret\n\nsecond-secret\n");
+
+      const secrets = await Effect.runPromise(
+        Effect.gen(function* () {
+          const svc = yield* MaskFsService;
+          return yield* svc.resolveSecrets(
+            [{ source: `lines:${filePath}` }],
+            makeHost(),
+          );
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(secrets).toEqual(["first-secret", "second-secret"]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  test("lines: source fails closed when a line is shorter than 4 bytes", async () => {
+    const tmpDir = await mkdtemp(
+      path.join(tmpdir(), "nas-maskfs-lines-secret-"),
+    );
+    try {
+      const filePath = path.join(tmpDir, "tokens.txt");
+      await writeFile(filePath, "good-secret\nab\n");
+
+      const exit = await Effect.runPromiseExit(
+        Effect.gen(function* () {
+          const svc = yield* MaskFsService;
+          return yield* svc.resolveSecrets(
+            [{ source: `lines:${filePath}` }],
+            makeHost(),
+          );
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(Exit.isFailure(exit)).toEqual(true);
+      const message = String(Exit.isFailure(exit) ? exit.cause : "");
+      expect(message).toContain("mask.values[0] line 2");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });
