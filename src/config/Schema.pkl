@@ -79,6 +79,9 @@ class Profile {
 
   /// ホストへのコマンド移譲設定。`null` で無効。
   hostexec: HostExecConfig? = null
+
+  /// ワークスペース文字列マスク。`null` で無効。
+  mask: MaskConfig? = null
 }
 
 class WorktreeConfig {
@@ -309,6 +312,27 @@ class EnvConfig {
 
   /// `"prefix"` / `"suffix"` モード時のセパレータ（必須）。
   separator: String? = null
+}
+
+// ---------------------------------------------------------------------------
+// Mask (workspace string masking)
+// ---------------------------------------------------------------------------
+
+/// マスク対象の秘密値の取得元。
+/// 対応形式: `env:VAR` / `file:/path` / `dotenv:/path#KEY` / `keyring:service/account`
+/// リテラル値は意図的に非対応 (config.pkl が git にコミットされると履歴経由で漏れるため)。
+class MaskValueConfig {
+  source: String
+}
+
+class MaskConfig {
+  /// マスク対象の秘密値のリスト。空なら maskfs は起動しない。
+  values: Listing<MaskValueConfig> = new {}
+
+  /// 秘密値を含むファイルへの書き込みの扱い。
+  /// `"readonly"`: write/truncate/unlink/rename を EROFS で拒否 (ホストの実体を保護)
+  /// `"passthrough"`: 無加工で通す (agent が読んだ *** をそのまま書き戻すと実体が壊れるリスクを許容)
+  writePolicy: ("readonly"|"passthrough") = "readonly"
 }
 
 // ---------------------------------------------------------------------------
