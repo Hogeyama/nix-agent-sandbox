@@ -5,6 +5,20 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const host_target = b.resolveTargetQuery(.{});
 
+    // ── nas-maskfs executable ──
+    const exe_mod = b.createModule(.{
+        .root_source_file = b.path("maskfs.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const exe = b.addExecutable(.{
+        .name = "nas-maskfs",
+        .root_module = exe_mod,
+    });
+    exe.linkSystemLibrary("fuse3");
+    b.installArtifact(exe);
+
     // ── unit tests (mask.zig は FUSE 非依存) ──
     const mask_test_mod = b.createModule(.{
         .root_source_file = b.path("mask.zig"),
@@ -15,6 +29,4 @@ pub fn build(b: *std.Build) void {
     const run_mask_tests = b.addRunArtifact(mask_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_mask_tests.step);
-
-    _ = target; // Task 3 で executable に使用
 }
