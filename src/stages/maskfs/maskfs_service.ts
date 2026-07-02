@@ -78,6 +78,30 @@ function assertFusermountAvailable(): Effect.Effect<string, Error> {
   );
 }
 
+/** Check whether fuse.conf text contains an active user_allow_other line. */
+export function hasUserAllowOther(fuseConfText: string): boolean {
+  return fuseConfText
+    .split("\n")
+    .some((line) => line.trim() === "user_allow_other");
+}
+
+/**
+ * Convenience async check: is the current user allowed to use FUSE allow_other?
+ * Root always returns true; non-root reads /etc/fuse.conf.
+ */
+export async function isUserAllowOtherEnabled(): Promise<boolean> {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    return true;
+  }
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const conf = await readFile("/etc/fuse.conf", "utf8");
+    return hasUserAllowOther(conf);
+  } catch {
+    return false;
+  }
+}
+
 function assertAllowOtherPermitted(fs: Fs): Effect.Effect<void, Error> {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return Effect.void;
@@ -86,10 +110,7 @@ function assertAllowOtherPermitted(fs: Fs): Effect.Effect<void, Error> {
     // missing fuse.conf → user_allow_other 無効扱い
     Effect.catchAllCause(() => Effect.succeed("")),
     Effect.flatMap((text) => {
-      const ok = text
-        .split("\n")
-        .some((line) => line.trim() === "user_allow_other");
-      return ok
+      return hasUserAllowOther(text)
         ? Effect.void
         : Effect.fail(
             new Error(
