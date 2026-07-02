@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.15.1] - 2026-07-03
+
+### Fixed
+
+- **MaskFS**: set `FUSE_USE_VERSION` to 317 to match actual >= 3.17 requirement; add comptime size assertion on `FuseFileInfo` to catch ABI drift on FUSE upgrades; eliminate per-read `mmap`/`munmap` syscalls by pre-allocating static buffers for `xRead` and `fdContainsSecret` hot paths ([b9d1dabe])
+
 ## [0.15.0] - 2026-07-03
 
 ### Added
