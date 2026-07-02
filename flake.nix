@@ -173,6 +173,8 @@
             pkgs.chromium
             pkgs.dtach
             pkgs.zig
+            pkgs.fuse3
+            pkgs.pkg-config
             pklNative
           ];
           shellHook = ''
