@@ -5,6 +5,7 @@
  * ここでは Pkl では表現しにくいクロスフィールド制約や実行時セマンティクスのみ検証する。
  */
 
+import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
 import { parseAllowlistEntry } from "../network/protocol.ts";
 import type {
@@ -537,8 +538,6 @@ function warnOverlappingHostExecRules(
 // Mask values validation
 // ---------------------------------------------------------------------------
 
-const MASK_SOURCE_PREFIXES = ["env:", "file:", "dotenv:", "keyring:"];
-
 function validateMaskValues(
   profileName: string,
   values: MaskValueConfig[],
@@ -552,9 +551,9 @@ function validateMaskValues(
       );
       continue;
     }
-    if (!MASK_SOURCE_PREFIXES.some((p) => source.startsWith(p))) {
+    if (!SECRET_SOURCE_PREFIXES.some((p) => source.startsWith(p))) {
       errors.push(
-        `profile "${profileName}": mask.values[${i}].source ("${source}") must start with one of ${MASK_SOURCE_PREFIXES.join(", ")} (literal values are not supported)`,
+        `profile "${profileName}": mask.values[${i}].source ("${source}") must start with one of ${SECRET_SOURCE_PREFIXES.join(", ")} (literal values are not supported)`,
       );
     }
   }
