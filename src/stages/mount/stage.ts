@@ -146,10 +146,12 @@ export function planMount(
 
   // ワークスペースマウント
   // git worktree 内の場合は本体リポジトリルートをマウントソースに広げる
-  const baseMountSource = path.resolve(workspace.mountDir ?? workspace.workDir);
-  const mountSource = probes.gitWorktreeMainRoot ?? baseMountSource;
+  // maskfs 有効時はバインドソースだけマスク済みビューに差し替える
+  // (コンテナ内パスは実パスのまま維持する)
+  const mountSource = resolveWorkspaceMountSource(workspace, probes);
+  const bindSource = workspace.maskedRoot ?? mountSource;
   const containerWorkDir = path.resolve(workspace.workDir);
-  addMount(args, mounts, mountSource, mountSource);
+  addMount(args, mounts, bindSource, mountSource);
   args.push("-w", containerWorkDir);
   envVars.WORKSPACE = containerWorkDir;
 
@@ -159,6 +161,9 @@ export function planMount(
   // Linux では unlink/rename/open(O_WRONLY) 全てが EBUSY/EROFS で拒否される。
   // これにより次回起動時に nas が信頼して読み込む設定（特に hostexec.rules）の
   // 改ざんを防ぐ。
+  // maskfs 有効時もソースは実パスのまま: config.pkl は mask.values に
+  // リテラルを書けない設計のため秘密値を含まず、trust 済み実体を RO で
+  // 見せることが改ざん防止として優先される。
   for (const configPath of probes.localConfigPaths) {
     if (isPathWithin(configPath, mountSource)) {
       addMount(args, mounts, configPath, configPath, true);
