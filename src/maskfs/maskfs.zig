@@ -186,7 +186,12 @@ fn xReaddir(
     };
     defer _ = c.closedir(dir);
     while (true) {
-        const ent = c.readdir(dir) orelse break;
+        std.c._errno().* = 0;
+        const ent = c.readdir(dir) orelse {
+            // readdir NULL can mean end-of-directory or error; check errno.
+            const e = std.c._errno().*;
+            return if (e != 0) -e else 0;
+        };
         if (filler.?(buf, &ent.*.d_name, null, 0, 0) != 0) break;
     }
     return 0;
@@ -209,8 +214,14 @@ fn xOpen(path: [*c]const u8, fi_raw: ?*c.fuse_file_info) callconv(.c) c_int {
 
 fn xCreate(path: [*c]const u8, mode: c.mode_t, fi_raw: ?*c.fuse_file_info) callconv(.c) c_int {
     const fi = castFi(fi_raw).?;
-    // 新規作成は秘密値を含み得ないので両ポリシーで許可
-    const fd = c.openat(src_fd, relPath(path), fi.flags, mode);
+    const rel = relPath(path);
+    // xCreate can be called for existing files when the FUSE dentry cache is
+    // cold (O_CREAT on a file that already exists). Check write protection so
+    // that secret-containing files are not truncated in readonly mode.
+    // For genuinely new files, denyIfProtected returns 0 (ENOENT -> false).
+    const deny = denyIfProtected(rel);
+    if (deny != 0) return deny;
+    const fd = c.openat(src_fd, rel, fi.flags, mode);
     if (fd == -1) return errnoNeg();
     fi.fh = @intCast(fd);
     return 0;
