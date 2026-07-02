@@ -166,6 +166,28 @@ describe("createMaskFsStage", () => {
     ).rejects.toThrow(/at least 4 bytes/);
   });
 
+  test("binary not found → fails (fail-closed)", async () => {
+    const input = makeStageInput();
+    input.profile.mask = {
+      values: [{ source: "env:NAS_TEST_MASK_SECRET" }],
+      writePolicy: "readonly",
+    };
+    const hostEnv = new Map(HOST.env);
+    hostEnv.set("NAS_TEST_MASK_SECRET", "hunter2secret");
+    (input as { host: unknown }).host = { ...HOST, env: hostEnv };
+
+    const stage = createMaskFsStage(input, MOUNT_PROBES, {
+      resolveBinPath: async () => null,
+    });
+    await expect(
+      Effect.runPromise(
+        Effect.scoped(stage.run({ workspace: WORKSPACE })).pipe(
+          Effect.provide(makeMaskFsServiceFake()),
+        ),
+      ),
+    ).rejects.toThrow(/binary not found/);
+  });
+
   test("unresolvable secret source → fails (fail-closed)", async () => {
     const input = makeStageInput();
     input.profile.mask = {
