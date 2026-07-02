@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initConfig } from "../src/config/init.ts";
 import { resolveMaskFsBinPath } from "../src/stages/maskfs/maskfs_path.ts";
+import { isUserAllowOtherEnabled } from "../src/stages/maskfs/maskfs_service.ts";
 
 const MAIN_TS = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -43,16 +44,7 @@ async function isFuseUsable(): Promise<boolean> {
   }
   if (!Bun.which("fusermount3")) return false;
   // docker からアクセスされるため allow_other が必要
-  if (typeof process.getuid === "function" && process.getuid() !== 0) {
-    try {
-      const conf = await readFile("/etc/fuse.conf", "utf8");
-      if (!conf.split("\n").some((l) => l.trim() === "user_allow_other")) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-  }
+  if (!(await isUserAllowOtherEnabled())) return false;
   return (await resolveMaskFsBinPath()) !== null;
 }
 
