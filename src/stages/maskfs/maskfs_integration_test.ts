@@ -79,6 +79,7 @@ describe.skipIf(!usable)("maskfs integration (real FUSE)", () => {
       stderr: "ignore",
     }).exited;
     daemon?.kill();
+    if (daemon) await daemon.exited;
     await rm(root, { recursive: true, force: true });
   });
 
