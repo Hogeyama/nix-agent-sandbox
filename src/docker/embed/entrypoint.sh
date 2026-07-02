@@ -370,11 +370,12 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   HAS_DEVSHELL=false
   DEV_SHELL_PROBE_START="$(nas_measure_start)"
   if [ -f "$WORKSPACE/flake.nix" ]; then
-    # flake に devShells.<system>.default があるかチェック (nix flake show は derivation を評価しないため高速)
+    # flake に devShells.<system>.default があるかチェック
+    # nix flake show は全 output を評価するため、無関係な output のエラーで失敗しうる。
+    # nix eval で devShells.default の type 属性だけを確認する。
     SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
     if [ -n "$SYSTEM" ] && "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
-      nix flake show --json "$WORKSPACE" 2>/dev/null |
-      jq -e ".devShells.\"$SYSTEM\".default" >/dev/null 2>&1; then
+      nix eval --raw "${WORKSPACE}#devShells.${SYSTEM}.default.type" 2>/dev/null | grep -qx derivation; then
       HAS_DEVSHELL=true
     else
       nas_info "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
