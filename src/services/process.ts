@@ -28,7 +28,11 @@ export class ProcessService extends Context.Tag("nas/ProcessService")<
     readonly spawn: (
       command: string,
       args: string[],
-      opts?: { logFile?: string; env?: Record<string, string> },
+      opts?: {
+        logFile?: string;
+        env?: Record<string, string>;
+        stdinData?: Uint8Array;
+      },
     ) => Effect.Effect<SpawnHandle>;
     readonly waitForFileExists: (
       path: string,
@@ -59,6 +63,7 @@ export const ProcessServiceLive: Layer.Layer<ProcessService> = Layer.succeed(
           logFd = openSync(opts.logFile, "a");
         }
         const child = Bun.spawn([command, ...args], {
+          stdin: opts?.stdinData,
           stdout: logFd !== null ? logFd : "pipe",
           stderr: logFd !== null ? logFd : "pipe",
           env: opts?.env ? { ...process.env, ...opts.env } : undefined,
@@ -150,7 +155,11 @@ export interface ProcessServiceFakeConfig {
   readonly spawn?: (
     command: string,
     args: string[],
-    opts?: { logFile?: string; env?: Record<string, string> },
+    opts?: {
+      logFile?: string;
+      env?: Record<string, string>;
+      stdinData?: Uint8Array;
+    },
   ) => Effect.Effect<SpawnHandle>;
   readonly waitForFileExists?: (
     path: string,
