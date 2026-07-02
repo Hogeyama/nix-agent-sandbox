@@ -43,6 +43,11 @@ export class SecretStore {
       this.env,
       this.keyringResolver,
     );
+    if (Array.isArray(value)) {
+      throw new Error(
+        `Secret "${name}" resolved to multiple values (lines: source is not supported here)`,
+      );
+    }
     if ((value === null || value === "") && config.required) {
       throw new Error(`Required secret is unavailable: ${name}`);
     }
@@ -66,6 +71,7 @@ export const SECRET_SOURCE_PREFIXES = [
   "file:",
   "dotenv:",
   "keyring:",
+  "lines:",
 ] as const;
 
 export async function resolveSecret(
@@ -75,7 +81,7 @@ export async function resolveSecret(
     service: string,
     account: string,
   ) => Promise<string | null> = defaultKeyringResolver,
-): Promise<string | null> {
+): Promise<string | string[] | null> {
   if (source.startsWith("env:")) {
     return env[source.slice(4)] ?? null;
   }
@@ -83,6 +89,12 @@ export async function resolveSecret(
     const filePath = source.slice(5);
     assertSafeSecretPath(filePath, env);
     return (await readFile(filePath, "utf8")).trimEnd();
+  }
+  if (source.startsWith("lines:")) {
+    const filePath = source.slice(6);
+    assertSafeSecretPath(filePath, env);
+    const text = await readFile(filePath, "utf8");
+    return text.split(/\r?\n/).filter((line) => line !== "");
   }
   if (source.startsWith("dotenv:")) {
     const target = source.slice(7);

@@ -57,6 +57,18 @@ describe("validateConfig: mask", () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
+  test("accepts lines: source", () => {
+    const config = makeConfig(
+      makeProfile({
+        mask: {
+          values: [{ source: "lines:/home/u/.secrets/tokens.txt" }],
+          writePolicy: "readonly",
+        },
+      }),
+    );
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
   test("rejects unsupported source scheme", () => {
     const config = makeConfig(
       makeProfile({
