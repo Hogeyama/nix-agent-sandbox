@@ -109,10 +109,9 @@ function defaultPreflight(fs: Fs): Effect.Effect<void, unknown> {
 
 /** mountpoint の st_dev が親ディレクトリと異なれば FUSE マウント完了 */
 function isMounted(fs: Fs, mountpoint: string): Effect.Effect<boolean> {
-  return Effect.all([
-    fs.stat(mountpoint),
-    fs.stat(path.dirname(mountpoint)),
-  ]).pipe(
+  return Effect.all([fs.stat(mountpoint), fs.stat(path.dirname(mountpoint))], {
+    concurrency: 2,
+  }).pipe(
     Effect.map(([self, parent]) => self.dev !== parent.dev),
     Effect.catchAllCause(() => Effect.succeed(false)),
   );
