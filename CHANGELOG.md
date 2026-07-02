@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.15.0] - 2026-07-03
+
+### Added
+
+- **MaskFS — workspace string masking via FUSE**: secrets referenced in config are transparently masked in the workspace view presented to the agent. A Zig masking core performs same-length in-place replacement with a sliding read window, and a FUSE passthrough daemon enforces masked reads and a write-protection policy. Includes a standalone CLI (`--daemon`/`--unmount`), `lines:` secret source for multi-line files, nix-bundle-elf distribution, `MaskFsService` for daemon lifecycle with scoped cleanup, and full pipeline integration via `MaskFsStage` ([5ecf816], [5fda8512], [44cc55f7], [61bc7e43], [a97b86c1], [f051ceda], [376829d4], [2ff37131], [b6f73da5], [13010074])
+- **Proxy — mitmproxy backend**: replaced Envoy with a mitmproxy Python addon for network authorization. Simpler deployment, native HTTPS CONNECT handling via `http_connect` hook, and built-in CA cert management with `update-ca-certificates` in the entrypoint ([7b52a506], [3e37a75c], [1e311d6d], [d0ab8ad8])
+- **Proxy — credential injection**: new `CredentialRule` config type allows automatic injection of authentication headers into proxied requests matching host/path patterns. Wired through the proxy stage, broker, and mitmproxy addon ([5c597124], [98639e71], [4a20a560], [d40b11d7])
+- **Proxy — JVM trust store**: generate PKCS12 truststore alongside PEM CA cert, mount into agent container, and configure `JAVA_TOOL_OPTIONS` so JVM-based tools trust the proxy CA ([50fa05bb], [731e6c9b], [e04fdc43])
+- **Proxy — addon change detection**: detect mitmproxy addon script changes and recreate the shared proxy container automatically ([96e21cb4])
+- **Network — unified reviewRules**: replaced `allowlist`/`denylist`/`prompt` with a single first-match `reviewRules` array. Supports `audit` flag to suppress noisy audit logs, host pattern validation, `reviewContext` body preview in both CLI and UI pending views ([31c569dc], [80bc1311], [6df8eed6], [8079404c], [887f9f52], [2d435518], [6f99df43], [5406290d], [90bf6233])
+- **Config — trust prompt**: gate untrusted repo-local config behind a trust prompt before applying ([cae03b2b])
+- **DinD egress confinement**: Docker-in-Docker containers are now routed through the session network proxy via the internal session network ([2d09be29])
+- **UI — scheduled send**: messages can be scheduled for delayed sending with a dialog, toolbar button, list view, and cancel support ([583bbbc3], [09b538cf], [addfcc06], [c2e98ebd], [5dc41445])
+- **UI — turn events**: render Events section with styling in turn accordion body ([4d2e02cc], [8a891870])
+- **Agents**: `buildPromptToTraceMap` dispatcher and Claude-specific `promptId`-to-`traceId` mapping ([79a00275], [bf1751ea])
+- **Review**: `review_trace` verification as orchestrator checkpoint ([130e9aab])
+- **Terminal**: `sendInput` method on `TerminalHandle` ([c64e1b21])
+- **HostExec**: exec-socket path helpers in registry ([8b142734])
+
+### Changed
+
+- **Breaking — network config**: `allowlist`/`denylist`/`prompt` replaced by `reviewRules`. See migration guide in docs ([31c569dc], [b82aabd7])
+- **Breaking — proxy backend**: Envoy removed entirely; mitmproxy is now the only proxy backend. `EnvoyService` replaced by `ProxyService`; auth-router GC removed from `RuntimePaths` ([d0ab8ad8], [c1418949], [8d2a6d87])
+- **HostExec**: broker split into exec and control sockets ([7597e9ea])
+- **DinD**: stopped owning a dind-private network; dropped container-network rewrite ([0f70d784])
+- **Proxy**: auth-router detached as a shared daemon; `AuthRouterHandle` removed ([47060120], [e1c510f1])
+
+### Fixed
+
+- **Proxy**: ensure Docker image is pulled before use to prevent silent hang; mount `caCertDir` at correct mitmproxy home; run CA cert generation as host user to prevent root-owned files; use `openssl` for JVM truststore instead of Python `cryptography`; kill connection on CONNECT auth failure and on 407 to force client reconnect; overwrite existing headers on credential injection; handle missing addon script on first run; avoid leading space in `JAVA_TOOL_OPTIONS`; add `--add-host` to bypass Docker DNS for proxy alias; use CertStore API for CA generation ([8741daf4], [77426512], [c0fc55d0], [c2cf5a7c], [25e4b2c9], [dcb03cf8], [05b3e509], [309a7eb1], [64bd0da6], [138e0c6a], [3be7cc81], [94153cdd])
+- **MaskFS**: harden `xCreate` write protection and `xReaddir` error handling; use 2-pass mark-then-replace for overlapping secret matches; route `MaskFsService` preflight/readiness IO through `FsService`; log `fusermount3` unmount failures ([f83edcc6], [c00ef278], [1ee43cd9], [16310c94])
+- **Network**: enforce segment boundary on `pathPrefix` matching; eliminate socket gap in auth-router daemon restart; detach auth-router daemon to survive parent exit ([d5a47907], [547b109d], [e1c510f1])
+- **Addon**: handle HTTPS CONNECT auth via `http_connect` hook; correct session registry path; use `flow.request.content` instead of non-existent `get_content(limit=)`; stop sending `matchedReviewRule` — broker evaluates rules directly ([86cfcdd6], [dbd5059f], [8a1d2eed], [51639b32])
+- **Nix**: use `nix eval` instead of `nix flake show` for devShell detection; replace deleted Envoy assets with mitmproxy addon in flake ([7f23c984], [d50173e5])
+- **UI**: bind scheduled-send to the session active at schedule time; force xterm mouse mode for Claude sessions; hide Search button when no terminal session is selected; replace native `<details>` with signal-driven toggle for Events section ([a3f01b13], [4f54365a], [1547c6b8], [02c30cd0])
+- **Config**: use `MaskValueConfig` type in `validateMaskValues` signature ([8dbe7866])
+- **Env**: use camelCase field names in env resolution error labels ([307a6b00])
+- **Test**: fix 3 broken tests — TTY stdin hang, Pkl type mismatch, empty `reviewRules` ([d0c86764])
+
+### Tests
+
+- MaskFS: host-side FUSE integration test, Docker e2e test, binary-not-found fail-closed test for `MaskFsStage` ([e9cc286b], [bcf7aebf], [dae1c640])
+- DinD: integration coverage for session-network egress confinement ([cbfb501b])
+- Network: auth-router socket recovery integration tests ([2a8500b8])
+
 ## [0.14.2] - 2026-05-29
 
 ### Fixed
@@ -409,6 +454,15 @@ Initial release.
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix + nix-bundle-elf
 
+[0.15.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.14.2...v0.15.0
+[0.14.2]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.10.1...v0.11.0
+[0.10.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.7.0...v0.8.0
