@@ -122,7 +122,7 @@ test.skipIf(!dockerAvailable || !fuseUsable)(
           "    gcloud { mountConfig = false }",
           "    aws { mountConfig = false }",
           "    gpg { forwardAgent = false }",
-          "    mask {",
+          "    mask = new MaskConfig {",
           "      values {",
           '        new { source = "dotenv:secret.env#DB_PASSWORD" }',
           "      }",

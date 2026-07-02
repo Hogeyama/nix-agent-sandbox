@@ -1033,7 +1033,7 @@ async function withBrokerFixture(
   const broker = new SessionBroker({
     paths,
     sessionId,
-    reviewRules: [],
+    reviewRules: [{ action: "review" }],
     pendingTimeoutSeconds: options.timeoutSeconds ?? 30,
     pendingDefaultScope: "host-port",
     pendingNotify: "off",

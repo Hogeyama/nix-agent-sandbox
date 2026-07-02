@@ -29,11 +29,21 @@ const BYPASS = "NAS_CONFIG_TRUST_ALL";
 async function withGateEnabled<T>(fn: () => Promise<T>): Promise<T> {
   const saved = process.env[BYPASS];
   delete process.env[BYPASS];
+  // Force non-TTY so ensureConfigTrusted never calls confirm() and blocks.
+  const savedIsTTY = process.stdin.isTTY;
+  Object.defineProperty(process.stdin, "isTTY", {
+    value: undefined,
+    configurable: true,
+  });
   try {
     return await fn();
   } finally {
     if (saved === undefined) delete process.env[BYPASS];
     else process.env[BYPASS] = saved;
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: savedIsTTY,
+      configurable: true,
+    });
   }
 }
 
