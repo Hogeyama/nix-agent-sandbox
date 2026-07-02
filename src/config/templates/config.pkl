@@ -6,7 +6,7 @@ amends "modulepath:/global.pkl"
 
 // Mask secrets from the agent (any file-read path shows same-length "*"):
 //   ["default"] {
-//     mask {
+//     mask = new MaskConfig {
 //       values { new { source = "dotenv:.env#DB_PASSWORD" } }
 //     }
 //   }
