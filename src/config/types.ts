@@ -196,6 +196,18 @@ export type EnvConfig = EnvKeySpec &
     separator?: string;
   };
 
+/** ワークスペース文字列マスク設定 */
+export interface MaskValueConfig {
+  source: string;
+}
+
+export type MaskWritePolicy = "readonly" | "passthrough";
+
+export interface MaskConfig {
+  values: MaskValueConfig[];
+  writePolicy: MaskWritePolicy;
+}
+
 /** プロファイル */
 export interface Profile {
   agent: AgentType;
@@ -214,6 +226,7 @@ export interface Profile {
   env: EnvConfig[];
   hook: HookConfig;
   hostexec?: HostExecConfig;
+  mask?: MaskConfig;
 }
 
 /** UI 設定 */

@@ -103,6 +103,11 @@ function validateProfile(name: string, profile: Profile): string[] {
     warnOverlappingHostExecRules(name, profile.hostexec.rules);
   }
 
+  // --- mask ---
+  if (profile.mask) {
+    errors.push(...validateMaskValues(name, profile.mask.values));
+  }
+
   return errors;
 }
 
@@ -525,4 +530,32 @@ function warnOverlappingHostExecRules(
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Mask values validation
+// ---------------------------------------------------------------------------
+
+const MASK_SOURCE_PREFIXES = ["env:", "file:", "dotenv:", "keyring:"];
+
+function validateMaskValues(
+  profileName: string,
+  values: { source: string }[],
+): string[] {
+  const errors: string[] = [];
+  for (const [i, value] of values.entries()) {
+    const source = value.source;
+    if (typeof source !== "string" || source.trim() === "") {
+      errors.push(
+        `profile "${profileName}": mask.values[${i}].source must be a non-empty string`,
+      );
+      continue;
+    }
+    if (!MASK_SOURCE_PREFIXES.some((p) => source.startsWith(p))) {
+      errors.push(
+        `profile "${profileName}": mask.values[${i}].source ("${source}") must start with one of ${MASK_SOURCE_PREFIXES.join(", ")} (literal values are not supported)`,
+      );
+    }
+  }
+  return errors;
 }
