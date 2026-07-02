@@ -363,4 +363,14 @@ profiles {
       }
     }
   }
+
+  // ./demo/test-secret.env の中身がマスクされる
+  ["mask-demo"] = new Profile {
+    agent = "claude"
+    mask = new MaskConfig {
+      values = new Listing {
+        new MaskValueConfig { source = "lines:demo/secrets.txt" }
+      }
+    }
+  }
 }
