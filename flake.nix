@@ -150,6 +150,25 @@
           chmod +x $out/bin/nas
         '';
 
+        maskfsPackage = pkgs.symlinkJoin {
+          name = "maskfs";
+          paths = [ maskfs ];
+          postBuild = ''
+            cp ${./src/maskfs/maskfs} $out/bin/maskfs
+            chmod +x $out/bin/maskfs
+          '';
+        };
+
+        maskfsBundled = bundle-script {
+          name = "maskfs";
+          script = "${maskfsPackage}/bin/maskfs";
+          type = "preload";
+          binaries = [
+            { name = "nas-maskfs"; target = "${maskfs}/bin/nas-maskfs"; }
+            { name = "fusermount3"; target = "${pkgs.fuse3}/bin/fusermount3"; }
+          ];
+        };
+
         # nas 本体と pkl を同じバンドルへ。bundle-script が両方の ELF 依存を
         # 一括解決して同梱するため、ユーザ系の glibc / libz には依存しない。
         nasBundledEntry = pkgs.writeScript "nas-bundled-entry" ''
@@ -187,6 +206,8 @@
         packages = {
           default = nas;
           bundled = nasBundled;
+          maskfs = maskfsPackage;
+          maskfs-bundled = maskfsBundled;
         };
 
         devShells.default = pkgs.mkShell {

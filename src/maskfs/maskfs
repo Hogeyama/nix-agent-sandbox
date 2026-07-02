@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pid_dir="${XDG_RUNTIME_DIR:-/tmp}/maskfs"
+
+pid_file_for() {
+  local mnt_real
+  mnt_real="$(realpath "$1")"
+  local hash
+  hash="$(printf '%s' "$mnt_real" | sha256sum | cut -c1-16)"
+  echo "${pid_dir}/${hash}.pid"
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: maskfs <sourceDir> <mountpoint> --secrets-file <path> [options]
+       maskfs --unmount <mountpoint>
+
+Transparently mask secrets in a directory using a FUSE overlay.
+
+Options:
+  --secrets-file <path>    File with secrets (one per line, empty lines ignored, min 4 bytes each)
+  --write-policy <policy>  readonly (default) or passthrough
+  --daemon                 Run in background and exit after mount is ready
+  --unmount <mountpoint>   Unmount a previously --daemon-started instance
+  -h, --help               Show this help
+EOF
+  exit 1
+}
+
+# --unmount mode: early branch
+if [ "${1:-}" = "--unmount" ]; then
+  [ $# -lt 2 ] && { echo "Error: --unmount requires a mountpoint" >&2; usage; }
+  umount_point="$2"
+  [ ! -d "$umount_point" ] && { echo "Error: mountpoint does not exist: $umount_point" >&2; exit 1; }
+
+  pid_file="$(pid_file_for "$umount_point")"
+  if [ ! -f "$pid_file" ]; then
+    echo "Error: no daemon found for $umount_point (missing $pid_file)" >&2
+    exit 1
+  fi
+
+  pid="$(head -1 "$pid_file")"
+  fusermount3 -u "$umount_point" 2>/dev/null || true
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    # Wait briefly for process to exit
+    for _ in $(seq 1 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+  fi
+  rm -f "$pid_file"
+  echo "maskfs: unmounted $umount_point" >&2
+  exit 0
+fi
+
+write_policy="readonly"
+secrets_file=""
+source_dir=""
+mountpoint=""
+daemon_mode=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --secrets-file)
+      [ $# -lt 2 ] && { echo "Error: --secrets-file requires a value" >&2; usage; }
+      secrets_file="$2"
+      shift 2
+      ;;
+    --write-policy)
+      [ $# -lt 2 ] && { echo "Error: --write-policy requires a value" >&2; usage; }
+      write_policy="$2"
+      shift 2
+      ;;
+    --daemon)
+      daemon_mode=true
+      shift
+      ;;
+    -h|--help) usage ;;
+    -*)
+      echo "Error: unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      if [ -z "$source_dir" ]; then
+        source_dir="$1"
+      elif [ -z "$mountpoint" ]; then
+        mountpoint="$1"
+      else
+        echo "Error: unexpected argument: $1" >&2
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+[ -z "$source_dir" ] && { echo "Error: sourceDir is required" >&2; usage; }
+[ -z "$mountpoint" ] && { echo "Error: mountpoint is required" >&2; usage; }
+[ -z "$secrets_file" ] && { echo "Error: --secrets-file is required" >&2; usage; }
+[ ! -f "$secrets_file" ] && { echo "Error: secrets file not found: $secrets_file" >&2; exit 1; }
+
+case "$write_policy" in
+  readonly|passthrough) ;;
+  *) echo "Error: --write-policy must be 'readonly' or 'passthrough'" >&2; exit 1 ;;
+esac
+
+secrets=()
+while IFS= read -r line || [ -n "$line" ]; do
+  [ -z "$line" ] && continue
+  byte_len=$(printf '%s' "$line" | wc -c)
+  if [ "$byte_len" -lt 4 ]; then
+    echo "Error: secret too short (${byte_len} bytes, minimum 4)" >&2
+    exit 1
+  fi
+  secrets+=("$line")
+done < "$secrets_file"
+
+[ ${#secrets[@]} -eq 0 ] && { echo "Error: no secrets found in $secrets_file" >&2; exit 1; }
+
+mkdir -p "$mountpoint"
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+nas_maskfs="${script_dir}/nas-maskfs"
+if [ ! -x "$nas_maskfs" ]; then
+  nas_maskfs="$(command -v nas-maskfs 2>/dev/null || true)"
+fi
+[ -z "$nas_maskfs" ] || [ ! -x "$nas_maskfs" ] && { echo "Error: nas-maskfs not found" >&2; exit 1; }
+
+# Output a u32 in little-endian byte order
+u32le() {
+  printf "$(printf '\\%03o\\%03o\\%03o\\%03o' \
+    $(($1 & 0xFF)) \
+    $((($1 >> 8) & 0xFF)) \
+    $((($1 >> 16) & 0xFF)) \
+    $((($1 >> 24) & 0xFF)))"
+}
+
+frame_file=$(mktemp)
+{
+  u32le ${#secrets[@]}
+  for s in "${secrets[@]}"; do
+    byte_len=$(printf '%s' "$s" | wc -c)
+    u32le "$byte_len"
+    printf '%s' "$s"
+  done
+} > "$frame_file"
+
+daemon_pid=""
+cleanup() {
+  fusermount3 -u "$mountpoint" 2>/dev/null || true
+  if [ -n "$daemon_pid" ]; then
+    kill "$daemon_pid" 2>/dev/null || true
+    wait "$daemon_pid" 2>/dev/null || true
+  fi
+  rm -f "$frame_file"
+  # Remove PID file on foreground exit
+  if ! $daemon_mode; then
+    local pf
+    pf="$(pid_file_for "$mountpoint" 2>/dev/null || true)"
+    rm -f "$pf" 2>/dev/null || true
+  fi
+}
+trap cleanup INT TERM EXIT
+
+if $daemon_mode; then
+  "$nas_maskfs" "$source_dir" "$mountpoint" "--write-policy=$write_policy" < "$frame_file" >/dev/null 2>&1 &
+else
+  "$nas_maskfs" "$source_dir" "$mountpoint" "--write-policy=$write_policy" < "$frame_file" &
+fi
+daemon_pid=$!
+rm -f "$frame_file"
+
+# Wait for mount readiness (st_dev changes when FUSE mounts)
+parent_dev=$(stat -c %d "$(dirname "$mountpoint")")
+deadline=$(( $(date +%s) + 10 ))
+mounted=false
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  mnt_dev=$(stat -c %d "$mountpoint" 2>/dev/null || echo "$parent_dev")
+  if [ "$mnt_dev" != "$parent_dev" ]; then
+    mounted=true
+    break
+  fi
+  if ! kill -0 "$daemon_pid" 2>/dev/null; then
+    wait "$daemon_pid" 2>/dev/null
+    rc=$?
+    echo "Error: nas-maskfs exited with code $rc" >&2
+    daemon_pid=""
+    exit 1
+  fi
+  sleep 0.1
+done
+
+if ! $mounted; then
+  echo "Error: FUSE mount did not become ready within 10s" >&2
+  exit 1
+fi
+
+# Write PID file
+mkdir -p "$pid_dir"
+pid_file="$(pid_file_for "$mountpoint")"
+echo "$daemon_pid" > "$pid_file"
+
+if $daemon_mode; then
+  # Detach: disown the daemon and exit without triggering cleanup
+  disown "$daemon_pid"
+  trap - INT TERM EXIT
+  echo "maskfs: mounted $source_dir on $mountpoint (pid $daemon_pid)" >&2
+  echo "maskfs: unmount with: maskfs --unmount $mountpoint" >&2
+  exit 0
+fi
+
+echo "maskfs: mounted $source_dir on $mountpoint (Ctrl-C to unmount)" >&2
+wait "$daemon_pid"
