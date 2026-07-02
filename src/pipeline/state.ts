@@ -17,6 +17,8 @@ export interface WorkspaceState {
   readonly workDir: string;
   readonly mountDir?: string;
   readonly imageName: string;
+  /** maskfs 有効時のみ: Docker バインドソースに使うマスク済みビューのルート */
+  readonly maskedRoot?: string;
 }
 
 /** Stable session identity provided by the session-store stage. */

@@ -109,6 +109,18 @@ export function createMountStage(
   };
 }
 
+/**
+ * MountStage がワークスペースのバインドソース/ターゲットに使う実パスを解決する。
+ * MaskFsStage も同じパスをマスク対象のソースディレクトリとして使う。
+ */
+export function resolveWorkspaceMountSource(
+  workspace: WorkspaceState,
+  probes: MountProbes,
+): string {
+  const base = path.resolve(workspace.mountDir ?? workspace.workDir);
+  return probes.gitWorktreeMainRoot ?? base;
+}
+
 // ---------------------------------------------------------------------------
 // Pure plan function
 // ---------------------------------------------------------------------------

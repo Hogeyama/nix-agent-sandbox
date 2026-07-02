@@ -15,6 +15,7 @@ import type {
   HostExecSetupService,
 } from "../stages/hostexec.ts";
 import type { ContainerLaunchService } from "../stages/launch.ts";
+import type { MaskFsService } from "../stages/maskfs.ts";
 import type { MountSetupService } from "../stages/mount.ts";
 import type { OtlpReceiverService } from "../stages/observability.ts";
 import type {
@@ -86,6 +87,7 @@ export type StageServices =
   | GitWorktreeService
   | HostExecBrokerService
   | HostExecSetupService
+  | MaskFsService
   | MountSetupService
   | NetworkRuntimeService
   | OtlpReceiverService
