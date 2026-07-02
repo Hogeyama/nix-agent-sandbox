@@ -1185,6 +1185,65 @@ test("MountStage: no mount widening when not in a worktree", () => {
 });
 
 // ============================================================
+// maskfs (maskedRoot バインドソース差し替え)
+// ============================================================
+
+test("MountStage: maskedRoot set uses maskedRoot as bind source, real path as target", () => {
+  const maskedRoot = "/run/user/1000/nas/maskfs/sessions/s1/mnt";
+  const { input, mountProbes } = makeInput({
+    slices: {
+      workspace: {
+        workDir: TEST_WORK_DIR,
+        imageName: "nas-sandbox",
+        maskedRoot,
+      },
+    },
+  });
+  const plan = planMount(input, mountProbes);
+
+  const workspaceMount = plan.containerPatch.mounts?.find(
+    (m) => m.target === TEST_WORK_DIR,
+  );
+  expect(workspaceMount?.source).toEqual(maskedRoot);
+  expect(plan.dockerArgs).toContain(`${maskedRoot}:${TEST_WORK_DIR}`);
+});
+
+test("MountStage: maskedRoot unset keeps bind source == target", () => {
+  const { input, mountProbes } = makeInput();
+  const plan = planMount(input, mountProbes);
+
+  const workspaceMount = plan.containerPatch.mounts?.find(
+    (m) => m.target === TEST_WORK_DIR,
+  );
+  expect(workspaceMount?.source).toEqual(TEST_WORK_DIR);
+});
+
+test("MountStage: maskedRoot set does not affect .nas/config.pkl RO mount source", () => {
+  // config.pkl は mask.values にリテラルを書けないため秘密値を含まず、
+  // 実パスを RO で見せる方が改ざん防止として優先される。
+  const maskedRoot = "/run/user/1000/nas/maskfs/sessions/s1/mnt";
+  const configPath = `${TEST_WORK_DIR}/.nas/config.pkl`;
+  const { input, mountProbes } = makeInput({
+    slices: {
+      workspace: {
+        workDir: TEST_WORK_DIR,
+        imageName: "nas-sandbox",
+        maskedRoot,
+      },
+    },
+    mountProbes: makeMountProbes({ localConfigPaths: [configPath] }),
+  });
+  const plan = planMount(input, mountProbes);
+
+  expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: configPath,
+    target: configPath,
+    readOnly: true,
+  });
+});
+
+// ============================================================
 // .nas/config.pkl RO bind mount (改ざん防止)
 // ============================================================
 
