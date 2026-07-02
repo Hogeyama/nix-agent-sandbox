@@ -4,6 +4,13 @@ amends "modulepath:/global.pkl"
 // replace the line above with:
 //   amends "Schema.pkl"
 
+// Mask secrets from the agent (any file-read path shows same-length "*"):
+//   ["default"] {
+//     mask {
+//       values { new { source = "dotenv:.env#DB_PASSWORD" } }
+//     }
+//   }
+
 profiles {
   ["default"] {
     agent = "claude"
