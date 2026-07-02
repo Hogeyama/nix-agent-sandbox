@@ -13,10 +13,15 @@
 
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
+import type { MaskValueConfig } from "../../config/types.ts";
+import { SecretStore } from "../../hostexec/secret_store.ts";
+import type { HostEnv } from "../../pipeline/types.ts";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService } from "../../services/process.ts";
 
 type Fs = Context.Tag.Service<typeof FsService>;
+
+const MIN_SECRET_BYTES = 4;
 
 export interface MaskFsStartPlan {
   readonly binaryPath: string;
@@ -46,6 +51,10 @@ export class MaskFsService extends Context.Tag("nas/MaskFsService")<
       plan: MaskFsStartPlan,
       options?: MaskFsStartOptions,
     ) => Effect.Effect<MaskFsHandle, unknown, Scope.Scope>;
+    readonly resolveSecrets: (
+      values: MaskValueConfig[],
+      host: HostEnv,
+    ) => Effect.Effect<string[], unknown>;
   }
 >() {}
 
@@ -131,6 +140,45 @@ function defaultWaitReady(
   });
 }
 
+/**
+ * デフォルトの秘密値解決実装 (本番用)。node:fs 経由の IO (file:/dotenv: ソース) を行う。
+ * テストでは makeMaskFsServiceFake の resolveSecrets 経由でフェイクに差し替える。
+ */
+async function resolveMaskSecrets(
+  values: MaskValueConfig[],
+  host: HostEnv,
+): Promise<string[]> {
+  const env: Record<string, string | undefined> = {};
+  for (const [k, v] of host.env) env[k] = v;
+
+  const store = new SecretStore(
+    Object.fromEntries(
+      values.map((v, i) => [String(i), { from: v.source, required: true }]),
+    ),
+    { env },
+  );
+
+  const secrets: string[] = [];
+  for (const [i, value] of values.entries()) {
+    let resolved: string;
+    try {
+      resolved = await store.require(String(i));
+    } catch (e) {
+      throw new Error(
+        `[nas] mask: failed to resolve mask.values[${i}].source ("${value.source}"): ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    const bytes = new TextEncoder().encode(resolved);
+    if (bytes.byteLength < MIN_SECRET_BYTES) {
+      throw new Error(
+        `[nas] mask: mask.values[${i}] resolved value must be at least 4 bytes (got ${bytes.byteLength}); short values would mass-mask unrelated content`,
+      );
+    }
+    secrets.push(resolved);
+  }
+  return secrets;
+}
+
 // ---------------------------------------------------------------------------
 // Live implementation
 // ---------------------------------------------------------------------------
@@ -193,6 +241,12 @@ export const MaskFsServiceLive: Layer.Layer<
             kill: () => spawnHandle.kill(),
           } satisfies MaskFsHandle;
         }),
+
+      resolveSecrets: (values, host) =>
+        Effect.tryPromise({
+          try: () => resolveMaskSecrets(values, host),
+          catch: (e) => e,
+        }),
     });
   }),
 );
@@ -206,6 +260,10 @@ export interface MaskFsServiceFakeConfig {
     plan: MaskFsStartPlan,
     options?: MaskFsStartOptions,
   ) => Effect.Effect<MaskFsHandle, unknown, Scope.Scope>;
+  readonly resolveSecrets?: (
+    values: MaskValueConfig[],
+    host: HostEnv,
+  ) => Effect.Effect<string[], unknown>;
 }
 
 const defaultHandle: MaskFsHandle = { kill: () => {} };
@@ -218,6 +276,7 @@ export function makeMaskFsServiceFake(
     MaskFsService.of({
       startMaskFs:
         overrides.startMaskFs ?? (() => Effect.succeed(defaultHandle)),
+      resolveSecrets: overrides.resolveSecrets ?? (() => Effect.succeed([])),
     }),
   );
 }

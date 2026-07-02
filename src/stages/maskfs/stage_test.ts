@@ -113,6 +113,7 @@ describe("createMaskFsStage", () => {
           plans.push(plan);
           return { kill: () => {} };
         }),
+      resolveSecrets: () => Effect.succeed(["hunter2secret"]),
     });
     const input = makeStageInput();
     input.profile.mask = {
@@ -160,7 +161,16 @@ describe("createMaskFsStage", () => {
     await expect(
       Effect.runPromise(
         Effect.scoped(stage.run({ workspace: WORKSPACE })).pipe(
-          Effect.provide(makeMaskFsServiceFake()),
+          Effect.provide(
+            makeMaskFsServiceFake({
+              resolveSecrets: () =>
+                Effect.fail(
+                  new Error(
+                    "[nas] mask: mask.values[0] resolved value must be at least 4 bytes (got 3); short values would mass-mask unrelated content",
+                  ),
+                ),
+            }),
+          ),
         ),
       ),
     ).rejects.toThrow(/at least 4 bytes/);
@@ -200,7 +210,16 @@ describe("createMaskFsStage", () => {
     await expect(
       Effect.runPromise(
         Effect.scoped(stage.run({ workspace: WORKSPACE })).pipe(
-          Effect.provide(makeMaskFsServiceFake()),
+          Effect.provide(
+            makeMaskFsServiceFake({
+              resolveSecrets: () =>
+                Effect.fail(
+                  new Error(
+                    '[nas] mask: failed to resolve mask.values[0].source ("env:NAS_TEST_DOES_NOT_EXIST"): not found',
+                  ),
+                ),
+            }),
+          ),
         ),
       ),
     ).rejects.toThrow();
