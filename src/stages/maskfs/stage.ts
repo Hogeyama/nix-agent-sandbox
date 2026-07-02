@@ -8,6 +8,7 @@
  */
 
 import { Effect } from "effect";
+import type { MaskValueConfig } from "../../config/types.ts";
 import { SecretStore } from "../../hostexec/secret_store.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { WorkspaceState } from "../../pipeline/state.ts";
@@ -25,6 +26,10 @@ const MIN_SECRET_BYTES = 4;
 /** テスト用フック */
 export interface MaskFsStageOptions {
   readonly resolveBinPath?: () => Promise<string | null>;
+  readonly resolveSecrets?: (
+    values: MaskValueConfig[],
+    host: HostEnv,
+  ) => Promise<string[]>;
 }
 
 export function resolveMaskFsRuntimeDir(host: HostEnv): string {
@@ -55,8 +60,9 @@ export function createMaskFsStage(
         const maskFs = yield* MaskFsService;
 
         // --- 秘密値の解決 (fail-closed: 全値 required) ---
+        const resolveSecrets = options.resolveSecrets ?? resolveMaskSecrets;
         const secrets = yield* Effect.tryPromise({
-          try: () => resolveMaskSecrets(mask.values, shared.host),
+          try: () => resolveSecrets(mask.values, shared.host),
           catch: (e) => e,
         });
 
@@ -101,8 +107,12 @@ export function createMaskFsStage(
   };
 }
 
+/**
+ * デフォルトの秘密値解決実装 (本番用)。node:fs 経由の IO (file:/dotenv: ソース) を行う。
+ * テストでは MaskFsStageOptions.resolveSecrets 経由でこの関数をフェイクに差し替える。
+ */
 async function resolveMaskSecrets(
-  values: { source: string }[],
+  values: MaskValueConfig[],
   host: HostEnv,
 ): Promise<string[]> {
   const env: Record<string, string | undefined> = {};
