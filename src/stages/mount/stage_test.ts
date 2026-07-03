@@ -1218,6 +1218,44 @@ test("MountStage: maskedRoot unset keeps bind source == target", () => {
   expect(workspaceMount?.source).toEqual(TEST_WORK_DIR);
 });
 
+test("MountStage: mask with maskfs=false does not require maskedRoot (proxy-only masking)", () => {
+  // proxy マスクのみの構成では MaskFsStage がスキップされ maskedRoot は未設定。
+  // ガードが maskfs 有効時のみ発火することを確認する (バインドソースは実パス)。
+  const { input, mountProbes } = makeInput({
+    profile: makeProfile({
+      mask: {
+        values: [{ source: "lines:demo/secrets.txt" }],
+        writePolicy: "readonly",
+        maskfs: false,
+        proxy: true,
+      },
+    }),
+  });
+
+  const plan = planMount(input, mountProbes);
+  const workspaceMount = plan.containerPatch.mounts?.find(
+    (m) => m.target === TEST_WORK_DIR,
+  );
+  expect(workspaceMount?.source).toEqual(TEST_WORK_DIR);
+});
+
+test("MountStage: mask with maskfs=true but maskedRoot unset throws ordering guard", () => {
+  const { input, mountProbes } = makeInput({
+    profile: makeProfile({
+      mask: {
+        values: [{ source: "lines:demo/secrets.txt" }],
+        writePolicy: "readonly",
+        maskfs: true,
+        proxy: false,
+      },
+    }),
+  });
+
+  expect(() => planMount(input, mountProbes)).toThrow(
+    /MaskFsStage must run before MountStage/,
+  );
+});
+
 test("MountStage: maskedRoot set does not affect .nas/config.pkl RO mount source", () => {
   // config.pkl は mask.values にリテラルを書けないため秘密値を含まず、
   // 実パスを RO で見せる方が改ざん防止として優先される。
