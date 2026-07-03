@@ -7,7 +7,7 @@
 import type { MaskValueConfig } from "../config/types.ts";
 import { resolveSecret } from "../hostexec/secret_store.ts";
 
-export const MIN_SECRET_BYTES = 4;
+const MIN_SECRET_BYTES = 4;
 
 export async function resolveMaskSecrets(
   values: MaskValueConfig[],
