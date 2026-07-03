@@ -847,6 +847,191 @@ test("SessionBroker: deny decision does not include injectHeaders", async () => 
   }
 });
 
+test("SessionBroker: allow decision includes maskValues", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [{ host: "example.com", action: "allow" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    maskValues: ["s3cret-value"],
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_mask1", "example.com", 443),
+    );
+    expect(response.decision).toEqual("allow");
+    expect(response.maskValues).toEqual(["s3cret-value"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: deny decision does not include maskValues", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [{ host: "example.com", action: "deny" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    maskValues: ["s3cret-value"],
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_test", "req_mask2", "example.com", 443),
+    );
+    expect(response.decision).toEqual("deny");
+    expect(response.maskValues).toBeUndefined();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: pending entry reviewContext is masked", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [{ action: "review" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    maskValues: ["s3cret-value"],
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const message = {
+      ...authorize("sess_test", "req_mask3", "api.example.com", 443),
+      reviewContext: {
+        path: "/upload?token=s3cret-value",
+        contentType: "application/x-www-form-urlencoded",
+        bodyPreview: "data=s3cret-value",
+        bodySize: 17,
+      },
+    };
+    const authorizePromise = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      message,
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items.length).toEqual(1);
+    expect(pending.items[0].reviewContext?.path).toEqual("/upload?token=****");
+    expect(pending.items[0].reviewContext?.bodyPreview).toEqual("data=****");
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_mask3",
+      scope: "host-port",
+    });
+    const decision = await authorizePromise;
+    expect(decision.decision).toEqual("allow");
+    expect(decision.maskValues).toEqual(["s3cret-value"]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: review-rule pathPrefix matches unmasked path even when it contains a mask secret", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [
+      {
+        host: "api.example.com",
+        pathPrefix: "/accounts/s3cret-value",
+        action: "allow",
+      },
+    ],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    maskValues: ["s3cret-value"],
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize("sess_test", "req_pathprefix_mask", "api.example.com", 443),
+      reviewContext: {
+        path: "/accounts/s3cret-value/info",
+        contentType: null,
+        bodyPreview: null,
+        bodySize: 0,
+      },
+    });
+    expect(response.decision).toEqual("allow");
+    expect(response.reason).toEqual("review-rule");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: credential pathPrefix matches unmasked path even when it contains a mask secret", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_cred_mask",
+    reviewRules: [{ host: "api.example.com", action: "allow" }],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    maskValues: ["s3cret-value"],
+    resolvedCredentials: [
+      {
+        host: "api.example.com",
+        header: "Authorization",
+        value: "token ghp_test123",
+        pathPrefix: "/accounts/s3cret-value",
+      },
+    ],
+  });
+  const socketPath = `${paths.brokersDir}/sess_cred_mask/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize(
+        "sess_cred_mask",
+        "req_cred_pathprefix_mask",
+        "api.example.com",
+        443,
+      ),
+      reviewContext: {
+        path: "/accounts/s3cret-value/info",
+        contentType: null,
+        bodyPreview: null,
+        bodySize: 0,
+      },
+    });
+    expect(response.decision).toEqual("allow");
+    expect(response.injectHeaders).toEqual([
+      { name: "Authorization", value: "token ghp_test123" },
+    ]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("SessionBroker: all-match injects multiple credentials for same host", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);

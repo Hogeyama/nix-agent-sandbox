@@ -15,6 +15,10 @@ import {
 import { logInfo } from "../log.ts";
 import { findMatchingCredentials } from "./credential_matching.ts";
 import {
+  expandMaskPatterns,
+  maskReviewContextWithPatterns,
+} from "./mask_patterns.ts";
+import {
   closeNotification,
   notifyPendingRequest,
   type ResolvedNotifyBackend,
@@ -28,6 +32,7 @@ import {
   matchesPathPrefix,
   type PendingEntry,
   type ResolvedCredential,
+  type ReviewContext,
   targetKey,
   targetKeyForScope,
 } from "./protocol.ts";
@@ -56,6 +61,9 @@ interface BrokerOptions {
   auditDir?: string;
   /** Pre-resolved credentials to inject into matching allow responses. */
   resolvedCredentials?: ResolvedCredential[];
+  /** Secrets to mask out of outgoing requests. Attached to allow decisions
+   * and used to sanitize incoming reviewContext. */
+  maskValues?: string[];
 }
 
 interface PendingWaiter {
@@ -117,6 +125,8 @@ export class SessionBroker {
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
   private readonly resolvedCredentials: ResolvedCredential[];
+  private readonly maskValues: string[];
+  private readonly maskPatterns: string[];
   private socketPath: string | null = null;
   private server: Server | null = null;
   private readonly approvedTargets = new Set<string>();
@@ -140,6 +150,8 @@ export class SessionBroker {
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
     this.resolvedCredentials = options.resolvedCredentials ?? [];
+    this.maskValues = options.maskValues ?? [];
+    this.maskPatterns = expandMaskPatterns(this.maskValues);
     this.negativeCache = new TtlLruCache<string, true>({
       maxSize: 1024,
       ttlMs: options.negativeCacheTtlMs ?? 30_000,
@@ -238,6 +250,11 @@ export class SessionBroker {
   private async authorize(
     message: AuthorizeRequest,
   ): Promise<DecisionResponse> {
+    // NOTE: `message` keeps its original (unmasked) reviewContext for the
+    // lifetime of this function. Matching (findMatchingRule pathPrefix,
+    // credential pathPrefix via decorateAllow) must run against the real
+    // path. Masking is applied only when building the entry persisted via
+    // toPendingEntry, further down.
     const targetStr = `${message.target.host}:${message.target.port}`;
 
     // deny-by-default targets (localhost, loopback, RFC1918, link-local, ULA)
@@ -269,7 +286,7 @@ export class SessionBroker {
       this.approvedTargets.has(targetCacheKey) ||
       this.approvedHosts.has(message.target.host)
     ) {
-      const decision = this.injectCredentialHeaders(
+      const decision = this.decorateAllow(
         allowDecision(message.requestId, "approved"),
         message,
       );
@@ -299,7 +316,7 @@ export class SessionBroker {
     const shouldAudit = matchedRule?.audit !== false;
     if (matchedRule !== null) {
       if (matchedRule.action === "allow") {
-        const decision = this.injectCredentialHeaders(
+        const decision = this.decorateAllow(
           allowDecision(message.requestId, "review-rule"),
           message,
         );
@@ -348,7 +365,11 @@ export class SessionBroker {
       this.requestIndex.set(message.requestId, groupKey);
       await writePendingEntry(
         this.paths,
-        toPendingEntry(message, group.createdAt),
+        toPendingEntry(
+          message,
+          group.createdAt,
+          this.maskedReviewContext(message),
+        ),
       );
     }
 
@@ -386,7 +407,10 @@ export class SessionBroker {
     };
     this.groups.set(groupKey, group);
     this.requestIndex.set(message.requestId, groupKey);
-    await writePendingEntry(this.paths, toPendingEntry(message, createdAt));
+    await writePendingEntry(
+      this.paths,
+      toPendingEntry(message, createdAt, this.maskedReviewContext(message)),
+    );
     const notificationTask = notifyPendingRequest({
       backend: this.notify,
       sessionId: this.sessionId,
@@ -499,7 +523,7 @@ export class SessionBroker {
       };
       const decision =
         outcome === "allow"
-          ? this.injectCredentialHeaders(baseWithId, request)
+          ? this.decorateAllow(baseWithId, request)
           : baseWithId;
       const targetStr = `${request.target.host}:${request.target.port}`;
       const headerNames = decision.injectHeaders?.map((h) => h.name);
@@ -513,6 +537,19 @@ export class SessionBroker {
       const waiter = group.waiters.get(requestId);
       waiter?.resolve(decision);
     }
+  }
+
+  /**
+   * reviewContext を pending エントリ永続化用にマスクする。マッチング
+   * (findMatchingRule / credential pathPrefix) には絶対に使わないこと。
+   */
+  private maskedReviewContext(
+    message: AuthorizeRequest,
+  ): ReviewContext | undefined {
+    return maskReviewContextWithPatterns(
+      message.reviewContext,
+      this.maskPatterns,
+    );
   }
 
   private findMatchingRule(message: AuthorizeRequest): ReviewRule | null {
@@ -585,6 +622,18 @@ export class SessionBroker {
     if (headers.length === 0) return decision;
     return { ...decision, injectHeaders: headers };
   }
+
+  /** allow decision に credential 注入と maskValues 付与をまとめて行う */
+  private decorateAllow(
+    decision: DecisionResponse,
+    message: AuthorizeRequest,
+  ): DecisionResponse {
+    const withCreds = this.injectCredentialHeaders(decision, message);
+    if (withCreds.decision !== "allow" || this.maskValues.length === 0) {
+      return withCreds;
+    }
+    return { ...withCreds, maskValues: this.maskValues };
+  }
 }
 
 export async function sendBrokerRequest<T extends BrokerResponse>(
@@ -607,6 +656,7 @@ export async function sendBrokerRequest<T extends BrokerResponse>(
 function toPendingEntry(
   message: AuthorizeRequest,
   createdAt: string,
+  maskedReviewContext: ReviewContext | undefined,
 ): PendingEntry {
   return {
     version: 1,
@@ -618,7 +668,7 @@ function toPendingEntry(
     state: "pending",
     createdAt,
     updatedAt: new Date().toISOString(),
-    reviewContext: message.reviewContext,
+    reviewContext: maskedReviewContext,
   };
 }
 

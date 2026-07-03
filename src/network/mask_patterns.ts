@@ -83,20 +83,32 @@ export function maskText(text: string, patterns: string[]): string {
 }
 
 /**
- * reviewContext (path / bodyPreview) をマスクする。
+ * reviewContext (path / bodyPreview) を、展開済みパターンでマスクする。
  * 既知の制限: bodyPreview は先頭 1024 バイトで切り詰められるため、
  * 秘密値がプレビュー境界をまたぐと先頭部分だけが残り得る (spec 参照)。
+ *
+ * 呼び出し側の注意: これはマスク済みの reviewContext を pending エントリ
+ * に永続化するためだけに使う。ホスト/パスマッチング (review rule の
+ * pathPrefix, credential の pathPrefix 等) には、元の (マスクしていない)
+ * reviewContext を使い続けること。マスク後の値でマッチングすると、URL
+ * パス中に秘密値が現れた場合に一致すべきルールが一致しなくなる。
  */
-export function maskReviewContext(
+export function maskReviewContextWithPatterns(
   ctx: ReviewContext | undefined,
-  values: string[],
+  patterns: string[],
 ): ReviewContext | undefined {
-  if (!ctx || values.length === 0) return ctx;
-  const patterns = expandMaskPatterns(values);
+  if (!ctx || patterns.length === 0) return ctx;
   return {
     ...ctx,
     path: maskText(ctx.path, patterns),
     bodyPreview:
       ctx.bodyPreview === null ? null : maskText(ctx.bodyPreview, patterns),
   };
+}
+
+export function maskReviewContext(
+  ctx: ReviewContext | undefined,
+  values: string[],
+): ReviewContext | undefined {
+  return maskReviewContextWithPatterns(ctx, expandMaskPatterns(values));
 }
