@@ -7,8 +7,9 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { CredentialRule } from "../../config/types.ts";
+import type { CredentialRule, MaskValueConfig } from "../../config/types.ts";
 import { resolveAsset } from "../../lib/asset.ts";
+import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
 import type { ResolvedCredential } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { FsService } from "../../services/fs.ts";
@@ -41,6 +42,10 @@ export class NetworkRuntimeService extends Context.Tag(
     readonly resolveCredentials: (
       credentials: CredentialRule[],
     ) => Effect.Effect<ResolvedCredential[]>;
+    readonly resolveMaskValues: (
+      values: MaskValueConfig[],
+      env: Record<string, string | undefined>,
+    ) => Effect.Effect<string[]>;
   }
 >() {}
 
@@ -142,6 +147,12 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           }
           return resolved;
         }),
+
+      resolveMaskValues: (values, env) =>
+        Effect.tryPromise({
+          try: () => resolveMaskSecrets(values, env),
+          catch: (e) => (e instanceof Error ? e : new Error(String(e))),
+        }).pipe(Effect.orDie),
     });
   }),
 );
@@ -167,6 +178,10 @@ export interface NetworkRuntimeServiceFakeConfig {
   readonly resolveCredentials?: (
     credentials: CredentialRule[],
   ) => Effect.Effect<ResolvedCredential[]>;
+  readonly resolveMaskValues?: (
+    values: MaskValueConfig[],
+    env: Record<string, string | undefined>,
+  ) => Effect.Effect<string[]>;
 }
 
 export function makeNetworkRuntimeServiceFake(
@@ -183,6 +198,8 @@ export function makeNetworkRuntimeServiceFake(
         overrides.computeAddonHash ?? (() => Effect.succeed("fakehash")),
       resolveCredentials:
         overrides.resolveCredentials ?? (() => Effect.succeed([])),
+      resolveMaskValues:
+        overrides.resolveMaskValues ?? (() => Effect.succeed([])),
     }),
   );
 }
