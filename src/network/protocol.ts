@@ -55,6 +55,9 @@ export interface DecisionResponse {
   reason: string;
   message?: string;
   injectHeaders?: InjectHeader[];
+  /** allow のとき、プロキシがリクエストから ****
+   * へ置換すべき秘密値 (nas_addon.py が消費)。 */
+  maskValues?: string[];
 }
 
 export interface PendingEntry {
