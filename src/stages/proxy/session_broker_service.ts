@@ -43,6 +43,7 @@ export interface SessionBrokerConfig {
   readonly auditDir?: string;
   readonly tokenHash: string;
   readonly resolvedCredentials?: ResolvedCredential[];
+  readonly maskValues?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +92,7 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
               uiIdleTimeout: config.uiIdleTimeout,
               auditDir: config.auditDir,
               resolvedCredentials: config.resolvedCredentials,
+              maskValues: config.maskValues,
             });
             await broker.start(config.socketPath);
             try {

@@ -14,14 +14,12 @@
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
 import type { MaskValueConfig } from "../../config/types.ts";
-import { resolveSecret } from "../../hostexec/secret_store.ts";
+import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService } from "../../services/process.ts";
 
 type Fs = Context.Tag.Service<typeof FsService>;
-
-const MIN_SECRET_BYTES = 4;
 
 export interface MaskFsStartPlan {
   readonly binaryPath: string;
@@ -160,62 +158,6 @@ function defaultWaitReady(
   });
 }
 
-/**
- * デフォルトの秘密値解決実装 (本番用)。node:fs 経由の IO (file:/dotenv: ソース) を行う。
- * テストでは makeMaskFsServiceFake の resolveSecrets 経由でフェイクに差し替える。
- */
-async function resolveMaskSecrets(
-  values: MaskValueConfig[],
-  host: HostEnv,
-): Promise<string[]> {
-  const env: Record<string, string | undefined> = {};
-  for (const [k, v] of host.env) env[k] = v;
-
-  const secrets: string[] = [];
-  for (const [i, value] of values.entries()) {
-    let resolved: string | string[] | null;
-    try {
-      resolved = await resolveSecret(value.source, env);
-    } catch (e) {
-      throw new Error(
-        `[nas] mask: failed to resolve mask.values[${i}].source ("${value.source}"): ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-    if (resolved === null || resolved === "") {
-      throw new Error(
-        `[nas] mask: failed to resolve mask.values[${i}].source ("${value.source}"): Required secret is unavailable`,
-      );
-    }
-    if (Array.isArray(resolved)) {
-      if (resolved.length === 0) {
-        throw new Error(
-          `[nas] mask: failed to resolve mask.values[${i}].source ("${value.source}"): Required secret is unavailable`,
-        );
-      }
-      for (const [lineIndex, line] of resolved.entries()) {
-        assertMinSecretBytes(
-          line,
-          `[nas] mask: mask.values[${i}] line ${lineIndex + 1}`,
-        );
-        secrets.push(line);
-      }
-      continue;
-    }
-    assertMinSecretBytes(resolved, `[nas] mask: mask.values[${i}]`);
-    secrets.push(resolved);
-  }
-  return secrets;
-}
-
-function assertMinSecretBytes(value: string, label: string): void {
-  const bytes = new TextEncoder().encode(value);
-  if (bytes.byteLength < MIN_SECRET_BYTES) {
-    throw new Error(
-      `${label} resolved value must be at least 4 bytes (got ${bytes.byteLength}); short values would mass-mask unrelated content`,
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Live implementation
 // ---------------------------------------------------------------------------
@@ -281,7 +223,11 @@ export const MaskFsServiceLive: Layer.Layer<
 
       resolveSecrets: (values, host) =>
         Effect.tryPromise({
-          try: () => resolveMaskSecrets(values, host),
+          try: () => {
+            const env: Record<string, string | undefined> = {};
+            for (const [k, v] of host.env) env[k] = v;
+            return resolveMaskSecrets(values, env);
+          },
           catch: (e) => e,
         }),
     });

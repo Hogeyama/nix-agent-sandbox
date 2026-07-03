@@ -7,7 +7,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { makeFsServiceFake } from "../../services/fs.ts";
 import { makeProcessServiceFake } from "../../services/process.ts";
@@ -84,4 +84,34 @@ test("writeReviewRules: writes JSON file to reviewRulesDir", async () => {
   expect(fsFake.store.has(rulesPath)).toEqual(true);
   const stored = fsFake.store.get(rulesPath);
   expect(JSON.parse(stored!.content)).toEqual(rules);
+});
+
+// ---------------------------------------------------------------------------
+// resolveMaskValues
+// ---------------------------------------------------------------------------
+
+test("resolveMaskValues: resolves env: sources via live layer", async () => {
+  const fsFake = makeFsServiceFake();
+  const live = makeLiveLayer(fsFake);
+  const values = await Effect.runPromise(
+    Effect.flatMap(NetworkRuntimeService, (svc) =>
+      svc.resolveMaskValues([{ source: "env:MY_SECRET" }], {
+        MY_SECRET: "s3cret-value",
+      }),
+    ).pipe(Effect.provide(live)),
+  );
+  expect(values).toEqual(["s3cret-value"]);
+});
+
+test("resolveMaskValues: dies when secret is unavailable (fail-closed)", async () => {
+  const fsFake = makeFsServiceFake();
+  const live = makeLiveLayer(fsFake);
+  const exit = await Effect.runPromiseExit(
+    Effect.flatMap(NetworkRuntimeService, (svc) =>
+      svc.resolveMaskValues([{ source: "env:MISSING" }], {}),
+    ).pipe(Effect.provide(live)),
+  );
+  expect(exit._tag).toEqual("Failure");
+  if (!Exit.isFailure(exit)) return;
+  expect(Cause.isDieType(exit.cause)).toEqual(true);
 });
