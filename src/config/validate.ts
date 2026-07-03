@@ -108,6 +108,12 @@ function validateProfile(name: string, profile: Profile): string[] {
   // --- mask ---
   if (profile.mask) {
     errors.push(...validateMaskValues(name, profile.mask.values));
+    if (typeof profile.mask.maskfs !== "boolean") {
+      errors.push(`profile "${name}": mask.maskfs must be a boolean`);
+    }
+    if (typeof profile.mask.proxy !== "boolean") {
+      errors.push(`profile "${name}": mask.proxy must be a boolean`);
+    }
   }
 
   return errors;

@@ -206,6 +206,10 @@ export type MaskWritePolicy = "readonly" | "passthrough";
 export interface MaskConfig {
   values: MaskValueConfig[];
   writePolicy: MaskWritePolicy;
+  /** FUSE ワークスペースマスク (maskfs) の有効化。デフォルト true */
+  maskfs: boolean;
+  /** mitmproxy リクエストマスクの有効化。デフォルト true */
+  proxy: boolean;
 }
 
 /** プロファイル */
