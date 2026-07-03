@@ -364,13 +364,33 @@ profiles {
     }
   }
 
-  // ./demo/test-secret.env の中身がマスクされる
-  ["mask-demo"] = new Profile {
+  // demo/secrets.txt の各行が、ワークスペース内のファイル読み取り時に
+  // maskfs(FUSE)で **** にマスクされる。リクエストマスクは無効。
+  ["maskfs-demo"] = new Profile {
     agent = "claude"
     mask = new MaskConfig {
       values = new Listing {
         new MaskValueConfig { source = "lines:demo/secrets.txt" }
       }
+      maskfs = true
+      proxy = false
+    }
+  }
+
+  // demo/secrets.txt の各行が、エージェント発の HTTP リクエスト
+  // (ボディ・URL・ヘッダー)から送出前に **** にマスクされる。
+  // proxy マスクは network proxy 経由でのみ効くため commonNetwork を継承する。
+  // maskfs は無効(git にコミット済みの秘密値でワークツリーが dirty に
+  // ならないよう、リクエストマスクだけを使う構成の確認用)。
+  ["maskproxy-demo"] = new Profile {
+    agent = "claude"
+    network = commonNetwork
+    mask = new MaskConfig {
+      values = new Listing {
+        new MaskValueConfig { source = "lines:demo/secrets.txt" }
+      }
+      maskfs = false
+      proxy = true
     }
   }
 }
