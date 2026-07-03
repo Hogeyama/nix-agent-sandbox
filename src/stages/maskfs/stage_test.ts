@@ -119,6 +119,8 @@ describe("createMaskFsStage", () => {
     input.profile.mask = {
       values: [{ source: "env:NAS_TEST_MASK_SECRET" }],
       writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_MASK_SECRET", "hunter2secret");
@@ -150,6 +152,8 @@ describe("createMaskFsStage", () => {
     input.profile.mask = {
       values: [{ source: "env:NAS_TEST_SHORT" }],
       writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_SHORT", "abc");
@@ -181,6 +185,8 @@ describe("createMaskFsStage", () => {
     input.profile.mask = {
       values: [{ source: "env:NAS_TEST_MASK_SECRET" }],
       writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_MASK_SECRET", "hunter2secret");
@@ -203,6 +209,8 @@ describe("createMaskFsStage", () => {
     input.profile.mask = {
       values: [{ source: "env:NAS_TEST_DOES_NOT_EXIST" }],
       writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
     };
     const stage = createMaskFsStage(input, MOUNT_PROBES, {
       resolveBinPath: async () => "/fake/nas-maskfs",

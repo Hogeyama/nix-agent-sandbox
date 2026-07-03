@@ -51,6 +51,8 @@ describe("validateConfig: mask", () => {
         mask: {
           values: [{ source: "env:MY_SECRET" }, { source: "dotenv:.env#KEY" }],
           writePolicy: "readonly",
+          maskfs: true,
+          proxy: true,
         },
       }),
     );
@@ -63,6 +65,8 @@ describe("validateConfig: mask", () => {
         mask: {
           values: [{ source: "lines:/home/u/.secrets/tokens.txt" }],
           writePolicy: "readonly",
+          maskfs: true,
+          proxy: true,
         },
       }),
     );
@@ -75,6 +79,8 @@ describe("validateConfig: mask", () => {
         mask: {
           values: [{ source: "literal:passw0rd" }],
           writePolicy: "readonly",
+          maskfs: true,
+          proxy: true,
         },
       }),
     );
@@ -85,7 +91,12 @@ describe("validateConfig: mask", () => {
   test("rejects empty source", () => {
     const config = makeConfig(
       makeProfile({
-        mask: { values: [{ source: "" }], writePolicy: "passthrough" },
+        mask: {
+          values: [{ source: "" }],
+          writePolicy: "passthrough",
+          maskfs: true,
+          proxy: true,
+        },
       }),
     );
     expect(() => validateConfig(config)).toThrow(ConfigValidationError);
@@ -94,5 +105,26 @@ describe("validateConfig: mask", () => {
   test("mask omitted is fine", () => {
     const config = makeConfig(makeProfile());
     expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  test("rejects non-boolean maskfs / proxy flags", () => {
+    const config = makeConfig(
+      makeProfile({
+        mask: {
+          values: [{ source: "env:MY_SECRET" }],
+          writePolicy: "readonly",
+          maskfs: "yes" as any,
+          proxy: 1 as any,
+        },
+      }),
+    );
+    expect(() => validateConfig(config)).toThrow(ConfigValidationError);
+    try {
+      validateConfig(config);
+    } catch (e) {
+      const msg = String(e);
+      expect(msg).toContain("mask.maskfs must be a boolean");
+      expect(msg).toContain("mask.proxy must be a boolean");
+    }
   });
 });

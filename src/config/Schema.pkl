@@ -334,6 +334,15 @@ class MaskConfig {
   /// `"readonly"`: write/truncate/unlink/rename を EROFS で拒否 (ホストの実体を保護)
   /// `"passthrough"`: 無加工で通す (agent が読んだ *** をそのまま書き戻すと実体が壊れるリスクを許容)
   writePolicy: ("readonly"|"passthrough") = "readonly"
+
+  /// FUSE ワークスペースマスク (maskfs) を有効にするか。
+  /// 秘密値が git にコミットされているリポジトリでは、マスク後の内容が
+  /// index と一致せずワークツリーが常に dirty に見えるため false にする。
+  maskfs: Boolean = true
+
+  /// mitmproxy によるリクエストマスク (ボディ・URL・ヘッダーの秘密値置換) を
+  /// 有効にするか。network proxy が有効なセッションでのみ効果がある。
+  proxy: Boolean = true
 }
 
 // ---------------------------------------------------------------------------
