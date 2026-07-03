@@ -165,7 +165,9 @@
           type = "preload";
           binaries = [
             { name = "nas-maskfs"; target = "${maskfs}/bin/nas-maskfs"; }
-            { name = "fusermount3"; target = "${pkgs.fuse3}/bin/fusermount3"; }
+            # fusermount3 は同梱しない: バンドル展開先のコピーには setuid が付かず
+            # mount(2) が必ず EPERM になる。ホストの setuid 版 (fuse3 パッケージ) に
+            # PATH フォールバックで到達させる。
           ];
         };
 
