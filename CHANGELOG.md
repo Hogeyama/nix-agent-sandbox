@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [0.15.2] - 2026-07-03
+
+### Fixed
+
+- **MaskFS**: stop bundling `fusermount3` in the standalone nix-bundle-elf distribution — the extracted copy can never carry the setuid bit, so it shadowed the host's setuid `fusermount3` on PATH and every unprivileged mount failed with EPERM. The bundle now falls back to the host binary (fuse3 package), and the standalone wrapper fails fast with a clear error when `fusermount3` is missing ([b2526a0e])
+
 ## [0.15.1] - 2026-07-03
 
 ### Fixed
@@ -460,6 +466,8 @@ Initial release.
 - Runtime: Bun (migrated from Deno)
 - Nix packaging via bun2nix + nix-bundle-elf
 
+[0.15.2]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.15.1...v0.15.2
+[0.15.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.14.2...v0.15.0
 [0.14.2]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/Hogeyama/nix-agent-sandbox/compare/v0.14.0...v0.14.1
