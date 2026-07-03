@@ -41,7 +41,7 @@ export function createMaskFsStage(
 
     run(input) {
       const mask = shared.profile.mask;
-      if (!mask || mask.values.length === 0) {
+      if (!mask?.maskfs || mask.values.length === 0) {
         return Effect.succeed({ workspace: input.workspace });
       }
 

@@ -105,6 +105,32 @@ describe("createMaskFsStage", () => {
     expect(started).toEqual(0);
   });
 
+  test("mask.maskfs=false → workspace passthrough, no daemon start", async () => {
+    let started = 0;
+    const input = makeStageInput();
+    input.profile.mask = {
+      values: [{ source: "env:NAS_TEST_MASK_SECRET" }],
+      writePolicy: "readonly",
+      maskfs: false,
+      proxy: true,
+    };
+    const layer = makeMaskFsServiceFake({
+      startMaskFs: () =>
+        Effect.sync(() => {
+          started += 1;
+          return { kill: () => {} };
+        }),
+    });
+    const stage = createMaskFsStage(input, MOUNT_PROBES);
+    const result = await Effect.runPromise(
+      Effect.scoped(stage.run({ workspace: WORKSPACE })).pipe(
+        Effect.provide(layer),
+      ),
+    );
+    expect(result.workspace.maskedRoot).toBeUndefined();
+    expect(started).toEqual(0);
+  });
+
   test("mask config → resolves secrets, starts daemon, sets maskedRoot", async () => {
     const plans: MaskFsStartPlan[] = [];
     const layer = makeMaskFsServiceFake({
