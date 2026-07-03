@@ -9,9 +9,9 @@
 
 import type { ReviewContext } from "./protocol.ts";
 
-export const MASK_REPLACEMENT = "****";
+const MASK_REPLACEMENT = "****";
 /** base64 確定部分文字列の最低長。これ未満は誤マスク防止のため捨てる */
-export const B64_MIN_PATTERN_LEN = 8;
+const B64_MIN_PATTERN_LEN = 8;
 
 /**
  * Python の urllib.parse.quote(value, safe="") / quote_plus(value) と同じ
