@@ -8,3 +8,5 @@ node_modules/
 result
 zig-out/
 .zig-cache/
+__pycache__/
+*.pyc

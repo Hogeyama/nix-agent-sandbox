@@ -13,6 +13,7 @@ import os
 import socket
 import sys
 import time
+import urllib.parse
 from typing import Optional
 
 from mitmproxy import connection, http
@@ -23,6 +24,105 @@ BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")
 REVIEW_RULES_DIR = os.path.join(NETWORK_DIR, "review-rules")
 
 BODY_PREVIEW_MAX = 1024
+
+# --- request masking -------------------------------------------------------
+# Pattern expansion mirrors src/network/mask_patterns.ts (broker-side
+# reviewContext masking). Keep both implementations in sync.
+
+MASK_REPLACEMENT = b"****"
+B64_MIN_PATTERN_LEN = 8
+
+
+def _base64_confident_substrings(secret: bytes) -> set[bytes]:
+    """truffleHog 方式: 3 バイトアライメントごとに、隣接バイトの影響を
+    受けない「確定部分文字列」を生成する (標準 / URL-safe 両アルファベット)。
+    短すぎるパターンは誤マスク防止のため捨てる。"""
+    out: set[bytes] = set()
+    for k in range(3):
+        encoded = base64.b64encode(b"\x00" * k + secret).rstrip(b"=")
+        start = -(-8 * k // 6)                # ceil(8k/6)
+        end = (8 * (k + len(secret))) // 6    # floor(8(k+n)/6)
+        candidate = encoded[start:end]
+        if len(candidate) >= B64_MIN_PATTERN_LEN:
+            out.add(candidate)
+            out.add(candidate.replace(b"+", b"-").replace(b"/", b"_"))
+    return out
+
+
+def _build_mask_patterns(mask_values: list[str]) -> list[bytes]:
+    """秘密値ごとに 生値 / percent-encoded (quote, quote_plus) / base64
+    バリアントを展開し、長い順に返す (部分重複対策)。"""
+    patterns: set[bytes] = set()
+    for value in mask_values:
+        if not value:
+            continue
+        raw = value.encode("utf-8")
+        patterns.add(raw)
+        patterns.add(urllib.parse.quote(value, safe="").encode("ascii"))
+        patterns.add(urllib.parse.quote_plus(value).encode("ascii"))
+        patterns.update(_base64_confident_substrings(raw))
+    return sorted(patterns, key=len, reverse=True)
+
+
+def _mask_bytes(data: bytes, patterns: list[bytes]) -> bytes:
+    for pattern in patterns:
+        data = data.replace(pattern, MASK_REPLACEMENT)
+    return data
+
+
+def _apply_request_masking(flow, patterns: list[bytes]) -> None:
+    """allow されたリクエストの URL・ヘッダー・ボディから秘密値を **** に
+    置換する。credential 注入 (injectHeaders) より前に呼ぶこと —
+    逆順だと注入したばかりの本物の credential をマスクして壊す。"""
+    if not patterns:
+        return
+
+    masked_path = _mask_bytes(
+        flow.request.path.encode("utf-8", errors="surrogateescape"), patterns
+    )
+    flow.request.path = masked_path.decode("utf-8", errors="surrogateescape")
+
+    # Headers is a multidict: item access does not reliably expose every
+    # occurrence of a duplicated header name, so use get_all/set_all to
+    # scan and rewrite all occurrences of each header name.
+    seen = set()
+    for name in list(flow.request.headers.keys()):
+        if name in seen:
+            continue
+        seen.add(name)
+        values = flow.request.headers.get_all(name)
+        masked_values = [
+            _mask_bytes(v.encode("utf-8", errors="surrogateescape"), patterns)
+            .decode("utf-8", errors="surrogateescape")
+            for v in values
+        ]
+        if masked_values != values:
+            flow.request.headers.set_all(name, masked_values)
+
+    # .content は Content-Encoding 展開済みビュー。再代入で mitmproxy が
+    # 再圧縮と Content-Length 更新を行う。展開できないエンコーディングは
+    # ValueError になる — その場合 raw_content は圧縮済みバイト列なので
+    # 生パターンのマッチは効かず、マスクできない。
+    # fail-closed: 展開不能 = マスク不能 = 漏洩リスクなので blocked を返す。
+    try:
+        content = flow.request.content
+    except ValueError:
+        content = None
+    if content is not None:
+        if content:
+            masked_content = _mask_bytes(content, patterns)
+            if masked_content != content:
+                flow.request.content = masked_content
+    else:
+        # content 展開失敗。blocked フラグを立てて呼び出し元で 403 にする。
+        ce = flow.request.headers.get("content-encoding", "unknown")
+        print(
+            f"[nas-addon] MASK-BLOCKED: cannot decode content-encoding "
+            f"'{ce}' for masking, blocking request to prevent secret leak",
+            file=sys.stderr,
+        )
+        flow.mask_blocked = True
+
 
 _registry_cache: dict[str, tuple[float, dict]] = {}
 _review_rules_cache: dict[str, tuple[float, list]] = {}
@@ -163,6 +263,19 @@ class NasAddon:
         # For HTTPS, Proxy-Authorization is only on the CONNECT request,
         # not on inner requests after TLS decryption.
         self._connect_creds: dict[str, tuple[str, str]] = {}
+        # mask_values is fixed for the whole session, so cache the derived
+        # patterns instead of re-deriving raw + quote + quote_plus + base64
+        # variants per secret on every allowed request.
+        self._mask_values_cache: Optional[list[str]] = None
+        self._mask_patterns_cache: list[bytes] = []
+
+    def _patterns_for(self, mask_values: list[str]) -> list[bytes]:
+        if mask_values == self._mask_values_cache:
+            return self._mask_patterns_cache
+        patterns = _build_mask_patterns(mask_values)
+        self._mask_values_cache = mask_values
+        self._mask_patterns_cache = patterns
+        return patterns
 
     def http_connect(self, flow: http.HTTPFlow) -> None:
         proxy_auth = flow.request.headers.get("proxy-authorization", "")
@@ -296,15 +409,27 @@ class NasAddon:
             )
             return
 
+        # Mask secrets out of the outgoing request (URL / headers / body)
+        # before credential injection so injected headers stay intact.
+        mask_values = decision.get("maskValues") or []
+        if mask_values:
+            _apply_request_masking(flow, self._patterns_for(mask_values))
+            if getattr(flow, "mask_blocked", False):
+                flow.response = http.Response.make(
+                    403,
+                    b"blocked: cannot decode request body for secret masking",
+                )
+                return
+
         # Inject credential headers from broker decision (overwrites existing).
         inject_headers = decision.get("injectHeaders", [])
         for h in inject_headers:
             flow.request.headers[h["name"]] = h["value"]
-            print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{request_path} "
+            print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{flow.request.path} "
                   f"(cred_source={cred_source})", file=sys.stderr)
         if not inject_headers and decision.get("decision") == "allow":
             print(f"[nas-addon] NO INJECT: no credentials matched for "
-                  f"{host}:{port}{request_path}", file=sys.stderr)
+                  f"{host}:{port}{flow.request.path}", file=sys.stderr)
 
         if "proxy-authorization" in flow.request.headers:
             del flow.request.headers["proxy-authorization"]
