@@ -11,7 +11,11 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import type { CredentialRule, ReviewRule } from "../../config/types.ts";
+import type {
+  CredentialRule,
+  MaskValueConfig,
+  ReviewRule,
+} from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import {
@@ -92,6 +96,10 @@ export interface ProxyPlan {
   readonly envVars: Record<string, string>;
   readonly container: ContainerPlan;
   readonly forwardPorts: ReadonlyArray<number>;
+  /** proxy マスク対象の秘密値ソース。無効時は空配列 */
+  readonly maskValueConfigs: MaskValueConfig[];
+  /** resolveMaskValues 用のホスト環境変数スナップショット */
+  readonly hostEnv: Record<string, string | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +191,11 @@ export function planProxy(
     extraMounts: [...forwardPortMounts, caCertMount],
   });
 
+  const mask = input.profile.mask;
+  const maskProxyEnabled = !!mask && mask.proxy && mask.values.length > 0;
+  const hostEnv: Record<string, string | undefined> = {};
+  for (const [k, v] of input.host.env) hostEnv[k] = v;
+
   const network: NetworkState = {
     networkName: sessionNetworkName,
     runtimeDir: runtimePaths.runtimeDir,
@@ -220,6 +233,8 @@ export function planProxy(
     envVars: container.env.static,
     container,
     forwardPorts,
+    maskValueConfigs: maskProxyEnabled ? [...mask.values] : [],
+    hostEnv,
     outputOverrides: {
       network,
       prompt: promptState,
@@ -335,6 +350,15 @@ function runProxy(
       plan.credentials,
     );
 
+    // 5.6. Resolve mask values (fail-closed: 解決失敗はセッション起動中止)
+    const maskValues =
+      plan.maskValueConfigs.length > 0
+        ? yield* networkRuntime.resolveMaskValues(
+            plan.maskValueConfigs,
+            plan.hostEnv,
+          )
+        : [];
+
     // 6. Session broker + registry (acquireRelease)
     const tokenHash = yield* Effect.tryPromise({
       try: () => hashToken(plan.token),
@@ -360,6 +384,7 @@ function runProxy(
         auditDir: plan.auditDir,
         tokenHash,
         resolvedCredentials,
+        maskValues,
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );

@@ -27,18 +27,24 @@ import type {
   HostEnv,
   ProbeResults,
   StageInput,
+  StageResult,
 } from "../../pipeline/types.ts";
-import { makeCaServiceFake } from "./ca_service.ts";
+import { type CaService, makeCaServiceFake } from "./ca_service.ts";
 import {
   type EnsureForwardPortRelaysOptions,
   type ForwardPortRelayHandle,
+  type ForwardPortRelayService,
   makeForwardPortRelayServiceFake,
 } from "./forward_port_relay_service.ts";
-import { makeNetworkRuntimeServiceFake } from "./network_runtime_service.ts";
-import { makeProxyServiceFake } from "./proxy_service.ts";
+import {
+  makeNetworkRuntimeServiceFake,
+  type NetworkRuntimeService,
+} from "./network_runtime_service.ts";
+import { makeProxyServiceFake, type ProxyService } from "./proxy_service.ts";
 import {
   makeSessionBrokerServiceFake,
   type SessionBrokerConfig,
+  type SessionBrokerService,
 } from "./session_broker_service.ts";
 import {
   buildNetworkRuntimePaths,
@@ -144,6 +150,40 @@ function makeInput(
     container,
     observability: overrides.observability ?? DISABLED_OBSERVABILITY,
   };
+}
+
+/**
+ * Runs `createProxyStage(...).run()` against a full fake-service layer stack
+ * (Effect.scoped), letting callers override only the fakes they care about.
+ * Extracted from the orchestration test bodies below so mask-value tests
+ * don't have to repeat the boilerplate.
+ */
+function runStageWithFakes(
+  profile: Profile,
+  fakes: {
+    caService?: Layer.Layer<CaService>;
+    networkRuntime?: Layer.Layer<NetworkRuntimeService>;
+    proxyService?: Layer.Layer<ProxyService>;
+    sessionBroker?: Layer.Layer<SessionBrokerService>;
+    forwardPortRelay?: Layer.Layer<ForwardPortRelayService>;
+  } = {},
+): Promise<
+  Partial<Pick<StageResult, "network" | "prompt" | "proxy" | "container">>
+> {
+  const { shared, container, observability } = makeInput(profile);
+  const stage = createProxyStage(shared);
+  const layer = Layer.mergeAll(
+    fakes.caService ?? makeCaServiceFake(),
+    fakes.networkRuntime ?? makeNetworkRuntimeServiceFake(),
+    fakes.proxyService ?? makeProxyServiceFake(),
+    fakes.sessionBroker ?? makeSessionBrokerServiceFake(),
+    fakes.forwardPortRelay ?? makeForwardPortRelayServiceFake(),
+  );
+  return Effect.runPromise(
+    stage
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
+  );
 }
 
 test("ProxyStage: always returns plan even when reviewRules and prompt are disabled", () => {
@@ -900,4 +940,72 @@ test("runProxy: resolves credentials and passes to broker", async () => {
   ]);
   expect(capturedBrokerConfigs.length).toBe(1);
   expect(capturedBrokerConfigs[0]!.resolvedCredentials).toEqual([resolvedCred]);
+});
+
+// ---------------------------------------------------------------------------
+// Mask value wiring tests
+// ---------------------------------------------------------------------------
+
+test("ProxyStage: resolves mask values and passes them to broker", async () => {
+  const profile = makeProfile({
+    network: { reviewRules: [{ action: "allow" as const }] },
+    mask: {
+      values: [{ source: "env:SECRET" }],
+      writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
+    },
+  });
+  const captured: SessionBrokerConfig[] = [];
+  const resolveCalls: unknown[] = [];
+  await runStageWithFakes(profile, {
+    networkRuntime: makeNetworkRuntimeServiceFake({
+      resolveMaskValues: (values) =>
+        Effect.sync(() => {
+          resolveCalls.push(values);
+          return ["resolved-secret"];
+        }),
+    }),
+    sessionBroker: makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          captured.push(config);
+          return { close: () => Effect.void };
+        }),
+    }),
+  });
+  expect(resolveCalls).toEqual([[{ source: "env:SECRET" }]]);
+  expect(captured[0]!.maskValues).toEqual(["resolved-secret"]);
+});
+
+test("ProxyStage: mask.proxy=false skips mask value resolution", async () => {
+  const profile = makeProfile({
+    network: { reviewRules: [{ action: "allow" as const }] },
+    mask: {
+      values: [{ source: "env:SECRET" }],
+      writePolicy: "readonly",
+      maskfs: true,
+      proxy: false,
+    },
+  });
+  const captured: SessionBrokerConfig[] = [];
+  let resolveCalled = false;
+  await runStageWithFakes(profile, {
+    networkRuntime: makeNetworkRuntimeServiceFake({
+      resolveMaskValues: () =>
+        Effect.sync(() => {
+          resolveCalled = true;
+          return [];
+        }),
+    }),
+    sessionBroker: makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          captured.push(config);
+          return { close: () => Effect.void };
+        }),
+    }),
+  });
+  expect(resolveCalled).toEqual(false);
+  expect(captured[0]!.maskValues).toEqual([]);
 });
