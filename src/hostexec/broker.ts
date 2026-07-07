@@ -705,20 +705,28 @@ export class HostExecBroker {
       (proc.stdin as import("bun").FileSink).write(stdin);
       (proc.stdin as import("bun").FileSink).end();
     }
-    await Promise.all([
-      pipeStreamToSocket(
-        proc.stdout as ReadableStream<Uint8Array>,
-        socket,
-        request.requestId,
-        1,
-      ),
-      pipeStreamToSocket(
-        proc.stderr as ReadableStream<Uint8Array>,
-        socket,
-        request.requestId,
-        2,
-      ),
-    ]);
+    try {
+      await Promise.all([
+        pipeStreamToSocket(
+          proc.stdout as ReadableStream<Uint8Array>,
+          socket,
+          request.requestId,
+          1,
+        ),
+        pipeStreamToSocket(
+          proc.stderr as ReadableStream<Uint8Array>,
+          socket,
+          request.requestId,
+          2,
+        ),
+      ]);
+    } catch {
+      // The client likely disconnected mid-stream; make sure the child
+      // process doesn't leak.
+      proc.kill();
+    } finally {
+      await proc.exited;
+    }
     const exitCode = await proc.exited;
     await writeJsonLine(socket, {
       type: "result",
