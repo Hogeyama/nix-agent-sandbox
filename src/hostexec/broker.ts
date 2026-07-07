@@ -705,6 +705,7 @@ export class HostExecBroker {
       (proc.stdin as import("bun").FileSink).write(stdin);
       (proc.stdin as import("bun").FileSink).end();
     }
+    let exitCode: number;
     try {
       await Promise.all([
         pipeStreamToSocket(
@@ -722,12 +723,18 @@ export class HostExecBroker {
       ]);
     } catch {
       // The client likely disconnected mid-stream; make sure the child
-      // process doesn't leak.
+      // process doesn't leak. Escalate to SIGKILL if the child ignores
+      // SIGTERM instead of hanging forever.
       proc.kill();
+      const killTimeout = setTimeout(() => proc.kill(9), 5000);
+      try {
+        await proc.exited;
+      } finally {
+        clearTimeout(killTimeout);
+      }
     } finally {
-      await proc.exited;
+      exitCode = await proc.exited;
     }
-    const exitCode = await proc.exited;
     await writeJsonLine(socket, {
       type: "result",
       requestId: request.requestId,
