@@ -1287,6 +1287,109 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
   }
 });
 
+test("HostExecBroker: streaming produces chunks for multi-line output", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-any",
+          match: { argv0: "node" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequest(
+      execSocketPath,
+      request(
+        [
+          "-e",
+          "console.log('line1'); console.error('err1'); console.log('line2')",
+        ],
+        workspace,
+        "req_stream",
+      ),
+    );
+    expect(result.exitCode).toEqual(0);
+    expect(result.chunks.length).toBeGreaterThan(0);
+    const stdout = collectStdout(result);
+    expect(stdout).toContain("line1");
+    expect(stdout).toContain("line2");
+    const stderr = result.chunks
+      .filter((c) => c.fd === 2)
+      .map((c) => Buffer.from(c.data, "base64").toString("utf-8"))
+      .join("");
+    expect(stderr).toContain("err1");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: streaming produces zero chunks for silent command", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "true-any",
+          match: { argv0: "true" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequest(
+      execSocketPath,
+      request([], workspace, "req_silent", "true"),
+    );
+    expect(result.exitCode).toEqual(0);
+    expect(result.chunks.length).toEqual(0);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 async function waitForPendingEntries(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   count: number,
