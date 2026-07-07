@@ -514,6 +514,11 @@ def find_fallback_binary(argv0: str, wrapper_dir: str) -> str:
 
 
 def stream_broker(payload: dict):
+    # Once any chunk has been written to stdout/stderr, we must never fall
+    # back to the real binary -- that would re-execute the command and
+    # duplicate output/side effects. All error/fallback paths below must
+    # check this flag before returning "fallback".
+    wrote_any_chunks = False
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.connect(os.environ["NAS_HOSTEXEC_SOCKET"])
     try:
@@ -535,9 +540,13 @@ def stream_broker(payload: dict):
                     else:
                         sys.stderr.buffer.write(data)
                         sys.stderr.flush()
+                    wrote_any_chunks = True
                 elif msg["type"] == "result":
                     return ("result", int(msg.get("exitCode", 0)))
                 elif msg["type"] == "fallback":
+                    if wrote_any_chunks:
+                        print("broker requested fallback after chunks were written", file=sys.stderr)
+                        return ("error", 1)
                     return ("fallback", 0)
                 elif msg["type"] == "error":
                     print(msg.get("message", "unknown error"), file=sys.stderr)
