@@ -9,23 +9,51 @@ import {
   writeJsonLine,
 } from "../lib/unix_socket.ts";
 import { resolveInterceptLibPath } from "./intercept_path.ts";
-import type { ExecuteRequest, HostExecBrokerResponse } from "./types.ts";
+import type { ExecuteRequest } from "./types.ts";
 
 /**
  * Start a mock broker that listens on the given Unix socket and responds
  * to each incoming JSON-line request using the provided handler function.
+ *
+ * Mirrors the real broker's streaming protocol: stdout/stderr (if any) are
+ * sent as base64-encoded `chunk` messages, followed by a final `result`
+ * message carrying the exit code.
  */
 function startMockBroker(
   socketPath: string,
-  handler: (request: ExecuteRequest) => HostExecBrokerResponse,
+  handler: (request: ExecuteRequest) => {
+    stdout?: string;
+    stderr?: string;
+    exitCode: number;
+  },
 ): Promise<Server> {
   return createUnixServer(socketPath, async (socket) => {
     try {
       const line = await readJsonLine(socket);
       if (line) {
         const request = JSON.parse(line) as ExecuteRequest;
-        const response = handler(request);
-        await writeJsonLine(socket, response);
+        const { stdout, stderr, exitCode } = handler(request);
+        if (stdout) {
+          await writeJsonLine(socket, {
+            type: "chunk",
+            requestId: request.requestId,
+            fd: 1,
+            data: Buffer.from(stdout).toString("base64"),
+          });
+        }
+        if (stderr) {
+          await writeJsonLine(socket, {
+            type: "chunk",
+            requestId: request.requestId,
+            fd: 2,
+            data: Buffer.from(stderr).toString("base64"),
+          });
+        }
+        await writeJsonLine(socket, {
+          type: "result",
+          requestId: request.requestId,
+          exitCode,
+        });
       }
     } catch (err) {
       console.error("mock broker handler error:", err);
@@ -84,12 +112,10 @@ test("intercept .so: broker returns exitCode=0 with stdout and stderr", async ()
     const expectedStdout = "hello from broker";
     const expectedStderr = "some error output";
 
-    const server = await startMockBroker(socketPath, (req) => ({
-      type: "result" as const,
-      requestId: req.requestId,
+    const server = await startMockBroker(socketPath, () => ({
+      stdout: expectedStdout,
+      stderr: expectedStderr,
       exitCode: 0,
-      stdout: Buffer.from(expectedStdout).toString("base64"),
-      stderr: Buffer.from(expectedStderr).toString("base64"),
     }));
 
     try {
@@ -126,12 +152,8 @@ test("intercept .so: broker returns non-zero exit code", async () => {
     await writeFile(interceptTarget, "#!/bin/sh\nexit 99\n");
     await chmod(interceptTarget, 0o755);
 
-    const server = await startMockBroker(socketPath, (req) => ({
-      type: "result" as const,
-      requestId: req.requestId,
+    const server = await startMockBroker(socketPath, () => ({
       exitCode: 42,
-      stdout: Buffer.from("").toString("base64"),
-      stderr: Buffer.from("").toString("base64"),
     }));
 
     try {
