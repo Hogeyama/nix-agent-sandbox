@@ -338,16 +338,6 @@ fn callBrokerInner(
     const sock = try std.net.connectUnixSocket(socket_path);
     defer sock.close();
 
-    // Set 30-second send/receive timeouts so we don't block forever
-    const timeout = std.posix.timeval{ .sec = 30, .usec = 0 };
-    const timeout_bytes = std.mem.asBytes(&timeout);
-    std.posix.setsockopt(sock.handle, std.os.linux.SOL.SOCKET, std.os.linux.SO.RCVTIMEO, timeout_bytes) catch |err| {
-        debugLog("failed to set SO_RCVTIMEO: {s}", .{@errorName(err)});
-    };
-    std.posix.setsockopt(sock.handle, std.os.linux.SOL.SOCKET, std.os.linux.SO.SNDTIMEO, timeout_bytes) catch |err| {
-        debugLog("failed to set SO_SNDTIMEO: {s}", .{@errorName(err)});
-    };
-
     // Send request
     try sock.writeAll(request_json);
 
