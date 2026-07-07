@@ -735,11 +735,25 @@ export class HostExecBroker {
     } finally {
       exitCode = await proc.exited;
     }
-    await writeJsonLine(socket, {
-      type: "result",
-      requestId: request.requestId,
-      exitCode,
-    });
+    try {
+      await writeJsonLine(socket, {
+        type: "result",
+        requestId: request.requestId,
+        exitCode,
+      });
+    } catch (e) {
+      // If streaming failed above because the client disconnected, the
+      // socket is already dead and this write will throw again; swallow
+      // it rather than surfacing an unhandled rejection.
+      const code = (e as NodeJS.ErrnoException).code;
+      if (
+        code === "EPIPE" ||
+        code === "ECONNRESET" ||
+        code === "ERR_STREAM_DESTROYED"
+      )
+        return;
+      throw e;
+    }
   }
 }
 
