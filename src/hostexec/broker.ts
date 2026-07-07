@@ -60,7 +60,9 @@ interface HostExecBrokerOptions {
 }
 
 interface PendingWaiter {
-  resolve: (response: HostExecBrokerResponse) => void;
+  /** Socket the original `execute` request arrived on; streamed responses go here. */
+  socket: Socket;
+  resolve: () => void;
   reject: (error: unknown) => void;
 }
 
@@ -173,12 +175,17 @@ export class HostExecBroker {
     for (const group of this.groups.values()) {
       clearTimeout(group.timer);
       group.notificationAbort.abort();
-      for (const waiter of group.waiters.values()) {
-        waiter.resolve({
-          type: "error",
-          requestId: "",
-          message: "hostexec broker closed",
-        });
+      for (const [requestId, waiter] of group.waiters.entries()) {
+        try {
+          await writeJsonLine(waiter.socket, {
+            type: "error",
+            requestId,
+            message: "hostexec broker closed",
+          });
+        } catch {
+          // Client socket may already be gone; nothing to notify.
+        }
+        waiter.resolve();
       }
     }
     await Promise.allSettled(this.notificationTasks);
@@ -231,6 +238,23 @@ export class HostExecBroker {
       const line = await readJsonLine(socket);
       if (!line) return;
       const message = JSON.parse(line) as HostExecBrokerMessage;
+      if (channel === "exec" && message.type === "execute") {
+        try {
+          await this.executeStreaming(message, socket);
+        } catch (error) {
+          try {
+            await writeJsonLine(
+              socket,
+              toErrorResponse(message, (error as Error).message),
+            );
+          } catch (e) {
+            const code = (e as NodeJS.ErrnoException).code;
+            if (code === "EPIPE" || code === "ECONNRESET") return;
+            throw e;
+          }
+        }
+        return;
+      }
       const response = await this.handleMessage(message, channel).catch(
         (error) => toErrorResponse(message, (error as Error).message),
       );
@@ -254,17 +278,18 @@ export class HostExecBroker {
     // exec socket is the only socket mounted into the agent container, so it
     // must never be able to drive approve/deny/list_pending; otherwise a
     // hostile agent could self-approve its own execute requests.
+    //
+    // `execute` on the exec channel is intercepted by handleConnection
+    // before reaching here (it streams directly to the socket via
+    // executeStreaming), so any message that reaches this branch is a
+    // disallowed approve/deny/list_pending sent on the exec channel.
     if (channel === "exec") {
-      if (message.type !== "execute") {
-        // Reject without touching any approval state (no pending change).
-        return {
-          type: "error",
-          requestId: message.type === "list_pending" ? "" : message.requestId,
-          message:
-            "approve/deny/list_pending are not accepted on the exec channel",
-        };
-      }
-      return await this.execute(message);
+      return {
+        type: "error",
+        requestId: message.type === "list_pending" ? "" : message.requestId,
+        message:
+          "approve/deny/list_pending are not accepted on the exec channel",
+      };
     }
     // control channel: host-side CLI/UI operations only.
     if (message.type === "list_pending") {
@@ -283,12 +308,28 @@ export class HostExecBroker {
     };
   }
 
-  private async execute(
+  /**
+   * Resolves an execute request and streams its responses directly to the
+   * exec socket, rather than returning a single buffered response. This
+   * lets `runResolved` emit `chunk` messages as the child process produces
+   * output instead of waiting for it to exit.
+   *
+   * The pending-approval flow keeps the socket open: when approval is
+   * required, the request waits in `group.waiters` (with the socket
+   * attached) until `resolveGroup` runs `runResolved` (or writes a denial)
+   * directly to that socket.
+   */
+  private async executeStreaming(
     message: ExecuteRequest,
-  ): Promise<HostExecBrokerResponse> {
+    socket: Socket,
+  ): Promise<void> {
     const resolved = await this.resolveRequest(message);
     if (!resolved) {
-      return { type: "fallback", requestId: message.requestId };
+      await writeJsonLine(socket, {
+        type: "fallback",
+        requestId: message.requestId,
+      });
+      return;
     }
     const commandStr = [message.argv0, ...message.args].join(" ");
     if (resolved.rule.approval === "deny") {
@@ -298,11 +339,12 @@ export class HostExecBroker {
         "policy-deny",
         commandStr,
       );
-      return {
+      await writeJsonLine(socket, {
         type: "error",
         requestId: message.requestId,
         message: "permission denied by hostexec policy",
-      };
+      });
+      return;
     }
 
     const approvalKey = await buildApprovalKey(resolved.capability);
@@ -318,16 +360,18 @@ export class HostExecBroker {
           "prompt-disabled",
           commandStr,
         );
-        return {
+        await writeJsonLine(socket, {
           type: "error",
           requestId: message.requestId,
           message: "hostexec prompt is disabled",
-        };
+        });
+        return;
       }
       const reason =
         resolved.rule.approval === "allow" ? "rule-allow" : "approved-cached";
       await this.recordAudit(message.requestId, "allow", reason, commandStr);
-      return await this.runResolved(message, resolved);
+      await this.runResolved(message, resolved, socket);
+      return;
     }
 
     const group =
@@ -346,12 +390,13 @@ export class HostExecBroker {
       group.pendingEntries.set(message.requestId, entry);
       await writeHostExecPendingEntry(this.paths, entry);
     }
-    const deferred = Promise.withResolvers<HostExecBrokerResponse>();
+    const deferred = Promise.withResolvers<void>();
     group.waiters.set(message.requestId, {
+      socket,
       resolve: deferred.resolve,
       reject: deferred.reject,
     });
-    return await deferred.promise;
+    await deferred.promise;
   }
 
   private async createPendingGroup(
@@ -473,14 +518,20 @@ export class HostExecBroker {
             ? "prompt-timeout"
             : "denied-by-user";
         await this.recordAudit(requestId, "deny", reason, commandStr);
-        waiter.resolve({
-          ...(denyResponse ?? {
-            type: "error",
+        try {
+          await writeJsonLine(waiter.socket, {
+            ...(denyResponse ?? {
+              type: "error",
+              requestId,
+              message: "permission denied by user",
+            }),
             requestId,
-            message: "permission denied by user",
-          }),
-          requestId,
-        } as HostExecBrokerResponse);
+          } as HostExecBrokerResponse);
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (code !== "EPIPE" && code !== "ECONNRESET") throw e;
+        }
+        waiter.resolve();
         continue;
       }
       await this.recordAudit(
@@ -490,16 +541,24 @@ export class HostExecBroker {
         commandStr,
       );
       try {
-        waiter.resolve(
-          await this.runResolved(pending.request, pending.resolved),
+        await this.runResolved(
+          pending.request,
+          pending.resolved,
+          waiter.socket,
         );
       } catch (error) {
-        waiter.resolve({
-          type: "error",
-          requestId,
-          message: (error as Error).message,
-        });
+        try {
+          await writeJsonLine(waiter.socket, {
+            type: "error",
+            requestId,
+            message: (error as Error).message,
+          });
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (code !== "EPIPE" && code !== "ECONNRESET") throw e;
+        }
       }
+      waiter.resolve();
     }
   }
 
@@ -603,7 +662,8 @@ export class HostExecBroker {
   private async runResolved(
     request: ExecuteRequest,
     resolved: ResolvedExecution,
-  ): Promise<HostExecBrokerResponse> {
+    socket: Socket,
+  ): Promise<void> {
     const commandArgv0 =
       isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
       path.isAbsolute(resolved.rule.match.argv0)
@@ -631,25 +691,48 @@ export class HostExecBroker {
       (proc.stdin as import("bun").FileSink).write(stdin);
       (proc.stdin as import("bun").FileSink).end();
     }
-    const [stdoutBuf, stderrBuf] = await Promise.all([
-      new Response(proc.stdout as ReadableStream).arrayBuffer(),
-      new Response(proc.stderr as ReadableStream).arrayBuffer(),
+    await Promise.all([
+      pipeStreamToSocket(
+        proc.stdout as ReadableStream<Uint8Array>,
+        socket,
+        request.requestId,
+        1,
+      ),
+      pipeStreamToSocket(
+        proc.stderr as ReadableStream<Uint8Array>,
+        socket,
+        request.requestId,
+        2,
+      ),
     ]);
     const exitCode = await proc.exited;
-    const secretValues = Object.keys(resolved.rule.env)
-      .map((key) => resolved.envVars[key])
-      .filter(
-        (value): value is string => typeof value === "string" && value !== "",
-      );
-    const stdout = redactSecretsBytes(new Uint8Array(stdoutBuf), secretValues);
-    const stderr = redactSecretsBytes(new Uint8Array(stderrBuf), secretValues);
-    return {
+    await writeJsonLine(socket, {
       type: "result",
       requestId: request.requestId,
       exitCode,
-      stdout: Buffer.from(stdout).toString("base64"),
-      stderr: Buffer.from(stderr).toString("base64"),
-    };
+    });
+  }
+}
+
+/**
+ * Streams a child process's stdout/stderr ReadableStream to the exec socket
+ * as NDJSON `chunk` messages, base64-encoding each chunk. Replaces the old
+ * approach of buffering the full stream and returning it in a single
+ * response — this lets output reach the client as it's produced.
+ */
+async function pipeStreamToSocket(
+  stream: ReadableStream<Uint8Array>,
+  socket: Socket,
+  requestId: string,
+  fd: 1 | 2,
+): Promise<void> {
+  for await (const chunk of stream) {
+    await writeJsonLine(socket, {
+      type: "chunk",
+      requestId,
+      fd,
+      data: Buffer.from(chunk).toString("base64"),
+    });
   }
 }
 
@@ -800,30 +883,6 @@ function toPendingEntry(
     createdAt,
     updatedAt: new Date().toISOString(),
   };
-}
-
-function redactSecretsBytes(bytes: Uint8Array, secrets: string[]): Uint8Array {
-  let buf = Buffer.from(bytes);
-  const replacement = Buffer.from("[REDACTED]", "utf-8");
-  for (const secret of secrets) {
-    if (!secret) continue;
-    const needle = Buffer.from(secret, "utf-8");
-    if (needle.length === 0) continue;
-    const parts: Buffer[] = [];
-    let idx = 0;
-    while (idx <= buf.length) {
-      const found = buf.indexOf(needle, idx);
-      if (found === -1) {
-        parts.push(buf.subarray(idx));
-        break;
-      }
-      parts.push(buf.subarray(idx, found));
-      parts.push(replacement);
-      idx = found + needle.length;
-    }
-    buf = Buffer.concat(parts);
-  }
-  return new Uint8Array(buf);
 }
 
 function toErrorResponse(
