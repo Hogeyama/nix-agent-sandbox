@@ -435,7 +435,13 @@ fn callBrokerInner(
             return err;
         };
         if (n == 0) break;
-        try buf.appendSlice(alloc, read_buf[0..n]);
+        buf.appendSlice(alloc, read_buf[0..n]) catch |err| {
+            if (wrote_any_chunks) {
+                debugLog("appendSlice failed after chunks written, aborting without fallback", .{});
+                return .{ .exit_code = 1, .should_fallback = false };
+            }
+            return err;
+        };
     }
 
     if (wrote_any_chunks) {
