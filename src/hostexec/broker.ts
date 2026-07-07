@@ -511,54 +511,68 @@ export class HostExecBroker {
       );
       const waiter = group.waiters.get(requestId);
       if (!waiter) continue;
-      if (mode === "deny") {
-        const reason =
-          denyResponse?.type === "error" &&
-          denyResponse.message === "pending approval timed out"
-            ? "prompt-timeout"
-            : "denied-by-user";
-        await this.recordAudit(requestId, "deny", reason, commandStr);
+      try {
+        if (mode === "deny") {
+          const reason =
+            denyResponse?.type === "error" &&
+            denyResponse.message === "pending approval timed out"
+              ? "prompt-timeout"
+              : "denied-by-user";
+          await this.recordAudit(requestId, "deny", reason, commandStr);
+          try {
+            await writeJsonLine(waiter.socket, {
+              ...(denyResponse ?? {
+                type: "error",
+                requestId,
+                message: "permission denied by user",
+              }),
+              requestId,
+            } as HostExecBrokerResponse);
+          } catch (e) {
+            console.error(
+              `resolveGroup: failed to write deny response for request ${requestId}`,
+              e,
+            );
+          }
+          continue;
+        }
+        await this.recordAudit(
+          requestId,
+          "allow",
+          "approved-by-user",
+          commandStr,
+        );
         try {
-          await writeJsonLine(waiter.socket, {
-            ...(denyResponse ?? {
+          await this.runResolved(
+            pending.request,
+            pending.resolved,
+            waiter.socket,
+          );
+        } catch (error) {
+          try {
+            await writeJsonLine(waiter.socket, {
               type: "error",
               requestId,
-              message: "permission denied by user",
-            }),
-            requestId,
-          } as HostExecBrokerResponse);
-        } catch (e) {
-          const code = (e as NodeJS.ErrnoException).code;
-          if (code !== "EPIPE" && code !== "ECONNRESET") throw e;
+              message: (error as Error).message,
+            });
+          } catch (e) {
+            console.error(
+              `resolveGroup: failed to write error response for request ${requestId}`,
+              e,
+            );
+          }
         }
-        waiter.resolve();
-        continue;
-      }
-      await this.recordAudit(
-        requestId,
-        "allow",
-        "approved-by-user",
-        commandStr,
-      );
-      try {
-        await this.runResolved(
-          pending.request,
-          pending.resolved,
-          waiter.socket,
-        );
       } catch (error) {
-        try {
-          await writeJsonLine(waiter.socket, {
-            type: "error",
-            requestId,
-            message: (error as Error).message,
-          });
-        } catch (e) {
-          const code = (e as NodeJS.ErrnoException).code;
-          if (code !== "EPIPE" && code !== "ECONNRESET") throw e;
-        }
+        // A dead/misbehaving socket for one waiter must not prevent the
+        // remaining sibling waiters sharing this approvalKey from being
+        // processed and cleaned up.
+        console.error(
+          `resolveGroup: unexpected error processing waiter for request ${requestId}`,
+          error,
+        );
+      } finally {
+        waiter.resolve();
       }
-      waiter.resolve();
     }
   }
 
