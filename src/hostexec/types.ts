@@ -57,14 +57,17 @@ export type HostExecBrokerMessage =
   | DenyRequest
   | ListPendingRequest;
 
+export interface ExecuteChunkResponse {
+  type: "chunk";
+  requestId: string;
+  fd: 1 | 2;
+  data: string;
+}
+
 export interface ExecuteResultResponse {
   type: "result";
   requestId: string;
   exitCode: number;
-  /** Base64-encoded raw bytes from the child process. */
-  stdout: string;
-  /** Base64-encoded raw bytes from the child process. */
-  stderr: string;
 }
 
 export interface ExecuteFallbackResponse {
@@ -90,6 +93,7 @@ export interface AckResponse {
 }
 
 export type HostExecBrokerResponse =
+  | ExecuteChunkResponse
   | ExecuteResultResponse
   | ExecuteFallbackResponse
   | ExecuteErrorResponse
