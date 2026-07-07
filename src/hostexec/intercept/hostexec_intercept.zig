@@ -170,16 +170,16 @@ pub fn buildRequest(
 
 /// Parsed broker response.
 ///
-/// Ownership: `stdout_b64` and `stderr_b64` are heap-allocated (via the
-/// allocator passed to `parseResponse`) only when `response_type == .result`.
-/// The caller is responsible for freeing each field whose `.len > 0`.
+/// Ownership: `data_b64` is heap-allocated (via the allocator passed to
+/// `parseResponse`) only when `response_type == .chunk`. The caller is
+/// responsible for freeing it whenever `.len > 0`.
 pub const BrokerResponse = struct {
     response_type: ResponseType,
     exit_code: i32,
-    stdout_b64: []const u8,
-    stderr_b64: []const u8,
+    data_b64: []const u8,
+    fd: i32,
 
-    pub const ResponseType = enum { result, fallback, @"error", unknown };
+    pub const ResponseType = enum { result, chunk, fallback, @"error", unknown };
 };
 
 /// Parse a JSON response line from the broker.
@@ -199,14 +199,15 @@ pub fn parseResponse(alloc: Allocator, line: []const u8) !BrokerResponse {
 
     const response_type: BrokerResponse.ResponseType = blk: {
         if (std.mem.eql(u8, type_str, "result")) break :blk .result;
+        if (std.mem.eql(u8, type_str, "chunk")) break :blk .chunk;
         if (std.mem.eql(u8, type_str, "fallback")) break :blk .fallback;
         if (std.mem.eql(u8, type_str, "error")) break :blk .@"error";
         break :blk .unknown;
     };
 
     var exit_code: i32 = 0;
-    var stdout_b64: []const u8 = "";
-    var stderr_b64: []const u8 = "";
+    var data_b64: []const u8 = "";
+    var fd: i32 = 1;
 
     if (response_type == .result) {
         if (root.object.get("exitCode")) |ec| {
@@ -217,19 +218,21 @@ pub fn parseResponse(alloc: Allocator, line: []const u8) !BrokerResponse {
                 else => {},
             }
         }
-        if (root.object.get("stdout")) |s| {
-            switch (s) {
+    }
+
+    if (response_type == .chunk) {
+        if (root.object.get("data")) |d| {
+            switch (d) {
                 .string => |str| {
-                    stdout_b64 = try alloc.dupe(u8, str);
+                    data_b64 = try alloc.dupe(u8, str);
                 },
                 else => {},
             }
         }
-        errdefer if (stdout_b64.len > 0) alloc.free(stdout_b64);
-        if (root.object.get("stderr")) |s| {
-            switch (s) {
-                .string => |str| {
-                    stderr_b64 = try alloc.dupe(u8, str);
+        if (root.object.get("fd")) |f| {
+            switch (f) {
+                .integer => |i| {
+                    fd = std.math.cast(i32, i) orelse 1;
                 },
                 else => {},
             }
@@ -239,8 +242,8 @@ pub fn parseResponse(alloc: Allocator, line: []const u8) !BrokerResponse {
     return BrokerResponse{
         .response_type = response_type,
         .exit_code = exit_code,
-        .stdout_b64 = stdout_b64,
-        .stderr_b64 = stderr_b64,
+        .data_b64 = data_b64,
+        .fd = fd,
     };
 }
 
@@ -341,61 +344,61 @@ fn callBrokerInner(
     // Send request
     try sock.writeAll(request_json);
 
-    // Read response (dynamically sized)
-    var response_buf: std.ArrayList(u8) = .{};
-    defer response_buf.deinit(alloc);
-
+    // NDJSON streaming loop: the broker emits zero or more `chunk` lines
+    // followed by a terminal `result` (or `fallback`/`error`) line.
+    var buf: std.ArrayList(u8) = .{};
+    defer buf.deinit(alloc);
     var read_buf: [4096]u8 = undefined;
+
     while (true) {
+        // Process all complete lines currently buffered.
+        while (std.mem.indexOfScalar(u8, buf.items, '\n')) |nl_pos| {
+            const line = buf.items[0..nl_pos];
+            const response = try parseResponse(alloc, line);
+
+            // Shift buffer: drop the processed line plus its newline.
+            const remaining = buf.items[nl_pos + 1 ..];
+            std.mem.copyForwards(u8, buf.items[0..remaining.len], remaining);
+            buf.items.len = remaining.len;
+
+            switch (response.response_type) {
+                .chunk => {
+                    if (response.data_b64.len > 0) {
+                        defer alloc.free(response.data_b64);
+                        if (decodeBase64(alloc, response.data_b64)) |decoded| {
+                            defer alloc.free(decoded);
+                            const target_fd: i32 = if (response.fd == 2) std.posix.STDERR_FILENO else std.posix.STDOUT_FILENO;
+                            if (decoded.len > 0) writeAll(target_fd, decoded);
+                        } else |_| {}
+                    }
+                },
+                .result => {
+                    debugLog("received result: exitCode={d}", .{response.exit_code});
+                    return .{ .exit_code = response.exit_code, .should_fallback = false };
+                },
+                .fallback => {
+                    debugLog("broker requested fallback", .{});
+                    return .{ .exit_code = 0, .should_fallback = true };
+                },
+                .@"error" => {
+                    debugLog("broker returned error", .{});
+                    return .{ .exit_code = 1, .should_fallback = true };
+                },
+                .unknown => {
+                    debugLog("unknown response type from broker", .{});
+                    return .{ .exit_code = 1, .should_fallback = true };
+                },
+            }
+        }
+
+        // Read more data from the socket.
         const n = try sock.read(&read_buf);
         if (n == 0) break;
-        try response_buf.appendSlice(alloc, read_buf[0..n]);
-        // Check for newline (end of JSON line)
-        if (std.mem.indexOfScalar(u8, response_buf.items, '\n') != null) break;
+        try buf.appendSlice(alloc, read_buf[0..n]);
     }
 
-    if (response_buf.items.len == 0) {
-        debugLog("empty response from broker", .{});
-        return .{ .exit_code = 1, .should_fallback = true };
-    }
-
-    debugLog("received response: {d} bytes", .{response_buf.items.len});
-
-    const response = try parseResponse(alloc, response_buf.items);
-
-    switch (response.response_type) {
-        .fallback => {
-            debugLog("broker requested fallback", .{});
-            return .{ .exit_code = 0, .should_fallback = true };
-        },
-        .@"error" => {
-            debugLog("broker returned error", .{});
-            return .{ .exit_code = 1, .should_fallback = true };
-        },
-        .result => {
-            // Decode and write stdout
-            if (response.stdout_b64.len > 0) {
-                defer alloc.free(response.stdout_b64);
-                if (decodeBase64(alloc, response.stdout_b64)) |stdout_data| {
-                    defer alloc.free(stdout_data);
-                    if (stdout_data.len > 0) writeAll(std.posix.STDOUT_FILENO, stdout_data);
-                } else |_| {}
-            }
-            // Decode and write stderr
-            if (response.stderr_b64.len > 0) {
-                defer alloc.free(response.stderr_b64);
-                if (decodeBase64(alloc, response.stderr_b64)) |stderr_data| {
-                    defer alloc.free(stderr_data);
-                    if (stderr_data.len > 0) writeAll(std.posix.STDERR_FILENO, stderr_data);
-                } else |_| {}
-            }
-            return .{ .exit_code = response.exit_code, .should_fallback = false };
-        },
-        .unknown => {
-            debugLog("unknown response type from broker", .{});
-            return .{ .exit_code = 1, .should_fallback = true };
-        },
-    }
+    debugLog("broker connection closed without result", .{});
+    return .{ .exit_code = 1, .should_fallback = true };
 }
 
 fn writeAll(fd: i32, data: []const u8) void {
@@ -642,34 +645,50 @@ test "buildRequest: ends with newline" {
 test "parseResponse: result type" {
     const alloc = std.testing.allocator;
     const input =
-        \\{"type":"result","requestId":"r1","exitCode":0,"stdout":"aGVsbG8=","stderr":""}
+        \\{"type":"result","requestId":"r1","exitCode":0}
     ;
     const resp = try parseResponse(alloc, input);
-    defer {
-        if (resp.stdout_b64.len > 0) alloc.free(resp.stdout_b64);
-        if (resp.stderr_b64.len > 0) alloc.free(resp.stderr_b64);
-    }
 
     try std.testing.expectEqual(BrokerResponse.ResponseType.result, resp.response_type);
     try std.testing.expectEqual(@as(i32, 0), resp.exit_code);
-    try std.testing.expectEqualStrings("aGVsbG8=", resp.stdout_b64);
-    try std.testing.expectEqualStrings("", resp.stderr_b64);
+    try std.testing.expectEqualStrings("", resp.data_b64);
 }
 
 test "parseResponse: result with nonzero exit code" {
     const alloc = std.testing.allocator;
     const input =
-        \\{"type":"result","requestId":"r2","exitCode":42,"stdout":"","stderr":"ZXJy"}
+        \\{"type":"result","requestId":"r2","exitCode":42}
     ;
     const resp = try parseResponse(alloc, input);
-    defer {
-        if (resp.stdout_b64.len > 0) alloc.free(resp.stdout_b64);
-        if (resp.stderr_b64.len > 0) alloc.free(resp.stderr_b64);
-    }
 
     try std.testing.expectEqual(BrokerResponse.ResponseType.result, resp.response_type);
     try std.testing.expectEqual(@as(i32, 42), resp.exit_code);
-    try std.testing.expectEqualStrings("ZXJy", resp.stderr_b64);
+}
+
+test "parseResponse: chunk type with stdout" {
+    const alloc = std.testing.allocator;
+    const input =
+        \\{"type":"chunk","requestId":"r1","fd":1,"data":"aGVsbG8="}
+    ;
+    const resp = try parseResponse(alloc, input);
+    defer if (resp.data_b64.len > 0) alloc.free(resp.data_b64);
+
+    try std.testing.expectEqual(BrokerResponse.ResponseType.chunk, resp.response_type);
+    try std.testing.expectEqual(@as(i32, 1), resp.fd);
+    try std.testing.expectEqualStrings("aGVsbG8=", resp.data_b64);
+}
+
+test "parseResponse: chunk type with stderr" {
+    const alloc = std.testing.allocator;
+    const input =
+        \\{"type":"chunk","requestId":"r1","fd":2,"data":"ZXJy"}
+    ;
+    const resp = try parseResponse(alloc, input);
+    defer if (resp.data_b64.len > 0) alloc.free(resp.data_b64);
+
+    try std.testing.expectEqual(BrokerResponse.ResponseType.chunk, resp.response_type);
+    try std.testing.expectEqual(@as(i32, 2), resp.fd);
+    try std.testing.expectEqualStrings("ZXJy", resp.data_b64);
 }
 
 test "parseResponse: fallback type" {
