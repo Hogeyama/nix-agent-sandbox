@@ -350,11 +350,23 @@ fn callBrokerInner(
     defer buf.deinit(alloc);
     var read_buf: [4096]u8 = undefined;
 
+    // Once any chunk has been written to stdout/stderr, we must never fall
+    // back to the real binary — that would re-execute the command and
+    // duplicate output/side effects. All error/fallback/unknown paths below
+    // must check this flag before allowing `should_fallback = true`.
+    var wrote_any_chunks: bool = false;
+
     while (true) {
         // Process all complete lines currently buffered.
         while (std.mem.indexOfScalar(u8, buf.items, '\n')) |nl_pos| {
             const line = buf.items[0..nl_pos];
-            const response = try parseResponse(alloc, line);
+            const response = parseResponse(alloc, line) catch |err| {
+                debugLog("failed to parse broker response: {s}", .{@errorName(err)});
+                if (wrote_any_chunks) {
+                    return .{ .exit_code = 1, .should_fallback = false };
+                }
+                return err;
+            };
 
             // Shift buffer: drop the processed line plus its newline.
             const remaining = buf.items[nl_pos + 1 ..];
@@ -367,8 +379,19 @@ fn callBrokerInner(
                         defer alloc.free(response.data_b64);
                         if (decodeBase64(alloc, response.data_b64)) |decoded| {
                             defer alloc.free(decoded);
-                            const target_fd: i32 = if (response.fd == 2) std.posix.STDERR_FILENO else std.posix.STDOUT_FILENO;
-                            if (decoded.len > 0) writeAll(target_fd, decoded);
+                            if (decoded.len > 0) {
+                                const target_fd: ?i32 = switch (response.fd) {
+                                    1 => std.posix.STDOUT_FILENO,
+                                    2 => std.posix.STDERR_FILENO,
+                                    else => null,
+                                };
+                                if (target_fd) |fd| {
+                                    writeAll(fd, decoded);
+                                    wrote_any_chunks = true;
+                                } else {
+                                    debugLog("chunk with unexpected fd {d}, skipping write", .{response.fd});
+                                }
+                            }
                         } else |_| {}
                     }
                 },
@@ -377,14 +400,26 @@ fn callBrokerInner(
                     return .{ .exit_code = response.exit_code, .should_fallback = false };
                 },
                 .fallback => {
+                    if (wrote_any_chunks) {
+                        debugLog("broker requested fallback after chunks were written; treating as failure", .{});
+                        return .{ .exit_code = 1, .should_fallback = false };
+                    }
                     debugLog("broker requested fallback", .{});
                     return .{ .exit_code = 0, .should_fallback = true };
                 },
                 .@"error" => {
+                    if (wrote_any_chunks) {
+                        debugLog("broker returned error after chunks were written; treating as failure", .{});
+                        return .{ .exit_code = 1, .should_fallback = false };
+                    }
                     debugLog("broker returned error", .{});
                     return .{ .exit_code = 1, .should_fallback = true };
                 },
                 .unknown => {
+                    if (wrote_any_chunks) {
+                        debugLog("unknown response type from broker after chunks were written; treating as failure", .{});
+                        return .{ .exit_code = 1, .should_fallback = false };
+                    }
                     debugLog("unknown response type from broker", .{});
                     return .{ .exit_code = 1, .should_fallback = true };
                 },
@@ -392,11 +427,21 @@ fn callBrokerInner(
         }
 
         // Read more data from the socket.
-        const n = try sock.read(&read_buf);
+        const n = sock.read(&read_buf) catch |err| {
+            debugLog("socket read failed: {s}", .{@errorName(err)});
+            if (wrote_any_chunks) {
+                return .{ .exit_code = 1, .should_fallback = false };
+            }
+            return err;
+        };
         if (n == 0) break;
         try buf.appendSlice(alloc, read_buf[0..n]);
     }
 
+    if (wrote_any_chunks) {
+        debugLog("broker connection closed without result after chunks were written; treating as failure", .{});
+        return .{ .exit_code = 1, .should_fallback = false };
+    }
     debugLog("broker connection closed without result", .{});
     return .{ .exit_code = 1, .should_fallback = true };
 }
