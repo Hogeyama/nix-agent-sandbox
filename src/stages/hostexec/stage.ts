@@ -551,6 +551,7 @@ def stream_broker(payload: dict):
                 elif msg["type"] == "error":
                     print(msg.get("message", "unknown error"), file=sys.stderr)
                     return ("error", 1)
+        print("hostexec broker connection closed unexpectedly", file=sys.stderr)
         return ("error", 1)
     finally:
         sock.close()
