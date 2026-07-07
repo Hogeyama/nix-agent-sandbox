@@ -513,20 +513,36 @@ def find_fallback_binary(argv0: str, wrapper_dir: str) -> str:
     raise FileNotFoundError(f"fallback binary not found: {argv0}")
 
 
-def call_broker(payload: dict) -> dict:
+def stream_broker(payload: dict):
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.connect(os.environ["NAS_HOSTEXEC_SOCKET"])
     try:
         sock.sendall((json.dumps(payload) + "\\n").encode())
-        data = b""
-        while not data.endswith(b"\\n"):
+        buf = b""
+        while True:
             chunk = sock.recv(4096)
             if not chunk:
                 break
-            data += chunk
-        if not data:
-            raise RuntimeError("empty hostexec broker response")
-        return json.loads(data.decode())
+            buf += chunk
+            while b"\\n" in buf:
+                line, buf = buf.split(b"\\n", 1)
+                msg = json.loads(line)
+                if msg["type"] == "chunk":
+                    data = base64.b64decode(msg["data"])
+                    if msg["fd"] == 1:
+                        sys.stdout.buffer.write(data)
+                        sys.stdout.flush()
+                    else:
+                        sys.stderr.buffer.write(data)
+                        sys.stderr.flush()
+                elif msg["type"] == "result":
+                    return ("result", int(msg.get("exitCode", 0)))
+                elif msg["type"] == "fallback":
+                    return ("fallback", 0)
+                elif msg["type"] == "error":
+                    print(msg.get("message", "unknown error"), file=sys.stderr)
+                    return ("error", 1)
+        return ("error", 1)
     finally:
         sock.close()
 
@@ -561,25 +577,14 @@ def main() -> int:
         if stdin_data:
             payload["stdin"] = base64.b64encode(stdin_data).decode()
 
-    response = call_broker(payload)
-    if response["type"] == "fallback":
+    result_type, exit_code = stream_broker(payload)
+    if result_type == "fallback":
         if (not os.path.isabs(argv0)) and (os.path.sep in argv0):
             print(f"relative argv0 fallback is not supported: {argv0}", file=sys.stderr)
             return 1
         binary = find_fallback_binary(argv0, os.environ["NAS_HOSTEXEC_WRAPPER_DIR"])
         os.execv(binary, [binary, *sys.argv[1:]])
-    if response["type"] == "error":
-        print(response["message"], file=sys.stderr)
-        return 1
-    stdout_b64 = response.get("stdout", "")
-    stderr_b64 = response.get("stderr", "")
-    if stdout_b64:
-        sys.stdout.buffer.write(base64.b64decode(stdout_b64))
-        sys.stdout.flush()
-    if stderr_b64:
-        sys.stderr.buffer.write(base64.b64decode(stderr_b64))
-        sys.stderr.flush()
-    return int(response.get("exitCode", 0))
+    return exit_code
 
 
 if __name__ == "__main__":
