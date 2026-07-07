@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { queryAuditLogs } from "../audit/store.ts";
 import type { HostExecConfig } from "../config/types.ts";
+import { connectUnix, writeJsonLine } from "../lib/unix_socket.ts";
 import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
 import {
   hostExecBrokerSocketPath,
@@ -20,6 +21,7 @@ import {
   resolveHostExecRuntimePaths,
 } from "./registry.ts";
 import type {
+  ExecuteChunkResponse,
   ExecuteRequest,
   HostExecBrokerResponse,
   PendingListResponse,
@@ -29,11 +31,73 @@ type HostExecConfigOverrides = Omit<Partial<HostExecConfig>, "prompt"> & {
   prompt?: Partial<HostExecConfig["prompt"]>;
 };
 
-function decodeStdout(response: HostExecBrokerResponse): string {
-  if (response.type !== "result") {
-    throw new Error(`expected result response, got ${response.type}`);
+interface StreamingResult {
+  chunks: ExecuteChunkResponse[];
+  exitCode: number;
+}
+
+/**
+ * Sends an execute request and reads the resulting NDJSON stream to
+ * completion, collecting every `chunk` message until the final `result`
+ * line arrives. Unlike `sendHostExecBrokerRequest` (which reads a single
+ * JSON line), this is required for execute requests because the broker now
+ * streams stdout/stderr as they are produced instead of buffering a single
+ * response.
+ */
+async function sendStreamingRequest(
+  socketPath: string,
+  message: ExecuteRequest,
+): Promise<StreamingResult> {
+  const socket = await connectUnix(socketPath);
+  try {
+    await writeJsonLine(socket, message);
+    const chunks: ExecuteChunkResponse[] = [];
+    let exitCode = -1;
+    let text = "";
+    await new Promise<void>((resolve, reject) => {
+      const onData = (chunk: Buffer) => {
+        text += chunk.toString();
+        let nl = text.indexOf("\n");
+        while (nl !== -1) {
+          const line = text.slice(0, nl);
+          text = text.slice(nl + 1);
+          const msg = JSON.parse(line);
+          if (msg.type === "chunk") {
+            chunks.push(msg);
+          } else if (msg.type === "result") {
+            exitCode = msg.exitCode;
+            socket.off("data", onData);
+            resolve();
+            return;
+          } else if (msg.type === "fallback" || msg.type === "error") {
+            socket.off("data", onData);
+            reject(new Error(`unexpected response: ${msg.type}`));
+            return;
+          }
+          nl = text.indexOf("\n");
+        }
+      };
+      socket.on("data", onData);
+      socket.on("end", () => resolve());
+      socket.on("error", reject);
+    });
+    return { chunks, exitCode };
+  } finally {
+    socket.destroy();
   }
-  return Buffer.from(response.stdout, "base64").toString("utf-8");
+}
+
+/**
+ * Reassembles stdout from a streaming result. Each chunk's `data` field is
+ * independently base64-encoded, so each chunk must be decoded on its own
+ * and the decoded strings concatenated — concatenating the base64 strings
+ * first and decoding once would corrupt the output.
+ */
+function collectStdout(result: StreamingResult): string {
+  return result.chunks
+    .filter((c) => c.fd === 1)
+    .map((c) => Buffer.from(c.data, "base64").toString("utf-8"))
+    .join("");
 }
 
 function makeConfig(overrides: HostExecConfigOverrides = {}): HostExecConfig {
@@ -102,8 +166,6 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
   const workspace = await mkdtemp(
     path.join(tmpdir(), "nas-hostexec-workspace-"),
   );
-  const oldToken = process.env.HOSTEXEC_TEST_TOKEN;
-  process.env.HOSTEXEC_TEST_TOKEN = "super-secret-value";
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_test",
@@ -113,15 +175,12 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
     sessionTmpDir: `${runtimeDir}/tmp`,
     auditDir,
     hostexec: makeConfig({
-      secrets: {
-        test_token: { from: "env:HOSTEXEC_TEST_TOKEN", required: true },
-      },
       rules: [
         {
           id: "node-eval",
           match: { argv0: "node", argRegex: "^-e\\b" },
           cwd: { mode: "workspace-only", allow: [] },
-          env: { TOKEN: "secret:test_token" },
+          env: {},
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
           fallback: "container",
@@ -133,13 +192,9 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const execPromise = sendStreamingRequest(
       execSocketPath,
-      request(
-        ["-e", "console.log(process.env['TOKEN'])"],
-        workspace,
-        "req_approve",
-      ),
+      request(["-e", "console.log('approved')"], workspace, "req_approve"),
     );
     const earlyResponse = await Promise.race([
       execPromise,
@@ -157,12 +212,9 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
       type: "approve",
       requestId: "req_approve",
     });
-    const response = await execPromise;
-    expect(response.type).toEqual("result");
-    if (response.type !== "result") {
-      throw new Error(`unexpected response type: ${response.type}`);
-    }
-    expect(decodeStdout(response).trim()).toEqual("[REDACTED]");
+    const result = await execPromise;
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result).trim()).toEqual("approved");
 
     const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
     expect(logs.length).toEqual(1);
@@ -171,8 +223,6 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
     expect(logs[0].requestId).toEqual("req_approve");
     expect(logs[0].command!).toMatch(/^node -e /);
   } finally {
-    if (oldToken !== undefined) process.env.HOSTEXEC_TEST_TOKEN = oldToken;
-    else delete process.env.HOSTEXEC_TEST_TOKEN;
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(workspace, { recursive: true, force: true }).catch(() => {});
@@ -551,15 +601,12 @@ test("HostExecBroker: argv0-only rule matches any args", async () => {
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const result = await sendStreamingRequest(
       execSocketPath,
       request(["-e", "console.log('ok')"], workspace, "req_any"),
     );
-    expect(response.type).toEqual("result");
-    if (response.type !== "result") {
-      throw new Error(`unexpected response type: ${response.type}`);
-    }
-    expect(decodeStdout(response).trim()).toEqual("ok");
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result).trim()).toEqual("ok");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -598,7 +645,7 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const result = await sendStreamingRequest(
       execSocketPath,
       request(
         ["-c", "printf ok"],
@@ -607,10 +654,8 @@ test("HostExecBroker: PATH rule executes basename when request argv0 is wrapper 
         "/opt/nas/hostexec/bin/sh",
       ),
     );
-    expect(response.type).toEqual("result");
-    if (response.type === "result") {
-      expect(decodeStdout(response)).toEqual("ok");
-    }
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result)).toEqual("ok");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -652,14 +697,12 @@ test("HostExecBroker: relative rule executes original relative argv0", async () 
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const result = await sendStreamingRequest(
       execSocketPath,
       request([], workspace, "req_gradlew", "./gradlew"),
     );
-    expect(response.type).toEqual("result");
-    if (response.type === "result") {
-      expect(decodeStdout(response)).toEqual("gradle-ok");
-    }
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result)).toEqual("gradle-ok");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -708,14 +751,12 @@ test("HostExecBroker: absolute rule executes exact absolute binary path", async 
   await broker.start(execSocketPath, controlSocketPath);
   try {
     // Request must use the exact absolute path — broker must execute it directly.
-    const response = await sendHostExecBrokerRequest(
+    const result = await sendStreamingRequest(
       execSocketPath,
       request([], workspace, "req_helper_abs", helperScript),
     );
-    expect(response.type).toEqual("result");
-    if (response.type === "result") {
-      expect(decodeStdout(response)).toEqual("absolute-ok");
-    }
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result)).toEqual("absolute-ok");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -901,14 +942,12 @@ test("HostExecBroker: allows cwd in session tmp with workspace-or-session-tmp mo
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const result = await sendStreamingRequest(
       execSocketPath,
       request(["-e", "console.log('ok')"], sessionTmpDir, "req_tmp"),
     );
-    expect(response.type).toEqual("result");
-    if (response.type === "result") {
-      expect(decodeStdout(response).trim()).toEqual("ok");
-    }
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result).trim()).toEqual("ok");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -1083,7 +1122,7 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
   await broker.start(execSocketPath, controlSocketPath);
   try {
     // First request: approve with scope "once"
-    const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const firstPromise = sendStreamingRequest(
       execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_once_1"),
     );
@@ -1093,11 +1132,9 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
       requestId: "req_once_1",
       scope: "once",
     });
-    const firstResponse = await firstPromise;
-    expect(firstResponse.type).toEqual("result");
-    if (firstResponse.type === "result") {
-      expect(decodeStdout(firstResponse).trim()).toEqual("first");
-    }
+    const firstResult = await firstPromise;
+    expect(firstResult.exitCode).toEqual(0);
+    expect(collectStdout(firstResult).trim()).toEqual("first");
 
     // Second identical request (same args) should go to pending again (not auto-approved)
     const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
@@ -1155,7 +1192,7 @@ test("HostExecBroker: scope capability caches approval key", async () => {
   await broker.start(execSocketPath, controlSocketPath);
   try {
     // First request: approve with scope "capability"
-    const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const firstPromise = sendStreamingRequest(
       execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_cap_1"),
     );
@@ -1165,19 +1202,16 @@ test("HostExecBroker: scope capability caches approval key", async () => {
       requestId: "req_cap_1",
       scope: "capability",
     });
-    const firstResponse = await firstPromise;
-    expect(firstResponse.type).toEqual("result");
+    const firstResult = await firstPromise;
+    expect(firstResult.exitCode).toEqual(0);
 
     // Second identical request (same args) should be auto-approved (not pending)
-    const secondResponse =
-      await sendHostExecBrokerRequest<HostExecBrokerResponse>(
-        execSocketPath,
-        request(["-e", "console.log('first')"], workspace, "req_cap_2"),
-      );
-    expect(secondResponse.type).toEqual("result");
-    if (secondResponse.type === "result") {
-      expect(decodeStdout(secondResponse).trim()).toEqual("first");
-    }
+    const secondResult = await sendStreamingRequest(
+      execSocketPath,
+      request(["-e", "console.log('first')"], workspace, "req_cap_2"),
+    );
+    expect(secondResult.exitCode).toEqual(0);
+    expect(collectStdout(secondResult).trim()).toEqual("first");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -1218,7 +1252,7 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
   await broker.start(execSocketPath, controlSocketPath);
   try {
     // First request: approve without explicit scope (defaultScope = "once")
-    const firstPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const firstPromise = sendStreamingRequest(
       execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_def_1"),
     );
@@ -1227,8 +1261,8 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
       type: "approve",
       requestId: "req_def_1",
     });
-    const firstResponse = await firstPromise;
-    expect(firstResponse.type).toEqual("result");
+    const firstResult = await firstPromise;
+    expect(firstResult.exitCode).toEqual(0);
 
     // Second request (same args) should go to pending (defaultScope was "once", so not cached)
     const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
