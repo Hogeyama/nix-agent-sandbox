@@ -76,6 +76,13 @@ nas_measure_done() {
 }
 
 exec_nas() {
+  if [ -n "${CA_CERT_PID:-}" ]; then
+    local ca_wait_start
+    ca_wait_start="$(nas_measure_start)"
+    wait "$CA_CERT_PID" 2>/dev/null || true
+    nas_measure_done "ca-cert-wait" "$ca_wait_start"
+    nas_info "[nas] mitmproxy CA certificate installed"
+  fi
   nas_measure_done "total" "${ENTRYPOINT_TOTAL_START:-}"
   exec "$@"
 }
@@ -84,10 +91,13 @@ ENTRYPOINT_TOTAL_START="$(nas_measure_start)"
 nas_debug "[nas] entrypoint start (shell_mode=${NAS_SHELL_MODE}, nix_enabled=${NIX_ENABLED:-false})"
 
 # --- CA 証明書のインストール ---
+# update-ca-certificates は遅い (~1s) ためバックグラウンドで実行し、
+# exec_nas (agent exec 直前) で wait する。
 CA_CERT_START="$(nas_measure_start)"
+CA_CERT_PID=""
 if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ]; then
-  update-ca-certificates 2>/dev/null || true
-  nas_info "[nas] mitmproxy CA certificate installed"
+  update-ca-certificates 2>/dev/null &
+  CA_CERT_PID=$!
 fi
 JVM_TRUSTSTORE="/tmp/nas-proxy-truststore.p12"
 if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ] && command -v openssl &>/dev/null; then
@@ -367,67 +377,65 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   if [ -x /bin/bash ]; then
     ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
   fi
-  HAS_DEVSHELL=false
-  DEV_SHELL_PROBE_START="$(nas_measure_start)"
+  # --- devShell キャッシュ検索 (probe 前にキャッシュを確認) ---
+  # キャッシュヒット時は nix eval による devShell probe (~1s) をスキップする。
+  CACHE_FILE=""
+  NAS_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
+
   if [ -f "$WORKSPACE/flake.nix" ]; then
-    # flake に devShells.<system>.default があるかチェック
-    # nix flake show は全 output を評価するため、無関係な output のエラーで失敗しうる。
-    # nix eval で devShells.default の type 属性だけを確認する。
-    SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
-    if [ -n "$SYSTEM" ] && "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
-      nix eval --raw "${WORKSPACE}#devShells.${SYSTEM}.default.type" 2>/dev/null | grep -qx derivation; then
-      HAS_DEVSHELL=true
-    else
-      nas_info "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
-    fi
-  fi
-  nas_measure_done "nix-devshell-probe" "$DEV_SHELL_PROBE_START"
-
-  if [ "$HAS_DEVSHELL" = "true" ]; then
-    # --- nix-direnv 方式: nix print-dev-env でキャッシュ ---
-    NAS_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
-    mkdir -p "$NAS_NIX_CACHE"
-
-    # キャッシュキー: flake.nix + flake.lock のハッシュ
     if [ -f "$WORKSPACE/flake.lock" ]; then
       FLAKE_HASH=$(cat "$WORKSPACE/flake.nix" "$WORKSPACE/flake.lock" | sha256sum | cut -d' ' -f1)
     else
       FLAKE_HASH=$(sha256sum "$WORKSPACE/flake.nix" | cut -d' ' -f1)
     fi
 
-    CACHE_FILE="${NAS_NIX_CACHE}/${FLAKE_HASH}.env"
+    CANDIDATE="${NAS_NIX_CACHE}/${FLAKE_HASH}.env"
     PROFILE_LINK="${NAS_NIX_CACHE}/profile-${FLAKE_HASH}"
 
-    if [ ! -f "$CACHE_FILE" ]; then
-      NIX_PRINT_DEV_ENV_START="$(nas_measure_start)"
-      nas_info "[nas] Caching nix dev environment via print-dev-env..."
-      if "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
-        nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CACHE_FILE}.tmp"; then
-        mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
-        chmod 644 "$CACHE_FILE"
-        nas_info "[nas] Nix dev environment cached."
-        nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
-      else
-        nas_info "[nas] nix print-dev-env failed, falling back to nix develop..."
-        rm -f "${CACHE_FILE}.tmp"
-        nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
-        # フォールバック: 従来の nix develop
-        if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
-          nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-          exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-            nix develop "$WORKSPACE" --command \
-            bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
-        else
-          nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
-          exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-            bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
-        fi
-      fi
-    else
+    if [ -f "$CANDIDATE" ]; then
+      CACHE_FILE="$CANDIDATE"
+      nas_debug "[nas] nix-devshell-probe skipped (cache hit)"
       nas_info "[nas] Using cached nix dev environment."
-    fi
+    else
+      DEV_SHELL_PROBE_START="$(nas_measure_start)"
+      SYSTEM=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "")
+      if [ -n "$SYSTEM" ] && "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
+        nix eval --raw "${WORKSPACE}#devShells.${SYSTEM}.default.type" 2>/dev/null | grep -qx derivation; then
+        nas_measure_done "nix-devshell-probe" "$DEV_SHELL_PROBE_START"
 
-    # キャッシュ済み環境を source してエージェント起動
+        mkdir -p "$NAS_NIX_CACHE"
+        NIX_PRINT_DEV_ENV_START="$(nas_measure_start)"
+        nas_info "[nas] Caching nix dev environment via print-dev-env..."
+        if "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon \
+          nix print-dev-env --profile "$PROFILE_LINK" "$WORKSPACE" >"${CANDIDATE}.tmp"; then
+          mv "${CANDIDATE}.tmp" "$CANDIDATE"
+          chmod 644 "$CANDIDATE"
+          CACHE_FILE="$CANDIDATE"
+          nas_info "[nas] Nix dev environment cached."
+          nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
+        else
+          nas_info "[nas] nix print-dev-env failed, falling back to nix develop..."
+          rm -f "${CANDIDATE}.tmp"
+          nas_measure_done "nix-print-dev-env" "$NIX_PRINT_DEV_ENV_START"
+          if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
+            nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
+            exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
+              nix develop "$WORKSPACE" --command \
+              bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+          else
+            nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
+            exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
+              bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+          fi
+        fi
+      else
+        nas_measure_done "nix-devshell-probe" "$DEV_SHELL_PROBE_START"
+        nas_info "[nas] flake.nix found but no devShells.${SYSTEM:-unknown}.default output, skipping nix develop."
+      fi
+    fi
+  fi
+
+  if [ -n "$CACHE_FILE" ]; then
     if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
       nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
       exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
