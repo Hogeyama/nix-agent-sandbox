@@ -76,13 +76,6 @@ nas_measure_done() {
 }
 
 exec_nas() {
-  if [ -n "${CA_CERT_PID:-}" ]; then
-    local ca_wait_start
-    ca_wait_start="$(nas_measure_start)"
-    wait "$CA_CERT_PID" 2>/dev/null || true
-    nas_measure_done "ca-cert-wait" "$ca_wait_start"
-    nas_info "[nas] mitmproxy CA certificate installed"
-  fi
   nas_measure_done "total" "${ENTRYPOINT_TOTAL_START:-}"
   exec "$@"
 }
@@ -91,18 +84,25 @@ ENTRYPOINT_TOTAL_START="$(nas_measure_start)"
 nas_debug "[nas] entrypoint start (shell_mode=${NAS_SHELL_MODE}, nix_enabled=${NIX_ENABLED:-false})"
 
 # --- CA 証明書のインストール ---
-# update-ca-certificates は遅い (~1s) ためバックグラウンドで実行し、
-# exec_nas (agent exec 直前) で wait する。
+# update-ca-certificates は全証明書を走査するため ~1s かかる。
+# 追加するのは mitmproxy CA 1 枚だけなので、CA bundle への追記と
+# ハッシュシンボリンク作成を直接行う。
 CA_CERT_START="$(nas_measure_start)"
-CA_CERT_PID=""
-if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ]; then
-  update-ca-certificates 2>/dev/null &
-  CA_CERT_PID=$!
+NAS_PROXY_CERT="/usr/local/share/ca-certificates/nas-proxy.crt"
+if [ -f "$NAS_PROXY_CERT" ]; then
+  cat "$NAS_PROXY_CERT" >> /etc/ssl/certs/ca-certificates.crt
+  if command -v openssl &>/dev/null; then
+    cert_hash=$(openssl x509 -hash -noout -in "$NAS_PROXY_CERT" 2>/dev/null || true)
+    if [ -n "$cert_hash" ]; then
+      ln -sf "$NAS_PROXY_CERT" "/etc/ssl/certs/${cert_hash}.0"
+    fi
+  fi
+  nas_info "[nas] mitmproxy CA certificate installed"
 fi
 JVM_TRUSTSTORE="/tmp/nas-proxy-truststore.p12"
-if [ -f /usr/local/share/ca-certificates/nas-proxy.crt ] && command -v openssl &>/dev/null; then
+if [ -f "$NAS_PROXY_CERT" ] && command -v openssl &>/dev/null; then
   openssl pkcs12 -export -nokeys \
-    -in /usr/local/share/ca-certificates/nas-proxy.crt \
+    -in "$NAS_PROXY_CERT" \
     -out "$JVM_TRUSTSTORE" \
     -passout pass:changeit \
     -name nas-proxy \
