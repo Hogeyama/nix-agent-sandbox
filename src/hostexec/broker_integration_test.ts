@@ -1390,6 +1390,61 @@ test("HostExecBroker: streaming produces zero chunks for silent command", async 
   }
 });
 
+test("HostExecBroker: secret env binding injects resolved value into command", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const oldToken = process.env.HOSTEXEC_TEST_TOKEN;
+  process.env.HOSTEXEC_TEST_TOKEN = "test-secret-42";
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      secrets: {
+        test_token: { from: "env:HOSTEXEC_TEST_TOKEN", required: true },
+      },
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: { TOKEN: "secret:test_token" },
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequest(
+      execSocketPath,
+      request(
+        ["-e", "console.log(process.env['TOKEN'])"],
+        workspace,
+        "req_secret",
+      ),
+    );
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result).trim()).toEqual("test-secret-42");
+  } finally {
+    if (oldToken !== undefined) process.env.HOSTEXEC_TEST_TOKEN = oldToken;
+    else delete process.env.HOSTEXEC_TEST_TOKEN;
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 async function waitForPendingEntries(
   paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
   count: number,
