@@ -686,6 +686,7 @@ export class HostExecBroker {
     const stdin = request.stdin
       ? Uint8Array.from(atob(request.stdin), (c) => c.charCodeAt(0))
       : undefined;
+    resolved.envVars.PWD = resolved.cwd;
     let proc: ReturnType<typeof Bun.spawn>;
     try {
       proc = Bun.spawn([commandArgv0, ...request.args], {
