@@ -484,6 +484,12 @@ function addMount(
 
 function buildWrapperScript(): string {
   return `#!/usr/bin/env python3
+# nas hostexec wrapper — a shim installed by nas (nix-agent-sandbox) to intercept
+# commands inside the container. When invoked, it forwards the request to the
+# hostexec broker running on the host via a Unix socket. The broker evaluates
+# approval rules, executes the command on the host if approved, and streams
+# stdout/stderr back. If no rule matches, this wrapper falls back to the real
+# binary on PATH. See: https://github.com/anthropics/nix-agent-sandbox
 import base64
 import json
 import os
