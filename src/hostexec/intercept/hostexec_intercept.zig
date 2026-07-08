@@ -369,6 +369,7 @@ fn callBrokerInner(
             };
 
             // Shift buffer: drop the processed line plus its newline.
+            // TODO: O(n²) — track a read offset instead of shifting on every line.
             const remaining = buf.items[nl_pos + 1 ..];
             std.mem.copyForwards(u8, buf.items[0..remaining.len], remaining);
             buf.items.len = remaining.len;
