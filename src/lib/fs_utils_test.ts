@@ -10,6 +10,7 @@ import * as path from "node:path";
 import {
   atomicWriteJson,
   defaultRuntimeDir,
+  expandTilde,
   isPidAlive,
   pathExists,
   readJsonDir,
@@ -240,6 +241,32 @@ test("defaultRuntimeDir: falls back to /tmp/nas-<uid> when XDG_RUNTIME_DIR is un
       process.env.XDG_RUNTIME_DIR = originalXdg;
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// expandTilde
+// ---------------------------------------------------------------------------
+
+test("expandTilde: expands bare ~", () => {
+  expect(expandTilde("~", "/home/alice")).toEqual("/home/alice");
+});
+
+test("expandTilde: expands ~/subpath", () => {
+  expect(expandTilde("~/foo/bar", "/home/alice")).toEqual(
+    "/home/alice/foo/bar",
+  );
+});
+
+test("expandTilde: leaves absolute paths unchanged", () => {
+  expect(expandTilde("/etc/config", "/home/alice")).toEqual("/etc/config");
+});
+
+test("expandTilde: leaves relative paths unchanged", () => {
+  expect(expandTilde("relative/path", "/home/alice")).toEqual("relative/path");
+});
+
+test("expandTilde: does not expand ~ in the middle of a path", () => {
+  expect(expandTilde("foo/~/bar", "/home/alice")).toEqual("foo/~/bar");
 });
 
 test("defaultRuntimeDir: falls back when XDG_RUNTIME_DIR is whitespace only", () => {
