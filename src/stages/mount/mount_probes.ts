@@ -14,6 +14,7 @@ import type {
   ExtraMountConfig,
   Profile,
 } from "../../config/types.ts";
+import { expandTilde } from "../../lib/fs_utils.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 // ---------------------------------------------------------------------------
 // Types — pre-resolved I/O results
@@ -292,12 +293,6 @@ async function resolveX11UnixDirReadOnly(): Promise<boolean> {
 // I/O helper functions
 // ---------------------------------------------------------------------------
 
-function expandHostPath(rawPath: string, hostHome: string): string {
-  if (rawPath === "~") return hostHome;
-  if (rawPath.startsWith("~/")) return path.join(hostHome, rawPath.slice(2));
-  return rawPath;
-}
-
 /**
  * Resolve a user-supplied host mount path to its canonical host path.
  *
@@ -313,7 +308,7 @@ export function resolveHostMountPath(
   baseDir: string,
   hostHome: string,
 ): string {
-  const expandedPath = expandHostPath(rawPath, hostHome);
+  const expandedPath = expandTilde(rawPath, hostHome);
   return path.normalize(
     path.isAbsolute(expandedPath)
       ? path.resolve(expandedPath)

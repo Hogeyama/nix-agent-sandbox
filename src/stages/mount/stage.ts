@@ -9,6 +9,7 @@
 import * as path from "node:path";
 import { Effect } from "effect";
 import { configureAgent } from "../../agents/registry.ts";
+import { expandTilde } from "../../lib/fs_utils.ts";
 import { logWarn } from "../../log.ts";
 import {
   type ContainerPatch,
@@ -371,7 +372,7 @@ export function planMount(
         `[nas] Invalid env var name from profile.env[${resolved.index}].${resolved.keySource}: ${resolved.key}`,
       );
     }
-    const value = expandContainerPath(resolved.value, containerHome);
+    const value = expandTilde(resolved.value, containerHome);
     switch (resolved.mode) {
       case "prefix":
         if (resolved.key in mergedEnvVars) {
@@ -521,14 +522,6 @@ export function planMount(
 // Pure helper functions
 // ---------------------------------------------------------------------------
 
-function expandContainerPath(rawPath: string, containerHome: string): string {
-  if (rawPath === "~") return containerHome;
-  if (rawPath.startsWith("~/")) {
-    return path.join(containerHome, rawPath.slice(2));
-  }
-  return rawPath;
-}
-
 function resolveContainerMountPath(
   rawPath: string,
   containerHome: string,
@@ -536,7 +529,7 @@ function resolveContainerMountPath(
 ): string {
   // `~` / `~/...` は containerHome 配下に限定（`..` による脱出を拒否）。
   if (rawPath === "~" || rawPath.startsWith("~/")) {
-    const expandedPath = expandContainerPath(rawPath, containerHome);
+    const expandedPath = expandTilde(rawPath, containerHome);
     const resolved = path.normalize(path.resolve(expandedPath));
     assertPathWithin(resolved, containerHome, rawPath, "containerHome");
     return resolved;

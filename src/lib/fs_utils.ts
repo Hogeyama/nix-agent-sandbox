@@ -123,6 +123,12 @@ export async function isPidAlive(pid: number): Promise<boolean> {
   }
 }
 
+export function expandTilde(rawPath: string, home: string): string {
+  if (rawPath === "~") return home;
+  if (rawPath.startsWith("~/")) return path.join(home, rawPath.slice(2));
+  return rawPath;
+}
+
 export function defaultRuntimeDir(subsystem: string): string {
   const xdg = process.env.XDG_RUNTIME_DIR;
   if (xdg && xdg.trim().length > 0) {
