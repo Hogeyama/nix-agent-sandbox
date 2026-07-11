@@ -174,6 +174,64 @@ test("parseDotEnv: empty value becomes empty string", () => {
 // resolveSecret: lines:
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// resolveSecret: tilde expansion
+// ---------------------------------------------------------------------------
+
+test("resolveSecret: file: expands ~ to HOME", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-secret-store-tilde-"));
+  try {
+    const filePath = path.join(tmpDir, "token");
+    await writeFile(filePath, "my-secret-value\n");
+
+    const result = await resolveSecret(`file:~/token`, { HOME: tmpDir });
+
+    expect(result).toEqual("my-secret-value");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resolveSecret: dotenv: expands ~ to HOME", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-secret-store-tilde-"));
+  try {
+    const filePath = path.join(tmpDir, "secrets.env");
+    await writeFile(filePath, "TOKEN=abc123\n");
+
+    const result = await resolveSecret(`dotenv:~/secrets.env#TOKEN`, {
+      HOME: tmpDir,
+    });
+
+    expect(result).toEqual("abc123");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resolveSecret: lines: expands ~ to HOME", async () => {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-secret-store-tilde-"));
+  try {
+    const filePath = path.join(tmpDir, "tokens.txt");
+    await writeFile(filePath, "first\nsecond\n");
+
+    const result = await resolveSecret(`lines:~/tokens.txt`, { HOME: tmpDir });
+
+    expect(result).toEqual(["first", "second"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resolveSecret: file: rejects tilde path with .. traversal", async () => {
+  await expect(
+    resolveSecret("file:~/../../../etc/shadow", { HOME: "/home/alice" }),
+  ).rejects.toThrow(/\.\./);
+});
+
+// ---------------------------------------------------------------------------
+// resolveSecret: lines:
+// ---------------------------------------------------------------------------
+
 test("resolveSecret: lines: reads a file and returns one string per non-empty line", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-secret-store-lines-"));
   try {

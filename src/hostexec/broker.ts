@@ -1,4 +1,5 @@
 import { mkdir, rm, rmdir } from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { appendAuditLog } from "../audit/store.ts";
 import type { AuditLogEntry } from "../audit/types.ts";
@@ -8,6 +9,7 @@ import type {
   HostExecRule,
 } from "../config/types.ts";
 import { DEFAULT_HOSTEXEC_CONFIG } from "../config/types.ts";
+import { expandTilde } from "../lib/fs_utils.ts";
 import {
   connectUnix,
   createUnixServer,
@@ -854,7 +856,8 @@ export async function resolveAllowEntry(
     assertWithinRoot(resolved, sessionTmpDir, entry);
     return resolved;
   }
-  return await realpath(entry).catch(() => path.resolve(entry));
+  const expanded = expandTilde(entry, process.env.HOME || os.homedir());
+  return await realpath(expanded).catch(() => path.resolve(expanded));
 }
 
 function assertWithinRoot(resolved: string, root: string, entry: string): void {
