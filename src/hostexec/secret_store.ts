@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SecretConfig } from "../config/types.ts";
+import { expandTilde } from "../lib/fs_utils.ts";
 
 export interface SecretStoreOptions {
   env?: Record<string, string | undefined>;
@@ -86,12 +87,12 @@ export async function resolveSecret(
     return env[source.slice(4)] ?? null;
   }
   if (source.startsWith("file:")) {
-    const filePath = source.slice(5);
+    const filePath = expandSecretPath(source.slice(5), env);
     assertSafeSecretPath(filePath, env);
     return (await readFile(filePath, "utf8")).trimEnd();
   }
   if (source.startsWith("lines:")) {
-    const filePath = source.slice(6);
+    const filePath = expandSecretPath(source.slice(6), env);
     assertSafeSecretPath(filePath, env);
     const text = await readFile(filePath, "utf8");
     return text.split(/\r?\n/).filter((line) => line !== "");
@@ -102,7 +103,7 @@ export async function resolveSecret(
     if (hashIndex <= 0 || hashIndex === target.length - 1) {
       throw new Error(`Invalid dotenv secret source: ${source}`);
     }
-    const filePath = target.slice(0, hashIndex);
+    const filePath = expandSecretPath(target.slice(0, hashIndex), env);
     const key = target.slice(hashIndex + 1);
     assertSafeSecretPath(filePath, env);
     const parsed = parseDotEnv(await readFile(filePath, "utf8"));
@@ -250,6 +251,17 @@ async function readKeyringViaCommand(
     return null;
   }
   return stdout.trimEnd() || null;
+}
+
+function expandSecretPath(
+  rawPath: string,
+  env: Record<string, string | undefined>,
+): string {
+  if (rawPath.split("/").some((s) => s === "..")) {
+    return rawPath;
+  }
+  const home = env.HOME || os.homedir();
+  return expandTilde(rawPath, home);
 }
 
 async function resolveCommand(name: string): Promise<string | null> {
