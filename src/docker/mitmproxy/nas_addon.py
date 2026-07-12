@@ -8,6 +8,7 @@ decisions, and evaluates review rules for request body inspection.
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import socket
@@ -17,6 +18,41 @@ import urllib.parse
 from typing import Optional
 
 from mitmproxy import connection, http
+
+# Denied IP networks — mirrors src/network/protocol.ts isDeniedIpv4/isDeniedIpv6.
+# Keep both implementations in sync. Changes here require a matching update in
+# protocol.ts (and vice versa).
+_DENIED_IPV4_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+]
+
+_DENIED_IPV6_NETWORKS = [
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _is_denied_ip(ip_str: str) -> bool:
+    """Check if an IP address falls within a denied network range.
+    Fail-closed: unparseable addresses are treated as denied."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    if isinstance(addr, ipaddress.IPv4Address):
+        return any(addr in net for net in _DENIED_IPV4_NETWORKS)
+    return any(addr in net for net in _DENIED_IPV6_NETWORKS)
+
 
 NETWORK_DIR = "/nas-network"
 SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")

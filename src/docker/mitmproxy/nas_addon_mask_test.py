@@ -245,5 +245,74 @@ class PatternsForCacheTest(unittest.TestCase):
         self.assertIn(b"other-secret", third)
 
 
+class IsDeniedIpTest(unittest.TestCase):
+    """Tests for _is_denied_ip — mirrors protocol_test.ts deny cases."""
+
+    # --- IPv4 denied ---
+    def test_blocks_this_network(self):
+        self.assertTrue(nas_addon._is_denied_ip("0.0.0.0"))
+        self.assertTrue(nas_addon._is_denied_ip("0.255.255.255"))
+
+    def test_blocks_loopback(self):
+        self.assertTrue(nas_addon._is_denied_ip("127.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("127.255.255.255"))
+
+    def test_blocks_rfc1918(self):
+        self.assertTrue(nas_addon._is_denied_ip("10.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("172.16.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("172.31.255.255"))
+        self.assertTrue(nas_addon._is_denied_ip("192.168.1.1"))
+
+    def test_blocks_link_local(self):
+        self.assertTrue(nas_addon._is_denied_ip("169.254.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("169.254.255.255"))
+
+    def test_blocks_cgnat(self):
+        self.assertTrue(nas_addon._is_denied_ip("100.64.0.0"))
+        self.assertTrue(nas_addon._is_denied_ip("100.64.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("100.127.255.255"))
+
+    def test_allows_public_ipv4(self):
+        self.assertFalse(nas_addon._is_denied_ip("8.8.8.8"))
+        self.assertFalse(nas_addon._is_denied_ip("1.1.1.1"))
+        self.assertFalse(nas_addon._is_denied_ip("100.128.0.0"))
+        self.assertFalse(nas_addon._is_denied_ip("172.32.0.1"))
+
+    # --- IPv6 denied ---
+    def test_blocks_unspecified(self):
+        self.assertTrue(nas_addon._is_denied_ip("::"))
+
+    def test_blocks_loopback_v6(self):
+        self.assertTrue(nas_addon._is_denied_ip("::1"))
+
+    def test_blocks_ula(self):
+        self.assertTrue(nas_addon._is_denied_ip("fc00::1"))
+        self.assertTrue(nas_addon._is_denied_ip("fd00::1"))
+        self.assertTrue(nas_addon._is_denied_ip("fdff::1"))
+
+    def test_blocks_link_local_v6(self):
+        self.assertTrue(nas_addon._is_denied_ip("fe80::1"))
+        self.assertTrue(nas_addon._is_denied_ip("febf::1"))
+
+    def test_blocks_ipv4_mapped(self):
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:127.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:10.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:169.254.1.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:192.168.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:100.64.0.1"))
+
+    def test_allows_public_ipv6(self):
+        self.assertFalse(nas_addon._is_denied_ip("2001:4860:4860::8888"))
+        self.assertFalse(nas_addon._is_denied_ip("2606:4700::1111"))
+
+    def test_allows_public_ipv4_mapped(self):
+        self.assertFalse(nas_addon._is_denied_ip("::ffff:8.8.8.8"))
+
+    # --- Edge cases ---
+    def test_unparseable_is_denied(self):
+        self.assertTrue(nas_addon._is_denied_ip("not-an-ip"))
+        self.assertTrue(nas_addon._is_denied_ip(""))
+
+
 if __name__ == "__main__":
     unittest.main()
