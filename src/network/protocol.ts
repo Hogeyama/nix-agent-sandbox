@@ -350,16 +350,82 @@ function isDeniedIpv4(host: string): boolean {
   return false;
 }
 
-function isDeniedIpv6(host: string): boolean {
+function expandIpv6(host: string): number[] | null {
   const normalized = host.toLowerCase();
-  if (normalized === "::1") return true;
-  const first = normalized.split(":")[0];
-  if (first.length === 0) return false;
-  const value = Number.parseInt(first, 16);
-  if (Number.isNaN(value)) return false;
-  // fc00::/7  — ULA (unique local address)
-  if ((value & 0xfe00) === 0xfc00) return true;
-  // fe80::/10 — link-local
-  if ((value & 0xffc0) === 0xfe80) return true;
+
+  // Handle IPv4-mapped (::ffff:a.b.c.d)
+  const v4MappedMatch = normalized.match(
+    /^([\da-f:]+):(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/,
+  );
+  if (v4MappedMatch) {
+    const prefix = v4MappedMatch[1];
+    const v4Part = v4MappedMatch[2];
+    const v4Octets = v4Part.split(".").map(Number);
+    if (
+      v4Octets.length !== 4 ||
+      v4Octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)
+    ) {
+      return null;
+    }
+    const prefixHextets = expandIpv6Pure(`${prefix}:0:0`);
+    if (!prefixHextets) return null;
+    // Replace last two hextets with IPv4 octets
+    prefixHextets[6] = (v4Octets[0] << 8) | v4Octets[1];
+    prefixHextets[7] = (v4Octets[2] << 8) | v4Octets[3];
+    return prefixHextets;
+  }
+
+  return expandIpv6Pure(normalized);
+}
+
+function expandIpv6Pure(addr: string): number[] | null {
+  if (addr.includes("::")) {
+    const [left, right] = addr.split("::");
+    const leftParts = left ? left.split(":") : [];
+    const rightParts = right ? right.split(":") : [];
+    const missing = 8 - leftParts.length - rightParts.length;
+    if (missing < 0) return null;
+    const allParts = [...leftParts, ...Array(missing).fill("0"), ...rightParts];
+    if (allParts.length !== 8) return null;
+    return allParts.map((p) => Number.parseInt(p, 16));
+  }
+  const parts = addr.split(":");
+  if (parts.length !== 8) return null;
+  return parts.map((p) => Number.parseInt(p, 16));
+}
+
+function isDeniedIpv6(host: string): boolean {
+  const hextets = expandIpv6(host.toLowerCase());
+  if (!hextets || hextets.some((h) => Number.isNaN(h) || h < 0 || h > 0xffff)) {
+    return false;
+  }
+
+  // Check for IPv4-mapped (::ffff:x.x.x.x) — delegate to isDeniedIpv4
+  if (
+    hextets[0] === 0 &&
+    hextets[1] === 0 &&
+    hextets[2] === 0 &&
+    hextets[3] === 0 &&
+    hextets[4] === 0 &&
+    hextets[5] === 0xffff
+  ) {
+    const a = (hextets[6] >> 8) & 0xff;
+    const b = hextets[6] & 0xff;
+    const c = (hextets[7] >> 8) & 0xff;
+    const d = hextets[7] & 0xff;
+    return isDeniedIpv4(`${a}.${b}.${c}.${d}`);
+  }
+
+  // :: (all zeros = unspecified)
+  if (hextets.every((h) => h === 0)) return true;
+  // ::1 (loopback)
+  if (hextets.slice(0, 7).every((h) => h === 0) && hextets[7] === 1) {
+    return true;
+  }
+  // fc00::/7 (ULA)
+  if ((hextets[0] & 0xfe00) === 0xfc00) return true;
+  // fe80::/10 (link-local)
+  if ((hextets[0] & 0xffc0) === 0xfe80) return true;
+
   return false;
 }

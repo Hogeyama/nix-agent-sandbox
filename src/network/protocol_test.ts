@@ -213,6 +213,55 @@ test("denyReasonForTarget: blocks private and link-local IPv6", () => {
   expect(denyReasonForTarget({ host: "fec0::1", port: 443 })).toEqual(null);
 });
 
+test("denyReasonForTarget: blocks :: (unspecified)", () => {
+  expect(denyReasonForTarget({ host: "::", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+});
+
+test("denyReasonForTarget: blocks ::1 in non-compressed forms", () => {
+  expect(denyReasonForTarget({ host: "0:0:0:0:0:0:0:1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(
+    denyReasonForTarget({
+      host: "0000:0000:0000:0000:0000:0000:0000:0001",
+      port: 80,
+    }),
+  ).toEqual("blocked-private-ip");
+});
+
+test("denyReasonForTarget: blocks IPv4-mapped IPv6 addresses", () => {
+  expect(denyReasonForTarget({ host: "::ffff:127.0.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "::ffff:169.254.1.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "::ffff:10.0.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "::ffff:192.168.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "::ffff:100.64.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  // Public IPv4-mapped should pass
+  expect(denyReasonForTarget({ host: "::ffff:8.8.8.8", port: 80 })).toEqual(
+    null,
+  );
+});
+
+test("denyReasonForTarget: blocks ULA in non-compressed forms", () => {
+  expect(denyReasonForTarget({ host: "fc00:0:0:0:0:0:0:1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "fd12:3456:789a::1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+});
+
 test("matchesPathPrefix: exact match", () => {
   expect(matchesPathPrefix("/api", "/api")).toBe(true);
 });
