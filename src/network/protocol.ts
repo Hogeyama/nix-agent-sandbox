@@ -397,7 +397,7 @@ function expandIpv6Pure(addr: string): number[] | null {
 function isDeniedIpv6(host: string): boolean {
   const hextets = expandIpv6(host.toLowerCase());
   if (!hextets || hextets.some((h) => Number.isNaN(h) || h < 0 || h > 0xffff)) {
-    return false;
+    return true;
   }
 
   // Check for IPv4-mapped (::ffff:x.x.x.x) — delegate to isDeniedIpv4
