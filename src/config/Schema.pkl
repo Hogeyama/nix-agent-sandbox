@@ -62,9 +62,6 @@ class Profile {
   session: SessionConfig = new {}
   nix: NixConfig = new {}
   docker: DockerConfig = new {}
-  gcloud: GcloudConfig = new {}
-  aws: AwsConfig = new {}
-  gpg: GpgConfig = new {}
   network: NetworkConfig = new {}
   dbus: DbusConfig = new {}
   display: DisplayConfig = new {}
@@ -133,21 +130,6 @@ class DockerConfig {
   /// サイドカーをセッション間で共有する。
   /// `false` ではセッションごとに起動・破棄。
   shared: Boolean = false
-}
-
-class GcloudConfig {
-  /// gcloud 設定ディレクトリ (`~/.config/gcloud`) をマウントする。
-  mountConfig: Boolean = false
-}
-
-class AwsConfig {
-  /// AWS 設定ディレクトリ (`~/.aws`) をマウントする。
-  mountConfig: Boolean = false
-}
-
-class GpgConfig {
-  /// ホストの gpg-agent を転送する（ソケット・公開鍵リング・信頼DB・設定ファイルをマウント）。
-  forwardAgent: Boolean = false
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /**
- * マウント構成の組み立てステージ (EffectStage<MountSetupService>)
+ * マウント構成の組み立てステージ
  *
  * resolveMountProbes() で全ての I/O を事前解決し、
  * planMount() は純粋関数として MountPlan を返す。
@@ -269,71 +269,6 @@ export function planMount(
       `${containerHome}/.config/git`,
       true,
     );
-  }
-
-  // gcloud 設定マウント
-  if (profile.gcloud.mountConfig && probes.gcloudConfigExists) {
-    addMount(
-      args,
-      mounts,
-      `${host.home}/.config/gcloud`,
-      `${containerHome}/.config/gcloud`,
-    );
-  }
-
-  // GPG ソケットマウント
-  if (profile.gpg.forwardAgent) {
-    const gpgSocketPath = input.probes.gpgAgentSocket;
-    if (gpgSocketPath && probes.gpgSocketExists) {
-      addMount(
-        args,
-        mounts,
-        gpgSocketPath,
-        `${containerHome}/.gnupg/S.gpg-agent`,
-      );
-      envVars.GPG_AGENT_INFO = `${containerHome}/.gnupg/S.gpg-agent`;
-    }
-    if (probes.gpgConfExists) {
-      addMount(
-        args,
-        mounts,
-        `${host.home}/.gnupg/gpg.conf`,
-        `${containerHome}/.gnupg/gpg.conf`,
-        true,
-      );
-    }
-    if (probes.gpgAgentConfExists) {
-      addMount(
-        args,
-        mounts,
-        `${host.home}/.gnupg/gpg-agent.conf`,
-        `${containerHome}/.gnupg/gpg-agent.conf`,
-        true,
-      );
-    }
-    if (probes.gpgPubringExists) {
-      addMount(
-        args,
-        mounts,
-        `${host.home}/.gnupg/pubring.kbx`,
-        `${containerHome}/.gnupg/pubring.kbx`,
-        true,
-      );
-    }
-    if (probes.gpgTrustdbExists) {
-      addMount(
-        args,
-        mounts,
-        `${host.home}/.gnupg/trustdb.gpg`,
-        `${containerHome}/.gnupg/trustdb.gpg`,
-        true,
-      );
-    }
-  }
-
-  // AWS 設定マウント
-  if (profile.aws.mountConfig && probes.awsConfigExists) {
-    addMount(args, mounts, `${host.home}/.aws`, `${containerHome}/.aws`);
   }
 
   // 追加マウント

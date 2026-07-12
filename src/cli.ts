@@ -302,7 +302,6 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       hostEnv,
       effectiveProfile,
       process.cwd(),
-      probes.gpgAgentSocket,
     );
     logDebug(`[nas] resolveMountProbes done (${formatElapsed(phaseStart)})`);
 

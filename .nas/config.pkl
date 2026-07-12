@@ -249,17 +249,8 @@ local baseProfile: Profile = new {
     enable = false
     shared = true
   }
-  gcloud {
-    mountConfig = false
-  }
-  aws {
-    mountConfig = false
-  }
   display {
     sandbox = "none"
-  }
-  gpg {
-    forwardAgent = false
   }
   extraMounts {
     // gitignoreが居る

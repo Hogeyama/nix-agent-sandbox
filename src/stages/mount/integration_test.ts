@@ -1,12 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  mkdtemp,
-  realpath,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Config, Profile } from "../../config/types.ts";
@@ -31,9 +24,6 @@ const baseProfile: Profile = {
   agentArgs: [],
   nix: { enable: false, mountSocket: false, extraPackages: [] },
   docker: { enable: false, shared: false },
-  gcloud: { mountConfig: false },
-  aws: { mountConfig: false },
-  gpg: { forwardAgent: false },
   session: DEFAULT_SESSION_CONFIG,
   network: structuredClone(DEFAULT_NETWORK_CONFIG),
   dbus: structuredClone(DEFAULT_DBUS_CONFIG),
@@ -74,12 +64,7 @@ async function buildTestInput(
 }> {
   const hostEnv = buildHostEnv();
   const probes = await resolveProbes(hostEnv);
-  const mountProbes = await resolveMountProbes(
-    hostEnv,
-    profile,
-    workDir,
-    probes.gpgAgentSocket,
-  );
+  const mountProbes = await resolveMountProbes(hostEnv, profile, workDir);
 
   const slices: Pick<
     PipelineState,
@@ -216,42 +201,6 @@ test("MountStage: mounts DBus proxy runtime and injects session env", async () =
   }
 });
 
-test("MountStage: GPG mount includes pubring.kbx and trustdb.gpg", async () => {
-  const profile: Profile = {
-    ...baseProfile,
-    gpg: { forwardAgent: true },
-  };
-  const { input, mountProbes } = await buildTestInput(profile, process.cwd());
-  const plan = planMount(input, mountProbes);
-
-  const home = process.env.HOME ?? "/root";
-  const containerHome = getContainerHome();
-
-  // Check pubring.kbx mount if file exists on host
-  const pubringExists = await stat(`${home}/.gnupg/pubring.kbx`).then(
-    () => true,
-    () => false,
-  );
-  if (pubringExists) {
-    const pubringMount = plan.dockerArgs.find((a) => a.includes("pubring.kbx"));
-    expect(pubringMount).toEqual(
-      `${home}/.gnupg/pubring.kbx:${containerHome}/.gnupg/pubring.kbx:ro`,
-    );
-  }
-
-  // Check trustdb.gpg mount if file exists on host
-  const trustdbExists = await stat(`${home}/.gnupg/trustdb.gpg`).then(
-    () => true,
-    () => false,
-  );
-  if (trustdbExists) {
-    const trustdbMount = plan.dockerArgs.find((a) => a.includes("trustdb.gpg"));
-    expect(trustdbMount).toEqual(
-      `${home}/.gnupg/trustdb.gpg:${containerHome}/.gnupg/trustdb.gpg:ro`,
-    );
-  }
-});
-
 test("MountStage: applies extra-mounts with mode and ~ expansion", async () => {
   const home = process.env.HOME ?? "/root";
   const containerHome = getContainerHome();
@@ -292,7 +241,7 @@ test("MountStage: resolveMountProbes canonicalizes extra-mounts src through syml
       extraMounts: [{ src: link, dst: "/tmp/nas-evil", mode: "ro" }],
     };
     const hostEnv = buildHostEnv();
-    const probes = await resolveMountProbes(hostEnv, profile, tmp, null);
+    const probes = await resolveMountProbes(hostEnv, profile, tmp);
     expect(probes.resolvedExtraMounts.length).toEqual(1);
     const resolved = probes.resolvedExtraMounts[0];
     expect(resolved.srcExists).toEqual(true);
@@ -315,6 +264,6 @@ test("MountStage: unknown agent type throws in resolveMountProbes", async () => 
   };
   const hostEnv = buildHostEnv();
   await expect(
-    resolveMountProbes(hostEnv, profile, process.cwd(), null),
+    resolveMountProbes(hostEnv, profile, process.cwd()),
   ).rejects.toThrow("Unknown agent");
 });

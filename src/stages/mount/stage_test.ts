@@ -61,9 +61,6 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
     docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
     network: {
       ...baseNetwork,
@@ -91,7 +88,6 @@ const defaultProbeResults: ProbeResults = {
   hasHostNix: false,
   xdgDbusProxyPath: null,
   dbusSessionAddress: null,
-  gpgAgentSocket: null,
   auditDir: "/tmp/audit",
 };
 
@@ -107,13 +103,6 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     nixConfRealPath: null,
     nixBinPath: null,
     gitConfigExists: false,
-    gcloudConfigExists: false,
-    gpgSocketExists: false,
-    gpgConfExists: false,
-    gpgAgentConfExists: false,
-    gpgPubringExists: false,
-    gpgTrustdbExists: false,
-    awsConfigExists: false,
     resolvedExtraMounts: [],
     resolvedEnvEntries: [],
     gitWorktreeMainRoot: null,
@@ -782,56 +771,6 @@ test("MountStage: docker socket not mounted when docker.enable is false", () => 
 });
 
 // ============================================================
-// GPG mount
-// ============================================================
-
-test("MountStage: GPG not mounted when disabled", () => {
-  const profile = makeProfile({ gpg: { forwardAgent: false } });
-  const { input, mountProbes } = makeInput({ profile });
-  const plan = planMount(input, mountProbes);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes("S.gpg-agent")),
-  ).toEqual(false);
-  expect("GPG_AGENT_INFO" in plan.envVars).toEqual(false);
-});
-
-test("MountStage: GPG socket mounted when enabled and socket exists", () => {
-  const gpgSocket = "/run/user/1000/gnupg/S.gpg-agent";
-  const profile = makeProfile({ gpg: { forwardAgent: true } });
-  const mountProbes = makeMountProbes({
-    gpgSocketExists: true,
-    gpgConfExists: true,
-    gpgAgentConfExists: true,
-    gpgPubringExists: true,
-    gpgTrustdbExists: true,
-  });
-  const probes: ProbeResults = {
-    ...defaultProbeResults,
-    gpgAgentSocket: gpgSocket,
-  };
-  const { input } = makeInput({ profile, mountProbes, probes });
-  const plan = planMount(input, mountProbes);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes("S.gpg-agent")),
-  ).toEqual(true);
-  expect(plan.envVars.GPG_AGENT_INFO).toEqual(
-    `${CONTAINER_HOME}/.gnupg/S.gpg-agent`,
-  );
-  expect(plan.dockerArgs.some((a: string) => a.includes("gpg.conf"))).toEqual(
-    true,
-  );
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes("gpg-agent.conf")),
-  ).toEqual(true);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes("pubring.kbx")),
-  ).toEqual(true);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes("trustdb.gpg")),
-  ).toEqual(true);
-});
-
-// ============================================================
 // workspace mount
 // ============================================================
 
@@ -987,46 +926,6 @@ test("MountStage: nix conf under /nix uses original path", () => {
   });
   const plan = planMount(input, mountProbes);
   expect(plan.envVars.NIX_CONF_PATH).toEqual("/nix/store/xxx/etc/nix.conf");
-});
-
-// ============================================================
-// gcloud / AWS mount
-// ============================================================
-
-test("MountStage: gcloud not mounted when disabled", () => {
-  const profile = makeProfile({ gcloud: { mountConfig: false } });
-  const { input, mountProbes } = makeInput({ profile });
-  const plan = planMount(input, mountProbes);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes(".config/gcloud")),
-  ).toEqual(false);
-});
-
-test("MountStage: gcloud mounted when enabled and exists", () => {
-  const profile = makeProfile({ gcloud: { mountConfig: true } });
-  const mountProbes = makeMountProbes({ gcloudConfigExists: true });
-  const { input } = makeInput({ profile, mountProbes });
-  const plan = planMount(input, mountProbes);
-  expect(
-    plan.dockerArgs.some((a: string) => a.includes(".config/gcloud")),
-  ).toEqual(true);
-});
-
-test("MountStage: aws not mounted when disabled", () => {
-  const profile = makeProfile({ aws: { mountConfig: false } });
-  const { input, mountProbes } = makeInput({ profile });
-  const plan = planMount(input, mountProbes);
-  expect(plan.dockerArgs.some((a: string) => a.includes(".aws"))).toEqual(
-    false,
-  );
-});
-
-test("MountStage: aws mounted when enabled and exists", () => {
-  const profile = makeProfile({ aws: { mountConfig: true } });
-  const mountProbes = makeMountProbes({ awsConfigExists: true });
-  const { input } = makeInput({ profile, mountProbes });
-  const plan = planMount(input, mountProbes);
-  expect(plan.dockerArgs.some((a: string) => a.includes(".aws"))).toEqual(true);
 });
 
 // ============================================================
@@ -1600,12 +1499,8 @@ test("MountStage run(): no directories when nix disabled", async () => {
 });
 
 test("MountStage run(): preserves structured base container state", async () => {
-  const mountProbes = makeMountProbes({
-    gcloudConfigExists: true,
-  });
-  const profile = makeProfile({
-    gcloud: { mountConfig: true },
-  });
+  const mountProbes = makeMountProbes({});
+  const profile = makeProfile({});
   const { sharedInput, slices } = makeInput({
     profile,
     mountProbes,
@@ -1639,10 +1534,6 @@ test("MountStage run(): preserves structured base container state", async () => 
   expect(result.container!.mounts).toEqual([
     { source: "/structured/src", target: "/structured/dst" },
     { source: TEST_WORK_DIR, target: TEST_WORK_DIR },
-    {
-      source: `${TEST_HOME}/.config/gcloud`,
-      target: `${CONTAINER_HOME}/.config/gcloud`,
-    },
   ]);
   expect(result.container!.extraRunArgs).toEqual(["--structured-flag"]);
   expect(result.container!.env.static).toEqual({

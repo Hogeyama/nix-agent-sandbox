@@ -31,9 +31,6 @@ function makeProfile(): Profile {
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
     docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     display: DEFAULT_DISPLAY_CONFIG,
     session: DEFAULT_SESSION_CONFIG,
     network: {
@@ -112,7 +109,6 @@ function makeSharedInput(profile: Profile, hostEnv: HostEnv): StageInput {
       hasHostNix: false,
       xdgDbusProxyPath: null,
       dbusSessionAddress: null,
-      gpgAgentSocket: null,
       auditDir: "/tmp/nas-test-audit",
     },
   };

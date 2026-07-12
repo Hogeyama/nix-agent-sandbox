@@ -48,7 +48,6 @@ export interface ProbeResults {
   readonly hasHostNix: boolean;
   readonly xdgDbusProxyPath: string | null;
   readonly dbusSessionAddress: string | null;
-  readonly gpgAgentSocket: string | null;
   readonly auditDir: string;
 }
 

@@ -40,9 +40,6 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
     docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
@@ -75,7 +72,6 @@ function makeStageInput(
     hasHostNix: false,
     xdgDbusProxyPath: "/usr/bin/xdg-dbus-proxy",
     dbusSessionAddress: "unix:path=/run/user/1000/bus",
-    gpgAgentSocket: null,
     auditDir: "/tmp/nas-test-audit",
   };
   return {

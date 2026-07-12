@@ -19,9 +19,6 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
     agentArgs: [],
     nix: { enable: nixEnable, mountSocket: true, extraPackages: [] },
     docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
@@ -60,7 +57,6 @@ function makeInput(
       hasHostNix,
       xdgDbusProxyPath: null,
       dbusSessionAddress: null,
-      gpgAgentSocket: null,
       auditDir: "/tmp/nas-audit",
     },
   };

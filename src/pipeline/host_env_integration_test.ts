@@ -58,10 +58,6 @@ test("resolveProbes: returns ProbeResults with expected fields", async () => {
     probes.dbusSessionAddress === null ||
       typeof probes.dbusSessionAddress === "string",
   ).toEqual(true);
-  // gpgAgentSocket may or may not exist
-  expect(
-    probes.gpgAgentSocket === null || typeof probes.gpgAgentSocket === "string",
-  ).toEqual(true);
 });
 
 test("resolveProbes: auditDir uses XDG_DATA_HOME when set", async () => {

@@ -48,7 +48,6 @@ const dummyStageInput: StageInput = {
     hasHostNix: false,
     xdgDbusProxyPath: null,
     dbusSessionAddress: null,
-    gpgAgentSocket: null,
     auditDir: "/tmp/nas-audit",
   },
 };
@@ -76,12 +75,10 @@ test("ProbeResults: can construct with all fields", () => {
     hasHostNix: true,
     xdgDbusProxyPath: "/usr/bin/xdg-dbus-proxy",
     dbusSessionAddress: "unix:path=/run/user/1000/bus",
-    gpgAgentSocket: "/run/user/1000/gnupg/S.gpg-agent",
     auditDir: "/tmp/nas-audit",
   };
 
   expect(probes.hasHostNix).toEqual(true);
-  expect(probes.gpgAgentSocket).toEqual("/run/user/1000/gnupg/S.gpg-agent");
 });
 
 test("StageInput: can construct without prior pipeline bag", () => {

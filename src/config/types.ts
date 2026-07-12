@@ -22,21 +22,6 @@ export interface DockerConfig {
   shared: boolean;
 }
 
-/** gcloud 設定 */
-export interface GcloudConfig {
-  mountConfig: boolean;
-}
-
-/** AWS 設定 */
-export interface AwsConfig {
-  mountConfig: boolean;
-}
-
-/** GPG 設定 */
-export interface GpgConfig {
-  forwardAgent: boolean;
-}
-
 /** Proxy 設定 */
 export interface ProxyConfig {
   forwardPorts: number[];
@@ -222,9 +207,6 @@ export interface Profile {
   session: SessionConfig;
   nix: NixConfig;
   docker: DockerConfig;
-  gcloud: GcloudConfig;
-  aws: AwsConfig;
-  gpg: GpgConfig;
   network: NetworkConfig;
   dbus: DbusConfig;
   display: DisplayConfig;
@@ -283,18 +265,6 @@ export const DEFAULT_NIX_CONFIG: NixConfig = {
 export const DEFAULT_DOCKER_CONFIG: DockerConfig = {
   enable: false,
   shared: false,
-};
-
-export const DEFAULT_GCLOUD_CONFIG: GcloudConfig = {
-  mountConfig: false,
-};
-
-export const DEFAULT_AWS_CONFIG: AwsConfig = {
-  mountConfig: false,
-};
-
-export const DEFAULT_GPG_CONFIG: GpgConfig = {
-  forwardAgent: false,
 };
 
 export const DEFAULT_PROXY_CONFIG: ProxyConfig = {

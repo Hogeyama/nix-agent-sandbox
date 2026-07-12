@@ -59,17 +59,6 @@ export interface MountProbes {
   nixBinPath: string | null;
   /** git 設定ディレクトリ ($HOME/.config/git) が存在するか */
   gitConfigExists: boolean;
-  /** gcloud 設定ディレクトリ ($HOME/.config/gcloud) が存在するか */
-  gcloudConfigExists: boolean;
-  /** GPG ソケットが存在するか (probes.gpgAgentSocket のパス) */
-  gpgSocketExists: boolean;
-  /** GPG 関連ファイルの存在チェック */
-  gpgConfExists: boolean;
-  gpgAgentConfExists: boolean;
-  gpgPubringExists: boolean;
-  gpgTrustdbExists: boolean;
-  /** AWS 設定ディレクトリ ($HOME/.aws) が存在するか */
-  awsConfigExists: boolean;
   /** 追加マウントの事前解決結果 */
   resolvedExtraMounts: ResolvedExtraMount[];
   /** 環境変数エントリの事前解決結果 */
@@ -106,7 +95,6 @@ export async function resolveMountProbes(
   hostEnv: HostEnv,
   profile: Profile,
   workDir: string,
-  gpgAgentSocket: string | null,
 ): Promise<MountProbes> {
   const home = hostEnv.home;
 
@@ -119,37 +107,9 @@ export async function resolveMountProbes(
     resolveNixBinPath(),
   ]);
 
-  // ファイル存在チェックを並列実行
+  // ファイル存在チェック
   const gitConfigDir = `${home}/.config/git`;
-  const gcloudConfigDir = `${home}/.config/gcloud`;
-  const awsConfigDir = `${home}/.aws`;
-  const gpgConf = `${home}/.gnupg/gpg.conf`;
-  const gpgAgentConf = `${home}/.gnupg/gpg-agent.conf`;
-  const pubring = `${home}/.gnupg/pubring.kbx`;
-  const trustdb = `${home}/.gnupg/trustdb.gpg`;
-
-  const [
-    gitConfigExists,
-    gcloudConfigExists,
-    awsConfigExists,
-    gpgConfExists,
-    gpgAgentConfExists,
-    gpgPubringExists,
-    gpgTrustdbExists,
-  ] = await Promise.all([
-    fileExists(gitConfigDir),
-    fileExists(gcloudConfigDir),
-    fileExists(awsConfigDir),
-    fileExists(gpgConf),
-    fileExists(gpgAgentConf),
-    fileExists(pubring),
-    fileExists(trustdb),
-  ]);
-
-  // GPG ソケット存在チェック
-  const gpgSocketExists = gpgAgentSocket
-    ? await fileExists(gpgAgentSocket)
-    : false;
+  const gitConfigExists = await fileExists(gitConfigDir);
 
   // 追加マウントの解決
   const resolvedExtraMounts = await resolveExtraMounts(
@@ -181,13 +141,6 @@ export async function resolveMountProbes(
     nixConfRealPath,
     nixBinPath,
     gitConfigExists,
-    gcloudConfigExists,
-    gpgSocketExists,
-    gpgConfExists,
-    gpgAgentConfExists,
-    gpgPubringExists,
-    gpgTrustdbExists,
-    awsConfigExists,
     resolvedExtraMounts,
     resolvedEnvEntries,
     gitWorktreeMainRoot,

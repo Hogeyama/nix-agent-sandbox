@@ -123,9 +123,6 @@ function createTestProfile(base: string): Profile {
     worktree: { base, onCreate: "" },
     nix: { enable: "auto", mountSocket: true, extraPackages: [] },
     docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
     network: structuredClone(DEFAULT_NETWORK_CONFIG),
     dbus: structuredClone(DEFAULT_DBUS_CONFIG),
@@ -171,7 +168,6 @@ function createTestInput(
       hasHostNix: false,
       xdgDbusProxyPath: null,
       dbusSessionAddress: null,
-      gpgAgentSocket: null,
       auditDir: "/tmp/audit",
     },
     workspace: {

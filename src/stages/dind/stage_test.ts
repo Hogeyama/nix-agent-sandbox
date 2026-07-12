@@ -49,9 +49,6 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     agentArgs: [],
     nix: { enable: false, mountSocket: false, extraPackages: [] },
     docker: { enable: false, shared: false },
-    gcloud: { mountConfig: false },
-    aws: { mountConfig: false },
-    gpg: { forwardAgent: false },
     session: DEFAULT_SESSION_CONFIG,
     network: {
       ...baseNetwork,
@@ -91,7 +88,6 @@ function makeSharedInput(
     hasHostNix: false,
     xdgDbusProxyPath: null,
     dbusSessionAddress: null,
-    gpgAgentSocket: null,
     auditDir: "/tmp/audit",
   };
   return {

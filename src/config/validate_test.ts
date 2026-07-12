@@ -11,12 +11,9 @@
 import { expect, test } from "bun:test";
 import type { Config, Profile } from "./types.ts";
 import {
-  DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
   DEFAULT_DOCKER_CONFIG,
-  DEFAULT_GCLOUD_CONFIG,
-  DEFAULT_GPG_CONFIG,
   DEFAULT_HOOK_CONFIG,
   DEFAULT_NETWORK_CONFIG,
   DEFAULT_NIX_CONFIG,
@@ -37,9 +34,6 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     session: DEFAULT_SESSION_CONFIG,
     nix: DEFAULT_NIX_CONFIG,
     docker: DEFAULT_DOCKER_CONFIG,
-    gcloud: DEFAULT_GCLOUD_CONFIG,
-    aws: DEFAULT_AWS_CONFIG,
-    gpg: DEFAULT_GPG_CONFIG,
     network: DEFAULT_NETWORK_CONFIG,
     dbus: DEFAULT_DBUS_CONFIG,
     display: DEFAULT_DISPLAY_CONFIG,

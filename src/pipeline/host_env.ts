@@ -43,26 +43,19 @@ export function buildHostEnv(): HostEnv {
  * 各 probe は独立しているため Promise.all で並列実行する。
  */
 export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
-  const [
-    hasHostNix,
-    auditDir,
-    xdgDbusProxyPath,
-    dbusSessionAddress,
-    gpgAgentSocket,
-  ] = await Promise.all([
-    probeHasHostNix(),
-    Promise.resolve(resolveAuditDirFromEnv(hostEnv)),
-    probeXdgDbusProxy(),
-    Promise.resolve(probeDbusSessionAddress(hostEnv)),
-    probeGpgAgentSocket(hostEnv),
-  ]);
+  const [hasHostNix, auditDir, xdgDbusProxyPath, dbusSessionAddress] =
+    await Promise.all([
+      probeHasHostNix(),
+      Promise.resolve(resolveAuditDirFromEnv(hostEnv)),
+      probeXdgDbusProxy(),
+      Promise.resolve(probeDbusSessionAddress(hostEnv)),
+    ]);
 
   return {
     hasHostNix,
     auditDir,
     xdgDbusProxyPath,
     dbusSessionAddress,
-    gpgAgentSocket,
   };
 }
 
@@ -125,36 +118,4 @@ async function probeXdgDbusProxy(): Promise<string | null> {
 function probeDbusSessionAddress(hostEnv: HostEnv): string | null {
   const addr = hostEnv.env.get("DBUS_SESSION_BUS_ADDRESS")?.trim();
   return addr && addr.length > 0 ? addr : null;
-}
-
-/** gpgconf --list-dir agent-socket でソケットパスを解決する */
-async function probeGpgAgentSocket(hostEnv: HostEnv): Promise<string | null> {
-  try {
-    const proc = Bun.spawn(["gpgconf", "--list-dir", "agent-socket"], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const socketPath = (await new Response(proc.stdout).text()).trim();
-    const code = await proc.exited;
-    if (code === 0) {
-      if (socketPath) return socketPath;
-    }
-  } catch {
-    // gpgconf not available
-  }
-
-  // フォールバック: /run/user/$UID/gnupg/S.gpg-agent
-  if (hostEnv.uid !== null) {
-    const runUserSocket = `/run/user/${hostEnv.uid}/gnupg/S.gpg-agent`;
-    try {
-      await stat(runUserSocket);
-      return runUserSocket;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw e;
-      }
-    }
-  }
-
-  return `${hostEnv.home}/.gnupg/S.gpg-agent`;
 }
