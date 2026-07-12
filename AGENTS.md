@@ -8,8 +8,9 @@ code in this repository.
 ```bash
 # Development and testing
 bun test                   # Run all tests
-bun test src/              # Unit tests only (no Docker needed)
-bun test tests/            # Integration/e2e tests (Docker required)
+bun test src/              # Unit + integration tests (integration requires Docker)
+bun test tests/            # E2E tests (Docker required)
+bun run test:unit          # Unit tests only (no Docker needed)
 bun test --test-name-pattern 'config' # Run specific test pattern
 bun run check              # Type check (uses strict mode)
 
