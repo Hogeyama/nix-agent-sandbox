@@ -408,10 +408,6 @@ class HostExecRule {
   /// - `"deny"`: 常に拒否
   approval: "allow"|"prompt"|"deny" = "prompt"
 
-  /// ルール不一致や不許可時の動作。
-  /// - `"container"`: コンテナ内で実行へフォールバック
-  /// - `"deny"`: 即拒否
-  fallback: "container"|"deny" = "container"
 }
 
 class HostExecConfig {

@@ -50,7 +50,6 @@ export interface HookConfig {
 
 /** HostExec 設定 */
 export type HostExecApproval = "allow" | "prompt" | "deny";
-export type HostExecFallback = "container" | "deny";
 export type HostExecCwdMode =
   | "workspace-only"
   | "workspace-or-session-tmp"
@@ -89,7 +88,6 @@ export interface HostExecRule {
   env: Record<string, string>;
   inheritEnv: HostExecInheritEnvConfig;
   approval: HostExecApproval;
-  fallback: HostExecFallback;
 }
 
 export interface HostExecConfig {

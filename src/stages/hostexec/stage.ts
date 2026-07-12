@@ -225,7 +225,6 @@ const NAS_HOOK_RULE: HostExecRule = {
     keys: ["NAS_SESSION_ID", "NAS_SESSION_STORE_DIR", "XDG_RUNTIME_DIR"],
   },
   approval: "allow",
-  fallback: "container",
 };
 
 export async function planHostExec(

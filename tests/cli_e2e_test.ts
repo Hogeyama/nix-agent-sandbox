@@ -594,7 +594,6 @@ test("CLI: hostexec pending lists queued approvals", async () => {
           env: { TOKEN: "secret:cli_token" },
           inheritEnv: { mode: "minimal", keys: [] },
           approval: "prompt",
-          fallback: "container",
         },
       ],
     },
