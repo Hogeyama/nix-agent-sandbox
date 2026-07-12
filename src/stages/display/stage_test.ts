@@ -102,6 +102,8 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     takenX11Displays: new Set<number>(),
     x11UnixDirReadOnly: false,
     localConfigPaths: [],
+    gitHooksDir: null,
+    gitConfigFile: null,
     ...overrides,
   };
 }

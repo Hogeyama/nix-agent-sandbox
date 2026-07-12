@@ -110,6 +110,8 @@ function makeMountProbes(overrides: Partial<MountProbes> = {}): MountProbes {
     takenX11Displays: new Set<number>(),
     x11UnixDirReadOnly: false,
     localConfigPaths: [],
+    gitHooksDir: null,
+    gitConfigFile: null,
     ...overrides,
   };
 }
@@ -1234,6 +1236,81 @@ test("MountStage: with gitWorktreeMainRoot, config within main root is RO mounte
   });
   const plan = planMount(input, mountProbes);
   expect(plan.dockerArgs).toContain(`${configPath}:${configPath}:ro`);
+});
+
+// ============================================================
+// .git/hooks, .git/config RO bind mount (改ざん防止)
+// ============================================================
+
+test("MountStage: .git/hooks inside mountSource is RO bind mounted", () => {
+  const hooksDir = `${TEST_WORK_DIR}/.git/hooks`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitHooksDir: hooksDir }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${hooksDir}:${hooksDir}:ro`);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: hooksDir,
+    target: hooksDir,
+    readOnly: true,
+  });
+});
+
+test("MountStage: .git/config inside mountSource is RO bind mounted", () => {
+  const configFile = `${TEST_WORK_DIR}/.git/config`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitConfigFile: configFile }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${configFile}:${configFile}:ro`);
+  expect(plan.containerPatch.mounts).toContainEqual({
+    source: configFile,
+    target: configFile,
+    readOnly: true,
+  });
+});
+
+test("MountStage: .git/hooks outside mountSource is skipped", () => {
+  const hooksDir = "/other/repo/.git/hooks";
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitHooksDir: hooksDir }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).not.toContain(`${hooksDir}:${hooksDir}:ro`);
+});
+
+test("MountStage: .git/config outside mountSource is skipped", () => {
+  const configFile = "/other/repo/.git/config";
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitConfigFile: configFile }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).not.toContain(`${configFile}:${configFile}:ro`);
+});
+
+test("MountStage: git worktree main repo .git/hooks is RO mounted", () => {
+  const mainRoot = "/repo";
+  const hooksDir = `${mainRoot}/.git/hooks`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({
+      gitWorktreeMainRoot: mainRoot,
+      gitHooksDir: hooksDir,
+    }),
+  });
+  const plan = planMount(input, mountProbes);
+  expect(plan.dockerArgs).toContain(`${hooksDir}:${hooksDir}:ro`);
+});
+
+test("MountStage: .git/hooks RO mount is emitted AFTER workspace RW mount", () => {
+  const hooksDir = `${TEST_WORK_DIR}/.git/hooks`;
+  const { input, mountProbes } = makeInput({
+    mountProbes: makeMountProbes({ gitHooksDir: hooksDir }),
+  });
+  const plan = planMount(input, mountProbes);
+  const wsIdx = plan.dockerArgs.indexOf(`${TEST_WORK_DIR}:${TEST_WORK_DIR}`);
+  const hooksIdx = plan.dockerArgs.indexOf(`${hooksDir}:${hooksDir}:ro`);
+  expect(wsIdx).toBeGreaterThanOrEqual(0);
+  expect(hooksIdx).toBeGreaterThan(wsIdx);
 });
 
 test("MountStage: RO mount is emitted AFTER the workspace RW mount", () => {

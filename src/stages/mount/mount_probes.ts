@@ -79,6 +79,10 @@ export interface MountProbes {
    * mountSource 内にあるものは RO bind mount で保護する。
    */
   localConfigPaths: readonly string[];
+  /** workspace の git common dir 内の hooks ディレクトリパス (存在する場合) */
+  gitHooksDir: string | null;
+  /** workspace の git common dir 内の config ファイルパス (存在する場合) */
+  gitConfigFile: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +131,10 @@ export async function resolveMountProbes(
   // .agent-sandbox.{yml,nix} の列挙（後で RO bind mount 対象にする）
   const localConfigPaths = await resolveLocalConfigPaths(workDir);
 
+  // .git/hooks, .git/config の保護対象パス
+  const { gitHooksDir, gitConfigFile } =
+    await resolveGitProtectedPaths(workDir);
+
   // display: xpra サンドボックス用のバイナリ探索と X11 display 採番
   const [xpraBinPath, takenX11Displays, x11UnixDirReadOnly] = await Promise.all(
     [
@@ -148,6 +156,8 @@ export async function resolveMountProbes(
     takenX11Displays,
     x11UnixDirReadOnly,
     localConfigPaths,
+    gitHooksDir,
+    gitConfigFile,
   };
 }
 
@@ -186,6 +196,39 @@ async function resolveLocalConfigPaths(workDir: string): Promise<string[]> {
     current = parent;
   }
   return paths;
+}
+
+async function resolveGitProtectedPaths(workDir: string): Promise<{
+  gitHooksDir: string | null;
+  gitConfigFile: string | null;
+}> {
+  try {
+    const proc = Bun.spawn(
+      ["git", "-C", workDir, "rev-parse", "--git-common-dir"],
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    const [output, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    if (code !== 0) return { gitHooksDir: null, gitConfigFile: null };
+
+    const gitCommonDir = path.resolve(workDir, output.trim());
+    const hooksDir = path.join(gitCommonDir, "hooks");
+    const configFile = path.join(gitCommonDir, "config");
+
+    const [hooksExists, configExists] = await Promise.all([
+      fileExists(hooksDir),
+      fileExists(configFile),
+    ]);
+
+    return {
+      gitHooksDir: hooksExists ? hooksDir : null,
+      gitConfigFile: configExists ? configFile : null,
+    };
+  } catch {
+    return { gitHooksDir: null, gitConfigFile: null };
+  }
 }
 
 /** PATH から任意のバイナリを which 相当で解決する */

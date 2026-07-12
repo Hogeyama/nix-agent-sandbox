@@ -188,6 +188,17 @@ export function planMount(
     }
   }
 
+  // .git/hooks と .git/config を RO bind mount で保護する。
+  // workspace は RW だが、これらだけ RO で上書きマウントすることで、
+  // コンテナ内のエージェントが git hook を仕込んだり core.fsmonitor を
+  // 設定する → ホストで git 操作時に実行される攻撃を防ぐ。
+  if (probes.gitHooksDir && isPathWithin(probes.gitHooksDir, mountSource)) {
+    addMount(args, mounts, probes.gitHooksDir, probes.gitHooksDir, true);
+  }
+  if (probes.gitConfigFile && isPathWithin(probes.gitConfigFile, mountSource)) {
+    addMount(args, mounts, probes.gitConfigFile, probes.gitConfigFile, true);
+  }
+
   // UID/GID
   const uid = host.uid;
   const gid = host.gid;
