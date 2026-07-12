@@ -8,11 +8,11 @@ description: Effect-based service architecture for this codebase — covers pipe
 > **Non-negotiable:** A stage is an orchestration boundary, not an I/O implementation site.
 > - Never call `node:fs`, `node:child_process`, `Bun.spawn`, Docker CLI helpers, socket APIs, or ad-hoc cleanup code from a stage.
 > - Do not script low-level setup or teardown in `run()`, even if the calls happen to go through `FsService`, `ProcessService`, or `DockerService`.
-> - `run()` may only do three things: call pure planners, call stage-facing service methods, and return `EffectStageResult`.
+> - `run()` may only do three things: call pure planners, call stage-facing service methods, and return the stage's `Adds` type.
 > - `FsService.readFile()` or `docker.inspect()` do not get a special exemption just because they are single calls. Put primitive I/O in probes or services, not in the stage.
 > - If you feel tempted to write `mkdir`, `writeFile`, `spawn`, `exec`, `rm`, `networkCreate`, or similar steps in a stage, stop and extract a service first.
 
-All pipeline stages use a single type: `EffectStage<R>`. A stage declares its required services via `R`, computes pure data when helpful, and orchestrates service calls inside a shared `Scope`.
+All pipeline stages use a single type: `Stage<Needs, Adds, R, E>` (defined in `src/pipeline/stage_builder.ts`). A stage declares its required state slices via `Needs`, the slices it produces via `Adds`, required services via `R`, and error channel via `E`. Stages orchestrate service calls inside a shared `Scope`.
 
 ## Service Tiers
 
@@ -37,22 +37,29 @@ read `references/domain-service.md`. They reuse the same Tag + Live +
 Fake idiom but add a plain-async client bridge, a different R-closure
 strategy, and typed-error unwrap at the adapter boundary.
 
-## EffectStage<R>
+## Stage<Needs, Adds, R, E>
 
 ```typescript
-export interface EffectStage<R extends StageServices = never> {
-  kind: "effect";
-  name: string;
-  run(input: StageInput): Effect.Effect<EffectStageResult, unknown, Scope.Scope | R>;
+export interface Stage<
+  Needs extends SliceKey,
+  Adds extends Partial<PipelineState>,
+  R extends StageServices = never,
+  E = never,
+> {
+  readonly name: string;
+  readonly needs: readonly Needs[];
+  readonly run: (
+    input: Pick<PipelineState, Needs>,
+  ) => Effect.Effect<Adds, E, R | Scope.Scope>;
 }
-
-export type AnyStage = EffectStage<StageServices>;
 ```
 
-- `R` lists the services this stage requires.
+- `Needs` lists the state slice keys (`SliceKey`) this stage reads — mirrored at runtime by the `needs` array.
+- `Adds` is `Partial<PipelineState>` — each stage returns only the slices it modifies.
+- `R` lists the Effect services this stage requires.
+- `E` is the error channel (defaults to `never`).
 - Prefer stage-facing services in `R`. Primitive services should usually stay behind probes or domain services.
 - `Scope.Scope` is always present for resource management but is not part of `R`.
-- `EffectStageResult` is `Partial<PriorStageOutputs>` -- each stage returns only the fields it modifies.
 
 ## Directory Layout & Naming
 
@@ -238,7 +245,7 @@ When a single domain service has enough D2 functions that each want independent 
 
 ### 1. Add a pure planner only when the plan itself deserves tests
 
-A "stage-local plan type" is just the typed return value of `planXxx()`: a pure data object computed from `StageInput` and later handed to services. Introduce it only when that pure decision-making has enough branching or invariants to deserve focused unit tests. If `run()` is already trivial, or the pure logic is obvious, keep it inline or extract smaller pure helpers instead of introducing `planXxx()`.
+A "stage-local plan type" is just the typed return value of `planXxx()`: a pure data object computed from the stage's input slices and later handed to services. Introduce it only when that pure decision-making has enough branching or invariants to deserve focused unit tests. If `run()` is already trivial, or the pure logic is obvious, keep it inline or extract smaller pure helpers instead of introducing `planXxx()`.
 
 ```typescript
 interface MyPlan {
@@ -247,10 +254,9 @@ interface MyPlan {
     readonly runtimeDir: string;
   };
   readonly envVars: Record<string, string>;
-  readonly outputOverrides: EffectStageResult;
 }
 
-function planMyStage(input: StageInput): MyPlan | null {
+function planMyStage(input: Pick<PipelineState, "workspace">): MyPlan | null {
   // Pure computation only -- no I/O allowed
 }
 ```
@@ -276,13 +282,15 @@ yield* workspaceService.prepareWorkspace(plan.workspace);
 ### 3. Create the stage factory
 
 ```typescript
-export function createMyStage(): EffectStage<MyStageService> {
+export function createMyStage(
+  shared: StageInput,
+): Stage<"workspace", { container: ContainerPlan }, MyStageService> {
   return {
-    kind: "effect",
     name: "MyStage",
+    needs: ["workspace"],
     run(input) {
       const plan = planMyStage(input);
-      if (!plan) return Effect.succeed({});
+      if (!plan) return Effect.succeed({ container: input.container });
 
       return Effect.gen(function* () {
         const myStageService = yield* MyStageService;
@@ -295,9 +303,8 @@ export function createMyStage(): EffectStage<MyStageService> {
         );
 
         return {
-          envVars: { ...input.prior.envVars, ...plan.envVars },
-          ...plan.outputOverrides,
-        } satisfies EffectStageResult;
+          container: mergeContainerPlan(input.container, { ... }),
+        } satisfies { container: ContainerPlan };
       });
     },
   };
@@ -340,35 +347,26 @@ Finalizer rules:
 
 ## Pipeline Execution
 
-### runPipeline
+### PipelineBuilder
 
 ```typescript
-function runPipeline<const TStages extends readonly AnyStage[]>(
-  stages: TStages,
-  input: StageInput,
-): Effect.Effect<PriorStageOutputs, unknown, PipelineRequirements<TStages>>
+const builder = createPipelineBuilder<Pick<PipelineState, "workspace" | "container">>()
+  .add(createWorktreeStage(input))
+  .add(createSessionStoreStage(input))
+  .add(createNixDetectStage(input))
+  // ... more stages
+  .add(createLaunchStage(input));
 ```
 
-Runs stages sequentially. Each stage receives cumulative `prior` outputs from all preceding stages. The return type `PipelineRequirements<TStages>` is the union of all stages' `R` plus `Scope.Scope`.
+`PipelineBuilder.add()` is a compile error when a stage's `Needs` slices are not yet available. Service requirements (`R`) and error channels (`E`) are accumulated across all stages.
 
 ### cli.ts (entry point)
 
 ```typescript
 const exit = await Effect.runPromiseExit(
-  runPipeline(stages, input).pipe(
-    Effect.scoped,
-    Effect.provide(Layer.mergeAll(
-      FsServiceLive,
-      ProcessServiceLive,
-      DockerServiceLive,
-      PromptServiceLive,
-      DindServiceLive,
-      SessionBrokerServiceLive,
-      HostExecBrokerServiceLive,
-      AuthRouterServiceLive,
-      SessionStoreServiceLive,
-    )),
-  ),
+  builder
+    .run(initialState)
+    .pipe(Effect.scoped, Effect.provide(liveLayer)),
 );
 ```
 
@@ -432,7 +430,7 @@ Agent modules are not stages, but they follow the same separation rule.
 
 ## Design Decision Flowchart
 
-1. **Need a stage?** -- Create an `EffectStage<R>` with the smallest set of service requirements that express the capability.
+1. **Need a stage?** -- Create a `Stage<Needs, Adds, R, E>` with the smallest set of slice and service requirements that express the capability.
 2. **Is there pure decision logic worth testing on its own?** -- Extract `planXxx()` and an optional plan type. Otherwise keep the pure logic inline or in smaller pure helpers.
 3. **Would execution require primitive filesystem/process/Docker I/O or manual cleanup?** -- Create or reuse a domain service first. Do not call primitive services directly from the stage.
 4. **Is there already an intentful service method for the job?** -- Call that service from the stage and keep the stage focused on orchestration.

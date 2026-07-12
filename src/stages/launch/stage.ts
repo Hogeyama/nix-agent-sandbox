@@ -1,5 +1,5 @@
 /**
- * コンテナ起動ステージ (EffectStage)
+ * コンテナ起動ステージ
  *
  * DockerService.runInteractive を呼び出してコンテナを起動する。
  * session.multiplex が有効な場合、CLI 層が dtach でラップ済みなので
@@ -121,7 +121,7 @@ export function compileLaunchOpts(
 }
 
 // ---------------------------------------------------------------------------
-// LaunchStage (EffectStage<ContainerLaunchService>)
+// LaunchStage
 // ---------------------------------------------------------------------------
 
 export function createLaunchStage(

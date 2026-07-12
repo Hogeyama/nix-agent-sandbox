@@ -1,5 +1,5 @@
 /**
- * HostExec Stage (EffectStage)
+ * HostExec Stage
  *
  * ホスト上のコマンド実行を仲介する HostExecBroker を起動し、
  * エージェントコンテナ内からラッパースクリプト経由でアクセスできるようにする。
@@ -160,7 +160,7 @@ export interface HostExecPlan {
 }
 
 // ---------------------------------------------------------------------------
-// EffectStage
+// Stage
 // ---------------------------------------------------------------------------
 
 type HostExecStageState = Pick<PipelineState, "workspace" | "container">;
