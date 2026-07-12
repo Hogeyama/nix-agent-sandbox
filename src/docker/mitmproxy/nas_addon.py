@@ -60,7 +60,7 @@ def _resolve_and_check(host: str, port: int) -> Optional[str]:
     Fail-closed: DNS failure or empty results return None."""
     try:
         results = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, OSError):
+    except OSError:
         return None
     if not results:
         return None
@@ -494,8 +494,11 @@ class NasAddon:
                 )
                 return
             # Pin upstream connection to the resolved IP.
-            # Host header stays as the original hostname for TLS SNI.
+            # Restore Host header after pinning (mitmproxy's .host setter overwrites it).
+            original_host_header = flow.request.headers.get("Host")
             flow.request.host = pinned_ip
+            if original_host_header is not None:
+                flow.request.headers["Host"] = original_host_header
 
         # Mask secrets out of the outgoing request (URL / headers / body)
         # before credential injection so injected headers stay intact.
