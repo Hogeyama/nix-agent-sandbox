@@ -37,6 +37,10 @@ test("planLaunch: produces correct plan with composed command", () => {
   expect(plan.container.image).toEqual("custom-image");
   expect(plan.opts.args).toEqual([
     "--log-driver=none",
+    "--security-opt",
+    "no-new-privileges",
+    "--cap-drop",
+    "ALL",
     "-w",
     "/workspace",
     "-v",
@@ -80,6 +84,10 @@ test("planLaunch: composes launch opts from container slice", () => {
   expect(plan.container.image).toEqual("slice-image");
   expect(plan.opts.args).toEqual([
     "--log-driver=none",
+    "--security-opt",
+    "no-new-privileges",
+    "--cap-drop",
+    "ALL",
     "-w",
     "/slice-workdir",
     "-v",
@@ -175,6 +183,10 @@ test("LaunchStage: run() calls ContainerLaunchService.launch", async () => {
   expect(capturedOpts!.command).toEqual(["claude", "--fast", "--extra"]);
   expect(capturedOpts!.args).toEqual([
     "--log-driver=none",
+    "--security-opt",
+    "no-new-privileges",
+    "--cap-drop",
+    "ALL",
     "-w",
     "/workspace",
     "-v",
@@ -210,7 +222,15 @@ test("compileLaunchOpts: baseline plan produces correct LaunchOpts", () => {
 
   expect(opts.image).toEqual("nas-sandbox:test");
   expect(opts.name).toEqual("nas-agent-sess1");
-  expect(opts.args).toEqual(["--log-driver=none", "-w", "/workspace"]);
+  expect(opts.args).toEqual([
+    "--log-driver=none",
+    "--security-opt",
+    "no-new-privileges",
+    "--cap-drop",
+    "ALL",
+    "-w",
+    "/workspace",
+  ]);
   expect(opts.envVars).toEqual({ TOKEN: "abc", MODE: "test" });
   expect(opts.command).toEqual(["claude", "serve", "--fast"]);
   expect(opts.labels).toEqual({ "nas.managed": "true" });
