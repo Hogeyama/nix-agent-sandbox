@@ -6,7 +6,9 @@ Direct invocation:
 """
 
 import base64
+import socket
 import unittest
+from unittest.mock import patch
 
 import nas_addon
 
@@ -139,6 +141,10 @@ class FakeRequest:
             self.headers = FakeHeaders(list(headers))
         self._content = content
         self.raw_content = content
+        self._host = None
+        self.port = None
+        self.method = None
+        self.pretty_url = None
 
     @property
     def content(self):
@@ -147,6 +153,20 @@ class FakeRequest:
     @content.setter
     def content(self, value):
         self._content = value
+
+    @property
+    def host(self):
+        return self._host
+
+    @host.setter
+    def host(self, value):
+        self._host = value
+        # Mimic mitmproxy's real Request.host setter, which also
+        # overwrites the "Host" header as a side effect. nas_addon.py's
+        # IP-pinning logic relies on this to justify restoring the
+        # original Host header after pinning — this fake must reproduce
+        # it or the restore logic couldn't be exercised.
+        self.headers["Host"] = value
 
 
 class FakeUndecodableRequest(FakeRequest):
@@ -243,6 +263,202 @@ class PatternsForCacheTest(unittest.TestCase):
         third = addon._patterns_for(["other-secret"])
         self.assertIsNot(first, third)
         self.assertIn(b"other-secret", third)
+
+
+class IsDeniedIpTest(unittest.TestCase):
+    """Tests for _is_denied_ip — mirrors protocol_test.ts deny cases."""
+
+    # --- IPv4 denied ---
+    def test_blocks_this_network(self):
+        self.assertTrue(nas_addon._is_denied_ip("0.0.0.0"))
+        self.assertTrue(nas_addon._is_denied_ip("0.255.255.255"))
+
+    def test_blocks_loopback(self):
+        self.assertTrue(nas_addon._is_denied_ip("127.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("127.255.255.255"))
+
+    def test_blocks_rfc1918(self):
+        self.assertTrue(nas_addon._is_denied_ip("10.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("172.16.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("172.31.255.255"))
+        self.assertTrue(nas_addon._is_denied_ip("192.168.1.1"))
+
+    def test_blocks_link_local(self):
+        self.assertTrue(nas_addon._is_denied_ip("169.254.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("169.254.255.255"))
+
+    def test_blocks_cgnat(self):
+        self.assertTrue(nas_addon._is_denied_ip("100.64.0.0"))
+        self.assertTrue(nas_addon._is_denied_ip("100.64.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("100.127.255.255"))
+
+    def test_allows_public_ipv4(self):
+        self.assertFalse(nas_addon._is_denied_ip("8.8.8.8"))
+        self.assertFalse(nas_addon._is_denied_ip("1.1.1.1"))
+        self.assertFalse(nas_addon._is_denied_ip("100.128.0.0"))
+        self.assertFalse(nas_addon._is_denied_ip("172.32.0.1"))
+
+    # --- IPv6 denied ---
+    def test_blocks_unspecified(self):
+        self.assertTrue(nas_addon._is_denied_ip("::"))
+
+    def test_blocks_loopback_v6(self):
+        self.assertTrue(nas_addon._is_denied_ip("::1"))
+
+    def test_blocks_ula(self):
+        self.assertTrue(nas_addon._is_denied_ip("fc00::1"))
+        self.assertTrue(nas_addon._is_denied_ip("fd00::1"))
+        self.assertTrue(nas_addon._is_denied_ip("fdff::1"))
+
+    def test_blocks_link_local_v6(self):
+        self.assertTrue(nas_addon._is_denied_ip("fe80::1"))
+        self.assertTrue(nas_addon._is_denied_ip("febf::1"))
+
+    def test_blocks_ipv4_mapped(self):
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:127.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:10.0.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:169.254.1.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:192.168.0.1"))
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:100.64.0.1"))
+
+    def test_allows_public_ipv6(self):
+        self.assertFalse(nas_addon._is_denied_ip("2001:4860:4860::8888"))
+        self.assertFalse(nas_addon._is_denied_ip("2606:4700::1111"))
+
+    def test_allows_public_ipv4_mapped(self):
+        self.assertFalse(nas_addon._is_denied_ip("::ffff:8.8.8.8"))
+
+    # --- Edge cases ---
+    def test_unparseable_is_denied(self):
+        self.assertTrue(nas_addon._is_denied_ip("not-an-ip"))
+        self.assertTrue(nas_addon._is_denied_ip(""))
+
+
+class ResolveAndCheckTest(unittest.TestCase):
+    """Tests for _resolve_and_check with mocked getaddrinfo."""
+
+    def _fake_addrinfo(self, results):
+        """Return a mock getaddrinfo that yields the given IP strings."""
+        return lambda host, port, *a, **kw: [
+            (2, 1, 6, "", (ip, port)) for ip in results
+        ]
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_first_allowed_ip(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["8.8.8.8", "8.8.4.4"])
+        result = nas_addon._resolve_and_check("dns.google", 443)
+        self.assertEqual(result, "8.8.8.8")
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_when_any_ip_is_denied(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["8.8.8.8", "127.0.0.1"])
+        result = nas_addon._resolve_and_check("evil.example", 443)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_when_all_ips_denied(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["10.0.0.1", "192.168.1.1"])
+        result = nas_addon._resolve_and_check("internal.corp", 80)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_on_dns_failure(self, mock_gai):
+        mock_gai.side_effect = socket.gaierror("Name or service not known")
+        result = nas_addon._resolve_and_check("nonexistent.invalid", 443)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_on_empty_result(self, mock_gai):
+        mock_gai.return_value = []
+        result = nas_addon._resolve_and_check("empty.example", 443)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_ipv4_mapped_denied(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["::ffff:169.254.1.1"])
+        result = nas_addon._resolve_and_check("rebind.attacker", 443)
+        self.assertIsNone(result)
+
+
+class RequestPinningTest(unittest.TestCase):
+    """Integration test: request() pins flow.request.host to resolved IP.
+
+    Exercises the full request() path (creds -> registry -> broker ->
+    DNS-rebinding pin) with _query_broker, socket.getaddrinfo, and
+    _load_registry mocked, driven through FakeFlow/FakeRequest.
+    """
+
+    def _make_flow(self, host, port, path="/"):
+        flow = FakeFlow(FakeRequest(path=path))
+        flow.request.host = host
+        flow.request.port = port
+        flow.request.method = "GET"
+        flow.request.pretty_url = f"https://{host}:{port}{path}"
+        flow.client_conn = type("C", (), {"id": "test-client-1"})()
+        flow.response = None
+        return flow
+
+    @patch("nas_addon._query_broker")
+    @patch("nas_addon.socket.getaddrinfo")
+    @patch("nas_addon._load_registry")
+    def test_pins_host_to_resolved_ip(self, mock_reg, mock_gai, mock_broker):
+        mock_reg.return_value = {"tokenHash": nas_addon._hash_token("tok")}
+        mock_broker.return_value = {"decision": "allow"}
+        mock_gai.return_value = [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+        ]
+
+        addon = nas_addon.NasAddon()
+        addon._connect_creds["test-client-1"] = ("sess1", "tok")
+
+        flow = self._make_flow("example.com", 443)
+        addon.request(flow)
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "93.184.216.34")
+        # The Host header must be restored to the original hostname —
+        # not left as the pinned IP that FakeRequest.host's setter
+        # (mimicking mitmproxy) would otherwise overwrite it with.
+        self.assertEqual(flow.request.headers["Host"], "example.com")
+
+    @patch("nas_addon._query_broker")
+    @patch("nas_addon.socket.getaddrinfo")
+    @patch("nas_addon._load_registry")
+    def test_blocks_when_resolved_to_private(self, mock_reg, mock_gai, mock_broker):
+        mock_reg.return_value = {"tokenHash": nas_addon._hash_token("tok")}
+        mock_broker.return_value = {"decision": "allow"}
+        mock_gai.return_value = [
+            (2, 1, 6, "", ("169.254.169.254", 80)),
+        ]
+
+        addon = nas_addon.NasAddon()
+        addon._connect_creds["test-client-1"] = ("sess1", "tok")
+
+        flow = self._make_flow("evil.attacker.com", 80)
+        addon.request(flow)
+
+        self.assertIsNotNone(flow.response)
+        self.assertEqual(flow.response.status_code, 403)
+        # Host must never be pinned to a denied IP — the request is
+        # blocked before pinning happens.
+        self.assertEqual(flow.request.host, "evil.attacker.com")
+
+    @patch("nas_addon._query_broker")
+    @patch("nas_addon._load_registry")
+    def test_skips_resolve_for_ip_literal(self, mock_reg, mock_broker):
+        mock_reg.return_value = {"tokenHash": nas_addon._hash_token("tok")}
+        mock_broker.return_value = {"decision": "allow"}
+
+        addon = nas_addon.NasAddon()
+        addon._connect_creds["test-client-1"] = ("sess1", "tok")
+
+        flow = self._make_flow("8.8.8.8", 443)
+        addon.request(flow)
+
+        # IP literal should not be resolved or pinned — host stays unchanged
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "8.8.8.8")
+        self.assertEqual(flow.request.headers["Host"], "8.8.8.8")
 
 
 if __name__ == "__main__":

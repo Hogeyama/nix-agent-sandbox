@@ -8,6 +8,7 @@ decisions, and evaluates review rules for request body inspection.
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import socket
@@ -17,6 +18,74 @@ import urllib.parse
 from typing import Optional
 
 from mitmproxy import connection, http
+
+# Denied IP networks — mirrors src/network/protocol.ts isDeniedIpv4/isDeniedIpv6.
+# Keep both implementations in sync. Changes here require a matching update in
+# protocol.ts (and vice versa).
+_DENIED_IPV4_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+]
+
+_DENIED_IPV6_NETWORKS = [
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _is_denied_ip(ip_str: str) -> bool:
+    """Check if an IP address falls within a denied network range.
+    Fail-closed: unparseable addresses are treated as denied."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    if isinstance(addr, ipaddress.IPv4Address):
+        return any(addr in net for net in _DENIED_IPV4_NETWORKS)
+    return any(addr in net for net in _DENIED_IPV6_NETWORKS)
+
+
+def _resolve_and_check(host: str, port: int) -> Optional[str]:
+    """Resolve host via DNS and check all resulting IPs against denied networks.
+    Returns the first IP if ALL are allowed, None if any is denied or resolution fails.
+    Fail-closed: DNS failure or empty results return None."""
+    try:
+        results = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return None
+    if not results:
+        return None
+
+    ips = []
+    for family, socktype, proto, canonname, sockaddr in results:
+        ip = sockaddr[0]
+        if ip not in ips:
+            ips.append(ip)
+
+    for ip in ips:
+        if _is_denied_ip(ip):
+            return None
+
+    return ips[0]
+
+
+def _is_ip_literal(host: str) -> bool:
+    """Check if host is already an IP literal (skip resolution for these)."""
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
 
 NETWORK_DIR = "/nas-network"
 SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")
@@ -408,6 +477,28 @@ class NasAddon:
                 403, message.encode() if isinstance(message, str) else b"denied"
             )
             return
+
+        # H5: DNS rebinding defense — resolve host, check all IPs against
+        # denied networks, and pin the connection to the checked IP.
+        # This runs after broker-allow but before upstream connection.
+        if not _is_ip_literal(host):
+            pinned_ip = _resolve_and_check(host, port)
+            if pinned_ip is None:
+                print(
+                    f"[nas-addon] DENIED-RESOLVE: {host}:{port} resolved to "
+                    f"denied IP or DNS failed (rebinding defense)",
+                    file=sys.stderr,
+                )
+                flow.response = http.Response.make(
+                    403, b"blocked: resolved IP is in denied range"
+                )
+                return
+            # Pin upstream connection to the resolved IP.
+            # Restore Host header after pinning (mitmproxy's .host setter overwrites it).
+            original_host_header = flow.request.headers.get("Host")
+            flow.request.host = pinned_ip
+            if original_host_header is not None:
+                flow.request.headers["Host"] = original_host_header
 
         # Mask secrets out of the outgoing request (URL / headers / body)
         # before credential injection so injected headers stay intact.
