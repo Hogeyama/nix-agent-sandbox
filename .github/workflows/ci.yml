@@ -18,11 +18,11 @@ jobs:
       - name: Install dependencies
         run: nix develop -c bun install --frozen-lockfile
 
-      - name: Type check
+      - name: Type check and lint
         run: nix develop -c bun run check
 
-      - name: Lint
-        run: nix develop -c bun run lint
+      - name: Lint composed effects
+        run: nix develop -c bun run lint:composed-effects
 
       - name: Unit tests
         run: nix develop -c bun run test:unit
