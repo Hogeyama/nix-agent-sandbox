@@ -141,6 +141,10 @@ class FakeRequest:
             self.headers = FakeHeaders(list(headers))
         self._content = content
         self.raw_content = content
+        self._host = None
+        self.port = None
+        self.method = None
+        self.pretty_url = None
 
     @property
     def content(self):
@@ -149,6 +153,20 @@ class FakeRequest:
     @content.setter
     def content(self, value):
         self._content = value
+
+    @property
+    def host(self):
+        return self._host
+
+    @host.setter
+    def host(self, value):
+        self._host = value
+        # Mimic mitmproxy's real Request.host setter, which also
+        # overwrites the "Host" header as a side effect. nas_addon.py's
+        # IP-pinning logic relies on this to justify restoring the
+        # original Host header after pinning — this fake must reproduce
+        # it or the restore logic couldn't be exercised.
+        self.headers["Host"] = value
 
 
 class FakeUndecodableRequest(FakeRequest):
@@ -360,6 +378,87 @@ class ResolveAndCheckTest(unittest.TestCase):
         mock_gai.side_effect = self._fake_addrinfo(["::ffff:169.254.1.1"])
         result = nas_addon._resolve_and_check("rebind.attacker", 443)
         self.assertIsNone(result)
+
+
+class RequestPinningTest(unittest.TestCase):
+    """Integration test: request() pins flow.request.host to resolved IP.
+
+    Exercises the full request() path (creds -> registry -> broker ->
+    DNS-rebinding pin) with _query_broker, socket.getaddrinfo, and
+    _load_registry mocked, driven through FakeFlow/FakeRequest.
+    """
+
+    def _make_flow(self, host, port, path="/"):
+        flow = FakeFlow(FakeRequest(path=path))
+        flow.request.host = host
+        flow.request.port = port
+        flow.request.method = "GET"
+        flow.request.pretty_url = f"https://{host}:{port}{path}"
+        flow.client_conn = type("C", (), {"id": "test-client-1"})()
+        flow.response = None
+        return flow
+
+    @patch("nas_addon._query_broker")
+    @patch("nas_addon.socket.getaddrinfo")
+    @patch("nas_addon._load_registry")
+    def test_pins_host_to_resolved_ip(self, mock_reg, mock_gai, mock_broker):
+        mock_reg.return_value = {"tokenHash": nas_addon._hash_token("tok")}
+        mock_broker.return_value = {"decision": "allow"}
+        mock_gai.return_value = [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+        ]
+
+        addon = nas_addon.NasAddon()
+        addon._connect_creds["test-client-1"] = ("sess1", "tok")
+
+        flow = self._make_flow("example.com", 443)
+        addon.request(flow)
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "93.184.216.34")
+        # The Host header must be restored to the original hostname —
+        # not left as the pinned IP that FakeRequest.host's setter
+        # (mimicking mitmproxy) would otherwise overwrite it with.
+        self.assertEqual(flow.request.headers["Host"], "example.com")
+
+    @patch("nas_addon._query_broker")
+    @patch("nas_addon.socket.getaddrinfo")
+    @patch("nas_addon._load_registry")
+    def test_blocks_when_resolved_to_private(self, mock_reg, mock_gai, mock_broker):
+        mock_reg.return_value = {"tokenHash": nas_addon._hash_token("tok")}
+        mock_broker.return_value = {"decision": "allow"}
+        mock_gai.return_value = [
+            (2, 1, 6, "", ("169.254.169.254", 80)),
+        ]
+
+        addon = nas_addon.NasAddon()
+        addon._connect_creds["test-client-1"] = ("sess1", "tok")
+
+        flow = self._make_flow("evil.attacker.com", 80)
+        addon.request(flow)
+
+        self.assertIsNotNone(flow.response)
+        self.assertEqual(flow.response.status_code, 403)
+        # Host must never be pinned to a denied IP — the request is
+        # blocked before pinning happens.
+        self.assertEqual(flow.request.host, "evil.attacker.com")
+
+    @patch("nas_addon._query_broker")
+    @patch("nas_addon._load_registry")
+    def test_skips_resolve_for_ip_literal(self, mock_reg, mock_broker):
+        mock_reg.return_value = {"tokenHash": nas_addon._hash_token("tok")}
+        mock_broker.return_value = {"decision": "allow"}
+
+        addon = nas_addon.NasAddon()
+        addon._connect_creds["test-client-1"] = ("sess1", "tok")
+
+        flow = self._make_flow("8.8.8.8", 443)
+        addon.request(flow)
+
+        # IP literal should not be resolved or pinned — host stays unchanged
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.host, "8.8.8.8")
+        self.assertEqual(flow.request.headers["Host"], "8.8.8.8")
 
 
 if __name__ == "__main__":
