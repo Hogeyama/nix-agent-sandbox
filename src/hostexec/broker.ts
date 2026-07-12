@@ -20,7 +20,7 @@ import {
 } from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
 import type { MatchContext } from "./match.ts";
-import { isRelativeHostExecArgv0, matchRule } from "./match.ts";
+import { matchRule } from "./match.ts";
 import {
   closeNotification,
   notifyHostExecPendingRequest,
@@ -704,11 +704,7 @@ export class HostExecBroker {
     resolved: ResolvedExecution,
     socket: Socket,
   ): Promise<void> {
-    const commandArgv0 =
-      isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
-      path.isAbsolute(resolved.rule.match.argv0)
-        ? request.argv0
-        : path.basename(request.argv0);
+    const commandArgv0 = resolved.capability.argv0;
     const stdin = request.stdin
       ? Uint8Array.from(atob(request.stdin), (c) => c.charCodeAt(0))
       : undefined;
@@ -999,7 +995,7 @@ function toPendingEntry(
     requestId: request.requestId,
     approvalKey,
     ruleId: resolved.rule.id,
-    argv0: request.argv0,
+    argv0: resolved.capability.argv0,
     args: request.args,
     cwd: resolved.cwd,
     state: "pending",
