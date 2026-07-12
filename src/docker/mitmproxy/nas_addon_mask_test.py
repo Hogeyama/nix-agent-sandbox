@@ -6,7 +6,9 @@ Direct invocation:
 """
 
 import base64
+import socket
 import unittest
+from unittest.mock import patch
 
 import nas_addon
 
@@ -312,6 +314,52 @@ class IsDeniedIpTest(unittest.TestCase):
     def test_unparseable_is_denied(self):
         self.assertTrue(nas_addon._is_denied_ip("not-an-ip"))
         self.assertTrue(nas_addon._is_denied_ip(""))
+
+
+class ResolveAndCheckTest(unittest.TestCase):
+    """Tests for _resolve_and_check with mocked getaddrinfo."""
+
+    def _fake_addrinfo(self, results):
+        """Return a mock getaddrinfo that yields the given IP strings."""
+        return lambda host, port, *a, **kw: [
+            (2, 1, 6, "", (ip, port)) for ip in results
+        ]
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_first_allowed_ip(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["8.8.8.8", "8.8.4.4"])
+        result = nas_addon._resolve_and_check("dns.google", 443)
+        self.assertEqual(result, "8.8.8.8")
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_when_any_ip_is_denied(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["8.8.8.8", "127.0.0.1"])
+        result = nas_addon._resolve_and_check("evil.example", 443)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_when_all_ips_denied(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["10.0.0.1", "192.168.1.1"])
+        result = nas_addon._resolve_and_check("internal.corp", 80)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_on_dns_failure(self, mock_gai):
+        mock_gai.side_effect = socket.gaierror("Name or service not known")
+        result = nas_addon._resolve_and_check("nonexistent.invalid", 443)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_returns_none_on_empty_result(self, mock_gai):
+        mock_gai.return_value = []
+        result = nas_addon._resolve_and_check("empty.example", 443)
+        self.assertIsNone(result)
+
+    @patch("nas_addon.socket.getaddrinfo")
+    def test_ipv4_mapped_denied(self, mock_gai):
+        mock_gai.side_effect = self._fake_addrinfo(["::ffff:169.254.1.1"])
+        result = nas_addon._resolve_and_check("rebind.attacker", 443)
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

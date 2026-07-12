@@ -54,6 +54,39 @@ def _is_denied_ip(ip_str: str) -> bool:
     return any(addr in net for net in _DENIED_IPV6_NETWORKS)
 
 
+def _resolve_and_check(host: str, port: int) -> Optional[str]:
+    """Resolve host via DNS and check all resulting IPs against denied networks.
+    Returns the first IP if ALL are allowed, None if any is denied or resolution fails.
+    Fail-closed: DNS failure or empty results return None."""
+    try:
+        results = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError):
+        return None
+    if not results:
+        return None
+
+    ips = []
+    for family, socktype, proto, canonname, sockaddr in results:
+        ip = sockaddr[0]
+        if ip not in ips:
+            ips.append(ip)
+
+    for ip in ips:
+        if _is_denied_ip(ip):
+            return None
+
+    return ips[0]
+
+
+def _is_ip_literal(host: str) -> bool:
+    """Check if host is already an IP literal (skip resolution for these)."""
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
 NETWORK_DIR = "/nas-network"
 SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")
 BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")
@@ -444,6 +477,25 @@ class NasAddon:
                 403, message.encode() if isinstance(message, str) else b"denied"
             )
             return
+
+        # H5: DNS rebinding defense — resolve host, check all IPs against
+        # denied networks, and pin the connection to the checked IP.
+        # This runs after broker-allow but before upstream connection.
+        if not _is_ip_literal(host):
+            pinned_ip = _resolve_and_check(host, port)
+            if pinned_ip is None:
+                print(
+                    f"[nas-addon] DENIED-RESOLVE: {host}:{port} resolved to "
+                    f"denied IP or DNS failed (rebinding defense)",
+                    file=sys.stderr,
+                )
+                flow.response = http.Response.make(
+                    403, b"blocked: resolved IP is in denied range"
+                )
+                return
+            # Pin upstream connection to the resolved IP.
+            # Host header stays as the original hostname for TLS SNI.
+            flow.request.host = pinned_ip
 
         # Mask secrets out of the outgoing request (URL / headers / body)
         # before credential injection so injected headers stay intact.
