@@ -332,6 +332,8 @@ function randomHex(bytes: number): string {
     .join("");
 }
 
+// Denied IPv4 networks — keep in sync with _DENIED_IPV4_NETWORKS in
+// src/docker/mitmproxy/nas_addon.py.
 function isDeniedIpv4(host: string): boolean {
   const parts = host.split(".").map(Number);
   if (
@@ -394,6 +396,8 @@ function expandIpv6Pure(addr: string): number[] | null {
   return parts.map((p) => Number.parseInt(p, 16));
 }
 
+// Denied IPv6 networks — keep in sync with _DENIED_IPV6_NETWORKS in
+// src/docker/mitmproxy/nas_addon.py.
 function isDeniedIpv6(host: string): boolean {
   const hextets = expandIpv6(host.toLowerCase());
   if (!hextets || hextets.some((h) => Number.isNaN(h) || h < 0 || h > 0xffff)) {
