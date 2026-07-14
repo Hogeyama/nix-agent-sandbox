@@ -166,7 +166,6 @@ local commonHostexec: HostExecConfig = new {
         keys = new Listing { "WAYLAND_DISPLAY"; "XDG_RUNTIME_DIR" }
       }
       approval = "allow"
-      fallback = "container"
     }
     new {
       // git commit/tag -S が呼ぶ形だけを通す:
@@ -180,7 +179,6 @@ local commonHostexec: HostExecConfig = new {
         mode = "workspace-or-session-tmp"
       }
       approval = "allow"
-      fallback = "container"
     }
     new {
       // mo の危険引数を遮断：
@@ -197,7 +195,6 @@ local commonHostexec: HostExecConfig = new {
         mode = "workspace-or-session-tmp"
       }
       approval = "deny"
-      fallback = "deny"
     }
     new {
       id = "mo"
@@ -208,7 +205,6 @@ local commonHostexec: HostExecConfig = new {
         mode = "workspace-or-session-tmp"
       }
       approval = "allow"
-      fallback = "container"
     }
     new {
       id = "diffity"
@@ -219,7 +215,6 @@ local commonHostexec: HostExecConfig = new {
         mode = "workspace-or-session-tmp"
       }
       approval = "allow"
-      fallback = "container"
     }
   }
 }
@@ -359,7 +354,6 @@ profiles {
             ["HOSTEXEC_DEMO_API_TOKEN"] = "secret:hostexec_demo_api_token"
           }
           approval = "prompt"
-          fallback = "container"
         }
       }
     }
