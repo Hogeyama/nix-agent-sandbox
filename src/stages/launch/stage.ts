@@ -89,15 +89,7 @@ export function compileLaunchOpts(
   // default journald driver dominates host I/O pressure. Nobody reads
   // `docker logs` for agent containers (the user attaches via TTY/dtach),
   // so disable the log driver entirely.
-  const args: string[] = [
-    "--log-driver=none",
-    "--security-opt",
-    "no-new-privileges",
-    "--cap-drop",
-    "ALL",
-    "-w",
-    plan.workDir,
-  ];
+  const args: string[] = ["--log-driver=none", "-w", plan.workDir];
 
   for (const mount of plan.mounts) {
     const suffix = mount.readOnly ? ":ro" : "";
