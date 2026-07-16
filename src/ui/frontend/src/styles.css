@@ -354,7 +354,7 @@ body::after {
   background: var(--surface);
 }
 .session.active {
-  background: var(--surface);
+  background: var(--surface-2);
 }
 .session.active::before {
   content: "";
@@ -362,7 +362,7 @@ body::after {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 3px;
   background: var(--amber);
   box-shadow: 0 0 10px var(--amber-glow);
 }
