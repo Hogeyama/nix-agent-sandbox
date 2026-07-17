@@ -43,14 +43,25 @@ pub fn streamMask(
     secrets: []const []const u8,
 ) !void {
     const max_len = mask.maxSecretLen(secrets);
-    const overlap_size: usize = if (max_len > 0) max_len - 1 else 0;
-
-    // シークレットなし (または全て空文字列) の場合はバッファリングせず素通し。
-    if (overlap_size == 0) {
+    if (max_len == 0) {
+        // No secrets — pure passthrough without masking.
         var buf: [BUF_SIZE]u8 = undefined;
         while (true) {
             const n = try reader.read(&buf);
             if (n == 0) break;
+            try writer.writeAll(buf[0..n]);
+        }
+        return;
+    }
+
+    const overlap_size: usize = max_len - 1;
+    if (overlap_size == 0) {
+        // 1-byte secrets: no overlap needed but still mask each chunk.
+        var buf: [BUF_SIZE]u8 = undefined;
+        while (true) {
+            const n = try reader.read(&buf);
+            if (n == 0) break;
+            mask.maskAll(buf[0..n], secrets, null);
             try writer.writeAll(buf[0..n]);
         }
         return;
@@ -152,10 +163,12 @@ pub fn main() !u8 {
 
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
-    streamMask(stdin.deprecatedReader(), stdout.deprecatedWriter(), secrets) catch |err| {
+    var buf_writer = std.io.bufferedWriter(stdout.deprecatedWriter());
+    streamMask(stdin.deprecatedReader(), buf_writer.writer(), secrets) catch |err| {
         std.debug.print("nas-mask-filter: stream error: {}\n", .{err});
         return 1;
     };
+    try buf_writer.flush();
     return 0;
 }
 
@@ -183,6 +196,12 @@ test "streamMask: single secret masked" {
     const result = try testStreamMask("password=hunter2 done", &.{"hunter2"});
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("password=******* done", result);
+}
+
+test "streamMask: single-byte secret masked" {
+    const result = try testStreamMask("abc_x_def", &.{"x"});
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("abc_*_def", result);
 }
 
 test "streamMask: secret spanning chunk boundary" {
