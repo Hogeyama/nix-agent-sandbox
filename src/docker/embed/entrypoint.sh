@@ -298,7 +298,16 @@ SHELL_BOOTSTRAP_START="$(nas_measure_start)"
 if [ "$NAS_SHELL_MODE" = "true" ]; then
   NAS_BASH_OVERRIDE_DIR="/tmp/nas-bash-override"
   mkdir -p "$NAS_BASH_OVERRIDE_DIR"
-  if [ -x /bin/bash ] && [ ! -e "$NAS_BASH_OVERRIDE_DIR/bash" ]; then
+  if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
+    cat > "$NAS_BASH_OVERRIDE_DIR/bash" << 'MASK_WRAPPER'
+#!/bin/bash
+if [ -n "$NAS_MASK_SECRETS_FILE" ] && [ -f "$NAS_MASK_FILTER" ]; then
+  exec > >("$NAS_MASK_FILTER") 2> >("$NAS_MASK_FILTER" >&2)
+fi
+exec /bin/bash "$@"
+MASK_WRAPPER
+    chmod +x "$NAS_BASH_OVERRIDE_DIR/bash"
+  elif [ -x /bin/bash ] && [ ! -e "$NAS_BASH_OVERRIDE_DIR/bash" ]; then
     ln -sf /bin/bash "$NAS_BASH_OVERRIDE_DIR/bash"
   fi
   SHELL_PATH_PREFIX="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE_DIR}:"
@@ -342,22 +351,42 @@ if [ "$NAS_SHELL_MODE" = "true" ]; then
 fi
 nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
 
-# --- bash オーバーライド (mask-filter wrapper) ---
-# /bin/bash (readline対応) を Nix の readline なし bash より優先させ、かつ
-# NAS_MASK_FILTER_BASH_WRAPPER が指定されていればそれを bash として設置する。
-# NIX_ENABLED の有無に関わらず必要な機能のため、nix 統合の分岐より前に
-# 用意し、nix 有効/無効どちらの exec パスからも参照できるようにする。
-# /bin 全体を PATH に入れると他のツールまで上書きするため、
-# bash だけのシンボリックリンク (またはラッパー) を専用ディレクトリに作る。
+# --- bash オーバーライド ---
+# /tmp/nas-bash-override を PATH の先頭に常設する。
+# NAS_MASK_FILTER + NAS_MASK_SECRETS_FILE が設定されている場合は
+# stdout/stderr を nas-mask-filter 経由でマスクする wrapper を設置。
+# フィルタ無効時は readline 対応の /bin/bash へのシンボリックリンク
+# (Nix の readline なし bash より優先させるため)。
 NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
 mkdir -p "$NAS_BASH_OVERRIDE"
-if [ -n "${NAS_MASK_FILTER_BASH_WRAPPER:-}" ]; then
-  printf '%s' "$NAS_MASK_FILTER_BASH_WRAPPER" > "$NAS_BASH_OVERRIDE/bash"
+if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
+  cat > "$NAS_BASH_OVERRIDE/bash" << 'MASK_WRAPPER'
+#!/bin/bash
+if [ -n "$__NAS_MASK_FILTER_SKIP" ]; then
+  unset __NAS_MASK_FILTER_SKIP
+  exec /bin/bash "$@"
+fi
+if [ -n "$NAS_MASK_SECRETS_FILE" ] && [ -f "$NAS_MASK_FILTER" ]; then
+  exec > >("$NAS_MASK_FILTER") 2> >("$NAS_MASK_FILTER" >&2)
+fi
+exec /bin/bash "$@"
+MASK_WRAPPER
   chmod +x "$NAS_BASH_OVERRIDE/bash"
+  export __NAS_MASK_FILTER_SKIP=1
+  # Nix devshell source が SHELL を Nix bash に設定するため、
+  # env-ops (source 後に適用) で上書きする。
+  if [ -z "$NAS_ENV_OPS_FILE" ]; then
+    NAS_ENV_OPS_FILE="$(mktemp /tmp/nas-env-ops.XXXXXX)"
+    chmod 644 "$NAS_ENV_OPS_FILE"
+  fi
+  echo "export SHELL='$NAS_BASH_OVERRIDE/bash'" >> "$NAS_ENV_OPS_FILE"
+  nas_debug "[nas] mask-filter: NAS_ENV_OPS_FILE=$NAS_ENV_OPS_FILE"
+  nas_debug "[nas] mask-filter: env-ops content=$(cat "$NAS_ENV_OPS_FILE" 2>/dev/null | tail -3)"
 elif [ -x /bin/bash ]; then
   ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
 fi
 export NAS_BASH_OVERRIDE
+export PATH="${NAS_BASH_OVERRIDE}:${PATH}"
 
 exec_agent_command() {
   [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
