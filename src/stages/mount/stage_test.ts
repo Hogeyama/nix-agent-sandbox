@@ -1228,6 +1228,7 @@ test("MountStage: mask with maskfs=false does not require maskedRoot (proxy-only
         writePolicy: "readonly",
         maskfs: false,
         proxy: true,
+        filter: true,
       },
     }),
   });
@@ -1247,6 +1248,7 @@ test("MountStage: mask with maskfs=true but maskedRoot unset throws ordering gua
         writePolicy: "readonly",
         maskfs: true,
         proxy: false,
+        filter: true,
       },
     }),
   });

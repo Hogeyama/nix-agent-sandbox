@@ -53,6 +53,7 @@ describe("validateConfig: mask", () => {
           writePolicy: "readonly",
           maskfs: true,
           proxy: true,
+          filter: true,
         },
       }),
     );
@@ -67,6 +68,7 @@ describe("validateConfig: mask", () => {
           writePolicy: "readonly",
           maskfs: true,
           proxy: true,
+          filter: true,
         },
       }),
     );
@@ -81,6 +83,7 @@ describe("validateConfig: mask", () => {
           writePolicy: "readonly",
           maskfs: true,
           proxy: true,
+          filter: true,
         },
       }),
     );
@@ -96,6 +99,7 @@ describe("validateConfig: mask", () => {
           writePolicy: "passthrough",
           maskfs: true,
           proxy: true,
+          filter: true,
         },
       }),
     );
@@ -115,6 +119,7 @@ describe("validateConfig: mask", () => {
           writePolicy: "readonly",
           maskfs: "yes" as any,
           proxy: 1 as any,
+          filter: true,
         },
       }),
     );

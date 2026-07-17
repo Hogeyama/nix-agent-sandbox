@@ -210,6 +210,8 @@ export interface MaskConfig {
   maskfs: boolean;
   /** mitmproxy リクエストマスクの有効化。デフォルト true */
   proxy: boolean;
+  /** コマンド stdout/stderr のフィルタマスク有効化。デフォルト true */
+  filter: boolean;
 }
 
 /** プロファイル */

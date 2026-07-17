@@ -113,6 +113,7 @@ describe("createMaskFsStage", () => {
       writePolicy: "readonly",
       maskfs: false,
       proxy: true,
+      filter: true,
     };
     const layer = makeMaskFsServiceFake({
       startMaskFs: () =>
@@ -147,6 +148,7 @@ describe("createMaskFsStage", () => {
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
+      filter: true,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_MASK_SECRET", "hunter2secret");
@@ -180,6 +182,7 @@ describe("createMaskFsStage", () => {
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
+      filter: true,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_SHORT", "abc");
@@ -213,6 +216,7 @@ describe("createMaskFsStage", () => {
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
+      filter: true,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_MASK_SECRET", "hunter2secret");
@@ -237,6 +241,7 @@ describe("createMaskFsStage", () => {
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
+      filter: true,
     };
     const stage = createMaskFsStage(input, MOUNT_PROBES, {
       resolveBinPath: async () => "/fake/nas-maskfs",
