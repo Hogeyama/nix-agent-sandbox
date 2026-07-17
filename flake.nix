@@ -182,6 +182,7 @@
           # daemon can spawn new sessions after its originating session
           # cleaned up /tmp (where the inner binary would otherwise go).
           export NAS_BIN_PATH="''${NAS_BIN_PATH:-$dir/share/nas/nas}"
+          export NAS_GIT_REVISION="${self.shortRev or self.dirtyShortRev or "unknown"}"
           # ネイティブ pkl を先頭に置く (loadPklConfig が PATH 経由で呼ぶ)
           export PATH="${pklNative}/bin:''${PATH}"
           exec "$dir/share/nas/nas" "$@"
