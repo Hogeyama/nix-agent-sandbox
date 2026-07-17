@@ -28,7 +28,6 @@ export interface MaskFilterPreparePlan {
 export interface MaskFilterResult {
   readonly mounts: readonly MountSpec[];
   readonly envVars: Readonly<Record<string, string>>;
-  readonly bashWrapperScript: string;
 }
 
 export class MaskFilterService extends Context.Tag("nas/MaskFilterService")<
@@ -86,11 +85,7 @@ export const MaskFilterServiceLive: Layer.Layer<
             NAS_MASK_FILTER: MASK_FILTER_CONTAINER_PATH,
           };
 
-          return {
-            mounts,
-            envVars,
-            bashWrapperScript: generateBashWrapper(MASK_FILTER_CONTAINER_PATH),
-          };
+          return { mounts, envVars };
         }),
 
       resolveSecrets: (values, host) =>
@@ -105,16 +100,6 @@ export const MaskFilterServiceLive: Layer.Layer<
     });
   }),
 );
-
-/** stdout/stderr を nas-mask-filter 経由にリダイレクトする bash ラッパー生成 (純粋関数) */
-export function generateBashWrapper(maskFilterPath: string): string {
-  return `#!/bin/bash
-if [ -n "$NAS_MASK_SECRETS_FILE" ] && [ -f "${maskFilterPath}" ]; then
-  exec > >("${maskFilterPath}") 2> >("${maskFilterPath}" >&2)
-fi
-exec /bin/bash "$@"
-`;
-}
 
 // ---------------------------------------------------------------------------
 // Fake / test implementation
@@ -139,12 +124,7 @@ export function makeMaskFilterServiceFake(
     MaskFilterService.of({
       prepareMaskFilter:
         overrides.prepareMaskFilter ??
-        (() =>
-          Effect.succeed({
-            mounts: [],
-            envVars: {},
-            bashWrapperScript: "",
-          })),
+        (() => Effect.succeed({ mounts: [], envVars: {} })),
       resolveSecrets: overrides.resolveSecrets ?? (() => Effect.succeed([])),
     }),
   );

@@ -4,7 +4,6 @@
 
 export { resolveMaskFilterBinPath } from "./maskfs/mask_filter_path.ts";
 export {
-  generateBashWrapper,
   type MaskFilterPreparePlan,
   type MaskFilterResult,
   MaskFilterService,
