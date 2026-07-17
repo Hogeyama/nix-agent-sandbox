@@ -224,6 +224,15 @@ local commonHostexec: HostExecConfig = new {
   }
 }
 
+local commonMask = new MaskConfig {
+  values = new Listing {
+    new MaskValueConfig { source = "lines:demo/secrets.txt" }
+  }
+  maskfs = false
+  proxy = false
+  filter = true
+}
+
 // common_infra + common_network + common_env + common_hostexec を含むベースプロファイル
 local baseProfile: Profile = new {
   // Profile class は agent を required とする。各プロファイルで上書きする。
@@ -268,6 +277,7 @@ local baseProfile: Profile = new {
   network = commonNetwork
   env = commonEnv
   hostexec = commonHostexec
+  mask = commonMask
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +401,22 @@ profiles {
       }
       maskfs = false
       proxy = true
+    }
+  }
+
+  // stdout/stderr フィルタマスクのデモ。
+  // demo/secrets.txt の各行がコマンド出力から **** にマスクされる。
+  // maskfs/proxy は無効にして filter のみテスト。
+  ["filter-demo"] = new Profile {
+    agent = "claude"
+    network = commonNetwork
+    mask = new MaskConfig {
+      values = new Listing {
+        new MaskValueConfig { source = "lines:demo/secrets.txt" }
+      }
+      maskfs = false
+      proxy = false
+      filter = true
     }
   }
 }
