@@ -342,6 +342,23 @@ if [ "$NAS_SHELL_MODE" = "true" ]; then
 fi
 nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
 
+# --- bash オーバーライド (mask-filter wrapper) ---
+# /bin/bash (readline対応) を Nix の readline なし bash より優先させ、かつ
+# NAS_MASK_FILTER_BASH_WRAPPER が指定されていればそれを bash として設置する。
+# NIX_ENABLED の有無に関わらず必要な機能のため、nix 統合の分岐より前に
+# 用意し、nix 有効/無効どちらの exec パスからも参照できるようにする。
+# /bin 全体を PATH に入れると他のツールまで上書きするため、
+# bash だけのシンボリックリンク (またはラッパー) を専用ディレクトリに作る。
+NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
+mkdir -p "$NAS_BASH_OVERRIDE"
+if [ -n "${NAS_MASK_FILTER_BASH_WRAPPER:-}" ]; then
+  printf '%s' "$NAS_MASK_FILTER_BASH_WRAPPER" > "$NAS_BASH_OVERRIDE/bash"
+  chmod +x "$NAS_BASH_OVERRIDE/bash"
+elif [ -x /bin/bash ]; then
+  ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
+fi
+export NAS_BASH_OVERRIDE
+
 exec_agent_command() {
   [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
   if [ -n "$HOSTEXEC_PATH_PREFIX" ] || [ -n "${NAS_BASH_OVERRIDE:-}" ]; then
@@ -369,17 +386,6 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   # workaround for https://github.com/github/copilot-cli/issues/1161#issuecomment-3938706868:
   # 配列をスペース区切りの文字列に変換
   CMD_STR=$(printf '%q ' "${AGENT_COMMAND[@]}")
-  # /bin/bash (readline対応) を Nix の readline なし bash より優先させる。
-  # /bin 全体を PATH に入れると他のツールまで上書きするため、
-  # bash だけのシンボリックリンクを専用ディレクトリに作る。
-  NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
-  mkdir -p "$NAS_BASH_OVERRIDE"
-  if [ -n "${NAS_MASK_FILTER_BASH_WRAPPER:-}" ]; then
-    printf '%s' "$NAS_MASK_FILTER_BASH_WRAPPER" > "$NAS_BASH_OVERRIDE/bash"
-    chmod +x "$NAS_BASH_OVERRIDE/bash"
-  elif [ -x /bin/bash ]; then
-    ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
-  fi
   # --- devShell キャッシュ検索 (probe 前にキャッシュを確認) ---
   # キャッシュヒット時は nix eval による devShell probe (~1s) をスキップする。
   CACHE_FILE=""
