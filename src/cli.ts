@@ -107,7 +107,8 @@ import {
 } from "./stages/worktree.ts";
 import { ensureUiDaemon } from "./ui/daemon.ts";
 
-const VERSION: string = pkg.version;
+const GIT_REVISION: string = process.env.NAS_GIT_REVISION ?? "dev";
+const VERSION: string = `${pkg.version}+${GIT_REVISION}`;
 
 export async function main(args: string[], entryMs?: number): Promise<void> {
   const mainStart = performance.now();
