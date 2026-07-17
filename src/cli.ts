@@ -71,7 +71,12 @@ import {
   ContainerLaunchServiceLive,
   createLaunchStage,
 } from "./stages/launch.ts";
-import { createMaskFsStage, MaskFsServiceLive } from "./stages/maskfs.ts";
+import {
+  createMaskFilterStage,
+  createMaskFsStage,
+  MaskFilterServiceLive,
+  MaskFsServiceLive,
+} from "./stages/maskfs.ts";
 import {
   createMountStage,
   type MountProbes,
@@ -324,6 +329,7 @@ export async function main(args: string[], entryMs?: number): Promise<void> {
       GitWorktreeServiceLive.pipe(Layer.provide(primitiveLayer)),
       HostExecBrokerServiceLive,
       HostExecSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
+      MaskFilterServiceLive.pipe(Layer.provide(primitiveLayer)),
       MaskFsServiceLive.pipe(Layer.provide(primitiveLayer)),
       MountSetupServiceLive.pipe(Layer.provide(FsServiceLive)),
       NetworkRuntimeServiceLive.pipe(Layer.provide(primitiveLayer)),
@@ -420,6 +426,7 @@ export function createCliPipelineBuilder({
       // 必ず MountStage の直前に置く。
       .add(createMaskFsStage(input, mountProbes))
       .add(createMountStage(input, mountProbes))
+      .add(createMaskFilterStage(input))
       .add(createHostExecStage(input))
       // ObservabilityStage materializes the observability slice and, when
       // enabled, acquires the per-session OTLP receiver and injects the OTLP
