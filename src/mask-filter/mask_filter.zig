@@ -57,11 +57,31 @@ pub fn streamMask(
     }
 
     // combined = [overlap (overlap_size バイトまで) | 新規読み取り (BUF_SIZE バイトまで)]
+    // combined は常に「元の平文」を保持する。mask.maskAll は buf を in-place で
+    // 書き換えてしまうため、combined を直接渡さず scratch (使い捨てコピー) に渡し、
+    // mask_buf (マッチ位置の bool マーク) だけを受け取る。
+    //
+    // combined を原文のまま保つ理由: overlap 部分がマスク済み ('*') になってしまうと、
+    // 次チャンクのバイトと連結しても元の平文と一致せず、境界を跨ぐシークレットの
+    // マッチに失敗する (例: secret="aa", 入力="aa"+"a" → overlap が '*' だと
+    // 2 回目に "*a" を見ても "aa" にマッチしない)。
+    //
+    // 一方で、原文のまま持ち越すだけだと「このチャンク内で完全に確定した (跨がない)
+    // マッチ」の情報を次周回で失ってしまう (例: secret="hunter2" が safe_end 側と
+    // overlap 側にまたがって完全一致した場合、overlap 側の末尾バイトは原文に戻すが、
+    // それが同じ secret の一部としてマスク確定していたことを覚えておく必要がある)。
+    // そのため carried_mask で「持ち越した overlap のうち、既に確定マスクされた
+    // 位置」を bool で追跡し、次周回の mask_buf と OR して最終的なマスク要否を求める。
     const combined_cap = overlap_size + BUF_SIZE;
     const combined = try allocator.alloc(u8, combined_cap);
     defer allocator.free(combined);
+    const scratch = try allocator.alloc(u8, combined_cap);
+    defer allocator.free(scratch);
     const mask_buf = try allocator.alloc(bool, combined_cap);
     defer allocator.free(mask_buf);
+    const carried_mask = try allocator.alloc(bool, overlap_size);
+    defer allocator.free(carried_mask);
+    @memset(carried_mask, false);
 
     var overlap_len: usize = 0;
 
@@ -70,26 +90,53 @@ pub fn streamMask(
         if (n == 0) break;
 
         const total = overlap_len + n;
-        mask.maskAll(combined[0..total], secrets, mask_buf);
+
+        // combined (原文) を破壊せず、scratch 上でマスク処理を行う。
+        // mask_buf[i] には「位置 i が今回の総当たりでマッチしたか」が書き戻される。
+        std.mem.copyForwards(u8, scratch[0..total], combined[0..total]);
+        mask.maskAll(scratch[0..total], secrets, mask_buf[0..total]);
+
+        // combined[0..overlap_len] は前回持ち越した overlap。carried_mask に
+        // 前回までの確定マッチが記録されているので、それを scratch に反映してから
+        // 出力する (今回未マッチでも、以前確定済みならマスクする)。
+        var k: usize = 0;
+        while (k < overlap_len) : (k += 1) {
+            if (carried_mask[k]) scratch[k] = '*';
+        }
 
         // 末尾 overlap_size バイトは次チャンクとマッチが跨る可能性があるため、
         // まだ出力せずオーバーラップとして保持する。
         const safe_end = if (total > overlap_size) total - overlap_size else 0;
         if (safe_end > 0) {
-            try writer.writeAll(combined[0..safe_end]);
+            try writer.writeAll(scratch[0..safe_end]);
         }
 
         const new_overlap = total - safe_end;
-        if (new_overlap > 0 and safe_end > 0) {
+        if (new_overlap > 0) {
+            // 次周回へ持ち越す carried_mask を更新する: 今回の mask_buf の結果と、
+            // (該当位置がさらに前回の overlap 由来でもあれば) 前回の carried_mask との OR。
+            var j: usize = 0;
+            while (j < new_overlap) : (j += 1) {
+                const src = safe_end + j;
+                carried_mask[j] = mask_buf[src] or (src < overlap_len and carried_mask[src]);
+            }
+            // combined は原文のまま前に詰める (scratch ではなく combined から)。
             std.mem.copyForwards(u8, combined[0..new_overlap], combined[safe_end..total]);
         }
         overlap_len = new_overlap;
     }
 
-    // EOF: 残った overlap にはこれ以上跨るチャンクが来ないので、再度マスクしてそのまま出力する。
+    // EOF: 残った overlap にはこれ以上跨るチャンクが来ないので、原文に対して
+    // 最後にもう一度マッチングし、carried_mask (それまでに確定していたマッチ) と
+    // OR して出力する。
     if (overlap_len > 0) {
-        mask.maskAll(combined[0..overlap_len], secrets, mask_buf);
-        try writer.writeAll(combined[0..overlap_len]);
+        std.mem.copyForwards(u8, scratch[0..overlap_len], combined[0..overlap_len]);
+        mask.maskAll(scratch[0..overlap_len], secrets, mask_buf[0..overlap_len]);
+        var i: usize = 0;
+        while (i < overlap_len) : (i += 1) {
+            if (carried_mask[i]) scratch[i] = '*';
+        }
+        try writer.writeAll(scratch[0..overlap_len]);
     }
 }
 
@@ -195,4 +242,124 @@ test "streamMask: input larger than BUF_SIZE with repeated secret" {
     defer testing.allocator.free(result);
     try testing.expect(std.mem.indexOf(u8, result, "SECRETVALUE") == null);
     try testing.expectEqual(input.items.len, result.len);
+}
+
+// ---------------------------------------------------------------------------
+// ChunkedReader: テストで read() の呼び出しごとに返すバイト数を強制的に
+// 指定できるようにするための reader。streamMask のチャンク境界跨ぎ処理を
+// 実際の read() 分割パターンで検証するために使う。
+// ---------------------------------------------------------------------------
+
+const ChunkedReader = struct {
+    data: []const u8,
+    chunks: []const usize,
+    pos: usize = 0,
+    chunk_idx: usize = 0,
+
+    fn read(self: *ChunkedReader, buf: []u8) !usize {
+        if (self.chunk_idx >= self.chunks.len) return 0;
+        const want = self.chunks[self.chunk_idx];
+        self.chunk_idx += 1;
+        const remaining = self.data.len - self.pos;
+        const n = @min(@min(want, remaining), buf.len);
+        @memcpy(buf[0..n], self.data[self.pos .. self.pos + n]);
+        self.pos += n;
+        return n;
+    }
+};
+
+fn testStreamMaskChunked(input: []const u8, chunks: []const usize, secrets: []const []const u8) ![]u8 {
+    var reader = ChunkedReader{ .data = input, .chunks = chunks };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(testing.allocator);
+    try streamMask(&reader, output.writer(testing.allocator), secrets);
+    return try output.toOwnedSlice(testing.allocator);
+}
+
+test "streamMask: self-overlapping secret at chunk boundary" {
+    // secret "aa" が "aaa" (chunk "aa" + "a") の境界を跨いで自己重複マッチする。
+    // バグ修正前は overlap に '*' が持ち越され "**a" になっていた。
+    const result = try testStreamMaskChunked("aaa", &.{ 2, 1 }, &.{"aa"});
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("***", result);
+}
+
+test "streamMask: cross-secret overlap at chunk boundary" {
+    // secrets {"PQ","QRS"} が "XPQRSY" (chunk "XPQR" + "SY") の境界を跨いでマッチする。
+    // "PQ" は 1 回目のチャンクで確定するが、"QRS" は 2 回目のチャンクとの
+    // 組み合わせでのみ確定する。
+    const result = try testStreamMaskChunked("XPQRSY", &.{ 4, 2 }, &.{ "PQ", "QRS" });
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("X****Y", result);
+}
+
+// ---------------------------------------------------------------------------
+// readSecretsFromFile tests
+// ---------------------------------------------------------------------------
+
+// std.testing.tmpDir を使って secrets_frame 形式のバイト列を書き込み、
+// readSecretsFromFile が std.fs.cwd().openFile で開ける絶対パスを返す。
+fn writeTempFile(tmp: *testing.TmpDir, bytes: []const u8) ![]const u8 {
+    const file = try tmp.dir.createFile("secrets.bin", .{});
+    defer file.close();
+    try file.writeAll(bytes);
+    return try tmp.dir.realpathAlloc(testing.allocator, "secrets.bin");
+}
+
+test "readSecretsFromFile: 0 secrets" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTempFile(&tmp, &[_]u8{ 0, 0, 0, 0 });
+    defer testing.allocator.free(path);
+
+    const secrets = try readSecretsFromFile(path);
+    try testing.expectEqual(@as(usize, 0), secrets.len);
+}
+
+test "readSecretsFromFile: more than 1024 secrets is an error" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeTempFile(&tmp, &[_]u8{ 0x01, 0x04, 0x00, 0x00 }); // count = 1025
+    defer testing.allocator.free(path);
+
+    try testing.expectError(error.TooManySecrets, readSecretsFromFile(path));
+}
+
+test "readSecretsFromFile: 0-length secret is an error" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // count=1, then len=0
+    const bytes = [_]u8{ 1, 0, 0, 0, 0, 0, 0, 0 };
+    const path = try writeTempFile(&tmp, &bytes);
+    defer testing.allocator.free(path);
+
+    try testing.expectError(error.InvalidSecretLength, readSecretsFromFile(path));
+}
+
+test "readSecretsFromFile: secret length over 16MB is an error" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // count=1, then len = 16*1024*1024 + 1 (u32le)
+    const len: u32 = 16 * 1024 * 1024 + 1;
+    var bytes: [8]u8 = undefined;
+    std.mem.writeInt(u32, bytes[0..4], 1, .little);
+    std.mem.writeInt(u32, bytes[4..8], len, .little);
+    const path = try writeTempFile(&tmp, &bytes);
+    defer testing.allocator.free(path);
+
+    try testing.expectError(error.InvalidSecretLength, readSecretsFromFile(path));
+}
+
+test "readSecretsFromFile: truncated file is an error" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // count=1, len=10, but fewer than 10 bytes of secret data follow.
+    var bytes: [4 + 4 + 3]u8 = undefined;
+    std.mem.writeInt(u32, bytes[0..4], 1, .little);
+    std.mem.writeInt(u32, bytes[4..8], 10, .little);
+    @memcpy(bytes[8..11], "abc");
+    const path = try writeTempFile(&tmp, &bytes);
+    defer testing.allocator.free(path);
+
+    try testing.expectError(error.EndOfStream, readSecretsFromFile(path));
 }
