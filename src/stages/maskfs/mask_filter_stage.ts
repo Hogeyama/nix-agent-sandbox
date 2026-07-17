@@ -57,10 +57,10 @@ export function createMaskFilterStage(
         const runtimeDir = resolveRuntimeSubdir(shared.host, "mask-filter");
         const secretsFramePath = `${runtimeDir}/${shared.sessionId}/mask-secrets`;
 
+        const secrets = yield* svc.resolveSecrets(mask.values, shared.host);
         const result = yield* svc.prepareMaskFilter(
           { secretsFramePath, filterBinaryHostPath: binaryPath },
-          mask.values,
-          shared.host,
+          secrets,
         );
 
         return {

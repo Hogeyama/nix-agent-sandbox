@@ -7,6 +7,7 @@
  * する」という 1 回限りの準備作業のみを行う。
  */
 
+import * as path from "node:path";
 import { Context, Effect, Layer } from "effect";
 import type { MaskValueConfig } from "../../config/types.ts";
 import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
@@ -35,9 +36,12 @@ export class MaskFilterService extends Context.Tag("nas/MaskFilterService")<
   {
     readonly prepareMaskFilter: (
       plan: MaskFilterPreparePlan,
+      secrets: string[],
+    ) => Effect.Effect<MaskFilterResult, unknown>;
+    readonly resolveSecrets: (
       values: MaskValueConfig[],
       host: HostEnv,
-    ) => Effect.Effect<MaskFilterResult, unknown>;
+    ) => Effect.Effect<string[], unknown>;
   }
 >() {}
 
@@ -55,16 +59,13 @@ export const MaskFilterServiceLive: Layer.Layer<
     const fs = yield* FsService;
 
     return MaskFilterService.of({
-      prepareMaskFilter: (plan, values, host) =>
+      prepareMaskFilter: (plan, secrets) =>
         Effect.gen(function* () {
-          const env: Record<string, string | undefined> = {};
-          for (const [k, v] of host.env) env[k] = v;
-          const secrets = yield* Effect.tryPromise({
-            try: () => resolveMaskSecrets(values, env),
-            catch: (e) => e,
-          });
-
           const frame = encodeMaskSecrets(secrets);
+          yield* fs.mkdir(path.dirname(plan.secretsFramePath), {
+            recursive: true,
+            mode: 0o700,
+          });
           yield* fs.writeFile(plan.secretsFramePath, frame, { mode: 0o600 });
 
           const mounts: MountSpec[] = [
@@ -91,6 +92,16 @@ export const MaskFilterServiceLive: Layer.Layer<
             bashWrapperScript: generateBashWrapper(MASK_FILTER_CONTAINER_PATH),
           };
         }),
+
+      resolveSecrets: (values, host) =>
+        Effect.tryPromise({
+          try: () => {
+            const env: Record<string, string | undefined> = {};
+            for (const [k, v] of host.env) env[k] = v;
+            return resolveMaskSecrets(values, env);
+          },
+          catch: (e) => e,
+        }),
     });
   }),
 );
@@ -112,9 +123,12 @@ exec /bin/bash "$@"
 export interface MaskFilterServiceFakeConfig {
   readonly prepareMaskFilter?: (
     plan: MaskFilterPreparePlan,
+    secrets: string[],
+  ) => Effect.Effect<MaskFilterResult, unknown>;
+  readonly resolveSecrets?: (
     values: MaskValueConfig[],
     host: HostEnv,
-  ) => Effect.Effect<MaskFilterResult, unknown>;
+  ) => Effect.Effect<string[], unknown>;
 }
 
 export function makeMaskFilterServiceFake(
@@ -131,6 +145,7 @@ export function makeMaskFilterServiceFake(
             envVars: {},
             bashWrapperScript: "",
           })),
+      resolveSecrets: overrides.resolveSecrets ?? (() => Effect.succeed([])),
     }),
   );
 }

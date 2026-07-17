@@ -152,6 +152,29 @@ describe("createMaskFilterStage", () => {
     );
   });
 
+  test("mask.filter=true with empty values → container passthrough", async () => {
+    const input = makeStageInput();
+    input.profile.mask = {
+      values: [],
+      writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
+      filter: true,
+    };
+    const stage = createMaskFilterStage(input, {
+      resolveBinPath: async () => "/fake/nas-mask-filter",
+    });
+    const container = emptyContainerPlan("img", "/work");
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        stage
+          .run({ container })
+          .pipe(Effect.provide(makeMaskFilterServiceFake())),
+      ),
+    );
+    expect(result).toEqual({});
+  });
+
   test("binary not found → fails", async () => {
     const input = makeStageInput();
     input.profile.mask = {
