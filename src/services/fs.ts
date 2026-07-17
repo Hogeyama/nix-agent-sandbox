@@ -18,7 +18,7 @@ export class FsService extends Context.Tag("nas/FsService")<
     ) => Effect.Effect<void>;
     readonly writeFile: (
       path: string,
-      content: string,
+      content: string | Uint8Array,
       opts?: { mode?: number },
     ) => Effect.Effect<void>;
     readonly chmod: (path: string, mode: number) => Effect.Effect<void>;
@@ -121,7 +121,7 @@ export const FsServiceLive = Layer.succeed(FsService, {
 // ---------------------------------------------------------------------------
 
 interface FakeEntry {
-  content: string;
+  content: string | Uint8Array;
   mode: number;
   /** If set, this entry is a symlink pointing at `symlinkTarget`. */
   symlinkTarget?: string;
@@ -210,7 +210,9 @@ export function makeFsServiceFake(): {
         if (!entry) {
           throw new Error(`ENOENT: ${path}`);
         }
-        return entry.content;
+        return typeof entry.content === "string"
+          ? entry.content
+          : new TextDecoder().decode(entry.content);
       }),
 
     rename: (oldPath, newPath) =>

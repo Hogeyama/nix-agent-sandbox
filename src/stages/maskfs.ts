@@ -4,6 +4,19 @@
 
 export { resolveMaskFilterBinPath } from "./maskfs/mask_filter_path.ts";
 export {
+  generateBashWrapper,
+  type MaskFilterPreparePlan,
+  type MaskFilterResult,
+  MaskFilterService,
+  type MaskFilterServiceFakeConfig,
+  MaskFilterServiceLive,
+  makeMaskFilterServiceFake,
+} from "./maskfs/mask_filter_service.ts";
+export {
+  createMaskFilterStage,
+  type MaskFilterStageOptions,
+} from "./maskfs/mask_filter_stage.ts";
+export {
   type MaskFsHandle,
   MaskFsService,
   type MaskFsServiceFakeConfig,

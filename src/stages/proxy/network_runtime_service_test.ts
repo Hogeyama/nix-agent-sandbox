@@ -83,7 +83,7 @@ test("writeReviewRules: writes JSON file to reviewRulesDir", async () => {
   const rulesPath = `${p.reviewRulesDir}/sess-123.json`;
   expect(fsFake.store.has(rulesPath)).toEqual(true);
   const stored = fsFake.store.get(rulesPath);
-  expect(JSON.parse(stored!.content)).toEqual(rules);
+  expect(JSON.parse(stored!.content as string)).toEqual(rules);
 });
 
 // ---------------------------------------------------------------------------
