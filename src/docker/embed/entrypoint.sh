@@ -374,7 +374,10 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
   # bash だけのシンボリックリンクを専用ディレクトリに作る。
   NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
   mkdir -p "$NAS_BASH_OVERRIDE"
-  if [ -x /bin/bash ]; then
+  if [ -n "${NAS_MASK_FILTER_BASH_WRAPPER:-}" ]; then
+    printf '%s' "$NAS_MASK_FILTER_BASH_WRAPPER" > "$NAS_BASH_OVERRIDE/bash"
+    chmod +x "$NAS_BASH_OVERRIDE/bash"
+  elif [ -x /bin/bash ]; then
     ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
   fi
   # --- devShell キャッシュ検索 (probe 前にキャッシュを確認) ---

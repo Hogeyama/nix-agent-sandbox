@@ -392,6 +392,7 @@ test("createCliPipelineBuilder: wires CLI stages through PipelineState order", (
       name: "MountStage",
       needs: ["container", "dbus", "display", "nix", "workspace"],
     },
+    { name: "MaskFilterStage", needs: ["container"] },
     { name: "HostExecStage", needs: ["container", "workspace"] },
     { name: "ObservabilityStage", needs: ["container"] },
     { name: "ProxyStage", needs: ["container", "observability"] },
