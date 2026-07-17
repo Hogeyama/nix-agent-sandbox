@@ -5,7 +5,7 @@
 //! foreground (-f) / single-thread (-s) で fuse_main を実行する。
 
 const std = @import("std");
-const mask = @import("mask.zig");
+const mask = @import("mask");
 
 const c = @cImport({
     @cDefine("FUSE_USE_VERSION", "317");
