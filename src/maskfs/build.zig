@@ -5,6 +5,13 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const host_target = b.resolveTargetQuery(.{});
 
+    // ── Create shared mask module (for both maskfs and mask-filter to use) ──
+    const mask_mod = b.createModule(.{
+        .root_source_file = b.path("../zig/mask.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // ── nas-maskfs executable ──
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("maskfs.zig"),
@@ -12,6 +19,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    exe_mod.addImport("mask", mask_mod);
     const exe = b.addExecutable(.{
         .name = "nas-maskfs",
         .root_module = exe_mod,
@@ -21,7 +29,7 @@ pub fn build(b: *std.Build) void {
 
     // ── unit tests (mask.zig は FUSE 非依存) ──
     const mask_test_mod = b.createModule(.{
-        .root_source_file = b.path("mask.zig"),
+        .root_source_file = b.path("../zig/mask.zig"),
         .target = host_target,
         .optimize = optimize,
     });
