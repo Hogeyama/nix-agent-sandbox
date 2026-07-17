@@ -139,7 +139,6 @@ describe("createMaskFilterStage", () => {
             NAS_MASK_SECRETS_FILE: "/run/nas/mask-secrets",
             NAS_MASK_FILTER: "/opt/nas/mask-filter/nas-mask-filter",
           },
-          bashWrapperScript: '#!/bin/bash\nexec /bin/bash "$@"',
         }),
     });
     const result = await Effect.runPromise(

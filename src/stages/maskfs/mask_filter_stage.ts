@@ -66,12 +66,7 @@ export function createMaskFilterStage(
         return {
           container: mergeContainerPlan(input.container, {
             mounts: result.mounts,
-            env: {
-              static: {
-                ...result.envVars,
-                NAS_MASK_FILTER_BASH_WRAPPER: result.bashWrapperScript,
-              },
-            },
+            env: { static: result.envVars },
           }),
         };
       });
