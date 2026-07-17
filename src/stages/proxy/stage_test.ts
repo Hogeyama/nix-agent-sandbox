@@ -954,6 +954,7 @@ test("ProxyStage: resolves mask values and passes them to broker", async () => {
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
+      filter: true,
     },
   });
   const captured: SessionBrokerConfig[] = [];
@@ -986,6 +987,7 @@ test("ProxyStage: mask.proxy=false skips mask value resolution", async () => {
       writePolicy: "readonly",
       maskfs: true,
       proxy: false,
+      filter: true,
     },
   });
   const captured: SessionBrokerConfig[] = [];

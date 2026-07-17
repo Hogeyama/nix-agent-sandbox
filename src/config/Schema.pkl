@@ -343,6 +343,11 @@ class MaskConfig {
   /// mitmproxy によるリクエストマスク (ボディ・URL・ヘッダーの秘密値置換) を
   /// 有効にするか。network proxy が有効なセッションでのみ効果がある。
   proxy: Boolean = true
+
+  /// コマンドの stdout/stderr に含まれるシークレットをマスクする bash wrapper フィルタ。
+  /// /tmp/nas-bash-override/bash を process substitution ラッパーに置き換え、
+  /// 全コマンド出力を nas-mask-filter 経由でマスクする。
+  filter: Boolean = true
 }
 
 // ---------------------------------------------------------------------------

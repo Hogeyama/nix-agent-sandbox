@@ -114,6 +114,9 @@ function validateProfile(name: string, profile: Profile): string[] {
     if (typeof profile.mask.proxy !== "boolean") {
       errors.push(`profile "${name}": mask.proxy must be a boolean`);
     }
+    if (typeof profile.mask.filter !== "boolean") {
+      errors.push(`profile "${name}": mask.filter must be a boolean`);
+    }
   }
 
   return errors;

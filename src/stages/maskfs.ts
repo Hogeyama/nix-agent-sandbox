@@ -2,6 +2,7 @@
  * maskfs ステージ — barrel re-export
  */
 
+export { resolveMaskFilterBinPath } from "./maskfs/mask_filter_path.ts";
 export {
   type MaskFsHandle,
   MaskFsService,
