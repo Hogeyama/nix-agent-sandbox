@@ -65,13 +65,16 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
       Effect.provide(
         Effect.gen(function* () {
           const svc = yield* MaskFilterService;
+          const secrets = yield* svc.resolveSecrets(
+            [{ source: "env:TEST_SECRET" }],
+            host,
+          );
           return yield* svc.prepareMaskFilter(
             {
               secretsFramePath: "/tmp/test-secrets",
               filterBinaryHostPath: "/usr/local/bin/nas-mask-filter",
             },
-            [{ source: "env:TEST_SECRET" }],
-            host,
+            secrets,
           );
         }),
         MaskFilterServiceLive.pipe(Layer.provide(fakeFsLayer)),
