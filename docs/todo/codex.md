@@ -99,18 +99,7 @@ Codex の設定例は `Stop` を `attention` にするところまでで、`stop
 対策するなら、hook ではなく Codex プロセス終了を監視する NAS 側 lifecycle から `done` を記録する必要があります。
 
 **補足**
-Codex hooks の README 例にある:
-
-```toml
-[features]
-codex_hooks = true
-```
-
-は現在 deprecated alias です。正式名は `hooks = true` で、現在はデフォルト有効です。
-
-- [README.md](/home/hogeyama/repo/nix-agent-sandbox/README.md:722)
-
-また、mouse mode が Codex だけ無効ですが、コード上は意図的な trait です。現時点では未実装とは判断できません。
+mouse mode が Codex だけ無効ですが、コード上は意図的な trait です。現時点では未実装とは判断できません。
 
 - [terminalTraits.ts](/home/hogeyama/repo/nix-agent-sandbox/src/agents/terminalTraits.ts:39)
 - [terminalTraits_test.ts](/home/hogeyama/repo/nix-agent-sandbox/src/agents/terminalTraits_test.ts:30)
