@@ -247,7 +247,9 @@ test("CLI: --version shows version and exits 0", async () => {
   const result = await runNas(["--version"]);
   expect(result.code).toEqual(0);
   expect(result.stdout.trim().startsWith("nas ")).toEqual(true);
-  expect(/^nas \d+\.\d+\.\d+$/.test(result.stdout.trim())).toEqual(true);
+  expect(/^nas \d+\.\d+\.\d+(\+\S+)?$/.test(result.stdout.trim())).toEqual(
+    true,
+  );
 });
 
 test("CLI: -V shows version and exits 0", async () => {
