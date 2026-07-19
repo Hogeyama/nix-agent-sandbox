@@ -289,6 +289,57 @@ if [ -n "${NAS_HOSTEXEC_WRAPPER_DIR:-}" ]; then
   HOSTEXEC_PATH_PREFIX="${NAS_HOSTEXEC_WRAPPER_DIR}"
 fi
 
+# --- bash override ---
+NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
+NAS_REAL_BASH="/bin/bash"
+mkdir -p "$NAS_BASH_OVERRIDE"
+
+if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
+  BASH_SYSTEM_PATH="$(readlink -f /bin/bash)"
+  NAS_REAL_BASH="$NAS_BASH_OVERRIDE/bash.real"
+
+  if [ ! -e "$NAS_REAL_BASH" ]; then
+    cp --preserve=mode "$BASH_SYSTEM_PATH" "$NAS_REAL_BASH"
+  fi
+
+  BASH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.tmp.$$"
+  cat > "$BASH_WRAPPER_TMP" << 'MASK_WRAPPER'
+#!/tmp/nas-bash-override/bash.real
+if [ "${1:-}" = "/entrypoint.sh" ]; then
+  exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
+fi
+if [ -f "${NAS_MASK_FILTER:-}" ] && [ -x "${NAS_MASK_FILTER:-}" ] && \
+   [ -f "${NAS_MASK_SECRETS_FILE:-}" ] && [ -r "${NAS_MASK_SECRETS_FILE:-}" ]; then
+  exec > >("$NAS_MASK_FILTER") 2> >("$NAS_MASK_FILTER" >&2)
+fi
+exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
+MASK_WRAPPER
+  chmod +x "$BASH_WRAPPER_TMP"
+
+  BASH_PATH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.next.$$"
+  cp --preserve=mode "$BASH_WRAPPER_TMP" "$BASH_PATH_WRAPPER_TMP"
+  mv -f "$BASH_PATH_WRAPPER_TMP" "$NAS_BASH_OVERRIDE/bash"
+
+  BASH_SYSTEM_WRAPPER_TMP="${BASH_SYSTEM_PATH}.nas-wrapper.$$"
+  cp --preserve=mode "$BASH_WRAPPER_TMP" "$BASH_SYSTEM_WRAPPER_TMP"
+  mv -f "$BASH_SYSTEM_WRAPPER_TMP" "$BASH_SYSTEM_PATH"
+  rm -f "$BASH_WRAPPER_TMP"
+
+  # Nix devshell source may reset SHELL; apply this after sourcing it.
+  if [ -z "$NAS_ENV_OPS_FILE" ]; then
+    NAS_ENV_OPS_FILE="$(mktemp /tmp/nas-env-ops.XXXXXX)"
+    chmod 644 "$NAS_ENV_OPS_FILE"
+  fi
+  echo "export SHELL='$NAS_BASH_OVERRIDE/bash'" >> "$NAS_ENV_OPS_FILE"
+  nas_debug "[nas] mask-filter: NAS_ENV_OPS_FILE=$NAS_ENV_OPS_FILE"
+  nas_debug "[nas] mask-filter: env-ops content=$(cat "$NAS_ENV_OPS_FILE" 2>/dev/null | tail -3)"
+elif [ -x /bin/bash ]; then
+  ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
+fi
+
+export NAS_BASH_OVERRIDE NAS_REAL_BASH
+export PATH="${NAS_BASH_OVERRIDE}:${PATH}"
+
 # --shell モード: flake 再評価や nix develop/print-dev-env 経由の複雑な
 # 起動は避け、初回起動時に作られたキャッシュ env を source するだけにする。
 # エージェント用の経路は入出力を expr/exec で回しているため、そのまま bash -i
@@ -296,21 +347,7 @@ fi
 # シェルは会話的に使えればよいので最短経路にする。
 SHELL_BOOTSTRAP_START="$(nas_measure_start)"
 if [ "$NAS_SHELL_MODE" = "true" ]; then
-  NAS_BASH_OVERRIDE_DIR="/tmp/nas-bash-override"
-  mkdir -p "$NAS_BASH_OVERRIDE_DIR"
-  if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
-    cat > "$NAS_BASH_OVERRIDE_DIR/bash" << 'MASK_WRAPPER'
-#!/bin/bash
-if [ -n "$NAS_MASK_SECRETS_FILE" ] && [ -f "$NAS_MASK_FILTER" ]; then
-  exec > >("$NAS_MASK_FILTER") 2> >("$NAS_MASK_FILTER" >&2)
-fi
-exec /bin/bash "$@"
-MASK_WRAPPER
-    chmod +x "$NAS_BASH_OVERRIDE_DIR/bash"
-  elif [ -x /bin/bash ] && [ ! -e "$NAS_BASH_OVERRIDE_DIR/bash" ]; then
-    ln -sf /bin/bash "$NAS_BASH_OVERRIDE_DIR/bash"
-  fi
-  SHELL_PATH_PREFIX="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE_DIR}:"
+  SHELL_PATH_PREFIX="${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE}:"
   SHELL_CACHE_FILE=""
   if [ "${NIX_ENABLED:-false}" = "true" ] && [ -f "$WORKSPACE/flake.nix" ]; then
     SHELL_NIX_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/nas/nix-dev-env"
@@ -341,52 +378,15 @@ MASK_WRAPPER
     } >"$SHELL_RC_FILE"
     chown "${NAS_UID}:${NAS_GID}" "$SHELL_RC_FILE" 2>/dev/null || true
     nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
-    exec_nas "${EXEC_PREFIX[@]}" bash --noprofile --rcfile "$SHELL_RC_FILE" -i
+    exec_nas "${EXEC_PREFIX[@]}" "$NAS_REAL_BASH" --noprofile --rcfile "$SHELL_RC_FILE" -i
   else
     [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
     export PATH="${SHELL_PATH_PREFIX}$PATH"
     nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
-    exec_nas "${EXEC_PREFIX[@]}" bash -i
+    exec_nas "${EXEC_PREFIX[@]}" "$NAS_REAL_BASH" -i
   fi
 fi
 nas_measure_done "shell-bootstrap" "$SHELL_BOOTSTRAP_START"
-
-# --- bash オーバーライド ---
-# /tmp/nas-bash-override を PATH の先頭に常設する。
-# NAS_MASK_FILTER + NAS_MASK_SECRETS_FILE が設定されている場合は
-# stdout/stderr を nas-mask-filter 経由でマスクする wrapper を設置。
-# フィルタ無効時は readline 対応の /bin/bash へのシンボリックリンク
-# (Nix の readline なし bash より優先させるため)。
-NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
-mkdir -p "$NAS_BASH_OVERRIDE"
-if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
-  cat > "$NAS_BASH_OVERRIDE/bash" << 'MASK_WRAPPER'
-#!/bin/bash
-if [ -n "$__NAS_MASK_FILTER_SKIP" ]; then
-  unset __NAS_MASK_FILTER_SKIP
-  exec /bin/bash "$@"
-fi
-if [ -n "$NAS_MASK_SECRETS_FILE" ] && [ -f "$NAS_MASK_FILTER" ]; then
-  exec > >("$NAS_MASK_FILTER") 2> >("$NAS_MASK_FILTER" >&2)
-fi
-exec /bin/bash "$@"
-MASK_WRAPPER
-  chmod +x "$NAS_BASH_OVERRIDE/bash"
-  export __NAS_MASK_FILTER_SKIP=1
-  # Nix devshell source が SHELL を Nix bash に設定するため、
-  # env-ops (source 後に適用) で上書きする。
-  if [ -z "$NAS_ENV_OPS_FILE" ]; then
-    NAS_ENV_OPS_FILE="$(mktemp /tmp/nas-env-ops.XXXXXX)"
-    chmod 644 "$NAS_ENV_OPS_FILE"
-  fi
-  echo "export SHELL='$NAS_BASH_OVERRIDE/bash'" >> "$NAS_ENV_OPS_FILE"
-  nas_debug "[nas] mask-filter: NAS_ENV_OPS_FILE=$NAS_ENV_OPS_FILE"
-  nas_debug "[nas] mask-filter: env-ops content=$(cat "$NAS_ENV_OPS_FILE" 2>/dev/null | tail -3)"
-elif [ -x /bin/bash ]; then
-  ln -sf /bin/bash "$NAS_BASH_OVERRIDE/bash"
-fi
-export NAS_BASH_OVERRIDE
-export PATH="${NAS_BASH_OVERRIDE}:${PATH}"
 
 exec_agent_command() {
   [ -n "${NAS_ENV_OPS_FILE:-}" ] && source "$NAS_ENV_OPS_FILE"
@@ -459,11 +459,11 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
             nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
             exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
               nix develop "$WORKSPACE" --command \
-              bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+              "$NAS_REAL_BASH" -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
           else
             nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
             exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix develop "$WORKSPACE" --command \
-              bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+              "$NAS_REAL_BASH" -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
           fi
         fi
       else
@@ -477,17 +477,17 @@ if [ "${NIX_ENABLED:-false}" = "true" ]; then
     if [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
       nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
       exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-        bash -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+        "$NAS_REAL_BASH" -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
     else
       nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
       exec_nas "${EXEC_PREFIX[@]}" \
-        bash -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+        "$NAS_REAL_BASH" -c "source '$CACHE_FILE'; ${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
     fi
   elif [ ${#NIX_EXTRA_PACKAGES_LIST[@]} -gt 0 ]; then
     nas_info "[nas] flake.nix not found, entering nix shell (via host daemon)..."
     nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
     exec_nas "${EXEC_PREFIX[@]}" env NIX_REMOTE=daemon nix shell "${NIX_EXTRA_PACKAGES_LIST[@]}" --command \
-      bash -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
+      "$NAS_REAL_BASH" -c "${NAS_ENV_OPS_FILE:+source '$NAS_ENV_OPS_FILE';} export PATH=\"${HOSTEXEC_PATH_PREFIX:+$HOSTEXEC_PATH_PREFIX:}${NAS_BASH_OVERRIDE:+$NAS_BASH_OVERRIDE:}\$PATH\"; exec $CMD_STR"
   else
     nas_measure_done "nix-integration" "$NIX_INTEGRATION_START"
     exec_agent_command
