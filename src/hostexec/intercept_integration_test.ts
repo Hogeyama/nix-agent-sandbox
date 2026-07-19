@@ -188,12 +188,17 @@ test("intercept .so: non-intercepted command runs normally", async () => {
     // interceptTarget is a path that does NOT match any command we run
     const interceptTarget = path.join(tmp, "not-the-command-we-run");
 
-    // Run /bin/echo which is NOT in the intercept list
+    // Run echo which is NOT in the intercept list
+    const echoPath = Bun.which("echo");
+    if (!echoPath) {
+      console.warn("Skipping: echo binary not found on PATH");
+      return;
+    }
     const result = await spawnWithIntercept(
       soPath,
       socketPath,
       interceptTarget,
-      ["/bin/echo", "normal-output"],
+      [echoPath, "normal-output"],
     );
 
     expect(result.exitCode).toBe(0);

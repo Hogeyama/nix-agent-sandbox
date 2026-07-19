@@ -594,7 +594,12 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
             NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
             NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
           },
-          extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+          extraArgs: [
+            "--entrypoint",
+            "",
+            "-v",
+            `${fixtureDir}:${containerFixtureDir}:ro`,
+          ],
           tty: true,
           stdin:
             "tty0=0; tty1=0; tty2=0\n" +
