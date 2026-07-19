@@ -10,6 +10,7 @@ import {
   DEFAULT_UI_CONFIG,
 } from "../../config/types.ts";
 import { INTERCEPT_LIB_CONTAINER_PATH } from "../../hostexec/intercept_path.ts";
+import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput } from "../../pipeline/types.ts";
@@ -555,6 +556,168 @@ test("HostExecStage plan: mixed relative and absolute argv0s produce multi-line 
     arg.includes(INTERCEPT_LIB_CONTAINER_PATH),
   );
   expect(soMounts.length).toEqual(1);
+});
+
+// ============================================================
+// planHostExec: mask filter intent (pure planning only; the planner must
+// not touch disk or resolve the filter binary -- see runHostExec tests
+// below for the I/O-resolving half of this behavior)
+// ============================================================
+
+test("HostExecStage plan: sets maskFilterIntent when mask.filter enabled and values non-empty", async () => {
+  const profile = makeProfile();
+  profile.mask = {
+    values: [{ source: "env:TEST_SECRET" }],
+    writePolicy: "readonly",
+    maskfs: false,
+    proxy: false,
+    filter: true,
+  };
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const hostEnvWithSecret: HostEnv = {
+    ...hostEnv,
+    env: new Map([...hostEnv.env, ["TEST_SECRET", "supersecretvalue"]]),
+  };
+  const input = {
+    ...makeSharedInput(profile, hostEnvWithSecret),
+    ...makeStageState(),
+  };
+  const plan = await planHostExec(input, { interceptLibPath: null });
+
+  expect(plan).not.toBeNull();
+  if (!plan) return;
+
+  expect(plan.maskFilterIntent).toBeDefined();
+
+  // The secrets frame path must match the one MaskFilterStage computes (see
+  // mask_filter_stage.ts): HostExecStage reuses that file instead of
+  // resolving the same secrets a second time, so it must never live in the
+  // session tmp dir that gets mounted into the container.
+  const expectedFramePath = `${resolveRuntimeSubdir(hostEnvWithSecret, "mask-filter")}/${input.sessionId}/mask-secrets`;
+  expect(plan.maskFilterIntent!.secretsFramePath).toEqual(expectedFramePath);
+  expect(plan.maskFilterIntent!.secretsFramePath).not.toContain(
+    plan.broker.sessionTmpDir,
+  );
+
+  // Pure planning: no I/O, so the file must not exist on disk yet.
+  const exists = await Bun.file(
+    plan.maskFilterIntent!.secretsFramePath,
+  ).exists();
+  expect(exists).toEqual(false);
+});
+
+test("HostExecStage plan: omits maskFilterIntent when mask.filter disabled", async () => {
+  const profile = makeProfile();
+  profile.mask = {
+    values: [{ source: "env:TEST_SECRET" }],
+    writePolicy: "readonly",
+    maskfs: false,
+    proxy: false,
+    filter: false,
+  };
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const hostEnvWithSecret: HostEnv = {
+    ...hostEnv,
+    env: new Map([...hostEnv.env, ["TEST_SECRET", "supersecretvalue"]]),
+  };
+  const input = {
+    ...makeSharedInput(profile, hostEnvWithSecret),
+    ...makeStageState(),
+  };
+  const plan = await planHostExec(input, { interceptLibPath: null });
+
+  expect(plan).not.toBeNull();
+  if (!plan) return;
+  expect(plan.maskFilterIntent).toBeUndefined();
+});
+
+test("HostExecStage plan: omits maskFilterIntent when mask config is absent", async () => {
+  const profile = makeProfile();
+  profile.mask = undefined;
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState(),
+  };
+  const plan = await planHostExec(input, { interceptLibPath: null });
+
+  expect(plan).not.toBeNull();
+  if (!plan) return;
+  expect(plan.maskFilterIntent).toBeUndefined();
+});
+
+test("HostExecStage plan: omits maskFilterIntent when mask.values is empty", async () => {
+  const profile = makeProfile();
+  profile.mask = {
+    values: [],
+    writePolicy: "readonly",
+    maskfs: false,
+    proxy: false,
+    filter: true,
+  };
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState(),
+  };
+  const plan = await planHostExec(input, { interceptLibPath: null });
+
+  expect(plan).not.toBeNull();
+  if (!plan) return;
+  expect(plan.maskFilterIntent).toBeUndefined();
+});
+
+// ============================================================
+// runHostExec: mask filter resolution (I/O half of mask filtering)
+// ============================================================
+
+test("HostExecStage: run fails closed when mask.filter is enabled but the filter binary is not found", async () => {
+  const profile = makeProfile();
+  profile.mask = {
+    values: [{ source: "env:TEST_SECRET" }],
+    writePolicy: "readonly",
+    maskfs: false,
+    proxy: false,
+    filter: true,
+  };
+  const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
+  const hostEnvWithSecret: HostEnv = {
+    ...hostEnv,
+    env: new Map([...hostEnv.env, ["TEST_SECRET", "supersecretvalue"]]),
+  };
+  const sharedInput = makeSharedInput(profile, hostEnvWithSecret);
+  const stageState = makeStageState();
+  // Inject a resolver that always reports the binary as missing, so this
+  // test exercises the fail-closed path deterministically regardless of
+  // whether `zig build` has produced the binary on the host running tests.
+  const stage = createHostExecStage(sharedInput, {
+    resolveMaskFilterBinPath: async () => null,
+  });
+
+  const setupLayer = makeHostExecSetupServiceFake();
+  const brokerLayer = makeHostExecBrokerServiceFake();
+  const scope = Effect.runSync(Scope.make());
+
+  const exit = await Effect.runPromiseExit(
+    stage
+      .run(stageState)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(setupLayer),
+        Effect.provide(brokerLayer),
+      ),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(Exit.isFailure(exit)).toEqual(true);
+  if (Exit.isFailure(exit)) {
+    const message = String(exit.cause);
+    expect(message).toContain("nas-mask-filter binary not found");
+  }
 });
 
 // ============================================================

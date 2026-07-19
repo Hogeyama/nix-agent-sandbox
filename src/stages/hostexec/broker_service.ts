@@ -9,7 +9,10 @@
 
 import { Context, Effect, Layer } from "effect";
 import type { HostExecConfig } from "../../config/types.ts";
-import { HostExecBroker } from "../../hostexec/broker.ts";
+import {
+  HostExecBroker,
+  type MaskFilterConfig,
+} from "../../hostexec/broker.ts";
 import type { ResolvedNotifyBackend } from "../../hostexec/notify.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import {
@@ -38,7 +41,7 @@ export interface HostExecBrokerConfig {
   readonly uiPort?: number;
   readonly uiIdleTimeout?: number;
   readonly auditDir?: string;
-  readonly maskFilter?: { binaryPath: string; secretsFramePath: string };
+  readonly maskFilter?: MaskFilterConfig;
 }
 
 // ---------------------------------------------------------------------------
