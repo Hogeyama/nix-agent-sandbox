@@ -30,10 +30,12 @@ import {
 } from "node:fs/promises";
 import * as path from "node:path";
 import { Effect, Layer } from "effect";
+import { shellEscape } from "../../dtach/client.ts";
 import { DockerServiceLive } from "../../services/docker.ts";
 import { FsServiceLive } from "../../services/fs.ts";
 import { DockerBuildServiceLive } from "../../stages/docker_build.ts";
 import { createDockerBuildStage, resolveBuildProbes } from "../docker_build.ts";
+import { encodeMaskSecrets } from "../maskfs/secrets_frame.ts";
 
 const IMAGE_NAME = "nas-sandbox";
 
@@ -58,6 +60,51 @@ async function makeTempDir(prefix: string): Promise<string> {
     await chmod(dir, 0o1777);
   }
   return dir;
+}
+
+const MASK_FILTER_FIXTURE = `#!/usr/bin/env python3
+import os
+import struct
+import sys
+import tempfile
+
+frame = memoryview(open(os.environ["NAS_MASK_SECRETS_FILE"], "rb").read())
+count = struct.unpack_from("<I", frame, 0)[0]
+offset = 4
+secrets = []
+for _ in range(count):
+    length = struct.unpack_from("<I", frame, offset)[0]
+    offset += 4
+    secrets.append(bytes(frame[offset:offset + length]))
+    offset += length
+
+# This test fixture's payloads are newline-terminated, so line streaming avoids
+# retaining output until the wrapped Bash process closes its pipe.
+for data in sys.stdin.buffer:
+    for secret in secrets:
+        if secret:
+            data = data.replace(secret, b"*" * len(secret))
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+
+marker_dir = os.environ.get("NAS_MASK_FILTER_MARKER_DIR")
+if marker_dir:
+    marker = tempfile.NamedTemporaryFile(
+        dir=marker_dir, prefix="filter-done-", delete=False
+    )
+    marker.close()
+`;
+
+async function writeMaskFilterFixture(
+  fixtureDir: string,
+  secrets: readonly string[],
+): Promise<{ filterPath: string; secretsPath: string }> {
+  const filterPath = path.join(fixtureDir, "nas-mask-filter");
+  const secretsPath = path.join(fixtureDir, "secrets.frame");
+  await writeFile(filterPath, MASK_FILTER_FIXTURE);
+  await chmod(filterPath, 0o755);
+  await writeFile(secretsPath, encodeMaskSecrets(secrets));
+  return { filterPath, secretsPath };
 }
 
 async function makeTreeWritableForDind(root: string): Promise<void> {
@@ -94,7 +141,34 @@ async function isDockerAvailable(): Promise<boolean> {
   }
 }
 
-const dockerAvailable = await isDockerAvailable();
+async function resolvePtyScriptPath(): Promise<string | null> {
+  const scriptPath = Bun.which("script");
+  if (!scriptPath) return null;
+
+  try {
+    const proc = Bun.spawn(
+      [scriptPath, "-qefc", "printf nas-script-probe; exit 37", "/dev/null"],
+      {
+        env: { ...process.env, SHELL: "/bin/sh" },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "ignore",
+      },
+    );
+    const [code, stdout] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+    ]);
+    return code === 37 && stdout === "nas-script-probe" ? scriptPath : null;
+  } catch {
+    return null;
+  }
+}
+
+const [dockerAvailable, ptyScriptPath] = await Promise.all([
+  isDockerAvailable(),
+  resolvePtyScriptPath(),
+]);
 
 /** Docker イメージをビルド（初回のみ） */
 let imageBuilt = false;
@@ -129,6 +203,8 @@ async function dockerRun(
     workDir?: string;
     envVars?: Record<string, string>;
     extraArgs?: string[];
+    tty?: boolean;
+    stdin?: string;
   } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   await ensureImage();
@@ -157,6 +233,10 @@ async function dockerRun(
     args.push("-e", `${key}=${value}`);
   }
 
+  if (options.tty) {
+    args.push("-i", "-t");
+  }
+
   args.push("-v", `${workDir}:${workDir}`);
   args.push("-w", workDir);
 
@@ -167,7 +247,22 @@ async function dockerRun(
   args.push(IMAGE_NAME);
   args.push(...testCommand);
 
-  const proc = Bun.spawn(["docker", ...args], {
+  const dockerCommand = ["docker", ...args];
+  let hostCommand = dockerCommand;
+  if (options.tty) {
+    if (!ptyScriptPath) {
+      throw new Error("compatible script command unavailable");
+    }
+    hostCommand = [
+      ptyScriptPath,
+      "-qefc",
+      shellEscape(dockerCommand),
+      "/dev/null",
+    ];
+  }
+  const proc = Bun.spawn(hostCommand, {
+    ...(options.tty ? { env: { ...process.env, SHELL: "/bin/sh" } } : {}),
+    stdin: options.stdin === undefined ? "ignore" : new Blob([options.stdin]),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -290,6 +385,287 @@ test.skipIf(!dockerAvailable)(
 // ホスト Docker (DOCKER_HOST 未設定) の場合は /tmp が使えるので常に動く。
 const canBindMount =
   dockerAvailable && (SHARED_TMP !== undefined || !process.env.DOCKER_HOST);
+
+test.skipIf(!canBindMount)(
+  "Integration: absolute /bin/bash remains the system executable when mask filter is disabled",
+  async () => {
+    const workDir = await makeTempDir("nas-e2e-bash-disabled-ws-");
+    try {
+      const result = await dockerRun(
+        ["/bin/sh", "-c", "od -An -t x1 -N 4 /bin/bash"],
+        { workDir },
+      );
+
+      expect(result.code).toEqual(0);
+      expect(result.stdout.trim().replace(/\s+/g, " ")).toEqual("7f 45 4c 46");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!canBindMount)(
+  "Integration: mask filter preserves an existing non-executable bash.real",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-bash-real-");
+    const workDir = await makeTempDir("nas-e2e-bash-real-ws-");
+    const realBashPath = path.join(fixtureDir, "bash.real");
+    const containerRealBashPath = "/tmp/nas-bash-override/bash.real";
+    const sentinel = "preserve-existing-bash-real";
+
+    try {
+      await writeMaskFilterFixture(fixtureDir, ["unused-secret"]);
+      await writeFile(realBashPath, sentinel, { mode: 0o644 });
+
+      const result = await dockerRun(
+        ["/bin/sh", "-c", 'cat "$1"', "sh", containerRealBashPath],
+        {
+          workDir,
+          envVars: {
+            NAS_MASK_FILTER: "/tmp/nas-bash-override/nas-mask-filter",
+            NAS_MASK_SECRETS_FILE: "/tmp/nas-bash-override/secrets.frame",
+          },
+          extraArgs: ["-v", `${fixtureDir}:/tmp/nas-bash-override`],
+        },
+      );
+
+      expect(result.code).toEqual(0);
+      expect(result.stdout).toEqual(sentinel);
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!canBindMount)(
+  "Integration: absolute /bin/bash masks command, login, and script invocations",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-mask-filter-");
+    const workDir = await makeTempDir("nas-e2e-mask-filter-ws-");
+    const containerFixtureDir = "/tmp/nas-mask-filter-test";
+    const containerScriptPath = `${containerFixtureDir}/mask-script.sh`;
+    const markerDir = path.join(workDir, "mask-filter-markers");
+    const secret = "my-secret-password";
+    const masked = "*".repeat(secret.length);
+    const runChildAndWaitForFilters = `
+"$@"
+child_status=$?
+attempt=0
+while [ "$(find "$NAS_MASK_FILTER_MARKER_DIR" -mindepth 1 -maxdepth 1 -type f | wc -l)" -lt 2 ]; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 100 ]; then
+    echo "mask filters did not drain before timeout" >&2
+    exit 124
+  fi
+  sleep 0.05
+done
+exit "$child_status"
+`;
+
+    try {
+      await writeMaskFilterFixture(fixtureDir, [secret]);
+      await writeFile(
+        path.join(fixtureDir, "mask-script.sh"),
+        `printf 'mode=script shell=%s stdout=${secret}\\n' "$0"
+printf 'mode=script stderr=${secret}\\n' >&2
+`,
+      );
+
+      const invocations = [
+        {
+          mode: "command",
+          command: [
+            "/bin/bash",
+            "-c",
+            `printf 'mode=command shell=%s stdout=${secret}\\n' "$0"; printf 'mode=command stderr=${secret}\\n' >&2`,
+          ],
+          expectedArgv0: "/bin/bash",
+        },
+        {
+          mode: "login",
+          command: [
+            "/bin/bash",
+            "-lc",
+            `printf 'mode=login shell=%s stdout=${secret}\\n' "$0"; printf 'mode=login stderr=${secret}\\n' >&2`,
+          ],
+          expectedArgv0: "/bin/bash",
+        },
+        {
+          mode: "script",
+          command: ["/bin/bash", containerScriptPath],
+          expectedArgv0: containerScriptPath,
+        },
+      ];
+
+      for (const invocation of invocations) {
+        await rm(markerDir, { recursive: true, force: true });
+        await mkdir(markerDir);
+
+        const result = await dockerRun(
+          [
+            "/bin/sh",
+            "-c",
+            runChildAndWaitForFilters,
+            "mask-filter-parent",
+            ...invocation.command,
+          ],
+          {
+            workDir,
+            envVars: {
+              NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
+              NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
+              NAS_MASK_FILTER_MARKER_DIR: markerDir,
+            },
+            extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+          },
+        );
+
+        expect(await readdir(markerDir)).toHaveLength(2);
+        expect(result.code).toEqual(0);
+        expect(result.stdout).toContain(
+          `mode=${invocation.mode} shell=${invocation.expectedArgv0} stdout=${masked}`,
+        );
+        expect(result.stderr).toContain(
+          `mode=${invocation.mode} stderr=${masked}`,
+        );
+        expect(result.stdout).not.toContain(secret);
+        expect(result.stderr).not.toContain(secret);
+      }
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!canBindMount)(
+  "Integration: absolute /bin/bash preserves output when the secrets frame is missing",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-mask-fallback-");
+    const workDir = await makeTempDir("nas-e2e-mask-fallback-ws-");
+    const containerFixtureDir = "/tmp/nas-mask-fallback-test";
+    try {
+      const { secretsPath } = await writeMaskFilterFixture(fixtureDir, []);
+      await rm(secretsPath);
+
+      const result = await dockerRun(
+        [
+          "/bin/bash",
+          "-c",
+          "printf 'fallback-stdout\\n'; printf 'fallback-stderr\\n' >&2",
+        ],
+        {
+          workDir,
+          envVars: {
+            NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
+            NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/missing.frame`,
+          },
+          extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+        },
+      );
+
+      expect(result.code).toEqual(0);
+      expect(result.stdout).toContain("fallback-stdout");
+      expect(result.stderr).toContain("fallback-stderr");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!canBindMount || !ptyScriptPath)(
+  "Integration: entrypoint Bash bypass preserves TTY during shell re-entry",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-shell-reentry-");
+    const workDir = await makeTempDir("nas-e2e-shell-reentry-ws-");
+    const containerFixtureDir = "/tmp/nas-shell-reentry-test";
+    const secret = "shell-reentry-secret";
+
+    try {
+      await writeMaskFilterFixture(fixtureDir, [secret]);
+
+      const result = await dockerRun(
+        ["/bin/bash", "/entrypoint.sh", "--shell"],
+        {
+          workDir,
+          envVars: {
+            NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
+            NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
+          },
+          extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+          tty: true,
+          stdin:
+            "tty0=0; tty1=0; tty2=0\n" +
+            "if [[ -t 0 ]]; then tty0=1; fi\n" +
+            "if [[ -t 1 ]]; then tty1=1; fi\n" +
+            "if [[ -t 2 ]]; then tty2=1; fi\n" +
+            `printf 'reentry=${secret} tty=%s%s%s\\n' ` +
+            '"$tty0" "$tty1" "$tty2"\nexit\n',
+        },
+      );
+
+      expect(result.code).toEqual(0);
+      expect(result.stdout).toContain(`reentry=${secret} tty=111`);
+      expect(result.stdout).not.toContain("reentry=********************");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!canBindMount || !ptyScriptPath)(
+  "Integration: cached Nix launch preserves agent TTY outside filter pipes",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-nix-launch-");
+    const workDir = await makeTempDir("nas-e2e-nix-launch-ws-");
+    const containerFixtureDir = "/tmp/nas-nix-launch-test";
+    const cacheDir = path.join(fixtureDir, "cache", "nas", "nix-dev-env");
+    const flake = "{ outputs = { self }: {}; }\n";
+    const flakeHash = new Bun.CryptoHasher("sha256")
+      .update(flake)
+      .digest("hex");
+    const secret = "nix-launch-secret";
+
+    try {
+      await mkdir(cacheDir, { recursive: true });
+      await writeFile(path.join(workDir, "flake.nix"), flake);
+      await writeFile(
+        path.join(cacheDir, `${flakeHash}.env`),
+        "export NAS_NIX_CACHE_MARKER=hit\n",
+      );
+      await writeMaskFilterFixture(fixtureDir, [secret]);
+
+      const command =
+        "tty1=0; tty2=0; " +
+        "if [ -t 1 ]; then tty1=1; fi; " +
+        "if [ -t 2 ]; then tty2=1; fi; " +
+        `printf 'cache=%s secret=${secret} tty=%s%s\\n' ` +
+        '"$NAS_NIX_CACHE_MARKER" ' +
+        '"$tty1" "$tty2"';
+      const result = await dockerRun(["/bin/sh", "-c", command], {
+        workDir,
+        envVars: {
+          NIX_ENABLED: "true",
+          XDG_CACHE_HOME: `${containerFixtureDir}/cache`,
+          NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
+          NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
+        },
+        extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+        tty: true,
+      });
+
+      expect(result.code).toEqual(0);
+      expect(result.stdout).toContain(`cache=hit secret=${secret} tty=11`);
+      expect(result.stdout).not.toContain("secret=*****************");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
 
 test.skipIf(!canBindMount)(
   "Integration: workspace is mounted and files are accessible",
