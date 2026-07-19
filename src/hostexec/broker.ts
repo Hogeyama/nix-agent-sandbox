@@ -46,6 +46,17 @@ import type {
   ResolvedExecutionCapability,
 } from "./types.ts";
 
+/**
+ * Shared shape describing the host-side nas-mask-filter binary and the
+ * secrets frame file it reads to redact stdout/stderr. Used wherever a
+ * mask-filter configuration is threaded through hostexec (broker options,
+ * broker service config, and the stage that resolves the binary path).
+ */
+export interface MaskFilterConfig {
+  readonly binaryPath: string;
+  readonly secretsFramePath: string;
+}
+
 interface HostExecBrokerOptions {
   paths: HostExecRuntimePaths;
   sessionId: string;
@@ -60,7 +71,7 @@ interface HostExecBrokerOptions {
   /** Directory for audit JSONL logs. If set, decisions are recorded. */
   auditDir?: string;
   /** If set, stdout/stderr of host commands are piped through nas-mask-filter. */
-  maskFilter?: { binaryPath: string; secretsFramePath: string };
+  maskFilter?: MaskFilterConfig;
 }
 
 interface PendingWaiter {
@@ -126,10 +137,7 @@ export class HostExecBroker {
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestToApprovalKey = new Map<string, string>();
   private readonly notificationTasks = new Set<Promise<void>>();
-  private readonly maskFilter?: {
-    binaryPath: string;
-    secretsFramePath: string;
-  };
+  private readonly maskFilter?: MaskFilterConfig;
 
   constructor(options: HostExecBrokerOptions) {
     this.paths = options.paths;
@@ -202,6 +210,15 @@ export class HostExecBroker {
     this.requestToApprovalKey.clear();
     await removeHostExecPendingDir(this.paths, this.sessionId);
     await removeHostExecSessionRegistry(this.paths, this.sessionId);
+    if (this.maskFilter) {
+      await rm(this.maskFilter.secretsFramePath, { force: true }).catch((e) => {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          logInfo(
+            `[nas] HostExecBroker: failed to remove mask secrets frame: ${e}`,
+          );
+        }
+      });
+    }
     const controlTarget =
       this.controlSocketPath ??
       hostExecBrokerSocketPath(this.paths, this.sessionId);
@@ -731,6 +748,12 @@ export class HostExecBroker {
     };
 
     let exitCode: number;
+    // Set when a mask-filter subprocess exits non-zero after streaming
+    // completes successfully. In that case the client saw a truncated or
+    // otherwise corrupted stream (e.g. a deleted/corrupt secrets frame), so
+    // we must not report the real command's (possibly zero) exit code as
+    // success -- that would silently hide the truncation from the client.
+    let filterError: string | undefined;
     try {
       await Promise.all([
         pipeStreamToSocket(
@@ -746,6 +769,13 @@ export class HostExecBroker {
           2,
         ),
       ]);
+      for (const f of filterProcs) {
+        const filterExit = await f.exited;
+        if (filterExit !== 0) {
+          filterError = `nas-mask-filter exited with code ${filterExit}; output may be incomplete`;
+          break;
+        }
+      }
     } catch {
       // The client likely disconnected mid-stream; make sure the child
       // process (and any mask-filter subprocesses it feeds) don't leak.
@@ -764,6 +794,25 @@ export class HostExecBroker {
       }
     } finally {
       exitCode = await proc.exited;
+    }
+    if (filterError) {
+      try {
+        await writeJsonLine(socket, {
+          type: "error",
+          requestId: request.requestId,
+          message: filterError,
+        });
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (
+          code === "EPIPE" ||
+          code === "ECONNRESET" ||
+          code === "ERR_STREAM_DESTROYED"
+        )
+          return;
+        throw e;
+      }
+      return;
     }
     try {
       await writeJsonLine(socket, {

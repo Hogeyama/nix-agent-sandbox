@@ -18,7 +18,7 @@ export interface HostExecWorkspacePlan {
   readonly directories: ReadonlyArray<{ path: string; mode: number }>;
   readonly files: ReadonlyArray<{
     path: string;
-    content: string;
+    content: string | Uint8Array;
     mode: number;
   }>;
   readonly symlinks: ReadonlyArray<{ target: string; path: string }>;

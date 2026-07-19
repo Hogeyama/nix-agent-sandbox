@@ -88,6 +88,60 @@ async function sendStreamingRequest(
 }
 
 /**
+ * Like `sendStreamingRequest`, but does not reject when the stream
+ * terminates with a `fallback`/`error` message — it returns the final
+ * message's type/message instead. Used to assert on the broker's error
+ * path without losing the error text.
+ */
+async function sendStreamingRequestRaw(
+  socketPath: string,
+  message: ExecuteRequest,
+): Promise<{
+  chunks: ExecuteChunkResponse[];
+  finalType: string;
+  finalMessage?: string;
+  exitCode?: number;
+}> {
+  const socket = await connectUnix(socketPath);
+  try {
+    await writeJsonLine(socket, message);
+    const chunks: ExecuteChunkResponse[] = [];
+    let finalType = "";
+    let finalMessage: string | undefined;
+    let exitCode: number | undefined;
+    let text = "";
+    await new Promise<void>((resolve, reject) => {
+      const onData = (chunk: Buffer) => {
+        text += chunk.toString();
+        let nl = text.indexOf("\n");
+        while (nl !== -1) {
+          const line = text.slice(0, nl);
+          text = text.slice(nl + 1);
+          const msg = JSON.parse(line);
+          if (msg.type === "chunk") {
+            chunks.push(msg);
+          } else {
+            finalType = msg.type;
+            finalMessage = msg.message;
+            exitCode = msg.exitCode;
+            socket.off("data", onData);
+            resolve();
+            return;
+          }
+          nl = text.indexOf("\n");
+        }
+      };
+      socket.on("data", onData);
+      socket.on("end", () => resolve());
+      socket.on("error", reject);
+    });
+    return { chunks, finalType, finalMessage, exitCode };
+  } finally {
+    socket.destroy();
+  }
+}
+
+/**
  * Reassembles stdout from a streaming result. Each chunk's `data` field is
  * independently base64-encoded, so each chunk must be decoded on its own
  * and the decoded strings concatenated — concatenating the base64 strings
@@ -1641,6 +1695,73 @@ test("HostExecBroker: does not mask when maskFilter is not configured", async ()
     const stdout = collectStdout(result);
     expect(stdout).toContain("SUPERSECRET");
     expect(result.exitCode).toBe(0);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: surfaces an error instead of a truncated result when the mask filter subprocess fails", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+
+  // Point the mask filter at a secrets frame file that does not exist, so
+  // nas-mask-filter fails to read it and exits non-zero (see
+  // src/mask-filter/mask_filter.zig: readSecretsFromFile -> exit code 1 on
+  // read failure). This simulates the frame being deleted/corrupted
+  // mid-session: the broker must surface this as an `error` response
+  // instead of silently reporting the real command's (successful) exit
+  // code with truncated/corrupted output.
+  const { resolveMaskFilterBinPath } = await import(
+    "../stages/maskfs/mask_filter_path.ts"
+  );
+  const binaryPath = await resolveMaskFilterBinPath();
+  if (!binaryPath) {
+    console.warn("Skipping mask-filter failure test: binary not found");
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    return;
+  }
+  const missingFramePath = path.join(runtimeDir, "does-not-exist.frame");
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "echo",
+          match: { argv0: "echo" },
+          cwd: { mode: "any", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+    maskFilter: { binaryPath, secretsFramePath: missingFramePath },
+  });
+
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await mkdir(`${runtimeDir}/tmp`, { recursive: true });
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequestRaw(
+      execSocketPath,
+      request(["hello world"], workspace, undefined, "echo"),
+    );
+    expect(result.finalType).toEqual("error");
+    expect(result.finalMessage).toMatch(/nas-mask-filter exited with code/);
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});

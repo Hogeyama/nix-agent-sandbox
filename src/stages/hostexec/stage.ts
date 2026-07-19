@@ -11,6 +11,7 @@ import {
   DEFAULT_HOSTEXEC_CONFIG,
   type HostExecRule,
 } from "../../config/types.ts";
+import type { MaskFilterConfig } from "../../hostexec/broker.ts";
 import {
   INTERCEPT_LIB_CONTAINER_PATH,
   resolveInterceptLibPath,
@@ -27,6 +28,7 @@ import {
   hostExecSessionBrokerDir,
 } from "../../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
+import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
@@ -37,6 +39,7 @@ import type {
   WorkspaceState,
 } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput, StageResult } from "../../pipeline/types.ts";
+import { resolveMaskFilterBinPath } from "../maskfs/mask_filter_path.ts";
 import { HostExecBrokerService } from "./broker_service.ts";
 import { HostExecSetupService } from "./setup_service.ts";
 
@@ -127,6 +130,17 @@ export interface HostExecPlan {
   readonly dockerArgs: string[];
   readonly envVars: Record<string, string>;
   readonly outputOverrides: Pick<StageResult, "hostexec">;
+  /**
+   * Intent to enable stdout/stderr mask filtering, carried as pure data.
+   * Resolution of the filter binary happens in the Effect runner
+   * (`runHostExec`), not here. The secrets themselves are resolved and
+   * written to `secretsFramePath` by `MaskFilterStage`, which runs earlier
+   * in the pipeline and owns that file; HostExecStage only reuses the path
+   * so the host-side filter subprocess can read it.
+   */
+  readonly maskFilterIntent?: {
+    readonly secretsFramePath: string;
+  };
   readonly broker: {
     readonly execSocketPath: string;
     readonly controlSocketPath: string;
@@ -152,8 +166,18 @@ export interface HostExecPlan {
 type HostExecStageState = Pick<PipelineState, "workspace" | "container">;
 type HostExecStageInput = StageInput & HostExecStageState;
 
+/**
+ * Options for {@link createHostExecStage}, primarily to allow tests to
+ * inject fakes for I/O-touching resolvers (mirrors
+ * `MaskFilterStageOptions.resolveBinPath`).
+ */
+export interface HostExecStageOptions {
+  readonly resolveMaskFilterBinPath?: () => Promise<string | null>;
+}
+
 export function createHostExecStage(
   shared: StageInput,
+  options: HostExecStageOptions = {},
 ): Stage<
   "workspace" | "container",
   Pick<StageResult, "container" | "hostexec">,
@@ -180,7 +204,7 @@ export function createHostExecStage(
         if (plan === null) {
           return {};
         }
-        return yield* runHostExec(plan, stageInput);
+        return yield* runHostExec(plan, stageInput, options);
       });
     },
   };
@@ -337,6 +361,19 @@ export async function planHostExec(
     }
   }
 
+  // Pure intent only: whether to enable mask filtering. The secrets frame
+  // path must match the one MaskFilterStage computes and writes to (see
+  // mask_filter_stage.ts) -- HostExecStage reuses that file instead of
+  // resolving the same secrets a second time. Resolving the filter binary
+  // (I/O) is deferred to the Effect runner.
+  const mask = input.profile.mask;
+  const maskFilterIntent: HostExecPlan["maskFilterIntent"] =
+    mask?.filter && mask.values.length > 0
+      ? {
+          secretsFramePath: `${resolveRuntimeSubdir(input.host, "mask-filter")}/${input.sessionId}/mask-secrets`,
+        }
+      : undefined;
+
   return {
     directories,
     files,
@@ -351,6 +388,7 @@ export async function planHostExec(
         sessionTmpDir: containerSessionTmp,
       } satisfies HostExecState,
     },
+    maskFilterIntent,
     broker: {
       execSocketPath,
       controlSocketPath,
@@ -377,11 +415,14 @@ export async function planHostExec(
 function runHostExec(
   plan: HostExecPlan,
   input: HostExecStageInput,
+  options: HostExecStageOptions = {},
 ): Effect.Effect<
   Pick<StageResult, "container" | "hostexec">,
   unknown,
   Scope.Scope | HostExecSetupService | HostExecBrokerService
 > {
+  const resolveBinPath =
+    options.resolveMaskFilterBinPath ?? resolveMaskFilterBinPath;
   return Effect.gen(function* () {
     const setupService = yield* HostExecSetupService;
     const brokerService = yield* HostExecBrokerService;
@@ -392,6 +433,29 @@ function runHostExec(
       files: plan.files,
       symlinks: plan.symlinks,
     });
+
+    let maskFilter: MaskFilterConfig | undefined;
+    const intent = plan.maskFilterIntent;
+    if (intent) {
+      const binaryPath = yield* Effect.tryPromise({
+        try: () => resolveBinPath(),
+        catch: (e) => e,
+      });
+      if (!binaryPath) {
+        return yield* Effect.fail(
+          new Error(
+            "[nas] hostexec: nas-mask-filter binary not found. Build with `cd src/mask-filter && zig build` (dev) or reinstall nas (nix).",
+          ),
+        );
+      }
+      // The secrets frame itself is resolved, written, and owned by
+      // MaskFilterStage (see mask_filter_stage.ts), which runs earlier in
+      // the pipeline. HostExecStage only needs the binary path and reuses
+      // the same frame file path -- resolving the secrets a second time
+      // here would be redundant I/O and a second copy of the secret
+      // material on disk.
+      maskFilter = { binaryPath, secretsFramePath: intent.secretsFramePath };
+    }
 
     const spec = plan.broker;
 
@@ -411,6 +475,7 @@ function runHostExec(
         uiIdleTimeout: spec.uiIdleTimeout,
         auditDir: spec.auditDir,
         agent: spec.agent,
+        maskFilter,
       }),
       (handle) => handle.close(),
     );
