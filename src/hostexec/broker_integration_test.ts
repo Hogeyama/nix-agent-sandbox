@@ -1532,6 +1532,122 @@ test("HostExecBroker: isolates sockets per session under 0o700 subdirs", async (
   }
 });
 
+test("HostExecBroker: masks secrets in streaming output when maskFilter configured", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+
+  // Write a secrets frame file with "SUPERSECRET" as the secret
+  const { encodeMaskSecrets } = await import(
+    "../stages/maskfs/secrets_frame.ts"
+  );
+  const frame = encodeMaskSecrets(["SUPERSECRET"]);
+  const secretsFramePath = path.join(runtimeDir, "mask-secrets.frame");
+  await writeFile(secretsFramePath, frame);
+
+  // Resolve the mask-filter binary
+  const { resolveMaskFilterBinPath } = await import(
+    "../stages/maskfs/mask_filter_path.ts"
+  );
+  const binaryPath = await resolveMaskFilterBinPath();
+  if (!binaryPath) {
+    console.warn("Skipping mask-filter test: binary not found");
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    return;
+  }
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "echo",
+          match: { argv0: "echo" },
+          cwd: { mode: "any", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+    maskFilter: { binaryPath, secretsFramePath },
+  });
+
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await mkdir(`${runtimeDir}/tmp`, { recursive: true });
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequest(
+      execSocketPath,
+      request(["hello SUPERSECRET world"], workspace, undefined, "echo"),
+    );
+    const stdout = collectStdout(result);
+    expect(stdout).not.toContain("SUPERSECRET");
+    expect(stdout).toContain("hello");
+    expect(stdout).toContain("world");
+    expect(result.exitCode).toBe(0);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: does not mask when maskFilter is not configured", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "echo",
+          match: { argv0: "echo" },
+          cwd: { mode: "any", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await mkdir(`${runtimeDir}/tmp`, { recursive: true });
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequest(
+      execSocketPath,
+      request(["hello SUPERSECRET world"], workspace, undefined, "echo"),
+    );
+    const stdout = collectStdout(result);
+    expect(stdout).toContain("SUPERSECRET");
+    expect(result.exitCode).toBe(0);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("HostExecBroker: close() removes both socket and session subdir", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
