@@ -59,6 +59,8 @@ interface HostExecBrokerOptions {
   uiIdleTimeout?: number;
   /** Directory for audit JSONL logs. If set, decisions are recorded. */
   auditDir?: string;
+  /** If set, stdout/stderr of host commands are piped through nas-mask-filter. */
+  maskFilter?: { binaryPath: string; secretsFramePath: string };
 }
 
 interface PendingWaiter {
@@ -124,6 +126,10 @@ export class HostExecBroker {
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestToApprovalKey = new Map<string, string>();
   private readonly notificationTasks = new Set<Promise<void>>();
+  private readonly maskFilter?: {
+    binaryPath: string;
+    secretsFramePath: string;
+  };
 
   constructor(options: HostExecBrokerOptions) {
     this.paths = options.paths;
@@ -138,6 +144,7 @@ export class HostExecBroker {
     this.uiIdleTimeout = options.uiIdleTimeout;
     this.auditDir = options.auditDir;
     this.secretStore = new SecretStore(this.config.secrets);
+    this.maskFilter = options.maskFilter;
   }
 
   async start(
@@ -708,17 +715,32 @@ export class HostExecBroker {
       (proc.stdin as import("bun").FileSink).write(stdin);
       (proc.stdin as import("bun").FileSink).end();
     }
+    const filterProcs: ReturnType<typeof Bun.spawn>[] = [];
+    const wrapStream = (
+      stream: ReadableStream<Uint8Array>,
+    ): ReadableStream<Uint8Array> => {
+      if (!this.maskFilter) return stream;
+      const filter = Bun.spawn([this.maskFilter.binaryPath], {
+        stdin: stream,
+        stdout: "pipe",
+        stderr: "ignore",
+        env: { NAS_MASK_SECRETS_FILE: this.maskFilter.secretsFramePath },
+      });
+      filterProcs.push(filter);
+      return filter.stdout as ReadableStream<Uint8Array>;
+    };
+
     let exitCode: number;
     try {
       await Promise.all([
         pipeStreamToSocket(
-          proc.stdout as ReadableStream<Uint8Array>,
+          wrapStream(proc.stdout as ReadableStream<Uint8Array>),
           socket,
           request.requestId,
           1,
         ),
         pipeStreamToSocket(
-          proc.stderr as ReadableStream<Uint8Array>,
+          wrapStream(proc.stderr as ReadableStream<Uint8Array>),
           socket,
           request.requestId,
           2,
@@ -726,12 +748,17 @@ export class HostExecBroker {
       ]);
     } catch {
       // The client likely disconnected mid-stream; make sure the child
-      // process doesn't leak. Escalate to SIGKILL if the child ignores
-      // SIGTERM instead of hanging forever.
+      // process (and any mask-filter subprocesses it feeds) don't leak.
+      // Escalate to SIGKILL if a child ignores SIGTERM instead of hanging
+      // forever.
       proc.kill();
-      const killTimeout = setTimeout(() => proc.kill(9), 5000);
+      for (const f of filterProcs) f.kill();
+      const killTimeout = setTimeout(() => {
+        proc.kill(9);
+        for (const f of filterProcs) f.kill(9);
+      }, 5000);
       try {
-        await proc.exited;
+        await Promise.all([proc.exited, ...filterProcs.map((f) => f.exited)]);
       } finally {
         clearTimeout(killTimeout);
       }
