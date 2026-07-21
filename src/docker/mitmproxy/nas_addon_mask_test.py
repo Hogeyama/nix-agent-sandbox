@@ -32,6 +32,13 @@ class DeniedIpPolicyTest(unittest.TestCase):
         self.assertFalse(nas_addon._is_denied_ip("example.com"))
         self.assertFalse(nas_addon._is_denied_ip("1.2.3.999"))
 
+    def test_strips_ipv6_zone_identifier_before_policy_check(self):
+        self.assertTrue(nas_addon._is_denied_ip("fe80::1%eth0"))
+        self.assertFalse(
+            nas_addon._is_denied_ip("2001:4860:4860::8888%eth0")
+        )
+        self.assertTrue(nas_addon._is_denied_ip("::ffff:127.0.0.1%lo"))
+
 
 class BuildMaskPatternsTest(unittest.TestCase):
     def test_includes_raw_value(self):
