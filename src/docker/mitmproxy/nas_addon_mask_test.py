@@ -6,9 +6,31 @@ Direct invocation:
 """
 
 import base64
+import json
 import unittest
+from pathlib import Path
 
 import nas_addon
+
+
+class DeniedIpPolicyTest(unittest.TestCase):
+    def test_matches_shared_policy_cases(self):
+        cases_path = (
+            Path(__file__).resolve().parents[2]
+            / "network"
+            / "denied_ip_policy_cases.json"
+        )
+        cases = json.loads(cases_path.read_text())
+        for case in cases:
+            with self.subTest(address=case["address"]):
+                self.assertEqual(
+                    nas_addon._is_denied_ip(case["address"]),
+                    case["denied"],
+                )
+
+    def test_hostname_and_malformed_value_are_not_ip_addresses(self):
+        self.assertFalse(nas_addon._is_denied_ip("example.com"))
+        self.assertFalse(nas_addon._is_denied_ip("1.2.3.999"))
 
 
 class BuildMaskPatternsTest(unittest.TestCase):

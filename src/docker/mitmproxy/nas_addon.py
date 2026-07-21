@@ -8,6 +8,7 @@ decisions, and evaluates review rules for request body inspection.
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import socket
@@ -24,6 +25,44 @@ BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")
 REVIEW_RULES_DIR = os.path.join(NETWORK_DIR, "review-rules")
 
 BODY_PREVIEW_MAX = 1024
+
+DENIED_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    )
+)
+DENIED_IPV6_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in ("::/128", "::1/128", "fc00::/7", "fe80::/10")
+)
+
+
+def _parse_ip(address: str):
+    try:
+        return ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return None
+
+
+def _is_denied_ip(address: str) -> bool:
+    parsed = _parse_ip(address)
+    if parsed is None:
+        return False
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
+        parsed = parsed.ipv4_mapped
+    networks = (
+        DENIED_IPV4_NETWORKS
+        if isinstance(parsed, ipaddress.IPv4Address)
+        else DENIED_IPV6_NETWORKS
+    )
+    return any(parsed in network for network in networks)
 
 # --- request masking -------------------------------------------------------
 # Pattern expansion mirrors src/network/mask_patterns.ts (broker-side

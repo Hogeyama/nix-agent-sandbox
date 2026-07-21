@@ -10,7 +10,7 @@ import * as path from "node:path";
 const python3 = Bun.which("python3");
 const addonDir = path.dirname(new URL(import.meta.url).pathname);
 
-test.skipIf(!python3)("nas_addon mask helpers (python unittest)", async () => {
+test.skipIf(!python3)("nas_addon helpers (python unittest)", async () => {
   const proc = Bun.spawn([python3 as string, "nas_addon_mask_test.py", "-v"], {
     cwd: addonDir,
     env: {
