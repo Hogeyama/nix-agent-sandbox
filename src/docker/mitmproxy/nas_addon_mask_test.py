@@ -74,11 +74,56 @@ class ServerConnectTest(unittest.TestCase):
         asyncio.run(addon.server_connect(data))
         return data
 
+    def test_missing_server_address_fails_closed(self):
+        addon = nas_addon.NasAddon(dns_timeout=0.1)
+        data = FakeServerConnectData(None)
+        asyncio.run(addon.server_connect(data))
+        self.assertIn("missing upstream address", data.server.error)
+
+    def test_direct_public_ip_skips_dns(self):
+        called = False
+
+        async def resolver(_host, _port, **_kwargs):
+            nonlocal called
+            called = True
+            return []
+
+        addon = nas_addon.NasAddon(resolver=resolver, dns_timeout=0.1)
+        data = FakeServerConnectData(("8.8.8.8", 53))
+        asyncio.run(addon.server_connect(data))
+        self.assertFalse(called)
+        self.assertEqual(data.server.address, ("8.8.8.8", 53))
+        self.assertIsNone(data.server.error)
+
     def test_pins_first_allowed_address_and_preserves_hostname_as_sni(self):
         data = self.run_hook(["8.8.8.8", "1.1.1.1"])
         self.assertEqual(data.server.address, ("8.8.8.8", 443))
         self.assertEqual(data.server.sni, "rebind.test")
         self.assertIsNone(data.server.error)
+
+    def test_preserves_pre_existing_sni(self):
+        data = self.run_hook(["8.8.8.8"], sni="existing.test")
+        self.assertEqual(data.server.sni, "existing.test")
+
+    def test_resolver_is_called_once_per_hostname_connection(self):
+        calls = []
+
+        async def resolver(host, port, **kwargs):
+            calls.append((host, port, kwargs))
+            return [addrinfo("8.8.8.8", port)]
+
+        addon = nas_addon.NasAddon(resolver=resolver, dns_timeout=0.1)
+        data = FakeServerConnectData(("once.test", 8443))
+        asyncio.run(addon.server_connect(data))
+        self.assertEqual(
+            calls,
+            [("once.test", 8443, {"type": socket.SOCK_STREAM})],
+        )
+
+    def test_empty_resolution_result_fails_closed(self):
+        data = self.run_hook([])
+        self.assertIn("no usable addresses", data.server.error)
+        self.assertEqual(data.server.address, ("rebind.test", 443))
 
     def test_discards_denied_candidates_before_pinning(self):
         data = self.run_hook(["127.0.0.1", "8.8.8.8", "8.8.8.8"])
@@ -131,6 +176,40 @@ class ServerConnectTest(unittest.TestCase):
         data = FakeServerConnectData(("slow.test", 80))
         asyncio.run(addon.server_connect(data))
         self.assertIn("DNS resolution timed out", data.server.error)
+
+
+class AddressesFromAddrinfoTest(unittest.TestCase):
+    def test_filters_unsupported_families(self):
+        results = [
+            (socket.AF_UNIX, socket.SOCK_STREAM, 0, "", ("ignored", 443)),
+            addrinfo("8.8.8.8", 443),
+        ]
+        self.assertEqual(
+            nas_addon._addresses_from_addrinfo(results),
+            ["8.8.8.8"],
+        )
+
+    def test_filters_non_stream_socket_types(self):
+        results = [
+            (socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("1.1.1.1", 443)),
+            (socket.AF_INET, 0, 0, "", ("8.8.8.8", 443)),
+        ]
+        self.assertEqual(
+            nas_addon._addresses_from_addrinfo(results),
+            ["8.8.8.8"],
+        )
+
+    def test_normalizes_and_deduplicates_in_resolver_order(self):
+        results = [
+            addrinfo("2001:4860:4860:0:0:0:0:8888", 443),
+            addrinfo("2001:4860:4860::8888", 443),
+            addrinfo("8.8.8.8", 443),
+            addrinfo("8.8.8.8", 443),
+        ]
+        self.assertEqual(
+            nas_addon._addresses_from_addrinfo(results),
+            ["2001:4860:4860::8888", "8.8.8.8"],
+        )
 
 
 class BuildMaskPatternsTest(unittest.TestCase):
