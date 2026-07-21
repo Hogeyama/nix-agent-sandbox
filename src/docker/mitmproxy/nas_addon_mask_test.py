@@ -7,9 +7,11 @@ Direct invocation:
 
 import asyncio
 import base64
+import io
 import json
 import socket
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 import nas_addon
@@ -148,6 +150,22 @@ class ServerConnectTest(unittest.TestCase):
         asyncio.run(addon.server_connect(data))
         self.assertFalse(called)
         self.assertIn("denied", data.server.error)
+
+    def test_direct_denial_log_includes_exact_policy_range(self):
+        addon = nas_addon.NasAddon(dns_timeout=0.1)
+        data = FakeServerConnectData(("::ffff:127.0.0.1", 80))
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            asyncio.run(addon.server_connect(data))
+        self.assertIn("::ffff:127.0.0.1:80", stderr.getvalue())
+        self.assertIn("127.0.0.0/8", stderr.getvalue())
+
+    def test_resolved_denial_log_includes_logical_host_and_policy_range(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.run_hook(["127.0.0.1"], host="logical.test")
+        self.assertIn("127.0.0.1 for logical.test:443", stderr.getvalue())
+        self.assertIn("127.0.0.0/8", stderr.getvalue())
 
     def test_resolution_error_fails_closed(self):
         async def resolver(_host, _port, **_kwargs):

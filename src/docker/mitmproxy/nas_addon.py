@@ -53,10 +53,10 @@ def _parse_ip(address: str):
         return None
 
 
-def _is_denied_ip(address: str) -> bool:
+def _denied_ip_classification(address: str) -> Optional[str]:
     parsed = _parse_ip(address)
     if parsed is None:
-        return False
+        return None
     if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
         parsed = parsed.ipv4_mapped
     networks = (
@@ -64,7 +64,14 @@ def _is_denied_ip(address: str) -> bool:
         if isinstance(parsed, ipaddress.IPv4Address)
         else DENIED_IPV6_NETWORKS
     )
-    return any(parsed in network for network in networks)
+    for network in networks:
+        if parsed in network:
+            return str(network)
+    return None
+
+
+def _is_denied_ip(address: str) -> bool:
+    return _denied_ip_classification(address) is not None
 
 
 def _addresses_from_addrinfo(results) -> list[str]:
@@ -339,9 +346,11 @@ class NasAddon:
         host, port = data.server.address
         parsed = _parse_ip(host)
         if parsed is not None:
-            if _is_denied_ip(host):
+            denied_range = _denied_ip_classification(host)
+            if denied_range is not None:
                 print(
-                    f"[nas-addon] DNS-BLOCKED: denied direct IP {host}:{port}",
+                    f"[nas-addon] DNS-BLOCKED: denied direct IP {host}:{port} "
+                    f"(range {denied_range})",
                     file=sys.stderr,
                 )
                 data.server.error = "nas: denied upstream IP"
@@ -368,10 +377,11 @@ class NasAddon:
 
         allowed: list[str] = []
         for address in addresses:
-            if _is_denied_ip(address):
+            denied_range = _denied_ip_classification(address)
+            if denied_range is not None:
                 print(
                     f"[nas-addon] DNS-BLOCKED: denied answer {address} "
-                    f"for {host}:{port}",
+                    f"for {host}:{port} (range {denied_range})",
                     file=sys.stderr,
                 )
             else:
