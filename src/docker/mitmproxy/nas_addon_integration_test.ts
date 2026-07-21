@@ -107,46 +107,51 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   async () => {
     const base = SHARED_TMP ?? "/tmp";
     const runtimeDir = await mkdtemp(path.join(base, "nas-addon-dns-"));
-    const paths = await resolveNetworkRuntimePaths(runtimeDir);
-    const sessionId = `sess_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const token = "integration-token";
-    const socketPath = brokerSocketPath(paths, sessionId);
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
     let brokerRequests = 0;
     let hostConnections = 0;
     let targetPort = 0;
-
-    const target = net.createServer((socket) => {
-      hostConnections += 1;
-      socket.end("HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nhost reached");
-    });
-
-    const broker = net.createServer((socket) => {
-      let input = "";
-      socket.on("data", (chunk) => {
-        input += chunk.toString();
-        const newline = input.indexOf("\n");
-        if (newline < 0) return;
-        const request = JSON.parse(input.slice(0, newline));
-        brokerRequests += 1;
-        socket.end(
-          `${JSON.stringify({
-            version: 1,
-            type: "decision",
-            requestId: request.requestId,
-            decision: "allow",
-            reason: "integration-test",
-          })}\n`,
-        );
-      });
-    });
+    let target: net.Server | undefined;
+    let broker: net.Server | undefined;
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        target.once("error", reject);
-        target.listen(0, "0.0.0.0", resolve);
+      const paths = await resolveNetworkRuntimePaths(runtimeDir);
+      const sessionId = `sess_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      const token = "integration-token";
+      const socketPath = brokerSocketPath(paths, sessionId);
+
+      const targetServer = net.createServer((socket) => {
+        hostConnections += 1;
+        socket.end("HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nhost reached");
       });
-      targetPort = (target.address() as AddressInfo).port;
+      target = targetServer;
+
+      const brokerServer = net.createServer((socket) => {
+        let input = "";
+        socket.on("data", (chunk) => {
+          input += chunk.toString();
+          const newline = input.indexOf("\n");
+          if (newline < 0) return;
+          const request = JSON.parse(input.slice(0, newline));
+          brokerRequests += 1;
+          socket.end(
+            `${JSON.stringify({
+              version: 1,
+              type: "decision",
+              requestId: request.requestId,
+              decision: "allow",
+              reason: "integration-test",
+            })}\n`,
+          );
+        });
+      });
+      broker = brokerServer;
+
+      await new Promise<void>((resolve, reject) => {
+        targetServer.once("error", reject);
+        targetServer.listen(0, "0.0.0.0", resolve);
+      });
+      targetPort = (targetServer.address() as AddressInfo).port;
       await chmod(runtimeDir, 0o755);
       await chmod(paths.caCertDir, 0o777);
       await chmod(paths.brokersDir, 0o755);
@@ -170,8 +175,8 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await chmod(paths.sessionsDir, 0o755);
       await chmod(sessionRegistryPath(paths, sessionId), 0o644);
       await new Promise<void>((resolve, reject) => {
-        broker.once("error", reject);
-        broker.listen(socketPath, resolve);
+        brokerServer.once("error", reject);
+        brokerServer.listen(socketPath, resolve);
       });
       await chmod(socketPath, 0o666);
 
@@ -211,8 +216,8 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
-      if (broker.listening) await closeServer(broker);
-      if (target.listening) await closeServer(target);
+      if (broker?.listening) await closeServer(broker);
+      if (target?.listening) await closeServer(target);
       await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     }
   },
