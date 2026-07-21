@@ -60,6 +60,33 @@ async function waitForTcp(port: number): Promise<void> {
   throw new Error(`timed out waiting for proxy port ${port}`);
 }
 
+async function waitForContainerTcp(
+  containerName: string,
+  port: number,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const proc = Bun.spawn(
+      [
+        "docker",
+        "exec",
+        containerName,
+        "python3",
+        "-c",
+        `import socket; socket.create_connection(("127.0.0.1", ${port}), 0.2).close()`,
+      ],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    if ((await proc.exited) === 0) return;
+    await Bun.sleep(250);
+  }
+  const logs = await dockerLogs(containerName);
+  throw new Error(
+    `timed out waiting for ${containerName}:${port}\n` +
+      `--- container logs ---\n${logs}`,
+  );
+}
+
 async function publishedPort(containerName: string): Promise<number> {
   const proc = Bun.spawn(["docker", "port", containerName, "8080/tcp"], {
     stdout: "pipe",
@@ -80,10 +107,13 @@ async function sendProxyRequest(
   proxyPort: number,
   targetUrl: string,
   credentials: string,
-): Promise<void> {
-  await new Promise<void>((resolve) => {
+): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    let response = "";
     const socket = net.createConnection({ host: "127.0.0.1", port: proxyPort });
-    socket.setTimeout(5_000, () => socket.destroy());
+    socket.setTimeout(5_000, () => {
+      socket.destroy(new Error("timed out waiting for proxy response"));
+    });
     socket.once("connect", () => {
       socket.write(
         [
@@ -96,9 +126,11 @@ async function sendProxyRequest(
         ].join("\r\n"),
       );
     });
-    socket.on("data", () => {});
-    socket.once("error", () => resolve());
-    socket.once("close", () => resolve());
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    socket.once("error", reject);
+    socket.once("close", () => resolve(response));
   });
 }
 
@@ -108,7 +140,6 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     const base = SHARED_TMP ?? "/tmp";
     const runtimeDir = await mkdtemp(path.join(base, "nas-addon-dns-"));
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
-    let brokerRequests = 0;
     let hostConnections = 0;
     let targetPort = 0;
     let target: net.Server | undefined;
@@ -133,7 +164,6 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           const newline = input.indexOf("\n");
           if (newline < 0) return;
           const request = JSON.parse(input.slice(0, newline));
-          brokerRequests += 1;
           socket.end(
             `${JSON.stringify({
               version: 1,
@@ -201,18 +231,20 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         ],
       });
       const proxyPort = await publishedPort(containerName);
+      await waitForContainerTcp(containerName, 8080);
       await waitForTcp(proxyPort);
 
-      await sendProxyRequest(
+      const response = await sendProxyRequest(
         proxyPort,
         `http://rebind.test:${targetPort}/`,
         `${sessionId}:${token}`,
       );
-      await Bun.sleep(100);
+      const logs = await dockerLogs(containerName);
 
-      expect(brokerRequests).toEqual(1);
+      expect(response).toContain("502 Bad Gateway");
+      expect(response).toContain("all resolved upstream IPs were denied");
       expect(hostConnections).toEqual(0);
-      expect(await dockerLogs(containerName)).toContain("DNS-BLOCKED");
+      expect(logs).toContain("DNS-BLOCKED");
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
@@ -221,4 +253,5 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     }
   },
+  60_000,
 );
