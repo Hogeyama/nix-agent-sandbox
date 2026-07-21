@@ -108,9 +108,12 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
   parity を検証した。
 - **H5**: mitmproxy addon の async `server_connect` で DNS を解決し、denied range の候補を除外してから
   最初の許可 IP へ `data.server.address` をピン留めする。TLS の SNI は元の論理ホスト名を維持する。
-- **検証**: Python addon unit、broker integration、mixed-answer・dedup・timeout・direct-IP・already-set SNI の
-  regression test を追加。実 mitmproxy が Docker host-gateway を解決してもホスト TCP 接続が 0 であることを
-  検証する guarded integration test も追加した（Docker 非対応環境では skip）。
+- **検証**: `src/network/ip_policy_test.ts`、`src/network/broker_integration_test.ts`、
+  `src/docker/mitmproxy/nas_addon_test.ts` で境界値と mixed-answer・dedup・timeout・direct-IP・
+  already-set SNI を回帰検証する。`src/docker/mitmproxy/nas_addon_integration_test.ts` では、実 mitmproxy が
+  Docker host-gateway を解決してもホスト TCP 接続が 0 であることを検証する。
+- **2026-07-21 実行結果**: unit 2455 pass / 9 skip、broker integration 24 pass。実 mitmproxy integration は
+  この検証環境で Docker が利用できず 1 skip（Docker 利用可能環境では guarded test を実行）。
 
 ### 危険で他に代替のある設定を削除
 `GcloudConfig.mountConfig` / `AwsConfig.mountConfig` / `GpgConfig.forwardAgent` の
