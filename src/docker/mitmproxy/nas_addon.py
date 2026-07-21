@@ -6,6 +6,7 @@ Proxy-Authorization, queries the per-session broker UDS for authorization
 decisions, and evaluates review rules for request body inspection.
 """
 
+import asyncio
 import base64
 import hashlib
 import ipaddress
@@ -25,6 +26,7 @@ BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")
 REVIEW_RULES_DIR = os.path.join(NETWORK_DIR, "review-rules")
 
 BODY_PREVIEW_MAX = 1024
+DNS_TIMEOUT_SECONDS = 5.0
 
 DENIED_IPV4_NETWORKS = tuple(
     ipaddress.ip_network(cidr)
@@ -63,6 +65,25 @@ def _is_denied_ip(address: str) -> bool:
         else DENIED_IPV6_NETWORKS
     )
     return any(parsed in network for network in networks)
+
+
+def _addresses_from_addrinfo(results) -> list[str]:
+    addresses: list[str] = []
+    seen: set[str] = set()
+    for family, socktype, _proto, _canonname, sockaddr in results:
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        if socktype not in (0, socket.SOCK_STREAM):
+            continue
+        address = sockaddr[0]
+        parsed = _parse_ip(address)
+        if parsed is None:
+            continue
+        normalized = str(parsed)
+        if normalized not in seen:
+            seen.add(normalized)
+            addresses.append(normalized)
+    return addresses
 
 # --- request masking -------------------------------------------------------
 # Pattern expansion mirrors src/network/mask_patterns.ts (broker-side
@@ -297,7 +318,9 @@ def _verify_creds(session_id: str, token: str) -> Optional[dict]:
 
 
 class NasAddon:
-    def __init__(self):
+    def __init__(self, resolver=None, dns_timeout=DNS_TIMEOUT_SECONDS):
+        self._resolver = resolver
+        self._dns_timeout = dns_timeout
         # CONNECT credentials keyed by client connection id.
         # For HTTPS, Proxy-Authorization is only on the CONNECT request,
         # not on inner requests after TLS decryption.
@@ -307,6 +330,65 @@ class NasAddon:
         # variants per secret on every allowed request.
         self._mask_values_cache: Optional[list[str]] = None
         self._mask_patterns_cache: list[bytes] = []
+
+    async def server_connect(self, data) -> None:
+        if not data.server.address:
+            data.server.error = "nas: missing upstream address"
+            return
+
+        host, port = data.server.address
+        parsed = _parse_ip(host)
+        if parsed is not None:
+            if _is_denied_ip(host):
+                print(
+                    f"[nas-addon] DNS-BLOCKED: denied direct IP {host}:{port}",
+                    file=sys.stderr,
+                )
+                data.server.error = "nas: denied upstream IP"
+            return
+
+        resolver = self._resolver or asyncio.get_running_loop().getaddrinfo
+        try:
+            results = await asyncio.wait_for(
+                resolver(host, port, type=socket.SOCK_STREAM),
+                timeout=self._dns_timeout,
+            )
+            addresses = _addresses_from_addrinfo(results)
+        except asyncio.TimeoutError:
+            data.server.error = "nas: DNS resolution timed out"
+            return
+        except Exception as exc:
+            print(
+                f"[nas-addon] DNS-BLOCKED: resolution failed for "
+                f"{host}:{port}: {exc}",
+                file=sys.stderr,
+            )
+            data.server.error = "nas: DNS resolution failed"
+            return
+
+        allowed: list[str] = []
+        for address in addresses:
+            if _is_denied_ip(address):
+                print(
+                    f"[nas-addon] DNS-BLOCKED: denied answer {address} "
+                    f"for {host}:{port}",
+                    file=sys.stderr,
+                )
+            else:
+                allowed.append(address)
+
+        if not addresses:
+            data.server.error = (
+                "nas: DNS resolution returned no usable addresses"
+            )
+            return
+        if not allowed:
+            data.server.error = "nas: all resolved upstream IPs were denied"
+            return
+
+        if data.server.sni is None:
+            data.server.sni = host
+        data.server.address = (allowed[0], port)
 
     def _patterns_for(self, mask_values: list[str]) -> list[bytes]:
         if mask_values == self._mask_values_cache:

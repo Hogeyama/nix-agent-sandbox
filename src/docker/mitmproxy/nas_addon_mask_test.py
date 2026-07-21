@@ -5,12 +5,36 @@ Direct invocation:
     PYTHONPATH=testdata/mitmproxy_stub python3 nas_addon_mask_test.py
 """
 
+import asyncio
 import base64
 import json
+import socket
 import unittest
 from pathlib import Path
 
 import nas_addon
+
+
+def addrinfo(address, port):
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+    sockaddr = (
+        (address, port, 0, 0)
+        if family == socket.AF_INET6
+        else (address, port)
+    )
+    return (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)
+
+
+class FakeServer:
+    def __init__(self, address, sni=None):
+        self.address = address
+        self.sni = sni
+        self.error = None
+
+
+class FakeServerConnectData:
+    def __init__(self, address, sni=None):
+        self.server = FakeServer(address, sni)
 
 
 class DeniedIpPolicyTest(unittest.TestCase):
@@ -38,6 +62,75 @@ class DeniedIpPolicyTest(unittest.TestCase):
             nas_addon._is_denied_ip("2001:4860:4860::8888%eth0")
         )
         self.assertTrue(nas_addon._is_denied_ip("::ffff:127.0.0.1%lo"))
+
+
+class ServerConnectTest(unittest.TestCase):
+    def run_hook(self, answers, host="rebind.test", port=443, sni=None):
+        async def resolver(_host, _port, **_kwargs):
+            return [addrinfo(address, port) for address in answers]
+
+        addon = nas_addon.NasAddon(resolver=resolver, dns_timeout=0.1)
+        data = FakeServerConnectData((host, port), sni)
+        asyncio.run(addon.server_connect(data))
+        return data
+
+    def test_pins_first_allowed_address_and_preserves_hostname_as_sni(self):
+        data = self.run_hook(["8.8.8.8", "1.1.1.1"])
+        self.assertEqual(data.server.address, ("8.8.8.8", 443))
+        self.assertEqual(data.server.sni, "rebind.test")
+        self.assertIsNone(data.server.error)
+
+    def test_discards_denied_candidates_before_pinning(self):
+        data = self.run_hook(["127.0.0.1", "8.8.8.8", "8.8.8.8"])
+        self.assertEqual(data.server.address, ("8.8.8.8", 443))
+        self.assertIsNone(data.server.error)
+
+    def test_all_denied_answers_fail_closed(self):
+        data = self.run_hook(["127.0.0.1", "::1"])
+        self.assertIn("denied", data.server.error)
+        self.assertEqual(data.server.address, ("rebind.test", 443))
+
+    def test_direct_denied_ip_fails_without_dns(self):
+        called = False
+
+        async def resolver(_host, _port, **_kwargs):
+            nonlocal called
+            called = True
+            return []
+
+        addon = nas_addon.NasAddon(resolver=resolver, dns_timeout=0.1)
+        data = FakeServerConnectData(("::ffff:127.0.0.1", 80))
+        asyncio.run(addon.server_connect(data))
+        self.assertFalse(called)
+        self.assertIn("denied", data.server.error)
+
+    def test_resolution_error_fails_closed(self):
+        async def resolver(_host, _port, **_kwargs):
+            raise socket.gaierror("not found")
+
+        addon = nas_addon.NasAddon(resolver=resolver, dns_timeout=0.1)
+        data = FakeServerConnectData(("missing.test", 80))
+        asyncio.run(addon.server_connect(data))
+        self.assertIn("DNS resolution failed", data.server.error)
+
+    def test_malformed_resolution_answer_fails_closed(self):
+        async def resolver(_host, _port, **_kwargs):
+            return [(socket.AF_INET,)]
+
+        addon = nas_addon.NasAddon(resolver=resolver, dns_timeout=0.1)
+        data = FakeServerConnectData(("malformed.test", 80))
+        asyncio.run(addon.server_connect(data))
+        self.assertIn("DNS resolution failed", data.server.error)
+
+    def test_resolution_timeout_fails_closed(self):
+        async def resolver(_host, _port, **_kwargs):
+            await asyncio.sleep(1)
+            return []
+
+        addon = nas_addon.NasAddon(resolver=resolver, dns_timeout=0.001)
+        data = FakeServerConnectData(("slow.test", 80))
+        asyncio.run(addon.server_connect(data))
+        self.assertIn("DNS resolution timed out", data.server.error)
 
 
 class BuildMaskPatternsTest(unittest.TestCase):
