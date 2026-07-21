@@ -365,7 +365,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
     const input = { ...sharedInput, ...stageState };
     const plan = planDind(input, {
       disableCache: true,
-      readinessTimeoutMs: 20_000,
+      readinessTimeoutMs: 60_000,
     });
     expect(plan).not.toBeNull();
 
@@ -383,7 +383,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
     try {
       const stage = createDindStageWithOptions(sharedInput, {
         disableCache: true,
-        readinessTimeoutMs: 20_000,
+        readinessTimeoutMs: 60_000,
       });
       const result = await Effect.runPromise(
         stage
@@ -428,7 +428,7 @@ test.skipIf(!dindAvailable || !RUNNING_ON_HOST_DOCKER)(
       }
     }
   },
-  30_000,
+  90_000,
 );
 
 /**

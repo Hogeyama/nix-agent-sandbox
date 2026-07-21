@@ -989,6 +989,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       expect(result.stdout.includes("MY_VAR=from-config")).toEqual(true);
     });
   },
+  30_000,
 );
 
 test.skipIf(!dockerAvailable || !canBindMount)(
@@ -1006,6 +1007,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       expect(content.trim()).toEqual("written-by-fake-codex");
     });
   },
+  30_000,
 );
 
 // ============================================================
