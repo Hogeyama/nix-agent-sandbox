@@ -3,6 +3,7 @@
 src/ui/dist/
 .playwright/cli.config.json
 .playwright-cli/
+.worktrees/
 .direnv/
 node_modules/
 result
