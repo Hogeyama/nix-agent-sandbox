@@ -134,3 +134,18 @@ test("denyReasonForTarget: IPv6 loopback is blocked", () => {
 test("denyReasonForTarget: public IPv6 is allowed", () => {
   expect(denyReasonForTarget({ host: "2001:db8::1", port: 80 })).toEqual(null);
 });
+
+test("denyReasonForTarget: IPv4-mapped private IPv6 is blocked", () => {
+  expect(denyReasonForTarget({ host: "::ffff:127.0.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+  expect(denyReasonForTarget({ host: "::ffff:100.64.0.1", port: 80 })).toEqual(
+    "blocked-private-ip",
+  );
+});
+
+test("denyReasonForTarget: IPv4-mapped public IPv6 is allowed", () => {
+  expect(denyReasonForTarget({ host: "::ffff:8.8.8.8", port: 53 })).toEqual(
+    null,
+  );
+});
