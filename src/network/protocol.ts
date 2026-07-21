@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { isDeniedIpAddress } from "./ip_policy.ts";
 
 export type ApprovalScope = "once" | "host-port" | "host";
 export type RequestKind = "connect" | "forward";
@@ -261,18 +262,9 @@ export function matchesPathPrefix(path: string, prefix: string): boolean {
 
 export function denyReasonForTarget(target: NormalizedTarget): string | null {
   const host = normalizeHost(target.host);
-  if (host === "localhost") {
-    return "blocked-special-host";
-  }
-
-  const ipVersion = isIP(host);
-  if (ipVersion === 4) {
-    if (isDeniedIpv4(host)) return "blocked-private-ip";
-    return null;
-  }
-  if (ipVersion === 6) {
-    if (isDeniedIpv6(host)) return "blocked-private-ip";
-    return null;
+  if (host === "localhost") return "blocked-special-host";
+  if (isIP(host) !== 0 && isDeniedIpAddress(host)) {
+    return "blocked-private-ip";
   }
   return null;
 }
@@ -330,34 +322,4 @@ function randomHex(bytes: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
-}
-
-function isDeniedIpv4(host: string): boolean {
-  const parts = host.split(".").map(Number);
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
-    return false;
-  }
-  const [a, b] = parts;
-  if (a === 10 || a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  return false;
-}
-
-function isDeniedIpv6(host: string): boolean {
-  const normalized = host.toLowerCase();
-  if (normalized === "::1") return true;
-  const first = normalized.split(":")[0];
-  if (first.length === 0) return false;
-  const value = Number.parseInt(first, 16);
-  if (Number.isNaN(value)) return false;
-  // fc00::/7  — ULA (unique local address)
-  if ((value & 0xfe00) === 0xfc00) return true;
-  // fe80::/10 — link-local
-  if ((value & 0xffc0) === 0xfe80) return true;
-  return false;
 }
