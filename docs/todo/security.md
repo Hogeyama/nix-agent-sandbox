@@ -21,8 +21,6 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 | 優先 | 項目 | 種別 | 工数 | 根拠 |
 |---|---|---|---|---|
-| **P0** | H6 IP 拒否リストの穴（述語バグ） | Sec | 小 | `0.0.0.0/8`・CGNAT・IPv4-mapped IPv6・`::` の拒否が必要 |
-| **P0** | H5 DNS リバインディング SSRF（多層防御） | Sec | 中 | addon で resolve→IP再チェック→ピン留めが必要 |
 | **P0** | 危険な代替あり設定の削除（gcloud/aws `mountConfig`, gpg `forwardAgent`） | Sec | 小 | 型+mount+probe+Pkl から削除する |
 | **P0** | §3-A ドキュメント/スキルのドリフト | Docs | 小 | 現行実装に合わせて更新する |
 | **P1** | H2 認証情報ディレクトリ常時 RW → host persistence | Sec | 中〜大 | `~/.claude` 等 hook 書換で次回 host 起動時に RCE |
@@ -42,6 +40,10 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 **削除済み（裏取りで修正確認）**: §2-1 addon-hash 再作成 / §2-2 pathPrefix 境界 / E1 error channel /
 §5 の pricing・codex OTEL・SSE 定数・frontend history pages・seedInvocation。詳細は各節の `[検証]` 参照。
 
+**検証済み完了（2026-07-21）**:
+- H6 IP 拒否リストの穴 — `51fa4414`, `73681f1f`, `be5fe26e`
+- H5 DNS リバインディング SSRF — `228f9464`, `18faee86`, `2363668a`, `fedebbad`
+
 ---
 
 # §1. Security
@@ -60,7 +62,8 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
   2. コンテナ内 agent → host への **escape / persistence**（H2・権限ハードニングが残）
   3. ~~共有ホストの別ユーザ (TCP loopback)~~ → H3 受容
   4. ブラウザ経由の **CSRF / DNS rebinding** (Origin guard で対策済)
-  5. コンテナ内 agent → **network egress 封じ込めの突破**（H5/H6 が残）
+  5. ✅ コンテナ内 agent → **network egress 封じ込めの突破** — IP literal と
+     DNS 解決後の denied range を多層で拒否し、許可 IP へピン留め（H5/H6）
 
 ## 対応状況サマリ
 
@@ -70,8 +73,8 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 | CRITICAL-2 未信頼 repo-local config → ホストRCE | ✅ 解決 | trust gate + pkl eval サンドボックス |
 | HIGH-3 Web UI に帯域外トークン無し | 🟡 受容 | 「同一ホスト＝信頼境界」。CSRF/DNS rebinding は Origin/Host guard で防御済 |
 | HIGH DinD egress バイパス | ✅ 解決 | 実機で内側 egress 不通・pull は allowlist 下を確認 |
-| H5 DNS リバインディング SSRF | ⬜ 残 **P0** | resolve→denied-IP再チェック→接続先IPのピン留めが必要 |
-| H6 IP リテラル拒否リストの穴 | ⬜ 残 **P0** | `0.0.0.0/8`・CGNAT・IPv4-mapped IPv6・`::` の拒否が必要 |
+| H5 DNS リバインディング SSRF | ✅ 解決 | addon の async `server_connect` で resolve→denied-IP 除外→許可 IP へピン留め。SNI は論理ホスト名を維持 |
+| H6 IP リテラル拒否リストの穴 | ✅ 解決 | TS の構造的 IP パースと Python `ipaddress` を同一境界 corpus で parity 検証 |
 | 危険設定削除 (gcloud/aws/gpg) | ⬜ 残 **P0** | 型+mount+probe+Pkl から削除する |
 | H2 認証情報ディレクトリ RW | ⬜ 残 **P1** | [検証] CONFIRMED。`~/.claude`/`~/.copilot`/`~/.codex` すべて `:ro` 無し |
 | コンテナ権限ハードニング | ⬜ 残 **P1** | `no-new-privileges` + `cap-drop ALL` の追加が必要 |
@@ -85,6 +88,9 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 - hostexec 自己承認バイパス（exec/control 2ソケット分離）— CRITICAL-1
 - workspace-trust ゲート + pkl eval サンドボックス — CRITICAL-2
 - DinD egress バイパス封じ込め
+- H6 IP literal 拒否 — `0.0.0.0/8`・CGNAT・IPv4-mapped IPv6・unspecified/loopback/link-local を
+  TS/Python の両経路で拒否
+- H5 DNS リバインディング SSRF — DNS 応答の denied IP を除外し、最初の許可 IP へ接続先をピン留め
 - mount: extra-mounts.src を realpath で解決（symlink escape）
 - mount: extra-mounts.dst の containerWorkDir/Home 逸脱を拒否
 - hostexec: 絶対パス argv0 を安全 prefix 配下に制限
@@ -95,13 +101,16 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 ## P0 セキュリティ
 
-### H5. DNS リバインディング SSRF
-対応案: mitmproxy addon で DNS resolve → denied-IP 再チェック → その IP にピン留めして接続する。
-TOCTOU も同時に塞ぎ、統合テストを追加する。
+### H5/H6. network SSRF hardening — ✅ 2026-07-21 解決
 
-### H6. IP リテラル拒否リストの穴
-`0.0.0.0/8`・CGNAT `100.64.0.0/10` を追加する。IPv6 は正規パースして IPv4-mapped は IPv4 判定へ委譲し、
-`::`/`::1` を明示ブロックする。TS/Python 両方の拒否リストを同期する。
+- **H6**: TS は文字列 prefix ではなく IPv4/IPv6 を構造的にパースする。Python は `ipaddress` と明示 CIDR を使い、
+  共有境界 corpus で `0.0.0.0/8`・CGNAT `100.64.0.0/10`・IPv4-mapped IPv6・`::`・`::1` などの
+  parity を検証した。
+- **H5**: mitmproxy addon の async `server_connect` で DNS を解決し、denied range の候補を除外してから
+  最初の許可 IP へ `data.server.address` をピン留めする。TLS の SNI は元の論理ホスト名を維持する。
+- **検証**: Python addon unit、broker integration、mixed-answer・dedup・timeout・direct-IP・already-set SNI の
+  regression test を追加。実 mitmproxy が Docker host-gateway を解決してもホスト TCP 接続が 0 であることを
+  検証する guarded integration test も追加した（Docker 非対応環境では skip）。
 
 ### 危険で他に代替のある設定を削除
 `GcloudConfig.mountConfig` / `AwsConfig.mountConfig` / `GpgConfig.forwardAgent` の
