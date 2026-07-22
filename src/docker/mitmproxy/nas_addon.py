@@ -368,12 +368,21 @@ def _schema_mask_json(body: bytes, patterns: list) -> tuple:
         parsed = json.loads(body)
     except (json.JSONDecodeError, ValueError):
         return None, True
-    masked, changed, blocked = _walk_schema(parsed, None, patterns)
-    if blocked:
+    # _walk_schema (深いネストで RecursionError の可能性) と後続の
+    # json.dumps().encode("utf-8") (lone surrogate を含む文字列で
+    # UnicodeEncodeError を送出する可能性) をまとめて保護する。
+    # fail-closed: ここで捕捉できない例外を通過させると、マスク未適用の
+    # 本文がそのまま送信されて秘密漏洩につながるため、あらゆる例外を
+    # blocked 扱いにする。
+    try:
+        masked, changed, blocked = _walk_schema(parsed, None, patterns)
+        if blocked:
+            return None, True
+        if not changed:
+            return None, False
+        return json.dumps(masked, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), False
+    except Exception:
         return None, True
-    if not changed:
-        return None, False
-    return json.dumps(masked, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), False
 
 
 def _match_host_pattern(host: str, pattern: str) -> bool:

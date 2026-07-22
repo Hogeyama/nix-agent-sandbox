@@ -554,6 +554,22 @@ class TestSchemaMask(unittest.TestCase):
         self.assertFalse(blocked)
         self.assertIsNone(body)
 
+    def test_lone_surrogate_encode_failure_fails_closed(self):
+        # ensure_ascii=True (json.dumps のデフォルト) は lone surrogate を
+        # "\ud800" として安全にエスケープするため、この body 構築自体は
+        # 例外を起こさない。json.loads で lone surrogate 文字列に復元された
+        # 後、SECRET123 のマスク発火で changed=True の経路に入り、最終の
+        # json.dumps(..., ensure_ascii=False).encode("utf-8") が strict
+        # UTF-8 エンコードで UnicodeEncodeError を送出する状況を再現する。
+        body, blocked = self._mask({
+            "model": "m",
+            "system": "\ud800",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "key is SECRET123 ok"}]}],
+        })
+        self.assertTrue(blocked)
+        self.assertIsNone(body)
+
 
 if __name__ == "__main__":
     unittest.main()
