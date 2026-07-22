@@ -7,7 +7,34 @@ import {
   normalizeHost,
   normalizeTarget,
   parseAllowlistEntry,
+  validateEgressOutcome,
 } from "./protocol.ts";
+
+const otherMethodBlockOutcome = {
+  version: 1,
+  type: "egress_outcome",
+  requestId: "req-other-method",
+  sessionId: "sess_test",
+  method: "OTHER",
+  route: "unknown",
+  action: "block",
+  reason: "unknown-endpoint",
+};
+
+test("validateEgressOutcome: accepts OTHER only as a sanitized method", () => {
+  expect(
+    validateEgressOutcome(otherMethodBlockOutcome, "sess_test"),
+  ).toBeNull();
+});
+
+test("validateEgressOutcome: rejects a raw unsupported method", () => {
+  expect(
+    validateEgressOutcome(
+      { ...otherMethodBlockOutcome, method: "HEAD" },
+      "sess_test",
+    ),
+  ).toEqual("invalid egress outcome method");
+});
 
 test("decodeProxyAuthorization: decodes Basic credentials", () => {
   const header = `Basic ${btoa("sess_abc:tok_xyz")}`;

@@ -210,6 +210,42 @@ def _query_broker(socket_path: str, request: dict) -> dict:
         sock.close()
 
 
+def _report_egress_outcome(
+    socket_path: str,
+    request_id: str,
+    session_id: str,
+    method: str,
+    route: str,
+    action: str,
+    reason: str,
+) -> None:
+    try:
+        response = _query_broker(socket_path, {
+            "version": 1,
+            "type": "egress_outcome",
+            "requestId": request_id,
+            "sessionId": session_id,
+            "method": method,
+            "route": route,
+            "action": action,
+            "reason": reason,
+        })
+        if not (
+            response.get("version") == 1
+            and response.get("type") == "egress_outcome_recorded"
+            and response.get("requestId") == request_id
+        ):
+            print(
+                "[nas-addon] egress outcome audit unavailable",
+                file=sys.stderr,
+            )
+    except Exception:
+        print(
+            "[nas-addon] egress outcome audit unavailable",
+            file=sys.stderr,
+        )
+
+
 def _normalize_host(host: str) -> str:
     h = host.strip().lower()
     if h.startswith("[") and h.endswith("]"):
@@ -273,6 +309,27 @@ def _block_reason_for_route(route: str) -> str:
     if route == "/v1/files":
         return "file-upload-blocked"
     return "unknown-endpoint"
+
+
+def _safe_anthropic_method(method: str) -> str:
+    normalized = method.upper()
+    if normalized in ("GET", "POST"):
+        return normalized
+    return "OTHER"
+
+
+def _plan_bodyless_anthropic_request(
+    body: Optional[bytes],
+) -> tuple[str, str]:
+    if body is None:
+        return "block", "body-unavailable"
+    if len(body) != 0:
+        return "block", "unexpected-body"
+    return "bodyless-pass", "known-bodyless-endpoint"
+
+
+def _should_emit_block_log(count: int) -> bool:
+    return count > 0 and (count & (count - 1)) == 0
 
 
 # コンテンツコンテナ内で許可するブロック型。ここに無い type が
@@ -348,14 +405,22 @@ def _walk_schema(node, parent_key: Optional[str], patterns: list[bytes]) -> tupl
     return node, False, False
 
 
-def _schema_mask_json(body: bytes, patterns: list[bytes]) -> tuple:
-    """(masked_body|None, blocked) を返す。"""
-    if not body:
-        return None, False
+def _schema_mask_json(
+    body: bytes, patterns: list[bytes]
+) -> tuple[Optional[bytes], Optional[str]]:
+    """(masked_body|None, block_reason|None) を返す。"""
+    def reject_duplicate_members(pairs):
+        parsed_object = {}
+        for key, value in pairs:
+            if key in parsed_object:
+                raise ValueError("duplicate JSON object member")
+            parsed_object[key] = value
+        return parsed_object
+
     try:
-        parsed = json.loads(body)
+        parsed = json.loads(body, object_pairs_hook=reject_duplicate_members)
     except Exception:
-        return None, True
+        return None, "decode-failed"
     # _walk_schema (深いネストで RecursionError の可能性) と後続の
     # json.dumps().encode("utf-8") (lone surrogate を含む文字列で
     # UnicodeEncodeError を送出する可能性) をまとめて保護する。
@@ -365,29 +430,31 @@ def _schema_mask_json(body: bytes, patterns: list[bytes]) -> tuple:
     try:
         masked, changed, blocked = _walk_schema(parsed, None, patterns)
         if blocked:
-            return None, True
+            return None, "schema-unknown"
         if not changed:
-            return None, False
-        return json.dumps(masked, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), False
+            return None, None
+        return (
+            json.dumps(
+                masked, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8"),
+            None,
+        )
     except Exception:
-        return None, True
+        return None, "decode-failed"
 
 
 def _plan_anthropic_masking(
-    method: str, path: str, body: Optional[bytes], patterns: list[bytes]
-) -> tuple:
-    """(action, masked_body) を返す。action は 'block'/'rewrite'/'passthrough'。"""
-    endpoint_class, _route = _classify_anthropic_endpoint(method, path)
-    if endpoint_class != "schema-mask":
-        return "block", None
+    body: Optional[bytes], patterns: list[bytes]
+) -> tuple[str, Optional[bytes], str]:
+    """Schema request の (action, masked_body, reason) を返す。"""
     if body is None:
-        return "block", None
-    masked, blocked = _schema_mask_json(body, patterns)
-    if blocked:
-        return "block", None
+        return "block", None, "body-unavailable"
+    masked, block_reason = _schema_mask_json(body, patterns)
+    if block_reason is not None:
+        return "block", None, block_reason
     if masked is None:
-        return "passthrough", None
-    return "rewrite", masked
+        return "passthrough", None, "recognized-schema"
+    return "rewrite", masked, "recognized-schema"
 
 
 def _registry_anthropic_egress(registry) -> bool:
@@ -451,6 +518,8 @@ class NasAddon:
         # variants per secret on every allowed request.
         self._mask_values_cache: Optional[list[str]] = None
         self._mask_patterns_cache: list[bytes] = []
+        self._anthropic_block_counts: dict[tuple[str, ...], int] = {}
+        self._client_sessions: dict[str, set[str]] = {}
 
     def _patterns_for(self, mask_values: list[str]) -> list[bytes]:
         if mask_values == self._mask_values_cache:
@@ -490,6 +559,9 @@ class NasAddon:
             return
 
         self._connect_creds[flow.client_conn.id] = creds
+        self._client_sessions.setdefault(flow.client_conn.id, set()).add(
+            session_id
+        )
 
     def request(self, flow: http.HTTPFlow) -> None:
         # Try request header first (HTTP forward proxy),
@@ -502,11 +574,16 @@ class NasAddon:
             if creds:
                 cred_source = "connect_cache"
         if not creds:
+            safe_method = _safe_anthropic_method(flow.request.method)
+            safe_route = "unknown"
+            if _is_anthropic_host(flow.request.host):
+                _, safe_route = _classify_anthropic_endpoint(
+                    flow.request.method, flow.request.path
+                )
             print(f"[nas-addon] REQUEST 407: no creds found, "
                   f"client={flow.client_conn.id}, "
                   f"has_proxy_auth={bool(proxy_auth)}, "
-                  f"connect_cache_keys={list(self._connect_creds.keys())}, "
-                  f"url={flow.request.pretty_url}",
+                  f"method={safe_method} route={safe_route}",
                   file=sys.stderr)
             flow.response = http.Response.make(
                 407, b"missing proxy credentials",
@@ -528,6 +605,10 @@ class NasAddon:
                 {"Proxy-Authenticate": 'Basic realm="nas"'},
             )
             return
+
+        self._client_sessions.setdefault(flow.client_conn.id, set()).add(
+            session_id
+        )
 
         host = _normalize_host(flow.request.host)
         port = flow.request.port
@@ -564,8 +645,15 @@ class NasAddon:
             "bodySize": 0,
         }
 
+        request_body = None
+        request_body_loaded = False
         if matched_rule:
-            body_bytes = flow.request.content or b""
+            try:
+                request_body = flow.request.content
+            except ValueError:
+                request_body = None
+            request_body_loaded = True
+            body_bytes = request_body or b""
             body_preview = None
             if body_bytes:
                 try:
@@ -597,25 +685,71 @@ class NasAddon:
         mask_values = decision.get("maskValues") or []
         patterns = self._patterns_for(mask_values) if mask_values else []
 
-        if _is_anthropic_host(host) and _registry_anthropic_egress(registry):
-            try:
-                body = flow.request.content
-            except ValueError:
-                body = None
-            action, masked_body = _plan_anthropic_masking(
-                method, request_path, body, patterns)
-            if action == "block":
-                print(
-                    f"[nas-addon] SCHEMA-BLOCKED: fail-closed on "
-                    f"{method} {request_path} (unrecognized structure or "
-                    f"undecodable body)", file=sys.stderr)
-                flow.response = http.Response.make(
-                    403, b"blocked: unrecognized Anthropic request structure")
-                return
-            if action == "rewrite":
+        anthropic_egress_enabled = (
+            _is_anthropic_host(host)
+            and _registry_anthropic_egress(registry)
+        )
+        if anthropic_egress_enabled:
+            _mask_url_and_headers(flow, patterns)
+            endpoint_class, route = _classify_anthropic_endpoint(
+                method, flow.request.path
+            )
+            if request_body_loaded:
+                body = request_body
+            else:
+                try:
+                    body = flow.request.content
+                except ValueError:
+                    body = None
+
+            masked_body = None
+            if endpoint_class == "schema-mask":
+                plan_action, masked_body, reason = (
+                    _plan_anthropic_masking(body, patterns)
+                )
+                action = (
+                    "block" if plan_action == "block" else "schema-mask"
+                )
+            elif endpoint_class == "bodyless-pass":
+                action, reason = _plan_bodyless_anthropic_request(body)
+            else:
+                action = "block"
+                reason = _block_reason_for_route(route)
+
+            if masked_body is not None:
                 flow.request.content = masked_body
-            if patterns:
-                _mask_url_and_headers(flow, patterns)
+
+            safe_method = _safe_anthropic_method(method)
+            _report_egress_outcome(
+                broker_socket,
+                request_id,
+                session_id,
+                safe_method,
+                route,
+                action,
+                reason,
+            )
+
+            if action == "block":
+                block_key = (
+                    session_id,
+                    safe_method,
+                    route,
+                    action,
+                    reason,
+                )
+                count = self._anthropic_block_counts.get(block_key, 0) + 1
+                self._anthropic_block_counts[block_key] = count
+                if _should_emit_block_log(count):
+                    print(
+                        f"[nas-addon] ANTHROPIC-BLOCKED: "
+                        f"method={safe_method} route={route} "
+                        f"action={action} reason={reason} count={count}",
+                        file=sys.stderr,
+                    )
+                flow.response = http.Response.make(
+                    403, b"blocked: Anthropic egress policy")
+                return
         else:
             if mask_values:
                 _apply_request_masking(flow, patterns)
@@ -630,9 +764,14 @@ class NasAddon:
         inject_headers = decision.get("injectHeaders", [])
         for h in inject_headers:
             flow.request.headers[h["name"]] = h["value"]
-            print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{flow.request.path} "
-                  f"(cred_source={cred_source})", file=sys.stderr)
-        if not inject_headers and decision.get("decision") == "allow":
+            if not anthropic_egress_enabled:
+                print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{flow.request.path} "
+                      f"(cred_source={cred_source})", file=sys.stderr)
+        if (
+            not inject_headers
+            and decision.get("decision") == "allow"
+            and not anthropic_egress_enabled
+        ):
             print(f"[nas-addon] NO INJECT: no credentials matched for "
                   f"{host}:{port}{flow.request.path}", file=sys.stderr)
 
@@ -641,6 +780,20 @@ class NasAddon:
 
     def client_disconnected(self, client: connection.Client) -> None:
         self._connect_creds.pop(client.id, None)
+        disconnected_sessions = self._client_sessions.pop(client.id, set())
+        active_sessions = {
+            session_id
+            for sessions in self._client_sessions.values()
+            for session_id in sessions
+        }
+        inactive_sessions = disconnected_sessions - active_sessions
+        if not inactive_sessions:
+            return
+        self._anthropic_block_counts = {
+            key: count
+            for key, count in self._anthropic_block_counts.items()
+            if key[0] not in inactive_sessions
+        }
 
 
 addons = [NasAddon()]

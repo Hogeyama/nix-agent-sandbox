@@ -51,7 +51,7 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
   }
 });
 
-test("SessionBroker: egress outcome is acknowledged and audited", async () => {
+test("SessionBroker: OTHER method block outcome is acknowledged and audited", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
@@ -74,7 +74,7 @@ test("SessionBroker: egress outcome is acknowledged and audited", async () => {
         type: "egress_outcome",
         requestId: "req-egress",
         sessionId: "sess_test",
-        method: "POST",
+        method: "OTHER",
         route: "/v1/files",
         action: "block",
         reason: "file-upload-blocked",
@@ -90,6 +90,7 @@ test("SessionBroker: egress outcome is acknowledged and audited", async () => {
     expect(logs.length).toEqual(1);
     expect(logs[0].phase).toEqual("egress");
     expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].method).toEqual("OTHER");
     expect(logs[0].target).toBeUndefined();
   } finally {
     await broker.close();
@@ -100,7 +101,7 @@ test("SessionBroker: egress outcome is acknowledged and audited", async () => {
 
 const invalidEgressOutcomes = [
   ["mismatched session", { sessionId: "sess_other" }],
-  ["invalid method", { method: "PUT" }],
+  ["raw unsupported method", { method: "HEAD" }],
   ["unlisted route", { route: "/v1/unlisted" }],
   ["invalid action", { action: "allow" }],
   ["invalid reason", { reason: "raw-secret-reason" }],

@@ -67,7 +67,7 @@ export const ANTHROPIC_EGRESS_ACTIONS = [
   "block",
 ] as const;
 
-export const ANTHROPIC_EGRESS_METHODS = ["GET", "POST"] as const;
+export const ANTHROPIC_EGRESS_METHODS = ["GET", "POST", "OTHER"] as const;
 
 export const ANTHROPIC_EGRESS_REASONS = [
   "recognized-schema",
