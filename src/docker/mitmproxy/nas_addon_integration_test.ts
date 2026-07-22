@@ -190,6 +190,14 @@ function randomBenchmarkSubnet(): string {
  * そのまま印字して 200 OK を返す python3 ワンショットサーバのスクリプト。
  * 標準出力は `docker logs` 経由でテストから読み取り、転送されたボディを
  * 検証するのに使う。
+ *
+ * `waitForContainerTcp` の readiness probe（バイトを送らずに接続して
+ * すぐ閉じるだけの接続）が最初の `accept()` を消費してしまうと、単発
+ * `accept()` のサーバでは probe を実リクエストと誤認して
+ * `recv() == b""` で抜け、閉じられた peer に `sendall` して
+ * `BrokenPipeError` で丸ごと落ちる。そのため accept はループで回し、
+ * 完全な HTTP リクエスト（ヘッダ終端 + Content-Length 分のボディ）を
+ * 受け取った接続だけに応答して、それを最後に終了する。
  */
 function rawEchoServerScript(port: number): string {
   return [
@@ -197,25 +205,33 @@ function rawEchoServerScript(port: number): string {
     "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
     "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
     `srv.bind(("0.0.0.0", ${port}))`,
-    "srv.listen(1)",
-    "conn, _ = srv.accept()",
-    'data = b""',
+    "srv.listen(8)",
     "while True:",
-    "    chunk = conn.recv(65536)",
-    "    if not chunk:",
+    "    conn, _ = srv.accept()",
+    '    data = b""',
+    "    complete = False",
+    "    while True:",
+    "        chunk = conn.recv(65536)",
+    "        if not chunk:",
+    "            break",
+    "        data += chunk",
+    '        sep = data.find(b"\\r\\n\\r\\n")',
+    "        if sep == -1:",
+    "            continue",
+    '        headers = data[:sep].decode("latin1")',
+    '        m = re.search(r"Content-Length:\\s*(\\d+)", headers, re.IGNORECASE)',
+    "        body_len = int(m.group(1)) if m else 0",
+    "        if len(data) - sep - 4 >= body_len:",
+    "            complete = True",
+    "            break",
+    "    if complete:",
+    '        print(data.decode("utf-8", "replace"), flush=True)',
+    "        try:",
+    '            conn.sendall(b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok")',
+    "        finally:",
+    "            conn.close()",
     "        break",
-    "    data += chunk",
-    '    sep = data.find(b"\\r\\n\\r\\n")',
-    "    if sep == -1:",
-    "        continue",
-    '    headers = data[:sep].decode("latin1")',
-    '    m = re.search(r"Content-Length:\\s*(\\d+)", headers, re.IGNORECASE)',
-    "    body_len = int(m.group(1)) if m else 0",
-    "    if len(data) - sep - 4 >= body_len:",
-    "        break",
-    'print(data.decode("utf-8", "replace"), flush=True)',
-    'conn.sendall(b"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok")',
-    "conn.close()",
+    "    conn.close()",
   ].join("\n");
 }
 
