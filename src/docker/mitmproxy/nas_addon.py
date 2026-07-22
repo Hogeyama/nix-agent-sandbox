@@ -366,7 +366,7 @@ def _schema_mask_json(body: bytes, patterns: list) -> tuple:
         return None, False
     try:
         parsed = json.loads(body)
-    except (json.JSONDecodeError, ValueError):
+    except Exception:
         return None, True
     # _walk_schema (深いネストで RecursionError の可能性) と後続の
     # json.dumps().encode("utf-8") (lone surrogate を含む文字列で

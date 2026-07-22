@@ -570,6 +570,17 @@ class TestSchemaMask(unittest.TestCase):
         self.assertTrue(blocked)
         self.assertIsNone(body)
 
+    def test_deeply_nested_body_fails_closed(self):
+        # json.loads は深いネストで RecursionError を送出する。
+        # RecursionError は ValueError の派生ではないため、
+        # except (json.JSONDecodeError, ValueError) では捕捉されず
+        # 関数がクラッシュ(fail-open)していた。あらゆる例外を
+        # fail-closed に倒すことを検証する。
+        deep = ("[" * 40000 + "]" * 40000).encode("utf-8")
+        body, blocked = nas_addon._schema_mask_json(deep, self.patterns)
+        self.assertTrue(blocked)
+        self.assertIsNone(body)
+
 
 if __name__ == "__main__":
     unittest.main()
