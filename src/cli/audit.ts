@@ -43,12 +43,56 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
       return;
     }
 
-    for (const entry of entries) {
-      console.log(formatEntry(entry));
+    for (const line of formatAuditEntries(entries)) {
+      console.log(line);
     }
   } catch (err) {
     exitOnCliError(err);
   }
+}
+
+export function formatAuditEntries(entries: AuditLogEntry[]): string[] {
+  const egressCounts = new Map<number, number>();
+  let currentKey: string | undefined;
+  let firstIndex = -1;
+
+  for (const [index, entry] of entries.entries()) {
+    if (entry.phase !== "egress") continue;
+
+    const key = [
+      entry.sessionId,
+      entry.method,
+      entry.route,
+      entry.egressAction,
+      entry.reason,
+    ].join("\u0000");
+
+    if (key === currentKey) {
+      egressCounts.set(firstIndex, (egressCounts.get(firstIndex) ?? 1) + 1);
+      continue;
+    }
+
+    currentKey = key;
+    firstIndex = index;
+    egressCounts.set(firstIndex, 1);
+  }
+
+  const lines: string[] = [];
+  for (const [index, entry] of entries.entries()) {
+    if (entry.phase !== "egress") {
+      lines.push(formatEntry(entry));
+      continue;
+    }
+
+    const count = egressCounts.get(index);
+    if (count === undefined) continue;
+
+    lines.push(
+      `${entry.timestamp} ${entry.sessionId} network ${entry.decision} ${entry.reason} ${entry.method ?? ""} ${entry.route ?? "unknown"} ${entry.egressAction ?? ""}${count > 1 ? ` x${count}` : ""}`,
+    );
+  }
+
+  return lines;
 }
 
 function formatEntry(entry: AuditLogEntry): string {
