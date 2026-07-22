@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -258,8 +259,14 @@ function rawEchoServerScript(port: number): string {
   ].join("\n");
 }
 
-/** fake broker: 常に allow + maskValues:["SECRET123"] を返す。 */
-async function startAllowMaskBroker(socketPath: string): Promise<net.Server> {
+/**
+ * fake broker: 受信メッセージを保存し、authorize に allow +
+ * maskValues、egress_outcome に recorded acknowledgement を返す。
+ */
+async function startAllowMaskBroker(
+  socketPath: string,
+  brokerMessages: unknown[],
+): Promise<net.Server> {
   const broker = net.createServer((socket) => {
     let input = "";
     socket.on("data", (chunk) => {
@@ -267,15 +274,30 @@ async function startAllowMaskBroker(socketPath: string): Promise<net.Server> {
       const newline = input.indexOf("\n");
       if (newline < 0) return;
       const request = JSON.parse(input.slice(0, newline));
-      socket.end(
-        `${JSON.stringify({
-          version: 1,
-          type: "decision",
-          requestId: request.requestId,
-          decision: "allow",
-          maskValues: ["SECRET123"],
-        })}\n`,
-      );
+      brokerMessages.push(request);
+      if (request.type === "egress_outcome") {
+        socket.end(
+          `${JSON.stringify({
+            version: 1,
+            type: "egress_outcome_recorded",
+            requestId: request.requestId,
+          })}\n`,
+        );
+        return;
+      }
+      if (request.type === "authorize") {
+        socket.end(
+          `${JSON.stringify({
+            version: 1,
+            type: "decision",
+            requestId: request.requestId,
+            decision: "allow",
+            maskValues: ["SECRET123"],
+          })}\n`,
+        );
+        return;
+      }
+      socket.end();
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -291,54 +313,286 @@ interface AnthropicFixture {
   sessionId: string;
   token: string;
   broker: net.Server;
+  brokerMessages: unknown[];
+}
+
+interface AnthropicFixtureSetupOptions {
+  afterBrokerStarted?: (partial: {
+    runtimeDir: string;
+    broker: net.Server;
+  }) => Promise<void>;
+}
+
+interface ExpectedEgressOutcome {
+  sessionId: string;
+  method: string;
+  route: string;
+  action: string;
+  reason: string;
+}
+
+function isBrokerMessageOfType(
+  message: unknown,
+  type: string,
+): message is Record<string, unknown> {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    !Array.isArray(message) &&
+    "type" in message &&
+    message.type === type
+  );
+}
+
+function expectSingleEgressExchange(
+  messages: unknown[],
+  expected: ExpectedEgressOutcome,
+  assertionName: string,
+): Record<string, unknown> {
+  const authorizations = messages.filter((message) =>
+    isBrokerMessageOfType(message, "authorize"),
+  );
+  const outcomes = messages.filter((message) =>
+    isBrokerMessageOfType(message, "egress_outcome"),
+  );
+
+  expect(authorizations, `${assertionName}: authorize count`).toHaveLength(1);
+  expect(outcomes, `${assertionName}: outcome count`).toHaveLength(1);
+  const [authorization] = authorizations;
+  const [outcome] = outcomes;
+  if (!authorization || !outcome) {
+    throw new Error(`${assertionName}: missing broker exchange`);
+  }
+
+  expect(
+    authorization.requestId,
+    `${assertionName}: authorize requestId`,
+  ).toEqual(expect.any(String));
+  expect(outcome.requestId, `${assertionName}: correlated requestId`).toBe(
+    authorization.requestId,
+  );
+  expect(outcome, `${assertionName}: outcome`).toEqual({
+    version: 1,
+    type: "egress_outcome",
+    requestId: authorization.requestId,
+    ...expected,
+  });
+  return outcome;
 }
 
 /**
  * `anthropicEgress: true` を書いたセッションレジストリ + fake broker
  * (allow + maskValues:["SECRET123"]) を用意する共通セットアップ。
- * 3つの anthropic 統合テストで共有する。
  */
 async function setupAnthropicFixture(
   dirPrefix: string,
+  options: AnthropicFixtureSetupOptions = {},
 ): Promise<AnthropicFixture> {
   const base = SHARED_TMP ?? "/tmp";
   const runtimeDir = await mkdtemp(path.join(base, dirPrefix));
-  const paths = await resolveNetworkRuntimePaths(runtimeDir);
-  const sessionId = `sess_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  const token = "integration-token";
-  const socketPath = brokerSocketPath(paths, sessionId);
+  let broker: net.Server | undefined;
 
-  await chmod(runtimeDir, 0o755);
-  await chmod(paths.caCertDir, 0o777);
-  await chmod(paths.brokersDir, 0o755);
-  await chmod(paths.reviewRulesDir, 0o755);
-  await mkdir(path.dirname(socketPath), { recursive: true });
-  await chmod(path.dirname(socketPath), 0o755);
-  await copyFile(
-    new URL("./nas_addon.py", import.meta.url).pathname,
-    paths.addonScriptPath,
-  );
-  await writeFile(`${paths.reviewRulesDir}/${sessionId}.json`, "[]");
-  await writeSessionRegistry(paths, {
-    version: 1,
-    sessionId,
-    tokenHash: await hashToken(token),
-    brokerSocket: socketPath,
-    profileName: "integration-test",
-    createdAt: new Date().toISOString(),
-    pid: process.pid,
-    anthropicEgress: true,
-  });
-  await chmod(paths.sessionsDir, 0o755);
-  await chmod(sessionRegistryPath(paths, sessionId), 0o644);
+  try {
+    const paths = await resolveNetworkRuntimePaths(runtimeDir);
+    const sessionId = `sess_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    const token = "integration-token";
+    const socketPath = brokerSocketPath(paths, sessionId);
 
-  const broker = await startAllowMaskBroker(socketPath);
-  await chmod(socketPath, 0o666);
+    await chmod(runtimeDir, 0o755);
+    await chmod(paths.caCertDir, 0o777);
+    await chmod(paths.brokersDir, 0o755);
+    await chmod(paths.reviewRulesDir, 0o755);
+    await mkdir(path.dirname(socketPath), { recursive: true });
+    await chmod(path.dirname(socketPath), 0o755);
+    await copyFile(
+      new URL("./nas_addon.py", import.meta.url).pathname,
+      paths.addonScriptPath,
+    );
+    await writeFile(
+      `${paths.reviewRulesDir}/${sessionId}.json`,
+      JSON.stringify([{ host: "api.anthropic.com", action: "allow" }]),
+    );
+    await writeSessionRegistry(paths, {
+      version: 1,
+      sessionId,
+      tokenHash: await hashToken(token),
+      brokerSocket: socketPath,
+      profileName: "integration-test",
+      createdAt: new Date().toISOString(),
+      pid: process.pid,
+      anthropicEgress: true,
+    });
+    await chmod(paths.sessionsDir, 0o755);
+    await chmod(sessionRegistryPath(paths, sessionId), 0o644);
 
-  return { runtimeDir, paths, sessionId, token, broker };
+    const brokerMessages: unknown[] = [];
+    broker = await startAllowMaskBroker(socketPath, brokerMessages);
+    await options.afterBrokerStarted?.({ runtimeDir, broker });
+    await chmod(socketPath, 0o666);
+
+    return { runtimeDir, paths, sessionId, token, broker, brokerMessages };
+  } catch (error) {
+    await Promise.allSettled([
+      broker?.listening ? closeServer(broker) : Promise.resolve(),
+      rm(runtimeDir, { recursive: true, force: true }),
+    ]);
+    throw error;
+  }
 }
 
+test("setupAnthropicFixture cleans partial state when setup fails after broker start", async () => {
+  const setupError = new Error("injected post-broker setup failure");
+  let partial: { runtimeDir: string; broker: net.Server } | undefined;
+  let thrown: unknown;
+
+  try {
+    try {
+      await setupAnthropicFixture("nas-addon-partial-setup-", {
+        afterBrokerStarted: async (state) => {
+          partial = state;
+          throw setupError;
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBe(setupError);
+    expect(partial).toBeDefined();
+    expect(partial?.broker.listening).toBe(false);
+    expect(existsSync(partial?.runtimeDir ?? "")).toBe(false);
+  } finally {
+    if (partial?.broker.listening) await closeServer(partial.broker);
+    if (partial) {
+      await rm(partial.runtimeDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("setupAnthropicFixture installs a matching Anthropic allow rule", async () => {
+  const fixture = await setupAnthropicFixture("nas-addon-review-rule-");
+  try {
+    const rules = await Bun.file(
+      `${fixture.paths.reviewRulesDir}/${fixture.sessionId}.json`,
+    ).json();
+
+    expect(rules).toEqual([{ host: "api.anthropic.com", action: "allow" }]);
+  } finally {
+    if (fixture.broker.listening) await closeServer(fixture.broker);
+    await rm(fixture.runtimeDir, { recursive: true, force: true });
+  }
+});
 const ANTHROPIC_TARGET_PORT = 8090;
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "anthropic bodyless GET: masks URL and headers before forwarding",
+  async () => {
+    const networkName = `nas-addon-net-${crypto.randomUUID().slice(0, 8)}`;
+    const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
+    const targetName = `nas-addon-upstream-${crypto.randomUUID().slice(0, 8)}`;
+    let fixture: AnthropicFixture | undefined;
+    let networkCreated = false;
+
+    try {
+      fixture = await setupAnthropicFixture("nas-addon-bodyless-");
+      const { runtimeDir, sessionId, token } = fixture;
+
+      await createBenchmarkNetworkWithRetry(networkName);
+      networkCreated = true;
+
+      await dockerRunDetached({
+        name: targetName,
+        image: "mitmproxy/mitmproxy:11",
+        args: [],
+        envVars: {},
+        network: networkName,
+        entrypoint: "python3",
+        command: ["-c", rawEchoServerScript(ANTHROPIC_TARGET_PORT)],
+      });
+      await waitForContainerTcp(targetName, ANTHROPIC_TARGET_PORT);
+      const targetIp = await dockerContainerIpOnNetwork(
+        targetName,
+        networkName,
+      );
+      if (!targetIp) {
+        throw new Error(
+          `could not determine ${targetName} IP on network ${networkName}`,
+        );
+      }
+
+      await dockerRunDetached({
+        name: containerName,
+        image: "mitmproxy/mitmproxy:11",
+        args: [`--add-host=api.anthropic.com:${targetIp}`],
+        envVars: {},
+        network: networkName,
+        mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
+        publishedPorts: ["127.0.0.1::8080"],
+        command: [
+          "mitmdump",
+          "--mode",
+          "regular@8080",
+          "--set",
+          "connection_strategy=lazy",
+          "--set",
+          "confdir=/nas-network/mitmproxy-ca",
+          "--ssl-insecure",
+          "-s",
+          "/nas-network/nas_addon.py",
+        ],
+      });
+      const proxyPort = await publishedPort(containerName);
+      await waitForContainerTcp(containerName, 8080);
+      await waitForTcp(proxyPort);
+
+      const messageStart = fixture.brokerMessages.length;
+      const response = await sendProxyRequest(
+        proxyPort,
+        `http://api.anthropic.com:${ANTHROPIC_TARGET_PORT}/api/claude_cli/bootstrap?entrypoint=cli&model=SECRET123`,
+        `${sessionId}:${token}`,
+        { headers: { "X-Test-Secret": "SECRET123" } },
+      );
+      const upstreamLogs = await dockerLogs(targetName);
+      const proxyLogs = await dockerLogs(containerName);
+      const outcome = expectSingleEgressExchange(
+        fixture.brokerMessages.slice(messageStart),
+        {
+          sessionId,
+          method: "GET",
+          route: "/api/claude_cli/bootstrap",
+          action: "bodyless-pass",
+          reason: "known-bodyless-endpoint",
+        },
+        "bodyless GET",
+      );
+
+      expect(response).toContain("200 OK");
+      expect(upstreamLogs).not.toContain("SECRET123");
+      expect(upstreamLogs).toContain(
+        "GET /api/claude_cli/bootstrap?entrypoint=cli&model=**** HTTP/1.1",
+      );
+      expect(upstreamLogs.toLowerCase()).toContain("x-test-secret: ****");
+      expect(upstreamLogs).toMatch(/\r?\n\r?\n\s*$/);
+      expect(JSON.stringify(outcome)).not.toContain("SECRET123");
+      expect(proxyLogs).not.toContain("egress outcome audit unavailable");
+    } finally {
+      await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
+      await dockerRm(containerName).catch(() => {});
+      await dockerStop(targetName, { timeoutSeconds: 0 }).catch(() => {});
+      await dockerRm(targetName).catch(() => {});
+      if (networkCreated) {
+        await dockerNetworkRemove(networkName).catch(() => {});
+      }
+      if (fixture?.broker.listening) await closeServer(fixture.broker);
+      if (fixture) {
+        await rm(fixture.runtimeDir, { recursive: true, force: true }).catch(
+          () => {},
+        );
+      }
+    }
+  },
+  60_000,
+);
 
 test.skipIf(!dockerAvailable || !canBindMount)(
   "anthropic /v1/messages: masks secret in JSON body before forwarding",
@@ -416,6 +670,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           { role: "user", content: [{ type: "text", text: "k=SECRET123" }] },
         ],
       });
+      const messageStart = fixture.brokerMessages.length;
       const response = await sendProxyRequest(
         proxyPort,
         `http://api.anthropic.com:${ANTHROPIC_TARGET_PORT}/v1/messages`,
@@ -427,10 +682,22 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         },
       );
       const upstreamLogs = await dockerLogs(targetName);
+      const outcome = expectSingleEgressExchange(
+        fixture.brokerMessages.slice(messageStart),
+        {
+          sessionId,
+          method: "POST",
+          route: "/v1/messages",
+          action: "schema-mask",
+          reason: "recognized-schema",
+        },
+        "messages forwarding",
+      );
 
       expect(response).toContain("200 OK");
       expect(upstreamLogs).not.toContain("SECRET123");
       expect(upstreamLogs).toContain("****");
+      expect(JSON.stringify(outcome)).not.toContain("SECRET123");
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
@@ -499,6 +766,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           { role: "user", content: [{ type: "quantum_payload", data: "x" }] },
         ],
       });
+      const messageStart = fixture.brokerMessages.length;
       const response = await sendProxyRequest(
         proxyPort,
         "http://api.anthropic.com/v1/messages",
@@ -509,8 +777,20 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           body: requestBody,
         },
       );
+      const outcome = expectSingleEgressExchange(
+        fixture.brokerMessages.slice(messageStart),
+        {
+          sessionId,
+          method: "POST",
+          route: "/v1/messages",
+          action: "block",
+          reason: "schema-unknown",
+        },
+        "unknown content block",
+      );
 
       expect(response).toContain("403");
+      expect(JSON.stringify(outcome)).not.toContain("SECRET123");
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
@@ -526,15 +806,13 @@ test.skipIf(!dockerAvailable || !canBindMount)(
 );
 
 test.skipIf(!dockerAvailable || !canBindMount)(
-  "anthropic: unknown path is failed closed (403)",
+  "anthropic: blocked endpoint policy is enforced before upstream connect",
   async () => {
-    // /v1/files は allowlist にない未知パスなので、これも upstream connect
-    // より前に 403 で fail-closed する（target server 不要）。
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
     let fixture: AnthropicFixture | undefined;
 
     try {
-      fixture = await setupAnthropicFixture("nas-addon-unknown-path-");
+      fixture = await setupAnthropicFixture("nas-addon-blocked-policy-");
       const { runtimeDir, sessionId, token } = fixture;
 
       await dockerRunDetached({
@@ -566,18 +844,82 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await waitForContainerTcp(containerName, 8080);
       await waitForTcp(proxyPort);
 
-      const response = await sendProxyRequest(
-        proxyPort,
-        "http://api.anthropic.com/v1/files",
-        `${sessionId}:${token}`,
+      const cases = [
         {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
+          name: "bodyless endpoint with a body",
+          path: "/api/claude_code/settings",
+          method: "GET",
+          body: "x",
+          route: "/api/claude_code/settings",
+          reason: "unexpected-body",
         },
-      );
+        {
+          name: "bodyless endpoint with undecodable body",
+          path: "/api/claude_code/settings",
+          method: "GET",
+          headers: { "Content-Encoding": "unsupported" },
+          body: "x",
+          route: "/api/claude_code/settings",
+          reason: "body-unavailable",
+        },
+        {
+          name: "unsupported method on a known route",
+          path: "/api/claude_code/metrics",
+          method: "POST",
+          route: "/api/claude_code/metrics",
+          reason: "unknown-endpoint",
+        },
+        {
+          name: "file upload",
+          path: "/v1/files",
+          method: "POST",
+          body: "{}",
+          route: "/v1/files",
+          reason: "file-upload-blocked",
+        },
+        {
+          name: "unknown secret-bearing route",
+          path: "/unknown/SECRET123?token=SECRET123",
+          method: "GET",
+          route: "unknown",
+          reason: "unknown-endpoint",
+        },
+      ];
 
-      expect(response).toContain("403");
+      for (const testCase of cases) {
+        const messageStart = fixture.brokerMessages.length;
+        const response = await sendProxyRequest(
+          proxyPort,
+          `http://api.anthropic.com${testCase.path}`,
+          `${sessionId}:${token}`,
+          {
+            method: testCase.method,
+            headers: testCase.headers,
+            body: testCase.body,
+          },
+        );
+        const outcome = expectSingleEgressExchange(
+          fixture.brokerMessages.slice(messageStart),
+          {
+            sessionId,
+            method: testCase.method,
+            route: testCase.route,
+            action: "block",
+            reason: testCase.reason,
+          },
+          testCase.name,
+        );
+        const proxyLogs = await dockerLogs(containerName);
+
+        expect(response, testCase.name).toContain("403 Forbidden");
+        expect(response, testCase.name).toContain(
+          "blocked: Anthropic egress policy",
+        );
+        expect(JSON.stringify(outcome), testCase.name).not.toContain(
+          "SECRET123",
+        );
+        expect(proxyLogs, testCase.name).not.toContain("SECRET123");
+      }
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
