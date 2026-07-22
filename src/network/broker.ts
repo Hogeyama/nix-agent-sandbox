@@ -287,7 +287,15 @@ export class SessionBroker {
         route: message.route,
         egressAction: message.action,
       };
-      await appendAuditLog(entry, this.auditDir);
+      try {
+        await appendAuditLog(entry, this.auditDir);
+      } catch {
+        return {
+          type: "error",
+          requestId: message.requestId,
+          message: "egress outcome audit unavailable",
+        };
+      }
     }
 
     return {

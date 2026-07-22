@@ -272,6 +272,50 @@ test("SessionBroker: egress outcome is acknowledged without an audit directory",
   }
 });
 
+test("SessionBroker: egress audit persistence failure returns a sanitized error", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const invalidAuditDir = path.join(runtimeDir, "audit-file");
+  await writeFile(invalidAuditDir, "not a directory");
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    auditDir: invalidAuditDir,
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, {
+      version: 1,
+      type: "egress_outcome",
+      requestId: "req-egress-audit-failure",
+      sessionId: "sess_test",
+      method: "POST",
+      route: "/v1/files",
+      action: "block",
+      reason: "file-upload-blocked",
+    });
+
+    expect(response).toEqual({
+      type: "error",
+      requestId: "req-egress-audit-failure",
+      message: "egress outcome audit unavailable",
+    });
+    expect(JSON.stringify(response)).not.toContain(invalidAuditDir);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("SessionBroker: pending request resumes after approve", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
