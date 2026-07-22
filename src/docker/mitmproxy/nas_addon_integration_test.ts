@@ -592,7 +592,12 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await dockerRunDetached({
         name: containerName,
         image: "mitmproxy/mitmproxy:11",
-        args: [],
+        // containment backstop: 正しい実装では 403 は request() 内で
+        // upstream connect より前に返るのでこの mapping は参照されない。
+        // fail-closed ロジックが regress した場合でも、実在の
+        // api.anthropic.com には絶対に届かせず、loopback (denied range)
+        // でローカルに失敗させる。
+        args: ["--add-host=api.anthropic.com:127.0.0.1"],
         envVars: {},
         mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
         publishedPorts: ["127.0.0.1::8080"],
@@ -660,7 +665,12 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await dockerRunDetached({
         name: containerName,
         image: "mitmproxy/mitmproxy:11",
-        args: [],
+        // containment backstop: 正しい実装では 403 は request() 内で
+        // upstream connect より前に返るのでこの mapping は参照されない。
+        // fail-closed ロジックが regress した場合でも、実在の
+        // api.anthropic.com には絶対に届かせず、loopback (denied range)
+        // でローカルに失敗させる。
+        args: ["--add-host=api.anthropic.com:127.0.0.1"],
         envVars: {},
         mounts: [{ source: runtimeDir, target: "/nas-network", mode: "rw" }],
         publishedPorts: ["127.0.0.1::8080"],
