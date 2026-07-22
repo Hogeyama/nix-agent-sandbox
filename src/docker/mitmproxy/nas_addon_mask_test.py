@@ -582,5 +582,40 @@ class TestSchemaMask(unittest.TestCase):
         self.assertIsNone(body)
 
 
+class TestAnthropicPlan(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def test_unknown_path_blocks(self):
+        action, out = nas_addon._plan_anthropic_masking("POST", "/v1/files", b"{}", self.patterns)
+        self.assertEqual(action, "block")
+        self.assertIsNone(out)
+
+    def test_undecodable_body_blocks(self):
+        action, out = nas_addon._plan_anthropic_masking("POST", "/v1/messages", None, self.patterns)
+        self.assertEqual(action, "block")
+
+    def test_secret_rewrites(self):
+        import json
+        body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "SECRET123"}]}).encode()
+        action, out = nas_addon._plan_anthropic_masking("POST", "/v1/messages", body, self.patterns)
+        self.assertEqual(action, "rewrite")
+        self.assertNotIn(b"SECRET123", out)
+
+    def test_clean_passthrough(self):
+        import json
+        body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "clean"}]}).encode()
+        action, out = nas_addon._plan_anthropic_masking("POST", "/v1/messages", body, self.patterns)
+        self.assertEqual(action, "passthrough")
+        self.assertIsNone(out)
+
+    def test_unknown_block_blocks(self):
+        import json
+        body = json.dumps({"model": "m", "messages": [
+            {"role": "user", "content": [{"type": "quantum", "x": 1}]}]}).encode()
+        action, out = nas_addon._plan_anthropic_masking("POST", "/v1/messages", body, self.patterns)
+        self.assertEqual(action, "block")
+
+
 if __name__ == "__main__":
     unittest.main()

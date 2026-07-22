@@ -385,6 +385,20 @@ def _schema_mask_json(body: bytes, patterns: list) -> tuple:
         return None, True
 
 
+def _plan_anthropic_masking(method, path, body, patterns):
+    """(action, masked_body) を返す。action は 'block'/'rewrite'/'passthrough'。"""
+    if _anthropic_json_endpoint(method, path) is None:
+        return "block", None
+    if body is None:
+        return "block", None
+    masked, blocked = _schema_mask_json(body, patterns)
+    if blocked:
+        return "block", None
+    if masked is None:
+        return "passthrough", None
+    return "rewrite", masked
+
+
 def _match_host_pattern(host: str, pattern: str) -> bool:
     normalized = _normalize_host(host)
     if pattern.startswith("*."):
