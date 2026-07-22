@@ -400,6 +400,64 @@ profiles {}
   });
 });
 
+test.skipIf(!hasPkl)(
+  "loadConfig: rejects unknown request policy kind",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules {
+        new ReviewRule {
+          action = "allow"
+          requestPolicy = new BodylessRequestPolicy {
+            kind = "graphql"
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+        /pkl eval exited with code/,
+      );
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: rejects unknown request policy fields",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules {
+        new ReviewRule {
+          action = "allow"
+          requestPolicy = new JsonRequestPolicy {
+            unknownField = true
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+        /pkl eval exited with code/,
+      );
+    });
+  },
+);
+
 test("loadConfig: pkl CLI not available shows helpful error", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nocli-"));
   const nasDir = path.join(tmpDir, ".nas");

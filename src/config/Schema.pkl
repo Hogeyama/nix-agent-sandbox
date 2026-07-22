@@ -162,17 +162,59 @@ class ProxyConfig {
   forwardPorts: Listing<Int> = new {}
 }
 
+class TaggedUnionGuard {
+  at: String
+  discriminator: String
+  allowedTags: Listing<String>
+}
+
+class EncodedField {
+  at: String
+  whenField: String
+  whenEquals: String
+  dataField: String
+  encoding: "base64"
+}
+
+class BodylessRequestPolicy {
+  kind: "bodyless" = "bodyless"
+}
+
+class JsonRequestPolicy {
+  kind: "json" = "json"
+  maxBodyBytes: Int = 33554432
+  maxDepth: Int = 64
+  maxNodes: Int = 200000
+  maxDecodedBytes: Int = 33554432
+  taggedUnions: Listing<TaggedUnionGuard> = new {}
+  encodedFields: Listing<EncodedField> = new {}
+}
+
 class ReviewRule {
+  /// ルール ID。requestPolicy を設定する場合は必須。
+  id: String?
   /// HTTP メソッド（大文字小文字無視）。省略時は全メソッドにマッチ。
   method: String?
   /// ホストパターン。"*.example.com" 等のワイルドカード対応。省略時は全ホストにマッチ。
   host: String?
+  /// 完全一致パス。pathPrefix と排他。
+  path: String?
   /// パスプレフィックス。省略時は全パスにマッチ。
   pathPrefix: String?
   /// マッチ時のアクション。
   action: "allow"|"review"|"deny" = "review"
   /// マッチ時に audit ログを記録するか。省略時は true。
   audit: Boolean = true
+  /// リクエストボディの検証・マスクポリシー。
+  requestPolicy: (BodylessRequestPolicy|JsonRequestPolicy)?
+}
+
+class ReviewRulesPreset {
+  id: String
+  preset: String
+  host: String?
+  removeRules: Listing<String> = new {}
+  addRules: Listing<ReviewRule> = new {}
 }
 
 class CredentialValSpec {
@@ -203,7 +245,7 @@ class CredentialRule {
 class NetworkConfig {
   /// ネットワークアクセス制御ルール。上から順に評価し、最初にマッチしたルールの
   /// action を適用する。どのルールにもマッチしない場合は暗黙 deny。
-  reviewRules: Listing<ReviewRule> = new {}
+  reviewRules: Listing<(ReviewRule|ReviewRulesPreset)> = new {}
 
   /// ホスト別認証情報。allow 判定されたリクエストにヘッダーを注入する。
   /// アクセス許可は reviewRules で別途設定が必要。

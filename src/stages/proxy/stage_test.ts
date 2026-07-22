@@ -52,6 +52,7 @@ import {
   createProxyStageWithOptions,
   LOCAL_PROXY_PORT,
   planProxy,
+  REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
   replaceNetwork,
 } from "./stage.ts";
 
@@ -218,6 +219,84 @@ test("ProxyStage: returns plan when reviewRules contains a review action", () =>
   const result = planProxy({ ...shared, container, observability });
   expect(result !== null).toEqual(true);
   expect(result!.reviewRules).toEqual([{ action: "review" }]);
+});
+
+test("ProxyStage: rejects unresolved review-rule presets", () => {
+  const profile = makeProfile({
+    network: {
+      reviewRules: [
+        {
+          id: "anthropic",
+          preset: "anthropic@1",
+          removeRules: [],
+          addRules: [],
+        },
+      ],
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+
+  expect(() => planProxy({ ...shared, container, observability })).toThrow(
+    REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
+  );
+});
+
+test("ProxyStage: rejects unresolved exact-path review rules", () => {
+  const profile = makeProfile({
+    network: {
+      reviewRules: [
+        {
+          id: "bodyless.settings",
+          method: "GET",
+          host: "api.example.com",
+          path: "/v1/settings",
+          action: "allow",
+        },
+      ],
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+
+  expect(() => planProxy({ ...shared, container, observability })).toThrow(
+    REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
+  );
+});
+
+test("ProxyStage: rejects unresolved request-policy review rules", () => {
+  const profile = makeProfile({
+    network: {
+      reviewRules: [
+        {
+          action: "allow",
+          requestPolicy: { kind: "bodyless" },
+        },
+      ],
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+
+  expect(() => planProxy({ ...shared, container, observability })).toThrow(
+    REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
+  );
+});
+
+test("ProxyStage: passes ordinary review rules unchanged", () => {
+  const reviewRules = [
+    {
+      method: "POST",
+      host: "api.example.com",
+      pathPrefix: "/v1/",
+      action: "allow" as const,
+      audit: false,
+    },
+    { action: "deny" as const },
+  ];
+  const profile = makeProfile({ network: { reviewRules } });
+  const { shared, container, observability } = makeInput(profile);
+
+  const result = planProxy({ ...shared, container, observability });
+
+  expect(result.reviewRules).toEqual(reviewRules);
 });
 
 test("ProxyStage: sets proxy env vars", () => {
