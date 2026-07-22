@@ -348,6 +348,11 @@ class MaskConfig {
   /// /tmp/nas-bash-override/bash を process substitution ラッパーに置き換え、
   /// 全コマンド出力を nas-mask-filter 経由でマスクする。
   filter: Boolean = true
+
+  /// api.anthropic.com への egress を JSON スキーマ認識でマスクする。
+  /// Claude 専用。true かつ agent が claude 以外、または proxy が false の
+  /// ときは設定検証でエラーになる。
+  anthropicEgress: Boolean = false
 }
 
 // ---------------------------------------------------------------------------

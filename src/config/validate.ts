@@ -117,6 +117,24 @@ function validateProfile(name: string, profile: Profile): string[] {
     if (typeof profile.mask.filter !== "boolean") {
       errors.push(`profile "${name}": mask.filter must be a boolean`);
     }
+    if (typeof profile.mask.anthropicEgress !== "boolean") {
+      errors.push(`profile "${name}": mask.anthropicEgress must be a boolean`);
+    }
+    if (profile.mask.anthropicEgress === true) {
+      if (profile.agent !== "claude") {
+        errors.push(
+          `profile "${name}": mask.anthropicEgress requires agent "claude" ` +
+            `(got "${profile.agent}"); this protection only covers ` +
+            `api.anthropic.com traffic`,
+        );
+      }
+      if (profile.mask.proxy !== true) {
+        errors.push(
+          `profile "${name}": mask.anthropicEgress requires mask.proxy to be ` +
+            `true (it runs in the mitmproxy addon)`,
+        );
+      }
+    }
   }
 
   return errors;

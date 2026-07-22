@@ -572,6 +572,7 @@ test("HostExecStage plan: sets maskFilterIntent when mask.filter enabled and val
     maskfs: false,
     proxy: false,
     filter: true,
+    anthropicEgress: false,
   };
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
@@ -615,6 +616,7 @@ test("HostExecStage plan: omits maskFilterIntent when mask.filter disabled", asy
     maskfs: false,
     proxy: false,
     filter: false,
+    anthropicEgress: false,
   };
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
@@ -657,6 +659,7 @@ test("HostExecStage plan: omits maskFilterIntent when mask.values is empty", asy
     maskfs: false,
     proxy: false,
     filter: true,
+    anthropicEgress: false,
   };
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
@@ -683,6 +686,7 @@ test("HostExecStage: run fails closed when mask.filter is enabled but the filter
     maskfs: false,
     proxy: false,
     filter: true,
+    anthropicEgress: false,
   };
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const hostEnvWithSecret: HostEnv = {

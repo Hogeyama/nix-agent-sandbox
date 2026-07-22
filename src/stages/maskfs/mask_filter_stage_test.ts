@@ -96,6 +96,7 @@ describe("createMaskFilterStage", () => {
       maskfs: true,
       proxy: true,
       filter: false,
+      anthropicEgress: false,
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
@@ -119,6 +120,7 @@ describe("createMaskFilterStage", () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
@@ -163,6 +165,7 @@ describe("createMaskFilterStage", () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => "/fake/nas-mask-filter",
@@ -259,6 +262,7 @@ describe("createMaskFilterStage", () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const stage = createMaskFilterStage(input, {
       resolveBinPath: async () => null,
