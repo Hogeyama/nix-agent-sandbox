@@ -295,6 +295,87 @@ def _anthropic_json_endpoint(method: str, path: str) -> Optional[str]:
     return None
 
 
+# コンテンツコンテナ内で許可するブロック型。ここに無い type が
+# system / *.content 直下に現れたらフェイルクローズドする。
+# 維持トリガー: Anthropic が新しいコンテンツブロック型を出荷したとき。
+_KNOWN_BLOCK_TYPES = frozenset({
+    "text", "image", "document", "thinking", "redacted_thinking",
+    "tool_use", "tool_result", "server_tool_use",
+    "web_search_tool_result", "code_execution_tool_result",
+    "mcp_tool_use", "mcp_tool_result", "search_result",
+    "container_upload", "fallback",
+})
+
+# この名前のキー直下の list を「ブロックリスト」とみなし type を検証する。
+_BLOCK_LIST_KEYS = frozenset({"content", "system"})
+
+
+def _walk_schema(node, parent_key, patterns):
+    """(masked_node, changed, blocked) を返す。文字列はパターンマスク、
+    base64 source はデコードして走査、ブロックリスト内の未知 type は blocked。"""
+    if isinstance(node, dict):
+        changed = False
+        blocked = False
+        working = node
+        if node.get("type") == "base64" and isinstance(node.get("data"), str):
+            try:
+                decoded = base64.b64decode(node["data"], validate=False)
+            except Exception:
+                decoded = None
+            if decoded is not None:
+                masked_blob = _mask_bytes(decoded, patterns)
+                if masked_blob != decoded:
+                    working = dict(node)
+                    working["data"] = base64.b64encode(masked_blob).decode("ascii")
+                    changed = True
+        new_node = {}
+        for k, v in working.items():
+            nv, ch, bl = _walk_schema(v, k, patterns)
+            new_node[k] = nv
+            changed = changed or ch
+            blocked = blocked or bl
+        return new_node, changed, blocked
+    if isinstance(node, list):
+        changed = False
+        blocked = False
+        is_block_list = parent_key in _BLOCK_LIST_KEYS
+        new_list = []
+        for item in node:
+            if is_block_list and isinstance(item, dict):
+                t = item.get("type")
+                if t is not None and t not in _KNOWN_BLOCK_TYPES:
+                    blocked = True
+            nv, ch, bl = _walk_schema(item, None, patterns)
+            new_list.append(nv)
+            changed = changed or ch
+            blocked = blocked or bl
+        return new_list, changed, blocked
+    if isinstance(node, str):
+        masked = _mask_bytes(
+            node.encode("utf-8", "surrogatepass"), patterns
+        ).decode("utf-8", "surrogatepass")
+        if masked != node:
+            return masked, True, False
+        return node, False, False
+    return node, False, False
+
+
+def _schema_mask_json(body: bytes, patterns: list) -> tuple:
+    """(masked_body|None, blocked) を返す。"""
+    if not body:
+        return None, False
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return None, True
+    masked, changed, blocked = _walk_schema(parsed, None, patterns)
+    if blocked:
+        return None, True
+    if not changed:
+        return None, False
+    return json.dumps(masked, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), False
+
+
 def _match_host_pattern(host: str, pattern: str) -> bool:
     normalized = _normalize_host(host)
     if pattern.startswith("*."):
