@@ -264,5 +264,104 @@ class TestAnthropicRouting(unittest.TestCase):
         self.assertIsNone(nas_addon._anthropic_json_endpoint("POST", "/v1/models"))
 
 
+class TestSchemaMask(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _mask(self, obj):
+        import json
+        return nas_addon._schema_mask_json(json.dumps(obj).encode("utf-8"), self.patterns)
+
+    def test_masks_text_block(self):
+        body, blocked = self._mask({"model": "m", "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "key is SECRET123 ok"}]}]})
+        self.assertFalse(blocked)
+        self.assertIn(b"****", body)
+        self.assertNotIn(b"SECRET123", body)
+
+    def test_masks_system_string(self):
+        body, blocked = self._mask({"model": "m", "system": "token SECRET123",
+            "messages": [{"role": "user", "content": "hi"}]})
+        self.assertFalse(blocked)
+        self.assertNotIn(b"SECRET123", body)
+
+    def test_masks_base64_blob(self):
+        import base64, json
+        blob = base64.b64encode(b"prefix SECRET123 suffix").decode()
+        body, blocked = self._mask({"model": "m", "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": blob}}]}]})
+        self.assertFalse(blocked)
+        parsed = json.loads(body)
+        decoded = base64.b64decode(parsed["messages"][0]["content"][0]["source"]["data"])
+        self.assertNotIn(b"SECRET123", decoded)
+
+    def test_masks_nested_tool_result(self):
+        body, blocked = self._mask({"model": "m", "messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": [{"type": "text", "text": "out SECRET123"}]}]}]})
+        self.assertFalse(blocked)
+        self.assertNotIn(b"SECRET123", body)
+
+    def test_unknown_block_type_blocks(self):
+        body, blocked = self._mask({"model": "m", "messages": [{"role": "user", "content": [
+            {"type": "quantum_payload", "data": "x"}]}]})
+        self.assertTrue(blocked)
+        self.assertIsNone(body)
+
+    def test_unknown_toplevel_field_passes(self):
+        body, blocked = self._mask({"model": "m", "future_param": {"nested": "SECRET123"},
+            "messages": [{"role": "user", "content": "hi"}]})
+        self.assertFalse(blocked)
+        self.assertNotIn(b"SECRET123", body)
+
+    def test_tools_type_not_block_checked(self):
+        body, blocked = self._mask({"model": "m",
+            "tools": [{"type": "bash_20250124", "name": "bash"}],
+            "messages": [{"role": "user", "content": "hi"}]})
+        self.assertFalse(blocked)
+
+    def test_no_secret_returns_unchanged(self):
+        body, blocked = self._mask({"model": "m", "messages": [{"role": "user", "content": "clean"}]})
+        self.assertFalse(blocked)
+        self.assertIsNone(body)
+
+    def test_unparseable_body_blocks(self):
+        body, blocked = nas_addon._schema_mask_json(b"{not json", self.patterns)
+        self.assertTrue(blocked)
+        self.assertIsNone(body)
+
+    def test_empty_body_passthrough(self):
+        body, blocked = nas_addon._schema_mask_json(b"", self.patterns)
+        self.assertFalse(blocked)
+        self.assertIsNone(body)
+
+    def test_lone_surrogate_encode_failure_fails_closed(self):
+        # ensure_ascii=True (json.dumps のデフォルト) は lone surrogate を
+        # "\ud800" として安全にエスケープするため、この body 構築自体は
+        # 例外を起こさない。json.loads で lone surrogate 文字列に復元された
+        # 後、SECRET123 のマスク発火で changed=True の経路に入り、最終の
+        # json.dumps(..., ensure_ascii=False).encode("utf-8") が strict
+        # UTF-8 エンコードで UnicodeEncodeError を送出する状況を再現する。
+        body, blocked = self._mask({
+            "model": "m",
+            "system": "\ud800",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "key is SECRET123 ok"}]}],
+        })
+        self.assertTrue(blocked)
+        self.assertIsNone(body)
+
+    def test_deeply_nested_body_fails_closed(self):
+        # json.loads は深いネストで RecursionError を送出する。
+        # RecursionError は ValueError の派生ではないため、
+        # except (json.JSONDecodeError, ValueError) では捕捉されず
+        # 関数がクラッシュ(fail-open)していた。あらゆる例外を
+        # fail-closed に倒すことを検証する。
+        deep = ("[" * 40000 + "]" * 40000).encode("utf-8")
+        body, blocked = nas_addon._schema_mask_json(deep, self.patterns)
+        self.assertTrue(blocked)
+        self.assertIsNone(body)
+
+
 if __name__ == "__main__":
     unittest.main()
