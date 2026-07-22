@@ -822,7 +822,7 @@ git commit -m "test(network): integration tests for Anthropic schema masking"
 - Config（フラグ・デフォルト false・claude 必須・proxy 必須・レジストリ伝達）→ Task 4/5/6
 - 未知ベータは log のみ、維持トリガー = 新ブロック型 → `_KNOWN_BLOCK_TYPES` コメント + Task 6 の SCHEMA-BLOCKED ログ
 - 既存コンポーネント統合（nas_addon / mask_patterns / broker / mask_blocked / agent 伝達経路）→ Task 5/6
-- 非目標（ターンまたぎ・非 Anthropic ホスト・レスポンス）→ 維持。非 Anthropic は Task 6 で現行挙動保持
+- 非目標（単一リクエスト内の非隣接分割・非 Anthropic ホスト・レスポンス）→ 維持。リクエストまたぎ分割はステートレス API のため成立せず脅威外。非 Anthropic は Task 6 で現行挙動保持
 
 **Placeholder scan:** 各ステップに実コードあり。統合テスト（Task 7）と一部 TS テスト（Task 5）は既存 fixture/ヘルパ再利用のため、セットアップを既存参照としたが、追加するリクエストボディ・期待値・assertion は具体化済み。
 
