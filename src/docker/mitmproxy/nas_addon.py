@@ -676,14 +676,36 @@ class NasAddon:
         # Mask secrets out of the outgoing request (URL / headers / body)
         # before credential injection so injected headers stay intact.
         mask_values = decision.get("maskValues") or []
-        if mask_values:
-            _apply_request_masking(flow, self._patterns_for(mask_values))
-            if getattr(flow, "mask_blocked", False):
+        patterns = self._patterns_for(mask_values) if mask_values else []
+
+        if _is_anthropic_host(host) and _registry_anthropic_egress(registry):
+            try:
+                body = flow.request.content
+            except ValueError:
+                body = None
+            action, masked_body = _plan_anthropic_masking(
+                method, request_path, body, patterns)
+            if action == "block":
+                print(
+                    f"[nas-addon] SCHEMA-BLOCKED: fail-closed on "
+                    f"{method} {request_path} (unrecognized structure or "
+                    f"undecodable body)", file=sys.stderr)
                 flow.response = http.Response.make(
-                    403,
-                    b"blocked: cannot decode request body for secret masking",
-                )
+                    403, b"blocked: unrecognized Anthropic request structure")
                 return
+            if action == "rewrite":
+                flow.request.content = masked_body
+            if patterns:
+                _mask_url_and_headers(flow, patterns)
+        else:
+            if mask_values:
+                _apply_request_masking(flow, patterns)
+                if getattr(flow, "mask_blocked", False):
+                    flow.response = http.Response.make(
+                        403,
+                        b"blocked: cannot decode request body for secret masking",
+                    )
+                    return
 
         # Inject credential headers from broker decision (overwrites existing).
         inject_headers = decision.get("injectHeaders", [])
