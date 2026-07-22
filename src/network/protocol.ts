@@ -83,6 +83,7 @@ export interface SessionRegistryEntry {
   createdAt: string;
   pid: number;
   agent?: string;
+  anthropicEgress?: boolean;
 }
 
 export interface NormalizeTargetInput {
