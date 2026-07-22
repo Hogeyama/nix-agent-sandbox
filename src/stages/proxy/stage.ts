@@ -77,6 +77,7 @@ export interface ProxyPlan {
   readonly sessionNetworkName: string;
   readonly profileName: string;
   readonly agent: StageInput["profile"]["agent"];
+  readonly anthropicEgress: boolean | undefined;
   readonly runtimePaths: NetworkRuntimePaths;
   readonly brokerSocket: string;
   readonly token: string;
@@ -218,6 +219,7 @@ export function planProxy(
     sessionNetworkName,
     profileName: input.profileName,
     agent: input.profile.agent,
+    anthropicEgress: mask?.anthropicEgress,
     runtimePaths,
     brokerSocket,
     token,
@@ -374,6 +376,7 @@ function runProxy(
         socketPath: plan.brokerSocket,
         profileName: plan.profileName,
         agent: plan.agent,
+        anthropicEgress: plan.anthropicEgress,
         reviewRules: plan.reviewRules,
         pendingTimeoutSeconds: plan.pendingTimeoutSeconds,
         pendingDefaultScope: plan.pendingDefaultScope,
