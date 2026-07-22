@@ -114,6 +114,7 @@ describe("createMaskFsStage", () => {
       maskfs: false,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const layer = makeMaskFsServiceFake({
       startMaskFs: () =>
@@ -149,6 +150,7 @@ describe("createMaskFsStage", () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_MASK_SECRET", "hunter2secret");
@@ -183,6 +185,7 @@ describe("createMaskFsStage", () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_SHORT", "abc");
@@ -217,6 +220,7 @@ describe("createMaskFsStage", () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const hostEnv = new Map(HOST.env);
     hostEnv.set("NAS_TEST_MASK_SECRET", "hunter2secret");
@@ -242,6 +246,7 @@ describe("createMaskFsStage", () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     };
     const stage = createMaskFsStage(input, MOUNT_PROBES, {
       resolveBinPath: async () => "/fake/nas-maskfs",

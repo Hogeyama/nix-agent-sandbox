@@ -212,6 +212,8 @@ export interface MaskConfig {
   proxy: boolean;
   /** コマンド stdout/stderr のフィルタマスク有効化。デフォルト true */
   filter: boolean;
+  /** api.anthropic.com egress のスキーマ認識マスク有効化。デフォルト false */
+  anthropicEgress: boolean;
 }
 
 /** プロファイル */

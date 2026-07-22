@@ -955,6 +955,7 @@ test("ProxyStage: resolves mask values and passes them to broker", async () => {
       maskfs: true,
       proxy: true,
       filter: true,
+      anthropicEgress: false,
     },
   });
   const captured: SessionBrokerConfig[] = [];
@@ -988,6 +989,7 @@ test("ProxyStage: mask.proxy=false skips mask value resolution", async () => {
       maskfs: true,
       proxy: false,
       filter: true,
+      anthropicEgress: false,
     },
   });
   const captured: SessionBrokerConfig[] = [];
