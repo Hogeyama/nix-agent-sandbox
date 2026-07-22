@@ -581,6 +581,24 @@ class TestSchemaMask(unittest.TestCase):
         self.assertTrue(blocked)
         self.assertIsNone(body)
 
+    def test_masks_secret_appearing_as_object_key(self):
+        # A secret can appear as a JSON object KEY (not just a value), e.g.
+        # inside a metadata dict. The legacy byte-level masking path masks
+        # whole request bytes so this is covered there; the schema-walking
+        # path must mask dict keys too, not just string values.
+        body = self._mask_raw(
+            b'{"model":"m","metadata":{"SECRET123":"v"},'
+            b'"messages":[{"role":"user","content":"hi"}]}'
+        )
+        masked, blocked = body
+        self.assertFalse(blocked)
+        self.assertIsNotNone(masked)
+        self.assertIn(b"****", masked)
+        self.assertNotIn(b"SECRET123", masked)
+
+    def _mask_raw(self, raw_body: bytes):
+        return nas_addon._schema_mask_json(raw_body, self.patterns)
+
 
 class TestAnthropicPlan(unittest.TestCase):
     def setUp(self):

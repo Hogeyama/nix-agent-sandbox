@@ -338,8 +338,16 @@ def _walk_schema(node, parent_key, patterns):
                     changed = True
         new_node = {}
         for k, v in working.items():
-            nv, ch, bl = _walk_schema(v, k, patterns)
-            new_node[k] = nv
+            nv, ch, bl = _walk_schema(v, k, patterns)  # original k for block-list detection
+            mk = k
+            if isinstance(k, str):
+                masked_k = _mask_bytes(
+                    k.encode("utf-8", "surrogatepass"), patterns
+                ).decode("utf-8", "surrogatepass")
+                if masked_k != k:
+                    mk = masked_k
+                    changed = True
+            new_node[mk] = nv
             changed = changed or ch
             blocked = blocked or bl
         return new_node, changed, blocked
