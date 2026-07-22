@@ -419,4 +419,27 @@ profiles {
       filter = true
     }
   }
+
+  // api.anthropic.com への egress リクエストボディを JSON スキーマ認識で
+  // マスクするデモ。demo/secrets.txt の各行が、messages の text・system・
+  // tool_result、JSON のキー、image/document の base64 blob 内まで含めて
+  // 送出前に **** にマスクされる。未知パス・未知コンテンツブロック型・
+  // デコード不能ボディはフェイルクローズドで 403 になる。
+  // Claude 専用の保護のため agent=claude が必須で、スキーママスクは
+  // mitmproxy addon 上で動くため proxy=true が必須(いずれも設定検証で強制)。
+  // commonNetwork を継承して proxy 経路と api.anthropic.com の allow を有効化。
+  // 新機能を分離して確認するため maskfs/filter は無効。
+  ["anthropic-egress-demo"] = new Profile {
+    agent = "claude"
+    network = commonNetwork
+    mask = new MaskConfig {
+      values = new Listing {
+        new MaskValueConfig { source = "lines:demo/secrets.txt" }
+      }
+      maskfs = false
+      proxy = true
+      filter = false
+      anthropicEgress = true
+    }
+  }
 }
