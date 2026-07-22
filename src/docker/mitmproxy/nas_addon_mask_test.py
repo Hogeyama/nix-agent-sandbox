@@ -617,5 +617,30 @@ class TestAnthropicPlan(unittest.TestCase):
         self.assertEqual(action, "block")
 
 
+def _make_stub_flow(path="/", headers=None, content=b""):
+    """Minimal stub flow builder matching the FakeFlow/FakeRequest/FakeHeaders
+    shapes used by ApplyRequestMaskingTest above."""
+    return FakeFlow(FakeRequest(path=path, headers=headers, content=content))
+
+
+class TestGateAndUrlHeader(unittest.TestCase):
+    def test_registry_gate(self):
+        self.assertTrue(nas_addon._registry_anthropic_egress({"anthropicEgress": True}))
+        self.assertFalse(nas_addon._registry_anthropic_egress({"anthropicEgress": False}))
+        self.assertFalse(nas_addon._registry_anthropic_egress({}))
+        self.assertFalse(nas_addon._registry_anthropic_egress(None))
+
+    def test_mask_url_and_headers_not_body(self):
+        patterns = nas_addon._build_mask_patterns(["SECRET123"])
+        flow = _make_stub_flow(
+            path="/v1/messages?k=SECRET123",
+            headers={"x-custom": "SECRET123"},
+            content=b'{"body":"SECRET123"}')
+        nas_addon._mask_url_and_headers(flow, patterns)
+        self.assertNotIn("SECRET123", flow.request.path)
+        self.assertNotIn("SECRET123", flow.request.headers["x-custom"])
+        self.assertIn(b"SECRET123", flow.request.content)  # body は触らない
+
+
 if __name__ == "__main__":
     unittest.main()

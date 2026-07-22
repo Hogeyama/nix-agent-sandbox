@@ -137,10 +137,8 @@ def _mask_bytes(data: bytes, patterns: list[bytes]) -> bytes:
     return data
 
 
-def _apply_request_masking(flow, patterns: list[bytes]) -> None:
-    """allow されたリクエストの URL・ヘッダー・ボディから秘密値を **** に
-    置換する。credential 注入 (injectHeaders) より前に呼ぶこと —
-    逆順だと注入したばかりの本物の credential をマスクして壊す。"""
+def _mask_url_and_headers(flow, patterns: list[bytes]) -> None:
+    """URL パスとヘッダーから秘密値を **** に置換する（body は触らない）。"""
     if not patterns:
         return
 
@@ -165,6 +163,16 @@ def _apply_request_masking(flow, patterns: list[bytes]) -> None:
         ]
         if masked_values != values:
             flow.request.headers.set_all(name, masked_values)
+
+
+def _apply_request_masking(flow, patterns: list[bytes]) -> None:
+    """allow されたリクエストの URL・ヘッダー・ボディから秘密値を **** に
+    置換する。credential 注入 (injectHeaders) より前に呼ぶこと —
+    逆順だと注入したばかりの本物の credential をマスクして壊す。"""
+    if not patterns:
+        return
+
+    _mask_url_and_headers(flow, patterns)
 
     # .content は Content-Encoding 展開済みビュー。再代入で mitmproxy が
     # 再圧縮と Content-Length 更新を行う。展開できないエンコーディングは
@@ -397,6 +405,10 @@ def _plan_anthropic_masking(method, path, body, patterns):
     if masked is None:
         return "passthrough", None
     return "rewrite", masked
+
+
+def _registry_anthropic_egress(registry) -> bool:
+    return bool(registry and registry.get("anthropicEgress"))
 
 
 def _match_host_pattern(host: str, pattern: str) -> bool:
