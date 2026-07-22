@@ -318,7 +318,7 @@ _KNOWN_BLOCK_TYPES = frozenset({
 _BLOCK_LIST_KEYS = frozenset({"content", "system"})
 
 
-def _walk_schema(node, parent_key, patterns):
+def _walk_schema(node, parent_key: Optional[str], patterns: list[bytes]) -> tuple:
     """(masked_node, changed, blocked) を返す。文字列はパターンマスク、
     base64 source はデコードして走査、ブロックリスト内の未知 type は blocked。"""
     if isinstance(node, dict):
@@ -376,7 +376,7 @@ def _walk_schema(node, parent_key, patterns):
     return node, False, False
 
 
-def _schema_mask_json(body: bytes, patterns: list) -> tuple:
+def _schema_mask_json(body: bytes, patterns: list[bytes]) -> tuple:
     """(masked_body|None, blocked) を返す。"""
     if not body:
         return None, False
@@ -401,7 +401,9 @@ def _schema_mask_json(body: bytes, patterns: list) -> tuple:
         return None, True
 
 
-def _plan_anthropic_masking(method, path, body, patterns):
+def _plan_anthropic_masking(
+    method: str, path: str, body: Optional[bytes], patterns: list[bytes]
+) -> tuple:
     """(action, masked_body) を返す。action は 'block'/'rewrite'/'passthrough'。"""
     if _anthropic_json_endpoint(method, path) is None:
         return "block", None
