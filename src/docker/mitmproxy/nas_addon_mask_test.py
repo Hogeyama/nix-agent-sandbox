@@ -464,7 +464,7 @@ class PatternsForCacheTest(unittest.TestCase):
         self.assertIn(b"other-secret", third)
 
 
-class TestAnthropicRouting(unittest.TestCase):
+class AnthropicRoutingTest(unittest.TestCase):
     def test_is_anthropic_host(self):
         self.assertTrue(nas_addon._is_anthropic_host("api.anthropic.com"))
         self.assertTrue(nas_addon._is_anthropic_host("API.ANTHROPIC.COM"))
@@ -483,7 +483,7 @@ class TestAnthropicRouting(unittest.TestCase):
         self.assertIsNone(nas_addon._anthropic_json_endpoint("POST", "/v1/models"))
 
 
-class TestSchemaMask(unittest.TestCase):
+class SchemaMaskTest(unittest.TestCase):
     def setUp(self):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
@@ -600,7 +600,7 @@ class TestSchemaMask(unittest.TestCase):
         return nas_addon._schema_mask_json(raw_body, self.patterns)
 
 
-class TestAnthropicPlan(unittest.TestCase):
+class AnthropicPlanTest(unittest.TestCase):
     def setUp(self):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
@@ -641,7 +641,7 @@ def _make_stub_flow(path="/", headers=None, content=b""):
     return FakeFlow(FakeRequest(path=path, headers=headers, content=content))
 
 
-class TestGateAndUrlHeader(unittest.TestCase):
+class GateAndUrlHeaderTest(unittest.TestCase):
     def test_registry_gate(self):
         self.assertTrue(nas_addon._registry_anthropic_egress({"anthropicEgress": True}))
         self.assertFalse(nas_addon._registry_anthropic_egress({"anthropicEgress": False}))
