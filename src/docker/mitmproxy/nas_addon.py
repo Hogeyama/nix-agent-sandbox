@@ -278,6 +278,23 @@ def _normalize_host(host: str) -> str:
     return h
 
 
+_ANTHROPIC_HOSTS = ("api.anthropic.com",)
+
+
+def _is_anthropic_host(host: str) -> bool:
+    return _normalize_host(host) in _ANTHROPIC_HOSTS
+
+
+def _anthropic_json_endpoint(method: str, path: str) -> Optional[str]:
+    """既知の JSON リクエストエンドポイントなら schema キーを返す。他は None。"""
+    if method != "POST":
+        return None
+    p = path.split("?", 1)[0].rstrip("/")
+    if p in ("/v1/messages", "/v1/messages/count_tokens"):
+        return "messages"
+    return None
+
+
 def _match_host_pattern(host: str, pattern: str) -> bool:
     normalized = _normalize_host(host)
     if pattern.startswith("*."):

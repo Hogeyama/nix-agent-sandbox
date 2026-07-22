@@ -464,5 +464,24 @@ class PatternsForCacheTest(unittest.TestCase):
         self.assertIn(b"other-secret", third)
 
 
+class TestAnthropicRouting(unittest.TestCase):
+    def test_is_anthropic_host(self):
+        self.assertTrue(nas_addon._is_anthropic_host("api.anthropic.com"))
+        self.assertTrue(nas_addon._is_anthropic_host("API.ANTHROPIC.COM"))
+        self.assertFalse(nas_addon._is_anthropic_host("example.com"))
+        self.assertFalse(nas_addon._is_anthropic_host("evil-anthropic.com"))
+
+    def test_known_json_endpoints(self):
+        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages"), "messages")
+        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages/count_tokens"), "messages")
+        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages?beta=true"), "messages")
+        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages/"), "messages")
+
+    def test_unknown_endpoints_return_none(self):
+        self.assertIsNone(nas_addon._anthropic_json_endpoint("POST", "/v1/files"))
+        self.assertIsNone(nas_addon._anthropic_json_endpoint("GET", "/v1/messages"))
+        self.assertIsNone(nas_addon._anthropic_json_endpoint("POST", "/v1/models"))
+
+
 if __name__ == "__main__":
     unittest.main()
