@@ -186,6 +186,32 @@ function randomBenchmarkSubnet(): string {
 }
 
 /**
+ * `randomBenchmarkSubnet()` は 198.18.0.0/15 内の /24 を一様ランダムに
+ * 選ぶだけなので、既存の docker network（並行実行中の別テストや、前回の
+ * 異常終了で残った leftover）とサブネットが衝突する可能性がゼロではない。
+ * 衝突時は `docker network create --subnet` がエラーになるだけでテスト
+ * 全体が failure になってしまうため、衝突するたびに新しい乱数サブネットで
+ * 数回だけ retry する。
+ */
+async function createBenchmarkNetworkWithRetry(
+  name: string,
+  maxAttempts = 5,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await dockerNetworkCreateWithSubnet(name, randomBenchmarkSubnet());
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`failed to create benchmark network ${name}: ${lastError}`);
+}
+
+/**
  * mitmproxy が転送してきた生の HTTP リクエストを1本受け取り、標準出力に
  * そのまま印字して 200 OK を返す python3 ワンショットサーバのスクリプト。
  * 標準出力は `docker logs` 経由でテストから読み取り、転送されたボディを
@@ -449,7 +475,6 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     // range = denied) にマップする既存 DNS ブロックテストの手法は使えない
     // ため、ここだけ別経路を取る。
     const networkName = `nas-addon-net-${crypto.randomUUID().slice(0, 8)}`;
-    const subnet = randomBenchmarkSubnet();
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
     const targetName = `nas-addon-upstream-${crypto.randomUUID().slice(0, 8)}`;
     let fixture: AnthropicFixture | undefined;
@@ -459,7 +484,10 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       fixture = await setupAnthropicFixture("nas-addon-mask-");
       const { runtimeDir, sessionId, token } = fixture;
 
-      await dockerNetworkCreateWithSubnet(networkName, subnet);
+      // 衝突時は新しい乱数サブネットで数回だけ retry する
+      // (createBenchmarkNetworkWithRetry 参照)。作成に成功した
+      // networkName のみ finally で cleanup する。
+      await createBenchmarkNetworkWithRetry(networkName);
       networkCreated = true;
 
       await dockerRunDetached({
