@@ -252,16 +252,102 @@ class AnthropicRoutingTest(unittest.TestCase):
         self.assertFalse(nas_addon._is_anthropic_host("example.com"))
         self.assertFalse(nas_addon._is_anthropic_host("evil-anthropic.com"))
 
-    def test_known_json_endpoints(self):
-        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages"), "messages")
-        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages/count_tokens"), "messages")
-        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages?beta=true"), "messages")
-        self.assertEqual(nas_addon._anthropic_json_endpoint("POST", "/v1/messages/"), "messages")
+    def test_known_bodyless_get_endpoints_ignore_query(self):
+        paths = [
+            "/api/claude_cli/bootstrap",
+            "/api/claude_code_penguin_mode",
+            "/api/claude_code/policy_limits",
+            "/api/claude_code/settings",
+            "/mcp-registry/v0/servers",
+            "/v1/code/triggers",
+            "/v1/mcp_servers",
+        ]
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    nas_addon._classify_anthropic_endpoint(
+                        "GET", f"{path}?test=value"
+                    ),
+                    ("bodyless-pass", path),
+                )
 
-    def test_unknown_endpoints_return_none(self):
-        self.assertIsNone(nas_addon._anthropic_json_endpoint("POST", "/v1/files"))
-        self.assertIsNone(nas_addon._anthropic_json_endpoint("GET", "/v1/messages"))
-        self.assertIsNone(nas_addon._anthropic_json_endpoint("POST", "/v1/models"))
+    def test_known_schema_endpoints_ignore_query_and_method_case(self):
+        cases = [
+            ("POST", "/v1/messages?beta=true", "/v1/messages"),
+            (
+                "post",
+                "/v1/messages/count_tokens?beta=true",
+                "/v1/messages/count_tokens",
+            ),
+        ]
+        for method, path, route in cases:
+            with self.subTest(method=method, path=path):
+                self.assertEqual(
+                    nas_addon._classify_anthropic_endpoint(method, path),
+                    ("schema-mask", route),
+                )
+
+    def test_unrecognized_method_and_path_combinations_block(self):
+        cases = [
+            (
+                "POST",
+                "/api/claude_code/metrics",
+                "/api/claude_code/metrics",
+            ),
+            (
+                "POST",
+                "/api/event_logging/v2/batch",
+                "/api/event_logging/v2/batch",
+            ),
+            ("POST", "/api/eval/sdk-secret", "/api/eval/:id"),
+            ("POST", "/v1/files", "/v1/files"),
+            ("GET", "/v1/files", "/v1/files"),
+            ("GET", "/api/claude_code/settings/", "unknown"),
+            ("GET", "/api/claude_code/settings/child", "unknown"),
+            ("GET", "/api%2Fclaude_code%2Fsettings", "unknown"),
+            ("GET", "//api/claude_code/settings", "unknown"),
+            (
+                "HEAD",
+                "/api/claude_code/settings",
+                "/api/claude_code/settings",
+            ),
+            ("POST", "/v1/messages/", "unknown"),
+        ]
+        for method, path, route in cases:
+            with self.subTest(method=method, path=path):
+                self.assertEqual(
+                    nas_addon._classify_anthropic_endpoint(method, path),
+                    ("block", route),
+                )
+
+    def test_block_reason_is_specific_only_for_files_route(self):
+        self.assertEqual(
+            nas_addon._block_reason_for_route("/v1/files"),
+            "file-upload-blocked",
+        )
+        other_blocked_routes = [
+            "/api/claude_code/metrics",
+            "/api/event_logging/v2/batch",
+            "/api/eval/:id",
+            "/api/claude_code/settings",
+            "unknown",
+        ]
+        for route in other_blocked_routes:
+            with self.subTest(route=route):
+                self.assertEqual(
+                    nas_addon._block_reason_for_route(route),
+                    "unknown-endpoint",
+                )
+
+    def test_files_descendant_blocks_with_specific_reason(self):
+        endpoint_class, route = nas_addon._classify_anthropic_endpoint(
+            "POST", "/v1/files/child"
+        )
+        self.assertEqual((endpoint_class, route), ("block", "/v1/files"))
+        self.assertEqual(
+            nas_addon._block_reason_for_route(route),
+            "file-upload-blocked",
+        )
 
 
 class SchemaMaskTest(unittest.TestCase):
@@ -389,6 +475,12 @@ class AnthropicPlanTest(unittest.TestCase):
         action, out = nas_addon._plan_anthropic_masking("POST", "/v1/files", b"{}", self.patterns)
         self.assertEqual(action, "block")
         self.assertIsNone(out)
+
+    def test_bodyless_endpoint_remains_blocked_by_schema_planner(self):
+        result = nas_addon._plan_anthropic_masking(
+            "GET", "/api/claude_code/settings", b"", self.patterns
+        )
+        self.assertEqual(result, ("block", None))
 
     def test_undecodable_body_blocks(self):
         action, out = nas_addon._plan_anthropic_masking("POST", "/v1/messages", None, self.patterns)

@@ -221,19 +221,58 @@ def _normalize_host(host: str) -> str:
 
 _ANTHROPIC_HOSTS = ("api.anthropic.com",)
 
+_ANTHROPIC_SCHEMA_ENDPOINTS = frozenset({
+    ("POST", "/v1/messages"),
+    ("POST", "/v1/messages/count_tokens"),
+})
+
+_ANTHROPIC_BODYLESS_ENDPOINTS = frozenset({
+    ("GET", "/api/claude_cli/bootstrap"),
+    ("GET", "/api/claude_code_penguin_mode"),
+    ("GET", "/api/claude_code/policy_limits"),
+    ("GET", "/api/claude_code/settings"),
+    ("GET", "/mcp-registry/v0/servers"),
+    ("GET", "/v1/code/triggers"),
+    ("GET", "/v1/mcp_servers"),
+})
+
+_ANTHROPIC_SAFE_ROUTES = frozenset({
+    *(path for _method, path in _ANTHROPIC_SCHEMA_ENDPOINTS),
+    *(path for _method, path in _ANTHROPIC_BODYLESS_ENDPOINTS),
+    "/api/claude_code/metrics",
+    "/api/event_logging/v2/batch",
+})
+
 
 def _is_anthropic_host(host: str) -> bool:
     return _normalize_host(host) in _ANTHROPIC_HOSTS
 
 
-def _anthropic_json_endpoint(method: str, path: str) -> Optional[str]:
-    """既知の JSON リクエストエンドポイントなら schema キーを返す。他は None。"""
-    if method != "POST":
-        return None
-    p = path.split("?", 1)[0].rstrip("/")
-    if p in ("/v1/messages", "/v1/messages/count_tokens"):
-        return "messages"
-    return None
+def _safe_anthropic_route(path: str) -> str:
+    if path in _ANTHROPIC_SAFE_ROUTES:
+        return path
+    if path.startswith("/api/eval/"):
+        return "/api/eval/:id"
+    if path == "/v1/files" or path.startswith("/v1/files/"):
+        return "/v1/files"
+    return "unknown"
+
+
+def _classify_anthropic_endpoint(method: str, path: str) -> tuple[str, str]:
+    method = method.upper()
+    path_without_query = path.split("?", 1)[0]
+    endpoint = (method, path_without_query)
+    if endpoint in _ANTHROPIC_SCHEMA_ENDPOINTS:
+        return "schema-mask", path_without_query
+    if endpoint in _ANTHROPIC_BODYLESS_ENDPOINTS:
+        return "bodyless-pass", path_without_query
+    return "block", _safe_anthropic_route(path_without_query)
+
+
+def _block_reason_for_route(route: str) -> str:
+    if route == "/v1/files":
+        return "file-upload-blocked"
+    return "unknown-endpoint"
 
 
 # コンテンツコンテナ内で許可するブロック型。ここに無い type が
@@ -338,7 +377,8 @@ def _plan_anthropic_masking(
     method: str, path: str, body: Optional[bytes], patterns: list[bytes]
 ) -> tuple:
     """(action, masked_body) を返す。action は 'block'/'rewrite'/'passthrough'。"""
-    if _anthropic_json_endpoint(method, path) is None:
+    endpoint_class, _route = _classify_anthropic_endpoint(method, path)
+    if endpoint_class != "schema-mask":
         return "block", None
     if body is None:
         return "block", None
