@@ -1,8 +1,14 @@
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { appendAuditLog, queryAuditLogs, resolveAuditDir } from "./store.ts";
+import {
+  _closeAuditDb,
+  appendAuditLog,
+  queryAuditLogs,
+  resolveAuditDir,
+} from "./store.ts";
 import type { AuditLogEntry } from "./types.ts";
 
 function makeEntry(overrides: Partial<AuditLogEntry> = {}): AuditLogEntry {
@@ -29,6 +35,109 @@ test("appendAuditLog: writes and reads back entries", async () => {
     expect(results[0].id).toEqual(entry.id);
     expect(results[0].domain).toEqual("network");
   } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("appendAuditLog: round-trips Anthropic egress outcome fields", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-egress-"));
+  try {
+    await appendAuditLog(
+      makeEntry({
+        requestId: "req-egress",
+        phase: "egress",
+        method: "POST",
+        route: "/v1/files",
+        egressAction: "block",
+        decision: "deny",
+        reason: "file-upload-blocked",
+      }),
+      dir,
+    );
+
+    const [entry] = await queryAuditLogs({}, dir);
+    expect(entry).toMatchObject({
+      phase: "egress",
+      method: "POST",
+      route: "/v1/files",
+      egressAction: "block",
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("queryAuditLogs: migrates legacy schema and preserves old rows", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-legacy-"));
+  try {
+    const db = new Database(path.join(dir, "audit.db"), { create: true });
+    try {
+      db.run(`
+        CREATE TABLE audit_log (
+          id               TEXT PRIMARY KEY,
+          timestamp        TEXT NOT NULL,
+          domain           TEXT NOT NULL,
+          session_id       TEXT NOT NULL,
+          request_id       TEXT NOT NULL,
+          decision         TEXT NOT NULL,
+          reason           TEXT NOT NULL,
+          scope            TEXT,
+          target           TEXT,
+          command          TEXT,
+          injected_headers TEXT
+        )
+      `);
+      db.run(
+        `INSERT INTO audit_log
+           (id, timestamp, domain, session_id, request_id, decision, reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          "legacy-id",
+          "2026-03-27T12:00:00Z",
+          "network",
+          "legacy-session",
+          "legacy-request",
+          "allow",
+          "legacy entry",
+        ],
+      );
+    } finally {
+      db.close();
+    }
+
+    const [entry] = await queryAuditLogs({}, dir);
+    expect(entry.phase).toEqual("authorization");
+    expect(entry.method).toBeUndefined();
+    expect(entry.route).toBeUndefined();
+    expect(entry.egressAction).toBeUndefined();
+
+    await appendAuditLog(
+      makeEntry({
+        id: "egress-id",
+        timestamp: "2026-03-28T12:00:00Z",
+        phase: "egress",
+        method: "POST",
+        route: "/v1/files",
+        egressAction: "schema-mask",
+      }),
+      dir,
+    );
+
+    const entries = await queryAuditLogs({}, dir);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      id: "legacy-id",
+      phase: "authorization",
+    });
+    expect(entries[1]).toMatchObject({
+      id: "egress-id",
+      phase: "egress",
+      method: "POST",
+      route: "/v1/files",
+      egressAction: "schema-mask",
+    });
+  } finally {
+    _closeAuditDb(dir);
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 });

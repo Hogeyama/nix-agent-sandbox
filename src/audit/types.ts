@@ -4,6 +4,10 @@ export type AuditDomain = "network" | "hostexec";
 /** Decision taken by the policy engine. */
 export type AuditDecision = "allow" | "deny";
 
+export type AuditPhase = "authorization" | "egress";
+
+export type AnthropicEgressAction = "schema-mask" | "bodyless-pass" | "block";
+
 /** A single audit log entry persisted to JSONL. */
 export interface AuditLogEntry {
   /** Unique identifier (UUID v4). */
@@ -20,6 +24,14 @@ export interface AuditLogEntry {
   decision: AuditDecision;
   /** Human-readable reason for the decision. */
   reason: string;
+  /** Processing phase. An absent phase means a legacy authorization entry. */
+  phase?: AuditPhase;
+  /** HTTP method for an egress outcome. */
+  method?: string;
+  /** HTTP route for an egress outcome. */
+  route?: string;
+  /** Anthropic response handling applied during the egress phase. */
+  egressAction?: AnthropicEgressAction;
   /** Optional scope label (e.g. allowlist rule name). */
   scope?: string;
   /** Network-specific: the target host / URL. */

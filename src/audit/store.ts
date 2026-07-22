@@ -1,7 +1,12 @@
 import { Database } from "bun:sqlite";
 import * as path from "node:path";
 import { ensureDir } from "../lib/fs_utils.ts";
-import type { AuditLogEntry, AuditLogFilter } from "./types.ts";
+import type {
+  AnthropicEgressAction,
+  AuditLogEntry,
+  AuditLogFilter,
+  AuditPhase,
+} from "./types.ts";
 
 /**
  * Resolve the directory where the audit SQLite database lives.
@@ -35,6 +40,15 @@ const DB_FILENAME = "audit.db";
  */
 const dbCache = new Map<string, Database>();
 
+function addColumnIfMissing(db: Database, definition: string): void {
+  try {
+    db.run(`ALTER TABLE audit_log ADD COLUMN ${definition}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("duplicate column name")) throw error;
+  }
+}
+
 function openDatabase(dir: string): Database {
   const cached = dbCache.get(dir);
   if (cached) return cached;
@@ -62,6 +76,10 @@ function openDatabase(dir: string): Database {
         request_id       TEXT NOT NULL,
         decision         TEXT NOT NULL,
         reason           TEXT NOT NULL,
+        phase            TEXT,
+        method           TEXT,
+        route            TEXT,
+        egress_action    TEXT,
         scope            TEXT,
         target           TEXT,
         command          TEXT,
@@ -74,16 +92,11 @@ function openDatabase(dir: string): Database {
       CREATE INDEX IF NOT EXISTS idx_audit_domain
         ON audit_log(domain);
     `);
-    // Add injected_headers column if it doesn't exist (migration for existing databases).
-    try {
-      db.run("ALTER TABLE audit_log ADD COLUMN injected_headers TEXT");
-    } catch (e) {
-      // Only ignore "duplicate column name" — any other error is unexpected.
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!msg.includes("duplicate column name")) {
-        throw e;
-      }
-    }
+    addColumnIfMissing(db, "injected_headers TEXT");
+    addColumnIfMissing(db, "phase TEXT");
+    addColumnIfMissing(db, "method TEXT");
+    addColumnIfMissing(db, "route TEXT");
+    addColumnIfMissing(db, "egress_action TEXT");
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
     // held for the rest of the process lifetime.
@@ -130,9 +143,10 @@ export async function appendAuditLog(
   db.prepare(
     `INSERT OR REPLACE INTO audit_log
        (id, timestamp, domain, session_id, request_id,
-        decision, reason, scope, target, command, injected_headers)
+        decision, reason, phase, method, route, egress_action,
+        scope, target, command, injected_headers)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -141,6 +155,10 @@ export async function appendAuditLog(
     entry.requestId,
     entry.decision,
     entry.reason,
+    entry.phase ?? null,
+    entry.method ?? null,
+    entry.route ?? null,
+    entry.egressAction ?? null,
     entry.scope ?? null,
     entry.target ?? null,
     entry.command ?? null,
@@ -234,7 +252,8 @@ export async function queryAuditLogs(
   }
 
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
-                      decision, reason, scope, target, command, injected_headers
+                      decision, reason, phase, method, route, egress_action,
+                      scope, target, command, injected_headers
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY timestamp ASC, id ASC`;
@@ -251,6 +270,10 @@ interface AuditLogRow {
   request_id: string;
   decision: string;
   reason: string;
+  phase: string | null;
+  method: string | null;
+  route: string | null;
+  egress_action: string | null;
   scope: string | null;
   target: string | null;
   command: string | null;
@@ -267,6 +290,13 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
     decision: row.decision as AuditLogEntry["decision"],
     reason: row.reason,
   };
+  entry.phase =
+    row.phase === null ? "authorization" : (row.phase as AuditPhase);
+  if (row.method !== null) entry.method = row.method;
+  if (row.route !== null) entry.route = row.route;
+  if (row.egress_action !== null) {
+    entry.egressAction = row.egress_action as AnthropicEgressAction;
+  }
   if (row.scope !== null) entry.scope = row.scope;
   if (row.target !== null) entry.target = row.target;
   if (row.command !== null) entry.command = row.command;
