@@ -28,6 +28,8 @@ import {
   type AuthorizeRequest,
   type DecisionResponse,
   denyReasonForTarget,
+  type EgressOutcomeRequest,
+  type EgressOutcomeResponse,
   matchesHostPattern,
   matchesPathPrefix,
   type PendingEntry,
@@ -35,6 +37,7 @@ import {
   type ReviewContext,
   targetKey,
   targetKeyForScope,
+  validateEgressOutcome,
 } from "./protocol.ts";
 import type { NetworkRuntimePaths } from "./registry.ts";
 import {
@@ -103,12 +106,14 @@ const ALLOWED_NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set([
 
 type BrokerMessage =
   | AuthorizeRequest
+  | EgressOutcomeRequest
   | { type: "approve"; requestId: string; scope?: ApprovalScope }
   | { type: "deny"; requestId: string; scope?: ApprovalScope }
   | { type: "list_pending" };
 
 type BrokerResponse =
   | DecisionResponse
+  | EgressOutcomeResponse
   | { type: "pending"; items: PendingEntry[] }
   | { type: "ack"; requestId: string; decision: "approve" | "deny" }
   | { type: "error"; requestId: string; message: string };
@@ -244,7 +249,52 @@ export class SessionBroker {
     if (message.type === "deny") {
       return await this.deny(message.requestId, message.scope);
     }
+    if (message.type === "egress_outcome") {
+      return await this.recordEgressOutcome(message);
+    }
     return { type: "pending", items: await this.listPending() };
+  }
+
+  private async recordEgressOutcome(message: EgressOutcomeRequest): Promise<
+    | EgressOutcomeResponse
+    | {
+        type: "error";
+        requestId: string;
+        message: string;
+      }
+  > {
+    const validationError = validateEgressOutcome(message, this.sessionId);
+    if (validationError) {
+      return {
+        type: "error",
+        requestId:
+          typeof message.requestId === "string" ? message.requestId : "",
+        message: validationError,
+      };
+    }
+
+    if (this.auditDir) {
+      const entry: AuditLogEntry = {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        domain: "network",
+        sessionId: this.sessionId,
+        requestId: message.requestId,
+        decision: message.action === "block" ? "deny" : "allow",
+        reason: message.reason,
+        phase: "egress",
+        method: message.method,
+        route: message.route,
+        egressAction: message.action,
+      };
+      await appendAuditLog(entry, this.auditDir);
+    }
+
+    return {
+      version: 1,
+      type: "egress_outcome_recorded",
+      requestId: message.requestId,
+    };
   }
 
   private async authorize(
@@ -595,6 +645,7 @@ export class SessionBroker {
       requestId,
       decision,
       reason,
+      phase: "authorization",
       target,
       injectedHeaders,
     };

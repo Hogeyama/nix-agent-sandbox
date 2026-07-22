@@ -8,6 +8,8 @@ import { SessionBroker, sendBrokerRequest } from "./broker.ts";
 import type {
   AuthorizeRequest,
   DecisionResponse,
+  EgressOutcomeRequest,
+  EgressOutcomeResponse,
   PendingEntry,
 } from "./protocol.ts";
 import { resolveNetworkRuntimePaths } from "./registry.ts";
@@ -39,12 +41,233 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
     expect(logs.length).toEqual(1);
     expect(logs[0].decision).toEqual("allow");
     expect(logs[0].reason).toEqual("review-rule");
+    expect(logs[0].phase).toEqual("authorization");
     expect(logs[0].target).toEqual("example.com:443");
     expect(logs[0].requestId).toEqual("req_1");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: egress outcome is acknowledged and audited", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+    auditDir,
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<EgressOutcomeResponse>(
+      socketPath,
+      {
+        version: 1,
+        type: "egress_outcome",
+        requestId: "req-egress",
+        sessionId: "sess_test",
+        method: "POST",
+        route: "/v1/files",
+        action: "block",
+        reason: "file-upload-blocked",
+      },
+    );
+
+    expect(response).toEqual({
+      version: 1,
+      type: "egress_outcome_recorded",
+      requestId: "req-egress",
+    });
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs.length).toEqual(1);
+    expect(logs[0].phase).toEqual("egress");
+    expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].target).toBeUndefined();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+const invalidEgressOutcomes = [
+  ["mismatched session", { sessionId: "sess_other" }],
+  ["invalid method", { method: "PUT" }],
+  ["unlisted route", { route: "/v1/unlisted" }],
+  ["invalid action", { action: "allow" }],
+  ["invalid reason", { reason: "raw-secret-reason" }],
+  [
+    "invalid action/reason pairing",
+    { action: "schema-mask", reason: "file-upload-blocked" },
+  ],
+  [
+    "block paired with recognized-schema",
+    { action: "block", reason: "recognized-schema" },
+  ],
+  [
+    "block paired with known-bodyless-endpoint",
+    { action: "block", reason: "known-bodyless-endpoint" },
+  ],
+] as const;
+
+for (const [name, overrides] of invalidEgressOutcomes) {
+  test(`SessionBroker: egress outcome rejects ${name} without auditing`, async () => {
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+    const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+    const paths = await resolveNetworkRuntimePaths(runtimeDir);
+    const broker = new SessionBroker({
+      paths,
+      sessionId: "sess_test",
+      reviewRules: [],
+      pendingTimeoutSeconds: 30,
+      pendingDefaultScope: "host-port",
+      pendingNotify: "off",
+      auditDir,
+    });
+    const socketPath = `${paths.brokersDir}/sess_test/sock`;
+    await broker.start(socketPath);
+    try {
+      const request = {
+        version: 1,
+        type: "egress_outcome",
+        requestId: `req-egress-${name}`,
+        sessionId: "sess_test",
+        method: "POST",
+        route: "/v1/files",
+        action: "block",
+        reason: "file-upload-blocked",
+        ...overrides,
+      } as unknown as EgressOutcomeRequest;
+      const response = await sendBrokerRequest<{
+        type: "error";
+        requestId: string;
+        message: string;
+      }>(socketPath, request);
+
+      expect(response.type).toEqual("error");
+      const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+      expect(logs.filter((entry) => entry.phase === "egress")).toEqual([]);
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+      await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
+const allowedEgressOutcomes = [
+  {
+    name: "schema-mask with recognized-schema",
+    requestId: "req-egress-schema-mask",
+    method: "POST",
+    route: "/v1/messages",
+    action: "schema-mask",
+    reason: "recognized-schema",
+  },
+  {
+    name: "bodyless-pass with known-bodyless-endpoint",
+    requestId: "req-egress-bodyless-pass",
+    method: "GET",
+    route: "/api/claude_cli/bootstrap",
+    action: "bodyless-pass",
+    reason: "known-bodyless-endpoint",
+  },
+] as const;
+
+for (const outcome of allowedEgressOutcomes) {
+  test(`SessionBroker: egress outcome maps ${outcome.name} to allow`, async () => {
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+    const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+    const paths = await resolveNetworkRuntimePaths(runtimeDir);
+    const broker = new SessionBroker({
+      paths,
+      sessionId: "sess_test",
+      reviewRules: [],
+      pendingTimeoutSeconds: 30,
+      pendingDefaultScope: "host-port",
+      pendingNotify: "off",
+      auditDir,
+    });
+    const socketPath = `${paths.brokersDir}/sess_test/sock`;
+    await broker.start(socketPath);
+    try {
+      const response = await sendBrokerRequest<EgressOutcomeResponse>(
+        socketPath,
+        {
+          version: 1,
+          type: "egress_outcome",
+          requestId: outcome.requestId,
+          sessionId: "sess_test",
+          method: outcome.method,
+          route: outcome.route,
+          action: outcome.action,
+          reason: outcome.reason,
+        },
+      );
+
+      expect(response).toEqual({
+        version: 1,
+        type: "egress_outcome_recorded",
+        requestId: outcome.requestId,
+      });
+      const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+      expect(logs.length).toEqual(1);
+      expect(logs[0].phase).toEqual("egress");
+      expect(logs[0].decision).toEqual("allow");
+      expect(logs[0].egressAction).toEqual(outcome.action);
+      expect(logs[0].reason).toEqual(outcome.reason);
+    } finally {
+      await broker.close();
+      await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+      await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
+test("SessionBroker: egress outcome is acknowledged without an audit directory", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    reviewRules: [],
+    pendingTimeoutSeconds: 30,
+    pendingDefaultScope: "host-port",
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<EgressOutcomeResponse>(
+      socketPath,
+      {
+        version: 1,
+        type: "egress_outcome",
+        requestId: "req-egress-no-audit",
+        sessionId: "sess_test",
+        method: "POST",
+        route: "/v1/files",
+        action: "block",
+        reason: "file-upload-blocked",
+      },
+    );
+
+    expect(response).toEqual({
+      version: 1,
+      type: "egress_outcome_recorded",
+      requestId: "req-egress-no-audit",
+    });
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

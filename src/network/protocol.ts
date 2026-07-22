@@ -61,6 +61,101 @@ export interface DecisionResponse {
   maskValues?: string[];
 }
 
+export const ANTHROPIC_EGRESS_ACTIONS = [
+  "schema-mask",
+  "bodyless-pass",
+  "block",
+] as const;
+
+export const ANTHROPIC_EGRESS_METHODS = ["GET", "POST"] as const;
+
+export const ANTHROPIC_EGRESS_REASONS = [
+  "recognized-schema",
+  "known-bodyless-endpoint",
+  "unknown-endpoint",
+  "unexpected-body",
+  "body-unavailable",
+  "schema-unknown",
+  "decode-failed",
+  "file-upload-blocked",
+] as const;
+
+export const ANTHROPIC_EGRESS_ROUTES = [
+  "/v1/messages",
+  "/v1/messages/count_tokens",
+  "/api/claude_cli/bootstrap",
+  "/api/claude_code_penguin_mode",
+  "/api/claude_code/policy_limits",
+  "/api/claude_code/settings",
+  "/mcp-registry/v0/servers",
+  "/v1/code/triggers",
+  "/v1/mcp_servers",
+  "/api/claude_code/metrics",
+  "/api/event_logging/v2/batch",
+  "/api/eval/:id",
+  "/v1/files",
+  "unknown",
+] as const;
+
+export interface EgressOutcomeRequest {
+  version: 1;
+  type: "egress_outcome";
+  requestId: string;
+  sessionId: string;
+  method: (typeof ANTHROPIC_EGRESS_METHODS)[number];
+  route: (typeof ANTHROPIC_EGRESS_ROUTES)[number];
+  action: (typeof ANTHROPIC_EGRESS_ACTIONS)[number];
+  reason: (typeof ANTHROPIC_EGRESS_REASONS)[number];
+}
+
+export interface EgressOutcomeResponse {
+  version: 1;
+  type: "egress_outcome_recorded";
+  requestId: string;
+}
+
+export function validateEgressOutcome(
+  value: unknown,
+  expectedSessionId: string,
+): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid egress outcome request";
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    message.version !== 1 ||
+    message.type !== "egress_outcome" ||
+    typeof message.requestId !== "string"
+  ) {
+    return "invalid egress outcome request";
+  }
+  if (message.sessionId !== expectedSessionId) {
+    return "egress outcome session mismatch";
+  }
+  if (!isListedValue(message.method, ANTHROPIC_EGRESS_METHODS)) {
+    return "invalid egress outcome method";
+  }
+  if (!isListedValue(message.route, ANTHROPIC_EGRESS_ROUTES)) {
+    return "invalid egress outcome route";
+  }
+  if (!isListedValue(message.action, ANTHROPIC_EGRESS_ACTIONS)) {
+    return "invalid egress outcome action";
+  }
+  if (!isListedValue(message.reason, ANTHROPIC_EGRESS_REASONS)) {
+    return "invalid egress outcome reason";
+  }
+
+  const action = message.action;
+  const reason = message.reason;
+  const validPair =
+    (action === "schema-mask" && reason === "recognized-schema") ||
+    (action === "bodyless-pass" && reason === "known-bodyless-endpoint") ||
+    (action === "block" &&
+      reason !== "recognized-schema" &&
+      reason !== "known-bodyless-endpoint");
+  return validPair ? null : "invalid egress outcome action/reason pairing";
+}
+
 export interface PendingEntry {
   version: 1;
   sessionId: string;
@@ -323,4 +418,11 @@ function randomHex(bytes: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function isListedValue<const T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+): value is T[number] {
+  return typeof value === "string" && allowed.some((item) => item === value);
 }
