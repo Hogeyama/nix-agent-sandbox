@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
+import { resolveReviewRules } from "../network/review_rules.ts";
 import { loadConfig } from "./load.ts";
 
 /** pkl コマンドが利用可能か確認する */
@@ -223,6 +224,9 @@ test.skipIf(!hasPkl)(
 profiles {
   ["dev"] {
     agent = "claude"
+    mask = new MaskConfig {
+      proxy = true
+    }
     network {
       reviewRules = new Listing {
         new ReviewRule {
@@ -321,13 +325,16 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
-  "pkl: preset overlay serializes bodyless request policy",
+  "pkl: serializes and expands a preset overlay",
   async () => {
     const configPkl = `amends "Schema.pkl"
 
 profiles {
   ["dev"] {
     agent = "claude"
+    mask = new MaskConfig {
+      proxy = true
+    }
     network {
       reviewRules {
         new ReviewRulesPreset {
@@ -354,24 +361,28 @@ profiles {
     try {
       await setupNasDir(tmpDir, configPkl);
       const config = await loadConfig({ startDir: tmpDir });
-      expect(config.profiles.dev.network.reviewRules).toEqual([
-        {
-          id: "anthropic",
-          preset: "anthropic@1",
-          host: "gateway.example.com",
-          removeRules: ["bodyless.settings"],
-          addRules: [
-            {
-              id: "company-bootstrap",
-              method: "GET",
-              path: "/company/bootstrap",
-              action: "review",
-              audit: true,
-              requestPolicy: { kind: "bodyless" },
-            },
-          ],
-        },
-      ]);
+      const resolved = resolveReviewRules(
+        config.profiles.dev.network.reviewRules,
+      );
+      expect(
+        resolved.rules.some(
+          (rule) => rule.id === "anthropic.bodyless.settings",
+        ),
+      ).toBe(false);
+      expect(
+        resolved.rules.find(
+          (rule) => rule.id === "anthropic.company-bootstrap",
+        ),
+      ).toMatchObject({
+        host: "gateway.example.com",
+        path: "/company/bootstrap",
+        action: "review",
+      });
+      expect(resolved.rules.at(-1)).toMatchObject({
+        id: "anthropic.default-deny",
+        host: "gateway.example.com",
+        action: "deny",
+      });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

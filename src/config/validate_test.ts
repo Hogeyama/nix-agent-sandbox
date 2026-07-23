@@ -8,8 +8,8 @@
  *   - validate_hostexec_test.ts — hostexec-specific validation
  */
 
-import { expect, test } from "bun:test";
-import type { Config, Profile } from "./types.ts";
+import { expect, spyOn, test } from "bun:test";
+import type { Config, Profile, ReviewRuleSpec } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_CONFIG,
@@ -194,6 +194,316 @@ test("validate: reviewRules accepts host:port entries", () => {
   expect(config.profiles.test.network.reviewRules[0].host).toEqual(
     "example.com:443",
   );
+});
+
+test("validate: resolves valid custom request-policy rules", () => {
+  const config = makeConfig({
+    profiles: {
+      test: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            {
+              id: "bodyless.settings",
+              method: "GET",
+              host: "api.example.com",
+              path: "/settings",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+          ],
+        },
+        mask: {
+          values: [],
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: true,
+          filter: false,
+        },
+      }),
+    },
+  });
+
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: prefixes custom rule compiler errors with profile and rule identity", () => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            {
+              id: "bodyless.bad",
+              method: "POST",
+              host: "api.example.com",
+              path: "/settings",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+          ],
+        },
+      }),
+    },
+  });
+
+  expect(() => validateConfig(config)).toThrow(
+    /profile "release": network\.reviewRules\[0\] \(id "bodyless\.bad"\).*bodyless.*GET/,
+  );
+});
+
+test("validate: aggregates multiple invalid review-rule specs in one profile", () => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            {
+              id: "bodyless.bad-method",
+              method: "POST",
+              host: "api.example.com",
+              path: "/settings",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+            {
+              id: "Unsafe",
+              method: "GET",
+              host: "api.example.com",
+              path: "/bootstrap",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+          ],
+        },
+        mask: {
+          values: [],
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: true,
+          filter: false,
+        },
+      }),
+    },
+  });
+
+  expect(() => validateConfig(config)).toThrow(
+    /profile "release": network\.reviewRules\[0\].*bodyless.*GET[\s\S]*profile "release": network\.reviewRules\[1\].*invalid rule ID/,
+  );
+});
+
+test("validate: hard-fails when an earlier rule shadows a policy rule", () => {
+  const config = makeConfig({
+    profiles: {
+      test: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            { action: "review" },
+            {
+              id: "bodyless.settings",
+              method: "GET",
+              host: "api.example.com",
+              path: "/settings",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+          ],
+        },
+        mask: {
+          values: [],
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: true,
+          filter: false,
+        },
+      }),
+    },
+  });
+
+  expect(() => validateConfig(config)).toThrow(
+    /profile "test": network\.reviewRules\[0\] shadows protected reviewRules\[1\].*bodyless\.settings/,
+  );
+});
+
+test.each([
+  [
+    "unknown preset removal",
+    {
+      id: "anthropic",
+      preset: "anthropic@1",
+      removeRules: ["missing"],
+      addRules: [],
+    },
+    /unknown removeRules.*missing/,
+  ],
+  [
+    "mismatched overlay host",
+    {
+      id: "anthropic",
+      preset: "anthropic@1",
+      host: "gateway.example.com",
+      removeRules: [],
+      addRules: [
+        {
+          id: "company-bootstrap",
+          method: "GET",
+          host: "api.anthropic.com",
+          path: "/company/bootstrap",
+          action: "allow",
+          requestPolicy: { kind: "bodyless" },
+        },
+      ],
+    },
+    /host.*effective preset host/,
+  ],
+  [
+    "composed preset ID overflow",
+    {
+      id: `a${"0".repeat(54)}`,
+      preset: "anthropic@1",
+      removeRules: [],
+      addRules: [],
+    },
+    /invalid composed rule ID/,
+  ],
+])("validate: profile-qualifies %s", (_name, preset, expected) => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [preset as ReviewRuleSpec],
+        },
+      }),
+    },
+  });
+
+  expect(() => validateConfig(config)).toThrow(
+    new RegExp(
+      `profile "release": network\\.reviewRules\\[0\\].*${expected.source}`,
+    ),
+  );
+});
+
+test("validate: accepts an overlay addition that inherits the preset host", () => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            {
+              id: "anthropic",
+              preset: "anthropic@1",
+              host: "gateway.example.com",
+              removeRules: [],
+              addRules: [
+                {
+                  id: "company-bootstrap",
+                  method: "GET",
+                  path: "/company/bootstrap",
+                  action: "allow",
+                  requestPolicy: { kind: "bodyless" },
+                },
+              ],
+            },
+          ],
+        },
+        mask: {
+          values: [],
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: true,
+          filter: false,
+        },
+      }),
+    },
+  });
+
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: profile-qualifies broad prior shadow of a preset", () => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            { action: "review" },
+            {
+              id: "anthropic",
+              preset: "anthropic@1",
+              removeRules: [],
+              addRules: [],
+            },
+          ],
+        },
+      }),
+    },
+  });
+
+  expect(() => validateConfig(config)).toThrow(
+    /profile "release": network\.reviewRules\[0\].*shadows protected reviewRules\[1\]/,
+  );
+});
+
+test("validate: retains ordinary catch-all shadow warnings", () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              reviewRules: [
+                { action: "review" },
+                { host: "example.com", action: "allow" },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'profile "test": network.reviewRules[0] (catch-all',
+      ),
+    );
+  } finally {
+    log.mockRestore();
+  }
+});
+
+test("validate: does not warn that an exact-path rule is catch-all", () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    validateConfig(
+      makeConfig({
+        profiles: {
+          test: makeProfile({
+            network: {
+              ...DEFAULT_NETWORK_CONFIG,
+              reviewRules: [
+                {
+                  path: "/specific",
+                  action: "review",
+                },
+                { host: "example.com", action: "allow" },
+              ],
+            },
+          }),
+        },
+      }),
+    );
+    expect(log).not.toHaveBeenCalled();
+  } finally {
+    log.mockRestore();
+  }
 });
 
 // ---------------------------------------------------------------------------
