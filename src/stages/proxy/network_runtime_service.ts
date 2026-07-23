@@ -12,6 +12,7 @@ import { resolveAsset } from "../../lib/asset.ts";
 import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
 import type { ResolvedCredential } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import type { ResolvedReviewRules } from "../../network/review_rules.ts";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService } from "../../services/process.ts";
 
@@ -36,7 +37,7 @@ export class NetworkRuntimeService extends Context.Tag(
     readonly writeReviewRules: (
       paths: NetworkRuntimePaths,
       sessionId: string,
-      rules: import("../../config/types.ts").ReviewRule[],
+      resolvedReviewRules: ResolvedReviewRules,
     ) => Effect.Effect<void>;
     readonly computeAddonHash: () => Effect.Effect<string>;
     readonly resolveCredentials: (
@@ -107,10 +108,10 @@ export const NetworkRuntimeServiceLive: Layer.Layer<
           return Buffer.from(new Uint8Array(digest)).toString("hex");
         }),
 
-      writeReviewRules: (paths, sessionId, rules) =>
+      writeReviewRules: (paths, sessionId, resolvedReviewRules) =>
         Effect.gen(function* () {
           const rulesPath = `${paths.reviewRulesDir}/${sessionId}.json`;
-          yield* fs.writeFile(rulesPath, JSON.stringify(rules), {
+          yield* fs.writeFile(rulesPath, JSON.stringify(resolvedReviewRules), {
             mode: 0o644,
           });
         }),
@@ -172,7 +173,7 @@ export interface NetworkRuntimeServiceFakeConfig {
   readonly writeReviewRules?: (
     paths: NetworkRuntimePaths,
     sessionId: string,
-    rules: import("../../config/types.ts").ReviewRule[],
+    resolvedReviewRules: ResolvedReviewRules,
   ) => Effect.Effect<void>;
   readonly computeAddonHash?: () => Effect.Effect<string>;
   readonly resolveCredentials?: (

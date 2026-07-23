@@ -8,7 +8,6 @@
  */
 
 import { Context, Effect, Layer } from "effect";
-import type { ReviewRule } from "../../config/types.ts";
 import type { ResolvedNotifyBackend } from "../../lib/notify_utils.ts";
 import { logInfo, logWarn } from "../../log.ts";
 import { SessionBroker } from "../../network/broker.ts";
@@ -22,6 +21,7 @@ import {
   removeSessionRegistry,
   writeSessionRegistry,
 } from "../../network/registry.ts";
+import type { ResolvedReviewRules } from "../../network/review_rules.ts";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -33,7 +33,7 @@ export interface SessionBrokerConfig {
   readonly socketPath: string;
   readonly profileName: string;
   readonly agent?: string;
-  readonly reviewRules: ReviewRule[];
+  readonly resolvedReviewRules: ResolvedReviewRules;
   readonly pendingTimeoutSeconds: number;
   readonly pendingDefaultScope: ApprovalScope;
   readonly pendingNotify: ResolvedNotifyBackend;
@@ -83,7 +83,7 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
             const broker = new SessionBroker({
               paths: config.paths,
               sessionId: config.sessionId,
-              reviewRules: config.reviewRules,
+              reviewRules: config.resolvedReviewRules.rules,
               pendingTimeoutSeconds: config.pendingTimeoutSeconds,
               pendingDefaultScope: config.pendingDefaultScope,
               pendingNotify: config.pendingNotify,

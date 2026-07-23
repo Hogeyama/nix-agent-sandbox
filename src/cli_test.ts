@@ -436,7 +436,10 @@ test("planProxy: network proxy cannot be opted out", () => {
 
   const result = planProxy(stageInput);
 
-  expect(result.reviewRules).toEqual([]);
+  expect(result.resolvedReviewRules).toEqual({
+    contractVersion: 1,
+    rules: [],
+  });
   expect(result.container.network).toEqual({
     name: "nas-session-net-sess_test123",
   });

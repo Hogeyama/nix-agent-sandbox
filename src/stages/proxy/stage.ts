@@ -11,12 +11,7 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import type {
-  CredentialRule,
-  MaskValueConfig,
-  ReviewRule,
-  ReviewRuleSpec,
-} from "../../config/types.ts";
+import type { CredentialRule, MaskValueConfig } from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import {
@@ -25,6 +20,10 @@ import {
 } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { brokerSocketPath } from "../../network/registry.ts";
+import {
+  type ResolvedReviewRules,
+  resolveReviewRules,
+} from "../../network/review_rules.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
@@ -54,8 +53,6 @@ const PROXY_ALIAS = "nas-proxy";
 const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
 export const LOCAL_PROXY_PORT = 18080;
-export const REVIEW_RULE_RESOLUTION_REQUIRED_ERROR =
-  "network.reviewRules presets, exact paths, and request policies require review-rule resolution";
 
 /**
  * Mount target directory inside the agent container where per-port forward-port
@@ -83,7 +80,7 @@ export interface ProxyPlan {
   readonly runtimePaths: NetworkRuntimePaths;
   readonly brokerSocket: string;
   readonly token: string;
-  readonly reviewRules: ReviewRule[];
+  readonly resolvedReviewRules: ResolvedReviewRules;
   readonly credentials: CredentialRule[];
   readonly pendingTimeoutSeconds: number;
   readonly pendingDefaultScope: import("../../network/protocol.ts").ApprovalScope;
@@ -118,7 +115,7 @@ export function planProxy(
   input: StageInput & Pick<PipelineState, "container" | "observability">,
   options: ProxyStageOptions = {},
 ): ProxyPlan {
-  const reviewRules = requireLegacyCompatibleReviewRules(
+  const resolvedReviewRules = resolveReviewRules(
     input.profile.network.reviewRules,
   );
   const proxyContainerName = options.proxyContainerName ?? PROXY_CONTAINER_NAME;
@@ -227,7 +224,7 @@ export function planProxy(
     runtimePaths,
     brokerSocket,
     token,
-    reviewRules,
+    resolvedReviewRules,
     credentials: [...input.profile.network.credentials],
     pendingTimeoutSeconds: input.profile.network.pendingTimeoutSeconds,
     pendingDefaultScope: input.profile.network.pendingDefaultScope,
@@ -248,23 +245,6 @@ export function planProxy(
       container,
     },
   };
-}
-
-function requireLegacyCompatibleReviewRules(
-  specs: ReviewRuleSpec[],
-): ReviewRule[] {
-  const reviewRules: ReviewRule[] = [];
-  for (const spec of specs) {
-    if (
-      "preset" in spec ||
-      spec.path !== undefined ||
-      spec.requestPolicy !== undefined
-    ) {
-      throw new Error(REVIEW_RULE_RESOLUTION_REQUIRED_ERROR);
-    }
-    reviewRules.push(spec);
-  }
-  return reviewRules;
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +345,7 @@ function runProxy(
     yield* networkRuntime.writeReviewRules(
       plan.runtimePaths,
       plan.sessionId,
-      plan.reviewRules,
+      plan.resolvedReviewRules,
     );
 
     // 5.5. Resolve credential values (valCmd execution)
@@ -397,7 +377,7 @@ function runProxy(
         socketPath: plan.brokerSocket,
         profileName: plan.profileName,
         agent: plan.agent,
-        reviewRules: plan.reviewRules,
+        resolvedReviewRules: plan.resolvedReviewRules,
         pendingTimeoutSeconds: plan.pendingTimeoutSeconds,
         pendingDefaultScope: plan.pendingDefaultScope,
         pendingNotify: plan.pendingNotify,

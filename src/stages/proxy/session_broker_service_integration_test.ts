@@ -7,6 +7,7 @@ import {
   readSessionRegistry,
   resolveNetworkRuntimePaths,
 } from "../../network/registry.ts";
+import type { ResolvedReviewRules } from "../../network/review_rules.ts";
 import {
   type SessionBrokerConfig,
   SessionBrokerService,
@@ -19,13 +20,17 @@ test("SessionBrokerService: writes the session registry entry", async () => {
     const paths = await resolveNetworkRuntimePaths(runtimeDir);
     const sessionId = "sess_registry";
     const socketPath = `${paths.brokersDir}/${sessionId}/sock`;
+    const resolvedReviewRules: ResolvedReviewRules = {
+      contractVersion: 1,
+      rules: [{ action: "deny", audit: true }],
+    };
     const config: SessionBrokerConfig = {
       paths,
       sessionId,
       socketPath,
       profileName: "test",
       agent: "claude",
-      reviewRules: [{ action: "deny" }],
+      resolvedReviewRules,
       pendingTimeoutSeconds: 30,
       pendingDefaultScope: "host-port",
       pendingNotify: "off",
@@ -41,9 +46,12 @@ test("SessionBrokerService: writes the session registry entry", async () => {
     try {
       const entry = await readSessionRegistry(paths, sessionId);
       expect(entry?.agent).toBe("claude");
+      expect(entry).not.toHaveProperty("resolvedReviewRules");
+      expect(entry).not.toHaveProperty("reviewRules");
     } finally {
       await Effect.runPromise(handle.close());
     }
+    expect(await readSessionRegistry(paths, sessionId)).toBeNull();
   } finally {
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }

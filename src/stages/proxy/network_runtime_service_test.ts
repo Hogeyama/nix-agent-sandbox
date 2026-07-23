@@ -9,6 +9,7 @@
 import { expect, test } from "bun:test";
 import { Cause, Effect, Exit, Layer } from "effect";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
+import type { ResolvedReviewRules } from "../../network/review_rules.ts";
 import { makeFsServiceFake } from "../../services/fs.ts";
 import { makeProcessServiceFake } from "../../services/process.ts";
 import {
@@ -68,22 +69,25 @@ test("gcStaleRuntime: is a no-op", async () => {
 // writeReviewRules
 // ---------------------------------------------------------------------------
 
-test("writeReviewRules: writes JSON file to reviewRulesDir", async () => {
+test("writeReviewRules: writes the complete versioned document to reviewRulesDir", async () => {
   const fsFake = makeFsServiceFake();
   const p = paths();
   const live = makeLiveLayer(fsFake);
 
-  const rules = [{ pattern: "*.example.com", action: "allow" as const }];
+  const resolvedReviewRules: ResolvedReviewRules = {
+    contractVersion: 1,
+    rules: [{ host: "*.example.com", action: "allow", audit: true }],
+  };
   await Effect.runPromise(
     Effect.flatMap(NetworkRuntimeService, (svc) =>
-      svc.writeReviewRules(p, "sess-123", rules as never),
+      svc.writeReviewRules(p, "sess-123", resolvedReviewRules),
     ).pipe(Effect.provide(live)),
   );
 
   const rulesPath = `${p.reviewRulesDir}/sess-123.json`;
   expect(fsFake.store.has(rulesPath)).toEqual(true);
   const stored = fsFake.store.get(rulesPath);
-  expect(JSON.parse(stored!.content as string)).toEqual(rules);
+  expect(JSON.parse(stored!.content as string)).toEqual(resolvedReviewRules);
 });
 
 // ---------------------------------------------------------------------------
