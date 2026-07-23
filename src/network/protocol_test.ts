@@ -7,34 +7,174 @@ import {
   normalizeHost,
   normalizeTarget,
   parseAllowlistEntry,
-  validateEgressOutcome,
+  validateRequestPolicyOutcome,
 } from "./protocol.ts";
 
-const otherMethodBlockOutcome = {
+const bodylessRule = {
+  id: "policy.bodyless",
+  method: "GET",
+  path: "/health",
+  action: "allow" as const,
+  requestPolicy: { kind: "bodyless" as const },
+};
+const jsonRule = {
+  id: "policy.json",
+  method: "POST",
+  path: "/v1/messages",
+  action: "allow" as const,
+  requestPolicy: {
+    kind: "json" as const,
+    maxBodyBytes: 1024,
+    maxDepth: 8,
+    maxNodes: 100,
+    maxDecodedBytes: 1024,
+    taggedUnions: [],
+    encodedFields: [],
+  },
+};
+const policyRules = [
+  bodylessRule,
+  jsonRule,
+  { id: "ordinary", action: "allow" as const },
+  { action: "allow" as const },
+];
+
+const validJsonOutcome = {
   version: 1,
-  type: "egress_outcome",
-  requestId: "req-other-method",
+  type: "request_policy_outcome",
+  requestId: "req-json",
   sessionId: "sess_test",
-  method: "OTHER",
-  route: "unknown",
-  action: "block",
-  reason: "unknown-endpoint",
+  ruleId: "policy.json",
+  result: "pass",
+  reason: "recognized-json",
 };
 
-test("validateEgressOutcome: accepts OTHER only as a sanitized method", () => {
+test("request policy outcome validation accepts the closed success pairings", () => {
   expect(
-    validateEgressOutcome(otherMethodBlockOutcome, "sess_test"),
+    validateRequestPolicyOutcome(validJsonOutcome, "sess_test", policyRules),
+  ).toBeNull();
+  expect(
+    validateRequestPolicyOutcome(
+      {
+        ...validJsonOutcome,
+        ruleId: "policy.json",
+        result: "rewrite",
+        reason: "masked-json",
+      },
+      "sess_test",
+      policyRules,
+    ),
+  ).toBeNull();
+  expect(
+    validateRequestPolicyOutcome(
+      {
+        ...validJsonOutcome,
+        ruleId: "policy.bodyless",
+        result: "pass",
+        reason: "empty-body",
+      },
+      "sess_test",
+      policyRules,
+    ),
   ).toBeNull();
 });
 
-test("validateEgressOutcome: rejects a raw unsupported method", () => {
+test("request policy outcome validation rejects an unknown broker-owned policy kind", () => {
+  const malformedRules = [
+    {
+      id: "policy.unknown-kind",
+      action: "allow",
+      requestPolicy: { kind: "yaml" },
+    },
+  ] as unknown as typeof policyRules;
+
   expect(
-    validateEgressOutcome(
-      { ...otherMethodBlockOutcome, method: "HEAD" },
+    validateRequestPolicyOutcome(
+      {
+        ...validJsonOutcome,
+        ruleId: "policy.unknown-kind",
+        result: "pass",
+        reason: "recognized-json",
+      },
       "sess_test",
+      malformedRules,
     ),
-  ).toEqual("invalid egress outcome method");
+  ).toEqual("invalid request-policy outcome policy kind");
 });
+
+const validPolicyBlocks = [
+  ["bodyless", "policy.bodyless", "body-unavailable"],
+  ["bodyless", "policy.bodyless", "unexpected-body"],
+  ["bodyless", "policy.bodyless", "processing-failed"],
+  ["json", "policy.json", "body-unavailable"],
+  ["json", "policy.json", "invalid-json"],
+  ["json", "policy.json", "schema-mismatch"],
+  ["json", "policy.json", "encoded-decode-failed"],
+  ["json", "policy.json", "resource-limit"],
+  ["json", "policy.json", "key-collision"],
+  ["json", "policy.json", "serialization-failed"],
+  ["json", "policy.json", "processing-failed"],
+] as const;
+
+for (const [kind, ruleId, reason] of validPolicyBlocks) {
+  test(`request policy outcome validation accepts ${kind} block/${reason}`, () => {
+    expect(
+      validateRequestPolicyOutcome(
+        { ...validJsonOutcome, ruleId, result: "block", reason },
+        "sess_test",
+        policyRules,
+      ),
+    ).toBeNull();
+  });
+}
+
+const invalidPolicyOutcomes = [
+  ["session mismatch", { sessionId: "sess_other" }],
+  ["malformed rule ID", { ruleId: "Policy JSON" }],
+  ["unknown rule ID", { ruleId: "policy.unknown" }],
+  ["ID-less rule cannot be addressed", { ruleId: "" }],
+  ["non-policy rule ID", { ruleId: "ordinary" }],
+  ["unknown result", { result: "allow" }],
+  ["unknown reason", { reason: "raw-error-detail" }],
+  [
+    "bodyless reason on JSON policy",
+    { ruleId: "policy.json", result: "pass", reason: "empty-body" },
+  ],
+  [
+    "JSON reason on bodyless policy",
+    {
+      ruleId: "policy.bodyless",
+      result: "pass",
+      reason: "recognized-json",
+    },
+  ],
+  [
+    "rewrite on bodyless policy",
+    { ruleId: "policy.bodyless", result: "rewrite", reason: "masked-json" },
+  ],
+  [
+    "rewrite with pass reason",
+    { result: "rewrite", reason: "recognized-json" },
+  ],
+  ["block with success reason", { result: "block", reason: "recognized-json" }],
+  [
+    "bodyless block with JSON-only reason",
+    { ruleId: "policy.bodyless", result: "block", reason: "invalid-json" },
+  ],
+  ["unknown field", { target: "sensitive.example" }],
+] as const;
+
+for (const [name, overrides] of invalidPolicyOutcomes) {
+  test(`request policy outcome validation rejects ${name}`, () => {
+    expect(
+      validateRequestPolicyOutcome(
+        { ...validJsonOutcome, ...overrides },
+        "sess_test",
+        policyRules,
+      ),
+    ).not.toBeNull();
+  });
+}
 
 test("decodeProxyAuthorization: decodes Basic credentials", () => {
   const header = `Basic ${btoa("sess_abc:tok_xyz")}`;

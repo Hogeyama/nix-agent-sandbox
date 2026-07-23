@@ -4,9 +4,7 @@ export type AuditDomain = "network" | "hostexec";
 /** Decision taken by the policy engine. */
 export type AuditDecision = "allow" | "deny";
 
-export type AuditPhase = "authorization" | "egress" | "request-policy";
-
-export type AnthropicEgressAction = "schema-mask" | "bodyless-pass" | "block";
+export type AuditPhase = "authorization" | "request-policy";
 
 export type RequestPolicyKind = "bodyless" | "json";
 
@@ -32,16 +30,14 @@ export interface AuditLogEntry {
   phase?: AuditPhase;
   /** Identifier of the rule whose request policy produced the outcome. */
   ruleId?: string;
-  /** HTTP method for an egress or request-policy outcome. */
+  /** HTTP method for a request-policy outcome. */
   method?: string;
-  /** HTTP route for an egress or request-policy outcome. */
+  /** HTTP route for a request-policy outcome. */
   route?: string;
   /** Kind of request policy that processed the request. */
   requestPolicyKind?: RequestPolicyKind;
   /** Result produced by the request policy. */
   requestPolicyResult?: RequestPolicyResult;
-  /** Anthropic response handling applied during the egress phase. */
-  egressAction?: AnthropicEgressAction;
   /** Optional scope label (e.g. allowlist rule name). */
   scope?: string;
   /** Network-specific: the target host / URL. */

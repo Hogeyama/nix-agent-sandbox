@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import type { ReviewRule } from "../config/types.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
 
 export type ApprovalScope = "once" | "host-port" | "host";
@@ -54,6 +55,8 @@ export interface DecisionResponse {
   decision: Decision;
   scope?: ApprovalScope;
   reason: string;
+  /** Authoritative ID of the resolved rule that allowed this request. */
+  ruleId?: string;
   message?: string;
   injectHeaders?: InjectHeader[];
   /** allow のとき、プロキシがリクエストから ****
@@ -61,99 +64,136 @@ export interface DecisionResponse {
   maskValues?: string[];
 }
 
-export const ANTHROPIC_EGRESS_ACTIONS = [
-  "schema-mask",
-  "bodyless-pass",
-  "block",
+export const REQUEST_POLICY_SUCCESS_REASONS = [
+  "empty-body",
+  "recognized-json",
+  "masked-json",
 ] as const;
 
-export const ANTHROPIC_EGRESS_METHODS = ["GET", "POST", "OTHER"] as const;
-
-export const ANTHROPIC_EGRESS_REASONS = [
-  "recognized-schema",
-  "known-bodyless-endpoint",
-  "unknown-endpoint",
-  "unexpected-body",
+export const REQUEST_POLICY_BLOCK_REASONS = [
   "body-unavailable",
-  "schema-unknown",
-  "decode-failed",
-  "file-upload-blocked",
+  "unexpected-body",
+  "invalid-json",
+  "schema-mismatch",
+  "encoded-decode-failed",
+  "resource-limit",
+  "key-collision",
+  "serialization-failed",
+  "processing-failed",
 ] as const;
 
-export const ANTHROPIC_EGRESS_ROUTES = [
-  "/v1/messages",
-  "/v1/messages/count_tokens",
-  "/api/claude_cli/bootstrap",
-  "/api/claude_code_penguin_mode",
-  "/api/claude_code/policy_limits",
-  "/api/claude_code/settings",
-  "/mcp-registry/v0/servers",
-  "/v1/code/triggers",
-  "/v1/mcp_servers",
-  "/api/claude_code/metrics",
-  "/api/event_logging/v2/batch",
-  "/api/eval/:id",
-  "/v1/files",
-  "unknown",
-] as const;
+export type RequestPolicyReason =
+  | (typeof REQUEST_POLICY_SUCCESS_REASONS)[number]
+  | (typeof REQUEST_POLICY_BLOCK_REASONS)[number];
 
-export interface EgressOutcomeRequest {
+export interface RequestPolicyOutcomeRequest {
   version: 1;
-  type: "egress_outcome";
+  type: "request_policy_outcome";
   requestId: string;
   sessionId: string;
-  method: (typeof ANTHROPIC_EGRESS_METHODS)[number];
-  route: (typeof ANTHROPIC_EGRESS_ROUTES)[number];
-  action: (typeof ANTHROPIC_EGRESS_ACTIONS)[number];
-  reason: (typeof ANTHROPIC_EGRESS_REASONS)[number];
+  ruleId: string;
+  result: "pass" | "rewrite" | "block";
+  reason: RequestPolicyReason;
 }
 
-export interface EgressOutcomeResponse {
+export interface RequestPolicyOutcomeResponse {
   version: 1;
-  type: "egress_outcome_recorded";
+  type: "request_policy_outcome_recorded";
   requestId: string;
 }
 
-export function validateEgressOutcome(
+const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
+  "version",
+  "type",
+  "requestId",
+  "sessionId",
+  "ruleId",
+  "result",
+  "reason",
+]);
+const SAFE_RULE_ID = /^[a-z][a-z0-9._-]{0,63}$/;
+const REQUEST_POLICY_RESULTS = ["pass", "rewrite", "block"] as const;
+
+export function validateRequestPolicyOutcome(
   value: unknown,
   expectedSessionId: string,
+  rules: readonly ReviewRule[],
 ): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return "invalid egress outcome request";
+    return "invalid request-policy outcome request";
   }
   const message = value as Record<string, unknown>;
   if (
     message.version !== 1 ||
-    message.type !== "egress_outcome" ||
+    message.type !== "request_policy_outcome" ||
     typeof message.requestId !== "string"
   ) {
-    return "invalid egress outcome request";
+    return "invalid request-policy outcome request";
   }
   if (message.sessionId !== expectedSessionId) {
-    return "egress outcome session mismatch";
+    return "request-policy outcome session mismatch";
   }
-  if (!isListedValue(message.method, ANTHROPIC_EGRESS_METHODS)) {
-    return "invalid egress outcome method";
+  if (
+    Object.keys(message).some(
+      (field) => !REQUEST_POLICY_OUTCOME_FIELDS.has(field),
+    )
+  ) {
+    return "invalid request-policy outcome request";
   }
-  if (!isListedValue(message.route, ANTHROPIC_EGRESS_ROUTES)) {
-    return "invalid egress outcome route";
+  if (
+    typeof message.ruleId !== "string" ||
+    !SAFE_RULE_ID.test(message.ruleId)
+  ) {
+    return "invalid request-policy outcome rule ID";
   }
-  if (!isListedValue(message.action, ANTHROPIC_EGRESS_ACTIONS)) {
-    return "invalid egress outcome action";
+  const rule = rules.find((candidate) => candidate.id === message.ruleId);
+  if (rule === undefined) {
+    return "unknown request-policy outcome rule ID";
   }
-  if (!isListedValue(message.reason, ANTHROPIC_EGRESS_REASONS)) {
-    return "invalid egress outcome reason";
+  if (rule.requestPolicy === undefined) {
+    return "request-policy outcome rule has no policy";
+  }
+  if (!isListedValue(message.result, REQUEST_POLICY_RESULTS)) {
+    return "invalid request-policy outcome result";
+  }
+  const reasons = [
+    ...REQUEST_POLICY_SUCCESS_REASONS,
+    ...REQUEST_POLICY_BLOCK_REASONS,
+  ] as const;
+  if (!isListedValue(message.reason, reasons)) {
+    return "invalid request-policy outcome reason";
   }
 
-  const action = message.action;
+  const result = message.result;
   const reason = message.reason;
-  const validPair =
-    (action === "schema-mask" && reason === "recognized-schema") ||
-    (action === "bodyless-pass" && reason === "known-bodyless-endpoint") ||
-    (action === "block" &&
-      reason !== "recognized-schema" &&
-      reason !== "known-bodyless-endpoint");
-  return validPair ? null : "invalid egress outcome action/reason pairing";
+  if (rule.requestPolicy.kind === "bodyless") {
+    const valid =
+      (result === "pass" && reason === "empty-body") ||
+      (result === "block" &&
+        (reason === "body-unavailable" ||
+          reason === "unexpected-body" ||
+          reason === "processing-failed"));
+    return valid
+      ? null
+      : "invalid request-policy outcome result/reason pairing";
+  }
+  if (rule.requestPolicy.kind !== "json") {
+    return "invalid request-policy outcome policy kind";
+  }
+
+  const valid =
+    (result === "pass" && reason === "recognized-json") ||
+    (result === "rewrite" && reason === "masked-json") ||
+    (result === "block" &&
+      (reason === "body-unavailable" ||
+        reason === "invalid-json" ||
+        reason === "schema-mismatch" ||
+        reason === "encoded-decode-failed" ||
+        reason === "resource-limit" ||
+        reason === "key-collision" ||
+        reason === "serialization-failed" ||
+        reason === "processing-failed"));
+  return valid ? null : "invalid request-policy outcome result/reason pairing";
 }
 
 export interface PendingEntry {

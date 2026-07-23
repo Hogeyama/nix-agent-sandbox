@@ -2,7 +2,6 @@ import { Database } from "bun:sqlite";
 import * as path from "node:path";
 import { ensureDir } from "../lib/fs_utils.ts";
 import type {
-  AnthropicEgressAction,
   AuditLogEntry,
   AuditLogFilter,
   AuditPhase,
@@ -84,7 +83,6 @@ function openDatabase(dir: string): Database {
         route            TEXT,
         request_policy_kind   TEXT,
         request_policy_result TEXT,
-        egress_action    TEXT,
         scope            TEXT,
         target           TEXT,
         command          TEXT,
@@ -104,7 +102,6 @@ function openDatabase(dir: string): Database {
     addColumnIfMissing(db, "route TEXT");
     addColumnIfMissing(db, "request_policy_kind TEXT");
     addColumnIfMissing(db, "request_policy_result TEXT");
-    addColumnIfMissing(db, "egress_action TEXT");
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
     // held for the rest of the process lifetime.
@@ -152,10 +149,10 @@ export async function appendAuditLog(
     `INSERT OR REPLACE INTO audit_log
        (id, timestamp, domain, session_id, request_id,
         decision, reason, phase, rule_id, method, route,
-        request_policy_kind, request_policy_result, egress_action,
+        request_policy_kind, request_policy_result,
         scope, target, command, injected_headers)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -170,7 +167,6 @@ export async function appendAuditLog(
     entry.route ?? null,
     entry.requestPolicyKind ?? null,
     entry.requestPolicyResult ?? null,
-    entry.egressAction ?? null,
     entry.scope ?? null,
     entry.target ?? null,
     entry.command ?? null,
@@ -265,7 +261,7 @@ export async function queryAuditLogs(
 
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
                       decision, reason, phase, rule_id, method, route,
-                      request_policy_kind, request_policy_result, egress_action,
+                      request_policy_kind, request_policy_result,
                       scope, target, command, injected_headers
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
@@ -289,7 +285,6 @@ interface AuditLogRow {
   route: string | null;
   request_policy_kind: string | null;
   request_policy_result: string | null;
-  egress_action: string | null;
   scope: string | null;
   target: string | null;
   command: string | null;
@@ -317,9 +312,6 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
   if (row.request_policy_result !== null) {
     entry.requestPolicyResult =
       row.request_policy_result as RequestPolicyResult;
-  }
-  if (row.egress_action !== null) {
-    entry.egressAction = row.egress_action as AnthropicEgressAction;
   }
   if (row.scope !== null) entry.scope = row.scope;
   if (row.target !== null) entry.target = row.target;
