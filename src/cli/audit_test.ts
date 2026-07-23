@@ -20,18 +20,19 @@ function makeEntry(overrides: Partial<AuditLogEntry> = {}): AuditLogEntry {
   };
 }
 
-function makeEgressEntry(
+function makeRequestPolicyEntry(
   overrides: Partial<AuditLogEntry> = {},
 ): AuditLogEntry {
   return makeEntry({
     timestamp: "2026-07-23T00:00:01.000Z",
-    requestId: "req-egress-1",
-    decision: "deny",
-    reason: "file-upload-blocked",
-    phase: "egress",
+    requestId: "req-request-policy-1",
+    reason: "masked-json",
+    phase: "request-policy",
+    ruleId: "anthropic.messages.create",
     method: "POST",
-    route: "/v1/files",
-    egressAction: "block",
+    route: "/v1/messages",
+    requestPolicyKind: "json",
+    requestPolicyResult: "rewrite",
     target: undefined,
     ...overrides,
   });
@@ -61,39 +62,39 @@ test("formatAuditEntries preserves hostexec entry formatting", () => {
   ]);
 });
 
-test("formatAuditEntries groups repeated egress entries across authorization entries", () => {
+test("formatAuditEntries groups repeated request-policy entries across authorization entries", () => {
   const entries = [
-    makeEgressEntry(),
+    makeRequestPolicyEntry(),
     makeEntry({
       id: "authorization-1",
       timestamp: "2026-07-23T00:00:02.000Z",
       requestId: "req-authorization-1",
     }),
-    makeEgressEntry({
-      id: "egress-2",
+    makeRequestPolicyEntry({
+      id: "request-policy-2",
       timestamp: "2026-07-23T00:00:03.000Z",
-      requestId: "req-egress-2",
+      requestId: "req-request-policy-2",
     }),
     makeEntry({
       id: "authorization-2",
       timestamp: "2026-07-23T00:00:04.000Z",
       requestId: "req-authorization-2",
     }),
-    makeEgressEntry({
-      id: "egress-3",
+    makeRequestPolicyEntry({
+      id: "request-policy-3",
       timestamp: "2026-07-23T00:00:05.000Z",
-      requestId: "req-egress-3",
+      requestId: "req-request-policy-3",
     }),
   ];
 
   expect(formatAuditEntries(entries)).toEqual([
-    "2026-07-23T00:00:01.000Z sess-1 network deny file-upload-blocked POST /v1/files block x3",
+    "2026-07-23T00:00:01.000Z sess-1 network allow masked-json POST /v1/messages anthropic.messages.create json rewrite x3",
     "2026-07-23T00:00:02.000Z sess-1 network allow review-rule api.anthropic.com:443",
     "2026-07-23T00:00:04.000Z sess-1 network allow review-rule api.anthropic.com:443",
   ]);
 });
 
-describe("formatAuditEntries egress grouping boundaries", () => {
+describe("formatAuditEntries request-policy grouping boundaries", () => {
   const boundaryCases: Array<{
     name: string;
     overrides: Partial<AuditLogEntry>;
@@ -103,102 +104,106 @@ describe("formatAuditEntries egress grouping boundaries", () => {
       name: "session",
       overrides: { sessionId: "sess-2" },
       expectedSuffix:
-        "sess-2 network deny file-upload-blocked POST /v1/files block",
+        "sess-2 network allow masked-json POST /v1/messages anthropic.messages.create json rewrite",
     },
     {
-      name: "method",
-      overrides: { method: "GET" },
+      name: "rule ID",
+      overrides: { ruleId: "anthropic.files.create" },
       expectedSuffix:
-        "sess-1 network deny file-upload-blocked GET /v1/files block",
+        "sess-1 network allow masked-json POST /v1/messages anthropic.files.create json rewrite",
     },
     {
-      name: "route",
-      overrides: { route: "/v1/messages" },
+      name: "kind",
+      overrides: { requestPolicyKind: "bodyless" },
       expectedSuffix:
-        "sess-1 network deny file-upload-blocked POST /v1/messages block",
+        "sess-1 network allow masked-json POST /v1/messages anthropic.messages.create bodyless rewrite",
     },
     {
-      name: "action",
-      overrides: { egressAction: "schema-mask" },
+      name: "result",
+      overrides: { requestPolicyResult: "block" },
       expectedSuffix:
-        "sess-1 network deny file-upload-blocked POST /v1/files schema-mask",
+        "sess-1 network allow masked-json POST /v1/messages anthropic.messages.create json block",
     },
     {
       name: "reason",
       overrides: { reason: "different-reason" },
       expectedSuffix:
-        "sess-1 network deny different-reason POST /v1/files block",
+        "sess-1 network allow different-reason POST /v1/messages anthropic.messages.create json rewrite",
     },
   ];
 
   for (const { name, overrides, expectedSuffix } of boundaryCases) {
     test(`stops at a changed ${name}`, () => {
-      const changedEntry = makeEgressEntry({
+      const changedEntry = makeRequestPolicyEntry({
         id: `changed-${name}`,
         timestamp: "2026-07-23T00:00:02.000Z",
         requestId: `req-changed-${name}`,
         ...overrides,
       });
 
-      expect(formatAuditEntries([makeEgressEntry(), changedEntry])).toEqual([
-        "2026-07-23T00:00:01.000Z sess-1 network deny file-upload-blocked POST /v1/files block",
+      expect(
+        formatAuditEntries([makeRequestPolicyEntry(), changedEntry]),
+      ).toEqual([
+        "2026-07-23T00:00:01.000Z sess-1 network allow masked-json POST /v1/messages anthropic.messages.create json rewrite",
         `2026-07-23T00:00:02.000Z ${expectedSuffix}`,
       ]);
     });
   }
 });
 
-test("formatAuditEntries does not merge separated egress runs", () => {
-  const first = makeEgressEntry();
-  const different = makeEgressEntry({
+test("formatAuditEntries does not merge separated request-policy runs", () => {
+  const first = makeRequestPolicyEntry();
+  const different = makeRequestPolicyEntry({
     id: "different",
     timestamp: "2026-07-23T00:00:02.000Z",
     requestId: "req-different",
-    route: "/v1/messages",
+    ruleId: "anthropic.files.create",
   });
-  const repeatedFirst = makeEgressEntry({
+  const repeatedFirst = makeRequestPolicyEntry({
     id: "repeated-first",
     timestamp: "2026-07-23T00:00:03.000Z",
     requestId: "req-repeated-first",
   });
 
   expect(formatAuditEntries([first, different, repeatedFirst])).toEqual([
-    "2026-07-23T00:00:01.000Z sess-1 network deny file-upload-blocked POST /v1/files block",
-    "2026-07-23T00:00:02.000Z sess-1 network deny file-upload-blocked POST /v1/messages block",
-    "2026-07-23T00:00:03.000Z sess-1 network deny file-upload-blocked POST /v1/files block",
+    "2026-07-23T00:00:01.000Z sess-1 network allow masked-json POST /v1/messages anthropic.messages.create json rewrite",
+    "2026-07-23T00:00:02.000Z sess-1 network allow masked-json POST /v1/messages anthropic.files.create json rewrite",
+    "2026-07-23T00:00:03.000Z sess-1 network allow masked-json POST /v1/messages anthropic.messages.create json rewrite",
   ]);
 });
 
-test("formatAuditEntries omits a count for a single egress entry", () => {
-  expect(formatAuditEntries([makeEgressEntry()])).toEqual([
-    "2026-07-23T00:00:01.000Z sess-1 network deny file-upload-blocked POST /v1/files block",
+test("formatAuditEntries omits a count for a single request-policy entry", () => {
+  expect(formatAuditEntries([makeRequestPolicyEntry()])).toEqual([
+    "2026-07-23T00:00:01.000Z sess-1 network allow masked-json POST /v1/messages anthropic.messages.create json rewrite",
   ]);
 });
 
-test("formatAuditEntries uses fallbacks for missing egress fields", () => {
-  const entry = makeEgressEntry({
+test("formatAuditEntries uses fallbacks for missing request-policy fields", () => {
+  const entry = makeRequestPolicyEntry({
     method: undefined,
     route: undefined,
-    egressAction: undefined,
+    ruleId: undefined,
+    requestPolicyKind: undefined,
+    requestPolicyResult: undefined,
   });
 
   expect(formatAuditEntries([entry])).toEqual([
-    "2026-07-23T00:00:01.000Z sess-1 network deny file-upload-blocked  unknown ",
+    "2026-07-23T00:00:01.000Z sess-1 network allow masked-json  unknown   ",
   ]);
 });
 
-test("runAuditCommand JSON mode returns repeated egress entries ungrouped", async () => {
+test("runAuditCommand JSON mode returns repeated request-policy entries ungrouped", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-cli-audit-json-"));
   const originalLog = console.log;
   const output: string[] = [];
 
   try {
-    await appendAuditLog(makeEgressEntry(), dir);
+    await appendAuditLog(makeRequestPolicyEntry(), dir);
     await appendAuditLog(
-      makeEgressEntry({
-        id: "egress-2",
+      makeRequestPolicyEntry({
+        id: "request-policy-2",
         timestamp: "2026-07-23T00:00:02.000Z",
-        requestId: "req-egress-2",
+        requestId: "req-request-policy-2",
       }),
       dir,
     );
@@ -216,19 +221,26 @@ test("runAuditCommand JSON mode returns repeated egress entries ungrouped", asyn
 
     const entries = JSON.parse(output.join("\n")) as AuditLogEntry[];
     expect(entries).toHaveLength(2);
-    expect(entries.map((entry) => entry.id)).toEqual(["entry-1", "egress-2"]);
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "entry-1",
+      "request-policy-2",
+    ]);
     expect(entries).toMatchObject([
       {
-        phase: "egress",
+        phase: "request-policy",
+        ruleId: "anthropic.messages.create",
         method: "POST",
-        route: "/v1/files",
-        egressAction: "block",
+        route: "/v1/messages",
+        requestPolicyKind: "json",
+        requestPolicyResult: "rewrite",
       },
       {
-        phase: "egress",
+        phase: "request-policy",
+        ruleId: "anthropic.messages.create",
         method: "POST",
-        route: "/v1/files",
-        egressAction: "block",
+        route: "/v1/messages",
+        requestPolicyKind: "json",
+        requestPolicyResult: "rewrite",
       },
     ]);
   } finally {

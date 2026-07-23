@@ -39,28 +39,31 @@ test("appendAuditLog: writes and reads back entries", async () => {
   }
 });
 
-test("appendAuditLog: round-trips Anthropic egress outcome fields", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-egress-"));
+test("appendAuditLog: round-trips request-policy outcome fields", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nas-audit-request-policy-"));
   try {
     await appendAuditLog(
       makeEntry({
-        requestId: "req-egress",
-        phase: "egress",
+        requestId: "req-request-policy",
+        phase: "request-policy",
+        ruleId: "anthropic.messages.create",
         method: "POST",
-        route: "/v1/files",
-        egressAction: "block",
-        decision: "deny",
-        reason: "file-upload-blocked",
+        route: "/v1/messages",
+        requestPolicyKind: "json",
+        requestPolicyResult: "rewrite",
+        reason: "masked-json",
       }),
       dir,
     );
 
     const [entry] = await queryAuditLogs({}, dir);
     expect(entry).toMatchObject({
-      phase: "egress",
+      phase: "request-policy",
+      ruleId: "anthropic.messages.create",
       method: "POST",
-      route: "/v1/files",
-      egressAction: "block",
+      route: "/v1/messages",
+      requestPolicyKind: "json",
+      requestPolicyResult: "rewrite",
     });
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -107,18 +110,23 @@ test("queryAuditLogs: migrates legacy schema and preserves old rows", async () =
 
     const [entry] = await queryAuditLogs({}, dir);
     expect(entry.phase).toEqual("authorization");
+    expect(entry.ruleId).toBeUndefined();
     expect(entry.method).toBeUndefined();
     expect(entry.route).toBeUndefined();
-    expect(entry.egressAction).toBeUndefined();
+    expect(entry.requestPolicyKind).toBeUndefined();
+    expect(entry.requestPolicyResult).toBeUndefined();
 
     await appendAuditLog(
       makeEntry({
-        id: "egress-id",
+        id: "request-policy-id",
         timestamp: "2026-03-28T12:00:00Z",
-        phase: "egress",
+        phase: "request-policy",
+        ruleId: "anthropic.messages.create",
         method: "POST",
-        route: "/v1/files",
-        egressAction: "schema-mask",
+        route: "/v1/messages",
+        requestPolicyKind: "json",
+        requestPolicyResult: "rewrite",
+        reason: "masked-json",
       }),
       dir,
     );
@@ -130,11 +138,14 @@ test("queryAuditLogs: migrates legacy schema and preserves old rows", async () =
       phase: "authorization",
     });
     expect(entries[1]).toMatchObject({
-      id: "egress-id",
-      phase: "egress",
+      id: "request-policy-id",
+      phase: "request-policy",
+      ruleId: "anthropic.messages.create",
       method: "POST",
-      route: "/v1/files",
-      egressAction: "schema-mask",
+      route: "/v1/messages",
+      requestPolicyKind: "json",
+      requestPolicyResult: "rewrite",
+      reason: "masked-json",
     });
   } finally {
     _closeAuditDb(dir);

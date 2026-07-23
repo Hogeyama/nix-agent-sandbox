@@ -52,43 +52,46 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
 }
 
 export function formatAuditEntries(entries: AuditLogEntry[]): string[] {
-  const egressCounts = new Map<number, number>();
+  const requestPolicyCounts = new Map<number, number>();
   let currentKey: string | undefined;
   let firstIndex = -1;
 
   for (const [index, entry] of entries.entries()) {
-    if (entry.phase !== "egress") continue;
+    if (entry.phase !== "request-policy") continue;
 
     const key = [
       entry.sessionId,
-      entry.method,
-      entry.route,
-      entry.egressAction,
+      entry.ruleId,
+      entry.requestPolicyKind,
+      entry.requestPolicyResult,
       entry.reason,
     ].join("\u0000");
 
     if (key === currentKey) {
-      egressCounts.set(firstIndex, (egressCounts.get(firstIndex) ?? 1) + 1);
+      requestPolicyCounts.set(
+        firstIndex,
+        (requestPolicyCounts.get(firstIndex) ?? 1) + 1,
+      );
       continue;
     }
 
     currentKey = key;
     firstIndex = index;
-    egressCounts.set(firstIndex, 1);
+    requestPolicyCounts.set(firstIndex, 1);
   }
 
   const lines: string[] = [];
   for (const [index, entry] of entries.entries()) {
-    if (entry.phase !== "egress") {
+    if (entry.phase !== "request-policy") {
       lines.push(formatEntry(entry));
       continue;
     }
 
-    const count = egressCounts.get(index);
+    const count = requestPolicyCounts.get(index);
     if (count === undefined) continue;
 
     lines.push(
-      `${entry.timestamp} ${entry.sessionId} network ${entry.decision} ${entry.reason} ${entry.method ?? ""} ${entry.route ?? "unknown"} ${entry.egressAction ?? ""}${count > 1 ? ` x${count}` : ""}`,
+      `${entry.timestamp} ${entry.sessionId} network ${entry.decision} ${entry.reason} ${entry.method ?? ""} ${entry.route ?? "unknown"} ${entry.ruleId ?? ""} ${entry.requestPolicyKind ?? ""} ${entry.requestPolicyResult ?? ""}${count > 1 ? ` x${count}` : ""}`,
     );
   }
 

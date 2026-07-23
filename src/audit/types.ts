@@ -4,9 +4,13 @@ export type AuditDomain = "network" | "hostexec";
 /** Decision taken by the policy engine. */
 export type AuditDecision = "allow" | "deny";
 
-export type AuditPhase = "authorization" | "egress";
+export type AuditPhase = "authorization" | "egress" | "request-policy";
 
 export type AnthropicEgressAction = "schema-mask" | "bodyless-pass" | "block";
+
+export type RequestPolicyKind = "bodyless" | "json";
+
+export type RequestPolicyResult = "pass" | "rewrite" | "block";
 
 /** A single audit log entry persisted to JSONL. */
 export interface AuditLogEntry {
@@ -26,10 +30,16 @@ export interface AuditLogEntry {
   reason: string;
   /** Processing phase. An absent phase means a legacy authorization entry. */
   phase?: AuditPhase;
-  /** HTTP method for an egress outcome. */
+  /** Identifier of the rule whose request policy produced the outcome. */
+  ruleId?: string;
+  /** HTTP method for an egress or request-policy outcome. */
   method?: string;
-  /** HTTP route for an egress outcome. */
+  /** HTTP route for an egress or request-policy outcome. */
   route?: string;
+  /** Kind of request policy that processed the request. */
+  requestPolicyKind?: RequestPolicyKind;
+  /** Result produced by the request policy. */
+  requestPolicyResult?: RequestPolicyResult;
   /** Anthropic response handling applied during the egress phase. */
   egressAction?: AnthropicEgressAction;
   /** Optional scope label (e.g. allowlist rule name). */

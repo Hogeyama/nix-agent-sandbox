@@ -6,6 +6,8 @@ import type {
   AuditLogEntry,
   AuditLogFilter,
   AuditPhase,
+  RequestPolicyKind,
+  RequestPolicyResult,
 } from "./types.ts";
 
 /**
@@ -77,8 +79,11 @@ function openDatabase(dir: string): Database {
         decision         TEXT NOT NULL,
         reason           TEXT NOT NULL,
         phase            TEXT,
+        rule_id          TEXT,
         method           TEXT,
         route            TEXT,
+        request_policy_kind   TEXT,
+        request_policy_result TEXT,
         egress_action    TEXT,
         scope            TEXT,
         target           TEXT,
@@ -94,8 +99,11 @@ function openDatabase(dir: string): Database {
     `);
     addColumnIfMissing(db, "injected_headers TEXT");
     addColumnIfMissing(db, "phase TEXT");
+    addColumnIfMissing(db, "rule_id TEXT");
     addColumnIfMissing(db, "method TEXT");
     addColumnIfMissing(db, "route TEXT");
+    addColumnIfMissing(db, "request_policy_kind TEXT");
+    addColumnIfMissing(db, "request_policy_result TEXT");
     addColumnIfMissing(db, "egress_action TEXT");
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
@@ -143,10 +151,11 @@ export async function appendAuditLog(
   db.prepare(
     `INSERT OR REPLACE INTO audit_log
        (id, timestamp, domain, session_id, request_id,
-        decision, reason, phase, method, route, egress_action,
+        decision, reason, phase, rule_id, method, route,
+        request_policy_kind, request_policy_result, egress_action,
         scope, target, command, injected_headers)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -156,8 +165,11 @@ export async function appendAuditLog(
     entry.decision,
     entry.reason,
     entry.phase ?? null,
+    entry.ruleId ?? null,
     entry.method ?? null,
     entry.route ?? null,
+    entry.requestPolicyKind ?? null,
+    entry.requestPolicyResult ?? null,
     entry.egressAction ?? null,
     entry.scope ?? null,
     entry.target ?? null,
@@ -252,7 +264,8 @@ export async function queryAuditLogs(
   }
 
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
-                      decision, reason, phase, method, route, egress_action,
+                      decision, reason, phase, rule_id, method, route,
+                      request_policy_kind, request_policy_result, egress_action,
                       scope, target, command, injected_headers
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
@@ -271,8 +284,11 @@ interface AuditLogRow {
   decision: string;
   reason: string;
   phase: string | null;
+  rule_id: string | null;
   method: string | null;
   route: string | null;
+  request_policy_kind: string | null;
+  request_policy_result: string | null;
   egress_action: string | null;
   scope: string | null;
   target: string | null;
@@ -292,8 +308,16 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
   };
   entry.phase =
     row.phase === null ? "authorization" : (row.phase as AuditPhase);
+  if (row.rule_id !== null) entry.ruleId = row.rule_id;
   if (row.method !== null) entry.method = row.method;
   if (row.route !== null) entry.route = row.route;
+  if (row.request_policy_kind !== null) {
+    entry.requestPolicyKind = row.request_policy_kind as RequestPolicyKind;
+  }
+  if (row.request_policy_result !== null) {
+    entry.requestPolicyResult =
+      row.request_policy_result as RequestPolicyResult;
+  }
   if (row.egress_action !== null) {
     entry.egressAction = row.egress_action as AnthropicEgressAction;
   }
