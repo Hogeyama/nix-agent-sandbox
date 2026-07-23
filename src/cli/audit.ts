@@ -43,12 +43,59 @@ export async function runAuditCommand(nasArgs: string[]): Promise<void> {
       return;
     }
 
-    for (const entry of entries) {
-      console.log(formatEntry(entry));
+    for (const line of formatAuditEntries(entries)) {
+      console.log(line);
     }
   } catch (err) {
     exitOnCliError(err);
   }
+}
+
+export function formatAuditEntries(entries: AuditLogEntry[]): string[] {
+  const requestPolicyCounts = new Map<number, number>();
+  let currentKey: string | undefined;
+  let firstIndex = -1;
+
+  for (const [index, entry] of entries.entries()) {
+    if (entry.phase !== "request-policy") continue;
+
+    const key = [
+      entry.sessionId,
+      entry.ruleId,
+      entry.requestPolicyKind,
+      entry.requestPolicyResult,
+      entry.reason,
+    ].join("\u0000");
+
+    if (key === currentKey) {
+      requestPolicyCounts.set(
+        firstIndex,
+        (requestPolicyCounts.get(firstIndex) ?? 1) + 1,
+      );
+      continue;
+    }
+
+    currentKey = key;
+    firstIndex = index;
+    requestPolicyCounts.set(firstIndex, 1);
+  }
+
+  const lines: string[] = [];
+  for (const [index, entry] of entries.entries()) {
+    if (entry.phase !== "request-policy") {
+      lines.push(formatEntry(entry));
+      continue;
+    }
+
+    const count = requestPolicyCounts.get(index);
+    if (count === undefined) continue;
+
+    lines.push(
+      `${entry.timestamp} ${entry.sessionId} network ${entry.decision} ${entry.reason} ${entry.method ?? ""} ${entry.route ?? "unknown"} ${entry.ruleId ?? ""} ${entry.requestPolicyKind ?? ""} ${entry.requestPolicyResult ?? ""}${count > 1 ? ` x${count}` : ""}`,
+    );
+  }
+
+  return lines;
 }
 
 function formatEntry(entry: AuditLogEntry): string {

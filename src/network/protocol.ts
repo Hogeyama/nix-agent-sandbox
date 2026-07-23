@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import type { ReviewRule } from "../config/types.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
 
 export type ApprovalScope = "once" | "host-port" | "host";
@@ -54,11 +55,145 @@ export interface DecisionResponse {
   decision: Decision;
   scope?: ApprovalScope;
   reason: string;
+  /** Authoritative ID of the resolved rule that allowed this request. */
+  ruleId?: string;
   message?: string;
   injectHeaders?: InjectHeader[];
   /** allow のとき、プロキシがリクエストから ****
    * へ置換すべき秘密値 (nas_addon.py が消費)。 */
   maskValues?: string[];
+}
+
+export const REQUEST_POLICY_SUCCESS_REASONS = [
+  "empty-body",
+  "recognized-json",
+  "masked-json",
+] as const;
+
+export const REQUEST_POLICY_BLOCK_REASONS = [
+  "body-unavailable",
+  "unexpected-body",
+  "invalid-json",
+  "schema-mismatch",
+  "encoded-decode-failed",
+  "resource-limit",
+  "key-collision",
+  "serialization-failed",
+  "processing-failed",
+] as const;
+
+export type RequestPolicyReason =
+  | (typeof REQUEST_POLICY_SUCCESS_REASONS)[number]
+  | (typeof REQUEST_POLICY_BLOCK_REASONS)[number];
+
+export interface RequestPolicyOutcomeRequest {
+  version: 1;
+  type: "request_policy_outcome";
+  requestId: string;
+  sessionId: string;
+  ruleId: string;
+  result: "pass" | "rewrite" | "block";
+  reason: RequestPolicyReason;
+}
+
+export interface RequestPolicyOutcomeResponse {
+  version: 1;
+  type: "request_policy_outcome_recorded";
+  requestId: string;
+}
+
+const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
+  "version",
+  "type",
+  "requestId",
+  "sessionId",
+  "ruleId",
+  "result",
+  "reason",
+]);
+const SAFE_RULE_ID = /^[a-z][a-z0-9._-]{0,63}$/;
+const REQUEST_POLICY_RESULTS = ["pass", "rewrite", "block"] as const;
+
+export function validateRequestPolicyOutcome(
+  value: unknown,
+  expectedSessionId: string,
+  rules: readonly ReviewRule[],
+): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid request-policy outcome request";
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    message.version !== 1 ||
+    message.type !== "request_policy_outcome" ||
+    typeof message.requestId !== "string"
+  ) {
+    return "invalid request-policy outcome request";
+  }
+  if (message.sessionId !== expectedSessionId) {
+    return "request-policy outcome session mismatch";
+  }
+  if (
+    Object.keys(message).some(
+      (field) => !REQUEST_POLICY_OUTCOME_FIELDS.has(field),
+    )
+  ) {
+    return "invalid request-policy outcome request";
+  }
+  if (
+    typeof message.ruleId !== "string" ||
+    !SAFE_RULE_ID.test(message.ruleId)
+  ) {
+    return "invalid request-policy outcome rule ID";
+  }
+  const rule = rules.find((candidate) => candidate.id === message.ruleId);
+  if (rule === undefined) {
+    return "unknown request-policy outcome rule ID";
+  }
+  if (rule.requestPolicy === undefined) {
+    return "request-policy outcome rule has no policy";
+  }
+  if (!isListedValue(message.result, REQUEST_POLICY_RESULTS)) {
+    return "invalid request-policy outcome result";
+  }
+  const reasons = [
+    ...REQUEST_POLICY_SUCCESS_REASONS,
+    ...REQUEST_POLICY_BLOCK_REASONS,
+  ] as const;
+  if (!isListedValue(message.reason, reasons)) {
+    return "invalid request-policy outcome reason";
+  }
+
+  const result = message.result;
+  const reason = message.reason;
+  if (rule.requestPolicy.kind === "bodyless") {
+    const valid =
+      (result === "pass" && reason === "empty-body") ||
+      (result === "block" &&
+        (reason === "body-unavailable" ||
+          reason === "unexpected-body" ||
+          reason === "processing-failed"));
+    return valid
+      ? null
+      : "invalid request-policy outcome result/reason pairing";
+  }
+  if (rule.requestPolicy.kind !== "json") {
+    return "invalid request-policy outcome policy kind";
+  }
+
+  const valid =
+    (result === "pass" && reason === "recognized-json") ||
+    (result === "rewrite" && reason === "masked-json") ||
+    (result === "block" &&
+      (reason === "body-unavailable" ||
+        reason === "invalid-json" ||
+        reason === "schema-mismatch" ||
+        reason === "encoded-decode-failed" ||
+        reason === "resource-limit" ||
+        reason === "key-collision" ||
+        reason === "serialization-failed" ||
+        reason === "processing-failed"));
+  return valid ? null : "invalid request-policy outcome result/reason pairing";
 }
 
 export interface PendingEntry {
@@ -322,4 +457,11 @@ function randomHex(bytes: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function isListedValue<const T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+): value is T[number] {
+  return typeof value === "string" && allowed.some((item) => item === value);
 }

@@ -4,6 +4,12 @@ export type AuditDomain = "network" | "hostexec";
 /** Decision taken by the policy engine. */
 export type AuditDecision = "allow" | "deny";
 
+export type AuditPhase = "authorization" | "request-policy";
+
+export type RequestPolicyKind = "bodyless" | "json";
+
+export type RequestPolicyResult = "pass" | "rewrite" | "block";
+
 /** A single audit log entry persisted to JSONL. */
 export interface AuditLogEntry {
   /** Unique identifier (UUID v4). */
@@ -20,6 +26,18 @@ export interface AuditLogEntry {
   decision: AuditDecision;
   /** Human-readable reason for the decision. */
   reason: string;
+  /** Processing phase. An absent phase means a legacy authorization entry. */
+  phase?: AuditPhase;
+  /** Identifier of the rule whose request policy produced the outcome. */
+  ruleId?: string;
+  /** HTTP method for a request-policy outcome. */
+  method?: string;
+  /** HTTP route for a request-policy outcome. */
+  route?: string;
+  /** Kind of request policy that processed the request. */
+  requestPolicyKind?: RequestPolicyKind;
+  /** Result produced by the request policy. */
+  requestPolicyResult?: RequestPolicyResult;
   /** Optional scope label (e.g. allowlist rule name). */
   scope?: string;
   /** Network-specific: the target host / URL. */

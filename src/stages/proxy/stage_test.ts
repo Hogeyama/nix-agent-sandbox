@@ -52,7 +52,6 @@ import {
   createProxyStageWithOptions,
   LOCAL_PROXY_PORT,
   planProxy,
-  REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
   replaceNetwork,
 } from "./stage.ts";
 
@@ -195,7 +194,10 @@ test("ProxyStage: always returns plan even when reviewRules and prompt are disab
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
   expect(result.sessionNetworkName).toEqual("nas-session-net-test-session-123");
-  expect(result.reviewRules).toEqual([]);
+  expect(result.resolvedReviewRules).toEqual({
+    contractVersion: 1,
+    rules: [],
+  });
   expect(result.forwardPorts).toEqual([]);
 });
 
@@ -218,10 +220,13 @@ test("ProxyStage: returns plan when reviewRules contains a review action", () =>
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability });
   expect(result !== null).toEqual(true);
-  expect(result!.reviewRules).toEqual([{ action: "review" }]);
+  expect(result.resolvedReviewRules).toEqual({
+    contractVersion: 1,
+    rules: [{ action: "review", audit: true }],
+  });
 });
 
-test("ProxyStage: rejects unresolved review-rule presets", () => {
+test("ProxyStage: resolves a raw preset into a versioned plan document", () => {
   const profile = makeProfile({
     network: {
       reviewRules: [
@@ -236,51 +241,21 @@ test("ProxyStage: rejects unresolved review-rule presets", () => {
   });
   const { shared, container, observability } = makeInput(profile);
 
-  expect(() => planProxy({ ...shared, container, observability })).toThrow(
-    REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
-  );
-});
+  const result = planProxy({ ...shared, container, observability });
 
-test("ProxyStage: rejects unresolved exact-path review rules", () => {
-  const profile = makeProfile({
-    network: {
-      reviewRules: [
-        {
-          id: "bodyless.settings",
-          method: "GET",
-          host: "api.example.com",
-          path: "/v1/settings",
-          action: "allow",
-        },
-      ],
-    },
+  expect(result.resolvedReviewRules.contractVersion).toBe(1);
+  expect(result.resolvedReviewRules.rules[0]).toMatchObject({
+    id: "anthropic.messages.create",
+    method: "POST",
+    host: "api.anthropic.com",
+    path: "/v1/messages",
+    action: "allow",
+    audit: true,
+    requestPolicy: { kind: "json" },
   });
-  const { shared, container, observability } = makeInput(profile);
-
-  expect(() => planProxy({ ...shared, container, observability })).toThrow(
-    REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
-  );
 });
 
-test("ProxyStage: rejects unresolved request-policy review rules", () => {
-  const profile = makeProfile({
-    network: {
-      reviewRules: [
-        {
-          action: "allow",
-          requestPolicy: { kind: "bodyless" },
-        },
-      ],
-    },
-  });
-  const { shared, container, observability } = makeInput(profile);
-
-  expect(() => planProxy({ ...shared, container, observability })).toThrow(
-    REVIEW_RULE_RESOLUTION_REQUIRED_ERROR,
-  );
-});
-
-test("ProxyStage: passes ordinary review rules unchanged", () => {
+test("ProxyStage: resolves ordinary review rules into the runtime contract", () => {
   const reviewRules = [
     {
       method: "POST",
@@ -296,7 +271,19 @@ test("ProxyStage: passes ordinary review rules unchanged", () => {
 
   const result = planProxy({ ...shared, container, observability });
 
-  expect(result.reviewRules).toEqual(reviewRules);
+  expect(result.resolvedReviewRules).toEqual({
+    contractVersion: 1,
+    rules: [
+      {
+        method: "POST",
+        host: "api.example.com",
+        pathPrefix: "/v1/",
+        action: "allow",
+        audit: false,
+      },
+      { action: "deny", audit: true },
+    ],
+  });
 });
 
 test("ProxyStage: sets proxy env vars", () => {
@@ -503,10 +490,14 @@ test("ProxyStage: forwardPorts does NOT inject host.docker.internal entries into
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
   expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:8080"),
+    result.resolvedReviewRules.rules.some(
+      (r) => r.host === "host.docker.internal:8080",
+    ),
   ).toEqual(false);
   expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:5432"),
+    result.resolvedReviewRules.rules.some(
+      (r) => r.host === "host.docker.internal:5432",
+    ),
   ).toEqual(false);
 });
 
@@ -523,10 +514,14 @@ test("ProxyStage: forwardPorts preserves user-declared host.docker.internal revi
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
   expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:9999"),
+    result.resolvedReviewRules.rules.some(
+      (r) => r.host === "host.docker.internal:9999",
+    ),
   ).toEqual(true);
   expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:8080"),
+    result.resolvedReviewRules.rules.some(
+      (r) => r.host === "host.docker.internal:8080",
+    ),
   ).toEqual(false);
 });
 
@@ -550,11 +545,13 @@ test("ProxyStage: forwardPorts leaves existing reviewRules untouched", () => {
   });
   const { shared, container, observability } = makeInput(profile);
   const result = planProxy({ ...shared, container, observability })!;
-  expect(result.reviewRules.some((r) => r.host === "example.com")).toEqual(
-    true,
-  );
   expect(
-    result.reviewRules.some((r) => r.host === "host.docker.internal:3000"),
+    result.resolvedReviewRules.rules.some((r) => r.host === "example.com"),
+  ).toEqual(true);
+  expect(
+    result.resolvedReviewRules.rules.some(
+      (r) => r.host === "host.docker.internal:3000",
+    ),
   ).toEqual(false);
 });
 
@@ -860,6 +857,52 @@ test("createProxyStage().run(): calls services and returns merged output", async
   expect(result.container?.env.static.http_proxy).toEqual(
     `http://127.0.0.1:${LOCAL_PROXY_PORT}`,
   );
+});
+
+test("createProxyStage().run(): gives both runtime consumers the same resolved document", async () => {
+  const profile = makeProfile({
+    network: {
+      reviewRules: [
+        {
+          id: "anthropic",
+          preset: "anthropic@1",
+          removeRules: [],
+          addRules: [],
+        },
+      ],
+    },
+  });
+  const { shared, container, observability } = makeInput(profile);
+  let writtenDocument: unknown;
+  let brokerDocument: unknown;
+
+  const layer = Layer.mergeAll(
+    makeCaServiceFake(),
+    makeNetworkRuntimeServiceFake({
+      writeReviewRules: (_paths, _sessionId, document) =>
+        Effect.sync(() => {
+          writtenDocument = document;
+        }),
+    }),
+    makeProxyServiceFake(),
+    makeSessionBrokerServiceFake({
+      start: (config) =>
+        Effect.sync(() => {
+          brokerDocument = config.resolvedReviewRules;
+          return { close: () => Effect.void };
+        }),
+    }),
+    makeForwardPortRelayServiceFake(),
+  );
+
+  await Effect.runPromise(
+    createProxyStage(shared)
+      .run({ container, observability })
+      .pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  expect(writtenDocument).toMatchObject({ contractVersion: 1 });
+  expect(brokerDocument).toBe(writtenDocument);
 });
 
 // ---------------------------------------------------------------------------

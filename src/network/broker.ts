@@ -28,13 +28,14 @@ import {
   type AuthorizeRequest,
   type DecisionResponse,
   denyReasonForTarget,
-  matchesHostPattern,
-  matchesPathPrefix,
   type PendingEntry,
+  type RequestPolicyOutcomeRequest,
+  type RequestPolicyOutcomeResponse,
   type ResolvedCredential,
   type ReviewContext,
   targetKey,
   targetKeyForScope,
+  validateRequestPolicyOutcome,
 } from "./protocol.ts";
 import type { NetworkRuntimePaths } from "./registry.ts";
 import {
@@ -44,6 +45,7 @@ import {
   removePendingEntry,
   writePendingEntry,
 } from "./registry.ts";
+import { matchesReviewRule } from "./review_rules.ts";
 
 interface BrokerOptions {
   paths: NetworkRuntimePaths;
@@ -77,6 +79,7 @@ interface PendingGroup {
   createdAt: string;
   target: AuthorizeRequest["target"];
   requests: Map<string, AuthorizeRequest>;
+  matchedRules: Map<string, ReviewRule>;
   waiters: Map<string, PendingWaiter>;
   timer: ReturnType<typeof setTimeout>;
   notificationAbort: AbortController;
@@ -103,12 +106,14 @@ const ALLOWED_NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set([
 
 type BrokerMessage =
   | AuthorizeRequest
+  | RequestPolicyOutcomeRequest
   | { type: "approve"; requestId: string; scope?: ApprovalScope }
   | { type: "deny"; requestId: string; scope?: ApprovalScope }
   | { type: "list_pending" };
 
 type BrokerResponse =
   | DecisionResponse
+  | RequestPolicyOutcomeResponse
   | { type: "pending"; items: PendingEntry[] }
   | { type: "ack"; requestId: string; decision: "approve" | "deny" }
   | { type: "error"; requestId: string; message: string };
@@ -244,7 +249,83 @@ export class SessionBroker {
     if (message.type === "deny") {
       return await this.deny(message.requestId, message.scope);
     }
+    if (message.type === "request_policy_outcome") {
+      return await this.recordRequestPolicyOutcome(message);
+    }
     return { type: "pending", items: await this.listPending() };
+  }
+
+  private async recordRequestPolicyOutcome(
+    message: RequestPolicyOutcomeRequest,
+  ): Promise<
+    | RequestPolicyOutcomeResponse
+    | {
+        type: "error";
+        requestId: string;
+        message: string;
+      }
+  > {
+    const validationError = validateRequestPolicyOutcome(
+      message,
+      this.sessionId,
+      this.reviewRules,
+    );
+    if (validationError) {
+      return {
+        type: "error",
+        requestId:
+          typeof message.requestId === "string" ? message.requestId : "",
+        message: validationError,
+      };
+    }
+
+    const rule = this.reviewRules.find(
+      (candidate) => candidate.id === message.ruleId,
+    );
+    if (
+      rule?.requestPolicy === undefined ||
+      rule.method === undefined ||
+      rule.path === undefined
+    ) {
+      return {
+        type: "error",
+        requestId: message.requestId,
+        message: "invalid request-policy outcome rule metadata",
+      };
+    }
+
+    if (this.auditDir && rule.audit !== false) {
+      const entry: AuditLogEntry = {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        domain: "network",
+        sessionId: this.sessionId,
+        requestId: message.requestId,
+        decision: message.result === "block" ? "deny" : "allow",
+        reason: message.reason,
+        phase: "request-policy",
+        ruleId: message.ruleId,
+        method: rule.method,
+        route: rule.path,
+        requestPolicyKind: rule.requestPolicy.kind,
+        requestPolicyResult: message.result,
+      };
+      try {
+        await appendAuditLog(entry, this.auditDir);
+      } catch {
+        return {
+          type: "error",
+          requestId: message.requestId,
+          message: "request-policy outcome audit unavailable",
+        };
+      }
+    }
+
+    return {
+      version: 1,
+      type: "request_policy_outcome_recorded",
+      requestId: message.requestId,
+    };
   }
 
   private async authorize(
@@ -265,20 +346,63 @@ export class SessionBroker {
       return denyDecision(message.requestId, denyReason);
     }
 
-    const targetCacheKey = targetKey(message.target);
+    // First-match evaluation is authoritative. Session decision caches only
+    // resolve rules whose action is currently "review".
+    const matchedRule = this.findMatchingRule(message);
+    if (matchedRule === null) {
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        "no-matching-rule",
+        targetStr,
+      );
+      return denyDecision(message.requestId, "no-matching-rule");
+    }
 
-    // Session-scoped deny/approve caches (set by user decisions) take priority
-    // over rule evaluation.
+    const shouldAudit = matchedRule.audit !== false;
+    if (matchedRule.action === "deny") {
+      if (shouldAudit) {
+        await this.recordAudit(
+          message.requestId,
+          "deny",
+          "review-rule",
+          targetStr,
+        );
+      }
+      return denyDecision(message.requestId, "review-rule");
+    }
+    if (matchedRule.action === "allow") {
+      const decision = this.decorateAllow(
+        allowDecision(message.requestId, "review-rule"),
+        message,
+        matchedRule,
+      );
+      if (shouldAudit) {
+        const headerNames = decision.injectHeaders?.map((h) => h.name);
+        await this.recordAudit(
+          message.requestId,
+          "allow",
+          "review-rule",
+          targetStr,
+          headerNames,
+        );
+      }
+      return decision;
+    }
+
+    const targetCacheKey = targetKey(message.target);
     if (
       this.deniedTargets.has(targetCacheKey) ||
       this.deniedHosts.has(message.target.host)
     ) {
-      await this.recordAudit(
-        message.requestId,
-        "deny",
-        "denied-by-user",
-        targetStr,
-      );
+      if (shouldAudit) {
+        await this.recordAudit(
+          message.requestId,
+          "deny",
+          "denied-by-user",
+          targetStr,
+        );
+      }
       return denyDecision(message.requestId, "denied-by-user");
     }
 
@@ -289,79 +413,41 @@ export class SessionBroker {
       const decision = this.decorateAllow(
         allowDecision(message.requestId, "approved"),
         message,
+        matchedRule,
       );
       const headerNames = decision.injectHeaders?.map((h) => h.name);
-      await this.recordAudit(
-        message.requestId,
-        "allow",
-        "approved",
-        targetStr,
-        headerNames,
-      );
+      if (shouldAudit) {
+        await this.recordAudit(
+          message.requestId,
+          "allow",
+          "approved",
+          targetStr,
+          headerNames,
+        );
+      }
       return decision;
     }
 
     if (this.negativeCache.get(targetCacheKey) !== undefined) {
-      await this.recordAudit(
-        message.requestId,
-        "deny",
-        "recent-deny",
-        targetStr,
-      );
-      return denyDecision(message.requestId, "recent-deny");
-    }
-
-    // First-match evaluation of reviewRules.
-    const matchedRule = this.findMatchingRule(message);
-    const shouldAudit = matchedRule?.audit !== false;
-    if (matchedRule !== null) {
-      if (matchedRule.action === "allow") {
-        const decision = this.decorateAllow(
-          allowDecision(message.requestId, "review-rule"),
-          message,
+      if (shouldAudit) {
+        await this.recordAudit(
+          message.requestId,
+          "deny",
+          "recent-deny",
+          targetStr,
         );
-        if (shouldAudit) {
-          const headerNames = decision.injectHeaders?.map((h) => h.name);
-          await this.recordAudit(
-            message.requestId,
-            "allow",
-            "review-rule",
-            targetStr,
-            headerNames,
-          );
-        }
-        return decision;
       }
-      if (matchedRule.action === "deny") {
-        if (shouldAudit) {
-          await this.recordAudit(
-            message.requestId,
-            "deny",
-            "review-rule",
-            targetStr,
-          );
-        }
-        return denyDecision(message.requestId, "review-rule");
-      }
-      // action === "review": fall through to pending queue
-    } else {
-      // No rule matched — deny by default.
-      await this.recordAudit(
-        message.requestId,
-        "deny",
-        "no-matching-rule",
-        targetStr,
-      );
-      return denyDecision(message.requestId, "no-matching-rule");
+      return denyDecision(message.requestId, "recent-deny");
     }
 
     const groupKey = `${this.sessionId}:${targetCacheKey}`;
     const group =
       this.groups.get(groupKey) ??
-      (await this.createPendingGroup(groupKey, message));
+      (await this.createPendingGroup(groupKey, message, matchedRule));
 
     if (!group.requests.has(message.requestId)) {
       group.requests.set(message.requestId, message);
+      group.matchedRules.set(message.requestId, matchedRule);
       this.requestIndex.set(message.requestId, groupKey);
       await writePendingEntry(
         this.paths,
@@ -384,6 +470,7 @@ export class SessionBroker {
   private async createPendingGroup(
     groupKey: string,
     message: AuthorizeRequest,
+    matchedRule: ReviewRule,
   ): Promise<PendingGroup> {
     const createdAt = new Date().toISOString();
     const notificationAbort = new AbortController();
@@ -400,6 +487,7 @@ export class SessionBroker {
       createdAt,
       target: message.target,
       requests: new Map([[message.requestId, message]]),
+      matchedRules: new Map([[message.requestId, matchedRule]]),
       waiters: new Map(),
       timer,
       notificationAbort,
@@ -523,17 +611,23 @@ export class SessionBroker {
       };
       const decision =
         outcome === "allow"
-          ? this.decorateAllow(baseWithId, request)
+          ? this.decorateAllow(
+              baseWithId,
+              request,
+              group.matchedRules.get(requestId),
+            )
           : baseWithId;
       const targetStr = `${request.target.host}:${request.target.port}`;
       const headerNames = decision.injectHeaders?.map((h) => h.name);
-      await this.recordAudit(
-        requestId,
-        outcome === "allow" ? "allow" : "deny",
-        baseDecision.reason,
-        targetStr,
-        headerNames,
-      );
+      if (group.matchedRules.get(requestId)?.audit !== false) {
+        await this.recordAudit(
+          requestId,
+          outcome === "allow" ? "allow" : "deny",
+          baseDecision.reason,
+          targetStr,
+          headerNames,
+        );
+      }
       const waiter = group.waiters.get(requestId);
       waiter?.resolve(decision);
     }
@@ -555,19 +649,13 @@ export class SessionBroker {
   private findMatchingRule(message: AuthorizeRequest): ReviewRule | null {
     for (const rule of this.reviewRules) {
       if (
-        rule.method !== undefined &&
-        rule.method.toUpperCase() !== message.method.toUpperCase()
+        !matchesReviewRule(rule, {
+          method: message.method,
+          target: message.target,
+          path: message.reviewContext?.path ?? "",
+        })
       )
         continue;
-      if (
-        rule.host !== undefined &&
-        !matchesHostPattern(message.target, [rule.host])
-      )
-        continue;
-      if (rule.pathPrefix !== undefined) {
-        const p = message.reviewContext?.path ?? "";
-        if (!matchesPathPrefix(p, rule.pathPrefix)) continue;
-      }
       return rule;
     }
     return null;
@@ -595,6 +683,7 @@ export class SessionBroker {
       requestId,
       decision,
       reason,
+      phase: "authorization",
       target,
       injectedHeaders,
     };
@@ -627,8 +716,13 @@ export class SessionBroker {
   private decorateAllow(
     decision: DecisionResponse,
     message: AuthorizeRequest,
+    matchedRule?: ReviewRule,
   ): DecisionResponse {
-    const withCreds = this.injectCredentialHeaders(decision, message);
+    const withRuleId =
+      matchedRule?.id === undefined
+        ? decision
+        : { ...decision, ruleId: matchedRule.id };
+    const withCreds = this.injectCredentialHeaders(withRuleId, message);
     if (withCreds.decision !== "allow" || this.maskValues.length === 0) {
       return withCreds;
     }
