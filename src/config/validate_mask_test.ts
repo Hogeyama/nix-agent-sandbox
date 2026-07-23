@@ -111,6 +111,59 @@ describe("validateConfig: mask", () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
+  test("request policy requires mask.proxy even when mask is omitted", () => {
+    const config = makeConfig(
+      makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            {
+              id: "bodyless.settings",
+              method: "GET",
+              host: "api.example.com",
+              path: "/settings",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+          ],
+        },
+      }),
+    );
+    expect(() => validateConfig(config)).toThrow(
+      /request policies require mask\.proxy = true/,
+    );
+  });
+
+  test("request policy requires mask.proxy to be true independently", () => {
+    const config = makeConfig(
+      makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            {
+              id: "bodyless.settings",
+              method: "GET",
+              host: "api.example.com",
+              path: "/settings",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+          ],
+        },
+        mask: {
+          values: [],
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: false,
+          filter: false,
+        },
+      }),
+    );
+    expect(() => validateConfig(config)).toThrow(
+      /request policies require mask\.proxy = true/,
+    );
+  });
+
   test("rejects non-boolean maskfs / proxy flags", () => {
     const config = makeConfig(
       makeProfile({

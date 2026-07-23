@@ -8,6 +8,10 @@
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
 import { parseAllowlistEntry } from "../network/protocol.ts";
+import {
+  type ResolvedReviewRules,
+  resolveReviewRules,
+} from "../network/review_rules.ts";
 import type {
   Config,
   CredentialRule,
@@ -54,6 +58,7 @@ export function validateConfig(config: Config): Config {
 
 function validateProfile(name: string, profile: Profile): string[] {
   const errors: string[] = [];
+  let resolvedReviewRules: ResolvedReviewRules | undefined;
 
   // --- reviewRules host pattern validation ---
   for (const [i, rule] of profile.network.reviewRules.entries()) {
@@ -65,6 +70,18 @@ function validateProfile(name: string, profile: Profile): string[] {
         ),
       );
     }
+  }
+
+  // --- reviewRules compilation and protected shadow validation ---
+  try {
+    resolvedReviewRules = resolveReviewRules(profile.network.reviewRules);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(
+      ...message
+        .split("\n")
+        .map((line) => `profile "${name}": network.${line}`),
+    );
   }
 
   // --- reviewRules shadowing warnings ---
@@ -118,6 +135,16 @@ function validateProfile(name: string, profile: Profile): string[] {
       errors.push(`profile "${name}": mask.filter must be a boolean`);
     }
   }
+  if (
+    resolvedReviewRules?.rules.some(
+      (rule) => rule.requestPolicy !== undefined,
+    ) &&
+    profile.mask?.proxy !== true
+  ) {
+    errors.push(
+      `profile "${name}": request policies require mask.proxy = true`,
+    );
+  }
 
   return errors;
 }
@@ -168,6 +195,7 @@ function warnShadowedReviewRules(
       "action" in earlier &&
       earlier.method === undefined &&
       earlier.host === undefined &&
+      earlier.path === undefined &&
       earlier.pathPrefix === undefined
     ) {
       for (let j = i + 1; j < rules.length; j++) {

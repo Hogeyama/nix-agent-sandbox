@@ -223,6 +223,9 @@ test.skipIf(!hasPkl)(
 profiles {
   ["dev"] {
     agent = "claude"
+    mask = new MaskConfig {
+      proxy = true
+    }
     network {
       reviewRules = new Listing {
         new ReviewRule {
@@ -321,7 +324,7 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
-  "pkl: preset overlay serializes bodyless request policy",
+  "pkl: preset overlay fails closed until preset expansion is implemented",
   async () => {
     const configPkl = `amends "Schema.pkl"
 
@@ -353,25 +356,11 @@ profiles {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-preset-"));
     try {
       await setupNasDir(tmpDir, configPkl);
-      const config = await loadConfig({ startDir: tmpDir });
-      expect(config.profiles.dev.network.reviewRules).toEqual([
-        {
-          id: "anthropic",
-          preset: "anthropic@1",
-          host: "gateway.example.com",
-          removeRules: ["bodyless.settings"],
-          addRules: [
-            {
-              id: "company-bootstrap",
-              method: "GET",
-              path: "/company/bootstrap",
-              action: "review",
-              audit: true,
-              requestPolicy: { kind: "bodyless" },
-            },
-          ],
-        },
-      ]);
+      // Staged fail-closed behavior: Pkl accepts and serializes the preset
+      // shape, but semantic validation rejects it until Task 3 expands it.
+      await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
+        /reviewRules\[0\].*preset "anthropic@1" is not supported/,
+      );
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
