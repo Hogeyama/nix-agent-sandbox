@@ -9,7 +9,7 @@
  */
 
 import { expect, spyOn, test } from "bun:test";
-import type { Config, Profile } from "./types.ts";
+import type { Config, Profile, ReviewRuleSpec } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_CONFIG,
@@ -325,6 +325,129 @@ test("validate: hard-fails when an earlier rule shadows a policy rule", () => {
 
   expect(() => validateConfig(config)).toThrow(
     /profile "test": network\.reviewRules\[0\] shadows protected reviewRules\[1\].*bodyless\.settings/,
+  );
+});
+
+test.each([
+  [
+    "unknown preset removal",
+    {
+      id: "anthropic",
+      preset: "anthropic@1",
+      removeRules: ["missing"],
+      addRules: [],
+    },
+    /unknown removeRules.*missing/,
+  ],
+  [
+    "mismatched overlay host",
+    {
+      id: "anthropic",
+      preset: "anthropic@1",
+      host: "gateway.example.com",
+      removeRules: [],
+      addRules: [
+        {
+          id: "company-bootstrap",
+          method: "GET",
+          host: "api.anthropic.com",
+          path: "/company/bootstrap",
+          action: "allow",
+          requestPolicy: { kind: "bodyless" },
+        },
+      ],
+    },
+    /host.*effective preset host/,
+  ],
+  [
+    "composed preset ID overflow",
+    {
+      id: `a${"0".repeat(54)}`,
+      preset: "anthropic@1",
+      removeRules: [],
+      addRules: [],
+    },
+    /invalid composed rule ID/,
+  ],
+])("validate: profile-qualifies %s", (_name, preset, expected) => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [preset as ReviewRuleSpec],
+        },
+      }),
+    },
+  });
+
+  expect(() => validateConfig(config)).toThrow(
+    new RegExp(
+      `profile "release": network\\.reviewRules\\[0\\].*${expected.source}`,
+    ),
+  );
+});
+
+test("validate: accepts an overlay addition that inherits the preset host", () => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            {
+              id: "anthropic",
+              preset: "anthropic@1",
+              host: "gateway.example.com",
+              removeRules: [],
+              addRules: [
+                {
+                  id: "company-bootstrap",
+                  method: "GET",
+                  path: "/company/bootstrap",
+                  action: "allow",
+                  requestPolicy: { kind: "bodyless" },
+                },
+              ],
+            },
+          ],
+        },
+        mask: {
+          values: [],
+          writePolicy: "readonly",
+          maskfs: false,
+          proxy: true,
+          filter: false,
+        },
+      }),
+    },
+  });
+
+  expect(validateConfig(config)).toBe(config);
+});
+
+test("validate: profile-qualifies broad prior shadow of a preset", () => {
+  const config = makeConfig({
+    profiles: {
+      release: makeProfile({
+        network: {
+          ...DEFAULT_NETWORK_CONFIG,
+          reviewRules: [
+            { action: "review" },
+            {
+              id: "anthropic",
+              preset: "anthropic@1",
+              removeRules: [],
+              addRules: [],
+            },
+          ],
+        },
+      }),
+    },
+  });
+
+  expect(() => validateConfig(config)).toThrow(
+    /profile "release": network\.reviewRules\[0\].*shadows protected reviewRules\[1\]/,
   );
 });
 

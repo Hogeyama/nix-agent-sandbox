@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
+import { resolveReviewRules } from "../network/review_rules.ts";
 import { loadConfig } from "./load.ts";
 
 /** pkl コマンドが利用可能か確認する */
@@ -324,13 +325,16 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
-  "pkl: preset overlay fails closed until preset expansion is implemented",
+  "pkl: serializes and expands a preset overlay",
   async () => {
     const configPkl = `amends "Schema.pkl"
 
 profiles {
   ["dev"] {
     agent = "claude"
+    mask = new MaskConfig {
+      proxy = true
+    }
     network {
       reviewRules {
         new ReviewRulesPreset {
@@ -356,11 +360,29 @@ profiles {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-preset-"));
     try {
       await setupNasDir(tmpDir, configPkl);
-      // Staged fail-closed behavior: Pkl accepts and serializes the preset
-      // shape, but semantic validation rejects it until Task 3 expands it.
-      await expect(loadConfig({ startDir: tmpDir })).rejects.toThrow(
-        /reviewRules\[0\].*preset "anthropic@1" is not supported/,
+      const config = await loadConfig({ startDir: tmpDir });
+      const resolved = resolveReviewRules(
+        config.profiles.dev.network.reviewRules,
       );
+      expect(
+        resolved.rules.some(
+          (rule) => rule.id === "anthropic.bodyless.settings",
+        ),
+      ).toBe(false);
+      expect(
+        resolved.rules.find(
+          (rule) => rule.id === "anthropic.company-bootstrap",
+        ),
+      ).toMatchObject({
+        host: "gateway.example.com",
+        path: "/company/bootstrap",
+        action: "review",
+      });
+      expect(resolved.rules.at(-1)).toMatchObject({
+        id: "anthropic.default-deny",
+        host: "gateway.example.com",
+        action: "deny",
+      });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

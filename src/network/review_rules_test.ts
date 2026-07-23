@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import type { JsonRequestPolicy, ReviewRule } from "../config/types.ts";
 import {
   matchesReviewRule,
@@ -51,6 +52,24 @@ function jsonRule(overrides: Partial<ReviewRule> = {}): ReviewRule {
     path: "/v1/messages",
     action: "allow",
     requestPolicy: JSON_POLICY,
+    ...overrides,
+  };
+}
+
+function anthropicPreset(
+  overrides: Partial<{
+    id: string;
+    preset: string;
+    host: string;
+    removeRules: string[];
+    addRules: ReviewRule[];
+  }> = {},
+) {
+  return {
+    id: "anthropic",
+    preset: "anthropic@1",
+    removeRules: [],
+    addRules: [],
     ...overrides,
   };
 }
@@ -500,5 +519,400 @@ describe("resolveReviewRules protected shadowing", () => {
         bodylessRule(),
       ]),
     ).not.toThrow();
+  });
+});
+
+describe("resolveReviewRules anthropic preset overlays", () => {
+  test("expands inline and inserts additions before the terminal deny", () => {
+    const resolved = resolveReviewRules([
+      { id: "before", host: "before.example.com", action: "review" },
+      anthropicPreset({
+        addRules: [
+          {
+            id: "company-bootstrap",
+            method: "GET",
+            path: "/company/bootstrap",
+            action: "review",
+            requestPolicy: BODYLESS,
+          },
+        ],
+      }),
+      { id: "after", host: "after.example.com", action: "review" },
+    ]);
+
+    expect(resolved.rules[0].id).toBe("before");
+    expect(resolved.rules.at(-1)?.id).toBe("after");
+    expect(resolved.rules.map((rule) => rule.id)).toEqual([
+      "before",
+      "anthropic.messages.create",
+      "anthropic.messages.count-tokens",
+      "anthropic.bodyless.bootstrap",
+      "anthropic.bodyless.penguin-mode",
+      "anthropic.bodyless.policy-limits",
+      "anthropic.bodyless.settings",
+      "anthropic.bodyless.mcp-registry",
+      "anthropic.bodyless.code-triggers",
+      "anthropic.bodyless.mcp-servers",
+      "anthropic.company-bootstrap",
+      "anthropic.default-deny",
+      "after",
+    ]);
+  });
+
+  test("removing the terminal rule appends additions after remaining rules", () => {
+    const resolved = resolveReviewRules([
+      anthropicPreset({
+        removeRules: ["default-deny"],
+        addRules: [
+          {
+            id: "company-bootstrap",
+            method: "GET",
+            path: "/company/bootstrap",
+            action: "review",
+            requestPolicy: BODYLESS,
+          },
+        ],
+      }),
+    ]);
+
+    expect(resolved.rules.at(-1)?.id).toBe("anthropic.company-bootstrap");
+    expect(resolved.rules.some((rule) => rule.action === "deny")).toBe(false);
+  });
+
+  test("allows a removed local ID to be replaced", () => {
+    const resolved = resolveReviewRules([
+      anthropicPreset({
+        removeRules: ["bodyless.settings"],
+        addRules: [
+          {
+            id: "bodyless.settings",
+            method: "GET",
+            path: "/company/settings",
+            action: "review",
+            requestPolicy: BODYLESS,
+          },
+        ],
+      }),
+    ]);
+
+    expect(
+      resolved.rules.find((rule) => rule.id === "anthropic.bodyless.settings"),
+    ).toMatchObject({
+      host: "api.anthropic.com",
+      path: "/company/settings",
+      action: "review",
+    });
+  });
+
+  test.each([
+    [
+      "unknown removal",
+      { removeRules: ["missing"] },
+      /unknown removeRules.*missing/,
+    ],
+    [
+      "duplicate removal",
+      { removeRules: ["bodyless.settings", "bodyless.settings"] },
+      /duplicate removeRules.*bodyless\.settings/,
+    ],
+    [
+      "reused ID without removal",
+      {
+        addRules: [
+          {
+            id: "bodyless.settings",
+            method: "GET",
+            path: "/company/settings",
+            action: "allow",
+            requestPolicy: BODYLESS,
+          },
+        ],
+      },
+      /duplicate.*bodyless\.settings/,
+    ],
+    [
+      "duplicate added endpoint",
+      {
+        addRules: [
+          {
+            id: "duplicate-messages",
+            method: "POST",
+            path: "/v1/messages",
+            action: "allow",
+            requestPolicy: JSON_POLICY,
+          },
+        ],
+      },
+      /duplicate exact endpoint/,
+    ],
+  ])("rejects %s", (_name, overrides, expected) => {
+    expect(() =>
+      resolveReviewRules([anthropicPreset(overrides as never)]),
+    ).toThrow(expected);
+  });
+
+  test("rejects an unknown preset version", () => {
+    expect(() =>
+      resolveReviewRules([anthropicPreset({ preset: "anthropic@2" })]),
+    ).toThrow(/unknown preset "anthropic@2"/);
+  });
+
+  test("applies an exact host override and inherits it in additions", () => {
+    const resolved = resolveReviewRules([
+      anthropicPreset({
+        host: "gateway.example.com",
+        addRules: [
+          {
+            id: "company-bootstrap",
+            method: "GET",
+            path: "/company/bootstrap",
+            action: "allow",
+            requestPolicy: BODYLESS,
+          },
+        ],
+      }),
+    ]);
+
+    expect(
+      resolved.rules.every((rule) => rule.host === "gateway.example.com"),
+    ).toBe(true);
+  });
+
+  test.each([
+    [
+      "policyless allow",
+      {
+        addRules: [
+          {
+            id: "policyless-allow",
+            method: "GET",
+            path: "/company/allow",
+            action: "allow",
+          },
+        ],
+      },
+      "policyless-allow",
+    ],
+    [
+      "policyless review",
+      {
+        addRules: [
+          {
+            id: "policyless-review",
+            method: "GET",
+            path: "/company/review",
+            action: "review",
+          },
+        ],
+      },
+      "policyless-review",
+    ],
+    [
+      "policyless replacement",
+      {
+        removeRules: ["bodyless.settings"],
+        addRules: [
+          {
+            id: "bodyless.settings",
+            method: "GET",
+            path: "/company/settings",
+            action: "allow",
+          },
+        ],
+      },
+      "bodyless.settings",
+    ],
+    [
+      "policyless Files-like allow route",
+      {
+        addRules: [
+          {
+            id: "files-upload",
+            method: "POST",
+            path: "/v1/files",
+            action: "allow",
+          },
+        ],
+      },
+      "files-upload",
+    ],
+  ])("rejects %s", (_name, overrides, additionId) => {
+    expect(() =>
+      resolveReviewRules([anthropicPreset(overrides as never)]),
+    ).toThrow(
+      new RegExp(
+        `reviewRules\\[0\\].*anthropic.*addRules ID "${additionId.replace(".", "\\.")}".*requestPolicy`,
+      ),
+    );
+  });
+
+  test("accepts a policyless deny addition", () => {
+    const resolved = resolveReviewRules([
+      anthropicPreset({
+        addRules: [
+          {
+            id: "deny-files",
+            method: "POST",
+            path: "/v1/files",
+            action: "deny",
+          },
+        ],
+      }),
+    ]);
+
+    expect(
+      resolved.rules.find((rule) => rule.id === "anthropic.deny-files"),
+    ).toEqual({
+      id: "anthropic.deny-files",
+      method: "POST",
+      host: "api.anthropic.com",
+      path: "/v1/files",
+      action: "deny",
+      audit: true,
+    });
+  });
+
+  test.each([
+    ["wildcard override", { host: "*.example.com" }],
+    [
+      "mismatched addition host",
+      {
+        host: "gateway.example.com",
+        addRules: [
+          {
+            id: "company-bootstrap",
+            method: "GET",
+            host: "api.anthropic.com",
+            path: "/company/bootstrap",
+            action: "allow",
+            requestPolicy: BODYLESS,
+          },
+        ],
+      },
+    ],
+  ])("rejects %s", (_name, overrides) => {
+    expect(() =>
+      resolveReviewRules([anthropicPreset(overrides as never)]),
+    ).toThrow(/host/);
+  });
+
+  test.each([
+    ["unsafe namespace", anthropicPreset({ id: "Unsafe" })],
+    ["namespace ID overflow", anthropicPreset({ id: `a${"0".repeat(64)}` })],
+    [
+      "unsafe local ID",
+      anthropicPreset({
+        addRules: [
+          {
+            id: "Unsafe",
+            method: "GET",
+            path: "/company/bootstrap",
+            action: "allow",
+          },
+        ],
+      }),
+    ],
+    [
+      "local ID overflow",
+      anthropicPreset({
+        addRules: [
+          {
+            id: `a${"0".repeat(64)}`,
+            method: "GET",
+            path: "/company/bootstrap",
+            action: "allow",
+          },
+        ],
+      }),
+    ],
+    ["composed ID overflow", anthropicPreset({ id: `a${"0".repeat(54)}` })],
+  ])("rejects %s", (_name, preset) => {
+    expect(() => resolveReviewRules([preset])).toThrow(/invalid.*ID/);
+  });
+
+  test("rejects a broad prior rule that shadows the preset", () => {
+    expect(() =>
+      resolveReviewRules([
+        { host: "*.anthropic.com", action: "review" },
+        anthropicPreset(),
+      ]),
+    ).toThrow(/reviewRules\[0\].*shadows protected reviewRules\[1\]/);
+  });
+
+  test("returns fresh clones rather than mutable preset data", () => {
+    const first = resolveReviewRules([anthropicPreset()]);
+    first.rules[0].host = "mutated.example.com";
+    if (first.rules[0].requestPolicy?.kind === "json") {
+      first.rules[0].requestPolicy.taggedUnions[0].allowedTags.push("fallback");
+    }
+
+    const second = resolveReviewRules([anthropicPreset()]);
+    expect(second.rules[0].host).toBe("api.anthropic.com");
+    expect(
+      second.rules[0].requestPolicy?.kind === "json" &&
+        second.rules[0].requestPolicy.taggedUnions[0].allowedTags,
+    ).not.toContain("fallback");
+  });
+});
+
+test("anthropic preset matches the versioned cross-language fixture", async () => {
+  const fixture = JSON.parse(
+    await readFile(
+      new URL(
+        "./fixtures/resolved_review_rules/anthropic-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const resolved = resolveReviewRules([anthropicPreset()]);
+
+  expect(resolved).toEqual(fixture);
+  expect(resolved.contractVersion).toBe(1);
+  expect(
+    resolved.rules.every(
+      (rule) =>
+        rule.id !== undefined && /^[a-z][a-z0-9._-]{0,63}$/.test(rule.id),
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(resolved)).not.toContain("fallback");
+  const allowedPaths = resolved.rules
+    .filter((rule) => rule.action === "allow")
+    .map((rule) => rule.path);
+  expect(
+    allowedPaths.some(
+      (path) =>
+        path === "/v1/files" ||
+        path?.startsWith("/v1/files/") ||
+        path?.includes("telemetry") ||
+        path?.includes("eval"),
+    ),
+  ).toBe(false);
+  const jsonPolicy = resolved.rules[0].requestPolicy;
+  expect(jsonPolicy?.kind).toBe("json");
+  expect(
+    jsonPolicy?.kind === "json"
+      ? jsonPolicy.taggedUnions.map((guard) => guard.allowedTags.length)
+      : [],
+  ).toEqual([14, 14]);
+  expect(
+    jsonPolicy?.kind === "json"
+      ? jsonPolicy.taggedUnions.map((guard) => guard.at)
+      : [],
+  ).toEqual(["/**/content/*", "/**/system/*"]);
+  expect(jsonPolicy?.kind === "json" ? jsonPolicy.encodedFields : []).toEqual([
+    {
+      at: "/**",
+      whenField: "type",
+      whenEquals: "base64",
+      dataField: "data",
+      encoding: "base64",
+    },
+  ]);
+  expect(resolved.rules.at(-1)).toEqual({
+    id: "anthropic.default-deny",
+    host: "api.anthropic.com",
+    action: "deny",
+    audit: true,
   });
 });
