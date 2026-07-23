@@ -381,8 +381,8 @@ function expectSingleEgressExchange(
 }
 
 /**
- * `anthropicEgress: true` を書いたセッションレジストリ + fake broker
- * (allow + maskValues:["SECRET123"]) を用意する共通セットアップ。
+ * セッションレジストリ + fake broker (allow + maskValues:["SECRET123"])
+ * を用意する共通セットアップ。
  */
 async function setupAnthropicFixture(
   dirPrefix: string,
@@ -420,7 +420,6 @@ async function setupAnthropicFixture(
       profileName: "integration-test",
       createdAt: new Date().toISOString(),
       pid: process.pid,
-      anthropicEgress: true,
     });
     await chmod(paths.sessionsDir, 0o755);
     await chmod(sessionRegistryPath(paths, sessionId), 0o644);

@@ -216,6 +216,169 @@ profiles {
 });
 
 test.skipIf(!hasPkl)(
+  "pkl: request policy serializes bodyless handler and preserves ordinary rules",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules = new Listing {
+        new ReviewRule {
+          host = "api.github.com"
+          action = "allow"
+        }
+        new ReviewRule {
+          id = "bodyless.settings"
+          method = "GET"
+          host = "api.example.com"
+          path = "/v1/settings"
+          action = "review"
+          requestPolicy = new BodylessRequestPolicy {}
+        }
+        new ReviewRule {
+          id = "messages.create"
+          method = "POST"
+          host = "api.example.com"
+          path = "/v1/messages"
+          action = "allow"
+          requestPolicy = new JsonRequestPolicy {
+            taggedUnions {
+              new TaggedUnionGuard {
+                at = "/messages/*/content/*"
+                discriminator = "type"
+                allowedTags { "text"; "image" }
+              }
+            }
+            encodedFields {
+              new EncodedField {
+                at = "/messages/*/content/*/source"
+                whenField = "type"
+                whenEquals = "base64"
+                dataField = "data"
+                encoding = "base64"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-policy-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      expect(config.profiles.dev.network.reviewRules).toEqual([
+        { host: "api.github.com", action: "allow", audit: true },
+        {
+          id: "bodyless.settings",
+          method: "GET",
+          host: "api.example.com",
+          path: "/v1/settings",
+          action: "review",
+          audit: true,
+          requestPolicy: { kind: "bodyless" },
+        },
+        {
+          id: "messages.create",
+          method: "POST",
+          host: "api.example.com",
+          path: "/v1/messages",
+          action: "allow",
+          audit: true,
+          requestPolicy: {
+            kind: "json",
+            maxBodyBytes: 33554432,
+            maxDepth: 64,
+            maxNodes: 200000,
+            maxDecodedBytes: 33554432,
+            taggedUnions: [
+              {
+                at: "/messages/*/content/*",
+                discriminator: "type",
+                allowedTags: ["text", "image"],
+              },
+            ],
+            encodedFields: [
+              {
+                at: "/messages/*/content/*/source",
+                whenField: "type",
+                whenEquals: "base64",
+                dataField: "data",
+                encoding: "base64",
+              },
+            ],
+          },
+        },
+      ]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "pkl: preset overlay serializes bodyless request policy",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules {
+        new ReviewRulesPreset {
+          id = "anthropic"
+          preset = "anthropic@1"
+          host = "gateway.example.com"
+          removeRules { "bodyless.settings" }
+          addRules {
+            new ReviewRule {
+              id = "company-bootstrap"
+              method = "GET"
+              path = "/company/bootstrap"
+              action = "review"
+              requestPolicy = new BodylessRequestPolicy {}
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-preset-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      expect(config.profiles.dev.network.reviewRules).toEqual([
+        {
+          id: "anthropic",
+          preset: "anthropic@1",
+          host: "gateway.example.com",
+          removeRules: ["bodyless.settings"],
+          addRules: [
+            {
+              id: "company-bootstrap",
+              method: "GET",
+              path: "/company/bootstrap",
+              action: "review",
+              audit: true,
+              requestPolicy: { kind: "bodyless" },
+            },
+          ],
+        },
+      ]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
   "pkl: handles config and temp paths with spaces",
   async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-space-"));

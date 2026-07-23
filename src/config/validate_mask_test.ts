@@ -54,7 +54,6 @@ describe("validateConfig: mask", () => {
           maskfs: true,
           proxy: true,
           filter: true,
-          anthropicEgress: false,
         },
       }),
     );
@@ -70,7 +69,6 @@ describe("validateConfig: mask", () => {
           maskfs: true,
           proxy: true,
           filter: true,
-          anthropicEgress: false,
         },
       }),
     );
@@ -86,7 +84,6 @@ describe("validateConfig: mask", () => {
           maskfs: true,
           proxy: true,
           filter: true,
-          anthropicEgress: false,
         },
       }),
     );
@@ -103,7 +100,6 @@ describe("validateConfig: mask", () => {
           maskfs: true,
           proxy: true,
           filter: true,
-          anthropicEgress: false,
         },
       }),
     );
@@ -124,7 +120,6 @@ describe("validateConfig: mask", () => {
           maskfs: "yes" as any,
           proxy: 1 as any,
           filter: true,
-          anthropicEgress: false,
         },
       }),
     );
@@ -136,88 +131,5 @@ describe("validateConfig: mask", () => {
       expect(msg).toContain("mask.maskfs must be a boolean");
       expect(msg).toContain("mask.proxy must be a boolean");
     }
-  });
-
-  test("rejects non-boolean anthropicEgress", () => {
-    const config = makeConfig(
-      makeProfile({
-        agent: "claude",
-        mask: {
-          values: [],
-          writePolicy: "readonly",
-          maskfs: true,
-          proxy: true,
-          filter: true,
-          anthropicEgress: "yes" as unknown as boolean,
-        },
-      }),
-    );
-    expect(() => validateConfig(config)).toThrow(ConfigValidationError);
-    try {
-      validateConfig(config);
-    } catch (e) {
-      expect(String(e)).toContain("mask.anthropicEgress must be a boolean");
-    }
-  });
-
-  test("anthropicEgress requires claude agent", () => {
-    const config = makeConfig(
-      makeProfile({
-        agent: "copilot",
-        mask: {
-          values: [],
-          writePolicy: "readonly",
-          maskfs: true,
-          proxy: true,
-          filter: true,
-          anthropicEgress: true,
-        },
-      }),
-    );
-    expect(() => validateConfig(config)).toThrow(ConfigValidationError);
-    try {
-      validateConfig(config);
-    } catch (e) {
-      expect(String(e)).toContain('requires agent "claude"');
-    }
-  });
-
-  test("anthropicEgress requires mask.proxy", () => {
-    const config = makeConfig(
-      makeProfile({
-        agent: "claude",
-        mask: {
-          values: [],
-          writePolicy: "readonly",
-          maskfs: true,
-          proxy: false,
-          filter: true,
-          anthropicEgress: true,
-        },
-      }),
-    );
-    expect(() => validateConfig(config)).toThrow(ConfigValidationError);
-    try {
-      validateConfig(config);
-    } catch (e) {
-      expect(String(e)).toContain("requires mask.proxy");
-    }
-  });
-
-  test("anthropicEgress valid for claude + proxy", () => {
-    const config = makeConfig(
-      makeProfile({
-        agent: "claude",
-        mask: {
-          values: [],
-          writePolicy: "readonly",
-          maskfs: true,
-          proxy: true,
-          filter: true,
-          anthropicEgress: true,
-        },
-      }),
-    );
-    expect(() => validateConfig(config)).not.toThrow();
   });
 });

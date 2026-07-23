@@ -14,7 +14,7 @@ import type {
   HostExecRule,
   MaskValueConfig,
   Profile,
-  ReviewRule,
+  ReviewRuleSpec,
 } from "./types.ts";
 
 export class ConfigValidationError extends Error {
@@ -117,24 +117,6 @@ function validateProfile(name: string, profile: Profile): string[] {
     if (typeof profile.mask.filter !== "boolean") {
       errors.push(`profile "${name}": mask.filter must be a boolean`);
     }
-    if (typeof profile.mask.anthropicEgress !== "boolean") {
-      errors.push(`profile "${name}": mask.anthropicEgress must be a boolean`);
-    }
-    if (profile.mask.anthropicEgress === true) {
-      if (profile.agent !== "claude") {
-        errors.push(
-          `profile "${name}": mask.anthropicEgress requires agent "claude" ` +
-            `(got "${profile.agent}"); this protection only covers ` +
-            `api.anthropic.com traffic`,
-        );
-      }
-      if (profile.mask.proxy !== true) {
-        errors.push(
-          `profile "${name}": mask.anthropicEgress requires mask.proxy to be ` +
-            `true (it runs in the mitmproxy addon)`,
-        );
-      }
-    }
   }
 
   return errors;
@@ -178,11 +160,12 @@ function validateHostList(fieldPath: string, entries: string[]): string[] {
 
 function warnShadowedReviewRules(
   profileName: string,
-  rules: ReviewRule[],
+  rules: ReviewRuleSpec[],
 ): void {
   for (let i = 0; i < rules.length; i++) {
     const earlier = rules[i];
     if (
+      "action" in earlier &&
       earlier.method === undefined &&
       earlier.host === undefined &&
       earlier.pathPrefix === undefined

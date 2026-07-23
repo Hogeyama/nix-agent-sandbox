@@ -116,13 +116,56 @@ export interface HostExecConfig {
 /** ネットワーク設定 */
 export type NetworkPromptNotify = "auto" | "desktop" | "off";
 
+export interface TaggedUnionGuard {
+  at: string;
+  discriminator: string;
+  allowedTags: string[];
+}
+
+export interface EncodedField {
+  at: string;
+  whenField: string;
+  whenEquals: string;
+  dataField: string;
+  encoding: "base64";
+}
+
+export interface BodylessRequestPolicy {
+  kind: "bodyless";
+}
+
+export interface JsonRequestPolicy {
+  kind: "json";
+  maxBodyBytes: number;
+  maxDepth: number;
+  maxNodes: number;
+  maxDecodedBytes: number;
+  taggedUnions: TaggedUnionGuard[];
+  encodedFields: EncodedField[];
+}
+
+export type RequestPolicy = BodylessRequestPolicy | JsonRequestPolicy;
+
 export interface ReviewRule {
+  id?: string;
   method?: string;
   host?: string;
+  path?: string;
   pathPrefix?: string;
   action: "allow" | "review" | "deny";
   audit?: boolean;
+  requestPolicy?: RequestPolicy;
 }
+
+export interface ReviewRulesPreset {
+  id: string;
+  preset: string;
+  host?: string;
+  removeRules: string[];
+  addRules: ReviewRule[];
+}
+
+export type ReviewRuleSpec = ReviewRule | ReviewRulesPreset;
 
 /** Credential の値指定 */
 export type CredentialValSpec = { val: string } | { valCmd: string };
@@ -137,7 +180,7 @@ export interface CredentialRule {
 }
 
 export interface NetworkConfig {
-  reviewRules: ReviewRule[];
+  reviewRules: ReviewRuleSpec[];
   credentials: CredentialRule[];
   proxy: ProxyConfig;
   pendingTimeoutSeconds: number;
@@ -212,8 +255,6 @@ export interface MaskConfig {
   proxy: boolean;
   /** コマンド stdout/stderr のフィルタマスク有効化。デフォルト true */
   filter: boolean;
-  /** api.anthropic.com egress のスキーマ認識マスク有効化。デフォルト false */
-  anthropicEgress: boolean;
 }
 
 /** プロファイル */

@@ -13,18 +13,18 @@ import {
   SessionBrokerServiceLive,
 } from "./session_broker_service.ts";
 
-test("SessionBrokerService: registry entry carries anthropicEgress flag", async () => {
+test("SessionBrokerService: writes the session registry entry", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-svc-"));
   try {
     const paths = await resolveNetworkRuntimePaths(runtimeDir);
-    const sessionId = "sess_egress";
+    const sessionId = "sess_registry";
     const socketPath = `${paths.brokersDir}/${sessionId}/sock`;
     const config: SessionBrokerConfig = {
       paths,
       sessionId,
       socketPath,
       profileName: "test",
-      anthropicEgress: true,
+      agent: "claude",
       reviewRules: [{ action: "deny" }],
       pendingTimeoutSeconds: 30,
       pendingDefaultScope: "host-port",
@@ -40,7 +40,7 @@ test("SessionBrokerService: registry entry carries anthropicEgress flag", async 
     );
     try {
       const entry = await readSessionRegistry(paths, sessionId);
-      expect(entry?.anthropicEgress).toBe(true);
+      expect(entry?.agent).toBe("claude");
     } finally {
       await Effect.runPromise(handle.close());
     }

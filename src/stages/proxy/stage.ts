@@ -15,6 +15,7 @@ import type {
   CredentialRule,
   MaskValueConfig,
   ReviewRule,
+  ReviewRuleSpec,
 } from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
@@ -53,6 +54,8 @@ const PROXY_ALIAS = "nas-proxy";
 const PROXY_PORT = 8080;
 const PROXY_READY_TIMEOUT_MS = 15_000;
 export const LOCAL_PROXY_PORT = 18080;
+export const REVIEW_RULE_RESOLUTION_REQUIRED_ERROR =
+  "network.reviewRules presets, exact paths, and request policies require review-rule resolution";
 
 /**
  * Mount target directory inside the agent container where per-port forward-port
@@ -77,7 +80,6 @@ export interface ProxyPlan {
   readonly sessionNetworkName: string;
   readonly profileName: string;
   readonly agent: StageInput["profile"]["agent"];
-  readonly anthropicEgress: boolean | undefined;
   readonly runtimePaths: NetworkRuntimePaths;
   readonly brokerSocket: string;
   readonly token: string;
@@ -116,6 +118,9 @@ export function planProxy(
   input: StageInput & Pick<PipelineState, "container" | "observability">,
   options: ProxyStageOptions = {},
 ): ProxyPlan {
+  const reviewRules = requireLegacyCompatibleReviewRules(
+    input.profile.network.reviewRules,
+  );
   const proxyContainerName = options.proxyContainerName ?? PROXY_CONTAINER_NAME;
   const generateSessionToken =
     options.generateSessionToken ?? defaultGenerateToken;
@@ -219,11 +224,10 @@ export function planProxy(
     sessionNetworkName,
     profileName: input.profileName,
     agent: input.profile.agent,
-    anthropicEgress: mask?.anthropicEgress,
     runtimePaths,
     brokerSocket,
     token,
-    reviewRules: [...input.profile.network.reviewRules],
+    reviewRules,
     credentials: [...input.profile.network.credentials],
     pendingTimeoutSeconds: input.profile.network.pendingTimeoutSeconds,
     pendingDefaultScope: input.profile.network.pendingDefaultScope,
@@ -244,6 +248,23 @@ export function planProxy(
       container,
     },
   };
+}
+
+function requireLegacyCompatibleReviewRules(
+  specs: ReviewRuleSpec[],
+): ReviewRule[] {
+  const reviewRules: ReviewRule[] = [];
+  for (const spec of specs) {
+    if (
+      "preset" in spec ||
+      spec.path !== undefined ||
+      spec.requestPolicy !== undefined
+    ) {
+      throw new Error(REVIEW_RULE_RESOLUTION_REQUIRED_ERROR);
+    }
+    reviewRules.push(spec);
+  }
+  return reviewRules;
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +397,6 @@ function runProxy(
         socketPath: plan.brokerSocket,
         profileName: plan.profileName,
         agent: plan.agent,
-        anthropicEgress: plan.anthropicEgress,
         reviewRules: plan.reviewRules,
         pendingTimeoutSeconds: plan.pendingTimeoutSeconds,
         pendingDefaultScope: plan.pendingDefaultScope,

@@ -1229,7 +1229,6 @@ test("MountStage: mask with maskfs=false does not require maskedRoot (proxy-only
         maskfs: false,
         proxy: true,
         filter: true,
-        anthropicEgress: false,
       },
     }),
   });
@@ -1250,7 +1249,6 @@ test("MountStage: mask with maskfs=true but maskedRoot unset throws ordering gua
         maskfs: true,
         proxy: false,
         filter: true,
-        anthropicEgress: false,
       },
     }),
   });

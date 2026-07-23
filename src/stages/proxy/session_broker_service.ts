@@ -33,7 +33,6 @@ export interface SessionBrokerConfig {
   readonly socketPath: string;
   readonly profileName: string;
   readonly agent?: string;
-  readonly anthropicEgress?: boolean;
   readonly reviewRules: ReviewRule[];
   readonly pendingTimeoutSeconds: number;
   readonly pendingDefaultScope: ApprovalScope;
@@ -106,7 +105,6 @@ export const SessionBrokerServiceLive: Layer.Layer<SessionBrokerService> =
                 createdAt: new Date().toISOString(),
                 pid: process.pid,
                 agent: config.agent,
-                anthropicEgress: config.anthropicEgress,
               });
             } catch (error) {
               try {
