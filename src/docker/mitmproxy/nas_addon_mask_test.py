@@ -6,8 +6,14 @@ Direct invocation:
 """
 
 import base64
+import copy
+import io
+import json
+import os
+import tempfile
 import unittest
 from contextlib import redirect_stderr
+from pathlib import Path
 from unittest.mock import patch
 
 import nas_addon
@@ -275,6 +281,467 @@ class PatternsForCacheTest(unittest.TestCase):
         third = addon._patterns_for(["other-secret"])
         self.assertIsNot(first, third)
         self.assertIn(b"other-secret", third)
+
+
+class ResolvedReviewRulesContractTest(unittest.TestCase):
+    def setUp(self):
+        fixture_path = (
+            Path(__file__).resolve().parents[2]
+            / "network"
+            / "fixtures"
+            / "resolved_review_rules"
+            / "anthropic-v1.json"
+        )
+        self.fixture = json.loads(fixture_path.read_text())
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.rules_dir_patch = patch.object(
+            nas_addon, "REVIEW_RULES_DIR", self.temp_dir.name
+        )
+        self.rules_dir_patch.start()
+        nas_addon._review_rules_cache.clear()
+
+    def tearDown(self):
+        self.rules_dir_patch.stop()
+        self.temp_dir.cleanup()
+        nas_addon._review_rules_cache.clear()
+
+    def _path(self, session_id="sess-contract"):
+        return Path(self.temp_dir.name) / f"{session_id}.json"
+
+    def _write(self, value, session_id="sess-contract"):
+        path = self._path(session_id)
+        path.write_text(json.dumps(value))
+        return path
+
+    def _load(self, session_id="sess-contract"):
+        return nas_addon._load_review_rules(session_id)
+
+    def assert_invalid(self, document):
+        nas_addon._review_rules_cache.clear()
+        self._write(document)
+        loaded = self._load()
+        invalid = getattr(nas_addon, "_INVALID_REVIEW_RULES", None)
+        self.assertIs(loaded, invalid)
+
+    def test_accepts_shared_anthropic_v1_fixture(self):
+        self._write(self.fixture)
+
+        self.assertEqual(self._load(), self.fixture)
+
+    def test_rejects_non_v1_and_non_document_roots(self):
+        cases = [
+            ("top-level list", self.fixture["rules"]),
+            ("missing version", {"rules": self.fixture["rules"]}),
+            (
+                "unknown version",
+                {**self.fixture, "contractVersion": 2},
+            ),
+            (
+                "boolean version",
+                {**self.fixture, "contractVersion": True},
+            ),
+            (
+                "missing rules",
+                {"contractVersion": 1},
+            ),
+            (
+                "non-list rules",
+                {"contractVersion": 1, "rules": {}},
+            ),
+        ]
+        for name, document in cases:
+            with self.subTest(name=name):
+                self.assert_invalid(document)
+
+    def test_rejects_unknown_document_rule_handler_and_ast_keys(self):
+        cases = []
+
+        document = copy.deepcopy(self.fixture)
+        document["unknown"] = "SECRET-document"
+        cases.append(("document", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["unknown"] = "SECRET-rule"
+        cases.append(("rule", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["requestPolicy"]["unknown"] = "SECRET-policy"
+        cases.append(("handler", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["requestPolicy"]["taggedUnions"][0]["unknown"] = (
+            "SECRET-tagged"
+        )
+        cases.append(("tagged union", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["requestPolicy"]["encodedFields"][0]["unknown"] = (
+            "SECRET-encoded"
+        )
+        cases.append(("encoded field", document))
+
+        for name, document in cases:
+            with self.subTest(name=name):
+                self.assert_invalid(document)
+
+    def test_rejects_malformed_rule_ids_and_primitive_fields(self):
+        cases = [
+            ("empty ID", "id", ""),
+            ("uppercase ID", "id", "Anthropic.rule"),
+            ("bad ID character", "id", "anthropic/rule"),
+            ("overlong ID", "id", "a" + ("0" * 64)),
+            ("non-string ID", "id", 1),
+            ("null ID", "id", None),
+            ("unknown action", "action", "permit"),
+            ("non-boolean audit", "audit", 1),
+            ("empty method", "method", ""),
+            ("non-string host", "host", 1),
+            ("query-bearing exact path", "path", "/v1/messages?x=1"),
+        ]
+        for name, field, value in cases:
+            with self.subTest(name=name):
+                document = copy.deepcopy(self.fixture)
+                document["rules"][0][field] = value
+                self.assert_invalid(document)
+
+    def test_rejects_unknown_kinds_and_illegal_rule_policy_combinations(self):
+        cases = []
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["requestPolicy"] = {"kind": "graphql"}
+        cases.append(("graphql", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["requestPolicy"] = {"kind": "future"}
+        cases.append(("unknown kind", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["action"] = "deny"
+        cases.append(("deny policy", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["pathPrefix"] = "/v1"
+        cases.append(("path and prefix", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][2]["method"] = "POST"
+        cases.append(("bodyless non-GET", document))
+
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["method"] = "GET"
+        cases.append(("json non-POST", document))
+
+        for name, document in cases:
+            with self.subTest(name=name):
+                self.assert_invalid(document)
+
+    def test_rejects_policy_rules_without_every_exact_match_field(self):
+        for field in ("id", "method", "host", "path"):
+            with self.subTest(field=field):
+                document = copy.deepcopy(self.fixture)
+                del document["rules"][0][field]
+                self.assert_invalid(document)
+
+        invalid_hosts = [
+            "*.anthropic.com",
+            "api.anthropic.com:443",
+            " api.anthropic.com",
+        ]
+        for host in invalid_hosts:
+            with self.subTest(host=host):
+                document = copy.deepcopy(self.fixture)
+                document["rules"][0]["host"] = host
+                self.assert_invalid(document)
+
+    def test_exact_policy_hosts_use_ascii_only_case_insensitive_matching(self):
+        document = copy.deepcopy(self.fixture)
+        document["rules"][0]["host"] = "API.Anthropic.COM"
+        self._write(document)
+        self.assertEqual(self._load(), document)
+
+        non_ascii_hosts = [
+            "api.K.example",
+            "api.ſ.example",
+            "api.İ.example",
+            "api.é.example",
+            "api.例.example",
+        ]
+        for host in non_ascii_hosts:
+            with self.subTest(host=host):
+                document = copy.deepcopy(self.fixture)
+                document["rules"][0]["host"] = host
+                self.assert_invalid(document)
+
+    def test_rejects_invalid_json_limits_including_python_booleans(self):
+        maximums = {
+            "maxBodyBytes": 33_554_432,
+            "maxDepth": 64,
+            "maxNodes": 200_000,
+            "maxDecodedBytes": 33_554_432,
+        }
+        for field, maximum in maximums.items():
+            values = (
+                True,
+                False,
+                0,
+                -1,
+                1.5,
+                str(maximum),
+                maximum + 1,
+            )
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    document = copy.deepcopy(self.fixture)
+                    document["rules"][0]["requestPolicy"][field] = value
+                    self.assert_invalid(document)
+
+    def test_rejects_malformed_json_policy_children(self):
+        mutations = [
+            (
+                "tagged unions not list",
+                lambda policy: policy.__setitem__("taggedUnions", {}),
+            ),
+            (
+                "tagged union not object",
+                lambda policy: policy.__setitem__("taggedUnions", ["bad"]),
+            ),
+            (
+                "bad selector escape",
+                lambda policy: policy["taggedUnions"][0].__setitem__(
+                    "at", "/bad/~2"
+                ),
+            ),
+            (
+                "embedded selector wildcard",
+                lambda policy: policy["taggedUnions"][0].__setitem__(
+                    "at", "/bad/prefix*"
+                ),
+            ),
+            (
+                "empty discriminator",
+                lambda policy: policy["taggedUnions"][0].__setitem__(
+                    "discriminator", ""
+                ),
+            ),
+            (
+                "allowed tags not list",
+                lambda policy: policy["taggedUnions"][0].__setitem__(
+                    "allowedTags", "text"
+                ),
+            ),
+            (
+                "empty allowed tags",
+                lambda policy: policy["taggedUnions"][0].__setitem__(
+                    "allowedTags", []
+                ),
+            ),
+            (
+                "non-string allowed tag",
+                lambda policy: policy["taggedUnions"][0].__setitem__(
+                    "allowedTags", ["text", 1]
+                ),
+            ),
+            (
+                "encoded fields not list",
+                lambda policy: policy.__setitem__("encodedFields", {}),
+            ),
+            (
+                "encoded field not object",
+                lambda policy: policy.__setitem__("encodedFields", ["bad"]),
+            ),
+            (
+                "unknown encoding",
+                lambda policy: policy["encodedFields"][0].__setitem__(
+                    "encoding", "base64url"
+                ),
+            ),
+            (
+                "non-string encoded field",
+                lambda policy: policy["encodedFields"][0].__setitem__(
+                    "dataField", 1
+                ),
+            ),
+        ]
+        for name, mutate in mutations:
+            with self.subTest(name=name):
+                document = copy.deepcopy(self.fixture)
+                mutate(document["rules"][0]["requestPolicy"])
+                self.assert_invalid(document)
+
+    def test_selector_grammar_accepts_producer_literal_segments(self):
+        selectors = [
+            "/$schema",
+            "/foo|bar",
+            r"/\d+",
+            "/(.*)",
+            "/filter[?(@.x)]",
+            "/script:mask(*)",
+        ]
+        for selector in selectors:
+            with self.subTest(selector=selector):
+                nas_addon._review_rules_cache.clear()
+                document = copy.deepcopy(self.fixture)
+                document["rules"][0]["requestPolicy"]["taggedUnions"][0][
+                    "at"
+                ] = selector
+                document["rules"][0]["requestPolicy"]["encodedFields"][0][
+                    "at"
+                ] = selector
+                self._write(document)
+                self.assertEqual(self._load(), document)
+
+    def test_selector_grammar_rejects_producer_partial_wildcards_and_escapes(
+        self,
+    ):
+        selectors = [
+            "/foo*bar",
+            "/foo**bar",
+            "/***",
+            "/prefix*",
+            "/*suffix",
+            "/foo~2bar",
+            "/foo~",
+        ]
+        for selector in selectors:
+            with self.subTest(selector=selector):
+                document = copy.deepcopy(self.fixture)
+                document["rules"][0]["requestPolicy"]["taggedUnions"][0][
+                    "at"
+                ] = selector
+                self.assert_invalid(document)
+
+    def test_missing_unreadable_and_malformed_files_are_silent_invalid_states(
+        self,
+    ):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            missing = self._load("sess-missing")
+
+            self._path("sess-malformed").write_text(
+                '{"contractVersion": "SECRET-malformed"'
+            )
+            malformed = self._load("sess-malformed")
+
+            self._write(self.fixture, "sess-unreadable")
+            with patch(
+                "builtins.open",
+                side_effect=PermissionError("SECRET-unreadable"),
+            ):
+                unreadable = self._load("sess-unreadable")
+
+        invalid = getattr(nas_addon, "_INVALID_REVIEW_RULES", None)
+        self.assertIs(missing, invalid)
+        self.assertIs(malformed, invalid)
+        self.assertIs(unreadable, invalid)
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_unexpected_decoder_exception_is_a_silent_invalid_state(self):
+        self._write(self.fixture)
+        stderr = io.StringIO()
+
+        with patch.object(
+            json,
+            "load",
+            side_effect=RuntimeError("SECRET-decoder-detail"),
+        ), redirect_stderr(stderr):
+            loaded = self._load()
+
+        self.assertIs(
+            loaded,
+            getattr(nas_addon, "_INVALID_REVIEW_RULES", None),
+        )
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_caches_valid_and_invalid_states_until_mtime_changes(self):
+        path = self._write(self.fixture)
+        valid = self._load()
+        with patch("builtins.open", side_effect=AssertionError("re-read")):
+            self.assertIs(self._load(), valid)
+
+        old_mtime = path.stat().st_mtime_ns
+        path.write_text('{"contractVersion": 1, "rules": "invalid"}')
+        os.utime(
+            path,
+            ns=(old_mtime + 1_000_000, old_mtime + 1_000_000),
+        )
+        invalid = self._load()
+        self.assertIs(
+            invalid,
+            getattr(nas_addon, "_INVALID_REVIEW_RULES", None),
+        )
+        with patch("builtins.open", side_effect=AssertionError("re-read")):
+            self.assertIs(self._load(), invalid)
+
+
+class ReviewRuleMatchTest(unittest.TestCase):
+    def test_exact_path_strips_only_the_query(self):
+        rule = {
+            "method": "POST",
+            "host": "api.anthropic.com",
+            "path": "/v1/messages",
+        }
+        cases = [
+            ("/v1/messages", True),
+            ("/v1/messages?beta=true", True),
+            ("/v1/messages/", False),
+            ("/v1//messages", False),
+            ("/v1/%6dessages", False),
+        ]
+        for path, expected in cases:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    nas_addon._match_review_rule(
+                        rule, "post", "API.ANTHROPIC.COM", path
+                    ),
+                    expected,
+                )
+
+    def test_path_prefix_method_and_host_matching_remain_segment_aware(self):
+        rule = {
+            "method": "GET",
+            "host": "*.example.com",
+            "pathPrefix": "/api/v1",
+        }
+        self.assertTrue(
+            nas_addon._match_review_rule(
+                rule, "get", "sub.example.com", "/api/v1/items?x=1"
+            )
+        )
+        self.assertFalse(
+            nas_addon._match_review_rule(
+                rule, "POST", "sub.example.com", "/api/v1/items"
+            )
+        )
+        self.assertFalse(
+            nas_addon._match_review_rule(
+                rule, "GET", "example.net", "/api/v1/items"
+            )
+        )
+        self.assertFalse(
+            nas_addon._match_review_rule(
+                rule, "GET", "sub.example.com", "/api/v10/items"
+            )
+        )
+
+    def test_trailing_dot_rule_hosts_match_exact_and_wildcard_targets(self):
+        cases = [
+            ("api.example.com.", "api.example.com", True),
+            ("api.example.com.", "API.EXAMPLE.COM.", True),
+            ("*.example.com.", "sub.example.com", True),
+            ("*.example.com.", "example.com.", True),
+            ("*.example.com.", "example.net", False),
+        ]
+        for pattern, host, expected in cases:
+            with self.subTest(pattern=pattern, host=host):
+                self.assertEqual(
+                    nas_addon._match_review_rule(
+                        {"host": pattern},
+                        "GET",
+                        host,
+                        "/",
+                    ),
+                    expected,
+                )
 
 
 class AnthropicRoutingTest(unittest.TestCase):
@@ -701,6 +1168,9 @@ class GateAndUrlHeaderTest(unittest.TestCase):
         self.assertIn(b"SECRET123", flow.request.content)  # body は触らない
 
 
+_DEFAULT_REVIEW_RULES = object()
+
+
 class AnthropicRequestFlowTest(unittest.TestCase):
     def setUp(self):
         self.session_id = "sess-test"
@@ -725,7 +1195,7 @@ class AnthropicRequestFlowTest(unittest.TestCase):
         outcome_failure=False,
         on_outcome=None,
         request_class=FakeRequest,
-        review_rules=None,
+        review_rules=_DEFAULT_REVIEW_RULES,
         client_id="client-test",
     ):
         request_headers = list(headers or [])
@@ -763,11 +1233,23 @@ class AnthropicRequestFlowTest(unittest.TestCase):
                 "requestId": request["requestId"],
             }
 
+        if review_rules is _DEFAULT_REVIEW_RULES:
+            loaded_review_rules = {"contractVersion": 1, "rules": []}
+        elif isinstance(review_rules, list):
+            loaded_review_rules = {
+                "contractVersion": 1,
+                "rules": review_rules,
+            }
+        else:
+            loaded_review_rules = review_rules
+
         stderr = io.StringIO()
         with patch.object(
             nas_addon, "_load_registry", return_value=self.registry
         ), patch.object(
-            nas_addon, "_load_review_rules", return_value=review_rules or []
+            nas_addon,
+            "_load_review_rules",
+            return_value=loaded_review_rules,
         ), patch.object(
             nas_addon, "_generate_request_id", return_value="req-test"
         ), patch.object(
@@ -828,6 +1310,69 @@ class AnthropicRequestFlowTest(unittest.TestCase):
         self.assertEqual(flow.response.status_code, 407)
         self.assertNotIn("SECRET123", stderr.getvalue())
         self.assertIn("method=OTHER route=unknown", stderr.getvalue())
+
+    def test_invalid_contract_blocks_before_broker_or_credential_injection(self):
+        flow, messages, stderr = self._run_request(review_rules=None)
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(flow.response.content, b"blocked: request policy")
+        self.assertNotIn("x-api-key", flow.request.headers)
+        self.assertEqual(messages, [])
+        self.assertEqual(
+            stderr,
+            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
+            "session=sess-test\n",
+        )
+
+    def test_invalid_contract_log_sanitizes_untrusted_session_identifier(self):
+        self.session_id = "sess-test\nSECRET-session"
+        self.proxy_auth = "Basic " + base64.b64encode(
+            f"{self.session_id}:{self.token}".encode()
+        ).decode()
+
+        flow, messages, stderr = self._run_request(review_rules=None)
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(messages, [])
+        self.assertEqual(
+            stderr,
+            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
+            "session=invalid\n",
+        )
+        self.assertNotIn("SECRET-session", stderr)
+
+    def test_trailing_dot_policy_host_pre_match_includes_body_preview(self):
+        body = b'{"messages":[]}'
+        rule = {
+            "id": "anthropic.messages.create",
+            "method": "POST",
+            "host": "api.anthropic.com.",
+            "path": "/v1/messages",
+            "action": "allow",
+            "audit": True,
+        }
+
+        _flow, messages, _stderr = self._run_request(
+            method="POST",
+            path="/v1/messages",
+            content=body,
+            review_rules=[rule],
+        )
+
+        authorization = next(
+            message
+            for message in messages
+            if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization["reviewContext"],
+            {
+                "path": "/v1/messages",
+                "contentType": None,
+                "bodyPreview": body.decode(),
+                "bodySize": len(body),
+            },
+        )
 
     def test_bodyless_known_get_allows_and_reports_once(self):
         flow, messages, _stderr = self._run_request()

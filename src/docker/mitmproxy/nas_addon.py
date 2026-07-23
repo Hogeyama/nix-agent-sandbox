@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -24,6 +25,53 @@ BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")
 REVIEW_RULES_DIR = os.path.join(NETWORK_DIR, "review-rules")
 
 BODY_PREVIEW_MAX = 1024
+REQUEST_POLICY_BLOCK_BODY = b"blocked: request policy"
+
+_SAFE_RULE_ID = re.compile(r"[a-z][a-z0-9._-]{0,63}\Z")
+_SAFE_SESSION_LABEL = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+_PARTIAL_SELECTOR_WILDCARD = re.compile(
+    r"[a-z0-9_.~-]*\*+[a-z0-9_.~-]*\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_DOCUMENT_KEYS = frozenset(("contractVersion", "rules"))
+_RULE_KEYS = frozenset((
+    "id",
+    "method",
+    "host",
+    "path",
+    "pathPrefix",
+    "action",
+    "audit",
+    "requestPolicy",
+))
+_BODYLESS_POLICY_KEYS = frozenset(("kind",))
+_JSON_POLICY_KEYS = frozenset((
+    "kind",
+    "maxBodyBytes",
+    "maxDepth",
+    "maxNodes",
+    "maxDecodedBytes",
+    "taggedUnions",
+    "encodedFields",
+))
+_TAGGED_UNION_KEYS = frozenset((
+    "at",
+    "discriminator",
+    "allowedTags",
+))
+_ENCODED_FIELD_KEYS = frozenset((
+    "at",
+    "whenField",
+    "whenEquals",
+    "dataField",
+    "encoding",
+))
+_JSON_LIMITS = {
+    "maxBodyBytes": 33_554_432,
+    "maxDepth": 64,
+    "maxNodes": 200_000,
+    "maxDecodedBytes": 33_554_432,
+}
 
 # --- request masking -------------------------------------------------------
 # Pattern expansion mirrors src/network/mask_patterns.ts (broker-side
@@ -133,7 +181,8 @@ def _apply_request_masking(flow, patterns: list[bytes]) -> None:
 
 
 _registry_cache: dict[str, tuple[float, dict]] = {}
-_review_rules_cache: dict[str, tuple[float, list]] = {}
+_INVALID_REVIEW_RULES = object()
+_review_rules_cache: dict[str, tuple[Optional[int], object]] = {}
 CACHE_TTL = 5.0
 
 
@@ -152,20 +201,181 @@ def _load_registry(session_id: str) -> Optional[dict]:
         return None
 
 
-def _load_review_rules(session_id: str) -> list:
-    now = time.monotonic()
-    cached = _review_rules_cache.get(session_id)
-    if cached and now - cached[0] < CACHE_TTL:
-        return cached[1]
+def _has_exact_keys(value: object, expected: frozenset[str]) -> bool:
+    return isinstance(value, dict) and value.keys() == expected
+
+
+def _is_non_empty_string(value: object) -> bool:
+    return isinstance(value, str) and len(value) > 0
+
+
+def _is_exact_non_port_host(value: object) -> bool:
+    if not isinstance(value, str) or value != value.strip():
+        return False
+    host = value[:-1] if value.endswith(".") else value
+    if len(host) == 0 or len(host) > 253:
+        return False
+    labels = host.split(".")
+    return all(
+        len(label) <= 63
+        and re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+            label,
+            re.IGNORECASE | re.ASCII,
+        ) is not None
+        for label in labels
+    )
+
+
+def _is_valid_selector(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("/"):
+        return False
+    for segment in value[1:].split("/"):
+        if re.search(r"~(?:[^01]|\Z)", segment):
+            return False
+        if (
+            segment not in ("*", "**")
+            and _PARTIAL_SELECTOR_WILDCARD.fullmatch(segment)
+        ):
+            return False
+    return True
+
+
+def _is_valid_tagged_union(value: object) -> bool:
+    if not _has_exact_keys(value, _TAGGED_UNION_KEYS):
+        return False
+    allowed_tags = value["allowedTags"]
+    return (
+        _is_valid_selector(value["at"])
+        and _is_non_empty_string(value["discriminator"])
+        and isinstance(allowed_tags, list)
+        and len(allowed_tags) > 0
+        and all(_is_non_empty_string(tag) for tag in allowed_tags)
+    )
+
+
+def _is_valid_encoded_field(value: object) -> bool:
+    if not _has_exact_keys(value, _ENCODED_FIELD_KEYS):
+        return False
+    return (
+        _is_valid_selector(value["at"])
+        and _is_non_empty_string(value["whenField"])
+        and _is_non_empty_string(value["whenEquals"])
+        and _is_non_empty_string(value["dataField"])
+        and value["encoding"] == "base64"
+    )
+
+
+def _is_valid_request_policy(value: object, method: str) -> bool:
+    if not isinstance(value, dict):
+        return False
+    kind = value.get("kind")
+    if kind == "bodyless":
+        return (
+            _has_exact_keys(value, _BODYLESS_POLICY_KEYS)
+            and method.upper() == "GET"
+        )
+    if kind != "json" or not _has_exact_keys(value, _JSON_POLICY_KEYS):
+        return False
+    if method.upper() != "POST":
+        return False
+    for field, maximum in _JSON_LIMITS.items():
+        limit = value[field]
+        if (
+            type(limit) is not int
+            or limit <= 0
+            or limit > maximum
+        ):
+            return False
+    tagged_unions = value["taggedUnions"]
+    encoded_fields = value["encodedFields"]
+    return (
+        isinstance(tagged_unions, list)
+        and all(_is_valid_tagged_union(item) for item in tagged_unions)
+        and isinstance(encoded_fields, list)
+        and all(_is_valid_encoded_field(item) for item in encoded_fields)
+    )
+
+
+def _is_valid_resolved_rule(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    keys = value.keys()
+    if not {"action", "audit"}.issubset(keys):
+        return False
+    if not set(keys).issubset(_RULE_KEYS):
+        return False
+    if value["action"] not in ("allow", "review", "deny"):
+        return False
+    if type(value["audit"]) is not bool:
+        return False
+
+    if "id" in value:
+        rule_id = value["id"]
+        if (
+            not isinstance(rule_id, str)
+            or _SAFE_RULE_ID.fullmatch(rule_id) is None
+        ):
+            return False
+    for field in ("method", "host", "path", "pathPrefix"):
+        if field in value and not _is_non_empty_string(value[field]):
+            return False
+    if "path" in value and "pathPrefix" in value:
+        return False
+    if "path" in value and "?" in value["path"]:
+        return False
+
+    policy = value.get("requestPolicy")
+    if policy is None:
+        return "requestPolicy" not in value
+    if value["action"] == "deny":
+        return False
+    if not all(field in value for field in ("id", "method", "host", "path")):
+        return False
+    if not _is_exact_non_port_host(value["host"]):
+        return False
+    return _is_valid_request_policy(policy, value["method"])
+
+
+def _is_valid_resolved_review_rules(value: object) -> bool:
+    try:
+        if not _has_exact_keys(value, _DOCUMENT_KEYS):
+            return False
+        if type(value["contractVersion"]) is not int:
+            return False
+        if value["contractVersion"] != 1:
+            return False
+        rules = value["rules"]
+        return (
+            isinstance(rules, list)
+            and all(_is_valid_resolved_rule(rule) for rule in rules)
+        )
+    except Exception:
+        return False
+
+
+def _load_review_rules(session_id: str) -> object:
     path = os.path.join(REVIEW_RULES_DIR, f"{session_id}.json")
     try:
-        with open(path) as f:
-            rules = json.load(f)
-        _review_rules_cache[session_id] = (now, rules)
-        return rules
-    except (FileNotFoundError, json.JSONDecodeError):
-        _review_rules_cache[session_id] = (now, [])
-        return []
+        mtime = os.stat(path).st_mtime_ns
+    except OSError:
+        mtime = None
+
+    cached = _review_rules_cache.get(session_id)
+    if cached and cached[0] == mtime:
+        return cached[1]
+
+    state: object = _INVALID_REVIEW_RULES
+    if mtime is not None:
+        try:
+            with open(path) as f:
+                document = json.load(f)
+            if _is_valid_resolved_review_rules(document):
+                state = document
+        except Exception:
+            pass
+    _review_rules_cache[session_id] = (mtime, state)
+    return state
 
 
 def _hash_token(token: str) -> str:
@@ -463,10 +673,11 @@ def _registry_anthropic_egress(registry) -> bool:
 
 def _match_host_pattern(host: str, pattern: str) -> bool:
     normalized = _normalize_host(host)
-    if pattern.startswith("*."):
-        suffix = pattern[2:].lower()
+    normalized_pattern = _normalize_host(pattern)
+    if normalized_pattern.startswith("*."):
+        suffix = normalized_pattern[2:]
         return normalized == suffix or normalized.endswith(f".{suffix}")
-    return normalized == pattern.lower()
+    return normalized == normalized_pattern
 
 
 def _matches_path_prefix(path: str, prefix: str) -> bool:
@@ -487,10 +698,23 @@ def _match_review_rule(rule: dict, method: str, host: str, path: str) -> bool:
     if "host" in rule and rule["host"]:
         if not _match_host_pattern(host, rule["host"]):
             return False
+    if "path" in rule and rule["path"]:
+        query_index = path.find("?")
+        query_free_path = (
+            path if query_index == -1 else path[:query_index]
+        )
+        if query_free_path != rule["path"]:
+            return False
     if "pathPrefix" in rule and rule["pathPrefix"]:
         if not _matches_path_prefix(path, rule["pathPrefix"]):
             return False
     return True
+
+
+def _safe_session_label(session_id: str) -> str:
+    if _SAFE_SESSION_LABEL.fullmatch(session_id):
+        return session_id
+    return "invalid"
 
 
 def _generate_request_id() -> str:
@@ -606,16 +830,32 @@ class NasAddon:
             )
             return
 
-        self._client_sessions.setdefault(flow.client_conn.id, set()).add(
-            session_id
-        )
-
         host = _normalize_host(flow.request.host)
         port = flow.request.port
         method = flow.request.method
         request_path = flow.request.path
 
-        review_rules = _load_review_rules(session_id)
+        review_document = _load_review_rules(session_id)
+        if (
+            review_document is _INVALID_REVIEW_RULES
+            or not isinstance(review_document, dict)
+        ):
+            print(
+                "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
+                f"session={_safe_session_label(session_id)}",
+                file=sys.stderr,
+            )
+            flow.response = http.Response.make(
+                403,
+                REQUEST_POLICY_BLOCK_BODY,
+            )
+            return
+
+        self._client_sessions.setdefault(flow.client_conn.id, set()).add(
+            session_id
+        )
+
+        review_rules = review_document["rules"]
         matched_rule = None
         for rule in review_rules:
             if _match_review_rule(rule, method, host, request_path):
