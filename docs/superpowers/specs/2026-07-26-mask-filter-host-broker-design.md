@@ -7,15 +7,15 @@ Status: Proposed
 
 `mask.filter` masks secrets in command stdout/stderr so they never enter the
 agent's context. Today MaskFilterStage writes the resolved secret frame to a
-host file and bind-mounts it into the container at `/run/nas/mask-secrets`,
+host file and **bind-mounts it into the container** at `/run/nas/mask-secrets`,
 passing its path through `NAS_MASK_SECRETS_FILE`. The container-side
 `nas-mask-filter` reads that file and masks locally.
 
-This violates two invariants recorded in the `security-constraints` skill:
+The mount violates two invariants recorded in the `security-constraints` skill:
 
-- **C1 — Do not mount secrets into the container.** The secret frame file must
-  live in a host-only directory; only masked output and read-only binary tools
-  belong in the container.
+- **C1 — Do not mount secrets into the container.** The frame must live in a
+  host-only directory; only masked output and read-only binary tools belong in
+  the container.
 - **S1 — Secrets are resolved host-side only.** Resolved values must not be
   handed to the container as files or environment variables.
 
@@ -23,22 +23,52 @@ The frame is mode `0600`, but it is owned by the agent's own UID, so the
 protection is vacuous against the threat model. `cat /run/nas/mask-secrets`
 hands the agent a consolidated index of every secret in the session.
 
-The other two mask surfaces already comply. MaskFsService spawns a host-side
-daemon and passes the frame on **stdin**, never writing it to disk. The
-mitmproxy surface receives `maskValues` from the host-side session broker and
-runs in a separate container. `mask.filter` is the sole outlier.
+Note what C1 does *not* forbid: a frame file in a host-only directory is
+explicitly the prescribed arrangement. The defect is the mount and the
+in-container environment variable, not the file's existence.
 
-Two recent changes make the fix tractable. `nas-mask-filter` now runs in
-supervise mode as the parent of the shell, owning the output pipes end to end
-(`2026-07-26` supervise change), and `MaskStream` was extracted as a reusable
-streaming state machine. Both are reused here unchanged in substance.
+The other two mask surfaces already comply. MaskFsService spawns a host-side
+daemon and passes the frame on stdin. The mitmproxy surface receives
+`maskValues` from the host-side session broker and runs in a separate container.
+`mask.filter` is the sole outlier.
+
+A recent change makes the fix tractable: `nas-mask-filter` now runs in supervise
+mode as the parent of the shell, owning the output pipes end to end, and
+`MaskStream` was extracted as a reusable streaming state machine. Both are
+reused here.
 
 ## Goal
 
-When `mask.filter` is enabled, no byte of any resolved secret exists anywhere
-inside the container — not on a mounted filesystem, not in an environment
-variable, not in the memory of any container-side process — while command
-stdout/stderr continue to be masked **before** the agent reads them.
+When `mask.filter` is enabled:
+
+1. No **durable, agent-readable** copy of the secret set exists inside the
+   container — no mounted file, no environment variable, no argv.
+2. Command stdout/stderr are masked **before** the agent's harness reads them.
+3. hostexec's host-side masking (C3) keeps working.
+
+### What this does not achieve
+
+Stating this precisely, because an earlier draft of this spec overclaimed and
+the claim is not defensible.
+
+Plaintext necessarily transits the container: it is in the child process's own
+memory, in the kernel pipe buffer, and in the supervisor's read buffer before it
+is relayed to the host. More importantly, the supervisor holds the *original*
+fd 1, and `/proc` is readable at the agent's own UID, so a process that is
+deliberately exfiltrating can bypass masking entirely:
+
+```sh
+cat secret_file > /proc/$(supervisor_pid)/fd/1   # straight into the harness
+cat secret_file > /dev/tty                       # straight to the operator
+```
+
+Both work today and are unchanged by this design. `mask.filter` is a
+**leak-reduction control against secrets incidentally appearing in command
+output**, not a containment boundary against deliberate exfiltration. An agent
+that wants to leak a secret it can already read will succeed; the control exists
+so that a secret the agent did *not* set out to leak does not silently land in
+the transcript. This design removes the largest such accident — handing over the
+whole secret index in a readable file — and does not claim more.
 
 ## Scope
 
@@ -48,14 +78,40 @@ Included:
   a relay.
 - MaskFilterService / MaskFilterStage: daemon lifecycle, mounts, environment.
 - The generated Bash wrapper in `entrypoint.sh`.
-- Removal of the now-unreachable secret-file and standalone-filter code paths.
+- Frame lifetime (S2), which is currently owned by the hostexec broker and
+  therefore leaks when hostexec is disabled.
 
 Excluded:
 
-- `mask.maskfs` and `mask.proxy`. Both already satisfy C1/S1 and are untouched.
-- hostexec output masking (C3). Unchanged.
-- The masking algorithm itself (`src/zig/mask.zig`, `MaskStream`). Reused as is.
+- `mask.maskfs` and `mask.proxy`. Both already satisfy C1/S1.
+- The masking algorithm (`src/zig/mask.zig`, `MaskStream`). Reused as is.
 - Configuration schema. `MaskConfig` is unchanged.
+- **hostexec's own masking path is preserved unchanged**, which constrains the
+  design — see below.
+
+### Constraint: hostexec depends on the frame file and the filter mode
+
+`src/hostexec/broker.ts:741` spawns `nas-mask-filter` in its standalone
+stdin→stdout filter mode to mask host-executed command output (C3):
+
+```ts
+const filter = Bun.spawn([this.maskFilter.binaryPath], {
+  stdin: stream, stdout: "pipe", stderr: "ignore",
+  env: { NAS_MASK_SECRETS_FILE: this.maskFilter.secretsFramePath },
+});
+```
+
+and `src/stages/hostexec/stage.ts:373` hardcodes the path MaskFilterStage writes
+(`${runtimeDir}/${sessionId}/mask-secrets`).
+
+Therefore this design **keeps** the host-side frame file, `readSecretsFromFile`,
+and the standalone filter mode. Deleting them — as an earlier draft proposed —
+would break C3 entirely: every hostexec command would spawn a filter that exits
+non-zero on `openFile`, and `broker.ts:774` would turn that into a command
+failure.
+
+Only the **mount** and the **in-container environment variable** are removed.
+That alone satisfies C1 and S1.
 
 ## Design
 
@@ -64,244 +120,322 @@ Excluded:
 ```
 host                                        container
 ────────────────────────────────────        ──────────────────────────
+${runtimeDir}/${sessionId}/mask-secrets      (not mounted)
+  │  (0600 in a 0700 dir, host-only)
+  ├─ read by nas-mask-filter --serve
+  └─ read by hostexec broker's filter (C3, unchanged)
+
 MaskFilterStage
-  └─ nas-mask-filter --serve <sock>         bash wrapper
-       stdin ← secret frame                   └─ exec nas-mask-filter --supervise
-       (acquireRelease, session-scoped)            └─ fork/exec bash.real
-            │                                          │ stdout/stderr pipes
-            │            UDS                           │
-            └──────────────────────────────────────────┘
+  └─ nas-mask-filter --serve <sock>          bash wrapper
+       (acquireRelease, session-scoped)        └─ exec nas-mask-filter --supervise
+            │                                       └─ fork/exec bash.real
+            │            UDS                            │ stdout/stderr pipes
+            └───────────────────────────────────────────┘
                  raw bytes  →
                  ←  masked bytes
 ```
-
-### Secret delivery
-
-The serve process reads the secret frame from **stdin at startup**, mirroring
-`MaskFsService.startMaskFs`. The frame is never written to disk on either side.
-
-This is strictly stronger than C1 requires. C1 asks for a host-only file; there
-is no file at all, which also makes S2 (delete the frame at session end) vacuous
-— there is nothing to delete.
-
-`MaskFilterService.prepareMaskFilter` loses its `fs.writeFile` call and its
-`secretsFramePath` input entirely.
 
 ### Container-visible surface
 
 | | Current | After |
 | --- | --- | --- |
-| mounts | secret frame (ro), binary (ro) | **socket (rw)**, binary (ro) |
+| mounts | secret frame (ro), binary (ro) | **socket dir (rw)**, binary (ro) |
 | env | `NAS_MASK_SECRETS_FILE`, `NAS_MASK_FILTER` | **`NAS_MASK_SOCKET`**, `NAS_MASK_FILTER` |
 
 `MASK_SECRETS_CONTAINER_PATH` is replaced by `MASK_SOCKET_CONTAINER_PATH`
-(`/run/nas/mask.sock`). On the host the socket lives at
-`${runtimeDir}/sessions/${sessionId}/mask.sock`, following the MaskFs
-session-directory layout.
+(`/run/nas-mask/mask.sock`).
 
-The Bash wrapper keeps its current shape but **loses its runtime fallback**:
+**Mount the containing directory, not the socket file**, mirroring hostexec
+(`src/stages/hostexec/stage.ts:330`). `compileLaunchOpts` emits `-v src:dst`, and
+Docker *creates a directory* when the source path does not exist — so mounting
+the socket file directly makes container startup order load-bearing, and a race
+would silently produce a directory at the socket path and fail every shell with
+a confusing error.
 
-```sh
-exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" --socket "$NAS_MASK_SOCKET" -- \
-  /tmp/nas-bash-override/bash.real "$@"
-```
+The host socket path must stay within `sun_path`'s 108-byte limit; the stage
+asserts this rather than letting a long `XDG_RUNTIME_DIR` produce an obscure
+`bind` failure.
 
-Today the wrapper checks that the secret file is readable and, if it is not,
-execs Bash unmasked. Translating that check to "the socket exists" would keep a
-**fail-open** path: if the serve process died, every shell would silently start
-producing unmasked output — the exact disclosure this design exists to prevent.
+### Frame lifetime (S2)
 
-The guard is therefore removed rather than translated. entrypoint installs the
-wrapper only when masking is configured, so by construction a wrapper that runs
-at all is a wrapper that must mask. If the socket is gone the supervisor fails
-closed (below) instead of degrading to plaintext.
+The frame is written `0600` inside a `0700` session directory and removed when
+the session scope closes. Today the only cleanup is `broker.ts:213`, which runs
+**only if hostexec is enabled** — so with `mask.filter` on and `hostexec` off the
+frame currently survives the session. MaskFilterStage takes ownership of removal
+via `acquireRelease`; the broker's existing cleanup becomes redundant but
+harmless.
 
-This is a deliberate behaviour change. The existing Docker test
-"absolute /bin/bash preserves output when the secrets frame is missing" asserts
-the old fail-open fallback and must be inverted to assert fail-closed.
+### Nested supervision
+
+The supervisor exports `NAS_MASK_SUPERVISED=1`; the wrapper skips supervision
+when it is already set.
+
+Without this, the connection count is not "a few shells" but **O(live bash
+processes)**, because every `bash` in the container is the wrapper — including
+`./configure`, every `make` recipe line, recursive make, and npm/cargo build
+scripts. `make -j16` on a real project sustains dozens of live shells, and
+nesting depth is unbounded. Each nested layer would also relay every byte across
+the container↔host boundary again and add another `maxSecretLen - 1` bytes of
+withholding delay.
+
+Suppressing nested layers is safe because it costs no coverage: all descendants
+inherit the outermost supervisor's pipes, so their output is already masked.
+Output that escapes the outermost supervisor (a redirect to a file, a write to
+`/dev/tty`) escapes every inner layer identically — inner wrappers never had
+that coverage to lose.
 
 ### Protocol
 
-One connection per stream: the supervisor opens two connections, one for the
-child's stdout and one for its stderr. The server holds a separate `MaskStream`
-per connection because overlap state is stream-specific.
+One connection per stream: the supervisor opens two, one for the child's stdout
+and one for its stderr. The server holds a separate `MaskStream` per connection
+because overlap state is stream-specific.
 
-The wire format is raw bytes in both directions — no framing. Masking preserves
-length, but the server withholds the trailing `maxSecretLen - 1` bytes of each
-chunk so a secret straddling a chunk boundary is still matched. **The reply is
-therefore delayed and not byte-synchronous with the request**; the client must
-never assume "wrote N, read N".
+Raw bytes in both directions, no framing. Masking preserves length, but the
+server withholds the trailing `maxSecretLen - 1` bytes of each chunk so a secret
+straddling a chunk boundary is still matched. **The reply is therefore delayed
+and not byte-synchronous with the request**; the client must never assume
+"wrote N, read N".
 
-- EOF is signalled by `shutdown(SHUT_WR)`. The server then flushes its retained
+- EOF is signalled by `shutdown(SHUT_WR)`. The server flushes its retained
   overlap and closes.
-- The client reads until the server closes, writing whatever it receives to its
-  own stdout/stderr.
+- The client reads until the server closes.
 
 **Deadlock avoidance is a hard requirement.** A client that writes without
-concurrently reading will fill the socket buffer and stall both sides. The
+concurrently reading fills the socket buffer and stalls both sides. The
 supervisor's existing `poll(2)` loop is extended to cover socket readability and
 writability alongside the child pipes.
 
-The protocol is deliberately limited to "bytes in, masked bytes out". It exposes
-no way to enumerate, count, or read secrets. The socket is mounted into the
-container and is therefore reachable by the agent's UID; this is accepted,
-because the only capability it grants is the masking oracle the agent already
-has by running `echo <guess>` through its own shell. This mirrors the C2
-two-socket split: only the least-privileged endpoint is exposed to the
-container.
+### Resource bounds
 
-### Concurrency requirement
+The socket is reachable at the agent's UID, and the server runs on the **host**,
+outside the container's cgroup. Without explicit bounds an agent can consume
+host memory, host fds, and host CPU that the container's limits do not govern.
+This is a resource-boundary escape even though it is not a confidentiality one,
+and — because the design is fail-closed — exhausting the server takes down every
+shell in the session, so it is an availability regression relative to today,
+where a filter failure affects one command.
 
-The serve process **must multiplex all connections in a single poll/epoll
-loop**. Handling one connection to completion before accepting the next is
-forbidden.
+The server must therefore:
 
-An agent routinely runs several shells at once, each holding two connections for
-its entire lifetime — and a shell may stay open for minutes. Sequential handling
-would let one long-lived shell block every other shell in the container. Combined
-with fail-closed behaviour, that surfaces as the whole container silently
-hanging, which is the worst available failure mode.
+- Use **non-blocking** sockets throughout; never block the shared poll loop on a
+  single peer.
+- Cap the per-connection output queue. On exceeding the cap, **stop polling that
+  connection for read**. Backpressure then propagates through the socket buffer
+  to the supervisor and through the child's pipe to the writer, which is the
+  correct and bounded behaviour.
+- Cap total concurrent connections, and handle the cap and `EMFILE` by
+  accept-and-close or by ceasing to poll the listener. Naively re-polling a
+  readable listener that returns `EMFILE` is a permanent 100% CPU spin that
+  serves nobody.
+- Raise `RLIMIT_NOFILE` at startup.
+- Allocate `MaskStream` lazily or from a pool. `MaskStream.init` currently
+  reserves ~192 KiB per stream (`combined` + `scratch` + `mask_buf`), so
+  allocating on accept makes one `connect()` worth 192 KiB of host memory.
+
+Masking CPU also moves from the container's cgroup to the host, and `maskAll` is
+`O(buf_len × n_secrets)`. Per-connection throughput limiting is the mitigation
+if this proves abusable.
 
 ### Failure handling
 
-Fail-closed throughout: no code path may emit unmasked bytes.
+Fail-closed: no code path may emit unmasked bytes.
 
 | Failure point | Behaviour |
 | --- | --- |
-| Session startup: serve fails to become ready | Stage fails, session aborts (matches MaskFsStage) |
+| Session startup: serve not ready | Stage fails, session aborts (matches MaskFsStage) |
 | Initial connect, before fork | Small bounded retry, then exit without starting the child |
-| Mid-stream disconnect | Fatal immediately, no retry: discard output, exit non-zero |
+| Mid-stream disconnect | Fatal, no retry: discard output, exit `121` |
+| Partial or failed socket write | Queue and re-arm `POLLOUT`; a real error is fatal |
 
 Mid-stream disconnect is deliberately not retried. A UDS does not lose or
 reorder data in flight, so a mid-stream failure means the peer process died —
-there is nothing to reconnect to. Worse, a fresh connection starts with empty
-overlap state, so resuming could miss a secret straddling the seam. Failing is
-both the safe and the honest outcome.
+there is nothing to reconnect to. A fresh connection also starts with empty
+overlap state, so resuming could miss a secret straddling the seam.
 
-For the same reason the initial-connect retry is kept deliberately small. The
-only genuinely transient case is a startup race, and that is addressed
-structurally by waiting for readiness at session start (below) rather than by
-elaborate reconnection logic.
+The "partial write" row is not a detail. The existing `FdWriter` in
+`supervise.zig:87` deliberately swallows write errors and treats a short write
+as done — correct for the child's output fd, catastrophic for the socket: silently
+dropping bytes `[i, i+k)` splits a secret so that neither fragment matches, and
+**both fragments are then emitted verbatim**. The relay must use a distinct
+writer that queues short writes and treats real errors as fatal.
 
-Diagnostics are emitted to the real stderr as **constant strings only**, since
-that path does not pass through masking and must be incapable of carrying a
-secret. When output has been suppressed the supervisor exits `121`, a dedicated
-code distinct from any the child can produce through normal exit-status
-propagation, so a caller cannot mistake a lost-output run for a successful one
-even if the child itself exited `0`.
+Diagnostics go to the real stderr as **constant strings only**, since that path
+does not pass through masking. Exit `121` is reserved for "output suppressed", so
+a caller cannot mistake a lost-output run for success even when the child exited
+`0`.
 
 Accepted blast radius: if the serve process dies, every subsequent command in
 the container fails. Availability is traded for non-disclosure, consistent with
 `resolveMaskSecrets` and the addon's `MASK-BLOCKED` behaviour.
 
-### Readiness
+### fd hygiene
 
-MaskFilterStage waits for the serve process to be listening before the container
-starts, mirroring `MaskFsService`'s mount-ready polling. This removes the startup
-race structurally instead of papering over it with client retries.
+Both socket fds are created `SOCK_CLOEXEC` **and** added to the child's explicit
+close list before `execve`.
+
+If a socket fd leaks into the child, the agent gets an injection oracle rather
+than a mere information leak: writing a byte into the middle of the stdout
+connection makes the server see `hunXter2`, which matches nothing and is
+returned verbatim to the agent's own stdout. Knowing the injected byte, the agent
+recovers the secret directly — no brute force.
+
+### Serve-mode output invariant
+
+Serve mode must never write stream-derived bytes to its own stdout or stderr.
+`ProcessService.spawn` points both at the session log file, and
+`MaskFsService.defaultWaitReady` splices the log tail into a user-visible error
+on readiness timeout — so any "failed masking chunk: `<bytes>`" diagnostic would
+write plaintext to a persistent host file and potentially onto the operator's
+terminal. The log file is created `0600` in the `0700` session directory and
+removed on scope release.
 
 ### Drain semantics
 
-The supervisor's existing child-exit drain applies unchanged: after the child
-exits, remaining pipe data is drained with a short idle timeout so a background
-process holding the pipe cannot hang the caller. Once the child pipes are done,
-the supervisor half-closes each socket and reads the masked remainder to EOF
-before exiting, so the server's retained overlap is never dropped.
+The supervisor's existing child-exit drain is unchanged: after the child exits,
+remaining pipe data is drained with a short idle timeout so a background process
+holding the pipe cannot hang the caller. Once the child pipes are done, the
+supervisor half-closes each socket and reads the masked remainder to EOF, so the
+server's retained overlap is never dropped.
 
-### Removed surfaces
+### The wrapper's bypass branch
 
-Because the frame arrives on stdin and the wrapper no longer names a file:
+The wrapper's runtime fallback is removed: translating "the secret file is
+readable" into "the socket exists" would preserve a **fail-open** path where a
+dead serve process silently yields unmasked shells.
 
-- `readSecretsFromFile` and all `NAS_MASK_SECRETS_FILE` handling.
-- The standalone stdin→stdout filter mode, now unreachable from any caller.
+The wrapper's *first* branch is a separate, deliberate exemption:
 
-Removing both eliminates the "read a secret file named by an environment
-variable" code path entirely.
+```sh
+if [ "${1:-}" = "/entrypoint.sh" ]; then
+  exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
+fi
+```
+
+It exists so entrypoint re-entry (`/entrypoint.sh --shell`) keeps a TTY, and
+entrypoint's shell mode execs `$NAS_REAL_BASH` unmasked by design
+(`entrypoint.sh:392,397`). So "a wrapper that runs at all must mask" is **false**,
+and this spec does not rely on it. The exemption is recorded as accepted: the
+operator's own interactive shell is out of scope for `mask.filter`, and an
+existing Docker test asserts that TTY behaviour.
+
+Because the branch keys off an agent-supplied argument, it is also reachable
+from inside the container. Narrowing it to genuine entrypoint re-entry — by
+gating on a root-owned sentinel created before privilege drop — is recommended
+but is **not** in scope here; it is an independent hardening item, and the
+`/proc` bypass above means it is not the weakest link.
+
+## Accepted limitations
+
+- **Oracle cost, not oracle existence.** The socket grants the same
+  confirm-a-guess oracle the agent already has via `echo <guess>`, but far more
+  cheaply: a 64 KiB write can batch thousands of candidates with no process spawn
+  per probe. With `MIN_SECRET_BYTES = 4` (`src/lib/mask_secrets.ts:10`), a
+  four-byte secret is recoverable in well under an hour. Raising the minimum
+  length for filter-masked values is recommended. The withholding amount is
+  match-state-independent, so there is **no prefix-match oracle** — the protocol
+  shape does not enable byte-at-a-time extraction.
+- **`maxSecretLen` is directly readable** by feeding one byte at a time and
+  counting the delay before output returns.
+- **A secret split across stdout and stderr is never masked** — two connections,
+  two `MaskStream`s. Pre-existing and inherent.
+- **The idle-timeout drain can cut mid-secret**: a background process that
+  writes half a secret, idles past the timeout, then writes the rest gets the
+  first half flushed unmasked. Pre-existing.
+- **`mem.eql` early-exits**, so aggregate server time is weakly correlated with
+  prefix match length. Vectorised comparison coarsens this well below
+  byte granularity; noted rather than mitigated.
+- **Orphaned serve process.** If nas is `SIGKILL`ed the daemon survives holding
+  resolved secrets in memory, and the session dir leaks. MaskFs has the same gap;
+  a stale-session sweep is worth adding but is not required here.
 
 ## Testing
 
 Per `test-policy`: unit tests are `*_test.ts`, Docker-dependent tests are
 `*_integration_test.ts`, both co-located with their source.
 
-The central win is that **serve and supervise both run on the host**, so the
-core of this design is testable without Docker.
+Serve and supervise both run on the host, so the core is testable without Docker.
 
-- **Zig unit tests** — `MaskStream` unchanged. New coverage for serve argument
-  parsing and per-connection state isolation.
-- **`mask_filter_service_test.ts`** — asserts the produced mounts contain no
-  secret frame and the produced env contains no `NAS_MASK_SECRETS_FILE`. This is
-  the C1/S1 regression guard: a future reintroduction fails the suite.
-- **`mask_filter_integration_test.ts`** (real UDS, no Docker) — masking of
-  stdout and stderr, a secret straddling a chunk boundary, exit-code and signal
-  propagation, output larger than the socket buffer (deadlock guard), several
-  concurrent supervised shells not blocking each other (concurrency guard), and
-  fail-closed behaviour when the server is stopped mid-run.
+- **Zig unit tests** — `MaskStream` unchanged; serve argument parsing;
+  per-connection state isolation.
+- **`mask_filter_service_test.ts`** — the C1/S1 regression guard: produced mounts
+  contain no secret frame and produced env contains no `NAS_MASK_SECRETS_FILE`.
+  Must also assert the frame **is** still written host-side, so a future change
+  cannot silently break hostexec's C3 path while the guard still passes.
+- **`mask_filter_integration_test.ts`** (real UDS, no Docker) — masking of stdout
+  and stderr; a secret straddling a chunk boundary; exit-code and signal
+  propagation; **a stalled reader** (client stops draining) exercising the output
+  cap and backpressure rather than unbounded growth; behaviour at the connection
+  cap; concurrent supervised shells not blocking each other; fail-closed when the
+  server is stopped mid-run; and `ls /proc/self/fd` inside the supervised child
+  showing only 0/1/2.
+- **hostexec regression** — an existing hostexec masking test must still pass,
+  proving C3 survives.
 - **`launch/integration_test.ts`** (Docker) — wrapper wiring for the command,
-  login, and script invocation forms, plus the inverted fallback test: with the
-  socket absent, the shell must fail closed rather than emit unmasked output.
+  login, and script forms; nested `bash -c bash -c` producing exactly one
+  supervision layer; and the inverted fallback test — with the socket absent the
+  shell fails closed instead of emitting unmasked output.
 
-Known cost: the Python mask-filter fixture in `launch/integration_test.ts`
-currently implements a stdin→stdout filter in about 30 lines. It must grow a
-`--serve` socket server and a `--supervise` relay client. The rejected
-alternative was to run the real Zig binary in the Docker tests; the fixture is
-kept because it lets those tests run without a Zig build prerequisite, which is
-the property it exists for.
+Known cost: the Python mask-filter fixture in `launch/integration_test.ts` is a
+~30-line stdin→stdout filter and must grow a `--serve` socket server and a
+`--supervise` relay client. It is kept rather than replaced by the real Zig
+binary because it lets the Docker tests run without a Zig build prerequisite,
+which is the property it exists for.
 
 ## Why
 
 Masking must happen before the agent reads the bytes, and the agent reads them
-inside the container. That rules out masking at the host boundary after the
-fact. The only way to satisfy that ordering *and* keep secrets out of the
-container is to move the bytes to the host, mask them there, and move them back
-— which is exactly what a host-side broker over a Unix socket does.
+inside the container, which rules out masking at the host boundary after the
+fact. The only way to satisfy that ordering while keeping the secret index out of
+the container is to move the bytes to the host, mask them there, and move them
+back — a host-side broker over a Unix socket.
 
-The approach also lands the codebase on one consistent pattern. maskfs already
-runs a host-side Zig daemon fed by stdin; hostexec already exposes a
-least-privileged Unix socket to the container while keeping the privileged
-endpoint host-side. This design makes `mask.filter` the third instance of a
-shape the project already relies on, rather than a fourth bespoke mechanism.
+The approach lands `mask.filter` on a shape the project already relies on twice:
+maskfs runs a host-side Zig daemon, and hostexec exposes a least-privileged Unix
+socket to the container while keeping the privileged endpoint host-side.
 
-Reusing `nas-mask-filter` for the server side keeps the masking algorithm at one
+Reusing `nas-mask-filter` for the server keeps the masking algorithm at one
 implementation. The repository already carries three (`mask.zig`,
 `mask_patterns.ts`, `nas_addon.py`) with an explicit "keep both implementations
-in sync" comment; adding a fourth would be a durable maintenance cost.
+in sync" comment; a fourth would be a durable maintenance cost.
 
-Finally, the change deletes more attack surface than it adds: the secret file,
-its environment variable, and the code that reads a path-specified secret file
-all disappear.
+Keeping the host-side frame file — rather than switching to stdin delivery — is
+what makes the change compatible with hostexec's C3 masking, and C1 prescribes
+exactly that arrangement anyway.
 
 ## Why Not
 
 - **Privilege separation (setuid `nas-mask-filter`, frame `root:root 0600`)** —
-  Keeps the frame inside the container and satisfies C1's intent but not its
-  stated rule. It is also blocked by the current layout in two places: the
-  binary is bind-mounted `nosuid`, so the setuid bit would be silently ignored,
-  and the frame's tmpfs is `uid=1000`, so entrypoint would have to materialise a
-  root-owned copy and unmount the agent-visible one before dropping privileges.
-  It introduces a setuid-root binary that parses attacker-controlled bytes, and
-  it requires hardcoding the frame path, because a setuid binary that reads an
-  env-specified file turns the masking oracle into an arbitrary-file-read
-  oracle. More risk, weaker guarantee.
+  Keeps the frame in the container and satisfies C1's intent but not its rule. It
+  is blocked twice by the current layout: the binary is bind-mounted `nosuid`, so
+  the setuid bit is silently ignored, and the frame's tmpfs is `uid=1000`, so
+  entrypoint would have to materialise a root-owned copy and unmount the
+  agent-visible one before dropping privileges. It adds a setuid-root binary that
+  parses attacker-controlled bytes and requires hardcoding the frame path,
+  because a setuid binary reading an env-specified file turns the masking oracle
+  into an arbitrary-file-read oracle. More risk, weaker guarantee.
 
-- **Hashed frame (length + rolling hash, no plaintext)** — Cheapest option and
-  it removes the plaintext index, but the frame stays in the container and stays
-  readable, so low-entropy values remain brute-forceable offline. The streaming
-  filter must hash every window position at line rate, so a slow KDF is not
-  available to mitigate this. It does not satisfy C1 either. Its usual objection
-  — that hashes create a confirmation oracle — is not actually a differentiator,
-  since the filter already is a perfect oracle for anything the agent can echo.
+- **Hashed frame (length + rolling hash)** — Cheapest, removes the plaintext
+  index, but the frame stays in the container and stays readable, so low-entropy
+  values remain brute-forceable offline; the filter must hash every window
+  position at line rate, so a slow KDF is unavailable. Does not satisfy C1. Its
+  usual objection — that hashes create a confirmation oracle — is not a
+  differentiator, since the filter already is one.
 
-- **Extending the hostexec broker instead of a dedicated socket** — `mask.filter`
-  can be enabled independently of `hostexec` (`hostexec` is optional in the
-  profile), so this would either make hostexec a de facto prerequisite or
-  require untangling the dependency. A dedicated session-scoped socket is
-  cheaper and keeps the two features independent.
+- **Stdin frame delivery instead of a host file** — Strictly stronger in
+  isolation and was the earlier draft, but it breaks hostexec's C3 masking, which
+  reads the frame file directly. Migrating hostexec onto the same socket is
+  possible but expands the change to `MaskFilterConfig`, `broker.ts:213/741`,
+  `hostexec/stage.ts:373`, and their tests, for no C1 benefit — C1 already
+  sanctions a host-only file.
 
-- **Passing pipe fds to the host with `SCM_RIGHTS`** — Removes the extra copy and
-  would let the host run the existing masking loop directly on the child's
-  pipes. Rejected because it splits lifetime control across the process
-  boundary: drain completion, the background-process idle timeout, and exit-code
-  propagation would move host-side while the child remains container-side. The
-  byte-relay keeps all of that in the supervisor, which is a far smaller delta
-  from the current implementation. UDS bandwidth is not a practical constraint
-  here.
+- **Extending the hostexec broker instead of a dedicated socket** —
+  `mask.filter` can be enabled independently of `hostexec` (`hostexec` is
+  optional in the profile), so this would make hostexec a de facto prerequisite
+  or require untangling the dependency.
+
+- **Passing pipe fds with `SCM_RIGHTS`** — Removes the extra copy and would let
+  the host run the masking loop directly on the child's pipes. Rejected because
+  it splits lifetime control across the process boundary: drain completion, the
+  background-process idle timeout, and exit-code propagation would move host-side
+  while the child stays container-side. The byte relay keeps all of that in the
+  supervisor. UDS bandwidth is not a practical constraint.
