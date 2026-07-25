@@ -302,6 +302,16 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
     cp --preserve=mode "$BASH_SYSTEM_PATH" "$NAS_REAL_BASH"
   fi
 
+  # マスクは nas-mask-filter の supervise モードに任せる。
+  #
+  # 以前はここで `exec > >("$NAS_MASK_FILTER")` とプロセス置換を使っていたが、
+  # bash はプロセス置換の子を wait せず、直後の exec で自分自身を置き換えて
+  # しまうため、フィルタの終了を待てるプロセスが 1 つも残らなかった。
+  # フィルタは出力先パイプを握ったまま bash より長く生き残るので、「bash の
+  # 終了」を完了シグナルにしている呼び出し元からは出力が丸ごと欠けて見える
+  # (同じコマンドが成功したり無出力になったりする競合)。
+  # supervise モードではフィルタ自身が親になり、パイプを drain し切ってから
+  # 子の終了ステータスで exit するため、この競合が起きない。
   BASH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.tmp.$$"
   cat > "$BASH_WRAPPER_TMP" << 'MASK_WRAPPER'
 #!/tmp/nas-bash-override/bash.real
@@ -310,7 +320,8 @@ if [ "${1:-}" = "/entrypoint.sh" ]; then
 fi
 if [ -f "${NAS_MASK_FILTER:-}" ] && [ -x "${NAS_MASK_FILTER:-}" ] && \
    [ -f "${NAS_MASK_SECRETS_FILE:-}" ] && [ -r "${NAS_MASK_SECRETS_FILE:-}" ]; then
-  exec > >("$NAS_MASK_FILTER") 2> >("$NAS_MASK_FILTER" >&2)
+  exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" -- \
+    /tmp/nas-bash-override/bash.real "$@"
 fi
 exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 MASK_WRAPPER
