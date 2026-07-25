@@ -62,11 +62,16 @@ async function makeTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
+// 本物の nas-mask-filter の代役。--supervise モード (bash ラッパーが実際に使う
+// 呼び出し方) と、素の stdin→stdout フィルタモードの両方を実装する。
+// supervise モードでは子の出力を drain し切ってから子の終了ステータスで exit する
+// ため、呼び出し元は「プロセスの終了 = 出力の完了」として扱える。
 const MASK_FILTER_FIXTURE = `#!/usr/bin/env python3
 import os
 import struct
+import subprocess
 import sys
-import tempfile
+import threading
 
 frame = memoryview(open(os.environ["NAS_MASK_SECRETS_FILE"], "rb").read())
 count = struct.unpack_from("<I", frame, 0)[0]
@@ -78,21 +83,56 @@ for _ in range(count):
     secrets.append(bytes(frame[offset:offset + length]))
     offset += length
 
-# This test fixture's payloads are newline-terminated, so line streaming avoids
-# retaining output until the wrapped Bash process closes its pipe.
-for data in sys.stdin.buffer:
+
+def mask(data):
     for secret in secrets:
         if secret:
             data = data.replace(secret, b"*" * len(secret))
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
+    return data
 
-marker_dir = os.environ.get("NAS_MASK_FILTER_MARKER_DIR")
-if marker_dir:
-    marker = tempfile.NamedTemporaryFile(
-        dir=marker_dir, prefix="filter-done-", delete=False
+
+# This test fixture's payloads are newline-terminated, so line streaming avoids
+# retaining output until the wrapped Bash process closes its pipe.
+def pump(src, dst):
+    for line in src:
+        dst.write(mask(line))
+        dst.flush()
+
+
+argv = sys.argv[1:]
+if argv and argv[0] == "--supervise":
+    argv = argv[1:]
+    argv0 = None
+    while argv:
+        if argv[0] == "--argv0":
+            argv0 = argv[1]
+            argv = argv[2:]
+        elif argv[0] == "--":
+            argv = argv[1:]
+            break
+        else:
+            break
+    program = argv[0]
+    child = subprocess.Popen(
+        [argv0 or program] + argv[1:],
+        executable=program,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    marker.close()
+    threads = [
+        threading.Thread(target=pump, args=(child.stdout, sys.stdout.buffer)),
+        threading.Thread(target=pump, args=(child.stderr, sys.stderr.buffer)),
+    ]
+    for thread in threads:
+        thread.start()
+    status = child.wait()
+    for thread in threads:
+        thread.join()
+    sys.exit(status if status >= 0 else 128 - status)
+
+for data in sys.stdin.buffer:
+    sys.stdout.buffer.write(mask(data))
+    sys.stdout.buffer.flush()
 `;
 
 async function writeMaskFilterFixture(
@@ -445,23 +485,8 @@ test.skipIf(!canBindMount)(
     const workDir = await makeTempDir("nas-e2e-mask-filter-ws-");
     const containerFixtureDir = "/tmp/nas-mask-filter-test";
     const containerScriptPath = `${containerFixtureDir}/mask-script.sh`;
-    const markerDir = path.join(workDir, "mask-filter-markers");
     const secret = "my-secret-password";
     const masked = "*".repeat(secret.length);
-    const runChildAndWaitForFilters = `
-"$@"
-child_status=$?
-attempt=0
-while [ "$(find "$NAS_MASK_FILTER_MARKER_DIR" -mindepth 1 -maxdepth 1 -type f | wc -l)" -lt 2 ]; do
-  attempt=$((attempt + 1))
-  if [ "$attempt" -ge 100 ]; then
-    echo "mask filters did not drain before timeout" >&2
-    exit 124
-  fi
-  sleep 0.05
-done
-exit "$child_status"
-`;
 
     try {
       await writeMaskFilterFixture(fixtureDir, [secret]);
@@ -499,29 +524,18 @@ printf 'mode=script stderr=${secret}\\n' >&2
       ];
 
       for (const invocation of invocations) {
-        await rm(markerDir, { recursive: true, force: true });
-        await mkdir(markerDir);
-
-        const result = await dockerRun(
-          [
-            "/bin/sh",
-            "-c",
-            runChildAndWaitForFilters,
-            "mask-filter-parent",
-            ...invocation.command,
-          ],
-          {
-            workDir,
-            envVars: {
-              NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
-              NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
-              NAS_MASK_FILTER_MARKER_DIR: markerDir,
-            },
-            extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+        // supervise モードのフィルタは出力を drain し切ってから exit するので、
+        // 呼び出し元は子プロセスの終了をそのまま待てばよい (以前はフィルタの
+        // 取りこぼしを避けるため、マーカーファイルを待つ細工が必要だった)。
+        const result = await dockerRun(invocation.command, {
+          workDir,
+          envVars: {
+            NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
+            NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
           },
-        );
+          extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+        });
 
-        expect(await readdir(markerDir)).toHaveLength(2);
         expect(result.code).toEqual(0);
         expect(result.stdout).toContain(
           `mode=${invocation.mode} shell=${invocation.expectedArgv0} stdout=${masked}`,
