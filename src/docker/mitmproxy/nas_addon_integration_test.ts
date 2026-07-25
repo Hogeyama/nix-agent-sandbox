@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -10,6 +10,9 @@ import {
 } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { queryAuditLogs } from "../../audit/store.ts";
+import type { ReviewRule } from "../../config/types.ts";
+import { SessionBroker } from "../../network/broker.ts";
 import { hashToken } from "../../network/protocol.ts";
 import {
   brokerSocketPath,
@@ -38,10 +41,6 @@ const dockerAvailable = (() => {
     return false;
   }
 })();
-
-async function closeServer(server: net.Server): Promise<void> {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-}
 
 async function waitForTcp(port: number): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -260,123 +259,94 @@ function rawEchoServerScript(port: number): string {
 }
 
 /**
- * fake broker: 受信メッセージを保存し、authorize に allow +
- * maskValues、egress_outcome に recorded acknowledgement を返す。
+ * addon が読む解決済みドキュメントと、broker が権威として使うルールは
+ * **同一の出荷物**でなければならない。片方だけを手書きすると、両者が
+ * 食い違ったまま緑になり、ちょうどこのタスクが塞いだ穴 (broker が承認した
+ * のとは別のポリシーが走る) を検出できなくなる。
  */
-async function startAllowMaskBroker(
-  socketPath: string,
-  brokerMessages: unknown[],
-): Promise<net.Server> {
-  const broker = net.createServer((socket) => {
-    let input = "";
-    socket.on("data", (chunk) => {
-      input += chunk.toString();
-      const newline = input.indexOf("\n");
-      if (newline < 0) return;
-      const request = JSON.parse(input.slice(0, newline));
-      brokerMessages.push(request);
-      if (request.type === "egress_outcome") {
-        socket.end(
-          `${JSON.stringify({
-            version: 1,
-            type: "egress_outcome_recorded",
-            requestId: request.requestId,
-          })}\n`,
-        );
-        return;
-      }
-      if (request.type === "authorize") {
-        socket.end(
-          `${JSON.stringify({
-            version: 1,
-            type: "decision",
-            requestId: request.requestId,
-            decision: "allow",
-            maskValues: ["SECRET123"],
-          })}\n`,
-        );
-        return;
-      }
-      socket.end();
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    broker.once("error", reject);
-    broker.listen(socketPath, resolve);
-  });
-  return broker;
-}
+const RESOLVED_DOCUMENT = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../network/fixtures/resolved_review_rules/anthropic-v1.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as { contractVersion: number; rules: ReviewRule[] };
 
 interface AnthropicFixture {
   runtimeDir: string;
+  auditDir: string;
   paths: Awaited<ReturnType<typeof resolveNetworkRuntimePaths>>;
   sessionId: string;
   token: string;
-  broker: net.Server;
-  brokerMessages: unknown[];
+  broker: SessionBroker;
 }
 
 interface AnthropicFixtureSetupOptions {
   afterBrokerStarted?: (partial: {
     runtimeDir: string;
-    broker: net.Server;
+    broker: SessionBroker;
   }) => Promise<void>;
 }
 
-interface ExpectedEgressOutcome {
-  sessionId: string;
-  method: string;
-  route: string;
-  action: string;
+interface ExpectedPolicyOutcome {
+  ruleId: string;
+  requestPolicyKind: "bodyless" | "json";
+  requestPolicyResult: "pass" | "rewrite" | "block";
   reason: string;
 }
 
-function isBrokerMessageOfType(
-  message: unknown,
-  type: string,
-): message is Record<string, unknown> {
-  return (
-    typeof message === "object" &&
-    message !== null &&
-    !Array.isArray(message) &&
-    "type" in message &&
-    message.type === type
-  );
+/**
+ * 監査ログから request-policy 行を1本だけ取り出して照合する。
+ *
+ * 結果を fake broker が受け取ったメッセージではなく監査から読むのは、
+ * broker が addon の申告を鵜呑みにせず自分の解決済みルールから method や
+ * route を導き直す設計になっているため。監査を見れば、その導出まで含めて
+ * 期待どおりかを確認できる。
+ */
+/**
+ * コンテナログのうち addon が書いた行だけを返す。mitmproxy 本体はどの要求に
+ * ついても要求行をそのまま出すので、addon の出力を評価したいときに混ぜない。
+ */
+function addonLogLines(containerLogs: string): string {
+  return containerLogs
+    .split("\n")
+    .filter((line) => line.includes("[nas-addon]"))
+    .join("\n");
 }
 
-function expectSingleEgressExchange(
-  messages: unknown[],
-  expected: ExpectedEgressOutcome,
+async function readPolicyOutcomes(
+  auditDir: string,
+): Promise<Record<string, unknown>[]> {
+  const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+  return logs.filter(
+    (entry) => entry.phase === "request-policy",
+  ) as unknown as Record<string, unknown>[];
+}
+
+async function expectSinglePolicyOutcome(
+  auditDir: string,
+  expected: ExpectedPolicyOutcome,
   assertionName: string,
-): Record<string, unknown> {
-  const authorizations = messages.filter((message) =>
-    isBrokerMessageOfType(message, "authorize"),
-  );
-  const outcomes = messages.filter((message) =>
-    isBrokerMessageOfType(message, "egress_outcome"),
-  );
-
-  expect(authorizations, `${assertionName}: authorize count`).toHaveLength(1);
+): Promise<Record<string, unknown>> {
+  const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+  const outcomes = logs.filter((entry) => entry.phase === "request-policy");
   expect(outcomes, `${assertionName}: outcome count`).toHaveLength(1);
-  const [authorization] = authorizations;
-  const [outcome] = outcomes;
-  if (!authorization || !outcome) {
-    throw new Error(`${assertionName}: missing broker exchange`);
-  }
-
-  expect(
-    authorization.requestId,
-    `${assertionName}: authorize requestId`,
-  ).toEqual(expect.any(String));
-  expect(outcome.requestId, `${assertionName}: correlated requestId`).toBe(
-    authorization.requestId,
+  const outcome = outcomes[0] as unknown as Record<string, unknown>;
+  const authorizations = logs.filter(
+    (entry) => entry.phase === "authorization",
   );
-  expect(outcome, `${assertionName}: outcome`).toEqual({
-    version: 1,
-    type: "egress_outcome",
-    requestId: authorization.requestId,
-    ...expected,
-  });
+  expect(
+    authorizations.length,
+    `${assertionName}: authorization row`,
+  ).toBeGreaterThan(0);
+  expect(outcome.requestId, `${assertionName}: correlated requestId`).toBe(
+    authorizations[0]?.requestId,
+  );
+  for (const [field, value] of Object.entries(expected)) {
+    expect(outcome[field], `${assertionName}: ${field}`).toBe(value);
+  }
   return outcome;
 }
 
@@ -390,7 +360,8 @@ async function setupAnthropicFixture(
 ): Promise<AnthropicFixture> {
   const base = SHARED_TMP ?? "/tmp";
   const runtimeDir = await mkdtemp(path.join(base, dirPrefix));
-  let broker: net.Server | undefined;
+  const auditDir = await mkdtemp(path.join(base, `${dirPrefix}audit-`));
+  let broker: SessionBroker | undefined;
 
   try {
     const paths = await resolveNetworkRuntimePaths(runtimeDir);
@@ -410,7 +381,7 @@ async function setupAnthropicFixture(
     );
     await writeFile(
       `${paths.reviewRulesDir}/${sessionId}.json`,
-      JSON.stringify([{ host: "api.anthropic.com", action: "allow" }]),
+      JSON.stringify(RESOLVED_DOCUMENT),
     );
     await writeSessionRegistry(paths, {
       version: 1,
@@ -424,24 +395,44 @@ async function setupAnthropicFixture(
     await chmod(paths.sessionsDir, 0o755);
     await chmod(sessionRegistryPath(paths, sessionId), 0o644);
 
-    const brokerMessages: unknown[] = [];
-    broker = await startAllowMaskBroker(socketPath, brokerMessages);
+    broker = new SessionBroker({
+      paths,
+      sessionId,
+      reviewRules: RESOLVED_DOCUMENT.rules,
+      pendingTimeoutSeconds: 30,
+      pendingDefaultScope: "host-port",
+      pendingNotify: "off",
+      maskValues: ["SECRET123"],
+      auditDir,
+    });
+    await broker.start(socketPath);
     await options.afterBrokerStarted?.({ runtimeDir, broker });
     await chmod(socketPath, 0o666);
 
-    return { runtimeDir, paths, sessionId, token, broker, brokerMessages };
+    return { runtimeDir, auditDir, paths, sessionId, token, broker };
   } catch (error) {
     await Promise.allSettled([
-      broker?.listening ? closeServer(broker) : Promise.resolve(),
+      broker ? broker.close() : Promise.resolve(),
       rm(runtimeDir, { recursive: true, force: true }),
+      rm(auditDir, { recursive: true, force: true }),
     ]);
     throw error;
   }
 }
 
+/** テスト終了時のフィクスチャ解体。broker を閉じ、一時ディレクトリを消す。 */
+async function teardownFixture(fixture?: AnthropicFixture): Promise<void> {
+  if (!fixture) return;
+  await fixture.broker.close().catch(() => {});
+  await rm(fixture.runtimeDir, { recursive: true, force: true }).catch(
+    () => {},
+  );
+  await rm(fixture.auditDir, { recursive: true, force: true }).catch(() => {});
+}
+
 test("setupAnthropicFixture cleans partial state when setup fails after broker start", async () => {
   const setupError = new Error("injected post-broker setup failure");
-  let partial: { runtimeDir: string; broker: net.Server } | undefined;
+  let partial: { runtimeDir: string; broker: SessionBroker } | undefined;
   let thrown: unknown;
 
   try {
@@ -458,27 +449,28 @@ test("setupAnthropicFixture cleans partial state when setup fails after broker s
 
     expect(thrown).toBe(setupError);
     expect(partial).toBeDefined();
-    expect(partial?.broker.listening).toBe(false);
     expect(existsSync(partial?.runtimeDir ?? "")).toBe(false);
   } finally {
-    if (partial?.broker.listening) await closeServer(partial.broker);
     if (partial) {
+      await partial.broker.close().catch(() => {});
       await rm(partial.runtimeDir, { recursive: true, force: true });
     }
   }
 });
 
-test("setupAnthropicFixture installs a matching Anthropic allow rule", async () => {
+test("setupAnthropicFixture installs the shipped resolved document", async () => {
   const fixture = await setupAnthropicFixture("nas-addon-review-rule-");
   try {
-    const rules = await Bun.file(
+    const document = await Bun.file(
       `${fixture.paths.reviewRulesDir}/${fixture.sessionId}.json`,
     ).json();
 
-    expect(rules).toEqual([{ host: "api.anthropic.com", action: "allow" }]);
+    // addon が読むファイルと broker が握るルールが同一であることが、
+    // このスイートの前提そのもの。
+    expect(document).toEqual(RESOLVED_DOCUMENT);
+    expect(document.contractVersion).toBe(1);
   } finally {
-    if (fixture.broker.listening) await closeServer(fixture.broker);
-    await rm(fixture.runtimeDir, { recursive: true, force: true });
+    await teardownFixture(fixture);
   }
 });
 const ANTHROPIC_TARGET_PORT = 8090;
@@ -544,7 +536,6 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await waitForContainerTcp(containerName, 8080);
       await waitForTcp(proxyPort);
 
-      const messageStart = fixture.brokerMessages.length;
       const response = await sendProxyRequest(
         proxyPort,
         `http://api.anthropic.com:${ANTHROPIC_TARGET_PORT}/api/claude_cli/bootstrap?entrypoint=cli&model=SECRET123`,
@@ -553,14 +544,13 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       );
       const upstreamLogs = await dockerLogs(targetName);
       const proxyLogs = await dockerLogs(containerName);
-      const outcome = expectSingleEgressExchange(
-        fixture.brokerMessages.slice(messageStart),
+      const outcome = await expectSinglePolicyOutcome(
+        fixture.auditDir,
         {
-          sessionId,
-          method: "GET",
-          route: "/api/claude_cli/bootstrap",
-          action: "bodyless-pass",
-          reason: "known-bodyless-endpoint",
+          ruleId: "anthropic.bodyless.bootstrap",
+          requestPolicyKind: "bodyless",
+          requestPolicyResult: "pass",
+          reason: "empty-body",
         },
         "bodyless GET",
       );
@@ -571,9 +561,16 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         "GET /api/claude_cli/bootstrap?entrypoint=cli&model=**** HTTP/1.1",
       );
       expect(upstreamLogs.toLowerCase()).toContain("x-test-secret: ****");
-      expect(upstreamLogs).toMatch(/\r?\n\r?\n\s*$/);
+      // bodyless ポリシーなのでヘッダ終端の後ろに何も続いてはならない。
+      // 「終端で終わる」ことを正規表現で見てはいけない: dockerLogs は末尾を
+      // trim するので \r\n\r\n 自体が消え、ボディが**ある**ときだけ通る反転
+      // した条件になる。終端より後ろに残るバイトを見る。
+      const [, ...afterHeaders] = upstreamLogs.split("\r\n\r\n");
+      expect(afterHeaders.join("\r\n\r\n").trim()).toBe("");
       expect(JSON.stringify(outcome)).not.toContain("SECRET123");
-      expect(proxyLogs).not.toContain("egress outcome audit unavailable");
+      expect(proxyLogs).not.toContain(
+        "request policy outcome audit unavailable",
+      );
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
@@ -582,12 +579,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       if (networkCreated) {
         await dockerNetworkRemove(networkName).catch(() => {});
       }
-      if (fixture?.broker.listening) await closeServer(fixture.broker);
-      if (fixture) {
-        await rm(fixture.runtimeDir, { recursive: true, force: true }).catch(
-          () => {},
-        );
-      }
+      await teardownFixture(fixture);
     }
   },
   60_000,
@@ -669,7 +661,6 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           { role: "user", content: [{ type: "text", text: "k=SECRET123" }] },
         ],
       });
-      const messageStart = fixture.brokerMessages.length;
       const response = await sendProxyRequest(
         proxyPort,
         `http://api.anthropic.com:${ANTHROPIC_TARGET_PORT}/v1/messages`,
@@ -681,14 +672,13 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         },
       );
       const upstreamLogs = await dockerLogs(targetName);
-      const outcome = expectSingleEgressExchange(
-        fixture.brokerMessages.slice(messageStart),
+      const outcome = await expectSinglePolicyOutcome(
+        fixture.auditDir,
         {
-          sessionId,
-          method: "POST",
-          route: "/v1/messages",
-          action: "schema-mask",
-          reason: "recognized-schema",
+          ruleId: "anthropic.messages.create",
+          requestPolicyKind: "json",
+          requestPolicyResult: "rewrite",
+          reason: "masked-json",
         },
         "messages forwarding",
       );
@@ -705,12 +695,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       if (networkCreated) {
         await dockerNetworkRemove(networkName).catch(() => {});
       }
-      if (fixture?.broker.listening) await closeServer(fixture.broker);
-      if (fixture) {
-        await rm(fixture.runtimeDir, { recursive: true, force: true }).catch(
-          () => {},
-        );
-      }
+      await teardownFixture(fixture);
     }
   },
   60_000,
@@ -765,7 +750,6 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           { role: "user", content: [{ type: "quantum_payload", data: "x" }] },
         ],
       });
-      const messageStart = fixture.brokerMessages.length;
       const response = await sendProxyRequest(
         proxyPort,
         "http://api.anthropic.com/v1/messages",
@@ -776,14 +760,14 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           body: requestBody,
         },
       );
-      const outcome = expectSingleEgressExchange(
-        fixture.brokerMessages.slice(messageStart),
+      const outcome = await expectSinglePolicyOutcome(
+        fixture.auditDir,
         {
-          sessionId,
-          method: "POST",
-          route: "/v1/messages",
-          action: "block",
-          reason: "schema-unknown",
+          ruleId: "anthropic.messages.create",
+          requestPolicyKind: "json",
+          requestPolicyResult: "block",
+          // 未知の判別子は tagged union のガードに弾かれる。
+          reason: "schema-mismatch",
         },
         "unknown content block",
       );
@@ -793,12 +777,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
-      if (fixture?.broker.listening) await closeServer(fixture.broker);
-      if (fixture) {
-        await rm(fixture.runtimeDir, { recursive: true, force: true }).catch(
-          () => {},
-        );
-      }
+      await teardownFixture(fixture);
     }
   },
   60_000,
@@ -843,13 +822,15 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       await waitForContainerTcp(containerName, 8080);
       await waitForTcp(proxyPort);
 
-      const cases = [
+      // 承認されたルールのポリシーが弾く経路。固定 403 と request-policy
+      // の監査行が1本ずつ出る。
+      const policyBlocks = [
         {
           name: "bodyless endpoint with a body",
           path: "/api/claude_code/settings",
           method: "GET",
           body: "x",
-          route: "/api/claude_code/settings",
+          ruleId: "anthropic.bodyless.settings",
           reason: "unexpected-body",
         },
         {
@@ -858,35 +839,29 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           method: "GET",
           headers: { "Content-Encoding": "unsupported" },
           body: "x",
-          route: "/api/claude_code/settings",
+          ruleId: "anthropic.bodyless.settings",
           reason: "body-unavailable",
         },
+      ];
+
+      // どの allow ルールにも当たらない経路。broker 側の default-deny が
+      // 認可の時点で落とすので、ポリシーは一度も走らない。
+      const authorizationDenials = [
         {
           name: "unsupported method on a known route",
           path: "/api/claude_code/metrics",
           method: "POST",
-          route: "/api/claude_code/metrics",
-          reason: "unknown-endpoint",
         },
-        {
-          name: "file upload",
-          path: "/v1/files",
-          method: "POST",
-          body: "{}",
-          route: "/v1/files",
-          reason: "file-upload-blocked",
-        },
+        { name: "file upload", path: "/v1/files", method: "POST", body: "{}" },
         {
           name: "unknown secret-bearing route",
           path: "/unknown/SECRET123?token=SECRET123",
           method: "GET",
-          route: "unknown",
-          reason: "unknown-endpoint",
         },
       ];
 
-      for (const testCase of cases) {
-        const messageStart = fixture.brokerMessages.length;
+      let seenOutcomes = 0;
+      for (const testCase of policyBlocks) {
         const response = await sendProxyRequest(
           proxyPort,
           `http://api.anthropic.com${testCase.path}`,
@@ -897,37 +872,47 @@ test.skipIf(!dockerAvailable || !canBindMount)(
             body: testCase.body,
           },
         );
-        const outcome = expectSingleEgressExchange(
-          fixture.brokerMessages.slice(messageStart),
-          {
-            sessionId,
-            method: testCase.method,
-            route: testCase.route,
-            action: "block",
-            reason: testCase.reason,
-          },
-          testCase.name,
-        );
+        const outcomes = await readPolicyOutcomes(fixture.auditDir);
+        const fresh = outcomes.slice(seenOutcomes);
+        seenOutcomes = outcomes.length;
         const proxyLogs = await dockerLogs(containerName);
 
+        expect(fresh, `${testCase.name}: outcome count`).toHaveLength(1);
+        expect(fresh[0]?.ruleId, testCase.name).toBe(testCase.ruleId);
+        expect(fresh[0]?.requestPolicyResult, testCase.name).toBe("block");
+        expect(fresh[0]?.reason, testCase.name).toBe(testCase.reason);
         expect(response, testCase.name).toContain("403 Forbidden");
-        expect(response, testCase.name).toContain(
-          "blocked: Anthropic egress policy",
+        expect(response, testCase.name).toContain("blocked: request policy");
+        expect(JSON.stringify(fresh), testCase.name).not.toContain("SECRET123");
+        expect(proxyLogs, testCase.name).not.toContain("SECRET123");
+      }
+
+      for (const testCase of authorizationDenials) {
+        const response = await sendProxyRequest(
+          proxyPort,
+          `http://api.anthropic.com${testCase.path}`,
+          `${sessionId}:${token}`,
+          { method: testCase.method, body: testCase.body },
         );
-        expect(JSON.stringify(outcome), testCase.name).not.toContain(
+        const outcomes = await readPolicyOutcomes(fixture.auditDir);
+        const proxyLogs = await dockerLogs(containerName);
+
+        expect(response, testCase.name).toContain("403");
+        expect(outcomes.length, `${testCase.name}: no policy ran`).toBe(
+          seenOutcomes,
+        );
+        // ここだけ addon 自身の行に絞る。マスク値は broker の allow 決定に
+        // しか乗らないので、認可の時点で落ちる要求はマスクを適用する機会が
+        // 来る前に mitmproxy 本体のフローログへ生の URL が出る。addon が
+        // 秘密を漏らさないことは、addon が書いた行で判定する。
+        expect(addonLogLines(proxyLogs), testCase.name).not.toContain(
           "SECRET123",
         );
-        expect(proxyLogs, testCase.name).not.toContain("SECRET123");
       }
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
-      if (fixture?.broker.listening) await closeServer(fixture.broker);
-      if (fixture) {
-        await rm(fixture.runtimeDir, { recursive: true, force: true }).catch(
-          () => {},
-        );
-      }
+      await teardownFixture(fixture);
     }
   },
   60_000,

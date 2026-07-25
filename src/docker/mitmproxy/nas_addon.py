@@ -420,40 +420,56 @@ def _query_broker(socket_path: str, request: dict) -> dict:
         sock.close()
 
 
-def _report_egress_outcome(
+REQUEST_POLICY_AUDIT_UNAVAILABLE = (
+    "[nas-addon] request policy outcome audit unavailable"
+)
+
+# Closed label set for logging an untrusted request method. Anything outside
+# it becomes "OTHER" so attacker-controlled bytes never reach stderr.
+_SAFE_METHOD_LABELS = frozenset((
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE",
+    "CONNECT",
+))
+
+
+def _safe_method_label(method: str) -> str:
+    normalized = method.upper() if isinstance(method, str) else ""
+    if normalized in _SAFE_METHOD_LABELS:
+        return normalized
+    return "OTHER"
+
+
+def _report_request_policy_outcome(
     socket_path: str,
     request_id: str,
     session_id: str,
-    method: str,
-    route: str,
-    action: str,
+    rule_id: str,
+    result: str,
     reason: str,
 ) -> None:
+    """Report a sanitized request-policy outcome to the broker.
+
+    Only the closed protocol fields are sent: no host, method, path, query,
+    header, body, filename, credential, or mask value. An acknowledgement
+    failure prints one constant line and never changes the computed result."""
     try:
         response = _query_broker(socket_path, {
             "version": 1,
-            "type": "egress_outcome",
+            "type": "request_policy_outcome",
             "requestId": request_id,
             "sessionId": session_id,
-            "method": method,
-            "route": route,
-            "action": action,
+            "ruleId": rule_id,
+            "result": result,
             "reason": reason,
         })
         if not (
             response.get("version") == 1
-            and response.get("type") == "egress_outcome_recorded"
+            and response.get("type") == "request_policy_outcome_recorded"
             and response.get("requestId") == request_id
         ):
-            print(
-                "[nas-addon] egress outcome audit unavailable",
-                file=sys.stderr,
-            )
+            print(REQUEST_POLICY_AUDIT_UNAVAILABLE, file=sys.stderr)
     except Exception:
-        print(
-            "[nas-addon] egress outcome audit unavailable",
-            file=sys.stderr,
-        )
+        print(REQUEST_POLICY_AUDIT_UNAVAILABLE, file=sys.stderr)
 
 
 def _normalize_host(host: str) -> str:
@@ -463,79 +479,6 @@ def _normalize_host(host: str) -> str:
     while h.endswith("."):
         h = h[:-1]
     return h
-
-
-_ANTHROPIC_HOSTS = ("api.anthropic.com",)
-
-_ANTHROPIC_SCHEMA_ENDPOINTS = frozenset({
-    ("POST", "/v1/messages"),
-    ("POST", "/v1/messages/count_tokens"),
-})
-
-_ANTHROPIC_BODYLESS_ENDPOINTS = frozenset({
-    ("GET", "/api/claude_cli/bootstrap"),
-    ("GET", "/api/claude_code_penguin_mode"),
-    ("GET", "/api/claude_code/policy_limits"),
-    ("GET", "/api/claude_code/settings"),
-    ("GET", "/mcp-registry/v0/servers"),
-    ("GET", "/v1/code/triggers"),
-    ("GET", "/v1/mcp_servers"),
-})
-
-_ANTHROPIC_SAFE_ROUTES = frozenset({
-    *(path for _method, path in _ANTHROPIC_SCHEMA_ENDPOINTS),
-    *(path for _method, path in _ANTHROPIC_BODYLESS_ENDPOINTS),
-    "/api/claude_code/metrics",
-    "/api/event_logging/v2/batch",
-})
-
-
-def _is_anthropic_host(host: str) -> bool:
-    return _normalize_host(host) in _ANTHROPIC_HOSTS
-
-
-def _safe_anthropic_route(path: str) -> str:
-    if path in _ANTHROPIC_SAFE_ROUTES:
-        return path
-    if path.startswith("/api/eval/"):
-        return "/api/eval/:id"
-    if path == "/v1/files" or path.startswith("/v1/files/"):
-        return "/v1/files"
-    return "unknown"
-
-
-def _classify_anthropic_endpoint(method: str, path: str) -> tuple[str, str]:
-    method = method.upper()
-    path_without_query = path.split("?", 1)[0]
-    endpoint = (method, path_without_query)
-    if endpoint in _ANTHROPIC_SCHEMA_ENDPOINTS:
-        return "schema-mask", path_without_query
-    if endpoint in _ANTHROPIC_BODYLESS_ENDPOINTS:
-        return "bodyless-pass", path_without_query
-    return "block", _safe_anthropic_route(path_without_query)
-
-
-def _block_reason_for_route(route: str) -> str:
-    if route == "/v1/files":
-        return "file-upload-blocked"
-    return "unknown-endpoint"
-
-
-def _safe_anthropic_method(method: str) -> str:
-    normalized = method.upper()
-    if normalized in ("GET", "POST"):
-        return normalized
-    return "OTHER"
-
-
-def _plan_bodyless_anthropic_request(
-    body: Optional[bytes],
-) -> tuple[str, str]:
-    if body is None:
-        return "block", "body-unavailable"
-    if len(body) != 0:
-        return "block", "unexpected-body"
-    return "bodyless-pass", "known-bodyless-endpoint"
 
 
 def _should_emit_block_log(count: int) -> bool:
@@ -881,133 +824,18 @@ def _execute_request_policy(
         return "block", None, "processing-failed"
 
 
-# コンテンツコンテナ内で許可するブロック型。ここに無い type が
-# system / *.content 直下に現れたらフェイルクローズドする。
-# 維持トリガー: Anthropic が新しいコンテンツブロック型を出荷したとき。
-_KNOWN_BLOCK_TYPES = frozenset({
-    "text", "image", "document", "thinking", "redacted_thinking",
-    "tool_use", "tool_result", "server_tool_use",
-    "web_search_tool_result", "code_execution_tool_result",
-    "mcp_tool_use", "mcp_tool_result", "search_result",
-    "container_upload", "fallback",
-})
+def _find_rule_by_id(rules: list, rule_id: str) -> Optional[dict]:
+    """Resolve the broker's authoritative rule ID in the local document.
 
-# この名前のキー直下の list を「ブロックリスト」とみなし type を検証する。
-_BLOCK_LIST_KEYS = frozenset({"content", "system"})
-
-
-def _walk_schema(node, parent_key: Optional[str], patterns: list[bytes]) -> tuple:
-    """(masked_node, changed, blocked) を返す。文字列はパターンマスク、
-    base64 source はデコードして走査、ブロックリスト内の未知 type は blocked。"""
-    if isinstance(node, dict):
-        changed = False
-        blocked = False
-        working = node
-        if node.get("type") == "base64" and isinstance(node.get("data"), str):
-            try:
-                decoded = base64.b64decode(node["data"], validate=False)
-            except Exception:
-                decoded = None
-            if decoded is not None:
-                masked_blob = _mask_bytes(decoded, patterns)
-                if masked_blob != decoded:
-                    working = dict(node)
-                    working["data"] = base64.b64encode(masked_blob).decode("ascii")
-                    changed = True
-        new_node = {}
-        for k, v in working.items():
-            nv, ch, bl = _walk_schema(v, k, patterns)  # original k for block-list detection
-            mk = k
-            if isinstance(k, str):
-                masked_k = _mask_bytes(
-                    k.encode("utf-8", "surrogatepass"), patterns
-                ).decode("utf-8", "surrogatepass")
-                if masked_k != k:
-                    mk = masked_k
-                    changed = True
-            new_node[mk] = nv
-            changed = changed or ch
-            blocked = blocked or bl
-        return new_node, changed, blocked
-    if isinstance(node, list):
-        changed = False
-        blocked = False
-        is_block_list = parent_key in _BLOCK_LIST_KEYS
-        new_list = []
-        for item in node:
-            if is_block_list and isinstance(item, dict):
-                t = item.get("type")
-                if t is not None and t not in _KNOWN_BLOCK_TYPES:
-                    blocked = True
-            nv, ch, bl = _walk_schema(item, None, patterns)
-            new_list.append(nv)
-            changed = changed or ch
-            blocked = blocked or bl
-        return new_list, changed, blocked
-    if isinstance(node, str):
-        masked = _mask_bytes(
-            node.encode("utf-8", "surrogatepass"), patterns
-        ).decode("utf-8", "surrogatepass")
-        if masked != node:
-            return masked, True, False
-        return node, False, False
-    return node, False, False
-
-
-def _schema_mask_json(
-    body: bytes, patterns: list[bytes]
-) -> tuple[Optional[bytes], Optional[str]]:
-    """(masked_body|None, block_reason|None) を返す。"""
-    def reject_duplicate_members(pairs):
-        parsed_object = {}
-        for key, value in pairs:
-            if key in parsed_object:
-                raise ValueError("duplicate JSON object member")
-            parsed_object[key] = value
-        return parsed_object
-
-    try:
-        parsed = json.loads(body, object_pairs_hook=reject_duplicate_members)
-    except Exception:
-        return None, "decode-failed"
-    # _walk_schema (深いネストで RecursionError の可能性) と後続の
-    # json.dumps().encode("utf-8") (lone surrogate を含む文字列で
-    # UnicodeEncodeError を送出する可能性) をまとめて保護する。
-    # fail-closed: ここで捕捉できない例外を通過させると、マスク未適用の
-    # 本文がそのまま送信されて秘密漏洩につながるため、あらゆる例外を
-    # blocked 扱いにする。
-    try:
-        masked, changed, blocked = _walk_schema(parsed, None, patterns)
-        if blocked:
-            return None, "schema-unknown"
-        if not changed:
-            return None, None
-        return (
-            json.dumps(
-                masked, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8"),
-            None,
-        )
-    except Exception:
-        return None, "decode-failed"
-
-
-def _plan_anthropic_masking(
-    body: Optional[bytes], patterns: list[bytes]
-) -> tuple[str, Optional[bytes], str]:
-    """Schema request の (action, masked_body, reason) を返す。"""
-    if body is None:
-        return "block", None, "body-unavailable"
-    masked, block_reason = _schema_mask_json(body, patterns)
-    if block_reason is not None:
-        return "block", None, block_reason
-    if masked is None:
-        return "passthrough", None, "recognized-schema"
-    return "rewrite", masked, "recognized-schema"
-
-
-def _registry_anthropic_egress(registry) -> bool:
-    return bool(registry and registry.get("anthropicEgress"))
+    Returns None when the ID names no rule, which means the broker and the
+    addon disagree about the resolved document. The caller fails closed
+    rather than falling back to a locally chosen rule: the broker approved
+    one specific policy, and executing a different one would run a policy
+    the operator never authorized for this request."""
+    for rule in rules:
+        if rule.get("id") == rule_id:
+            return rule
+    return None
 
 
 def _match_host_pattern(host: str, pattern: str) -> bool:
@@ -1056,6 +884,14 @@ def _safe_session_label(session_id: str) -> str:
     return "invalid"
 
 
+def _safe_rule_label(rule_id: object) -> str:
+    """Rule IDs reach the log from the broker response, so re-check the
+    syntax the contract promises before printing one."""
+    if isinstance(rule_id, str) and _SAFE_RULE_ID.fullmatch(rule_id):
+        return rule_id
+    return "invalid"
+
+
 def _generate_request_id() -> str:
     return f"req_{os.urandom(6).hex()}"
 
@@ -1081,7 +917,7 @@ class NasAddon:
         # variants per secret on every allowed request.
         self._mask_values_cache: Optional[list[str]] = None
         self._mask_patterns_cache: list[bytes] = []
-        self._anthropic_block_counts: dict[tuple[str, ...], int] = {}
+        self._request_policy_block_counts: dict[tuple[str, ...], int] = {}
         self._client_sessions: dict[str, set[str]] = {}
 
     def _patterns_for(self, mask_values: list[str]) -> list[bytes]:
@@ -1137,16 +973,14 @@ class NasAddon:
             if creds:
                 cred_source = "connect_cache"
         if not creds:
-            safe_method = _safe_anthropic_method(flow.request.method)
-            safe_route = "unknown"
-            if _is_anthropic_host(flow.request.host):
-                _, safe_route = _classify_anthropic_endpoint(
-                    flow.request.method, flow.request.path
-                )
+            # The request is unauthenticated, so every field on it is
+            # attacker-controlled. Only the closed method label is safe to
+            # log; the path is never logged because no resolved rule has
+            # classified it at this point.
             print(f"[nas-addon] REQUEST 407: no creds found, "
                   f"client={flow.client_conn.id}, "
                   f"has_proxy_auth={bool(proxy_auth)}, "
-                  f"method={safe_method} route={safe_route}",
+                  f"method={_safe_method_label(flow.request.method)}",
                   file=sys.stderr)
             flow.response = http.Response.make(
                 407, b"missing proxy credentials",
@@ -1195,10 +1029,15 @@ class NasAddon:
         )
 
         review_rules = review_document["rules"]
-        matched_rule = None
+        # The local match only decides whether to attach a bounded body
+        # preview to the authorization request. It must not decide the
+        # verdict or which policy runs — the broker owns both, and letting
+        # a local pre-match win would execute a policy the broker never
+        # approved whenever the two documents disagree.
+        preview_rule = None
         for rule in review_rules:
             if _match_review_rule(rule, method, host, request_path):
-                matched_rule = rule
+                preview_rule = rule
                 break
 
         request_id = _generate_request_id()
@@ -1226,7 +1065,7 @@ class NasAddon:
 
         request_body = None
         request_body_loaded = False
-        if matched_rule:
+        if preview_rule:
             try:
                 request_body = flow.request.content
             except ValueError:
@@ -1246,10 +1085,6 @@ class NasAddon:
                 "bodySize": len(body_bytes),
             }
 
-            if matched_rule.get("action") == "deny":
-                flow.response = http.Response.make(403, b"denied by review rule")
-                return
-
         decision = _query_broker(broker_socket, authorize_req)
 
         if decision.get("decision") != "allow":
@@ -1264,72 +1099,29 @@ class NasAddon:
         mask_values = decision.get("maskValues") or []
         patterns = self._patterns_for(mask_values) if mask_values else []
 
-        anthropic_egress_enabled = (
-            _is_anthropic_host(host)
-            and _registry_anthropic_egress(registry)
-        )
-        if anthropic_egress_enabled:
-            _mask_url_and_headers(flow, patterns)
-            endpoint_class, route = _classify_anthropic_endpoint(
-                method, flow.request.path
-            )
-            if request_body_loaded:
-                body = request_body
-            else:
-                try:
-                    body = flow.request.content
-                except ValueError:
-                    body = None
-
-            masked_body = None
-            if endpoint_class == "schema-mask":
-                plan_action, masked_body, reason = (
-                    _plan_anthropic_masking(body, patterns)
+        # The broker names the rule it approved. Resolve it here rather than
+        # reusing the local pre-match so a disagreement fails closed instead
+        # of silently running a different policy.
+        rule_id = decision.get("ruleId")
+        policy = None
+        if rule_id is not None:
+            approved_rule = _find_rule_by_id(review_rules, rule_id)
+            if approved_rule is None:
+                print(
+                    "[nas-addon] REQUEST-POLICY-RULE-UNKNOWN: "
+                    f"session={_safe_session_label(session_id)} "
+                    f"rule={_safe_rule_label(rule_id)}",
+                    file=sys.stderr,
                 )
-                action = (
-                    "block" if plan_action == "block" else "schema-mask"
-                )
-            elif endpoint_class == "bodyless-pass":
-                action, reason = _plan_bodyless_anthropic_request(body)
-            else:
-                action = "block"
-                reason = _block_reason_for_route(route)
-
-            if masked_body is not None:
-                flow.request.content = masked_body
-
-            safe_method = _safe_anthropic_method(method)
-            _report_egress_outcome(
-                broker_socket,
-                request_id,
-                session_id,
-                safe_method,
-                route,
-                action,
-                reason,
-            )
-
-            if action == "block":
-                block_key = (
-                    session_id,
-                    safe_method,
-                    route,
-                    action,
-                    reason,
-                )
-                count = self._anthropic_block_counts.get(block_key, 0) + 1
-                self._anthropic_block_counts[block_key] = count
-                if _should_emit_block_log(count):
-                    print(
-                        f"[nas-addon] ANTHROPIC-BLOCKED: "
-                        f"method={safe_method} route={route} "
-                        f"action={action} reason={reason} count={count}",
-                        file=sys.stderr,
-                    )
                 flow.response = http.Response.make(
-                    403, b"blocked: Anthropic egress policy")
+                    403, REQUEST_POLICY_BLOCK_BODY
+                )
                 return
-        else:
+            policy = approved_rule.get("requestPolicy")
+
+        if policy is None:
+            # Ordinary rule (with or without an ID): byte-pattern masking
+            # only, exactly as before request policies existed.
             if mask_values:
                 _apply_request_masking(flow, patterns)
                 if getattr(flow, "mask_blocked", False):
@@ -1338,18 +1130,66 @@ class NasAddon:
                         b"blocked: cannot decode request body for secret masking",
                     )
                     return
+        else:
+            # Order is load-bearing: mask the URL and headers before anything
+            # can log them, execute the policy on the body, apply the rewrite,
+            # report the outcome, and only then block or inject credentials —
+            # so a blocked request never carries an injected credential.
+            _mask_url_and_headers(flow, patterns)
+            if request_body_loaded:
+                body = request_body
+            else:
+                try:
+                    body = flow.request.content
+                except ValueError:
+                    body = None
+
+            result, rewritten, reason = _execute_request_policy(
+                policy, body, patterns
+            )
+            if result == "rewrite" and rewritten is not None:
+                flow.request.content = rewritten
+
+            _report_request_policy_outcome(
+                broker_socket,
+                request_id,
+                session_id,
+                rule_id,
+                result,
+                reason,
+            )
+
+            if result == "block":
+                kind = policy.get("kind")
+                block_key = (session_id, rule_id, kind, result, reason)
+                count = self._request_policy_block_counts.get(block_key, 0) + 1
+                self._request_policy_block_counts[block_key] = count
+                if _should_emit_block_log(count):
+                    print(
+                        f"[nas-addon] REQUEST-POLICY-BLOCKED: "
+                        f"session={_safe_session_label(session_id)} "
+                        f"rule={_safe_rule_label(rule_id)} kind={kind} "
+                        f"result={result} reason={reason} count={count}",
+                        file=sys.stderr,
+                    )
+                flow.response = http.Response.make(
+                    403, REQUEST_POLICY_BLOCK_BODY
+                )
+                return
 
         # Inject credential headers from broker decision (overwrites existing).
+        # These lines carry the request path, so they stay off for
+        # policy-governed rules: those log only the closed outcome fields.
         inject_headers = decision.get("injectHeaders", [])
         for h in inject_headers:
             flow.request.headers[h["name"]] = h["value"]
-            if not anthropic_egress_enabled:
+            if policy is None:
                 print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{flow.request.path} "
                       f"(cred_source={cred_source})", file=sys.stderr)
         if (
             not inject_headers
             and decision.get("decision") == "allow"
-            and not anthropic_egress_enabled
+            and policy is None
         ):
             print(f"[nas-addon] NO INJECT: no credentials matched for "
                   f"{host}:{port}{flow.request.path}", file=sys.stderr)
@@ -1368,9 +1208,9 @@ class NasAddon:
         inactive_sessions = disconnected_sessions - active_sessions
         if not inactive_sessions:
             return
-        self._anthropic_block_counts = {
+        self._request_policy_block_counts = {
             key: count
-            for key, count in self._anthropic_block_counts.items()
+            for key, count in self._request_policy_block_counts.items()
             if key[0] not in inactive_sessions
         }
 

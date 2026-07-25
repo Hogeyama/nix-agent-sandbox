@@ -744,128 +744,9 @@ class ReviewRuleMatchTest(unittest.TestCase):
                 )
 
 
-class AnthropicRoutingTest(unittest.TestCase):
-    def test_is_anthropic_host(self):
-        self.assertTrue(nas_addon._is_anthropic_host("api.anthropic.com"))
-        self.assertTrue(nas_addon._is_anthropic_host("API.ANTHROPIC.COM"))
-        self.assertFalse(nas_addon._is_anthropic_host("example.com"))
-        self.assertFalse(nas_addon._is_anthropic_host("evil-anthropic.com"))
-
-    def test_known_bodyless_get_endpoints_ignore_query(self):
-        paths = [
-            "/api/claude_cli/bootstrap",
-            "/api/claude_code_penguin_mode",
-            "/api/claude_code/policy_limits",
-            "/api/claude_code/settings",
-            "/mcp-registry/v0/servers",
-            "/v1/code/triggers",
-            "/v1/mcp_servers",
-        ]
-        for path in paths:
-            with self.subTest(path=path):
-                self.assertEqual(
-                    nas_addon._classify_anthropic_endpoint(
-                        "GET", f"{path}?test=value"
-                    ),
-                    ("bodyless-pass", path),
-                )
-
-    def test_known_schema_endpoints_ignore_query_and_method_case(self):
-        cases = [
-            ("POST", "/v1/messages?beta=true", "/v1/messages"),
-            (
-                "post",
-                "/v1/messages/count_tokens?beta=true",
-                "/v1/messages/count_tokens",
-            ),
-        ]
-        for method, path, route in cases:
-            with self.subTest(method=method, path=path):
-                self.assertEqual(
-                    nas_addon._classify_anthropic_endpoint(method, path),
-                    ("schema-mask", route),
-                )
-
-    def test_unrecognized_method_and_path_combinations_block(self):
-        cases = [
-            (
-                "POST",
-                "/api/claude_code/metrics",
-                "/api/claude_code/metrics",
-            ),
-            (
-                "POST",
-                "/api/event_logging/v2/batch",
-                "/api/event_logging/v2/batch",
-            ),
-            ("POST", "/api/eval/sdk-secret", "/api/eval/:id"),
-            ("POST", "/v1/files", "/v1/files"),
-            ("GET", "/v1/files", "/v1/files"),
-            ("GET", "/api/claude_code/settings/", "unknown"),
-            ("GET", "/api/claude_code/settings/child", "unknown"),
-            ("GET", "/api%2Fclaude_code%2Fsettings", "unknown"),
-            ("GET", "//api/claude_code/settings", "unknown"),
-            (
-                "HEAD",
-                "/api/claude_code/settings",
-                "/api/claude_code/settings",
-            ),
-            ("POST", "/v1/messages/", "unknown"),
-        ]
-        for method, path, route in cases:
-            with self.subTest(method=method, path=path):
-                self.assertEqual(
-                    nas_addon._classify_anthropic_endpoint(method, path),
-                    ("block", route),
-                )
-
-    def test_block_reason_is_specific_only_for_files_route(self):
-        self.assertEqual(
-            nas_addon._block_reason_for_route("/v1/files"),
-            "file-upload-blocked",
-        )
-        other_blocked_routes = [
-            "/api/claude_code/metrics",
-            "/api/event_logging/v2/batch",
-            "/api/eval/:id",
-            "/api/claude_code/settings",
-            "unknown",
-        ]
-        for route in other_blocked_routes:
-            with self.subTest(route=route):
-                self.assertEqual(
-                    nas_addon._block_reason_for_route(route),
-                    "unknown-endpoint",
-                )
-
-    def test_files_descendant_blocks_with_specific_reason(self):
-        endpoint_class, route = nas_addon._classify_anthropic_endpoint(
-            "POST", "/v1/files/child"
-        )
-        self.assertEqual((endpoint_class, route), ("block", "/v1/files"))
-        self.assertEqual(
-            nas_addon._block_reason_for_route(route),
-            "file-upload-blocked",
-        )
-
-
-class AnthropicOutcomeHelperTest(unittest.TestCase):
+class RequestPolicyOutcomeReportTest(unittest.TestCase):
     def test_addon_starts_with_no_aggregated_block_counts(self):
-        self.assertEqual(nas_addon.NasAddon()._anthropic_block_counts, {})
-
-    def test_bodyless_request_requires_available_empty_body(self):
-        self.assertEqual(
-            nas_addon._plan_bodyless_anthropic_request(b""),
-            ("bodyless-pass", "known-bodyless-endpoint"),
-        )
-        self.assertEqual(
-            nas_addon._plan_bodyless_anthropic_request(b"x"),
-            ("block", "unexpected-body"),
-        )
-        self.assertEqual(
-            nas_addon._plan_bodyless_anthropic_request(None),
-            ("block", "body-unavailable"),
-        )
+        self.assertEqual(nas_addon.NasAddon()._request_policy_block_counts, {})
 
     def test_block_log_cadence_is_powers_of_two(self):
         self.assertEqual(
@@ -877,17 +758,15 @@ class AnthropicOutcomeHelperTest(unittest.TestCase):
             [1, 2, 4, 8],
         )
 
-    def test_unsupported_methods_use_only_the_closed_other_label(self):
-        self.assertEqual(nas_addon._safe_anthropic_method("GET"), "GET")
-        self.assertEqual(nas_addon._safe_anthropic_method("POST"), "POST")
-        self.assertEqual(nas_addon._safe_anthropic_method("get"), "GET")
-        self.assertEqual(nas_addon._safe_anthropic_method("post"), "POST")
-        self.assertEqual(nas_addon._safe_anthropic_method("HEAD"), "OTHER")
-        self.assertEqual(nas_addon._safe_anthropic_method("PUT"), "OTHER")
-        self.assertEqual(
-            nas_addon._safe_anthropic_method("CUSTOM-SECRET123"),
-            "OTHER",
-        )
+    def test_method_label_is_a_closed_set(self):
+        for method in ("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"):
+            with self.subTest(method=method):
+                self.assertEqual(
+                    nas_addon._safe_method_label(method.lower()), method
+                )
+        for method in ("CUSTOM-SECRET123", "", "GET /private", "gEt\n"):
+            with self.subTest(method=method):
+                self.assertEqual(nas_addon._safe_method_label(method), "OTHER")
 
     def test_outcome_report_contains_only_closed_fields(self):
         with patch.object(
@@ -895,31 +774,29 @@ class AnthropicOutcomeHelperTest(unittest.TestCase):
             "_query_broker",
             return_value={
                 "version": 1,
-                "type": "egress_outcome_recorded",
+                "type": "request_policy_outcome_recorded",
                 "requestId": "req-safe",
             },
         ) as query:
-            nas_addon._report_egress_outcome(
+            nas_addon._report_request_policy_outcome(
                 "/safe/broker.sock",
                 "req-safe",
                 "sess-safe",
-                "POST",
-                "/v1/files",
+                "anthropic.messages.create",
                 "block",
-                "file-upload-blocked",
+                "schema-mismatch",
             )
 
         query.assert_called_once_with(
             "/safe/broker.sock",
             {
                 "version": 1,
-                "type": "egress_outcome",
+                "type": "request_policy_outcome",
                 "requestId": "req-safe",
                 "sessionId": "sess-safe",
-                "method": "POST",
-                "route": "/v1/files",
-                "action": "block",
-                "reason": "file-upload-blocked",
+                "ruleId": "anthropic.messages.create",
+                "result": "block",
+                "reason": "schema-mismatch",
             },
         )
 
@@ -930,19 +807,18 @@ class AnthropicOutcomeHelperTest(unittest.TestCase):
             "_query_broker",
             side_effect=RuntimeError("SECRET123 /raw/private-path"),
         ), redirect_stderr(stderr):
-            nas_addon._report_egress_outcome(
+            nas_addon._report_request_policy_outcome(
                 "/safe/broker.sock",
                 "req-safe",
                 "sess-safe",
-                "GET",
-                "unknown",
+                "anthropic.bodyless.settings",
                 "block",
-                "unknown-endpoint",
+                "unexpected-body",
             )
 
         self.assertEqual(
             stderr.getvalue(),
-            "[nas-addon] egress outcome audit unavailable\n",
+            "[nas-addon] request policy outcome audit unavailable\n",
         )
 
     def test_outcome_report_non_ack_emits_only_constant_error(self):
@@ -955,192 +831,19 @@ class AnthropicOutcomeHelperTest(unittest.TestCase):
                 "reason": "broker-unavailable: SECRET123 /raw/private-path",
             },
         ), redirect_stderr(stderr):
-            nas_addon._report_egress_outcome(
+            nas_addon._report_request_policy_outcome(
                 "/safe/broker.sock",
                 "req-safe",
                 "sess-safe",
-                "GET",
-                "unknown",
-                "block",
-                "unknown-endpoint",
+                "anthropic.bodyless.settings",
+                "pass",
+                "empty-body",
             )
 
         self.assertEqual(
             stderr.getvalue(),
-            "[nas-addon] egress outcome audit unavailable\n",
+            "[nas-addon] request policy outcome audit unavailable\n",
         )
-
-
-class SchemaMaskTest(unittest.TestCase):
-    def setUp(self):
-        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
-
-    def _mask(self, obj):
-        import json
-        return nas_addon._schema_mask_json(json.dumps(obj).encode("utf-8"), self.patterns)
-
-    def test_masks_text_block(self):
-        body, reason = self._mask({"model": "m", "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "key is SECRET123 ok"}]}]})
-        self.assertIsNone(reason)
-        self.assertIn(b"****", body)
-        self.assertNotIn(b"SECRET123", body)
-
-    def test_masks_system_string(self):
-        body, reason = self._mask({"model": "m", "system": "token SECRET123",
-            "messages": [{"role": "user", "content": "hi"}]})
-        self.assertIsNone(reason)
-        self.assertNotIn(b"SECRET123", body)
-
-    def test_masks_base64_blob(self):
-        import base64, json
-        blob = base64.b64encode(b"prefix SECRET123 suffix").decode()
-        body, reason = self._mask({"model": "m", "messages": [{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": blob}}]}]})
-        self.assertIsNone(reason)
-        parsed = json.loads(body)
-        decoded = base64.b64decode(parsed["messages"][0]["content"][0]["source"]["data"])
-        self.assertNotIn(b"SECRET123", decoded)
-
-    def test_masks_nested_tool_result(self):
-        body, reason = self._mask({"model": "m", "messages": [{"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "t1",
-             "content": [{"type": "text", "text": "out SECRET123"}]}]}]})
-        self.assertIsNone(reason)
-        self.assertNotIn(b"SECRET123", body)
-
-    def test_unknown_block_type_blocks(self):
-        body, reason = self._mask({"model": "m", "messages": [{"role": "user", "content": [
-            {"type": "quantum_payload", "data": "x"}]}]})
-        self.assertEqual(reason, "schema-unknown")
-        self.assertIsNone(body)
-
-    def test_unknown_toplevel_field_passes(self):
-        body, reason = self._mask({"model": "m", "future_param": {"nested": "SECRET123"},
-            "messages": [{"role": "user", "content": "hi"}]})
-        self.assertIsNone(reason)
-        self.assertNotIn(b"SECRET123", body)
-
-    def test_tools_type_not_block_checked(self):
-        body, reason = self._mask({"model": "m",
-            "tools": [{"type": "bash_20250124", "name": "bash"}],
-            "messages": [{"role": "user", "content": "hi"}]})
-        self.assertIsNone(reason)
-
-    def test_no_secret_returns_unchanged(self):
-        body, reason = self._mask({"model": "m", "messages": [{"role": "user", "content": "clean"}]})
-        self.assertIsNone(reason)
-        self.assertIsNone(body)
-
-    def test_unparseable_body_blocks(self):
-        body, reason = nas_addon._schema_mask_json(b"{not json", self.patterns)
-        self.assertEqual(reason, "decode-failed")
-        self.assertIsNone(body)
-
-    def test_empty_body_is_decode_failure(self):
-        body, reason = nas_addon._schema_mask_json(b"", self.patterns)
-        self.assertEqual(reason, "decode-failed")
-        self.assertIsNone(body)
-
-    def test_lone_surrogate_encode_failure_fails_closed(self):
-        # ensure_ascii=True (json.dumps のデフォルト) は lone surrogate を
-        # "\ud800" として安全にエスケープするため、この body 構築自体は
-        # 例外を起こさない。json.loads で lone surrogate 文字列に復元された
-        # 後、SECRET123 のマスク発火で changed=True の経路に入り、最終の
-        # json.dumps(..., ensure_ascii=False).encode("utf-8") が strict
-        # UTF-8 エンコードで UnicodeEncodeError を送出する状況を再現する。
-        body, reason = self._mask({
-            "model": "m",
-            "system": "\ud800",
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": "key is SECRET123 ok"}]}],
-        })
-        self.assertEqual(reason, "decode-failed")
-        self.assertIsNone(body)
-
-    def test_deeply_nested_body_fails_closed(self):
-        # json.loads は深いネストで RecursionError を送出する。
-        # RecursionError は ValueError の派生ではないため、
-        # except (json.JSONDecodeError, ValueError) では捕捉されず
-        # 関数がクラッシュ(fail-open)していた。あらゆる例外を
-        # fail-closed に倒すことを検証する。
-        deep = ("[" * 40000 + "]" * 40000).encode("utf-8")
-        body, reason = nas_addon._schema_mask_json(deep, self.patterns)
-        self.assertEqual(reason, "decode-failed")
-        self.assertIsNone(body)
-
-    def test_masks_secret_appearing_as_object_key(self):
-        # A secret can appear as a JSON object KEY (not just a value), e.g.
-        # inside a metadata dict. The legacy byte-level masking path masks
-        # whole request bytes so this is covered there; the schema-walking
-        # path must mask dict keys too, not just string values.
-        body = self._mask_raw(
-            b'{"model":"m","metadata":{"SECRET123":"v"},'
-            b'"messages":[{"role":"user","content":"hi"}]}'
-        )
-        masked, reason = body
-        self.assertIsNone(reason)
-        self.assertIsNotNone(masked)
-        self.assertIn(b"****", masked)
-        self.assertNotIn(b"SECRET123", masked)
-
-    def _mask_raw(self, raw_body: bytes):
-        return nas_addon._schema_mask_json(raw_body, self.patterns)
-
-
-class AnthropicPlanTest(unittest.TestCase):
-    def setUp(self):
-        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
-
-    def test_schema_planner_does_not_repeat_endpoint_routing(self):
-        result = nas_addon._plan_anthropic_masking(
-            b"{}", self.patterns
-        )
-        self.assertEqual(result, ("passthrough", None, "recognized-schema"))
-
-    def test_undecodable_body_blocks(self):
-        result = nas_addon._plan_anthropic_masking(None, self.patterns)
-        self.assertEqual(result, ("block", None, "body-unavailable"))
-
-    def test_secret_rewrites(self):
-        import json
-        body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "SECRET123"}]}).encode()
-        action, out, reason = nas_addon._plan_anthropic_masking(body, self.patterns)
-        self.assertEqual((action, reason), ("rewrite", "recognized-schema"))
-        self.assertNotIn(b"SECRET123", out)
-
-    def test_clean_passthrough(self):
-        import json
-        body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "clean"}]}).encode()
-        result = nas_addon._plan_anthropic_masking(body, self.patterns)
-        self.assertEqual(
-            result,
-            ("passthrough", None, "recognized-schema"),
-        )
-
-    def test_unknown_block_blocks(self):
-        import json
-        body = json.dumps({"model": "m", "messages": [
-            {"role": "user", "content": [{"type": "quantum", "x": 1}]}]}).encode()
-        result = nas_addon._plan_anthropic_masking(body, self.patterns)
-        self.assertEqual(result, ("block", None, "schema-unknown"))
-
-    def test_decode_failure_blocks_with_precise_reason(self):
-        result = nas_addon._plan_anthropic_masking(
-            b"{not json", self.patterns
-        )
-        self.assertEqual(result, ("block", None, "decode-failed"))
-
-    def test_empty_body_blocks_with_decode_failure(self):
-        result = nas_addon._plan_anthropic_masking(b"", self.patterns)
-        self.assertEqual(result, ("block", None, "decode-failed"))
-
-    def test_duplicate_json_members_fail_closed(self):
-        body = b'{"prompt":"s3cret-value","prompt":"safe"}'
-
-        result = nas_addon._plan_anthropic_masking(body, self.patterns)
-
-        self.assertEqual(result, ("block", None, "decode-failed"))
 
 
 def _make_stub_flow(path="/", headers=None, content=b""):
@@ -1149,13 +852,7 @@ def _make_stub_flow(path="/", headers=None, content=b""):
     return FakeFlow(FakeRequest(path=path, headers=headers, content=content))
 
 
-class GateAndUrlHeaderTest(unittest.TestCase):
-    def test_registry_gate(self):
-        self.assertTrue(nas_addon._registry_anthropic_egress({"anthropicEgress": True}))
-        self.assertFalse(nas_addon._registry_anthropic_egress({"anthropicEgress": False}))
-        self.assertFalse(nas_addon._registry_anthropic_egress({}))
-        self.assertFalse(nas_addon._registry_anthropic_egress(None))
-
+class MaskUrlAndHeadersTest(unittest.TestCase):
     def test_mask_url_and_headers_not_body(self):
         patterns = nas_addon._build_mask_patterns(["SECRET123"])
         flow = _make_stub_flow(
@@ -1166,573 +863,6 @@ class GateAndUrlHeaderTest(unittest.TestCase):
         self.assertNotIn("SECRET123", flow.request.path)
         self.assertNotIn("SECRET123", flow.request.headers["x-custom"])
         self.assertIn(b"SECRET123", flow.request.content)  # body は触らない
-
-
-_DEFAULT_REVIEW_RULES = object()
-
-
-class AnthropicRequestFlowTest(unittest.TestCase):
-    def setUp(self):
-        self.session_id = "sess-test"
-        self.token = "token-test"
-        self.proxy_auth = "Basic " + base64.b64encode(
-            f"{self.session_id}:{self.token}".encode()
-        ).decode()
-        self.registry = {
-            "tokenHash": nas_addon._hash_token(self.token),
-            "anthropicEgress": True,
-        }
-
-    def _run_request(
-        self,
-        *,
-        method="GET",
-        path="/api/claude_code/settings",
-        content=b"",
-        headers=None,
-        host="api.anthropic.com",
-        addon=None,
-        outcome_failure=False,
-        on_outcome=None,
-        request_class=FakeRequest,
-        review_rules=_DEFAULT_REVIEW_RULES,
-        client_id="client-test",
-    ):
-        request_headers = list(headers or [])
-        request_headers.append(("proxy-authorization", self.proxy_auth))
-        flow = FakeFlow(request_class(
-            path=path,
-            headers=request_headers,
-            content=content,
-            method=method,
-            host=host,
-        ))
-        flow.client_conn.id = client_id
-        addon = addon or nas_addon.NasAddon()
-        messages = []
-
-        def query_broker(_socket_path, request):
-            messages.append(json.loads(json.dumps(request)))
-            if request["type"] == "authorize":
-                return {
-                    "decision": "allow",
-                    "requestId": request["requestId"],
-                    "reason": "review-rule",
-                    "maskValues": ["SECRET123"],
-                    "injectHeaders": [
-                        {"name": "x-api-key", "value": "injected-value"}
-                    ],
-                }
-            if on_outcome is not None:
-                on_outcome(flow)
-            if outcome_failure:
-                raise RuntimeError("SECRET123 /raw/private-path")
-            return {
-                "version": 1,
-                "type": "egress_outcome_recorded",
-                "requestId": request["requestId"],
-            }
-
-        if review_rules is _DEFAULT_REVIEW_RULES:
-            loaded_review_rules = {"contractVersion": 1, "rules": []}
-        elif isinstance(review_rules, list):
-            loaded_review_rules = {
-                "contractVersion": 1,
-                "rules": review_rules,
-            }
-        else:
-            loaded_review_rules = review_rules
-
-        stderr = io.StringIO()
-        with patch.object(
-            nas_addon, "_load_registry", return_value=self.registry
-        ), patch.object(
-            nas_addon,
-            "_load_review_rules",
-            return_value=loaded_review_rules,
-        ), patch.object(
-            nas_addon, "_generate_request_id", return_value="req-test"
-        ), patch.object(
-            nas_addon, "_query_broker", side_effect=query_broker
-        ), patch.object(
-            nas_addon.http.Response,
-            "make",
-            side_effect=lambda status, body=b"", response_headers=None: (
-                FakeResponse(status, body, response_headers)
-            ),
-        ), redirect_stderr(stderr):
-            addon.request(flow)
-
-        return flow, messages, stderr.getvalue()
-
-    def _outcomes(self, messages):
-        return [m for m in messages if m["type"] == "egress_outcome"]
-
-    def _run_connect(self, addon, client_id, *, authenticated):
-        headers = {"proxy-authorization": self.proxy_auth} if authenticated else {}
-        flow = FakeFlow(FakeRequest(
-            headers=headers,
-            host="api.anthropic.com",
-        ))
-        flow.client_conn.id = client_id
-        stderr = io.StringIO()
-        with patch.object(
-            nas_addon, "_verify_creds", return_value=(
-                self.registry if authenticated else None
-            )
-        ), patch.object(
-            nas_addon.http.Response,
-            "make",
-            side_effect=lambda status, body=b"", response_headers=None: (
-                FakeResponse(status, body, response_headers)
-            ),
-        ), redirect_stderr(stderr):
-            addon.http_connect(flow)
-        return flow
-
-    def test_missing_credentials_log_uses_only_sanitized_request_fields(self):
-        flow = FakeFlow(FakeRequest(
-            path="/private/SECRET123?filename=SECRET123.txt",
-            method="CUSTOM-SECRET123",
-            host="api.anthropic.com",
-        ))
-        stderr = io.StringIO()
-
-        with patch.object(
-            nas_addon.http.Response,
-            "make",
-            side_effect=lambda status, body=b"", response_headers=None: (
-                FakeResponse(status, body, response_headers)
-            ),
-        ), redirect_stderr(stderr):
-            nas_addon.NasAddon().request(flow)
-
-        self.assertEqual(flow.response.status_code, 407)
-        self.assertNotIn("SECRET123", stderr.getvalue())
-        self.assertIn("method=OTHER route=unknown", stderr.getvalue())
-
-    def test_invalid_contract_blocks_before_broker_or_credential_injection(self):
-        flow, messages, stderr = self._run_request(review_rules=None)
-
-        self.assertEqual(flow.response.status_code, 403)
-        self.assertEqual(flow.response.content, b"blocked: request policy")
-        self.assertNotIn("x-api-key", flow.request.headers)
-        self.assertEqual(messages, [])
-        self.assertEqual(
-            stderr,
-            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
-            "session=sess-test\n",
-        )
-
-    def test_invalid_contract_log_sanitizes_untrusted_session_identifier(self):
-        self.session_id = "sess-test\nSECRET-session"
-        self.proxy_auth = "Basic " + base64.b64encode(
-            f"{self.session_id}:{self.token}".encode()
-        ).decode()
-
-        flow, messages, stderr = self._run_request(review_rules=None)
-
-        self.assertEqual(flow.response.status_code, 403)
-        self.assertEqual(messages, [])
-        self.assertEqual(
-            stderr,
-            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
-            "session=invalid\n",
-        )
-        self.assertNotIn("SECRET-session", stderr)
-
-    def test_trailing_dot_policy_host_pre_match_includes_body_preview(self):
-        body = b'{"messages":[]}'
-        rule = {
-            "id": "anthropic.messages.create",
-            "method": "POST",
-            "host": "api.anthropic.com.",
-            "path": "/v1/messages",
-            "action": "allow",
-            "audit": True,
-        }
-
-        _flow, messages, _stderr = self._run_request(
-            method="POST",
-            path="/v1/messages",
-            content=body,
-            review_rules=[rule],
-        )
-
-        authorization = next(
-            message
-            for message in messages
-            if message["type"] == "authorize"
-        )
-        self.assertEqual(
-            authorization["reviewContext"],
-            {
-                "path": "/v1/messages",
-                "contentType": None,
-                "bodyPreview": body.decode(),
-                "bodySize": len(body),
-            },
-        )
-
-    def test_bodyless_known_get_allows_and_reports_once(self):
-        flow, messages, _stderr = self._run_request()
-
-        self.assertIsNone(flow.response)
-        self.assertEqual(flow.request.headers["x-api-key"], "injected-value")
-        outcomes = self._outcomes(messages)
-        self.assertEqual(len(outcomes), 1)
-        self.assertEqual(
-            (outcomes[0]["method"], outcomes[0]["route"],
-             outcomes[0]["action"], outcomes[0]["reason"]),
-            (
-                "GET",
-                "/api/claude_code/settings",
-                "bodyless-pass",
-                "known-bodyless-endpoint",
-            ),
-        )
-
-    def test_nonempty_known_get_blocks_with_fixed_response(self):
-        flow, messages, _stderr = self._run_request(content=b"x")
-
-        self.assertEqual(flow.response.status_code, 403)
-        self.assertEqual(
-            flow.response.content,
-            b"blocked: Anthropic egress policy",
-        )
-        self.assertNotIn("x-api-key", flow.request.headers)
-        outcomes = self._outcomes(messages)
-        self.assertEqual(len(outcomes), 1)
-        self.assertEqual(outcomes[0]["action"], "block")
-        self.assertEqual(outcomes[0]["reason"], "unexpected-body")
-
-    def test_unavailable_body_blocks_with_precise_outcome(self):
-        flow, messages, _stderr = self._run_request(
-            request_class=FakeUndecodableRequest
-        )
-
-        self.assertEqual(flow.response.status_code, 403)
-        outcomes = self._outcomes(messages)
-        self.assertEqual(len(outcomes), 1)
-        self.assertEqual(
-            (outcomes[0]["action"], outcomes[0]["reason"]),
-            ("block", "body-unavailable"),
-        )
-
-    def test_matching_allow_rule_with_unavailable_body_blocks_once(self):
-        flow, messages, _stderr = self._run_request(
-            request_class=FakeUndecodableRequest,
-            review_rules=[{
-                "method": "GET",
-                "host": "api.anthropic.com",
-                "pathPrefix": "/api/claude_code/settings",
-                "action": "allow",
-            }],
-        )
-
-        self.assertEqual(flow.response.status_code, 403)
-        self.assertEqual(
-            flow.response.content,
-            b"blocked: Anthropic egress policy",
-        )
-        outcomes = self._outcomes(messages)
-        self.assertEqual(len(outcomes), 1)
-        self.assertEqual(
-            (outcomes[0]["action"], outcomes[0]["reason"]),
-            ("block", "body-unavailable"),
-        )
-
-    def test_telemetry_and_files_block_with_sanitized_routes(self):
-        cases = [
-            (
-                "/api/claude_code/metrics?value=SECRET123",
-                "/api/claude_code/metrics",
-                "unknown-endpoint",
-            ),
-            (
-                "/v1/files/private-SECRET123-name",
-                "/v1/files",
-                "file-upload-blocked",
-            ),
-        ]
-        for path, route, reason in cases:
-            with self.subTest(path=path):
-                flow, messages, stderr = self._run_request(
-                    method="POST", path=path, content=b"SECRET123"
-                )
-                self.assertEqual(flow.response.status_code, 403)
-                self.assertEqual(
-                    flow.response.content,
-                    b"blocked: Anthropic egress policy",
-                )
-                outcome = self._outcomes(messages)[0]
-                self.assertEqual((outcome["route"], outcome["reason"]),
-                                 (route, reason))
-                self.assertNotIn("SECRET123", json.dumps(outcome))
-                self.assertNotIn("SECRET123", stderr)
-
-    def test_query_and_header_are_masked_before_logging_or_injection(self):
-        observed_headers_at_outcome = []
-
-        def observe(flow):
-            observed_headers_at_outcome.append(
-                "x-api-key" in flow.request.headers
-            )
-
-        flow, messages, stderr = self._run_request(
-            path="/api/claude_code/settings?token=SECRET123",
-            headers=[("x-note", "value=SECRET123")],
-            on_outcome=observe,
-        )
-
-        self.assertEqual(
-            flow.request.path,
-            "/api/claude_code/settings?token=****",
-        )
-        self.assertEqual(flow.request.headers["x-note"], "value=****")
-        self.assertNotIn("SECRET123", stderr)
-        self.assertNotIn("SECRET123", json.dumps(self._outcomes(messages)))
-        self.assertEqual(observed_headers_at_outcome, [False])
-        self.assertEqual(flow.request.headers["x-api-key"], "injected-value")
-
-    def test_unrecognized_query_value_never_enters_anthropic_logs(self):
-        raw_query_value = "PRIVATE-NOT-A-MASK-VALUE"
-        flow, messages, stderr = self._run_request(
-            path=(
-                "/api/claude_code/settings?filename="
-                f"{raw_query_value}.txt"
-            ),
-        )
-
-        self.assertIsNone(flow.response)
-        self.assertIn(raw_query_value, flow.request.path)
-        self.assertNotIn(raw_query_value, stderr)
-        self.assertNotIn(raw_query_value, json.dumps(self._outcomes(messages)))
-
-    def test_unknown_path_data_never_enters_stderr_or_outcome(self):
-        flow, messages, stderr = self._run_request(
-            method="POST",
-            path="/private/SECRET123?filename=SECRET123.txt",
-            headers=[("x-private", "SECRET123")],
-            content=b"SECRET123",
-        )
-
-        self.assertEqual(flow.response.status_code, 403)
-        outcome = self._outcomes(messages)[0]
-        self.assertEqual(outcome["route"], "unknown")
-        self.assertEqual(outcome["reason"], "unknown-endpoint")
-        self.assertNotIn("SECRET123", json.dumps(outcome))
-        self.assertNotIn("SECRET123", stderr)
-
-    def test_schema_rewrite_masks_body_and_reports_schema_mask(self):
-        body = json.dumps({
-            "model": "m",
-            "messages": [
-                {"role": "user", "content": "token SECRET123"}
-            ],
-        }).encode()
-        flow, messages, _stderr = self._run_request(
-            method="POST", path="/v1/messages", content=body
-        )
-
-        self.assertIsNone(flow.response)
-        self.assertNotIn(b"SECRET123", flow.request.content)
-        self.assertIn(b"****", flow.request.content)
-        outcome = self._outcomes(messages)[0]
-        self.assertEqual(
-            (outcome["action"], outcome["reason"]),
-            ("schema-mask", "recognized-schema"),
-        )
-
-    def test_empty_schema_body_blocks_as_decode_failure(self):
-        flow, messages, _stderr = self._run_request(
-            method="POST", path="/v1/messages", content=b""
-        )
-
-        self.assertEqual(flow.response.status_code, 403)
-        self.assertEqual(
-            flow.response.content,
-            b"blocked: Anthropic egress policy",
-        )
-        outcomes = self._outcomes(messages)
-        self.assertEqual(len(outcomes), 1)
-        self.assertEqual(
-            (outcomes[0]["action"], outcomes[0]["reason"]),
-            ("block", "decode-failed"),
-        )
-
-    def test_unknown_schema_block_reports_precise_reason(self):
-        body = json.dumps({
-            "messages": [{
-                "role": "user",
-                "content": [{"type": "future-block"}],
-            }],
-        }).encode()
-        flow, messages, _stderr = self._run_request(
-            method="POST", path="/v1/messages", content=body
-        )
-
-        self.assertEqual(flow.response.status_code, 403)
-        outcomes = self._outcomes(messages)
-        self.assertEqual(len(outcomes), 1)
-        self.assertEqual(
-            (outcomes[0]["action"], outcomes[0]["reason"]),
-            ("block", "schema-unknown"),
-        )
-
-    def test_unsupported_methods_block_and_report_only_other(self):
-        for method in ("HEAD", "PUT"):
-            with self.subTest(method=method):
-                flow, messages, stderr = self._run_request(method=method)
-                self.assertEqual(flow.response.status_code, 403)
-                outcomes = self._outcomes(messages)
-                self.assertEqual(len(outcomes), 1)
-                outcome = outcomes[0]
-                self.assertEqual(outcome["method"], "OTHER")
-                self.assertEqual(outcome["action"], "block")
-                self.assertNotIn(method, json.dumps(outcome))
-                self.assertNotIn(method, stderr)
-
-    def test_outcome_failure_does_not_change_allow_or_block(self):
-        allowed, allowed_messages, allowed_stderr = self._run_request(
-            outcome_failure=True
-        )
-        blocked, blocked_messages, blocked_stderr = self._run_request(
-            method="POST",
-            path="/api/event_logging/v2/batch",
-            outcome_failure=True,
-        )
-
-        self.assertIsNone(allowed.response)
-        self.assertEqual(blocked.response.status_code, 403)
-        self.assertEqual(len(self._outcomes(allowed_messages)), 1)
-        self.assertEqual(len(self._outcomes(blocked_messages)), 1)
-        self.assertIn(
-            "[nas-addon] egress outcome audit unavailable",
-            allowed_stderr,
-        )
-        self.assertIn(
-            "[nas-addon] egress outcome audit unavailable",
-            blocked_stderr,
-        )
-        self.assertNotIn("SECRET123", allowed_stderr + blocked_stderr)
-
-    def test_repeated_blocks_log_only_at_power_of_two_counts(self):
-        addon = nas_addon.NasAddon()
-        stderr = ""
-        outcome_count = 0
-        for _ in range(9):
-            _flow, messages, request_stderr = self._run_request(
-                method="POST",
-                path="/api/claude_code/metrics",
-                addon=addon,
-            )
-            stderr += request_stderr
-            outcome_count += len(self._outcomes(messages))
-
-        block_lines = [
-            line for line in stderr.splitlines()
-            if line.startswith("[nas-addon] ANTHROPIC-BLOCKED:")
-        ]
-        self.assertEqual(outcome_count, 9)
-        self.assertEqual(
-            block_lines,
-            [
-                "[nas-addon] ANTHROPIC-BLOCKED: method=POST "
-                "route=/api/claude_code/metrics action=block "
-                f"reason=unknown-endpoint count={count}"
-                for count in (1, 2, 4, 8)
-            ],
-        )
-
-    def test_client_disconnect_prunes_only_its_session_block_counts(self):
-        addon = nas_addon.NasAddon()
-        self._run_request(
-            method="POST",
-            path="/api/claude_code/metrics",
-            addon=addon,
-            client_id="client-one",
-        )
-        unrelated_key = (
-            "sess-unrelated",
-            "POST",
-            "/v1/files",
-            "block",
-            "file-upload-blocked",
-        )
-        addon._anthropic_block_counts[unrelated_key] = 7
-
-        addon.client_disconnected(FakeClientConnection("client-one"))
-
-        self.assertEqual(addon._anthropic_block_counts, {unrelated_key: 7})
-
-    def test_shared_session_counts_remain_until_last_client_disconnects(self):
-        addon = nas_addon.NasAddon()
-        for client_id in ("client-one", "client-two"):
-            self._run_request(
-                method="POST",
-                path="/api/claude_code/metrics",
-                addon=addon,
-                client_id=client_id,
-            )
-        self.assertEqual(len(addon._anthropic_block_counts), 1)
-
-        addon.client_disconnected(FakeClientConnection("client-one"))
-        self.assertEqual(len(addon._anthropic_block_counts), 1)
-
-        addon.client_disconnected(FakeClientConnection("client-two"))
-        self.assertEqual(addon._anthropic_block_counts, {})
-
-    def test_authenticated_connect_keeps_session_active_before_inner_request(self):
-        addon = nas_addon.NasAddon()
-        self._run_request(
-            method="POST",
-            path="/api/claude_code/metrics",
-            addon=addon,
-            client_id="request-client",
-        )
-        connect_flow = self._run_connect(
-            addon,
-            "connect-client",
-            authenticated=True,
-        )
-        self.assertIsNone(connect_flow.response)
-
-        addon.client_disconnected(FakeClientConnection("request-client"))
-        self.assertEqual(len(addon._anthropic_block_counts), 1)
-
-        addon.client_disconnected(FakeClientConnection("connect-client"))
-        self.assertEqual(addon._anthropic_block_counts, {})
-
-    def test_failed_connect_does_not_keep_session_block_counts(self):
-        addon = nas_addon.NasAddon()
-        self._run_request(
-            method="POST",
-            path="/api/claude_code/metrics",
-            addon=addon,
-            client_id="request-client",
-        )
-        connect_flow = self._run_connect(
-            addon,
-            "failed-connect-client",
-            authenticated=False,
-        )
-        self.assertEqual(connect_flow.response.status_code, 407)
-
-        addon.client_disconnected(FakeClientConnection("request-client"))
-        self.assertEqual(addon._anthropic_block_counts, {})
-
-    def test_non_anthropic_request_keeps_generic_masking_without_outcome(self):
-        flow, messages, _stderr = self._run_request(
-            host="example.com",
-            method="POST",
-            path="/submit",
-            content=b"value=SECRET123",
-        )
-
-        self.assertIsNone(flow.response)
-        self.assertEqual(flow.request.content, b"value=****")
-        self.assertEqual(self._outcomes(messages), [])
 
 
 _DEFAULT_JSON_LIMITS = {
@@ -2537,6 +1667,538 @@ class RequestPolicyInjectedExceptionTest(unittest.TestCase):
                 _json_policy(), self.body, self.patterns
             )
         self.assertEqual(stderr.getvalue(), "")
+
+
+def _policy_rule(rule_id, **overrides):
+    """許可 + JSON ポリシー付きの解決済みルール。"""
+    rule = {
+        "id": rule_id,
+        "method": "POST",
+        "host": "api.example.com",
+        "path": "/v1/messages",
+        "action": "allow",
+        "audit": True,
+        "requestPolicy": _json_policy(),
+    }
+    rule.update(overrides)
+    return rule
+
+
+def _bodyless_rule(rule_id, **overrides):
+    rule = {
+        "id": rule_id,
+        "method": "GET",
+        "host": "api.example.com",
+        "path": "/v1/models",
+        "action": "allow",
+        "audit": True,
+        "requestPolicy": {"kind": "bodyless"},
+    }
+    rule.update(overrides)
+    return rule
+
+
+class RequestPolicyFlowTest(unittest.TestCase):
+    """request() が broker の権威的な ruleId でポリシーを実行することの検証。
+
+    ローカルの事前マッチはプレビュー選択のためだけに使ってよく、どのポリシーを
+    実行するかを決めてはならない。決めてしまうと、broker が持つ解決済み
+    ドキュメントとローカルの判断がずれたときに、承認されていないポリシーが
+    実行されうる。"""
+
+    def setUp(self):
+        self.session_id = "sess-test"
+        self.token = "token-test"
+        self.proxy_auth = "Basic " + base64.b64encode(
+            f"{self.session_id}:{self.token}".encode()
+        ).decode()
+        self.registry = {"tokenHash": nas_addon._hash_token(self.token)}
+
+    def _run(
+        self,
+        *,
+        rules,
+        rule_id="messages",
+        method="POST",
+        path="/v1/messages",
+        host="api.example.com",
+        content=b'{"text":"SECRET123"}',
+        headers=None,
+        request_class=FakeRequest,
+        inject=True,
+        addon=None,
+        client_id="client-test",
+    ):
+        """rule_id は broker が返す権威的な ID。省略記法として None で ID 無し。"""
+        request_headers = list(headers or [])
+        request_headers.append(("proxy-authorization", self.proxy_auth))
+        flow = FakeFlow(request_class(
+            path=path,
+            headers=request_headers,
+            content=content,
+            method=method,
+            host=host,
+        ))
+        flow.client_conn.id = client_id
+        addon = addon or nas_addon.NasAddon()
+        messages = []
+
+        def query_broker(_socket_path, request):
+            messages.append(json.loads(json.dumps(request)))
+            if request["type"] == "authorize":
+                decision = {
+                    "decision": "allow",
+                    "requestId": request["requestId"],
+                    "reason": "review-rule",
+                    "maskValues": ["SECRET123"],
+                }
+                if rule_id is not None:
+                    decision["ruleId"] = rule_id
+                if inject:
+                    decision["injectHeaders"] = [
+                        {"name": "x-api-key", "value": "injected-value"}
+                    ]
+                return decision
+            return {
+                "version": 1,
+                "type": "request_policy_outcome_recorded",
+                "requestId": request["requestId"],
+            }
+
+        stderr = io.StringIO()
+        with patch.object(
+            nas_addon, "_load_registry", return_value=self.registry
+        ), patch.object(
+            nas_addon,
+            "_load_review_rules",
+            # rules=None は「契約として読めないドキュメント」を表す。
+            return_value=(
+                None
+                if rules is None
+                else {"contractVersion": 1, "rules": rules}
+            ),
+        ), patch.object(
+            nas_addon, "_generate_request_id", return_value="req-test"
+        ), patch.object(
+            nas_addon, "_query_broker", side_effect=query_broker
+        ), patch.object(
+            nas_addon.http.Response,
+            "make",
+            side_effect=lambda status, body=b"", response_headers=None: (
+                FakeResponse(status, body, response_headers)
+            ),
+        ), redirect_stderr(stderr):
+            addon.request(flow)
+
+        return flow, messages, stderr.getvalue()
+
+    def _outcomes(self, messages):
+        return [
+            m for m in messages if m["type"] == "request_policy_outcome"
+        ]
+
+    def _injected(self, flow):
+        return flow.request.headers.get("x-api-key")
+
+    def _run_connect(self, addon, client_id, *, authenticated):
+        headers = (
+            {"proxy-authorization": self.proxy_auth} if authenticated else {}
+        )
+        flow = FakeFlow(FakeRequest(headers=headers, host="api.example.com"))
+        flow.client_conn.id = client_id
+        stderr = io.StringIO()
+        with patch.object(
+            nas_addon, "_verify_creds", return_value=(
+                self.registry if authenticated else None
+            )
+        ), patch.object(
+            nas_addon.http.Response,
+            "make",
+            side_effect=lambda status, body=b"", response_headers=None: (
+                FakeResponse(status, body, response_headers)
+            ),
+        ), redirect_stderr(stderr):
+            addon.http_connect(flow)
+        return flow
+
+    def test_broker_rule_id_beats_local_pre_match(self):
+        # ローカルの first-match は bodyless (非空ボディを block) を選ぶが、
+        # broker は JSON ポリシーの ID を返す。実行されるのは broker の方。
+        local = _bodyless_rule(
+            "local-first", method="POST", path="/v1/messages"
+        )
+        local["requestPolicy"] = {"kind": "bodyless"}
+        flow, messages, _stderr = self._run(
+            rules=[local, _policy_rule("broker-choice")],
+            rule_id="broker-choice",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b'{"text":"****"}')
+        self.assertEqual(
+            [(m["ruleId"], m["result"], m["reason"])
+             for m in self._outcomes(messages)],
+            [("broker-choice", "rewrite", "masked-json")],
+        )
+
+    def test_unknown_rule_id_blocks_before_injection(self):
+        flow, messages, _stderr = self._run(
+            rules=[_policy_rule("messages")],
+            rule_id="not-in-document",
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(
+            flow.response.content, nas_addon.REQUEST_POLICY_BLOCK_BODY
+        )
+        self.assertIsNone(self._injected(flow))
+        self.assertEqual(self._outcomes(messages), [])
+
+    def test_id_less_allow_keeps_generic_masking(self):
+        flow, messages, _stderr = self._run(
+            rules=[],
+            rule_id=None,
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b"value=SECRET123",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b"value=****")
+        self.assertEqual(self._outcomes(messages), [])
+        self.assertEqual(self._injected(flow), "injected-value")
+
+    def test_rule_without_policy_keeps_generic_masking(self):
+        ordinary = {
+            "id": "ordinary",
+            "host": "example.com",
+            "action": "allow",
+            "audit": True,
+        }
+        flow, messages, _stderr = self._run(
+            rules=[ordinary],
+            rule_id="ordinary",
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b"value=SECRET123",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b"value=****")
+        self.assertEqual(self._outcomes(messages), [])
+        self.assertEqual(self._injected(flow), "injected-value")
+
+    def test_approved_review_executes_policy(self):
+        flow, messages, _stderr = self._run(
+            rules=[_policy_rule("messages", action="review")],
+            rule_id="messages",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b'{"text":"****"}')
+        self.assertEqual(
+            [m["result"] for m in self._outcomes(messages)], ["rewrite"]
+        )
+
+    def test_policy_block_prevents_credential_injection(self):
+        flow, messages, _stderr = self._run(
+            rules=[_bodyless_rule("models")],
+            rule_id="models",
+            method="GET",
+            path="/v1/models",
+            content=b"unexpected",
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(
+            flow.response.content, nas_addon.REQUEST_POLICY_BLOCK_BODY
+        )
+        self.assertIsNone(self._injected(flow))
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("block", "unexpected-body")],
+        )
+
+    def test_pass_injects_credentials_after_policy(self):
+        flow, messages, _stderr = self._run(
+            rules=[_bodyless_rule("models")],
+            rule_id="models",
+            method="GET",
+            path="/v1/models",
+            content=b"",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(self._injected(flow), "injected-value")
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("pass", "empty-body")],
+        )
+
+    def test_rewrite_injects_credentials_after_policy(self):
+        flow, _messages, _stderr = self._run(
+            rules=[_policy_rule("messages")],
+            rule_id="messages",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b'{"text":"****"}')
+        self.assertEqual(self._injected(flow), "injected-value")
+
+    def test_outcome_carries_only_the_closed_field_set(self):
+        _flow, messages, _stderr = self._run(
+            rules=[_policy_rule("messages")],
+            rule_id="messages",
+        )
+
+        outcome = self._outcomes(messages)[0]
+        self.assertEqual(
+            set(outcome),
+            {
+                "version",
+                "type",
+                "requestId",
+                "sessionId",
+                "ruleId",
+                "result",
+                "reason",
+            },
+        )
+        self.assertEqual(outcome["sessionId"], self.session_id)
+        self.assertEqual(outcome["requestId"], "req-test")
+
+    def test_missing_credentials_log_uses_only_sanitized_request_fields(self):
+        flow = FakeFlow(FakeRequest(
+            path="/private/SECRET123?filename=SECRET123.txt",
+            method="CUSTOM-SECRET123",
+            host="api.example.com",
+        ))
+        stderr = io.StringIO()
+        with patch.object(
+            nas_addon.http.Response,
+            "make",
+            side_effect=lambda status, body=b"", response_headers=None: (
+                FakeResponse(status, body, response_headers)
+            ),
+        ), redirect_stderr(stderr):
+            nas_addon.NasAddon().request(flow)
+
+        self.assertEqual(flow.response.status_code, 407)
+        self.assertIn("method=OTHER", stderr.getvalue())
+        self.assertNotIn("SECRET123", stderr.getvalue())
+        self.assertNotIn("/private/", stderr.getvalue())
+
+    def test_invalid_contract_blocks_before_broker_or_injection(self):
+        flow, messages, stderr = self._run(rules=None)
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(
+            flow.response.content, nas_addon.REQUEST_POLICY_BLOCK_BODY
+        )
+        self.assertIsNone(self._injected(flow))
+        self.assertEqual(messages, [])
+        self.assertEqual(
+            stderr,
+            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
+            "session=sess-test\n",
+        )
+
+    def test_invalid_contract_log_sanitizes_untrusted_session_id(self):
+        self.session_id = "sess-test\nSECRET-session"
+        self.proxy_auth = "Basic " + base64.b64encode(
+            f"{self.session_id}:{self.token}".encode()
+        ).decode()
+
+        flow, messages, stderr = self._run(rules=None)
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(messages, [])
+        self.assertEqual(
+            stderr,
+            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
+            "session=invalid\n",
+        )
+
+    def test_unknown_rule_id_log_sanitizes_the_broker_supplied_id(self):
+        _flow, _messages, stderr = self._run(
+            rules=[_policy_rule("messages")],
+            rule_id="NOT A VALID ID\nSECRET-rule",
+        )
+
+        self.assertEqual(
+            stderr,
+            "[nas-addon] REQUEST-POLICY-RULE-UNKNOWN: "
+            "session=sess-test rule=invalid\n",
+        )
+
+    def test_pre_match_attaches_bounded_preview_for_trailing_dot_host(self):
+        body = b'{"text":"hello"}'
+        rule = _policy_rule("messages", host="api.example.com.")
+
+        _flow, messages, _stderr = self._run(
+            rules=[rule], rule_id="messages", content=body
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(
+            authorization["reviewContext"],
+            {
+                "path": "/v1/messages",
+                "contentType": None,
+                "bodyPreview": body.decode(),
+                "bodySize": len(body),
+            },
+        )
+
+    def test_query_and_header_are_masked_before_injection(self):
+        flow, _messages, stderr = self._run(
+            rules=[_policy_rule("messages")],
+            rule_id="messages",
+            path="/v1/messages?k=SECRET123",
+            headers=[("x-custom", "SECRET123")],
+        )
+
+        self.assertEqual(flow.request.path, "/v1/messages?k=****")
+        self.assertEqual(flow.request.headers["x-custom"], "****")
+        self.assertEqual(self._injected(flow), "injected-value")
+        self.assertNotIn("SECRET123", stderr)
+
+    def test_policy_request_never_logs_the_path_or_its_query(self):
+        _flow, _messages, stderr = self._run(
+            rules=[_policy_rule("messages")],
+            rule_id="messages",
+            path="/v1/messages?filename=PRIVATE-NOT-A-MASK-VALUE.txt",
+        )
+
+        self.assertNotIn("PRIVATE-NOT-A-MASK-VALUE", stderr)
+        self.assertNotIn("/v1/messages", stderr)
+
+    def test_outcome_failure_does_not_change_the_computed_result(self):
+        rules = [_policy_rule("messages")]
+
+        def failing_broker(_socket_path, request):
+            if request["type"] == "authorize":
+                return {
+                    "decision": "allow",
+                    "requestId": request["requestId"],
+                    "reason": "review-rule",
+                    "ruleId": "messages",
+                    "maskValues": ["SECRET123"],
+                }
+            raise RuntimeError("SECRET123 /raw/private-path")
+
+        flow = FakeFlow(FakeRequest(
+            path="/v1/messages",
+            headers=[("proxy-authorization", self.proxy_auth)],
+            content=b'{"text":"SECRET123"}',
+            method="POST",
+            host="api.example.com",
+        ))
+        stderr = io.StringIO()
+        with patch.object(
+            nas_addon, "_load_registry", return_value=self.registry
+        ), patch.object(
+            nas_addon,
+            "_load_review_rules",
+            return_value={"contractVersion": 1, "rules": rules},
+        ), patch.object(
+            nas_addon, "_generate_request_id", return_value="req-test"
+        ), patch.object(
+            nas_addon, "_query_broker", side_effect=failing_broker
+        ), patch.object(
+            nas_addon.http.Response,
+            "make",
+            side_effect=lambda status, body=b"", response_headers=None: (
+                FakeResponse(status, body, response_headers)
+            ),
+        ), redirect_stderr(stderr):
+            nas_addon.NasAddon().request(flow)
+
+        # 監査が届かなくても、計算済みの rewrite はそのまま通す。
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b'{"text":"****"}')
+        self.assertEqual(
+            stderr.getvalue(),
+            nas_addon.REQUEST_POLICY_AUDIT_UNAVAILABLE + "\n",
+        )
+
+    def test_repeated_blocks_log_only_at_power_of_two_counts(self):
+        addon = nas_addon.NasAddon()
+        lines = []
+        for _ in range(5):
+            _flow, _messages, stderr = self._run(
+                rules=[_bodyless_rule("models")],
+                rule_id="models",
+                method="GET",
+                path="/v1/models",
+                content=b"unexpected",
+                addon=addon,
+            )
+            lines.append(stderr)
+
+        emitted = [line for line in lines if line]
+        self.assertEqual(len(emitted), 3)  # count=1,2,4
+        self.assertIn("count=1", emitted[0])
+        self.assertIn("count=2", emitted[1])
+        self.assertIn("count=4", emitted[2])
+        self.assertIn("rule=models kind=bodyless", emitted[0])
+        self.assertIn("result=block reason=unexpected-body", emitted[0])
+
+    def _block_once(self, addon, client_id):
+        return self._run(
+            rules=[_bodyless_rule("models")],
+            rule_id="models",
+            method="GET",
+            path="/v1/models",
+            content=b"unexpected",
+            addon=addon,
+            client_id=client_id,
+        )
+
+    def test_client_disconnect_prunes_only_its_session_counts(self):
+        addon = nas_addon.NasAddon()
+        self._block_once(addon, "client-a")
+        self.assertTrue(addon._request_policy_block_counts)
+
+        addon.client_disconnected(FakeClientConnection("client-a"))
+
+        self.assertEqual(addon._request_policy_block_counts, {})
+
+    def test_shared_session_counts_remain_until_last_client_leaves(self):
+        addon = nas_addon.NasAddon()
+        self._block_once(addon, "client-a")
+        self._block_once(addon, "client-b")
+
+        addon.client_disconnected(FakeClientConnection("client-a"))
+
+        # 同じセッションを client-b がまだ握っているので消してはならない。
+        self.assertTrue(addon._request_policy_block_counts)
+
+        addon.client_disconnected(FakeClientConnection("client-b"))
+
+        self.assertEqual(addon._request_policy_block_counts, {})
+
+    def test_authenticated_connect_keeps_the_session_active(self):
+        addon = nas_addon.NasAddon()
+        self._block_once(addon, "client-a")
+        self._run_connect(addon, "client-b", authenticated=True)
+
+        addon.client_disconnected(FakeClientConnection("client-a"))
+
+        self.assertTrue(addon._request_policy_block_counts)
+
+    def test_failed_connect_does_not_keep_session_counts(self):
+        addon = nas_addon.NasAddon()
+        self._block_once(addon, "client-a")
+        self._run_connect(addon, "client-b", authenticated=False)
+
+        addon.client_disconnected(FakeClientConnection("client-a"))
+
+        self.assertEqual(addon._request_policy_block_counts, {})
 
 
 if __name__ == "__main__":
