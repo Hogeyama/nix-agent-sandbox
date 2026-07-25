@@ -542,6 +542,345 @@ def _should_emit_block_log(count: int) -> bool:
     return count > 0 and (count & (count - 1)) == 0
 
 
+# --- generic request-policy engine -----------------------------------------
+# Pure dispatcher for validated bodyless/json request policies. Returns
+# (result, rewritten_body_or_none, closed_reason). Every exception path
+# blocks; no body, exception, or secret data is logged here.
+
+
+class _PolicyBlock(Exception):
+    """Internal control-flow signal carrying a closed block reason."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _mask_json_string(value: str, patterns: list[bytes]) -> tuple[str, bool]:
+    masked = _mask_bytes(
+        value.encode("utf-8", "surrogatepass"), patterns
+    ).decode("utf-8", "surrogatepass")
+    if masked != value:
+        return masked, True
+    return value, False
+
+
+def _recursively_mask_json(
+    node, patterns: list[bytes], consumed: dict
+) -> tuple[object, bool]:
+    """Mask every string value and object key recursively, skipping encoded
+    data already consumed by an encoded-field rule. Raises _PolicyBlock
+    (key-collision) before inserting a duplicate masked key."""
+    if isinstance(node, dict):
+        changed = False
+        new_node: dict = {}
+        consumed_keys = consumed.get(id(node), frozenset())
+        for key, value in node.items():
+            masked_key = key
+            if isinstance(key, str):
+                masked_key, key_changed = _mask_json_string(key, patterns)
+                changed = changed or key_changed
+            if key in consumed_keys:
+                new_value, value_changed = value, False
+            else:
+                new_value, value_changed = _recursively_mask_json(
+                    value, patterns, consumed
+                )
+            changed = changed or value_changed
+            if masked_key in new_node:
+                raise _PolicyBlock("key-collision")
+            new_node[masked_key] = new_value
+        return new_node, changed
+    if isinstance(node, list):
+        changed = False
+        new_list = []
+        for item in node:
+            new_item, item_changed = _recursively_mask_json(
+                item, patterns, consumed
+            )
+            new_list.append(new_item)
+            changed = changed or item_changed
+        return new_list, changed
+    if isinstance(node, str):
+        return _mask_json_string(node, patterns)
+    return node, False
+
+
+def _json_children(node) -> list:
+    if isinstance(node, dict):
+        return list(node.values())
+    if isinstance(node, list):
+        return list(node)
+    return []
+
+
+def _parse_selector(selector: str) -> list[tuple[str, Optional[str]]]:
+    """Parse a validated restricted-pointer selector into segments.
+
+    Literal segments use JSON Pointer unescaping (`~1` -> `/`, `~0` -> `~`,
+    applied in that order). `*` and `**` are wildcards."""
+    segments: list[tuple[str, Optional[str]]] = []
+    for raw in selector[1:].split("/"):
+        if raw == "*":
+            segments.append(("*", None))
+        elif raw == "**":
+            segments.append(("**", None))
+        else:
+            segments.append(
+                ("literal", raw.replace("~1", "/").replace("~0", "~"))
+            )
+    return segments
+
+
+def _json_pointer_index(literal: str) -> Optional[int]:
+    """Return the array index a literal segment addresses, else None.
+
+    RFC 6901 array indices are ASCII digits with no leading zero (only "0"
+    itself may start with a zero). The end-of-array token "-" is rejected on
+    purpose: it only addresses the append position, never an existing member,
+    so treating it as a match would be unsound."""
+    if not literal or not literal.isascii() or not literal.isdigit():
+        return None
+    if len(literal) > 1 and literal[0] == "0":
+        return None
+    return int(literal)
+
+
+def _collect_selector_matches(node, segments, matches: list, seen: set) -> int:
+    """Collect every node reached by the selector. A node is recorded at most
+    once per selector even when several `**` routes reach it.
+
+    Returns how many (node, segment-index) states were expanded. Expanding a
+    state is a pure function of that state, so each one is memoized and
+    expanded at most once. Without this a selector with several `**` segments
+    re-expands the same subtree once per route and grows superlinearly in the
+    number of `**`; the depth and node budgets alone do not bound it."""
+    expansions = [0]
+    visited: set = set()
+
+    def expand(current, index: int) -> None:
+        state = (id(current), index)
+        if state in visited:
+            return
+        visited.add(state)
+        expansions[0] += 1
+        if index == len(segments):
+            if id(current) not in seen:
+                seen.add(id(current))
+                matches.append(current)
+            return
+        kind, literal = segments[index]
+        if kind == "**":
+            # Zero descendants: the remainder may match at this very node.
+            expand(current, index + 1)
+            # One or more descendants: keep `**` active while descending.
+            for child in _json_children(current):
+                expand(child, index)
+            return
+        if kind == "*":
+            for child in _json_children(current):
+                expand(child, index + 1)
+            return
+        if isinstance(current, dict):
+            if literal in current:
+                expand(current[literal], index + 1)
+            return
+        if isinstance(current, list):
+            array_index = _json_pointer_index(literal)
+            if array_index is not None and array_index < len(current):
+                expand(current[array_index], index + 1)
+
+    expand(node, 0)
+    return expansions[0]
+
+
+def _account_json(node, max_depth: int, max_nodes: int) -> None:
+    """Traverse with explicit depth and node accounting. Raises _PolicyBlock
+    ("resource-limit") as soon as either budget is exceeded. Depth is checked
+    before descending, so recursion stays bounded by max_depth."""
+    remaining = [max_nodes]
+
+    def walk(current, depth: int) -> None:
+        if depth > max_depth:
+            raise _PolicyBlock("resource-limit")
+        remaining[0] -= 1
+        if remaining[0] < 0:
+            raise _PolicyBlock("resource-limit")
+        for child in _json_children(current):
+            walk(child, depth + 1)
+
+    walk(node, 1)
+
+
+def _validate_tagged_unions(root, guards: list) -> None:
+    """Validate every node matched by each guard. A matched node must be an
+    object whose discriminator is its own string property listed in
+    allowedTags. Any other shape blocks as schema-mismatch."""
+    for guard in guards:
+        segments = _parse_selector(guard["at"])
+        matches: list = []
+        _collect_selector_matches(root, segments, matches, set())
+        discriminator = guard["discriminator"]
+        allowed = frozenset(guard["allowedTags"])
+        for node in matches:
+            if not isinstance(node, dict):
+                raise _PolicyBlock("schema-mismatch")
+            tag = node.get(discriminator)
+            if not isinstance(tag, str) or tag not in allowed:
+                raise _PolicyBlock("schema-mismatch")
+
+
+def _decode_strict_base64(value: str) -> bytes:
+    """Decode strict standard base64 only.
+
+    `validate=True` rejects any character outside the standard alphabet, so
+    whitespace, line-wrapped MIME input, and the URL-safe alphabet all fail.
+    The canonical round-trip check additionally rejects wrong padding and
+    non-canonical trailing bits, and guarantees re-encoding is stable."""
+    try:
+        raw = value.encode("ascii")
+        decoded = base64.b64decode(raw, validate=True)
+        if base64.b64encode(decoded) != raw:
+            raise ValueError("non-canonical base64")
+        return decoded
+    except Exception:
+        raise _PolicyBlock("encoded-decode-failed")
+
+
+def _process_encoded_fields(
+    root, encoded_fields: list, patterns: list[bytes], max_decoded: int
+) -> tuple[bool, dict]:
+    """Decode, mask, and canonically re-encode every matching encoded field,
+    mutating `root` in place. Returns (changed, consumed) where `consumed`
+    maps a container's id() to the data fields that must not be masked a
+    second time as ordinary strings."""
+    changed = False
+    consumed: dict = {}
+    remaining = max_decoded
+    for field in encoded_fields:
+        if field["encoding"] != "base64":
+            raise _PolicyBlock("encoded-decode-failed")
+        segments = _parse_selector(field["at"])
+        matches: list = []
+        _collect_selector_matches(root, segments, matches, set())
+        when_field = field["whenField"]
+        when_equals = field["whenEquals"]
+        data_field = field["dataField"]
+        for node in matches:
+            # "/**" also selects scalars and lists; only objects whose
+            # discriminator matches carry an encoded payload.
+            if not isinstance(node, dict):
+                continue
+            if node.get(when_field) != when_equals:
+                continue
+            data = node.get(data_field)
+            if not isinstance(data, str):
+                raise _PolicyBlock("schema-mismatch")
+            decoded = _decode_strict_base64(data)
+            remaining -= len(decoded)
+            if remaining < 0:
+                raise _PolicyBlock("resource-limit")
+            masked_blob = _mask_bytes(decoded, patterns)
+            if masked_blob != decoded:
+                node[data_field] = base64.b64encode(
+                    masked_blob
+                ).decode("ascii")
+                changed = True
+            consumed.setdefault(id(node), set()).add(data_field)
+    return changed, consumed
+
+
+def _reject_non_standard_constant(_literal: str):
+    """Reject NaN / Infinity / -Infinity.
+
+    They are Python extensions, not RFC 8259 JSON. Accepting them would let
+    the rewrite path re-serialize a body that strict parsers upstream would
+    reject, so they are classified as malformed input."""
+    raise _PolicyBlock("invalid-json")
+
+
+def _reject_duplicate_members(pairs):
+    parsed_object: dict = {}
+    for key, value in pairs:
+        if key in parsed_object:
+            raise _PolicyBlock("invalid-json")
+        parsed_object[key] = value
+    return parsed_object
+
+
+def _execute_json_policy(
+    policy: dict, body: Optional[bytes], patterns: list[bytes]
+) -> tuple[str, Optional[bytes], str]:
+    if body is None:
+        return "block", None, "body-unavailable"
+    if len(body) > policy["maxBodyBytes"]:
+        return "block", None, "resource-limit"
+    try:
+        parsed = json.loads(
+            body,
+            object_pairs_hook=_reject_duplicate_members,
+            parse_constant=_reject_non_standard_constant,
+        )
+    except _PolicyBlock as exc:
+        return "block", None, exc.reason
+    except Exception:
+        return "block", None, "invalid-json"
+    if not isinstance(parsed, dict):
+        return "block", None, "schema-mismatch"
+    try:
+        # Accounting runs first on purpose: it proves the tree is within the
+        # depth and node budgets, which is what bounds the recursive `**`
+        # selector traversal and the masking walk that follow.
+        _account_json(parsed, policy["maxDepth"], policy["maxNodes"])
+        _validate_tagged_unions(parsed, policy["taggedUnions"])
+        encoded_changed, consumed = _process_encoded_fields(
+            parsed,
+            policy["encodedFields"],
+            patterns,
+            policy["maxDecodedBytes"],
+        )
+        masked, mask_changed = _recursively_mask_json(
+            parsed, patterns, consumed
+        )
+        changed = encoded_changed or mask_changed
+    except _PolicyBlock as exc:
+        return "block", None, exc.reason
+    except Exception:
+        return "block", None, "processing-failed"
+    if not changed:
+        return "pass", None, "recognized-json"
+    try:
+        serialized = json.dumps(
+            masked, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+    except Exception:
+        return "block", None, "serialization-failed"
+    return "rewrite", serialized, "masked-json"
+
+
+def _execute_request_policy(
+    policy: dict, body: Optional[bytes], patterns: list[bytes]
+) -> tuple[str, Optional[bytes], str]:
+    """Execute a validated request policy against the request body.
+
+    Returns (result, rewritten_body_or_none, closed_reason) where result is
+    one of "pass", "rewrite", or "block". Any unclassified exception blocks
+    with "processing-failed"."""
+    try:
+        kind = policy.get("kind")
+        if kind == "bodyless":
+            if body is None:
+                return "block", None, "body-unavailable"
+            if len(body) != 0:
+                return "block", None, "unexpected-body"
+            return "pass", None, "empty-body"
+        if kind == "json":
+            return _execute_json_policy(policy, body, patterns)
+        return "block", None, "processing-failed"
+    except Exception:
+        return "block", None, "processing-failed"
+
+
 # コンテンツコンテナ内で許可するブロック型。ここに無い type が
 # system / *.content 直下に現れたらフェイルクローズドする。
 # 維持トリガー: Anthropic が新しいコンテンツブロック型を出荷したとき。

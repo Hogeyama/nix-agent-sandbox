@@ -1735,5 +1735,809 @@ class AnthropicRequestFlowTest(unittest.TestCase):
         self.assertEqual(self._outcomes(messages), [])
 
 
+_DEFAULT_JSON_LIMITS = {
+    "maxBodyBytes": 33_554_432,
+    "maxDepth": 64,
+    "maxNodes": 200_000,
+    "maxDecodedBytes": 33_554_432,
+}
+
+
+def _json_policy(**overrides):
+    policy = {
+        "kind": "json",
+        **_DEFAULT_JSON_LIMITS,
+        "taggedUnions": [],
+        "encodedFields": [],
+    }
+    policy.update(overrides)
+    return policy
+
+
+class RequestPolicyBodylessEngineTest(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _run(self, body):
+        return nas_addon._execute_request_policy(
+            {"kind": "bodyless"}, body, self.patterns
+        )
+
+    def test_empty_body_passes(self):
+        self.assertEqual(self._run(b""), ("pass", None, "empty-body"))
+
+    def test_non_empty_body_blocks_as_unexpected(self):
+        self.assertEqual(self._run(b"x"), ("block", None, "unexpected-body"))
+
+    def test_unavailable_body_blocks(self):
+        self.assertEqual(self._run(None), ("block", None, "body-unavailable"))
+
+
+class RequestPolicyJsonParseTest(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _run(self, body, **overrides):
+        return nas_addon._execute_request_policy(
+            _json_policy(**overrides), body, self.patterns
+        )
+
+    def test_unavailable_body_blocks(self):
+        self.assertEqual(self._run(None), ("block", None, "body-unavailable"))
+
+    def test_empty_body_is_invalid_json(self):
+        self.assertEqual(self._run(b""), ("block", None, "invalid-json"))
+
+    def test_malformed_body_is_invalid_json(self):
+        self.assertEqual(
+            self._run(b"{not json"), ("block", None, "invalid-json")
+        )
+
+    def test_duplicate_members_are_invalid_json(self):
+        self.assertEqual(
+            self._run(b'{"a":1,"a":2}'), ("block", None, "invalid-json")
+        )
+
+    def test_scalar_root_is_schema_mismatch(self):
+        self.assertEqual(
+            self._run(b'"hello"'), ("block", None, "schema-mismatch")
+        )
+
+    def test_array_root_is_schema_mismatch(self):
+        self.assertEqual(self._run(b"[]"), ("block", None, "schema-mismatch"))
+
+    def test_unchanged_object_passes(self):
+        self.assertEqual(
+            self._run(b'{"a":"clean","b":1}'),
+            ("pass", None, "recognized-json"),
+        )
+
+    def test_changed_object_is_masked(self):
+        result, out, reason = self._run(b'{"a":"SECRET123"}')
+        self.assertEqual((result, reason), ("rewrite", "masked-json"))
+        self.assertIsNotNone(out)
+        self.assertNotIn(b"SECRET123", out)
+        self.assertEqual(json.loads(out), {"a": "****"})
+
+    def test_object_keys_are_masked(self):
+        result, out, reason = self._run(b'{"SECRET123":"v"}')
+        self.assertEqual((result, reason), ("rewrite", "masked-json"))
+        self.assertNotIn(b"SECRET123", out)
+        self.assertEqual(json.loads(out), {"****": "v"})
+
+    def test_nested_values_are_masked(self):
+        result, out, _reason = self._run(
+            b'{"a":{"b":["x","SECRET123"]}}'
+        )
+        self.assertEqual(result, "rewrite")
+        self.assertEqual(json.loads(out), {"a": {"b": ["x", "****"]}})
+
+    def test_serialization_is_compact_and_deterministic(self):
+        _r, out, _reason = self._run(b'{"a": "SECRET123", "b": 1}')
+        self.assertEqual(out, b'{"a":"****","b":1}')
+
+    def test_non_standard_constants_are_invalid_json(self):
+        # NaN / Infinity / -Infinity are not RFC 8259 JSON. Accepting them
+        # would let the rewrite path re-emit a body no strict parser accepts.
+        for literal in (b"NaN", b"Infinity", b"-Infinity"):
+            with self.subTest(literal=literal, position="top-level"):
+                self.assertEqual(
+                    self._run(b'{"a":' + literal + b"}"),
+                    ("block", None, "invalid-json"),
+                )
+            with self.subTest(literal=literal, position="nested"):
+                self.assertEqual(
+                    self._run(
+                        b'{"a":{"b":[1,' + literal + b']},"c":"SECRET123"}'
+                    ),
+                    ("block", None, "invalid-json"),
+                )
+
+    def test_numbers_that_merely_look_like_constants_still_parse(self):
+        result, _out, reason = self._run(
+            b'{"NaN":"Infinity","a":1e308,"b":-1.5,"c":0}'
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_body_over_byte_limit_is_resource_limit(self):
+        self.assertEqual(
+            self._run(b'{"a":"bb"}', maxBodyBytes=4),
+            ("block", None, "resource-limit"),
+        )
+
+
+class RequestPolicyTaggedUnionTest(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _run(self, body_obj, guards):
+        policy = _json_policy(taggedUnions=guards)
+        return nas_addon._execute_request_policy(
+            policy, json.dumps(body_obj).encode("utf-8"), self.patterns
+        )
+
+    def _content_guard(self, tags, at="/messages/*/content/*"):
+        return [{"at": at, "discriminator": "type", "allowedTags": tags}]
+
+    def test_allowed_tag_in_star_path_passes(self):
+        result, _out, reason = self._run(
+            {"messages": [{"content": [{"type": "text", "text": "hi"}]}]},
+            self._content_guard(["text", "image"]),
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_unknown_tag_is_schema_mismatch(self):
+        self.assertEqual(
+            self._run(
+                {"messages": [{"content": [{"type": "future"}]}]},
+                self._content_guard(["text"]),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_missing_discriminator_is_schema_mismatch(self):
+        self.assertEqual(
+            self._run(
+                {"messages": [{"content": [{"text": "hi"}]}]},
+                self._content_guard(["text"]),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_non_string_discriminator_is_schema_mismatch(self):
+        self.assertEqual(
+            self._run(
+                {"messages": [{"content": [{"type": 1}]}]},
+                self._content_guard(["text"]),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_non_object_matched_node_is_schema_mismatch(self):
+        self.assertEqual(
+            self._run(
+                {"messages": [{"content": ["bare-string"]}]},
+                self._content_guard(["text"]),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_absent_optional_path_passes(self):
+        result, _out, reason = self._run(
+            {"messages": [{"role": "user"}]},
+            self._content_guard(["text"]),
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_content_as_scalar_string_does_not_match_star(self):
+        result, _out, reason = self._run(
+            {"messages": [{"content": "plain"}]},
+            self._content_guard(["text"]),
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_double_star_matches_zero_and_many_descendants(self):
+        body = {
+            "messages": [
+                {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "content": [{"type": "future"}],
+                        }
+                    ]
+                }
+            ]
+        }
+        # /**/content/* reaches both the top content block (tool_result, ok)
+        # and the nested content block (future, rejected).
+        self.assertEqual(
+            self._run(body, self._content_guard(
+                ["tool_result"], at="/**/content/*"
+            )),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_double_star_zero_descendants_matches_root_child(self):
+        # /**/content/* with content directly under the object root.
+        self.assertEqual(
+            self._run(
+                {"content": [{"type": "future"}]},
+                self._content_guard(["text"], at="/**/content/*"),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_tilde_escaped_literal_segments_match(self):
+        # "~1" -> "/", "~0" -> "~"
+        self.assertEqual(
+            self._run(
+                {"a/b": [{"type": "future"}]},
+                self._content_guard(["text"], at="/a~1b/*"),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+        self.assertEqual(
+            self._run(
+                {"a~b": [{"type": "future"}]},
+                self._content_guard(["text"], at="/a~0b/*"),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_overlapping_guards_each_validate_matched_nodes(self):
+        body = {"content": [{"type": "text"}], "system": [{"type": "future"}]}
+        guards = [
+            {"at": "/**/content/*", "discriminator": "type",
+             "allowedTags": ["text"]},
+            {"at": "/**/system/*", "discriminator": "type",
+             "allowedTags": ["text"]},
+        ]
+        self.assertEqual(
+            self._run(body, guards), ("block", None, "schema-mismatch")
+        )
+
+    def test_masking_still_applies_after_valid_guard(self):
+        result, out, reason = self._run(
+            {"messages": [{"content": [
+                {"type": "text", "text": "x SECRET123"}]}]},
+            self._content_guard(["text"]),
+        )
+        self.assertEqual((result, reason), ("rewrite", "masked-json"))
+        self.assertNotIn(b"SECRET123", out)
+
+
+class RequestPolicySelectorArrayIndexTest(unittest.TestCase):
+    """Literal segments follow JSON Pointer semantics: a literal that is a
+    valid array index descends into a list. Without this the selector matches
+    nothing and the guard silently fails open."""
+
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _run(self, body_obj, at, tags=("text",)):
+        policy = _json_policy(taggedUnions=[{
+            "at": at, "discriminator": "type", "allowedTags": list(tags),
+        }])
+        return nas_addon._execute_request_policy(
+            policy, json.dumps(body_obj).encode("utf-8"), self.patterns
+        )
+
+    def test_index_selector_no_longer_fails_open(self):
+        # The exact reviewer-reported fail-open: this selector is accepted by
+        # the contract validator, so it must not silently match nothing.
+        self.assertTrue(nas_addon._is_valid_selector("/messages/0/content/*"))
+        self.assertEqual(
+            self._run(
+                {"messages": [{"content": [{"type": "UNKNOWN_TAG"}]}]},
+                "/messages/0/content/*",
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_index_selects_only_the_addressed_element(self):
+        body = {"messages": [
+            {"content": [{"type": "text"}]},
+            {"content": [{"type": "future"}]},
+        ]}
+        result, _out, reason = self._run(body, "/messages/0/content/*")
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+        self.assertEqual(
+            self._run(body, "/messages/1/content/*"),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_out_of_range_index_matches_nothing(self):
+        result, _out, reason = self._run(
+            {"messages": [{"content": [{"type": "future"}]}]},
+            "/messages/7/content/*",
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_leading_zero_index_does_not_address_a_list(self):
+        result, _out, reason = self._run(
+            {"messages": [{"content": [{"type": "future"}]}]},
+            "/messages/01/content/*",
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_dash_token_does_not_address_a_list(self):
+        # JSON Pointer "-" means "after the last element"; it can never
+        # address an existing member.
+        result, _out, reason = self._run(
+            {"messages": [{"content": [{"type": "future"}]}]},
+            "/messages/-/content/*",
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_non_numeric_and_signed_literals_do_not_address_a_list(self):
+        body = {"messages": [{"content": [{"type": "future"}]}]}
+        for at in (
+            "/messages/x/content/*",
+            "/messages/+0/content/*",
+            "/messages/-1/content/*",
+            "/messages/0_0/content/*",
+            "/messages/ 0/content/*",
+        ):
+            with self.subTest(at=at):
+                result, _out, reason = self._run(body, at)
+                self.assertEqual(
+                    (result, reason), ("pass", "recognized-json")
+                )
+
+    def test_object_key_named_like_an_index_still_matches_by_key(self):
+        self.assertEqual(
+            self._run(
+                {"messages": {"0": {"content": [{"type": "future"}]}}},
+                "/messages/0/content/*",
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_index_matches_a_scalar_element_as_schema_mismatch(self):
+        # /messages/0 addresses the string itself, which is not an object.
+        self.assertEqual(
+            self._run({"messages": ["plain"]}, "/messages/0"),
+            ("block", None, "schema-mismatch"),
+        )
+
+
+def _nested_content_document(depth, breadth):
+    if depth == 0:
+        return {"type": "text"}
+    return {
+        "content": [
+            _nested_content_document(depth - 1, breadth)
+            for _ in range(breadth)
+        ]
+    }
+
+
+def _count_json_nodes(node):
+    total = 1
+    for child in nas_addon._json_children(node):
+        total += _count_json_nodes(child)
+    return total
+
+
+class RequestPolicySelectorExpansionBoundTest(unittest.TestCase):
+    """Selector evaluation memoizes (node, segment-index) states, so multiple
+    `**` segments cannot multiply the work done per node."""
+
+    def _collect(self, document, selector):
+        segments = nas_addon._parse_selector(selector)
+        matches: list = []
+        expansions = nas_addon._collect_selector_matches(
+            document, segments, matches, set()
+        )
+        return segments, matches, expansions
+
+    def test_repeated_double_star_expansion_stays_bounded(self):
+        document = _nested_content_document(6, 3)
+        nodes = _count_json_nodes(document)
+        self.assertGreater(nodes, 2000)
+        for selector in ("/**/content/*", "/**/**/content/*",
+                         "/**/**/**/content/*"):
+            with self.subTest(selector=selector):
+                segments, matches, expansions = self._collect(
+                    document, selector
+                )
+                self.assertIsInstance(
+                    expansions, int, "expansion count is not reported"
+                )
+                # Each (node, segment-index) state is expanded at most once.
+                self.assertLessEqual(expansions, nodes * (len(segments) + 1))
+
+    def test_repeated_double_star_matches_are_unchanged(self):
+        document = _nested_content_document(4, 3)
+        _segments, baseline, _expansions = self._collect(
+            document, "/**/content/*"
+        )
+        for selector in ("/**/**/content/*", "/**/**/**/content/*"):
+            with self.subTest(selector=selector):
+                _segments, matches, _expansions = self._collect(
+                    document, selector
+                )
+                self.assertEqual(
+                    [id(node) for node in matches],
+                    [id(node) for node in baseline],
+                )
+
+    def test_bounded_traversal_keeps_guard_semantics(self):
+        document = {"content": [
+            {"type": "text", "content": [{"type": "future"}]},
+        ]}
+        policy = _json_policy(taggedUnions=[{
+            "at": "/**/**/content/*",
+            "discriminator": "type",
+            "allowedTags": ["text"],
+        }])
+        self.assertEqual(
+            nas_addon._execute_request_policy(
+                policy,
+                json.dumps(document).encode("utf-8"),
+                nas_addon._build_mask_patterns(["SECRET123"]),
+            ),
+            ("block", None, "schema-mismatch"),
+        )
+
+
+_BASE64_FIELD = {
+    "at": "/**",
+    "whenField": "type",
+    "whenEquals": "base64",
+    "dataField": "data",
+    "encoding": "base64",
+}
+
+
+class RequestPolicyEncodedFieldTest(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _run(self, body_obj, patterns=None, **overrides):
+        policy = _json_policy(encodedFields=[_BASE64_FIELD], **overrides)
+        return nas_addon._execute_request_policy(
+            policy,
+            json.dumps(body_obj).encode("utf-8"),
+            self.patterns if patterns is None else patterns,
+        )
+
+    def _source(self, data):
+        return {"source": {"type": "base64", "data": data}}
+
+    def test_non_matching_discriminator_is_a_no_op(self):
+        # type != "base64" so the rule does nothing; the value is then an
+        # ordinary string and stays untouched because it holds no secret.
+        result, _out, reason = self._run(
+            {"source": {"type": "url", "data": "not!base64!"}}
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_non_object_selector_matches_are_skipped(self):
+        # "/**" also selects scalars and lists; they must not block.
+        result, _out, reason = self._run(
+            {"a": "plain", "b": [1, 2], "c": None}
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_matching_rule_requires_string_data_field(self):
+        result, out, reason = self._run(self._source(123))
+        self.assertEqual(result, "block")
+        self.assertIsNone(out)
+        self.assertEqual(reason, "schema-mismatch")
+
+    def test_matching_rule_requires_present_data_field(self):
+        result, _out, reason = self._run({"source": {"type": "base64"}})
+        self.assertEqual((result, reason), ("block", "schema-mismatch"))
+
+    def test_clean_base64_is_unchanged_and_passes(self):
+        blob = base64.b64encode(b"clean payload bytes").decode("ascii")
+        result, out, reason = self._run(self._source(blob))
+        self.assertEqual((result, out, reason), ("pass", None, "recognized-json"))
+
+    def test_secret_inside_base64_is_masked_and_re_encoded(self):
+        blob = base64.b64encode(b"prefix SECRET123 suffix").decode("ascii")
+        result, out, reason = self._run(self._source(blob))
+        self.assertEqual((result, reason), ("rewrite", "masked-json"))
+        parsed = json.loads(out)
+        decoded = base64.b64decode(parsed["source"]["data"])
+        self.assertNotIn(b"SECRET123", decoded)
+        self.assertIn(b"****", decoded)
+        self.assertEqual(decoded, b"prefix **** suffix")
+
+    def test_invalid_base64_alphabet_blocks(self):
+        self.assertEqual(
+            self._run(self._source("not!valid!base64!")),
+            ("block", None, "encoded-decode-failed"),
+        )
+
+    def test_invalid_base64_padding_blocks(self):
+        self.assertEqual(
+            self._run(self._source("YWJjZA")),
+            ("block", None, "encoded-decode-failed"),
+        )
+
+    def test_whitespace_and_line_wrapped_base64_block(self):
+        raw = base64.b64encode(b"x" * 90).decode("ascii")
+        for variant in (
+            f"{raw[:40]}\n{raw[40:]}",
+            f"{raw[:40]} {raw[40:]}",
+            f" {raw}",
+            f"{raw}\n",
+            f"{raw[:40]}\r\n{raw[40:]}",
+        ):
+            with self.subTest(variant=repr(variant[:12])):
+                self.assertEqual(
+                    self._run(self._source(variant)),
+                    ("block", None, "encoded-decode-failed"),
+                )
+
+    def test_non_canonical_trailing_bits_block(self):
+        # "YR==" decodes to b"a" but canonically re-encodes to "YQ==".
+        self.assertEqual(
+            self._run(self._source("YR==")),
+            ("block", None, "encoded-decode-failed"),
+        )
+
+    def test_cumulative_decoded_budget_is_enforced(self):
+        blob = base64.b64encode(b"y" * 60).decode("ascii")
+        body = {"a": self._source(blob), "b": self._source(blob)}
+        # Each field decodes to 60 bytes; 120 total.
+        self.assertEqual(
+            self._run(body, maxDecodedBytes=119),
+            ("block", None, "resource-limit"),
+        )
+        result, _out, reason = self._run(body, maxDecodedBytes=120)
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+    def test_consumed_data_is_not_masked_a_second_time_as_text(self):
+        # The base64 TEXT itself contains the secret, but the decoded bytes
+        # do not. Because the field was consumed by the encoded-field rule it
+        # must not be masked again as an ordinary string.
+        blob = base64.b64encode(b"hello world payload").decode("ascii")
+        secret = blob[:10]
+        patterns = nas_addon._build_mask_patterns([secret])
+        result, out, reason = self._run(self._source(blob), patterns=patterns)
+        self.assertEqual((result, out, reason), ("pass", None, "recognized-json"))
+
+    def test_unconsumed_sibling_strings_are_still_masked(self):
+        blob = base64.b64encode(b"clean").decode("ascii")
+        body = {"source": {"type": "base64", "data": blob,
+                           "note": "SECRET123"}}
+        result, out, reason = self._run(body)
+        self.assertEqual((result, reason), ("rewrite", "masked-json"))
+        parsed = json.loads(out)
+        self.assertEqual(parsed["source"]["note"], "****")
+        self.assertEqual(parsed["source"]["data"], blob)
+
+
+class RequestPolicyKeyCollisionTest(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _run(self, raw_body, patterns=None):
+        return nas_addon._execute_request_policy(
+            _json_policy(),
+            raw_body,
+            self.patterns if patterns is None else patterns,
+        )
+
+    def test_masked_key_colliding_with_existing_key_blocks(self):
+        self.assertEqual(
+            self._run(b'{"SECRET123":"a","****":"b"}'),
+            ("block", None, "key-collision"),
+        )
+
+    def test_two_distinct_secrets_masking_to_the_same_key_block(self):
+        patterns = nas_addon._build_mask_patterns(["SECRET123", "TOKENXY"])
+        self.assertEqual(
+            self._run(b'{"SECRET123":"a","TOKENXY":"b"}', patterns=patterns),
+            ("block", None, "key-collision"),
+        )
+
+    def test_nested_key_collision_blocks(self):
+        self.assertEqual(
+            self._run(b'{"outer":{"SECRET123":"a","****":"b"}}'),
+            ("block", None, "key-collision"),
+        )
+
+    def test_distinct_masked_keys_do_not_collide(self):
+        result, out, reason = self._run(b'{"aSECRET123b":"v","c":"w"}')
+        self.assertEqual((result, reason), ("rewrite", "masked-json"))
+        self.assertEqual(json.loads(out), {"a****b": "v", "c": "w"})
+
+
+class RequestPolicyLimitBoundaryTest(unittest.TestCase):
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _run(self, raw_body, **overrides):
+        return nas_addon._execute_request_policy(
+            _json_policy(**overrides), raw_body, self.patterns
+        )
+
+    def test_body_bytes_at_limit_passes_and_over_limit_blocks(self):
+        body = b'{"a":1}'
+        self.assertEqual(len(body), 7)
+        result, _out, reason = self._run(body, maxBodyBytes=7)
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+        self.assertEqual(
+            self._run(body, maxBodyBytes=6),
+            ("block", None, "resource-limit"),
+        )
+
+    def test_depth_at_limit_passes_and_over_limit_blocks(self):
+        # root object is depth 1, its scalar member is depth 2.
+        body = b'{"a":1}'
+        result, _out, reason = self._run(body, maxDepth=2)
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+        self.assertEqual(
+            self._run(body, maxDepth=1), ("block", None, "resource-limit")
+        )
+
+    def test_nested_depth_boundary(self):
+        # root -> a -> b -> scalar == depth 4
+        body = b'{"a":{"b":{"c":1}}}'
+        result, _out, reason = self._run(body, maxDepth=4)
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+        self.assertEqual(
+            self._run(body, maxDepth=3), ("block", None, "resource-limit")
+        )
+
+    def test_nodes_at_limit_passes_and_over_limit_blocks(self):
+        # root + two scalars == 3 nodes
+        body = b'{"a":1,"b":2}'
+        result, _out, reason = self._run(body, maxNodes=3)
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+        self.assertEqual(
+            self._run(body, maxNodes=2), ("block", None, "resource-limit")
+        )
+
+    def test_array_elements_count_as_nodes(self):
+        # root + list + three elements == 5 nodes
+        body = b'{"a":[1,2,3]}'
+        result, _out, reason = self._run(body, maxNodes=5)
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+        self.assertEqual(
+            self._run(body, maxNodes=4), ("block", None, "resource-limit")
+        )
+
+    def test_decoded_bytes_at_limit_passes_and_over_limit_blocks(self):
+        blob = base64.b64encode(b"z" * 30).decode("ascii")
+        body = json.dumps(
+            {"source": {"type": "base64", "data": blob}}
+        ).encode("utf-8")
+        result, _out, reason = self._run(
+            body, encodedFields=[_BASE64_FIELD], maxDecodedBytes=30
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+        self.assertEqual(
+            self._run(
+                body, encodedFields=[_BASE64_FIELD], maxDecodedBytes=29
+            ),
+            ("block", None, "resource-limit"),
+        )
+
+    def test_deeply_nested_body_fails_closed(self):
+        deep = ("[" * 40000 + "]" * 40000).encode("utf-8")
+        result, out, reason = self._run(deep)
+        self.assertEqual(result, "block")
+        self.assertIsNone(out)
+        self.assertIn(reason, ("invalid-json", "resource-limit"))
+
+    def test_lone_surrogate_serialization_fails_closed(self):
+        body = json.dumps(
+            {"a": "\ud800", "b": "SECRET123"}
+        ).encode("utf-8")
+        self.assertEqual(
+            self._run(body), ("block", None, "serialization-failed")
+        )
+
+
+class RequestPolicyInjectedExceptionTest(unittest.TestCase):
+    """Every internal exception must block with a closed reason and must not
+    leak exception text or body data to stderr."""
+
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+        self.body = json.dumps(
+            {"messages": [{"content": [{"type": "text",
+                                        "text": "SECRET123"}]}]}
+        ).encode("utf-8")
+
+    def _run_with(self, target, **patch_kwargs):
+        stderr = io.StringIO()
+        with patch.object(
+            nas_addon, target, **patch_kwargs
+        ), redirect_stderr(stderr):
+            result = nas_addon._execute_request_policy(
+                _json_policy(encodedFields=[_BASE64_FIELD]),
+                self.body,
+                self.patterns,
+            )
+        return result, stderr.getvalue()
+
+    def test_traversal_exception_blocks_as_processing_failed(self):
+        for target in (
+            "_account_json",
+            "_validate_tagged_unions",
+            "_process_encoded_fields",
+            "_recursively_mask_json",
+        ):
+            with self.subTest(target=target):
+                result, stderr = self._run_with(
+                    target,
+                    side_effect=RuntimeError(
+                        "SECRET123 /raw/private-path leak"
+                    ),
+                )
+                self.assertEqual(
+                    result, ("block", None, "processing-failed")
+                )
+                self.assertEqual(stderr, "")
+
+    def test_parser_exception_blocks_without_leaking(self):
+        stderr = io.StringIO()
+        with patch.object(
+            nas_addon.json,
+            "loads",
+            side_effect=RuntimeError("SECRET123 parser detail"),
+        ), redirect_stderr(stderr):
+            result = nas_addon._execute_request_policy(
+                _json_policy(), self.body, self.patterns
+            )
+        self.assertEqual(result, ("block", None, "invalid-json"))
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_serializer_exception_blocks_as_serialization_failed(self):
+        stderr = io.StringIO()
+        with patch.object(
+            nas_addon.json,
+            "dumps",
+            side_effect=RuntimeError("SECRET123 serializer detail"),
+        ), redirect_stderr(stderr):
+            result = nas_addon._execute_request_policy(
+                _json_policy(), self.body, self.patterns
+            )
+        self.assertEqual(result, ("block", None, "serialization-failed"))
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_bodyless_engine_exception_blocks_as_processing_failed(self):
+        class ExplodingBody:
+            def __len__(self):
+                raise RuntimeError("SECRET123 length detail")
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            result = nas_addon._execute_request_policy(
+                {"kind": "bodyless"}, ExplodingBody(), self.patterns
+            )
+        self.assertEqual(result, ("block", None, "processing-failed"))
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_unknown_policy_kind_blocks(self):
+        for policy in (
+            {"kind": "graphql"},
+            {"kind": "future"},
+            {},
+        ):
+            with self.subTest(policy=policy):
+                self.assertEqual(
+                    nas_addon._execute_request_policy(
+                        policy, b"{}", self.patterns
+                    ),
+                    ("block", None, "processing-failed"),
+                )
+
+    def test_engine_emits_nothing_to_stderr_on_success(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            nas_addon._execute_request_policy(
+                _json_policy(), self.body, self.patterns
+            )
+        self.assertEqual(stderr.getvalue(), "")
+
+
 if __name__ == "__main__":
     unittest.main()
