@@ -142,8 +142,16 @@ MaskFilterStage
 | mounts | secret frame (ro), binary (ro) | **socket dir (rw)**, binary (ro) |
 | env | `NAS_MASK_SECRETS_FILE`, `NAS_MASK_FILTER` | **`NAS_MASK_SOCKET`**, `NAS_MASK_FILTER` |
 
-`MASK_SECRETS_CONTAINER_PATH` is replaced by `MASK_SOCKET_CONTAINER_PATH`
-(`/run/nas-mask/mask.sock`).
+`MASK_SECRETS_CONTAINER_PATH` is removed and nothing replaces it: following
+hostexec (`src/stages/hostexec/stage.ts:330`), the socket's directory is mounted
+at **the same absolute path** inside the container, so no container-path constant
+is needed. `NAS_MASK_SOCKET` carries the path.
+
+The socket must live in a directory **of its own**, a sibling of the session
+directory — `${runtimeDir}/${sessionId}-sock/mask.sock` against a frame at
+`${runtimeDir}/${sessionId}/mask-secrets`. Putting the socket in the session
+directory and mounting that directory hands the frame straight back to the
+container, which is the defect this design exists to remove.
 
 **Mount the containing directory, not the socket file**, mirroring hostexec
 (`src/stages/hostexec/stage.ts:330`). `compileLaunchOpts` emits `-v src:dst`, and
@@ -282,12 +290,18 @@ recovers the secret directly — no brute force.
 ### Serve-mode output invariant
 
 Serve mode must never write stream-derived bytes to its own stdout or stderr.
-`ProcessService.spawn` points both at the session log file, and
-`MaskFsService.defaultWaitReady` splices the log tail into a user-visible error
-on readiness timeout — so any "failed masking chunk: `<bytes>`" diagnostic would
-write plaintext to a persistent host file and potentially onto the operator's
-terminal. The log file is created `0600` in the `0700` session directory and
-removed on scope release.
+`ProcessService.spawn` points both at a log file, so any "failed masking chunk:
+`<bytes>`" diagnostic would write plaintext to a persistent host file. The log
+is created `0600` in the `0700` session directory and removed on scope release.
+
+(An earlier draft justified this by saying `MaskFsService.defaultWaitReady`
+splices the log tail into user-visible errors. That is false for this path:
+`defaultWaitReady` is private to `maskfs_service.ts` and takes a
+`MaskFsStartPlan`. MaskFilterService uses `proc.waitForFileExists`, which reports
+only a timeout with no log content — meaning a serve-daemon startup failure
+currently gives the operator *no* diagnostic at all. Wiring an equivalent log
+splice for readiness failures is worthwhile, but the confidentiality requirement
+above stands on its own.)
 
 ### Drain semantics
 
@@ -376,8 +390,16 @@ Serve and supervise both run on the host, so the core is testable without Docker
   propagation; **a stalled reader** (client stops draining) exercising the output
   cap and backpressure rather than unbounded growth; behaviour at the connection
   cap; concurrent supervised shells not blocking each other; fail-closed when the
-  server is stopped mid-run; and `ls /proc/self/fd` inside the supervised child
-  showing only 0/1/2.
+  server is stopped mid-run; and `ls -l /proc/self/fd` inside the supervised
+  child containing no `socket:` entry. (Asserting "only 0/1/2" is not achievable
+  — `ls` holds its own directory fd — so the invariant is asserted directly.)
+
+  **Socket test clients must use `Bun.connect` with `socket.shutdown()`.** Under
+  Bun 1.3.9, `node:net`'s `sock.end()` performs a full close, not a half-close:
+  measured, the server's post-EOF write fails with `EPIPE` and the client
+  receives nothing, whereas `Bun.connect` + `shutdown()` receives the flushed
+  tail. Since the protocol's entire flush path hangs off half-close, a test built
+  on `node:net` reports a correct server as broken.
 - **hostexec regression** — an existing hostexec masking test must still pass,
   proving C3 survives.
 - **`launch/integration_test.ts`** (Docker) — wrapper wiring for the command,
