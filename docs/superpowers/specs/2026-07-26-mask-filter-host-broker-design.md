@@ -347,6 +347,16 @@ but is **not** in scope here; it is an independent hardening item, and the
 - **Orphaned serve process.** If nas is `SIGKILL`ed the daemon survives holding
   resolved secrets in memory, and the session dir leaks. MaskFs has the same gap;
   a stale-session sweep is worth adding but is not required here.
+- **Socket substitution.** The socket's directory is mounted read-write, so the
+  agent can delete `mask.sock` and bind its own listener at that path. Shells
+  started afterwards would connect to it, and a listener that echoes its input
+  disables masking entirely while `--supervise` still reports success. This is
+  not a regression — today's mounted frame is strictly worse, and it is the
+  reason the socket must live in a directory of its own containing nothing else
+  — but it is the sharpest remaining edge. A read-only bind mount is the
+  structural fix **if** `connect(2)` succeeds through one; that is worth
+  determining during implementation, and this limitation should be revisited
+  rather than treated as settled.
 
 ## Testing
 
