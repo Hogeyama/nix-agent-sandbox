@@ -34,6 +34,14 @@
 //! 到達可能な攻撃面として扱う。接続ごとの未送信バイト数上限・接続数上限・
 //! EMFILE 時の listener バックオフを設ける。
 //!
+//! アイドル接続のタイムアウト刈り取りは **意図的に持たない**。ピアが死ねば fd が
+//! 閉じて read が 0 を返し、通常の EOF 経路で接続は回収される。したがって刈り取りが
+//! 発火しうるのは「生きているが黙っているだけ」の接続 (`sleep 900` の supervise、
+//! stderr に何も書かない長時間ビルド、watch モードのサーバ) だけで、これを閉じると
+//! スーパーバイザが fail-closed の 121 を返し、成功するはずのコマンドが失敗する。
+//! 防御としても意味がない: 「1 バイトも届けていない接続だけ」という条件が必須である
+//! 以上、接続ごとに 1 バイト書くだけで全スロットを恒久的に免除できてしまう。
+//!
 //! 出力の不変条件
 //! --------------
 //! serve モードは **ストリーム由来のバイトを自身の stdout/stderr に書いてはならない**。
@@ -66,22 +74,15 @@ const MAX_QUEUED_BYTES: usize = 256 * 1024;
 
 const LISTEN_BACKLOG: u31 = 128;
 
-/// poll のタイムアウト。無限待ちにするとアイドル接続の刈り取りと
-/// listener のバックオフ解除が走れなくなる。
+/// poll のタイムアウト。listener のバックオフは poll から抜けた時にしか
+/// 解除できないので、無限待ちにすると EMFILE 後に listener が二度と
+/// 復帰しなくなる。
 const POLL_TIMEOUT_MS: i32 = 1000;
 
 /// EMFILE / ENFILE で accept に失敗したときに listener を休ませる時間。
 /// readable な listener を EMFILE のまま poll し直すと 100% CPU の
 /// 恒久スピンになる。
 const LISTENER_BACKOFF_MS: i64 = 1000;
-
-/// **1 バイトも送ってこなかった** 接続だけを刈り取るまでの時間。
-///
-/// 「静かなだけ」の接続を刈ると正当なシェルを殺す: supervise 下の `sleep 180` は
-/// 無通信のまま生き続け、切断されるとスーパーバイザが fail-closed で 121 を
-/// 返してしまう。そのためこの閾値はそうしたコマンドより十分長く取り、かつ
-/// 一度でもバイトを届けた接続は対象外にする。
-const IDLE_REAP_MS: i64 = 10 * 60 * 1000;
 
 pub const ServeError = error{
     EmptySocketPath,
@@ -119,9 +120,6 @@ const Conn = struct {
     out: std.ArrayList(u8) = .empty,
     /// クライアントが half-close した (read が 0 を返した)。
     read_eof: bool = false,
-    /// 1 バイト以上受け取ったか。アイドル刈り取りの判定に使う。
-    delivered: bool = false,
-    accepted_ms: i64,
 
     fn deinit(self: *Conn, gpa: std.mem.Allocator) void {
         if (self.stream) |*s| s.deinit(gpa);
@@ -163,7 +161,6 @@ const Conn = struct {
                 self.read_eof = true;
                 return;
             }
-            self.delivered = true;
             self.stream = mask_stream.MaskStream.init(gpa, secrets) catch return error.Failed;
             @memcpy(self.stream.?.readBuf()[0..n], scratch[0..n]);
             self.stream.?.push(n, writer) catch return error.Failed;
@@ -181,7 +178,6 @@ const Conn = struct {
             stream.finish(writer) catch return error.Failed;
             return;
         }
-        self.delivered = true;
         stream.push(n, writer) catch return error.Failed;
     }
 
@@ -315,8 +311,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                 };
             }
 
-            const idle_reap = !conn.delivered and (now - conn.accepted_ms) > IDLE_REAP_MS;
-            if (failed or idle_reap or conn.finished()) {
+            if (failed or conn.finished()) {
                 var dead = conns.swapRemove(i);
                 dead.deinit(gpa);
             }
@@ -354,7 +349,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                     posix.close(fd);
                     continue;
                 }
-                conns.append(gpa, .{ .fd = fd, .accepted_ms = std.time.milliTimestamp() }) catch {
+                conns.append(gpa, .{ .fd = fd }) catch {
                     posix.close(fd);
                     break;
                 };
