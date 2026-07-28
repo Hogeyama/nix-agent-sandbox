@@ -28,8 +28,28 @@ Hard rules:
 4. **Diagnostics on the real stderr are constant strings.** That path bypasses masking.
 5. **Serve mode never writes stream-derived bytes to its own stdout/stderr.**
 6. Exit `121` = "output suppressed". Reserved. Every error path in supervise mode must reach `121`, never a Zig error-return trace.
-7. **Every commit must build and pass `bun test src/` + `zig build test`.** Task ordering below is chosen to make that possible; do not reorder.
+7. **Every commit must build and pass `zig build test` + the non-Docker part of `bun test src/`.** See "Execution order" below for the one deliberate exception.
 8. Preserve: child-exit drain with idle timeout, signal forwarding, exit-status propagation (128+signo), `--argv0`.
+
+## Execution order
+
+**Execute in this order: 1, 2, 3, 5, 6, 7, 4, 8.** Task numbers below are kept as
+written; only the order changes.
+
+**Task 7 runs before Task 4.** Task 4's nesting test extracts the `MASK_WRAPPER`
+heredoc and runs it with `NAS_MASK_SOCKET` set and no `NAS_MASK_SECRETS_FILE`.
+The pre-Task-7 wrapper gates on `[ -f "$NAS_MASK_SECRETS_FILE" ]` and execs
+`--supervise` without `--socket`, so it falls through to plain bash and the
+`NAS_MASK_SUPERVISED` marker reads `unset` no matter how correct Task 4's Zig
+change is. Task 7 depends only on Task 3, so it moves earlier cleanly.
+
+**Docker tests are red from Task 7 until Task 8.** Task 7 flips the install guard
+to require `NAS_MASK_SOCKET`, and the Docker mask tests in
+`src/stages/launch/integration_test.ts` still set only `NAS_MASK_SECRETS_FILE`
+until Task 8 updates them. This is accepted deliberately: Tasks 7 and 4 must keep
+`zig build test` and the non-Docker part of `bun test src/` green, and must state
+in their reports which Docker tests fail and why. Task 8 restores a fully green
+`bun test src/`.
 
 ## Measured environment facts
 
@@ -629,7 +649,14 @@ export interface MaskFilterPreparePlan {
 }
 prepareMaskFilter(plan, secrets): Effect<MaskFilterResult, unknown, Scope.Scope>
 ```
-Mounts: `{source: socketDir, target: socketDir}` plus the binary read-only. Env: `NAS_MASK_SOCKET`, `NAS_MASK_FILTER`. `MASK_SECRETS_CONTAINER_PATH` is deleted. The Layer type becomes `Layer.Layer<MaskFilterService, never, FsService | ProcessService>`.
+Mounts: `{source: socketDir, target: socketDir, readOnly: true}` plus the binary read-only. Env: `NAS_MASK_SOCKET`, `NAS_MASK_FILTER`. `MASK_SECRETS_CONTAINER_PATH` is deleted. The Layer type becomes `Layer.Layer<MaskFilterService, never, FsService | ProcessService>`.
+
+**The socket directory is mounted read-only.** `connect(2)` succeeds through a
+read-only bind mount while `unlink`/`create` return `EROFS` — measured; see the
+spec's "Socket substitution" limitation for the table. Read-write would let the
+agent delete `mask.sock` and bind an echo listener in its place, disabling
+masking while `--supervise` still reports success. The daemon creates and unlinks
+the socket host-side, where the mount flag does not apply.
 
 Keep writing the frame (`0600` in a `0700` dir) — hostexec reads it for C3. Spawn `--serve` with `NAS_MASK_SECRETS_FILE` in the **daemon's own env** (host-side process, not a container variable). `acquireRelease` on release: kill the daemon, then remove frame, socket, **and log**. `chmod` the log to `0600` after spawn — `ProcessService.spawn` opens it with `openSync(path,"a")`, i.e. `0644`.
 
@@ -670,9 +697,11 @@ test("writes the frame host-side (hostexec C3 depends on it)", async () => {
   expect(written.map((w) => w.path)).toContain(FRAME);
 });
 
-test("mounts the socket directory and spawns the daemon", async () => {
+test("mounts the socket directory read-only and spawns the daemon", async () => {
   const { result, spawns } = await runCapturing();
-  expect(result.mounts.some((m) => m.source === SOCKET_DIR && m.target === SOCKET_DIR)).toBe(true);
+  expect(result.mounts.some((m) =>
+    m.source === SOCKET_DIR && m.target === SOCKET_DIR && m.readOnly === true
+  )).toBe(true);
   expect(result.envVars.NAS_MASK_SOCKET).toBe(SOCKET);
   expect(spawns).toEqual([{ command: "/usr/local/bin/nas-mask-filter", args: ["--serve", SOCKET] }]);
 });
@@ -698,9 +727,16 @@ fix(mask-filter): stop exposing the secrets frame to the container
 
 マウントとコンテナ env を廃止し、ホスト側で --serve デーモンを起動して
 socket だけをコンテナへ見せる。socket はセッションディレクトリとは別の
-ディレクトリに置き、そこだけをマウントする。同居させるとフレームごと
-コンテナへ渡すことになり、しかもマウントは読み書き可能なのでエージェントが
-socket を差し替えて素通しのエコーサーバを立てられる。
+ディレクトリに置き、そこだけを読み取り専用でマウントする。同居させると
+フレームごとコンテナへ渡すことになる。
+
+読み取り専用にするのは socket の差し替えを防ぐため。読み書き可能だと
+エージェントが mask.sock を削除して素通しのエコーサーバを同じパスに立て
+られ、以降のシェルはマスクされないまま --supervise が成功を報告する。
+connect(2) は読み取り専用バインドマウント越しでも成功する (書き込み権限は
+socket の inode に対して必要なだけで、マウントの読み取り専用フラグは
+名前空間の変更のみを止める) ため、この制約でプロトコルは何も失わない。
+デーモンによる socket の作成と削除はホスト側で行われるので影響を受けない。
 
 フレームファイル自体はホスト専用ディレクトリに残す。C1 はこの配置を明示的に
 許容しており、src/hostexec/broker.ts が C3 のマスクで直読みしている。
@@ -830,7 +866,7 @@ EOF
 Read the whole file first. Five existing facts will break this task if ignored:
 
 1. `MASK_FILTER_FIXTURE` reads `os.environ["NAS_MASK_SECRETS_FILE"]` **at module top level** (`:76`). After Task 7 that variable is gone from the container, so `--supervise` would die with `KeyError`. Move the frame read into the `--serve` branch.
-2. The mask tests mount the fixture dir `:ro` (e.g. `:578`). The socket needs its **own** read-write mount, separate from that.
+2. The mask tests mount the fixture dir `:ro` (e.g. `:578`). The socket needs its **own** mount, separate from that — also `:ro`, per Task 5.
 3. `USING_DIND` (`:45`) means host paths ≠ daemon paths; the socket must then live under the shared tmp dir. `SHARED_TMP` is `string | undefined` — reuse the existing `makeTempDir()` helper (`:52-62`), which already handles the DinD sticky-bit, rather than reinventing it.
 4. `existsSync` (node:fs) and `mkdtemp` (node:fs/promises) are **not imported** in that file. Add them or use what is already imported.
 5. Two further mask tests (`:609` shell re-entry/TTY, `:673` nix launch) still set only `NAS_MASK_SECRETS_FILE`. After Task 7's guard change, entrypoint silently stops installing the wrapper and both keep passing while testing nothing. Update them too.
@@ -842,7 +878,7 @@ Read the whole file first. Five existing facts will break this task if ignored:
 - `--supervise` must also export `NAS_MASK_SUPERVISED=1` to the child, or the nesting test exercises nothing.
 
 - [ ] **Step 1: Restructure the fixture** (serve + supervise + filter modes)
-- [ ] **Step 2: Start the daemon per mask test, mount its socket dir rw, set `NAS_MASK_SOCKET`, drop `NAS_MASK_SECRETS_FILE`, clean up in `finally`**
+- [ ] **Step 2: Start the daemon per mask test, mount its socket dir `:ro`, set `NAS_MASK_SOCKET`, drop `NAS_MASK_SECRETS_FILE`, clean up in `finally`**
 - [ ] **Step 3: Invert the fallback test** — socket configured but dead ⇒ non-zero exit and no `fallback-stdout`; `NAS_MASK_SOCKET` unset ⇒ wrapper never installed, plain bash, exit 0 (that is not a bypass, it is the feature being off)
 - [ ] **Step 4: Add the nesting test**, asserting the `NAS_MASK_SUPERVISED` marker as in Task 4 — asserting masked output cannot detect the regression
 - [ ] **Step 5: Update the two stale mask tests at `:609` and `:673`**
@@ -897,6 +933,7 @@ EOF
 | --- | --- |
 | Frame unreachable from container; mount/env change | 5, 6 |
 | Socket in its own directory; mount the directory | 5, 6 |
+| Socket directory mounted read-only (blocks substitution) | 5, 8 |
 | `sun_path` assertion | 6 |
 | Frame + log lifetime (S2) | 5 |
 | Nested supervision | 4 |
