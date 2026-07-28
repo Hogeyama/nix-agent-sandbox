@@ -139,7 +139,7 @@ MaskFilterStage
 
 | | Current | After |
 | --- | --- | --- |
-| mounts | secret frame (ro), binary (ro) | **socket dir (rw)**, binary (ro) |
+| mounts | secret frame (ro), binary (ro) | **socket dir (ro)**, binary (ro) |
 | env | `NAS_MASK_SECRETS_FILE`, `NAS_MASK_FILTER` | **`NAS_MASK_SOCKET`**, `NAS_MASK_FILTER` |
 
 `MASK_SECRETS_CONTAINER_PATH` is removed and nothing replaces it: following
@@ -159,6 +159,12 @@ Docker *creates a directory* when the source path does not exist — so mounting
 the socket file directly makes container startup order load-bearing, and a race
 would silently produce a directory at the socket path and fail every shell with
 a confusing error.
+
+**Mount it read-only.** `connect(2)` succeeds through a read-only bind mount —
+measured, see "Socket substitution" under Accepted limitations — so `:ro` costs
+the protocol nothing while making the socket structurally unreplaceable. The
+daemon creates and unlinks the socket host-side, where the mount's read-only
+flag does not apply.
 
 The host socket path must stay within `sun_path`'s 108-byte limit; the stage
 asserts this rather than letting a long `XDG_RUNTIME_DIR` produce an obscure
@@ -361,16 +367,28 @@ but is **not** in scope here; it is an independent hardening item, and the
 - **Orphaned serve process.** If nas is `SIGKILL`ed the daemon survives holding
   resolved secrets in memory, and the session dir leaks. MaskFs has the same gap;
   a stale-session sweep is worth adding but is not required here.
-- **Socket substitution.** The socket's directory is mounted read-write, so the
-  agent can delete `mask.sock` and bind its own listener at that path. Shells
-  started afterwards would connect to it, and a listener that echoes its input
-  disables masking entirely while `--supervise` still reports success. This is
-  not a regression — today's mounted frame is strictly worse, and it is the
-  reason the socket must live in a directory of its own containing nothing else
-  — but it is the sharpest remaining edge. A read-only bind mount is the
-  structural fix **if** `connect(2)` succeeds through one; that is worth
-  determining during implementation, and this limitation should be revisited
-  rather than treated as settled.
+- **Socket substitution — resolved, no longer a limitation.** An earlier draft
+  mounted the socket's directory read-write, which let the agent delete
+  `mask.sock` and bind its own listener at that path; a listener that echoes its
+  input disables masking entirely while `--supervise` still reports success. The
+  draft left open whether a read-only bind mount was usable as the structural
+  fix, since it would be worthless if `connect(2)` did not survive it.
+
+  Measured on this host (Docker bind mount of a directory holding a live socket,
+  client `connect(2)` + `write(2)` from inside the container):
+
+  | socket dir mount | `connect(2)` | `rm mask.sock` | create a file |
+  | --- | --- | --- | --- |
+  | read-write | succeeds | **succeeds** | **succeeds** |
+  | read-only | **succeeds** | `EROFS` | `EROFS` |
+
+  `connect(2)` needs write permission on the socket *inode*, which the mount's
+  read-only flag does not revoke; only namespace mutation is blocked. So `:ro`
+  keeps the protocol working and removes substitution outright. The design mounts
+  read-only for that reason.
+
+  The socket still lives in a directory of its own — that requirement comes from
+  C1 (the frame must not be reachable), not from substitution, and is unchanged.
 
 ## Testing
 
