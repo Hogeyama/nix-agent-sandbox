@@ -62,8 +62,13 @@ pub const MAX_SOCKET_PATH: usize = 107;
 /// 同時接続数の上限。1 シェルにつき 2 接続で、`make -j` は数百のシェルを走らせる。
 /// 上限を超えた接続は accept して即 close する (下の accept ループのコメント参照)。
 ///
-/// MAX_QUEUED_BYTES と合わせて、ホスト側メモリの最悪値は
-/// 512 * (MaskStream 約 192KiB + キュー 256KiB) ≒ 224MiB に有界化される。
+/// MAX_QUEUED_BYTES と合わせた 1 接続あたりのホスト側メモリの最悪値は
+/// MaskStream 約 192KiB + 送信キュー約 480KiB ≒ 672KiB で、全体では
+/// 512 * 672KiB ≒ 336MiB に有界化される。キュー側の内訳は、上限判定が push の
+/// 前なので実データが最大 MAX_QUEUED_BYTES + 1 チャンク ≒ 320KiB に達し、
+/// ArrayList の伸長が最大でその 1.5 倍の容量を取りうる、というもの。
+/// この 480KiB は一時的なピークであって定常的な占有ではない。キューを吐き切った
+/// 時点で通常運転分を超える容量は解放する (Conn.writable 参照)。
 const MAX_CONNECTIONS: usize = 512;
 
 /// 1 接続あたりの未送信 (マスク済み) バイト数の上限。超えたらその接続の
@@ -71,6 +76,12 @@ const MAX_CONNECTIONS: usize = 512;
 /// 上限判定は push の前に行うので、実際のキュー長は一時的に 1 チャンク分
 /// (overlap + BUF_SIZE) だけ超えうるが、有界であることは変わらない。
 const MAX_QUEUED_BYTES: usize = 256 * 1024;
+
+/// キューを吐き切ったときに保持したままにする容量の上限。
+/// 通常運転では 1 回の push が高々 1 チャンク (overlap + BUF_SIZE) しか積まない
+/// ので、この分を残しておけばチャンクごとの alloc/free を避けられる。これを
+/// 超える容量は解放して、一度膨らんだ接続がピーク容量を寿命いっぱい抱え込むのを防ぐ。
+const QUEUE_RETAIN_BYTES: usize = 2 * BUF_SIZE;
 
 const LISTEN_BACKLOG: u31 = 128;
 
@@ -181,7 +192,7 @@ const Conn = struct {
         stream.push(n, writer) catch return error.Failed;
     }
 
-    fn writable(self: *Conn) ConnError!void {
+    fn writable(self: *Conn, gpa: std.mem.Allocator) ConnError!void {
         if (self.out.items.len == 0) return;
         const n = posix.write(self.fd, self.out.items) catch |err| switch (err) {
             error.WouldBlock => return,
@@ -192,6 +203,15 @@ const Conn = struct {
         const remaining = self.out.items.len - n;
         std.mem.copyForwards(u8, self.out.items[0..remaining], self.out.items[n..]);
         self.out.items.len = remaining;
+
+        // items.len を縮めても確保済み容量は返らない。読まないクライアントの
+        // せいで一度 MAX_QUEUED_BYTES まで膨らんだ接続が、その後ずっと平常運転に
+        // 戻ってもピーク容量を接続の寿命いっぱい抱え続けてしまうため、吐き切った
+        // 時点で通常運転に要る分を超える容量は解放する。空でないうちは実データを
+        // 抱えているので触らない。
+        if (remaining == 0 and self.out.capacity > QUEUE_RETAIN_BYTES) {
+            self.out.clearAndFree(gpa);
+        }
     }
 };
 
@@ -306,7 +326,7 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                 failed = true;
             }
             if (!failed and revents & posix.POLL.OUT != 0) {
-                conn.writable() catch {
+                conn.writable(gpa) catch {
                     failed = true;
                 };
             }
