@@ -91,6 +91,69 @@ async function runFilter(input: string, secrets: string[]): Promise<string> {
   return output;
 }
 
+function startServe(secretsFile: string, sockPath: string) {
+  return Bun.spawn([binaryPath!, "--serve", sockPath], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, NAS_MASK_SECRETS_FILE: secretsFile },
+  });
+}
+
+async function waitForSocket(sockPath: string, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(sockPath)) return true;
+    await Bun.sleep(20);
+  }
+  return false;
+}
+
+/** AF_UNIX パスは 107 バイトまで。テスト用 tmpdir は長すぎるので /tmp に置く。 */
+function shortSockPath(tag: string): string {
+  return `/tmp/nas-mf-${tag}-${process.pid}-${secretsFileSeq++}.sock`;
+}
+
+/**
+ * `writes` を (必要なら間隔を空けて) 送り、half-close してからサーバが
+ * close するまで読み続ける。
+ *
+ * Bun 1.3.9 の node:net は `.end()` が half-close ではなく full close に
+ * なるため、サーバが EOF 後にフラッシュした末尾を受け取れない。このプロトコルは
+ * フラッシュ経路全体が half-close に紐づいているので、クライアントは
+ * Bun.connect + shutdown() でなければならない。
+ */
+function maskOverSocket(
+  sockPath: string,
+  writes: string[],
+  gapMs = 0,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    Bun.connect({
+      unix: sockPath,
+      socket: {
+        async open(s) {
+          for (const w of writes) {
+            s.write(Buffer.from(w));
+            if (gapMs) await Bun.sleep(gapMs);
+          }
+          s.shutdown();
+        },
+        data(_s, d) {
+          chunks.push(Buffer.from(d));
+        },
+        close() {
+          resolve(Buffer.concat(chunks).toString());
+        },
+        error(_s, e) {
+          reject(e);
+        },
+      },
+    }).catch(reject);
+  });
+}
+
 describe("nas-mask-filter binary", () => {
   test("masks single secret", async () => {
     if (!binaryPath) return; // skip if not built
@@ -263,5 +326,59 @@ describe("nas-mask-filter --supervise", () => {
     const elapsed = Date.now() - started;
     expect(r.stdout).toBe("before\nafter\n");
     expect(elapsed).toBeLessThan(5000);
+  }, 15000);
+});
+
+describe("nas-mask-filter --serve", () => {
+  test("masks a stream over the socket", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("basic");
+    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      expect(await maskOverSocket(sockPath, ["pw=hunter2 done"])).toBe(
+        "pw=******* done",
+      );
+    } finally {
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+  }, 15000);
+
+  test("masks a secret straddling a socket chunk boundary", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("seam");
+    const proc = startServe(writeSecretsFile(["SECRETVALUE"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      // 間隔を空けることで、サーバに 2 つの半片を別々に処理させる。
+      expect(
+        await maskOverSocket(sockPath, ["head SECRE", "TVALUE tail"], 50),
+      ).toBe("head *********** tail");
+    } finally {
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+  }, 15000);
+
+  test("keeps per-connection overlap state isolated", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("iso");
+    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      const [a, b] = await Promise.all([
+        maskOverSocket(sockPath, ["aaa hun", "ter2 aaa"], 30),
+        maskOverSocket(sockPath, ["bbb hun", "ter2 bbb"], 30),
+      ]);
+      expect(a).toBe("aaa ******* aaa");
+      expect(b).toBe("bbb ******* bbb");
+    } finally {
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
   }, 15000);
 });
