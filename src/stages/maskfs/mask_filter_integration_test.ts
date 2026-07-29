@@ -134,7 +134,8 @@ function shortSockPath(tag: string): string {
 
 /**
  * `writes` を (必要なら間隔を空けて) 送り、half-close してからサーバが
- * close するまで読み続ける。
+ * close するまで読み続ける。`openDelayMs` を渡すと、接続後 1 バイトも
+ * 書かないまま黙っている時間を作れる。
  *
  * Bun 1.3.9 の node:net は `.end()` が half-close ではなく full close に
  * なるため、サーバが EOF 後にフラッシュした末尾を受け取れない。このプロトコルは
@@ -145,6 +146,7 @@ function maskOverSocket(
   sockPath: string,
   writes: string[],
   gapMs = 0,
+  openDelayMs = 0,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -152,6 +154,7 @@ function maskOverSocket(
       unix: sockPath,
       socket: {
         async open(s) {
+          if (openDelayMs) await Bun.sleep(openDelayMs);
           for (const w of writes) {
             s.write(Buffer.from(w));
             if (gapMs) await Bun.sleep(gapMs);
@@ -160,6 +163,60 @@ function maskOverSocket(
         },
         data(_s, d) {
           chunks.push(Buffer.from(d));
+        },
+        close() {
+          resolve(Buffer.concat(chunks).toString());
+        },
+        error(_s, e) {
+          reject(e);
+        },
+      },
+    }).catch(reject);
+  });
+}
+
+/**
+ * バルク転送用のクライアント。`payload` を書き切って half-close し、サーバが
+ * close するまで読み続けるのは maskOverSocket と同じだが、受信のたびに
+ * 同期的に `readStallMs` だけ止まる「遅い読み手」を演じる点が違う。
+ *
+ * これがないとサーバの `write(2)` は毎回全量成功してしまい、送信キューの
+ * ドレイン経路 — 短い write のあとの前詰め圧縮と、MAX_QUEUED_BYTES 付近まで
+ * 育ったキューを吐き切ったときの容量調整 — が一度も実行されない。AF_UNIX の
+ * 送受信バッファは既定でどちらも約 208KiB、マスクは長さを保存するので、
+ * 読み手が遅れない限りサーバの出力は必ず一度の write に収まってしまう。
+ *
+ * Bun の `pause()` ではソケット自体は読み進められてしまい (コールバックが
+ * 遅延するだけ) カーネルの受信バッファは埋まらない。実測でも短い write は
+ * 発生しなかった。イベントループごと同期的に止めるのが唯一効く方法で、
+ * こうすると圧縮経路が実際に走る (壊すとこのテストが落ちる)。
+ */
+function maskOverSocketSlowReader(
+  sockPath: string,
+  payload: string,
+  readStallMs = 40,
+): Promise<string> {
+  const buf = Buffer.from(payload);
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    Bun.connect({
+      unix: sockPath,
+      socket: {
+        async open(s) {
+          let off = 0;
+          while (off < buf.length) {
+            const n = s.write(buf.subarray(off));
+            if (n > 0) off += n;
+            else await Bun.sleep(1);
+          }
+          s.shutdown();
+        },
+        data(_s, d) {
+          chunks.push(Buffer.from(d));
+          const until = Date.now() + readStallMs;
+          while (Date.now() < until) {
+            // イベントループを止めるための同期ビジーウェイト。
+          }
         },
         close() {
           resolve(Buffer.concat(chunks).toString());
@@ -402,4 +459,68 @@ describe("nas-mask-filter --serve", () => {
     }
     await expectServeSilent(proc);
   }, 15000);
+
+  // アイドル接続のタイムアウト刈り取りは意図的に持たない。死んだピアは fd が
+  // 閉じて read が 0 を返す通常の EOF 経路で回収されるので、刈り取りが発火しうる
+  // のは「生きているが黙っているだけ」の接続 (supervise 下の `sleep 900`、
+  // stderr に何も書かない長時間ビルド) だけであり、これを閉じるとスーパーバイザが
+  // fail-closed の 121 を返して成功するはずのコマンドが失敗する。
+  // 刈り取りが再導入されると、ここで沈黙中に接続が閉じられ、その後の書き込みの
+  // 出力が返ってこなくなる。
+  test("keeps a silent live connection alive across poll timeouts", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("idle");
+    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      // POLL_TIMEOUT_MS = 1000ms。その 2 周期分より長く 1 バイトも書かない。
+      expect(await maskOverSocket(sockPath, ["pw=hunter2 done"], 0, 2500)).toBe(
+        "pw=******* done",
+      );
+    } finally {
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+    await expectServeSilent(proc);
+  }, 20000);
+
+  // 1 read チャンク (BUF_SIZE = 64KiB) を大きく超えるペイロードを流し、送信キューの
+  // ドレイン経路 (短い write 後の前詰め圧縮と、吐き切った後の容量調整) を実際に
+  // 通す。ここが壊れると出力はバイト単位で欠落・重複・順序入れ替わりを起こし、
+  // シークレットが分断されてどちらの断片もマッチせず平文で出てしまう。
+  test("streams a payload far larger than one read chunk intact", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("bulk");
+    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+
+      const lines: string[] = [];
+      for (let i = 0; i < 64000; i++)
+        lines.push(`line${i} pw=hunter2 end${i}\n`);
+      const input = lines.join("");
+      // BUF_SIZE = 64KiB。その 16 倍以上を 1 接続で流す。
+      expect(input.length).toBeGreaterThan(16 * 64 * 1024);
+      const expected = input.replaceAll("hunter2", "*******");
+
+      const got = await maskOverSocketSlowReader(sockPath, input);
+
+      // MiB 級の文字列を toBe に投げると失敗時に巨大な diff が出るので、
+      // 最初に食い違ったオフセットだけを比較対象にする。-1 は完全一致。
+      const divergesAt = (a: string, b: string): number => {
+        const n = Math.min(a.length, b.length);
+        for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
+        return a.length === b.length ? -1 : n;
+      };
+      expect(got.length).toBe(expected.length);
+      expect(divergesAt(got, expected)).toBe(-1);
+      expect(got.includes("hunter2")).toBe(false);
+    } finally {
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+    await expectServeSilent(proc);
+  }, 30000);
 });
