@@ -1,16 +1,15 @@
 //! nas-mask-filter — 出力をシークレットマスクするフィルタ / スーパーバイザ。
 //!
-//! 環境変数 NAS_MASK_SECRETS_FILE に secrets_frame 形式
-//! (u32le count, その後 count 個の [u32le len + bytes]) のファイルパスを指定して実行する。
-//!
 //! 使い方:
 //!   nas-mask-filter
 //!       フィルタモード。stdin から読み、マスク済みバイト列を stdout へ書く。
+//!       hostexec のホスト実行出力マスク (C3) が使う。
 //!
-//!   nas-mask-filter --supervise [--argv0 NAME] -- PROGRAM [ARGS...]
-//!       スーパーバイザモード。PROGRAM を起動し、その stdout/stderr をマスクしながら
-//!       中継する。パイプを drain し切ってから PROGRAM の終了ステータスで exit するため、
-//!       「プロセスの終了」を完了シグナルにしている呼び出し元から見ても出力が欠けない。
+//!   nas-mask-filter --supervise [--argv0 NAME] --socket SOCKET -- PROGRAM [ARGS...]
+//!       スーパーバイザモード。PROGRAM を起動し、その stdout/stderr を SOCKET の
+//!       ホスト側ブローカーへ中継してマスク済みバイトを書き戻す。パイプを drain し
+//!       切ってから PROGRAM の終了ステータスで exit するため、「プロセスの終了」を
+//!       完了シグナルにしている呼び出し元から見ても出力が欠けない。
 //!       詳細は supervise.zig の冒頭コメントを参照。
 //!
 //!   nas-mask-filter --serve SOCKET
@@ -18,9 +17,16 @@
 //!       マスクする。シークレットフレームをコンテナへ渡さずにマスクを効かせるための
 //!       モード。詳細は serve.zig の冒頭コメントを参照。
 //!
-//! exit code: フィルタモードは 0 = 成功, 1 = 致命的エラー, 2 = 使用方法エラー(env 未設定等)。
+//! シークレットフレーム (NAS_MASK_SECRETS_FILE) が要るのは **filter と serve だけ**。
+//! どちらもホスト側で動く。supervise はコンテナ内で動くので、フレームを読ませると
+//! エージェントにセッション全シークレットの索引を渡すことになる
+//! (security-constraints C1 / S1)。したがって supervise では env を一切読まない。
+//!
+//! exit code: フィルタ / サーブモードは 0 = 成功, 1 = 致命的エラー,
+//!            2 = 使用方法エラー(env 未設定等)。
 //!            スーパーバイザモードは PROGRAM の終了コードをそのまま返す
-//!            (シグナル終了なら 128+signo)。
+//!            (シグナル終了なら 128+signo)。ただし 121 は「出力抑止」の予約値で、
+//!            マスク経路が壊れたときだけ返る (fail-closed)。
 
 const std = @import("std");
 const mask_stream = @import("mask_stream.zig");
@@ -56,6 +62,10 @@ pub const SuperviseArgs = struct {
     program: []const u8,
     /// argv[1..] として渡す引数。
     args: []const []const u8,
+    /// マスクを依頼するホスト側ブローカーの Unix socket パス。
+    /// パーサは未指定を許す (引数解釈の契約を変えないため) が、実行時には必須で、
+    /// 無ければ fail-closed で中断する。
+    socket: ?[]const u8 = null,
 };
 
 /// argv[1..] を supervise モードの引数として解釈する。
@@ -65,12 +75,17 @@ pub fn parseSuperviseArgs(argv: []const []const u8) !?SuperviseArgs {
     if (!std.mem.eql(u8, argv[0], "--supervise")) return error.UnknownOption;
 
     var argv0: ?[]const u8 = null;
+    var socket: ?[]const u8 = null;
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--argv0")) {
             i += 1;
             if (i >= argv.len) return error.MissingOptionValue;
             argv0 = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--socket")) {
+            i += 1;
+            if (i >= argv.len) return error.MissingOptionValue;
+            socket = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--")) {
             i += 1;
             break;
@@ -85,6 +100,7 @@ pub fn parseSuperviseArgs(argv: []const []const u8) !?SuperviseArgs {
         .argv0 = argv0 orelse program,
         .program = program,
         .args = argv[i + 1 ..],
+        .socket = socket,
     };
 }
 
@@ -113,10 +129,39 @@ pub fn parseMode(argv: []const []const u8) !Mode {
 
 const usage_text =
     \\usage: nas-mask-filter                                      (stdin -> stdout filter)
-    \\       nas-mask-filter --supervise [--argv0 NAME] -- PROGRAM [ARGS...]
+    \\       nas-mask-filter --supervise [--argv0 NAME] --socket SOCKET -- PROGRAM [ARGS...]
     \\       nas-mask-filter --serve SOCKET
     \\
 ;
+
+/// 「出力を抑止した」ことを表す予約済み終了コード。子が 0 で終わっていても、
+/// マスク経路が壊れたときはこれを返すので、呼び出し元が出力欠落を成功と
+/// 取り違えることがない。
+const EXIT_OUTPUT_SUPPRESSED: u8 = 121;
+
+/// supervise モードの診断は **定数文字列だけ** にする。この経路はマスクを
+/// 通らない本物の stderr へ直接出るので、書式指定でストリーム由来の値を
+/// 混ぜてはならない。原因の区別は文字列そのものを分けることで付ける。
+fn superviseDiagnostic(err: anyerror) []const u8 {
+    return switch (err) {
+        error.SocketPathInvalid,
+        error.RelayConnectFailed,
+        => "nas-mask-filter: cannot reach the mask broker; output suppressed\n",
+        error.RelayClosedEarly => "nas-mask-filter: mask broker closed early; output suppressed\n",
+        error.RelayDrainTimeout => "nas-mask-filter: mask broker stopped responding; output suppressed\n",
+        else => "nas-mask-filter: mask relay failed; output suppressed\n",
+    };
+}
+
+/// フィルタ / サーブモード用にシークレットフレームを読む。
+/// supervise はホスト側ブローカーへ中継するだけなので呼ばない。
+fn loadSecrets() !?[][]u8 {
+    const env_path = std.posix.getenv("NAS_MASK_SECRETS_FILE") orelse {
+        std.debug.print("nas-mask-filter: NAS_MASK_SECRETS_FILE not set\n", .{});
+        return null;
+    };
+    return try readSecretsFromFile(env_path);
+}
 
 pub fn main() !u8 {
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -129,22 +174,31 @@ pub fn main() !u8 {
         return 2;
     };
 
-    const env_path = std.posix.getenv("NAS_MASK_SECRETS_FILE") orelse {
-        std.debug.print("nas-mask-filter: NAS_MASK_SECRETS_FILE not set\n", .{});
-        return 2;
-    };
-    // secrets を読めないまま子を起動するとマスクなしで動いてしまうため、
-    // フィルタモード・スーパーバイザモードとも fail-closed で中断する。
-    const secrets = readSecretsFromFile(env_path) catch |err| {
-        std.debug.print("nas-mask-filter: failed to read secrets: {}\n", .{err});
-        return 1;
+    // supervise はシークレットフレームを読まない。読ませてしまうと、コンテナ内に
+    // 全シークレットの索引を置くことになり、このモードの存在理由が消える。
+    // 残りの 2 モードはホスト側で動くのでここで読む。
+    const secrets: []const []const u8 = switch (mode) {
+        .supervise => &.{},
+        // secrets を読めないままフィルタ / サーバを動かすとマスクなしで
+        // 素通しになってしまうため、fail-closed で中断する。
+        .serve, .filter => (loadSecrets() catch |err| {
+            std.debug.print("nas-mask-filter: failed to read secrets: {}\n", .{err});
+            return 1;
+        }) orelse return 2,
     };
 
     switch (mode) {
         .supervise => |sa| {
-            return supervise.run(arena_alloc, secrets, sa.argv0, sa.program, sa.args) catch |err| {
-                std.debug.print("nas-mask-filter: supervise failed: {}\n", .{err});
-                return 1;
+            const sock_path = sa.socket orelse {
+                std.debug.print(
+                    "nas-mask-filter: --socket is required in supervise mode; output suppressed\n",
+                    .{},
+                );
+                return EXIT_OUTPUT_SUPPRESSED;
+            };
+            return supervise.run(arena_alloc, sock_path, sa.argv0, sa.program, sa.args) catch |err| {
+                std.debug.print("{s}", .{superviseDiagnostic(err)});
+                return EXIT_OUTPUT_SUPPRESSED;
             };
         },
         .serve => |sock_path| {
@@ -182,6 +236,7 @@ const testing = std.testing;
 
 test {
     _ = @import("mask_stream.zig");
+    _ = @import("relay.zig");
     _ = @import("serve.zig");
     _ = @import("supervise.zig");
 }
@@ -263,6 +318,36 @@ test "parseSuperviseArgs: missing program is an error" {
 
 test "parseSuperviseArgs: missing --argv0 value is an error" {
     try testing.expectError(error.MissingOptionValue, parseSuperviseArgs(&.{ "--supervise", "--argv0" }));
+}
+
+test "parseSuperviseArgs: --socket is captured" {
+    const got = (try parseSuperviseArgs(&.{ "--supervise", "--socket", "/run/nas/mask.sock", "--", "/bin/bash" })).?;
+    try testing.expectEqualStrings("/run/nas/mask.sock", got.socket.?);
+    try testing.expectEqualStrings("/bin/bash", got.program);
+}
+
+test "parseSuperviseArgs: --socket combines with --argv0 in either order" {
+    const got = (try parseSuperviseArgs(&.{ "--supervise", "--socket", "/s", "--argv0", "-bash", "--", "/bin/bash" })).?;
+    try testing.expectEqualStrings("/s", got.socket.?);
+    try testing.expectEqualStrings("-bash", got.argv0);
+}
+
+// パーサは --socket なしの呼び出しを受け付け続ける (引数解釈の契約は変えない)。
+// 必須性は実行時に main が判定し、無ければ fail-closed で 121 にする。
+test "parseSuperviseArgs: socket is null when --socket is absent" {
+    const got = (try parseSuperviseArgs(&.{ "--supervise", "--", "/bin/bash" })).?;
+    try testing.expectEqual(@as(?[]const u8, null), got.socket);
+}
+
+test "parseSuperviseArgs: missing --socket value is an error" {
+    try testing.expectError(error.MissingOptionValue, parseSuperviseArgs(&.{ "--supervise", "--socket" }));
+}
+
+test "parseSuperviseArgs: --socket after -- is passed through to the child" {
+    const got = (try parseSuperviseArgs(&.{ "--supervise", "--", "/bin/bash", "--socket", "/x" })).?;
+    try testing.expectEqual(@as(?[]const u8, null), got.socket);
+    try testing.expectEqual(@as(usize, 2), got.args.len);
+    try testing.expectEqualStrings("--socket", got.args[0]);
 }
 
 // ---------------------------------------------------------------------------
