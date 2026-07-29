@@ -334,8 +334,39 @@ function connectIdle(sockPath: string): Promise<BunSocket | null> {
  * serve.zig の `MAX_CONNECTIONS`。これを超えた接続はサーバが accept して
  * 即 close する。フラッド系のテストは「この本数を実際に越えたか」を
  * 自分で確かめる必要があるので、値をここに写して参照する。
+ *
+ * 写した値が実装より小さい方向へずれると、テストは黙って「上限未満の接続を
+ * 並べただけ」の形へ退化する。実装側を 1024 にしたビルドで 600 本を積んだ
+ * 実測では established = 600 (> 512 なので通る) / 超過プローブは
+ * "pw=*******" (許容値) / デーモン生存 の 3 つとも緑になり、上限超過の経路を
+ * 一度も踏まないまま pass した。これは前の変更が潰したはずの形そのものなので、
+ * ずれは静かな退化ではなく明示的な失敗にする。
  */
 const SERVE_MAX_CONNECTIONS = 512;
+
+/**
+ * serve.zig のソースから `MAX_CONNECTIONS` を読む。読めなければ null。
+ * 上の写しと突き合わせて、実装側の変更を検出するために使う。
+ */
+function readServeMaxConnections(): number | null {
+  const src = path.resolve(import.meta.dir, "../../mask-filter/serve.zig");
+  if (!fs.existsSync(src)) return null;
+  const m = fs
+    .readFileSync(src, "utf8")
+    .match(/^const MAX_CONNECTIONS:\s*usize\s*=\s*(\d+);$/m);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * フラッドテストで積む接続数。上限からの相対で決める (定数を上げたときに
+ * 本数だけ据え置かれて上限を跨がなくなるのを防ぐ)。
+ *
+ * 超過段は上限の 1.2 倍。connectIdle は接続失敗を null に潰すので、
+ * RLIMIT_NOFILE や backlog の都合で何本か張れなくても上限を越えられるだけの
+ * 余裕を持たせている (512 なら 615 本を積み、102 本落ちても越える)。
+ */
+const FLOOD_BELOW_CAP = Math.floor(SERVE_MAX_CONNECTIONS / 2);
+const FLOOD_ABOVE_CAP = Math.ceil(SERVE_MAX_CONNECTIONS * 1.2);
 
 function serverRssKb(pid: number): number {
   const m = fs
@@ -751,6 +782,10 @@ describe("nas-mask-filter --serve", () => {
     try {
       expect(await waitForSocket(sockPath)).toBe(true);
 
+      // 積む本数はすべてこの定数から導くので、実装とずれていたら以降の判定は
+      // まるごと無意味になる。ソースから読み直して先に確定させる。
+      expect(readServeMaxConnections()).toBe(SERVE_MAX_CONNECTIONS);
+
       // 例外を一律 "CLOSED" のような正常値へ潰してはならない。デーモンが死んで
       // connect が ECONNREFUSED になった場合まで「待たされなかった」として
       // 通ってしまう。エラーはエラーと分かる文字列にして、許容値から外す。
@@ -763,22 +798,24 @@ describe("nas-mask-filter --serve", () => {
         ]);
 
       // まずは SERVE_MAX_CONNECTIONS 未満。
-      for (let i = 0; i < 300; i++) held.push(await connectIdle(sockPath));
+      for (let i = 0; i < FLOOD_BELOW_CAP; i++)
+        held.push(await connectIdle(sockPath));
       await Bun.sleep(300);
       expect(await probe()).toBe("pw=*******");
 
       // 上限を超えるまで積む。超過分は accept して即 close されるので、新しい
       // クライアントは masked な応答か即 EOF のどちらかを得る。ぶら下がるのは不可。
-      for (let i = 0; i < 300; i++) held.push(await connectIdle(sockPath));
+      for (let i = held.length; i < FLOOD_ABOVE_CAP; i++)
+        held.push(await connectIdle(sockPath));
       await Bun.sleep(300);
 
       // 本当に上限を越えたことを確かめてから probe する。connectIdle は接続失敗を
       // null に潰すので、RLIMIT_NOFILE が小さい・backlog が短い・ホストが遅いと
-      // いった理由で 600 本のうち 88 本以上が張れなければ、このテストは黙って
-      // 「上限未満の 300 本」と同じ形に退化する。その形は listener の poll を
-      // 外すだけの壊れた実装でも通ることが実測で分かっているので、退化したまま
-      // 緑になる状態を許してはならない。失敗時に観測本数が出るよう、真偽値では
-      // なく本数そのものを比較する。
+      // いった理由で張れない接続が多すぎると、このテストは黙って「上限未満」と
+      // 同じ形に退化する。その形は listener の poll を外すだけの壊れた実装でも
+      // 通ることが実測で分かっているので、退化したまま緑になる状態を許しては
+      // ならない。失敗時に観測本数が出るよう、真偽値ではなく本数そのものを
+      // 比較する。
       const established = held.filter((s) => s !== null).length;
       expect(established).toBeGreaterThan(SERVE_MAX_CONNECTIONS);
 
