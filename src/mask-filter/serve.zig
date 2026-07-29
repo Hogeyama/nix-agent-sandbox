@@ -379,7 +379,13 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                     },
                     // 接続が accept 前に消えた等。次の accept を試す。
                     error.ConnectionAborted, error.ProtocolFailure => continue,
-                    else => break,
+                    // 想定外の errno。原因が持続するものだと、backlog に残った
+                    // 接続で listener は次の周回も readable のままなので、
+                    // poll が即返り accept が即失敗する 100% CPU スピンになる。
+                    else => {
+                        listener_backoff_until = std.time.milliTimestamp() + LISTENER_BACKOFF_MS;
+                        break;
+                    },
                 };
 
                 // 上限超過分は accept して即 close する。listener の poll を
@@ -393,8 +399,13 @@ pub fn run(gpa: std.mem.Allocator, secrets: []const []const u8, sock_path: []con
                     posix.close(fd);
                     continue;
                 }
+                // append の失敗はホストのメモリ枯渇。次の周回でも同じように失敗する
+                // 上に、accept 済みでない接続が backlog に残っていれば listener は
+                // readable のままなので、バックオフを張らないと EMFILE と同じ
+                // 100% CPU スピンになる。
                 conns.append(gpa, .{ .fd = fd }) catch {
                     posix.close(fd);
+                    listener_backoff_until = std.time.milliTimestamp() + LISTENER_BACKOFF_MS;
                     break;
                 };
             }
