@@ -68,7 +68,8 @@ pub const MAX_SOCKET_PATH: usize = 107;
 /// 前なので実データが最大 MAX_QUEUED_BYTES + 1 チャンク ≒ 320KiB に達し、
 /// ArrayList の伸長が最大でその 1.5 倍の容量を取りうる、というもの。
 /// この 480KiB は一時的なピークであって定常的な占有ではない。キューを吐き切った
-/// 時点で通常運転分を超える容量は解放する (Conn.writable 参照)。
+/// 時点で容量は QUEUE_RETAIN_BYTES (128KiB) まで縮むので、定常状態の最悪値は
+/// 512 * (192KiB + 128KiB) = 160MiB になる (Conn.writable 参照)。
 const MAX_CONNECTIONS: usize = 512;
 
 /// 1 接続あたりの未送信 (マスク済み) バイト数の上限。超えたらその接続の
@@ -77,10 +78,27 @@ const MAX_CONNECTIONS: usize = 512;
 /// (overlap + BUF_SIZE) だけ超えうるが、有界であることは変わらない。
 const MAX_QUEUED_BYTES: usize = 256 * 1024;
 
-/// キューを吐き切ったときに保持したままにする容量の上限。
-/// 通常運転では 1 回の push が高々 1 チャンク (overlap + BUF_SIZE) しか積まない
-/// ので、この分を残しておけばチャンクごとの alloc/free を避けられる。これを
-/// 超える容量は解放して、一度膨らんだ接続がピーク容量を寿命いっぱい抱え込むのを防ぐ。
+/// キューを吐き切ったときに保持する容量。**閾値であると同時に下限でもある**:
+/// これを超える容量は解放し、解放後はこの容量をちょうど確保し直す。
+///
+/// 通常運転でキューに載る最大バイト数がちょうどこの値になるように選んである。
+/// MaskStream.push が 1 回に writer へ渡すのは高々 BUF_SIZE バイト
+/// (safe_end = overlap_len + n - overlap_size <= BUF_SIZE) で、POLLOUT は
+/// 「arm 時点で out が空でない」ときにしか立たないため、吐き切れているストリームの
+/// out は「前周回の 1 チャンク + 今周回の 1 チャンク」= 2 * BUF_SIZE までしか
+/// 育たない。
+///
+/// 閾値だけを置いて解放しっ放しにすると、この 2 * BUF_SIZE を格納するために
+/// ArrayList が確保する容量 (伸長は 1.5 倍刻みなので 2 * BUF_SIZE を上回る) が
+/// 毎回閾値を超え、通常のストリーミングのたびに clearAndFree が走る。
+/// page_allocator では 128KiB ごとに munmap/mmap とページフォルトが発生し、
+/// この定数が避けようとしている per-chunk の alloc/free churn そのものになる。
+/// 解放後に precise でこの容量へ戻すことで、通常運転では 2 チャンクが容量ぴったりに
+/// 収まり、伸長も解放も起きなくなる (接続あたり高々 1 回の解放で定常状態に入る)。
+///
+/// したがって定常的に抱え込む容量は接続あたり 128KiB、MAX_CONNECTIONS 全体で
+/// 512 * 128KiB = 64MiB が最悪値。背圧で MAX_QUEUED_BYTES まで膨らんだときの
+/// ピーク容量 (約 480KiB) は、吐き切った時点でここまで縮む。
 const QUEUE_RETAIN_BYTES: usize = 2 * BUF_SIZE;
 
 const LISTEN_BACKLOG: u31 = 128;
@@ -209,8 +227,14 @@ const Conn = struct {
         // 戻ってもピーク容量を接続の寿命いっぱい抱え続けてしまうため、吐き切った
         // 時点で通常運転に要る分を超える容量は解放する。空でないうちは実データを
         // 抱えているので触らない。
+        //
+        // 解放しっ放しにはせず QUEUE_RETAIN_BYTES ちょうどに確保し直す。通常運転の
+        // ピークはこの値に一致するので、戻さないと次のチャンクで必ず伸長が起きて
+        // 再び閾値を超え、チャンクごとの alloc/free に落ちてしまう。確保に失敗しても
+        // 容量 0 の空キューが残るだけで正しさには影響しないため無視してよい。
         if (remaining == 0 and self.out.capacity > QUEUE_RETAIN_BYTES) {
             self.out.clearAndFree(gpa);
+            self.out.ensureTotalCapacityPrecise(gpa, QUEUE_RETAIN_BYTES) catch {};
         }
     }
 };
