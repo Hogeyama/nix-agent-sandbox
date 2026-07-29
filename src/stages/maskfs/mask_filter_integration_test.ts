@@ -617,7 +617,7 @@ describe("nas-mask-filter --serve", () => {
   // READ の poll を外すので、背圧は socket バッファ経由でクライアントへ伝わり、
   // サーバのメモリは上限付近で頭打ちになる。
   //
-  // 検証対象はサーバの VmRSS そのものである点が重要。クライアント側の
+  // 検証対象はサーバの VmRSS の**増分**である点が重要。クライアント側の
   // `write()` の戻り値では上限あり・なしを区別できない (STALLING_CLIENT_PY の
   // コメント参照)。
   test("bounds server memory when a client stops reading", async () => {
@@ -630,6 +630,12 @@ describe("nas-mask-filter --serve", () => {
     try {
       expect(await waitForSocket(sockPath)).toBe(true);
 
+      // 接続を張る前の RSS。上限の効き目は「接続によって増えた分」にしか
+      // 現れないので、絶対値ではなくこの値からの増分を見る (下のコメント)。
+      await Bun.sleep(200);
+      const baselineRssKb = serverRssKb(proc.pid);
+      expect(baselineRssKb).toBeGreaterThan(0);
+
       stall = Bun.spawn(["python3", writeStallingClient(), sockPath, "64"], {
         stdin: "ignore",
         stdout: "pipe",
@@ -640,10 +646,28 @@ describe("nas-mask-filter --serve", () => {
       expect(accepted).toBeGreaterThan(0);
 
       await Bun.sleep(300);
-      // 実測: 上限ありで RSS 4.2MB / 受理 0.57MiB、MAX_QUEUED_BYTES を
-      // maxInt(usize) にすると RSS 67.7MB / 受理 64MiB (= 押し込んだ全量)。
-      expect(serverRssKb(proc.pid)).toBeLessThan(16 * 1024);
-      expect(accepted).toBeLessThan(8 * 1024 * 1024);
+
+      // 実測 (このホストで 3 回、いずれも同値): 接続前 RSS 3,696kB /
+      // 詰まらせた後 4,164kB / 増分 468kB、受理 597,376B (583KiB)。
+      //
+      // **絶対 RSS ではなく増分を見る**のが要点。絶対値のうち約 3.7MB は接続と
+      // 無関係な固定オーバーヘッドで、上限由来の信号は残り 0.47MB しかない。
+      // そこに絶対値の閾値を置くと上限の撤去しか検出できない: MAX_QUEUED_BYTES を
+      // 256KiB から 4MiB へ 16 倍緩める (ホストの最悪値が 160MiB から 2GiB へ
+      // 悪化する) と、絶対 RSS 約 8MB / 受理 約 4.3MiB にしかならず、
+      // 「16MB 未満」「8MiB 未満」はどちらも通ってしまう。
+      //
+      // 増分 1,536kB は実測 468kB の約 3.3 倍。定数から導ける一時ピーク
+      // (キュー容量 約 480KiB + MaskStream 約 192KiB ≒ 672KiB) に対しても
+      // 約 2.2 倍の余裕がある。kernel の socket バッファは VmRSS に入らないので
+      // この増分はホストの速度にもバッファ設定にも依存せず、MAX_QUEUED_BYTES を
+      // 5 倍以上に緩めればここで落ちる。
+      const rssGrowthKb = serverRssKb(proc.pid) - baselineRssKb;
+      expect(rssGrowthKb).toBeLessThan(1536);
+      // 受理バイト数の上限 2MiB は実測 583KiB の約 3.5 倍。こちらは kernel の
+      // socket バッファ (既定で送受信とも 208KiB 前後) の分だけホスト設定に
+      // 依存するので、増分より margin を広めに取る。
+      expect(accepted).toBeLessThan(2 * 1024 * 1024);
 
       stall.kill();
       await stall.exited;
