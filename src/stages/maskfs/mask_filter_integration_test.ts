@@ -742,11 +742,19 @@ describe("nas-mask-filter --serve", () => {
         // 336MiB から約 900MiB へ悪化するので、そこは捕まえられねばならない。
         const rssGrowthKb = serverRssKb(proc.pid) - baselineRssKb;
         expect(rssGrowthKb).toBeLessThan(640);
-        // 受理バイト数はキュー上限に加えて kernel の socket バッファ (既定で
-        // 送受信とも 208KiB 前後) を含むので、ホスト設定に依存する分だけ増分より
-        // 余裕を取る。実測 583KiB のうち上限由来は 256KiB、残り 327KiB がホスト
-        // 依存分。閾値 896KiB はホスト依存分に 640KiB (実測の約 2 倍) を許しつつ、
-        // 2 倍緩和時の 839KiB は捕まえる。
+        // 受理バイト数はキュー上限以外の項を含むので、増分より余裕を取る。
+        // 実測 583KiB の内訳は 256KiB (上限) + 64KiB + 約 263KiB。
+        //
+        // 中央の 64KiB は決定的なオーバーシュートでホスト依存ではない。上限判定は
+        // push の前に行うため、キュー長は 1 チャンク (BUF_SIZE) だけ上限を超えうる
+        // (serve.zig の MAX_QUEUED_BYTES の説明を参照)。実際、受理量から上限を
+        // 引いた値は上限を 256/384/512/1024KiB と変えても 327KiB で一定だった。
+        // ホスト設定に依存するのは残る約 263KiB (kernel の socket バッファ、
+        // 既定で送受信とも 208KiB 前後) だけ。
+        //
+        // 閾値 896KiB は上限以外の項に 640KiB を許す。うち 64KiB は決定的なので
+        // ホスト依存分は 576KiB (実測の約 2.19 倍) まで振れてよい計算になり、
+        // それでいて 2 倍緩和時の 839KiB は捕まえる。
         expect(accepted).toBeLessThan(896 * 1024);
 
         stall.kill();
