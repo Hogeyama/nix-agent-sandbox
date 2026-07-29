@@ -688,7 +688,11 @@ describe("nas-mask-filter --serve", () => {
   test.skipIf(!hasProcStatus || !hasPython3)(
     "bounds server memory when a client stops reading",
     async () => {
-      if (!binaryPath) return;
+      // ここで黙って return すると、`cd src/mask-filter && zig build` を
+      // していないだけで、メモリ上限の唯一の証明が「何も検証せずに pass」
+      // として報告される。binaryPath は beforeAll で解決するので skipIf には
+      // 渡せない。skip ではなく失敗として出す。
+      expect(binaryPath).not.toBeNull();
       const sockPath = shortSockPath("bp");
       const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
       let stall: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
@@ -775,7 +779,9 @@ describe("nas-mask-filter --serve", () => {
   // 接続を完了させてしまうので、クライアントは応答も拒否も得られないまま
   // タイムアウトまでぶら下がる。
   test("serves a new client while many idle connections are held", async () => {
-    if (!binaryPath) return;
+    // 上と同じ理由でバイナリ未ビルドは失敗にする。接続数上限の証明はこの
+    // テストだけなので、黙って 0 assertion で通ってはならない。
+    expect(binaryPath).not.toBeNull();
     const sockPath = shortSockPath("flood");
     const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
     const held: (BunSocket | null)[] = [];
