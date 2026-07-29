@@ -465,8 +465,11 @@ describe("nas-mask-filter --serve", () => {
   // のは「生きているが黙っているだけ」の接続 (supervise 下の `sleep 900`、
   // stderr に何も書かない長時間ビルド) だけであり、これを閉じるとスーパーバイザが
   // fail-closed の 121 を返して成功するはずのコマンドが失敗する。
-  // 刈り取りが再導入されると、ここで沈黙中に接続が閉じられ、その後の書き込みの
-  // 出力が返ってこなくなる。
+  // このテストが実際に保証するのは「無音のまま poll タイムアウトを何周かしても
+  // 接続が落ちない」ことまでで、閾値つきの刈り取りが再導入された場合に捕まえら
+  // れるのは閾値が沈黙時間 (2.5s) より短いときだけである。削除した実装の
+  // IDLE_REAP_MS は 10 分だったので、あれをそのまま戻しただけではここは通って
+  // しまう。10 分待つテストは現実的でないため、そこは割り切ってこの範囲を守る。
   test("keeps a silent live connection alive across poll timeouts", async () => {
     if (!binaryPath) return;
     const sockPath = shortSockPath("idle");
