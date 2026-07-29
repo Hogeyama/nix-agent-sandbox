@@ -1,28 +1,52 @@
 /**
- * MaskFilterService — nas-mask-filter バイナリと秘密フレームをコンテナに
- * 供給するための準備 (ファイル書き込み + マウント/env 計算) を行う。
+ * MaskFilterService — nas-mask-filter の `--serve` デーモンをホスト側で起動し、
+ * コンテナには socket だけを見せるための準備を行う。
  *
- * MaskFsService (FUSE デーモン) とは異なりデーモンのライフサイクルは持たず、
- * 「秘密フレームをホスト上のファイルへ書き出し、コンテナへバインドマウント
- * する」という 1 回限りの準備作業のみを行う。
+ * 解決済みシークレットのフレームはホスト専用ディレクトリに書き、コンテナへは
+ * マウントしない (C1 / S1)。コンテナ内の `--supervise` はフレームを読まず、
+ * この socket 越しにバイト列を中継してマスクを受け取る。
+ *
+ * socket はセッションディレクトリとは別のディレクトリに置く。マウントするのは
+ * socket の「あるディレクトリ」なので、フレームと同居させるとフレームごと
+ * コンテナへ渡すことになる。そのディレクトリは読み取り専用でマウントし、
+ * エージェントによる socket の差し替えを構造的に封じる (connect(2) は読み取り
+ * 専用バインドマウント越しでも成功する)。
+ *
+ * MaskFsService と同じくデーモンのライフサイクルを持ち、Scope 終了時に
+ * デーモンを kill してフレーム・socket・ログを削除する (S2)。
+ *
+ * D1/D2 分離: IO プリミティブ呼び出しは 1 関数 1 呼び出しの D1 ラッパに閉じ、
+ * 合成 Effect (D2) はそれらを組み合わせるだけにする。
  */
 
 import * as path from "node:path";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, type Scope } from "effect";
 import type { MaskValueConfig } from "../../config/types.ts";
 import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
 import type { MountSpec } from "../../pipeline/state.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { FsService } from "../../services/fs.ts";
+import { ProcessService, type SpawnHandle } from "../../services/process.ts";
 import { encodeMaskSecrets } from "./secrets_frame.ts";
+
+type Fs = Context.Tag.Service<typeof FsService>;
+type Proc = Context.Tag.Service<typeof ProcessService>;
 
 export const MASK_FILTER_CONTAINER_PATH =
   "/opt/nas/mask-filter/nas-mask-filter";
-export const MASK_SECRETS_CONTAINER_PATH = "/run/nas/mask-secrets";
 
 export interface MaskFilterPreparePlan {
+  /** ホスト専用。このディレクトリは決してマウントしない。 */
   readonly secretsFramePath: string;
   readonly filterBinaryHostPath: string;
+  /** マウントされる。socket 以外を置いてはならない。 */
+  readonly socketDir: string;
+  /** `${socketDir}/mask.sock` */
+  readonly socketPath: string;
+  /** socketDir の下に置いてはならない。 */
+  readonly logFile: string;
+  readonly timeoutMs: number;
+  readonly pollIntervalMs: number;
 }
 
 export interface MaskFilterResult {
@@ -36,7 +60,7 @@ export class MaskFilterService extends Context.Tag("nas/MaskFilterService")<
     readonly prepareMaskFilter: (
       plan: MaskFilterPreparePlan,
       secrets: string[],
-    ) => Effect.Effect<MaskFilterResult, unknown>;
+    ) => Effect.Effect<MaskFilterResult, unknown, Scope.Scope>;
     readonly resolveSecrets: (
       values: MaskValueConfig[],
       host: HostEnv,
@@ -45,48 +69,174 @@ export class MaskFilterService extends Context.Tag("nas/MaskFilterService")<
 >() {}
 
 // ---------------------------------------------------------------------------
+// Pure planners
+// ---------------------------------------------------------------------------
+
+/**
+ * コンテナから見えるのは socket のディレクトリ (ro) とフィルタバイナリ (ro)
+ * だけ。socket ディレクトリはホストと同じ絶対パスにマウントするので、
+ * コンテナ側パスの定数は不要 (hostexec と同じ方式)。
+ */
+function planMounts(plan: MaskFilterPreparePlan): MountSpec[] {
+  return [
+    { source: plan.socketDir, target: plan.socketDir, readOnly: true },
+    {
+      source: plan.filterBinaryHostPath,
+      target: MASK_FILTER_CONTAINER_PATH,
+      readOnly: true,
+    },
+  ];
+}
+
+function planEnvVars(plan: MaskFilterPreparePlan): Record<string, string> {
+  return {
+    NAS_MASK_SOCKET: plan.socketPath,
+    NAS_MASK_FILTER: MASK_FILTER_CONTAINER_PATH,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// D1: primitive effect wrappers (one IO call each; not unit-tested directly)
+// ---------------------------------------------------------------------------
+
+function makePrivateDir(fs: Fs, dir: string): Effect.Effect<void> {
+  return fs.mkdir(dir, { recursive: true, mode: 0o700 });
+}
+
+function writeSecretsFrame(
+  fs: Fs,
+  framePath: string,
+  frame: Uint8Array,
+): Effect.Effect<void> {
+  return fs.writeFile(framePath, frame, { mode: 0o600 });
+}
+
+function spawnServe(
+  proc: Proc,
+  plan: MaskFilterPreparePlan,
+): Effect.Effect<SpawnHandle> {
+  return proc.spawn(plan.filterBinaryHostPath, ["--serve", plan.socketPath], {
+    logFile: plan.logFile,
+    // ホスト側プロセスの env なのでコンテナ境界を越えない (C1/S1 の対象外)。
+    env: { NAS_MASK_SECRETS_FILE: plan.secretsFramePath },
+  });
+}
+
+/**
+ * ProcessService.spawn は openSync(path, "a") でログを開くため 0644 になる。
+ * serve はストリーム由来のバイト列を書かない契約だが、ログはセッション
+ * ディレクトリ内の永続ファイルなので 0600 に落としておく。
+ */
+function restrictLogFile(fs: Fs, logFile: string): Effect.Effect<void> {
+  return fs.chmod(logFile, 0o600);
+}
+
+function awaitSocket(
+  proc: Proc,
+  plan: MaskFilterPreparePlan,
+): Effect.Effect<void> {
+  return proc.waitForFileExists(
+    plan.socketPath,
+    plan.timeoutMs,
+    plan.pollIntervalMs,
+  );
+}
+
+function removeFile(fs: Fs, target: string): Effect.Effect<void> {
+  return fs.rm(target, { force: true });
+}
+
+function killDaemon(handle: SpawnHandle): Effect.Effect<void> {
+  return Effect.sync(() => handle.kill());
+}
+
+// ---------------------------------------------------------------------------
+// D2: composed effects
+// ---------------------------------------------------------------------------
+
+/**
+ * フレームは 0700 のディレクトリに 0600 で書く。hostexec が C3 のマスクで
+ * これを直読みするため、マウントを止めてもファイル自体は残す。
+ */
+function writeHostSideFrame(
+  fs: Fs,
+  plan: MaskFilterPreparePlan,
+  secrets: string[],
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    yield* makePrivateDir(fs, path.dirname(plan.secretsFramePath));
+    yield* makePrivateDir(fs, plan.socketDir);
+    yield* writeSecretsFrame(
+      fs,
+      plan.secretsFramePath,
+      encodeMaskSecrets(secrets),
+    );
+  });
+}
+
+/** S2: デーモンを止めてから、フレーム・socket・ログを消す。 */
+function releaseServe(
+  fs: Fs,
+  plan: MaskFilterPreparePlan,
+  handle: SpawnHandle,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    yield* killDaemon(handle);
+    yield* removeFile(fs, plan.secretsFramePath);
+    yield* removeFile(fs, plan.socketPath);
+    yield* removeFile(fs, plan.logFile);
+  }).pipe(
+    // finalizer は失敗してはならない。
+    Effect.catchAllCause(() =>
+      Effect.logWarning("mask-filter: serve daemon cleanup failed"),
+    ),
+  );
+}
+
+function startServe(
+  fs: Fs,
+  proc: Proc,
+  plan: MaskFilterPreparePlan,
+): Effect.Effect<void, unknown, Scope.Scope> {
+  return Effect.gen(function* () {
+    yield* Effect.acquireRelease(spawnServe(proc, plan), (handle) =>
+      releaseServe(fs, plan, handle),
+    );
+    yield* restrictLogFile(fs, plan.logFile);
+    yield* awaitSocket(proc, plan);
+  });
+}
+
+function prepareMaskFilter(
+  fs: Fs,
+  proc: Proc,
+  plan: MaskFilterPreparePlan,
+  secrets: string[],
+): Effect.Effect<MaskFilterResult, unknown, Scope.Scope> {
+  return Effect.gen(function* () {
+    yield* writeHostSideFrame(fs, plan, secrets);
+    yield* startServe(fs, proc, plan);
+    return { mounts: planMounts(plan), envVars: planEnvVars(plan) };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Live implementation
 // ---------------------------------------------------------------------------
 
 export const MaskFilterServiceLive: Layer.Layer<
   MaskFilterService,
   never,
-  FsService
+  FsService | ProcessService
 > = Layer.effect(
   MaskFilterService,
   Effect.gen(function* () {
     const fs = yield* FsService;
+    const proc = yield* ProcessService;
 
     return MaskFilterService.of({
       prepareMaskFilter: (plan, secrets) =>
-        Effect.gen(function* () {
-          const frame = encodeMaskSecrets(secrets);
-          yield* fs.mkdir(path.dirname(plan.secretsFramePath), {
-            recursive: true,
-            mode: 0o700,
-          });
-          yield* fs.writeFile(plan.secretsFramePath, frame, { mode: 0o600 });
-
-          const mounts: MountSpec[] = [
-            {
-              source: plan.secretsFramePath,
-              target: MASK_SECRETS_CONTAINER_PATH,
-              readOnly: true,
-            },
-            {
-              source: plan.filterBinaryHostPath,
-              target: MASK_FILTER_CONTAINER_PATH,
-              readOnly: true,
-            },
-          ];
-
-          const envVars: Record<string, string> = {
-            NAS_MASK_SECRETS_FILE: MASK_SECRETS_CONTAINER_PATH,
-            NAS_MASK_FILTER: MASK_FILTER_CONTAINER_PATH,
-          };
-
-          return { mounts, envVars };
-        }),
+        prepareMaskFilter(fs, proc, plan, secrets),
 
       resolveSecrets: (values, host) =>
         Effect.tryPromise({
@@ -109,7 +259,7 @@ export interface MaskFilterServiceFakeConfig {
   readonly prepareMaskFilter?: (
     plan: MaskFilterPreparePlan,
     secrets: string[],
-  ) => Effect.Effect<MaskFilterResult, unknown>;
+  ) => Effect.Effect<MaskFilterResult, unknown, Scope.Scope>;
   readonly resolveSecrets?: (
     values: MaskValueConfig[],
     host: HostEnv,

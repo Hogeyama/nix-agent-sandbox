@@ -19,6 +19,9 @@ import { MaskFilterService } from "./mask_filter_service.ts";
 
 type StageResult = Pick<PipelineState, "container">;
 
+const SOCKET_READY_TIMEOUT_MS = 10_000;
+const SOCKET_READY_POLL_MS = 50;
+
 /** テスト用フック */
 export interface MaskFilterStageOptions {
   readonly resolveBinPath?: () => Promise<string | null>;
@@ -55,11 +58,23 @@ export function createMaskFilterStage(
         }
 
         const runtimeDir = resolveRuntimeSubdir(shared.host, "mask-filter");
-        const secretsFramePath = `${runtimeDir}/${shared.sessionId}/mask-secrets`;
+        // socket はセッションディレクトリの「兄弟」に置く。マウントするのは
+        // socket のあるディレクトリなので、同居させるとフレームごとコンテナへ
+        // 渡すことになる (C1)。
+        const sessionDir = `${runtimeDir}/${shared.sessionId}`;
+        const socketDir = `${runtimeDir}/${shared.sessionId}-sock`;
 
         const secrets = yield* svc.resolveSecrets(mask.values, shared.host);
         const result = yield* svc.prepareMaskFilter(
-          { secretsFramePath, filterBinaryHostPath: binaryPath },
+          {
+            secretsFramePath: `${sessionDir}/mask-secrets`,
+            filterBinaryHostPath: binaryPath,
+            socketDir,
+            socketPath: `${socketDir}/mask.sock`,
+            logFile: `${sessionDir}/serve.log`,
+            timeoutMs: SOCKET_READY_TIMEOUT_MS,
+            pollIntervalMs: SOCKET_READY_POLL_MS,
+          },
           secrets,
         );
 
