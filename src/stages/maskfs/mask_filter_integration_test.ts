@@ -229,6 +229,90 @@ function maskOverSocketSlowReader(
   });
 }
 
+/**
+ * 「書くだけで一切読まない」クライアント。TypeScript では書けないので Python で
+ * 別プロセスとして用意する。
+ *
+ * node:net の `write()` の戻り値は使えない。サーバの状態と無関係に Node 自身の
+ * highWaterMark (16KiB) を超えた時点で false になるので、上限あり・なしで
+ * 同じ結果しか出ない。Bun の `pause()` もカーネルの受信バッファの排出を
+ * 止めない (コールバックが遅延するだけ) ので、Bun のクライアントでは
+ * そもそもサーバを詰まらせられない。
+ *
+ * 非ブロッキングにしてカーネルが受け取る限り書き続け、recv は決して呼ばない。
+ * 進まなくなったら受理されたバイト数を出力して stdout を閉じ、あとは kill
+ * されるまで接続を握ったまま黙る (接続を閉じるとサーバがキューを解放して
+ * しまい、測りたい状態が消える)。
+ */
+const STALLING_CLIENT_PY = `import os
+import socket
+import sys
+import time
+
+sock_path = sys.argv[1]
+limit_bytes = int(sys.argv[2]) * 1024 * 1024
+stall_timeout_s = 2.0
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sock_path)
+s.setblocking(False)
+
+chunk = b"x" * 65536
+sent = 0
+blocked_since = None
+while sent < limit_bytes:
+    try:
+        n = s.send(chunk)
+    except BlockingIOError:
+        n = 0
+    except OSError:
+        break
+    if n > 0:
+        sent += n
+        blocked_since = None
+        continue
+    now = time.monotonic()
+    if blocked_since is None:
+        blocked_since = now
+    elif now - blocked_since >= stall_timeout_s:
+        break
+    time.sleep(0.01)
+
+sys.stdout.write(str(sent) + "\\n")
+sys.stdout.flush()
+os.close(1)
+
+while True:
+    time.sleep(1)
+`;
+
+function writeStallingClient(): string {
+  const p = path.join(tmpDir, "stalling_client.py");
+  if (!fs.existsSync(p)) fs.writeFileSync(p, STALLING_CLIENT_PY);
+  return p;
+}
+
+type BunSocket = Awaited<ReturnType<typeof Bun.connect>>;
+
+/** 接続だけして 1 バイトも書かず、握ったまま黙るクライアント。 */
+function connectIdle(sockPath: string): Promise<BunSocket | null> {
+  return Bun.connect({
+    unix: sockPath,
+    socket: {
+      data() {},
+      close() {},
+      error() {},
+    },
+  }).catch(() => null);
+}
+
+function serverRssKb(pid: number): number {
+  const m = fs
+    .readFileSync(`/proc/${pid}/status`, "utf8")
+    .match(/^VmRSS:\s+(\d+) kB$/m);
+  return m ? Number(m[1]) : 0;
+}
+
 describe("nas-mask-filter binary", () => {
   test("masks single secret", async () => {
     if (!binaryPath) return; // skip if not built
@@ -526,4 +610,96 @@ describe("nas-mask-filter --serve", () => {
     }
     await expectServeSilent(proc);
   }, 30000);
+
+  // socket はエージェントの UID から到達可能で、サーバはコンテナの cgroup の
+  // **外** (ホスト) で動く。したがって「読まずに書き続ける」クライアント 1 本で
+  // ホストのメモリを好きなだけ食えてはならない。MAX_QUEUED_BYTES を超えた接続は
+  // READ の poll を外すので、背圧は socket バッファ経由でクライアントへ伝わり、
+  // サーバのメモリは上限付近で頭打ちになる。
+  //
+  // 検証対象はサーバの VmRSS そのものである点が重要。クライアント側の
+  // `write()` の戻り値では上限あり・なしを区別できない (STALLING_CLIENT_PY の
+  // コメント参照)。
+  test("bounds server memory when a client stops reading", async () => {
+    if (!binaryPath) return;
+    if (!fs.existsSync("/proc/self/status")) return; // Linux 限定
+    if (!Bun.which("python3")) return;
+    const sockPath = shortSockPath("bp");
+    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    let stall: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+
+      stall = Bun.spawn(["python3", writeStallingClient(), sockPath, "64"], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      // 進まなくなった (= 背圧がかかった) 時点で stdout が閉じる。
+      const accepted = Number(await new Response(stall.stdout).text());
+      expect(accepted).toBeGreaterThan(0);
+
+      await Bun.sleep(300);
+      // 実測: 上限ありで RSS 4.2MB / 受理 0.57MiB、MAX_QUEUED_BYTES を
+      // maxInt(usize) にすると RSS 67.7MB / 受理 64MiB (= 押し込んだ全量)。
+      expect(serverRssKb(proc.pid)).toBeLessThan(16 * 1024);
+      expect(accepted).toBeLessThan(8 * 1024 * 1024);
+
+      stall.kill();
+      await stall.exited;
+      stall = null;
+
+      // 詰まった接続を抱えたままでも他の接続は普通に処理できる。
+      expect(await maskOverSocket(sockPath, ["pw=hunter2"])).toBe("pw=*******");
+    } finally {
+      if (stall) {
+        stall.kill();
+        await stall.exited;
+      }
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+    await expectServeSilent(proc);
+  }, 60000);
+
+  // 接続を並べただけで次のクライアントが待たされてはならない。
+  //
+  // 上限未満では普通に処理できること、上限を超えたぶんは accept して即 close
+  // されること (= クライアントは即 EOF を受け取り、待たされない) の両方を見る。
+  // listener の poll を外すだけの実装だと後者が壊れる: kernel が backlog へ
+  // 接続を完了させてしまうので、クライアントは応答も拒否も得られないまま
+  // タイムアウトまでぶら下がる。
+  test("serves a new client while many idle connections are held", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("flood");
+    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    const held: (BunSocket | null)[] = [];
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+
+      const probe = () =>
+        Promise.race([
+          maskOverSocket(sockPath, ["pw=hunter2"]).catch(() => "CLOSED"),
+          Bun.sleep(5000).then(() => "TIMEOUT"),
+        ]);
+
+      // MAX_CONNECTIONS = 512。まずは上限未満。
+      for (let i = 0; i < 300; i++) held.push(await connectIdle(sockPath));
+      await Bun.sleep(300);
+      expect(await probe()).toBe("pw=*******");
+
+      // 上限を超えるまで積む。超過分は accept して即 close されるので、新しい
+      // クライアントは masked な応答か即 EOF のどちらかを得る。ぶら下がるのは不可。
+      for (let i = 0; i < 300; i++) held.push(await connectIdle(sockPath));
+      await Bun.sleep(300);
+      expect(await probe()).not.toBe("TIMEOUT");
+    } finally {
+      for (const s of held) s?.end();
+      proc.kill();
+      await proc.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+    await expectServeSilent(proc);
+  }, 60000);
 });
