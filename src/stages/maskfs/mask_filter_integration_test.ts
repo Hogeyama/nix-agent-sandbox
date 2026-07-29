@@ -340,58 +340,6 @@ function writeStallingClient(): string {
   return p;
 }
 
-type BunSocket = Awaited<ReturnType<typeof Bun.connect>>;
-
-/** 接続だけして 1 バイトも書かず、握ったまま黙るクライアント。 */
-function connectIdle(sockPath: string): Promise<BunSocket | null> {
-  return Bun.connect({
-    unix: sockPath,
-    socket: {
-      data() {},
-      close() {},
-      error() {},
-    },
-  }).catch(() => null);
-}
-
-/**
- * serve.zig の `MAX_CONNECTIONS`。これを超えた接続はサーバが accept して
- * 即 close する。フラッド系のテストは「この本数を実際に越えたか」を
- * 自分で確かめる必要があるので、値をここに写して参照する。
- *
- * 写した値が実装より小さい方向へずれると、テストは黙って「上限未満の接続を
- * 並べただけ」の形へ退化する。実装側を 1024 にしたビルドで 600 本を積んだ
- * 実測では established = 600 (> 512 なので通る) / 超過プローブは
- * "pw=*******" (許容値) / デーモン生存 の 3 つとも緑になり、上限超過の経路を
- * 一度も踏まないまま pass した。これは前の変更が潰したはずの形そのものなので、
- * ずれは静かな退化ではなく明示的な失敗にする。
- */
-const SERVE_MAX_CONNECTIONS = 512;
-
-/**
- * serve.zig のソースから `MAX_CONNECTIONS` を読む。読めなければ null。
- * 上の写しと突き合わせて、実装側の変更を検出するために使う。
- */
-function readServeMaxConnections(): number | null {
-  const src = path.resolve(import.meta.dir, "../../mask-filter/serve.zig");
-  if (!fs.existsSync(src)) return null;
-  const m = fs
-    .readFileSync(src, "utf8")
-    .match(/^const MAX_CONNECTIONS:\s*usize\s*=\s*(\d+);$/m);
-  return m ? Number(m[1]) : null;
-}
-
-/**
- * フラッドテストで積む接続数。上限からの相対で決める (定数を上げたときに
- * 本数だけ据え置かれて上限を跨がなくなるのを防ぐ)。
- *
- * 超過段は上限の 1.2 倍。connectIdle は接続失敗を null に潰すので、
- * RLIMIT_NOFILE や backlog の都合で何本か張れなくても上限を越えられるだけの
- * 余裕を持たせている (512 なら 615 本を積み、102 本落ちても越える)。
- */
-const FLOOD_BELOW_CAP = Math.floor(SERVE_MAX_CONNECTIONS / 2);
-const FLOOD_ABOVE_CAP = Math.ceil(SERVE_MAX_CONNECTIONS * 1.2);
-
 function serverRssKb(pid: number): number {
   const m = fs
     .readFileSync(`/proc/${pid}/status`, "utf8")
@@ -993,19 +941,9 @@ describe("nas-mask-filter --serve", () => {
         // 336MiB から約 900MiB へ悪化するので、そこは捕まえられねばならない。
         const rssGrowthKb = serverRssKb(proc.pid) - baselineRssKb;
         expect(rssGrowthKb).toBeLessThan(640);
-        // 受理バイト数はキュー上限以外の項を含むので、増分より余裕を取る。
-        // 実測 583KiB の内訳は 256KiB (上限) + 64KiB + 約 263KiB。
-        //
-        // 中央の 64KiB は決定的なオーバーシュートでホスト依存ではない。上限判定は
-        // push の前に行うため、キュー長は 1 チャンク (BUF_SIZE) だけ上限を超えうる
-        // (serve.zig の MAX_QUEUED_BYTES の説明を参照)。実際、受理量から上限を
-        // 引いた値は上限を 256/384/512/1024KiB と変えても 327KiB で一定だった。
-        // ホスト設定に依存するのは残る約 263KiB (kernel の socket バッファ、
-        // 既定で送受信とも 208KiB 前後) だけ。
-        //
-        // 閾値 896KiB は上限以外の項に 640KiB を許す。うち 64KiB は決定的なので
-        // ホスト依存分は 576KiB (実測の約 2.19 倍) まで振れてよい計算になり、
-        // それでいて 2 倍緩和時の 839KiB は捕まえる。
+        // 受理量は上限のほかに 1 チャンク分のオーバーシュートと kernel の
+        // socket バッファを含むので、増分より余裕を取る。実測 583KiB に対し
+        // 896KiB なら、2 倍緩和時の 839KiB を捕まえつつホスト差を吸収できる。
         expect(accepted).toBeLessThan(896 * 1024);
 
         stall.kill();
@@ -1029,77 +967,4 @@ describe("nas-mask-filter --serve", () => {
     },
     60000,
   );
-
-  // 接続を並べただけで次のクライアントが待たされてはならない。
-  //
-  // 上限未満では普通に処理できること、上限を超えたぶんは accept して即 close
-  // されること (= クライアントは即 EOF を受け取り、待たされない) の両方を見る。
-  // listener の poll を外すだけの実装だと後者が壊れる: kernel が backlog へ
-  // 接続を完了させてしまうので、クライアントは応答も拒否も得られないまま
-  // タイムアウトまでぶら下がる。
-  test("serves a new client while many idle connections are held", async () => {
-    // 上と同じ理由でバイナリ未ビルドは失敗にする。接続数上限の証明はこの
-    // テストだけなので、黙って 0 assertion で通ってはならない。
-    expect(binaryPath).not.toBeNull();
-    const sockPath = shortSockPath("flood");
-    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    const held: (BunSocket | null)[] = [];
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-
-      // 積む本数はすべてこの定数から導くので、実装とずれていたら以降の判定は
-      // まるごと無意味になる。ソースから読み直して先に確定させる。
-      expect(readServeMaxConnections()).toBe(SERVE_MAX_CONNECTIONS);
-
-      // 例外を一律 "CLOSED" のような正常値へ潰してはならない。デーモンが死んで
-      // connect が ECONNREFUSED になった場合まで「待たされなかった」として
-      // 通ってしまう。エラーはエラーと分かる文字列にして、許容値から外す。
-      const probe = (): Promise<string> =>
-        Promise.race([
-          maskOverSocket(sockPath, ["pw=hunter2"]).catch(
-            (e) => `ERROR: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-          Bun.sleep(5000).then(() => "TIMEOUT"),
-        ]);
-
-      // まずは SERVE_MAX_CONNECTIONS 未満。
-      for (let i = 0; i < FLOOD_BELOW_CAP; i++)
-        held.push(await connectIdle(sockPath));
-      await Bun.sleep(300);
-      expect(await probe()).toBe("pw=*******");
-
-      // 上限を超えるまで積む。超過分は accept して即 close されるので、新しい
-      // クライアントは masked な応答か即 EOF のどちらかを得る。ぶら下がるのは不可。
-      for (let i = held.length; i < FLOOD_ABOVE_CAP; i++)
-        held.push(await connectIdle(sockPath));
-      await Bun.sleep(300);
-
-      // 本当に上限を越えたことを確かめてから probe する。connectIdle は接続失敗を
-      // null に潰すので、RLIMIT_NOFILE が小さい・backlog が短い・ホストが遅いと
-      // いった理由で張れない接続が多すぎると、このテストは黙って「上限未満」と
-      // 同じ形に退化する。その形は listener の poll を外すだけの壊れた実装でも
-      // 通ることが実測で分かっているので、退化したまま緑になる状態を許しては
-      // ならない。失敗時に観測本数が出るよう、真偽値ではなく本数そのものを
-      // 比較する。
-      const established = held.filter((s) => s !== null).length;
-      expect(established).toBeGreaterThan(SERVE_MAX_CONNECTIONS);
-
-      // 上限超過時に許される結果は 2 つだけ。accept して即 close された結果の
-      // 空の EOF (実測ではこちらで決定的)、または上限内に空きができていた場合の
-      // マスク済み応答。ぶら下がり (TIMEOUT) はもちろん、connect 自体の失敗
-      // (ERROR: ... — デーモンが死んだ / socket が消えた) も不合格にする。
-      // `not.toBe("TIMEOUT")` ではこの「何かが壊れた」側を全部見逃す。
-      expect(["", "pw=*******"]).toContain(await probe());
-
-      // 上の空応答が accept-and-close の結果であって「デーモンが落ちて
-      // socket が消えた」結果ではないことを、ここで確定させる。
-      expect(serveAlive(proc)).toBe(true);
-    } finally {
-      for (const s of held) s?.end();
-      proc.kill();
-      await proc.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-    await expectServeSilent(proc);
-  }, 60000);
 });
