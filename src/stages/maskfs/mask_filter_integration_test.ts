@@ -681,27 +681,38 @@ describe("nas-mask-filter --serve", () => {
 
         await Bun.sleep(300);
 
-        // 実測 (このホストで 3 回、いずれも同値): 接続前 RSS 3,696kB /
-        // 詰まらせた後 4,164kB / 増分 468kB、受理 597,376B (583KiB)。
-        //
         // **絶対 RSS ではなく増分を見る**のが要点。絶対値のうち約 3.7MB は接続と
         // 無関係な固定オーバーヘッドで、上限由来の信号は残り 0.47MB しかない。
-        // そこに絶対値の閾値を置くと上限の撤去しか検出できない: MAX_QUEUED_BYTES を
-        // 256KiB から 4MiB へ 16 倍緩める (ホストの最悪値が 160MiB から 2GiB へ
-        // 悪化する) と、絶対 RSS 約 8MB / 受理 約 4.3MiB にしかならず、
-        // 「16MB 未満」「8MiB 未満」はどちらも通ってしまう。
+        // そこに絶対値の閾値を置くと上限の撤去しか検出できない。
         //
-        // 増分 1,536kB は実測 468kB の約 3.3 倍。定数から導ける一時ピーク
-        // (キュー容量 約 480KiB + MaskStream 約 192KiB ≒ 672KiB) に対しても
-        // 約 2.2 倍の余裕がある。kernel の socket バッファは VmRSS に入らないので
-        // この増分はホストの速度にもバッファ設定にも依存せず、MAX_QUEUED_BYTES を
-        // 5 倍以上に緩めればここで落ちる。
+        // 閾値は「MAX_QUEUED_BYTES を 2 倍に緩めたら落ちる」ように選ぶ。実測は
+        // 上限にほぼ比例し (増分 ≒ MAX_QUEUED_BYTES + 約 212kB)、同じホストで
+        // 何度測っても 1kB もぶれない (出荷ビルドで 3 回、いずれも同値):
+        //
+        //   MAX_QUEUED_BYTES | 増分     | 受理     | 接続前 RSS
+        //   256KiB (出荷)    |   468kB  |  583KiB  | 3,696kB
+        //   512KiB (2 倍)    |   724kB  |  839KiB  | 3,696kB
+        //   1MiB   (4 倍)    | 1,236kB  | 1,351KiB | 3,700kB
+        //   1280KiB (5 倍)   | 1,492kB  | 1,607KiB | 3,700kB
+        //   4MiB   (16 倍)   | 4,308kB  | 4,423KiB | 3,740kB
+        //
+        // kernel の socket バッファは VmRSS に入らないので、この増分はホストの
+        // 速度にもバッファ設定にも依存しない。よって閾値は「実測 468kB の上」
+        // かつ「2 倍緩和の 724kB の下」に置けばよく、640kB とする: 実測比 1.37 倍
+        // (余裕 172kB) で、2 倍緩和からは 84kB 下。増分 ≒ 上限 + 212kB なので、
+        // MAX_QUEUED_BYTES が約 424KiB (約 1.7 倍) を超えた時点で落ちる。
+        //
+        // 緩い閾値では駄目な理由: 増分 1,536kB / 受理 2MiB だと 5 倍緩和
+        // (1280KiB) まで両方素通りする。1MiB へ緩めるだけでホストの最悪値は
+        // 336MiB から約 900MiB へ悪化するので、そこは捕まえられねばならない。
         const rssGrowthKb = serverRssKb(proc.pid) - baselineRssKb;
-        expect(rssGrowthKb).toBeLessThan(1536);
-        // 受理バイト数の上限 2MiB は実測 583KiB の約 3.5 倍。こちらは kernel の
-        // socket バッファ (既定で送受信とも 208KiB 前後) の分だけホスト設定に
-        // 依存するので、増分より margin を広めに取る。
-        expect(accepted).toBeLessThan(2 * 1024 * 1024);
+        expect(rssGrowthKb).toBeLessThan(640);
+        // 受理バイト数はキュー上限に加えて kernel の socket バッファ (既定で
+        // 送受信とも 208KiB 前後) を含むので、ホスト設定に依存する分だけ増分より
+        // 余裕を取る。実測 583KiB のうち上限由来は 256KiB、残り 327KiB がホスト
+        // 依存分。閾値 896KiB はホスト依存分に 640KiB (実測の約 2 倍) を許しつつ、
+        // 2 倍緩和時の 839KiB は捕まえる。
+        expect(accepted).toBeLessThan(896 * 1024);
 
         stall.kill();
         await stall.exited;
