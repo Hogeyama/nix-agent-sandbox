@@ -100,6 +100,24 @@ function startServe(secretsFile: string, sockPath: string) {
   });
 }
 
+/**
+ * serve モードの出力不変条件: ストリーム由来のバイトを自身の stdout/stderr に
+ * 書いてはならない。
+ *
+ * ホスト側では ProcessService.spawn がこの 2 つを永続ログファイルに向けるため、
+ * 「failed to mask chunk: <bytes>」のような診断を 1 つ足すだけで平文シークレットが
+ * ディスクに残る。診断は定数文字列だけに限る必要があるので、両ストリームが空の
+ * ままであることを毎回確認する。
+ */
+async function expectServeSilent(proc: ReturnType<typeof startServe>) {
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  expect(stdout).toBe("");
+  expect(stderr).toBe("");
+}
+
 async function waitForSocket(sockPath: string, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -344,6 +362,7 @@ describe("nas-mask-filter --serve", () => {
       await proc.exited;
       fs.rmSync(sockPath, { force: true });
     }
+    await expectServeSilent(proc);
   }, 15000);
 
   test("masks a secret straddling a socket chunk boundary", async () => {
@@ -361,6 +380,7 @@ describe("nas-mask-filter --serve", () => {
       await proc.exited;
       fs.rmSync(sockPath, { force: true });
     }
+    await expectServeSilent(proc);
   }, 15000);
 
   test("keeps per-connection overlap state isolated", async () => {
@@ -380,5 +400,6 @@ describe("nas-mask-filter --serve", () => {
       await proc.exited;
       fs.rmSync(sockPath, { force: true });
     }
+    await expectServeSilent(proc);
   }, 15000);
 });
