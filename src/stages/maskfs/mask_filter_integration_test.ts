@@ -306,6 +306,13 @@ function connectIdle(sockPath: string): Promise<BunSocket | null> {
   }).catch(() => null);
 }
 
+/**
+ * serve.zig の `MAX_CONNECTIONS`。これを超えた接続はサーバが accept して
+ * 即 close する。フラッド系のテストは「この本数を実際に越えたか」を
+ * 自分で確かめる必要があるので、値をここに写して参照する。
+ */
+const SERVE_MAX_CONNECTIONS = 512;
+
 function serverRssKb(pid: number): number {
   const m = fs
     .readFileSync(`/proc/${pid}/status`, "utf8")
@@ -708,7 +715,7 @@ describe("nas-mask-filter --serve", () => {
           Bun.sleep(5000).then(() => "TIMEOUT"),
         ]);
 
-      // MAX_CONNECTIONS = 512。まずは上限未満。
+      // まずは SERVE_MAX_CONNECTIONS 未満。
       for (let i = 0; i < 300; i++) held.push(await connectIdle(sockPath));
       await Bun.sleep(300);
       expect(await probe()).toBe("pw=*******");
@@ -717,6 +724,17 @@ describe("nas-mask-filter --serve", () => {
       // クライアントは masked な応答か即 EOF のどちらかを得る。ぶら下がるのは不可。
       for (let i = 0; i < 300; i++) held.push(await connectIdle(sockPath));
       await Bun.sleep(300);
+
+      // 本当に上限を越えたことを確かめてから probe する。connectIdle は接続失敗を
+      // null に潰すので、RLIMIT_NOFILE が小さい・backlog が短い・ホストが遅いと
+      // いった理由で 600 本のうち 88 本以上が張れなければ、このテストは黙って
+      // 「上限未満の 300 本」と同じ形に退化する。その形は listener の poll を
+      // 外すだけの壊れた実装でも通ることが実測で分かっているので、退化したまま
+      // 緑になる状態を許してはならない。失敗時に観測本数が出るよう、真偽値では
+      // なく本数そのものを比較する。
+      const established = held.filter((s) => s !== null).length;
+      expect(established).toBeGreaterThan(SERVE_MAX_CONNECTIONS);
+
       expect(await probe()).not.toBe("TIMEOUT");
     } finally {
       for (const s of held) s?.end();
