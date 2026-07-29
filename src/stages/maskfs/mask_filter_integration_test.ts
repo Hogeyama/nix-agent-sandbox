@@ -118,6 +118,18 @@ async function expectServeSilent(proc: ReturnType<typeof startServe>) {
   expect(stderr).toBe("");
 }
 
+/**
+ * デーモンがまだ生きているか。
+ *
+ * `exitCode` / `signalCode` は `await proc.exited` しなくても子の終了を反映
+ * するので、シグナルによる死も検出できる。expectServeSilent は stdout/stderr が
+ * 空であることしか見ておらず、途中で落ちたデーモン (どちらも空のまま) を
+ * 素通りさせてしまうため、生存はこちらで別に確かめる必要がある。
+ */
+function serveAlive(proc: ReturnType<typeof startServe>): boolean {
+  return proc.exitCode === null && proc.signalCode === null;
+}
+
 async function waitForSocket(sockPath: string, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -709,9 +721,14 @@ describe("nas-mask-filter --serve", () => {
     try {
       expect(await waitForSocket(sockPath)).toBe(true);
 
-      const probe = () =>
+      // 例外を一律 "CLOSED" のような正常値へ潰してはならない。デーモンが死んで
+      // connect が ECONNREFUSED になった場合まで「待たされなかった」として
+      // 通ってしまう。エラーはエラーと分かる文字列にして、許容値から外す。
+      const probe = (): Promise<string> =>
         Promise.race([
-          maskOverSocket(sockPath, ["pw=hunter2"]).catch(() => "CLOSED"),
+          maskOverSocket(sockPath, ["pw=hunter2"]).catch(
+            (e) => `ERROR: ${e instanceof Error ? e.message : String(e)}`,
+          ),
           Bun.sleep(5000).then(() => "TIMEOUT"),
         ]);
 
@@ -735,7 +752,16 @@ describe("nas-mask-filter --serve", () => {
       const established = held.filter((s) => s !== null).length;
       expect(established).toBeGreaterThan(SERVE_MAX_CONNECTIONS);
 
-      expect(await probe()).not.toBe("TIMEOUT");
+      // 上限超過時に許される結果は 2 つだけ。accept して即 close された結果の
+      // 空の EOF (実測ではこちらで決定的)、または上限内に空きができていた場合の
+      // マスク済み応答。ぶら下がり (TIMEOUT) はもちろん、connect 自体の失敗
+      // (ERROR: ... — デーモンが死んだ / socket が消えた) も不合格にする。
+      // `not.toBe("TIMEOUT")` ではこの「何かが壊れた」側を全部見逃す。
+      expect(["", "pw=*******"]).toContain(await probe());
+
+      // 上の空応答が accept-and-close の結果であって「デーモンが落ちて
+      // socket が消えた」結果ではないことを、ここで確定させる。
+      expect(serveAlive(proc)).toBe(true);
     } finally {
       for (const s of held) s?.end();
       proc.kill();
