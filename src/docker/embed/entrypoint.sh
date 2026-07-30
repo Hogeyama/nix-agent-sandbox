@@ -312,10 +312,21 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
   # (同じコマンドが成功したり無出力になったりする競合)。
   # supervise モードではフィルタ自身が親になり、パイプを drain し切ってから
   # 子の終了ステータスで exit するため、この競合が起きない。
+  #
+  # NAS_MASK_SUPERVISED は supervisor が子へ渡す入れ子抑止のマーカー。
+  # コンテナ内の bash はすべてこのラッパーなので、抑止しないと ./configure や
+  # make の各レシピ行、再帰 make、npm/cargo のビルドスクリプトのたびに層が
+  # 積み上がり、接続数は生存 bash プロセス数に比例して増える。抑止しても
+  # カバレッジは減らない: 子孫は最外周 supervisor のパイプを継承するので
+  # 出力は既にマスクされており、最外周から逃げる出力 (ファイルへのリダイレクト、
+  # /dev/tty) は内側の層からも同様に逃げる。
   BASH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.tmp.$$"
   cat > "$BASH_WRAPPER_TMP" << 'MASK_WRAPPER'
 #!/tmp/nas-bash-override/bash.real
 if [ "${1:-}" = "/entrypoint.sh" ]; then
+  exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
+fi
+if [ -n "${NAS_MASK_SUPERVISED:-}" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
 exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" --socket "$NAS_MASK_SOCKET" -- \
