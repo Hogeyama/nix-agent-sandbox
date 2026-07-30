@@ -18,6 +18,7 @@ import { expect, test } from "bun:test";
  *   /tmp 直下を使用する。
  */
 
+import { existsSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -62,89 +63,327 @@ async function makeTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-// 本物の nas-mask-filter の代役。--supervise モード (bash ラッパーが実際に使う
-// 呼び出し方) と、素の stdin→stdout フィルタモードの両方を実装する。
+// 本物の nas-mask-filter の代役。実バイナリに置き換えないのは、これらの Docker
+// テストを Zig ビルド無しで走らせられるようにするためで、それがこのフィクスチャの
+// 存在理由そのものなので保つ。
+//
+// 実装するのは 3 モード:
+//   --serve <sock>  ホスト側ブローカー。1 接続 = 1 ストリームでマスクして返す。
+//                   シークレットフレームを読むのは**このモードだけ**。
+//   --supervise ... コンテナ側の中継クライアント。子を起動し、その stdout/stderr を
+//                   socket 経由でマスクして書き戻す。フレームは読まない。
+//   (引数なし)      素の stdin→stdout フィルタ。
+//
 // supervise モードでは子の出力を drain し切ってから子の終了ステータスで exit する
 // ため、呼び出し元は「プロセスの終了 = 出力の完了」として扱える。
 const MASK_FILTER_FIXTURE = `#!/usr/bin/env python3
 import os
+import socket
 import struct
 import subprocess
 import sys
 import threading
 
-frame = memoryview(open(os.environ["NAS_MASK_SECRETS_FILE"], "rb").read())
-count = struct.unpack_from("<I", frame, 0)[0]
-offset = 4
-secrets = []
-for _ in range(count):
-    length = struct.unpack_from("<I", frame, offset)[0]
-    offset += 4
-    secrets.append(bytes(frame[offset:offset + length]))
-    offset += length
+BUF_SIZE = 65536
+# 出力抑止 (fail-closed) の終了コード。
+EXIT_FAIL_CLOSED = 121
 
 
-def mask(data):
-    for secret in secrets:
+def load_secrets():
+    with open(os.environ["NAS_MASK_SECRETS_FILE"], "rb") as f:
+        frame = memoryview(f.read())
+    count = struct.unpack_from("<I", frame, 0)[0]
+    offset = 4
+    secrets = []
+    for _ in range(count):
+        length = struct.unpack_from("<I", frame, offset)[0]
+        offset += 4
+        secret = bytes(frame[offset:offset + length])
+        offset += length
         if secret:
-            data = data.replace(secret, b"*" * len(secret))
-    return data
+            secrets.append(secret)
+    return secrets
 
 
-# This test fixture's payloads are newline-terminated, so line streaming avoids
-# retaining output until the wrapped Bash process closes its pipe.
-def pump(src, dst):
-    for line in src:
-        dst.write(mask(line))
-        dst.flush()
+class MaskStream:
+    """mask_stream.zig の MaskStream と同じ持ち越し規則を再現する。
+
+    emit する分だけをマスクすると、保持中の overlap と新規バイトに跨る
+    マッチが一度も見えない (overlap=6 で "pw=hunter2 done" を流すと
+    "pw=hunter2 done" がそのまま出る)。overlap + 新規を連結した全体をマスクし、
+    安全な前半だけを emit して、末尾は**原文のまま**確定マスク位置と一緒に
+    次周回へ持ち越す。
+    """
+
+    def __init__(self, secrets):
+        self.secrets = secrets
+        longest = max((len(s) for s in secrets), default=0)
+        self.overlap_size = longest - 1 if longest > 0 else 0
+        self.pending = b""
+        self.carried = b""
+
+    def _marks(self, data):
+        marks = bytearray(len(data))
+        for secret in self.secrets:
+            start = 0
+            while True:
+                i = data.find(secret, start)
+                if i < 0:
+                    break
+                for k in range(i, i + len(secret)):
+                    marks[k] = 1
+                start = i + 1
+        return marks
+
+    def _apply(self, data, marks):
+        out = bytearray(data)
+        for i, m in enumerate(marks):
+            if m:
+                out[i] = 0x2A
+        return bytes(out)
+
+    def push(self, data):
+        combined = self.pending + data
+        marks = self._marks(combined)
+        for i, m in enumerate(self.carried):
+            if m:
+                marks[i] = 1
+        total = len(combined)
+        safe_end = total - self.overlap_size if total > self.overlap_size else 0
+        emitted = self._apply(combined[:safe_end], marks[:safe_end])
+        self.pending = combined[safe_end:]
+        self.carried = bytes(marks[safe_end:])
+        return emitted
+
+    def finish(self):
+        if not self.pending:
+            return b""
+        marks = self._marks(self.pending)
+        for i, m in enumerate(self.carried):
+            if m:
+                marks[i] = 1
+        out = self._apply(self.pending, marks)
+        self.pending = b""
+        self.carried = b""
+        return out
 
 
-argv = sys.argv[1:]
-if argv and argv[0] == "--supervise":
-    argv = argv[1:]
+def serve_conn(conn, secrets):
+    stream = MaskStream(secrets)
+    try:
+        while True:
+            data = conn.recv(BUF_SIZE)
+            if not data:
+                break
+            out = stream.push(data)
+            if out:
+                conn.sendall(out)
+        # クライアントの half-close が EOF の合図。保持中の overlap を
+        # フラッシュしてから close する。
+        tail = stream.finish()
+        if tail:
+            conn.sendall(tail)
+    except OSError:
+        pass
+    finally:
+        conn.close()
+
+
+def serve(sock_path):
+    secrets = load_secrets()
+    try:
+        os.unlink(sock_path)
+    except FileNotFoundError:
+        pass
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(sock_path)
+    listener.listen(64)
+    while True:
+        conn, _ = listener.accept()
+        worker = threading.Thread(
+            target=serve_conn, args=(conn, secrets), daemon=True
+        )
+        worker.start()
+
+
+def pump_to_socket(src_fd, sock):
+    try:
+        while True:
+            data = os.read(src_fd, BUF_SIZE)
+            if not data:
+                break
+            sock.sendall(data)
+    except OSError:
+        pass
+    finally:
+        try:
+            sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+def pump_from_socket(sock, dst):
+    try:
+        while True:
+            data = sock.recv(BUF_SIZE)
+            if not data:
+                break
+            dst.write(data)
+            dst.flush()
+    except OSError:
+        pass
+
+
+def supervise(argv):
     argv0 = None
+    sock_path = None
     while argv:
         if argv[0] == "--argv0":
             argv0 = argv[1]
+            argv = argv[2:]
+        elif argv[0] == "--socket":
+            sock_path = argv[1]
             argv = argv[2:]
         elif argv[0] == "--":
             argv = argv[1:]
             break
         else:
             break
+
+    # fail-closed: 2 本とも Popen の**前に**張る。ワーカースレッドの中で
+    # 張ると、失敗してもそのスレッドが死ぬだけで child.wait() は 0 を返し、
+    # 壊れた実装が「出力なしで成功」として通ってしまう。
+    socks = []
+    try:
+        if not sock_path:
+            raise OSError("no socket path")
+        for _ in range(2):
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(sock_path)
+            socks.append(s)
+    except OSError:
+        for s in socks:
+            s.close()
+        sys.exit(EXIT_FAIL_CLOSED)
+
     program = argv[0]
+    # 入れ子抑止のマーカー。渡さないとラッパーのガードが働かず、入れ子の
+    # 検証が何も見ていないことになる。
+    env = dict(os.environ)
+    env["NAS_MASK_SUPERVISED"] = "1"
     child = subprocess.Popen(
         [argv0 or program] + argv[1:],
         executable=program,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
     )
-    threads = [
-        threading.Thread(target=pump, args=(child.stdout, sys.stdout.buffer)),
-        threading.Thread(target=pump, args=(child.stderr, sys.stderr.buffer)),
-    ]
+    threads = []
+    for pipe, sock, dst in (
+        (child.stdout, socks[0], sys.stdout.buffer),
+        (child.stderr, socks[1], sys.stderr.buffer),
+    ):
+        threads.append(
+            threading.Thread(target=pump_to_socket, args=(pipe.fileno(), sock))
+        )
+        threads.append(
+            threading.Thread(target=pump_from_socket, args=(sock, dst))
+        )
     for thread in threads:
         thread.start()
     status = child.wait()
     for thread in threads:
         thread.join()
+    for s in socks:
+        s.close()
     sys.exit(status if status >= 0 else 128 - status)
 
-for data in sys.stdin.buffer:
-    sys.stdout.buffer.write(mask(data))
+
+def filter_stdin():
+    stream = MaskStream(load_secrets())
+    while True:
+        data = os.read(0, BUF_SIZE)
+        if not data:
+            break
+        out = stream.push(data)
+        if out:
+            sys.stdout.buffer.write(out)
+            sys.stdout.buffer.flush()
+    tail = stream.finish()
+    if tail:
+        sys.stdout.buffer.write(tail)
     sys.stdout.buffer.flush()
+
+
+args = sys.argv[1:]
+if args and args[0] == "--serve":
+    serve(args[1])
+elif args and args[0] == "--supervise":
+    supervise(args[1:])
+else:
+    filter_stdin()
 `;
 
-async function writeMaskFilterFixture(
-  fixtureDir: string,
-  secrets: readonly string[],
-): Promise<{ filterPath: string; secretsPath: string }> {
+/** 代役フィルタをフィクスチャディレクトリへ置き、ホスト側のパスを返す。 */
+async function writeMaskFilterFixture(fixtureDir: string): Promise<string> {
   const filterPath = path.join(fixtureDir, "nas-mask-filter");
-  const secretsPath = path.join(fixtureDir, "secrets.frame");
   await writeFile(filterPath, MASK_FILTER_FIXTURE);
   await chmod(filterPath, 0o755);
-  await writeFile(secretsPath, encodeMaskSecrets(secrets));
-  return { filterPath, secretsPath };
+  return filterPath;
+}
+
+interface MaskBroker {
+  /** コンテナへ ro でマウントするディレクトリ。socket 以外を置かない。 */
+  readonly socketDir: string;
+  /** ホストとコンテナで同じ絶対パス。 */
+  readonly socketPath: string;
+  readonly stop: () => Promise<void>;
+}
+
+/**
+ * 代役フィルタの `--serve` デーモンをホスト側で起動する。
+ *
+ * 本番 (MaskFilterService) と同じ形にする:
+ *   - シークレットフレームはホスト専用ディレクトリに置き、**マウントしない**。
+ *     コンテナ側の supervise はフレームを読まないので、これで動くこと自体が
+ *     コンテナからフレームが不要になった証明になる。
+ *   - socket はフィクスチャのマウントとは別のディレクトリに置き、ro で渡す。
+ *     ro でも connect(2) は成功し、socket の差し替えだけが封じられる。
+ *   - ホストと同じ絶対パスへマウントするので、コンテナ側パスの変換は要らない。
+ */
+async function startMaskBroker(
+  hostFilterPath: string,
+  secrets: readonly string[],
+): Promise<MaskBroker> {
+  const frameDir = await makeTempDir("nas-e2e-mask-frame-");
+  const socketDir = await makeTempDir("nas-e2e-mask-sock-");
+  const socketPath = path.join(socketDir, "mask.sock");
+  const framePath = path.join(frameDir, "secrets.frame");
+  await writeFile(framePath, encodeMaskSecrets(secrets));
+
+  const proc = Bun.spawn([hostFilterPath, "--serve", socketPath], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, NAS_MASK_SECRETS_FILE: framePath },
+  });
+  const stop = async (): Promise<void> => {
+    proc.kill();
+    await proc.exited;
+    await rm(frameDir, { recursive: true, force: true });
+    await rm(socketDir, { recursive: true, force: true });
+  };
+
+  const deadline = Date.now() + 5000;
+  while (!existsSync(socketPath)) {
+    if (proc.exitCode !== null || Date.now() >= deadline) {
+      const stderr = await new Response(proc.stderr).text();
+      await stop();
+      throw new Error(`mask broker failed to start: ${stderr}`);
+    }
+    await Bun.sleep(20);
+  }
+  return { socketDir, socketPath, stop };
 }
 
 async function makeTreeWritableForDind(root: string): Promise<void> {
@@ -452,10 +691,14 @@ test.skipIf(!canBindMount)(
     const realBashPath = path.join(fixtureDir, "bash.real");
     const containerRealBashPath = "/tmp/nas-bash-override/bash.real";
     const sentinel = "preserve-existing-bash-real";
+    let broker: MaskBroker | null = null;
 
     try {
-      await writeMaskFilterFixture(fixtureDir, ["unused-secret"]);
+      const filterPath = await writeMaskFilterFixture(fixtureDir);
       await writeFile(realBashPath, sentinel, { mode: 0o644 });
+      // NAS_MASK_SOCKET が無いとラッパー自体が設置されず、bash.real に
+      // 触れる経路ごと消えるので、このテストは何も検証しなくなる。
+      broker = await startMaskBroker(filterPath, ["unused-secret"]);
 
       const result = await dockerRun(
         ["/bin/sh", "-c", 'cat "$1"', "sh", containerRealBashPath],
@@ -463,15 +706,21 @@ test.skipIf(!canBindMount)(
           workDir,
           envVars: {
             NAS_MASK_FILTER: "/tmp/nas-bash-override/nas-mask-filter",
-            NAS_MASK_SECRETS_FILE: "/tmp/nas-bash-override/secrets.frame",
+            NAS_MASK_SOCKET: broker.socketPath,
           },
-          extraArgs: ["-v", `${fixtureDir}:/tmp/nas-bash-override`],
+          extraArgs: [
+            "-v",
+            `${fixtureDir}:/tmp/nas-bash-override`,
+            "-v",
+            `${broker.socketDir}:${broker.socketDir}:ro`,
+          ],
         },
       );
 
       expect(result.code).toEqual(0);
       expect(result.stdout).toEqual(sentinel);
     } finally {
+      await broker?.stop();
       await rm(fixtureDir, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
     }
@@ -487,9 +736,11 @@ test.skipIf(!canBindMount)(
     const containerScriptPath = `${containerFixtureDir}/mask-script.sh`;
     const secret = "my-secret-password";
     const masked = "*".repeat(secret.length);
+    let broker: MaskBroker | null = null;
 
     try {
-      await writeMaskFilterFixture(fixtureDir, [secret]);
+      const filterPath = await writeMaskFilterFixture(fixtureDir);
+      broker = await startMaskBroker(filterPath, [secret]);
       await writeFile(
         path.join(fixtureDir, "mask-script.sh"),
         `printf 'mode=script shell=%s stdout=${secret}\\n' "$0"
@@ -531,9 +782,14 @@ printf 'mode=script stderr=${secret}\\n' >&2
           workDir,
           envVars: {
             NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
-            NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
+            NAS_MASK_SOCKET: broker.socketPath,
           },
-          extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+          extraArgs: [
+            "-v",
+            `${fixtureDir}:${containerFixtureDir}:ro`,
+            "-v",
+            `${broker.socketDir}:${broker.socketDir}:ro`,
+          ],
         });
 
         expect(result.code).toEqual(0);
@@ -547,21 +803,26 @@ printf 'mode=script stderr=${secret}\\n' >&2
         expect(result.stderr).not.toContain(secret);
       }
     } finally {
+      await broker?.stop();
       await rm(fixtureDir, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
     }
   },
 );
 
+// ブローカーへ届かないときに素通しする経路は存在しない。マスクされたか
+// 確信できないバイトは 1 バイトも出さず、121 (出力抑止) で落ちる。
 test.skipIf(!canBindMount)(
-  "Integration: absolute /bin/bash preserves output when the secrets frame is missing",
+  "Integration: absolute /bin/bash fails closed when the broker is unreachable",
   async () => {
-    const fixtureDir = await makeTempDir("nas-e2e-mask-fallback-");
-    const workDir = await makeTempDir("nas-e2e-mask-fallback-ws-");
-    const containerFixtureDir = "/tmp/nas-mask-fallback-test";
+    const fixtureDir = await makeTempDir("nas-e2e-mask-deadsock-");
+    const workDir = await makeTempDir("nas-e2e-mask-deadsock-ws-");
+    // デーモンを起動しないので socket ファイルは存在しない (= デーモンが
+    // 死んだ後と同じ状態)。設定だけは本番と同じ形で与える。
+    const socketDir = await makeTempDir("nas-e2e-mask-deadsock-sock-");
+    const containerFixtureDir = "/tmp/nas-mask-deadsock-test";
     try {
-      const { secretsPath } = await writeMaskFilterFixture(fixtureDir, []);
-      await rm(secretsPath);
+      await writeMaskFilterFixture(fixtureDir);
 
       const result = await dockerRun(
         [
@@ -573,16 +834,113 @@ test.skipIf(!canBindMount)(
           workDir,
           envVars: {
             NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
-            NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/missing.frame`,
+            NAS_MASK_SOCKET: `${socketDir}/mask.sock`,
+          },
+          extraArgs: [
+            "-v",
+            `${fixtureDir}:${containerFixtureDir}:ro`,
+            "-v",
+            `${socketDir}:${socketDir}:ro`,
+          ],
+        },
+      );
+
+      expect(result.code).toEqual(121);
+      expect(result.stdout).not.toContain("fallback-stdout");
+      expect(result.stderr).not.toContain("fallback-stderr");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(socketDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// NAS_MASK_SOCKET が無いのはバイパスではなく「機能が無効」の状態。ラッパーは
+// そもそも設置されず、/bin/bash は本物のままで出力も素のまま流れる。
+test.skipIf(!canBindMount)(
+  "Integration: the bash wrapper is not installed without NAS_MASK_SOCKET",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-mask-nosock-");
+    const workDir = await makeTempDir("nas-e2e-mask-nosock-ws-");
+    const containerFixtureDir = "/tmp/nas-mask-nosock-test";
+    try {
+      await writeMaskFilterFixture(fixtureDir);
+
+      const result = await dockerRun(
+        [
+          "/bin/sh",
+          "-c",
+          "od -An -t x1 -N 4 /bin/bash; printf 'plain-stdout\\n'",
+        ],
+        {
+          workDir,
+          envVars: {
+            NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
           },
           extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
         },
       );
 
       expect(result.code).toEqual(0);
-      expect(result.stdout).toContain("fallback-stdout");
-      expect(result.stderr).toContain("fallback-stderr");
+      // ラッパーは `#!/tmp/nas-bash-override/bash.real` で始まるスクリプトなので、
+      // ELF マジックが残っていれば差し替えは起きていない。
+      expect(result.stdout.replace(/\s+/g, " ")).toContain("7f 45 4c 46");
+      expect(result.stdout).toContain("plain-stdout");
     } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// コンテナ内の bash はすべてラッパーなので、supervise 下で起動した bash も
+// またラッパーになる。抑止しないと ./configure や make のレシピ行のたびに層が
+// 積み上がる。判定はマーカーで行う: マスクは冪等 (* はシークレットではない)
+// なので、層が 1 つでも 2 つでも出力は同一になり、出力からは回帰を検出できない。
+// 層の数そのものを数える検証は src/stages/maskfs/mask_filter_integration_test.ts
+// にある。ここで確かめるのは、マーカーが実コンテナの起動経路
+// (entrypoint → setpriv → ラッパー → supervisor → 子) を通って届くこと。
+test.skipIf(!canBindMount)(
+  "Integration: the supervised marker reaches a nested bash wrapper",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-mask-nested-");
+    const workDir = await makeTempDir("nas-e2e-mask-nested-ws-");
+    const containerFixtureDir = "/tmp/nas-mask-nested-test";
+    const secret = "nested-supervise-secret";
+    const masked = "*".repeat(secret.length);
+    let broker: MaskBroker | null = null;
+
+    try {
+      const filterPath = await writeMaskFilterFixture(fixtureDir);
+      broker = await startMaskBroker(filterPath, [secret]);
+
+      const result = await dockerRun(
+        [
+          "/bin/bash",
+          "-c",
+          `/bin/bash -c 'printf "inner=[%s] pw=${secret}\\n" "$NAS_MASK_SUPERVISED"'`,
+        ],
+        {
+          workDir,
+          envVars: {
+            NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
+            NAS_MASK_SOCKET: broker.socketPath,
+          },
+          extraArgs: [
+            "-v",
+            `${fixtureDir}:${containerFixtureDir}:ro`,
+            "-v",
+            `${broker.socketDir}:${broker.socketDir}:ro`,
+          ],
+        },
+      );
+
+      expect(result.code).toEqual(0);
+      expect(result.stdout).toContain(`inner=[1] pw=${masked}`);
+      expect(result.stdout).not.toContain(secret);
+    } finally {
+      await broker?.stop();
       await rm(fixtureDir, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
     }
@@ -596,9 +954,13 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
     const workDir = await makeTempDir("nas-e2e-shell-reentry-ws-");
     const containerFixtureDir = "/tmp/nas-shell-reentry-test";
     const secret = "shell-reentry-secret";
+    let broker: MaskBroker | null = null;
 
     try {
-      await writeMaskFilterFixture(fixtureDir, [secret]);
+      const filterPath = await writeMaskFilterFixture(fixtureDir);
+      // ブローカーを立てないとラッパーが設置されず、バイパス経路を通ったのか
+      // そもそもマスクが無効だったのかを区別できない。
+      broker = await startMaskBroker(filterPath, [secret]);
 
       const result = await dockerRun(
         ["/bin/bash", "/entrypoint.sh", "--shell"],
@@ -606,13 +968,15 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
           workDir,
           envVars: {
             NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
-            NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
+            NAS_MASK_SOCKET: broker.socketPath,
           },
           extraArgs: [
             "--entrypoint",
             "",
             "-v",
             `${fixtureDir}:${containerFixtureDir}:ro`,
+            "-v",
+            `${broker.socketDir}:${broker.socketDir}:ro`,
           ],
           tty: true,
           stdin:
@@ -629,6 +993,7 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
       expect(result.stdout).toContain(`reentry=${secret} tty=111`);
       expect(result.stdout).not.toContain("reentry=********************");
     } finally {
+      await broker?.stop();
       await rm(fixtureDir, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
     }
@@ -647,6 +1012,7 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
       .update(flake)
       .digest("hex");
     const secret = "nix-launch-secret";
+    let broker: MaskBroker | null = null;
 
     try {
       await mkdir(cacheDir, { recursive: true });
@@ -655,7 +1021,10 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
         path.join(cacheDir, `${flakeHash}.env`),
         "export NAS_NIX_CACHE_MARKER=hit\n",
       );
-      await writeMaskFilterFixture(fixtureDir, [secret]);
+      const filterPath = await writeMaskFilterFixture(fixtureDir);
+      // ブローカーを立てないとラッパーが設置されず、agent が supervisor の
+      // パイプの外に出ていることを何も確かめていないことになる。
+      broker = await startMaskBroker(filterPath, [secret]);
 
       const command =
         "tty1=0; tty2=0; " +
@@ -670,9 +1039,14 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
           NIX_ENABLED: "true",
           XDG_CACHE_HOME: `${containerFixtureDir}/cache`,
           NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
-          NAS_MASK_SECRETS_FILE: `${containerFixtureDir}/secrets.frame`,
+          NAS_MASK_SOCKET: broker.socketPath,
         },
-        extraArgs: ["-v", `${fixtureDir}:${containerFixtureDir}:ro`],
+        extraArgs: [
+          "-v",
+          `${fixtureDir}:${containerFixtureDir}:ro`,
+          "-v",
+          `${broker.socketDir}:${broker.socketDir}:ro`,
+        ],
         tty: true,
       });
 
@@ -680,6 +1054,7 @@ test.skipIf(!canBindMount || !ptyScriptPath)(
       expect(result.stdout).toContain(`cache=hit secret=${secret} tty=11`);
       expect(result.stdout).not.toContain("secret=*****************");
     } finally {
+      await broker?.stop();
       await rm(fixtureDir, { recursive: true, force: true });
       await rm(workDir, { recursive: true, force: true });
     }
