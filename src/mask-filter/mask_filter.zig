@@ -13,12 +13,18 @@
 //!       「プロセスの終了」を完了シグナルにしている呼び出し元から見ても出力が欠けない。
 //!       詳細は supervise.zig の冒頭コメントを参照。
 //!
+//!   nas-mask-filter --serve SOCKET
+//!       サーブモード (ホスト側常駐)。SOCKET で待ち受け、接続ごとに 1 ストリームとして
+//!       マスクする。シークレットフレームをコンテナへ渡さずにマスクを効かせるための
+//!       モード。詳細は serve.zig の冒頭コメントを参照。
+//!
 //! exit code: フィルタモードは 0 = 成功, 1 = 致命的エラー, 2 = 使用方法エラー(env 未設定等)。
 //!            スーパーバイザモードは PROGRAM の終了コードをそのまま返す
 //!            (シグナル終了なら 128+signo)。
 
 const std = @import("std");
 const mask_stream = @import("mask_stream.zig");
+const serve = @import("serve.zig");
 const supervise = @import("supervise.zig");
 
 const BUF_SIZE = mask_stream.BUF_SIZE;
@@ -82,9 +88,33 @@ pub fn parseSuperviseArgs(argv: []const []const u8) !?SuperviseArgs {
     };
 }
 
+/// 実行モード。argv[1..] から決まる。
+pub const Mode = union(enum) {
+    /// stdin -> stdout フィルタ。hostexec のホスト実行出力マスク (C3) が使う。
+    filter,
+    /// ホスト側常駐サーバ。値は待ち受ける Unix socket のパス。
+    serve: []const u8,
+    supervise: SuperviseArgs,
+};
+
+/// argv[1..] を実行モードとして解釈する。
+///
+/// parseSuperviseArgs は「引数なし = null (フィルタモード)」という契約を持つので、
+/// --serve をそちらに混ぜず手前で分岐させる。
+pub fn parseMode(argv: []const []const u8) !Mode {
+    if (argv.len > 0 and std.mem.eql(u8, argv[0], "--serve")) {
+        if (argv.len < 2) return error.MissingSocketPath;
+        if (argv.len > 2) return error.UnexpectedArgument;
+        return .{ .serve = argv[1] };
+    }
+    if (try parseSuperviseArgs(argv)) |sa| return .{ .supervise = sa };
+    return .filter;
+}
+
 const usage_text =
     \\usage: nas-mask-filter                                      (stdin -> stdout filter)
     \\       nas-mask-filter --supervise [--argv0 NAME] -- PROGRAM [ARGS...]
+    \\       nas-mask-filter --serve SOCKET
     \\
 ;
 
@@ -94,7 +124,7 @@ pub fn main() !u8 {
     const arena_alloc = arena.allocator();
 
     const argv = try std.process.argsAlloc(arena_alloc);
-    const supervise_args = parseSuperviseArgs(argv[1..]) catch |err| {
+    const mode = parseMode(argv[1..]) catch |err| {
         std.debug.print("nas-mask-filter: {}\n{s}", .{ err, usage_text });
         return 2;
     };
@@ -110,23 +140,38 @@ pub fn main() !u8 {
         return 1;
     };
 
-    if (supervise_args) |sa| {
-        return supervise.run(arena_alloc, secrets, sa.argv0, sa.program, sa.args) catch |err| {
-            std.debug.print("nas-mask-filter: supervise failed: {}\n", .{err});
-            return 1;
-        };
+    switch (mode) {
+        .supervise => |sa| {
+            return supervise.run(arena_alloc, secrets, sa.argv0, sa.program, sa.args) catch |err| {
+                std.debug.print("nas-mask-filter: supervise failed: {}\n", .{err});
+                return 1;
+            };
+        },
+        .serve => |sock_path| {
+            // 接続は出入りするので arena ではなく解放できるアロケータを渡す。
+            //
+            // ここで出す診断は「起動に失敗した」ことだけで、ストリーム由来の
+            // バイトは含まない。serve モードの stdout/stderr はホスト上の
+            // ログファイルに向くので、平文が混じってはならない
+            // (serve.zig の「出力の不変条件」を参照)。
+            return serve.run(allocator, secrets, sock_path) catch |err| {
+                std.debug.print("nas-mask-filter: serve failed: {}\n", .{err});
+                return 1;
+            };
+        },
+        .filter => {
+            const stdin = std.fs.File.stdin();
+            const stdout = std.fs.File.stdout();
+            var out_buf: [BUF_SIZE]u8 = undefined;
+            var stdout_writer = stdout.writer(&out_buf);
+            mask_stream.streamMask(stdin.deprecatedReader(), &stdout_writer.interface, secrets) catch |err| {
+                std.debug.print("nas-mask-filter: stream error: {}\n", .{err});
+                return 1;
+            };
+            try stdout_writer.interface.flush();
+            return 0;
+        },
     }
-
-    const stdin = std.fs.File.stdin();
-    const stdout = std.fs.File.stdout();
-    var out_buf: [BUF_SIZE]u8 = undefined;
-    var stdout_writer = stdout.writer(&out_buf);
-    mask_stream.streamMask(stdin.deprecatedReader(), &stdout_writer.interface, secrets) catch |err| {
-        std.debug.print("nas-mask-filter: stream error: {}\n", .{err});
-        return 1;
-    };
-    try stdout_writer.interface.flush();
-    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +182,41 @@ const testing = std.testing;
 
 test {
     _ = @import("mask_stream.zig");
+    _ = @import("serve.zig");
     _ = @import("supervise.zig");
+}
+
+// ---------------------------------------------------------------------------
+// parseMode tests
+// ---------------------------------------------------------------------------
+
+test "parseMode: no args -> filter mode" {
+    try testing.expectEqual(Mode.filter, try parseMode(&.{}));
+}
+
+test "parseMode: --serve takes the socket path" {
+    const mode = try parseMode(&.{ "--serve", "/run/nas/mask.sock" });
+    try testing.expectEqualStrings("/run/nas/mask.sock", mode.serve);
+}
+
+test "parseMode: --serve without a socket path is an error" {
+    try testing.expectError(error.MissingSocketPath, parseMode(&.{"--serve"}));
+}
+
+test "parseMode: --serve with extra arguments is an error" {
+    try testing.expectError(
+        error.UnexpectedArgument,
+        parseMode(&.{ "--serve", "/run/nas/mask.sock", "extra" }),
+    );
+}
+
+test "parseMode: --supervise still reaches supervise mode" {
+    const mode = try parseMode(&.{ "--supervise", "--", "/bin/bash" });
+    try testing.expectEqualStrings("/bin/bash", mode.supervise.program);
+}
+
+test "parseMode: unknown option is still an error" {
+    try testing.expectError(error.UnknownOption, parseMode(&.{"--bogus"}));
 }
 
 // ---------------------------------------------------------------------------
