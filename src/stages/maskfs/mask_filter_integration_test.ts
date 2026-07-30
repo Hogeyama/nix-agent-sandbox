@@ -50,6 +50,30 @@ function realBashPath(): string {
   return fs.existsSync(real) ? real : "/bin/bash";
 }
 
+/**
+ * entrypoint.sh の MASK_WRAPPER ヒアドキュメントからラッパー本体を取り出して
+ * 実行可能ファイルとして書き出す。
+ *
+ * 入れ子抑止の判定はラッパー側にあるので、bash.real を直接叩くテストでは
+ * ラッパーごと素通りして何も検証できない。出荷されるスクリプトそのものを
+ * 使うために、コピーではなく entrypoint から抽出する。
+ */
+function writeWrapperScript(): string {
+  const entry = fs.readFileSync(
+    path.join(import.meta.dir, "../../docker/embed/entrypoint.sh"),
+    "utf8",
+  );
+  const m = entry.match(/<< 'MASK_WRAPPER'\n([\s\S]*?)\nMASK_WRAPPER\n/);
+  if (!m) throw new Error("MASK_WRAPPER heredoc not found");
+  const body = m[1].replaceAll(
+    "/tmp/nas-bash-override/bash.real",
+    realBashPath(),
+  );
+  const p = path.join(tmpDir, `wrapper-${secretsFileSeq++}.sh`);
+  fs.writeFileSync(p, `${body}\n`, { mode: 0o755 });
+  return p;
+}
+
 async function runFilter(input: string, secrets: string[]): Promise<string> {
   if (!binaryPath) throw new Error("nas-mask-filter binary not found");
   const secretsFile = writeSecretsFile(secrets);
@@ -732,6 +756,106 @@ describe("nas-mask-filter --supervise", () => {
       expect(stdout).toBe("");
     } finally {
       server.stop(true);
+      fs.rmSync(sockPath, { force: true });
+    }
+  }, 15000);
+
+  // コンテナ内の bash はすべてラッパーなので、supervise 下で起動した bash も
+  // またラッパーになる。抑止しないと ./configure や make の各レシピ行、再帰
+  // make、npm/cargo のビルドスクリプトのたびに層が積み上がり、接続数は生存
+  // bash プロセス数に比例して増える。
+  //
+  // 検証はマスク結果ではなくマーカーを見る。マスクは冪等 (* はシークレット
+  // ではない) なので、層が 1 つでも 2 つでも stdout は同一になり、出力を見ても
+  // 回帰を検出できない。
+  test("supervises exactly one layer when wrappers nest", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("nest");
+    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      const wrapper = writeWrapperScript();
+      const proc = Bun.spawn(
+        [
+          wrapper,
+          "-c",
+          `${wrapper} -c 'echo inner=[\${NAS_MASK_SUPERVISED:-unset}] pw=hunter2'`,
+        ],
+        {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: {
+            ...process.env,
+            NAS_MASK_FILTER: binaryPath,
+            NAS_MASK_SOCKET: sockPath,
+          },
+        },
+      );
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      // マーカーは外側の層が supervise したことを、マスクは内側のシェルの
+      // 出力がその層を通ったことを示す。
+      expect(stdout).toBe("inner=[1] pw=*******\n");
+    } finally {
+      server.kill();
+      await server.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+  }, 15000);
+
+  // 上のテストはマーカーだけを見るので、**ラッパー側**のガードを外しても通る:
+  // 内側の supervisor も同じマーカーを子へ渡すため、出力は層が 1 つのときと
+  // 完全に同じになる (実測でも素通りした)。契約のうちシェル側の半分を守るには、
+  // 層の数そのものを数えるしかない。
+  //
+  // 数え方は「この socket パスを引数に持つ supervisor プロセス」。socket パスは
+  // テストごとに一意なので、開発機やコンテナで別に走っている supervisor が
+  // 混ざらない。数える主体は内側のシェル自身で、対象は自分の祖先だから
+  // 生存が保証されており、ハンドシェイクも待ち合わせも要らない。
+  //
+  // grep は使わない。開発環境の grep が ugrep のことがあり、-z の意味が
+  // GNU grep と違う。bash の組み込みだけで済ませれば fork も起きない。
+  const COUNT_LAYERS_SCRIPT = `n=0
+for f in /proc/[0-9]*/cmdline; do
+  sup=0
+  sock=0
+  while IFS= read -r -d '' a; do
+    [ "$a" = "--supervise" ] && sup=1
+    [ "$a" = "$NAS_MASK_SOCKET" ] && sock=1
+  done < "$f" 2>/dev/null || true
+  [ "$sup" = 1 ] && [ "$sock" = 1 ] && n=$((n + 1))
+done
+echo "layers=$n"
+`;
+
+  test("does not stack a second supervisor on the nested wrapper", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("layers");
+    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      const wrapper = writeWrapperScript();
+      // 数えるスクリプトは**ラッパー経由で**起動する。bash.real を直接叩くと
+      // ガードごと素通りして何も検証しないことになる。
+      const script = path.join(tmpDir, `layers-${secretsFileSeq++}.sh`);
+      fs.writeFileSync(script, COUNT_LAYERS_SCRIPT);
+      const proc = Bun.spawn([wrapper, "-c", `${wrapper} ${script}`], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          NAS_MASK_FILTER: binaryPath,
+          NAS_MASK_SOCKET: sockPath,
+        },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      expect(stdout).toBe("layers=1\n");
+    } finally {
+      server.kill();
+      await server.exited;
       fs.rmSync(sockPath, { force: true });
     }
   }, 15000);
