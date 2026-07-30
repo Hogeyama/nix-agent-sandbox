@@ -20,7 +20,8 @@
 //! シークレットフレーム (NAS_MASK_SECRETS_FILE) が要るのは **filter と serve だけ**。
 //! どちらもホスト側で動く。supervise はコンテナ内で動くので、フレームを読ませると
 //! エージェントにセッション全シークレットの索引を渡すことになる
-//! (security-constraints C1 / S1)。したがって supervise では env を一切読まない。
+//! (security-constraints C1 / S1)。したがって supervise ではシークレット関連の
+//! env を一切読まない (子へ渡す環境を組み立てるために environ を走査するだけ)。
 //!
 //! exit code: フィルタ / サーブモードは 0 = 成功, 1 = 致命的エラー,
 //!            2 = 使用方法エラー(env 未設定等)。

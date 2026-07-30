@@ -85,6 +85,47 @@ const RELAY_MAX_PENDING: usize = 256 * 1024;
 /// exec に失敗したときの終了コード (POSIX シェル互換)。
 const EXIT_EXEC_FAILED: u8 = 127;
 
+/// 入れ子の supervise を抑止するためのマーカー。子に渡し、bash ラッパーは
+/// これが設定済みなら supervisor を挟まず素の bash を exec する。
+///
+/// コンテナ内の bash はすべてラッパーなので、抑止しないと ./configure や
+/// make の各レシピ行、再帰 make、npm/cargo のビルドスクリプトのたびに層が
+/// 積み上がる。接続数は「数シェル」ではなく生存 bash プロセス数に比例し、
+/// 深さのぶんだけ全バイトがコンテナとホストの間を往復して保持遅延も積み上がる。
+///
+/// 抑止してもカバレッジは減らない。子孫はすべて最外周 supervisor のパイプを
+/// 継承するので出力は既にマスクされており、最外周から逃げる出力 (ファイルへの
+/// リダイレクト、/dev/tty への書き込み) は内側の層からも同様に逃げる。
+const SUPERVISED_ENTRY: [*:0]const u8 = "NAS_MASK_SUPERVISED=1";
+const SUPERVISED_PREFIX = "NAS_MASK_SUPERVISED=";
+
+/// 子へ渡す環境を組み立てる。**fork の前に**呼ぶこと (子ではアロケートしない)。
+///
+/// 既存の `NAS_MASK_SUPERVISED=` は追加ではなく**置換**する。append すると
+/// 同名の重複エントリが残り、どちらが効くかは getenv の実装依存になる。
+fn buildChildEnvp(
+    allocator: std.mem.Allocator,
+    environ: [*:null]?[*:0]u8,
+) ![:null]?[*:0]const u8 {
+    var n: usize = 0;
+    while (environ[n] != null) : (n += 1) {}
+
+    var replace_at: ?usize = null;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (std.mem.startsWith(u8, std.mem.span(environ[i].?), SUPERVISED_PREFIX)) {
+            replace_at = i;
+            break;
+        }
+    }
+
+    const envp = try allocator.allocSentinel(?[*:0]const u8, if (replace_at == null) n + 1 else n, null);
+    i = 0;
+    while (i < n) : (i += 1) envp[i] = environ[i].?;
+    envp[replace_at orelse n] = SUPERVISED_ENTRY;
+    return envp;
+}
+
 var g_child_pid: std.atomic.Value(i32) = .init(0);
 var g_sig_write_fd: std.atomic.Value(i32) = .init(-1);
 
@@ -211,6 +252,7 @@ pub fn run(
     for (args, 0..) |arg, i| {
         argv_z[i + 1] = (try allocator.dupeZ(u8, arg)).ptr;
     }
+    const envp_z = try buildChildEnvp(allocator, std.c.environ);
 
     // socket / 出力先 fd への write が EPIPE を返す前にプロセスが死なないよう、
     // SIGPIPE を無視する。無視しないと fail-closed の 121 に到達できず、
@@ -255,7 +297,7 @@ pub fn run(
         for (child_close) |fd| {
             if (fd > posix.STDERR_FILENO) posix.close(fd);
         }
-        const err = posix.execveZ(program_z, argv_z.ptr, @ptrCast(std.c.environ));
+        const err = posix.execveZ(program_z, argv_z.ptr, envp_z.ptr);
         // 子の stderr は既にパイプ (= マスク経路) なので、この診断は
         // マスクを通ってから出る。program はエージェントが与えた文字列で
         // シークレット由来ではない。
@@ -407,6 +449,33 @@ test "exitCodeFromStatus: normal exit" {
     try testing.expectEqual(@as(u8, 0), exitCodeFromStatus(0x0000));
     try testing.expectEqual(@as(u8, 3), exitCodeFromStatus(0x0300));
     try testing.expectEqual(@as(u8, 127), exitCodeFromStatus(0x7f00));
+}
+
+test "buildChildEnvp: appends the marker when absent" {
+    var environ = [_:null]?[*:0]u8{ @constCast("A=1"), @constCast("B=2") };
+    const envp = try buildChildEnvp(testing.allocator, &environ);
+    defer testing.allocator.free(envp);
+
+    try testing.expectEqual(@as(usize, 3), envp.len);
+    try testing.expectEqualStrings("A=1", std.mem.span(envp[0].?));
+    try testing.expectEqualStrings("B=2", std.mem.span(envp[1].?));
+    try testing.expectEqualStrings("NAS_MASK_SUPERVISED=1", std.mem.span(envp[2].?));
+}
+
+// append すると同名エントリが 2 つ残り、どちらが効くかは getenv 依存になる。
+test "buildChildEnvp: replaces an existing marker instead of appending" {
+    var environ = [_:null]?[*:0]u8{
+        @constCast("A=1"),
+        @constCast("NAS_MASK_SUPERVISED=0"),
+        @constCast("B=2"),
+    };
+    const envp = try buildChildEnvp(testing.allocator, &environ);
+    defer testing.allocator.free(envp);
+
+    try testing.expectEqual(@as(usize, 3), envp.len);
+    try testing.expectEqualStrings("A=1", std.mem.span(envp[0].?));
+    try testing.expectEqualStrings("NAS_MASK_SUPERVISED=1", std.mem.span(envp[1].?));
+    try testing.expectEqualStrings("B=2", std.mem.span(envp[2].?));
 }
 
 test "exitCodeFromStatus: killed by signal maps to 128+signo" {
