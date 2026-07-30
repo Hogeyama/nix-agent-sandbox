@@ -1,11 +1,20 @@
 /**
- * MaskFilterStage — mask.filter が有効な場合、nas-mask-filter バイナリと
- * 秘密フレームをコンテナへバインドマウントし、stdout/stderr マスク用の
- * env / bash ラッパーを ContainerPlan にマージする。
+ * MaskFilterStage — mask.filter が有効な場合、nas-mask-filter の `--serve`
+ * デーモンをセッションスコープで起動し、その socket のディレクトリと
+ * フィルタバイナリをコンテナへバインドマウントして、stdout/stderr マスク用の
+ * env を ContainerPlan にマージする。
  *
- * MaskFsStage (workspace スライス, FUSE デーモンのライフサイクル管理) とは
- * 独立したステージ: 必要とするスライスが container であり、デーモンを
- * 持たない 1 回限りの準備作業のみを行う。
+ * 解決済みシークレットのフレームはホスト側にだけ置き、コンテナへは socket
+ * しか見せない (C1)。そのため socket はセッションディレクトリの「兄弟」の
+ * ディレクトリに置く — マウントするのは socket の「あるディレクトリ」なので、
+ * フレームと同居させるとフレームごとコンテナへ渡すことになる。
+ *
+ * デーモンのライフサイクル (フレーム書き込み・spawn・socket の listen 待ち・
+ * Scope 終了時の後始末) は MaskFilterService が持つ。このステージはパスを
+ * 決めて検証し、その計画をサービスへ渡すだけ。
+ *
+ * MaskFsStage (workspace スライス, FUSE デーモン) とは独立したステージ:
+ * 必要とするスライスが container であり、別のデーモンを扱う。
  */
 
 import { Effect } from "effect";
@@ -21,6 +30,9 @@ type StageResult = Pick<PipelineState, "container">;
 
 const SOCKET_READY_TIMEOUT_MS = 10_000;
 const SOCKET_READY_POLL_MS = 50;
+
+/** sun_path は NUL 終端込みで 108 バイト。 */
+const MAX_SOCKET_PATH_BYTES = 107;
 
 /** テスト用フック */
 export interface MaskFilterStageOptions {
@@ -63,6 +75,18 @@ export function createMaskFilterStage(
         // 渡すことになる (C1)。
         const sessionDir = `${runtimeDir}/${shared.sessionId}`;
         const socketDir = `${runtimeDir}/${shared.sessionId}-sock`;
+        const socketPath = `${socketDir}/mask.sock`;
+
+        // 超過を放置するとデーモン内の bind(2) が不可解に失敗するだけで、
+        // 運用者には原因が分からない。
+        const socketPathBytes = new TextEncoder().encode(socketPath).byteLength;
+        if (socketPathBytes > MAX_SOCKET_PATH_BYTES) {
+          return yield* Effect.fail(
+            new Error(
+              `[nas] mask: socket path too long: ${socketPathBytes} bytes (max ${MAX_SOCKET_PATH_BYTES}): ${socketPath}`,
+            ),
+          );
+        }
 
         const secrets = yield* svc.resolveSecrets(mask.values, shared.host);
         const result = yield* svc.prepareMaskFilter(
@@ -70,7 +94,7 @@ export function createMaskFilterStage(
             secretsFramePath: `${sessionDir}/mask-secrets`,
             filterBinaryHostPath: binaryPath,
             socketDir,
-            socketPath: `${socketDir}/mask.sock`,
+            socketPath,
             logFile: `${sessionDir}/serve.log`,
             timeoutMs: SOCKET_READY_TIMEOUT_MS,
             pollIntervalMs: SOCKET_READY_POLL_MS,

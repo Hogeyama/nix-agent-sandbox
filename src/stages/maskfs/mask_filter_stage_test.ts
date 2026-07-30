@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import * as path from "node:path";
+import { Cause, Effect, Exit } from "effect";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { StageInput } from "../../pipeline/types.ts";
-import { makeMaskFilterServiceFake } from "./mask_filter_service.ts";
+import {
+  type MaskFilterPreparePlan,
+  makeMaskFilterServiceFake,
+} from "./mask_filter_service.ts";
 import { createMaskFilterStage } from "./mask_filter_stage.ts";
 
 const HOST = {
@@ -172,6 +176,79 @@ describe("createMaskFilterStage", () => {
       ),
     );
     expect(result).toEqual({});
+  });
+
+  test("socket dir is a sibling of the frame dir, not inside it", async () => {
+    const input = makeStageInput();
+    input.profile.mask = {
+      values: [{ source: "env:SECRET" }],
+      writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
+      filter: true,
+    };
+    const stage = createMaskFilterStage(input, {
+      resolveBinPath: async () => "/fake/nas-mask-filter",
+    });
+    const container = emptyContainerPlan("img", "/work");
+    const plans: MaskFilterPreparePlan[] = [];
+    const fakeLayer = makeMaskFilterServiceFake({
+      prepareMaskFilter: (plan) => {
+        plans.push(plan);
+        return Effect.succeed({ mounts: [], envVars: {} });
+      },
+    });
+    await Effect.runPromise(
+      Effect.scoped(stage.run({ container }).pipe(Effect.provide(fakeLayer))),
+    );
+
+    expect(plans.length).toEqual(1);
+    const plan = plans[0];
+    if (!plan) return;
+    const frameDir = path.dirname(plan.secretsFramePath);
+    // マウントされるのは socketDir。フレームのディレクトリ配下にあると
+    // フレームごとコンテナへ渡すことになる (C1)。
+    expect(plan.socketDir.startsWith(`${frameDir}/`)).toEqual(false);
+    expect(path.dirname(plan.socketDir)).toEqual(path.dirname(frameDir));
+    expect(plan.socketPath).toEqual(`${plan.socketDir}/mask.sock`);
+    expect(plan.logFile).toEqual(`${frameDir}/serve.log`);
+  });
+
+  test("socket path over 107 bytes → fails", async () => {
+    const input = makeStageInput({
+      host: {
+        ...HOST,
+        env: new Map([["XDG_RUNTIME_DIR", `/run/${"d".repeat(120)}`]]),
+      },
+    });
+    input.profile.mask = {
+      values: [{ source: "env:SECRET" }],
+      writePolicy: "readonly",
+      maskfs: true,
+      proxy: true,
+      filter: true,
+    };
+    const stage = createMaskFilterStage(input, {
+      resolveBinPath: async () => "/fake/nas-mask-filter",
+    });
+    const container = emptyContainerPlan("img", "/work");
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        stage
+          .run({ container })
+          .pipe(Effect.provide(makeMaskFilterServiceFake())),
+      ),
+    );
+
+    expect(Exit.isFailure(exit)).toEqual(true);
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.failureOption(exit.cause);
+      expect(failure._tag).toEqual("Some");
+      if (failure._tag === "Some") {
+        const err = failure.value as Error;
+        expect(err.message).toContain("socket path too long");
+      }
+    }
   });
 
   test("binary not found → fails", async () => {
