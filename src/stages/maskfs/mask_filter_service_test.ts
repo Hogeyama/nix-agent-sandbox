@@ -253,6 +253,92 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   test("scope release kills the daemon and removes frame, socket and log (S2)", async () => {
     const { killed, removed } = await runCapturing();
     expect(killed).toBe(1);
-    expect(removed).toEqual([FRAME, SOCKET, LOG]);
+    // Finalizers run in reverse acquisition order: the frame's
+    // acquireRelease is registered before the daemon's, so on release the
+    // daemon (and its socket/log) is torn down first and the frame last.
+    // This still satisfies S2 (daemon killed before its own files are
+    // removed) and additionally ensures the frame is removed even if the
+    // daemon never successfully starts.
+    expect(removed).toEqual([SOCKET, LOG, FRAME]);
+  });
+
+  test("removes the frame if spawn throws before the daemon starts", async () => {
+    // Mirrors ProcessService's real spawn: Effect.sync around Bun.spawn,
+    // which throws synchronously on e.g. EACCES for a non-executable file.
+    // The frame must not survive an aborted session even though the daemon
+    // never got a chance to start (and so releaseServe's finalizer never
+    // gets registered).
+    const written: WrittenFile[] = [];
+    const removed: string[] = [];
+
+    const fakeFs = Layer.succeed(
+      FsService,
+      FsService.of({
+        mkdir: () => Effect.void,
+        writeFile: (p, data, opts) =>
+          Effect.sync(() => {
+            written.push({
+              path: p,
+              data:
+                data instanceof Uint8Array
+                  ? data
+                  : new TextEncoder().encode(String(data)),
+              mode: opts?.mode,
+            });
+          }),
+        chmod: () => Effect.void,
+        rm: (p) =>
+          Effect.sync(() => {
+            removed.push(p);
+          }),
+        readFile: () => Effect.succeed(""),
+        symlink: () => Effect.void,
+        rename: () => Effect.void,
+        stat: () => Effect.succeed({} as any),
+        exists: () => Effect.succeed(false),
+        mkdtemp: () => Effect.succeed("/tmp/fake"),
+      }),
+    );
+
+    const fakeProc = Layer.succeed(
+      ProcessService,
+      ProcessService.of({
+        spawn: () =>
+          Effect.sync(() => {
+            throw new Error("EACCES: permission denied, spawn");
+          }),
+        waitForFileExists: () => Effect.void,
+        exec: () => Effect.succeed(""),
+      }),
+    );
+
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const svc = yield* MaskFilterService;
+            return yield* svc.prepareMaskFilter(
+              {
+                secretsFramePath: FRAME,
+                filterBinaryHostPath: BINARY,
+                socketDir: SOCKET_DIR,
+                socketPath: SOCKET,
+                logFile: LOG,
+                timeoutMs: 5000,
+                pollIntervalMs: 25,
+              },
+              ["hunter2secret"],
+            );
+          }),
+        ),
+        MaskFilterServiceLive.pipe(
+          Layer.provide(Layer.merge(fakeFs, fakeProc)),
+        ),
+      ),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    expect(written.map((w) => w.path)).toEqual([FRAME]);
+    expect(removed).toEqual([FRAME]);
   });
 });

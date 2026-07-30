@@ -13,7 +13,10 @@
  * 専用バインドマウント越しでも成功する)。
  *
  * MaskFsService と同じくデーモンのライフサイクルを持ち、Scope 終了時に
- * デーモンを kill してフレーム・socket・ログを削除する (S2)。
+ * デーモンを kill してフレーム・socket・ログを削除する (S2)。フレームの
+ * 削除は書き込みと同じ acquireRelease で登録するため、その後のデーモン
+ * 起動 (spawn) が失敗してもフレームは残らない — 起動失敗と後片付けは
+ * 独立している。
  *
  * D1/D2 分離: IO プリミティブ呼び出しは 1 関数 1 呼び出しの D1 ラッパに閉じ、
  * 合成 Effect (D2) はそれらを組み合わせるだけにする。
@@ -155,26 +158,51 @@ function killDaemon(handle: SpawnHandle): Effect.Effect<void> {
 // ---------------------------------------------------------------------------
 
 /**
+ * フレーム削除は「フレームを書いた直後」から scope 終了まで、いつ finalizer
+ * として起動されても失敗してはならない。releaseServe と同じ理由で total 化
+ * する。
+ */
+function removeFrame(fs: Fs, plan: MaskFilterPreparePlan): Effect.Effect<void> {
+  return removeFile(fs, plan.secretsFramePath).pipe(
+    Effect.catchAllCause(() =>
+      Effect.logWarning("mask-filter: secrets frame cleanup failed"),
+    ),
+  );
+}
+
+/**
  * フレームは 0700 のディレクトリに 0600 で書く。hostexec が C3 のマスクで
  * これを直読みするため、マウントを止めてもファイル自体は残す。
+ *
+ * フレームの書き込みそのものを acquireRelease で包み、削除を「フレームが
+ * 存在するようになった瞬間」に登録する。これにより、この後の startServe
+ * (デーモン起動) が失敗しても — acquire 自体が同期的に throw するケースを
+ * 含め — scope が閉じればフレームは必ず削除される。デーモンが起動できな
+ * かったことと、フレームが残ることは無関係でなければならない。
  */
 function writeHostSideFrame(
   fs: Fs,
   plan: MaskFilterPreparePlan,
   secrets: string[],
-): Effect.Effect<void> {
+): Effect.Effect<void, unknown, Scope.Scope> {
   return Effect.gen(function* () {
     yield* makePrivateDir(fs, path.dirname(plan.secretsFramePath));
     yield* makePrivateDir(fs, plan.socketDir);
-    yield* writeSecretsFrame(
-      fs,
-      plan.secretsFramePath,
-      encodeMaskSecrets(secrets),
+    yield* Effect.acquireRelease(
+      writeSecretsFrame(fs, plan.secretsFramePath, encodeMaskSecrets(secrets)),
+      () => removeFrame(fs, plan),
     );
   });
 }
 
-/** S2: デーモンを止めてから、フレーム・socket・ログを消す。 */
+/**
+ * S2: デーモンを止めてから、socket・ログを消す。フレームの削除は
+ * writeHostSideFrame 側の acquireRelease が扱うのでここでは触らない
+ * (二重削除を避けるため)。scope の finalizer は登録の逆順で実行される
+ * ので、フレームの acquire がデーモン起動より先に行われている限り、
+ * このデーモン停止処理は必ずフレーム削除より先に走る — デーモンがその
+ * フレームより長生きすることはない。
+ */
 function releaseServe(
   fs: Fs,
   plan: MaskFilterPreparePlan,
@@ -182,7 +210,6 @@ function releaseServe(
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
     yield* killDaemon(handle);
-    yield* removeFile(fs, plan.secretsFramePath);
     yield* removeFile(fs, plan.socketPath);
     yield* removeFile(fs, plan.logFile);
   }).pipe(
