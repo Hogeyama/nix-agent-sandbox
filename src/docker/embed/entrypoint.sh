@@ -294,7 +294,7 @@ NAS_BASH_OVERRIDE="/tmp/nas-bash-override"
 NAS_REAL_BASH="/bin/bash"
 mkdir -p "$NAS_BASH_OVERRIDE"
 
-if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
+if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
   BASH_SYSTEM_PATH="$(readlink -f /bin/bash)"
   NAS_REAL_BASH="$NAS_BASH_OVERRIDE/bash.real"
 
@@ -318,12 +318,8 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SECRETS_FILE:-}" ]; then
 if [ "${1:-}" = "/entrypoint.sh" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
-if [ -f "${NAS_MASK_FILTER:-}" ] && [ -x "${NAS_MASK_FILTER:-}" ] && \
-   [ -f "${NAS_MASK_SECRETS_FILE:-}" ] && [ -r "${NAS_MASK_SECRETS_FILE:-}" ]; then
-  exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" -- \
-    /tmp/nas-bash-override/bash.real "$@"
-fi
-exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
+exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" --socket "$NAS_MASK_SOCKET" -- \
+  /tmp/nas-bash-override/bash.real "$@"
 MASK_WRAPPER
   chmod +x "$BASH_WRAPPER_TMP"
 
