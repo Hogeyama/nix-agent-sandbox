@@ -263,6 +263,12 @@
             pkgs.zig
             pkgs.fuse3
             pkgs.pkg-config
+            # テストヘルパの実行に使う。nas 本体の実行時依存ではないが、
+            # TypeScript では書けないクライアント (mask-filter の serve モードに
+            # 対する「書くだけで読まない」クライアント等) や
+            # nas_addon.py のユニットテストがこれに依存する。宣言しておかないと
+            # ホストの profile 次第でテストが黙って skip される。
+            pkgs.python3
             pklNative
           ];
           shellHook = ''

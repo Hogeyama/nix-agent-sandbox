@@ -5,6 +5,18 @@ import * as path from "node:path";
 import { resolveMaskFilterBinPath } from "./mask_filter_path.ts";
 import { encodeMaskSecrets } from "./secrets_frame.ts";
 
+/**
+ * 「読まずに書き続ける」クライアント (STALLING_CLIENT_PY) は TypeScript では
+ * 書けないので python3 で用意する。flake.nix の devShell で宣言してあるが、
+ * devShell の外で走らせる場合もあるので存在を確かめ、無ければ **skip として
+ * 報告する** (黙って return すると、資源上限の唯一の証明が消えたことに
+ * 誰も気付けないまま suite が緑のままになる)。
+ */
+const hasPython3 = Bun.which("python3") !== null;
+
+/** サーバの VmRSS を /proc から読むので Linux でしか動かない。 */
+const hasProcStatus = fs.existsSync("/proc/self/status");
+
 let binaryPath: string | null = null;
 let tmpDir: string;
 
@@ -118,6 +130,18 @@ async function expectServeSilent(proc: ReturnType<typeof startServe>) {
   expect(stderr).toBe("");
 }
 
+/**
+ * デーモンがまだ生きているか。
+ *
+ * `exitCode` / `signalCode` は `await proc.exited` しなくても子の終了を反映
+ * するので、シグナルによる死も検出できる。expectServeSilent は stdout/stderr が
+ * 空であることしか見ておらず、途中で落ちたデーモン (どちらも空のまま) を
+ * 素通りさせてしまうため、生存はこちらで別に確かめる必要がある。
+ */
+function serveAlive(proc: ReturnType<typeof startServe>): boolean {
+  return proc.exitCode === null && proc.signalCode === null;
+}
+
 async function waitForSocket(sockPath: string, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -227,6 +251,76 @@ function maskOverSocketSlowReader(
       },
     }).catch(reject);
   });
+}
+
+/**
+ * 「書くだけで一切読まない」クライアント。TypeScript では書けないので Python で
+ * 別プロセスとして用意する。
+ *
+ * node:net の `write()` の戻り値は使えない。サーバの状態と無関係に Node 自身の
+ * highWaterMark (16KiB) を超えた時点で false になるので、上限あり・なしで
+ * 同じ結果しか出ない。Bun の `pause()` もカーネルの受信バッファの排出を
+ * 止めない (コールバックが遅延するだけ) ので、Bun のクライアントでは
+ * そもそもサーバを詰まらせられない。
+ *
+ * 非ブロッキングにしてカーネルが受け取る限り書き続け、recv は決して呼ばない。
+ * 進まなくなったら受理されたバイト数を出力して stdout を閉じ、あとは kill
+ * されるまで接続を握ったまま黙る (接続を閉じるとサーバがキューを解放して
+ * しまい、測りたい状態が消える)。
+ */
+const STALLING_CLIENT_PY = `import os
+import socket
+import sys
+import time
+
+sock_path = sys.argv[1]
+limit_bytes = int(sys.argv[2]) * 1024 * 1024
+stall_timeout_s = 2.0
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sock_path)
+s.setblocking(False)
+
+chunk = b"x" * 65536
+sent = 0
+blocked_since = None
+while sent < limit_bytes:
+    try:
+        n = s.send(chunk)
+    except BlockingIOError:
+        n = 0
+    except OSError:
+        break
+    if n > 0:
+        sent += n
+        blocked_since = None
+        continue
+    now = time.monotonic()
+    if blocked_since is None:
+        blocked_since = now
+    elif now - blocked_since >= stall_timeout_s:
+        break
+    time.sleep(0.01)
+
+sys.stdout.write(str(sent) + "\\n")
+sys.stdout.flush()
+os.close(1)
+
+while True:
+    time.sleep(1)
+`;
+
+function writeStallingClient(): string {
+  const p = path.join(tmpDir, "stalling_client.py");
+  if (!fs.existsSync(p)) fs.writeFileSync(p, STALLING_CLIENT_PY);
+  return p;
+}
+
+function serverRssKb(pid: number): number {
+  const m = fs
+    .readFileSync(`/proc/${pid}/status`, "utf8")
+    .match(/^VmRSS:\s+(\d+) kB$/m);
+  return m ? Number(m[1]) : 0;
 }
 
 describe("nas-mask-filter binary", () => {
@@ -526,4 +620,100 @@ describe("nas-mask-filter --serve", () => {
     }
     await expectServeSilent(proc);
   }, 30000);
+
+  // socket はエージェントの UID から到達可能で、サーバはコンテナの cgroup の
+  // **外** (ホスト) で動く。したがって「読まずに書き続ける」クライアント 1 本で
+  // ホストのメモリを好きなだけ食えてはならない。MAX_QUEUED_BYTES を超えた接続は
+  // READ の poll を外すので、背圧は socket バッファ経由でクライアントへ伝わり、
+  // サーバのメモリは上限付近で頭打ちになる。
+  //
+  // 検証対象はサーバの VmRSS の**増分**である点が重要。クライアント側の
+  // `write()` の戻り値では上限あり・なしを区別できない (STALLING_CLIENT_PY の
+  // コメント参照)。
+  //
+  // 前提が欠けたときは黙って return せず skip として報告する。このテストは
+  // メモリ上限の唯一の証明なので、消えたことが出力に出ないと誰も気付けない。
+  test.skipIf(!hasProcStatus || !hasPython3)(
+    "bounds server memory when a client stops reading",
+    async () => {
+      // ここで黙って return すると、`cd src/mask-filter && zig build` を
+      // していないだけで、メモリ上限の唯一の証明が「何も検証せずに pass」
+      // として報告される。binaryPath は beforeAll で解決するので skipIf には
+      // 渡せない。skip ではなく失敗として出す。
+      expect(binaryPath).not.toBeNull();
+      const sockPath = shortSockPath("bp");
+      const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      let stall: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+
+        // 接続を張る前の RSS。上限の効き目は「接続によって増えた分」にしか
+        // 現れないので、絶対値ではなくこの値からの増分を見る (下のコメント)。
+        await Bun.sleep(200);
+        const baselineRssKb = serverRssKb(proc.pid);
+        expect(baselineRssKb).toBeGreaterThan(0);
+
+        stall = Bun.spawn(["python3", writeStallingClient(), sockPath, "64"], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        // 進まなくなった (= 背圧がかかった) 時点で stdout が閉じる。
+        const accepted = Number(await new Response(stall.stdout).text());
+        expect(accepted).toBeGreaterThan(0);
+
+        await Bun.sleep(300);
+
+        // **絶対 RSS ではなく増分を見る**のが要点。絶対値のうち約 3.7MB は接続と
+        // 無関係な固定オーバーヘッドで、上限由来の信号は残り 0.47MB しかない。
+        // そこに絶対値の閾値を置くと上限の撤去しか検出できない。
+        //
+        // 閾値は「MAX_QUEUED_BYTES を 2 倍に緩めたら落ちる」ように選ぶ。実測は
+        // 上限にほぼ比例し (増分 ≒ MAX_QUEUED_BYTES + 約 212kB)、同じホストで
+        // 何度測っても 1kB もぶれない (出荷ビルドで 3 回、いずれも同値):
+        //
+        //   MAX_QUEUED_BYTES | 増分     | 受理     | 接続前 RSS
+        //   256KiB (出荷)    |   468kB  |  583KiB  | 3,696kB
+        //   512KiB (2 倍)    |   724kB  |  839KiB  | 3,696kB
+        //   1MiB   (4 倍)    | 1,236kB  | 1,351KiB | 3,700kB
+        //   1280KiB (5 倍)   | 1,492kB  | 1,607KiB | 3,700kB
+        //   4MiB   (16 倍)   | 4,308kB  | 4,423KiB | 3,740kB
+        //
+        // kernel の socket バッファは VmRSS に入らないので、この増分はホストの
+        // 速度にもバッファ設定にも依存しない。よって閾値は「実測 468kB の上」
+        // かつ「2 倍緩和の 724kB の下」に置けばよく、640kB とする: 実測比 1.37 倍
+        // (余裕 172kB) で、2 倍緩和からは 84kB 下。増分 ≒ 上限 + 212kB なので、
+        // MAX_QUEUED_BYTES が約 424KiB (約 1.7 倍) を超えた時点で落ちる。
+        //
+        // 緩い閾値では駄目な理由: 増分 1,536kB / 受理 2MiB だと 5 倍緩和
+        // (1280KiB) まで両方素通りする。1MiB へ緩めるだけでホストの最悪値は
+        // 336MiB から約 900MiB へ悪化するので、そこは捕まえられねばならない。
+        const rssGrowthKb = serverRssKb(proc.pid) - baselineRssKb;
+        expect(rssGrowthKb).toBeLessThan(640);
+        // 受理量は上限のほかに 1 チャンク分のオーバーシュートと kernel の
+        // socket バッファを含むので、増分より余裕を取る。実測 583KiB に対し
+        // 896KiB なら、2 倍緩和時の 839KiB を捕まえつつホスト差を吸収できる。
+        expect(accepted).toBeLessThan(896 * 1024);
+
+        stall.kill();
+        await stall.exited;
+        stall = null;
+
+        // 詰まった接続を抱えたままでも他の接続は普通に処理できる。
+        expect(await maskOverSocket(sockPath, ["pw=hunter2"])).toBe(
+          "pw=*******",
+        );
+      } finally {
+        if (stall) {
+          stall.kill();
+          await stall.exited;
+        }
+        proc.kill();
+        await proc.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+      await expectServeSilent(proc);
+    },
+    60000,
+  );
 });
