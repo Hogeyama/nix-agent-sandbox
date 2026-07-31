@@ -860,6 +860,29 @@ echo "layers=$n"
     }
   }, 15000);
 
+  // ラッパーは本物の /bin/bash の inode を置き換えて設置されるので、環境を
+  // 落として起動された bash (env -i、env_reset 付きの sudo、su -) もここを通る。
+  // ブローカーの居場所が分からない以上マスクは保証できないので素の bash へ
+  // フォールバックしてはならないが、そのまま exec すると空文字列を実行しようと
+  // して "exec: : not found" の 127 になり、運用者にはマスクの話だと分からない。
+  // fail-closed のまま原因が伝わること (定数の診断 + 予約コード 121) を見る。
+  test("fails closed with a diagnostic when the broker env is stripped", async () => {
+    const wrapper = writeWrapperScript();
+    const proc = Bun.spawn([wrapper, "-c", "echo hi"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {}, // env -i 相当
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    expect(await proc.exited).toBe(121);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("[nas] mask: broker env missing");
+  }, 15000);
+
   // socket fd が子へ漏れると単なる情報漏れでは済まず、注入オラクルになる:
   // ストリーム途中に 1 バイト差し込むとサーバ側のマッチが崩れて原文が返るため、
   // 差し込んだ値を知っていれば原文を復元できる。

@@ -320,6 +320,14 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
   # カバレッジは減らない: 子孫は最外周 supervisor のパイプを継承するので
   # 出力は既にマスクされており、最外周から逃げる出力 (ファイルへのリダイレクト、
   # /dev/tty) は内側の層からも同様に逃げる。
+  #
+  # ラッパーは本物の /bin/bash の inode を置き換えて設置されるので、環境を落として
+  # 起動された bash (env -i、env_reset 付きの sudo、su -) もここを通る。そのとき
+  # NAS_MASK_FILTER / NAS_MASK_SOCKET は空になり、素朴に exec すると空文字列を
+  # 実行しようとして "exec: : not found" の 127 になる — 運用者にはマスクの話だと
+  # 分からない。ブローカーの居場所が分からない以上マスクは保証できないので、素の
+  # bash へフォールバックはせず (fail-open になる)、定数の診断を出して予約コード
+  # 121 (= 出力抑止) で落とす。
   BASH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.tmp.$$"
   cat > "$BASH_WRAPPER_TMP" << 'MASK_WRAPPER'
 #!/tmp/nas-bash-override/bash.real
@@ -328,6 +336,10 @@ if [ "${1:-}" = "/entrypoint.sh" ]; then
 fi
 if [ -n "${NAS_MASK_SUPERVISED:-}" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
+fi
+if [ -z "${NAS_MASK_FILTER:-}" ] || [ -z "${NAS_MASK_SOCKET:-}" ]; then
+  echo '[nas] mask: broker env missing; output suppressed' >&2
+  exit 121
 fi
 exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" --socket "$NAS_MASK_SOCKET" -- \
   /tmp/nas-bash-override/bash.real "$@"
