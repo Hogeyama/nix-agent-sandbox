@@ -47,6 +47,7 @@ interface Recorded {
   readonly spawnLogFiles: Array<string | undefined>;
   readonly chmods: Array<{ path: string; mode: number }>;
   readonly mkdirs: Array<{ path: string; mode: number | undefined }>;
+  /** rm と rmdir を 1 本の列に混ぜて記録する (削除の順序を見るため)。 */
   readonly removed: string[];
   readonly waited: Array<{ path: string; timeoutMs: number }>;
   readonly killed: number;
@@ -100,6 +101,10 @@ async function runCapturing(): Promise<Recorded> {
           chmods.push({ path: p, mode });
         }),
       rm: (p) =>
+        Effect.sync(() => {
+          removed.push(p);
+        }),
+      rmdir: (p) =>
         Effect.sync(() => {
           removed.push(p);
         }),
@@ -250,24 +255,26 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
     expect(waited).toEqual([{ path: SOCKET, timeoutMs: 5000 }]);
   });
 
-  test("scope release kills the daemon and removes frame, socket and log (S2)", async () => {
+  test("scope release kills the daemon and removes everything it created (S2)", async () => {
     const { killed, removed } = await runCapturing();
     expect(killed).toBe(1);
-    // Finalizers run in reverse acquisition order: the frame's
-    // acquireRelease is registered before the daemon's, so on release the
-    // daemon (and its socket/log) is torn down first and the frame last.
-    // This still satisfies S2 (daemon killed before its own files are
-    // removed) and additionally ensures the frame is removed even if the
+    // Finalizers run in reverse acquisition order. The directories and the
+    // frame are acquired before the daemon, so on release the daemon (and its
+    // socket/log) is torn down first, then the frame, then the directories
+    // that held them — contents always before their directory.
+    //
+    // Registering the directories with acquireRelease (rather than removing
+    // them from releaseServe) also means they are reclaimed even when the
     // daemon never successfully starts.
-    expect(removed).toEqual([SOCKET, LOG, FRAME]);
+    expect(removed).toEqual([SOCKET, LOG, FRAME, SOCKET_DIR, SESSION_DIR]);
   });
 
-  test("removes the frame if spawn throws before the daemon starts", async () => {
+  test("removes the frame and directories if spawn throws before the daemon starts", async () => {
     // Mirrors ProcessService's real spawn: Effect.sync around Bun.spawn,
     // which throws synchronously on e.g. EACCES for a non-executable file.
-    // The frame must not survive an aborted session even though the daemon
-    // never got a chance to start (and so releaseServe's finalizer never
-    // gets registered).
+    // Nothing must survive an aborted session even though the daemon never
+    // got a chance to start (and so releaseServe's finalizer never gets
+    // registered).
     const written: WrittenFile[] = [];
     const removed: string[] = [];
 
@@ -288,6 +295,10 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
           }),
         chmod: () => Effect.void,
         rm: (p) =>
+          Effect.sync(() => {
+            removed.push(p);
+          }),
+        rmdir: (p) =>
           Effect.sync(() => {
             removed.push(p);
           }),
@@ -339,6 +350,79 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
 
     expect(exit._tag).toBe("Failure");
     expect(written.map((w) => w.path)).toEqual([FRAME]);
-    expect(removed).toEqual([FRAME]);
+    expect(removed).toEqual([FRAME, SOCKET_DIR, SESSION_DIR]);
+  });
+
+  // rmdir が失敗しても release 全体を落としてはならない (finalizer は失敗
+  // してはならない)。落とすと、後続の finalizer — ここではセッション
+  // ディレクトリの削除 — が走らなくなる。
+  test("a directory that will not go away does not abort the release", async () => {
+    const removed: string[] = [];
+
+    const fakeFs = Layer.succeed(
+      FsService,
+      FsService.of({
+        mkdir: () => Effect.void,
+        writeFile: () => Effect.void,
+        chmod: () => Effect.void,
+        rm: (p) =>
+          Effect.sync(() => {
+            removed.push(p);
+          }),
+        rmdir: (p) =>
+          Effect.sync(() => {
+            if (p === SOCKET_DIR) throw new Error(`ENOTEMPTY: ${p}`);
+            removed.push(p);
+          }),
+        readFile: () => Effect.succeed(""),
+        symlink: () => Effect.void,
+        rename: () => Effect.void,
+        stat: () => Effect.succeed({} as any),
+        exists: () => Effect.succeed(false),
+        mkdtemp: () => Effect.succeed("/tmp/fake"),
+      }),
+    );
+
+    const fakeProc = Layer.succeed(
+      ProcessService,
+      ProcessService.of({
+        spawn: () =>
+          Effect.succeed({
+            kill: () => {},
+            exited: Effect.succeed(0),
+            pid: 4242,
+          } satisfies SpawnHandle),
+        waitForFileExists: () => Effect.void,
+        exec: () => Effect.succeed(""),
+      }),
+    );
+
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const svc = yield* MaskFilterService;
+            return yield* svc.prepareMaskFilter(
+              {
+                secretsFramePath: FRAME,
+                filterBinaryHostPath: BINARY,
+                socketDir: SOCKET_DIR,
+                socketPath: SOCKET,
+                logFile: LOG,
+                timeoutMs: 5000,
+                pollIntervalMs: 25,
+              },
+              ["hunter2secret"],
+            );
+          }),
+        ),
+        MaskFilterServiceLive.pipe(
+          Layer.provide(Layer.merge(fakeFs, fakeProc)),
+        ),
+      ),
+    );
+
+    expect(exit._tag).toBe("Success");
+    expect(removed).toEqual([SOCKET, LOG, FRAME, SESSION_DIR]);
   });
 });
