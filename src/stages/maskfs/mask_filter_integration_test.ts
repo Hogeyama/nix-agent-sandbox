@@ -936,8 +936,10 @@ echo "layers=$n"
   // ブローカーの居場所が分からない以上マスクは保証できないので素の bash へ
   // フォールバックしてはならないが、そのまま exec すると空文字列を実行しようと
   // して "exec: : not found" の 127 になり、運用者にはマスクの話だと分からない。
-  // fail-closed のまま原因が伝わること (定数の診断 + 予約コード 121) を見る。
-  test("fails closed with a diagnostic when the broker env is stripped", async () => {
+  // このラッパー自身が /bin/bash の inode を占めているため、ここで診断を出すと
+  // 呼び出し元 (無関係なプログラム) の stderr に nas 由来のテキストが紛れ込む。
+  // fail-closed のまま何も出力せず、予約コード 121 だけで原因が伝わることを見る。
+  test("fails closed with no output when the broker env is stripped", async () => {
     const wrapper = writeWrapperScript();
     const proc = Bun.spawn([wrapper, "-c", "echo hi"], {
       stdin: "ignore",
@@ -951,7 +953,7 @@ echo "layers=$n"
     ]);
     expect(await proc.exited).toBe(121);
     expect(stdout).toBe("");
-    expect(stderr).toContain("[nas] mask: broker env missing");
+    expect(stderr).toBe("");
   }, 15000);
 
   // socket fd が子へ漏れると単なる情報漏れでは済まず、注入オラクルになる:
