@@ -326,8 +326,11 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
   # NAS_MASK_FILTER / NAS_MASK_SOCKET は空になり、素朴に exec すると空文字列を
   # 実行しようとして "exec: : not found" の 127 になる — 運用者にはマスクの話だと
   # 分からない。ブローカーの居場所が分からない以上マスクは保証できないので、素の
-  # bash へフォールバックはせず (fail-open になる)、定数の診断を出して予約コード
-  # 121 (= 出力抑止) で落とす。
+  # bash へフォールバックはせず (fail-open になる)、何も出力せず予約コード
+  # 121 (= 出力抑止) で落とす。このラッパー自身が /bin/bash の inode を占めている
+  # ため、ここで echo すると呼び出し元 (env -i された sudo/su 経由の無関係な
+  # プログラム) の stderr に nas 由来のテキストが紛れ込んでしまう。終了コード
+  # 121 だけで意味を伝える。
   BASH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.tmp.$$"
   cat > "$BASH_WRAPPER_TMP" << 'MASK_WRAPPER'
 #!/tmp/nas-bash-override/bash.real
@@ -338,7 +341,6 @@ if [ -n "${NAS_MASK_SUPERVISED:-}" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
 if [ -z "${NAS_MASK_FILTER:-}" ] || [ -z "${NAS_MASK_SOCKET:-}" ]; then
-  echo '[nas] mask: broker env missing; output suppressed' >&2
   exit 121
 fi
 exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" --socket "$NAS_MASK_SOCKET" -- \
