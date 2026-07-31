@@ -13,10 +13,10 @@
  * 専用バインドマウント越しでも成功する)。
  *
  * MaskFsService と同じくデーモンのライフサイクルを持ち、Scope 終了時に
- * デーモンを kill してフレーム・socket・ログを削除する (S2)。フレームの
- * 削除は書き込みと同じ acquireRelease で登録するため、その後のデーモン
- * 起動 (spawn) が失敗してもフレームは残らない — 起動失敗と後片付けは
- * 独立している。
+ * デーモンを kill してフレーム・socket・ログと、それらを置いた 2 つの
+ * ディレクトリを削除する (S2)。作成したものはすべて作成と同じ
+ * acquireRelease で削除を登録するため、その後のデーモン起動 (spawn) が
+ * 失敗しても何も残らない — 起動失敗と後片付けは独立している。
  *
  * D1/D2 分離: IO プリミティブ呼び出しは 1 関数 1 呼び出しの D1 ラッパに閉じ、
  * 合成 Effect (D2) はそれらを組み合わせるだけにする。
@@ -149,6 +149,11 @@ function removeFile(fs: Fs, target: string): Effect.Effect<void> {
   return fs.rm(target, { force: true });
 }
 
+/** 空になったディレクトリを取り除く。中身を消した後に呼ぶこと。 */
+function removeDir(fs: Fs, dir: string): Effect.Effect<void> {
+  return fs.rmdir(dir);
+}
+
 function killDaemon(handle: SpawnHandle): Effect.Effect<void> {
   return Effect.sync(() => handle.kill());
 }
@@ -171,6 +176,24 @@ function removeFrame(fs: Fs, plan: MaskFilterPreparePlan): Effect.Effect<void> {
 }
 
 /**
+ * 自分で作ったディレクトリを畳む。
+ *
+ * rm ではなく rmdir を使うので、想定外の中身が残っていれば ENOTEMPTY で
+ * 失敗する — それを消してしまうより、残して警告する方が安全。ただし
+ * finalizer は失敗してはならないので、ここで total 化して release の
+ * 残りのステップを止めないようにする。
+ */
+function removeOwnDir(
+  fs: Fs,
+  dir: string,
+  warning: string,
+): Effect.Effect<void> {
+  return removeDir(fs, dir).pipe(
+    Effect.catchAllCause(() => Effect.logWarning(warning)),
+  );
+}
+
+/**
  * フレームは 0700 のディレクトリに 0600 で書く。hostexec が C3 のマスクで
  * これを直読みするため、マウントを止めてもファイル自体は残す。
  *
@@ -179,6 +202,16 @@ function removeFrame(fs: Fs, plan: MaskFilterPreparePlan): Effect.Effect<void> {
  * (デーモン起動) が失敗しても — acquire 自体が同期的に throw するケースを
  * 含め — scope が閉じればフレームは必ず削除される。デーモンが起動できな
  * かったことと、フレームが残ることは無関係でなければならない。
+ *
+ * ディレクトリの作成も同じ理由で acquireRelease にしてある。ここで作る
+ * 2 つは `${runtimeDir}/${sessionId}` と `${runtimeDir}/${sessionId}-sock` で、
+ * どちらもセッション固有なので、消さないと $XDG_RUNTIME_DIR に空ディレクトリが
+ * セッションごとに積み上がる (刈り取る仕組みは無い)。
+ *
+ * 登録順は「セッションディレクトリ → socket ディレクトリ → フレーム →
+ * (startServe の) デーモン」。finalizer は逆順なので、実際の解体は
+ * デーモン停止 → socket・ログ削除 → フレーム削除 → socket ディレクトリ →
+ * セッションディレクトリ となり、中身は必ずディレクトリより先に消える。
  */
 function writeHostSideFrame(
   fs: Fs,
@@ -186,8 +219,17 @@ function writeHostSideFrame(
   secrets: string[],
 ): Effect.Effect<void, unknown, Scope.Scope> {
   return Effect.gen(function* () {
-    yield* makePrivateDir(fs, path.dirname(plan.secretsFramePath));
-    yield* makePrivateDir(fs, plan.socketDir);
+    const sessionDir = path.dirname(plan.secretsFramePath);
+    yield* Effect.acquireRelease(makePrivateDir(fs, sessionDir), () =>
+      removeOwnDir(fs, sessionDir, "mask-filter: session dir cleanup failed"),
+    );
+    yield* Effect.acquireRelease(makePrivateDir(fs, plan.socketDir), () =>
+      removeOwnDir(
+        fs,
+        plan.socketDir,
+        "mask-filter: socket dir cleanup failed",
+      ),
+    );
     yield* Effect.acquireRelease(
       writeSecretsFrame(fs, plan.secretsFramePath, encodeMaskSecrets(secrets)),
       () => removeFrame(fs, plan),
@@ -196,12 +238,12 @@ function writeHostSideFrame(
 }
 
 /**
- * S2: デーモンを止めてから、socket・ログを消す。フレームの削除は
- * writeHostSideFrame 側の acquireRelease が扱うのでここでは触らない
+ * S2: デーモンを止めてから、socket・ログを消す。フレームとディレクトリの
+ * 削除は writeHostSideFrame 側の acquireRelease が扱うのでここでは触らない
  * (二重削除を避けるため)。scope の finalizer は登録の逆順で実行される
- * ので、フレームの acquire がデーモン起動より先に行われている限り、
- * このデーモン停止処理は必ずフレーム削除より先に走る — デーモンがその
- * フレームより長生きすることはない。
+ * ので、それらの acquire がデーモン起動より先に行われている限り、
+ * このデーモン停止処理は必ずフレーム削除・ディレクトリ削除より先に走る —
+ * デーモンがその socket やディレクトリより長生きすることはない。
  */
 function releaseServe(
   fs: Fs,
