@@ -27,6 +27,16 @@ export class FsService extends Context.Tag("nas/FsService")<
       path: string,
       opts?: { recursive?: boolean; force?: boolean },
     ) => Effect.Effect<void>;
+    /**
+     * Remove an empty directory.
+     *
+     * Distinct from `rm`: `fs.rm` refuses directories unless `recursive` is
+     * set, and `recursive` would delete whatever the directory happens to
+     * contain. Callers that only want to reclaim a directory they emptied
+     * themselves want this — an unexpected leftover then fails loudly instead
+     * of being destroyed.
+     */
+    readonly rmdir: (path: string) => Effect.Effect<void>;
     readonly stat: (path: string) => Effect.Effect<Stats>;
     readonly exists: (path: string) => Effect.Effect<boolean>;
     readonly readFile: (path: string) => Effect.Effect<string>;
@@ -76,6 +86,12 @@ export const FsServiceLive = Layer.succeed(FsService, {
     Effect.tryPromise({
       try: () => fs.rm(path, opts),
       catch: fsError("rm", path),
+    }).pipe(Effect.orDie),
+
+  rmdir: (path) =>
+    Effect.tryPromise({
+      try: () => fs.rmdir(path),
+      catch: fsError("rmdir", path),
     }).pipe(Effect.orDie),
 
   stat: (path) =>
@@ -182,6 +198,16 @@ export function makeFsServiceFake(): {
         } else {
           store.delete(path);
         }
+      }),
+
+    rmdir: (path) =>
+      Effect.sync(() => {
+        const prefix = path.endsWith("/") ? path : `${path}/`;
+        for (const key of store.keys()) {
+          if (key.startsWith(prefix)) throw new Error(`ENOTEMPTY: ${path}`);
+        }
+        if (!store.has(path)) throw new Error(`ENOENT: ${path}`);
+        store.delete(path);
       }),
 
     stat: (path) =>
