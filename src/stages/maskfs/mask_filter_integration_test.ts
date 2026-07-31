@@ -2,8 +2,43 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveMaskFilterBinPath } from "./mask_filter_path.ts";
 import { encodeMaskSecrets } from "./secrets_frame.ts";
+
+/**
+ * dev のバイナリをソースに追従させてから測る。
+ *
+ * このスイートは挙動をバイナリでしか検証できないので、`zig build` を忘れると
+ * **ソース上は直っている不具合をテストが再現し続ける**。実際に
+ * `fix(mask-filter): treat destination EPIPE as a clean exit` の後で前日の
+ * ビルドが残り、修正前の 121 を報告して赤くなった。直っているコードを疑う
+ * ことになるので、ビルドはテスト側で引き受ける。
+ *
+ * mtime の新旧比較では代用できない: `zig build` は成果物が同一内容なら
+ * バイナリを書き直さないため、指示通り再ビルドしても「古い」と言い続ける。
+ *
+ * zig が無い環境 (devShell 外) では既存のバイナリをそのまま使う — 追従は
+ * できないが、ビルド手段が無い以上ここで落としても直しようがない。
+ * NAS_ASSET_DIR が立つ bundled モードでは nix が同じソースからビルドする。
+ */
+async function buildMaskFilterForDev(): Promise<void> {
+  if (process.env.NAS_ASSET_DIR) return;
+  if (Bun.which("zig") === null) return;
+  const srcDir = fileURLToPath(new URL("../../mask-filter/", import.meta.url));
+  const proc = Bun.spawn(["zig", "build"], {
+    cwd: srcDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [code, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stderr).text(),
+  ]);
+  if (code !== 0) {
+    throw new Error(`zig build failed in ${srcDir} (exit ${code}):\n${stderr}`);
+  }
+}
 
 /**
  * このスイートの前提判定は、欠けている前提を例外なく **skip として報告する**。
@@ -13,12 +48,13 @@ import { encodeMaskSecrets } from "./secrets_frame.ts";
  * 前提は describe の外 (トップレベル await) で解決し、各テストの `skipIf` に渡す。
  *
  * 前提は 3 つ:
- * - `binaryPath`: `cd src/mask-filter && zig build` の生成物。
+ * - `binaryPath`: `src/mask-filter` の生成物。dev では直前にビルドしてから解決する。
  * - `hasPython3`: 「読まずに書き続ける」クライアント (STALLING_CLIENT_PY) は
  *   TypeScript では書けないので python3 で用意する。flake.nix の devShell で
  *   宣言してあるが、devShell の外で走らせる場合もあるので存在を確かめる。
  * - `hasProcStatus`: サーバの VmRSS を /proc から読むので Linux でしか動かない。
  */
+await buildMaskFilterForDev();
 const binaryPath = await resolveMaskFilterBinPath();
 const hasPython3 = Bun.which("python3") !== null;
 const hasProcStatus = fs.existsSync("/proc/self/status");
