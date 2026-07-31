@@ -35,6 +35,14 @@
 //! 途中でブローカーが死んだ、socket への書き込みが失敗した — いずれの場合も
 //! 出力を捨てて 121 (= 出力抑止) で終了する。「エラー時は素通し」は無い。
 //!
+//! **出力先 fd の EPIPE だけは例外**。`cmd | head` のように呼び出し元が途中で
+//! 読むのをやめただけで、マスクは最後まで正しく効いており、抑止すべき未マスク
+//! 出力も残っていない (出力先へ流すのはサーバが返したマスク済みバイトだけ)。
+//! ここを 121 にすると、ごく普通のパイプラインが「出力抑止」の診断を出し、
+//! pipefail 下ではパイプライン全体が失敗する。よってこの場合だけは診断を出さず、
+//! 子の終了ステータスでそのまま終わる。socket 側の書き込みエラーは緩和の対象外
+//! (relay.zig の DestError を参照)。
+//!
 //! 終了判定の 3 段階
 //! -----------------
 //! 子のパイプが EOF になっただけでは終われない (サーバが保持中の末尾をまだ
@@ -186,13 +194,37 @@ const Stream = struct {
     /// このストリーム専用のブローカー接続。所有者は `run` のローカル変数で、
     /// Stream は借りているだけ (値で持つとキューの更新が反映されない)。
     relay: *Relay,
-    /// パイプをこれ以上読まない (EOF、またはアイドル打ち切り)。
+    /// パイプをこれ以上読まない (EOF、アイドル打ち切り、または出力先が閉じた)。
     pipe_done: bool = false,
+    /// 出力先 fd が EPIPE を返した。マスクの失敗ではないので 121 にはしない。
+    dst_closed: bool = false,
+    /// pipe_fd を close 済みか (二重 close 防止)。
+    pipe_closed: bool = false,
 
     /// パイプを POLLIN で張るか。送信キューが上限に達している間は張らない
     /// (張り続けるとパイプを永久に読み込み、背圧の連鎖が存在しなくなる)。
     fn wantsPipeRead(self: *const Stream) bool {
         return !self.pipe_done and self.relay.pendingLen() < RELAY_MAX_PENDING;
+    }
+
+    /// 出力先が閉じている (`cmd | head` で読み手が去った) と分かったときの後始末。
+    ///
+    /// 出力先へ流すのはサーバが返したマスク済みバイトだけなので、届かなくなった
+    /// ことに confidentiality 上の意味はなく、抑止すべき未マスク出力も残っていない。
+    /// よって 121 にはせず、このストリームを完了扱いにする。
+    ///
+    /// **子のパイプの読み出し端を閉じる**のが要点。閉じずに読み捨てを続けると、
+    /// `yes | head -2` のように終わらない子がいる場合にスーパーバイザが永遠に
+    /// 回り続けて呼び出し元がハングする。閉じれば読み手がいなくなるので、子は
+    /// スーパーバイザがいないときとまったく同じように SIGPIPE を受け取る
+    /// (子では SIGPIPE を既定へ戻してある)。
+    fn abandonDestination(self: *Stream) void {
+        self.dst_closed = true;
+        if (!self.pipe_closed) {
+            posix.close(self.pipe_fd);
+            self.pipe_closed = true;
+        }
+        self.pipe_done = true;
     }
 
     fn relayEvents(self: *const Stream) i16 {
@@ -204,7 +236,7 @@ const Stream = struct {
     }
 
     fn done(self: *const Stream) bool {
-        return self.relay.read_eof;
+        return self.relay.read_eof or self.dst_closed;
     }
 };
 
@@ -331,6 +363,7 @@ pub fn run(
         // write が EPIPE になって全出力を捨てることになる (子が 0 で終わって
         // いても 121)。
         for (&streams) |*s| {
+            if (s.done()) continue;
             if (s.pipe_done and s.relay.pendingLen() == 0) try s.relay.halfClose();
         }
 
@@ -347,10 +380,11 @@ pub fn run(
                 pipe_idx[i] = n_fds;
                 n_fds += 1;
             }
-            // EOF を報告したリレーは poll 集合から外す。サーバが close した
-            // socket は恒久的に POLLIN|POLLHUP なので、張ったままだと
-            // もう一方のストリームが走っている間ずっとホスト CPU を回す。
-            if (!s.relay.read_eof) {
+            // 完了したリレーは poll 集合から外す。サーバが close した socket は
+            // 恒久的に POLLIN|POLLHUP なので、張ったままだともう一方の
+            // ストリームが走っている間ずっとホスト CPU を回す。出力先が閉じた
+            // ストリームも同じ理由で外す (読んでも捨てるだけ)。
+            if (!s.done()) {
                 fds[n_fds] = .{ .fd = s.relay.fd, .events = s.relayEvents(), .revents = 0 };
                 relay_idx[i] = n_fds;
                 n_fds += 1;
@@ -391,7 +425,17 @@ pub fn run(
             if (revents == 0) continue;
             if (revents & (posix.POLL.ERR | posix.POLL.NVAL) != 0) return error.RelayFailed;
             if (revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
-                if (try s.relay.pumpReadable(s.dst_fd, scratch) > 0) progress = true;
+                // 出力先の EPIPE (`cmd | head`) はマスクの失敗ではない。
+                // 抑止すべき未マスク出力も残っていないので、121 にはせず
+                // このストリームを畳んで子の終了ステータスで終わる。
+                const n = s.relay.pumpReadable(s.dst_fd, scratch) catch |err| switch (err) {
+                    error.DestinationClosed => {
+                        s.abandonDestination();
+                        continue;
+                    },
+                    else => return err,
+                };
+                if (n > 0) progress = true;
                 if (s.relay.read_eof) {
                     // half-close 前にサーバが閉じたのは「完了」ではなく
                     // 切り捨て。接続数上限を超えた接続はサーバが accept して
@@ -409,6 +453,9 @@ pub fn run(
 
         for (&streams, 0..) |*s, i| {
             const idx = pipe_idx[i] orelse continue;
+            // 上の socket 処理で出力先が閉じたと分かった場合、pipe_fd は
+            // 既に close 済みなのでこの周回では触らない。
+            if (s.pipe_done) continue;
             if (fds[idx].revents != 0) try drainPipeOnce(allocator, s, scratch);
         }
 

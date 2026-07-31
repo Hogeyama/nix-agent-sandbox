@@ -860,6 +860,77 @@ echo "layers=$n"
     }
   }, 15000);
 
+  // `cmd | head` は読み手が先に去るごく普通のパイプラインで、出力先 fd への
+  // write が EPIPE になる。これはマスクの失敗ではない (出力先へ流すのは
+  // サーバが返したマスク済みバイトだけで、抑止すべき未マスク出力は残っていない)
+  // ので、診断も 121 も出してはならない。終了ステータスはスーパーバイザが
+  // いないときと同じ — 子が SIGPIPE で死ねば 141 — でなければならない。
+  test("exits cleanly when the caller stops reading (cmd | head)", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("epipe");
+    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      const bash = realBashPath();
+      // スーパーバイザの終了コードは stderr へ出す (パイプの先ではないので
+      // head には食われない)。PIPESTATUS を使わないのは、その綴りが
+      // TypeScript のテンプレートリテラルと衝突して lint に引っかかるため。
+      const script =
+        `{ "${binaryPath}" --supervise --socket "${sockPath}" -- ` +
+        `"${bash}" -c 'seq 200000'; echo "supervisor=$?" >&2; } | head -2`;
+      const proc = Bun.spawn([bash, "-c", script], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      expect(await proc.exited).toBe(0);
+      expect(stdout).toBe("1\n2\n");
+      // 「出力抑止」の診断が出ないこと、121 にならないこと。
+      expect(stderr).not.toContain("output suppressed");
+      expect(stderr).not.toContain("supervisor=121");
+      // 子が SIGPIPE で死ぬので、スーパーバイザなしの `seq | head` と同じ 141。
+      expect(stderr).toContain("supervisor=141");
+      expect(serveAlive(server)).toBe(true);
+    } finally {
+      server.kill();
+      await server.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+  }, 30000);
+
+  // 出力先が閉じたストリームのパイプを読み捨てするだけだと、終わらない子
+  // (`yes`) を抱えたままスーパーバイザが永遠に回り、呼び出し元がハングする。
+  // 読み出し端を閉じて子に通常どおり SIGPIPE を見せる必要がある。
+  test("does not hang when an unbounded child outlives the reader", async () => {
+    if (!binaryPath) return;
+    const sockPath = shortSockPath("yeshead");
+    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+    try {
+      expect(await waitForSocket(sockPath)).toBe(true);
+      const bash = realBashPath();
+      const proc = Bun.spawn(
+        [
+          bash,
+          "-c",
+          `"${binaryPath}" --supervise --socket "${sockPath}" -- ` +
+            `"${bash}" -c 'yes' | head -2`,
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      expect(stdout).toBe("y\ny\n");
+    } finally {
+      server.kill();
+      await server.exited;
+      fs.rmSync(sockPath, { force: true });
+    }
+  }, 30000);
+
   // ラッパーは本物の /bin/bash の inode を置き換えて設置されるので、環境を
   // 落として起動された bash (env -i、env_reset 付きの sudo、su -) もここを通る。
   // ブローカーの居場所が分からない以上マスクは保証できないので素の bash へ
