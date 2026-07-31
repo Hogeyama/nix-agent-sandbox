@@ -245,7 +245,15 @@ class CredentialRule {
 class NetworkConfig {
   /// ネットワークアクセス制御ルール。上から順に評価し、最初にマッチしたルールの
   /// action を適用する。どのルールにもマッチしない場合は暗黙 deny。
-  reviewRules: Listing<(ReviewRule|ReviewRulesPreset)> = new {}
+  ///
+  /// 要素型が union なので Pkl は既定要素を決められず、`default` を与えないと
+  /// 素の `new { ... }` が構築できない。プリセットを受け付ける前から使われて
+  /// いる `new { host = "..."; action = "allow" }` という書き方をそのまま
+  /// 通すため、既定要素を ReviewRule にする。プリセットは
+  /// `new ReviewRulesPreset { ... }` と型を明示して書く。
+  reviewRules: Listing<(ReviewRule|ReviewRulesPreset)> = new {
+    default = (_) -> new ReviewRule {}
+  }
 
   /// ホスト別認証情報。allow 判定されたリクエストにヘッダーを注入する。
   /// アクセス許可は reviewRules で別途設定が必要。

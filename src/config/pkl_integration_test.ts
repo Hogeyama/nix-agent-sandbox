@@ -216,6 +216,50 @@ profiles {
   }
 });
 
+// reviewRules の要素型がプリセットとの union になったとき、Pkl は既定要素を
+// 決められなくなり、型を書かない `new { ... }` が構築できなくなった。既存の
+// 設定はほぼその書き方をしているので、union 化した時点で読めなくなっていた
+// (実際にこのリポジトリ自身の .nas/config.pkl が評価できなくなっていた)。
+// 既存テストがどれも `new ReviewRule { ... }` と型を明示していたため気付け
+// なかった。型を省いた書き方をそのまま固定する。
+test.skipIf(!hasPkl)(
+  "pkl: review rules without an explicit element type still load",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules {
+        new { host = "api.github.com"; action = "allow" }
+        new { method = "POST"; host = "httpbin.org"; action = "review" }
+        new { action = "review" }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-bare-rule-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      expect(config.profiles.dev.network.reviewRules).toEqual([
+        { host: "api.github.com", action: "allow", audit: true },
+        {
+          method: "POST",
+          host: "httpbin.org",
+          action: "review",
+          audit: true,
+        },
+        { action: "review", audit: true },
+      ]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
 test.skipIf(!hasPkl)(
   "pkl: request policy serializes bodyless handler and preserves ordinary rules",
   async () => {
