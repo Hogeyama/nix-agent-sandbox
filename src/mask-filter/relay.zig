@@ -40,6 +40,24 @@ pub const RelayError = error{
     RelayFailed,
 };
 
+/// **出力先 fd 専用**のエラー集合。socket 側で使ってはならない。
+///
+/// socket への write が落としたバイトはシークレットを分断し、どちらの断片も
+/// サーバのパターンに一致せず素通しになるので、socket 側のエラーは常に致命
+/// (`RelayError.RelayFailed` → 121) でなければならない。出力先はその逆で、
+/// EPIPE は「もう誰も読んでいない」以上の意味を持たない: マスクの失敗ではないし、
+/// 抑止すべき未マスク出力も残っていない (出力先へ流すのはサーバが返した
+/// マスク済みバイトだけ)。
+///
+/// 両者を同じ関数・同じエラーで扱うとこの緩和がいつか socket 側へ広がるので、
+/// 集合ごと分けてある。**フラグ引数で共用しないこと**。
+pub const DestError = error{
+    /// 出力先が閉じている (EPIPE)。fail-closed の 121 にしてはならない。
+    DestinationClosed,
+    /// 出力先への書き込みが本当に失敗した。
+    RelayFailed,
+};
+
 fn setNonBlocking(fd: posix.fd_t) !void {
     const flags = try posix.fcntl(fd, posix.F.GETFL, 0);
     const nonblock: u32 = @bitCast(posix.O{ .NONBLOCK = true });
@@ -51,8 +69,14 @@ fn setNonBlocking(fd: posix.fd_t) !void {
 /// WouldBlock を致命扱いにしてはならない。出力先が非ブロッキングなら読み手が
 /// 遅いだけで EAGAIN が返り、それを致命にすると「ただ遅い」だけの実行で出力を
 /// 丸ごと捨てて 121 を返すことになる。書けるまで poll して待つ。
+///
+/// EPIPE も致命ではない。`cmd | head` のように呼び出し元が途中で読むのをやめた
+/// だけで、マスクは最後まで正しく効いている。ここを致命にすると、ごく普通の
+/// パイプラインが「出力抑止」の診断つきで 121 になり、pipefail 下ではパイプライン
+/// 全体が失敗する。呼び出し側が扱えるよう専用のエラーで返す。
+///
 /// それ以外のエラーは致命: ここで落としたバイトはもう誰にも届かない。
-fn writeAllFatal(fd: posix.fd_t, bytes: []const u8) RelayError!void {
+fn writeAllToDest(fd: posix.fd_t, bytes: []const u8) DestError!void {
     var i: usize = 0;
     while (i < bytes.len) {
         const n = posix.write(fd, bytes[i..]) catch |err| switch (err) {
@@ -63,6 +87,7 @@ fn writeAllFatal(fd: posix.fd_t, bytes: []const u8) RelayError!void {
                 _ = posix.poll(&pfd, -1) catch return error.RelayFailed;
                 continue;
             },
+            error.BrokenPipe => return error.DestinationClosed,
             else => return error.RelayFailed,
         };
         if (n == 0) return error.RelayFailed;
@@ -157,7 +182,15 @@ pub const Relay = struct {
     /// POLLIN / POLLHUP が立ったときに呼ぶ。マスク済みバイトを 1 回読んで
     /// dst_fd へ書き切る。戻り値は読めたバイト数 (0 は EAGAIN か EOF)。
     /// EOF は `read_eof` で区別する。
-    pub fn pumpReadable(self: *Relay, dst_fd: posix.fd_t, buf: []u8) RelayError!usize {
+    ///
+    /// socket 側の失敗は `RelayError.RelayFailed` (致命)、出力先が閉じている
+    /// 場合だけ `DestError.DestinationClosed` を返す。呼び出し側は後者を
+    /// 121 にしてはならない。
+    pub fn pumpReadable(
+        self: *Relay,
+        dst_fd: posix.fd_t,
+        buf: []u8,
+    ) (RelayError || DestError)!usize {
         const n = posix.read(self.fd, buf) catch |err| switch (err) {
             error.WouldBlock => return 0,
             else => return error.RelayFailed,
@@ -166,7 +199,7 @@ pub const Relay = struct {
             self.read_eof = true;
             return 0;
         }
-        try writeAllFatal(dst_fd, buf[0..n]);
+        try writeAllToDest(dst_fd, buf[0..n]);
         return n;
     }
 
@@ -280,6 +313,54 @@ test "Relay: relays bytes out and back, and half-close is the EOF signal" {
     try waitReadable(relay.fd);
     try testing.expectEqual(@as(usize, 0), try relay.pumpReadable(out_pipe[1], &buf));
     try testing.expect(relay.read_eof);
+}
+
+// 出力先の EPIPE は「もう誰も読んでいない」だけでマスクの失敗ではないので、
+// socket 側の失敗と同じ RelayFailed にしてはならない。同じにすると
+// `cmd | head` が「出力抑止」の診断つきで 121 になる。
+test "Relay.pumpReadable: a closed destination is reported apart from mask failure" {
+    // 出力先への write が EPIPE を返す前にテストランナーが死なないようにする
+    // (supervise.run も同じ理由で SIGPIPE を無視している)。
+    var old: posix.Sigaction = undefined;
+    const ign: posix.Sigaction = .{
+        .handler = .{ .handler = posix.SIG.IGN },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.PIPE, &ign, &old);
+    defer posix.sigaction(posix.SIG.PIPE, &old, null);
+
+    var path_buf: [MAX_SOCKET_PATH]u8 = undefined;
+    const path = try std.fmt.bufPrint(
+        &path_buf,
+        "/tmp/nas-mf-dstgone-{d}.sock",
+        .{std.c.getpid()},
+    );
+
+    const listener = try listenAt(path);
+    defer {
+        posix.close(listener);
+        posix.unlink(path) catch {};
+    }
+
+    var relay = try Relay.connect(path);
+    defer relay.deinit(testing.allocator);
+    const peer = try posix.accept(listener, null, null, posix.SOCK.CLOEXEC);
+    defer posix.close(peer);
+
+    _ = try posix.write(peer, "HELLO");
+
+    // 読み手が去った出力先 (`cmd | head` 相当)。
+    const out_pipe = try posix.pipe();
+    posix.close(out_pipe[0]);
+    defer posix.close(out_pipe[1]);
+
+    var buf: [CHUNK_SIZE]u8 = undefined;
+    try waitReadable(relay.fd);
+    try testing.expectError(
+        error.DestinationClosed,
+        relay.pumpReadable(out_pipe[1], &buf),
+    );
 }
 
 test "Relay.pumpWritable: a short write leaves the remainder queued" {
