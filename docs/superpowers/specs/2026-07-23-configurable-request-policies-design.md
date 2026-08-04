@@ -9,8 +9,8 @@ Where the two documents conflict, this design takes precedence:
 
 - `mask.anthropicEgress` is removed without a compatibility alias.
 - There is no separate `network.egressPolicies` collection.
-- Anthropic endpoint rules become the versioned `anthropic@1` preset inside
-  `network.reviewRules`.
+- Anthropic endpoint rules become the versioned `anthropic@1` preset, exposed
+  as a Pkl function that expands into `network.reviewRules`.
 - The generic name is `requestPolicy`, not `egress`.
 - Protocol, audit, and log names use `request-policy`.
 
@@ -27,13 +27,14 @@ or upstream forwarding.
 Users can:
 
 - enable an immutable built-in preset explicitly;
-- add, remove, or replace preset rules by stable ID;
+- drop or replace preset rules by stable ID using ordinary Pkl list operations;
 - add exact bodyless GET rules;
 - define JSON request policies with the same DSL used by built-in presets.
 
-The first built-in preset is `anthropic@1`. The model must permit a future
-OpenAI preset and a future GraphQL request-policy handler without changing the
-review-rule matcher, authorization flow, overlay mechanism, or audit contract.
+The first built-in preset is `anthropic@1`, provided as `anthropicV1()` in
+`Schema.pkl`. The model must permit a future OpenAI preset and a future GraphQL
+request-policy handler without changing the review-rule matcher, authorization
+flow, or audit contract.
 
 ## Non-goals
 
@@ -47,9 +48,10 @@ review-rule matcher, authorization flow, overlay mechanism, or audit contract.
 
 ## Configuration model
 
-`network.reviewRules` becomes an ordered list of rule specifications. A
-specification is either a normal `ReviewRule` or an inline
-`ReviewRulesPreset`.
+`network.reviewRules` stays an ordered `Listing<ReviewRule>`. Presets are Pkl
+functions that return `List<ReviewRule>`, so a preset is not a distinct
+configuration node: by the time the TypeScript compiler sees the config, there
+are only ordinary review rules.
 
 ### ReviewRule
 
@@ -93,85 +95,85 @@ The raw path is used only for matching inside the existing authenticated
 addon-to-broker flow. It is not copied into request-policy outcome messages or
 block logs.
 
-### ReviewRulesPreset
+### Built-in presets
+
+A preset is a function on the `Schema.pkl` module. It takes a rule-ID prefix
+and an exact host, and returns a plain `List<ReviewRule>`:
 
 ```pkl
 network {
   reviewRules {
-    new ReviewRulesPreset {
-      id = "anthropic"
-      preset = "anthropic@1"
-
-      removeRules {
-        "bodyless.settings"
-      }
-
-      addRules {
-        new ReviewRule {
-          id = "company-bootstrap"
-          method = "GET"
-          path = "/company/bootstrap"
-          action = "allow"
-          requestPolicy = new BodylessRequestPolicy {}
-        }
-      }
+    // 追加ルールは終端 deny より前に置く (first-match)。
+    new ReviewRule {
+      id = "anthropic.company-bootstrap"
+      method = "GET"
+      host = "api.anthropic.com"
+      path = "/company/bootstrap"
+      action = "allow"
+      requestPolicy = new BodylessRequestPolicy {}
     }
+    for (r in module.anthropicV1("anthropic", "api.anthropic.com")
+                .filter((r) -> r.id != "anthropic.bodyless.settings")) { r }
   }
 }
 ```
 
-Fields:
-
 ```text
-ReviewRulesPreset
-  id: String
-  preset: String
-  host?: String
-  removeRules: Set<String>
-  addRules: Listing<ReviewRule>
+anthropicV1(prefix: String, host: String): List<ReviewRule>
 ```
 
-`id` is a safe namespace for runtime rule IDs and uses the same safe-ID syntax.
-`host`, when present, replaces the preset's default host and must still be one
-exact hostname. This supports a compatible private gateway without weakening
-host matching.
+`prefix` is a safe namespace for runtime rule IDs and uses the same safe-ID
+syntax; every returned rule is named `<prefix>.<localId>`, for example
+`anthropic.messages.create`. Applying the same preset to two hosts requires two
+prefixes, otherwise the IDs collide and the compiler reports a duplicate.
 
-Preset expansion occurs at the preset entry's position in the ordered
-`reviewRules` list:
+`host` replaces the preset's default host and must be one exact hostname. This
+supports a compatible private gateway without weakening host matching.
 
-1. Load the immutable, versioned preset data.
-2. Compute the effective preset host from the default and optional override,
-   then apply it to every built-in rule.
-3. Remove rules named by local ID.
-4. For each added rule, fill an omitted host with the effective preset host. An
-   explicitly supplied host must equal the effective host or expansion fails.
-5. Insert `addRules`, in their declared order, immediately before the preset's
-   remaining terminal catch-all rule.
-6. Prefix every local rule ID with the preset entry ID, for example
-   `anthropic.messages.create`.
-7. Revalidate the composed runtime ID with the same safe-ID syntax and 64-byte
-   ASCII limit.
-8. Run validation and shadow analysis over the complete resolved list.
+Why a Pkl function and not a configuration node:
 
-If the terminal rule was removed, additions are appended after the remaining
-preset rules.
+- `.nas/Schema.pkl` is overwritten from the shipped asset on every load, so a
+  preset defined there is as immutable as a TypeScript constant was — a user
+  cannot edit the preset body.
+- Only `config.pkl`, `Schema.pkl`, and `PklProject` are kept in `.nas/`, so
+  shipping the preset inside `Schema.pkl` needs no runtime changes at all.
+- A new provider can be added in Pkl alone.
 
-An added rule may reuse an ID only when the original rule was removed. That is
-the replacement mechanism. Unknown remove IDs, duplicate IDs, duplicate exact
-`method + host + path` matchers, or a reused ID that was not removed are
-configuration errors.
+Pkl scoping note: inside an amend block such as `reviewRules { ... }` the
+receiver is the `Listing`, and unqualified method resolution does not walk up to
+the module. Preset calls therefore need the `module.` qualifier.
 
-A namespace and local ID may each be valid in isolation but still produce an
-overlong composed ID. That is a configuration error after expansion; the
-runtime protocol never accepts an ID longer than 64 bytes.
+Overlays are ordinary list operations rather than a dedicated mechanism:
+
+- to drop a rule, `filter` it out by ID;
+- to replace one, filter it out and append your own rule;
+- to add an endpoint, place it **before** the preset so first-match reaches it
+  ahead of the terminal deny.
+
+This is strictly less validated than the previous `removeRules` / `addRules`
+overlay: a typo in a filtered ID is silently a no-op, and there is no check
+that an addition's host matches the preset host. The compensating guarantee is
+the shadowing check below — an addition placed after the terminal deny is a
+configuration error, not a silently dead rule.
+
+Duplicate IDs and duplicate exact `method + host + path` matchers remain
+configuration errors, as does an ID longer than 64 bytes; the runtime protocol
+never accepts one.
 
 Preset versions are immutable. A nas release never adds an allowed endpoint to
-an existing version. API changes produce `anthropic@2`, and users opt in
+an existing version. API changes produce `anthropicV2`, and users opt in
 explicitly. This prevents a nas update from silently widening egress.
 
-Any earlier rule that fully shadows a resolved preset rule or a rule carrying
-`requestPolicy` is a configuration error rather than the existing warning.
-Users must reorder the rules or explicitly remove the protected rule.
+Any earlier rule that fully shadows a *protected* rule is a configuration error
+rather than the existing warning. Users must reorder the rules or drop the
+protected rule. A rule is protected when it carries a `requestPolicy` **or**
+has an `id`.
+
+The `id` half of that condition is what keeps the preset's terminal
+`default-deny` — which carries no `requestPolicy` — from being silently covered
+by an earlier blanket `allow`. The rationale generalizes: a rule the user
+bothered to name is one they meant to reach, so it should not be quietly dead.
+Rules without an `id` keep the previous warn-only behavior.
 
 For this check, an earlier rule `A` fully shadows a protected rule `B` exactly
 when every request matched by `B` is also matched by `A`. The compiler uses
@@ -240,8 +242,8 @@ The public handler model is a tagged union. Version 1 accepts `bodyless` and
 runtime fail-closed errors.
 
 GraphQL support can later add a new handler and parser while reusing exact
-endpoint matching, preset overlays, authorization, outcome reporting, audit,
-and fixed block responses.
+endpoint matching, authorization, outcome reporting, audit, and fixed block
+responses.
 
 ### BodylessRequestPolicy
 
@@ -386,7 +388,8 @@ language.
 
 ## `anthropic@1`
 
-The preset default host is `api.anthropic.com`.
+`anthropicV1(prefix, host)` is normally called with
+`host = "api.anthropic.com"`.
 
 JSON rules:
 
@@ -411,14 +414,36 @@ The final `default-deny` rule matches the exact preset host and has action
 `deny`. It has no request policy.
 
 The JSON policy expresses the existing Anthropic behavior as data. Its
-tagged-union selectors are:
+tagged-union selectors name **only the places that actually carry message
+content**:
 
 ```text
-/**/content/*
-/**/system/*
+/messages/*/content/*
+/messages/*/content/*/content/*
+/messages/*/content/*/source/content/*
+/messages/*/content/*/content/*/source/content/*
+/system/*
 ```
 
-Both use discriminator `type` and this exact allowed-tag set:
+They deliberately avoid `**`. A `**` selector reaches arbitrary depth, so
+`/**/content/*` also matches `tools[].input_schema.properties.content` — and
+Claude Code sends a `Write` tool with a `content` parameter on every request.
+The tool's JSON Schema (`{"type": "string"}`) then fails the tag check and the
+request is blocked as `schema-mismatch`.
+
+The cost of dropping `**` is that every place a content block can nest must be
+enumerated; anything missed falls outside the fail-closed net. Version 1
+enumerates:
+
+- directly under a message;
+- one level down, inside a `tool_result` or `search_result` `content`;
+- inside a `document` whose `source.type` is `"content"`, which can appear
+  under either of the two positions above.
+
+An unknown tag at any of those positions still blocks, so narrowing does not
+weaken fail-closed behavior for the shapes the API defines.
+
+All five use discriminator `type` and this exact allowed-tag set:
 
 ```text
 text
@@ -438,7 +463,9 @@ container_upload
 ```
 
 Its encoded-field rule selects `/**`, requires `type = "base64"`, reads
-`data`, and uses strict `base64`.
+`data`, and uses strict `base64`. The broad selector is correct here: it names
+*candidate carriers* of a base64 payload rather than imposing a structural
+requirement, and non-objects are skipped rather than blocked.
 
 These complete known-tag and selector lists live in preset data, not in
 provider-named branches in the Python addon.
@@ -451,9 +478,9 @@ it fails closed until a verified preset version adds a concrete type.
 
 Telemetry, eval, Files API, descendant Files paths, and all other endpoints
 reach `default-deny`. Files and multipart uploads have no handler that a preset
-can accidentally select. A user would have to remove or precede the terminal
-rule through the preset overlay and add an explicit supported request policy;
-there is no generic passthrough inside the preset.
+can accidentally select. A user would have to filter out or precede the
+terminal rule and add an explicit supported request policy; there is no generic
+passthrough inside the preset.
 
 Query strings do not participate in exact-path matching. Exact matching does
 not percent-decode, normalize doubled slashes, or remove trailing slashes. URL
@@ -466,7 +493,7 @@ continues to consume `mask.values`.
 
 - Any resolved request policy, including `BodylessRequestPolicy`, requires
   `mask.proxy = true`. This validation is independent of which other preset
-  rules remain after overlay expansion.
+  rules the user kept.
 - `mask.values` remains the only secret-source configuration.
 - Secret resolution stays in the host-side broker/stage boundary.
 - Resolved secret values are never written to the review-rules file or session
@@ -487,8 +514,8 @@ unchanged.
 The host resolves configuration once:
 
 ```text
-Pkl review-rule specifications
-  -> pure preset expansion and validation
+Pkl config (presets already expanded to ReviewRule by Pkl)
+  -> pure validation and shadow analysis
   -> ResolvedReviewRules { contractVersion: 1, rules: [...] }
        -> existing per-session review-rules JSON
        -> SessionBroker configuration
@@ -641,21 +668,22 @@ resource-limit errors, and serialization errors block.
 - Request-policy rules require safe IDs, exact hosts, methods, and paths.
 - `deny + requestPolicy` is rejected.
 - `graphql` and unknown policy kinds are rejected.
-- Preset expansion happens inline and preserves order.
-- Additions are inserted before the terminal rule.
-- Remove, replace, unknown-remove, duplicate-ID, and duplicate-endpoint cases.
-- Host override is exact, updates every built-in rule, and is inherited by
-  additions; an explicitly mismatched addition host is rejected.
-- Namespace, local, and composed runtime ID validation, including composed
-  length overflow.
-- Fully shadowed preset/request-policy rules are rejected.
+- Duplicate-ID and duplicate-endpoint cases.
+- Runtime ID validation, including length overflow.
+- Fully shadowed request-policy rules and fully shadowed named rules are
+  rejected, including an addition placed after the terminal deny.
+- ID-less rules stay unprotected and keep the warn-only behavior.
 - Method, host, exact-path, prefix, absent-field, wildcard, and port-qualified
   shadow-subsumption cases.
 - Existing non-policy shadow warnings remain unchanged.
 
 ### Shared contract
 
-- TypeScript produces versioned resolved-rule fixtures.
+- The committed `anthropic-v1` fixture is generated from `Schema.pkl` through
+  the real `pkl` -> `loadConfig` -> `resolveReviewRules` path, and a test fails
+  if the two drift.
+- Re-resolving the committed fixture is a fixed point, so it is a canonical
+  resolved document.
 - Python accepts every valid fixture.
 - Both sides reject unknown versions, kinds, fields, invalid IDs, and malformed
   AST nodes.
@@ -669,6 +697,11 @@ resource-limit errors, and serialization errors block.
 - `*`, `**`, escaped literals, overlapping selector matches, and absent paths.
 - Tagged-union valid, missing, wrong-type, and unknown discriminator cases.
 - Nested Anthropic content blocks.
+- The **shipped** `anthropic@1` policy, taken from the fixture rather than
+  hand-written, passes a realistic Claude Code request that carries a `system`
+  array, a `tools` array whose schemas contain a `content` property, and a
+  nested `tool_result`; and still blocks an unknown tag at each of the three
+  guarded positions.
 - Base64 unchanged, rewritten, malformed, and decoded-size cases.
 - Strict base64 rejects whitespace and line-wrapped input.
 - Recursive masking of values and keys.
@@ -697,8 +730,9 @@ resource-limit errors, and serialization errors block.
 - Telemetry, eval, Files, Files descendants, unsupported methods, trailing
   slashes, percent-encoded lookalikes, doubled slashes, and unknown paths hit
   the terminal deny.
-- Removing a preset rule makes that endpoint hit terminal deny.
+- Filtering a preset rule out makes that endpoint hit terminal deny.
 - Adding and replacing rules changes only the named exact endpoint.
+- A custom prefix and host are applied to every returned rule.
 
 ### Integration and security
 
@@ -734,8 +768,14 @@ This design preserves the repository security constraints:
 
 ## Deliberate trade-offs
 
-- Exact paths reject provider changes until the preset or user overlay changes.
+- Exact paths reject provider changes until the preset or the user's own rules
+  change.
 - Immutable preset versions require explicit upgrades.
+- Expressing overlays as Pkl list operations trades the previous overlay
+  validation (unknown-ID rejection, host inheritance, automatic insertion before
+  the terminal rule) for a preset mechanism that needs no TypeScript changes to
+  extend. A mistyped filter ID is silently a no-op; a misplaced addition is
+  caught by the named-rule shadowing check rather than the overlay compiler.
 - The compact JSON DSL validates security-sensitive unions and encodings, not a
   complete standards-based JSON Schema.
 - Unknown JSON fields are allowed but all string keys and values are masked.

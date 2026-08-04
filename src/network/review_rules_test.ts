@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import type { JsonRequestPolicy, ReviewRule } from "../config/types.ts";
 import {
   matchesReviewRule,
+  type ResolvedReviewRules,
   resolveReviewRules,
   reviewRuleSubsumes,
 } from "./review_rules.ts";
@@ -52,24 +53,6 @@ function jsonRule(overrides: Partial<ReviewRule> = {}): ReviewRule {
     path: "/v1/messages",
     action: "allow",
     requestPolicy: JSON_POLICY,
-    ...overrides,
-  };
-}
-
-function anthropicPreset(
-  overrides: Partial<{
-    id: string;
-    preset: string;
-    host: string;
-    removeRules: string[];
-    addRules: ReviewRule[];
-  }> = {},
-) {
-  return {
-    id: "anthropic",
-    preset: "anthropic@1",
-    removeRules: [],
-    addRules: [],
     ...overrides,
   };
 }
@@ -251,12 +234,33 @@ describe("resolveReviewRules custom rules", () => {
     ).toThrow(new RegExp(`${field}.*positive integer.*at most`));
   });
 
+  // addon はルール 1 件でも不正だとドキュメント全体を無効化し、セッション中の
+  // 全リクエストが 403 になる。空文字は addon 側の検証条件なので、ここで
+  // 同じ条件を持って設定エラーとして落とす。
+  test.each([
+    ["method", { method: "" }],
+    ["host", { host: "" }],
+    ["path", { path: "" }],
+    ["pathPrefix", { path: undefined, pathPrefix: "" }],
+  ])("rejects empty %s", (field, overrides) => {
+    expect(() =>
+      resolveReviewRules([{ action: "allow", ...overrides }]),
+    ).toThrow(new RegExp(`${field} must not be empty`));
+  });
+
+  // `*` を含むセグメントを 1 つでも通すと、addon はそれをリテラルとして扱い
+  // guard が 0 ノードにマッチする = 何も検査せず pass する。fail-closed の
+  // 制御が fail-open に転ぶので、文字種によらず一律で弾くことを固定する。
   test.each([
     ["not absolute", "messages/*"],
     ["bad escape", "/messages/~2"],
     ["partial wildcard", "/messages/pre*"],
     ["leading partial wildcard", "/messages/*post"],
     ["embedded partial wildcard", "/messages/pre*post"],
+    ["wildcard after punctuation", "/messages/*/content:*"],
+    ["wildcard after whitespace", "/messages/*/con tent*"],
+    ["wildcard inside regex-looking group", "/(.*)"],
+    ["wildcard with non-ASCII", "/messages/内容*"],
   ])("rejects malformed selector: %s", (_name, at) => {
     const policy = {
       ...JSON_POLICY,
@@ -271,7 +275,6 @@ describe("resolveReviewRules custom rules", () => {
     ["dollar-prefixed", "/$schema"],
     ["pipe", "/foo|bar"],
     ["regex-looking escape", String.raw`/\d+`],
-    ["regex-looking group", "/(.*)"],
     ["filter-looking", "/[?(@.type)]"],
     ["script-looking", "/$" + "{danger}"],
   ])("accepts expression-looking selector text as a literal: %s", (_name, at) => {
@@ -522,28 +525,104 @@ describe("resolveReviewRules protected shadowing", () => {
   });
 });
 
-describe("resolveReviewRules anthropic preset overlays", () => {
-  test("expands inline and inserts additions before the terminal deny", () => {
-    const resolved = resolveReviewRules([
-      { id: "before", host: "before.example.com", action: "review" },
-      anthropicPreset({
-        addRules: [
-          {
-            id: "company-bootstrap",
-            method: "GET",
-            path: "/company/bootstrap",
-            action: "review",
-            requestPolicy: BODYLESS,
-          },
-        ],
-      }),
-      { id: "after", host: "after.example.com", action: "review" },
-    ]);
+describe("resolveReviewRules named-rule shadowing", () => {
+  // requestPolicy を持たないルールでも、ID を付けたものは「意図して名指しした」
+  // ルールなので手前の広いルールに黙って覆われてはいけない。プリセットの終端
+  // deny がこれに当たる。
+  test("rejects an earlier rule that shadows a named policyless deny", () => {
+    expect(() =>
+      resolveReviewRules([
+        { host: "*.anthropic.com", action: "allow" },
+        {
+          id: "anthropic.default-deny",
+          host: "api.anthropic.com",
+          action: "deny",
+        },
+      ]),
+    ).toThrow(/reviewRules\[0\].*shadows protected.*anthropic\.default-deny/);
+  });
 
-    expect(resolved.rules[0].id).toBe("before");
-    expect(resolved.rules.at(-1)?.id).toBe("after");
-    expect(resolved.rules.map((rule) => rule.id)).toEqual([
-      "before",
+  test("rejects an addition placed after the terminal deny", () => {
+    expect(() =>
+      resolveReviewRules([
+        {
+          id: "anthropic.default-deny",
+          host: "api.anthropic.com",
+          action: "deny",
+        },
+        {
+          id: "anthropic.company-bootstrap",
+          method: "GET",
+          host: "api.anthropic.com",
+          path: "/company/bootstrap",
+          action: "allow",
+          requestPolicy: BODYLESS,
+        },
+      ]),
+    ).toThrow(/shadows protected.*anthropic\.company-bootstrap/);
+  });
+
+  test("allows the same addition placed before the terminal deny", () => {
+    expect(() =>
+      resolveReviewRules([
+        {
+          id: "anthropic.company-bootstrap",
+          method: "GET",
+          host: "api.anthropic.com",
+          path: "/company/bootstrap",
+          action: "allow",
+          requestPolicy: BODYLESS,
+        },
+        {
+          id: "anthropic.default-deny",
+          host: "api.anthropic.com",
+          action: "deny",
+        },
+      ]),
+    ).not.toThrow();
+  });
+
+  test("leaves ID-less rules unprotected", () => {
+    expect(() =>
+      resolveReviewRules([
+        { host: "*.example.com", action: "allow" },
+        { host: "api.example.com", action: "deny" },
+      ]),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * fixture の権威は `src/config/Schema.pkl` の `anthropicV1()` にあり、pkl から
+ * 生成されているかどうかは `src/config/pkl_integration_test.ts` が見る。ここでは
+ * pkl 無しでも走る形で、出荷物そのものが満たすべき性質を固定する。
+ */
+describe("anthropic-v1 resolved fixture", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "./fixtures/resolved_review_rules/anthropic-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as ResolvedReviewRules;
+
+  test("is a canonical resolved document", () => {
+    // 解決済みドキュメントを再解決しても変わらない = 検証を通り、既定値が
+    // すべて埋まっている。
+    expect(resolveReviewRules(fixture.rules)).toEqual(fixture);
+    expect(fixture.contractVersion).toBe(1);
+    expect(
+      fixture.rules.every(
+        (rule) =>
+          rule.id !== undefined && /^[a-z][a-z0-9._-]{0,63}$/.test(rule.id),
+      ),
+    ).toBe(true);
+  });
+
+  test("allows only the endpoints Claude Code needs", () => {
+    expect(fixture.rules.map((rule) => rule.id)).toEqual([
       "anthropic.messages.create",
       "anthropic.messages.count-tokens",
       "anthropic.bodyless.bootstrap",
@@ -553,366 +632,61 @@ describe("resolveReviewRules anthropic preset overlays", () => {
       "anthropic.bodyless.mcp-registry",
       "anthropic.bodyless.code-triggers",
       "anthropic.bodyless.mcp-servers",
-      "anthropic.company-bootstrap",
       "anthropic.default-deny",
-      "after",
     ]);
-  });
-
-  test("removing the terminal rule appends additions after remaining rules", () => {
-    const resolved = resolveReviewRules([
-      anthropicPreset({
-        removeRules: ["default-deny"],
-        addRules: [
-          {
-            id: "company-bootstrap",
-            method: "GET",
-            path: "/company/bootstrap",
-            action: "review",
-            requestPolicy: BODYLESS,
-          },
-        ],
-      }),
-    ]);
-
-    expect(resolved.rules.at(-1)?.id).toBe("anthropic.company-bootstrap");
-    expect(resolved.rules.some((rule) => rule.action === "deny")).toBe(false);
-  });
-
-  test("allows a removed local ID to be replaced", () => {
-    const resolved = resolveReviewRules([
-      anthropicPreset({
-        removeRules: ["bodyless.settings"],
-        addRules: [
-          {
-            id: "bodyless.settings",
-            method: "GET",
-            path: "/company/settings",
-            action: "review",
-            requestPolicy: BODYLESS,
-          },
-        ],
-      }),
-    ]);
-
+    const allowedPaths = fixture.rules
+      .filter((rule) => rule.action === "allow")
+      .map((rule) => rule.path);
     expect(
-      resolved.rules.find((rule) => rule.id === "anthropic.bodyless.settings"),
-    ).toMatchObject({
-      host: "api.anthropic.com",
-      path: "/company/settings",
-      action: "review",
-    });
-  });
-
-  test.each([
-    [
-      "unknown removal",
-      { removeRules: ["missing"] },
-      /unknown removeRules.*missing/,
-    ],
-    [
-      "duplicate removal",
-      { removeRules: ["bodyless.settings", "bodyless.settings"] },
-      /duplicate removeRules.*bodyless\.settings/,
-    ],
-    [
-      "reused ID without removal",
-      {
-        addRules: [
-          {
-            id: "bodyless.settings",
-            method: "GET",
-            path: "/company/settings",
-            action: "allow",
-            requestPolicy: BODYLESS,
-          },
-        ],
-      },
-      /duplicate.*bodyless\.settings/,
-    ],
-    [
-      "duplicate added endpoint",
-      {
-        addRules: [
-          {
-            id: "duplicate-messages",
-            method: "POST",
-            path: "/v1/messages",
-            action: "allow",
-            requestPolicy: JSON_POLICY,
-          },
-        ],
-      },
-      /duplicate exact endpoint/,
-    ],
-  ])("rejects %s", (_name, overrides, expected) => {
-    expect(() =>
-      resolveReviewRules([anthropicPreset(overrides as never)]),
-    ).toThrow(expected);
-  });
-
-  test("rejects an unknown preset version", () => {
-    expect(() =>
-      resolveReviewRules([anthropicPreset({ preset: "anthropic@2" })]),
-    ).toThrow(/unknown preset "anthropic@2"/);
-  });
-
-  test("applies an exact host override and inherits it in additions", () => {
-    const resolved = resolveReviewRules([
-      anthropicPreset({
-        host: "gateway.example.com",
-        addRules: [
-          {
-            id: "company-bootstrap",
-            method: "GET",
-            path: "/company/bootstrap",
-            action: "allow",
-            requestPolicy: BODYLESS,
-          },
-        ],
-      }),
-    ]);
-
-    expect(
-      resolved.rules.every((rule) => rule.host === "gateway.example.com"),
-    ).toBe(true);
-  });
-
-  test.each([
-    [
-      "policyless allow",
-      {
-        addRules: [
-          {
-            id: "policyless-allow",
-            method: "GET",
-            path: "/company/allow",
-            action: "allow",
-          },
-        ],
-      },
-      "policyless-allow",
-    ],
-    [
-      "policyless review",
-      {
-        addRules: [
-          {
-            id: "policyless-review",
-            method: "GET",
-            path: "/company/review",
-            action: "review",
-          },
-        ],
-      },
-      "policyless-review",
-    ],
-    [
-      "policyless replacement",
-      {
-        removeRules: ["bodyless.settings"],
-        addRules: [
-          {
-            id: "bodyless.settings",
-            method: "GET",
-            path: "/company/settings",
-            action: "allow",
-          },
-        ],
-      },
-      "bodyless.settings",
-    ],
-    [
-      "policyless Files-like allow route",
-      {
-        addRules: [
-          {
-            id: "files-upload",
-            method: "POST",
-            path: "/v1/files",
-            action: "allow",
-          },
-        ],
-      },
-      "files-upload",
-    ],
-  ])("rejects %s", (_name, overrides, additionId) => {
-    expect(() =>
-      resolveReviewRules([anthropicPreset(overrides as never)]),
-    ).toThrow(
-      new RegExp(
-        `reviewRules\\[0\\].*anthropic.*addRules ID "${additionId.replace(".", "\\.")}".*requestPolicy`,
+      allowedPaths.some(
+        (path) =>
+          path === "/v1/files" ||
+          path?.startsWith("/v1/files/") ||
+          path?.includes("telemetry") ||
+          path?.includes("eval"),
       ),
-    );
-  });
-
-  test("accepts a policyless deny addition", () => {
-    const resolved = resolveReviewRules([
-      anthropicPreset({
-        addRules: [
-          {
-            id: "deny-files",
-            method: "POST",
-            path: "/v1/files",
-            action: "deny",
-          },
-        ],
-      }),
-    ]);
-
-    expect(
-      resolved.rules.find((rule) => rule.id === "anthropic.deny-files"),
-    ).toEqual({
-      id: "anthropic.deny-files",
-      method: "POST",
+    ).toBe(false);
+    expect(fixture.rules.at(-1)).toEqual({
+      id: "anthropic.default-deny",
       host: "api.anthropic.com",
-      path: "/v1/files",
       action: "deny",
       audit: true,
     });
   });
 
-  test.each([
-    ["wildcard override", { host: "*.example.com" }],
-    [
-      "mismatched addition host",
-      {
-        host: "gateway.example.com",
-        addRules: [
-          {
-            id: "company-bootstrap",
-            method: "GET",
-            host: "api.anthropic.com",
-            path: "/company/bootstrap",
-            action: "allow",
-            requestPolicy: BODYLESS,
-          },
-        ],
-      },
-    ],
-  ])("rejects %s", (_name, overrides) => {
-    expect(() =>
-      resolveReviewRules([anthropicPreset(overrides as never)]),
-    ).toThrow(/host/);
-  });
+  /**
+   * 回帰: セレクタが `/**` を含んでいると tools[].input_schema.properties.content
+   * にまで届き、Claude Code の実トラフィックが schema-mismatch で 403 になる。
+   * 本文が載る場所だけを名指ししていることを固定する。
+   */
+  test("guards only the paths that actually carry message content", () => {
+    const jsonPolicy = fixture.rules[0].requestPolicy;
+    expect(jsonPolicy?.kind).toBe("json");
+    if (jsonPolicy?.kind !== "json") return;
 
-  test.each([
-    ["unsafe namespace", anthropicPreset({ id: "Unsafe" })],
-    ["namespace ID overflow", anthropicPreset({ id: `a${"0".repeat(64)}` })],
-    [
-      "unsafe local ID",
-      anthropicPreset({
-        addRules: [
-          {
-            id: "Unsafe",
-            method: "GET",
-            path: "/company/bootstrap",
-            action: "allow",
-          },
-        ],
-      }),
-    ],
-    [
-      "local ID overflow",
-      anthropicPreset({
-        addRules: [
-          {
-            id: `a${"0".repeat(64)}`,
-            method: "GET",
-            path: "/company/bootstrap",
-            action: "allow",
-          },
-        ],
-      }),
-    ],
-    ["composed ID overflow", anthropicPreset({ id: `a${"0".repeat(54)}` })],
-  ])("rejects %s", (_name, preset) => {
-    expect(() => resolveReviewRules([preset])).toThrow(/invalid.*ID/);
-  });
-
-  test("rejects a broad prior rule that shadows the preset", () => {
-    expect(() =>
-      resolveReviewRules([
-        { host: "*.anthropic.com", action: "review" },
-        anthropicPreset(),
-      ]),
-    ).toThrow(/reviewRules\[0\].*shadows protected reviewRules\[1\]/);
-  });
-
-  test("returns fresh clones rather than mutable preset data", () => {
-    const first = resolveReviewRules([anthropicPreset()]);
-    first.rules[0].host = "mutated.example.com";
-    if (first.rules[0].requestPolicy?.kind === "json") {
-      first.rules[0].requestPolicy.taggedUnions[0].allowedTags.push("fallback");
-    }
-
-    const second = resolveReviewRules([anthropicPreset()]);
-    expect(second.rules[0].host).toBe("api.anthropic.com");
+    expect(jsonPolicy.taggedUnions.map((guard) => guard.at)).toEqual([
+      "/messages/*/content/*",
+      "/messages/*/content/*/content/*",
+      "/messages/*/content/*/source/content/*",
+      "/messages/*/content/*/content/*/source/content/*",
+      "/system/*",
+    ]);
     expect(
-      second.rules[0].requestPolicy?.kind === "json" &&
-        second.rules[0].requestPolicy.taggedUnions[0].allowedTags,
-    ).not.toContain("fallback");
-  });
-});
-
-test("anthropic preset matches the versioned cross-language fixture", async () => {
-  const fixture = JSON.parse(
-    await readFile(
-      new URL(
-        "./fixtures/resolved_review_rules/anthropic-v1.json",
-        import.meta.url,
-      ),
-      "utf8",
-    ),
-  );
-  const resolved = resolveReviewRules([anthropicPreset()]);
-
-  expect(resolved).toEqual(fixture);
-  expect(resolved.contractVersion).toBe(1);
-  expect(
-    resolved.rules.every(
-      (rule) =>
-        rule.id !== undefined && /^[a-z][a-z0-9._-]{0,63}$/.test(rule.id),
-    ),
-  ).toBe(true);
-  expect(JSON.stringify(resolved)).not.toContain("fallback");
-  const allowedPaths = resolved.rules
-    .filter((rule) => rule.action === "allow")
-    .map((rule) => rule.path);
-  expect(
-    allowedPaths.some(
-      (path) =>
-        path === "/v1/files" ||
-        path?.startsWith("/v1/files/") ||
-        path?.includes("telemetry") ||
-        path?.includes("eval"),
-    ),
-  ).toBe(false);
-  const jsonPolicy = resolved.rules[0].requestPolicy;
-  expect(jsonPolicy?.kind).toBe("json");
-  expect(
-    jsonPolicy?.kind === "json"
-      ? jsonPolicy.taggedUnions.map((guard) => guard.allowedTags.length)
-      : [],
-  ).toEqual([14, 14]);
-  expect(
-    jsonPolicy?.kind === "json"
-      ? jsonPolicy.taggedUnions.map((guard) => guard.at)
-      : [],
-  ).toEqual(["/**/content/*", "/**/system/*"]);
-  expect(jsonPolicy?.kind === "json" ? jsonPolicy.encodedFields : []).toEqual([
-    {
-      at: "/**",
-      whenField: "type",
-      whenEquals: "base64",
-      dataField: "data",
-      encoding: "base64",
-    },
-  ]);
-  expect(resolved.rules.at(-1)).toEqual({
-    id: "anthropic.default-deny",
-    host: "api.anthropic.com",
-    action: "deny",
-    audit: true,
+      jsonPolicy.taggedUnions.every((guard) => !guard.at.includes("**")),
+    ).toBe(true);
+    expect(
+      jsonPolicy.taggedUnions.map((guard) => guard.allowedTags.length),
+    ).toEqual([14, 14, 14, 14, 14]);
+    // encodedFields の `/**` は「構造の要求」ではなく base64 の運び手の候補なので
+    // 広いままで正しい。
+    expect(jsonPolicy.encodedFields).toEqual([
+      {
+        at: "/**",
+        whenField: "type",
+        whenEquals: "base64",
+        dataField: "data",
+        encoding: "base64",
+      },
+    ]);
   });
 });

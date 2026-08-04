@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 /**
  * Integration tests: Pkl 設定の --project-dir 評価テスト
@@ -9,6 +9,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { generateAnthropicV1Fixture } from "../../scripts/gen_resolved_review_rules_fixture.ts";
 import { resolveAsset } from "../lib/asset.ts";
 import { resolveReviewRules } from "../network/review_rules.ts";
 import { loadConfig } from "./load.ts";
@@ -35,6 +36,37 @@ async function pklAvailable(): Promise<boolean> {
 }
 
 const hasPkl = await pklAvailable();
+
+/**
+ * `NAS_ASSET_DIR` をリポジトリの `src/config/Schema.pkl` を持つ一時ツリーに
+ * 差し替える。
+ *
+ * `loadConfig` は評価前に `.nas/Schema.pkl` をアセットから上書きするので、
+ * `NAS_ASSET_DIR` が**インストール済みの** nas を指していると (nas セッション
+ * の中で nas を開発しているときは常にそう)、リポジトリの Schema.pkl が一切
+ * 検証されないまま緑になる。ファイルスコープで固定して hermetic にする。
+ */
+let assetDir: string | undefined;
+let previousAssetDir: string | undefined;
+
+beforeAll(async () => {
+  assetDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-assets-"));
+  await mkdir(path.join(assetDir, "config"), { recursive: true });
+  await writeFile(
+    path.join(assetDir, "config", "Schema.pkl"),
+    await readFile(new URL("./Schema.pkl", import.meta.url), "utf8"),
+  );
+  previousAssetDir = process.env.NAS_ASSET_DIR;
+  process.env.NAS_ASSET_DIR = assetDir;
+});
+
+afterAll(async () => {
+  if (previousAssetDir === undefined) delete process.env.NAS_ASSET_DIR;
+  else process.env.NAS_ASSET_DIR = previousAssetDir;
+  if (assetDir !== undefined) {
+    await rm(assetDir, { recursive: true, force: true });
+  }
+});
 
 /** バンドルされた Schema.pkl のテキストを読み込む */
 async function readBundledSchema(): Promise<string> {
@@ -216,6 +248,50 @@ profiles {
   }
 });
 
+// reviewRules の要素型がプリセットとの union になったとき、Pkl は既定要素を
+// 決められなくなり、型を書かない `new { ... }` が構築できなくなった。既存の
+// 設定はほぼその書き方をしているので、union 化した時点で読めなくなっていた
+// (実際にこのリポジトリ自身の .nas/config.pkl が評価できなくなっていた)。
+// 既存テストがどれも `new ReviewRule { ... }` と型を明示していたため気付け
+// なかった。型を省いた書き方をそのまま固定する。
+test.skipIf(!hasPkl)(
+  "pkl: review rules without an explicit element type still load",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules {
+        new { host = "api.github.com"; action = "allow" }
+        new { method = "POST"; host = "httpbin.org"; action = "review" }
+        new { action = "review" }
+      }
+    }
+  }
+}
+`;
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-pkl-bare-rule-"));
+    try {
+      await setupNasDir(tmpDir, configPkl);
+      const config = await loadConfig({ startDir: tmpDir });
+      expect(config.profiles.dev.network.reviewRules).toEqual([
+        { host: "api.github.com", action: "allow", audit: true },
+        {
+          method: "POST",
+          host: "httpbin.org",
+          action: "review",
+          audit: true,
+        },
+        { action: "review", audit: true },
+      ]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  },
+);
+
 test.skipIf(!hasPkl)(
   "pkl: request policy serializes bodyless handler and preserves ordinary rules",
   async () => {
@@ -325,7 +401,7 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
-  "pkl: serializes and expands a preset overlay",
+  "pkl: anthropicV1 expands with a custom prefix, host, and filter",
   async () => {
     const configPkl = `amends "Schema.pkl"
 
@@ -337,21 +413,17 @@ profiles {
     }
     network {
       reviewRules {
-        new ReviewRulesPreset {
-          id = "anthropic"
-          preset = "anthropic@1"
+        // 追加ルールはプリセットの終端 deny より前に置く (first-match)。
+        new ReviewRule {
+          id = "gw.company-bootstrap"
+          method = "GET"
           host = "gateway.example.com"
-          removeRules { "bodyless.settings" }
-          addRules {
-            new ReviewRule {
-              id = "company-bootstrap"
-              method = "GET"
-              path = "/company/bootstrap"
-              action = "review"
-              requestPolicy = new BodylessRequestPolicy {}
-            }
-          }
+          path = "/company/bootstrap"
+          action = "review"
+          requestPolicy = new BodylessRequestPolicy {}
         }
+        for (r in module.anthropicV1("gw", "gateway.example.com")
+                    .filter((r) -> r.id != "gw.bodyless.settings")) { r }
       }
     }
   }
@@ -364,28 +436,54 @@ profiles {
       const resolved = resolveReviewRules(
         config.profiles.dev.network.reviewRules,
       );
+
+      // filter で外したルールは消え、残りはすべて指定ホストに向く。
       expect(
-        resolved.rules.some(
-          (rule) => rule.id === "anthropic.bodyless.settings",
-        ),
+        resolved.rules.some((rule) => rule.id === "gw.bodyless.settings"),
       ).toBe(false);
       expect(
-        resolved.rules.find(
-          (rule) => rule.id === "anthropic.company-bootstrap",
-        ),
-      ).toMatchObject({
-        host: "gateway.example.com",
+        resolved.rules.every((rule) => rule.host === "gateway.example.com"),
+      ).toBe(true);
+      expect(
+        resolved.rules.find((rule) => rule.id === "gw.messages.create"),
+      ).toMatchObject({ method: "POST", path: "/v1/messages" });
+      expect(resolved.rules[0]).toMatchObject({
+        id: "gw.company-bootstrap",
         path: "/company/bootstrap",
         action: "review",
       });
       expect(resolved.rules.at(-1)).toMatchObject({
-        id: "anthropic.default-deny",
+        id: "gw.default-deny",
         host: "gateway.example.com",
         action: "deny",
       });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
+  },
+);
+
+/**
+ * fixture の権威は Schema.pkl の `anthropicV1()` にある。生成器と同じ経路
+ * (pkl 評価 → loadConfig → resolveReviewRules) を通した結果がコミット済みの
+ * fixture と一致することを固定し、pkl 側だけ変えて fixture を更新し忘れる
+ * 乖離を落とす。ずれたら `bun run scripts/gen_resolved_review_rules_fixture.ts`。
+ */
+test.skipIf(!hasPkl)(
+  "pkl: anthropicV1 matches the committed cross-language fixture",
+  async () => {
+    const generated = await generateAnthropicV1Fixture();
+    const committed = JSON.parse(
+      await readFile(
+        new URL(
+          "../network/fixtures/resolved_review_rules/anthropic-v1.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+
+    expect(generated).toEqual(committed);
   },
 );
 

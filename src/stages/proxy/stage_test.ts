@@ -8,7 +8,12 @@ import { Effect, Layer } from "effect";
  * Proxy コンテナ起動の integration テストは proxy_stage_integration_test.ts を参照。
  */
 
-import type { Config, CredentialRule, Profile } from "../../config/types.ts";
+import type {
+  Config,
+  CredentialRule,
+  Profile,
+  ReviewRule,
+} from "../../config/types.ts";
 import {
   DEFAULT_DBUS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
@@ -125,6 +130,16 @@ function makeProbes(): ProbeResults {
 
 const DISABLED_OBSERVABILITY: ObservabilityState = { enabled: false };
 
+/** requestPolicy を持つルール。Schema.pkl の anthropicV1 が吐く形と同じ。 */
+const POLICY_RULE: ReviewRule = {
+  id: "anthropic.bodyless.settings",
+  method: "GET",
+  host: "api.anthropic.com",
+  path: "/api/claude_code/settings",
+  action: "allow",
+  requestPolicy: { kind: "bodyless" },
+};
+
 function makeInput(
   profile: Profile,
   overrides: {
@@ -226,32 +241,21 @@ test("ProxyStage: returns plan when reviewRules contains a review action", () =>
   });
 });
 
-test("ProxyStage: resolves a raw preset into a versioned plan document", () => {
-  const profile = makeProfile({
-    network: {
-      reviewRules: [
-        {
-          id: "anthropic",
-          preset: "anthropic@1",
-          removeRules: [],
-          addRules: [],
-        },
-      ],
-    },
-  });
+test("ProxyStage: resolves a request-policy rule into a versioned plan document", () => {
+  const profile = makeProfile({ network: { reviewRules: [POLICY_RULE] } });
   const { shared, container, observability } = makeInput(profile);
 
   const result = planProxy({ ...shared, container, observability });
 
   expect(result.resolvedReviewRules.contractVersion).toBe(1);
   expect(result.resolvedReviewRules.rules[0]).toMatchObject({
-    id: "anthropic.messages.create",
-    method: "POST",
+    id: "anthropic.bodyless.settings",
+    method: "GET",
     host: "api.anthropic.com",
-    path: "/v1/messages",
+    path: "/api/claude_code/settings",
     action: "allow",
     audit: true,
-    requestPolicy: { kind: "json" },
+    requestPolicy: { kind: "bodyless" },
   });
 });
 
@@ -860,18 +864,7 @@ test("createProxyStage().run(): calls services and returns merged output", async
 });
 
 test("createProxyStage().run(): gives both runtime consumers the same resolved document", async () => {
-  const profile = makeProfile({
-    network: {
-      reviewRules: [
-        {
-          id: "anthropic",
-          preset: "anthropic@1",
-          removeRules: [],
-          addRules: [],
-        },
-      ],
-    },
-  });
+  const profile = makeProfile({ network: { reviewRules: [POLICY_RULE] } });
   const { shared, container, observability } = makeInput(profile);
   let writtenDocument: unknown;
   let brokerDocument: unknown;

@@ -3,7 +3,6 @@ import type {
   JsonRequestPolicy,
   RequestPolicy,
   ReviewRule,
-  ReviewRuleSpec,
   TaggedUnionGuard,
 } from "../config/types.ts";
 import type { NormalizedTarget } from "./protocol.ts";
@@ -21,143 +20,6 @@ const JSON_LIMITS = {
   maxNodes: 200_000,
   maxDecodedBytes: 33_554_432,
 } as const;
-const ANTHROPIC_TAGS = Object.freeze([
-  "text",
-  "image",
-  "document",
-  "thinking",
-  "redacted_thinking",
-  "tool_use",
-  "tool_result",
-  "server_tool_use",
-  "web_search_tool_result",
-  "code_execution_tool_result",
-  "mcp_tool_use",
-  "mcp_tool_result",
-  "search_result",
-  "container_upload",
-]);
-const ANTHROPIC_JSON_POLICY = Object.freeze({
-  kind: "json" as const,
-  ...JSON_LIMITS,
-  taggedUnions: Object.freeze([
-    Object.freeze({
-      at: "/**/content/*",
-      discriminator: "type",
-      allowedTags: ANTHROPIC_TAGS,
-    }),
-    Object.freeze({
-      at: "/**/system/*",
-      discriminator: "type",
-      allowedTags: ANTHROPIC_TAGS,
-    }),
-  ]),
-  encodedFields: Object.freeze([
-    Object.freeze({
-      at: "/**",
-      whenField: "type",
-      whenEquals: "base64",
-      dataField: "data",
-      encoding: "base64" as const,
-    }),
-  ]),
-});
-
-interface ImmutablePreset {
-  readonly defaultHost: string;
-  readonly terminalRuleId: string;
-  readonly rules: readonly ImmutablePresetRule[];
-}
-
-interface ImmutablePresetRule {
-  readonly id: string;
-  readonly method?: string;
-  readonly path?: string;
-  readonly action: "allow" | "review" | "deny";
-  readonly requestPolicy?:
-    | Readonly<{
-        kind: "bodyless";
-      }>
-    | typeof ANTHROPIC_JSON_POLICY;
-}
-
-const BODYLESS_POLICY = Object.freeze({ kind: "bodyless" as const });
-const ANTHROPIC_V1: ImmutablePreset = Object.freeze({
-  defaultHost: "api.anthropic.com",
-  terminalRuleId: "default-deny",
-  rules: Object.freeze([
-    Object.freeze({
-      id: "messages.create",
-      method: "POST",
-      path: "/v1/messages",
-      action: "allow",
-      requestPolicy: ANTHROPIC_JSON_POLICY,
-    }),
-    Object.freeze({
-      id: "messages.count-tokens",
-      method: "POST",
-      path: "/v1/messages/count_tokens",
-      action: "allow",
-      requestPolicy: ANTHROPIC_JSON_POLICY,
-    }),
-    Object.freeze({
-      id: "bodyless.bootstrap",
-      method: "GET",
-      path: "/api/claude_cli/bootstrap",
-      action: "allow",
-      requestPolicy: BODYLESS_POLICY,
-    }),
-    Object.freeze({
-      id: "bodyless.penguin-mode",
-      method: "GET",
-      path: "/api/claude_code_penguin_mode",
-      action: "allow",
-      requestPolicy: BODYLESS_POLICY,
-    }),
-    Object.freeze({
-      id: "bodyless.policy-limits",
-      method: "GET",
-      path: "/api/claude_code/policy_limits",
-      action: "allow",
-      requestPolicy: BODYLESS_POLICY,
-    }),
-    Object.freeze({
-      id: "bodyless.settings",
-      method: "GET",
-      path: "/api/claude_code/settings",
-      action: "allow",
-      requestPolicy: BODYLESS_POLICY,
-    }),
-    Object.freeze({
-      id: "bodyless.mcp-registry",
-      method: "GET",
-      path: "/mcp-registry/v0/servers",
-      action: "allow",
-      requestPolicy: BODYLESS_POLICY,
-    }),
-    Object.freeze({
-      id: "bodyless.code-triggers",
-      method: "GET",
-      path: "/v1/code/triggers",
-      action: "allow",
-      requestPolicy: BODYLESS_POLICY,
-    }),
-    Object.freeze({
-      id: "bodyless.mcp-servers",
-      method: "GET",
-      path: "/v1/mcp_servers",
-      action: "allow",
-      requestPolicy: BODYLESS_POLICY,
-    }),
-    Object.freeze({
-      id: "default-deny",
-      action: "deny",
-    }),
-  ]),
-});
-const PRESETS: Readonly<Record<string, ImmutablePreset>> = Object.freeze({
-  "anthropic@1": ANTHROPIC_V1,
-});
 
 export interface ResolvedReviewRule {
   id?: string;
@@ -187,28 +49,30 @@ interface IndexedResolvedReviewRule {
   protected: boolean;
 }
 
-/** Compile custom rules and immutable preset overlays into the runtime contract. */
-export function resolveReviewRules(
-  specs: ReviewRuleSpec[],
-): ResolvedReviewRules {
+/** Compile configured review rules into the runtime contract. */
+export function resolveReviewRules(rules: ReviewRule[]): ResolvedReviewRules {
   const compiled: IndexedResolvedReviewRule[] = [];
   const errors: string[] = [];
 
-  specs.forEach((spec, index) => {
-    if ("preset" in spec) {
-      try {
-        compiled.push(...expandPreset(spec, index));
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
-      }
-      return;
-    }
+  rules.forEach((rule, index) => {
     try {
-      validateRule(spec, index);
+      validateRule(rule, index);
       compiled.push({
         sourceIndex: index,
-        rule: cloneRule(spec),
-        protected: spec.requestPolicy !== undefined,
+        rule: cloneRule(rule),
+        // 手前の広いルールに覆われていたら設定エラーにする (= shadow 検査の
+        // 対象)。覆われたルールは first-match で到達しないので、書いた人の
+        // 意図どおりに動いていない。
+        //
+        // id は任意項目なので、付いているルールは意図して名指ししたもの =
+        // 到達すべきものとみなす。id なしのルールは validate.ts の警告どまり。
+        //
+        // requestPolicy だけを条件にすると穴が開く: validateRule が
+        // deny + requestPolicy を禁止しているため、プリセットの終端
+        // default-deny のような名前付き deny が必ず無防備になる。そこが
+        // 覆われると「9 エンドポイントだけ通す」つもりの設定が緑のまま
+        // 全通しになり、egress が黙って広がる。
+        protected: rule.requestPolicy !== undefined || rule.id !== undefined,
       });
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
@@ -275,6 +139,15 @@ function validateRule(rule: ReviewRule, index: number): void {
     throw new Error(
       `${label}: invalid rule ID; expected [a-z][a-z0-9._-]{0,63}`,
     );
+  }
+  // addon 側 (_is_valid_resolved_rule) はこれらの空文字を弾く。addon は
+  // ルール 1 件でも不正だとドキュメント全体を無効化するため、ここで通すと
+  // セッション中の全リクエストが REQUEST-POLICY-CONTRACT-INVALID で 403 に
+  // なる。設定読み込みの時点で落として、通信断ではなく設定エラーにする。
+  for (const field of ["method", "host", "path", "pathPrefix"] as const) {
+    if (rule[field] === "") {
+      throw new Error(`${label}: ${field} must not be empty`);
+    }
   }
   if (rule.path !== undefined && rule.pathPrefix !== undefined) {
     throw new Error(`${label}: path and pathPrefix are mutually exclusive`);
@@ -384,11 +257,11 @@ function validateSelector(selector: string, label: string): void {
     if (/(?:~(?![01]))|~$/.test(segment)) {
       throw new Error(`${label}: invalid selector escape`);
     }
-    if (
-      segment !== "*" &&
-      segment !== "**" &&
-      /^[a-z0-9_.~-]*\*+[a-z0-9_.~-]*$/i.test(segment)
-    ) {
+    // `*` を含むセグメントは `*` / `**` そのものでない限り拒否する。
+    // 通してしまうと addon 側 (_parse_selector) が丸ごとリテラルとして扱い、
+    // guard が 0 ノードにマッチして「何も検査せず pass」になる。fail-closed
+    // であるべき制御が fail-open に転ぶので、文字種で絞らず一律で弾く。
+    if (segment !== "*" && segment !== "**" && segment.includes("*")) {
       throw new Error(
         `${label}: invalid selector wildcard; * and ** must occupy a whole segment`,
       );
@@ -470,120 +343,6 @@ function validateProtectedShadowing(
     }
   });
   return errors;
-}
-
-function expandPreset(
-  spec: Extract<ReviewRuleSpec, { preset: string }>,
-  sourceIndex: number,
-): IndexedResolvedReviewRule[] {
-  const label = ruleLabel(sourceIndex, spec.id);
-  if (!isSafeId(spec.id)) {
-    throw new Error(
-      `${label}: invalid preset ID; expected [a-z][a-z0-9._-]{0,63}`,
-    );
-  }
-
-  const preset = PRESETS[spec.preset];
-  if (preset === undefined) {
-    throw new Error(`${label}: unknown preset "${spec.preset}"`);
-  }
-
-  const effectiveHost = spec.host ?? preset.defaultHost;
-  if (!isExactNonPortHost(effectiveHost)) {
-    throw new Error(`${label}: preset host must be an exact non-port host`);
-  }
-
-  const knownIds = new Set(preset.rules.map((rule) => rule.id));
-  const removedIds = new Set<string>();
-  for (const localId of spec.removeRules) {
-    if (removedIds.has(localId)) {
-      throw new Error(`${label}: duplicate removeRules ID "${localId}"`);
-    }
-    removedIds.add(localId);
-    if (!knownIds.has(localId)) {
-      throw new Error(`${label}: unknown removeRules ID "${localId}"`);
-    }
-  }
-
-  const builtIns = preset.rules
-    .filter((rule) => !removedIds.has(rule.id))
-    .map((rule) => presetRuleToReviewRule(rule, effectiveHost));
-  const additions = spec.addRules.map((addition) => {
-    if (addition.id === undefined || !isSafeId(addition.id)) {
-      throw new Error(
-        `${label}: invalid local rule ID; expected [a-z][a-z0-9._-]{0,63}`,
-      );
-    }
-    if (knownIds.has(addition.id) && !removedIds.has(addition.id)) {
-      throw new Error(
-        `${label}: duplicate local rule ID "${addition.id}" requires removing the built-in rule first`,
-      );
-    }
-    if (addition.action !== "deny" && addition.requestPolicy === undefined) {
-      throw new Error(
-        `${label}: addRules ID "${addition.id}" with action "${addition.action}" requires requestPolicy`,
-      );
-    }
-    if (
-      addition.host !== undefined &&
-      !exactHostsEqual(addition.host, effectiveHost)
-    ) {
-      throw new Error(
-        `${label}: addRules ID "${addition.id}" host must equal the effective preset host "${effectiveHost}"`,
-      );
-    }
-    return cloneRule({ ...addition, host: effectiveHost });
-  });
-
-  const terminalIndex = builtIns.findIndex(
-    (rule) => rule.id === preset.terminalRuleId,
-  );
-  const localRules =
-    terminalIndex === -1
-      ? [...builtIns, ...additions]
-      : [
-          ...builtIns.slice(0, terminalIndex),
-          ...additions,
-          ...builtIns.slice(terminalIndex),
-        ];
-
-  return localRules.map((localRule) => {
-    const localId = localRule.id;
-    if (localId === undefined) {
-      throw new Error(`${label}: preset rules require a local rule ID`);
-    }
-    const rule = { ...localRule, id: `${spec.id}.${localId}` };
-    if (!isSafeId(rule.id)) {
-      throw new Error(`${label}: invalid composed rule ID "${rule.id}"`);
-    }
-    validateRule(rule, sourceIndex);
-    return { sourceIndex, rule: cloneRule(rule), protected: true };
-  });
-}
-
-function presetRuleToReviewRule(
-  rule: ImmutablePresetRule,
-  host: string,
-): ResolvedReviewRule {
-  return cloneRule({
-    id: rule.id,
-    method: rule.method,
-    host,
-    path: rule.path,
-    action: rule.action,
-    requestPolicy:
-      rule.requestPolicy === undefined
-        ? undefined
-        : cloneRequestPolicy(rule.requestPolicy as RequestPolicy),
-  });
-}
-
-function exactHostsEqual(left: string, right: string): boolean {
-  if (!isExactNonPortHost(left) || !isExactNonPortHost(right)) return false;
-  return (
-    normalizeHost(left.replace(/\.$/, "")) ===
-    normalizeHost(right.replace(/\.$/, ""))
-  );
 }
 
 function cloneRule(rule: ReviewRule): ResolvedReviewRule {

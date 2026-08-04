@@ -157,16 +157,6 @@ export interface ReviewRule {
   requestPolicy?: RequestPolicy;
 }
 
-export interface ReviewRulesPreset {
-  id: string;
-  preset: string;
-  host?: string;
-  removeRules: string[];
-  addRules: ReviewRule[];
-}
-
-export type ReviewRuleSpec = ReviewRule | ReviewRulesPreset;
-
 /** Credential の値指定 */
 export type CredentialValSpec = { val: string } | { valCmd: string };
 
@@ -180,7 +170,7 @@ export interface CredentialRule {
 }
 
 export interface NetworkConfig {
-  reviewRules: ReviewRuleSpec[];
+  reviewRules: ReviewRule[];
   credentials: CredentialRule[];
   proxy: ProxyConfig;
   pendingTimeoutSeconds: number;

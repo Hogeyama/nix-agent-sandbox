@@ -18,7 +18,7 @@ import type {
   HostExecRule,
   MaskValueConfig,
   Profile,
-  ReviewRuleSpec,
+  ReviewRule,
 } from "./types.ts";
 
 export class ConfigValidationError extends Error {
@@ -187,12 +187,11 @@ function validateHostList(fieldPath: string, entries: string[]): string[] {
 
 function warnShadowedReviewRules(
   profileName: string,
-  rules: ReviewRuleSpec[],
+  rules: ReviewRule[],
 ): void {
   for (let i = 0; i < rules.length; i++) {
     const earlier = rules[i];
     if (
-      "action" in earlier &&
       earlier.method === undefined &&
       earlier.host === undefined &&
       earlier.path === undefined &&

@@ -7,6 +7,7 @@
       "host": "api.anthropic.com",
       "path": "/v1/messages",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "json",
         "maxBodyBytes": 33554432,
@@ -15,7 +16,7 @@
         "maxDecodedBytes": 33554432,
         "taggedUnions": [
           {
-            "at": "/**/content/*",
+            "at": "/messages/*/content/*",
             "discriminator": "type",
             "allowedTags": [
               "text",
@@ -35,7 +36,67 @@
             ]
           },
           {
-            "at": "/**/system/*",
+            "at": "/messages/*/content/*/content/*",
+            "discriminator": "type",
+            "allowedTags": [
+              "text",
+              "image",
+              "document",
+              "thinking",
+              "redacted_thinking",
+              "tool_use",
+              "tool_result",
+              "server_tool_use",
+              "web_search_tool_result",
+              "code_execution_tool_result",
+              "mcp_tool_use",
+              "mcp_tool_result",
+              "search_result",
+              "container_upload"
+            ]
+          },
+          {
+            "at": "/messages/*/content/*/source/content/*",
+            "discriminator": "type",
+            "allowedTags": [
+              "text",
+              "image",
+              "document",
+              "thinking",
+              "redacted_thinking",
+              "tool_use",
+              "tool_result",
+              "server_tool_use",
+              "web_search_tool_result",
+              "code_execution_tool_result",
+              "mcp_tool_use",
+              "mcp_tool_result",
+              "search_result",
+              "container_upload"
+            ]
+          },
+          {
+            "at": "/messages/*/content/*/content/*/source/content/*",
+            "discriminator": "type",
+            "allowedTags": [
+              "text",
+              "image",
+              "document",
+              "thinking",
+              "redacted_thinking",
+              "tool_use",
+              "tool_result",
+              "server_tool_use",
+              "web_search_tool_result",
+              "code_execution_tool_result",
+              "mcp_tool_use",
+              "mcp_tool_result",
+              "search_result",
+              "container_upload"
+            ]
+          },
+          {
+            "at": "/system/*",
             "discriminator": "type",
             "allowedTags": [
               "text",
@@ -64,8 +125,7 @@
             "encoding": "base64"
           }
         ]
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.messages.count-tokens",
@@ -73,6 +133,7 @@
       "host": "api.anthropic.com",
       "path": "/v1/messages/count_tokens",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "json",
         "maxBodyBytes": 33554432,
@@ -81,7 +142,7 @@
         "maxDecodedBytes": 33554432,
         "taggedUnions": [
           {
-            "at": "/**/content/*",
+            "at": "/messages/*/content/*",
             "discriminator": "type",
             "allowedTags": [
               "text",
@@ -101,7 +162,67 @@
             ]
           },
           {
-            "at": "/**/system/*",
+            "at": "/messages/*/content/*/content/*",
+            "discriminator": "type",
+            "allowedTags": [
+              "text",
+              "image",
+              "document",
+              "thinking",
+              "redacted_thinking",
+              "tool_use",
+              "tool_result",
+              "server_tool_use",
+              "web_search_tool_result",
+              "code_execution_tool_result",
+              "mcp_tool_use",
+              "mcp_tool_result",
+              "search_result",
+              "container_upload"
+            ]
+          },
+          {
+            "at": "/messages/*/content/*/source/content/*",
+            "discriminator": "type",
+            "allowedTags": [
+              "text",
+              "image",
+              "document",
+              "thinking",
+              "redacted_thinking",
+              "tool_use",
+              "tool_result",
+              "server_tool_use",
+              "web_search_tool_result",
+              "code_execution_tool_result",
+              "mcp_tool_use",
+              "mcp_tool_result",
+              "search_result",
+              "container_upload"
+            ]
+          },
+          {
+            "at": "/messages/*/content/*/content/*/source/content/*",
+            "discriminator": "type",
+            "allowedTags": [
+              "text",
+              "image",
+              "document",
+              "thinking",
+              "redacted_thinking",
+              "tool_use",
+              "tool_result",
+              "server_tool_use",
+              "web_search_tool_result",
+              "code_execution_tool_result",
+              "mcp_tool_use",
+              "mcp_tool_result",
+              "search_result",
+              "container_upload"
+            ]
+          },
+          {
+            "at": "/system/*",
             "discriminator": "type",
             "allowedTags": [
               "text",
@@ -130,8 +251,7 @@
             "encoding": "base64"
           }
         ]
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.bodyless.bootstrap",
@@ -139,10 +259,10 @@
       "host": "api.anthropic.com",
       "path": "/api/claude_cli/bootstrap",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "bodyless"
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.bodyless.penguin-mode",
@@ -150,10 +270,10 @@
       "host": "api.anthropic.com",
       "path": "/api/claude_code_penguin_mode",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "bodyless"
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.bodyless.policy-limits",
@@ -161,10 +281,10 @@
       "host": "api.anthropic.com",
       "path": "/api/claude_code/policy_limits",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "bodyless"
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.bodyless.settings",
@@ -172,10 +292,10 @@
       "host": "api.anthropic.com",
       "path": "/api/claude_code/settings",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "bodyless"
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.bodyless.mcp-registry",
@@ -183,10 +303,10 @@
       "host": "api.anthropic.com",
       "path": "/mcp-registry/v0/servers",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "bodyless"
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.bodyless.code-triggers",
@@ -194,10 +314,10 @@
       "host": "api.anthropic.com",
       "path": "/v1/code/triggers",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "bodyless"
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.bodyless.mcp-servers",
@@ -205,10 +325,10 @@
       "host": "api.anthropic.com",
       "path": "/v1/mcp_servers",
       "action": "allow",
+      "audit": true,
       "requestPolicy": {
         "kind": "bodyless"
-      },
-      "audit": true
+      }
     },
     {
       "id": "anthropic.default-deny",

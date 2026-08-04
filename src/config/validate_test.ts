@@ -9,7 +9,7 @@
  */
 
 import { expect, spyOn, test } from "bun:test";
-import type { Config, Profile, ReviewRuleSpec } from "./types.ts";
+import type { Config, Profile, ReviewRule } from "./types.ts";
 import {
   DEFAULT_AWS_CONFIG,
   DEFAULT_DBUS_CONFIG,
@@ -330,52 +330,41 @@ test("validate: hard-fails when an earlier rule shadows a policy rule", () => {
 
 test.each([
   [
-    "unknown preset removal",
+    "invalid rule ID",
     {
-      id: "anthropic",
-      preset: "anthropic@1",
-      removeRules: ["missing"],
-      addRules: [],
+      id: "Unsafe",
+      host: "api.anthropic.com",
+      action: "deny" as const,
     },
-    /unknown removeRules.*missing/,
+    /invalid rule ID/,
   ],
   [
-    "mismatched overlay host",
+    "rule ID overflow",
     {
-      id: "anthropic",
-      preset: "anthropic@1",
-      host: "gateway.example.com",
-      removeRules: [],
-      addRules: [
-        {
-          id: "company-bootstrap",
-          method: "GET",
-          host: "api.anthropic.com",
-          path: "/company/bootstrap",
-          action: "allow",
-          requestPolicy: { kind: "bodyless" },
-        },
-      ],
+      id: `a${"0".repeat(64)}`,
+      host: "api.anthropic.com",
+      action: "deny" as const,
     },
-    /host.*effective preset host/,
+    /invalid rule ID/,
   ],
   [
-    "composed preset ID overflow",
+    "policy rule without an exact endpoint",
     {
-      id: `a${"0".repeat(54)}`,
-      preset: "anthropic@1",
-      removeRules: [],
-      addRules: [],
+      id: "anthropic.messages.create",
+      method: "POST",
+      host: "api.anthropic.com",
+      action: "allow" as const,
+      requestPolicy: { kind: "bodyless" as const },
     },
-    /invalid composed rule ID/,
+    /requestPolicy requires exact/,
   ],
-])("validate: profile-qualifies %s", (_name, preset, expected) => {
+])("validate: profile-qualifies %s", (_name, rule, expected) => {
   const config = makeConfig({
     profiles: {
       release: makeProfile({
         network: {
           ...DEFAULT_NETWORK_CONFIG,
-          reviewRules: [preset as ReviewRuleSpec],
+          reviewRules: [rule as ReviewRule],
         },
       }),
     },
@@ -388,7 +377,7 @@ test.each([
   );
 });
 
-test("validate: accepts an overlay addition that inherits the preset host", () => {
+test("validate: accepts an addition placed before the terminal deny", () => {
   const config = makeConfig({
     profiles: {
       release: makeProfile({
@@ -396,19 +385,17 @@ test("validate: accepts an overlay addition that inherits the preset host", () =
           ...DEFAULT_NETWORK_CONFIG,
           reviewRules: [
             {
-              id: "anthropic",
-              preset: "anthropic@1",
+              id: "anthropic.company-bootstrap",
+              method: "GET",
               host: "gateway.example.com",
-              removeRules: [],
-              addRules: [
-                {
-                  id: "company-bootstrap",
-                  method: "GET",
-                  path: "/company/bootstrap",
-                  action: "allow",
-                  requestPolicy: { kind: "bodyless" },
-                },
-              ],
+              path: "/company/bootstrap",
+              action: "allow",
+              requestPolicy: { kind: "bodyless" },
+            },
+            {
+              id: "anthropic.default-deny",
+              host: "gateway.example.com",
+              action: "deny",
             },
           ],
         },
@@ -426,7 +413,7 @@ test("validate: accepts an overlay addition that inherits the preset host", () =
   expect(validateConfig(config)).toBe(config);
 });
 
-test("validate: profile-qualifies broad prior shadow of a preset", () => {
+test("validate: profile-qualifies a broad prior shadow of a named rule", () => {
   const config = makeConfig({
     profiles: {
       release: makeProfile({
@@ -435,10 +422,9 @@ test("validate: profile-qualifies broad prior shadow of a preset", () => {
           reviewRules: [
             { action: "review" },
             {
-              id: "anthropic",
-              preset: "anthropic@1",
-              removeRules: [],
-              addRules: [],
+              id: "anthropic.default-deny",
+              host: "api.anthropic.com",
+              action: "deny",
             },
           ],
         },
