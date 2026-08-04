@@ -20,6 +20,7 @@ import { FsService } from "../../services/fs.ts";
 import { ProcessService } from "../../services/process.ts";
 
 type Fs = Context.Tag.Service<typeof FsService>;
+type Proc = Context.Tag.Service<typeof ProcessService>;
 
 export interface MaskFsStartPlan {
   readonly binaryPath: string;
@@ -136,6 +137,19 @@ function isMounted(fs: Fs, mountpoint: string): Effect.Effect<boolean> {
   );
 }
 
+/**
+ * D1: タイムアウト診断に載せるログ末尾。読めなければ空文字。
+ *
+ * 待機ループから切り出してあるのは、ループ側が isMounted との合成 (D2) だから。
+ * 同じ本体で primitive を直接呼ぶと、ループの分岐を fake で単体テストできない。
+ */
+function readLogTail(fs: Fs, logFile: string): Effect.Effect<string> {
+  return fs.readFile(logFile).pipe(
+    Effect.map((s) => s.slice(-2000)),
+    Effect.catchAllCause(() => Effect.succeed("")),
+  );
+}
+
 function defaultWaitReady(
   fs: Fs,
   plan: MaskFsStartPlan,
@@ -146,16 +160,44 @@ function defaultWaitReady(
       if (yield* isMounted(fs, plan.mountpoint)) return;
       yield* Effect.sleep(plan.pollIntervalMs);
     }
-    const logTail = yield* fs.readFile(plan.logFile).pipe(
-      Effect.map((s) => s.slice(-2000)),
-      Effect.catchAllCause(() => Effect.succeed("")),
-    );
+    const logTail = yield* readLogTail(fs, plan.logFile);
     yield* Effect.fail(
       new Error(
         `[nas] mask: maskfs mount did not become ready within ${plan.timeoutMs}ms at ${plan.mountpoint}\n${logTail}`,
       ),
     );
   });
+}
+
+/** D1: マウントポイントとその親を 0700 で用意する。 */
+function createMountpoint(
+  fs: Fs,
+  mountpoint: string,
+): Effect.Effect<void, unknown> {
+  return Effect.gen(function* () {
+    yield* fs.mkdir(path.dirname(mountpoint), {
+      recursive: true,
+      mode: 0o700,
+    });
+    yield* fs.mkdir(mountpoint, { recursive: true, mode: 0o700 });
+  });
+}
+
+/** D1: maskfs デーモンを起動する。秘密値は引数ではなく stdin で渡す。 */
+function spawnMaskFs(proc: Proc, plan: MaskFsStartPlan) {
+  return proc.spawn(
+    plan.binaryPath,
+    [
+      plan.sourceDir,
+      plan.mountpoint,
+      `--write-policy=${plan.writePolicy}`,
+      "--allow-other",
+    ],
+    {
+      logFile: plan.logFile,
+      stdinData: plan.secretsFrame,
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -175,29 +217,13 @@ export const MaskFsServiceLive: Layer.Layer<
     return MaskFsService.of({
       startMaskFs: (plan, options) =>
         Effect.gen(function* () {
-          yield* fs.mkdir(path.dirname(plan.mountpoint), {
-            recursive: true,
-            mode: 0o700,
-          });
-          yield* fs.mkdir(plan.mountpoint, { recursive: true, mode: 0o700 });
+          yield* createMountpoint(fs, plan.mountpoint);
 
           const preflight = options?.preflight ?? (() => defaultPreflight(fs));
           yield* preflight();
 
           const spawnHandle = yield* Effect.acquireRelease(
-            proc.spawn(
-              plan.binaryPath,
-              [
-                plan.sourceDir,
-                plan.mountpoint,
-                `--write-policy=${plan.writePolicy}`,
-                "--allow-other",
-              ],
-              {
-                logFile: plan.logFile,
-                stdinData: plan.secretsFrame,
-              },
-            ),
+            spawnMaskFs(proc, plan),
             (handle) =>
               proc.exec(["fusermount3", "-u", plan.mountpoint]).pipe(
                 // fusermount3 -u may fail (already unmounted, race, etc.) —

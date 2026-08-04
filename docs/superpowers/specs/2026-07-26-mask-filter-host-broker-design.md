@@ -300,14 +300,14 @@ Serve mode must never write stream-derived bytes to its own stdout or stderr.
 `<bytes>`" diagnostic would write plaintext to a persistent host file. The log
 is created `0600` in the `0700` session directory and removed on scope release.
 
-(An earlier draft justified this by saying `MaskFsService.defaultWaitReady`
-splices the log tail into user-visible errors. That is false for this path:
-`defaultWaitReady` is private to `maskfs_service.ts` and takes a
-`MaskFsStartPlan`. MaskFilterService uses `proc.waitForFileExists`, which reports
-only a timeout with no log content — meaning a serve-daemon startup failure
-currently gives the operator *no* diagnostic at all. Wiring an equivalent log
-splice for readiness failures is worthwhile, but the confidentiality requirement
-above stands on its own.)
+The invariant is also what makes the log quotable. When the readiness wait times
+out without a socket, `MaskFilterService` appends the tail of that log to the
+error the operator sees, so a broker that exits before binding (unreadable
+secrets file, corrupt frame, address already in use) names its own cause instead
+of leaving behind a bare "timed out waiting for file". Since everything serve
+mode writes to the log is a constant diagnostic string, the spliced text cannot
+carry stream-derived plaintext. Relaxing the output invariant would break that
+splice as well as the confidentiality requirement, which stands on its own.
 
 ### Drain semantics
 
