@@ -74,6 +74,21 @@ function writeWrapperScript(): string {
   return p;
 }
 
+/**
+ * process.env のコピーから NAS_MASK_SUPERVISED を取り除いたもの。
+ *
+ * このテストスイート自体が既に mask-filter 下のシェル (nas セッション) で
+ * 走っていることがある。その場合 process.env に NAS_MASK_SUPERVISED=1 が
+ * 乗っており、ラッパーの入れ子抑止テストがそれをそのまま継承すると、外側の
+ * 呼び出しが「既に supervise 済み」と誤認して素通りし、マスクも supervisor
+ * の層数も検証できなくなる。
+ */
+function envWithoutSupervisionMarker(): Record<string, string | undefined> {
+  const env = { ...process.env };
+  delete env.NAS_MASK_SUPERVISED;
+  return env;
+}
+
 async function runFilter(input: string, secrets: string[]): Promise<string> {
   if (!binaryPath) throw new Error("nas-mask-filter binary not found");
   const secretsFile = writeSecretsFile(secrets);
@@ -786,7 +801,7 @@ describe("nas-mask-filter --supervise", () => {
           stdout: "pipe",
           stderr: "pipe",
           env: {
-            ...process.env,
+            ...envWithoutSupervisionMarker(),
             NAS_MASK_FILTER: binaryPath,
             NAS_MASK_SOCKET: sockPath,
           },
@@ -845,7 +860,7 @@ echo "layers=$n"
         stdout: "pipe",
         stderr: "pipe",
         env: {
-          ...process.env,
+          ...envWithoutSupervisionMarker(),
           NAS_MASK_FILTER: binaryPath,
           NAS_MASK_SOCKET: sockPath,
         },
