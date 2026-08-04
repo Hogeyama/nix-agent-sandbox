@@ -6,22 +6,26 @@ import { resolveMaskFilterBinPath } from "./mask_filter_path.ts";
 import { encodeMaskSecrets } from "./secrets_frame.ts";
 
 /**
- * 「読まずに書き続ける」クライアント (STALLING_CLIENT_PY) は TypeScript では
- * 書けないので python3 で用意する。flake.nix の devShell で宣言してあるが、
- * devShell の外で走らせる場合もあるので存在を確かめ、無ければ **skip として
- * 報告する** (黙って return すると、資源上限の唯一の証明が消えたことに
- * 誰も気付けないまま suite が緑のままになる)。
+ * このスイートの前提判定は、欠けている前提を例外なく **skip として報告する**。
+ * 前提が欠けたときに黙って return すると、そのテストが何も検証しなかった事実が
+ * 出力から消え、suite は緑のままになる。バイナリ未ビルドなら 30 件近くが、
+ * python3 や /proc が無ければ資源上限の唯一の証明が、そうやって静かに失われる。
+ * 前提は describe の外 (トップレベル await) で解決し、各テストの `skipIf` に渡す。
+ *
+ * 前提は 3 つ:
+ * - `binaryPath`: `cd src/mask-filter && zig build` の生成物。
+ * - `hasPython3`: 「読まずに書き続ける」クライアント (STALLING_CLIENT_PY) は
+ *   TypeScript では書けないので python3 で用意する。flake.nix の devShell で
+ *   宣言してあるが、devShell の外で走らせる場合もあるので存在を確かめる。
+ * - `hasProcStatus`: サーバの VmRSS を /proc から読むので Linux でしか動かない。
  */
+const binaryPath = await resolveMaskFilterBinPath();
 const hasPython3 = Bun.which("python3") !== null;
-
-/** サーバの VmRSS を /proc から読むので Linux でしか動かない。 */
 const hasProcStatus = fs.existsSync("/proc/self/status");
 
-let binaryPath: string | null = null;
 let tmpDir: string;
 
-beforeAll(async () => {
-  binaryPath = await resolveMaskFilterBinPath();
+beforeAll(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mask-filter-test-"));
 });
 
@@ -387,32 +391,27 @@ function serverRssKb(pid: number): number {
 }
 
 describe("nas-mask-filter binary", () => {
-  test("masks single secret", async () => {
-    if (!binaryPath) return; // skip if not built
+  test.skipIf(!binaryPath)("masks single secret", async () => {
     const result = await runFilter("password=hunter2 done", ["hunter2"]);
     expect(result).toBe("password=******* done");
   });
 
-  test("masks multiple secrets", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("masks multiple secrets", async () => {
     const result = await runFilter("a=tok1 b=tok22 c=tok1", ["tok1", "tok22"]);
     expect(result).toBe("a=**** b=***** c=****");
   });
 
-  test("passes through when no secrets match", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("passes through when no secrets match", async () => {
     const result = await runFilter("nothing to mask here", ["nonexistent"]);
     expect(result).toBe("nothing to mask here");
   });
 
-  test("handles empty input", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("handles empty input", async () => {
     const result = await runFilter("", ["secret"]);
     expect(result).toBe("");
   });
 
-  test("masks secret spanning large input", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("masks secret spanning large input", async () => {
     // Create input larger than BUF_SIZE (64KB) with secret near the boundary
     const padding = "x".repeat(65530);
     const input = `${padding}SECRET_VALUE${padding}`;
@@ -424,67 +423,70 @@ describe("nas-mask-filter binary", () => {
 });
 
 describe("nas-mask-filter --supervise", () => {
-  test("masks supervised output through the socket", async () => {
-    if (!binaryPath) return;
-    const r = await runSupervisedOverSocket("echo pw=hunter2", ["hunter2"]);
-    expect(r.stdout).toBe("pw=*******\n");
-    expect(r.exitCode).toBe(0);
-  });
+  test.skipIf(!binaryPath)(
+    "masks supervised output through the socket",
+    async () => {
+      const r = await runSupervisedOverSocket("echo pw=hunter2", ["hunter2"]);
+      expect(r.stdout).toBe("pw=*******\n");
+      expect(r.exitCode).toBe(0);
+    },
+  );
 
-  test("masks stderr of the supervised child", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("masks stderr of the supervised child", async () => {
     const r = await runSupervisedOverSocket("echo pw=hunter2 >&2", ["hunter2"]);
     expect(r.stderr).toBe("pw=*******\n");
     expect(r.stdout).toBe("");
   });
 
-  test("propagates the child exit code", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("propagates the child exit code", async () => {
     const r = await runSupervisedOverSocket("exit 42", ["hunter2"]);
     expect(r.exitCode).toBe(42);
   });
 
-  test("maps death by signal to 128+signo", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("maps death by signal to 128+signo", async () => {
     const r = await runSupervisedOverSocket("kill -TERM $$", ["hunter2"]);
     expect(r.exitCode).toBe(128 + 15);
   });
 
-  test("--argv0 sets the child's argv[0]", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("--argv0 sets the child's argv[0]", async () => {
     const r = await runSupervisedOverSocket('echo "argv0=$0"', ["hunter2"], {
       argv0: "-bash",
     });
     expect(r.stdout).toBe("argv0=-bash\n");
   });
 
-  test("preserves output larger than the pipe buffer", async () => {
-    if (!binaryPath) return;
-    const r = await runSupervisedOverSocket(
-      "for i in $(seq 5000); do echo line$i; done",
-      ["hunter2"],
-    );
-    const lines = r.stdout.split("\n").filter(Boolean);
-    expect(lines.length).toBe(5000);
-    expect(lines[4999]).toBe("line5000");
-    expect(r.exitCode).toBe(0);
-  });
+  test.skipIf(!binaryPath)(
+    "preserves output larger than the pipe buffer",
+    async () => {
+      const r = await runSupervisedOverSocket(
+        "for i in $(seq 5000); do echo line$i; done",
+        ["hunter2"],
+      );
+      const lines = r.stdout.split("\n").filter(Boolean);
+      expect(lines.length).toBe(5000);
+      expect(lines[4999]).toBe("line5000");
+      expect(r.exitCode).toBe(0);
+    },
+  );
 
   // constraint 2 の回帰テスト。キューが残っているうちに half-close すると、
   // その後の write が EPIPE になって全出力が捨てられ、子が 0 で終わっていても
   // 121 になる。パイプが EOF になった時点でまだ数 MB がキューと socket の
   // 往復に残っている量を流して、末尾まで欠けないことを見る。
-  test("preserves multi-megabyte output through the socket", async () => {
-    if (!binaryPath) return;
-    const r = await runSupervisedOverSocket(
-      "for i in $(seq 200000); do echo line$i; done",
-      ["hunter2"],
-    );
-    const lines = r.stdout.split("\n").filter(Boolean);
-    expect(lines.length).toBe(200000);
-    expect(lines[199999]).toBe("line200000");
-    expect(r.exitCode).toBe(0);
-  }, 60000);
+  test.skipIf(!binaryPath)(
+    "preserves multi-megabyte output through the socket",
+    async () => {
+      const r = await runSupervisedOverSocket(
+        "for i in $(seq 200000); do echo line$i; done",
+        ["hunter2"],
+      );
+      const lines = r.stdout.split("\n").filter(Boolean);
+      expect(lines.length).toBe(200000);
+      expect(lines[199999]).toBe("line200000");
+      expect(r.exitCode).toBe(0);
+    },
+    60000,
+  );
 
   // 上の「量を流すだけ」のテストでは constraint 2 の失敗経路に**届かない**。
   // 読み手が遅れていなければ 1 周回ごとに送信キューを丸ごと吐き切れてしまい、
@@ -498,58 +500,61 @@ describe("nas-mask-filter --supervise", () => {
   // 以降の write が EPIPE になり、残りが丸ごと消える。上と同じ壊し方を入れた
   // 実測では 200000 行中 188295 行しか届かず、しかも exit は 0 だった
   // (= 呼び出し元は欠落に気付けない)。だから遅い読み手が要る。
-  test("preserves the tail when the caller reads slowly", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("slow");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const proc = Bun.spawn(
-        [
-          binaryPath,
-          "--supervise",
-          "--socket",
-          sockPath,
-          "--",
-          realBashPath(),
-          "-c",
-          "for i in $(seq 200000); do echo line$i pw=hunter2; done",
-        ],
-        {
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-          env: { ...process.env },
-        },
-      );
+  test.skipIf(!binaryPath)(
+    "preserves the tail when the caller reads slowly",
+    async () => {
+      const sockPath = shortSockPath("slow");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const proc = Bun.spawn(
+          [
+            binaryPath!,
+            "--supervise",
+            "--socket",
+            sockPath,
+            "--",
+            realBashPath(),
+            "-c",
+            "for i in $(seq 200000); do echo line$i pw=hunter2; done",
+          ],
+          {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: { ...process.env },
+          },
+        );
 
-      // 受信のたびに同期的に止まる「遅い読み手」。Bun のイベントループごと
-      // 止めないとカーネルのパイプバッファが埋まらず、詰まりが再現しない。
-      const reader = proc.stdout.getReader();
-      const chunks: Uint8Array[] = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        const until = Date.now() + 15;
-        while (Date.now() < until) {
-          // 同期ビジーウェイト。
+        // 受信のたびに同期的に止まる「遅い読み手」。Bun のイベントループごと
+        // 止めないとカーネルのパイプバッファが埋まらず、詰まりが再現しない。
+        const reader = proc.stdout.getReader();
+        const chunks: Uint8Array[] = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          const until = Date.now() + 15;
+          while (Date.now() < until) {
+            // 同期ビジーウェイト。
+          }
         }
-      }
 
-      const lines = Buffer.concat(chunks)
-        .toString()
-        .split("\n")
-        .filter(Boolean);
-      expect(await proc.exited).toBe(0);
-      expect(lines.length).toBe(200000);
-      expect(lines[199999]).toBe("line200000 pw=*******");
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 60000);
+        const lines = Buffer.concat(chunks)
+          .toString()
+          .split("\n")
+          .filter(Boolean);
+        expect(await proc.exited).toBe(0);
+        expect(lines.length).toBe(200000);
+        expect(lines[199999]).toBe("line200000 pw=*******");
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    60000,
+  );
 
   // 本命の回帰テスト。プロセス置換方式では、フィルタが出力先パイプを握ったまま
   // bash より長く生き残るため、「子プロセスの終了」を完了シグナルにしている
@@ -558,32 +563,34 @@ describe("nas-mask-filter --supervise", () => {
   //
   // デーモンは 1 本だけ起動して使い回す。呼び出しごとに起動すると、この 1 つの
   // テストで 50 回の spawn/kill を回すことになる。
-  test("never loses output across repeated short runs", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("repeat");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const mismatched: string[] = [];
-      for (let i = 0; i < 50; i++) {
-        const r = await runSupervisedOverSocket("echo hoge; echo 71", [], {
-          sockPath,
-        });
-        if (r.stdout !== "hoge\n71\n")
-          mismatched.push(JSON.stringify(r.stdout));
+  test.skipIf(!binaryPath)(
+    "never loses output across repeated short runs",
+    async () => {
+      const sockPath = shortSockPath("repeat");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const mismatched: string[] = [];
+        for (let i = 0; i < 50; i++) {
+          const r = await runSupervisedOverSocket("echo hoge; echo 71", [], {
+            sockPath,
+          });
+          if (r.stdout !== "hoge\n71\n")
+            mismatched.push(JSON.stringify(r.stdout));
+        }
+        expect(mismatched).toEqual([]);
+        expect(serveAlive(server)).toBe(true);
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
       }
-      expect(mismatched).toEqual([]);
-      expect(serveAlive(server)).toBe(true);
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-    await expectServeSilent(server);
-  }, 60000);
+      await expectServeSilent(server);
+    },
+    60000,
+  );
 
-  test("passes stdin through to the child", async () => {
-    if (!binaryPath) return;
+  test.skipIf(!binaryPath)("passes stdin through to the child", async () => {
     const r = await runSupervisedOverSocket(
       'read -r x; echo "got=$x"',
       ["hunter2"],
@@ -596,164 +603,84 @@ describe("nas-mask-filter --supervise", () => {
   // 子は呼び出し元から見て孫プロセスになるため、呼び出し元がスーパーバイザの
   // pid だけを kill しても子に届くよう転送する必要がある。転送後も drain を
   // 続けるので、シグナルハンドラが出した出力まで取りこぼさない。
-  test("forwards SIGTERM to the child and still drains its output", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("sigterm");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    const readyFile = path.join(tmpDir, `sigterm-ready-${secretsFileSeq}`);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const proc = Bun.spawn(
-        [
-          binaryPath,
-          "--supervise",
-          "--socket",
-          sockPath,
-          "--",
-          realBashPath(),
-          "-c",
-          // bash はフォアグラウンドのコマンドが終わるまで trap を保留するため、
-          // 長い sleep 一発ではなく短い sleep のループで待つ。
-          `trap 'echo got-term; exit 7' TERM; : > "${readyFile}"; while :; do sleep 0.05; done`,
-        ],
-        {
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-          env: { ...process.env },
-        },
-      );
+  test.skipIf(!binaryPath)(
+    "forwards SIGTERM to the child and still drains its output",
+    async () => {
+      const sockPath = shortSockPath("sigterm");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      const readyFile = path.join(tmpDir, `sigterm-ready-${secretsFileSeq}`);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const proc = Bun.spawn(
+          [
+            binaryPath!,
+            "--supervise",
+            "--socket",
+            sockPath,
+            "--",
+            realBashPath(),
+            "-c",
+            // bash はフォアグラウンドのコマンドが終わるまで trap を保留するため、
+            // 長い sleep 一発ではなく短い sleep のループで待つ。
+            `trap 'echo got-term; exit 7' TERM; : > "${readyFile}"; while :; do sleep 0.05; done`,
+          ],
+          {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: { ...process.env },
+          },
+        );
 
-      // trap 設置前に kill するとテストが不安定になるので、準備完了を待つ。
-      for (let i = 0; i < 200 && !fs.existsSync(readyFile); i++) {
-        await Bun.sleep(25);
+        // trap 設置前に kill するとテストが不安定になるので、準備完了を待つ。
+        for (let i = 0; i < 200 && !fs.existsSync(readyFile); i++) {
+          await Bun.sleep(25);
+        }
+        expect(fs.existsSync(readyFile)).toBe(true);
+        proc.kill("SIGTERM");
+
+        const stdout = await new Response(proc.stdout).text();
+        const exitCode = await proc.exited;
+        expect(stdout).toBe("got-term\n");
+        expect(exitCode).toBe(7);
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
       }
-      expect(fs.existsSync(readyFile)).toBe(true);
-      proc.kill("SIGTERM");
-
-      const stdout = await new Response(proc.stdout).text();
-      const exitCode = await proc.exited;
-      expect(stdout).toBe("got-term\n");
-      expect(exitCode).toBe(7);
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 15000);
+    },
+    15000,
+  );
 
   // fd を引き継いだまま生き残るバックグラウンドプロセスがいても、EOF を
   // 無条件に待たずアイドルタイムアウトで抜けること (呼び出し元をハングさせない)。
   // 終了判定の phase 2 がこれのために存在する。
-  test("does not hang on a background process holding the pipe", async () => {
-    if (!binaryPath) return;
-    const started = Date.now();
-    const r = await runSupervisedOverSocket(
-      "echo before; (sleep 30) & echo after",
-      ["hunter2"],
-    );
-    const elapsed = Date.now() - started;
-    expect(r.stdout).toBe("before\nafter\n");
-    expect(elapsed).toBeLessThan(5000);
-  }, 15000);
+  test.skipIf(!binaryPath)(
+    "does not hang on a background process holding the pipe",
+    async () => {
+      const started = Date.now();
+      const r = await runSupervisedOverSocket(
+        "echo before; (sleep 30) & echo after",
+        ["hunter2"],
+      );
+      const elapsed = Date.now() - started;
+      expect(r.stdout).toBe("before\nafter\n");
+      expect(elapsed).toBeLessThan(5000);
+    },
+    15000,
+  );
 
   // 到達できないブローカーで子を起動してはならない。起動してしまうと、
   // マスクできない出力を持ったプロセスが動き出す。
-  test("fails closed when the broker is absent", async () => {
-    if (!binaryPath) return;
-    const proc = Bun.spawn(
-      [
-        binaryPath,
-        "--supervise",
-        "--socket",
-        "/tmp/nas-mf-absent.sock",
-        "--",
-        realBashPath(),
-        "-c",
-        "echo pw=hunter2",
-      ],
-      {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env },
-      },
-    );
-    const stdout = await new Response(proc.stdout).text();
-    expect(await proc.exited).toBe(121);
-    expect(stdout).toBe("");
-  });
-
-  // 途中切断は再試行しない。UDS は在庫中のデータを落とさないので、途中で
-  // 切れたということはピアが死んだということであり、繋ぎ直す先が無い。
-  // 新しい接続は overlap 状態が空から始まるので、継ぎ目を跨ぐシークレットを
-  // 取りこぼしうるという理由もある。
-  test("fails closed when the broker dies mid-run", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("mid");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
+  test.skipIf(!binaryPath)(
+    "fails closed when the broker is absent",
+    async () => {
       const proc = Bun.spawn(
         [
-          binaryPath,
+          binaryPath!,
           "--supervise",
           "--socket",
-          sockPath,
-          "--",
-          realBashPath(),
-          "-c",
-          "sleep 0.5; echo pw=hunter2",
-        ],
-        {
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-          env: { ...process.env },
-        },
-      );
-      await Bun.sleep(150);
-      server.kill();
-      const stdout = await new Response(proc.stdout).text();
-      expect(await proc.exited).toBe(121);
-      expect(stdout).not.toContain("hunter2");
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 15000);
-
-  // サーバは MAX_CONNECTIONS を超えた接続を accept して即 close する
-  // (poll から外すだけだと kernel が backlog へ接続を完了させてしまい、
-  // クライアントが応答も拒否も得られないまま待たされるため)。したがって
-  // 上限超過のリレーが観測するのは「接続はできたが即座にきれいな EOF」で、
-  // これを「ストリーム完了」と取り違えると 1 バイトも中継しないまま exit 0 に
-  // なる。half-close 前の EOF は切り捨てとして 121 にしなければならない。
-  //
-  // 実サーバで 512 本積むのは遅いので、同じ挙動 (accept して即 close) の
-  // listener を立てて経路だけを再現する。
-  test("fails closed when the broker closes the connection immediately", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("overcap");
-    const server = Bun.listen({
-      unix: sockPath,
-      socket: {
-        open(s) {
-          s.end();
-        },
-        data() {},
-        close() {},
-        error() {},
-      },
-    });
-    try {
-      const proc = Bun.spawn(
-        [
-          binaryPath,
-          "--supervise",
-          "--socket",
-          sockPath,
+          "/tmp/nas-mf-absent.sock",
           "--",
           realBashPath(),
           "-c",
@@ -769,11 +696,105 @@ describe("nas-mask-filter --supervise", () => {
       const stdout = await new Response(proc.stdout).text();
       expect(await proc.exited).toBe(121);
       expect(stdout).toBe("");
-    } finally {
-      server.stop(true);
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 15000);
+    },
+  );
+
+  // 途中切断は再試行しない。UDS は在庫中のデータを落とさないので、途中で
+  // 切れたということはピアが死んだということであり、繋ぎ直す先が無い。
+  // 新しい接続は overlap 状態が空から始まるので、継ぎ目を跨ぐシークレットを
+  // 取りこぼしうるという理由もある。
+  test.skipIf(!binaryPath)(
+    "fails closed when the broker dies mid-run",
+    async () => {
+      const sockPath = shortSockPath("mid");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const proc = Bun.spawn(
+          [
+            binaryPath!,
+            "--supervise",
+            "--socket",
+            sockPath,
+            "--",
+            realBashPath(),
+            "-c",
+            "sleep 0.5; echo pw=hunter2",
+          ],
+          {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: { ...process.env },
+          },
+        );
+        await Bun.sleep(150);
+        server.kill();
+        const stdout = await new Response(proc.stdout).text();
+        expect(await proc.exited).toBe(121);
+        expect(stdout).not.toContain("hunter2");
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    15000,
+  );
+
+  // サーバは MAX_CONNECTIONS を超えた接続を accept して即 close する
+  // (poll から外すだけだと kernel が backlog へ接続を完了させてしまい、
+  // クライアントが応答も拒否も得られないまま待たされるため)。したがって
+  // 上限超過のリレーが観測するのは「接続はできたが即座にきれいな EOF」で、
+  // これを「ストリーム完了」と取り違えると 1 バイトも中継しないまま exit 0 に
+  // なる。half-close 前の EOF は切り捨てとして 121 にしなければならない。
+  //
+  // 実サーバで 512 本積むのは遅いので、同じ挙動 (accept して即 close) の
+  // listener を立てて経路だけを再現する。
+  test.skipIf(!binaryPath)(
+    "fails closed when the broker closes the connection immediately",
+    async () => {
+      const sockPath = shortSockPath("overcap");
+      const server = Bun.listen({
+        unix: sockPath,
+        socket: {
+          open(s) {
+            s.end();
+          },
+          data() {},
+          close() {},
+          error() {},
+        },
+      });
+      try {
+        const proc = Bun.spawn(
+          [
+            binaryPath!,
+            "--supervise",
+            "--socket",
+            sockPath,
+            "--",
+            realBashPath(),
+            "-c",
+            "echo pw=hunter2",
+          ],
+          {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: { ...process.env },
+          },
+        );
+        const stdout = await new Response(proc.stdout).text();
+        expect(await proc.exited).toBe(121);
+        expect(stdout).toBe("");
+      } finally {
+        server.stop(true);
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    15000,
+  );
 
   // コンテナ内の bash はすべてラッパーなので、supervise 下で起動した bash も
   // またラッパーになる。抑止しないと ./configure や make の各レシピ行、再帰
@@ -783,41 +804,44 @@ describe("nas-mask-filter --supervise", () => {
   // 検証はマスク結果ではなくマーカーを見る。マスクは冪等 (* はシークレット
   // ではない) なので、層が 1 つでも 2 つでも stdout は同一になり、出力を見ても
   // 回帰を検出できない。
-  test("supervises exactly one layer when wrappers nest", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("nest");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const wrapper = writeWrapperScript();
-      const proc = Bun.spawn(
-        [
-          wrapper,
-          "-c",
-          `${wrapper} -c 'echo inner=[\${NAS_MASK_SUPERVISED:-unset}] pw=hunter2'`,
-        ],
-        {
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-          env: {
-            ...envWithoutSupervisionMarker(),
-            NAS_MASK_FILTER: binaryPath,
-            NAS_MASK_SOCKET: sockPath,
+  test.skipIf(!binaryPath)(
+    "supervises exactly one layer when wrappers nest",
+    async () => {
+      const sockPath = shortSockPath("nest");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const wrapper = writeWrapperScript();
+        const proc = Bun.spawn(
+          [
+            wrapper,
+            "-c",
+            `${wrapper} -c 'echo inner=[\${NAS_MASK_SUPERVISED:-unset}] pw=hunter2'`,
+          ],
+          {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: {
+              ...envWithoutSupervisionMarker(),
+              NAS_MASK_FILTER: binaryPath!,
+              NAS_MASK_SOCKET: sockPath,
+            },
           },
-        },
-      );
-      const stdout = await new Response(proc.stdout).text();
-      expect(await proc.exited).toBe(0);
-      // マーカーは外側の層が supervise したことを、マスクは内側のシェルの
-      // 出力がその層を通ったことを示す。
-      expect(stdout).toBe("inner=[1] pw=*******\n");
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 15000);
+        );
+        const stdout = await new Response(proc.stdout).text();
+        expect(await proc.exited).toBe(0);
+        // マーカーは外側の層が supervise したことを、マスクは内側のシェルの
+        // 出力がその層を通ったことを示す。
+        expect(stdout).toBe("inner=[1] pw=*******\n");
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    15000,
+  );
 
   // 上のテストはマーカーだけを見るので、**ラッパー側**のガードを外しても通る:
   // 内側の supervisor も同じマーカーを子へ渡すため、出力は層が 1 つのときと
@@ -844,107 +868,116 @@ done
 echo "layers=$n"
 `;
 
-  test("does not stack a second supervisor on the nested wrapper", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("layers");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const wrapper = writeWrapperScript();
-      // 数えるスクリプトは**ラッパー経由で**起動する。bash.real を直接叩くと
-      // ガードごと素通りして何も検証しないことになる。
-      const script = path.join(tmpDir, `layers-${secretsFileSeq++}.sh`);
-      fs.writeFileSync(script, COUNT_LAYERS_SCRIPT);
-      const proc = Bun.spawn([wrapper, "-c", `${wrapper} ${script}`], {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-        env: {
-          ...envWithoutSupervisionMarker(),
-          NAS_MASK_FILTER: binaryPath,
-          NAS_MASK_SOCKET: sockPath,
-        },
-      });
-      const stdout = await new Response(proc.stdout).text();
-      expect(await proc.exited).toBe(0);
-      expect(stdout).toBe("layers=1\n");
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 15000);
+  test.skipIf(!binaryPath)(
+    "does not stack a second supervisor on the nested wrapper",
+    async () => {
+      const sockPath = shortSockPath("layers");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const wrapper = writeWrapperScript();
+        // 数えるスクリプトは**ラッパー経由で**起動する。bash.real を直接叩くと
+        // ガードごと素通りして何も検証しないことになる。
+        const script = path.join(tmpDir, `layers-${secretsFileSeq++}.sh`);
+        fs.writeFileSync(script, COUNT_LAYERS_SCRIPT);
+        const proc = Bun.spawn([wrapper, "-c", `${wrapper} ${script}`], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: {
+            ...envWithoutSupervisionMarker(),
+            NAS_MASK_FILTER: binaryPath!,
+            NAS_MASK_SOCKET: sockPath,
+          },
+        });
+        const stdout = await new Response(proc.stdout).text();
+        expect(await proc.exited).toBe(0);
+        expect(stdout).toBe("layers=1\n");
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    15000,
+  );
 
   // `cmd | head` は読み手が先に去るごく普通のパイプラインで、出力先 fd への
   // write が EPIPE になる。これはマスクの失敗ではない (出力先へ流すのは
   // サーバが返したマスク済みバイトだけで、抑止すべき未マスク出力は残っていない)
   // ので、診断も 121 も出してはならない。終了ステータスはスーパーバイザが
   // いないときと同じ — 子が SIGPIPE で死ねば 141 — でなければならない。
-  test("exits cleanly when the caller stops reading (cmd | head)", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("epipe");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const bash = realBashPath();
-      // スーパーバイザの終了コードは stderr へ出す (パイプの先ではないので
-      // head には食われない)。PIPESTATUS を使わないのは、その綴りが
-      // TypeScript のテンプレートリテラルと衝突して lint に引っかかるため。
-      const script =
-        `{ "${binaryPath}" --supervise --socket "${sockPath}" -- ` +
-        `"${bash}" -c 'seq 200000'; echo "supervisor=$?" >&2; } | head -2`;
-      const proc = Bun.spawn([bash, "-c", script], {
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      expect(await proc.exited).toBe(0);
-      expect(stdout).toBe("1\n2\n");
-      // 「出力抑止」の診断が出ないこと、121 にならないこと。
-      expect(stderr).not.toContain("output suppressed");
-      expect(stderr).not.toContain("supervisor=121");
-      // 子が SIGPIPE で死ぬので、スーパーバイザなしの `seq | head` と同じ 141。
-      expect(stderr).toContain("supervisor=141");
-      expect(serveAlive(server)).toBe(true);
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 30000);
+  test.skipIf(!binaryPath)(
+    "exits cleanly when the caller stops reading (cmd | head)",
+    async () => {
+      const sockPath = shortSockPath("epipe");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const bash = realBashPath();
+        // スーパーバイザの終了コードは stderr へ出す (パイプの先ではないので
+        // head には食われない)。PIPESTATUS を使わないのは、その綴りが
+        // TypeScript のテンプレートリテラルと衝突して lint に引っかかるため。
+        const script =
+          `{ "${binaryPath}" --supervise --socket "${sockPath}" -- ` +
+          `"${bash}" -c 'seq 200000'; echo "supervisor=$?" >&2; } | head -2`;
+        const proc = Bun.spawn([bash, "-c", script], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [stdout, stderr] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        expect(await proc.exited).toBe(0);
+        expect(stdout).toBe("1\n2\n");
+        // 「出力抑止」の診断が出ないこと、121 にならないこと。
+        expect(stderr).not.toContain("output suppressed");
+        expect(stderr).not.toContain("supervisor=121");
+        // 子が SIGPIPE で死ぬので、スーパーバイザなしの `seq | head` と同じ 141。
+        expect(stderr).toContain("supervisor=141");
+        expect(serveAlive(server)).toBe(true);
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    30000,
+  );
 
   // 出力先が閉じたストリームのパイプを読み捨てするだけだと、終わらない子
   // (`yes`) を抱えたままスーパーバイザが永遠に回り、呼び出し元がハングする。
   // 読み出し端を閉じて子に通常どおり SIGPIPE を見せる必要がある。
-  test("does not hang when an unbounded child outlives the reader", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("yeshead");
-    const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const bash = realBashPath();
-      const proc = Bun.spawn(
-        [
-          bash,
-          "-c",
-          `"${binaryPath}" --supervise --socket "${sockPath}" -- ` +
-            `"${bash}" -c 'yes' | head -2`,
-        ],
-        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-      );
-      const stdout = await new Response(proc.stdout).text();
-      expect(await proc.exited).toBe(0);
-      expect(stdout).toBe("y\ny\n");
-    } finally {
-      server.kill();
-      await server.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-  }, 30000);
+  test.skipIf(!binaryPath)(
+    "does not hang when an unbounded child outlives the reader",
+    async () => {
+      const sockPath = shortSockPath("yeshead");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const bash = realBashPath();
+        const proc = Bun.spawn(
+          [
+            bash,
+            "-c",
+            `"${binaryPath}" --supervise --socket "${sockPath}" -- ` +
+              `"${bash}" -c 'yes' | head -2`,
+          ],
+          { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+        );
+        const stdout = await new Response(proc.stdout).text();
+        expect(await proc.exited).toBe(0);
+        expect(stdout).toBe("y\ny\n");
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    30000,
+  );
 
   // ラッパーは本物の /bin/bash の inode を置き換えて設置されるので、環境を
   // 落として起動された bash (env -i、env_reset 付きの sudo、su -) もここを通る。
@@ -954,6 +987,10 @@ echo "layers=$n"
   // このラッパー自身が /bin/bash の inode を占めているため、ここで診断を出すと
   // 呼び出し元 (無関係なプログラム) の stderr に nas 由来のテキストが紛れ込む。
   // fail-closed のまま何も出力せず、予約コード 121 だけで原因が伝わることを見る。
+  //
+  // このスイートで唯一 `skipIf(!binaryPath)` を付けないテスト。検証対象は
+  // ラッパースクリプト側のガードだけで、nas-mask-filter のバイナリを起動しない
+  // (env を落としたラッパーはバイナリに辿り着く前に 121 で降りる)。
   test("fails closed with no output when the broker env is stripped", async () => {
     const wrapper = writeWrapperScript();
     const proc = Bun.spawn([wrapper, "-c", "echo hi"], {
@@ -977,68 +1014,81 @@ echo "layers=$n"
   //
   // 「0/1/2 だけ」を主張することはできない (ls 自身がディレクトリ fd を握る)
   // ので、不変条件を直接見る。
-  test("does not leak socket fds into the supervised child", async () => {
-    if (!binaryPath) return;
-    const r = await runSupervisedOverSocket("ls -l /proc/self/fd", ["hunter2"]);
-    expect(r.stdout).not.toContain("socket:");
-    expect(r.exitCode).toBe(0);
-  });
+  test.skipIf(!binaryPath)(
+    "does not leak socket fds into the supervised child",
+    async () => {
+      const r = await runSupervisedOverSocket("ls -l /proc/self/fd", [
+        "hunter2",
+      ]);
+      expect(r.stdout).not.toContain("socket:");
+      expect(r.exitCode).toBe(0);
+    },
+  );
 });
 describe("nas-mask-filter --serve", () => {
-  test("masks a stream over the socket", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("basic");
-    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      expect(await maskOverSocket(sockPath, ["pw=hunter2 done"])).toBe(
-        "pw=******* done",
-      );
-    } finally {
-      proc.kill();
-      await proc.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-    await expectServeSilent(proc);
-  }, 15000);
+  test.skipIf(!binaryPath)(
+    "masks a stream over the socket",
+    async () => {
+      const sockPath = shortSockPath("basic");
+      const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        expect(await maskOverSocket(sockPath, ["pw=hunter2 done"])).toBe(
+          "pw=******* done",
+        );
+      } finally {
+        proc.kill();
+        await proc.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+      await expectServeSilent(proc);
+    },
+    15000,
+  );
 
-  test("masks a secret straddling a socket chunk boundary", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("seam");
-    const proc = startServe(writeSecretsFile(["SECRETVALUE"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      // 間隔を空けることで、サーバに 2 つの半片を別々に処理させる。
-      expect(
-        await maskOverSocket(sockPath, ["head SECRE", "TVALUE tail"], 50),
-      ).toBe("head *********** tail");
-    } finally {
-      proc.kill();
-      await proc.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-    await expectServeSilent(proc);
-  }, 15000);
+  test.skipIf(!binaryPath)(
+    "masks a secret straddling a socket chunk boundary",
+    async () => {
+      const sockPath = shortSockPath("seam");
+      const proc = startServe(writeSecretsFile(["SECRETVALUE"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        // 間隔を空けることで、サーバに 2 つの半片を別々に処理させる。
+        expect(
+          await maskOverSocket(sockPath, ["head SECRE", "TVALUE tail"], 50),
+        ).toBe("head *********** tail");
+      } finally {
+        proc.kill();
+        await proc.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+      await expectServeSilent(proc);
+    },
+    15000,
+  );
 
-  test("keeps per-connection overlap state isolated", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("iso");
-    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      const [a, b] = await Promise.all([
-        maskOverSocket(sockPath, ["aaa hun", "ter2 aaa"], 30),
-        maskOverSocket(sockPath, ["bbb hun", "ter2 bbb"], 30),
-      ]);
-      expect(a).toBe("aaa ******* aaa");
-      expect(b).toBe("bbb ******* bbb");
-    } finally {
-      proc.kill();
-      await proc.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-    await expectServeSilent(proc);
-  }, 15000);
+  test.skipIf(!binaryPath)(
+    "keeps per-connection overlap state isolated",
+    async () => {
+      const sockPath = shortSockPath("iso");
+      const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const [a, b] = await Promise.all([
+          maskOverSocket(sockPath, ["aaa hun", "ter2 aaa"], 30),
+          maskOverSocket(sockPath, ["bbb hun", "ter2 bbb"], 30),
+        ]);
+        expect(a).toBe("aaa ******* aaa");
+        expect(b).toBe("bbb ******* bbb");
+      } finally {
+        proc.kill();
+        await proc.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+      await expectServeSilent(proc);
+    },
+    15000,
+  );
 
   // アイドル接続のタイムアウト刈り取りは意図的に持たない。死んだピアは fd が
   // 閉じて read が 0 を返す通常の EOF 経路で回収されるので、刈り取りが発火しうる
@@ -1050,62 +1100,68 @@ describe("nas-mask-filter --serve", () => {
   // れるのは閾値が沈黙時間 (2.5s) より短いときだけである。削除した実装の
   // IDLE_REAP_MS は 10 分だったので、あれをそのまま戻しただけではここは通って
   // しまう。10 分待つテストは現実的でないため、そこは割り切ってこの範囲を守る。
-  test("keeps a silent live connection alive across poll timeouts", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("idle");
-    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
-      // POLL_TIMEOUT_MS = 1000ms。その 2 周期分より長く 1 バイトも書かない。
-      expect(await maskOverSocket(sockPath, ["pw=hunter2 done"], 0, 2500)).toBe(
-        "pw=******* done",
-      );
-    } finally {
-      proc.kill();
-      await proc.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-    await expectServeSilent(proc);
-  }, 20000);
+  test.skipIf(!binaryPath)(
+    "keeps a silent live connection alive across poll timeouts",
+    async () => {
+      const sockPath = shortSockPath("idle");
+      const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        // POLL_TIMEOUT_MS = 1000ms。その 2 周期分より長く 1 バイトも書かない。
+        expect(
+          await maskOverSocket(sockPath, ["pw=hunter2 done"], 0, 2500),
+        ).toBe("pw=******* done");
+      } finally {
+        proc.kill();
+        await proc.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+      await expectServeSilent(proc);
+    },
+    20000,
+  );
 
   // 1 read チャンク (BUF_SIZE = 64KiB) を大きく超えるペイロードを流し、送信キューの
   // ドレイン経路 (短い write 後の前詰め圧縮と、吐き切った後の容量調整) を実際に
   // 通す。ここが壊れると出力はバイト単位で欠落・重複・順序入れ替わりを起こし、
   // シークレットが分断されてどちらの断片もマッチせず平文で出てしまう。
-  test("streams a payload far larger than one read chunk intact", async () => {
-    if (!binaryPath) return;
-    const sockPath = shortSockPath("bulk");
-    const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
-    try {
-      expect(await waitForSocket(sockPath)).toBe(true);
+  test.skipIf(!binaryPath)(
+    "streams a payload far larger than one read chunk intact",
+    async () => {
+      const sockPath = shortSockPath("bulk");
+      const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
 
-      const lines: string[] = [];
-      for (let i = 0; i < 64000; i++)
-        lines.push(`line${i} pw=hunter2 end${i}\n`);
-      const input = lines.join("");
-      // BUF_SIZE = 64KiB。その 16 倍以上を 1 接続で流す。
-      expect(input.length).toBeGreaterThan(16 * 64 * 1024);
-      const expected = input.replaceAll("hunter2", "*******");
+        const lines: string[] = [];
+        for (let i = 0; i < 64000; i++)
+          lines.push(`line${i} pw=hunter2 end${i}\n`);
+        const input = lines.join("");
+        // BUF_SIZE = 64KiB。その 16 倍以上を 1 接続で流す。
+        expect(input.length).toBeGreaterThan(16 * 64 * 1024);
+        const expected = input.replaceAll("hunter2", "*******");
 
-      const got = await maskOverSocketSlowReader(sockPath, input);
+        const got = await maskOverSocketSlowReader(sockPath, input);
 
-      // MiB 級の文字列を toBe に投げると失敗時に巨大な diff が出るので、
-      // 最初に食い違ったオフセットだけを比較対象にする。-1 は完全一致。
-      const divergesAt = (a: string, b: string): number => {
-        const n = Math.min(a.length, b.length);
-        for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
-        return a.length === b.length ? -1 : n;
-      };
-      expect(got.length).toBe(expected.length);
-      expect(divergesAt(got, expected)).toBe(-1);
-      expect(got.includes("hunter2")).toBe(false);
-    } finally {
-      proc.kill();
-      await proc.exited;
-      fs.rmSync(sockPath, { force: true });
-    }
-    await expectServeSilent(proc);
-  }, 30000);
+        // MiB 級の文字列を toBe に投げると失敗時に巨大な diff が出るので、
+        // 最初に食い違ったオフセットだけを比較対象にする。-1 は完全一致。
+        const divergesAt = (a: string, b: string): number => {
+          const n = Math.min(a.length, b.length);
+          for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i;
+          return a.length === b.length ? -1 : n;
+        };
+        expect(got.length).toBe(expected.length);
+        expect(divergesAt(got, expected)).toBe(-1);
+        expect(got.includes("hunter2")).toBe(false);
+      } finally {
+        proc.kill();
+        await proc.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+      await expectServeSilent(proc);
+    },
+    30000,
+  );
 
   // socket はエージェントの UID から到達可能で、サーバはコンテナの cgroup の
   // **外** (ホスト) で動く。したがって「読まずに書き続ける」クライアント 1 本で
@@ -1119,14 +1175,9 @@ describe("nas-mask-filter --serve", () => {
   //
   // 前提が欠けたときは黙って return せず skip として報告する。このテストは
   // メモリ上限の唯一の証明なので、消えたことが出力に出ないと誰も気付けない。
-  test.skipIf(!hasProcStatus || !hasPython3)(
+  test.skipIf(!binaryPath || !hasProcStatus || !hasPython3)(
     "bounds server memory when a client stops reading",
     async () => {
-      // ここで黙って return すると、`cd src/mask-filter && zig build` を
-      // していないだけで、メモリ上限の唯一の証明が「何も検証せずに pass」
-      // として報告される。binaryPath は beforeAll で解決するので skipIf には
-      // 渡せない。skip ではなく失敗として出す。
-      expect(binaryPath).not.toBeNull();
       const sockPath = shortSockPath("bp");
       const proc = startServe(writeSecretsFile(["hunter2"]), sockPath);
       let stall: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
@@ -1203,3 +1254,13 @@ describe("nas-mask-filter --serve", () => {
     60000,
   );
 });
+
+// バイナリが無いときに走る唯一のテスト。skip 件数だけでは「何が欠けていて
+// どう直すか」が出力に出ないので、理由と復旧手順をテスト名で告げる pass を
+// 1 件残す。
+test.skipIf(binaryPath !== null)(
+  "nas-mask-filter tests skipped (binary not built: cd src/mask-filter && zig build)",
+  () => {
+    expect(binaryPath).toBeNull();
+  },
+);
