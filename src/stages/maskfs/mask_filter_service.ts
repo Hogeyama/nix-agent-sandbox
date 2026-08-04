@@ -98,6 +98,70 @@ function planEnvVars(plan: MaskFilterPreparePlan): Record<string, string> {
   };
 }
 
+/** How much of the serve log's tail is quoted back to the operator. */
+const SERVE_LOG_TAIL_CHARS = 2000;
+
+/**
+ * What the serve log had to say about a startup failure.
+ *
+ * "empty" and "unreadable" are separate outcomes on purpose: an empty log
+ * means the daemon was killed or died before writing (SIGKILL, OOM), while an
+ * unreadable one means the log file itself never materialised or is not
+ * accessible. They point at different things to check, so collapsing both into
+ * "no output" would hide half the diagnosis.
+ */
+type ServeLogTail =
+  | { readonly _tag: "Text"; readonly text: string }
+  | { readonly _tag: "Empty" }
+  | { readonly _tag: "Unreadable"; readonly reason: string };
+
+function describeDefect(defect: unknown): string {
+  return defect instanceof Error ? defect.message : String(defect);
+}
+
+/**
+ * Builds the error an operator sees when the broker never bound its socket.
+ *
+ * The timeout's own message is kept verbatim — it is the only place the polled
+ * path and the deadline are named — and the serve log's tail is appended below
+ * it, because that is where nas-mask-filter reports *why* it gave up (missing
+ * or unreadable secrets file, corrupt frame, bind failure).
+ *
+ * Quoting the log is safe only because serve mode never writes stream-derived
+ * bytes to stdout/stderr; everything it emits there is a constant diagnostic
+ * string. That invariant exists for exactly this reason: relaxing it turns this
+ * splice into a plaintext leak.
+ */
+function formatServeStartupError(
+  plan: MaskFilterPreparePlan,
+  defect: unknown,
+  tail: ServeLogTail,
+): Error {
+  const lines = [
+    `[nas] mask: the mask broker did not create its socket at ${plan.socketPath} within ${plan.timeoutMs}ms`,
+    describeDefect(defect),
+  ];
+  switch (tail._tag) {
+    case "Text":
+      lines.push(
+        `--- nas-mask-filter --serve output (${plan.logFile}, removed with the session) ---`,
+        tail.text,
+      );
+      break;
+    case "Empty":
+      lines.push(
+        `the serve log at ${plan.logFile} is empty; the daemon may have died before writing`,
+      );
+      break;
+    case "Unreadable":
+      lines.push(
+        `the serve log at ${plan.logFile} could not be read: ${tail.reason}`,
+      );
+      break;
+  }
+  return new Error(lines.join("\n"));
+}
+
 // ---------------------------------------------------------------------------
 // D1: primitive effect wrappers (one IO call each; not unit-tested directly)
 // ---------------------------------------------------------------------------
@@ -134,7 +198,7 @@ function restrictLogFile(fs: Fs, logFile: string): Effect.Effect<void> {
   return fs.chmod(logFile, 0o600);
 }
 
-function awaitSocket(
+function waitForSocketFile(
   proc: Proc,
   plan: MaskFilterPreparePlan,
 ): Effect.Effect<void> {
@@ -143,6 +207,10 @@ function awaitSocket(
     plan.timeoutMs,
     plan.pollIntervalMs,
   );
+}
+
+function readLogFile(fs: Fs, logFile: string): Effect.Effect<string> {
+  return fs.readFile(logFile);
 }
 
 function removeFile(fs: Fs, target: string): Effect.Effect<void> {
@@ -238,12 +306,65 @@ function writeHostSideFrame(
 }
 
 /**
+ * 起動失敗時に運用者へ見せるログ末尾を読み取り、3 つの結果のどれかに畳む。
+ *
+ * fs.readFile は失敗を defect にする (orDie) ので、ここは catchAllDefect で
+ * data 化する。catchAllCause だと interrupt まで「読めなかった」に化けるので
+ * 使わない。読めなかったことと空だったことは別の結果として残す — 潰すと
+ * 運用者が次に見るべき場所を選べなくなる。
+ */
+function serveLogTail(fs: Fs, logFile: string): Effect.Effect<ServeLogTail> {
+  return readLogFile(fs, logFile).pipe(
+    Effect.map((content): ServeLogTail => {
+      const text = content.slice(-SERVE_LOG_TAIL_CHARS).trim();
+      return text.length === 0 ? { _tag: "Empty" } : { _tag: "Text", text };
+    }),
+    Effect.catchAllDefect((defect) =>
+      Effect.succeed<ServeLogTail>({
+        _tag: "Unreadable",
+        reason: describeDefect(defect),
+      }),
+    ),
+  );
+}
+
+/**
+ * socket が現れるのを待ち、現れなければ serve デーモンのログ末尾を添えて
+ * 失敗する。
+ *
+ * waitForFileExists はタイムアウトを typed error ではなく defect として報告
+ * するので、診断は catchAllDefect で付ける — catchAllCause は interrupt まで
+ * 拾ってしまい、単に中断されただけの実行を「起動に失敗した」と偽ることに
+ * なる。ログを読むのは失敗したときだけで、socket が現れた場合は fs に
+ * 一切触らない。
+ */
+function awaitSocket(
+  fs: Fs,
+  proc: Proc,
+  plan: MaskFilterPreparePlan,
+): Effect.Effect<void, Error> {
+  return waitForSocketFile(proc, plan).pipe(
+    Effect.catchAllDefect((defect) =>
+      serveLogTail(fs, plan.logFile).pipe(
+        Effect.flatMap((tail) =>
+          Effect.fail(formatServeStartupError(plan, defect, tail)),
+        ),
+      ),
+    ),
+  );
+}
+
+/**
  * S2: デーモンを止めてから、socket・ログを消す。フレームとディレクトリの
  * 削除は writeHostSideFrame 側の acquireRelease が扱うのでここでは触らない
  * (二重削除を避けるため)。scope の finalizer は登録の逆順で実行される
  * ので、それらの acquire がデーモン起動より先に行われている限り、
  * このデーモン停止処理は必ずフレーム削除・ディレクトリ削除より先に走る —
  * デーモンがその socket やディレクトリより長生きすることはない。
+ *
+ * 起動に失敗した場合でもログは消す。証拠は awaitSocket が scope の解体より
+ * 前にエラーへ写し取っているので失われないし、残せば removeOwnDir の rmdir が
+ * ENOTEMPTY になり、$XDG_RUNTIME_DIR にセッションディレクトリが積み上がる。
  */
 function releaseServe(
   fs: Fs,
@@ -272,7 +393,7 @@ function startServe(
       releaseServe(fs, plan, handle),
     );
     yield* restrictLogFile(fs, plan.logFile);
-    yield* awaitSocket(proc, plan);
+    yield* awaitSocket(fs, proc, plan);
   });
 }
 

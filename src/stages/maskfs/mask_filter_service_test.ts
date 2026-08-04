@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, type Exit, Layer } from "effect";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService, type SpawnHandle } from "../../services/process.ts";
 import {
@@ -40,7 +40,7 @@ interface SpawnRecord {
 }
 
 interface Recorded {
-  readonly result: MaskFilterResult;
+  readonly exit: Exit.Exit<MaskFilterResult, unknown>;
   readonly written: WrittenFile[];
   readonly spawns: SpawnRecord[];
   readonly spawnEnv: Array<Record<string, string> | undefined>;
@@ -49,8 +49,29 @@ interface Recorded {
   readonly mkdirs: Array<{ path: string; mode: number | undefined }>;
   /** rm と rmdir を 1 本の列に混ぜて記録する (削除の順序を見るため)。 */
   readonly removed: string[];
+  readonly readFileCalls: string[];
+  /**
+   * 読み取りと削除を 1 本に混ぜた列 (`read:<path>` / `rm:<path>`)。削除だけ、
+   * 読み取りだけを見ても、両者の前後関係 — ログを読んでから消したのか、
+   * 消してから読んだのか — は分からないため別に持つ。
+   */
+  readonly ops: string[];
   readonly waited: Array<{ path: string; timeoutMs: number }>;
   readonly killed: number;
+}
+
+/**
+ * Behaviour the fakes take from the individual test instead of the default.
+ * Everything is still recorded, so an override changes what the fake does
+ * without costing the test its observations.
+ */
+interface CaptureOverrides {
+  readonly waitForFileExists?: (
+    path: string,
+    timeoutMs: number,
+    pollIntervalMs: number,
+  ) => Effect.Effect<void>;
+  readonly readFile?: (path: string) => Effect.Effect<string>;
 }
 
 const host = {
@@ -67,7 +88,9 @@ const host = {
  * records every interaction. The scope is closed before returning, so the
  * finalizer's effects are visible in `removed` / `killed`.
  */
-async function runCapturing(): Promise<Recorded> {
+async function runCapturing(
+  overrides: CaptureOverrides = {},
+): Promise<Recorded> {
   const written: WrittenFile[] = [];
   const spawns: SpawnRecord[] = [];
   const spawnEnv: Array<Record<string, string> | undefined> = [];
@@ -75,6 +98,8 @@ async function runCapturing(): Promise<Recorded> {
   const chmods: Array<{ path: string; mode: number }> = [];
   const mkdirs: Array<{ path: string; mode: number | undefined }> = [];
   const removed: string[] = [];
+  const readFileCalls: string[] = [];
+  const ops: string[] = [];
   const waited: Array<{ path: string; timeoutMs: number }> = [];
   let killed = 0;
 
@@ -103,12 +128,19 @@ async function runCapturing(): Promise<Recorded> {
       rm: (p) =>
         Effect.sync(() => {
           removed.push(p);
+          ops.push(`rm:${p}`);
         }),
       rmdir: (p) =>
         Effect.sync(() => {
           removed.push(p);
+          ops.push(`rm:${p}`);
         }),
-      readFile: () => Effect.succeed(""),
+      readFile: (p) =>
+        Effect.suspend(() => {
+          readFileCalls.push(p);
+          ops.push(`read:${p}`);
+          return overrides.readFile?.(p) ?? Effect.succeed("");
+        }),
       symlink: () => Effect.void,
       rename: () => Effect.void,
       stat: () => Effect.succeed({} as any),
@@ -133,15 +165,19 @@ async function runCapturing(): Promise<Recorded> {
             pid: 4242,
           } satisfies SpawnHandle;
         }),
-      waitForFileExists: (p, timeoutMs) =>
-        Effect.sync(() => {
+      waitForFileExists: (p, timeoutMs, pollIntervalMs) =>
+        Effect.suspend(() => {
           waited.push({ path: p, timeoutMs });
+          return (
+            overrides.waitForFileExists?.(p, timeoutMs, pollIntervalMs) ??
+            Effect.void
+          );
         }),
       exec: () => Effect.succeed(""),
     }),
   );
 
-  const result = await Effect.runPromise(
+  const exit = await Effect.runPromiseExit(
     Effect.provide(
       Effect.scoped(
         Effect.gen(function* () {
@@ -169,7 +205,7 @@ async function runCapturing(): Promise<Recorded> {
   );
 
   return {
-    result,
+    exit,
     written,
     spawns,
     spawnEnv,
@@ -177,13 +213,29 @@ async function runCapturing(): Promise<Recorded> {
     chmods,
     mkdirs,
     removed,
+    readFileCalls,
+    ops,
     waited,
     killed,
   };
 }
 
+function successResult(
+  exit: Exit.Exit<MaskFilterResult, unknown>,
+): MaskFilterResult {
+  if (exit._tag !== "Success") {
+    throw new Error(`expected success, got:\n${Cause.pretty(exit.cause)}`);
+  }
+  return exit.value;
+}
+
+function failureText(exit: Exit.Exit<unknown, unknown>): string {
+  if (exit._tag !== "Failure") throw new Error("expected a failure");
+  return Cause.pretty(exit.cause);
+}
+
 async function run(): Promise<MaskFilterResult> {
-  return (await runCapturing()).result;
+  return successResult((await runCapturing()).exit);
 }
 
 describe("MaskFilterServiceLive.prepareMaskFilter", () => {
@@ -213,7 +265,8 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   });
 
   test("mounts the socket directory read-only and spawns the daemon", async () => {
-    const { result, spawns } = await runCapturing();
+    const { exit, spawns } = await runCapturing();
+    const result = successResult(exit);
     expect(
       result.mounts.some(
         (m) =>
@@ -253,6 +306,13 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   test("waits for the socket before returning", async () => {
     const { waited } = await runCapturing();
     expect(waited).toEqual([{ path: SOCKET, timeoutMs: 5000 }]);
+  });
+
+  test("does not read the serve log when the socket appears", async () => {
+    // The log is only consulted to explain a readiness failure. A successful
+    // start must not pay for that diagnostic.
+    const { readFileCalls } = await runCapturing();
+    expect(readFileCalls).toEqual([]);
   });
 
   test("scope release kills the daemon and removes everything it created (S2)", async () => {
@@ -424,5 +484,80 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
 
     expect(exit._tag).toBe("Success");
     expect(removed).toEqual([SOCKET, LOG, FRAME, SESSION_DIR]);
+  });
+});
+
+/**
+ * ProcessService.waitForFileExists reports its timeout as a defect (it ends in
+ * Effect.orDie), so these tests reproduce the failure with Effect.die. The
+ * service depends on that shape: it attaches the diagnostic with
+ * catchAllDefect, which — unlike catchAllCause — leaves interrupts alone.
+ */
+describe("MaskFilterServiceLive.prepareMaskFilter readiness failure", () => {
+  const TIMEOUT_MESSAGE = `[nas] Timed out waiting for file: ${SOCKET} (5000ms)`;
+  const timesOut = () => Effect.die(new Error(TIMEOUT_MESSAGE));
+
+  test("the readiness failure names the serve log's last words", async () => {
+    const { exit } = await runCapturing({
+      waitForFileExists: timesOut,
+      readFile: () =>
+        Effect.succeed(
+          "nas-mask-filter: failed to read secrets: error.InvalidFrame\n",
+        ),
+    });
+
+    const text = failureText(exit);
+    // The daemon's own reason is what the operator needs; the timeout alone
+    // does not say why the socket never appeared.
+    expect(text).toContain("failed to read secrets: error.InvalidFrame");
+    // ...and the timeout's own information is not thrown away to make room.
+    expect(text).toContain(TIMEOUT_MESSAGE);
+    expect(text).toContain(SOCKET);
+    expect(text).toContain("5000ms");
+    expect(text).toContain(LOG);
+  });
+
+  test("the log is read before the finalizer removes it", async () => {
+    const { ops, removed, killed } = await runCapturing({
+      waitForFileExists: timesOut,
+      readFile: () =>
+        Effect.succeed("nas-mask-filter: serve failed: error.AddressInUse\n"),
+    });
+
+    // The evidence is copied into the error while the scope is still open,
+    // which is what lets the release keep deleting the log.
+    expect(ops.indexOf(`read:${LOG}`)).toBeGreaterThanOrEqual(0);
+    expect(ops.indexOf(`read:${LOG}`)).toBeLessThan(ops.indexOf(`rm:${LOG}`));
+    // Cleanup is unchanged by the diagnostic: a failed start still leaves
+    // nothing behind.
+    expect(killed).toBe(1);
+    expect(removed).toEqual([SOCKET, LOG, FRAME, SOCKET_DIR, SESSION_DIR]);
+  });
+
+  test("an empty serve log is reported as empty", async () => {
+    const { exit } = await runCapturing({
+      waitForFileExists: timesOut,
+      readFile: () => Effect.succeed("  \n\n"),
+    });
+
+    const text = failureText(exit);
+    expect(text).toContain(`the serve log at ${LOG} is empty`);
+    expect(text).not.toContain("could not be read");
+  });
+
+  test("an unreadable serve log says so instead of claiming it was empty", async () => {
+    // FsService.readFile ends in Effect.orDie, so an ENOENT/EACCES on the log
+    // arrives as a defect. Reporting it as "empty" would send the operator
+    // looking for a daemon crash when the log file itself is the problem.
+    const { exit } = await runCapturing({
+      waitForFileExists: timesOut,
+      readFile: () =>
+        Effect.die(new Error(`ENOENT: readFile failed: ${LOG} no such file`)),
+    });
+
+    const text = failureText(exit);
+    expect(text).toContain(`the serve log at ${LOG} could not be read`);
+    expect(text).toContain("ENOENT");
+    expect(text).not.toContain("is empty");
   });
 });
