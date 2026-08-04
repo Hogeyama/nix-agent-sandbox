@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Cause, Effect, type Exit, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService, type SpawnHandle } from "../../services/process.ts";
 import {
@@ -238,6 +238,20 @@ async function run(): Promise<MaskFilterResult> {
   return successResult((await runCapturing()).exit);
 }
 
+/**
+ * runCapturing for the tests that describe a successful start.
+ *
+ * Most recorded side effects look the same whether preparation succeeded or
+ * failed on readiness — `removed`, for one, is identical either way — so an
+ * assertion about them can pass on a run that never reached the state the test
+ * claims to describe. Asserting success first closes that gap.
+ */
+async function runCapturingOk(): Promise<Recorded> {
+  const recorded = await runCapturing();
+  successResult(recorded.exit);
+  return recorded;
+}
+
 describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   test("no mount can reach the secrets frame (C1)", async () => {
     const result = await run();
@@ -257,7 +271,7 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   });
 
   test("writes the frame host-side (hostexec C3 depends on it)", async () => {
-    const { written } = await runCapturing();
+    const { written } = await runCapturingOk();
     expect(written.map((w) => w.path)).toContain(FRAME);
     const frame = written.find((w) => w.path === FRAME);
     expect(frame?.mode).toBe(0o600);
@@ -290,13 +304,13 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   });
 
   test("passes the frame path in the daemon's own env, not the container's", async () => {
-    const { spawnEnv, spawnLogFiles } = await runCapturing();
+    const { spawnEnv, spawnLogFiles } = await runCapturingOk();
     expect(spawnEnv[0]?.NAS_MASK_SECRETS_FILE).toBe(FRAME);
     expect(spawnLogFiles[0]).toBe(LOG);
   });
 
   test("creates the frame and socket directories 0700 and tightens the log to 0600", async () => {
-    const { mkdirs, chmods } = await runCapturing();
+    const { mkdirs, chmods } = await runCapturingOk();
     expect(mkdirs).toContainEqual({ path: SESSION_DIR, mode: 0o700 });
     expect(mkdirs).toContainEqual({ path: SOCKET_DIR, mode: 0o700 });
     // ProcessService.spawn opens the log with openSync(path, "a") => 0644.
@@ -304,19 +318,19 @@ describe("MaskFilterServiceLive.prepareMaskFilter", () => {
   });
 
   test("waits for the socket before returning", async () => {
-    const { waited } = await runCapturing();
+    const { waited } = await runCapturingOk();
     expect(waited).toEqual([{ path: SOCKET, timeoutMs: 5000 }]);
   });
 
   test("does not read the serve log when the socket appears", async () => {
     // The log is only consulted to explain a readiness failure. A successful
     // start must not pay for that diagnostic.
-    const { readFileCalls } = await runCapturing();
+    const { readFileCalls } = await runCapturingOk();
     expect(readFileCalls).toEqual([]);
   });
 
   test("scope release kills the daemon and removes everything it created (S2)", async () => {
-    const { killed, removed } = await runCapturing();
+    const { killed, removed } = await runCapturingOk();
     expect(killed).toBe(1);
     // Finalizers run in reverse acquisition order. The directories and the
     // frame are acquired before the daemon, so on release the daemon (and its
@@ -546,9 +560,9 @@ describe("MaskFilterServiceLive.prepareMaskFilter readiness failure", () => {
   });
 
   test("an unreadable serve log says so instead of claiming it was empty", async () => {
-    // FsService.readFile ends in Effect.orDie, so an ENOENT/EACCES on the log
-    // arrives as a defect. Reporting it as "empty" would send the operator
-    // looking for a daemon crash when the log file itself is the problem.
+    // FsService.readFile ends in Effect.orDie, so a failed read arrives as a
+    // defect. Reporting it as "empty" would send the operator looking for a
+    // daemon crash when reading the log is what actually failed.
     const { exit } = await runCapturing({
       waitForFileExists: timesOut,
       readFile: () =>
@@ -559,5 +573,17 @@ describe("MaskFilterServiceLive.prepareMaskFilter readiness failure", () => {
     expect(text).toContain(`the serve log at ${LOG} could not be read`);
     expect(text).toContain("ENOENT");
     expect(text).not.toContain("is empty");
+  });
+
+  test("an interrupted wait stays interrupted instead of becoming a startup failure", async () => {
+    // catchAllDefect is load-bearing here. catchAllCause would also swallow
+    // the interrupt and dress a cancelled session up as a broker that failed
+    // to start — complete with a log tail read that nobody asked for.
+    const { exit, readFileCalls } = await runCapturing({
+      waitForFileExists: () => Effect.interrupt,
+    });
+
+    expect(Exit.isInterrupted(exit)).toBe(true);
+    expect(readFileCalls).toEqual([]);
   });
 });

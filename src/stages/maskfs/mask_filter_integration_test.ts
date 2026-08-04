@@ -988,9 +988,9 @@ echo "layers=$n"
   // 呼び出し元 (無関係なプログラム) の stderr に nas 由来のテキストが紛れ込む。
   // fail-closed のまま何も出力せず、予約コード 121 だけで原因が伝わることを見る。
   //
-  // このスイートで唯一 `skipIf(!binaryPath)` を付けないテスト。検証対象は
-  // ラッパースクリプト側のガードだけで、nas-mask-filter のバイナリを起動しない
-  // (env を落としたラッパーはバイナリに辿り着く前に 121 で降りる)。
+  // `skipIf(!binaryPath)` を付けない。検証対象はラッパースクリプト側のガード
+  // だけで、nas-mask-filter のバイナリを起動しないため (env を落としたラッパーは
+  // バイナリに辿り着く前に 121 で降りる)。
   test("fails closed with no output when the broker env is stripped", async () => {
     const wrapper = writeWrapperScript();
     const proc = Bun.spawn([wrapper, "-c", "echo hi"], {
@@ -1255,9 +1255,8 @@ describe("nas-mask-filter --serve", () => {
   );
 });
 
-// バイナリが無いときに走る唯一のテスト。skip 件数だけでは「何が欠けていて
-// どう直すか」が出力に出ないので、理由と復旧手順をテスト名で告げる pass を
-// 1 件残す。
+// バイナリが無いときだけ走るテスト。skip 件数だけでは「何が欠けていてどう直すか」
+// が出力に出ないので、理由と復旧手順をテスト名で告げる pass を 1 件残す。
 test.skipIf(binaryPath !== null)(
   "nas-mask-filter tests skipped (binary not built: cd src/mask-filter && zig build)",
   () => {

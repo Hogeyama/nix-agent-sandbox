@@ -106,8 +106,9 @@ const SERVE_LOG_TAIL_CHARS = 2000;
  *
  * "empty" and "unreadable" are separate outcomes on purpose: an empty log
  * means the daemon was killed or died before writing (SIGKILL, OOM), while an
- * unreadable one means the log file itself never materialised or is not
- * accessible. They point at different things to check, so collapsing both into
+ * unreadable one means the read itself failed on a log that the session did
+ * create — its permissions changed, it was deleted under us, or the filesystem
+ * errored. They point at different things to check, so collapsing both into
  * "no output" would hide half the diagnosis.
  */
 type ServeLogTail =
