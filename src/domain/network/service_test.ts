@@ -69,6 +69,9 @@ describe("NetworkApprovalService (Live): listPending", () => {
         state: "pending",
         createdAt: now,
         updatedAt: now,
+        ruleId: "$fallback",
+        approvalScopes: ["once", "host-port", "host"],
+        injectHeaders: [],
       };
       await writePendingEntry(paths, entry);
 

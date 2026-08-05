@@ -13,8 +13,8 @@
 
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
-import type { MaskValueConfig } from "../../config/types.ts";
-import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
+import type { SecretConfig } from "../../config/types.ts";
+import { resolveSecretList } from "../../network/secrets.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { FsService } from "../../services/fs.ts";
 import { ProcessService } from "../../services/process.ts";
@@ -51,7 +51,7 @@ export class MaskFsService extends Context.Tag("nas/MaskFsService")<
       options?: MaskFsStartOptions,
     ) => Effect.Effect<MaskFsHandle, unknown, Scope.Scope>;
     readonly resolveSecrets: (
-      values: MaskValueConfig[],
+      secrets: Readonly<Record<string, SecretConfig>>,
       host: HostEnv,
     ) => Effect.Effect<string[], unknown>;
   }
@@ -247,12 +247,12 @@ export const MaskFsServiceLive: Layer.Layer<
           } satisfies MaskFsHandle;
         }),
 
-      resolveSecrets: (values, host) =>
+      resolveSecrets: (secrets, host) =>
         Effect.tryPromise({
           try: () => {
             const env: Record<string, string | undefined> = {};
             for (const [k, v] of host.env) env[k] = v;
-            return resolveMaskSecrets(values, env);
+            return resolveSecretList(secrets, env);
           },
           catch: (e) => e,
         }),
@@ -270,7 +270,7 @@ export interface MaskFsServiceFakeConfig {
     options?: MaskFsStartOptions,
   ) => Effect.Effect<MaskFsHandle, unknown, Scope.Scope>;
   readonly resolveSecrets?: (
-    values: MaskValueConfig[],
+    secrets: Readonly<Record<string, SecretConfig>>,
     host: HostEnv,
   ) => Effect.Effect<string[], unknown>;
 }

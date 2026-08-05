@@ -1,7 +1,16 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { useRepoSchemaAsset } from "../config/schema_asset_testing.ts";
 import type { HostExecRuntimePaths } from "../hostexec/registry.ts";
 import { resolveAsset } from "../lib/asset.ts";
 import type { NetworkRuntimePaths } from "../network/registry.ts";
@@ -16,6 +25,16 @@ import {
   resolveStableNasCommand,
   validateLaunchRequest,
 } from "./launch.ts";
+
+let restoreSchemaAsset: (() => Promise<void>) | undefined;
+
+beforeAll(async () => {
+  restoreSchemaAsset = await useRepoSchemaAsset();
+});
+
+afterAll(async () => {
+  await restoreSchemaAsset?.();
+});
 
 /**
  * Tests for launch request validation.
@@ -42,7 +61,7 @@ function createDummyCtx(): UiDataContext {
     brokersDir: "/tmp/nas-launch-test-unused/network/brokers",
     caCertDir: "/tmp/nas-launch-test-unused/network/mitmproxy-ca",
     addonScriptPath: "/tmp/nas-launch-test-unused/network/nas_addon.py",
-    reviewRulesDir: "/tmp/nas-launch-test-unused/network/review-rules",
+    authzDir: "/tmp/nas-launch-test-unused/network/authz",
   };
   const hostExecPaths: HostExecRuntimePaths = {
     runtimeDir: "/tmp/nas-launch-test-unused/hostexec",

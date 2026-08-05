@@ -247,7 +247,7 @@ describe("MaskFsService.resolveSecrets", () => {
         Effect.gen(function* () {
           const svc = yield* MaskFsService;
           return yield* svc.resolveSecrets(
-            [{ source: `lines:${filePath}` }],
+            { s1: { from: `lines:${filePath}` } },
             makeHost(),
           );
         }).pipe(Effect.provide(layer)),
@@ -271,7 +271,7 @@ describe("MaskFsService.resolveSecrets", () => {
         Effect.gen(function* () {
           const svc = yield* MaskFsService;
           return yield* svc.resolveSecrets(
-            [{ source: `lines:${filePath}` }],
+            { s1: { from: `lines:${filePath}` } },
             makeHost(),
           );
         }).pipe(Effect.provide(layer)),
@@ -279,7 +279,7 @@ describe("MaskFsService.resolveSecrets", () => {
 
       expect(Exit.isFailure(exit)).toEqual(true);
       const message = String(Exit.isFailure(exit) ? exit.cause : "");
-      expect(message).toContain("mask.values[0] line 2");
+      expect(message).toContain('secrets["s1"]');
     } finally {
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }

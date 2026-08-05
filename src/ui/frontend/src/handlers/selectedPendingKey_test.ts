@@ -28,6 +28,9 @@ function makeNetworkRow(
     summary: "example.com:443",
     createdAtMs: 1000,
     reviewContext: null,
+    ruleId: "api.ask",
+    approvalScopes: ["once", "host-port", "host"],
+    injectHeaders: [],
   };
 }
 

@@ -54,6 +54,53 @@ describe("normalizeNetworkPending", () => {
     expect(rows2[0]?.verb).toBe("GET");
   });
 
+  test("carries the rule the confirmation came from and the offered scopes", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({
+        ruleId: "github.gql.write",
+        approvalScopes: ["once", "rule"],
+      }),
+    ]);
+    expect(rows[0]?.ruleId).toBe("github.gql.write");
+    expect(rows[0]?.approvalScopes).toEqual(["once", "rule"]);
+  });
+
+  test("an entry that offers no scopes falls back to the narrowest one", () => {
+    // A payload without the field can only be trusted for this one
+    // request; guessing a wider grain would remember an approval the
+    // backend never advertised.
+    const rows = normalizeNetworkPending([
+      makeNetwork({ approvalScopes: undefined }),
+    ]);
+    expect(rows[0]?.approvalScopes).toEqual(["once"]);
+    const empty = normalizeNetworkPending([
+      makeNetwork({ approvalScopes: [] }),
+    ]);
+    expect(empty[0]?.approvalScopes).toEqual(["once"]);
+  });
+
+  test("carries the headers an approval would inject, by name", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({
+        injectHeaders: [
+          { name: "Authorization", secrets: ["gh-token"] },
+          { name: "X-Plain", secrets: null },
+        ],
+      }),
+    ]);
+    expect(rows[0]?.injectHeaders).toEqual([
+      { name: "Authorization", secrets: ["gh-token"] },
+      { name: "X-Plain", secrets: [] },
+    ]);
+  });
+
+  test("no inject headers when the payload omits them", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({ injectHeaders: undefined }),
+    ]);
+    expect(rows[0]?.injectHeaders).toEqual([]);
+  });
+
   test("verb is uppercased", () => {
     const rows = normalizeNetworkPending([makeNetwork({ method: "post" })]);
     expect(rows[0]?.verb).toBe("POST");

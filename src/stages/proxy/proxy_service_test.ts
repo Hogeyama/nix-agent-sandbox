@@ -168,7 +168,7 @@ function runtimePaths(): NetworkRuntimePaths {
     brokersDir: `${root}/brokers`,
     caCertDir: `${root}/mitmproxy-ca`,
     addonScriptPath: `${root}/nas_addon.py`,
-    reviewRulesDir: `${root}/review-rules`,
+    authzDir: `${root}/authz`,
   };
 }
 

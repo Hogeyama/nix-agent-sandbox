@@ -35,107 +35,166 @@ local commonEnv: Listing<EnvConfig> = new {
     mode = "suffix"
     separator = ":"
   }
+  new {
+    // 空だとghが問答無用で死ぬ。ghCredで本物をinjectする
+    key = "GITHUB_TOKEN"
+    val = "dummy"
+  }
 }
 
-local function allow(h: String) = new ReviewRule { host = h; action = "allow" }
-local function deny(h: String) = new ReviewRule { host = h; action = "deny" }
-local function ghCred(h: String) = new CredentialRule {
-  host = h
-  header = "Authorization"
-  value { valCmd = #"printf 'Basic %s' "$(printf 'x-access-token:%s' "$(gh auth token)" | base64 -w0)""# }
+local commonSecrets: Mapping<String, SecretConfig> = new {
+  // 旧 ghCred の valCmd。ヘッダー値を丸ごと組み立てていたものを、トークン側を
+  // 名前付き秘密にして組み立てを template に移した。名前を持ったので、注入先
+  // 以外のホスト宛のリクエストに同じ値が現れたときにも扱いを決められる。
+  ["gh-token-basic"] {
+    from = #"cmd:printf 'Basic %s' "$(printf 'x-access-token:%s' "$(gh auth token)" | base64 -w0)""#
+  }
+  ["workspace-demo"] {
+    from = "lines:demo/secrets.txt"
+  }
+}
+
+local workspaceSecrets: Mapping<String, SecretConfig> = new {
+  ["workspace-demo"] {
+    from = "lines:demo/secrets.txt"
+  }
 }
 
 local commonNetwork: NetworkConfig = new {
-  credentials {
-    ghCred("github.com")
-    ghCred("api.github.com")
+  fallback = "review"
+
+  scopes {
+    ["telemetry"] {
+      targets {
+        // Claude Code がなんか送ってるやつ
+        "http-intake.logs.us5.datadoghq.com"
+        // Copilot CLI がなんか送ってるやつ
+        "copilot-telemetry.githubusercontent.com"
+      }
+      fallback = "deny"
+    }
+
+    ["github-tls"] {
+      targets { "github.com:443"; "api.github.com:443" }
+      fallback = "allow"
+      secrets { ["gh-token-basic"] = "inject" }
+      inject {
+        new Inject {
+          name = "Authorization"
+          value = #"template:${gh-token-basic}"#
+        }
+      }
+    }
+
+    ["httpbin"] {
+      targets { "httpbin.org" }
+      fallback = "allow"
+      rules {
+        ["post"] {
+          match { methods { "POST" }; paths { "/**" } }
+          onMatch = "review"
+        }
+      }
+    }
+
+    ["openai"] {
+      targets {
+        "api.openai.com:443"
+        "chatgpt.openai.com:443"
+      }
+      webSocket = "allow" // "allow" | "deny" (規定deny) (reviewはない)
+      fallback = "review"
+      rules {
+        ["streaming"] {
+          match {
+            methods { "POST" }
+            paths { "/v1/responses" }
+            body { format = "json"; equals { ["/stream"] = true } }
+          }
+          onMatch = "review"
+          onIndeterminate = "deny"
+        }
+        ["non-streaming"] {
+          match {
+            methods { "POST" }
+            paths { "/v1/responses" }
+            body { format = "json"; equals { ["/stream"] = false } }
+          }
+          onMatch = "allow"
+          onIndeterminate = "deny"
+        }
+      }
+    }
+
+    // 旧: 残りの allow(...) 全部。同じ帰結しか持たないホストは 1 スコープに畳める。
+    ["allowed"] {
+      targets {
+        // Anthropic / Claude
+        "api.anthropic.com"
+        "statsig.anthropic.com"
+        "platform.claude.com"
+        "mcp-proxy.anthropic.com"
+        "code.claude.com"
+        "claude.ai"
+        "downloads.claude.ai"
+
+        // OpenAI / ChatGPT
+        "*.api.openai.com"
+        "ab.chatgpt.com"
+        "chatgpt.com"
+        "developers.openai.com"
+
+        // Google
+        "storage.googleapis.com"
+
+        // GitHub (資格情報を注入しないもの)
+        "release-assets.githubusercontent.com"
+        "codeload.github.com"
+        "gist.github.com"
+        "raw.githubusercontent.com"
+        // Copilot
+        "api.githubcopilot.com"
+        "telemetry.individual.githubcopilot.com"
+        "api.individual.githubcopilot.com"
+        "telemetry.business.githubcopilot.com"
+        "api.business.githubcopilot.com"
+        // 画像系
+        "camo.githubusercontent.com"
+        "avatars.githubusercontent.com"
+
+        // Docker Hub
+        "registry-1.docker.io"
+        "auth.docker.io"
+        "index.docker.io"
+        "hub.docker.com"
+        "www.docker.com"
+        "production.cloudflare.docker.com"
+        "download.docker.com"
+
+        // Container Registries
+        //
+        // "*.x" はサフィックスのラベルを 1 つ以上要求するので、"x" 自身には
+        // 一致しない。裸のホストが実際の宛先になるものは併記する
+        // (docker pull gcr.io/... は gcr.io に繋ぐ)。
+        "gcr.io"                      // Google Container Registry
+        "*.gcr.io"
+        "ghcr.io"                     // GitHub Container Registry
+        "mcr.microsoft.com"           // Microsoft Container Registry
+        "data.mcr.microsoft.com"
+        "*.data.mcr.microsoft.com"
+        "public.ecr.aws"              // AWS ECR
+
+        // Package Registries
+        "registry.npmjs.org"          // npm
+        "jsr.io"                      // JSR (Deno)
+        "deno.land"                   // Deno
+        "dl.deno.land"                // Deno
+        "esm.sh"
+      }
+      fallback = "allow"
+    }
   }
-  reviewRules {
-    // Deny: telemetry endpoints
-    // Claude Codeがなんか送ってるやつ
-    deny("http-intake.logs.us5.datadoghq.com")
-    // Copilot CLIがなんか送ってるやつ
-    deny("copilot-telemetry.githubusercontent.com")
 
-    // Allow: Anthropic / Claude
-    for (h in List(
-      "api.anthropic.com",
-      "statsig.anthropic.com",
-      "platform.claude.com",
-      "mcp-proxy.anthropic.com",
-      "code.claude.com",
-      "claude.ai",
-      "downloads.claude.ai",
-    )) { allow(h) }
-
-    // Allow: OpenAI / ChatGPT
-    for (h in List(
-      "api.openai.com",
-      "*.api.openai.com",
-      "ab.chatgpt.com",
-      "chatgpt.com",
-      "developers.openai.com",
-    )) { allow(h) }
-
-    // Allow: Google
-    allow("storage.googleapis.com")
-
-    // Allow: GitHub
-    for (h in List(
-      "api.github.com",
-      "release-assets.githubusercontent.com",
-      "codeload.github.com",
-      // ユーザーのやつ
-      "github.com",
-      "gist.github.com",
-      "raw.githubusercontent.com",
-      // Copilot
-      "api.githubcopilot.com",
-      "telemetry.individual.githubcopilot.com",
-      "api.individual.githubcopilot.com",
-      "telemetry.business.githubcopilot.com",
-      "api.business.githubcopilot.com",
-      // 画像系
-      "camo.githubusercontent.com",
-      "avatars.githubusercontent.com",
-    )) { allow(h) }
-
-    // Allow: Docker Hub
-    for (h in List(
-      "registry-1.docker.io",
-      "auth.docker.io",
-      "index.docker.io",
-      "hub.docker.com",
-      "www.docker.com",
-      "production.cloudflare.docker.com",
-      "download.docker.com",
-    )) { allow(h) }
-
-    // Allow: Container Registries
-    for (h in List(
-      "*.gcr.io",                    // Google Container Registry
-      "ghcr.io",                     // GitHub Container Registry
-      "mcr.microsoft.com",           // Microsoft Container Registry
-      "*.data.mcr.microsoft.com",
-      "public.ecr.aws",              // AWS ECR
-    )) { allow(h) }
-
-    // Review: specific patterns (must come BEFORE general allow)
-    new { method = "POST"; host = "httpbin.org"; action = "review" }
-
-    // Allow: Package Registries
-    for (h in List(
-      "registry.npmjs.org",          // npm
-      "jsr.io",                      // JSR (Deno)
-      "deno.land",                   // Deno
-      "dl.deno.land",                // Deno
-      "esm.sh",
-      "httpbin.org",
-    )) { allow(h) }
-
-    // Catch-all: send unknown traffic to pending queue
-    new { action = "review" }
-  }
   proxy {
     forwardPorts = new Listing {
       8080
@@ -146,6 +205,24 @@ local commonNetwork: NetworkConfig = new {
   }
 }
 
+// commonMask は proxy = false なので、秘密の扱いを既定の "mask" のままにすると
+// 「mask を持つスコープがあるのに proxy マスクを切っている」として設定エラーに
+// なる。プロキシでのマスクを行わないことを明示する。github スコープの
+// "inject" はスコープ側で上書きされるので効き続ける。
+local unmaskedNetwork: NetworkConfig = (commonNetwork) {
+  defaults {
+    secrets { ["*"] = "ignore" }
+  }
+}
+
+// api.anthropic.com を preset のスコープで狭める。preset のターゲットは
+// allowed スコープのターゲット集合に包含されるので、特異な preset 側が勝つ。
+local anthropicPolicyNetwork: NetworkConfig = (commonNetwork) {
+  scopes {
+    ["anthropic"] = module.presets.anthropic.v1
+  }
+}
+
 local commonHostexec: HostExecConfig = new {
   prompt {
     enable = true
@@ -153,6 +230,34 @@ local commonHostexec: HostExecConfig = new {
     defaultScope = "capability"
   }
   rules {
+    new {
+      id = "bun"
+      match {
+        argv0 = "bun"
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      inheritEnv {
+        mode = "unsafe-inherit-all"
+      }
+      approval = "allow"
+      fallback = "container"
+    }
+    new {
+      id = "docker"
+      match {
+        argv0 = "docker"
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      inheritEnv {
+        mode = "unsafe-inherit-all"
+      }
+      approval = "allow"
+      fallback = "container"
+    }
     new {
       id = "wl-paste"
       match {
@@ -236,12 +341,9 @@ local commonHostexec: HostExecConfig = new {
 }
 
 local commonMask = new MaskConfig {
-  values = new Listing {
-    new MaskValueConfig { source = "lines:demo/secrets.txt" }
-  }
   maskfs = false
   proxy = false
-  filter = true
+  filter = false
 }
 
 // common_infra + common_network + common_env + common_hostexec を含むベースプロファイル
@@ -284,9 +386,11 @@ local baseProfile: Profile = new {
     new { src = "~/.cache/.bun"; dst = "~/.cache/.bun"; mode = "ro" }
     // OTELのデバッグに
     new { src = "~/.local/share/nas"; dst = "~/.local/share/nas"; mode = "rw" }
+    new { src = "/tmp"; dst = "/tmp"; mode = "rw" }
   }
-  network = commonNetwork
+  network = unmaskedNetwork
   env = commonEnv
+  secrets = commonSecrets
   hostexec = commonHostexec
   mask = commonMask
 }
@@ -345,6 +449,7 @@ profiles {
     agentArgs = new Listing {}
     network = commonNetwork
     env = commonEnv
+    secrets = commonSecrets
     extraMounts {
       new { src = "/dev/null"; dst = ".env" }
       new { src = "./deno.json"; dst = "deno.json"; mode = "ro" }
@@ -389,10 +494,8 @@ profiles {
   // maskfs(FUSE)で **** にマスクされる。リクエストマスクは無効。
   ["maskfs-demo"] = new Profile {
     agent = "claude"
+    secrets = workspaceSecrets
     mask = new MaskConfig {
-      values = new Listing {
-        new MaskValueConfig { source = "lines:demo/secrets.txt" }
-      }
       maskfs = true
       proxy = false
     }
@@ -406,12 +509,11 @@ profiles {
   ["maskproxy-demo"] = new Profile {
     agent = "claude"
     network = commonNetwork
+    secrets = commonSecrets
     mask = new MaskConfig {
-      values = new Listing {
-        new MaskValueConfig { source = "lines:demo/secrets.txt" }
-      }
       maskfs = false
       proxy = true
+      apply = new Listing { "workspace-demo" }
     }
   }
 
@@ -420,14 +522,30 @@ profiles {
   // maskfs/proxy は無効にして filter のみテスト。
   ["filter-demo"] = new Profile {
     agent = "claude"
-    network = commonNetwork
+    network = unmaskedNetwork
+    secrets = commonSecrets
     mask = new MaskConfig {
-      values = new Listing {
-        new MaskValueConfig { source = "lines:demo/secrets.txt" }
-      }
       maskfs = false
       proxy = false
       filter = true
+      apply = new Listing { "workspace-demo" }
+    }
+  }
+
+  // Schema.pkl の anthropic preset を当てた構成。
+  // api.anthropic.com は preset が並べたエンドポイントだけが通り、それ以外は
+  // スコープの fallback = "deny" に落ちる (allowed スコープの一括 allow より
+  // preset のターゲットが特異なので、そちらが選ばれる)。
+  // /v1/messages と count_tokens のボディは JSON として解析され、未知の
+  // content block 型・未知構造は fail-closed で 403。
+  ["anthropic-policy-demo"] = (baseProfile) {
+    agent = "claude"
+    network = anthropicPolicyNetwork
+    mask = new MaskConfig {
+      maskfs = false
+      proxy = true
+      filter = false
+      apply = new Listing { "workspace-demo" }
     }
   }
 }

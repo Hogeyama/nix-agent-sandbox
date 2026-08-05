@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 /**
- * `src/network/fixtures/resolved_review_rules/anthropic-v1.json` の生成器。
+ * `src/network/fixtures/authz/anthropic-v1.json` の生成器。
  *
  * fixture は addon (Python) / broker (TS) / 統合テストが**同じ出荷物**を見て
  * いることを担保するためのもので、権威は `src/config/Schema.pkl` の
- * `anthropicV1()` にある。手で維持すると pkl 側と黙って乖離するので、
- * ここで pkl → loadConfig → resolveReviewRules の実経路を通して生成する。
+ * `presets.anthropic.v1` にある。手で維持すると pkl 側と黙って乖離するので、
+ * ここで pkl → loadConfig → resolveAuthzConfig の実経路を通して生成する。
  *
- *   bun run scripts/gen_resolved_review_rules_fixture.ts
+ *   bun run scripts/gen_authz_fixture.ts
  *
  * 同じ関数を `src/config/pkl_integration_test.ts` が呼び、コミット済みの
  * fixture と一致することを検証している。
@@ -18,12 +18,11 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../src/config/load.ts";
 import {
-  type ResolvedReviewRules,
-  resolveReviewRules,
-} from "../src/network/review_rules.ts";
+  type ResolvedDocument,
+  resolveAuthzConfig,
+} from "../src/network/authz/resolve.ts";
 
-export const FIXTURE_PATH =
-  "src/network/fixtures/resolved_review_rules/anthropic-v1.json";
+export const FIXTURE_PATH = "src/network/fixtures/authz/anthropic-v1.json";
 
 /**
  * リポジトリ内の Schema.pkl。`resolveSchemaAsset()` は `NAS_ASSET_DIR` が
@@ -43,8 +42,8 @@ profiles {
       proxy = true
     }
     network {
-      reviewRules {
-        for (r in module.anthropicV1("anthropic", "api.anthropic.com")) { r }
+      scopes {
+        ["anthropic"] = module.presets.anthropic.v1
       }
     }
   }
@@ -61,14 +60,14 @@ evaluatorSettings {
 `;
 
 /**
- * Schema.pkl の `anthropicV1("anthropic", "api.anthropic.com")` を実際の
+ * Schema.pkl の `presets.anthropic.v1` を実際の
  * pkl 評価 + loadConfig 経由で解決し、runtime contract を返す。
  *
  * `loadConfig` は評価前に `.nas/Schema.pkl` をアセットから上書きするため、
  * リポジトリの Schema.pkl を指す一時アセットツリーを `NAS_ASSET_DIR` で
  * 差し込んで hermetic にする。
  */
-export async function generateAnthropicV1Fixture(): Promise<ResolvedReviewRules> {
+export async function generateAnthropicV1Fixture(): Promise<ResolvedDocument> {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-fixture-"));
   try {
     const assetDir = path.join(tmpDir, "assets");
@@ -89,7 +88,18 @@ export async function generateAnthropicV1Fixture(): Promise<ResolvedReviewRules>
       { NAS_ASSET_DIR: assetDir, NAS_CONFIG_TRUST_ALL: "1" },
       () => loadConfig({ startDir: projectDir }),
     );
-    return resolveReviewRules(config.profiles.fixture.network.reviewRules);
+    const profile = config.profiles.fixture;
+    const resolved = resolveAuthzConfig({
+      secrets: profile.secrets,
+      mask: profile.mask,
+      network: profile.network,
+    });
+    if (resolved.document === null) {
+      throw new Error(
+        resolved.diagnostics.map((entry) => entry.message).join("\n"),
+      );
+    }
+    return resolved.document;
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -118,5 +128,5 @@ if (import.meta.main) {
   const resolved = await generateAnthropicV1Fixture();
   const target = path.join(import.meta.dir, "..", FIXTURE_PATH);
   await writeFile(target, `${JSON.stringify(resolved, null, 2)}\n`);
-  console.log(`wrote ${FIXTURE_PATH} (${resolved.rules.length} rules)`);
+  console.log(`wrote ${FIXTURE_PATH} (${resolved.scopes.length} scopes)`);
 }

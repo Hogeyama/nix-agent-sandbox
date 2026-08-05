@@ -2,8 +2,8 @@
  * Tests for `createPendingActionHandlers`.
  *
  * The handler factory is the canonical pin for two contracts:
- *   - Network deny forwards the currently selected scope (with a
- *     `host-port` default), hostexec deny does not pass scope at all.
+ *   - Network deny forwards the currently selected scope, clamped to the
+ *     grains the entry offers; hostexec deny does not pass scope at all.
  *   - Approve/Deny round-trips wrap the client call in
  *     `pending.beginAction(key)` / `pending.endAction(key, error?)` so
  *     the per-card busy flag and error message stay in sync with the
@@ -25,7 +25,7 @@ import type {
 import { createPendingStore } from "../stores/pendingStore";
 import {
   createPendingActionHandlers,
-  DEFAULT_NETWORK_SCOPE,
+  networkScopeFor,
   type PendingActionClient,
 } from "./createPendingActionHandlers";
 
@@ -44,6 +44,9 @@ function makeNetworkRow(
     summary: "example.com:443",
     createdAtMs: 0,
     reviewContext: null,
+    ruleId: "api.ask",
+    approvalScopes: ["once", "host-port", "host"],
+    injectHeaders: [],
     ...overrides,
   };
 }
@@ -127,6 +130,26 @@ function makeFakeClient(
   };
 }
 
+describe("networkScopeFor", () => {
+  test("keeps a selection the entry offers", () => {
+    const row = makeNetworkRow({
+      approvalScopes: ["once", "host-port", "host"],
+    });
+    expect(networkScopeFor(row, "host")).toBe("host");
+  });
+
+  test("falls back to the narrowest grain the entry offers", () => {
+    const row = makeNetworkRow({ approvalScopes: ["once", "rule"] });
+    expect(networkScopeFor(row, undefined)).toBe("once");
+    expect(networkScopeFor(row, "host-port")).toBe("once");
+  });
+
+  test("falls back to once when the entry offers nothing", () => {
+    const row = makeNetworkRow({ approvalScopes: [] });
+    expect(networkScopeFor(row, "host")).toBe("once");
+  });
+});
+
 describe("createPendingActionHandlers — onApprove", () => {
   test("network row calls client.approveNetwork with (sessionId, requestId, scope)", async () => {
     const client = makeFakeClient();
@@ -192,7 +215,7 @@ describe("createPendingActionHandlers — onDeny", () => {
     expect(client.denyNetwork).toHaveBeenCalledWith("sess-1", "req-1", "host");
   });
 
-  test("network row defaults to host-port when no scope has been chosen", async () => {
+  test("network row defaults to the narrowest scope the entry offers", async () => {
     const client = makeFakeClient();
     const pendingAction = createPendingActionStore();
     const pending = createPendingStore();
@@ -202,16 +225,39 @@ describe("createPendingActionHandlers — onDeny", () => {
       pendingAction,
     });
 
-    const row = makeNetworkRow({ sessionId: "sess-1", id: "req-1" });
+    const row = makeNetworkRow({
+      sessionId: "sess-1",
+      id: "req-1",
+      approvalScopes: ["once", "rule"],
+    });
     await handlers.onDeny(row);
 
     expect(client.denyNetwork).toHaveBeenCalledTimes(1);
-    expect(client.denyNetwork).toHaveBeenCalledWith(
-      "sess-1",
-      "req-1",
-      DEFAULT_NETWORK_SCOPE,
-    );
-    expect(DEFAULT_NETWORK_SCOPE).toBe("host-port");
+    expect(client.denyNetwork).toHaveBeenCalledWith("sess-1", "req-1", "once");
+  });
+
+  test("network row drops a selected scope the entry does not offer", async () => {
+    // The chip set is rebuilt from every pending snapshot, so a selection
+    // made against an older set must not be forwarded: the backend would
+    // refuse it, and if it did not, it would widen past what was shown.
+    const client = makeFakeClient();
+    const pendingAction = createPendingActionStore();
+    const pending = createPendingStore();
+    const handlers = createPendingActionHandlers({
+      client,
+      pending,
+      pendingAction,
+    });
+
+    const row = makeNetworkRow({
+      sessionId: "sess-1",
+      id: "req-1",
+      approvalScopes: ["once", "rule"],
+    });
+    pendingAction.setScope(row.key, "host");
+    await handlers.onDeny(row);
+
+    expect(client.denyNetwork).toHaveBeenCalledWith("sess-1", "req-1", "once");
   });
 
   test("hostexec row calls client.denyHostExec with exactly two arguments", async () => {

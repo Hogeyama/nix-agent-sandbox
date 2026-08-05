@@ -62,6 +62,7 @@ function makeProfile(overrides: ProfileOverrides = {}): Profile {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
     ...rest,
   };
 }

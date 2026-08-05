@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { queryAuditLogs } from "../audit/store.ts";
 import { _resetNotifySendCache } from "../lib/notify_utils.ts";
+import type { ResolvedDocument } from "./authz/resolve.ts";
+import { documentWithScopes, resolvedDocument } from "./authz/testing.ts";
 import { SessionBroker, sendBrokerRequest } from "./broker.ts";
 import type {
   AuthorizeRequest,
@@ -21,9 +23,10 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ host: "example.com", action: "allow" }],
+    document: documentWithScopes({
+      example: { targets: ["example.com"], fallback: "allow" },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
   });
@@ -35,12 +38,12 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
       authorize("sess_test", "req_1", "example.com", 443),
     );
     expect(response.decision).toEqual("allow");
-    expect(response.reason).toEqual("review-rule");
+    expect(response.reason).toEqual("scope-fallback");
 
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
     expect(logs.length).toEqual(1);
     expect(logs[0].decision).toEqual("allow");
-    expect(logs[0].reason).toEqual("review-rule");
+    expect(logs[0].reason).toEqual("scope-fallback");
     expect(logs[0].phase).toEqual("authorization");
     expect(logs[0].target).toEqual("example.com:443");
     expect(logs[0].requestId).toEqual("req_1");
@@ -51,33 +54,63 @@ test("SessionBroker: allow rule returns allow immediately", async () => {
   }
 });
 
-const JSON_REQUEST_POLICY = {
-  kind: "json" as const,
-  maxBodyBytes: 1024,
-  maxDepth: 8,
-  maxNodes: 100,
-  maxDecodedBytes: 1024,
-  taggedUnions: [],
-  encodedFields: [],
-};
-const OUTCOME_RULES = [
-  {
-    id: "policy.bodyless",
-    method: "GET",
-    path: "/health",
-    action: "allow" as const,
-    requestPolicy: { kind: "bodyless" as const },
+const OUTCOME_DOCUMENT = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "allow",
+    rules: {
+      bodyless: {
+        match: { methods: ["GET"], paths: ["/health"] },
+        onMatch: "allow",
+        expect: [{ kind: "emptyBody" }],
+      },
+      json: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/messages"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+      },
+    },
   },
-  {
-    id: "policy.json",
-    method: "POST",
-    path: "/v1/messages",
-    action: "allow" as const,
-    requestPolicy: JSON_REQUEST_POLICY,
+});
+
+const POST_REVIEW_DOCUMENT = documentWithScopes({
+  openai: {
+    targets: ["*.openai.com"],
+    fallback: "allow",
+    rules: {
+      post: {
+        match: { methods: ["POST"], paths: ["/**"] },
+        onMatch: "review",
+      },
+    },
   },
-  { id: "ordinary", action: "allow" as const },
-  { action: "allow" as const },
-];
+});
+
+const UNAUDITED_OUTCOME_DOCUMENT = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "allow",
+    audit: "off",
+    rules: {
+      bodyless: {
+        match: { methods: ["GET"], paths: ["/health"] },
+        onMatch: "allow",
+        expect: [{ kind: "emptyBody" }],
+      },
+      json: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/messages"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+      },
+    },
+  },
+});
 
 test("SessionBroker: request policy outcome rejects the closed invalid matrix without auditing", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-policy-"));
@@ -86,9 +119,8 @@ test("SessionBroker: request policy outcome rejects the closed invalid matrix wi
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_policy",
-    reviewRules: OUTCOME_RULES,
+    document: OUTCOME_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
   });
@@ -100,28 +132,14 @@ test("SessionBroker: request policy outcome rejects the closed invalid matrix wi
       ["malformed rule ID", { ruleId: "Policy JSON" }],
       ["unknown rule ID", { ruleId: "unknown" }],
       ["ID-less rule ID", { ruleId: "" }],
-      ["non-policy rule ID", { ruleId: "ordinary" }],
+      ["rule ID from another scope", { ruleId: "other.json" }],
       ["unknown result", { result: "allow" }],
       ["unknown reason", { reason: "raw-secret-reason" }],
+      ["pass with a rewrite reason", { result: "pass", reason: "masked-json" }],
+      ["pass with a block reason", { result: "pass", reason: "invalid-json" }],
       [
-        "bodyless/JSON mismatch",
-        {
-          ruleId: "policy.bodyless",
-          result: "pass",
-          reason: "recognized-json",
-        },
-      ],
-      [
-        "JSON/bodyless mismatch",
-        { ruleId: "policy.json", result: "pass", reason: "empty-body" },
-      ],
-      [
-        "invalid rewrite",
-        {
-          ruleId: "policy.bodyless",
-          result: "rewrite",
-          reason: "masked-json",
-        },
+        "rewrite with a pass reason",
+        { result: "rewrite", reason: "recognized-json" },
       ],
       ["block with success reason", { result: "block", reason: "masked-json" }],
       ["unexpected raw target", { target: "sensitive.example" }],
@@ -159,9 +177,8 @@ test("SessionBroker: request policy outcome derives audit metadata from broker r
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_policy",
-    reviewRules: OUTCOME_RULES,
+    document: OUTCOME_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
   });
@@ -175,9 +192,7 @@ test("SessionBroker: request policy outcome derives audit metadata from broker r
         result: "pass",
         reason: "empty-body",
         decision: "allow",
-        method: "GET",
         route: "/health",
-        kind: "bodyless",
       },
       {
         requestId: "req-json-rewrite",
@@ -185,9 +200,7 @@ test("SessionBroker: request policy outcome derives audit metadata from broker r
         result: "rewrite",
         reason: "masked-json",
         decision: "allow",
-        method: "POST",
         route: "/v1/messages",
-        kind: "json",
       },
       {
         requestId: "req-json-block",
@@ -195,9 +208,7 @@ test("SessionBroker: request policy outcome derives audit metadata from broker r
         result: "block",
         reason: "invalid-json",
         decision: "deny",
-        method: "POST",
         route: "/v1/messages",
-        kind: "json",
       },
     ] as const;
 
@@ -231,9 +242,8 @@ test("SessionBroker: request policy outcome derives audit metadata from broker r
         ruleId: outcome.ruleId,
         decision: outcome.decision,
         reason: outcome.reason,
-        method: outcome.method,
+        // 経路はルールが宣言したパターン。リクエストのパスは報告に載らない。
         route: outcome.route,
-        requestPolicyKind: outcome.kind,
         requestPolicyResult: outcome.result,
       });
       expect(log?.target).toBeUndefined();
@@ -252,9 +262,8 @@ test("SessionBroker: request policy outcome is acknowledged without an audit dir
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_policy",
-    reviewRules: OUTCOME_RULES,
+    document: OUTCOME_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_policy/sock`;
@@ -286,11 +295,8 @@ test("SessionBroker: request policy outcome with audit false records no row", as
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_policy_no_audit",
-    reviewRules: OUTCOME_RULES.map((rule) =>
-      rule.id === "policy.json" ? { ...rule, audit: false } : rule,
-    ),
+    document: UNAUDITED_OUTCOME_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
   });
@@ -327,11 +333,8 @@ test("SessionBroker: request policy outcome with audit false ignores audit-store
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_policy_no_audit",
-    reviewRules: OUTCOME_RULES.map((rule) =>
-      rule.id === "policy.json" ? { ...rule, audit: false } : rule,
-    ),
+    document: UNAUDITED_OUTCOME_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir: invalidAuditDir,
   });
@@ -370,9 +373,8 @@ test("SessionBroker: request-policy outcome audit unavailable returns a sanitize
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_policy",
-    reviewRules: OUTCOME_RULES,
+    document: OUTCOME_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir: invalidAuditDir,
   });
@@ -412,9 +414,8 @@ test("SessionBroker: pending request resumes after approve", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
   });
@@ -448,7 +449,7 @@ test("SessionBroker: pending request resumes after approve", async () => {
   }
 });
 
-test("SessionBroker: grouped pending waiters retain rule ID credentials and audit behavior", async () => {
+test("SessionBroker: each rule's waiters keep their own credentials and audit behavior", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grouped-"));
   const auditDir = await mkdtemp(
     path.join(tmpdir(), "nas-broker-grouped-audit-"),
@@ -457,97 +458,277 @@ test("SessionBroker: grouped pending waiters retain rule ID credentials and audi
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_grouped",
-    reviewRules: [
-      {
-        id: "review.path-a",
-        method: "POST",
-        path: "/path-a",
-        action: "review",
-        audit: true,
+    document: resolvedDocument({
+      secrets: {
+        "cred-a": { from: "env:A" },
+        "cred-b": { from: "env:B" },
+        "cred-c": { from: "env:C" },
       },
-      {
-        id: "review.path-b",
-        method: "POST",
-        path: "/path-b",
-        action: "review",
-        audit: false,
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com"],
+            secrets: {
+              "cred-a": "inject",
+              "cred-b": "inject",
+              "cred-c": "inject",
+            },
+            rules: {
+              "path-a": {
+                match: { methods: ["POST"], paths: ["/path-a"] },
+                onMatch: "review",
+                inject: [{ name: "X-Path-A", value: "secret:cred-a" }],
+              },
+              "path-b": {
+                match: { methods: ["POST"], paths: ["/path-b"] },
+                onMatch: "review",
+                inject: [{ name: "X-Path-B", value: "secret:cred-b" }],
+              },
+              "path-c": {
+                match: { methods: ["POST"], paths: ["/path-c"] },
+                onMatch: "review",
+                audit: "off",
+                inject: [{ name: "X-Path-C", value: "secret:cred-c" }],
+              },
+            },
+          },
+        },
       },
-    ],
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "once",
     pendingNotify: "off",
     auditDir,
-    resolvedCredentials: [
-      {
-        host: "api.example.com",
-        pathPrefix: "/path-a",
-        header: "X-Path-A",
-        value: "credential-a",
-      },
-      {
-        host: "api.example.com",
-        pathPrefix: "/path-b",
-        header: "X-Path-B",
-        value: "credential-b",
-      },
-    ],
+    secretValues: {
+      "cred-a": ["credential-a"],
+      "cred-b": ["credential-b"],
+      "cred-c": ["credential-c"],
+    },
   });
   const socketPath = `${paths.brokersDir}/sess_grouped/sock`;
   await broker.start(socketPath);
+  const authorizationLogs = async () =>
+    (await queryAuditLogs({ domain: "network" }, auditDir)).filter(
+      (entry) => entry.phase === "authorization",
+    );
   try {
-    const pathA = sendBrokerRequest<DecisionResponse>(socketPath, {
-      ...authorize("sess_grouped", "req_grouped_a", "api.example.com", 443),
-      method: "POST",
-      reviewContext: {
-        path: "/path-a",
-        contentType: null,
-        bodyPreview: null,
-        bodySize: 0,
-      },
-    });
-    const pathB = sendBrokerRequest<DecisionResponse>(socketPath, {
-      ...authorize("sess_grouped", "req_grouped_b", "api.example.com", 443),
-      method: "POST",
-      reviewContext: {
-        path: "/path-b",
-        contentType: null,
-        bodyPreview: null,
-        bodySize: 0,
-      },
-    });
+    const firstA = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_grouped", "req_grouped_a1", "/path-a"),
+    );
+    const secondA = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_grouped", "req_grouped_a2", "/path-a"),
+    );
+    const pathB = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_grouped", "req_grouped_b", "/path-b"),
+    );
+    const pathC = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_grouped", "req_grouped_c", "/path-c"),
+    );
 
-    const pending = await waitForPending(socketPath, 2);
+    const pending = await waitForPending(socketPath, 4);
     expect(pending.items.map((item) => item.requestId).sort()).toEqual([
-      "req_grouped_a",
+      "req_grouped_a1",
+      "req_grouped_a2",
       "req_grouped_b",
+      "req_grouped_c",
     ]);
-    await sendBrokerRequest(socketPath, {
-      type: "approve",
-      requestId: "req_grouped_a",
-      scope: "once",
-    });
 
-    expect(await pathA).toMatchObject({
-      decision: "allow",
-      ruleId: "review.path-a",
-      injectHeaders: [{ name: "X-Path-A", value: "credential-a" }],
+    // Both /path-a requests are the same rule against the same target, so
+    // one press answers for both — and for neither of the other rules'.
+    expect(
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req_grouped_a1",
+        scope: "once",
+      }),
+    ).toEqual({
+      type: "ack",
+      requestId: "req_grouped_a1",
+      decision: "approve",
     });
+    for (const decision of [await firstA, await secondA]) {
+      expect(decision).toMatchObject({
+        decision: "allow",
+        ruleId: "api.path-a",
+        injectHeaders: [{ name: "X-Path-A", value: "credential-a" }],
+      });
+    }
+
+    // The card that was answered showed the /path-a requests and the header
+    // api.path-a injects. The other rules' requests were not on it, so they
+    // are still waiting and nothing has been let through in their name.
+    // Their entries are removed while `approve` is being answered, so this
+    // is the settled list rather than a snapshot taken mid-flight.
+    const stillPending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
+    expect(stillPending.items.map((item) => item.requestId).sort()).toEqual([
+      "req_grouped_b",
+      "req_grouped_c",
+    ]);
+    const afterA = await authorizationLogs();
+    expect(afterA.map((entry) => entry.requestId).sort()).toEqual([
+      "req_grouped_a1",
+      "req_grouped_a2",
+    ]);
+    for (const entry of afterA) {
+      expect(entry.injectedHeaders).toEqual(["X-Path-A"]);
+    }
+
+    // Each of the others still needs its own press, and gets its own
+    // credential when it is answered.
+    expect(
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req_grouped_b",
+        scope: "once",
+      }),
+    ).toEqual({ type: "ack", requestId: "req_grouped_b", decision: "approve" });
     expect(await pathB).toMatchObject({
       decision: "allow",
-      ruleId: "review.path-b",
+      ruleId: "api.path-b",
       injectHeaders: [{ name: "X-Path-B", value: "credential-b" }],
     });
 
-    const authorizationLogs = (
-      await queryAuditLogs({ domain: "network" }, auditDir)
-    ).filter((entry) => entry.phase === "authorization");
-    expect(authorizationLogs).toHaveLength(1);
-    expect(authorizationLogs[0].requestId).toEqual("req_grouped_a");
-    expect(authorizationLogs[0].injectedHeaders).toEqual(["X-Path-A"]);
+    expect(
+      await sendBrokerRequest(socketPath, {
+        type: "approve",
+        requestId: "req_grouped_c",
+        scope: "once",
+      }),
+    ).toEqual({ type: "ack", requestId: "req_grouped_c", decision: "approve" });
+    expect(await pathC).toMatchObject({
+      decision: "allow",
+      ruleId: "api.path-c",
+      injectHeaders: [{ name: "X-Path-C", value: "credential-c" }],
+    });
+
+    // api.path-c sets audit = "off", so its approval leaves no record while
+    // the other two rules keep theirs, each with the header it injects.
+    const finalLogs = await authorizationLogs();
+    expect(
+      finalLogs.map((entry) => [entry.requestId, entry.injectedHeaders]).sort(),
+    ).toEqual([
+      ["req_grouped_a1", ["X-Path-A"]],
+      ["req_grouped_a2", ["X-Path-A"]],
+      ["req_grouped_b", ["X-Path-B"]],
+    ]);
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+/**
+ * 実 ID が衝突した解決済みドキュメントを手で組む。
+ *
+ * この形は設定検査が弾くので `resolveAuthzConfig` からは出てこない。broker が
+ * その検査の結果だけに頼らず、承認をそれが出たターゲットに閉じ込めていることを
+ * 確かめるために、検査を通さずに組み立てる。
+ */
+function documentWithSharedRuleId(): ResolvedDocument {
+  const base = resolvedDocument({
+    secrets: { deploy: { from: "env:DEPLOY_TOKEN" } },
+    network: {
+      scopes: {
+        github: {
+          targets: ["api.github.com:443"],
+          rules: {
+            read: {
+              match: { methods: ["POST"], paths: ["/**"] },
+              onMatch: "review",
+            },
+          },
+        },
+        internal: {
+          targets: ["internal.example.com:443"],
+          secrets: { deploy: "inject" },
+          rules: {
+            read: {
+              match: { methods: ["POST"], paths: ["/**"] },
+              onMatch: "review",
+              inject: [
+                // biome-ignore lint/suspicious/noTemplateCurlyInString: `template:` の参照構文であってテンプレートリテラルではない
+                { name: "Authorization", value: "template:Bearer ${deploy}" },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+  return {
+    ...base,
+    scopes: base.scopes.map((scope) => ({
+      ...scope,
+      rules: scope.rules.map((rule) => ({ ...rule, id: "github.api.read" })),
+    })),
+  };
+}
+
+test("SessionBroker: a rule-grain approval releases only its own target", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grain-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_grain",
+    document: documentWithSharedRuleId(),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    secretValues: { deploy: ["deploy-token"] },
+  });
+  const socketPath = `${paths.brokersDir}/sess_grain/sock`;
+  await broker.start(socketPath);
+  try {
+    const shown = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_grain", "req_shown", "/x", "api.github.com"),
+    );
+    const shownPending = await waitForPending(socketPath);
+    // ターゲットを 1 つに固定したスコープなので「このルールが有効な間ずっと」を選べる。
+    expect(shownPending.items[0]?.approvalScopes).toContain("rule");
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_shown",
+      scope: "rule",
+    });
+    expect(await shown).toMatchObject({ decision: "allow" });
+
+    // 承認された相手は api.github.com:443 だけである。実 ID が同じでも、人が
+    // 見ていない internal.example.com:443 に答えが流用されてはならない。
+    const unseen = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_grain", "req_unseen", "/x", "internal.example.com"),
+    );
+    expect(
+      await Promise.race([
+        unseen.then((decision) => decision as DecisionResponse | "still-open"),
+        new Promise<"still-open">((resolve) =>
+          setTimeout(() => resolve("still-open"), 250),
+        ),
+      ]),
+    ).toEqual("still-open");
+    const unseenPending = await waitForPending(socketPath);
+    expect(unseenPending.items.map((item) => item.requestId)).toEqual([
+      "req_unseen",
+    ]);
+
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_unseen",
+      scope: "once",
+    });
+    const denied = await unseen;
+    expect(denied).toMatchObject({ decision: "deny" });
+    expect(JSON.stringify(denied)).not.toContain("deploy-token");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -593,9 +774,8 @@ true
     const broker = new SessionBroker({
       paths,
       sessionId: "sess_test",
-      reviewRules: [{ action: "review" }],
+      document: documentWithScopes({}, "review"),
       pendingTimeoutSeconds: 30,
-      pendingDefaultScope: "host-port",
       pendingNotify: "desktop",
       uiPort: healthServer.port,
     });
@@ -653,9 +833,10 @@ test("SessionBroker: deny rule returns deny immediately", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ host: "evil.com", action: "deny" }],
+    document: documentWithScopes({
+      evil: { targets: ["evil.com"], fallback: "deny" },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
   });
@@ -667,12 +848,12 @@ test("SessionBroker: deny rule returns deny immediately", async () => {
       authorize("sess_test", "req_deny", "evil.com", 443),
     );
     expect(response.decision).toEqual("deny");
-    expect(response.reason).toEqual("review-rule");
+    expect(response.reason).toEqual("scope-fallback");
 
     const logs = await queryAuditLogs({ domain: "network" }, auditDir);
     expect(logs.length).toEqual(1);
     expect(logs[0].decision).toEqual("deny");
-    expect(logs[0].reason).toEqual("review-rule");
+    expect(logs[0].reason).toEqual("scope-fallback");
     expect(logs[0].target).toEqual("evil.com:443");
   } finally {
     await broker.close();
@@ -687,9 +868,10 @@ test("SessionBroker: first-match: *.example.com allow rule matches sub.example.c
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ host: "*.example.com", action: "allow" }],
+    document: documentWithScopes({
+      example: { targets: ["*.example.com"], fallback: "allow" },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -700,45 +882,46 @@ test("SessionBroker: first-match: *.example.com allow rule matches sub.example.c
       authorize("sess_test", "req_wild_allow", "sub.example.com", 443),
     );
     expect(response.decision).toEqual("allow");
-    expect(response.reason).toEqual("review-rule");
+    expect(response.reason).toEqual("scope-fallback");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-test("SessionBroker: first-match: sub.example.com allow wins over *.example.com deny for other.example.com", async () => {
+test("SessionBroker: the narrower scope wins over the wildcard that contains it", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [
-      { host: "sub.example.com", action: "allow" },
-      { host: "*.example.com", action: "deny" },
-    ],
+    document: documentWithScopes({
+      // 宣言順は特異な側が先だが、選択は位置ではなくターゲットの特異度で決まる。
+      sub: { targets: ["sub.example.com"], fallback: "allow" },
+      wide: { targets: ["*.example.com"], fallback: "deny" },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
-    // sub.example.com matches first rule → allow
+    // sub.example.com belongs to the exact scope even though the wildcard
+    // also matches it.
     const allowResponse = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_allow_sub", "sub.example.com", 443),
     );
     expect(allowResponse.decision).toEqual("allow");
-    expect(allowResponse.reason).toEqual("review-rule");
+    expect(allowResponse.ruleId).toEqual("sub.$fallback");
 
-    // other.example.com skips first rule, matches second → deny
+    // other.example.com only matches the wildcard.
     const denyResponse = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_deny_other", "other.example.com", 443),
     );
     expect(denyResponse.decision).toEqual("deny");
-    expect(denyResponse.reason).toEqual("review-rule");
+    expect(denyResponse.reason).toEqual("scope-fallback");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -751,9 +934,8 @@ test("SessionBroker: denied target is cached as recent-deny", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -792,9 +974,8 @@ test("SessionBroker: negative cache expires after TTL", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     negativeCacheTtlMs: 50,
   });
@@ -851,9 +1032,8 @@ test("SessionBroker: deny with host-port scope persists beyond negative-cache TT
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     negativeCacheTtlMs: 50,
   });
@@ -897,9 +1077,8 @@ test("SessionBroker: approve after group already resolved returns error", async 
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -968,9 +1147,10 @@ test("SessionBroker: deny-by-default targets blocked even with allow rule", asyn
     const broker = new SessionBroker({
       paths,
       sessionId: "sess_test",
-      reviewRules: [{ host: host, action: "allow" }],
+      document: documentWithScopes({
+        target: { targets: [host], fallback: "allow" },
+      }),
       pendingTimeoutSeconds: 30,
-      pendingDefaultScope: "host-port",
       pendingNotify: "off",
     });
     const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -996,9 +1176,8 @@ test("SessionBroker: approve with unknown scope is rejected and request stays pe
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_scope",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
   });
@@ -1046,15 +1225,318 @@ test("SessionBroker: approve with unknown scope is rejected and request stays pe
   }
 });
 
+const GRANULARITY_DOCUMENT = documentWithScopes(
+  {
+    pinned: {
+      targets: ["api.example.com:443"],
+      rules: {
+        ask: { match: { paths: ["/**"] }, onMatch: "review" },
+      },
+    },
+    wild: {
+      targets: ["*.example.org"],
+      rules: {
+        ask: { match: { paths: ["/**"] }, onMatch: "review" },
+      },
+    },
+  },
+  "review",
+);
+
+test("SessionBroker: the offered granularity follows the scope's target", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grain-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_grain",
+    document: GRANULARITY_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_grain/sock`;
+  await broker.start(socketPath);
+  try {
+    const waiting = [
+      sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        authorize("sess_grain", "req_pinned", "api.example.com", 443),
+      ),
+      sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        authorize("sess_grain", "req_wild", "sub.example.org", 443),
+      ),
+      sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        authorize("sess_grain", "req_unscoped", "elsewhere.test", 443),
+      ),
+    ];
+    const pending = await waitForPending(socketPath, 3);
+    const grainOf = (requestId: string) =>
+      pending.items.find((item) => item.requestId === requestId);
+
+    // The scope fixes host and port, so host / host:port would say the same
+    // thing twice. The only real question left is how long it lasts.
+    expect(grainOf("req_pinned")).toMatchObject({
+      ruleId: "pinned.ask",
+      approvalScopes: ["once", "rule"],
+    });
+    // A wildcard scope does not say which host the rule ran against, so the
+    // target still has to be pinned by hand.
+    expect(grainOf("req_wild")).toMatchObject({
+      ruleId: "wild.ask",
+      approvalScopes: ["once", "host-port", "host"],
+    });
+    // Nothing claimed this target at all.
+    expect(grainOf("req_unscoped")).toMatchObject({
+      ruleId: "$fallback",
+      approvalScopes: ["once", "host-port", "host"],
+    });
+
+    for (const requestId of ["req_pinned", "req_wild", "req_unscoped"]) {
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId,
+        scope: "once",
+      });
+    }
+    await Promise.all(waiting);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: a granularity the entry does not offer is refused", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grain-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_grain_refuse",
+    document: GRANULARITY_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_grain_refuse/sock`;
+  await broker.start(socketPath);
+  try {
+    const waiting = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_grain_refuse", "req_pinned", "api.example.com", 443),
+    );
+    await waitForPending(socketPath);
+    const refused = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, {
+      type: "approve",
+      requestId: "req_pinned",
+      scope: "host",
+    });
+    expect(refused.type).toEqual("error");
+    expect(refused.message.toLowerCase()).toContain("scope not allowed");
+
+    // The wildcard scope is the one that offers "host"; "rule" is refused
+    // there for the same reason, in the other direction.
+    const wildWaiting = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_grain_refuse", "req_wild", "sub.example.org", 443),
+    );
+    await waitForPending(socketPath, 2);
+    const refusedRule = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, {
+      type: "approve",
+      requestId: "req_wild",
+      scope: "rule",
+    });
+    expect(refusedRule.type).toEqual("error");
+
+    for (const requestId of ["req_pinned", "req_wild"]) {
+      await sendBrokerRequest(socketPath, {
+        type: "deny",
+        requestId,
+        scope: "once",
+      });
+    }
+    expect((await waiting).decision).toEqual("deny");
+    expect((await wildWaiting).decision).toEqual("deny");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: approving for the life of the rule answers its later requests", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grain-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_grain_rule",
+    document: GRANULARITY_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_grain_rule/sock`;
+  await broker.start(socketPath);
+  try {
+    const waiting = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_grain_rule", "req_first", "api.example.com", 443),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_first",
+      scope: "rule",
+    });
+    expect((await waiting).decision).toEqual("allow");
+
+    const later = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_grain_rule", "req_later", "api.example.com", 443),
+    );
+    expect(later.decision).toEqual("allow");
+    expect(later.reason).toEqual("approved");
+    expect(later.ruleId).toEqual("pinned.ask");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: an approval for an inspected body does not release an uninspectable one", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grain-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_reason",
+    document: resolvedDocument({
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com:443"],
+            rules: {
+              messages: {
+                match: { paths: ["/v1/messages"], body: { format: "json" } },
+                onMatch: "review",
+                onIndeterminate: "review",
+                expect: [{ kind: "jsonRoot", rootType: "object" }],
+              },
+            },
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_reason/sock`;
+  await broker.start(socketPath);
+  try {
+    const parseable = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...post("sess_reason", "req_json", "/v1/messages"),
+      reviewContext: {
+        path: "/v1/messages",
+        contentType: "application/json",
+        bodyPreview: null,
+        bodySize: 2,
+        bodyKind: "json",
+      },
+    });
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_json",
+      scope: "rule",
+    });
+    expect((await parseable).decision).toEqual("allow");
+
+    // The body of that request was inspected before it was shown. A body
+    // that cannot be parsed at all skips every acceptance condition, so the
+    // approval just granted does not answer for it.
+    const broken = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...post("sess_reason", "req_broken", "/v1/messages"),
+      reviewContext: {
+        path: "/v1/messages",
+        contentType: "application/json",
+        bodyPreview: null,
+        bodySize: 7,
+        bodyKind: "binary",
+      },
+    });
+    const answeredFromCache = await Promise.race([
+      broken,
+      waitForPending(socketPath).then(() => null),
+    ]);
+    expect(answeredFromCache).toBeNull();
+
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_broken",
+      scope: "once",
+    });
+    expect((await broken).decision).toEqual("deny");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: an approval that names no granularity is not remembered", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-grain-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_grain_default",
+    document: GRANULARITY_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_grain_default/sock`;
+  await broker.start(socketPath);
+  try {
+    const waiting = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_grain_default", "req_first", "sub.example.org", 443),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_first",
+    });
+    expect((await waiting).decision).toEqual("allow");
+
+    // Nobody said how far that approval reached, so the next request of the
+    // same rule against the same target asks again.
+    const later = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize("sess_grain_default", "req_later", "sub.example.org", 443),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items.map((item) => item.requestId)).toEqual(["req_later"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_later",
+      scope: "once",
+    });
+    expect((await later).decision).toEqual("deny");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("SessionBroker: close resolves pending request", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -1071,24 +1553,20 @@ test("SessionBroker: close resolves pending request", async () => {
   await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
 });
 
-test("SessionBroker: review rule on POST sends to pending, allow rule handles GET", async () => {
+test("SessionBroker: a POST rule sends to pending while the scope fallback allows GET", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [
-      { method: "POST", host: "*.openai.com", action: "review" },
-      { host: "api.openai.com", action: "allow" },
-    ],
+    document: POST_REVIEW_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
-    // POST to api.openai.com: first rule matches (POST + *.openai.com) → pending
+    // POST に一致するルールが引き受けるので pending に回る。
     const authorizePromise = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_test", "req_review_1", "api.openai.com", 443),
       method: "POST",
@@ -1097,6 +1575,7 @@ test("SessionBroker: review rule on POST sends to pending, allow rule handles GE
         contentType: "application/json",
         bodyPreview: '{"model":"gpt-4"}',
         bodySize: 18,
+        bodyKind: "json",
       },
     });
     const pending = await waitForPending(socketPath);
@@ -1123,45 +1602,42 @@ test("SessionBroker: review rule on POST sends to pending, allow rule handles GE
   }
 });
 
-test("SessionBroker: GET to host with review-POST rule falls through to allow rule", async () => {
+test("SessionBroker: a GET the POST rule declines falls to the scope fallback", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [
-      { method: "POST", host: "*.openai.com", action: "review" },
-      { host: "api.openai.com", action: "allow" },
-    ],
+    document: POST_REVIEW_DOCUMENT,
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
   try {
-    // GET to api.openai.com: first rule skipped (method mismatch), second rule matches → allow
+    // メソッドが合わないのでルールは辞退し、スコープの fallback が拾う。
     const response = await sendBrokerRequest<DecisionResponse>(
       socketPath,
       authorize("sess_test", "req_get", "api.openai.com", 443),
     );
     expect(response.decision).toEqual("allow");
-    expect(response.reason).toEqual("review-rule");
+    expect(response.reason).toEqual("scope-fallback");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-test("SessionBroker: no matching rule returns deny", async () => {
+test("SessionBroker: a target outside every scope falls to the network fallback", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ host: "allowed.com", action: "allow" }],
+    document: documentWithScopes({
+      allowed: { targets: ["allowed.com"], fallback: "allow" },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
@@ -1172,12 +1648,33 @@ test("SessionBroker: no matching rule returns deny", async () => {
       authorize("sess_test", "req_no_match", "other.com", 443),
     );
     expect(response.decision).toEqual("deny");
-    expect(response.reason).toEqual("no-matching-rule");
+    expect(response.reason).toEqual("network-fallback");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+function post(
+  sessionId: string,
+  requestId: string,
+  requestPath: string,
+  host = "api.example.com",
+  port = 443,
+): AuthorizeRequest {
+  return {
+    ...authorize(sessionId, requestId, host, port),
+    method: "POST",
+    requestKind: "forward",
+    reviewContext: {
+      path: requestPath,
+      contentType: null,
+      bodyPreview: null,
+      bodySize: 0,
+      bodyKind: "absent",
+    },
+  };
+}
 
 async function waitForPending(
   socketPath: string,
@@ -1239,18 +1736,23 @@ test("SessionBroker: allow decision includes injectHeaders for matching credenti
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_cred",
-    reviewRules: [{ host: "github.com", action: "allow" }],
+    document: resolvedDocument({
+      secrets: { "gh-token": { from: "env:GH" } },
+      network: {
+        scopes: {
+          github: {
+            targets: ["github.com"],
+            fallback: "allow",
+            secrets: { "gh-token": "inject" },
+            inject: [{ name: "Authorization", value: "secret:gh-token" }],
+          },
+        },
+      },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
     auditDir,
-    resolvedCredentials: [
-      {
-        host: "github.com",
-        header: "Authorization",
-        value: "token ghp_test123",
-      },
-    ],
+    secretValues: { "gh-token": ["token ghp_test123"] },
   });
   const socketPath = `${paths.brokersDir}/sess_cred/sock`;
   await broker.start(socketPath);
@@ -1280,17 +1782,22 @@ test("SessionBroker: deny decision does not include injectHeaders", async () => 
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_cred",
-    reviewRules: [{ host: "github.com", action: "deny" }],
-    pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
-    pendingNotify: "off",
-    resolvedCredentials: [
-      {
-        host: "github.com",
-        header: "Authorization",
-        value: "token ghp_test123",
+    document: resolvedDocument({
+      secrets: { "gh-token": { from: "env:GH" } },
+      network: {
+        scopes: {
+          github: {
+            targets: ["github.com"],
+            fallback: "deny",
+            secrets: { "gh-token": "inject" },
+            inject: [{ name: "Authorization", value: "secret:gh-token" }],
+          },
+        },
       },
-    ],
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    secretValues: { "gh-token": ["token ghp_test123"] },
   });
   const socketPath = `${paths.brokersDir}/sess_cred/sock`;
   await broker.start(socketPath);
@@ -1313,11 +1820,12 @@ test("SessionBroker: allow decision includes maskValues", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ host: "example.com", action: "allow" }],
+    document: documentWithScopes({
+      example: { targets: ["example.com"], fallback: "allow" },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
-    maskValues: ["s3cret-value"],
+    secretValues: { workspace: ["s3cret-value"] },
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
@@ -1340,11 +1848,12 @@ test("SessionBroker: deny decision does not include maskValues", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ host: "example.com", action: "deny" }],
+    document: documentWithScopes({
+      example: { targets: ["example.com"], fallback: "deny" },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
-    maskValues: ["s3cret-value"],
+    secretValues: { workspace: ["s3cret-value"] },
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
@@ -1367,11 +1876,10 @@ test("SessionBroker: pending entry reviewContext is masked", async () => {
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [{ action: "review" }],
+    document: documentWithScopes({}, "review"),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
-    maskValues: ["s3cret-value"],
+    secretValues: { workspace: ["s3cret-value"] },
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
@@ -1383,6 +1891,7 @@ test("SessionBroker: pending entry reviewContext is masked", async () => {
         contentType: "application/x-www-form-urlencoded",
         bodyPreview: "data=s3cret-value",
         bodySize: 17,
+        bodyKind: "absent" as const,
       },
     };
     const authorizePromise = sendBrokerRequest<DecisionResponse>(
@@ -1407,23 +1916,27 @@ test("SessionBroker: pending entry reviewContext is masked", async () => {
   }
 });
 
-test("SessionBroker: review-rule pathPrefix matches unmasked path even when it contains a mask secret", async () => {
+test("SessionBroker: a rule's path matches the unmasked path even when it holds a secret", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_test",
-    reviewRules: [
-      {
-        host: "api.example.com",
-        pathPrefix: "/accounts/s3cret-value",
-        action: "allow",
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        fallback: "deny",
+        rules: {
+          account: {
+            match: { paths: ["/accounts/s3cret-value/**"] },
+            onMatch: "allow",
+          },
+        },
       },
-    ],
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
-    maskValues: ["s3cret-value"],
+    secretValues: { workspace: ["s3cret-value"] },
   });
   const socketPath = `${paths.brokersDir}/sess_test/sock`;
   await broker.start(socketPath);
@@ -1435,35 +1948,51 @@ test("SessionBroker: review-rule pathPrefix matches unmasked path even when it c
         contentType: null,
         bodyPreview: null,
         bodySize: 0,
+        bodyKind: "absent",
       },
     });
     expect(response.decision).toEqual("allow");
-    expect(response.reason).toEqual("review-rule");
+    expect(response.ruleId).toEqual("api.account");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-test("SessionBroker: credential pathPrefix matches unmasked path even when it contains a mask secret", async () => {
+test("SessionBroker: an inject rule matches the unmasked path even when it holds a secret", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_cred_mask",
-    reviewRules: [{ host: "api.example.com", action: "allow" }],
-    pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
-    pendingNotify: "off",
-    maskValues: ["s3cret-value"],
-    resolvedCredentials: [
-      {
-        host: "api.example.com",
-        header: "Authorization",
-        value: "token ghp_test123",
-        pathPrefix: "/accounts/s3cret-value",
+    document: resolvedDocument({
+      secrets: {
+        workspace: { from: "env:WORKSPACE" },
+        "api-token": { from: "env:API" },
       },
-    ],
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com"],
+            fallback: "allow",
+            secrets: { "api-token": "inject" },
+            rules: {
+              account: {
+                match: { paths: ["/accounts/s3cret-value/**"] },
+                onMatch: "allow",
+                inject: [{ name: "Authorization", value: "secret:api-token" }],
+              },
+            },
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    secretValues: {
+      workspace: ["s3cret-value"],
+      "api-token": ["token ghp_test123"],
+    },
   });
   const socketPath = `${paths.brokersDir}/sess_cred_mask/sock`;
   await broker.start(socketPath);
@@ -1480,6 +2009,7 @@ test("SessionBroker: credential pathPrefix matches unmasked path even when it co
         contentType: null,
         bodyPreview: null,
         bodySize: 0,
+        bodyKind: "absent",
       },
     });
     expect(response.decision).toEqual("allow");
@@ -1492,20 +2022,35 @@ test("SessionBroker: credential pathPrefix matches unmasked path even when it co
   }
 });
 
-test("SessionBroker: all-match injects multiple credentials for same host", async () => {
+test("SessionBroker: a scope may inject more than one header", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_multi",
-    reviewRules: [{ host: "api.example.com", action: "allow" }],
+    document: resolvedDocument({
+      secrets: {
+        bearer: { from: "env:BEARER" },
+        "api-key": { from: "env:KEY" },
+      },
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com"],
+            fallback: "allow",
+            secrets: { bearer: "inject", "api-key": "inject" },
+            inject: [
+              // biome-ignore lint/suspicious/noTemplateCurlyInString: `template:` の参照構文であってテンプレートリテラルではない
+              { name: "Authorization", value: "template:Bearer ${bearer}" },
+              { name: "X-API-Key", value: "secret:api-key" },
+            ],
+          },
+        },
+      },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
-    resolvedCredentials: [
-      { host: "api.example.com", header: "Authorization", value: "Bearer tok" },
-      { host: "api.example.com", header: "X-API-Key", value: "key123" },
-    ],
+    secretValues: { bearer: ["tok"], "api-key": ["key123"] },
   });
   const socketPath = `${paths.brokersDir}/sess_multi/sock`;
   await broker.start(socketPath);
@@ -1531,12 +2076,22 @@ test("SessionBroker: approval cache cannot override an explicit deny", async () 
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_cache_deny",
-    reviewRules: [
-      { id: "deny-post", method: "POST", action: "deny" },
-      { id: "review-get", method: "GET", action: "review" },
-    ],
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        rules: {
+          "deny-post": {
+            match: { methods: ["POST"], paths: ["/**"] },
+            onMatch: "deny",
+          },
+          "review-get": {
+            match: { methods: ["GET"], paths: ["/**"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_cache_deny/sock`;
@@ -1569,7 +2124,7 @@ test("SessionBroker: approval cache cannot override an explicit deny", async () 
       method: "POST",
     });
     expect(denied.decision).toEqual("deny");
-    expect(denied.reason).toEqual("review-rule");
+    expect(denied.reason).toEqual("rule");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -1582,12 +2137,22 @@ test("SessionBroker: denial cache cannot override an explicit allow", async () =
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_cache_allow",
-    reviewRules: [
-      { id: "allow-post", method: "POST", action: "allow" },
-      { id: "review-get", method: "GET", action: "review" },
-    ],
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        rules: {
+          "allow-post": {
+            match: { methods: ["POST"], paths: ["/**"] },
+            onMatch: "allow",
+          },
+          "review-get": {
+            match: { methods: ["GET"], paths: ["/**"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_cache_allow/sock`;
@@ -1620,26 +2185,35 @@ test("SessionBroker: denial cache cannot override an explicit allow", async () =
       method: "POST",
     });
     expect(allowed.decision).toEqual("allow");
-    expect(allowed.reason).toEqual("review-rule");
-    expect(allowed.ruleId).toEqual("allow-post");
+    expect(allowed.ruleId).toEqual("api.allow-post");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-test("SessionBroker: approval cache applies only to a matched review rule and returns its rule ID", async () => {
+test("SessionBroker: a host-wide approval spans ports but not other rules", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-cache-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_cache_review",
-    reviewRules: [
-      { id: "review-get", method: "GET", action: "review" },
-      { id: "review-post", method: "POST", action: "review" },
-    ],
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        rules: {
+          "review-get": {
+            match: { methods: ["GET"], paths: ["/**"] },
+            onMatch: "review",
+          },
+          "review-post": {
+            match: { methods: ["POST"], paths: ["/**"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_cache_review/sock`;
@@ -1660,19 +2234,20 @@ test("SessionBroker: approval cache applies only to a matched review rule and re
       requestId: "req_cache_first",
       scope: "host",
     });
-    expect((await pendingDecision).ruleId).toEqual("review-get");
+    expect((await pendingDecision).ruleId).toEqual("api.review-get");
 
     const cached = await sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize(
         "sess_cache_review",
         "req_cache_second",
         "api.example.com",
-        443,
+        8443,
       ),
-      method: "POST",
+      method: "GET",
     });
     expect(cached.decision).toEqual("allow");
-    expect(cached.ruleId).toEqual("review-post");
+    expect(cached.reason).toEqual("approved");
+    expect(cached.ruleId).toEqual("api.review-get");
 
     const noMatch = await sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize(
@@ -1684,30 +2259,308 @@ test("SessionBroker: approval cache applies only to a matched review rule and re
       method: "DELETE",
     });
     expect(noMatch.decision).toEqual("deny");
-    expect(noMatch.reason).toEqual("no-matching-rule");
+    expect(noMatch.reason).toEqual("scope-fallback");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-test("SessionBroker: allow carries policy rule ID and ID-less allow omits rule ID", async () => {
+test("SessionBroker: a pending entry names the headers approval would inject", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-inject-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_inject_preview",
+    document: resolvedDocument({
+      secrets: { "gh-token": { from: "env:GH" } },
+      network: {
+        scopes: {
+          github: {
+            targets: ["api.github.com:443"],
+            secrets: { "gh-token": "inject" },
+            inject: [{ name: "X-Scope", value: "literal:plain" }],
+            rules: {
+              write: {
+                match: { methods: ["POST"], paths: ["/graphql"] },
+                onMatch: "review",
+                inject: [
+                  {
+                    name: "Authorization",
+                    // biome-ignore lint/suspicious/noTemplateCurlyInString: `template:` の参照構文であってテンプレートリテラルではない
+                    value: "template:Bearer ${gh-token}",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    secretValues: { "gh-token": ["ghp_realtokenvalue"] },
+  });
+  const socketPath = `${paths.brokersDir}/sess_inject_preview/sock`;
+  await broker.start(socketPath);
+  try {
+    const waiting = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_inject_preview", "req_gql", "/graphql", "api.github.com"),
+    );
+    const pending = await waitForPending(socketPath);
+    const entry = pending.items[0];
+
+    // Approving hands a credential to that host. The person pressing the
+    // button has to be able to see that, by header and by secret name.
+    expect(entry?.injectHeaders).toEqual([
+      { name: "X-Scope", secrets: [] },
+      { name: "Authorization", secrets: ["gh-token"] },
+    ]);
+    // The name is the whole of it. Nothing that reaches a screen or the
+    // pending file on disk may carry the value.
+    expect(JSON.stringify(entry)).not.toContain("ghp_realtokenvalue");
+
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_gql",
+      scope: "once",
+    });
+    // What was shown is what goes out: the same headers, now with values.
+    expect((await waiting).injectHeaders).toEqual([
+      { name: "X-Scope", value: "plain" },
+      { name: "Authorization", value: "Bearer ghp_realtokenvalue" },
+    ]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: an approval covers only the rule that raised it", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-identity-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_identity",
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        rules: {
+          "review-get": {
+            match: { methods: ["GET"], paths: ["/**"] },
+            onMatch: "review",
+          },
+          "review-post": {
+            match: { methods: ["POST"], paths: ["/**"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_identity/sock`;
+  await broker.start(socketPath);
+  try {
+    const approved = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize("sess_identity", "req_get", "api.example.com", 443),
+      method: "GET",
+    });
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_get",
+      scope: "host",
+    });
+    expect((await approved).ruleId).toEqual("api.review-get");
+
+    // The same rule against the same target is what was approved, so a
+    // second GET goes straight through.
+    const sameRule = await sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize("sess_identity", "req_get_again", "api.example.com", 443),
+      method: "GET",
+    });
+    expect(sameRule.decision).toEqual("allow");
+    expect(sameRule.reason).toEqual("approved");
+
+    // A POST is a different rule. Nobody approved it, so it has to wait for
+    // a human even though the host is the one that was approved.
+    const otherRule = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize("sess_identity", "req_post", "api.example.com", 443),
+      method: "POST",
+    });
+    const pending = await waitForPending(socketPath);
+    expect(pending.items.map((item) => item.requestId)).toEqual(["req_post"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_post",
+      scope: "once",
+    });
+    expect((await otherRule).decision).toEqual("deny");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: a denial covers only the rule that raised it", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-identity-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_deny_identity",
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        rules: {
+          "review-get": {
+            match: { methods: ["GET"], paths: ["/**"] },
+            onMatch: "review",
+          },
+          "review-post": {
+            match: { methods: ["POST"], paths: ["/**"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_deny_identity/sock`;
+  await broker.start(socketPath);
+  try {
+    const denied = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize("sess_deny_identity", "req_get", "api.example.com", 443),
+      method: "GET",
+    });
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_get",
+      scope: "host",
+    });
+    expect((await denied).decision).toEqual("deny");
+
+    const sameRule = await sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize(
+        "sess_deny_identity",
+        "req_get_again",
+        "api.example.com",
+        443,
+      ),
+      method: "GET",
+    });
+    expect(sameRule.decision).toEqual("deny");
+    expect(sameRule.reason).toEqual("denied-by-user");
+
+    // The POST rule was never shown to anyone, so the denial of the GET rule
+    // must not answer for it.
+    const otherRule = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize("sess_deny_identity", "req_post", "api.example.com", 443),
+      method: "POST",
+    });
+    const pending = await waitForPending(socketPath);
+    expect(pending.items.map((item) => item.requestId)).toEqual(["req_post"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_post",
+      scope: "once",
+    });
+    expect((await otherRule).decision).toEqual("deny");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: one decision resolves only the requests of its own rule", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-groups-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_groups",
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        rules: {
+          "path-a": {
+            match: { methods: ["POST"], paths: ["/path-a"] },
+            onMatch: "review",
+          },
+          "path-b": {
+            match: { methods: ["POST"], paths: ["/path-b"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_groups/sock`;
+  await broker.start(socketPath);
+  try {
+    const pathA = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_groups", "req_a", "/path-a"),
+    );
+    const pathB = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      post("sess_groups", "req_b", "/path-b"),
+    );
+    await waitForPending(socketPath, 2);
+
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_a",
+      scope: "once",
+    });
+    expect(await pathA).toMatchObject({
+      decision: "allow",
+      ruleId: "api.path-a",
+    });
+
+    // /path-b belongs to another rule, so it is still waiting.
+    const stillPending = await waitForPending(socketPath);
+    expect(stillPending.items.map((item) => item.requestId)).toEqual(["req_b"]);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req_b",
+      scope: "once",
+    });
+    expect(await pathB).toMatchObject({
+      decision: "deny",
+      reason: "denied-by-user",
+    });
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: allow carries the rule ID, and a fallback carries the pseudo ID", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-rule-id-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_rule_id",
-    reviewRules: [
-      {
-        id: "policy-get",
-        method: "GET",
-        action: "allow",
-        requestPolicy: { kind: "bodyless" },
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        fallback: "allow",
+        rules: {
+          "policy-get": {
+            match: { methods: ["GET"], paths: ["/**"] },
+            onMatch: "allow",
+            expect: [{ kind: "emptyBody" }],
+          },
+        },
       },
-      { method: "POST", action: "allow" },
-    ],
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_rule_id/sock`;
@@ -1717,13 +2570,15 @@ test("SessionBroker: allow carries policy rule ID and ID-less allow omits rule I
       ...authorize("sess_rule_id", "req_policy_id", "api.example.com", 443),
       method: "GET",
     });
-    expect(policy.ruleId).toEqual("policy-get");
+    expect(policy.ruleId).toEqual("api.policy-get");
 
+    // どのルールも引き受けなかったリクエストは、承認の同一性のために
+    // スコープの擬似 ID を持つ。ID が無いルールという概念は無くなった。
     const ordinary = await sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_rule_id", "req_no_id", "api.example.com", 443),
       method: "POST",
     });
-    expect(ordinary.ruleId).toBeUndefined();
+    expect(ordinary.ruleId).toEqual("api.$fallback");
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -1736,16 +2591,18 @@ test("SessionBroker: exact path accepts a query and rejects normalized or encode
   const broker = new SessionBroker({
     paths,
     sessionId: "sess_exact_path",
-    reviewRules: [
-      {
-        id: "exact",
-        method: "POST",
-        path: "/v1/messages",
-        action: "allow",
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        rules: {
+          exact: {
+            match: { methods: ["POST"], paths: ["/v1/messages"] },
+            onMatch: "allow",
+          },
+        },
       },
-    ],
+    }),
     pendingTimeoutSeconds: 30,
-    pendingDefaultScope: "host-port",
     pendingNotify: "off",
   });
   const socketPath = `${paths.brokersDir}/sess_exact_path/sock`;
@@ -1769,6 +2626,7 @@ test("SessionBroker: exact path accepts a query and rejects normalized or encode
           contentType: null,
           bodyPreview: null,
           bodySize: 0,
+          bodyKind: "absent",
         },
       });
       expect(response.decision).toEqual(decision);

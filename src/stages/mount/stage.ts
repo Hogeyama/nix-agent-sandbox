@@ -36,6 +36,9 @@ export type {
   ResolvedEnvEntry,
   ResolvedExtraMount,
 } from "./mount_probes.ts";
+
+import { selectAppliedSecrets } from "../../network/secrets.ts";
+
 // Re-export probe types and resolver for backward compatibility
 export { resolveMountProbes } from "./mount_probes.ts";
 
@@ -141,7 +144,8 @@ export function planMount(
   // cannot enforce ordering because maskedRoot is optional, so we assert here.
   if (
     profile.mask?.maskfs &&
-    profile.mask.values.length &&
+    Object.keys(selectAppliedSecrets(profile.secrets, profile.mask.apply))
+      .length > 0 &&
     !workspace.maskedRoot
   ) {
     throw new Error(
@@ -179,7 +183,7 @@ export function planMount(
   // Linux では unlink/rename/open(O_WRONLY) 全てが EBUSY/EROFS で拒否される。
   // これにより次回起動時に nas が信頼して読み込む設定（特に hostexec.rules）の
   // 改ざんを防ぐ。
-  // maskfs 有効時もソースは実パスのまま: config.pkl は mask.values に
+  // maskfs 有効時もソースは実パスのまま: config.pkl は secrets に
   // リテラルを書けない設計のため秘密値を含まず、trust 済み実体を RO で
   // 見せることが改ざん防止として優先される。
   for (const configPath of probes.localConfigPaths) {

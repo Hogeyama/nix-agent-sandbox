@@ -46,6 +46,21 @@ export type NetworkPendingItemLike = {
   method?: string | null; // "GET" / "POST" / etc
   target: { host: string; port: number };
   reviewContext?: ReviewContextLike | null;
+  // Rule that raised the confirmation, or a `$fallback` pseudo ID. Together
+  // with the target it is the identity of the approval the buttons produce.
+  ruleId?: string | null;
+  // Grains this confirmation may be approved at, narrowest first. The
+  // backend derives them from how specific the matched rule is and refuses
+  // anything outside the list.
+  approvalScopes?: string[] | null;
+  // Headers the request gains if it is approved: the header name and the
+  // names of the secrets its value is built from. Values never travel here.
+  injectHeaders?: InjectHeaderPreviewLike[] | null;
+};
+
+export type InjectHeaderPreviewLike = {
+  name: string;
+  secrets?: string[] | null;
 };
 
 export type HostExecPendingItemLike = {

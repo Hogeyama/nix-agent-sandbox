@@ -1468,6 +1468,26 @@ body::after {
   overflow-y: auto;
 }
 
+/* -- Headers an approval would inject (names only, never values) -- */
+.card-inject {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--cream-dim);
+}
+.card-inject-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--amber-hi);
+}
+.card-inject-header {
+  word-break: break-all;
+}
+
 .scope-row {
   display: flex;
   gap: 4px;

@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
+import { detectLegacyIdentifiers } from "../network/authz/validate.ts";
 import { initConfig, resolveSchemaAsset } from "./init.ts";
 import {
   findNixConfig,
@@ -62,8 +63,30 @@ export async function loadConfig(
   // Check for legacy global config before eval
   await detectAndMigrateGlobalLegacy();
 
+  // Names the schema no longer has produce "Unresolved reference" from Pkl,
+  // which says nothing about where the setting went. Scan the source first so
+  // the error can name the replacement.
+  await reportLegacyIdentifiers(found.configPath);
+
   const raw = await evalPklConfig(found.nasDir, found.configPath);
   return validateConfig(raw as Config);
+}
+
+/**
+ * 廃止した識別子を、Pkl が「解決できない参照」と言う前に名指しする。
+ *
+ * 移行案内の専用であって互換モードではない。旧識別子を含む設定は動かない。
+ */
+async function reportLegacyIdentifiers(configPath: string): Promise<void> {
+  const source = await readFile(configPath, "utf8");
+  const diagnostics = detectLegacyIdentifiers(
+    source,
+    path.basename(configPath),
+  );
+  if (diagnostics.length === 0) return;
+  throw new Error(
+    diagnostics.map((diagnostic) => diagnostic.message).join("\n\n"),
+  );
 }
 
 /**

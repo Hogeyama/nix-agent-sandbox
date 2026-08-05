@@ -30,7 +30,9 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
     const client = makeNetworkApprovalClient();
     const adapter: ApprovalAdapter = {
       domain: "network",
-      scopeOptions: ["once", "host-port", "host"],
+      // どの粒度を本当に選べるかは確認ごとに違う (pending の approvalScopes)。
+      // ここはその全体で、選べない粒度を送れば broker が突き返す。
+      scopeOptions: ["once", "rule", "host-port", "host"],
       async listPending() {
         const items = await client.listPending(paths);
         return items.map((item) => {
@@ -41,7 +43,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
           return {
             sessionId: item.sessionId,
             requestId: item.requestId,
-            displayLine: `${item.sessionId} ${item.requestId} ${target}${reviewInfo} ${item.state} ${item.createdAt}`,
+            displayLine: `${item.sessionId} ${item.requestId} ${target}${reviewInfo} ${item.ruleId} ${item.state} ${item.createdAt}`,
             structured: {
               sessionId: item.sessionId,
               requestId: item.requestId,
@@ -51,6 +53,8 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
               createdAt: item.createdAt,
               method: item.method,
               reviewContext: item.reviewContext ?? null,
+              ruleId: item.ruleId,
+              approvalScopes: item.approvalScopes,
             },
           };
         });

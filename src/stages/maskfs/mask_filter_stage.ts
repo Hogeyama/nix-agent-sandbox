@@ -19,6 +19,7 @@
 
 import { Effect } from "effect";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
+import { selectAppliedSecrets } from "../../network/secrets.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
@@ -49,7 +50,8 @@ export function createMaskFilterStage(
 
     run(input) {
       const mask = shared.profile.mask;
-      if (!mask?.filter || mask.values.length === 0) {
+      const applied = selectAppliedSecrets(shared.profile.secrets, mask?.apply);
+      if (!mask?.filter || Object.keys(applied).length === 0) {
         return Effect.succeed({});
       }
 
@@ -88,7 +90,7 @@ export function createMaskFilterStage(
           );
         }
 
-        const secrets = yield* svc.resolveSecrets(mask.values, shared.host);
+        const secrets = yield* svc.resolveSecrets(applied, shared.host);
         const result = yield* svc.prepareMaskFilter(
           {
             secretsFramePath: `${sessionDir}/mask-secrets`,

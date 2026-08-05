@@ -1,7 +1,7 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import {
   DEFAULT_HOSTEXEC_SCOPE,
-  DEFAULT_NETWORK_SCOPE,
+  networkScopeFor,
 } from "../handlers/createPendingActionHandlers";
 import type { AuditLogEntryRow } from "../stores/auditStore";
 import type {
@@ -12,29 +12,34 @@ import { formatAuditEntry, summaryFor } from "./auditEntryView";
 import { formatRelativeTime, sessionLabel } from "./pendingCardView";
 
 // Network scope chips. The label is what the user reads; the hint is the
-// `title` tooltip. `host` and `host:port` promise less than their names
-// suggest: the broker consults its approval / denial caches only while
-// resolving a rule whose action is `review` (`src/network/broker.ts`
-// `authorize`), so denying a host does not stop a later request that an
-// explicit `allow` rule matches first. The hint says so, because the
-// label cannot.
-const NETWORK_SCOPES = [
-  {
-    id: "once",
+// `title` tooltip. Which of these a card shows comes from the entry's
+// `approvalScopes`, which the broker derives from how specific the matched
+// rule is — a card offering `rule` never offers `host` and vice versa.
+//
+// Every grain is remembered against the rule that raised the confirmation,
+// so none of them answers for a different rule pointed at the same host.
+// The hints say so, because the labels cannot.
+const NETWORK_SCOPE_CHIPS: Record<
+  string,
+  { readonly label: string; readonly hint: string }
+> = {
+  once: {
     label: "once",
     hint: "Applies to this request only. Nothing is remembered.",
   },
-  {
-    id: "host-port",
+  rule: {
+    label: "this rule",
+    hint: "Remembered for this session, for as long as this rule is in effect. The scope pins the host and port, so nothing else is covered.",
+  },
+  "host-port": {
     label: "host:port",
-    hint: "Remembered for this session, for this host and port. Requests that an explicit allow or deny rule matches first are unaffected.",
+    hint: "Remembered for this session, for this rule against this host and port. Other rules still ask.",
   },
-  {
-    id: "host",
+  host: {
     label: "host",
-    hint: "Remembered for this session, for this host on any port. Requests that an explicit allow or deny rule matches first are unaffected.",
+    hint: "Remembered for this session, for this rule against this host on any port. Other rules still ask.",
   },
-] as const;
+};
 
 const HOSTEXEC_SCOPES = ["once", "capability"] as const;
 
@@ -121,14 +126,25 @@ export function PendingPane(props: Props) {
             fallback={<div class="empty">No pending</div>}
           >
             {(row) => {
-              const scope = () =>
-                props.scopeFor(row.key) ?? DEFAULT_NETWORK_SCOPE;
+              const scope = () => networkScopeFor(row, props.scopeFor(row.key));
               const busy = () => props.busyFor(row.key);
               const error = () => props.errorFor(row.key);
               return (
                 <article class="card" data-pending-key={row.key} tabindex="-1">
                   <div class="card-head">
                     <span class="chip">{sessionLabel(row)}</span>
+                    {/* The rule that raised the confirmation is half of what
+                        the decision is remembered against, so name it. */}
+                    <Show when={row.ruleId}>
+                      {(ruleId) => (
+                        <span
+                          class="chip"
+                          title="Rule that raised this confirmation. What you press is remembered for this rule against this target, and for nothing else."
+                        >
+                          {ruleId()}
+                        </span>
+                      )}
+                    </Show>
                     <span class="card-time">
                       {formatRelativeTime(row.createdAtMs, now())}
                     </span>
@@ -157,18 +173,38 @@ export function PendingPane(props: Props) {
                       </div>
                     )}
                   </Show>
+                  {/* Allowing this request also hands these headers to the
+                      host, which is a different grant from letting the bare
+                      request through. Header names and secret names only —
+                      the value is never on this side of the wire. */}
+                  <Show when={row.injectHeaders.length > 0}>
+                    <div class="card-inject">
+                      <span class="card-inject-label">injects</span>
+                      <For each={row.injectHeaders}>
+                        {(header) => (
+                          <span class="card-inject-header">
+                            {header.name}
+                            <Show when={header.secrets.length > 0}>
+                              {" ← "}
+                              {header.secrets.join(", ")}
+                            </Show>
+                          </span>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
                   <div class="scope-row">
-                    <For each={NETWORK_SCOPES}>
-                      {(opt) => (
+                    <For each={row.approvalScopes}>
+                      {(id) => (
                         <button
                           type="button"
                           class="scope"
-                          classList={{ selected: scope() === opt.id }}
-                          title={opt.hint}
+                          classList={{ selected: scope() === id }}
+                          title={NETWORK_SCOPE_CHIPS[id]?.hint}
                           disabled={busy()}
-                          onClick={() => props.setScope(row.key, opt.id)}
+                          onClick={() => props.setScope(row.key, id)}
                         >
-                          {opt.label}
+                          {NETWORK_SCOPE_CHIPS[id]?.label ?? id}
                         </button>
                       )}
                     </For>

@@ -36,8 +36,12 @@ import { json, Router } from "../router.ts";
 import { isSafeId } from "./validate_ids.ts";
 import { withErrorHandling } from "./with_error_handling.ts";
 
+// 送られてきた値がスコープの綴りかどうかだけを見る。その確認で本当に選べる
+// 粒度かどうかは broker が pending エントリに載せた集合で決めるので、判定は
+// broker に残す。
 const NETWORK_SCOPES: ReadonlySet<ApprovalScope> = new Set([
   "once",
+  "rule",
   "host-port",
   "host",
 ]);

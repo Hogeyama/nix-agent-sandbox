@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { documentWithScopes } from "./authz/testing.ts";
 import {
   decodeProxyAuthorization,
   denyReasonForTarget,
@@ -10,36 +11,29 @@ import {
   validateRequestPolicyOutcome,
 } from "./protocol.ts";
 
-const bodylessRule = {
-  id: "policy.bodyless",
-  method: "GET",
-  path: "/health",
-  action: "allow" as const,
-  requestPolicy: { kind: "bodyless" as const },
-};
-const jsonRule = {
-  id: "policy.json",
-  method: "POST",
-  path: "/v1/messages",
-  action: "allow" as const,
-  requestPolicy: {
-    kind: "json" as const,
-    maxBodyBytes: 1024,
-    maxDepth: 8,
-    maxNodes: 100,
-    maxDecodedBytes: 1024,
-    taggedUnions: [],
-    encodedFields: [],
+const document = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "deny",
+    rules: {
+      bodyless: {
+        match: { methods: ["GET"], paths: ["/health"] },
+        onMatch: "allow",
+        expect: [{ kind: "emptyBody" }],
+      },
+      json: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/messages"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+      },
+    },
   },
-};
-const policyRules = [
-  bodylessRule,
-  jsonRule,
-  { id: "ordinary", action: "allow" as const },
-  { action: "allow" as const },
-];
+});
 
-const validJsonOutcome = {
+const validOutcome = {
   version: 1,
   type: "request_policy_outcome",
   requestId: "req-json",
@@ -49,80 +43,87 @@ const validJsonOutcome = {
   reason: "recognized-json",
 };
 
-test("request policy outcome validation accepts the closed success pairings", () => {
-  expect(
-    validateRequestPolicyOutcome(validJsonOutcome, "sess_test", policyRules),
-  ).toBeNull();
-  expect(
-    validateRequestPolicyOutcome(
-      {
-        ...validJsonOutcome,
-        ruleId: "policy.json",
-        result: "rewrite",
-        reason: "masked-json",
-      },
-      "sess_test",
-      policyRules,
-    ),
-  ).toBeNull();
-  expect(
-    validateRequestPolicyOutcome(
-      {
-        ...validJsonOutcome,
-        ruleId: "policy.bodyless",
-        result: "pass",
-        reason: "empty-body",
-      },
-      "sess_test",
-      policyRules,
-    ),
-  ).toBeNull();
-});
-
-test("request policy outcome validation rejects an unknown broker-owned policy kind", () => {
-  const malformedRules = [
-    {
-      id: "policy.unknown-kind",
-      action: "allow",
-      requestPolicy: { kind: "yaml" },
-    },
-  ] as unknown as typeof policyRules;
-
-  expect(
-    validateRequestPolicyOutcome(
-      {
-        ...validJsonOutcome,
-        ruleId: "policy.unknown-kind",
-        result: "pass",
-        reason: "recognized-json",
-      },
-      "sess_test",
-      malformedRules,
-    ),
-  ).toEqual("invalid request-policy outcome policy kind");
-});
-
-const validPolicyBlocks = [
-  ["bodyless", "policy.bodyless", "body-unavailable"],
-  ["bodyless", "policy.bodyless", "unexpected-body"],
-  ["bodyless", "policy.bodyless", "processing-failed"],
-  ["json", "policy.json", "body-unavailable"],
-  ["json", "policy.json", "invalid-json"],
-  ["json", "policy.json", "schema-mismatch"],
-  ["json", "policy.json", "encoded-decode-failed"],
-  ["json", "policy.json", "resource-limit"],
-  ["json", "policy.json", "key-collision"],
-  ["json", "policy.json", "serialization-failed"],
-  ["json", "policy.json", "processing-failed"],
+const acceptedOutcomes = [
+  [
+    "a rule that passed its acceptance conditions",
+    "policy.json",
+    "pass",
+    "recognized-json",
+  ],
+  [
+    "a body rewritten by secret masking",
+    "policy.json",
+    "rewrite",
+    "masked-json",
+  ],
+  ["an empty body a rule required", "policy.bodyless", "pass", "empty-body"],
+  [
+    "a rule with nothing to inspect",
+    "policy.bodyless",
+    "pass",
+    "no-inspection",
+  ],
+  [
+    "violations the rule chose to record",
+    "policy.json",
+    "pass",
+    "violations-allowed",
+  ],
+  [
+    "a scope fallback that inspected nothing",
+    "policy.$fallback",
+    "pass",
+    "no-inspection",
+  ],
+  ["a body that could not be read", "policy.json", "block", "body-unavailable"],
+  [
+    "a body present where none was allowed",
+    "policy.bodyless",
+    "block",
+    "unexpected-body",
+  ],
+  ["a body that is not JSON", "policy.json", "block", "invalid-json"],
+  ["a shape the rule did not allow", "policy.json", "block", "schema-mismatch"],
+  [
+    "a forbidden secret in the request",
+    "policy.json",
+    "block",
+    "forbidden-secret",
+  ],
+  [
+    "an inspection that ran out of budget",
+    "policy.json",
+    "block",
+    "resource-limit",
+  ],
+  [
+    "masking that would collide two keys",
+    "policy.json",
+    "block",
+    "key-collision",
+  ],
+  [
+    "a masked body that would not serialize",
+    "policy.json",
+    "block",
+    "serialization-failed",
+  ],
+  ["an inspection that fell over", "policy.json", "block", "processing-failed"],
+  [
+    "a body that was masked while carrying an allowed violation",
+    "policy.json",
+    "rewrite",
+    "violations-allowed",
+  ],
 ] as const;
 
-for (const [kind, ruleId, reason] of validPolicyBlocks) {
-  test(`request policy outcome validation accepts ${kind} block/${reason}`, () => {
+for (const [name, ruleId, result, reason] of acceptedOutcomes) {
+  test(`request policy outcome validation accepts ${name}`, () => {
     expect(
       validateRequestPolicyOutcome(
-        { ...validJsonOutcome, ruleId, result: "block", reason },
+        { ...validOutcome, ruleId, result, reason },
         "sess_test",
-        policyRules,
+        document,
       ),
     ).toBeNull();
   });
@@ -132,35 +133,17 @@ const invalidPolicyOutcomes = [
   ["session mismatch", { sessionId: "sess_other" }],
   ["malformed rule ID", { ruleId: "Policy JSON" }],
   ["unknown rule ID", { ruleId: "policy.unknown" }],
+  ["a rule ID from another scope", { ruleId: "other.json" }],
   ["ID-less rule cannot be addressed", { ruleId: "" }],
-  ["non-policy rule ID", { ruleId: "ordinary" }],
   ["unknown result", { result: "allow" }],
   ["unknown reason", { reason: "raw-error-detail" }],
   [
-    "bodyless reason on JSON policy",
-    { ruleId: "policy.json", result: "pass", reason: "empty-body" },
-  ],
-  [
-    "JSON reason on bodyless policy",
-    {
-      ruleId: "policy.bodyless",
-      result: "pass",
-      reason: "recognized-json",
-    },
-  ],
-  [
-    "rewrite on bodyless policy",
-    { ruleId: "policy.bodyless", result: "rewrite", reason: "masked-json" },
-  ],
-  [
-    "rewrite with pass reason",
+    "rewrite with a pass reason",
     { result: "rewrite", reason: "recognized-json" },
   ],
+  ["pass with a rewrite reason", { result: "pass", reason: "masked-json" }],
   ["block with success reason", { result: "block", reason: "recognized-json" }],
-  [
-    "bodyless block with JSON-only reason",
-    { ruleId: "policy.bodyless", result: "block", reason: "invalid-json" },
-  ],
+  ["pass with a block reason", { result: "pass", reason: "invalid-json" }],
   ["unknown field", { target: "sensitive.example" }],
 ] as const;
 
@@ -168,9 +151,9 @@ for (const [name, overrides] of invalidPolicyOutcomes) {
   test(`request policy outcome validation rejects ${name}`, () => {
     expect(
       validateRequestPolicyOutcome(
-        { ...validJsonOutcome, ...overrides },
+        { ...validOutcome, ...overrides },
         "sess_test",
-        policyRules,
+        document,
       ),
     ).not.toBeNull();
   });

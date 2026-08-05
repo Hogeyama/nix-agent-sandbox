@@ -3,7 +3,7 @@
  *
  * 共有 Proxy コンテナ + session network + session broker を
  * セットアップし、エージェントコンテナのネットワークトラフィックを
- * reviewRules ベースで制御する。
+ * 解決済みの認可ドキュメントで制御する。
  *
  * plan() は skip 判定と設定の計算のみ行い、run() は Effect.acquireRelease を
  * チェーンして各サブリソースのライフサイクルを管理する。
@@ -11,8 +11,12 @@
 
 import * as path from "node:path";
 import { Effect, type Scope } from "effect";
-import type { CredentialRule, MaskValueConfig } from "../../config/types.ts";
+import type { SecretConfig } from "../../config/types.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
+import {
+  type ResolvedDocument,
+  resolveAuthzConfig,
+} from "../../network/authz/resolve.ts";
 import { forwardPortSocketPath } from "../../network/forward_port_relay.ts";
 import {
   generateSessionToken as defaultGenerateToken,
@@ -20,10 +24,6 @@ import {
 } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import { brokerSocketPath } from "../../network/registry.ts";
-import {
-  type ResolvedReviewRules,
-  resolveReviewRules,
-} from "../../network/review_rules.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
@@ -80,10 +80,8 @@ export interface ProxyPlan {
   readonly runtimePaths: NetworkRuntimePaths;
   readonly brokerSocket: string;
   readonly token: string;
-  readonly resolvedReviewRules: ResolvedReviewRules;
-  readonly credentials: CredentialRule[];
+  readonly document: ResolvedDocument;
   readonly pendingTimeoutSeconds: number;
-  readonly pendingDefaultScope: import("../../network/protocol.ts").ApprovalScope;
   readonly pendingNotify: import("../../lib/notify_utils.ts").ResolvedNotifyBackend;
   readonly uiEnabled: boolean;
   readonly uiPort: number;
@@ -96,9 +94,11 @@ export interface ProxyPlan {
   readonly envVars: Record<string, string>;
   readonly container: ContainerPlan;
   readonly forwardPorts: ReadonlyArray<number>;
-  /** proxy マスク対象の秘密値ソース。無効時は空配列 */
-  readonly maskValueConfigs: MaskValueConfig[];
-  /** resolveMaskValues 用のホスト環境変数スナップショット */
+  /** 秘密のレジストリ。注入に要るので `mask.proxy` に関わらず解決する。 */
+  readonly secretRegistry: Record<string, SecretConfig>;
+  /** プロキシでの秘密の置換と拒否を行うか。 */
+  readonly proxyMasking: boolean;
+  /** 秘密の解決に使うホスト環境変数のスナップショット。 */
   readonly hostEnv: Record<string, string | undefined>;
 }
 
@@ -115,9 +115,25 @@ export function planProxy(
   input: StageInput & Pick<PipelineState, "container" | "observability">,
   options: ProxyStageOptions = {},
 ): ProxyPlan {
-  const resolvedReviewRules = resolveReviewRules(
-    input.profile.network.reviewRules,
-  );
+  // 設定エラーは loadConfig の検証で既に落ちている。ここへ来て解決できない
+  // ドキュメントは、検証を通らない設定でステージが呼ばれたということなので、
+  // 適当な既定で進めずに止める。
+  const resolved = resolveAuthzConfig({
+    secrets: input.profile.secrets,
+    mask: input.profile.mask,
+    network: input.profile.network,
+  });
+  if (resolved.document === null) {
+    throw new Error(
+      [
+        "[nas] ネットワーク認可の設定を解決できません:",
+        ...resolved.diagnostics
+          .filter((diagnostic) => diagnostic.severity === "error")
+          .map((diagnostic) => diagnostic.message),
+      ].join("\n"),
+    );
+  }
+  const document = resolved.document;
   const proxyContainerName = options.proxyContainerName ?? PROXY_CONTAINER_NAME;
   const generateSessionToken =
     options.generateSessionToken ?? defaultGenerateToken;
@@ -194,8 +210,9 @@ export function planProxy(
     extraMounts: [...forwardPortMounts, caCertMount],
   });
 
-  const mask = input.profile.mask;
-  const maskProxyEnabled = !!mask && mask.proxy && mask.values.length > 0;
+  // 秘密の扱いはスコープとルールが決めるので、レジストリは丸ごと渡す。注入は
+  // マスクを経由しないので、`mask.proxy = false` でもレジストリは要る。
+  const proxyMasking = input.profile.mask?.proxy !== false;
   const hostEnv: Record<string, string | undefined> = {};
   for (const [k, v] of input.host.env) hostEnv[k] = v;
 
@@ -224,10 +241,8 @@ export function planProxy(
     runtimePaths,
     brokerSocket,
     token,
-    resolvedReviewRules,
-    credentials: [...input.profile.network.credentials],
+    document,
     pendingTimeoutSeconds: input.profile.network.pendingTimeoutSeconds,
-    pendingDefaultScope: input.profile.network.pendingDefaultScope,
     pendingNotify: resolveNotifyBackend(input.profile.network.pendingNotify),
     uiEnabled: input.config.ui.enable,
     uiPort: input.config.ui.port,
@@ -236,7 +251,8 @@ export function planProxy(
     envVars: container.env.static,
     container,
     forwardPorts,
-    maskValueConfigs: maskProxyEnabled ? [...mask.values] : [],
+    secretRegistry: { ...input.profile.secrets },
+    proxyMasking,
     hostEnv,
     outputOverrides: {
       network,
@@ -329,7 +345,7 @@ function runProxy(
     const caService = yield* CaService;
 
     // 1. Ensure runtime dirs exist (runtimeDir, sessions, pending, brokers,
-    //    caCertDir, reviewRulesDir)
+    //    caCertDir, authzDir)
     yield* networkRuntime.ensureRuntimeDirs(plan.runtimePaths);
 
     // 2. GC stale sessions
@@ -341,26 +357,28 @@ function runProxy(
     // 4. Copy addon script to runtime dir
     yield* networkRuntime.copyAddonScript(plan.runtimePaths);
 
-    // 5. Write per-session review rules
-    yield* networkRuntime.writeReviewRules(
-      plan.runtimePaths,
-      plan.sessionId,
-      plan.resolvedReviewRules,
+    // 5. Write the per-session resolved authorization document, and take it
+    //    away again when the session ends. The document describes what this
+    //    one session was allowed to do; leaving it behind lets a later reader
+    //    mistake it for a live policy, and it accumulates one file per run.
+    yield* Effect.acquireRelease(
+      networkRuntime.writeAuthzDocument(
+        plan.runtimePaths,
+        plan.sessionId,
+        plan.document,
+      ),
+      () =>
+        networkRuntime.removeAuthzDocument(plan.runtimePaths, plan.sessionId),
     );
 
-    // 5.5. Resolve credential values (valCmd execution)
-    const resolvedCredentials = yield* networkRuntime.resolveCredentials(
-      plan.credentials,
-    );
-
-    // 5.6. Resolve mask values (fail-closed: 解決失敗はセッション起動中止)
-    const maskValues =
-      plan.maskValueConfigs.length > 0
-        ? yield* networkRuntime.resolveMaskValues(
-            plan.maskValueConfigs,
+    // 5.5. Resolve the secret registry (fail-closed: 解決失敗はセッション起動中止)
+    const secretValues =
+      Object.keys(plan.secretRegistry).length > 0
+        ? yield* networkRuntime.resolveSecrets(
+            plan.secretRegistry,
             plan.hostEnv,
           )
-        : [];
+        : {};
 
     // 6. Session broker + registry (acquireRelease)
     const tokenHash = yield* Effect.tryPromise({
@@ -377,17 +395,16 @@ function runProxy(
         socketPath: plan.brokerSocket,
         profileName: plan.profileName,
         agent: plan.agent,
-        resolvedReviewRules: plan.resolvedReviewRules,
+        document: plan.document,
         pendingTimeoutSeconds: plan.pendingTimeoutSeconds,
-        pendingDefaultScope: plan.pendingDefaultScope,
         pendingNotify: plan.pendingNotify,
         uiEnabled: plan.uiEnabled,
         uiPort: plan.uiPort,
         uiIdleTimeout: plan.uiIdleTimeout,
         auditDir: plan.auditDir,
         tokenHash,
-        resolvedCredentials,
-        maskValues,
+        secretValues,
+        proxyMasking: plan.proxyMasking,
       }),
       (handle: SessionBrokerHandle) => handle.close(),
     );
@@ -465,7 +482,7 @@ export function buildNetworkRuntimePaths(host: HostEnv): NetworkRuntimePaths {
     brokersDir: path.join(runtimeDir, "brokers"),
     caCertDir: path.join(runtimeDir, "mitmproxy-ca"),
     addonScriptPath: path.join(runtimeDir, "nas_addon.py"),
-    reviewRulesDir: path.join(runtimeDir, "review-rules"),
+    authzDir: path.join(runtimeDir, "authz"),
   };
 }
 

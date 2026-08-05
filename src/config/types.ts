@@ -1,5 +1,8 @@
 import type { AgentType } from "../agents/types.ts";
-import type { ApprovalScope } from "../network/protocol.ts";
+import type {
+  NetworkConfig as AuthzNetworkConfig,
+  SecretConfig,
+} from "../network/authz/config.ts";
 
 export type { AgentType } from "../agents/types.ts";
 
@@ -45,10 +48,16 @@ export interface ProxyConfig {
 /** Secret 設定 */
 export type SecretSource = string;
 
-export interface SecretConfig {
-  from: SecretSource;
-  required: boolean;
-}
+export type {
+  AuditMode,
+  Expect,
+  Inject,
+  Limits,
+  RuleConfig,
+  ScopeConfig,
+  SecretConfig,
+  SecretDisposition,
+} from "../network/authz/config.ts";
 
 /** Session 設定 */
 export interface SessionConfig {
@@ -116,65 +125,9 @@ export interface HostExecConfig {
 /** ネットワーク設定 */
 export type NetworkPromptNotify = "auto" | "desktop" | "off";
 
-export interface TaggedUnionGuard {
-  at: string;
-  discriminator: string;
-  allowedTags: string[];
-}
-
-export interface EncodedField {
-  at: string;
-  whenField: string;
-  whenEquals: string;
-  dataField: string;
-  encoding: "base64";
-}
-
-export interface BodylessRequestPolicy {
-  kind: "bodyless";
-}
-
-export interface JsonRequestPolicy {
-  kind: "json";
-  maxBodyBytes: number;
-  maxDepth: number;
-  maxNodes: number;
-  maxDecodedBytes: number;
-  taggedUnions: TaggedUnionGuard[];
-  encodedFields: EncodedField[];
-}
-
-export type RequestPolicy = BodylessRequestPolicy | JsonRequestPolicy;
-
-export interface ReviewRule {
-  id?: string;
-  method?: string;
-  host?: string;
-  path?: string;
-  pathPrefix?: string;
-  action: "allow" | "review" | "deny";
-  audit?: boolean;
-  requestPolicy?: RequestPolicy;
-}
-
-/** Credential の値指定 */
-export type CredentialValSpec = { val: string } | { valCmd: string };
-
-/** ホスト別認証情報 */
-export interface CredentialRule {
-  host: string;
-  pathPrefix?: string;
-  method?: string;
-  header: string;
-  value: CredentialValSpec;
-}
-
-export interface NetworkConfig {
-  reviewRules: ReviewRule[];
-  credentials: CredentialRule[];
+export interface NetworkConfig extends AuthzNetworkConfig {
   proxy: ProxyConfig;
   pendingTimeoutSeconds: number;
-  pendingDefaultScope: ApprovalScope;
   pendingNotify: NetworkPromptNotify;
 }
 
@@ -230,14 +183,9 @@ export type EnvConfig = EnvKeySpec &
   };
 
 /** ワークスペース文字列マスク設定 */
-export interface MaskValueConfig {
-  source: string;
-}
-
 export type MaskWritePolicy = "readonly" | "passthrough";
 
 export interface MaskConfig {
-  values: MaskValueConfig[];
   writePolicy: MaskWritePolicy;
   /** FUSE ワークスペースマスク (maskfs) の有効化。デフォルト true */
   maskfs: boolean;
@@ -245,6 +193,8 @@ export interface MaskConfig {
   proxy: boolean;
   /** コマンド stdout/stderr のフィルタマスク有効化。デフォルト true */
   filter: boolean;
+  /** maskfs と filter が対象にする秘密の名前。未指定で全件。 */
+  apply?: string[];
 }
 
 /** プロファイル */
@@ -265,6 +215,8 @@ export interface Profile {
   env: EnvConfig[];
   hook: HookConfig;
   hostexec?: HostExecConfig;
+  /** 秘密の名前付きレジストリ。 */
+  secrets: Record<string, SecretConfig>;
   mask?: MaskConfig;
 }
 
@@ -335,11 +287,11 @@ export const DEFAULT_PROXY_CONFIG: ProxyConfig = {
 };
 
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
-  reviewRules: [],
-  credentials: [],
+  scopes: {},
+  fallback: "deny",
+  defaults: {},
   proxy: DEFAULT_PROXY_CONFIG,
   pendingTimeoutSeconds: 300,
-  pendingDefaultScope: "host-port",
   pendingNotify: "auto",
 };
 

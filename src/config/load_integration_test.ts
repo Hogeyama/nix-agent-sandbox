@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 
 /**
  * 設定ファイルの読み込み・検索の統合テスト
@@ -259,6 +259,17 @@ profiles {
 );
 
 import * as nodeFs from "node:fs/promises";
+import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
+
+let restoreSchemaAsset: (() => Promise<void>) | undefined;
+
+beforeAll(async () => {
+  restoreSchemaAsset = await useRepoSchemaAsset();
+});
+
+afterAll(async () => {
+  await restoreSchemaAsset?.();
+});
 
 test("loadConfig: propagates config discovery stat errors", async () => {
   await withNestedDirs(async (rootDir, childDir, grandchildDir) => {
@@ -401,7 +412,7 @@ profiles {}
 });
 
 test.skipIf(!hasPkl)(
-  "loadConfig: rejects unknown request policy kind",
+  "loadConfig: names the replacement for a setting the schema dropped",
   async () => {
     const configPkl = `amends "Schema.pkl"
 
@@ -410,39 +421,64 @@ profiles {
     agent = "claude"
     network {
       reviewRules {
-        new ReviewRule {
-          action = "allow"
-          requestPolicy = new BodylessRequestPolicy {
-            kind = "graphql"
-          }
-        }
+        new ReviewRule { host = "api.github.com"; action = "allow" }
       }
     }
   }
 }
 `;
     await withNasConfig(configPkl, async (dir) => {
-      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
-        /pkl eval exited with code/,
+      // Pkl は "Unresolved reference" としか言えず、設定がどこへ行ったかを
+      // 名指しできない。評価より前に生のソースを走査して案内する。
+      const error = await loadConfig({ startDir: dir }).then(
+        () => null,
+        (thrown: unknown) => String(thrown),
       );
+      expect(error).toContain("reviewRules");
+      expect(error).toContain("network.scopes");
+      expect(error).toContain("ReviewRule");
+      expect(error).not.toContain("Unresolved reference");
     });
   },
 );
 
 test.skipIf(!hasPkl)(
-  "loadConfig: rejects unknown request policy fields",
+  "loadConfig: a dropped name inside a comment is not a migration error",
   async () => {
     const configPkl = `amends "Schema.pkl"
 
 profiles {
   ["dev"] {
     agent = "claude"
+    // 旧 reviewRules はスコープに移行済み。
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
+      expect(config.profiles.dev.agent).toEqual("claude");
+    });
+  },
+);
+
+test.skipIf(!hasPkl)("loadConfig: rejects an unknown body format", async () => {
+  const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
     network {
-      reviewRules {
-        new ReviewRule {
-          action = "allow"
-          requestPolicy = new JsonRequestPolicy {
-            unknownField = true
+      scopes {
+        ["api"] {
+          targets { "api.example.com" }
+          rules {
+            ["graphql"] {
+              match {
+                paths { "/graphql" }
+                body { format = "graphql" }
+              }
+              onMatch = "allow"
+            }
           }
         }
       }
@@ -450,13 +486,42 @@ profiles {
   }
 }
 `;
-    await withNasConfig(configPkl, async (dir) => {
-      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
-        /pkl eval exited with code/,
-      );
-    });
-  },
-);
+  await withNasConfig(configPkl, async (dir) => {
+    await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+      /pkl eval exited with code/,
+    );
+  });
+});
+
+test.skipIf(!hasPkl)("loadConfig: rejects an unknown rule field", async () => {
+  const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["api"] {
+          targets { "api.example.com" }
+          rules {
+            ["all"] {
+              match { paths { "/**" } }
+              onMatch = "allow"
+              unknownField = true
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+  await withNasConfig(configPkl, async (dir) => {
+    await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+      /pkl eval exited with code/,
+    );
+  });
+});
 
 test("loadConfig: pkl CLI not available shows helpful error", async () => {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-pkl-nocli-"));
@@ -509,7 +574,9 @@ profiles {
   ["from-global"] {
     agent = "copilot"
     network {
-      reviewRules = new Listing { new ReviewRule { host = "api.github.com"; action = "allow" } }
+      scopes {
+        ["github"] { targets { "api.github.com" }; fallback = "allow" }
+      }
     }
   }
 }
@@ -529,9 +596,9 @@ profiles {
         const config = await loadConfig({ startDir: dir });
         expect("from-global" in config.profiles).toEqual(true);
         expect(config.profiles["from-global"].agent).toEqual("copilot");
-        expect(config.profiles["from-global"].network.reviewRules).toEqual([
-          { host: "api.github.com", action: "allow", audit: true },
-        ]);
+        expect(
+          Object.keys(config.profiles["from-global"].network.scopes),
+        ).toEqual(["github"]);
         expect("from-local" in config.profiles).toEqual(true);
         expect(config.profiles["from-local"].agent).toEqual("claude");
       });
@@ -610,6 +677,7 @@ test("resolveProfile: resolves by explicit name", () => {
         hook: DEFAULT_HOOK_CONFIG,
         extraMounts: [],
         env: [],
+        secrets: {},
       },
       "other-profile": {
         agent: "copilot",
@@ -626,6 +694,7 @@ test("resolveProfile: resolves by explicit name", () => {
         hook: DEFAULT_HOOK_CONFIG,
         extraMounts: [],
         env: [],
+        secrets: {},
       },
     },
     ui: DEFAULT_UI_CONFIG,
@@ -657,6 +726,7 @@ test("resolveProfile: falls back to default profile", () => {
         hook: DEFAULT_HOOK_CONFIG,
         extraMounts: [],
         env: [],
+        secrets: {},
       },
     },
     ui: DEFAULT_UI_CONFIG,
@@ -686,6 +756,7 @@ test("resolveProfile: auto-selects when only one profile and no default", () => 
         hook: DEFAULT_HOOK_CONFIG,
         extraMounts: [],
         env: [],
+        secrets: {},
       },
     },
     ui: DEFAULT_UI_CONFIG,
@@ -715,6 +786,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
         hook: DEFAULT_HOOK_CONFIG,
         extraMounts: [],
         env: [],
+        secrets: {},
       },
       b: {
         agent: "copilot",
@@ -731,6 +803,7 @@ test("resolveProfile: throws when multiple profiles and no default", () => {
         hook: DEFAULT_HOOK_CONFIG,
         extraMounts: [],
         env: [],
+        secrets: {},
       },
     },
     ui: DEFAULT_UI_CONFIG,
@@ -760,6 +833,7 @@ test("resolveProfile: throws for nonexistent profile name", () => {
         hook: DEFAULT_HOOK_CONFIG,
         extraMounts: [],
         env: [],
+        secrets: {},
       },
     },
     ui: DEFAULT_UI_CONFIG,

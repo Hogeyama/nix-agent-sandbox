@@ -26,7 +26,8 @@ export {
 export interface NetworkRuntimePaths extends BaseRuntimePaths {
   caCertDir: string;
   addonScriptPath: string;
-  reviewRulesDir: string;
+  /** セッションごとの解決済み認可ドキュメントを置くディレクトリ。 */
+  authzDir: string;
 }
 
 export async function resolveNetworkRuntimePaths(
@@ -40,14 +41,14 @@ export async function resolveNetworkRuntimePaths(
     brokersDir: path.join(resolved, "brokers"),
     caCertDir: path.join(resolved, "mitmproxy-ca"),
     addonScriptPath: path.join(resolved, "nas_addon.py"),
-    reviewRulesDir: path.join(resolved, "review-rules"),
+    authzDir: path.join(resolved, "authz"),
   };
   await ensureDir(paths.runtimeDir, 0o755);
   await ensureDir(paths.sessionsDir);
   await ensureDir(paths.pendingDir);
   await ensureDir(paths.brokersDir);
   await ensureDir(paths.caCertDir);
-  await ensureDir(paths.reviewRulesDir);
+  await ensureDir(paths.authzDir);
   return paths;
 }
 

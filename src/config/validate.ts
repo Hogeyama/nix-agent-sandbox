@@ -7,19 +7,8 @@
 
 import { SECRET_SOURCE_PREFIXES } from "../hostexec/secret_store.ts";
 import { logWarn } from "../log.ts";
-import { parseAllowlistEntry } from "../network/protocol.ts";
-import {
-  type ResolvedReviewRules,
-  resolveReviewRules,
-} from "../network/review_rules.ts";
-import type {
-  Config,
-  CredentialRule,
-  HostExecRule,
-  MaskValueConfig,
-  Profile,
-  ReviewRule,
-} from "./types.ts";
+import { validateAuthzConfig } from "../network/authz/validate.ts";
+import type { Config, HostExecRule, Profile, SecretConfig } from "./types.ts";
 
 export class ConfigValidationError extends Error {
   constructor(message: string) {
@@ -58,37 +47,10 @@ export function validateConfig(config: Config): Config {
 
 function validateProfile(name: string, profile: Profile): string[] {
   const errors: string[] = [];
-  let resolvedReviewRules: ResolvedReviewRules | undefined;
 
-  // --- reviewRules host pattern validation ---
-  for (const [i, rule] of profile.network.reviewRules.entries()) {
-    if (rule.host !== undefined) {
-      errors.push(
-        ...validateHostList(
-          `profile "${name}": network.reviewRules[${i}].host`,
-          [rule.host],
-        ),
-      );
-    }
-  }
-
-  // --- reviewRules compilation and protected shadow validation ---
-  try {
-    resolvedReviewRules = resolveReviewRules(profile.network.reviewRules);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    errors.push(
-      ...message
-        .split("\n")
-        .map((line) => `profile "${name}": network.${line}`),
-    );
-  }
-
-  // --- reviewRules shadowing warnings ---
-  warnShadowedReviewRules(name, profile.network.reviewRules);
-
-  // --- credentials validation ---
-  errors.push(...validateCredentials(name, profile.network.credentials));
+  // --- 秘密のレジストリと、それを使うネットワーク認可 ---
+  errors.push(...validateSecretRegistry(name, profile.secrets));
+  errors.push(...validateAuthz(name, profile));
 
   // --- forwardPorts の予約ポート(18080)・重複検出 ---
   errors.push(
@@ -124,88 +86,121 @@ function validateProfile(name: string, profile: Profile): string[] {
 
   // --- mask ---
   if (profile.mask) {
-    errors.push(...validateMaskValues(name, profile.mask.values));
-    if (typeof profile.mask.maskfs !== "boolean") {
-      errors.push(`profile "${name}": mask.maskfs must be a boolean`);
+    for (const field of ["maskfs", "proxy", "filter"] as const) {
+      if (typeof profile.mask[field] !== "boolean") {
+        errors.push(`profile "${name}": mask.${field} must be a boolean`);
+      }
     }
-    if (typeof profile.mask.proxy !== "boolean") {
-      errors.push(`profile "${name}": mask.proxy must be a boolean`);
-    }
-    if (typeof profile.mask.filter !== "boolean") {
-      errors.push(`profile "${name}": mask.filter must be a boolean`);
-    }
-  }
-  if (
-    resolvedReviewRules?.rules.some(
-      (rule) => rule.requestPolicy !== undefined,
-    ) &&
-    profile.mask?.proxy !== true
-  ) {
-    errors.push(
-      `profile "${name}": request policies require mask.proxy = true`,
-    );
-  }
-
-  return errors;
-}
-
-// ---------------------------------------------------------------------------
-// Host list validation (shared by allowlist / denylist)
-// ---------------------------------------------------------------------------
-
-function validateHostList(fieldPath: string, entries: string[]): string[] {
-  const errors: string[] = [];
-  for (const [i, entry] of entries.entries()) {
-    if (typeof entry !== "string" || entry.trim() === "") {
-      errors.push(`${fieldPath}[${i}] must be a non-empty string`);
-      continue;
-    }
-    let parsed: { host: string; port: number | null };
-    try {
-      parsed = parseAllowlistEntry(entry);
-    } catch {
-      errors.push(
-        `${fieldPath}[${i}] ("${entry}") is not a valid host or host:port entry`,
-      );
-      continue;
-    }
-    const domain = parsed.host.startsWith("*.")
-      ? parsed.host.slice(2)
-      : parsed.host;
-    if (domain.includes("*")) {
-      errors.push(
-        `${fieldPath}[${i}] ("${entry}") contains wildcard "*" in an invalid position; only "*.domain.com" prefix form is allowed`,
-      );
-    }
-  }
-  return errors;
-}
-
-// ---------------------------------------------------------------------------
-// ReviewRules shadowing warning
-// ---------------------------------------------------------------------------
-
-function warnShadowedReviewRules(
-  profileName: string,
-  rules: ReviewRule[],
-): void {
-  for (let i = 0; i < rules.length; i++) {
-    const earlier = rules[i];
-    if (
-      earlier.method === undefined &&
-      earlier.host === undefined &&
-      earlier.path === undefined &&
-      earlier.pathPrefix === undefined
-    ) {
-      for (let j = i + 1; j < rules.length; j++) {
-        logWarn(
-          `[warn] profile "${profileName}": network.reviewRules[${i}] (catch-all, action="${earlier.action}") ` +
-            `shadows reviewRules[${j}]; consider reordering`,
+    for (const [i, secretName] of (profile.mask.apply ?? []).entries()) {
+      if (!(secretName in profile.secrets)) {
+        errors.push(
+          `profile "${name}": mask.apply[${i}] ("${secretName}") is not a name in secrets`,
         );
       }
-      break;
     }
   }
+
+  return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Secret registry
+// ---------------------------------------------------------------------------
+
+function validateSecretRegistry(
+  profileName: string,
+  secrets: Record<string, SecretConfig>,
+): string[] {
+  const errors: string[] = [];
+  for (const [secretName, secret] of Object.entries(secrets)) {
+    const source = secret.from;
+    if (typeof source !== "string" || source.trim() === "") {
+      errors.push(
+        `profile "${profileName}": secrets["${secretName}"].from must be a non-empty string`,
+      );
+      continue;
+    }
+    if (!SECRET_SOURCE_PREFIXES.some((prefix) => source.startsWith(prefix))) {
+      errors.push(
+        `profile "${profileName}": secrets["${secretName}"].from ("${source}") must start with one of ${SECRET_SOURCE_PREFIXES.join(", ")} (literal values are not supported)`,
+      );
+    }
+  }
+  return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Network authorization
+// ---------------------------------------------------------------------------
+
+/**
+ * Headers a config may not inject.
+ *
+ * They describe the connection or the message framing rather than the
+ * caller, so overwriting one rewrites how the proxied request is
+ * transported — or, for `proxy-authorization`, hands the agent's own
+ * session credential to the upstream host.
+ */
+const FORBIDDEN_INJECT_HEADERS = new Set([
+  "host",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "proxy-authorization",
+  "proxy-connection",
+  "keep-alive",
+  "te",
+  "trailer",
+  "upgrade",
+]);
+
+function validateAuthz(profileName: string, profile: Profile): string[] {
+  const errors: string[] = [];
+  const prefix = `profile "${profileName}": `;
+
+  for (const diagnostic of validateAuthzConfig({
+    secrets: profile.secrets,
+    mask: profile.mask,
+    network: profile.network,
+  })) {
+    if (diagnostic.severity === "warning") {
+      logWarn(`[warn] ${prefix}${diagnostic.message}`);
+      continue;
+    }
+    errors.push(prefix + diagnostic.message);
+  }
+
+  for (const [scopeName, scope] of Object.entries(profile.network.scopes)) {
+    const injects = [
+      ...(scope.inject ?? []),
+      ...Object.values(scope.rules ?? {}).flatMap((rule) => rule.inject ?? []),
+    ];
+    for (const entry of injects) {
+      const header = entry.name.trim();
+      if (header === "") {
+        errors.push(
+          `${prefix}スコープ ${scopeName} の inject にヘッダー名がありません。`,
+        );
+      } else if (FORBIDDEN_INJECT_HEADERS.has(header.toLowerCase())) {
+        errors.push(
+          `${prefix}スコープ ${scopeName} の inject が注入を禁じられたヘッダー ${header} を指しています。`,
+        );
+      }
+    }
+    // `review` は承認の作り直しと一緒に解禁する。それまでは書けても効かない
+    // ので、黙って deny に丸めるのではなく設定エラーにする。
+    for (const [key, rule] of Object.entries(scope.rules ?? {})) {
+      for (const [index, expect] of (rule.expect ?? []).entries()) {
+        if (expect.onViolation === "review") {
+          errors.push(
+            `${prefix}ルール ${scopeName}.${key} の expect[${index}] の onViolation = "review" はまだ実装されていません。"deny" か "allow" を選んでください。`,
+          );
+        }
+      }
+    }
+  }
+
+  return errors;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,59 +250,6 @@ function validateEnvEntries(
         );
       }
     }
-  }
-  return errors;
-}
-
-// ---------------------------------------------------------------------------
-// Credential validation
-// ---------------------------------------------------------------------------
-
-const FORBIDDEN_CREDENTIAL_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-  "proxy-authorization",
-  "proxy-connection",
-  "keep-alive",
-  "te",
-  "trailer",
-  "upgrade",
-]);
-
-function validateCredentials(
-  profileName: string,
-  credentials: CredentialRule[],
-): string[] {
-  const errors: string[] = [];
-  for (const [i, cred] of credentials.entries()) {
-    const prefix = `profile "${profileName}": network.credentials[${i}]`;
-
-    const normalizedHeader = cred.header.trim();
-    if (!normalizedHeader) {
-      errors.push(`${prefix}.header must not be empty`);
-    } else if (
-      FORBIDDEN_CREDENTIAL_HEADERS.has(normalizedHeader.toLowerCase())
-    ) {
-      errors.push(
-        `${prefix}.header "${cred.header}" is a forbidden header for credential injection`,
-      );
-    }
-
-    // Use != null (covers both null and undefined) to handle Pkl's null values
-    // which arrive as null at runtime despite the TypeScript type saying string.
-    const hasVal = "val" in cred.value && cred.value.val != null;
-    // After "valCmd" in check TypeScript narrows to { valCmd: string };
-    // the != null guard catches Pkl nulls that slip through the type.
-    const hasValCmd = "valCmd" in cred.value && cred.value.valCmd != null;
-    if (hasVal && hasValCmd) {
-      errors.push(`${prefix}.value: only one of val or valCmd may be set`);
-    } else if (!hasVal && !hasValCmd) {
-      errors.push(`${prefix}.value: exactly one of val or valCmd must be set`);
-    }
-
-    errors.push(...validateHostList(`${prefix}.host`, [cred.host]));
   }
   return errors;
 }
@@ -569,30 +511,4 @@ function warnOverlappingHostExecRules(
       }
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Mask values validation
-// ---------------------------------------------------------------------------
-
-function validateMaskValues(
-  profileName: string,
-  values: MaskValueConfig[],
-): string[] {
-  const errors: string[] = [];
-  for (const [i, value] of values.entries()) {
-    const source = value.source;
-    if (typeof source !== "string" || source.trim() === "") {
-      errors.push(
-        `profile "${profileName}": mask.values[${i}].source must be a non-empty string`,
-      );
-      continue;
-    }
-    if (!SECRET_SOURCE_PREFIXES.some((p) => source.startsWith(p))) {
-      errors.push(
-        `profile "${profileName}": mask.values[${i}].source ("${source}") must start with one of ${SECRET_SOURCE_PREFIXES.join(", ")} (literal values are not supported)`,
-      );
-    }
-  }
-  return errors;
 }

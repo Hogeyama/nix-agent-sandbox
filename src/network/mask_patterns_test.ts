@@ -71,6 +71,7 @@ describe("maskReviewContext", () => {
         contentType: "application/x-www-form-urlencoded",
         bodyPreview: "data=s3cret-value",
         bodySize: 17,
+        bodyKind: "binary",
       },
       ["s3cret-value"],
     );
@@ -84,6 +85,7 @@ describe("maskReviewContext", () => {
       contentType: null,
       bodyPreview: "body",
       bodySize: 4,
+      bodyKind: "binary" as const,
     };
     expect(maskReviewContext(ctx, [])).toEqual(ctx);
     expect(maskReviewContext(undefined, ["s3cret-value"])).toBeUndefined();

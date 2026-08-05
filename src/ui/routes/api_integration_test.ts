@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 
 /**
  * UI API ルートの単体テスト — Router.request() でテスト
@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { appendAuditLog } from "../../audit/store.ts";
+import { useRepoSchemaAsset } from "../../config/schema_asset_testing.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import { resolveAsset } from "../../lib/asset.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
@@ -22,6 +23,16 @@ import type { PricingSnapshot } from "../pricing.ts";
 import { Router } from "../router.ts";
 import { createApiRoutes } from "./api.ts";
 
+let restoreSchemaAsset: (() => Promise<void>) | undefined;
+
+beforeAll(async () => {
+  restoreSchemaAsset = await useRepoSchemaAsset();
+});
+
+afterAll(async () => {
+  await restoreSchemaAsset?.();
+});
+
 /** テスト用のダミーコンテキストを作成 */
 function createTestContext(dir: string): UiDataContext {
   const networkPaths: NetworkRuntimePaths = {
@@ -31,7 +42,7 @@ function createTestContext(dir: string): UiDataContext {
     brokersDir: `${dir}/network/brokers`,
     caCertDir: `${dir}/network/mitmproxy-ca`,
     addonScriptPath: `${dir}/network/nas_addon.py`,
-    reviewRulesDir: `${dir}/network/review-rules`,
+    authzDir: `${dir}/network/authz`,
   };
   const hostExecPaths: HostExecRuntimePaths = {
     runtimeDir: `${dir}/hostexec`,

@@ -32,6 +32,7 @@ import {
 } from "../../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
+import { selectAppliedSecrets } from "../../network/secrets.ts";
 import { mergeContainerPlan } from "../../pipeline/container_plan.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type {
@@ -365,7 +366,9 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   // (I/O) is deferred to the Effect runner.
   const mask = input.profile.mask;
   const maskFilterIntent: HostExecPlan["maskFilterIntent"] =
-    mask?.filter && mask.values.length > 0
+    mask?.filter &&
+    Object.keys(selectAppliedSecrets(input.profile.secrets, mask.apply))
+      .length > 0
       ? {
           secretsFramePath: `${resolveRuntimeSubdir(input.host, "mask-filter")}/${input.sessionId}/mask-secrets`,
         }

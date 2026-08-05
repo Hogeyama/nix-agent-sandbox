@@ -20,14 +20,33 @@ import type {
 } from "../stores/pendingStore";
 
 /**
- * Default scopes per domain. Network defaults to `host-port`, matching
- * the Network pane convention; hostexec defaults to `capability`,
- * matching the HostExec pane convention. These are applied when the
- * user has not interacted with the scope chips before pressing
- * Allow/Approve or Deny.
+ * Default scope for hostexec, applied when the user has not touched the
+ * scope chips before pressing Approve or Deny.
+ *
+ * Network has no fixed counterpart: each pending entry carries the grains
+ * it may be approved at, so the default is that entry's narrowest one. See
+ * `networkScopeFor`.
  */
-export const DEFAULT_NETWORK_SCOPE = "host-port";
 export const DEFAULT_HOSTEXEC_SCOPE = "capability";
+
+/**
+ * The grain a network action should send for a row.
+ *
+ * The chips are rebuilt from every pending snapshot while a selection
+ * survives in the per-card store, so a stale selection can name a grain
+ * this entry never offered. Sending it would either be refused by the
+ * backend or, worse, remember an approval nobody was shown; fall back to
+ * the narrowest grain the entry does offer instead.
+ */
+export function networkScopeFor(
+  row: NetworkPendingRow,
+  selected: string | undefined,
+): string {
+  if (selected !== undefined && row.approvalScopes.includes(selected)) {
+    return selected;
+  }
+  return row.approvalScopes[0] ?? "once";
+}
 
 export interface PendingActionClient {
   approveNetwork(
@@ -118,11 +137,13 @@ export function createPendingActionHandlers(
     onDeny(row) {
       const domain = domainOf(row.key);
       if (domain === "network") {
-        // The currently selected scope (or the network default when the
-        // user has not interacted with the chips) is forwarded to the
-        // backend, which validates it and widens / narrows the deny
-        // rule accordingly.
-        const scope = pendingAction.scopeFor(row.key) ?? DEFAULT_NETWORK_SCOPE;
+        // The selected grain, clamped to what this entry offers, is
+        // forwarded to the backend, which validates it again and widens /
+        // narrows the deny accordingly.
+        const scope = networkScopeFor(
+          row as NetworkPendingRow,
+          pendingAction.scopeFor(row.key),
+        );
         return runWithBusy(
           row.key,
           () => client.denyNetwork(row.sessionId, row.id, scope),

@@ -29,6 +29,7 @@ function makeProfile(nixEnable: boolean | "auto"): Profile {
     hook: DEFAULT_HOOK_CONFIG,
     extraMounts: [],
     env: [],
+    secrets: {},
   };
 }
 

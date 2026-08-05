@@ -9,6 +9,7 @@
 
 import { Effect } from "effect";
 import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
+import { selectAppliedSecrets } from "../../network/secrets.ts";
 import type { Stage } from "../../pipeline/stage_builder.ts";
 import type { WorkspaceState } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput } from "../../pipeline/types.ts";
@@ -41,7 +42,8 @@ export function createMaskFsStage(
 
     run(input) {
       const mask = shared.profile.mask;
-      if (!mask?.maskfs || mask.values.length === 0) {
+      const applied = selectAppliedSecrets(shared.profile.secrets, mask?.apply);
+      if (!mask?.maskfs || Object.keys(applied).length === 0) {
         return Effect.succeed({ workspace: input.workspace });
       }
 
@@ -49,7 +51,7 @@ export function createMaskFsStage(
         const maskFs = yield* MaskFsService;
 
         // --- 秘密値の解決 (fail-closed: 全値 required) ---
-        const secrets = yield* maskFs.resolveSecrets(mask.values, shared.host);
+        const secrets = yield* maskFs.resolveSecrets(applied, shared.host);
 
         // --- バイナリパス ---
         const resolveBin = options.resolveBinPath ?? resolveMaskFsBinPath;

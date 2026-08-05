@@ -1,8 +1,21 @@
 import { isIP } from "node:net";
-import type { ReviewRule } from "../config/types.ts";
+import type { ResolvedDocument } from "./authz/resolve.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
 
-export type ApprovalScope = "once" | "host-port" | "host";
+/**
+ * 承認をどこまで覚えるか。
+ *
+ * 承認の同一性は (ルール ID, ターゲット) であり、ここで選べるのはその
+ * ターゲット成分の広さだけである。どの粒度を出すかはマッチしたルールの
+ * 具体性から決まる (`src/network/broker.ts`)。
+ *
+ * - `once`: 何も覚えない。
+ * - `rule`: そのルールが有効な間ずっと。ターゲットをスコープが 1 つの
+ *   ホストとポートに固定しているときだけ選べる。
+ * - `host-port`: そのホストとポートに対して。
+ * - `host`: そのホストの全ポートに対して。
+ */
+export type ApprovalScope = "once" | "rule" | "host-port" | "host";
 export type RequestKind = "connect" | "forward";
 export type Decision = "allow" | "deny";
 
@@ -11,12 +24,17 @@ export interface InjectHeader {
   value: string;
 }
 
-export interface ResolvedCredential {
-  host: string;
-  pathPrefix?: string;
-  method?: string;
-  header: string;
-  value: string;
+/**
+ * 承認 UI に出す注入ヘッダーの姿。
+ *
+ * ヘッダー名と、その値が参照する秘密の名前だけを持つ。値を持つ
+ * `InjectHeader` とは別の型なので、人が見る面へ値の付いた方を載せようと
+ * すると型エラーになる。
+ */
+export interface InjectHeaderPreview {
+  name: string;
+  /** 参照する秘密の名前。`literal:` だけの値では空。 */
+  secrets: string[];
 }
 
 export interface SessionCredentials {
@@ -29,11 +47,33 @@ export interface NormalizedTarget {
   port: number;
 }
 
+/**
+ * ボディについて、選択に効く事実だけ。
+ *
+ * addon がボディを読んで分類し、broker がそれを使って `decide` を回す。
+ * broker はボディそのものを受け取らないので、`match.body.format` の 3 値評価に
+ * 必要な最小限だけをここに載せる。
+ *
+ * - `absent`: ボディが存在しない。
+ * - `empty`: ボディが存在し、長さが 0 である。
+ * - `binary`: ボディが存在し、JSON として解析できない。
+ * - `json`: ボディが存在し、JSON として解析できる。
+ */
+export type BodyKind = "absent" | "empty" | "binary" | "json";
+
+export const BODY_KINDS = [
+  "absent",
+  "empty",
+  "binary",
+  "json",
+] as const satisfies readonly BodyKind[];
+
 export interface ReviewContext {
   path: string;
   contentType: string | null;
   bodyPreview: string | null;
   bodySize: number;
+  bodyKind: BodyKind;
 }
 
 export interface AuthorizeRequest {
@@ -62,11 +102,20 @@ export interface DecisionResponse {
   /** allow のとき、プロキシがリクエストから ****
    * へ置換すべき秘密値 (nas_addon.py が消費)。 */
   maskValues?: string[];
+  /** allow のとき、出現したらリクエストを拒否すべき秘密値。 */
+  forbidValues?: string[];
 }
 
 export const REQUEST_POLICY_SUCCESS_REASONS = [
+  /** 受理条件を持たないルールなので、ボディを検査していない。 */
+  "no-inspection",
+  /** EmptyBody が満たされた。 */
   "empty-body",
+  /** JSON を解析し、受理条件をすべて満たした。 */
   "recognized-json",
+  /** 違反はあったが、すべて onViolation = "allow" だった。 */
+  "violations-allowed",
+  /** 秘密をマスクしてボディを書き換えた。 */
   "masked-json",
 ] as const;
 
@@ -75,7 +124,7 @@ export const REQUEST_POLICY_BLOCK_REASONS = [
   "unexpected-body",
   "invalid-json",
   "schema-mismatch",
-  "encoded-decode-failed",
+  "forbidden-secret",
   "resource-limit",
   "key-collision",
   "serialization-failed",
@@ -111,13 +160,26 @@ const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
   "result",
   "reason",
 ]);
-const SAFE_RULE_ID = /^[a-z][a-z0-9._-]{0,63}$/;
+/** ルールの実 ID は `<スコープ名>.<キー>`。擬似 ID は `$fallback` で終わる。 */
+const SAFE_RULE_ID = /^[a-z][a-z0-9._-]{0,63}(?:\.\$fallback)?$/;
 const REQUEST_POLICY_RESULTS = ["pass", "rewrite", "block"] as const;
+
+/** 解決済みドキュメントに存在するルール ID か。 */
+export function documentHasRuleId(
+  document: ResolvedDocument,
+  ruleId: string,
+): boolean {
+  return document.scopes.some(
+    (scope) =>
+      scope.fallbackRuleId === ruleId ||
+      scope.rules.some((rule) => rule.id === ruleId),
+  );
+}
 
 export function validateRequestPolicyOutcome(
   value: unknown,
   expectedSessionId: string,
-  rules: readonly ReviewRule[],
+  document: ResolvedDocument,
 ): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return "invalid request-policy outcome request";
@@ -146,54 +208,34 @@ export function validateRequestPolicyOutcome(
   ) {
     return "invalid request-policy outcome rule ID";
   }
-  const rule = rules.find((candidate) => candidate.id === message.ruleId);
-  if (rule === undefined) {
+  if (!documentHasRuleId(document, message.ruleId)) {
     return "unknown request-policy outcome rule ID";
-  }
-  if (rule.requestPolicy === undefined) {
-    return "request-policy outcome rule has no policy";
   }
   if (!isListedValue(message.result, REQUEST_POLICY_RESULTS)) {
     return "invalid request-policy outcome result";
   }
-  const reasons = [
-    ...REQUEST_POLICY_SUCCESS_REASONS,
-    ...REQUEST_POLICY_BLOCK_REASONS,
-  ] as const;
-  if (!isListedValue(message.reason, reasons)) {
+  if (
+    !isListedValue(message.reason, [
+      ...REQUEST_POLICY_SUCCESS_REASONS,
+      ...REQUEST_POLICY_BLOCK_REASONS,
+    ] as const)
+  ) {
     return "invalid request-policy outcome reason";
   }
 
-  const result = message.result;
+  // 結果と理由の組み合わせを閉じる。ボディ検査を通したという報告に拒否の理由が
+  // 付いていたら、addon と broker のどちらかが壊れている。
   const reason = message.reason;
-  if (rule.requestPolicy.kind === "bodyless") {
-    const valid =
-      (result === "pass" && reason === "empty-body") ||
-      (result === "block" &&
-        (reason === "body-unavailable" ||
-          reason === "unexpected-body" ||
-          reason === "processing-failed"));
-    return valid
-      ? null
-      : "invalid request-policy outcome result/reason pairing";
-  }
-  if (rule.requestPolicy.kind !== "json") {
-    return "invalid request-policy outcome policy kind";
-  }
-
-  const valid =
-    (result === "pass" && reason === "recognized-json") ||
-    (result === "rewrite" && reason === "masked-json") ||
-    (result === "block" &&
-      (reason === "body-unavailable" ||
-        reason === "invalid-json" ||
-        reason === "schema-mismatch" ||
-        reason === "encoded-decode-failed" ||
-        reason === "resource-limit" ||
-        reason === "key-collision" ||
-        reason === "serialization-failed" ||
-        reason === "processing-failed"));
-  return valid ? null : "invalid request-policy outcome result/reason pairing";
+  const consistent =
+    message.result === "block"
+      ? isListedValue(reason, REQUEST_POLICY_BLOCK_REASONS)
+      : message.result === "rewrite"
+        ? reason === "masked-json" || reason === "violations-allowed"
+        : isListedValue(reason, REQUEST_POLICY_SUCCESS_REASONS) &&
+          reason !== "masked-json";
+  return consistent
+    ? null
+    : "invalid request-policy outcome result/reason pairing";
 }
 
 export interface PendingEntry {
@@ -207,6 +249,12 @@ export interface PendingEntry {
   createdAt: string;
   updatedAt: string;
   reviewContext?: ReviewContext;
+  /** この確認を起こしたルール。承認の同一性の片割れであり、擬似 ID もありうる。 */
+  ruleId: string;
+  /** この確認で選べる粒度。ルールの具体性から導出される。 */
+  approvalScopes: ApprovalScope[];
+  /** 承認したときに注入されるヘッダー。名前だけで、値は載らない。 */
+  injectHeaders: InjectHeaderPreview[];
 }
 
 export interface SessionRegistryEntry {
@@ -377,14 +425,6 @@ export function matchesHostPattern(
 
 export function targetKey(target: NormalizedTarget): string {
   return `${target.host}:${target.port}`;
-}
-
-export function targetKeyForScope(
-  target: NormalizedTarget,
-  scope: ApprovalScope,
-): string {
-  if (scope === "host") return target.host;
-  return targetKey(target);
 }
 
 export function matchesPathPrefix(path: string, prefix: string): boolean {

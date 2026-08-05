@@ -35,11 +35,11 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       aws: { mountConfig: false },
       gpg: { forwardAgent: false },
       network: {
-        reviewRules: [],
-        credentials: [],
+        scopes: {},
+        fallback: "deny",
+        defaults: {},
         proxy: { forwardPorts: [] },
         pendingTimeoutSeconds: 300,
-        pendingDefaultScope: "host-port",
         pendingNotify: "off",
       },
       dbus: {
@@ -55,6 +55,7 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       display: { sandbox: "none", size: "1920x1080" },
       extraMounts: [],
       env: [],
+      secrets: {},
       hook: { notify: "off" },
     },
     profileName: "test",
@@ -111,8 +112,8 @@ describe("createMaskFsStage", () => {
   test("mask.maskfs=false → workspace passthrough, no daemon start", async () => {
     let started = 0;
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:NAS_TEST_MASK_SECRET" }],
       writePolicy: "readonly",
       maskfs: false,
       proxy: true,
@@ -146,8 +147,8 @@ describe("createMaskFsStage", () => {
       resolveSecrets: () => Effect.succeed(["hunter2secret"]),
     });
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:NAS_TEST_MASK_SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
@@ -180,8 +181,8 @@ describe("createMaskFsStage", () => {
 
   test("secret shorter than 4 bytes → fails (fail-closed)", async () => {
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:NAS_TEST_SHORT" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
@@ -214,8 +215,8 @@ describe("createMaskFsStage", () => {
 
   test("binary not found → fails (fail-closed)", async () => {
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:NAS_TEST_MASK_SECRET" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,
@@ -239,8 +240,8 @@ describe("createMaskFsStage", () => {
 
   test("unresolvable secret source → fails (fail-closed)", async () => {
     const input = makeStageInput();
+    input.profile.secrets = { workspace: { from: "env:TEST_SECRET" } };
     input.profile.mask = {
-      values: [{ source: "env:NAS_TEST_DOES_NOT_EXIST" }],
       writePolicy: "readonly",
       maskfs: true,
       proxy: true,

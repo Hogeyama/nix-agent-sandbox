@@ -24,8 +24,8 @@
 
 import * as path from "node:path";
 import { Context, Effect, Layer, type Scope } from "effect";
-import type { MaskValueConfig } from "../../config/types.ts";
-import { resolveMaskSecrets } from "../../lib/mask_secrets.ts";
+import type { SecretConfig } from "../../config/types.ts";
+import { resolveSecretList } from "../../network/secrets.ts";
 import type { MountSpec } from "../../pipeline/state.ts";
 import type { HostEnv } from "../../pipeline/types.ts";
 import { FsService } from "../../services/fs.ts";
@@ -65,7 +65,7 @@ export class MaskFilterService extends Context.Tag("nas/MaskFilterService")<
       secrets: string[],
     ) => Effect.Effect<MaskFilterResult, unknown, Scope.Scope>;
     readonly resolveSecrets: (
-      values: MaskValueConfig[],
+      secrets: Readonly<Record<string, SecretConfig>>,
       host: HostEnv,
     ) => Effect.Effect<string[], unknown>;
   }
@@ -429,12 +429,12 @@ export const MaskFilterServiceLive: Layer.Layer<
       prepareMaskFilter: (plan, secrets) =>
         prepareMaskFilter(fs, proc, plan, secrets),
 
-      resolveSecrets: (values, host) =>
+      resolveSecrets: (secrets, host) =>
         Effect.tryPromise({
           try: () => {
             const env: Record<string, string | undefined> = {};
             for (const [k, v] of host.env) env[k] = v;
-            return resolveMaskSecrets(values, env);
+            return resolveSecretList(secrets, env);
           },
           catch: (e) => e,
         }),
@@ -452,7 +452,7 @@ export interface MaskFilterServiceFakeConfig {
     secrets: string[],
   ) => Effect.Effect<MaskFilterResult, unknown, Scope.Scope>;
   readonly resolveSecrets?: (
-    values: MaskValueConfig[],
+    secrets: Readonly<Record<string, SecretConfig>>,
     host: HostEnv,
   ) => Effect.Effect<string[], unknown>;
 }

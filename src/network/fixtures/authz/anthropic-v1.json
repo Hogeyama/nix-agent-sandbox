@@ -1,0 +1,339 @@
+{
+  "contractVersion": 2,
+  "fallback": "deny",
+  "defaults": {
+    "limits": {
+      "maxBodyBytes": 33554432,
+      "maxDepth": 64,
+      "maxNodes": 200000,
+      "maxSelectorExpansions": 1000000
+    },
+    "secrets": {
+      "*": "mask"
+    },
+    "audit": "always"
+  },
+  "scopes": [
+    {
+      "name": "anthropic",
+      "targets": [
+        {
+          "source": "api.anthropic.com",
+          "host": {
+            "kind": "exact",
+            "host": "api.anthropic.com"
+          },
+          "port": null
+        }
+      ],
+      "fallback": "deny",
+      "fallbackRuleId": "anthropic.$fallback",
+      "limits": {
+        "maxBodyBytes": 33554432,
+        "maxDepth": 64,
+        "maxNodes": 200000,
+        "maxSelectorExpansions": 1000000
+      },
+      "secrets": {
+        "*": "mask"
+      },
+      "inject": [],
+      "audit": "always",
+      "rules": [
+        {
+          "id": "anthropic.messages",
+          "key": "messages",
+          "precedes": [],
+          "match": {
+            "methods": ["POST"],
+            "paths": [
+              {
+                "source": "/v1/messages",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v1"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["messages"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/v1/messages/count_tokens",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v1"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["messages"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["count_tokens"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              }
+            ],
+            "bodyFormat": "json"
+          },
+          "onMatch": "allow",
+          "onIndeterminate": "deny",
+          "expect": [
+            {
+              "kind": "unionShape",
+              "onViolation": "deny",
+              "at": "/**/content/*",
+              "exclude": ["/tools/**"],
+              "discriminator": "type",
+              "allowed": [
+                "text",
+                "image",
+                "document",
+                "thinking",
+                "redacted_thinking",
+                "tool_use",
+                "tool_result",
+                "server_tool_use",
+                "web_search_tool_result",
+                "code_execution_tool_result",
+                "mcp_tool_use",
+                "mcp_tool_result",
+                "search_result",
+                "container_upload"
+              ]
+            },
+            {
+              "kind": "unionShape",
+              "onViolation": "deny",
+              "at": "/system/*",
+              "exclude": [],
+              "discriminator": "type",
+              "allowed": [
+                "text",
+                "image",
+                "document",
+                "thinking",
+                "redacted_thinking",
+                "tool_use",
+                "tool_result",
+                "server_tool_use",
+                "web_search_tool_result",
+                "code_execution_tool_result",
+                "mcp_tool_use",
+                "mcp_tool_result",
+                "search_result",
+                "container_upload"
+              ]
+            },
+            {
+              "kind": "jsonRoot",
+              "onViolation": "deny",
+              "rootType": "object"
+            }
+          ],
+          "limits": {
+            "maxBodyBytes": 33554432,
+            "maxDepth": 64,
+            "maxNodes": 200000,
+            "maxSelectorExpansions": 1000000
+          },
+          "secrets": {
+            "*": "mask"
+          },
+          "inject": [],
+          "audit": "always"
+        },
+        {
+          "id": "anthropic.bootstrap",
+          "key": "bootstrap",
+          "precedes": [],
+          "match": {
+            "methods": ["GET"],
+            "paths": [
+              {
+                "source": "/api/claude_cli/bootstrap",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["claude_cli"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["bootstrap"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/api/claude_code_penguin_mode",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["claude_code_penguin_mode"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/api/claude_code/policy_limits",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["claude_code"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["policy_limits"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/api/claude_code/settings",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["api"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["claude_code"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["settings"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/mcp-registry/v0/servers",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["mcp-registry"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v0"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["servers"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/v1/code/triggers",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v1"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["code"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["triggers"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              },
+              {
+                "source": "/v1/mcp_servers",
+                "segments": [
+                  {
+                    "kind": "finite",
+                    "values": [""]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["v1"]
+                  },
+                  {
+                    "kind": "finite",
+                    "values": ["mcp_servers"]
+                  }
+                ],
+                "trailingDoubleStar": false
+              }
+            ],
+            "bodyFormat": null
+          },
+          "onMatch": "allow",
+          "onIndeterminate": "deny",
+          "expect": [
+            {
+              "kind": "emptyBody",
+              "onViolation": "deny"
+            }
+          ],
+          "limits": {
+            "maxBodyBytes": 33554432,
+            "maxDepth": 64,
+            "maxNodes": 200000,
+            "maxSelectorExpansions": 1000000
+          },
+          "secrets": {
+            "*": "mask"
+          },
+          "inject": [],
+          "audit": "always"
+        }
+      ]
+    }
+  ]
+}
