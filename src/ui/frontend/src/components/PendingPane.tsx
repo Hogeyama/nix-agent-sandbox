@@ -11,7 +11,31 @@ import type {
 import { formatAuditEntry, summaryFor } from "./auditEntryView";
 import { formatRelativeTime, sessionLabel } from "./pendingCardView";
 
-const NETWORK_SCOPES = ["once", "host-port", "host"] as const;
+// Network scope chips. The label is what the user reads; the hint is the
+// `title` tooltip. `host` and `host:port` promise less than their names
+// suggest: the broker consults its approval / denial caches only while
+// resolving a rule whose action is `review` (`src/network/broker.ts`
+// `authorize`), so denying a host does not stop a later request that an
+// explicit `allow` rule matches first. The hint says so, because the
+// label cannot.
+const NETWORK_SCOPES = [
+  {
+    id: "once",
+    label: "once",
+    hint: "Applies to this request only. Nothing is remembered.",
+  },
+  {
+    id: "host-port",
+    label: "host:port",
+    hint: "Remembered for this session, for this host and port. Requests that an explicit allow or deny rule matches first are unaffected.",
+  },
+  {
+    id: "host",
+    label: "host",
+    hint: "Remembered for this session, for this host on any port. Requests that an explicit allow or deny rule matches first are unaffected.",
+  },
+] as const;
+
 const HOSTEXEC_SCOPES = ["once", "capability"] as const;
 
 type Props = {
@@ -139,11 +163,12 @@ export function PendingPane(props: Props) {
                         <button
                           type="button"
                           class="scope"
-                          classList={{ selected: scope() === opt }}
+                          classList={{ selected: scope() === opt.id }}
+                          title={opt.hint}
                           disabled={busy()}
-                          onClick={() => props.setScope(row.key, opt)}
+                          onClick={() => props.setScope(row.key, opt.id)}
                         >
-                          {opt === "host-port" ? "host:port" : opt}
+                          {opt.label}
                         </button>
                       )}
                     </For>
