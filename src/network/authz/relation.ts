@@ -60,7 +60,10 @@ export function compileMatch(match: Match): Result<CompiledMatch> {
   return {
     ok: true,
     value: {
-      methods: match.methods === undefined ? null : unique(match.methods),
+      methods:
+        match.methods === undefined
+          ? null
+          : unique(match.methods.map(normalizeMethod)),
       paths,
       body: normalizeBody(match.body),
     },
@@ -114,6 +117,36 @@ export function normalizeBody(body: BodyMatch | undefined): NormalizedBody {
 }
 
 // ---------------------------------------------------------------- メソッド
+
+/**
+ * メソッドの綴りを畳む。
+ *
+ * HTTP のメソッドは大文字小文字を区別する語であり、実際に飛んでくるのは
+ * 大文字の綴りである。設定側をここで大文字に揃えるので、比較はどの経路でも
+ * 単純な文字列の一致でよい。揃えるのを判定の側でやると、判定の経路が 1 つ
+ * 増えるたびに揃え忘れが生まれ、そのたびにルールが黙って発火しなくなる。
+ */
+export function normalizeMethod(method: string): string {
+  return method.toUpperCase();
+}
+
+/**
+ * 綴りを畳んだあとに既知のメソッドとして通る集合。
+ *
+ * 一致しない綴りは、そのルールが発火しない可能性の高い書き間違いである。
+ * 拡張メソッドを禁じる根拠はないので、エラーではなく警告に使う。
+ */
+export const KNOWN_HTTP_METHODS: ReadonlySet<string> = new Set([
+  "GET",
+  "HEAD",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "CONNECT",
+  "OPTIONS",
+  "TRACE",
+]);
 
 export function methodsIntersect(
   a: readonly string[] | null,
@@ -388,6 +421,19 @@ export function parseTarget(source: string): Result<Target> {
   return { ok: true, value: { source, host: host.value, port } };
 }
 
+/**
+ * ホストの綴りを畳む。
+ *
+ * DNS 名の大小は意味を持たず、リクエストのホストは小文字に揃えて渡ってくる。
+ * ここで畳むので、`HostPattern` を読む側 — 一致判定、包含判定、そこから導かれる
+ * 特異度の順序 — はすべて小文字どうしを比べることになる。畳むのを一致判定だけに
+ * 置くと、包含判定が大小の違う 2 つを素なパターンと見て、包含で決まるはずの
+ * スコープの順序が黙って崩れる。
+ */
+export function normalizeHost(host: string): string {
+  return host.toLowerCase();
+}
+
 function parseHostPattern(host: string): Result<HostPattern> {
   if (host === "") return { ok: false, error: "ホストが空である" };
   if (host.startsWith("*.")) {
@@ -395,7 +441,10 @@ function parseHostPattern(host: string): Result<HostPattern> {
     if (suffix === "" || suffix.includes("*")) {
       return { ok: false, error: `ホストパターンが不正である: ${host}` };
     }
-    return { ok: true, value: { kind: "suffix", suffix } };
+    return {
+      ok: true,
+      value: { kind: "suffix", suffix: normalizeHost(suffix) },
+    };
   }
   if (host.includes("*")) {
     return {
@@ -403,7 +452,7 @@ function parseHostPattern(host: string): Result<HostPattern> {
       error: `ワイルドカードは先頭の "*." だけに置ける: ${host}`,
     };
   }
-  return { ok: true, value: { kind: "exact", host } };
+  return { ok: true, value: { kind: "exact", host: normalizeHost(host) } };
 }
 
 export function hostMatches(pattern: HostPattern, host: string): boolean {

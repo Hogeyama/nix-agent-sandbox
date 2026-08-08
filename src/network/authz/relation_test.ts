@@ -4,6 +4,7 @@ import {
   bodySubsumes,
   type CompiledMatch,
   compileMatch,
+  hostMatches,
   matchesIntersect,
   matchSubsumes,
   methodsIntersect,
@@ -35,6 +36,28 @@ describe("メソッド", () => {
     expect(methodsSubsume(null, ["GET"])).toBe(false);
     expect(methodsIntersect(null, ["GET"])).toBe(true);
     expect(methodsIntersect(["GET"], ["POST"])).toBe(false);
+  });
+
+  test("綴りの大小は畳む", () => {
+    // リクエスト側のメソッドは大文字に揃えて渡ってくる。設定側を揃えないと、
+    // 小文字で書いたルールが 1 度も発火しないまま黙って消える。
+    expect(compile({ methods: ["post"], paths: ["/**"] }).methods).toEqual([
+      "POST",
+    ]);
+  });
+
+  test("大小だけが違う綴りは同じ 1 つのメソッドになる", () => {
+    expect(
+      compile({ methods: ["post", "POST", "Post"], paths: ["/**"] }).methods,
+    ).toEqual(["POST"]);
+  });
+
+  test("大小だけが違う 2 つのルールは同じ受理集合として扱う", () => {
+    const lower = compile({ methods: ["post"], paths: ["/a"] });
+    const upper = compile({ methods: ["POST"], paths: ["/a"] });
+    expect(matchesIntersect(lower, upper)).toBe(true);
+    expect(matchSubsumes(lower, upper)).toBe(true);
+    expect(matchSubsumes(upper, lower)).toBe(true);
   });
 });
 
@@ -263,6 +286,38 @@ describe("ターゲット", () => {
     expect(
       targetSetsIntersect([target("*.example.com")], [target("example.com")]),
     ).toBe(false);
+  });
+
+  test("ホストの綴りの大小は畳む", () => {
+    // リクエストのホストは小文字に揃えて渡ってくる。
+    expect(target("API.Example.COM").host).toEqual({
+      kind: "exact",
+      host: "api.example.com",
+    });
+    expect(target("*.GCR.io").host).toEqual({
+      kind: "suffix",
+      suffix: "gcr.io",
+    });
+    expect(hostMatches(target("API.Example.COM").host, "api.example.com")).toBe(
+      true,
+    );
+    expect(hostMatches(target("*.GCR.io").host, "a.gcr.io")).toBe(true);
+  });
+
+  test("大小だけが違う 2 つのターゲットは同じ 1 つのパターンとして扱う", () => {
+    // 素な 2 つと見なされると、包含で決まるはずの特異度の順序が壊れる。
+    const upper = [target("API.example.com")];
+    const lower = [target("api.example.com")];
+    expect(targetSetsIntersect(upper, lower)).toBe(true);
+    expect(targetSetsSubsume(upper, lower)).toBe(true);
+    expect(targetSetsSubsume(lower, upper)).toBe(true);
+    expect(
+      targetSetsSubsume([target("a.EXAMPLE.com")], [target("*.example.com")]),
+    ).toBe(true);
+  });
+
+  test("元の綴りは診断のために残す", () => {
+    expect(target("API.example.com:8443").source).toBe("API.example.com:8443");
   });
 
   test("不正なターゲットは設定エラーにする", () => {

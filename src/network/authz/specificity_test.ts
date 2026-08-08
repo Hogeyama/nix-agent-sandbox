@@ -4,6 +4,7 @@ import {
   compareSpecificity,
   compareTargetSpecificity,
   evaluationOrder,
+  precedenceOrder,
 } from "./specificity.ts";
 import type { Match, Target } from "./types.ts";
 
@@ -76,16 +77,20 @@ describe("compareTargetSpecificity", () => {
 describe("evaluationOrder", () => {
   const rule = (id: string, match: Match) => ({ id, compiled: compile(match) });
 
+  function idsOf(rules: readonly { id: string; compiled: CompiledMatch }[]) {
+    const outcome = evaluationOrder(rules, (item) => item.compiled);
+    if (!outcome.ok)
+      throw new Error(`並べられなかった: ${outcome.cycle.length}`);
+    return outcome.ordered.map((item) => item.id);
+  }
+
   test("特異度の降順に評価する", () => {
     const rules = [
       rule("wide", { paths: ["/repos/**"] }),
       rule("narrow", { paths: ["/repos/a/b"] }),
       rule("middle", { paths: ["/repos/a/**"] }),
     ];
-    const ordered = evaluationOrder(rules, (item) => item.compiled).map(
-      (item) => item.id,
-    );
-    expect(ordered).toEqual(["narrow", "middle", "wide"]);
+    expect(idsOf(rules)).toEqual(["narrow", "middle", "wide"]);
   });
 
   test("特異度で決着しない組は宣言順で評価する", () => {
@@ -96,10 +101,7 @@ describe("evaluationOrder", () => {
       rule("ping.none", { paths: ["/v1/ping"], body: { format: "none" } }),
       rule("ping.json", { paths: ["/v1/ping"], body: { format: "json" } }),
     ];
-    const ordered = evaluationOrder(rules, (item) => item.compiled).map(
-      (item) => item.id,
-    );
-    expect(ordered).toEqual(["ping.none", "ping.json"]);
+    expect(idsOf(rules)).toEqual(["ping.none", "ping.json"]);
   });
 
   test("宣言順は特異度を覆さない", () => {
@@ -108,10 +110,34 @@ describe("evaluationOrder", () => {
       rule("unrelated", { paths: ["/other"], methods: ["POST"] }),
       rule("narrow", { paths: ["/a"] }),
     ];
-    const ordered = evaluationOrder(rules, (item) => item.compiled).map(
-      (item) => item.id,
-    );
+    const ordered = idsOf(rules);
     expect(ordered.indexOf("narrow")).toBeLessThan(ordered.indexOf("wide"));
     expect(ordered).toHaveLength(3);
+  });
+});
+
+describe("precedenceOrder", () => {
+  test("閉路があるときは順序を作らず、閉路そのものを返す", () => {
+    // 「並べられなかった」を宣言順に潰すと、閉路に加わっていない c まで宣言順に
+    // 落ちる。順序で安全側を決めている呼び手にはそれが静かな緩みになる。
+    const outcome = precedenceOrder(
+      ["a", "b", "c"],
+      (from, to) =>
+        (from === "a" && to === "b") || (from === "b" && to === "a"),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("閉路を検出できていない");
+    expect([...outcome.cycle].sort()).toEqual(["a", "b"]);
+  });
+
+  test("3 要素の輪も検出する", () => {
+    const ring: Record<string, string> = { a: "b", b: "c", c: "a" };
+    const outcome = precedenceOrder(
+      ["a", "b", "c"],
+      (from, to) => ring[from] === to,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("閉路を検出できていない");
+    expect([...outcome.cycle].sort()).toEqual(["a", "b", "c"]);
   });
 });
