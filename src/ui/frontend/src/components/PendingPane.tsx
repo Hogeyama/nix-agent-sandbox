@@ -41,7 +41,7 @@ const NETWORK_SCOPE_CHIPS: Record<
   },
   violation: {
     label: "these values",
-    hint: "Remembered for this session, for this rule and exactly the values listed above. Any other value, and the same value found by another check, still asks.",
+    hint: "Remembered for this session, for this rule and the values this card is asking about. Any other value, and the same value found by another check, still asks. Violations the rule only records are listed for context and are not remembered.",
   },
 };
 

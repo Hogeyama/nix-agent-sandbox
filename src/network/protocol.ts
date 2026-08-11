@@ -24,13 +24,20 @@ import { isDeniedIpAddress } from "./ip_policy.ts";
  *
  * - `violation`: 提示した違反をそのセッションの間ずっと。同じルールの別の値も、
  *   別のルールの同じ値も覆わない。
+ *
+ * 型ではなくこの配列を正本にしてある。粒度を通す側 (HTTP ルートの検証、CLI の
+ * 選択肢) が独自の写しを持っていると、粒度を 1 つ足したときに片方だけ古いまま
+ * になり、承認 UI には出るのに押すと 400 になる。写しを作らずここから導く。
  */
-export type ApprovalScope =
-  | "once"
-  | "rule"
-  | "host-port"
-  | "host"
-  | "violation";
+export const APPROVAL_SCOPES = [
+  "once",
+  "rule",
+  "host-port",
+  "host",
+  "violation",
+] as const;
+
+export type ApprovalScope = (typeof APPROVAL_SCOPES)[number];
 export type RequestKind = "connect" | "forward";
 export type Decision = "allow" | "deny";
 
@@ -330,6 +337,12 @@ export function validateRequestPolicyReview(
   if (typeof message.method !== "string" || !HTTP_METHOD.test(message.method)) {
     return "invalid request-policy review method";
   }
+  if (
+    message.reviewContext !== undefined &&
+    !isReviewContext(message.reviewContext)
+  ) {
+    return "invalid request-policy review context";
+  }
   const findingsError = validateViolationFindings(message.findings);
   if (findingsError) return findingsError;
   if ((message.findings as unknown[]).length === 0) {
@@ -339,6 +352,35 @@ export function validateRequestPolicyReview(
   }
   return null;
 }
+
+/**
+ * カードに出す事実の形。
+ *
+ * broker はこれを人が読む面へ写す前にマスクを掛けるので、`path` が文字列で
+ * ないだけでマスクが例外を投げ、メッセージを 1 通投げただけで broker を
+ * 落とせてしまう。他のフィールドと同じく形を先に確かめる。
+ */
+function isReviewContext(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const context = value as Record<string, unknown>;
+  return (
+    Object.keys(context).every((field) => REVIEW_CONTEXT_FIELDS.has(field)) &&
+    typeof context.path === "string" &&
+    (context.contentType === null || typeof context.contentType === "string") &&
+    Number.isSafeInteger(context.bodySize) &&
+    (context.bodySize as number) >= 0 &&
+    isListedValue(context.bodyKind, BODY_KINDS)
+  );
+}
+
+const REVIEW_CONTEXT_FIELDS = new Set([
+  "path",
+  "contentType",
+  "bodySize",
+  "bodyKind",
+]);
 
 function isNormalizedTarget(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

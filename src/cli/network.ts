@@ -3,7 +3,7 @@
  */
 
 import { makeNetworkApprovalClient } from "../domain/network.ts";
-import type { ApprovalScope } from "../network/protocol.ts";
+import { APPROVAL_SCOPES, type ApprovalScope } from "../network/protocol.ts";
 import {
   gcNetworkRuntime,
   resolveNetworkRuntimePaths,
@@ -32,7 +32,7 @@ export async function runNetworkCommand(nasArgs: string[]): Promise<void> {
       domain: "network",
       // どの粒度を本当に選べるかは確認ごとに違う (pending の approvalScopes)。
       // ここはその全体で、選べない粒度を送れば broker が突き返す。
-      scopeOptions: ["once", "rule", "host-port", "host"],
+      scopeOptions: [...APPROVAL_SCOPES],
       async listPending() {
         const items = await client.listPending(paths);
         return items.map((item) => {

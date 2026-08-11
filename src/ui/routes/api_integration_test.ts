@@ -11,6 +11,7 @@ import { appendAuditLog } from "../../audit/store.ts";
 import { useRepoSchemaAsset } from "../../config/schema_asset_testing.ts";
 import type { HostExecRuntimePaths } from "../../hostexec/registry.ts";
 import { resolveAsset } from "../../lib/asset.ts";
+import { APPROVAL_SCOPES } from "../../network/protocol.ts";
 import type { NetworkRuntimePaths } from "../../network/registry.ts";
 import {
   createSession,
@@ -619,6 +620,39 @@ test("POST /network/approve rejects unknown scope values with 400", async () => 
     expect(res.status).toEqual(400);
     const body = await res.json();
     expect(body.error).toContain("Invalid scope");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("POST /network/approve accepts every grain the broker can offer", async () => {
+  // 拒む側だけを試していると、粒度を 1 つ足したときに承認 UI には出るのに
+  // 押すと 400 になる状態を通してしまう。押せるはずのものが押せることを、
+  // プロトコルの一覧そのもので確かめる。
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "nas-ui-test-"));
+  try {
+    await mkdir(`${tmpDir}/network/sessions`, { recursive: true });
+    await mkdir(`${tmpDir}/network/pending`, { recursive: true });
+    await mkdir(`${tmpDir}/network/brokers`, { recursive: true });
+
+    const ctx = createTestContext(tmpDir);
+    const api = createApiRoutes(ctx);
+    const app = new Router();
+    app.route("/api", api);
+
+    for (const scope of APPROVAL_SCOPES) {
+      const res = await app.request("/api/network/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "sess-1",
+          requestId: "req-1",
+          scope,
+        }),
+      });
+      // broker は動いていないので通信は失敗するが、綴りで弾かれてはいない。
+      expect(res.status).not.toEqual(400);
+    }
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

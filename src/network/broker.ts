@@ -25,6 +25,7 @@ import type { RequestBody } from "./authz/types.ts";
 import {
   expandMaskPatterns,
   maskReviewContextWithPatterns,
+  maskText,
 } from "./mask_patterns.ts";
 import {
   closeNotification,
@@ -305,6 +306,12 @@ export class SessionBroker {
         if (code === "EPIPE" || code === "ECONNRESET") return;
         throw e;
       }
+    } catch (e) {
+      // この呼び出しは待たれていない (`void this.handleConnection`) ので、
+      // ここで捕まえないと 1 通の壊れたメッセージが unhandled rejection に
+      // なり、セッションのネットワークごと broker が落ちる。答えを返さずに
+      // 切るので、問うた側には空応答が見え、fail-closed のまま拒否になる。
+      logInfo(`[nas] NetworkBroker: dropping malformed request: ${e}`);
     } finally {
       socket.destroy();
     }
@@ -373,7 +380,11 @@ export class SessionBroker {
         route: rule?.match.paths.map((pattern) => pattern.source).join(" "),
         requestPolicyResult: message.result,
         ...(message.findings && message.findings.length > 0
-          ? { violations: message.findings.map(toAuditViolation) }
+          ? {
+              violations: this.maskedFindings(message.findings).map(
+                toAuditViolation,
+              ),
+            }
           : {}),
       };
       try {
@@ -441,23 +452,39 @@ export class SessionBroker {
           )
         : Promise.resolve();
 
+    // 所見には `onViolation = "allow"` の違反も載っている。承認者はリクエスト
+    // 全体を見て押すので、記録に回った違反を隠す理由はない。ただし答えを要する
+    // のは `review` の違反だけである。`allow` の違反まで承認の対象にすると、
+    // 設定が「訊くな」と言った条件のせいで確認が出る — その値はリクエストごとに
+    // 変わりうるので、1 度承認しても次のターンでまた出る。
+    const asked = message.findings.filter((finding) =>
+      violationNeedsApproval(rule, finding),
+    );
+    if (asked.length === 0) {
+      // addon は `review` の違反があるときだけここへ来る。1 件も見当たらない
+      // なら、両者が別のドキュメントを読んでいる。
+      await audit("deny", "review-condition-mismatch");
+      return denyDecision(message.requestId, "review-condition-mismatch");
+    }
+
     // 押せない所見が混ざっていたら、そのリクエストは承認では通せない。押した
     // 人が通したつもりのリクエストが通らないまま残るより、ここで断る方が
     // 正直である。走査が完了しなかった記録と、保持上限で畳まれた記録がそれで
-    // あり、どちらも受理条件か値を欠いている。
-    if (message.findings.some((finding) => !isApprovableFinding(finding))) {
+    // あり、どちらも受理条件か値を欠いている。`allow` の条件が上限を埋めた
+    // だけの打ち切りは答えを要さないので、ここには来ない。
+    if (asked.some((finding) => !isApprovableFinding(finding))) {
       await audit("deny", "unapprovable-violation");
       return denyDecision(message.requestId, "unapprovable-violation");
     }
 
-    const identities = message.findings.map((finding) =>
+    const identities = asked.map((finding) =>
       violationKey(message.ruleId, finding),
     );
     if (identities.some((key) => this.deniedViolations.has(key))) {
       await audit("deny", "denied-by-user");
       return denyDecision(message.requestId, "denied-by-user");
     }
-    const undecided = message.findings.filter(
+    const undecided = asked.filter(
       (finding) =>
         !this.approvedViolations.has(violationKey(message.ruleId, finding)),
     );
@@ -482,7 +509,12 @@ export class SessionBroker {
     const group =
       open?.kind === "violation"
         ? open
-        : await this.createViolationGroup(groupKey, message, undecided);
+        : await this.createViolationGroup(
+            groupKey,
+            message,
+            undecided,
+            message.findings,
+          );
     if (!group.requests.has(message.requestId)) {
       group.requests.set(message.requestId, message);
       this.requestIndex.set(message.requestId, groupKey);
@@ -492,6 +524,7 @@ export class SessionBroker {
           message,
           group,
           this.maskedReviewContext(message.reviewContext),
+          this.maskedFindings(group.findings),
         ),
       );
     }
@@ -507,7 +540,8 @@ export class SessionBroker {
   private async createViolationGroup(
     groupKey: string,
     message: RequestPolicyReviewRequest,
-    findings: readonly ViolationFinding[],
+    asked: readonly ViolationFinding[],
+    shown: readonly ViolationFinding[],
   ): Promise<ViolationPendingGroup> {
     const notificationAbort = new AbortController();
     const timer = setTimeout(() => {
@@ -530,10 +564,8 @@ export class SessionBroker {
       // ターゲットは同一性に入らないので、広さを選ぶ粒度は出さない。残る問いは
       // 「この違反を覚えるかどうか」だけである。
       allowedScopes: ["once", "violation"],
-      identities: findings.map((finding) =>
-        violationKey(message.ruleId, finding),
-      ),
-      findings: [...findings],
+      identities: asked.map((finding) => violationKey(message.ruleId, finding)),
+      findings: [...shown],
     };
     this.groups.set(groupKey, group);
     this.requestIndex.set(message.requestId, groupKey);
@@ -543,6 +575,7 @@ export class SessionBroker {
         message,
         group,
         this.maskedReviewContext(message.reviewContext),
+        this.maskedFindings(group.findings),
       ),
     );
     const notificationTask = notifyPendingRequest({
@@ -964,6 +997,37 @@ export class SessionBroker {
     return maskReviewContextWithPatterns(reviewContext, this.maskPatterns);
   }
 
+  /**
+   * 所見を人が読む面へ出す前に、レジストリの全ての値で伏せ直す。
+   *
+   * addon は既にマスクしているが、そこで使うパターンはそのルールで `mask` と
+   * 宣言された秘密だけである。`ignore` や `inject` の秘密がボディに現れて違反
+   * ノードの中に入っていれば、addon のマスクは通り抜ける。pending エントリと
+   * 監査ログは扱いが決まる前から人が読む面なので、reviewContext と同じ広さ
+   * — レジストリにある値すべて — で伏せる。
+   *
+   * 承認の鍵はここを通らない。鍵は届いた値のままで作るので、伏せた結果が
+   * 衝突しても別々の違反は別々の承認のままである。カードに出るものが実際の
+   * 値より少ないことはあるが、多いことはない。
+   */
+  private maskedFindings(
+    findings: readonly ViolationFinding[],
+  ): ViolationFinding[] {
+    if (this.maskPatterns.length === 0) return [...findings];
+    return findings.map((finding) => ({
+      ...finding,
+      pointer: maskText(finding.pointer, this.maskPatterns),
+      value:
+        finding.value === null
+          ? null
+          : maskText(finding.value, this.maskPatterns),
+      excerpt:
+        finding.excerpt === null
+          ? null
+          : maskText(finding.excerpt, this.maskPatterns),
+    }));
+  }
+
   /** 実 ID から解決済みルールを引く。擬似 ID (`<スコープ>.$fallback`) には無い。 */
   private findRuleById(ruleId: string): ResolvedRule | undefined {
     for (const scope of this.document.scopes) {
@@ -1004,7 +1068,7 @@ export class SessionBroker {
       phase: "request-policy",
       ruleId: message.ruleId,
       target,
-      violations: findings.map(toAuditViolation),
+      violations: this.maskedFindings(findings).map(toAuditViolation),
     };
     await appendAuditLog(entry, this.auditDir);
   }
@@ -1139,6 +1203,30 @@ function approvalKey(
 }
 
 /**
+ * その所見が人の答えを要するか。
+ *
+ * 所見の列には `onViolation` が `allow` の違反も混ざっている。承認 UI には
+ * 全部出すが (承認者はリクエスト全体を見て押す)、答えを要するのは `review` の
+ * 違反だけである。どの受理条件から出た所見かは位置で分かり、解決済み
+ * ドキュメントはこの broker が持っているので、ここで引ける。
+ *
+ * 受理条件に紐づかない所見 — 走査が完了しなかった記録 — はどの条件が違反した
+ * はずかを言えない。検査未完了はルールが宣言する中で最も厳しい帰結を取り、
+ * それが `review` だったからここへ来ているので、答えを要する側に数える。
+ * 承認には変換できないので、呼び出し側がそこで拒否する。
+ */
+function violationNeedsApproval(
+  rule: ResolvedRule,
+  finding: ViolationFinding,
+): boolean {
+  if (finding.expect < 0) return true;
+  const expect = rule.expect[finding.expect];
+  // 位置が解決済みルールの外を指すなら、addon と broker が別のドキュメントを
+  // 読んでいる。黙って無視せず、答えを要する側に数えて呼び出し側で止める。
+  return expect === undefined || expect.onViolation === "review";
+}
+
+/**
  * 違反の承認の同一性 (ルール ID, 受理条件の位置, 違反した値) を 1 本の鍵にする。
  *
  * ターゲットは入らない。ルールはちょうど 1 つのスコープに属し、スコープが
@@ -1152,12 +1240,18 @@ function approvalKey(
  * 作られてこの broker と寿命を共にするからである。承認をセッションを跨いで
  * 永続化するなら位置では足りず、`expect` にキーを与える必要がある。
  *
- * 値を持たない受理条件 (`EmptyBody` / `JsonRoot`) では値の成分が空になり、
+ * 値を持たない受理条件 (`EmptyBody` / `JsonRoot`) では値の成分が無くなり、
  * 「この受理条件をこのセッションの間は満たさなくてよい」を意味する。ルール
  * 全体を無効にするわけではないので、同じルールの他の受理条件は効き続ける。
+ *
+ * 「値が無い」と「値が空文字列」は別の違反である。`UnionShape` は、対象が
+ * オブジェクトでない・discriminator が無い・文字列でない、のいずれでも値の
+ * 無い違反を出す一方、`{"type": ""}` は値が空文字列の違反を出す。前者を承認
+ * した人は後者を見ていないので、同じ鍵に落としてはならない。`JSON.stringify`
+ * が `null` と `""` を書き分けるので、それを鍵の成分にする。
  */
 function violationKey(ruleId: string, finding: ViolationFinding): string {
-  return `${ruleId}\u0000${finding.expect}\u0000${finding.value ?? ""}`;
+  return `${ruleId}\u0000${finding.expect}\u0000${JSON.stringify(finding.value)}`;
 }
 
 /**
@@ -1266,6 +1360,7 @@ function toViolationPendingEntry(
   message: RequestPolicyReviewRequest,
   group: ViolationPendingGroup,
   maskedReviewContext: ReviewContext | undefined,
+  maskedFindings: ViolationFinding[],
 ): PendingEntry {
   return {
     version: 1,
@@ -1284,7 +1379,7 @@ function toViolationPendingEntry(
     // この確認が通しても資格情報は増えない。注入するかどうかは authorize が
     // 既に決めていて、ここでの答えは違反を通すかどうかだけである。
     injectHeaders: [],
-    violations: [...group.findings],
+    violations: maskedFindings,
   };
 }
 

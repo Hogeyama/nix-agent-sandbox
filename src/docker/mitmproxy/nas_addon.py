@@ -675,6 +675,27 @@ def _safe_method_label(method: str) -> str:
     return "OTHER"
 
 
+def _request_policy_outcome_message(
+    request_id: str,
+    session_id: str,
+    rule_id: str,
+    result: str,
+    reason: str,
+    findings: list[dict],
+) -> dict:
+    """The outcome report, as a value. See `_violation_review_message`."""
+    return {
+        "version": 1,
+        "type": "request_policy_outcome",
+        "requestId": request_id,
+        "sessionId": session_id,
+        "ruleId": rule_id,
+        "result": result,
+        "reason": reason,
+        "findings": findings,
+    }
+
+
 def _report_request_policy_outcome(
     socket_path: str,
     request_id: str,
@@ -692,16 +713,9 @@ def _report_request_policy_outcome(
     `_expect_finding`. An acknowledgement failure prints one constant line and
     never changes the computed result."""
     try:
-        response = _query_broker(socket_path, {
-            "version": 1,
-            "type": "request_policy_outcome",
-            "requestId": request_id,
-            "sessionId": session_id,
-            "ruleId": rule_id,
-            "result": result,
-            "reason": reason,
-            "findings": findings,
-        })
+        response = _query_broker(socket_path, _request_policy_outcome_message(
+            request_id, session_id, rule_id, result, reason, findings,
+        ))
         if not (
             response.get("version") == 1
             and response.get("type") == "request_policy_outcome_recorded"
@@ -737,7 +751,31 @@ def _settle_violation_review(
     press lands in the approved set, so the next request carrying the same
     violation passes without asking. With the conversation history resent
     every turn, that next request is usually seconds away."""
-    response = _query_broker(socket_path, {
+    response = _query_broker(socket_path, _violation_review_message(
+        request_id, session_id, rule_id, host, port, method,
+        review_context, findings,
+    ))
+    return response.get("decision") == "allow"
+
+
+def _violation_review_message(
+    request_id: str,
+    session_id: str,
+    rule_id: str,
+    host: str,
+    port: int,
+    method: str,
+    review_context: dict,
+    findings: list[dict],
+) -> dict:
+    """The review query, as a value.
+
+    Built apart from the sending so that `message_parity_test.ts` can hand a
+    real one to the broker's validator. The broker refuses a message it does
+    not recognize field for field, and a refusal turns into a dead session
+    rather than a wrong answer, so the two sides have to be compared
+    somewhere that does not need the proxy running."""
+    return {
         "version": 1,
         "type": "request_policy_review",
         "requestId": request_id,
@@ -747,8 +785,7 @@ def _settle_violation_review(
         "method": method,
         "findings": findings,
         "reviewContext": review_context,
-    })
-    return response.get("decision") == "allow"
+    }
 
 
 def _normalize_host(host: str) -> str:

@@ -450,6 +450,54 @@ test("SessionBroker: a violation is confirmed with the finding on the card", asy
   });
 });
 
+test("SessionBroker: a finding is masked again with the whole registry", async () => {
+  // addon がマスクに使うのは、そのルールで `mask` と宣言された秘密だけである。
+  // `ignore` の秘密が違反ノードの中にいれば addon のマスクは通り抜けるので、
+  // 人が読む面へ出す前に reviewContext と同じ広さで伏せ直す。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-review-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_policy",
+    document: OUTCOME_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+    secretValues: { ignored: ["s3cret-value"] },
+  });
+  const socketPath = `${paths.brokersDir}/sess_policy/sock`;
+  await broker.start(socketPath);
+  try {
+    const decision = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-masked", [
+        finding("future_block", {
+          pointer: "/messages/s3cret-value/content/1",
+          excerpt: '{"type":"future_block","note":"s3cret-value"}',
+        }),
+      ]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].violations?.[0]).toMatchObject({
+      pointer: "/messages/****/content/1",
+      excerpt: '{"type":"future_block","note":"****"}',
+    });
+
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-masked",
+    });
+    await decision;
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs[0].violations?.[0].pointer).toEqual("/messages/****/content/1");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("SessionBroker: an approved violation is not confirmed again", async () => {
   // 会話履歴は毎リクエスト再送されるので、これが効かないと 1 度押した確認が
   // ターンごとに戻ってくる。
@@ -541,7 +589,15 @@ test("SessionBroker: approving a rule does not approve its violations", async ()
                 body: { format: "json" },
               },
               onMatch: "review",
-              expect: [{ kind: "jsonRoot", rootType: "object" }],
+              expect: [
+                {
+                  kind: "unionShape",
+                  at: "/**/content/*",
+                  discriminator: "type",
+                  allowed: ["text"],
+                  onViolation: "review",
+                },
+              ],
             },
           },
         },
@@ -594,6 +650,186 @@ test("SessionBroker: approving a rule does not approve its violations", async ()
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("SessionBroker: an empty value is not the same violation as no value", async () => {
+  // `UnionShape` は、対象がオブジェクトでない・discriminator が無い・文字列で
+  // ないのいずれでも値の無い違反を出し、`{"type": ""}` は値が空文字列の違反を
+  // 出す。前者を承認した人は後者を見ていない。
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-null-value", [finding(null)]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-null-value",
+      scope: "violation",
+    });
+    await first;
+
+    const emptyValue = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-empty-value", [finding("")]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].requestId).toEqual("req-empty-value");
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-empty-value",
+    });
+    expect((await emptyValue).decision).toEqual("deny");
+  });
+});
+
+const MIXED_CONSEQUENCE_DOCUMENT = documentWithScopes({
+  policy: {
+    targets: ["api.example.com"],
+    fallback: "deny",
+    rules: {
+      json: {
+        match: {
+          methods: ["POST"],
+          paths: ["/v1/messages"],
+          body: { format: "json" },
+        },
+        onMatch: "allow",
+        audit: "always",
+        expect: [
+          {
+            kind: "unionShape",
+            at: "/**/content/*",
+            discriminator: "type",
+            allowed: ["text"],
+            onViolation: "allow",
+          },
+          {
+            kind: "unionShape",
+            at: "/system/*",
+            discriminator: "type",
+            allowed: ["text"],
+            onViolation: "review",
+          },
+        ],
+      },
+    },
+  },
+});
+
+async function withMixedBroker(
+  body: (socketPath: string) => Promise<void>,
+): Promise<void> {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-mixed-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_policy",
+    document: MIXED_CONSEQUENCE_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_policy/sock`;
+  await broker.start(socketPath);
+  try {
+    await body(socketPath);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+test("SessionBroker: a recorded violation does not become a question", async () => {
+  // `onViolation = "allow"` は「記録して通せ、訊くな」である。所見には載る
+  // ので承認者はリクエスト全体を見られるが、押す対象にはならない。ここを
+  // 分けないと、リクエストごとに変わる値のせいで確認が毎ターン出る。
+  await withMixedBroker(async (socketPath) => {
+    const recorded = finding("recorded_a", { expect: 0 });
+    const asked = finding("asked", { expect: 1, at: "/system/*" });
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed-1", [recorded, asked]),
+    );
+    const pending = await waitForPending(socketPath);
+    // カードには両方載る。押した結果が覆うのは `review` の側だけである。
+    expect(
+      pending.items[0].violations?.map((violation) => violation.value),
+    ).toEqual(["recorded_a", "asked"]);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-mixed-1",
+      scope: "violation",
+    });
+    expect((await first).decision).toEqual("allow");
+
+    // 次のターン: `allow` の側の値だけが変わっている。同じ問いは戻らない。
+    const second = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed-2", [finding("recorded_b", { expect: 0 }), asked]),
+    );
+    expect(second).toMatchObject({ decision: "allow", reason: "approved" });
+  });
+});
+
+test("SessionBroker: a recorded violation overflowing its allowance is not a refusal", async () => {
+  // 打ち切りの記録は承認に変換できない。だが `allow` の条件が自分の上限を
+  // 埋めただけなら、答えを要する違反は 1 つも失われていない。
+  await withMixedBroker(async (socketPath) => {
+    const decision = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed-truncated", [
+        finding(null, { expect: 0, kind: "findings-truncated", count: 40 }),
+        finding("asked", { expect: 1, at: "/system/*" }),
+      ]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].requestId).toEqual("req-mixed-truncated");
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-mixed-truncated",
+      scope: "violation",
+    });
+    expect((await decision).decision).toEqual("allow");
+  });
+});
+
+test("SessionBroker: a review with nothing to answer is refused", async () => {
+  // addon は `review` の違反があるときだけ問い合わせる。1 件も見当たらない
+  // なら両者が別のドキュメントを読んでいるので、fail-closed で止める。
+  await withMixedBroker(async (socketPath) => {
+    const decision = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-mixed-none", [finding("recorded", { expect: 0 })]),
+    );
+    expect(decision).toMatchObject({
+      decision: "deny",
+      reason: "review-condition-mismatch",
+    });
+  });
+});
+
+test("SessionBroker: a malformed review context is refused, not fatal", async () => {
+  // broker はカードに出す前に path をマスクする。文字列でなければマスクが
+  // 例外を投げるので、形を検証しないと 1 通でセッションのネットワークごと
+  // 落とせる。
+  await withReviewBroker(async ({ socketPath }) => {
+    const response = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, {
+      ...review("req-bad-context", [finding("future_block")]),
+      reviewContext: { path: 1 },
+    } as unknown as RequestPolicyReviewRequest);
+    expect(response.type).toEqual("error");
+
+    // broker は生きている。
+    const pending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
+    expect(pending.items).toHaveLength(0);
+  });
 });
 
 test("SessionBroker: a denied violation stays denied without asking again", async () => {
