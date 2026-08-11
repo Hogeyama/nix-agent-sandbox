@@ -256,6 +256,103 @@ test("SessionBroker: request policy outcome derives audit metadata from broker r
   }
 });
 
+test("SessionBroker: the audit records which condition a violation broke", async () => {
+  // 理由は閉じた語彙なので `schema-mismatch` としか言えない。どの受理条件が
+  // どの値で落ちたかは所見にしかないので、所見が記録に入らないとセッションが
+  // 終わったあとに何も分からない。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-policy-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_policy",
+    document: OUTCOME_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+  });
+  const socketPath = `${paths.brokersDir}/sess_policy/sock`;
+  await broker.start(socketPath);
+  try {
+    await sendBrokerRequest<RequestPolicyOutcomeResponse>(socketPath, {
+      version: 1,
+      type: "request_policy_outcome",
+      requestId: "req-violations",
+      sessionId: "sess_policy",
+      ruleId: "policy.json",
+      result: "block",
+      reason: "schema-mismatch",
+      findings: [
+        {
+          expect: 0,
+          expectKind: "unionShape",
+          at: "/**/content/*",
+          kind: "schema-mismatch",
+          pointer: "/messages/0/content/1",
+          value: "future_block",
+          excerpt: '{"type":"future_block"}',
+          count: 2,
+        },
+      ],
+    });
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs).toHaveLength(1);
+    // 抜粋は載らない。承認 UI が違反箇所を見せるための成果物であって、ログを
+    // 読む人が違反を特定するのに要るものではない。
+    expect(logs[0].violations).toEqual([
+      {
+        expect: 0,
+        at: "/**/content/*",
+        kind: "schema-mismatch",
+        pointer: "/messages/0/content/1",
+        value: "future_block",
+        count: 2,
+      },
+    ]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: an outcome with no violation records none", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-policy-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_policy",
+    document: OUTCOME_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+  });
+  const socketPath = `${paths.brokersDir}/sess_policy/sock`;
+  await broker.start(socketPath);
+  try {
+    await sendBrokerRequest<RequestPolicyOutcomeResponse>(socketPath, {
+      version: 1,
+      type: "request_policy_outcome",
+      requestId: "req-clean",
+      sessionId: "sess_policy",
+      ruleId: "policy.json",
+      result: "pass",
+      reason: "recognized-json",
+      findings: [],
+    });
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].violations).toBeUndefined();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("SessionBroker: request policy outcome is acknowledged without an audit directory", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-policy-"));
   const paths = await resolveNetworkRuntimePaths(runtimeDir);

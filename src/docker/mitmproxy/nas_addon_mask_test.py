@@ -1114,6 +1114,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "anthropic.messages.create",
                 "block",
                 "schema-mismatch",
+                [_finding(value="future")],
             )
 
         query.assert_called_once_with(
@@ -1126,6 +1127,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "ruleId": "anthropic.messages.create",
                 "result": "block",
                 "reason": "schema-mismatch",
+                "findings": [_finding(value="future")],
             },
         )
 
@@ -1143,6 +1145,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "anthropic.bodyless.settings",
                 "block",
                 "unexpected-body",
+                [],
             )
 
         self.assertEqual(
@@ -1167,6 +1170,7 @@ class RequestPolicyOutcomeReportTest(unittest.TestCase):
                 "anthropic.bodyless.settings",
                 "pass",
                 "empty-body",
+                [],
             )
 
         self.assertEqual(
@@ -1293,6 +1297,20 @@ def _bodyless_policy():
     return _rule(expects=[{"kind": "emptyBody", "onViolation": "deny"}])
 
 
+def _finding(value="future", expect=0, at="/**/content/*", count=1):
+    """One finding in the shape the addon puts on the wire."""
+    return {
+        "expect": expect,
+        "expectKind": "unionShape",
+        "at": at,
+        "kind": "schema-mismatch",
+        "pointer": "/content/0",
+        "value": value,
+        "excerpt": '{"type":"%s"}' % value,
+        "count": count,
+    }
+
+
 def _execute_request_policy(rule, body, patterns):
     """Classify the body, apply the rule's body condition, then inspect.
 
@@ -1318,7 +1336,19 @@ def _execute_request_policy(rule, body, patterns):
         )
     if truth == "false":
         return "block", None, "unexpected-body"
-    return nas_addon._inspect_body(rule, body, parsed, patterns)
+    return _inspect_outcome(rule, body, parsed, patterns)
+
+
+def _inspect_outcome(rule, body, parsed, patterns):
+    """The outcome half of an inspection: (result, rewritten, reason).
+
+    The findings are the other half and are checked on their own, so the
+    cases about what a rule decides do not carry them through every
+    assertion."""
+    result, rewritten, reason, _findings = nas_addon._inspect_body(
+        rule, body, parsed, patterns
+    )
+    return result, rewritten, reason
 
 
 def _validate_tagged_unions(root, guards, patterns, budget):
@@ -2449,7 +2479,7 @@ class RequestPolicyAllowedViolationTest(unittest.TestCase):
         )
 
     def _inspect(self, body):
-        return nas_addon._inspect_body(
+        return _inspect_outcome(
             self._rule_allowing_violations(),
             body,
             json.loads(body),
@@ -2492,7 +2522,7 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
         parsed = json.loads(json.dumps(
             {"content": [{"type": tag} for tag in tags]}
         ))
-        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", cap):
+        with patch.object(nas_addon, "MAX_FINDINGS_PER_EXPECT", cap):
             return _validate_tagged_unions(
                 parsed, [_tagged_union("/**/content/*")], self.patterns,
                 _selector_budget(),
@@ -2519,6 +2549,15 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
         self.assertIsNone(truncated["value"])
         self.assertIsNone(truncated["excerpt"])
 
+    def test_the_truncation_record_names_the_condition_it_belongs_to(self):
+        # The record cannot be approved — it has no value — so the only thing
+        # it can do for the operator is say which condition overflowed.
+        truncated = self._findings(["a", "b", "c", "d", "e", "f"])[-1]
+        self.assertEqual(
+            (truncated["expect"], truncated["at"]),
+            (0, "/**/content/*"),
+        )
+
     def test_counts_stay_truthful_past_the_cap(self):
         # "a" repeats after the cap is full: it is already retained, so it
         # keeps counting. "e" and "f" are new and only add to the total.
@@ -2532,7 +2571,7 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
 
     def test_a_capped_body_still_blocks_on_the_shape_mismatch(self):
         body = {"content": [{"type": "a%d" % i} for i in range(200)]}
-        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 4):
+        with patch.object(nas_addon, "MAX_FINDINGS_PER_EXPECT", 4):
             self.assertEqual(
                 _execute_request_policy(
                     _json_policy(guards=[
@@ -2563,7 +2602,7 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
         # wide enough that the walk runs out of expansions before it finishes.
         body = {"content": [{"type": "a%d" % i} for i in range(8)],
                 "extra": ["x"] * 40}
-        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 2), \
+        with patch.object(nas_addon, "MAX_FINDINGS_PER_EXPECT", 2), \
                 _expansion_ceiling(20):
             return body, _validate_tagged_unions(
                 json.loads(json.dumps(body)),
@@ -2580,7 +2619,7 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
         self.assertEqual(
             [f["kind"] for f in findings],
             ["schema-mismatch", "schema-mismatch",
-             "inspection-incomplete", "findings-truncated"],
+             "findings-truncated", "inspection-incomplete"],
         )
 
     def test_incomplete_inspection_still_wins_the_reason_when_capped(self):
@@ -2591,7 +2630,7 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
 
     def test_a_capped_and_truncated_walk_blocks_on_the_resource_limit(self):
         body, _findings = self._capped_and_truncated_walk()
-        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 2), \
+        with patch.object(nas_addon, "MAX_FINDINGS_PER_EXPECT", 2), \
                 _expansion_ceiling(20):
             self.assertEqual(
                 _execute_request_policy(
@@ -2604,13 +2643,16 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
                 ("block", None, "resource-limit"),
             )
 
-    def test_the_cap_is_shared_across_checks(self):
-        # One allowance for the whole body inspection, not one per check. The
-        # first check fills it, so the second check's violations have to land
-        # in the truncated record rather than disappear from the totals.
+    def test_each_check_gets_its_own_allowance(self):
+        # One allowance per acceptance condition, not one shared across the
+        # body inspection. A finding is what an approval is keyed by, so a
+        # first check that spends a shared allowance would leave the second
+        # check's violations describable only as a count — and a count cannot
+        # be approved. Each check therefore describes its own violations up
+        # to its own ceiling.
         body = {"content": [{"type": "a"}, {"type": "b"}],
                 "system": [{"type": "c"}, {"type": "d"}, {"type": "c"}]}
-        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 2):
+        with patch.object(nas_addon, "MAX_FINDINGS_PER_EXPECT", 2):
             findings = _validate_tagged_unions(
                 json.loads(json.dumps(body)),
                 [_tagged_union("/**/content/*"),
@@ -2620,10 +2662,83 @@ class RequestPolicyFindingCapTest(unittest.TestCase):
         self.assertEqual(
             [(f["at"], f["value"], f["count"]) for f in findings],
             [("/**/content/*", "a", 1), ("/**/content/*", "b", 1),
-             ("", None, 3)],
+             ("/**/system/*", "c", 2), ("/**/system/*", "d", 1)],
         )
-        self.assertEqual(findings[-1]["kind"], "findings-truncated")
         self.assertEqual(sum(f["count"] for f in findings), 5)
+
+    def test_a_check_that_overflows_does_not_shrink_the_next_one(self):
+        # The first check overflows its own allowance; the second one still
+        # describes its violations, so they stay approvable.
+        body = {"content": [{"type": "a"}, {"type": "b"}, {"type": "c"}],
+                "system": [{"type": "d"}, {"type": "e"}]}
+        with patch.object(nas_addon, "MAX_FINDINGS_PER_EXPECT", 2):
+            findings = _validate_tagged_unions(
+                json.loads(json.dumps(body)),
+                [_tagged_union("/**/content/*"),
+                 _tagged_union("/**/system/*")],
+                self.patterns, _selector_budget(),
+            )
+        self.assertEqual(
+            [(f["kind"], f["value"], f["count"]) for f in findings],
+            [("schema-mismatch", "a", 1), ("schema-mismatch", "b", 1),
+             ("findings-truncated", None, 1),
+             ("schema-mismatch", "d", 1), ("schema-mismatch", "e", 1)],
+        )
+        self.assertEqual(sum(f["count"] for f in findings), 5)
+
+
+class FindingFieldCeilingTest(unittest.TestCase):
+    """The offending value and the pointer are built out of the request body,
+    so their size is the body's to choose. They leave this process for an
+    approval UI and an audit log, so the addon bounds them."""
+
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _finding_for(self, tag=None, key=None):
+        node = {"type": tag if tag is not None else "future"}
+        body = {"content": [{key: node} if key else node]}
+        selector = "/content/*/*" if key else "/content/*"
+        findings = _validate_tagged_unions(
+            json.loads(json.dumps(body)),
+            [_tagged_union(selector)], self.patterns, _selector_budget(),
+        )
+        return findings[0]
+
+    def test_a_short_value_is_kept_whole(self):
+        self.assertEqual(self._finding_for(tag="future")["value"], "future")
+
+    def test_a_long_value_is_cut(self):
+        value = self._finding_for(tag="x" * 5000)["value"]
+        self.assertEqual(
+            len(value),
+            nas_addon.FINDING_VALUE_MAX_CHARS + len("...#")
+            + nas_addon.FINDING_VALUE_DIGEST_CHARS,
+        )
+        self.assertTrue(value.startswith("x" * 32))
+
+    def test_two_long_values_sharing_a_prefix_stay_distinct(self):
+        # The value is half of what an approval is keyed by. If cutting
+        # merged these two, approving the one an operator was shown would
+        # silently approve the other.
+        first = self._finding_for(tag="x" * 5000 + "a")["value"]
+        second = self._finding_for(tag="x" * 5000 + "b")["value"]
+        self.assertNotEqual(first, second)
+
+    def test_a_cut_value_cannot_be_spelled_by_an_uncut_one(self):
+        # A body could otherwise choose a short value that renders exactly
+        # like some long value's cut form and inherit its approval.
+        cut = self._finding_for(tag="x" * 5000)["value"]
+        self.assertGreater(len(cut), nas_addon.FINDING_VALUE_MAX_CHARS)
+        self.assertEqual(self._finding_for(tag=cut)["value"][:8], cut[:8])
+        self.assertNotEqual(self._finding_for(tag=cut)["value"], cut)
+
+    def test_a_long_pointer_is_cut(self):
+        pointer = self._finding_for(key="k" * 4000)["pointer"]
+        self.assertEqual(
+            len(pointer),
+            nas_addon.FINDING_POINTER_MAX_CHARS + len("..."),
+        )
 
 
 class RequestPolicyIncompleteInspectionTest(unittest.TestCase):
@@ -2917,7 +3032,7 @@ class RequestPolicyInjectedExceptionTest(unittest.TestCase):
 
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            result = nas_addon._inspect_body(
+            result = _inspect_outcome(
                 _bodyless_policy(), ExplodingBody(), None, self.patterns
             )
         self.assertEqual(result, ("block", None, "processing-failed"))
@@ -3455,10 +3570,41 @@ class RequestPolicyFlowTest(unittest.TestCase):
                 "ruleId",
                 "result",
                 "reason",
+                "findings",
             },
         )
         self.assertEqual(outcome["sessionId"], self.session_id)
         self.assertEqual(outcome["requestId"], "req-test")
+
+    def test_an_outcome_with_no_violation_carries_no_findings(self):
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
+        )
+
+        self.assertEqual(self._outcomes(messages)[0]["findings"], [])
+
+    def test_the_violations_travel_with_the_outcome(self):
+        # The reason is a closed label: `schema-mismatch` says a shape did
+        # not match and nothing about which condition saw what. Without the
+        # findings the audit log cannot say more either.
+        rule = _messages_rule()
+        rule["expect"] = [_union_shape(_tagged_union("/content/*"))]
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([rule]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future","note":"SECRET123"}]}',
+        )
+
+        outcome = self._outcomes(messages)[0]
+        self.assertEqual((outcome["result"], outcome["reason"]),
+                         ("block", "schema-mismatch"))
+        self.assertEqual(
+            [(f["expect"], f["at"], f["value"], f["excerpt"], f["count"])
+             for f in outcome["findings"]],
+            [(0, "/content/*", "future",
+              '{"type":"future","note":"****"}', 1)],
+        )
 
     def test_missing_credentials_log_uses_only_sanitized_request_fields(self):
         flow = FakeFlow(FakeRequest(

@@ -1,7 +1,7 @@
 import { mkdir, rm, rmdir } from "node:fs/promises";
 import * as path from "node:path";
 import { appendAuditLog } from "../audit/store.ts";
-import type { AuditLogEntry } from "../audit/types.ts";
+import type { AuditLogEntry, AuditViolation } from "../audit/types.ts";
 import { TtlLruCache } from "../lib/ttl_lru_cache.ts";
 import {
   connectUnix,
@@ -44,6 +44,7 @@ import {
   type RequestPolicyOutcomeResponse,
   type ReviewContext,
   targetKey,
+  type ViolationFinding,
   validateRequestPolicyOutcome,
 } from "./protocol.ts";
 import type { NetworkRuntimePaths } from "./registry.ts";
@@ -327,6 +328,9 @@ export class SessionBroker {
         // リクエストのパスは秘密を含みうるうえ、この報告には載っていない。
         route: rule?.match.paths.map((pattern) => pattern.source).join(" "),
         requestPolicyResult: message.result,
+        ...(message.findings && message.findings.length > 0
+          ? { violations: message.findings.map(toAuditViolation) }
+          : {}),
       };
       try {
         await appendAuditLog(entry, this.auditDir);
@@ -752,6 +756,24 @@ export class SessionBroker {
       ...(forbidValues.length > 0 ? { forbidValues } : {}),
     };
   }
+}
+
+/**
+ * 所見を監査ログの形に落とす。
+ *
+ * 抜粋は落とす。承認 UI が違反箇所を見せるための成果物であって、ログを読む人が
+ * 違反を特定するのに要るのは受理条件と Pointer と値だからである。1 件あたり
+ * 数百バイトを JSONL に毎回書くだけの見返りがない。
+ */
+function toAuditViolation(finding: ViolationFinding): AuditViolation {
+  return {
+    expect: finding.expect,
+    at: finding.at,
+    kind: finding.kind,
+    pointer: finding.pointer,
+    value: finding.value,
+    count: finding.count,
+  };
 }
 
 /**

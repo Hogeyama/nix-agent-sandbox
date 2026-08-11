@@ -10,6 +10,28 @@ export type RequestPolicyKind = "bodyless" | "json";
 
 export type RequestPolicyResult = "pass" | "rewrite" | "block";
 
+/**
+ * One acceptance-condition violation, as recorded in the audit log.
+ *
+ * The excerpt the approval UI shows is deliberately absent: it is the bulky
+ * part of a finding and it says nothing the pointer and the value do not
+ * already identify. Every field here is masked by the time it arrives.
+ */
+export interface AuditViolation {
+  /** Position of the violated acceptance condition, or -1 when there is none. */
+  expect: number;
+  /** Selector of the condition, when it had one. */
+  at: string;
+  /** What kind of violation this was (`schema-mismatch`, ...). */
+  kind: string;
+  /** Masked JSON Pointer of the offending node. */
+  pointer: string;
+  /** Masked offending value, or null for a condition that has no value. */
+  value: string | null;
+  /** How many violations of this condition carried this value. */
+  count: number;
+}
+
 /** A single audit log entry persisted to JSONL. */
 export interface AuditLogEntry {
   /** Unique identifier (UUID v4). */
@@ -38,6 +60,14 @@ export interface AuditLogEntry {
   requestPolicyKind?: RequestPolicyKind;
   /** Result produced by the request policy. */
   requestPolicyResult?: RequestPolicyResult;
+  /**
+   * Acceptance-condition violations the body inspection found.
+   *
+   * The reason field says a request was refused for a `schema-mismatch`; only
+   * this says which condition matched nothing and what value it saw, which is
+   * what someone reading the log after the session has ended needs.
+   */
+  violations?: AuditViolation[];
   /** Optional scope label (e.g. allowlist rule name). */
   scope?: string;
   /** Network-specific: the target host / URL. */

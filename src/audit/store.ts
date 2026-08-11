@@ -5,6 +5,7 @@ import type {
   AuditLogEntry,
   AuditLogFilter,
   AuditPhase,
+  AuditViolation,
   RequestPolicyKind,
   RequestPolicyResult,
 } from "./types.ts";
@@ -86,7 +87,8 @@ function openDatabase(dir: string): Database {
         scope            TEXT,
         target           TEXT,
         command          TEXT,
-        injected_headers TEXT
+        injected_headers TEXT,
+        violations       TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_audit_timestamp
         ON audit_log(timestamp);
@@ -102,6 +104,7 @@ function openDatabase(dir: string): Database {
     addColumnIfMissing(db, "route TEXT");
     addColumnIfMissing(db, "request_policy_kind TEXT");
     addColumnIfMissing(db, "request_policy_result TEXT");
+    addColumnIfMissing(db, "violations TEXT");
   } catch (e) {
     // Init failed partway — release the handle so the file lock isn't
     // held for the rest of the process lifetime.
@@ -150,9 +153,9 @@ export async function appendAuditLog(
        (id, timestamp, domain, session_id, request_id,
         decision, reason, phase, rule_id, method, route,
         request_policy_kind, request_policy_result,
-        scope, target, command, injected_headers)
+        scope, target, command, injected_headers, violations)
      VALUES
-       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     entry.id,
     entry.timestamp,
@@ -173,6 +176,7 @@ export async function appendAuditLog(
     entry.injectedHeaders !== undefined
       ? JSON.stringify(entry.injectedHeaders)
       : null,
+    entry.violations !== undefined ? JSON.stringify(entry.violations) : null,
   );
 }
 
@@ -262,7 +266,7 @@ export async function queryAuditLogs(
   const sql = `SELECT id, timestamp, domain, session_id, request_id,
                       decision, reason, phase, rule_id, method, route,
                       request_policy_kind, request_policy_result,
-                      scope, target, command, injected_headers
+                      scope, target, command, injected_headers, violations
                FROM audit_log
                ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
                ORDER BY timestamp ASC, id ASC`;
@@ -289,6 +293,7 @@ interface AuditLogRow {
   target: string | null;
   command: string | null;
   injected_headers: string | null;
+  violations: string | null;
 }
 
 function rowToEntry(row: AuditLogRow): AuditLogEntry {
@@ -318,6 +323,8 @@ function rowToEntry(row: AuditLogRow): AuditLogEntry {
   if (row.command !== null) entry.command = row.command;
   if (row.injected_headers !== null)
     entry.injectedHeaders = JSON.parse(row.injected_headers) as string[];
+  if (row.violations !== null)
+    entry.violations = JSON.parse(row.violations) as AuditViolation[];
   return entry;
 }
 

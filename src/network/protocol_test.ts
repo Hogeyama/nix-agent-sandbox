@@ -3,11 +3,13 @@ import { documentWithScopes } from "./authz/testing.ts";
 import {
   decodeProxyAuthorization,
   denyReasonForTarget,
+  isApprovableFinding,
   matchesHostPattern,
   matchesPathPrefix,
   normalizeHost,
   normalizeTarget,
   parseAllowlistEntry,
+  type ViolationFinding,
   validateRequestPolicyOutcome,
 } from "./protocol.ts";
 
@@ -158,6 +160,100 @@ for (const [name, overrides] of invalidPolicyOutcomes) {
     ).not.toBeNull();
   });
 }
+
+const validFinding: ViolationFinding = {
+  expect: 0,
+  expectKind: "unionShape",
+  at: "/**/content/*",
+  kind: "schema-mismatch",
+  pointer: "/messages/0/content/1",
+  value: "future_block",
+  excerpt: '{"type":"future_block"}',
+  count: 3,
+};
+
+test("request policy outcome validation accepts findings", () => {
+  expect(
+    validateRequestPolicyOutcome(
+      { ...validOutcome, findings: [validFinding] },
+      "sess_test",
+      document,
+    ),
+  ).toBeNull();
+});
+
+// 所見の中身はボディ由来である。件数も 1 件あたりの長さも攻撃者が選べるので、
+// 承認 UI と監査ログとメモリがボディの大きさに引きずられないよう、broker は
+// addon の上限を信じずに自分で閉じる。
+const invalidFindings = [
+  ["a finding that is not an object", "not-an-object"],
+  ["an unknown field", { ...validFinding, secret: "leak" }],
+  ["a missing field", { ...validFinding, count: undefined }],
+  ["an unknown kind", { ...validFinding, kind: "something-else" }],
+  ["an unknown condition kind", { ...validFinding, expectKind: "graphql" }],
+  ["a condition position below -1", { ...validFinding, expect: -2 }],
+  ["a fractional condition position", { ...validFinding, expect: 0.5 }],
+  ["a count below one", { ...validFinding, count: 0 }],
+  ["a non-string pointer", { ...validFinding, pointer: null }],
+  ["an over-long value", { ...validFinding, value: "x".repeat(4096) }],
+  ["an over-long pointer", { ...validFinding, pointer: "/".repeat(4096) }],
+  ["an over-long excerpt", { ...validFinding, excerpt: "x".repeat(8192) }],
+  ["an over-long selector", { ...validFinding, at: "/x".repeat(4096) }],
+] as const;
+
+for (const [name, finding] of invalidFindings) {
+  test(`request policy outcome validation rejects ${name}`, () => {
+    expect(
+      validateRequestPolicyOutcome(
+        { ...validOutcome, findings: [finding] },
+        "sess_test",
+        document,
+      ),
+    ).not.toBeNull();
+  });
+}
+
+test("request policy outcome validation rejects too many findings", () => {
+  expect(
+    validateRequestPolicyOutcome(
+      { ...validOutcome, findings: Array(2000).fill(validFinding) },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+test("request policy outcome validation rejects findings that are not a list", () => {
+  expect(
+    validateRequestPolicyOutcome(
+      { ...validOutcome, findings: { "0": validFinding } },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
+
+test("an incomplete inspection is not something an approval can cover", () => {
+  // 承認の同一性は (ルール ID, 受理条件の位置, 違反した値) なので、位置か値を
+  // 欠く記録は押せる対象にならない。
+  expect(isApprovableFinding({ ...validFinding, count: 1 })).toBe(true);
+  expect(
+    isApprovableFinding({
+      ...validFinding,
+      expect: -1,
+      expectKind: "",
+      kind: "inspection-incomplete",
+      value: null,
+    }),
+  ).toBe(false);
+  expect(
+    isApprovableFinding({
+      ...validFinding,
+      kind: "findings-truncated",
+      value: null,
+    }),
+  ).toBe(false);
+});
 
 test("decodeProxyAuthorization: decodes Basic credentials", () => {
   const header = `Basic ${btoa("sess_abc:tok_xyz")}`;

@@ -119,6 +119,77 @@ export const REQUEST_POLICY_SUCCESS_REASONS = [
   "masked-json",
 ] as const;
 
+/**
+ * 所見の種別。
+ *
+ * - `schema-mismatch`: 受理条件が要求する形になっていない。
+ * - `unexpected-body`: `EmptyBody` に対してボディが存在した。
+ * - `body-unavailable`: `EmptyBody` に対してボディを読めなかった。
+ * - `inspection-incomplete`: セレクタの走査が予算を使い切り、部分木を
+ *   検査しないまま終わった。何が違反したかを言えないので承認できない。
+ * - `findings-truncated`: 保持上限に達し、記述しなかった違反がある。
+ *   識別子も値も持たないので承認できない。
+ */
+export const VIOLATION_FINDING_KINDS = [
+  "schema-mismatch",
+  "unexpected-body",
+  "body-unavailable",
+  "inspection-incomplete",
+  "findings-truncated",
+] as const;
+
+export type ViolationFindingKind = (typeof VIOLATION_FINDING_KINDS)[number];
+
+/** 承認の単位を成せる所見の種別。残りは記述を欠くので押せる対象にならない。 */
+const APPROVABLE_FINDING_KINDS: readonly ViolationFindingKind[] = [
+  "schema-mismatch",
+  "unexpected-body",
+  "body-unavailable",
+];
+
+/**
+ * 受理条件の違反 1 件。
+ *
+ * ボディ由来のフィールド (`pointer` / `value` / `excerpt`) は addon が
+ * マスクしてから載せる。承認 UI と監査ログに出ていく記録なので、生の秘密が
+ * 載っていてはならない。
+ */
+export interface ViolationFinding {
+  /**
+   * 違反した受理条件の `expect` 内の位置。承認の同一性の一部である。
+   * 受理条件に紐づかない記録 (`inspection-incomplete`) は -1。
+   */
+  expect: number;
+  /** 受理条件の種別。位置の代わりに UI が出す。紐づかない記録では空。 */
+  expectKind: string;
+  /** `UnionShape` のセレクタ。UI が「どこを見た条件か」を出すのに使う。 */
+  at: string;
+  kind: ViolationFindingKind;
+  /** マスク済みの JSON Pointer。値を持たない受理条件では空。 */
+  pointer: string;
+  /** マスク済みの違反した値。承認の同一性の一部。値がない条件では null。 */
+  value: string | null;
+  /** マスク済みの、そのノードだけの抜粋。 */
+  excerpt: string | null;
+  /** 同じ (受理条件, 値) の違反の件数。 */
+  count: number;
+}
+
+/**
+ * その所見が承認の単位を成すか。
+ *
+ * 承認の同一性は (ルール ID, 受理条件の位置, 違反した値) なので、位置か値の
+ * どちらかを欠く記録は押せる対象にならない。走査が完了しなかった記録と、
+ * 保持上限で畳まれた記録がそれである。押せないものを承認 UI に出すと、押した
+ * 人が通したつもりのリクエストが通らないままになる。
+ */
+export function isApprovableFinding(finding: ViolationFinding): boolean {
+  return (
+    finding.expect >= 0 &&
+    APPROVABLE_FINDING_KINDS.some((kind) => kind === finding.kind)
+  );
+}
+
 export const REQUEST_POLICY_BLOCK_REASONS = [
   "body-unavailable",
   "unexpected-body",
@@ -143,6 +214,14 @@ export interface RequestPolicyOutcomeRequest {
   ruleId: string;
   result: "pass" | "rewrite" | "block";
   reason: RequestPolicyReason;
+  /**
+   * 検査が見つけた違反。違反が無ければ空。
+   *
+   * 帰結は `result` と `reason` で閉じているので、これは記録のためにある。
+   * どの受理条件がどの値で落ちたかは理由の語彙では言えず、監査ログに残らないと
+   * 「schema-mismatch で 403」以上のことが後から分からない。
+   */
+  findings?: ViolationFinding[];
 }
 
 export interface RequestPolicyOutcomeResponse {
@@ -159,7 +238,81 @@ const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
   "ruleId",
   "result",
   "reason",
+  "findings",
 ]);
+
+/**
+ * 1 通のメッセージが運べる所見の件数。
+ *
+ * addon 側の上限は「受理条件ごとに 64 件 + 打ち切りの記録」なので、受理条件を
+ * 15 本置いても届かない。broker がこれを持つのは、addon の上限を信じずに
+ * 自分の側でメモリを閉じるためである。
+ */
+const MAX_FINDINGS = 1024;
+/** マスク済みの値の長さ。addon は 276 文字で畳むので、その倍を天井にする。 */
+const MAX_FINDING_VALUE_CHARS = 552;
+const MAX_FINDING_POINTER_CHARS = 1024;
+const MAX_FINDING_EXCERPT_CHARS = 2048;
+const MAX_FINDING_SELECTOR_CHARS = 512;
+const FINDING_FIELDS = new Set([
+  "expect",
+  "expectKind",
+  "at",
+  "kind",
+  "pointer",
+  "value",
+  "excerpt",
+  "count",
+]);
+const EXPECT_KINDS = ["", "emptyBody", "jsonRoot", "unionShape"] as const;
+
+function isBoundedString(value: unknown, max: number): boolean {
+  return typeof value === "string" && value.length <= max;
+}
+
+function isBoundedNullableString(value: unknown, max: number): boolean {
+  return value === null || isBoundedString(value, max);
+}
+
+/**
+ * 所見の列を検証する。
+ *
+ * 所見は addon がボディから組み立てたもので、値もポインタも抜粋も
+ * 攻撃者が選んだ文字列に由来する。長さと件数をここで閉じないと、承認 UI と
+ * 監査ログとメモリがボディの大きさに引きずられる。
+ */
+export function validateViolationFindings(value: unknown): string | null {
+  if (!Array.isArray(value)) return "invalid violation findings";
+  if (value.length > MAX_FINDINGS) return "too many violation findings";
+  for (const finding of value) {
+    if (
+      typeof finding !== "object" ||
+      finding === null ||
+      Array.isArray(finding)
+    ) {
+      return "invalid violation finding";
+    }
+    const record = finding as Record<string, unknown>;
+    if (Object.keys(record).some((field) => !FINDING_FIELDS.has(field))) {
+      return "invalid violation finding";
+    }
+    if (
+      !Number.isSafeInteger(record.expect) ||
+      (record.expect as number) < -1 ||
+      !isListedValue(record.expectKind, EXPECT_KINDS) ||
+      !isBoundedString(record.at, MAX_FINDING_SELECTOR_CHARS) ||
+      !isListedValue(record.kind, VIOLATION_FINDING_KINDS) ||
+      !isBoundedString(record.pointer, MAX_FINDING_POINTER_CHARS) ||
+      !isBoundedNullableString(record.value, MAX_FINDING_VALUE_CHARS) ||
+      !isBoundedNullableString(record.excerpt, MAX_FINDING_EXCERPT_CHARS) ||
+      !Number.isSafeInteger(record.count) ||
+      (record.count as number) < 1
+    ) {
+      return "invalid violation finding";
+    }
+  }
+  return null;
+}
 /** ルールの実 ID は `<スコープ名>.<キー>`。擬似 ID は `$fallback` で終わる。 */
 const SAFE_RULE_ID = /^[a-z][a-z0-9._-]{0,63}(?:\.\$fallback)?$/;
 const REQUEST_POLICY_RESULTS = ["pass", "rewrite", "block"] as const;
@@ -221,6 +374,10 @@ export function validateRequestPolicyOutcome(
     ] as const)
   ) {
     return "invalid request-policy outcome reason";
+  }
+  if (message.findings !== undefined) {
+    const findingsError = validateViolationFindings(message.findings);
+    if (findingsError) return findingsError;
   }
 
   // 結果と理由の組み合わせを閉じる。ボディ検査を通したという報告に拒否の理由が

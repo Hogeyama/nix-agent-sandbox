@@ -46,14 +46,38 @@ EXCERPT_MASK_BUDGET = 4096
 EXCERPT_MAX_BYTES = 512
 EXCERPT_ELIDED = "..."
 
-# Ceiling on how many distinct violation findings one body inspection keeps.
-# Grouping violations by their value does not bound the list on its own: the
-# value is a string out of the request body, so a body carrying a fresh value
-# at every node yields a fresh finding at every node, each one paying for an
-# excerpt. Violations past the ceiling are counted but not retained, and the
-# count is reported as one further finding, so the totals stay honest while
-# the work and the memory stay bounded.
-MAX_RETAINED_FINDINGS = 64
+# Ceiling on how many distinct violation findings one acceptance condition
+# keeps. Grouping violations by their value does not bound the list on its
+# own: the value is a string out of the request body, so a body carrying a
+# fresh value at every node yields a fresh finding at every node, each one
+# paying for an excerpt. Violations past the ceiling are counted but not
+# retained, and the count is reported as one further finding, so the totals
+# stay honest while the work and the memory stay bounded.
+#
+# The allowance is per condition rather than one shared across the whole body
+# inspection, because a finding is what an approval is keyed by: a retained
+# finding names (condition, value) and a dropped one names neither. Sharing
+# one allowance lets the first condition spend it and leaves every later
+# condition's violations unapprovable — the request would be refused with no
+# way for the operator to let it through. The memory stays bounded because
+# the number of conditions comes from the resolved document, not from the
+# request.
+MAX_FINDINGS_PER_EXPECT = 64
+
+# Ceilings on the two body-derived fields of a finding that are otherwise
+# unbounded. The offending value is a discriminator string out of the request
+# body and the pointer is assembled from object keys out of the same body, so
+# either can be as large as the body itself. They travel to the approval UI
+# and the audit log, so their size cannot be the attacker's to choose.
+#
+# The value is also half of what an approval is keyed by, so cutting it must
+# not make two distinct values look alike: a cut value carries a digest of the
+# whole one, which keeps distinct values distinct. The rendering is longer than
+# the ceiling, so no value short enough to be kept whole can ever collide with
+# a cut one.
+FINDING_VALUE_MAX_CHARS = 256
+FINDING_VALUE_DIGEST_CHARS = 16
+FINDING_POINTER_MAX_CHARS = 1024
 
 FINDING_SCHEMA_MISMATCH = "schema-mismatch"
 FINDING_UNEXPECTED_BODY = "unexpected-body"
@@ -658,12 +682,15 @@ def _report_request_policy_outcome(
     rule_id: str,
     result: str,
     reason: str,
+    findings: list[dict],
 ) -> None:
     """Report a sanitized request-policy outcome to the broker.
 
-    Only the closed protocol fields are sent: no host, method, path, query,
-    header, body, filename, credential, or mask value. An acknowledgement
-    failure prints one constant line and never changes the computed result."""
+    Beyond the closed protocol fields, the findings go too: no host, method,
+    path, query, header, filename, credential or mask value, and nothing from
+    the body that has not been through the mask patterns and the ceilings in
+    `_expect_finding`. An acknowledgement failure prints one constant line and
+    never changes the computed result."""
     try:
         response = _query_broker(socket_path, {
             "version": 1,
@@ -673,6 +700,7 @@ def _report_request_policy_outcome(
             "ruleId": rule_id,
             "result": result,
             "reason": reason,
+            "findings": findings,
         })
         if not (
             response.get("version") == 1
@@ -1143,29 +1171,62 @@ def _reject_duplicate_members(pairs):
     return parsed_object
 
 
+def _cut_finding_value(value: Optional[str]) -> Optional[str]:
+    """Bound a masked offending value without merging two of them.
+
+    The value identifies what an approval covers, so a plain cut would let a
+    body choose a long value sharing its prefix with one the operator already
+    approved and inherit that approval. Appending a digest of the whole value
+    keeps the identity injective, and the rendering is longer than the ceiling
+    so an uncut value can never spell one."""
+    if value is None or len(value) <= FINDING_VALUE_MAX_CHARS:
+        return value
+    digest = hashlib.sha256(
+        value.encode("utf-8", "surrogatepass")
+    ).hexdigest()[:FINDING_VALUE_DIGEST_CHARS]
+    return value[:FINDING_VALUE_MAX_CHARS] + EXCERPT_ELIDED + "#" + digest
+
+
+def _cut_finding_pointer(pointer: str) -> str:
+    """Bound a masked pointer. Unlike the value it is not part of any
+    identity, so cutting it can only cost the reader precision about where the
+    node was."""
+    if len(pointer) <= FINDING_POINTER_MAX_CHARS:
+        return pointer
+    return pointer[:FINDING_POINTER_MAX_CHARS] + EXCERPT_ELIDED
+
+
 def _expect_finding(
     expect_index: int, expect_kind: str, at: str, pointer: str,
     value: Optional[str], excerpt: Optional[str], kind: str,
     patterns: list[bytes], count: int = 1,
 ) -> dict:
-    """Build one finding, masking the pointer on the way in.
+    """Build one finding, masking the pointer and bounding it on the way in.
 
     The pointer is masked here rather than at the call sites so that every
     body-derived field on a finding — pointer, value, excerpt — is masked by
     the time the record exists, and a new call site cannot forget one. `at`
     needs no masking: it is the selector out of the rule, not body text.
 
+    The same argument applies to size. The pointer and the value are built out
+    of the body, so they are as large as the body lets them be; the finding
+    leaves this process for an approval UI and an audit log, and both of those
+    are the addon's to bound. Cutting here means no call site can produce an
+    unbounded one.
+
     `expect` is the position of the acceptance condition inside the rule's
-    `expect` list, which is what an approval will eventually be keyed by:
-    approving a tag found by `/**/content/*` must not also approve the same
-    tag found by `/system/*`."""
+    `expect` list, which is what an approval is keyed by: approving a tag
+    found by `/**/content/*` must not also approve the same tag found by
+    `/system/*`."""
     return {
         "expect": expect_index,
         "expectKind": expect_kind,
         "at": at,
         "kind": kind,
-        "pointer": _mask_json_pointer(pointer, patterns),
-        "value": value,
+        "pointer": _cut_finding_pointer(
+            _mask_json_pointer(pointer, patterns)
+        ),
+        "value": _cut_finding_value(value),
         "excerpt": excerpt,
         "count": count,
     }
@@ -1173,9 +1234,13 @@ def _expect_finding(
 
 def _scan_union_shape(
     root, expect: dict, index: int, patterns: list[bytes],
-    budget: _SelectorBudget, findings: list[dict], retained: list[int],
-) -> tuple[bool, Optional[tuple[str, str]]]:
-    """Check every node the selector reaches. Returns (violated, incomplete).
+    budget: _SelectorBudget,
+) -> tuple[bool, Optional[tuple[str, str]], list[dict], int]:
+    """Check every node the selector reaches.
+
+    Returns (violated, incomplete, findings, dropped) where `findings` are
+    this condition's own records and `dropped` counts the violations its
+    allowance had no room to describe.
 
     A matched node must be an object whose discriminator is its own string
     property listed in `allowed`; any other shape is a violation. A selector
@@ -1192,6 +1257,8 @@ def _scan_union_shape(
     discriminator = expect["discriminator"]
     allowed = frozenset(expect["allowed"])
     by_value: dict = {}
+    findings: list[dict] = []
+    dropped = 0
     violated = False
     for pointer, node in matches:
         value = None
@@ -1208,11 +1275,11 @@ def _scan_union_shape(
         if seen_finding is not None:
             seen_finding["count"] += 1
             continue
-        if len(findings) >= MAX_RETAINED_FINDINGS:
+        if len(findings) >= MAX_FINDINGS_PER_EXPECT:
             # Counted, but not recorded, and not entered into `by_value`
             # either: keeping the map bounded is what keeps the memory
             # bounded when every value is distinct.
-            retained[0] += 1
+            dropped += 1
             continue
         finding = _expect_finding(
             index, expect["kind"], expect["at"], pointer, value,
@@ -1221,7 +1288,7 @@ def _scan_union_shape(
         )
         by_value[value] = finding
         findings.append(finding)
-    return violated, incomplete
+    return violated, incomplete, findings, dropped
 
 
 def _evaluate_expects(
@@ -1240,7 +1307,6 @@ def _evaluate_expects(
     `onViolation` the rule declares anywhere — the walk cannot say which
     condition it would have failed, so it assumes the worst one on offer."""
     findings: list[dict] = []
-    dropped = [0]
     violated: list[str] = []
     incomplete: Optional[tuple[str, str]] = None
 
@@ -1257,29 +1323,37 @@ def _evaluate_expects(
                     FINDING_BODY_UNAVAILABLE if body is None
                     else FINDING_UNEXPECTED_BODY
                 )
-                if len(findings) < MAX_RETAINED_FINDINGS:
-                    findings.append(_expect_finding(
-                        index, kind, "", "", None, None, finding_kind,
-                        patterns,
-                    ))
-                else:
-                    dropped[0] += 1
+                # One violation at most, so this condition cannot exhaust its
+                # own allowance and never needs to check it.
+                findings.append(_expect_finding(
+                    index, kind, "", "", None, None, finding_kind, patterns,
+                ))
             continue
         if kind == "jsonRoot":
             wanted = dict if expect["rootType"] == "object" else list
             if not isinstance(parsed, wanted):
                 violated.append(expect["onViolation"])
-                if len(findings) < MAX_RETAINED_FINDINGS:
-                    findings.append(_expect_finding(
-                        index, kind, "", "", None, None,
-                        FINDING_SCHEMA_MISMATCH, patterns,
-                    ))
-                else:
-                    dropped[0] += 1
+                findings.append(_expect_finding(
+                    index, kind, "", "", None, None,
+                    FINDING_SCHEMA_MISMATCH, patterns,
+                ))
             continue
-        hit, incomplete = _scan_union_shape(
-            parsed, expect, index, patterns, budget, findings, dropped
+        hit, incomplete, scanned, dropped = _scan_union_shape(
+            parsed, expect, index, patterns, budget
         )
+        findings.extend(scanned)
+        if dropped:
+            # No pointer, value or excerpt: this record stands for the
+            # violations of this condition whose own records were never
+            # built. Its count is what they add up to, so the totals across
+            # the list still cover every violation. It names the condition it
+            # belongs to, which is how the operator learns which one to
+            # narrow — but it is not an approvable finding, because the
+            # values it stands for were never kept.
+            findings.append(_expect_finding(
+                index, kind, expect["at"], "", None, None,
+                FINDING_FINDINGS_TRUNCATED, patterns, count=dropped,
+            ))
         if hit:
             violated.append(expect["onViolation"])
         if incomplete is not None:
@@ -1294,14 +1368,6 @@ def _evaluate_expects(
             FINDING_INSPECTION_INCOMPLETE, patterns,
         ))
         violated.extend(expect["onViolation"] for expect in expects)
-    if dropped[0]:
-        # No pointer, value or excerpt: this record stands for violations
-        # whose own records were never built. Its count is what they add up
-        # to, so the totals across the list still cover every violation.
-        findings.append(_expect_finding(
-            -1, "", "", "", None, None, FINDING_FINDINGS_TRUNCATED,
-            patterns, count=dropped[0],
-        ))
 
     if not violated:
         return None, findings
@@ -1373,13 +1439,18 @@ def _classify_body(
 
 def _inspect_body(
     rule: dict, body: Optional[bytes], parsed, patterns: list[bytes]
-) -> tuple[str, Optional[bytes], str]:
+) -> tuple[str, Optional[bytes], str, list[dict]]:
     """Run a rule's acceptance conditions and secret masking over the body.
 
-    Returns (result, rewritten_body_or_none, closed_reason) where result is
-    one of "pass", "rewrite", or "block". Any unclassified exception blocks
-    with "processing-failed": a body inspection that fell over has not shown
-    the request to be acceptable."""
+    Returns (result, rewritten_body_or_none, closed_reason, findings) where
+    result is one of "pass", "rewrite", or "block". Any unclassified exception
+    blocks with "processing-failed": a body inspection that fell over has not
+    shown the request to be acceptable.
+
+    The findings travel out with the result. The reason is a closed label — it
+    says a shape did not match, never which condition or which value — so it
+    is all the audit log can carry unless the findings leave with it."""
+    findings: list[dict] = []
     expects = rule.get("expect", [])
     # `maxBodyBytes` is not read here. It bounds the parse, and the parse
     # happens before selection; the chosen rule's own number is applied to
@@ -1392,7 +1463,7 @@ def _inspect_body(
     if rule["match"]["bodyFormat"] != "json":
         parsed = None
     if not expects and parsed is None:
-        return "pass", None, "no-inspection"
+        return "pass", None, "no-inspection", findings
 
     try:
         if parsed is not None:
@@ -1416,28 +1487,29 @@ def _inspect_body(
             # No JSON tree, so nothing to mask structurally. The byte-level
             # masking the caller applies covers this body.
             if severity == "allow":
-                return "pass", None, "violations-allowed"
+                return "pass", None, "violations-allowed", findings
             if any(expect["kind"] == "emptyBody" for expect in expects):
-                return "pass", None, "empty-body"
-            return "pass", None, "no-inspection"
+                return "pass", None, "empty-body", findings
+            return "pass", None, "no-inspection", findings
         masked, changed = _recursively_mask_json(parsed, patterns)
     except _PolicyBlock as exc:
-        return "block", None, exc.reason
+        return "block", None, exc.reason, findings
     except Exception:
-        return "block", None, "processing-failed"
+        return "block", None, "processing-failed", findings
 
     if not changed:
         return (
             "pass",
             None,
             "violations-allowed" if severity == "allow" else "recognized-json",
+            findings,
         )
     try:
         serialized = json.dumps(
             masked, ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
     except Exception:
-        return "block", None, "serialization-failed"
+        return "block", None, "serialization-failed", findings
     # Both are true of this body, and the outcome carries one reason: the
     # violation wins. A rule that sets `onViolation = "allow"` is required to
     # keep its audit on precisely so that letting a violation through leaves a
@@ -1447,6 +1519,7 @@ def _inspect_body(
         "rewrite",
         serialized,
         "violations-allowed" if severity == "allow" else "masked-json",
+        findings,
     )
 
 
@@ -1971,7 +2044,7 @@ class NasAddon:
         rule = local["rule"]
         if rule is not None:
             _mask_url_and_headers(flow, patterns)
-            result, rewritten, reason = _inspect_body(
+            result, rewritten, reason, findings = _inspect_body(
                 rule, request_body, parsed_body, patterns
             )
             if result == "rewrite" and rewritten is not None:
@@ -1984,6 +2057,7 @@ class NasAddon:
                 rule_id,
                 result,
                 reason,
+                findings,
             )
 
             if result == "block":
