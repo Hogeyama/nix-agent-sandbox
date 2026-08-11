@@ -28,6 +28,17 @@ _FIXTURE_PATH = (
 )
 
 
+def _decide_for_body_kind(
+    document, host, port, method, path, body_kind, body_size=None
+):
+    truth = nas_addon._body_truth_table(
+        document, host, port, method, path, body_kind, body_size
+    )
+    return nas_addon._decide(
+        document, host, port, method, path, truth
+    )
+
+
 class BuildMaskPatternsTest(unittest.TestCase):
     def test_includes_raw_value(self):
         patterns = nas_addon._build_mask_patterns(["s3cret-value"])
@@ -379,8 +390,8 @@ class AuthzDocumentContractTest(unittest.TestCase):
                 {k: v for k, v in self.fixture.items()
                  if k != "contractVersion"},
             ),
-            ("older version", {**self.fixture, "contractVersion": 1}),
-            ("newer version", {**self.fixture, "contractVersion": 3}),
+            ("older version", {**self.fixture, "contractVersion": 2}),
+            ("newer version", {**self.fixture, "contractVersion": 4}),
             ("boolean version", {**self.fixture, "contractVersion": True}),
             (
                 "missing scopes",
@@ -544,6 +555,43 @@ class AuthzDocumentContractTest(unittest.TestCase):
             with self.subTest(name=name):
                 document = copy.deepcopy(self.fixture)
                 mutate(self._messages_rule(document))
+                self.assert_invalid(document)
+
+    def test_accepts_scalar_equals_and_one_of_match_conditions(self):
+        document = copy.deepcopy(self.fixture)
+        match = self._messages_rule(document)["match"]
+        match["equals"] = {"/model": "claude", "/stream": True}
+        match["oneOf"] = {"/priority": [1, 2.5, "high"]}
+        self._write(document)
+
+        self.assertEqual(self._load(), document)
+
+    def test_rejects_malformed_pointer_conditions_and_non_scalar_values(self):
+        cases = [
+            ("equals is not an object", "equals", []),
+            ("pointer has no leading slash", "equals", {"model": "x"}),
+            ("pointer has a bad escape", "equals", {"/bad~2": "x"}),
+            ("equals null", "equals", {"/model": None}),
+            ("equals object", "equals", {"/model": {"x": 1}}),
+            ("oneOf is not an object", "oneOf", []),
+            ("oneOf value is not a list", "oneOf", {"/model": "x"}),
+            ("oneOf value is empty", "oneOf", {"/model": []}),
+            ("oneOf contains null", "oneOf", {"/model": ["x", None]}),
+            ("oneOf contains an object", "oneOf", {"/model": [{"x": 1}]}),
+        ]
+        for name, field, value in cases:
+            with self.subTest(name=name):
+                document = copy.deepcopy(self.fixture)
+                self._messages_rule(document)["match"][field] = value
+                self.assert_invalid(document)
+
+    def test_rejects_value_conditions_without_json_format(self):
+        for body_format in (None, "none", "opaque"):
+            with self.subTest(body_format=body_format):
+                document = copy.deepcopy(self.fixture)
+                match = document["scopes"][0]["rules"][1]["match"]
+                match["bodyFormat"] = body_format
+                match["equals"] = {"/model": "claude"}
                 self.assert_invalid(document)
 
     def test_rejects_an_acceptance_condition_it_cannot_run(self):
@@ -715,7 +763,7 @@ class AuthzDocumentContractTest(unittest.TestCase):
             self.assertIs(self._load(), valid)
 
         old_mtime = path.stat().st_mtime_ns
-        path.write_text('{"contractVersion": 2, "scopes": "invalid"}')
+        path.write_text('{"contractVersion": 3, "scopes": "invalid"}')
         os.utime(
             path,
             ns=(old_mtime + 1_000_000, old_mtime + 1_000_000),
@@ -771,7 +819,7 @@ class SelectionTest(unittest.TestCase):
 
     def _document(self, scopes, fallback="deny"):
         return {
-            "contractVersion": 2,
+            "contractVersion": 3,
             "fallback": fallback,
             "defaults": {
                 "limits": dict(_DEFAULT_LIMITS),
@@ -825,7 +873,7 @@ class SelectionTest(unittest.TestCase):
         ]
         for path, rule_id in cases:
             with self.subTest(path=path):
-                decision = nas_addon._decide(
+                decision = _decide_for_body_kind(
                     document, "api.anthropic.com", 443, "POST", path, "absent"
                 )
                 self.assertEqual(decision["ruleId"], rule_id)
@@ -840,7 +888,7 @@ class SelectionTest(unittest.TestCase):
         ])
 
         def decide(method, host, path):
-            return nas_addon._decide(
+            return _decide_for_body_kind(
                 document, host, 443, method, path, "absent"
             )["ruleId"]
 
@@ -865,13 +913,13 @@ class SelectionTest(unittest.TestCase):
                         fallback="deny"),
         ])
         self.assertEqual(
-            nas_addon._decide(
+            _decide_for_body_kind(
                 document, "api.example.com", 443, "GET", "/", "absent"
             )["action"],
             "allow",
         )
         self.assertEqual(
-            nas_addon._decide(
+            _decide_for_body_kind(
                 document, "other.example.com", 443, "GET", "/", "absent"
             )["action"],
             "deny",
@@ -883,13 +931,13 @@ class SelectionTest(unittest.TestCase):
                         fallback="allow"),
         ], fallback="review")
         self.assertEqual(
-            nas_addon._decide(
+            _decide_for_body_kind(
                 document, "api.example.com", 443, "GET", "/", "absent"
             )["action"],
             "allow",
         )
         self.assertEqual(
-            nas_addon._decide(
+            _decide_for_body_kind(
                 document, "api.example.com", 80, "GET", "/", "absent"
             )["action"],
             "review",
@@ -906,7 +954,7 @@ class SelectionTest(unittest.TestCase):
             self._scope("api", [self._exact("api.example.com")],
                         [broad, narrow]),
         ])
-        decision = nas_addon._decide(
+        decision = _decide_for_body_kind(
             document, "api.example.com", 443, "POST", "/v1/ping", "empty"
         )
         self.assertEqual(
@@ -930,7 +978,7 @@ class SelectionTest(unittest.TestCase):
                 [unrelated, broad, narrow],
             ),
         ])
-        decision = nas_addon._decide(
+        decision = _decide_for_body_kind(
             document, "api.example.com", 443, "POST", "/v1/ping", "empty"
         )
         self.assertEqual(decision["ruleId"], "api.narrow")
@@ -946,7 +994,7 @@ class SelectionTest(unittest.TestCase):
             self._scope("api", [self._exact("api.example.com")],
                         [narrow, broad], fallback="allow"),
         ])
-        decision = nas_addon._decide(
+        decision = _decide_for_body_kind(
             document, "api.example.com", 443, "POST", "/v1/ping", "binary"
         )
         self.assertEqual(
@@ -965,7 +1013,7 @@ class SelectionTest(unittest.TestCase):
             self._scope("api", [self._exact("api.example.com")], [a, b],
                         fallback="allow"),
         ])
-        decision = nas_addon._decide(
+        decision = _decide_for_body_kind(
             document, "api.example.com", 443, "POST", "/x", "absent"
         )
         self.assertEqual(
@@ -986,14 +1034,100 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(evaluate("json", "empty"), "indeterminate")
         self.assertEqual(evaluate("json", "binary"), "indeterminate")
 
+    def test_body_values_select_different_rules_in_declaration_order(self):
+        fast = _rule(
+            key="fast", paths=["/v1/run"], body_format="json",
+            equals={"/mode": "fast", "/checked": True},
+        )
+        fast["onIndeterminate"] = "review"
+        safe = _rule(
+            key="safe", paths=["/v1/run"], body_format="json",
+            one_of={"/mode": ["safe"]},
+        )
+        safe["onMatch"] = "review"
+        document = self._document([
+            self._scope("api", [self._exact("api.example.com")],
+                        [fast, safe]),
+        ])
+
+        fast_truth = nas_addon._body_truth_table(
+            document, "api.example.com", 443, "POST", "/v1/run",
+            "json", 32, {"mode": "fast", "checked": True},
+        )
+        safe_truth = nas_addon._body_truth_table(
+            document, "api.example.com", 443, "POST", "/v1/run",
+            "json", 16, {"mode": "safe"},
+        )
+
+        self.assertEqual(fast_truth, {
+            "api.fast": "true", "api.safe": "false",
+        })
+        self.assertEqual(safe_truth, {
+            "api.fast": "false", "api.safe": "true",
+        })
+        self.assertEqual(
+            nas_addon._decide(
+                document, "api.example.com", 443, "POST", "/v1/run",
+                safe_truth,
+            )["ruleId"],
+            "api.safe",
+        )
+        incomparable_truth = nas_addon._body_truth_table(
+            document, "api.example.com", 443, "POST", "/v1/run",
+            "json", 24, {"mode": {"nested": True}, "checked": True},
+        )
+        self.assertEqual(incomparable_truth, {
+            "api.fast": "indeterminate", "api.safe": "indeterminate",
+        })
+        self.assertEqual(
+            nas_addon._decide(
+                document, "api.example.com", 443, "POST", "/v1/run",
+                incomparable_truth,
+            )["ruleId"],
+            # The value conditions are incomparable, so declaration order is
+            # the deterministic tie-break on both host and addon.
+            "api.fast",
+        )
+
+    def test_missing_pointer_is_false(self):
+        rule = _rule(
+            key="matched", paths=["/v1/run"], body_format="json",
+            equals={"/mode": "fast"},
+        )
+        document = self._document([
+            self._scope("api", [self._exact("api.example.com")], [rule]),
+        ])
+        truth = nas_addon._body_truth_table(
+            document, "api.example.com", 443, "POST", "/v1/run",
+            "json", 2, {},
+        )
+        self.assertEqual(truth, {"api.matched": "false"})
+
+    def test_non_scalar_and_false_conditions_make_indeterminate_win(self):
+        rule = _rule(
+            key="matched", paths=["/v1/run"], body_format="json",
+            equals={"/mode": "fast", "/checked": True},
+        )
+        rule["onIndeterminate"] = "review"
+        document = self._document([
+            self._scope("api", [self._exact("api.example.com")], [rule]),
+        ])
+        truth = nas_addon._body_truth_table(
+            document, "api.example.com", 443, "POST", "/v1/run",
+            "json", 48, {"mode": {"nested": True}, "checked": False},
+        )
+        decision = nas_addon._decide(
+            document, "api.example.com", 443, "POST", "/v1/run", truth
+        )
+        self.assertEqual(truth, {"api.matched": "indeterminate"})
+        self.assertEqual(
+            (decision["ruleId"], decision["action"], decision["reason"]),
+            ("api.matched", "review", "indeterminate"),
+        )
+
 
 class RuleBudgetSelectionTest(unittest.TestCase):
-    """The chosen rule's own `maxBodyBytes` settles its body condition.
-
-    Classification runs before selection, so it can only spend the scope's
-    budget. A rule that asked for a smaller one never had its body read within
-    the budget it declared, and a body it could not read cannot make its
-    `json` condition true."""
+    """Every candidate pays its own `maxBodyBytes` before selection."""
 
     def _document(self, rule, scope_budget=None):
         scope_limits = dict(_DEFAULT_LIMITS)
@@ -1003,11 +1137,13 @@ class RuleBudgetSelectionTest(unittest.TestCase):
         document["scopes"][0]["limits"] = scope_limits
         return document
 
-    def _decide(self, rule, body_kind, body_size, scope_budget=None):
-        return nas_addon._decide_under_rule_budget(
+    def _truth(
+        self, rule, body_kind, body_size, scope_budget=None, parsed_body=None
+    ):
+        return nas_addon._body_truth_table(
             self._document(rule, scope_budget),
             "api.example.com", 443, "POST", "/v1/messages",
-            body_kind, body_size,
+            body_kind, body_size, parsed_body,
         )
 
     def _budgeted(self, max_body_bytes, **overrides):
@@ -1016,55 +1152,58 @@ class RuleBudgetSelectionTest(unittest.TestCase):
         return rule
 
     def test_a_body_over_the_rules_budget_is_indeterminate(self):
-        decision, body_kind = self._decide(self._budgeted(16), "json", 4096)
+        truth = self._truth(self._budgeted(16), "json", 4096)
+        self.assertEqual(truth, {"api.messages": "indeterminate"})
 
-        self.assertEqual(
-            (decision["action"], decision["reason"], decision["ruleId"]),
-            ("deny", "indeterminate", "api.messages"),
+    def test_budget_exhaustion_overrides_a_determined_false_value(self):
+        rule = self._budgeted(16)
+        rule["match"]["equals"] = {"/mode": "fast"}
+        truth = self._truth(
+            rule, "json", 4096, parsed_body={"mode": "slow"}
         )
-        self.assertEqual(body_kind, "binary")
-        self.assertIsNone(decision["rule"])
+        self.assertEqual(truth, {"api.messages": "indeterminate"})
 
     def test_a_body_within_the_rules_budget_matches(self):
-        decision, body_kind = self._decide(self._budgeted(4096), "json", 16)
+        truth = self._truth(self._budgeted(4096), "json", 16)
+        self.assertEqual(truth, {"api.messages": "true"})
 
-        self.assertEqual(
-            (decision["action"], decision["reason"], decision["ruleId"]),
-            ("allow", "rule", "api.messages"),
-        )
-        self.assertEqual(body_kind, "json")
-
-    def test_the_budget_moves_the_verdict_and_not_the_rule(self):
-        """A tighter budget only turns a `json` condition from true to
-        indeterminate. Every other condition keeps its value, and both truth
-        values stop the walk at the same candidate, so the rule whose budget
-        was applied stays the rule the re-run names."""
+    def test_a_conditionless_candidate_is_present_and_true(self):
         opaque = self._budgeted(16)
-        opaque["match"]["bodyFormat"] = "opaque"
-        decision, body_kind = self._decide(opaque, "json", 4096)
-
-        self.assertEqual(
-            (decision["action"], decision["reason"], decision["ruleId"]),
-            ("allow", "rule", "api.messages"),
-        )
-        self.assertEqual(body_kind, "binary")
+        opaque["match"]["bodyFormat"] = None
+        truth = self._truth(opaque, "json", 4096)
+        self.assertEqual(truth, {"api.messages": "true"})
 
     def test_a_body_that_could_not_be_read_has_no_size_to_compare(self):
-        decision, body_kind = self._decide(self._budgeted(16), "binary", None)
-
-        self.assertEqual(decision["reason"], "indeterminate")
-        self.assertEqual(body_kind, "binary")
+        truth = self._truth(self._budgeted(16), "binary", None)
+        self.assertEqual(truth, {"api.messages": "indeterminate"})
 
     def test_a_rule_cannot_widen_the_budget_its_scope_spent(self):
         """The scope's budget is the one that was actually spent on the parse.
         Raising `maxBodyBytes` on the rule does not get the body re-read, so a
         body the scope refused to parse stays unparsed."""
-        decision, body_kind = self._decide(
+        truth = self._truth(
             self._budgeted(4096), "binary", 1024, scope_budget=16
         )
+        self.assertEqual(truth, {"api.messages": "indeterminate"})
 
-        self.assertEqual(decision["reason"], "indeterminate")
-        self.assertEqual(body_kind, "binary")
+    def test_each_candidate_uses_its_own_budget(self):
+        small = self._budgeted(16)
+        small["key"] = "small"
+        small["id"] = "api.small"
+        large = self._budgeted(4096)
+        large["key"] = "large"
+        large["id"] = "api.large"
+        document = _flow_document([small, large])
+
+        truth = nas_addon._body_truth_table(
+            document, "api.example.com", 443, "POST", "/v1/messages",
+            "json", 1024,
+        )
+
+        self.assertEqual(truth, {
+            "api.small": "indeterminate",
+            "api.large": "true",
+        })
 
 
 class RequestPolicyOutcomeReportTest(unittest.TestCase):
@@ -1218,7 +1357,7 @@ def _expansion_ceiling(value):
 
 def _rule(
     expects=(), body_format=None, key="messages", paths=None, scope="api",
-    **limits,
+    equals=None, one_of=None, **limits,
 ):
     """A resolved rule, in the shape the host writes and the addon re-checks."""
     budget = dict(_DEFAULT_LIMITS)
@@ -1232,6 +1371,8 @@ def _rule(
             "methods": ["POST"],
             "paths": [_path_pattern(pattern) for pattern in (paths or ["/v1/messages"])],
             "bodyFormat": body_format,
+            "equals": dict(equals or {}),
+            "oneOf": dict(one_of or {}),
         },
         "onMatch": "allow",
         "onIndeterminate": "deny",
@@ -1322,7 +1463,7 @@ def _execute_request_policy(rule, body, patterns):
     kind, parsed = nas_addon._classify_body(
         body, limits["maxBodyBytes"], True
     )
-    truth = nas_addon._evaluate_body_format(rule["match"]["bodyFormat"], kind)
+    truth = nas_addon._evaluate_body_match(rule["match"], kind, parsed)
     if truth == "indeterminate":
         over_budget = len(body) > limits["maxBodyBytes"]
         return "block", None, (
@@ -3100,7 +3241,7 @@ def _flow_document(rules=(), scope="api", targets=("api.example.com",),
                    fallback="deny", network_fallback="deny"):
     """A resolved document with one scope, in the shape the addon reads."""
     return {
-        "contractVersion": 2,
+        "contractVersion": 3,
         "fallback": network_fallback,
         "defaults": {
             "limits": dict(_DEFAULT_LIMITS),
@@ -3446,7 +3587,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
 
         self.assertIsNone(flow.response)
         self.assertEqual(
-            messages[0]["reviewContext"]["bodyKind"], "absent"
+            messages[0]["bodyTruth"],
+            {"api.opaque": "false", "api.all": "true"},
         )
 
     def test_a_declared_empty_body_does_satisfy_an_opaque_rule(self):
@@ -3463,7 +3605,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
         )
 
         self.assertIsNone(flow.response)
-        self.assertEqual(messages[0]["reviewContext"]["bodyKind"], "empty")
+        self.assertEqual(
+            messages[0]["bodyTruth"],
+            {"api.opaque": "true", "api.all": "true"},
+        )
 
     def test_a_masked_body_still_reports_the_violation_it_let_through(self):
         """The rewrite and the allowed violation are both true of this
@@ -3507,7 +3652,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
                     + b"x" * 64 + b'"}',
         )
 
-        self.assertEqual(messages[0]["reviewContext"]["bodyKind"], "binary")
+        self.assertEqual(
+            messages[0]["bodyTruth"],
+            {"api.messages": "indeterminate"},
+        )
         self.assertEqual(self._outcomes(messages), [])
         self.assertNotIn(b"SECRET123", flow.request.content)
 
@@ -3751,9 +3899,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
                 "path": "/v1/messages",
                 "contentType": None,
                 "bodySize": len(body),
-                # broker はボディを見ないので、選択に効く事実だけを渡す。
-                "bodyKind": "json",
             },
+        )
+        self.assertEqual(
+            authorization["bodyTruth"], {"api.messages": "true"}
         )
 
     def _review_rule(self):

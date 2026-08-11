@@ -23,8 +23,12 @@ def main() -> int:
         return 1
     lines = []
     for host, port, method, path, body_kind in cases:
+        body_truth = nas_addon._body_truth_table(
+            document, host, port, method, path, body_kind,
+            2 if body_kind == "json" else 0,
+        )
         decision = nas_addon._decide(
-            document, host, port, method, path, body_kind
+            document, host, port, method, path, body_truth
         )
         lines.append("|".join([
             host,

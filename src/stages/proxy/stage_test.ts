@@ -244,7 +244,7 @@ test("ProxyStage: resolves a rule into the versioned plan document", () => {
 
   const result = planProxy({ ...shared, container, observability });
 
-  expect(result.document.contractVersion).toBe(2);
+  expect(result.document.contractVersion).toBe(3);
   const scope = result.document.scopes[0]!;
   expect(scope.name).toEqual("anthropic");
   expect(scope.fallback).toEqual("deny");
@@ -894,7 +894,7 @@ test("createProxyStage().run(): gives both runtime consumers the same resolved d
       .pipe(Effect.scoped, Effect.provide(layer)),
   );
 
-  expect(writtenDocument).toMatchObject({ contractVersion: 2 });
+  expect(writtenDocument).toMatchObject({ contractVersion: 3 });
   expect(brokerDocument).toBe(writtenDocument);
 });
 

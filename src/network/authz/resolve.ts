@@ -16,6 +16,7 @@ import {
   type Action,
   type AuditMode,
   type AuthzConfig,
+  type BodyMatchConfig,
   DEFAULT_AUDIT_MODE,
   DEFAULT_SECRET_DISPOSITIONS,
   type Expect,
@@ -32,12 +33,14 @@ import {
   type ViolationAction,
 } from "./config.ts";
 import { type CompiledPath, compiledPathMatches } from "./pattern.ts";
-import { type CompiledMatch, hostMatches } from "./relation.ts";
-import { evaluateBody } from "./semantics.ts";
+import { type CompiledMatch, hostMatches, normalizeBody } from "./relation.ts";
+import { evaluateBody, type Truth } from "./semantics.ts";
 import { compareTargetSpecificity, precedenceOrder } from "./specificity.ts";
 import type {
   AuthzRequest,
   BodyFormat,
+  JsonScalar,
+  RequestBody,
   Result,
   Target,
   TargetAddress,
@@ -60,6 +63,8 @@ export interface ResolvedMatch {
   readonly paths: readonly CompiledPath[];
   /** null はボディ条件を持たない。 */
   readonly bodyFormat: BodyFormat | null;
+  readonly equals: Readonly<Record<string, JsonScalar>>;
+  readonly oneOf: Readonly<Record<string, readonly JsonScalar[]>>;
 }
 
 export interface ResolvedRule {
@@ -111,12 +116,18 @@ export interface ResolvedDefaults {
 }
 
 export interface ResolvedDocument {
-  readonly contractVersion: 2;
+  readonly contractVersion: 3;
   /** どのスコープにも属さないターゲットの帰結。 */
   readonly fallback: NetworkFallback;
   readonly defaults: ResolvedDefaults;
   /** ターゲットの特異度の降順。同順は宣言順。 */
   readonly scopes: readonly ResolvedScope[];
+}
+
+export interface DecisionRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly body?: RequestBody;
 }
 
 export interface ResolveOutcome {
@@ -165,7 +176,7 @@ export function resolveAuthzConfig(config: AuthzConfig): ResolveOutcome {
 
   return {
     document: {
-      contractVersion: 2,
+      contractVersion: 3,
       fallback: config.network.fallback ?? "deny",
       defaults,
       scopes: ordered.value,
@@ -228,7 +239,7 @@ function resolveRule(
     id: rule.id,
     key: rule.key,
     precedes,
-    match: toResolvedMatch(rule.match),
+    match: toResolvedMatch(rule.match, rule.config.match.body),
     onMatch: rule.config.onMatch,
     onIndeterminate: rule.config.onIndeterminate ?? "deny",
     expect: (rule.config.expect ?? []).map((expect) => ({
@@ -242,11 +253,21 @@ function resolveRule(
   };
 }
 
-function toResolvedMatch(match: CompiledMatch): ResolvedMatch {
+function toResolvedMatch(
+  match: CompiledMatch,
+  body: BodyMatchConfig | undefined,
+): ResolvedMatch {
   return {
     methods: match.methods,
     paths: match.paths,
     bodyFormat: match.body.format,
+    equals: { ...body?.equals },
+    oneOf: Object.fromEntries(
+      Object.entries(body?.oneOf ?? {}).map(([pointer, values]) => [
+        pointer,
+        [...values],
+      ]),
+    ),
   };
 }
 
@@ -467,6 +488,18 @@ export function decide(
   document: ResolvedDocument,
   address: TargetAddress,
   request: AuthzRequest,
+): Decision;
+export function decide(
+  document: ResolvedDocument,
+  address: TargetAddress,
+  request: DecisionRequest,
+  evaluateRuleBody: (rule: ResolvedRule) => Truth,
+): Decision;
+export function decide(
+  document: ResolvedDocument,
+  address: TargetAddress,
+  request: DecisionRequest,
+  evaluateRuleBody?: (rule: ResolvedRule) => Truth,
 ): Decision {
   const scope = selectScope(document, address);
   if (scope === null) {
@@ -484,11 +517,23 @@ export function decide(
     };
   }
 
+  const leaf =
+    evaluateRuleBody ??
+    ((rule: ResolvedRule): Truth =>
+      evaluateBody(
+        normalizeBody(
+          rule.match.bodyFormat === null
+            ? undefined
+            : {
+                format: rule.match.bodyFormat,
+                equals: rule.match.equals,
+                oneOf: rule.match.oneOf,
+              },
+        ),
+        request.body as RequestBody,
+      ));
   for (const rule of orderedCandidates(scope, request)) {
-    const truth = evaluateBody(
-      { format: rule.match.bodyFormat, pointers: new Map(), graphql: null },
-      request.body,
-    );
+    const truth = leaf(rule);
     if (truth === "false") continue;
     return truth === "true"
       ? fromRule(scope, rule, rule.onMatch, "rule", rule.expect)
@@ -542,7 +587,7 @@ function fromRule(
  */
 function orderedCandidates(
   scope: ResolvedScope,
-  request: AuthzRequest,
+  request: DecisionRequest,
 ): readonly ResolvedRule[] {
   const path = pathForSelection(request.path);
   const candidates = scope.rules.filter((rule) =>

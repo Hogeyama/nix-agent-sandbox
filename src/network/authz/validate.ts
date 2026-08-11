@@ -274,7 +274,16 @@ function compileRuleMatch(
   checkMethods(diagnostics, id, rule.match.methods);
 
   if (broken) return null;
-  const compiled = compileMatch(rule.match);
+  // Value-aware relation diagnostics are enabled separately from the runtime
+  // contract. Until then, preserve the previous format-only relation so this
+  // contract change does not start rejecting configurations early.
+  const compiled = compileMatch({
+    ...rule.match,
+    body:
+      rule.match.body === undefined
+        ? undefined
+        : { format: rule.match.body.format },
+  });
   if (!compiled.ok) {
     diagnostics.push(error(`ルール ${id} の match: ${compiled.error}`));
     return null;

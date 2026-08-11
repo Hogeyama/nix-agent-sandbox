@@ -272,6 +272,12 @@ class UnionShape extends Expect {
 /// `"json"` と `"none"` は交差しない。
 class BodyMatch {
   format: "none"|"json"|"opaque"
+
+  /// JSON Pointer と値の完全一致。値の形は設定検査で確認する。
+  equals: Mapping<String, Any> = new {}
+
+  /// JSON Pointer と許す値の集合。値の形は設定検査で確認する。
+  oneOf: Mapping<String, Listing<Any>> = new {}
 }
 
 /// そのルールがリクエストを引き受けるかどうかを決める条件。

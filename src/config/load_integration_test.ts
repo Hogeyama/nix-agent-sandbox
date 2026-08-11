@@ -493,6 +493,50 @@ profiles {
   });
 });
 
+test.skipIf(!hasPkl)(
+  "loadConfig: accepts equals and oneOf body match conditions",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["api"] {
+          targets { "api.example.com" }
+          rules {
+            ["matched"] {
+              match {
+                paths { "/v1/run" }
+                body {
+                  format = "json"
+                  equals { ["/mode"] = "fast" }
+                  oneOf { ["/tier"] = new Listing { "pro"; "team" } }
+                }
+              }
+              onMatch = "allow"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      const config = await loadConfig({ startDir: dir });
+      const body =
+        config.profiles.dev.network.scopes.api?.rules?.matched?.match.body;
+      expect(body).toEqual({
+        format: "json",
+        equals: { "/mode": "fast" },
+        oneOf: { "/tier": ["pro", "team"] },
+      });
+    });
+  },
+);
+
 test.skipIf(!hasPkl)("loadConfig: rejects an unknown rule field", async () => {
   const configPkl = `amends "Schema.pkl"
 

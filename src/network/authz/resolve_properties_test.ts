@@ -18,7 +18,7 @@ import {
   githubPathsExample,
 } from "./examples_fixture.ts";
 import { compiledPathMatches } from "./pattern.ts";
-import type { CompiledMatch } from "./relation.ts";
+import { type CompiledMatch, normalizeBody } from "./relation.ts";
 import {
   decide,
   pathForSelection,
@@ -240,11 +240,15 @@ function compiledOf(rule: ResolvedRule): CompiledMatch {
   return {
     methods: rule.match.methods,
     paths: rule.match.paths,
-    body: {
-      format: rule.match.bodyFormat,
-      pointers: new Map(),
-      graphql: null,
-    },
+    body: normalizeBody(
+      rule.match.bodyFormat === null
+        ? undefined
+        : {
+            format: rule.match.bodyFormat,
+            equals: rule.match.equals,
+            oneOf: rule.match.oneOf,
+          },
+    ),
   };
 }
 

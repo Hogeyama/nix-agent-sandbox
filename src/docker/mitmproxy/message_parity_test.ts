@@ -17,6 +17,7 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { ResolvedDocument } from "../../network/authz/resolve.ts";
 import {
+  validateAuthorizeRequest,
   validateRequestPolicyOutcome,
   validateRequestPolicyReview,
 } from "../../network/protocol.ts";
@@ -44,6 +45,7 @@ function body(extraContent: unknown[]): string {
 async function messagesFor(requestBody: string): Promise<{
   result: string;
   reason: string;
+  authorize: unknown;
   review: unknown;
   outcome: unknown;
 }> {
@@ -72,6 +74,26 @@ async function messagesFor(requestBody: string): Promise<{
   if (exitCode !== 0) throw new Error(`message_parity.py failed: ${stderr}`);
   return JSON.parse(stdout);
 }
+
+test.skipIf(!python3)(
+  "the broker accepts the authorization truth table the addon builds",
+  async () => {
+    const document = await shippedDocument();
+    const { authorize } = await messagesFor(body([]));
+
+    expect(validateAuthorizeRequest(authorize, "sess_parity", document)).toBe(
+      null,
+    );
+    expect(authorize).toMatchObject({
+      bodyTruth: { "anthropic.messages": "true" },
+      reviewContext: {
+        path: "/v1/messages",
+        contentType: "application/json",
+      },
+    });
+    expect(JSON.stringify(authorize)).not.toContain("bodyKind");
+  },
+);
 
 async function shippedDocument(): Promise<ResolvedDocument> {
   return JSON.parse(

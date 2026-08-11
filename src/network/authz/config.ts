@@ -10,9 +10,9 @@
  * 走査には `Object.entries` の順序を使う。ルールのキーは
  * `[a-z][a-z0-9._-]{0,63}` に従うので整数キーにはならず、挿入順が保たれる。
  *
- * `match.body` は `format` だけを持つ。`equals` / `oneOf` / `graphql` を
- * `match` に置けるようにするのは後の段階であり、この段階では受理条件
- * (`BodyExpect`) の側にだけ現れる。
+ * `match.body` は `format` と JSON Pointer の `equals` / `oneOf` を持つ。
+ * `graphql` を `match` に置けるようにするのは後の段階であり、この段階では
+ * 受理条件 (`BodyExpect`) の側にだけ現れる。
  */
 
 import type { BodyFormat, GraphqlMatch, JsonScalar, Result } from "./types.ts";
@@ -128,6 +128,8 @@ export function requiresJsonBody(expect: Expect): boolean {
 
 export interface BodyMatchConfig {
   readonly format: BodyFormat;
+  readonly equals?: Readonly<Record<string, JsonScalar>>;
+  readonly oneOf?: Readonly<Record<string, readonly JsonScalar[]>>;
 }
 
 export interface MatchConfig {

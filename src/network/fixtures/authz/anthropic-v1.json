@@ -1,5 +1,5 @@
 {
-  "contractVersion": 2,
+  "contractVersion": 3,
   "fallback": "deny",
   "defaults": {
     "limits": {
@@ -88,7 +88,9 @@
                 "trailingDoubleStar": false
               }
             ],
-            "bodyFormat": "json"
+            "bodyFormat": "json",
+            "equals": {},
+            "oneOf": {}
           },
           "onMatch": "allow",
           "onIndeterminate": "deny",
@@ -311,7 +313,9 @@
                 "trailingDoubleStar": false
               }
             ],
-            "bodyFormat": null
+            "bodyFormat": null,
+            "equals": {},
+            "oneOf": {}
           },
           "onMatch": "allow",
           "onIndeterminate": "deny",

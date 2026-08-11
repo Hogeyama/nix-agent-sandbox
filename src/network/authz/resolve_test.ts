@@ -313,6 +313,23 @@ describe("評価順", () => {
     expect(decision.action).toBe("allow");
   });
 
+  test("注入した葉の真偽だけを使い、候補の順序と打ち切りは decide が保つ", () => {
+    const evaluated: string[] = [];
+    const decision = decide(
+      twoRules(),
+      at("api.example.com"),
+      request("POST", "/v1/x", JSON_BODY),
+      (rule) => {
+        evaluated.push(rule.id);
+        return rule.id === "api.narrow" ? "false" : "indeterminate";
+      },
+    );
+
+    expect(evaluated).toEqual(["api.narrow", "api.wide"]);
+    expect(decision.ruleId).toBe("api.wide");
+    expect(decision.reason).toBe("indeterminate");
+  });
+
   test("候補にならないルールは候補どうしの順序を変えない", () => {
     // ping.json と ping.none は受理集合が交わらず比較不能なので、宣言順で決着
     // する。ping.get は GET しか受理しないので POST の候補ではない。候補でない
@@ -396,6 +413,88 @@ describe("評価順", () => {
       request("GET", "/repos/my-org/nas/pulls"),
     );
     expect(decision.ruleId).toBe("api.pulls");
+  });
+});
+
+describe("ボディの値条件", () => {
+  const document = documentOf({
+    network: {
+      scopes: {
+        api: {
+          targets: ["api.example.com"],
+          fallback: "deny",
+          rules: {
+            fast: {
+              match: {
+                paths: ["/v1/run"],
+                body: {
+                  format: "json",
+                  equals: { "/mode": "fast", "/checked": true },
+                },
+              },
+              onMatch: "allow",
+              onIndeterminate: "review",
+            },
+            safe: {
+              match: {
+                paths: ["/v1/run"],
+                body: { format: "json", oneOf: { "/mode": ["safe"] } },
+              },
+              onMatch: "review",
+            },
+          },
+        },
+      },
+    },
+  });
+  const address = at("api.example.com");
+  const run = (value: RequestBody) =>
+    decide(document, address, request("POST", "/v1/run", value));
+
+  test("解決済み契約 v3 に equals と oneOf を保存する", () => {
+    expect(document.contractVersion).toBe(3);
+    expect(document.scopes[0]?.rules.map((rule) => rule.match)).toEqual([
+      expect.objectContaining({
+        equals: { "/mode": "fast", "/checked": true },
+        oneOf: {},
+      }),
+      expect.objectContaining({
+        equals: {},
+        oneOf: { "/mode": ["safe"] },
+      }),
+    ]);
+  });
+
+  test("ボディの値によって宣言順の異なるルールを選ぶ", () => {
+    expect(
+      run({ kind: "json", value: { mode: "fast", checked: true } }).ruleId,
+    ).toBe("api.fast");
+    const safe = run({ kind: "json", value: { mode: "safe" } });
+    expect([safe.ruleId, safe.action, safe.reason]).toEqual([
+      "api.safe",
+      "review",
+      "rule",
+    ]);
+  });
+
+  test("存在しない Pointer は偽として次の候補または fallback へ進む", () => {
+    const decision = run({ kind: "json", value: {} });
+    expect([decision.ruleId, decision.reason]).toEqual([
+      "api.$fallback",
+      "scope-fallback",
+    ]);
+  });
+
+  test("非 scalar と偽が混じると判定不能が勝って traversal を止める", () => {
+    const decision = run({
+      kind: "json",
+      value: { mode: { nested: true }, checked: false },
+    });
+    expect([decision.ruleId, decision.action, decision.reason]).toEqual([
+      "api.fast",
+      "review",
+      "indeterminate",
+    ]);
   });
 });
 

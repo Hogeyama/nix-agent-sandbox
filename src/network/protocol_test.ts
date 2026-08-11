@@ -10,6 +10,7 @@ import {
   normalizeTarget,
   parseAllowlistEntry,
   type ViolationFinding,
+  validateAuthorizeRequest,
   validateRequestPolicyOutcome,
 } from "./protocol.ts";
 
@@ -44,6 +45,76 @@ const validOutcome = {
   result: "pass",
   reason: "recognized-json",
 };
+
+const validAuthorize = {
+  version: 1,
+  type: "authorize",
+  requestId: "req-authorize",
+  sessionId: "sess_test",
+  target: { host: "api.example.com", port: 443 },
+  method: "POST",
+  requestKind: "forward",
+  observedAt: "2026-08-17T00:00:00.000Z",
+  bodyTruth: {
+    "policy.json": "true",
+  },
+  reviewContext: {
+    path: "/v1/messages",
+    contentType: "application/json",
+    bodySize: 2,
+  },
+};
+
+test("authorize validation accepts a bounded rule truth table", () => {
+  expect(
+    validateAuthorizeRequest(validAuthorize, "sess_test", document),
+  ).toBeNull();
+});
+
+const invalidAuthorizeTruth = [
+  ["a missing truth table", { bodyTruth: undefined }],
+  ["a truth table array", { bodyTruth: [] }],
+  ["an unknown truth value", { bodyTruth: { "policy.json": "yes" } }],
+  ["an unknown rule ID", { bodyTruth: { "policy.unknown": "true" } }],
+  [
+    "more entries than the document has rules",
+    {
+      bodyTruth: {
+        "policy.json": "true",
+        "policy.bodyless": "true",
+        "policy.extra": "true",
+      },
+    },
+  ],
+] as const;
+
+for (const [name, overrides] of invalidAuthorizeTruth) {
+  test(`authorize validation rejects ${name}`, () => {
+    expect(
+      validateAuthorizeRequest(
+        { ...validAuthorize, ...overrides },
+        "sess_test",
+        document,
+      ),
+    ).not.toBeNull();
+  });
+}
+
+test("authorize validation rejects the removed bodyKind review field", () => {
+  expect(
+    validateAuthorizeRequest(
+      {
+        ...validAuthorize,
+        reviewContext: {
+          ...validAuthorize.reviewContext,
+          bodyKind: "json",
+        },
+      },
+      "sess_test",
+      document,
+    ),
+  ).not.toBeNull();
+});
 
 const acceptedOutcomes = [
   [

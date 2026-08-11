@@ -351,7 +351,11 @@ profiles {
           allowed: ["text", "image"],
         },
       ]);
-      expect(rules?.messages?.match.body).toEqual({ format: "json" });
+      expect(rules?.messages?.match.body).toEqual({
+        format: "json",
+        equals: {},
+        oneOf: {},
+      });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

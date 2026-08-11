@@ -41,13 +41,20 @@ def main() -> int:
         "path": "/v1/messages",
         "contentType": "application/json",
         "bodySize": len(body),
-        "bodyKind": "json",
     }
+    body_truth = nas_addon._body_truth_table(
+        document, "api.anthropic.com", 443, "POST", "/v1/messages",
+        "json", len(body),
+    )
     # The outcome is reported with whatever the review settled on; an approval
     # is the case that carries findings and a success reason at once.
     print(json.dumps({
         "result": result,
         "reason": reason,
+        "authorize": nas_addon._authorize_message(
+            "req-parity", "sess_parity", "api.anthropic.com", 443,
+            "POST", body_truth, review_context,
+        ),
         "review": nas_addon._violation_review_message(
             "req-parity", "sess_parity", rule["id"],
             "api.anthropic.com", 443, "POST", review_context, findings,

@@ -10,6 +10,7 @@ import base64
 import hashlib
 import itertools
 import json
+import math
 import os
 import re
 import socket
@@ -31,7 +32,7 @@ REQUEST_POLICY_BLOCK_BODY = b"blocked: request policy"
 # does not carry exactly this version is rejected whole: the host writes it
 # and the addon re-validates it, so a mismatch means the two halves of the
 # session were built from different releases.
-AUTHZ_CONTRACT_VERSION = 2
+AUTHZ_CONTRACT_VERSION = 3
 
 # A violation finding quotes the offending node. The depth and byte ceilings
 # keep that quote readable and stop a finding from growing into a copy of the
@@ -135,7 +136,9 @@ _RULE_KEYS = frozenset((
     "inject",
     "audit",
 ))
-_MATCH_KEYS = frozenset(("methods", "paths", "bodyFormat"))
+_MATCH_KEYS = frozenset((
+    "methods", "paths", "bodyFormat", "equals", "oneOf",
+))
 _PATH_KEYS = frozenset(("source", "segments", "trailingDoubleStar"))
 _TARGET_KEYS = frozenset(("source", "host", "port"))
 _LIMIT_KEYS = frozenset((
@@ -349,6 +352,43 @@ def _is_valid_selector(value: object) -> bool:
     return True
 
 
+def _is_valid_json_pointer(value: object) -> bool:
+    """Validate RFC 6901 syntax without interpreting literal `*` tokens."""
+    if not isinstance(value, str):
+        return False
+    if value == "":
+        return True
+    if not value.startswith("/"):
+        return False
+    return re.search(r"~(?:[^01]|\Z)", value) is None
+
+
+def _is_json_scalar(value: object) -> bool:
+    if isinstance(value, (str, bool)):
+        return True
+    if type(value) is int:
+        return True
+    return type(value) is float and math.isfinite(value)
+
+
+def _is_valid_value_conditions(equals: object, one_of: object) -> bool:
+    return (
+        isinstance(equals, dict)
+        and all(
+            _is_valid_json_pointer(pointer) and _is_json_scalar(expected)
+            for pointer, expected in equals.items()
+        )
+        and isinstance(one_of, dict)
+        and all(
+            _is_valid_json_pointer(pointer)
+            and isinstance(expected, list)
+            and len(expected) > 0
+            and all(_is_json_scalar(value) for value in expected)
+            for pointer, expected in one_of.items()
+        )
+    )
+
+
 def _is_valid_limits(value: object) -> bool:
     if not _has_exact_keys(value, _LIMIT_KEYS):
         return False
@@ -439,6 +479,10 @@ def _is_valid_match(value: object) -> bool:
             return False
     body_format = value["bodyFormat"]
     if body_format is not None and body_format not in _BODY_FORMATS:
+        return False
+    if not _is_valid_value_conditions(value["equals"], value["oneOf"]):
+        return False
+    if body_format != "json" and (value["equals"] or value["oneOf"]):
         return False
     paths = value["paths"]
     return (
@@ -784,6 +828,32 @@ def _violation_review_message(
         "target": {"host": host, "port": port},
         "method": method,
         "findings": findings,
+        "reviewContext": review_context,
+    }
+
+
+def _authorize_message(
+    request_id: str,
+    session_id: str,
+    host: str,
+    port: int,
+    method: str,
+    body_truth: dict[str, str],
+    review_context: dict,
+) -> dict:
+    """Build the authorization message shared with the broker validator."""
+    return {
+        "version": 1,
+        "type": "authorize",
+        "requestId": request_id,
+        "sessionId": session_id,
+        "target": {"host": host, "port": port},
+        "method": method,
+        "requestKind": "forward",
+        "observedAt": time.strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
+        ),
+        "bodyTruth": body_truth,
         "reviewContext": review_context,
     }
 
@@ -1534,10 +1604,9 @@ def _inspect_body(
     is all the audit log can carry unless the findings leave with it."""
     findings: list[dict] = []
     expects = rule.get("expect", [])
-    # `maxBodyBytes` is not read here. It bounds the parse, and the parse
-    # happens before selection; the chosen rule's own number is applied to
-    # that classification by `_decide_under_rule_budget`, so a tree that
-    # arrives here is one the rule's budget paid for.
+    # `maxBodyBytes` is not read here. Selection precomputes every candidate's
+    # truth under its own byte budget, and a tree only arrives here when the
+    # chosen rule's budget paid for it.
     limits = rule.get("limits", _LIMIT_CEILINGS)
     # A rule that did not declare `format = "json"` never asked for the body
     # to be read as JSON, so it does not get the structural pass either — the
@@ -1749,8 +1818,115 @@ def _evaluate_body_format(body_format: Optional[str], body_kind: str) -> str:
     return "true" if body_kind == "json" else "indeterminate"
 
 
+_POINTER_MISSING = object()
+
+
+def _resolve_json_pointer(root, pointer: str):
+    if pointer == "":
+        return root
+    current = root
+    for raw in pointer[1:].split("/"):
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, list):
+            index = _json_pointer_index(token)
+            if index is None or index >= len(current):
+                return _POINTER_MISSING
+            current = current[index]
+            continue
+        if not isinstance(current, dict) or token not in current:
+            return _POINTER_MISSING
+        current = current[token]
+    return current
+
+
+def _scalars_equal(left, right) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is bool and type(right) is bool and left == right
+    if isinstance(left, str) or isinstance(right, str):
+        return type(left) is str and type(right) is str and left == right
+    return (
+        type(left) in (int, float)
+        and type(right) in (int, float)
+        and left == right
+    )
+
+
+def _evaluate_pointer(root, pointer: str, expected: list) -> str:
+    found = _resolve_json_pointer(root, pointer)
+    if found is _POINTER_MISSING:
+        return "false"
+    if not _is_json_scalar(found):
+        return "indeterminate"
+    return (
+        "true"
+        if any(_scalars_equal(found, value) for value in expected)
+        else "false"
+    )
+
+
+def _evaluate_body_match(match: dict, body_kind: str, parsed_body) -> str:
+    """Mirror TypeScript evaluateBody for the stage-3 Pointer vocabulary."""
+    format_truth = _evaluate_body_format(match["bodyFormat"], body_kind)
+    if format_truth != "true":
+        return format_truth
+
+    equals = match["equals"]
+    one_of = match["oneOf"]
+    if not equals and not one_of:
+        return "true"
+    if body_kind != "json":
+        return "indeterminate"
+
+    indeterminate = False
+    determined_false = False
+    conditions = itertools.chain(
+        ((pointer, [value]) for pointer, value in equals.items()),
+        one_of.items(),
+    )
+    for pointer, expected in conditions:
+        truth = _evaluate_pointer(parsed_body, pointer, expected)
+        if truth == "indeterminate":
+            indeterminate = True
+        elif truth == "false":
+            determined_false = True
+
+    # An uninspectable target stops candidate traversal even when another
+    # condition is already false; otherwise a malformed body can evade a
+    # more specific rule and fall through to a broader one.
+    if indeterminate:
+        return "indeterminate"
+    return "false" if determined_false else "true"
+
+
+def _body_truth_table(
+    document: dict, host: str, port: int, method: str, path: str,
+    body_kind: str, body_size: Optional[int], parsed_body=None,
+) -> dict[str, str]:
+    """Evaluate every candidate under that candidate's body byte budget."""
+    scope = _select_scope(document, host, port)
+    if scope is None:
+        return {}
+    candidates = [
+        rule
+        for rule in scope["rules"]
+        if _is_candidate(rule, method, _path_for_selection(path))
+    ]
+    truths = {}
+    for rule in candidates:
+        candidate_kind = body_kind
+        candidate_parsed = parsed_body
+        max_body_bytes = rule.get("limits", _LIMIT_CEILINGS)["maxBodyBytes"]
+        if body_size is not None and body_size > max_body_bytes:
+            candidate_kind = "binary"
+            candidate_parsed = None
+        truths[rule["id"]] = _evaluate_body_match(
+            rule["match"], candidate_kind, candidate_parsed
+        )
+    return truths
+
+
 def _decide(document: dict, host: str, port: int, method: str,
-            path: str, body_kind: str) -> dict:
+            path: str, body_truth: dict[str, str]) -> dict:
     """Return {action, ruleId, reason, scope, rule} for one request."""
     scope = _select_scope(document, host, port)
     if scope is None:
@@ -1778,7 +1954,7 @@ def _decide(document: dict, host: str, port: int, method: str,
         }
 
     for rule in ordered:
-        truth = _evaluate_body_format(rule["match"]["bodyFormat"], body_kind)
+        truth = body_truth.get(rule["id"], "indeterminate")
         if truth == "false":
             continue
         if truth == "true":
@@ -1806,47 +1982,6 @@ def _decide(document: dict, host: str, port: int, method: str,
         "scope": scope,
         "rule": None,
     }
-
-
-def _decide_under_rule_budget(
-    document: dict, host: str, port: int, method: str, path: str,
-    body_kind: str, body_size: Optional[int],
-) -> tuple[dict, str]:
-    """Decide, then decide again under the chosen rule's own `maxBodyBytes`.
-
-    The body has to be classified before selection, because `match.body.format`
-    takes part in choosing the rule, and before selection only the scope's
-    budget is known. A rule may declare a smaller `maxBodyBytes` than its
-    scope. A body over that number was never read within the budget the rule
-    asked for, so as far as that rule is concerned it is a body that could not
-    be parsed: its `json` condition is indeterminate, and `onIndeterminate`
-    settles the request rather than `onMatch`.
-
-    Re-deciding cannot land on a different rule. Counting the body as
-    unparseable only ever turns a `json` condition from true to indeterminate;
-    `"none"` and `"opaque"` and the absence of a condition all keep their
-    value, and both truth values stop the walk at the same candidate. The
-    second run therefore names the same rule, whose budget is the one already
-    applied, so one re-run is a fixed point.
-
-    A rule that declares a *larger* `maxBodyBytes` than its scope does not get
-    the body re-parsed. The scope's budget is what was actually spent, and
-    widening after the fact would turn an indeterminate match into a match on
-    a body nobody parsed.
-
-    This lives outside `_decide` so that `_decide` stays what it claims to be:
-    the same function as the host's `decide`, over the same inputs, checked
-    case for case against it. The budget is applied to the classification the
-    two of them share, and the addon sends the result of that to the broker,
-    so both sides still decide on the same body kind."""
-    decision = _decide(document, host, port, method, path, body_kind)
-    rule = decision["rule"]
-    if rule is None or body_size is None:
-        return decision, body_kind
-    if body_size <= rule.get("limits", _LIMIT_CEILINGS)["maxBodyBytes"]:
-        return decision, body_kind
-    return _decide(document, host, port, method, path, "binary"), "binary"
-
 
 def _safe_session_label(session_id: str) -> str:
     if _SAFE_SESSION_LABEL.fullmatch(session_id):
@@ -2008,11 +2143,9 @@ class NasAddon:
             session_id
         )
 
-        # The body has to be read and classified before selection, because
-        # `match.body.format` takes part in choosing the rule. The parse
-        # budget comes from the scope, since the rule is not known yet; the
-        # chosen rule's own budget is applied to that classification once the
-        # rule is known.
+        # Parse once under the scope budget, then evaluate every candidate
+        # under its own maxBodyBytes. Selection consumes the resulting leaf
+        # truths in one pass; it does not choose a rule and re-run itself.
         scope = _select_scope(document, host, port)
         limits = (
             scope.get("limits", _LIMIT_CEILINGS)
@@ -2029,15 +2162,24 @@ class NasAddon:
             _request_carries_body(flow.request),
         )
 
-        local, budgeted_kind = _decide_under_rule_budget(
+        body_size = None if request_body is None else len(request_body)
+        body_truth = _body_truth_table(
             document, host, port, method, request_path, body_kind,
-            None if request_body is None else len(request_body),
+            body_size, parsed_body,
         )
-        if budgeted_kind != body_kind:
-            # The tree came out of a parse the chosen rule did not pay for.
-            # Handing it to the inspection would be inspecting a body the
-            # rule's own budget says was never read.
-            body_kind = budgeted_kind
+        local = _decide(
+            document, host, port, method, request_path, body_truth
+        )
+        selected_rule = local["rule"]
+        if (
+            selected_rule is not None
+            and body_size is not None
+            and body_size
+            > selected_rule.get("limits", _LIMIT_CEILINGS)["maxBodyBytes"]
+        ):
+            # A conditionless/opaque rule can still own an over-budget body,
+            # but its acceptance inspection may not reuse a tree that its own
+            # budget did not pay for.
             parsed_body = None
 
         request_id = _generate_request_id()
@@ -2053,25 +2195,12 @@ class NasAddon:
             "path": request_path,
             "contentType": flow.request.headers.get("content-type"),
             "bodySize": len(body_bytes),
-            # The broker runs the same selection on the same document.
-            # It cannot see the body, so the one fact selection needs
-            # from it travels here.
-            "bodyKind": body_kind,
         }
 
-        authorize_req = {
-            "version": 1,
-            "type": "authorize",
-            "requestId": request_id,
-            "sessionId": session_id,
-            "target": {"host": host, "port": port},
-            "method": method,
-            "requestKind": "forward",
-            "observedAt": time.strftime(
-                "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
-            ),
-            "reviewContext": review_context,
-        }
+        authorize_req = _authorize_message(
+            request_id, session_id, host, port, method, body_truth,
+            review_context,
+        )
 
         decision = _query_broker(broker_socket, authorize_req)
 

@@ -21,7 +21,6 @@ import {
   type ResolvedRule,
   type ResolvedScope,
 } from "./authz/resolve.ts";
-import type { RequestBody } from "./authz/types.ts";
 import {
   expandMaskPatterns,
   maskReviewContextWithPatterns,
@@ -35,7 +34,6 @@ import {
 import {
   type ApprovalScope,
   type AuthorizeRequest,
-  type BodyKind,
   type DecisionResponse,
   denyReasonForTarget,
   type InjectHeaderPreview,
@@ -48,6 +46,7 @@ import {
   type ReviewContext,
   targetKey,
   type ViolationFinding,
+  validateAuthorizeRequest,
   validateRequestPolicyOutcome,
   validateRequestPolicyReview,
 } from "./protocol.ts";
@@ -319,6 +318,19 @@ export class SessionBroker {
 
   private async handleMessage(message: BrokerMessage): Promise<BrokerResponse> {
     if (message.type === "authorize") {
+      const validationError = validateAuthorizeRequest(
+        message,
+        this.sessionId,
+        this.document,
+      );
+      if (validationError) {
+        return {
+          type: "error",
+          requestId:
+            typeof message.requestId === "string" ? message.requestId : "",
+          message: validationError,
+        };
+      }
       return await this.authorize(message);
     }
     if (message.type === "approve") {
@@ -623,6 +635,7 @@ export class SessionBroker {
       this.document,
       message.target,
       toAuthzRequest(message),
+      (rule) => message.bodyTruth[rule.id] ?? "indeterminate",
     );
     const shouldAudit = decided.audit !== "off";
 
@@ -1319,34 +1332,17 @@ export async function sendBrokerRequest<T extends BrokerResponse>(
 /**
  * 認可の判定に渡すリクエストの姿。
  *
- * ボディそのものは broker に来ない。addon が読んで分類した種別だけが来るので、
- * `match.body.format` の 3 値評価に必要な形へ組み直す。値条件 (`equals` /
- * `oneOf` / `graphql`) を `match` に置けるようになったら、ここに実際の値が
- * 要る。
+ * ボディそのものは broker に来ない。候補ごとのボディ条件の真偽は `decide`
+ * へ注入する別の葉述語が読むので、ここでは候補を集める構文部分だけを渡す。
  */
 function toAuthzRequest(message: AuthorizeRequest): {
   method: string;
   path: string;
-  body: RequestBody;
 } {
   return {
     method: message.method.toUpperCase(),
     path: pathForSelection(message.reviewContext?.path ?? ""),
-    body: toRequestBody(message.reviewContext?.bodyKind),
   };
-}
-
-function toRequestBody(kind: BodyKind | undefined): RequestBody {
-  switch (kind) {
-    case "empty":
-      return { kind: "empty" };
-    case "binary":
-      return { kind: "binary" };
-    case "json":
-      return { kind: "json", value: {} };
-    default:
-      return { kind: "absent" };
-  }
 }
 
 /**

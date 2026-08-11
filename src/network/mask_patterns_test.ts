@@ -71,7 +71,6 @@ describe("maskReviewContext", () => {
         path: "/upload?token=s3cret-value",
         contentType: "application/x-www-form-urlencoded",
         bodySize: 17,
-        bodyKind: "binary",
       },
       ["s3cret-value"],
     );
@@ -83,7 +82,6 @@ describe("maskReviewContext", () => {
       path: "/p",
       contentType: null,
       bodySize: 4,
-      bodyKind: "binary" as const,
     };
     expect(maskReviewContext(ctx, [])).toEqual(ctx);
     expect(maskReviewContext(undefined, ["s3cret-value"])).toBeUndefined();

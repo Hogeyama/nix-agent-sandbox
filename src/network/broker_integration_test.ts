@@ -619,11 +619,11 @@ test("SessionBroker: approving a rule does not approve its violations", async ()
       method: "POST",
       requestKind: "forward",
       observedAt: new Date().toISOString(),
+      bodyTruth: { "policy.json": "true" },
       reviewContext: {
         path: "/v1/messages",
         contentType: "application/json",
         bodySize: 2,
-        bodyKind: "json",
       },
     });
     await waitForPending(socketPath);
@@ -830,6 +830,36 @@ test("SessionBroker: a malformed review context is refused, not fatal", async ()
     }>(socketPath, { type: "list_pending" });
     expect(pending.items).toHaveLength(0);
   });
+});
+
+test("SessionBroker: a malformed authorization truth table is rejected whole", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-truth-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_truth",
+    document: POST_REVIEW_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_truth/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, {
+      ...post("sess_truth", "req_bad_truth", "/x"),
+      bodyTruth: { "openai.post": "yes" },
+    } as unknown as AuthorizeRequest);
+
+    expect(response.type).toEqual("error");
+    expect(await broker.listPending()).toEqual([]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("SessionBroker: a denied violation stays denied without asking again", async () => {
@@ -1220,19 +1250,47 @@ test("SessionBroker: each rule's waiters keep their own credentials and audit be
   try {
     const firstA = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_grouped", "req_grouped_a1", "/path-a"),
+      post(
+        "sess_grouped",
+        "req_grouped_a1",
+        "/path-a",
+        "api.example.com",
+        443,
+        "api.path-a",
+      ),
     );
     const secondA = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_grouped", "req_grouped_a2", "/path-a"),
+      post(
+        "sess_grouped",
+        "req_grouped_a2",
+        "/path-a",
+        "api.example.com",
+        443,
+        "api.path-a",
+      ),
     );
     const pathB = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_grouped", "req_grouped_b", "/path-b"),
+      post(
+        "sess_grouped",
+        "req_grouped_b",
+        "/path-b",
+        "api.example.com",
+        443,
+        "api.path-b",
+      ),
     );
     const pathC = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_grouped", "req_grouped_c", "/path-c"),
+      post(
+        "sess_grouped",
+        "req_grouped_c",
+        "/path-c",
+        "api.example.com",
+        443,
+        "api.path-c",
+      ),
     );
 
     const pending = await waitForPending(socketPath, 4);
@@ -1394,7 +1452,14 @@ test("SessionBroker: a rule-grain approval releases only its own target", async 
   try {
     const shown = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_grain", "req_shown", "/x", "api.github.com"),
+      post(
+        "sess_grain",
+        "req_shown",
+        "/x",
+        "api.github.com",
+        443,
+        "github.api.read",
+      ),
     );
     const shownPending = await waitForPending(socketPath);
     // ターゲットを 1 つに固定したスコープなので「このルールが有効な間ずっと」を選べる。
@@ -1410,7 +1475,14 @@ test("SessionBroker: a rule-grain approval releases only its own target", async 
     // 見ていない internal.example.com:443 に答えが流用されてはならない。
     const unseen = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_grain", "req_unseen", "/x", "internal.example.com"),
+      post(
+        "sess_grain",
+        "req_unseen",
+        "/x",
+        "internal.example.com",
+        443,
+        "github.api.read",
+      ),
     );
     expect(
       await Promise.race([
@@ -1520,6 +1592,7 @@ function authorize(
   requestId: string,
   host: string,
   port: number,
+  ruleId?: string,
 ): AuthorizeRequest {
   return {
     version: 1,
@@ -1530,6 +1603,7 @@ function authorize(
     method: "CONNECT",
     requestKind: "connect",
     observedAt: new Date().toISOString(),
+    bodyTruth: ruleId ? { [ruleId]: "true" } : {},
   };
 }
 
@@ -1966,11 +2040,17 @@ test("SessionBroker: the offered granularity follows the scope's target", async 
     const waiting = [
       sendBrokerRequest<DecisionResponse>(
         socketPath,
-        authorize("sess_grain", "req_pinned", "api.example.com", 443),
+        authorize(
+          "sess_grain",
+          "req_pinned",
+          "api.example.com",
+          443,
+          "pinned.ask",
+        ),
       ),
       sendBrokerRequest<DecisionResponse>(
         socketPath,
-        authorize("sess_grain", "req_wild", "sub.example.org", 443),
+        authorize("sess_grain", "req_wild", "sub.example.org", 443, "wild.ask"),
       ),
       sendBrokerRequest<DecisionResponse>(
         socketPath,
@@ -2028,7 +2108,13 @@ test("SessionBroker: a granularity the entry does not offer is refused", async (
   try {
     const waiting = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      authorize("sess_grain_refuse", "req_pinned", "api.example.com", 443),
+      authorize(
+        "sess_grain_refuse",
+        "req_pinned",
+        "api.example.com",
+        443,
+        "pinned.ask",
+      ),
     );
     await waitForPending(socketPath);
     const refused = await sendBrokerRequest<{
@@ -2047,7 +2133,13 @@ test("SessionBroker: a granularity the entry does not offer is refused", async (
     // there for the same reason, in the other direction.
     const wildWaiting = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      authorize("sess_grain_refuse", "req_wild", "sub.example.org", 443),
+      authorize(
+        "sess_grain_refuse",
+        "req_wild",
+        "sub.example.org",
+        443,
+        "wild.ask",
+      ),
     );
     await waitForPending(socketPath, 2);
     const refusedRule = await sendBrokerRequest<{
@@ -2091,7 +2183,13 @@ test("SessionBroker: approving for the life of the rule answers its later reques
   try {
     const waiting = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      authorize("sess_grain_rule", "req_first", "api.example.com", 443),
+      authorize(
+        "sess_grain_rule",
+        "req_first",
+        "api.example.com",
+        443,
+        "pinned.ask",
+      ),
     );
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -2103,7 +2201,13 @@ test("SessionBroker: approving for the life of the rule answers its later reques
 
     const later = await sendBrokerRequest<DecisionResponse>(
       socketPath,
-      authorize("sess_grain_rule", "req_later", "api.example.com", 443),
+      authorize(
+        "sess_grain_rule",
+        "req_later",
+        "api.example.com",
+        443,
+        "pinned.ask",
+      ),
     );
     expect(later.decision).toEqual("allow");
     expect(later.reason).toEqual("approved");
@@ -2149,8 +2253,8 @@ test("SessionBroker: an approval for an inspected body does not release an unins
         path: "/v1/messages",
         contentType: "application/json",
         bodySize: 2,
-        bodyKind: "json",
       },
+      bodyTruth: { "api.messages": "true" },
     });
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -2160,17 +2264,17 @@ test("SessionBroker: an approval for an inspected body does not release an unins
     });
     expect((await parseable).decision).toEqual("allow");
 
-    // The body of that request was inspected before it was shown. A body
-    // that cannot be parsed at all skips every acceptance condition, so the
-    // approval just granted does not answer for it.
+    // The table omits the candidate. A missing leaf is indeterminate rather
+    // than false, so the approval just granted for a matched rule does not
+    // answer for it and a broader rule cannot silently take over.
     const broken = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...post("sess_reason", "req_broken", "/v1/messages"),
       reviewContext: {
         path: "/v1/messages",
         contentType: "application/json",
         bodySize: 7,
-        bodyKind: "binary",
       },
+      bodyTruth: {},
     });
     const answeredFromCache = await Promise.race([
       broken,
@@ -2205,7 +2309,13 @@ test("SessionBroker: an approval that names no granularity is not remembered", a
   try {
     const waiting = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      authorize("sess_grain_default", "req_first", "sub.example.org", 443),
+      authorize(
+        "sess_grain_default",
+        "req_first",
+        "sub.example.org",
+        443,
+        "wild.ask",
+      ),
     );
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -2218,7 +2328,13 @@ test("SessionBroker: an approval that names no granularity is not remembered", a
     // same rule against the same target asks again.
     const later = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      authorize("sess_grain_default", "req_later", "sub.example.org", 443),
+      authorize(
+        "sess_grain_default",
+        "req_later",
+        "sub.example.org",
+        443,
+        "wild.ask",
+      ),
     );
     const pending = await waitForPending(socketPath);
     expect(pending.items.map((item) => item.requestId)).toEqual(["req_later"]);
@@ -2275,16 +2391,17 @@ test("SessionBroker: a POST rule sends to pending while the scope fallback allow
     const authorizePromise = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_test", "req_review_1", "api.openai.com", 443),
       method: "POST",
+      bodyTruth: { "openai.post": "true" },
       reviewContext: {
         path: "/v1/chat/completions",
         contentType: "application/json",
         bodySize: 18,
-        bodyKind: "json",
       },
     });
     const pending = await waitForPending(socketPath);
     expect(pending.items.length).toEqual(1);
     expect(pending.items[0].reviewContext).toBeDefined();
+    expect("bodyTruth" in pending.items[0]).toBe(false);
     expect(pending.items[0].reviewContext!.path).toEqual(
       "/v1/chat/completions",
     );
@@ -2362,16 +2479,17 @@ function post(
   requestPath: string,
   host = "api.example.com",
   port = 443,
+  ruleId?: string,
 ): AuthorizeRequest {
   return {
     ...authorize(sessionId, requestId, host, port),
     method: "POST",
     requestKind: "forward",
+    bodyTruth: ruleId ? { [ruleId]: "true" } : {},
     reviewContext: {
       path: requestPath,
       contentType: null,
       bodySize: 0,
-      bodyKind: "absent",
     },
   };
 }
@@ -2590,7 +2708,6 @@ test("SessionBroker: pending entry reviewContext is masked", async () => {
         path: "/upload?token=s3cret-value",
         contentType: "application/x-www-form-urlencoded",
         bodySize: 17,
-        bodyKind: "absent" as const,
       },
     };
     const authorizePromise = sendBrokerRequest<DecisionResponse>(
@@ -2641,11 +2758,11 @@ test("SessionBroker: a rule's path matches the unmasked path even when it holds 
   try {
     const response = await sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_test", "req_pathprefix_mask", "api.example.com", 443),
+      bodyTruth: { "api.account": "true" },
       reviewContext: {
         path: "/accounts/s3cret-value/info",
         contentType: null,
         bodySize: 0,
-        bodyKind: "absent",
       },
     });
     expect(response.decision).toEqual("allow");
@@ -2701,11 +2818,11 @@ test("SessionBroker: an inject rule matches the unmasked path even when it holds
         "api.example.com",
         443,
       ),
+      bodyTruth: { "api.account": "true" },
       reviewContext: {
         path: "/accounts/s3cret-value/info",
         contentType: null,
         bodySize: 0,
-        bodyKind: "absent",
       },
     });
     expect(response.decision).toEqual("allow");
@@ -2801,6 +2918,7 @@ test("SessionBroker: approval cache cannot override an explicit deny", async () 
         443,
       ),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -2818,6 +2936,7 @@ test("SessionBroker: approval cache cannot override an explicit deny", async () 
         443,
       ),
       method: "POST",
+      bodyTruth: { "api.deny-post": "true" },
     });
     expect(denied.decision).toEqual("deny");
     expect(denied.reason).toEqual("rule");
@@ -2862,6 +2981,7 @@ test("SessionBroker: denial cache cannot override an explicit allow", async () =
         443,
       ),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -2879,6 +2999,7 @@ test("SessionBroker: denial cache cannot override an explicit allow", async () =
         443,
       ),
       method: "POST",
+      bodyTruth: { "api.allow-post": "true" },
     });
     expect(allowed.decision).toEqual("allow");
     expect(allowed.ruleId).toEqual("api.allow-post");
@@ -2923,6 +3044,7 @@ test("SessionBroker: a host-wide approval spans ports but not other rules", asyn
         443,
       ),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -2940,6 +3062,7 @@ test("SessionBroker: a host-wide approval spans ports but not other rules", asyn
         8443,
       ),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     expect(cached.decision).toEqual("allow");
     expect(cached.reason).toEqual("approved");
@@ -3002,7 +3125,14 @@ test("SessionBroker: a pending entry names the headers approval would inject", a
   try {
     const waiting = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_inject_preview", "req_gql", "/graphql", "api.github.com"),
+      post(
+        "sess_inject_preview",
+        "req_gql",
+        "/graphql",
+        "api.github.com",
+        443,
+        "github.write",
+      ),
     );
     const pending = await waitForPending(socketPath);
     const entry = pending.items[0];
@@ -3063,6 +3193,7 @@ test("SessionBroker: an approval covers only the rule that raised it", async () 
     const approved = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_identity", "req_get", "api.example.com", 443),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -3077,6 +3208,7 @@ test("SessionBroker: an approval covers only the rule that raised it", async () 
     const sameRule = await sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_identity", "req_get_again", "api.example.com", 443),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     expect(sameRule.decision).toEqual("allow");
     expect(sameRule.reason).toEqual("approved");
@@ -3086,6 +3218,7 @@ test("SessionBroker: an approval covers only the rule that raised it", async () 
     const otherRule = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_identity", "req_post", "api.example.com", 443),
       method: "POST",
+      bodyTruth: { "api.review-post": "true" },
     });
     const pending = await waitForPending(socketPath);
     expect(pending.items.map((item) => item.requestId)).toEqual(["req_post"]);
@@ -3131,6 +3264,7 @@ test("SessionBroker: a denial covers only the rule that raised it", async () => 
     const denied = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_deny_identity", "req_get", "api.example.com", 443),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     await waitForPending(socketPath);
     await sendBrokerRequest(socketPath, {
@@ -3148,6 +3282,7 @@ test("SessionBroker: a denial covers only the rule that raised it", async () => 
         443,
       ),
       method: "GET",
+      bodyTruth: { "api.review-get": "true" },
     });
     expect(sameRule.decision).toEqual("deny");
     expect(sameRule.reason).toEqual("denied-by-user");
@@ -3157,6 +3292,7 @@ test("SessionBroker: a denial covers only the rule that raised it", async () => 
     const otherRule = sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_deny_identity", "req_post", "api.example.com", 443),
       method: "POST",
+      bodyTruth: { "api.review-post": "true" },
     });
     const pending = await waitForPending(socketPath);
     expect(pending.items.map((item) => item.requestId)).toEqual(["req_post"]);
@@ -3201,11 +3337,25 @@ test("SessionBroker: one decision resolves only the requests of its own rule", a
   try {
     const pathA = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_groups", "req_a", "/path-a"),
+      post(
+        "sess_groups",
+        "req_a",
+        "/path-a",
+        "api.example.com",
+        443,
+        "api.path-a",
+      ),
     );
     const pathB = sendBrokerRequest<DecisionResponse>(
       socketPath,
-      post("sess_groups", "req_b", "/path-b"),
+      post(
+        "sess_groups",
+        "req_b",
+        "/path-b",
+        "api.example.com",
+        443,
+        "api.path-b",
+      ),
     );
     await waitForPending(socketPath, 2);
 
@@ -3265,6 +3415,7 @@ test("SessionBroker: allow carries the rule ID, and a fallback carries the pseud
     const policy = await sendBrokerRequest<DecisionResponse>(socketPath, {
       ...authorize("sess_rule_id", "req_policy_id", "api.example.com", 443),
       method: "GET",
+      bodyTruth: { "api.policy-get": "true" },
     });
     expect(policy.ruleId).toEqual("api.policy-get");
 
@@ -3317,11 +3468,12 @@ test("SessionBroker: exact path accepts a query and rejects normalized or encode
           443,
         ),
         method: "POST",
+        bodyTruth:
+          requestId === "query" ? { "api.exact": "true" as const } : {},
         reviewContext: {
           path: requestPath,
           contentType: null,
           bodySize: 0,
-          bodyKind: "absent",
         },
       });
       expect(response.decision).toEqual(decision);

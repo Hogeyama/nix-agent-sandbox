@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import type { ResolvedDocument } from "./authz/resolve.ts";
+import type { Truth } from "./authz/semantics.ts";
 import { isDeniedIpAddress } from "./ip_policy.ts";
 
 /**
@@ -70,27 +71,6 @@ export interface NormalizedTarget {
 }
 
 /**
- * ボディについて、選択に効く事実だけ。
- *
- * addon がボディを読んで分類し、broker がそれを使って `decide` を回す。
- * broker はボディそのものを受け取らないので、`match.body.format` の 3 値評価に
- * 必要な最小限だけをここに載せる。
- *
- * - `absent`: ボディが存在しない。
- * - `empty`: ボディが存在し、長さが 0 である。
- * - `binary`: ボディが存在し、JSON として解析できない。
- * - `json`: ボディが存在し、JSON として解析できる。
- */
-export type BodyKind = "absent" | "empty" | "binary" | "json";
-
-export const BODY_KINDS = [
-  "absent",
-  "empty",
-  "binary",
-  "json",
-] as const satisfies readonly BodyKind[];
-
-/**
  * 確認のカードに出す、リクエストについての事実。
  *
  * ボディの断片は載らない。100KB の会話の先頭 1024 バイトからは判断できず、
@@ -101,7 +81,6 @@ export interface ReviewContext {
   path: string;
   contentType: string | null;
   bodySize: number;
-  bodyKind: BodyKind;
 }
 
 export interface AuthorizeRequest {
@@ -113,6 +92,8 @@ export interface AuthorizeRequest {
   method: string;
   requestKind: RequestKind;
   observedAt: string;
+  /** 候補ルールごとに、そのルール自身の予算で評価したボディ条件の真偽。 */
+  bodyTruth: Readonly<Record<string, Truth>>;
   reviewContext?: ReviewContext;
 }
 
@@ -297,6 +278,82 @@ const REQUEST_POLICY_REVIEW_FIELDS = new Set([
   "reviewContext",
 ]);
 const HTTP_METHOD = /^[A-Za-z]{1,16}$/;
+const AUTHORIZE_FIELDS = new Set([
+  "version",
+  "type",
+  "requestId",
+  "sessionId",
+  "target",
+  "method",
+  "requestKind",
+  "observedAt",
+  "bodyTruth",
+  "reviewContext",
+]);
+const REQUEST_KINDS = ["connect", "forward"] as const;
+const TRUTH_VALUES = ["true", "false", "indeterminate"] as const;
+
+export function validateAuthorizeRequest(
+  value: unknown,
+  expectedSessionId: string,
+  document: ResolvedDocument,
+): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid authorize request";
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    message.version !== 1 ||
+    message.type !== "authorize" ||
+    typeof message.requestId !== "string"
+  ) {
+    return "invalid authorize request";
+  }
+  if (message.sessionId !== expectedSessionId) {
+    return "authorize session mismatch";
+  }
+  if (Object.keys(message).some((field) => !AUTHORIZE_FIELDS.has(field))) {
+    return "invalid authorize request";
+  }
+  if (!isNormalizedTarget(message.target)) return "invalid authorize target";
+  if (typeof message.method !== "string" || !HTTP_METHOD.test(message.method)) {
+    return "invalid authorize method";
+  }
+  if (!isListedValue(message.requestKind, REQUEST_KINDS)) {
+    return "invalid authorize request kind";
+  }
+  if (typeof message.observedAt !== "string") {
+    return "invalid authorize observation time";
+  }
+  if (
+    message.reviewContext !== undefined &&
+    !isReviewContext(message.reviewContext)
+  ) {
+    return "invalid authorize review context";
+  }
+  if (
+    typeof message.bodyTruth !== "object" ||
+    message.bodyTruth === null ||
+    Array.isArray(message.bodyTruth)
+  ) {
+    return "invalid authorize body truth table";
+  }
+  const entries = Object.entries(message.bodyTruth);
+  const ruleCount = document.scopes.reduce(
+    (count, scope) => count + scope.rules.length,
+    0,
+  );
+  if (entries.length > ruleCount) return "too many authorize body truths";
+  for (const [ruleId, truth] of entries) {
+    if (!documentHasConcreteRuleId(document, ruleId)) {
+      return "unknown authorize body truth rule ID";
+    }
+    if (!isListedValue(truth, TRUTH_VALUES)) {
+      return "invalid authorize body truth value";
+    }
+  }
+  return null;
+}
 
 export function validateRequestPolicyReview(
   value: unknown,
@@ -370,17 +427,11 @@ function isReviewContext(value: unknown): boolean {
     typeof context.path === "string" &&
     (context.contentType === null || typeof context.contentType === "string") &&
     Number.isSafeInteger(context.bodySize) &&
-    (context.bodySize as number) >= 0 &&
-    isListedValue(context.bodyKind, BODY_KINDS)
+    (context.bodySize as number) >= 0
   );
 }
 
-const REVIEW_CONTEXT_FIELDS = new Set([
-  "path",
-  "contentType",
-  "bodySize",
-  "bodyKind",
-]);
+const REVIEW_CONTEXT_FIELDS = new Set(["path", "contentType", "bodySize"]);
 
 function isNormalizedTarget(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -494,6 +545,15 @@ export function documentHasRuleId(
     (scope) =>
       scope.fallbackRuleId === ruleId ||
       scope.rules.some((rule) => rule.id === ruleId),
+  );
+}
+
+function documentHasConcreteRuleId(
+  document: ResolvedDocument,
+  ruleId: string,
+): boolean {
+  return document.scopes.some((scope) =>
+    scope.rules.some((rule) => rule.id === ruleId),
   );
 }
 

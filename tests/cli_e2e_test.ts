@@ -1052,6 +1052,7 @@ async function authorizeThroughBroker(
     method: "CONNECT",
     requestKind: "connect",
     observedAt: new Date().toISOString(),
+    bodyTruth: {},
   };
   return await sendBrokerRequest<DecisionResponse>(socketPath, request);
 }
