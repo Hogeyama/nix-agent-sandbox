@@ -31,6 +31,7 @@ function makeNetworkRow(
     ruleId: "api.ask",
     approvalScopes: ["once", "host-port", "host"],
     injectHeaders: [],
+    violations: [],
   };
 }
 

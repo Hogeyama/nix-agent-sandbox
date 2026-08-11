@@ -35,7 +35,6 @@ export type ContainerInfoLike = {
 export type ReviewContextLike = {
   path: string;
   contentType: string | null;
-  bodyPreview: string | null;
   bodySize: number;
 };
 
@@ -56,6 +55,27 @@ export type NetworkPendingItemLike = {
   // Headers the request gains if it is approved: the header name and the
   // names of the secrets its value is built from. Values never travel here.
   injectHeaders?: InjectHeaderPreviewLike[] | null;
+  // Acceptance-condition violations this confirmation covers. Present when
+  // the confirmation came from a body inspection rather than from a rule
+  // asking to be reviewed: then these are exactly what approving remembers.
+  violations?: ViolationFindingLike[] | null;
+};
+
+// One violation, as the approval UI shows it. Every body-derived field
+// arrives masked and length-bounded; the UI adds no interpretation.
+export type ViolationFindingLike = {
+  // Selector of the condition that was violated, when it had one.
+  at?: string | null;
+  kind?: string | null;
+  // JSON Pointer of the offending node.
+  pointer?: string | null;
+  // The offending value — the unknown tag itself. Null for a condition
+  // that has no value to approve, such as "the body must be empty".
+  value?: string | null;
+  // The offending node on its own, pruned and masked.
+  excerpt?: string | null;
+  // How many nodes violated the same condition with the same value.
+  count?: number | null;
 };
 
 export type InjectHeaderPreviewLike = {

@@ -553,12 +553,6 @@ class AuthzDocumentContractTest(unittest.TestCase):
                 lambda expects: expects[0].__setitem__("kind", "graphql"),
             ),
             (
-                "review is not implemented yet",
-                lambda expects: expects[0].__setitem__(
-                    "onViolation", "review"
-                ),
-            ),
-            (
                 "unknown consequence",
                 lambda expects: expects[0].__setitem__("onViolation", "skip"),
             ),
@@ -1642,6 +1636,21 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
             self.rule, json.dumps(body_obj).encode("utf-8"), self.patterns
         )
 
+    def _review(self, body_obj):
+        """The outcome plus the values a person would be asked about.
+
+        The shipped policy answers an unknown content-block tag with
+        `review`, so the interesting part of these cases is not that the
+        request stopped — it is which tag stopped it, since that tag is what
+        an approval is keyed by."""
+        body = json.dumps(body_obj).encode("utf-8")
+        result, _rewritten, reason, findings = nas_addon._inspect_body(
+            self.rule, body, json.loads(body), self.patterns
+        )
+        return (result, reason), [
+            (f["at"], f["pointer"], f["value"]) for f in findings
+        ]
+
     def _claude_code_body(self, **overrides):
         """Claude Code が /v1/messages に送る形状。system 配列・tools 配列・
         tool_result のネストした content をすべて含む。"""
@@ -1727,36 +1736,52 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
         self.assertEqual((result, reason), ("rewrite", "masked-json"))
         self.assertNotIn(b"SECRET123", out)
 
-    def test_unknown_tag_under_messages_blocks(self):
+    def test_unknown_tag_under_messages_is_put_to_a_person(self):
         body = self._claude_code_body()
         body["messages"][0]["content"].append({"type": "future_block"})
 
+        outcome, findings = self._review(body)
+
+        self.assertEqual(outcome, ("review", "violations-review"))
         self.assertEqual(
-            self._run(body), ("block", None, "schema-mismatch")
+            findings,
+            [("/**/content/*", "/messages/0/content/1", "future_block")],
         )
 
-    def test_unknown_tag_nested_in_tool_result_blocks(self):
+    def test_unknown_tag_nested_in_tool_result_is_put_to_a_person(self):
         body = self._claude_code_body()
         body["messages"][2]["content"][0]["content"].append(
             {"type": "future_block"}
         )
 
+        outcome, findings = self._review(body)
+
+        self.assertEqual(outcome, ("review", "violations-review"))
         self.assertEqual(
-            self._run(body), ("block", None, "schema-mismatch")
+            findings,
+            [(
+                "/**/content/*",
+                "/messages/2/content/0/content/1",
+                "future_block",
+            )],
         )
 
-    def test_unknown_tag_in_system_blocks(self):
+    def test_unknown_tag_in_system_is_put_to_a_person(self):
         body = self._claude_code_body()
         body["system"].append({"type": "future_block"})
 
+        outcome, findings = self._review(body)
+
+        # `/system/*` で見つけた違反である。同じタグを `/**/content/*` で
+        # 承認していても、この確認は別に出る。
+        self.assertEqual(outcome, ("review", "violations-review"))
         self.assertEqual(
-            self._run(body), ("block", None, "schema-mismatch")
+            findings, [("/system/*", "/system/2", "future_block")]
         )
 
-    def test_unknown_tag_in_a_document_content_source_blocks(self):
-        """`**` を捨てた分、content block がネストしうる場所は数え上げになる。
-        `document` の `source.type = "content"` は content block の配列を持つ
-        ので、そこも fail-closed の網に入っていること。"""
+    def test_unknown_tag_in_a_document_content_source_is_caught(self):
+        """`document` の `source.type = "content"` は content block の配列を
+        持つので、そこも網に入っていること。"""
         body = self._claude_code_body()
         body["messages"][0]["content"].append(
             {
@@ -1768,11 +1793,14 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
             }
         )
 
+        outcome, findings = self._review(body)
+
+        self.assertEqual(outcome, ("review", "violations-review"))
         self.assertEqual(
-            self._run(body), ("block", None, "schema-mismatch")
+            [value for _at, _pointer, value in findings], ["future_block"]
         )
 
-    def test_unknown_tag_in_a_document_source_nested_in_tool_result_blocks(self):
+    def test_unknown_tag_in_a_document_source_nested_in_tool_result(self):
         body = self._claude_code_body()
         body["messages"][2]["content"][0]["content"].append(
             {
@@ -1784,8 +1812,29 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
             }
         )
 
+        outcome, findings = self._review(body)
+
+        self.assertEqual(outcome, ("review", "violations-review"))
         self.assertEqual(
-            self._run(body), ("block", None, "schema-mismatch")
+            [value for _at, _pointer, value in findings], ["future_block"]
+        )
+
+    def test_an_unfinished_walk_stops_without_asking_anyone(self):
+        # 走査が予算を使い切ると、どの値が違反したはずかを言えない。承認の
+        # 単位はその値なので、人に出しても押せる対象が無い。プリセットが
+        # `JsonRoot` を `deny` のまま残しているのはこのためで、検査未完了は
+        # ルールが宣言する中で最も厳しい帰結を取る。
+        rule = json.loads(json.dumps(self.rule))
+        rule["limits"]["maxSelectorExpansions"] = 20
+        body = json.dumps(self._claude_code_body()).encode("utf-8")
+
+        result, _rewritten, reason, findings = nas_addon._inspect_body(
+            rule, body, json.loads(body), self.patterns
+        )
+
+        self.assertEqual((result, reason), ("block", "resource-limit"))
+        self.assertIn(
+            "inspection-incomplete", [f["kind"] for f in findings]
         )
 
     def test_well_formed_document_content_source_passes(self):
@@ -3131,6 +3180,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         addon=None,
         client_id="client-test",
         mask_values=("SECRET123",),
+        review_decision="allow",
     ):
         """rule_id は broker が返す答え。addon の選択と食い違えば止まる。"""
         request_headers = list(headers or [])
@@ -3162,6 +3212,14 @@ class RequestPolicyFlowTest(unittest.TestCase):
                         {"name": "x-api-key", "value": "injected-value"}
                     ]
                 return decision
+            if request["type"] == "request_policy_review":
+                return {
+                    "version": 1,
+                    "type": "decision",
+                    "requestId": request["requestId"],
+                    "decision": review_decision,
+                    "reason": "approved",
+                }
             return {
                 "version": 1,
                 "type": "request_policy_outcome_recorded",
@@ -3198,6 +3256,11 @@ class RequestPolicyFlowTest(unittest.TestCase):
     def _outcomes(self, messages):
         return [
             m for m in messages if m["type"] == "request_policy_outcome"
+        ]
+
+    def _reviews(self, messages):
+        return [
+            m for m in messages if m["type"] == "request_policy_review"
         ]
 
     def _injected(self, flow):
@@ -3668,7 +3731,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
             "broker=invalid addon=api.messages\n",
         )
 
-    def test_authorization_carries_a_bounded_preview_and_the_body_kind(self):
+    def test_authorization_carries_no_slice_of_the_body(self):
         body = b'{"text":"hello"}'
 
         _flow, messages, _stderr = self._run(
@@ -3680,16 +3743,119 @@ class RequestPolicyFlowTest(unittest.TestCase):
         authorization = next(
             message for message in messages if message["type"] == "authorize"
         )
+        # ボディの断片は載らない。100KB の会話の先頭 1024 バイトからは
+        # 判断できず、判断の材料は検査のあとに所見として別に届く。
         self.assertEqual(
             authorization["reviewContext"],
             {
                 "path": "/v1/messages",
                 "contentType": None,
-                "bodyPreview": body.decode(),
                 "bodySize": len(body),
                 # broker はボディを見ないので、選択に効く事実だけを渡す。
                 "bodyKind": "json",
             },
+        )
+
+    def _review_rule(self):
+        rule = _messages_rule()
+        rule["expect"] = [
+            _union_shape(_tagged_union("/content/*"), on_violation="review")
+        ]
+        return rule
+
+    def test_a_violation_under_review_asks_the_broker(self):
+        flow, messages, _stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future","note":"SECRET123"}]}',
+        )
+
+        review = self._reviews(messages)[0]
+        self.assertEqual(
+            (review["ruleId"], review["method"], review["target"]),
+            ("api.messages", "POST", {"host": "api.example.com", "port": 443}),
+        )
+        self.assertEqual(
+            [(f["at"], f["value"]) for f in review["findings"]],
+            [("/content/*", "future")],
+        )
+        # 押した人が読むのは、承認の対象そのものである。
+        self.assertEqual(
+            review["findings"][0]["excerpt"],
+            '{"type":"future","note":"****"}',
+        )
+        self.assertEqual(review["reviewContext"]["path"], "/v1/messages")
+
+        # 承認されたので、マスク済みのボディが前へ進む。
+        self.assertIsNone(flow.response)
+        self.assertEqual(
+            flow.request.content,
+            b'{"content":[{"type":"future","note":"****"}]}',
+        )
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("rewrite", "violations-approved")],
+        )
+
+    def test_a_refused_violation_blocks_before_the_credential(self):
+        flow, messages, _stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future"}]}',
+            review_decision="deny",
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        # 拒否されたリクエストに資格情報は付かない。
+        self.assertIsNone(self._injected(flow))
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("block", "violations-denied")],
+        )
+
+    def test_an_unanswerable_review_blocks(self):
+        # broker が答えられないなら、そのリクエストは受理できると示されて
+        # いない。`_query_broker` は落ちた問い合わせを deny に変える。
+        flow, messages, _stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future"}]}',
+            review_decision="broker-is-gone",
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(
+            [m["reason"] for m in self._outcomes(messages)],
+            ["violations-denied"],
+        )
+
+    def test_a_body_that_satisfies_the_rule_asks_nobody(self):
+        _flow, messages, _stderr = self._run(
+            document=_flow_document([self._review_rule()]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"text"}]}',
+        )
+
+        self.assertEqual(self._reviews(messages), [])
+
+    def test_a_deny_condition_still_blocks_without_asking(self):
+        # 帰結は違反した受理条件のうち最も厳しいものである。`deny` が混ざれば
+        # 人に訊く前に止まる。
+        rule = self._review_rule()
+        rule["expect"] = rule["expect"] + [
+            {"kind": "jsonRoot", "onViolation": "deny", "rootType": "object"}
+        ]
+        flow, messages, _stderr = self._run(
+            document=_flow_document([rule]),
+            rule_id="api.messages",
+            content=b'[{"content":[{"type":"future"}]}]',
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertEqual(self._reviews(messages), [])
+        self.assertEqual(
+            [m["reason"] for m in self._outcomes(messages)],
+            ["schema-mismatch"],
         )
 
     def test_query_and_header_are_masked_before_injection(self):

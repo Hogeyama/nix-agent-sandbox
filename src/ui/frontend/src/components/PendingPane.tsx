@@ -39,6 +39,10 @@ const NETWORK_SCOPE_CHIPS: Record<
     label: "host",
     hint: "Remembered for this session, for this rule against this host on any port. Other rules still ask.",
   },
+  violation: {
+    label: "these values",
+    hint: "Remembered for this session, for this rule and exactly the values listed above. Any other value, and the same value found by another check, still asks.",
+  },
 };
 
 const HOSTEXEC_SCOPES = ["once", "capability"] as const;
@@ -165,13 +169,47 @@ export function PendingPane(props: Props) {
                             {ctx().bodySize}B
                           </span>
                         </div>
-                        <Show when={ctx().bodyPreview}>
-                          {(body) => (
-                            <pre class="card-review-body">{body()}</pre>
-                          )}
-                        </Show>
                       </div>
                     )}
+                  </Show>
+                  {/* What this confirmation is actually about: the nodes a
+                      body inspection refused, each one a thing the approval
+                      remembers. The first 1024 bytes of a 100KB body would
+                      not show any of them. */}
+                  <Show when={row.violations.length > 0}>
+                    <div class="card-violations">
+                      <For each={row.violations}>
+                        {(violation) => (
+                          <div class="card-violation">
+                            <div class="card-violation-head">
+                              <span class="card-violation-value">
+                                {violation.value ?? violation.kind}
+                              </span>
+                              <Show when={violation.count > 1}>
+                                <span class="card-violation-count">
+                                  ×{violation.count}
+                                </span>
+                              </Show>
+                              <Show when={violation.at}>
+                                <span class="card-violation-at">
+                                  {violation.at}
+                                </span>
+                              </Show>
+                            </div>
+                            <Show when={violation.pointer}>
+                              <div class="card-violation-pointer">
+                                {violation.pointer}
+                              </div>
+                            </Show>
+                            <Show when={violation.excerpt}>
+                              {(excerpt) => (
+                                <pre class="card-review-body">{excerpt()}</pre>
+                              )}
+                            </Show>
+                          </div>
+                        )}
+                      </For>
+                    </div>
                   </Show>
                   {/* Allowing this request also hands these headers to the
                       host, which is a different grant from letting the bare

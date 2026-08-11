@@ -25,7 +25,6 @@ SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")
 BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")
 AUTHZ_DIR = os.path.join(NETWORK_DIR, "authz")
 
-BODY_PREVIEW_MAX = 1024
 REQUEST_POLICY_BLOCK_BODY = b"blocked: request policy"
 
 # Contract version of the resolved authorization document. A document that
@@ -78,6 +77,10 @@ MAX_FINDINGS_PER_EXPECT = 64
 FINDING_VALUE_MAX_CHARS = 256
 FINDING_VALUE_DIGEST_CHARS = 16
 FINDING_POINTER_MAX_CHARS = 1024
+
+# Placeholder reason on an inspection that ends in "review". It never reaches
+# the broker: whoever settles the review replaces it with what happened.
+REASON_VIOLATIONS_REVIEW = "violations-review"
 
 FINDING_SCHEMA_MISMATCH = "schema-mismatch"
 FINDING_UNEXPECTED_BODY = "unexpected-body"
@@ -161,10 +164,7 @@ _LIMIT_CEILINGS = {
 }
 _ACTIONS = frozenset(("allow", "review", "deny"))
 _BODY_FORMATS = frozenset(("none", "json", "opaque"))
-# `review` is not implemented yet, so a document that declares it is rejected
-# rather than quietly rounded to `deny`: rounding would make an approval the
-# operator asked for look like it worked.
-_VIOLATION_ACTIONS = frozenset(("deny", "allow"))
+_VIOLATION_ACTIONS = frozenset(("deny", "review", "allow"))
 
 # --- request masking -------------------------------------------------------
 # Pattern expansion mirrors src/network/mask_patterns.ts (broker-side
@@ -710,6 +710,45 @@ def _report_request_policy_outcome(
             print(REQUEST_POLICY_AUDIT_UNAVAILABLE, file=sys.stderr)
     except Exception:
         print(REQUEST_POLICY_AUDIT_UNAVAILABLE, file=sys.stderr)
+
+
+def _settle_violation_review(
+    socket_path: str,
+    request_id: str,
+    session_id: str,
+    rule_id: str,
+    host: str,
+    port: int,
+    method: str,
+    review_context: dict,
+    findings: list[dict],
+) -> bool:
+    """Ask the broker whether these violations may pass.
+
+    The broker holds the approvals, not the addon: it answers from the set of
+    violations already approved this session, or it puts a card in front of a
+    person and waits. Anything other than a clear allow — a broker that is
+    gone, a malformed answer, a person who said no — leaves the request
+    refused, because the request has not been shown to be acceptable.
+
+    This blocks the proxy while it waits, the same way the authorization query
+    does, and gives up on the same 10 second ceiling. A person who takes
+    longer does not lose the approval: the broker keeps the card, and the
+    press lands in the approved set, so the next request carrying the same
+    violation passes without asking. With the conversation history resent
+    every turn, that next request is usually seconds away."""
+    response = _query_broker(socket_path, {
+        "version": 1,
+        "type": "request_policy_review",
+        "requestId": request_id,
+        "sessionId": session_id,
+        "ruleId": rule_id,
+        "target": {"host": host, "port": port},
+        "method": method,
+        "findings": findings,
+        "reviewContext": review_context,
+    })
+    return response.get("decision") == "allow"
 
 
 def _normalize_host(host: str) -> str:
@@ -1443,9 +1482,15 @@ def _inspect_body(
     """Run a rule's acceptance conditions and secret masking over the body.
 
     Returns (result, rewritten_body_or_none, closed_reason, findings) where
-    result is one of "pass", "rewrite", or "block". Any unclassified exception
-    blocks with "processing-failed": a body inspection that fell over has not
-    shown the request to be acceptable.
+    result is one of "pass", "rewrite", "block", or "review". Any unclassified
+    exception blocks with "processing-failed": a body inspection that fell over
+    has not shown the request to be acceptable.
+
+    "review" is not an outcome. It says the strictest violated condition asks
+    for a person, and the caller has to settle it with the broker before the
+    request goes anywhere; the rewritten body comes back with it so that an
+    approval does not have to redo the masking. Nothing below here can settle
+    it, because the answer lives in the broker's approved set or in a human.
 
     The findings travel out with the result. The reason is a closed label — it
     says a shape did not match, never which condition or which value — so it
@@ -1480,12 +1525,14 @@ def _inspect_body(
         severity, findings = _evaluate_expects(
             expects, body, parsed, patterns, budget
         )
-        if severity is not None and severity != "allow":
+        if severity == "deny":
             raise _PolicyBlock(_findings_block_reason(findings))
 
         if parsed is None:
             # No JSON tree, so nothing to mask structurally. The byte-level
             # masking the caller applies covers this body.
+            if severity == "review":
+                return "review", None, REASON_VIOLATIONS_REVIEW, findings
             if severity == "allow":
                 return "pass", None, "violations-allowed", findings
             if any(expect["kind"] == "emptyBody" for expect in expects):
@@ -1498,6 +1545,8 @@ def _inspect_body(
         return "block", None, "processing-failed", findings
 
     if not changed:
+        if severity == "review":
+            return "review", None, REASON_VIOLATIONS_REVIEW, findings
         return (
             "pass",
             None,
@@ -1510,6 +1559,8 @@ def _inspect_body(
         ).encode("utf-8")
     except Exception:
         return "block", None, "serialization-failed", findings
+    if severity == "review":
+        return "review", serialized, REASON_VIOLATIONS_REVIEW, findings
     # Both are true of this body, and the outcome carries one reason: the
     # violation wins. A rule that sets `onViolation = "allow"` is required to
     # keep its audit on precisely so that letting a violation through leaves a
@@ -1956,14 +2007,20 @@ class NasAddon:
         broker_socket = os.path.join(BROKERS_DIR, session_id, "sock")
 
         body_bytes = request_body or b""
-        body_preview = None
-        if body_bytes:
-            try:
-                body_preview = body_bytes[:BODY_PREVIEW_MAX].decode(
-                    "utf-8", errors="replace"
-                )
-            except Exception:
-                body_preview = f"<binary {len(body_bytes)} bytes>"
+        # What a person is told about the request, on both the authorization
+        # card and the violation card. No slice of the body is on it: the
+        # first kilobyte of a 100KB conversation shows nothing worth
+        # deciding on, and what is worth deciding on — the node a condition
+        # refused — arrives as a finding once the body has been inspected.
+        review_context = {
+            "path": request_path,
+            "contentType": flow.request.headers.get("content-type"),
+            "bodySize": len(body_bytes),
+            # The broker runs the same selection on the same document.
+            # It cannot see the body, so the one fact selection needs
+            # from it travels here.
+            "bodyKind": body_kind,
+        }
 
         authorize_req = {
             "version": 1,
@@ -1976,16 +2033,7 @@ class NasAddon:
             "observedAt": time.strftime(
                 "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
             ),
-            "reviewContext": {
-                "path": request_path,
-                "contentType": flow.request.headers.get("content-type"),
-                "bodyPreview": body_preview,
-                "bodySize": len(body_bytes),
-                # The broker runs the same selection on the same document.
-                # It cannot see the body, so the one fact selection needs
-                # from it travels here.
-                "bodyKind": body_kind,
-            },
+            "reviewContext": review_context,
         }
 
         decision = _query_broker(broker_socket, authorize_req)
@@ -2047,6 +2095,20 @@ class NasAddon:
             result, rewritten, reason, findings = _inspect_body(
                 rule, request_body, parsed_body, patterns
             )
+            if result == "review":
+                # The rule asked for a person on these violations. The answer
+                # decides the outcome, so it has to arrive before the body
+                # does — and before any credential is injected below.
+                if _settle_violation_review(
+                    broker_socket, request_id, session_id, rule_id,
+                    host, port, method, review_context, findings,
+                ):
+                    result = "rewrite" if rewritten is not None else "pass"
+                    reason = "violations-approved"
+                else:
+                    result, rewritten, reason = (
+                        "block", None, "violations-denied",
+                    )
             if result == "rewrite" and rewritten is not None:
                 flow.request.content = rewritten
 

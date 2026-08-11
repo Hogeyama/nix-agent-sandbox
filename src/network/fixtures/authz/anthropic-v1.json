@@ -95,7 +95,7 @@
           "expect": [
             {
               "kind": "unionShape",
-              "onViolation": "deny",
+              "onViolation": "review",
               "at": "/**/content/*",
               "exclude": ["/tools/**"],
               "discriminator": "type",
@@ -118,7 +118,7 @@
             },
             {
               "kind": "unionShape",
-              "onViolation": "deny",
+              "onViolation": "review",
               "at": "/system/*",
               "exclude": [],
               "discriminator": "type",

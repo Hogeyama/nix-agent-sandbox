@@ -14,6 +14,7 @@ import type {
   InjectHeaderPreviewLike,
   NetworkPendingItemLike,
   ReviewContextLike,
+  ViolationFindingLike,
 } from "./types";
 
 export type NetworkPendingRow = {
@@ -43,12 +44,30 @@ export type NetworkPendingRow = {
   // names of the secrets the value is built from. Never a value: the
   // wire payload does not carry one and this row must not invent one.
   injectHeaders: { name: string; secrets: string[] }[];
+  // Violations approving this row would remember. Empty for a confirmation
+  // a rule raised on its own: those cover a request, not a set of values.
+  violations: NetworkViolationRow[];
+};
+
+export type NetworkViolationRow = {
+  at: string;
+  kind: string;
+  pointer: string;
+  value: string | null;
+  excerpt: string | null;
+  count: number;
 };
 
 // Grains the backend understands (`ApprovalScope` in
 // `src/network/protocol.ts`). Anything else in a payload is dropped rather
 // than rendered, so a chip can never offer a grain no one can act on.
-const KNOWN_APPROVAL_SCOPES = ["once", "rule", "host-port", "host"];
+const KNOWN_APPROVAL_SCOPES = [
+  "once",
+  "rule",
+  "host-port",
+  "host",
+  "violation",
+];
 
 const NARROWEST_APPROVAL_SCOPE = "once";
 
@@ -81,6 +100,27 @@ export function normalizeNetworkPending(
     ruleId: it.ruleId ?? null,
     approvalScopes: approvalScopesOf(it.approvalScopes),
     injectHeaders: injectHeadersOf(it.injectHeaders),
+    violations: violationsOf(it.violations),
+  }));
+}
+
+/**
+ * Normalize the violations a row may carry.
+ *
+ * Every field is optional on the wire, and a violation with nothing in it
+ * still says "one node broke this condition" — the count alone is
+ * meaningful — so nothing here drops a record for being sparse.
+ */
+function violationsOf(
+  violations: ViolationFindingLike[] | null | undefined,
+): NetworkViolationRow[] {
+  return (violations ?? []).map((violation) => ({
+    at: violation.at ?? "",
+    kind: violation.kind ?? "",
+    pointer: violation.pointer ?? "",
+    value: violation.value ?? null,
+    excerpt: violation.excerpt ?? null,
+    count: violation.count ?? 1,
   }));
 }
 

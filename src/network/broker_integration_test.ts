@@ -13,6 +13,8 @@ import type {
   PendingEntry,
   RequestPolicyOutcomeRequest,
   RequestPolicyOutcomeResponse,
+  RequestPolicyReviewRequest,
+  ViolationFinding,
 } from "./protocol.ts";
 import { resolveNetworkRuntimePaths } from "./registry.ts";
 
@@ -351,6 +353,378 @@ test("SessionBroker: an outcome with no violation records none", async () => {
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+function review(
+  requestId: string,
+  findings: ViolationFinding[],
+  ruleId = "policy.json",
+): RequestPolicyReviewRequest {
+  return {
+    version: 1,
+    type: "request_policy_review",
+    requestId,
+    sessionId: "sess_policy",
+    ruleId,
+    target: { host: "api.example.com", port: 443 },
+    method: "POST",
+    findings,
+  };
+}
+
+function finding(
+  value: string | null,
+  overrides: Partial<ViolationFinding> = {},
+): ViolationFinding {
+  return {
+    expect: 0,
+    expectKind: "unionShape",
+    at: "/**/content/*",
+    kind: "schema-mismatch",
+    pointer: "/messages/0/content/1",
+    value,
+    excerpt: `{"type":"${value}"}`,
+    count: 1,
+    ...overrides,
+  };
+}
+
+async function withReviewBroker(
+  body: (context: {
+    socketPath: string;
+    auditDir: string;
+    broker: SessionBroker;
+  }) => Promise<void>,
+): Promise<void> {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-review-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-broker-audit-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_policy",
+    document: OUTCOME_DOCUMENT,
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+    auditDir,
+  });
+  const socketPath = `${paths.brokersDir}/sess_policy/sock`;
+  await broker.start(socketPath);
+  try {
+    await body({ socketPath, auditDir, broker });
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+test("SessionBroker: a violation is confirmed with the finding on the card", async () => {
+  await withReviewBroker(async ({ socketPath, auditDir }) => {
+    const pendingDecision = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-review-1", [finding("future_block")]),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items).toHaveLength(1);
+    // 押せる対象そのものがカードに載る。ボディの先頭 1024 バイトでは
+    // 100KB のリクエストの違反箇所は見えない。
+    expect(pending.items[0].violations).toEqual([finding("future_block")]);
+    expect(pending.items[0].ruleId).toEqual("policy.json");
+    // ターゲットは同一性に入らないので、広さを選ぶ粒度は出さない。
+    expect(pending.items[0].approvalScopes).toEqual(["once", "violation"]);
+    // この答えが通しても資格情報は増えない。
+    expect(pending.items[0].injectHeaders).toEqual([]);
+
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-review-1",
+      scope: "violation",
+    });
+    expect((await pendingDecision).decision).toEqual("allow");
+
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs).toHaveLength(1);
+    expect(logs[0].phase).toEqual("request-policy");
+    expect(logs[0].reason).toEqual("approved-by-user");
+    expect(logs[0].violations?.[0].value).toEqual("future_block");
+  });
+});
+
+test("SessionBroker: an approved violation is not confirmed again", async () => {
+  // 会話履歴は毎リクエスト再送されるので、これが効かないと 1 度押した確認が
+  // ターンごとに戻ってくる。
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-first", [finding("future_block")]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-first",
+      scope: "violation",
+    });
+    await first;
+
+    const second = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-second", [finding("future_block")]),
+    );
+    expect(second).toMatchObject({ decision: "allow", reason: "approved" });
+    const pending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
+    expect(pending.items).toHaveLength(0);
+  });
+});
+
+test("SessionBroker: an approval covers the value it was shown and no other", async () => {
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-approved", [finding("future_block")]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-approved",
+      scope: "violation",
+    });
+    await first;
+
+    // 別の値は別の許可である。
+    const otherValue = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-other-value", [finding("other_block")]),
+    );
+    // 同じ値でも、見つけた受理条件が違えば別の許可である。`/**/content/*` で
+    // 1 件承認したつもりが `/system/*` でも通ってはならない。
+    const otherCondition = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-other-condition", [
+        finding("future_block", { expect: 1, at: "/system/*" }),
+      ]),
+    );
+    const pending = await waitForPending(socketPath, 2);
+    expect(pending.items.map((item) => item.requestId).sort()).toEqual([
+      "req-other-condition",
+      "req-other-value",
+    ]);
+
+    for (const requestId of ["req-other-value", "req-other-condition"]) {
+      await sendBrokerRequest(socketPath, { type: "deny", requestId });
+    }
+    expect((await otherValue).decision).toEqual("deny");
+    expect((await otherCondition).decision).toEqual("deny");
+  });
+});
+
+test("SessionBroker: approving a rule does not approve its violations", async () => {
+  // 2 種類の承認は別の集合にある。「このホストへこのルールを通してよい」と
+  // 押した人は、そのルールが未知の値を見ても通してよいとは言っていない。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-review-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_policy",
+    document: documentWithScopes(
+      {
+        policy: {
+          targets: ["api.example.com"],
+          fallback: "deny",
+          rules: {
+            json: {
+              match: {
+                methods: ["POST"],
+                paths: ["/v1/messages"],
+                body: { format: "json" },
+              },
+              onMatch: "review",
+              expect: [{ kind: "jsonRoot", rootType: "object" }],
+            },
+          },
+        },
+      },
+      "deny",
+    ),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_policy/sock`;
+  await broker.start(socketPath);
+  try {
+    const authorized = sendBrokerRequest<DecisionResponse>(socketPath, {
+      version: 1,
+      type: "authorize",
+      requestId: "req-rule",
+      sessionId: "sess_policy",
+      target: { host: "api.example.com", port: 443 },
+      method: "POST",
+      requestKind: "forward",
+      observedAt: new Date().toISOString(),
+      reviewContext: {
+        path: "/v1/messages",
+        contentType: "application/json",
+        bodySize: 2,
+        bodyKind: "json",
+      },
+    });
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req-rule",
+      scope: "host-port",
+    });
+    expect((await authorized).decision).toEqual("allow");
+
+    // 同じルールの違反はまだ誰も押していない。
+    const violation = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-violation", [finding("future_block")], "policy.json"),
+    );
+    const pending = await waitForPending(socketPath);
+    expect(pending.items[0].requestId).toEqual("req-violation");
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-violation",
+    });
+    expect((await violation).decision).toEqual("deny");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: a denied violation stays denied without asking again", async () => {
+  await withReviewBroker(async ({ socketPath }) => {
+    const first = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-denied", [finding("future_block")]),
+    );
+    await waitForPending(socketPath);
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-denied",
+      scope: "violation",
+    });
+    expect((await first).decision).toEqual("deny");
+
+    const second = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-denied-again", [finding("future_block")]),
+    );
+    expect(second).toMatchObject({
+      decision: "deny",
+      reason: "denied-by-user",
+    });
+  });
+});
+
+test("SessionBroker: a violation nobody can approve is refused, not asked about", async () => {
+  // 走査が完了しなかった記録と、保持上限で畳まれた記録は受理条件か値を欠く。
+  // 承認 UI に出しても押した人のリクエストは通らないままになる。
+  await withReviewBroker(async ({ socketPath, auditDir }) => {
+    for (const [requestId, unapprovable] of [
+      [
+        "req-incomplete",
+        finding(null, {
+          expect: -1,
+          expectKind: "",
+          kind: "inspection-incomplete",
+          excerpt: null,
+        }),
+      ],
+      [
+        "req-truncated",
+        finding(null, { kind: "findings-truncated", excerpt: null }),
+      ],
+    ] as const) {
+      const decision = await sendBrokerRequest<DecisionResponse>(
+        socketPath,
+        review(requestId, [finding("future_block"), unapprovable]),
+      );
+      expect(decision).toMatchObject({
+        decision: "deny",
+        reason: "unapprovable-violation",
+      });
+    }
+    const pending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
+    expect(pending.items).toHaveLength(0);
+    const logs = await queryAuditLogs({ domain: "network" }, auditDir);
+    expect(logs.map((entry) => entry.reason)).toEqual([
+      "unapprovable-violation",
+      "unapprovable-violation",
+    ]);
+  });
+});
+
+test("SessionBroker: a violation card only offers the grains it was built with", async () => {
+  await withReviewBroker(async ({ socketPath }) => {
+    const decision = sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      review("req-scope", [finding("future_block")]),
+    );
+    await waitForPending(socketPath);
+    const refused = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(socketPath, { type: "approve", requestId: "req-scope", scope: "host" });
+    expect(refused.type).toEqual("error");
+
+    await sendBrokerRequest(socketPath, {
+      type: "deny",
+      requestId: "req-scope",
+    });
+    expect((await decision).decision).toEqual("deny");
+  });
+});
+
+test("SessionBroker: a review naming a rule with no expectations is refused", async () => {
+  await withReviewBroker(async ({ socketPath }) => {
+    const response = await sendBrokerRequest<{
+      type: "error";
+      requestId: string;
+      message: string;
+    }>(
+      socketPath,
+      review("req-fallback", [finding("future_block")], "policy.$fallback"),
+    );
+    expect(response.type).toEqual("error");
+  });
+});
+
+test("SessionBroker: an invalid review is refused without a card", async () => {
+  await withReviewBroker(async ({ socketPath }) => {
+    const invalid = [
+      ["another session", { sessionId: "sess_other" }],
+      ["an unknown rule", { ruleId: "policy.unknown" }],
+      ["no violation at all", { findings: [] }],
+      ["an unusable target", { target: { host: "", port: 443 } }],
+      ["a method that is not one", { method: "POST /v1/messages" }],
+      ["an unknown field", { bodyPreview: "raw body" }],
+    ] as const;
+    for (const [name, overrides] of invalid) {
+      const response = await sendBrokerRequest<{
+        type: "error";
+        requestId: string;
+        message: string;
+      }>(socketPath, {
+        ...review(`req-invalid-${name}`, [finding("future_block")]),
+        ...overrides,
+      } as unknown as RequestPolicyReviewRequest);
+      expect(response.type).toEqual("error");
+    }
+    const pending = await sendBrokerRequest<{
+      type: "pending";
+      items: PendingEntry[];
+    }>(socketPath, { type: "list_pending" });
+    expect(pending.items).toHaveLength(0);
+  });
 });
 
 test("SessionBroker: request policy outcome is acknowledged without an audit directory", async () => {
@@ -1538,7 +1912,6 @@ test("SessionBroker: an approval for an inspected body does not release an unins
       reviewContext: {
         path: "/v1/messages",
         contentType: "application/json",
-        bodyPreview: null,
         bodySize: 2,
         bodyKind: "json",
       },
@@ -1559,7 +1932,6 @@ test("SessionBroker: an approval for an inspected body does not release an unins
       reviewContext: {
         path: "/v1/messages",
         contentType: "application/json",
-        bodyPreview: null,
         bodySize: 7,
         bodyKind: "binary",
       },
@@ -1670,7 +2042,6 @@ test("SessionBroker: a POST rule sends to pending while the scope fallback allow
       reviewContext: {
         path: "/v1/chat/completions",
         contentType: "application/json",
-        bodyPreview: '{"model":"gpt-4"}',
         bodySize: 18,
         bodyKind: "json",
       },
@@ -1680,9 +2051,6 @@ test("SessionBroker: a POST rule sends to pending while the scope fallback allow
     expect(pending.items[0].reviewContext).toBeDefined();
     expect(pending.items[0].reviewContext!.path).toEqual(
       "/v1/chat/completions",
-    );
-    expect(pending.items[0].reviewContext!.bodyPreview).toEqual(
-      '{"model":"gpt-4"}',
     );
 
     // Approve to unblock
@@ -1766,7 +2134,6 @@ function post(
     reviewContext: {
       path: requestPath,
       contentType: null,
-      bodyPreview: null,
       bodySize: 0,
       bodyKind: "absent",
     },
@@ -1986,7 +2353,6 @@ test("SessionBroker: pending entry reviewContext is masked", async () => {
       reviewContext: {
         path: "/upload?token=s3cret-value",
         contentType: "application/x-www-form-urlencoded",
-        bodyPreview: "data=s3cret-value",
         bodySize: 17,
         bodyKind: "absent" as const,
       },
@@ -1998,7 +2364,6 @@ test("SessionBroker: pending entry reviewContext is masked", async () => {
     const pending = await waitForPending(socketPath);
     expect(pending.items.length).toEqual(1);
     expect(pending.items[0].reviewContext?.path).toEqual("/upload?token=****");
-    expect(pending.items[0].reviewContext?.bodyPreview).toEqual("data=****");
     await sendBrokerRequest(socketPath, {
       type: "approve",
       requestId: "req_mask3",
@@ -2043,7 +2408,6 @@ test("SessionBroker: a rule's path matches the unmasked path even when it holds 
       reviewContext: {
         path: "/accounts/s3cret-value/info",
         contentType: null,
-        bodyPreview: null,
         bodySize: 0,
         bodyKind: "absent",
       },
@@ -2104,7 +2468,6 @@ test("SessionBroker: an inject rule matches the unmasked path even when it holds
       reviewContext: {
         path: "/accounts/s3cret-value/info",
         contentType: null,
-        bodyPreview: null,
         bodySize: 0,
         bodyKind: "absent",
       },
@@ -2721,7 +3084,6 @@ test("SessionBroker: exact path accepts a query and rejects normalized or encode
         reviewContext: {
           path: requestPath,
           contentType: null,
-          bodyPreview: null,
           bodySize: 0,
           bodyKind: "absent",
         },

@@ -5,17 +5,32 @@ import { isDeniedIpAddress } from "./ip_policy.ts";
 /**
  * 承認をどこまで覚えるか。
  *
- * 承認の同一性は (ルール ID, ターゲット) であり、ここで選べるのはその
- * ターゲット成分の広さだけである。どの粒度を出すかはマッチしたルールの
- * 具体性から決まる (`src/network/broker.ts`)。
+ * 2 種類の確認があり、粒度はそれぞれの同一性の上で意味を持つ。
+ *
+ * ルールが `review` を宣言したことから生じる確認では、同一性は
+ * (ルール ID, 判定の理由, ターゲット) であり、ここで選べるのはターゲット成分の
+ * 広さだけである。どの粒度を出すかはマッチしたルールの具体性から決まる
+ * (`src/network/broker.ts`)。
  *
  * - `once`: 何も覚えない。
  * - `rule`: そのルールが有効な間ずっと。ターゲットをスコープが 1 つの
  *   ホストとポートに固定しているときだけ選べる。
  * - `host-port`: そのホストとポートに対して。
  * - `host`: そのホストの全ポートに対して。
+ *
+ * 受理条件の違反から生じる確認では、同一性は
+ * (ルール ID, 受理条件の位置, 違反した値) でありターゲットを含まない。
+ * 選べるのは覚えるかどうかだけになる。
+ *
+ * - `violation`: 提示した違反をそのセッションの間ずっと。同じルールの別の値も、
+ *   別のルールの同じ値も覆わない。
  */
-export type ApprovalScope = "once" | "rule" | "host-port" | "host";
+export type ApprovalScope =
+  | "once"
+  | "rule"
+  | "host-port"
+  | "host"
+  | "violation";
 export type RequestKind = "connect" | "forward";
 export type Decision = "allow" | "deny";
 
@@ -68,10 +83,16 @@ export const BODY_KINDS = [
   "json",
 ] as const satisfies readonly BodyKind[];
 
+/**
+ * 確認のカードに出す、リクエストについての事実。
+ *
+ * ボディの断片は載らない。100KB の会話の先頭 1024 バイトからは判断できず、
+ * 判断の材料になるもの — 受理条件が拒んだノード — は検査のあとに所見として
+ * 別に届く。
+ */
 export interface ReviewContext {
   path: string;
   contentType: string | null;
-  bodyPreview: string | null;
   bodySize: number;
   bodyKind: BodyKind;
 }
@@ -115,6 +136,8 @@ export const REQUEST_POLICY_SUCCESS_REASONS = [
   "recognized-json",
   /** 違反はあったが、すべて onViolation = "allow" だった。 */
   "violations-allowed",
+  /** 違反を人が承認した、または承認済みの集合にあった。 */
+  "violations-approved",
   /** 秘密をマスクしてボディを書き換えた。 */
   "masked-json",
 ] as const;
@@ -191,6 +214,8 @@ export function isApprovableFinding(finding: ViolationFinding): boolean {
 }
 
 export const REQUEST_POLICY_BLOCK_REASONS = [
+  /** 違反を人が拒否した、または承認に変換できなかった。 */
+  "violations-denied",
   "body-unavailable",
   "unexpected-body",
   "invalid-json",
@@ -228,6 +253,107 @@ export interface RequestPolicyOutcomeResponse {
   version: 1;
   type: "request_policy_outcome_recorded";
   requestId: string;
+}
+
+/**
+ * `onViolation = "review"` の違反について broker に帰結を訊く。
+ *
+ * 検査は addon が行い、承認済みの集合は broker が持つ。承認結果を解決済み
+ * ドキュメントに書き戻して addon に押し返すことはしないので、addon は違反の
+ * たびにここへ来て、broker がキャッシュから即答するか、人に確認する。
+ *
+ * ターゲットとメソッドと `reviewContext` は、承認 UI のカードに出すために
+ * 運ぶ。承認の同一性はターゲットを含まないので、これらはカードの見た目にしか
+ * 効かない。承認が及ぶ範囲を広げることはできない。
+ */
+export interface RequestPolicyReviewRequest {
+  version: 1;
+  type: "request_policy_review";
+  requestId: string;
+  sessionId: string;
+  ruleId: string;
+  target: NormalizedTarget;
+  method: string;
+  findings: ViolationFinding[];
+  reviewContext?: ReviewContext;
+}
+
+const REQUEST_POLICY_REVIEW_FIELDS = new Set([
+  "version",
+  "type",
+  "requestId",
+  "sessionId",
+  "ruleId",
+  "target",
+  "method",
+  "findings",
+  "reviewContext",
+]);
+const HTTP_METHOD = /^[A-Za-z]{1,16}$/;
+
+export function validateRequestPolicyReview(
+  value: unknown,
+  expectedSessionId: string,
+  document: ResolvedDocument,
+): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "invalid request-policy review request";
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    message.version !== 1 ||
+    message.type !== "request_policy_review" ||
+    typeof message.requestId !== "string"
+  ) {
+    return "invalid request-policy review request";
+  }
+  if (message.sessionId !== expectedSessionId) {
+    return "request-policy review session mismatch";
+  }
+  if (
+    Object.keys(message).some(
+      (field) => !REQUEST_POLICY_REVIEW_FIELDS.has(field),
+    )
+  ) {
+    return "invalid request-policy review request";
+  }
+  if (
+    typeof message.ruleId !== "string" ||
+    !SAFE_RULE_ID.test(message.ruleId) ||
+    !documentHasRuleId(document, message.ruleId)
+  ) {
+    return "invalid request-policy review rule ID";
+  }
+  if (!isNormalizedTarget(message.target)) {
+    return "invalid request-policy review target";
+  }
+  if (typeof message.method !== "string" || !HTTP_METHOD.test(message.method)) {
+    return "invalid request-policy review method";
+  }
+  const findingsError = validateViolationFindings(message.findings);
+  if (findingsError) return findingsError;
+  if ((message.findings as unknown[]).length === 0) {
+    // 違反が無いのに帰結を訊くことはない。空を承認に変えると、押した人が
+    // 何も見ていない承認が 1 つ生まれる。
+    return "request-policy review carries no violation";
+  }
+  return null;
+}
+
+function isNormalizedTarget(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const target = value as Record<string, unknown>;
+  return (
+    Object.keys(target).length === 2 &&
+    typeof target.host === "string" &&
+    target.host.length > 0 &&
+    target.host.length <= 253 &&
+    Number.isSafeInteger(target.port) &&
+    (target.port as number) > 0 &&
+    (target.port as number) <= 65535
+  );
 }
 
 const REQUEST_POLICY_OUTCOME_FIELDS = new Set([
@@ -387,7 +513,9 @@ export function validateRequestPolicyOutcome(
     message.result === "block"
       ? isListedValue(reason, REQUEST_POLICY_BLOCK_REASONS)
       : message.result === "rewrite"
-        ? reason === "masked-json" || reason === "violations-allowed"
+        ? reason === "masked-json" ||
+          reason === "violations-allowed" ||
+          reason === "violations-approved"
         : isListedValue(reason, REQUEST_POLICY_SUCCESS_REASONS) &&
           reason !== "masked-json";
   return consistent
@@ -412,6 +540,14 @@ export interface PendingEntry {
   approvalScopes: ApprovalScope[];
   /** 承認したときに注入されるヘッダー。名前だけで、値は載らない。 */
   injectHeaders: InjectHeaderPreview[];
+  /**
+   * 受理条件の違反から生じた確認で、承認が覆う違反。
+   *
+   * この確認で押せる対象そのものである。ボディの先頭を切り出した preview では
+   * 100KB のリクエストの違反箇所は見えないので、承認者が見るのはこちらになる。
+   * ルールの `review` から生じた確認には無い。
+   */
+  violations?: ViolationFinding[];
 }
 
 export interface SessionRegistryEntry {

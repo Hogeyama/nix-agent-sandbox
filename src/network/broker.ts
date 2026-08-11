@@ -38,14 +38,17 @@ import {
   type DecisionResponse,
   denyReasonForTarget,
   type InjectHeaderPreview,
+  isApprovableFinding,
   type NormalizedTarget,
   type PendingEntry,
   type RequestPolicyOutcomeRequest,
   type RequestPolicyOutcomeResponse,
+  type RequestPolicyReviewRequest,
   type ReviewContext,
   targetKey,
   type ViolationFinding,
   validateRequestPolicyOutcome,
+  validateRequestPolicyReview,
 } from "./protocol.ts";
 import type { NetworkRuntimePaths } from "./registry.ts";
 import {
@@ -94,18 +97,12 @@ interface PendingWaiter {
   reject: (error: unknown) => void;
 }
 
-interface PendingGroup {
+interface PendingGroupBase {
   groupKey: string;
   /** 承認の同一性の一部。この確認を起こしたルール、または擬似 ID。 */
   ruleId: string;
-  /** 承認の同一性の一部。この確認に至った判定の理由。 */
-  reason: DecisionReason;
-  /** 承認されたら注入されるヘッダー。名前だけで、値は持たない。 */
-  injectHeaders: readonly InjectHeaderPreview[];
   createdAt: string;
-  target: AuthorizeRequest["target"];
-  requests: Map<string, AuthorizeRequest>;
-  decisions: Map<string, AuthzDecision>;
+  target: NormalizedTarget;
   waiters: Map<string, PendingWaiter>;
   timer: ReturnType<typeof setTimeout>;
   notificationAbort: AbortController;
@@ -117,9 +114,39 @@ interface PendingGroup {
   allowedScopes: readonly ApprovalScope[];
 }
 
+/** ルールの `review` から生じた確認。同一性はターゲットを含む。 */
+interface AuthorizePendingGroup extends PendingGroupBase {
+  kind: "authorize";
+  /** 承認の同一性の一部。この確認に至った判定の理由。 */
+  reason: DecisionReason;
+  /** 承認されたら注入されるヘッダー。名前だけで、値は持たない。 */
+  injectHeaders: readonly InjectHeaderPreview[];
+  requests: Map<string, AuthorizeRequest>;
+  decisions: Map<string, AuthzDecision>;
+}
+
+/**
+ * 受理条件の違反から生じた確認。同一性はターゲットを含まない。
+ *
+ * 会話履歴は毎リクエスト再送されるので、未知タグが 1 つ混ざると以後のすべての
+ * リクエストが同じ違反を起こす。リクエストを単位にするとターンごとに同じ確認が
+ * 出てセッションが進まないので、単位は違反そのものになる。
+ */
+interface ViolationPendingGroup extends PendingGroupBase {
+  kind: "violation";
+  /** 承認したときに覚える鍵。`findings` と 1 対 1 で対応する。 */
+  identities: readonly string[];
+  /** 承認 UI に出す違反。押せる対象と出したものを一致させる。 */
+  findings: readonly ViolationFinding[];
+  requests: Map<string, RequestPolicyReviewRequest>;
+}
+
+type PendingGroup = AuthorizePendingGroup | ViolationPendingGroup;
+
 type BrokerMessage =
   | AuthorizeRequest
   | RequestPolicyOutcomeRequest
+  | RequestPolicyReviewRequest
   | { type: "approve"; requestId: string; scope?: ApprovalScope }
   | { type: "deny"; requestId: string; scope?: ApprovalScope }
   | { type: "list_pending" };
@@ -166,6 +193,18 @@ export class SessionBroker {
    */
   private readonly approved = new Set<string>();
   private readonly denied = new Set<string>();
+  /**
+   * 受理条件の違反について人が押した結果。鍵は (ルール ID, 受理条件の位置,
+   * 違反した値) であり、`violationKey` が作る。
+   *
+   * `approved` / `denied` と別の集合にしてあるのは、2 種類の承認が互いを
+   * 解放してはならないからである。「このホストへのこのルールを通してよい」と
+   * 「このルールがこの値を見ても通してよい」は別の許可であり、鍵の形が
+   * たまたま似ていても、片方を押した人はもう片方を見ていない。集合を分けて
+   * おけば、鍵の作り方を後から変えても混ざりようがない。
+   */
+  private readonly approvedViolations = new Set<string>();
+  private readonly deniedViolations = new Set<string>();
   private readonly negativeCache: TtlLruCache<string, true>;
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestIndex = new Map<string, string>();
@@ -228,6 +267,8 @@ export class SessionBroker {
     this.requestIndex.clear();
     this.approved.clear();
     this.denied.clear();
+    this.approvedViolations.clear();
+    this.deniedViolations.clear();
     this.negativeCache.clear();
     await removePendingDir(this.paths, this.sessionId);
     const sock =
@@ -281,6 +322,9 @@ export class SessionBroker {
     }
     if (message.type === "request_policy_outcome") {
       return await this.recordRequestPolicyOutcome(message);
+    }
+    if (message.type === "request_policy_review") {
+      return await this.reviewViolations(message);
     }
     return { type: "pending", items: await this.listPending() };
   }
@@ -348,6 +392,176 @@ export class SessionBroker {
       type: "request_policy_outcome_recorded",
       requestId: message.requestId,
     };
+  }
+
+  /**
+   * 受理条件の違反に帰結を与える。
+   *
+   * 承認済みの組はここで即答する。会話履歴の再送で同じ違反が毎ターン届くので、
+   * ここが効かないと 1 度押した確認がターンごとに戻ってくる。
+   */
+  private async reviewViolations(
+    message: RequestPolicyReviewRequest,
+  ): Promise<
+    DecisionResponse | { type: "error"; requestId: string; message: string }
+  > {
+    const validationError = validateRequestPolicyReview(
+      message,
+      this.sessionId,
+      this.document,
+    );
+    if (validationError) {
+      return {
+        type: "error",
+        requestId:
+          typeof message.requestId === "string" ? message.requestId : "",
+        message: validationError,
+      };
+    }
+    const rule = this.findRuleById(message.ruleId);
+    if (rule === undefined) {
+      // 擬似 ID は受理条件を持たないので、その名前で違反は起こりえない。
+      return {
+        type: "error",
+        requestId: message.requestId,
+        message: "request-policy review names a rule that has no expectations",
+      };
+    }
+
+    const shouldAudit = (rule.audit ?? this.document.defaults.audit) !== "off";
+    const targetStr = targetKey(message.target);
+    const audit = (decision: "allow" | "deny", reason: string) =>
+      shouldAudit
+        ? this.recordViolationAudit(
+            message,
+            decision,
+            reason,
+            targetStr,
+            message.findings,
+          )
+        : Promise.resolve();
+
+    // 押せない所見が混ざっていたら、そのリクエストは承認では通せない。押した
+    // 人が通したつもりのリクエストが通らないまま残るより、ここで断る方が
+    // 正直である。走査が完了しなかった記録と、保持上限で畳まれた記録がそれで
+    // あり、どちらも受理条件か値を欠いている。
+    if (message.findings.some((finding) => !isApprovableFinding(finding))) {
+      await audit("deny", "unapprovable-violation");
+      return denyDecision(message.requestId, "unapprovable-violation");
+    }
+
+    const identities = message.findings.map((finding) =>
+      violationKey(message.ruleId, finding),
+    );
+    if (identities.some((key) => this.deniedViolations.has(key))) {
+      await audit("deny", "denied-by-user");
+      return denyDecision(message.requestId, "denied-by-user");
+    }
+    const undecided = message.findings.filter(
+      (finding) =>
+        !this.approvedViolations.has(violationKey(message.ruleId, finding)),
+    );
+    if (undecided.length === 0) {
+      await audit("allow", "approved");
+      return allowDecision(message.requestId, "approved");
+    }
+
+    // 束ねる単位は、まだ答えの無い違反の集合である。既に承認済みの違反を
+    // 鍵に混ぜると、同じ問いが違うカードに分かれる。
+    const groupKey = violationGroupKey(
+      this.sessionId,
+      message.ruleId,
+      undecided.map((finding) => violationKey(message.ruleId, finding)),
+    );
+    if (this.negativeCache.get(groupKey) !== undefined) {
+      await audit("deny", "recent-deny");
+      return denyDecision(message.requestId, "recent-deny");
+    }
+
+    const open = this.groups.get(groupKey);
+    const group =
+      open?.kind === "violation"
+        ? open
+        : await this.createViolationGroup(groupKey, message, undecided);
+    if (!group.requests.has(message.requestId)) {
+      group.requests.set(message.requestId, message);
+      this.requestIndex.set(message.requestId, groupKey);
+      await writePendingEntry(
+        this.paths,
+        toViolationPendingEntry(
+          message,
+          group,
+          this.maskedReviewContext(message.reviewContext),
+        ),
+      );
+    }
+
+    const deferred = Promise.withResolvers<DecisionResponse>();
+    group.waiters.set(message.requestId, {
+      resolve: deferred.resolve,
+      reject: deferred.reject,
+    });
+    return await deferred.promise;
+  }
+
+  private async createViolationGroup(
+    groupKey: string,
+    message: RequestPolicyReviewRequest,
+    findings: readonly ViolationFinding[],
+  ): Promise<ViolationPendingGroup> {
+    const notificationAbort = new AbortController();
+    const timer = setTimeout(() => {
+      void this.resolveGroup(
+        groupKey,
+        denyDecision(message.requestId, "prompt-timeout"),
+        "deny",
+      );
+    }, this.timeoutSeconds * 1000);
+    const group: ViolationPendingGroup = {
+      kind: "violation",
+      groupKey,
+      ruleId: message.ruleId,
+      createdAt: new Date().toISOString(),
+      target: message.target,
+      requests: new Map([[message.requestId, message]]),
+      waiters: new Map(),
+      timer,
+      notificationAbort,
+      // ターゲットは同一性に入らないので、広さを選ぶ粒度は出さない。残る問いは
+      // 「この違反を覚えるかどうか」だけである。
+      allowedScopes: ["once", "violation"],
+      identities: findings.map((finding) =>
+        violationKey(message.ruleId, finding),
+      ),
+      findings: [...findings],
+    };
+    this.groups.set(groupKey, group);
+    this.requestIndex.set(message.requestId, groupKey);
+    await writePendingEntry(
+      this.paths,
+      toViolationPendingEntry(
+        message,
+        group,
+        this.maskedReviewContext(message.reviewContext),
+      ),
+    );
+    const notificationTask = notifyPendingRequest({
+      backend: this.notify,
+      sessionId: this.sessionId,
+      requestId: message.requestId,
+      target: group.target,
+      uiEnabled: this.uiEnabled,
+      uiPort: this.uiPort,
+      uiIdleTimeout: this.uiIdleTimeout,
+      signal: notificationAbort.signal,
+    }).catch((e) =>
+      logInfo(`[nas] NetworkBroker: failed to send notification: ${e}`),
+    );
+    this.notificationTasks.add(notificationTask);
+    void notificationTask.finally(() => {
+      this.notificationTasks.delete(notificationTask);
+    });
+    return group;
   }
 
   private async authorize(
@@ -472,9 +686,11 @@ export class SessionBroker {
       return denyDecision(message.requestId, "recent-deny");
     }
 
+    const open = this.groups.get(groupKey);
     const group =
-      this.groups.get(groupKey) ??
-      (await this.createPendingGroup(groupKey, message, decided));
+      open?.kind === "authorize"
+        ? open
+        : await this.createPendingGroup(groupKey, message, decided);
 
     if (!group.requests.has(message.requestId)) {
       group.requests.set(message.requestId, message);
@@ -482,7 +698,11 @@ export class SessionBroker {
       this.requestIndex.set(message.requestId, groupKey);
       await writePendingEntry(
         this.paths,
-        toPendingEntry(message, group, this.maskedReviewContext(message)),
+        toPendingEntry(
+          message,
+          group,
+          this.maskedReviewContext(message.reviewContext),
+        ),
       );
     }
 
@@ -498,7 +718,7 @@ export class SessionBroker {
     groupKey: string,
     message: AuthorizeRequest,
     decided: AuthzDecision,
-  ): Promise<PendingGroup> {
+  ): Promise<AuthorizePendingGroup> {
     const createdAt = new Date().toISOString();
     const notificationAbort = new AbortController();
     const timer = setTimeout(() => {
@@ -508,7 +728,8 @@ export class SessionBroker {
         "deny",
       );
     }, this.timeoutSeconds * 1000);
-    const group: PendingGroup = {
+    const group: AuthorizePendingGroup = {
+      kind: "authorize",
       groupKey,
       ruleId: decided.ruleId,
       reason: decided.reason,
@@ -526,7 +747,11 @@ export class SessionBroker {
     this.requestIndex.set(message.requestId, groupKey);
     await writePendingEntry(
       this.paths,
-      toPendingEntry(message, group, this.maskedReviewContext(message)),
+      toPendingEntry(
+        message,
+        group,
+        this.maskedReviewContext(message.reviewContext),
+      ),
     );
     const notificationTask = notifyPendingRequest({
       backend: this.notify,
@@ -567,7 +792,7 @@ export class SessionBroker {
       };
     }
     const selectedScope = scope ?? DEFAULT_APPROVAL_SCOPE;
-    this.remember(this.approved, this.denied, group, selectedScope);
+    this.remember(group, selectedScope, "approve");
     await this.resolveGroup(
       group.groupKey,
       allowDecision(requestId, "approved-by-user", selectedScope),
@@ -596,7 +821,7 @@ export class SessionBroker {
       };
     }
     if (scope !== undefined) {
-      this.remember(this.denied, this.approved, group, scope);
+      this.remember(group, scope, "deny");
     }
     await this.resolveGroup(
       group.groupKey,
@@ -625,6 +850,18 @@ export class SessionBroker {
       this.negativeCache.set(group.groupKey, true);
     }
 
+    if (group.kind === "violation") {
+      await this.resolveViolationGroup(group, baseDecision, outcome);
+      return;
+    }
+    await this.resolveAuthorizeGroup(group, baseDecision, outcome);
+  }
+
+  private async resolveAuthorizeGroup(
+    group: AuthorizePendingGroup,
+    baseDecision: DecisionResponse,
+    outcome: "allow" | "deny",
+  ): Promise<void> {
     for (const [requestId, request] of group.requests.entries()) {
       this.requestIndex.delete(requestId);
       await removePendingEntry(this.paths, this.sessionId, requestId);
@@ -632,42 +869,86 @@ export class SessionBroker {
         ...baseDecision,
         requestId: request.requestId,
       };
+      const decided = group.decisions.get(requestId);
       const decision =
         outcome === "allow"
-          ? this.decorateAllow(baseWithId, group.decisions.get(requestId))
+          ? this.decorateAllow(baseWithId, decided)
           : baseWithId;
-      const targetStr = `${request.target.host}:${request.target.port}`;
-      const headerNames = decision.injectHeaders?.map((h) => h.name);
-      const decided = group.decisions.get(requestId);
       if ((decided?.audit ?? this.document.defaults.audit) !== "off") {
         await this.recordAudit(
           requestId,
-          outcome === "allow" ? "allow" : "deny",
+          outcome,
           baseDecision.reason,
-          targetStr,
-          headerNames,
+          targetKey(request.target),
+          decision.injectHeaders?.map((h) => h.name),
           decided?.ruleId,
         );
       }
-      const waiter = group.waiters.get(requestId);
-      waiter?.resolve(decision);
+      group.waiters.get(requestId)?.resolve(decision);
+    }
+  }
+
+  private async resolveViolationGroup(
+    group: ViolationPendingGroup,
+    baseDecision: DecisionResponse,
+    outcome: "allow" | "deny",
+  ): Promise<void> {
+    const rule = this.findRuleById(group.ruleId);
+    const shouldAudit = (rule?.audit ?? this.document.defaults.audit) !== "off";
+    for (const [requestId, request] of group.requests.entries()) {
+      this.requestIndex.delete(requestId);
+      await removePendingEntry(this.paths, this.sessionId, requestId);
+      // 注入ヘッダーは載せない。この答えが決めるのは違反を通すかどうかだけで
+      // あり、資格情報を付けるかどうかは authorize が既に決めている。
+      const decision: DecisionResponse = { ...baseDecision, requestId };
+      if (shouldAudit) {
+        await this.recordViolationAudit(
+          request,
+          outcome,
+          baseDecision.reason,
+          targetKey(request.target),
+          group.findings,
+        );
+      }
+      group.waiters.get(requestId)?.resolve(decision);
     }
   }
 
   /**
-   * 押された答えを (ルール ID, 判定の理由, ターゲット) で覚え、反対の答えを
-   * 取り消す。
+   * 押された答えをその確認の同一性で覚え、反対の答えを取り消す。
    *
-   * `once` は何も覚えない。同じルールと同じターゲットの次のリクエストは、
-   * もう一度人に聞くところからやり直す。
+   * 確認の種類ごとに別の集合へ入れる。ルールの `review` から生じた承認は
+   * (ルール ID, 判定の理由, ターゲット) を、受理条件の違反から生じた承認は
+   * (ルール ID, 受理条件の位置, 違反した値) を単位とする。**一方が他方を
+   * 解放してはならない。** 「このホストへこのルールを通してよい」と押した人は、
+   * そのルールが未知の値を見ても通してよいとは言っていない。
+   *
+   * `once` は何も覚えない。次の同じリクエストは、もう一度人に聞くところから
+   * やり直す。
    */
   private remember(
-    into: Set<string>,
-    opposite: Set<string>,
     group: PendingGroup,
     scope: ApprovalScope,
+    outcome: "approve" | "deny",
   ): void {
     if (scope === "once") return;
+    if (group.kind === "violation") {
+      // 粒度は `violation` しか出していないので、他の値が来たら押せる集合の
+      // 外である。呼び出し側が突き合わせているが、ここでも取り違えない。
+      if (scope !== "violation") return;
+      const into =
+        outcome === "approve" ? this.approvedViolations : this.deniedViolations;
+      const opposite =
+        outcome === "approve" ? this.deniedViolations : this.approvedViolations;
+      for (const key of group.identities) {
+        into.add(key);
+        opposite.delete(key);
+      }
+      return;
+    }
+    if (scope === "violation") return;
+    const into = outcome === "approve" ? this.approved : this.denied;
+    const opposite = outcome === "approve" ? this.denied : this.approved;
     const key = approvalKey(group.ruleId, group.reason, group.target, scope);
     into.add(key);
     opposite.delete(key);
@@ -678,12 +959,9 @@ export class SessionBroker {
    * (findMatchingRule / credential pathPrefix) には絶対に使わないこと。
    */
   private maskedReviewContext(
-    message: AuthorizeRequest,
+    reviewContext: ReviewContext | undefined,
   ): ReviewContext | undefined {
-    return maskReviewContextWithPatterns(
-      message.reviewContext,
-      this.maskPatterns,
-    );
+    return maskReviewContextWithPatterns(reviewContext, this.maskPatterns);
   }
 
   /** 実 ID から解決済みルールを引く。擬似 ID (`<スコープ>.$fallback`) には無い。 */
@@ -699,6 +977,36 @@ export class SessionBroker {
     const groupKey = this.requestIndex.get(requestId);
     if (!groupKey) return null;
     return this.groups.get(groupKey) ?? null;
+  }
+
+  /**
+   * 違反の確認の帰結を記録する。
+   *
+   * 帰結が承認でも拒否でも、押した人が見たのと同じ違反の一覧を残す。理由の
+   * 語彙は「承認された」としか言えないので、何が承認されたかはここにしかない。
+   */
+  private async recordViolationAudit(
+    message: RequestPolicyReviewRequest,
+    decision: "allow" | "deny",
+    reason: string,
+    target: string,
+    findings: readonly ViolationFinding[],
+  ): Promise<void> {
+    if (!this.auditDir) return;
+    const entry: AuditLogEntry = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      domain: "network",
+      sessionId: this.sessionId,
+      requestId: message.requestId,
+      decision,
+      reason,
+      phase: "request-policy",
+      ruleId: message.ruleId,
+      target,
+      violations: findings.map(toAuditViolation),
+    };
+    await appendAuditLog(entry, this.auditDir);
   }
 
   private async recordAudit(
@@ -830,6 +1138,43 @@ function approvalKey(
   return `${ruleId}\u0000${reason}\u0000${scope}\u0000${pinned}`;
 }
 
+/**
+ * 違反の承認の同一性 (ルール ID, 受理条件の位置, 違反した値) を 1 本の鍵にする。
+ *
+ * ターゲットは入らない。ルールはちょうど 1 つのスコープに属し、スコープが
+ * ターゲット集合を決めるので、ルール ID が既に「どこに向けて」を閉じている。
+ *
+ * 受理条件の位置が入るのは、ルール ID と値だけでは粗いからである。
+ * `anthropic.messages` で `"fallback"` を承認したとき、`/**` + `/content/*` で
+ * 見つけた 1 件を承認したつもりが `/system/*` でも通ってしまう。
+ *
+ * 位置で識別できるのは、解決済みドキュメントがセッション開始時に 1 度だけ
+ * 作られてこの broker と寿命を共にするからである。承認をセッションを跨いで
+ * 永続化するなら位置では足りず、`expect` にキーを与える必要がある。
+ *
+ * 値を持たない受理条件 (`EmptyBody` / `JsonRoot`) では値の成分が空になり、
+ * 「この受理条件をこのセッションの間は満たさなくてよい」を意味する。ルール
+ * 全体を無効にするわけではないので、同じルールの他の受理条件は効き続ける。
+ */
+function violationKey(ruleId: string, finding: ViolationFinding): string {
+  return `${ruleId}\u0000${finding.expect}\u0000${finding.value ?? ""}`;
+}
+
+/**
+ * 1 つのカードにまとめる違反の範囲。
+ *
+ * まだ答えの無い違反の集合そのもので束ねる。同じ組み合わせを持つリクエストは
+ * 同じ問いなので 1 枚のカードで足り、会話履歴の再送で飛んでくる同じ違反が
+ * カードを増やさない。
+ */
+function violationGroupKey(
+  sessionId: string,
+  ruleId: string,
+  identities: readonly string[],
+): string {
+  return [sessionId, ruleId, ...[...identities].sort()].join("\u0000");
+}
+
 /** そのリクエストの答えになりうる鍵。広い粒度の答えは狭いリクエストに効く。 */
 function approvalKeys(
   ruleId: string,
@@ -910,9 +1255,42 @@ function toRequestBody(kind: BodyKind | undefined): RequestBody {
   }
 }
 
+/**
+ * 違反の確認を pending エントリにする。
+ *
+ * `violations` に載せるのは、その確認で押せる違反そのものである。カードに
+ * 出したものと承認が覚えるものが同じでなければ、押した人は見ていないものを
+ * 通すことになる。
+ */
+function toViolationPendingEntry(
+  message: RequestPolicyReviewRequest,
+  group: ViolationPendingGroup,
+  maskedReviewContext: ReviewContext | undefined,
+): PendingEntry {
+  return {
+    version: 1,
+    sessionId: message.sessionId,
+    requestId: message.requestId,
+    target: message.target,
+    method: message.method,
+    // ボディを読んだ後に起きる確認なので、CONNECT ではありえない。
+    requestKind: "forward",
+    state: "pending",
+    createdAt: group.createdAt,
+    updatedAt: new Date().toISOString(),
+    reviewContext: maskedReviewContext,
+    ruleId: group.ruleId,
+    approvalScopes: [...group.allowedScopes],
+    // この確認が通しても資格情報は増えない。注入するかどうかは authorize が
+    // 既に決めていて、ここでの答えは違反を通すかどうかだけである。
+    injectHeaders: [],
+    violations: [...group.findings],
+  };
+}
+
 function toPendingEntry(
   message: AuthorizeRequest,
-  group: PendingGroup,
+  group: AuthorizePendingGroup,
   maskedReviewContext: ReviewContext | undefined,
 ): PendingEntry {
   return {

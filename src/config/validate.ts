@@ -187,17 +187,6 @@ function validateAuthz(profileName: string, profile: Profile): string[] {
         );
       }
     }
-    // `review` は承認の作り直しと一緒に解禁する。それまでは書けても効かない
-    // ので、黙って deny に丸めるのではなく設定エラーにする。
-    for (const [key, rule] of Object.entries(scope.rules ?? {})) {
-      for (const [index, expect] of (rule.expect ?? []).entries()) {
-        if (expect.onViolation === "review") {
-          errors.push(
-            `${prefix}ルール ${scopeName}.${key} の expect[${index}] の onViolation = "review" はまだ実装されていません。"deny" か "allow" を選んでください。`,
-          );
-        }
-      }
-    }
   }
 
   return errors;

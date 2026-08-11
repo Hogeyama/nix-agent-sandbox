@@ -216,8 +216,12 @@ abstract class Expect {
   kind: String
 
   /// 違反の帰結。`allow` は違反を記録して通過させるので `audit = "always"` を要する。
-  /// `review` は未実装。
-  onViolation: "deny"|"allow" = "deny"
+  ///
+  /// `review` は違反ごとに承認を求める。承認の単位は (ルール ID, この受理条件,
+  /// 違反した値) なので、同じ値の再確認はセッション中 1 度で済む。走査が予算を
+  /// 使い切ったときと、所見の保持上限を超えたときの違反は、どの値が違反したかを
+  /// 言えないので承認に変換できず、`review` でも拒否になる。
+  onViolation: "deny"|"review"|"allow" = "deny"
 }
 
 /// ボディが存在しないことを要求する。
@@ -440,17 +444,30 @@ const local anthropicContentTags: Listing<String> = new {
 /// しまうので、そこだけ部分木ごと落とす。位置を数え上げる代わりに検査しない
 /// 領域を名指しするので、上流が content block の新しい入れ子位置を追加しても
 /// 網から漏れない。
+///
+/// タグ集合の違反が `review` なのは、プリセットの受理条件を設定で緩められない
+/// からである。上流が content block を 1 つ追加したときに `deny` だとセッションが
+/// 止まり、利用者には nas のリリースを待つ以外の手が無い。`review` なら未知の
+/// タグそのものが承認 UI に出て、押せばそのセッションの残りは同じ確認が出ない。
+///
+/// ルートの型は `deny` のままにする。`/v1/messages` のボディがオブジェクトで
+/// ないのは上流の追加ではなく壊れたリクエストであり、承認すべき値も無い。
+/// これは走査が予算を使い切ったときの帰結も決める: 検査未完了はルールが宣言する
+/// 中で最も厳しい帰結を取るので、`deny` が 1 つあることで予算切れが人に訊かずに
+/// 止まる。
 const local anthropicContentBlocks: Listing<Expect> = new {
   new UnionShape {
     at = "/**/content/*"
     exclude { "/tools/**" }
     discriminator = "type"
     allowed = anthropicContentTags
+    onViolation = "review"
   }
   new UnionShape {
     at = "/system/*"
     discriminator = "type"
     allowed = anthropicContentTags
+    onViolation = "review"
   }
   new JsonRoot { rootType = "object" }
 }

@@ -101,6 +101,60 @@ describe("normalizeNetworkPending", () => {
     expect(rows[0]?.injectHeaders).toEqual([]);
   });
 
+  test("carries the violations an approval would remember", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({
+        approvalScopes: ["once", "violation"],
+        violations: [
+          {
+            at: "/**/content/*",
+            kind: "schema-mismatch",
+            pointer: "/messages/0/content/1",
+            value: "future_block",
+            excerpt: '{"type":"future_block"}',
+            count: 3,
+          },
+        ],
+      }),
+    ]);
+    expect(rows[0]?.approvalScopes).toEqual(["once", "violation"]);
+    expect(rows[0]?.violations).toEqual([
+      {
+        at: "/**/content/*",
+        kind: "schema-mismatch",
+        pointer: "/messages/0/content/1",
+        value: "future_block",
+        excerpt: '{"type":"future_block"}',
+        count: 3,
+      },
+    ]);
+  });
+
+  test("a violation with no value is still one violation", () => {
+    // 「ボディが空であること」のような受理条件には承認すべき値が無い。
+    // 値が無いことは記録が無いことではない。
+    const rows = normalizeNetworkPending([
+      makeNetwork({ violations: [{ kind: "unexpected-body" }] }),
+    ]);
+    expect(rows[0]?.violations).toEqual([
+      {
+        at: "",
+        kind: "unexpected-body",
+        pointer: "",
+        value: null,
+        excerpt: null,
+        count: 1,
+      },
+    ]);
+  });
+
+  test("no violations when the payload omits them", () => {
+    const rows = normalizeNetworkPending([
+      makeNetwork({ violations: undefined }),
+    ]);
+    expect(rows[0]?.violations).toEqual([]);
+  });
+
   test("verb is uppercased", () => {
     const rows = normalizeNetworkPending([makeNetwork({ method: "post" })]);
     expect(rows[0]?.verb).toBe("POST");

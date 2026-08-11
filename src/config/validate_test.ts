@@ -338,25 +338,24 @@ test("validate: accepts mask.proxy = false once every secret is ignored", () => 
   expect(validateConfig(config)).toBe(config);
 });
 
-test('validate: rejects onViolation = "review" until approvals are rebuilt', () => {
-  expect(() =>
-    validateConfig(
-      withScopes({
-        api: {
-          targets: ["api.example.com"],
-          rules: {
-            messages: {
-              match: { paths: ["/v1/messages"], body: { format: "json" } },
-              onMatch: "allow",
-              expect: [
-                { kind: "jsonRoot", rootType: "object", onViolation: "review" },
-              ],
-            },
-          },
+test('validate: accepts onViolation = "review"', () => {
+  // 違反ごとの承認が動くようになったので、`review` は書ける。承認の単位は
+  // (ルール ID, 受理条件の位置, 違反した値) であり、broker が持つ。
+  const config = withScopes({
+    api: {
+      targets: ["api.example.com"],
+      rules: {
+        messages: {
+          match: { paths: ["/v1/messages"], body: { format: "json" } },
+          onMatch: "allow",
+          expect: [
+            { kind: "jsonRoot", rootType: "object", onViolation: "review" },
+          ],
         },
-      }),
-    ),
-  ).toThrow(/まだ実装されていません/);
+      },
+    },
+  });
+  expect(validateConfig(config)).toBe(config);
 });
 
 test("validate: rejects a limit above its ceiling", () => {
