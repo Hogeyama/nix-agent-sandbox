@@ -11,7 +11,7 @@ import {
 import net from "node:net";
 import path from "node:path";
 import { queryAuditLogs } from "../../audit/store.ts";
-import type { ReviewRule } from "../../config/types.ts";
+import type { ResolvedDocument } from "../../network/authz/resolve.ts";
 import { SessionBroker } from "../../network/broker.ts";
 import { hashToken } from "../../network/protocol.ts";
 import {
@@ -266,13 +266,10 @@ function rawEchoServerScript(port: number): string {
  */
 const RESOLVED_DOCUMENT = JSON.parse(
   readFileSync(
-    new URL(
-      "../../network/fixtures/resolved_review_rules/anthropic-v1.json",
-      import.meta.url,
-    ),
+    new URL("../../network/fixtures/authz/anthropic-v1.json", import.meta.url),
     "utf8",
   ),
-) as { contractVersion: number; rules: ReviewRule[] };
+) as ResolvedDocument;
 
 interface AnthropicFixture {
   runtimeDir: string;
@@ -292,7 +289,6 @@ interface AnthropicFixtureSetupOptions {
 
 interface ExpectedPolicyOutcome {
   ruleId: string;
-  requestPolicyKind: "bodyless" | "json";
   requestPolicyResult: "pass" | "rewrite" | "block";
   reason: string;
 }
@@ -372,7 +368,7 @@ async function setupAnthropicFixture(
     await chmod(runtimeDir, 0o755);
     await chmod(paths.caCertDir, 0o777);
     await chmod(paths.brokersDir, 0o755);
-    await chmod(paths.reviewRulesDir, 0o755);
+    await chmod(paths.authzDir, 0o755);
     await mkdir(path.dirname(socketPath), { recursive: true });
     await chmod(path.dirname(socketPath), 0o755);
     await copyFile(
@@ -380,7 +376,7 @@ async function setupAnthropicFixture(
       paths.addonScriptPath,
     );
     await writeFile(
-      `${paths.reviewRulesDir}/${sessionId}.json`,
+      `${paths.authzDir}/${sessionId}.json`,
       JSON.stringify(RESOLVED_DOCUMENT),
     );
     await writeSessionRegistry(paths, {
@@ -398,11 +394,10 @@ async function setupAnthropicFixture(
     broker = new SessionBroker({
       paths,
       sessionId,
-      reviewRules: RESOLVED_DOCUMENT.rules,
+      document: RESOLVED_DOCUMENT,
       pendingTimeoutSeconds: 30,
-      pendingDefaultScope: "host-port",
       pendingNotify: "off",
-      maskValues: ["SECRET123"],
+      secretValues: { workspace: ["SECRET123"] },
       auditDir,
     });
     await broker.start(socketPath);
@@ -462,13 +457,13 @@ test("setupAnthropicFixture installs the shipped resolved document", async () =>
   const fixture = await setupAnthropicFixture("nas-addon-review-rule-");
   try {
     const document = await Bun.file(
-      `${fixture.paths.reviewRulesDir}/${fixture.sessionId}.json`,
+      `${fixture.paths.authzDir}/${fixture.sessionId}.json`,
     ).json();
 
     // addon が読むファイルと broker が握るルールが同一であることが、
     // このスイートの前提そのもの。
     expect(document).toEqual(RESOLVED_DOCUMENT);
-    expect(document.contractVersion).toBe(1);
+    expect(document.contractVersion).toBe(2);
   } finally {
     await teardownFixture(fixture);
   }
@@ -547,8 +542,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       const outcome = await expectSinglePolicyOutcome(
         fixture.auditDir,
         {
-          ruleId: "anthropic.bodyless.bootstrap",
-          requestPolicyKind: "bodyless",
+          ruleId: "anthropic.bootstrap",
           requestPolicyResult: "pass",
           reason: "empty-body",
         },
@@ -675,8 +669,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       const outcome = await expectSinglePolicyOutcome(
         fixture.auditDir,
         {
-          ruleId: "anthropic.messages.create",
-          requestPolicyKind: "json",
+          ruleId: "anthropic.messages",
           requestPolicyResult: "rewrite",
           reason: "masked-json",
         },
@@ -763,8 +756,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
       const outcome = await expectSinglePolicyOutcome(
         fixture.auditDir,
         {
-          ruleId: "anthropic.messages.create",
-          requestPolicyKind: "json",
+          ruleId: "anthropic.messages",
           requestPolicyResult: "block",
           // 未知の判別子は tagged union のガードに弾かれる。
           reason: "schema-mismatch",
@@ -830,7 +822,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           path: "/api/claude_code/settings",
           method: "GET",
           body: "x",
-          ruleId: "anthropic.bodyless.settings",
+          ruleId: "anthropic.bootstrap",
           reason: "unexpected-body",
         },
         {
@@ -839,7 +831,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           method: "GET",
           headers: { "Content-Encoding": "unsupported" },
           body: "x",
-          ruleId: "anthropic.bodyless.settings",
+          ruleId: "anthropic.bootstrap",
           reason: "body-unavailable",
         },
       ];

@@ -3,11 +3,12 @@ nas_addon.py — mitmproxy addon for nas network authorization.
 
 Intercepts HTTP/HTTPS requests, extracts session credentials from
 Proxy-Authorization, queries the per-session broker UDS for authorization
-decisions, and evaluates review rules for request body inspection.
+decisions, and inspects request bodies against the rule the broker named.
 """
 
 import base64
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -22,52 +23,124 @@ from mitmproxy import connection, http
 NETWORK_DIR = "/nas-network"
 SESSIONS_DIR = os.path.join(NETWORK_DIR, "sessions")
 BROKERS_DIR = os.path.join(NETWORK_DIR, "brokers")
-REVIEW_RULES_DIR = os.path.join(NETWORK_DIR, "review-rules")
+AUTHZ_DIR = os.path.join(NETWORK_DIR, "authz")
 
 BODY_PREVIEW_MAX = 1024
 REQUEST_POLICY_BLOCK_BODY = b"blocked: request policy"
 
-_SAFE_RULE_ID = re.compile(r"[a-z][a-z0-9._-]{0,63}\Z")
+# Contract version of the resolved authorization document. A document that
+# does not carry exactly this version is rejected whole: the host writes it
+# and the addon re-validates it, so a mismatch means the two halves of the
+# session were built from different releases.
+AUTHZ_CONTRACT_VERSION = 2
+
+# A violation finding quotes the offending node. The depth and byte ceilings
+# keep that quote readable and stop a finding from growing into a copy of the
+# request body. Depth and width bound how much of the node is walked and
+# EXCERPT_MASK_BUDGET how much text is scanned for secrets, because the
+# offending node is attacker-controlled and may be nearly the whole body:
+# bounding only the printed result would leave the work unbounded.
+EXCERPT_MAX_DEPTH = 3
+EXCERPT_MAX_WIDTH = 16
+EXCERPT_MASK_BUDGET = 4096
+EXCERPT_MAX_BYTES = 512
+EXCERPT_ELIDED = "..."
+
+# Ceiling on how many distinct violation findings one body inspection keeps.
+# Grouping violations by their value does not bound the list on its own: the
+# value is a string out of the request body, so a body carrying a fresh value
+# at every node yields a fresh finding at every node, each one paying for an
+# excerpt. Violations past the ceiling are counted but not retained, and the
+# count is reported as one further finding, so the totals stay honest while
+# the work and the memory stay bounded.
+MAX_RETAINED_FINDINGS = 64
+
+FINDING_SCHEMA_MISMATCH = "schema-mismatch"
+FINDING_UNEXPECTED_BODY = "unexpected-body"
+FINDING_BODY_UNAVAILABLE = "body-unavailable"
+FINDING_INSPECTION_INCOMPLETE = "inspection-incomplete"
+FINDING_FINDINGS_TRUNCATED = "findings-truncated"
+
+# `deny` beats `review` beats `allow`. The consequence of a rule whose
+# acceptance conditions were violated is the strictest consequence among the
+# conditions that were actually violated.
+VIOLATION_SEVERITY = {"allow": 0, "review": 1, "deny": 2}
+
+# The rule ID a scope's `fallback` produces. `$` is outside the rule key
+# syntax, so a user-written ID can never collide with it.
+FALLBACK_RULE_KEY = "$fallback"
+
+# A real rule ID, a scope's `<scope>.$fallback`, or the bare `$fallback`
+# that a request belonging to no scope carries.
+_SAFE_RULE_ID = re.compile(
+    r"(?:[a-z][a-z0-9._-]{0,63}(?:\.\$fallback)?|\$fallback)\Z"
+)
+_RULE_KEY = re.compile(r"[a-z][a-z0-9._-]{0,63}\Z")
 _SAFE_SESSION_LABEL = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
-_DOCUMENT_KEYS = frozenset(("contractVersion", "rules"))
+
+_DOCUMENT_KEYS = frozenset((
+    "contractVersion",
+    "fallback",
+    "defaults",
+    "scopes",
+))
+_SCOPE_KEYS = frozenset((
+    "name",
+    "targets",
+    "fallback",
+    "fallbackRuleId",
+    "limits",
+    "secrets",
+    "inject",
+    "audit",
+    "rules",
+))
 _RULE_KEYS = frozenset((
     "id",
-    "method",
-    "host",
-    "path",
-    "pathPrefix",
-    "action",
+    "key",
+    "precedes",
+    "match",
+    "onMatch",
+    "onIndeterminate",
+    "expect",
+    "limits",
+    "secrets",
+    "inject",
     "audit",
-    "requestPolicy",
 ))
-_BODYLESS_POLICY_KEYS = frozenset(("kind",))
-_JSON_POLICY_KEYS = frozenset((
-    "kind",
+_MATCH_KEYS = frozenset(("methods", "paths", "bodyFormat"))
+_PATH_KEYS = frozenset(("source", "segments", "trailingDoubleStar"))
+_TARGET_KEYS = frozenset(("source", "host", "port"))
+_LIMIT_KEYS = frozenset((
     "maxBodyBytes",
     "maxDepth",
     "maxNodes",
-    "maxDecodedBytes",
-    "taggedUnions",
-    "encodedFields",
+    "maxSelectorExpansions",
 ))
-_TAGGED_UNION_KEYS = frozenset((
-    "at",
-    "discriminator",
-    "allowedTags",
-))
-_ENCODED_FIELD_KEYS = frozenset((
-    "at",
-    "whenField",
-    "whenEquals",
-    "dataField",
-    "encoding",
-))
-_JSON_LIMITS = {
+_EXPECT_KEYS = {
+    "emptyBody": frozenset(("kind", "onViolation")),
+    "jsonRoot": frozenset(("kind", "onViolation", "rootType")),
+    "unionShape": frozenset((
+        "kind",
+        "onViolation",
+        "at",
+        "exclude",
+        "discriminator",
+        "allowed",
+    )),
+}
+_LIMIT_CEILINGS = {
     "maxBodyBytes": 33_554_432,
     "maxDepth": 64,
     "maxNodes": 200_000,
-    "maxDecodedBytes": 33_554_432,
+    "maxSelectorExpansions": 1_000_000,
 }
+_ACTIONS = frozenset(("allow", "review", "deny"))
+_BODY_FORMATS = frozenset(("none", "json", "opaque"))
+# `review` is not implemented yet, so a document that declares it is rejected
+# rather than quietly rounded to `deny`: rounding would make an approval the
+# operator asked for look like it worked.
+_VIOLATION_ACTIONS = frozenset(("deny", "allow"))
 
 # --- request masking -------------------------------------------------------
 # Pattern expansion mirrors src/network/mask_patterns.ts (broker-side
@@ -176,9 +249,36 @@ def _apply_request_masking(flow, patterns: list[bytes]) -> None:
         flow.mask_blocked = True
 
 
+def _contains_forbidden(flow, patterns: list[bytes]) -> bool:
+    """Whether a `forbid` secret appears anywhere in the outgoing request.
+
+    Checked before anything is rewritten: masking would erase the very
+    occurrence that has to stop the request. The same expansion masking uses
+    is applied, so a value carried percent-encoded or inside a base64 blob is
+    still recognised. Neither the value nor where it was found is logged.
+
+    A body that cannot be decoded counts as containing the secret. Absence
+    has to be proved, and an undecodable body proves nothing."""
+    if not patterns:
+        return False
+    haystacks = [flow.request.path.encode("utf-8", errors="surrogateescape")]
+    for name in list(flow.request.headers.keys()):
+        for value in flow.request.headers.get_all(name):
+            haystacks.append(value.encode("utf-8", errors="surrogateescape"))
+    try:
+        content = flow.request.content
+    except ValueError:
+        return True
+    if content:
+        haystacks.append(content)
+    return any(
+        pattern in haystack for haystack in haystacks for pattern in patterns
+    )
+
+
 _registry_cache: dict[str, tuple[float, dict]] = {}
-_INVALID_REVIEW_RULES = object()
-_review_rules_cache: dict[str, tuple[Optional[int], object]] = {}
+_INVALID_AUTHZ_DOCUMENT = object()
+_authz_cache: dict[str, tuple[Optional[int], object]] = {}
 CACHE_TTL = 5.0
 
 
@@ -201,26 +301,14 @@ def _has_exact_keys(value: object, expected: frozenset[str]) -> bool:
     return isinstance(value, dict) and value.keys() == expected
 
 
+def _has_keys_within(value: object, allowed: frozenset[str]) -> bool:
+    """Accept a subset of `allowed`. The host omits optional fields rather
+    than writing nulls, so an absent key is normal and an unknown key is not."""
+    return isinstance(value, dict) and set(value.keys()).issubset(allowed)
+
+
 def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and len(value) > 0
-
-
-def _is_exact_non_port_host(value: object) -> bool:
-    if not isinstance(value, str) or value != value.strip():
-        return False
-    host = value[:-1] if value.endswith(".") else value
-    if len(host) == 0 or len(host) > 253:
-        return False
-    labels = host.split(".")
-    return all(
-        len(label) <= 63
-        and re.fullmatch(
-            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
-            label,
-            re.IGNORECASE | re.ASCII,
-        ) is not None
-        for label in labels
-    )
 
 
 def _is_valid_selector(value: object) -> bool:
@@ -237,140 +325,268 @@ def _is_valid_selector(value: object) -> bool:
     return True
 
 
-def _is_valid_tagged_union(value: object) -> bool:
-    if not _has_exact_keys(value, _TAGGED_UNION_KEYS):
+def _is_valid_limits(value: object) -> bool:
+    if not _has_exact_keys(value, _LIMIT_KEYS):
         return False
-    allowed_tags = value["allowedTags"]
-    return (
-        _is_valid_selector(value["at"])
-        and _is_non_empty_string(value["discriminator"])
-        and isinstance(allowed_tags, list)
-        and len(allowed_tags) > 0
-        and all(_is_non_empty_string(tag) for tag in allowed_tags)
+    for field, ceiling in _LIMIT_CEILINGS.items():
+        limit = value[field]
+        if type(limit) is not int or limit <= 0 or limit > ceiling:
+            return False
+    return True
+
+
+def _is_valid_dispositions(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(name, str)
+        and disposition in ("inject", "mask", "forbid", "ignore")
+        for name, disposition in value.items()
     )
 
 
-def _is_valid_encoded_field(value: object) -> bool:
-    if not _has_exact_keys(value, _ENCODED_FIELD_KEYS):
-        return False
-    return (
-        _is_valid_selector(value["at"])
-        and _is_non_empty_string(value["whenField"])
-        and _is_non_empty_string(value["whenEquals"])
-        and _is_non_empty_string(value["dataField"])
-        and value["encoding"] == "base64"
+def _is_valid_inject(value: object) -> bool:
+    return isinstance(value, list) and all(
+        _has_exact_keys(entry, frozenset(("name", "value")))
+        and _is_non_empty_string(entry["name"])
+        and isinstance(entry["value"], str)
+        for entry in value
     )
 
 
-def _is_valid_request_policy(value: object, method: str) -> bool:
+def _is_valid_expect(value: object) -> bool:
     if not isinstance(value, dict):
         return False
     kind = value.get("kind")
-    if kind == "bodyless":
-        return (
-            _has_exact_keys(value, _BODYLESS_POLICY_KEYS)
-            and method.upper() == "GET"
-        )
-    if kind != "json" or not _has_exact_keys(value, _JSON_POLICY_KEYS):
+    expected = _EXPECT_KEYS.get(kind) if isinstance(kind, str) else None
+    if expected is None or not _has_exact_keys(value, expected):
         return False
-    if method.upper() != "POST":
+    if value["onViolation"] not in _VIOLATION_ACTIONS:
         return False
-    for field, maximum in _JSON_LIMITS.items():
-        limit = value[field]
-        if (
-            type(limit) is not int
-            or limit <= 0
-            or limit > maximum
-        ):
-            return False
-    tagged_unions = value["taggedUnions"]
-    encoded_fields = value["encodedFields"]
+    if kind == "emptyBody":
+        return True
+    if kind == "jsonRoot":
+        return value["rootType"] in ("object", "array")
+    allowed = value["allowed"]
+    exclude = value["exclude"]
     return (
-        isinstance(tagged_unions, list)
-        and all(_is_valid_tagged_union(item) for item in tagged_unions)
-        and isinstance(encoded_fields, list)
-        and all(_is_valid_encoded_field(item) for item in encoded_fields)
+        _is_valid_selector(value["at"])
+        and isinstance(exclude, list)
+        and all(_is_valid_selector(pattern) for pattern in exclude)
+        and _is_non_empty_string(value["discriminator"])
+        and isinstance(allowed, list)
+        and len(allowed) > 0
+        and all(_is_non_empty_string(tag) for tag in allowed)
     )
 
 
-def _is_valid_resolved_rule(value: object) -> bool:
+def _is_valid_segment(value: object) -> bool:
     if not isinstance(value, dict):
         return False
-    keys = value.keys()
-    if not {"action", "audit"}.issubset(keys):
+    kind = value.get("kind")
+    if kind == "all":
+        return value.keys() == frozenset(("kind",))
+    if kind != "finite" or value.keys() != frozenset(("kind", "values")):
         return False
-    if not set(keys).issubset(_RULE_KEYS):
-        return False
-    if value["action"] not in ("allow", "review", "deny"):
-        return False
-    if type(value["audit"]) is not bool:
-        return False
+    values = value["values"]
+    return isinstance(values, list) and all(
+        isinstance(token, str) for token in values
+    )
 
-    if "id" in value:
-        rule_id = value["id"]
-        if (
-            not isinstance(rule_id, str)
-            or _SAFE_RULE_ID.fullmatch(rule_id) is None
+
+def _is_valid_path(value: object) -> bool:
+    if not _has_exact_keys(value, _PATH_KEYS):
+        return False
+    segments = value["segments"]
+    return (
+        isinstance(value["source"], str)
+        and type(value["trailingDoubleStar"]) is bool
+        and isinstance(segments, list)
+        and all(_is_valid_segment(segment) for segment in segments)
+    )
+
+
+def _is_valid_match(value: object) -> bool:
+    if not _has_exact_keys(value, _MATCH_KEYS):
+        return False
+    methods = value["methods"]
+    if methods is not None:
+        if not isinstance(methods, list) or not all(
+            _is_non_empty_string(method) for method in methods
         ):
             return False
-    for field in ("method", "host", "path", "pathPrefix"):
-        if field in value and not _is_non_empty_string(value[field]):
-            return False
-    if "path" in value and "pathPrefix" in value:
+    body_format = value["bodyFormat"]
+    if body_format is not None and body_format not in _BODY_FORMATS:
         return False
-    if "path" in value and "?" in value["path"]:
-        return False
-
-    policy = value.get("requestPolicy")
-    if policy is None:
-        return "requestPolicy" not in value
-    if value["action"] == "deny":
-        return False
-    if not all(field in value for field in ("id", "method", "host", "path")):
-        return False
-    if not _is_exact_non_port_host(value["host"]):
-        return False
-    return _is_valid_request_policy(policy, value["method"])
+    paths = value["paths"]
+    return (
+        isinstance(paths, list)
+        and len(paths) > 0
+        and all(_is_valid_path(path) for path in paths)
+    )
 
 
-def _is_valid_resolved_review_rules(value: object) -> bool:
+def _is_valid_rule(value: object, scope_name: str, keys: set[str]) -> bool:
+    if not _has_keys_within(value, _RULE_KEYS):
+        return False
+    if not {"id", "key", "precedes", "match", "onMatch"}.issubset(value.keys()):
+        return False
+    key = value["key"]
+    if not isinstance(key, str) or _RULE_KEY.fullmatch(key) is None:
+        return False
+    if value["id"] != f"{scope_name}.{key}":
+        return False
+    precedes = value["precedes"]
+    # A rule may only be ordered against rules of its own scope. Selection
+    # reads these keys, so a key naming nothing would silently drop an edge
+    # and let a broad allow overtake a narrow deny.
+    if not isinstance(precedes, list) or not all(
+        isinstance(other, str) and other in keys and other != key
+        for other in precedes
+    ):
+        return False
+    if not _is_valid_match(value["match"]):
+        return False
+    if value["onMatch"] not in _ACTIONS:
+        return False
+    if value.get("onIndeterminate", "deny") not in ("review", "deny"):
+        return False
+    expect = value.get("expect", [])
+    if not isinstance(expect, list) or not all(
+        _is_valid_expect(item) for item in expect
+    ):
+        return False
+    # UnionShape / JsonRoot は解析済みの JSON ツリーを前提にする。format が
+    # "json" でないルールに置かれていたら、検査は決して走らないのに設定は
+    # 検査したつもりでいる。
+    if value["match"]["bodyFormat"] != "json" and any(
+        item["kind"] != "emptyBody" for item in expect
+    ):
+        return False
+    if not _is_valid_limits(value.get("limits", _LIMIT_CEILINGS)):
+        return False
+    if not _is_valid_dispositions(value.get("secrets", {})):
+        return False
+    if not _is_valid_inject(value.get("inject", [])):
+        return False
+    return value.get("audit", "always") in ("always", "aggregate", "off")
+
+
+def _is_valid_target(value: object) -> bool:
+    if not _has_exact_keys(value, _TARGET_KEYS):
+        return False
+    host = value["host"]
+    port = value["port"]
+    if port is not None and (type(port) is not int or not 0 < port <= 65535):
+        return False
+    if not isinstance(host, dict):
+        return False
+    if host.get("kind") == "exact":
+        return host.keys() == frozenset(("kind", "host")) and _is_non_empty_string(
+            host["host"]
+        )
+    if host.get("kind") == "suffix":
+        return host.keys() == frozenset(
+            ("kind", "suffix")
+        ) and _is_non_empty_string(host["suffix"])
+    return False
+
+
+def _is_valid_scope(value: object) -> bool:
+    if not _has_keys_within(value, _SCOPE_KEYS):
+        return False
+    if not {"name", "targets", "fallback", "fallbackRuleId", "rules"}.issubset(
+        value.keys()
+    ):
+        return False
+    name = value["name"]
+    if not _is_non_empty_string(name):
+        return False
+    if value["fallbackRuleId"] != f"{name}.{FALLBACK_RULE_KEY}":
+        return False
+    if value["fallback"] not in _ACTIONS:
+        return False
+    targets = value["targets"]
+    if (
+        not isinstance(targets, list)
+        or len(targets) == 0
+        or not all(_is_valid_target(target) for target in targets)
+    ):
+        return False
+    rules = value["rules"]
+    if not isinstance(rules, list):
+        return False
+    keys = {
+        rule["key"]
+        for rule in rules
+        if isinstance(rule, dict) and isinstance(rule.get("key"), str)
+    }
+    if len(keys) != len(rules):
+        return False
+    if not all(_is_valid_rule(rule, name, keys) for rule in rules):
+        return False
+    if not _is_valid_limits(value.get("limits", _LIMIT_CEILINGS)):
+        return False
+    if not _is_valid_dispositions(value.get("secrets", {})):
+        return False
+    if not _is_valid_inject(value.get("inject", [])):
+        return False
+    return value.get("audit", "always") in ("always", "aggregate", "off")
+
+
+def _is_valid_authz_document(value: object) -> bool:
+    """Re-validate the document the host wrote.
+
+    The host resolves the config once and writes the result here; this side
+    checks the result again before trusting it. Anything unrecognised
+    invalidates the whole document rather than the one rule that carries it,
+    because a document the addon only half understands is a document whose
+    selection it cannot reproduce."""
     try:
         if not _has_exact_keys(value, _DOCUMENT_KEYS):
             return False
         if type(value["contractVersion"]) is not int:
             return False
-        if value["contractVersion"] != 1:
+        if value["contractVersion"] != AUTHZ_CONTRACT_VERSION:
             return False
-        rules = value["rules"]
-        return (
-            isinstance(rules, list)
-            and all(_is_valid_resolved_rule(rule) for rule in rules)
+        if value["fallback"] not in ("review", "deny"):
+            return False
+        defaults = value["defaults"]
+        if not _has_exact_keys(defaults, frozenset(("limits", "secrets", "audit"))):
+            return False
+        if not _is_valid_limits(defaults["limits"]):
+            return False
+        if not _is_valid_dispositions(defaults["secrets"]):
+            return False
+        if defaults["audit"] not in ("always", "aggregate", "off"):
+            return False
+        scopes = value["scopes"]
+        return isinstance(scopes, list) and all(
+            _is_valid_scope(scope) for scope in scopes
         )
     except Exception:
         return False
 
 
-def _load_review_rules(session_id: str) -> object:
-    path = os.path.join(REVIEW_RULES_DIR, f"{session_id}.json")
+def _load_authz_document(session_id: str) -> object:
+    path = os.path.join(AUTHZ_DIR, f"{session_id}.json")
     try:
         mtime = os.stat(path).st_mtime_ns
     except OSError:
         mtime = None
 
-    cached = _review_rules_cache.get(session_id)
+    cached = _authz_cache.get(session_id)
     if cached and cached[0] == mtime:
         return cached[1]
 
-    state: object = _INVALID_REVIEW_RULES
+    state: object = _INVALID_AUTHZ_DOCUMENT
     if mtime is not None:
         try:
             with open(path) as f:
                 document = json.load(f)
-            if _is_valid_resolved_review_rules(document):
+            if _is_valid_authz_document(document):
                 state = document
         except Exception:
             pass
-    _review_rules_cache[session_id] = (mtime, state)
+    _authz_cache[session_id] = (mtime, state)
     return state
 
 
@@ -504,27 +720,18 @@ def _mask_json_string(value: str, patterns: list[bytes]) -> tuple[str, bool]:
     return value, False
 
 
-def _recursively_mask_json(
-    node, patterns: list[bytes], consumed: dict
-) -> tuple[object, bool]:
-    """Mask every string value and object key recursively, skipping encoded
-    data already consumed by an encoded-field rule. Raises _PolicyBlock
-    (key-collision) before inserting a duplicate masked key."""
+def _recursively_mask_json(node, patterns: list[bytes]) -> tuple[object, bool]:
+    """Mask every string value and object key recursively. Raises
+    _PolicyBlock (key-collision) before inserting a duplicate masked key."""
     if isinstance(node, dict):
         changed = False
         new_node: dict = {}
-        consumed_keys = consumed.get(id(node), frozenset())
         for key, value in node.items():
             masked_key = key
             if isinstance(key, str):
                 masked_key, key_changed = _mask_json_string(key, patterns)
                 changed = changed or key_changed
-            if key in consumed_keys:
-                new_value, value_changed = value, False
-            else:
-                new_value, value_changed = _recursively_mask_json(
-                    value, patterns, consumed
-                )
+            new_value, value_changed = _recursively_mask_json(value, patterns)
             changed = changed or value_changed
             if masked_key in new_node:
                 raise _PolicyBlock("key-collision")
@@ -534,9 +741,7 @@ def _recursively_mask_json(
         changed = False
         new_list = []
         for item in node:
-            new_item, item_changed = _recursively_mask_json(
-                item, patterns, consumed
-            )
+            new_item, item_changed = _recursively_mask_json(item, patterns)
             new_list.append(new_item)
             changed = changed or item_changed
         return new_list, changed
@@ -551,6 +756,20 @@ def _json_children(node) -> list:
     if isinstance(node, list):
         return list(node)
     return []
+
+
+def _json_members(node) -> list[tuple[str, object]]:
+    """Children paired with the JSON Pointer token that addresses them."""
+    if isinstance(node, dict):
+        return list(node.items())
+    if isinstance(node, list):
+        return [(str(index), item) for index, item in enumerate(node)]
+    return []
+
+
+def _pointer_step(pointer: str, token: str) -> str:
+    """Append one reference token to a JSON Pointer (RFC 6901 escaping)."""
+    return pointer + "/" + token.replace("~", "~0").replace("/", "~1")
 
 
 def _parse_selector(selector: str) -> list[tuple[str, Optional[str]]]:
@@ -585,52 +804,133 @@ def _json_pointer_index(literal: str) -> Optional[int]:
     return int(literal)
 
 
-def _collect_selector_matches(node, segments, matches: list, seen: set) -> int:
-    """Collect every node reached by the selector. A node is recorded at most
-    once per selector even when several `**` routes reach it.
+class _SelectorBudget:
+    """Expansion accounting for the body inspection of one rule.
 
-    Returns how many (node, segment-index) states were expanded. Expanding a
-    state is a pure function of that state, so each one is memoized and
-    expanded at most once. Without this a selector with several `**` segments
+    One instance is shared by every walk that inspection performs — each
+    guard, each of its `exclude` patterns, each encoded-field selector — so
+    the configured ceiling bounds the whole inspection rather than being
+    handed out afresh per walk, which would multiply it by the number of
+    walks the policy happens to contain.
+
+    A walk that runs out of budget stops early, which leaves the remaining
+    subtrees uninspected. `exhausted` records that, so the caller can report
+    an incomplete inspection instead of mistaking a truncated walk for a
+    clean one, and `last_pointer` says how far the walk got. Both are sticky:
+    once the shared budget is gone, every later walk in the same inspection
+    finds nothing and the pointer keeps naming where the money ran out."""
+
+    def __init__(self, max_expansions: int) -> None:
+        self.max_expansions = max_expansions
+        self.spent_expansions = 0
+        self.exhausted = False
+        self.last_pointer = ""
+
+    def charge(self, pointer: str) -> bool:
+        """Charge one state expansion. Returns False once the expansion
+        budget is used up."""
+        if self.exhausted:
+            return False
+        self.last_pointer = pointer
+        if self.spent_expansions >= self.max_expansions:
+            self.exhausted = True
+            return False
+        self.spent_expansions += 1
+        return True
+
+
+def _collect_selector_matches(
+    node, segments, budget: _SelectorBudget, excluded=frozenset()
+) -> list[tuple[str, object]]:
+    """Collect (JSON Pointer, node) for every node reached by the selector. A
+    node is recorded at most once per selector even when several `**` routes
+    reach it, and a node whose pointer is in `excluded` is cut away together
+    with its whole subtree — the walk never descends past it.
+
+    Each (pointer, segment-index) state is charged to `budget` and memoized,
+    so it is expanded at most once: expanding a state is a pure function of
+    that state. Without the memo a selector with several `**` segments
     re-expands the same subtree once per route and grows superlinearly in the
-    number of `**`; the depth and node budgets alone do not bound it."""
-    expansions = [0]
+    number of `**`; the depth and node budgets alone do not bound it. The
+    memo is keyed by pointer rather than by object identity because Python
+    hands out one shared object for small ints and for interned strings, and
+    two positions holding such a value are two nodes to inspect."""
+    matches: list[tuple[str, object]] = []
     visited: set = set()
 
-    def expand(current, index: int) -> None:
-        state = (id(current), index)
+    def expand(current, pointer: str, index: int) -> None:
+        state = (pointer, index)
         if state in visited:
             return
         visited.add(state)
-        expansions[0] += 1
+        if not budget.charge(pointer):
+            return
+        if pointer in excluded:
+            return
         if index == len(segments):
-            if id(current) not in seen:
-                seen.add(id(current))
-                matches.append(current)
+            matches.append((pointer, current))
             return
         kind, literal = segments[index]
         if kind == "**":
             # Zero descendants: the remainder may match at this very node.
-            expand(current, index + 1)
+            expand(current, pointer, index + 1)
             # One or more descendants: keep `**` active while descending.
-            for child in _json_children(current):
-                expand(child, index)
+            for token, child in _json_members(current):
+                expand(child, _pointer_step(pointer, token), index)
             return
         if kind == "*":
-            for child in _json_children(current):
-                expand(child, index + 1)
+            for token, child in _json_members(current):
+                expand(child, _pointer_step(pointer, token), index + 1)
             return
         if isinstance(current, dict):
             if literal in current:
-                expand(current[literal], index + 1)
+                expand(
+                    current[literal],
+                    _pointer_step(pointer, literal),
+                    index + 1,
+                )
             return
         if isinstance(current, list):
             array_index = _json_pointer_index(literal)
             if array_index is not None and array_index < len(current):
-                expand(current[array_index], index + 1)
+                expand(
+                    current[array_index],
+                    _pointer_step(pointer, str(array_index)),
+                    index + 1,
+                )
 
-    expand(node, 0)
-    return expansions[0]
+    expand(node, "", 0)
+    return matches
+
+
+def _scan_selector(
+    root, selector: str, excludes: list, budget: _SelectorBudget
+) -> tuple[list[tuple[str, object]], Optional[tuple[str, str]]]:
+    """Walk `selector` over `root` with every `exclude` subtree cut away.
+
+    Every walk here is charged to the caller's `budget`, which spans the whole
+    body inspection rather than this one scan.
+
+    Returns (matches, incomplete). `incomplete` is None when both the exclude
+    walks and the selector walk finished; otherwise it is the (selector, last
+    pointer reached) pair of the walk that ran out of budget. An exclude walk
+    that ran out cannot be trusted to have found everything it should cut, so
+    it reports incomplete rather than inspecting an under-excluded tree."""
+    excluded: set = set()
+    for pattern in excludes:
+        found = _collect_selector_matches(
+            root, _parse_selector(pattern), budget
+        )
+        if budget.exhausted:
+            return [], (pattern, budget.last_pointer)
+        excluded.update(pointer for pointer, _node in found)
+
+    matches = _collect_selector_matches(
+        root, _parse_selector(selector), budget, excluded
+    )
+    if budget.exhausted:
+        return matches, (selector, budget.last_pointer)
+    return matches, None
 
 
 def _account_json(node, max_depth: int, max_nodes: int) -> None:
@@ -651,82 +951,178 @@ def _account_json(node, max_depth: int, max_nodes: int) -> None:
     walk(node, 1)
 
 
-def _validate_tagged_unions(root, guards: list) -> None:
-    """Validate every node matched by each guard. A matched node must be an
-    object whose discriminator is its own string property listed in
-    allowedTags. Any other shape blocks as schema-mismatch."""
-    for guard in guards:
-        segments = _parse_selector(guard["at"])
-        matches: list = []
-        _collect_selector_matches(root, segments, matches, set())
-        discriminator = guard["discriminator"]
-        allowed = frozenset(guard["allowedTags"])
-        for node in matches:
-            if not isinstance(node, dict):
-                raise _PolicyBlock("schema-mismatch")
-            tag = node.get(discriminator)
-            if not isinstance(tag, str) or tag not in allowed:
-                raise _PolicyBlock("schema-mismatch")
+def _mask_scalar_for_excerpt(node, patterns: list[bytes], remaining: list):
+    """Mask one JSON scalar before it is serialized into the excerpt.
+
+    Masking has to happen on the scalar's own content, not on the serialized
+    document: the patterns hold the raw secret bytes, and `json.dumps`
+    escapes `"`, `\\`, newline and tab, so a secret containing any of those
+    stops matching once it has been escaped and would be emitted verbatim.
+
+    A non-string scalar is masked in the form it will be printed in and
+    becomes a string when that changes anything, so a secret spelled as a
+    bare number cannot slip through either. Otherwise it is returned as is,
+    which keeps numbers and booleans printed as numbers and booleans.
+
+    A scalar longer than the remaining mask budget is elided whole rather
+    than cut down to fit: masking scans the text once per pattern, so the
+    budget has to be checked before the scan, and cutting first could split
+    a secret and leave the unmatched remainder in the excerpt."""
+    text = node if isinstance(node, str) else json.dumps(node)
+    if len(text) > remaining[0]:
+        return EXCERPT_ELIDED
+    remaining[0] -= len(text)
+    masked, changed = _mask_json_string(text, patterns)
+    if isinstance(node, str):
+        return masked
+    return masked if changed else node
 
 
-def _decode_strict_base64(value: str) -> bytes:
-    """Decode strict standard base64 only.
+def _prune_for_excerpt(node, depth: int, patterns: list[bytes], remaining):
+    """Copy the node with secrets masked, and with subtrees past the depth
+    limit, members past the width limit, and text past the mask budget
+    replaced by an elision marker.
 
-    `validate=True` rejects any character outside the standard alphabet, so
-    whitespace, line-wrapped MIME input, and the URL-safe alphabet all fail.
-    The canonical round-trip check additionally rejects wrong padding and
-    non-canonical trailing bits, and guarantees re-encoding is stable."""
+    Width matters as much as depth here: the violating node can be most of
+    the request body, and a container is copied member by member."""
+    if isinstance(node, (dict, list)) and depth <= 0:
+        return EXCERPT_ELIDED
+    if isinstance(node, dict):
+        pruned = {
+            _mask_scalar_for_excerpt(key, patterns, remaining):
+                _prune_for_excerpt(value, depth - 1, patterns, remaining)
+            for key, value in itertools.islice(
+                node.items(), EXCERPT_MAX_WIDTH
+            )
+        }
+        if len(node) > EXCERPT_MAX_WIDTH:
+            pruned[EXCERPT_ELIDED] = EXCERPT_ELIDED
+        return pruned
+    if isinstance(node, list):
+        pruned = [
+            _prune_for_excerpt(item, depth - 1, patterns, remaining)
+            for item in itertools.islice(node, EXCERPT_MAX_WIDTH)
+        ]
+        if len(node) > EXCERPT_MAX_WIDTH:
+            pruned.append(EXCERPT_ELIDED)
+        return pruned
+    return _mask_scalar_for_excerpt(node, patterns, remaining)
+
+
+def _violation_excerpt(node, patterns: list[bytes]) -> str:
+    """Render the violating node on its own, with secrets masked and the text
+    cut off by depth, width, and bytes.
+
+    A finding travels to an approval UI and to the audit log, so it must
+    carry enough to recognize the node and no more: never the surrounding
+    body, and never an unmasked secret that happened to sit inside it."""
     try:
-        raw = value.encode("ascii")
-        decoded = base64.b64decode(raw, validate=True)
-        if base64.b64encode(decoded) != raw:
-            raise ValueError("non-canonical base64")
-        return decoded
+        text = json.dumps(
+            _prune_for_excerpt(
+                node, EXCERPT_MAX_DEPTH, patterns, [EXCERPT_MASK_BUDGET]
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     except Exception:
-        raise _PolicyBlock("encoded-decode-failed")
+        return EXCERPT_ELIDED
+    # Every scalar is already masked; this second pass only covers a secret
+    # that spans the punctuation the serializer inserts between them.
+    raw = _mask_bytes(text.encode("utf-8", "surrogatepass"), patterns)
+    if len(raw) > EXCERPT_MAX_BYTES:
+        # Cutting by bytes can split a character; "replace" keeps the excerpt
+        # printable rather than raising on the truncated tail.
+        cut = raw[:EXCERPT_MAX_BYTES].decode("utf-8", "replace")
+        return cut + EXCERPT_ELIDED
+    return raw.decode("utf-8", "replace")
 
 
-def _process_encoded_fields(
-    root, encoded_fields: list, patterns: list[bytes], max_decoded: int
-) -> tuple[bool, dict]:
-    """Decode, mask, and canonically re-encode every matching encoded field,
-    mutating `root` in place. Returns (changed, consumed) where `consumed`
-    maps a container's id() to the data fields that must not be masked a
-    second time as ordinary strings."""
-    changed = False
-    consumed: dict = {}
-    remaining = max_decoded
-    for field in encoded_fields:
-        if field["encoding"] != "base64":
-            raise _PolicyBlock("encoded-decode-failed")
-        segments = _parse_selector(field["at"])
-        matches: list = []
-        _collect_selector_matches(root, segments, matches, set())
-        when_field = field["whenField"]
-        when_equals = field["whenEquals"]
-        data_field = field["dataField"]
-        for node in matches:
-            # "/**" also selects scalars and lists; only objects whose
-            # discriminator matches carry an encoded payload.
-            if not isinstance(node, dict):
-                continue
-            if node.get(when_field) != when_equals:
-                continue
-            data = node.get(data_field)
-            if not isinstance(data, str):
-                raise _PolicyBlock("schema-mismatch")
-            decoded = _decode_strict_base64(data)
-            remaining -= len(decoded)
-            if remaining < 0:
-                raise _PolicyBlock("resource-limit")
-            masked_blob = _mask_bytes(decoded, patterns)
-            if masked_blob != decoded:
-                node[data_field] = base64.b64encode(
-                    masked_blob
-                ).decode("ascii")
-                changed = True
-            consumed.setdefault(id(node), set()).add(data_field)
-    return changed, consumed
+def _mask_tracking_separators(
+    data: bytes, separators: list[bool], pattern: bytes
+) -> tuple[bytes, list[bool]]:
+    """Replace `pattern` the way `_mask_bytes` does — left to right, no
+    overlaps — while carrying a per-byte "this byte is a separator" flag
+    through the substitution.
+
+    The bytes a match consumes take their flags with them, so a secret that
+    swallowed a separator leaves no separator behind, and the replacement
+    itself is content rather than structure."""
+    out = bytearray()
+    out_separators: list[bool] = []
+    start = 0
+    while True:
+        hit = data.find(pattern, start)
+        if hit < 0:
+            out += data[start:]
+            out_separators.extend(separators[start:])
+            return bytes(out), out_separators
+        out += data[start:hit]
+        out_separators.extend(separators[start:hit])
+        out += MASK_REPLACEMENT
+        out_separators.extend([False] * len(MASK_REPLACEMENT))
+        start = hit + len(pattern)
+
+
+def _mask_json_pointer(pointer: str, patterns: list[bytes]) -> str:
+    """Mask secrets in a JSON Pointer without stopping it being one.
+
+    A pointer is assembled from object keys taken from the request body, so a
+    key that holds a secret would otherwise reach a finding verbatim. Masking
+    the pointer as it is written does not work, for two reasons that pull in
+    opposite directions. A secret containing `/` or `~` appears there only in
+    its escaped spelling and never matches the pattern at all, so masking has
+    to see the unescaped text. But the `/` separators and the `~0`/`~1`
+    escapes are structure, not content, so a secret that spans a separator
+    would be replaced together with the punctuation that makes the pointer
+    parseable.
+
+    Masking therefore runs once over the whole unescaped text — every token's
+    literal content joined by the separators — with a flag per byte recording
+    which bytes are separators. Whatever the substitution does to the content,
+    the surviving flags still say where the tokens end, and re-escaping each
+    one rebuilds a pointer that parses. A secret that ate a separator merges
+    the tokens it spanned into a single masked token, which is the honest
+    result: those two tokens were one secret.
+
+    Masking token by token would leave exactly that case unmasked, which is
+    why one pass over the joined text replaces it rather than following it."""
+    if not pointer:
+        return pointer
+    data = bytearray()
+    separators: list[bool] = []
+    for index, token in enumerate(pointer[1:].split("/")):
+        if index:
+            data += b"/"
+            separators.append(True)
+        literal = token.replace("~1", "/").replace("~0", "~")
+        encoded = literal.encode("utf-8", "surrogatepass")
+        data += encoded
+        separators.extend([False] * len(encoded))
+
+    masked_data = bytes(data)
+    for pattern in patterns:
+        # An empty pattern would match at every position without consuming
+        # anything; `_build_mask_patterns` drops empty secrets, and this keeps
+        # a hand-built pattern list from hanging the walk.
+        if not pattern:
+            continue
+        masked_data, separators = _mask_tracking_separators(
+            masked_data, separators, pattern
+        )
+
+    masked = ""
+    token_bytes = bytearray()
+    for byte, is_separator in zip(masked_data, separators):
+        if is_separator:
+            masked = _pointer_step(
+                masked, token_bytes.decode("utf-8", "surrogatepass")
+            )
+            token_bytes = bytearray()
+        else:
+            token_bytes.append(byte)
+    return _pointer_step(
+        masked, token_bytes.decode("utf-8", "surrogatepass")
+    )
 
 
 def _reject_non_standard_constant(_literal: str):
@@ -747,131 +1143,548 @@ def _reject_duplicate_members(pairs):
     return parsed_object
 
 
-def _execute_json_policy(
-    policy: dict, body: Optional[bytes], patterns: list[bytes]
-) -> tuple[str, Optional[bytes], str]:
+def _expect_finding(
+    expect_index: int, expect_kind: str, at: str, pointer: str,
+    value: Optional[str], excerpt: Optional[str], kind: str,
+    patterns: list[bytes], count: int = 1,
+) -> dict:
+    """Build one finding, masking the pointer on the way in.
+
+    The pointer is masked here rather than at the call sites so that every
+    body-derived field on a finding — pointer, value, excerpt — is masked by
+    the time the record exists, and a new call site cannot forget one. `at`
+    needs no masking: it is the selector out of the rule, not body text.
+
+    `expect` is the position of the acceptance condition inside the rule's
+    `expect` list, which is what an approval will eventually be keyed by:
+    approving a tag found by `/**/content/*` must not also approve the same
+    tag found by `/system/*`."""
+    return {
+        "expect": expect_index,
+        "expectKind": expect_kind,
+        "at": at,
+        "kind": kind,
+        "pointer": _mask_json_pointer(pointer, patterns),
+        "value": value,
+        "excerpt": excerpt,
+        "count": count,
+    }
+
+
+def _scan_union_shape(
+    root, expect: dict, index: int, patterns: list[bytes],
+    budget: _SelectorBudget, findings: list[dict], retained: list[int],
+) -> tuple[bool, Optional[tuple[str, str]]]:
+    """Check every node the selector reaches. Returns (violated, incomplete).
+
+    A matched node must be an object whose discriminator is its own string
+    property listed in `allowed`; any other shape is a violation. A selector
+    matching zero nodes is not a violation.
+
+    The walk does not stop at the first violation. An approver decides per
+    violated value, so a truncated list would surface the next violation only
+    after the previous one was approved, and the audit record would name one
+    value out of many. Violations of the same condition with the same value
+    are one finding with a count, which is the unit an approval applies to."""
+    matches, incomplete = _scan_selector(
+        root, expect["at"], expect.get("exclude") or [], budget
+    )
+    discriminator = expect["discriminator"]
+    allowed = frozenset(expect["allowed"])
+    by_value: dict = {}
+    violated = False
+    for pointer, node in matches:
+        value = None
+        if isinstance(node, dict):
+            tag = node.get(discriminator)
+            if isinstance(tag, str):
+                if tag in allowed:
+                    continue
+                value = _mask_json_string(tag, patterns)[0]
+            # A missing or non-string discriminator leaves no value to
+            # approve, so those group together under the empty value.
+        violated = True
+        seen_finding = by_value.get(value)
+        if seen_finding is not None:
+            seen_finding["count"] += 1
+            continue
+        if len(findings) >= MAX_RETAINED_FINDINGS:
+            # Counted, but not recorded, and not entered into `by_value`
+            # either: keeping the map bounded is what keeps the memory
+            # bounded when every value is distinct.
+            retained[0] += 1
+            continue
+        finding = _expect_finding(
+            index, expect["kind"], expect["at"], pointer, value,
+            _violation_excerpt(node, patterns), FINDING_SCHEMA_MISMATCH,
+            patterns,
+        )
+        by_value[value] = finding
+        findings.append(finding)
+    return violated, incomplete
+
+
+def _evaluate_expects(
+    expects: list, body: Optional[bytes], parsed, patterns: list[bytes],
+    budget: _SelectorBudget,
+) -> tuple[Optional[str], list[dict]]:
+    """Evaluate every acceptance condition of a rule.
+
+    Returns (severity, findings) where severity is the strictest
+    `onViolation` among the conditions that were violated, or None when none
+    were. The list is a conjunction and it does not short-circuit: an
+    approver decides per violated value, so the findings have to be complete.
+
+    An unfinished selector walk proved nothing about the subtrees it never
+    reached, so it counts as a violation whose consequence is the strictest
+    `onViolation` the rule declares anywhere — the walk cannot say which
+    condition it would have failed, so it assumes the worst one on offer."""
+    findings: list[dict] = []
+    dropped = [0]
+    violated: list[str] = []
+    incomplete: Optional[tuple[str, str]] = None
+
+    for index, expect in enumerate(expects):
+        kind = expect["kind"]
+        if kind == "emptyBody":
+            if body is None or len(body) != 0:
+                violated.append(expect["onViolation"])
+                # A body that could not be read is not a body proved empty.
+                # It is reported as unreadable rather than as a body that was
+                # present, because the two ask the operator to look at
+                # different things.
+                finding_kind = (
+                    FINDING_BODY_UNAVAILABLE if body is None
+                    else FINDING_UNEXPECTED_BODY
+                )
+                if len(findings) < MAX_RETAINED_FINDINGS:
+                    findings.append(_expect_finding(
+                        index, kind, "", "", None, None, finding_kind,
+                        patterns,
+                    ))
+                else:
+                    dropped[0] += 1
+            continue
+        if kind == "jsonRoot":
+            wanted = dict if expect["rootType"] == "object" else list
+            if not isinstance(parsed, wanted):
+                violated.append(expect["onViolation"])
+                if len(findings) < MAX_RETAINED_FINDINGS:
+                    findings.append(_expect_finding(
+                        index, kind, "", "", None, None,
+                        FINDING_SCHEMA_MISMATCH, patterns,
+                    ))
+                else:
+                    dropped[0] += 1
+            continue
+        hit, incomplete = _scan_union_shape(
+            parsed, expect, index, patterns, budget, findings, dropped
+        )
+        if hit:
+            violated.append(expect["onViolation"])
+        if incomplete is not None:
+            # Every remaining condition would walk a budget it cannot charge,
+            # match nothing, and repeat the same incomplete finding.
+            break
+
+    if incomplete is not None:
+        exhausted_selector, last_pointer = incomplete
+        findings.append(_expect_finding(
+            -1, "", exhausted_selector, last_pointer, None, None,
+            FINDING_INSPECTION_INCOMPLETE, patterns,
+        ))
+        violated.extend(expect["onViolation"] for expect in expects)
+    if dropped[0]:
+        # No pointer, value or excerpt: this record stands for violations
+        # whose own records were never built. Its count is what they add up
+        # to, so the totals across the list still cover every violation.
+        findings.append(_expect_finding(
+            -1, "", "", "", None, None, FINDING_FINDINGS_TRUNCATED,
+            patterns, count=dropped[0],
+        ))
+
+    if not violated:
+        return None, findings
+    return max(violated, key=lambda action: VIOLATION_SEVERITY[action]), findings
+
+
+def _findings_block_reason(findings: list[dict]) -> str:
+    """An unfinished walk proved nothing about the subtrees it never reached,
+    so it is reported as a resource limit rather than as a shape mismatch."""
+    for finding in findings:
+        if finding["kind"] == FINDING_INSPECTION_INCOMPLETE:
+            return "resource-limit"
+    for finding in findings:
+        if finding["kind"] == FINDING_BODY_UNAVAILABLE:
+            return "body-unavailable"
+    for finding in findings:
+        if finding["kind"] == FINDING_UNEXPECTED_BODY:
+            return "unexpected-body"
+    return "schema-mismatch"
+
+
+def _request_carries_body(request) -> bool:
+    """Whether the request declares that it carries a body at all.
+
+    mitmproxy reports `b""` for a GET that carries no body and for a
+    `Content-Length: 0` POST that carries an empty one; `raw_content` and
+    `data.content` are `b""` in both cases too, so the bytes cannot tell the
+    two apart. HTTP framing can: a request has a body exactly when it says so
+    with `Content-Length` or `Transfer-Encoding`.
+
+    Only the zero-byte case needs to ask. Bytes that arrived are a body
+    whatever the headers claim."""
+    headers = request.headers
+    return "content-length" in headers or "transfer-encoding" in headers
+
+
+def _classify_body(
+    body: Optional[bytes], max_body_bytes: int, carries_body: bool
+) -> tuple[str, object]:
+    """Sort a body into the four kinds selection distinguishes.
+
+    A body that cannot be read at all is reported as `binary` rather than
+    `absent`. `absent` means the request carries no body, which makes every
+    body condition false and lets a broader rule take the request; a body
+    that exists but could not be decoded has proved nothing, so it has to
+    reach a `json` condition as indeterminate.
+
+    Zero bytes are `absent` or `empty` depending on the framing, and the two
+    are not interchangeable: an absent body satisfies no `format`, while an
+    empty one satisfies `"opaque"` and `"none"`. Collapsing both into `empty`
+    would let a bodyless GET be taken by a rule whose condition is that the
+    request carries something."""
     if body is None:
-        return "block", None, "body-unavailable"
-    if len(body) > policy["maxBodyBytes"]:
-        return "block", None, "resource-limit"
+        return "binary", None
+    if len(body) == 0:
+        return ("empty" if carries_body else "absent"), None
+    if len(body) > max_body_bytes:
+        return "binary", None
     try:
         parsed = json.loads(
             body,
             object_pairs_hook=_reject_duplicate_members,
             parse_constant=_reject_non_standard_constant,
         )
-    except _PolicyBlock as exc:
-        return "block", None, exc.reason
     except Exception:
-        return "block", None, "invalid-json"
-    if not isinstance(parsed, dict):
-        return "block", None, "schema-mismatch"
+        return "binary", None
+    return "json", parsed
+
+
+def _inspect_body(
+    rule: dict, body: Optional[bytes], parsed, patterns: list[bytes]
+) -> tuple[str, Optional[bytes], str]:
+    """Run a rule's acceptance conditions and secret masking over the body.
+
+    Returns (result, rewritten_body_or_none, closed_reason) where result is
+    one of "pass", "rewrite", or "block". Any unclassified exception blocks
+    with "processing-failed": a body inspection that fell over has not shown
+    the request to be acceptable."""
+    expects = rule.get("expect", [])
+    # `maxBodyBytes` is not read here. It bounds the parse, and the parse
+    # happens before selection; the chosen rule's own number is applied to
+    # that classification by `_decide_under_rule_budget`, so a tree that
+    # arrives here is one the rule's budget paid for.
+    limits = rule.get("limits", _LIMIT_CEILINGS)
+    # A rule that did not declare `format = "json"` never asked for the body
+    # to be read as JSON, so it does not get the structural pass either — the
+    # tree is only there because classification parses every body once.
+    if rule["match"]["bodyFormat"] != "json":
+        parsed = None
+    if not expects and parsed is None:
+        return "pass", None, "no-inspection"
+
     try:
-        # Accounting runs first on purpose: it proves the tree is within the
-        # depth and node budgets, which is what bounds the recursive `**`
-        # selector traversal and the masking walk that follow.
-        _account_json(parsed, policy["maxDepth"], policy["maxNodes"])
-        _validate_tagged_unions(parsed, policy["taggedUnions"])
-        encoded_changed, consumed = _process_encoded_fields(
-            parsed,
-            policy["encodedFields"],
-            patterns,
-            policy["maxDecodedBytes"],
+        if parsed is not None:
+            # Accounting runs first on purpose: it proves the tree is within
+            # the depth and node budgets, which is what bounds the recursive
+            # `**` selector traversal and the masking walk that follow.
+            _account_json(parsed, limits["maxDepth"], limits["maxNodes"])
+        # One budget for the whole inspection of this body. The expansion
+        # ceiling is a resource ceiling for a rule, so every walk the rule
+        # performs draws on the same allowance; allocating one per walk would
+        # let the real ceiling grow with the number of acceptance conditions
+        # and exclude patterns the rule happens to declare.
+        budget = _SelectorBudget(limits["maxSelectorExpansions"])
+        severity, findings = _evaluate_expects(
+            expects, body, parsed, patterns, budget
         )
-        masked, mask_changed = _recursively_mask_json(
-            parsed, patterns, consumed
-        )
-        changed = encoded_changed or mask_changed
+        if severity is not None and severity != "allow":
+            raise _PolicyBlock(_findings_block_reason(findings))
+
+        if parsed is None:
+            # No JSON tree, so nothing to mask structurally. The byte-level
+            # masking the caller applies covers this body.
+            if severity == "allow":
+                return "pass", None, "violations-allowed"
+            if any(expect["kind"] == "emptyBody" for expect in expects):
+                return "pass", None, "empty-body"
+            return "pass", None, "no-inspection"
+        masked, changed = _recursively_mask_json(parsed, patterns)
     except _PolicyBlock as exc:
         return "block", None, exc.reason
     except Exception:
         return "block", None, "processing-failed"
+
     if not changed:
-        return "pass", None, "recognized-json"
+        return (
+            "pass",
+            None,
+            "violations-allowed" if severity == "allow" else "recognized-json",
+        )
     try:
         serialized = json.dumps(
             masked, ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
     except Exception:
         return "block", None, "serialization-failed"
-    return "rewrite", serialized, "masked-json"
+    # Both are true of this body, and the outcome carries one reason: the
+    # violation wins. A rule that sets `onViolation = "allow"` is required to
+    # keep its audit on precisely so that letting a violation through leaves a
+    # trace, and reporting the rewrite instead spends the only slot there is
+    # on the fact that is already visible in the result field.
+    return (
+        "rewrite",
+        serialized,
+        "violations-allowed" if severity == "allow" else "masked-json",
+    )
 
 
-def _execute_request_policy(
-    policy: dict, body: Optional[bytes], patterns: list[bytes]
-) -> tuple[str, Optional[bytes], str]:
-    """Execute a validated request policy against the request body.
-
-    Returns (result, rewritten_body_or_none, closed_reason) where result is
-    one of "pass", "rewrite", or "block". Any unclassified exception blocks
-    with "processing-failed"."""
-    try:
-        kind = policy.get("kind")
-        if kind == "bodyless":
-            if body is None:
-                return "block", None, "body-unavailable"
-            if len(body) != 0:
-                return "block", None, "unexpected-body"
-            return "pass", None, "empty-body"
-        if kind == "json":
-            return _execute_json_policy(policy, body, patterns)
-        return "block", None, "processing-failed"
-    except Exception:
-        return "block", None, "processing-failed"
+# --- selection -------------------------------------------------------------
+# Mirrors `decide` in src/network/authz/resolve.ts. The host resolves the
+# config and the addon reproduces the same choice on the same document; the
+# two are compared before the body is inspected, so a divergence fails closed
+# instead of running a rule the broker never approved.
 
 
-def _find_rule_by_id(rules: list, rule_id: str) -> Optional[dict]:
-    """Resolve the broker's authoritative rule ID in the local document.
+def _host_matches(pattern: dict, host: str) -> bool:
+    if pattern["kind"] == "exact":
+        return pattern["host"] == host
+    suffix = pattern["suffix"]
+    return host.endswith("." + suffix) and len(host) > len(suffix) + 1
 
-    Returns None when the ID names no rule, which means the broker and the
-    addon disagree about the resolved document. The caller fails closed
-    rather than falling back to a locally chosen rule: the broker approved
-    one specific policy, and executing a different one would run a policy
-    the operator never authorized for this request."""
-    for rule in rules:
-        if rule.get("id") == rule_id:
-            return rule
+
+def _scope_matches(scope: dict, host: str, port: int) -> bool:
+    return any(
+        _host_matches(target["host"], host)
+        and (target["port"] is None or target["port"] == port)
+        for target in scope["targets"]
+    )
+
+
+def _select_scope(document: dict, host: str, port: int) -> Optional[dict]:
+    """Pick the one scope a target belongs to.
+
+    Scopes arrive ordered narrowest first: the host sorts them by target
+    specificity, and the config error check guarantees that any two scopes a
+    single target matches are nested rather than merely overlapping. The
+    matching scopes therefore form a chain, and the first one in document
+    order is its narrowest member."""
+    for scope in document["scopes"]:
+        if _scope_matches(scope, host, port):
+            return scope
     return None
 
 
-def _match_host_pattern(host: str, pattern: str) -> bool:
-    normalized = _normalize_host(host)
-    normalized_pattern = _normalize_host(pattern)
-    if normalized_pattern.startswith("*."):
-        suffix = normalized_pattern[2:]
-        return normalized == suffix or normalized.endswith(f".{suffix}")
-    return normalized == normalized_pattern
+def _segment_matches(segment: dict, token: str) -> bool:
+    return segment["kind"] == "all" or token in segment["values"]
 
 
-def _matches_path_prefix(path: str, prefix: str) -> bool:
-    if not path.startswith(prefix):
+def _path_matches(pattern: dict, path: str) -> bool:
+    """No normalization: no percent-decoding, no collapsing of repeated
+    slashes, no stripping of a trailing slash. The leading `/` is kept as an
+    empty leading token on both sides so the two splits line up."""
+    tokens = path.split("/")
+    segments = pattern["segments"]
+    if pattern["trailingDoubleStar"]:
+        if len(tokens) < len(segments):
+            return False
+    elif len(tokens) != len(segments):
         return False
-    if len(path) == len(prefix):
-        return True
-    if prefix.endswith("/"):
-        return True
-    nxt = path[len(prefix)]
-    return nxt == "/" or nxt == "?"
+    return all(
+        _segment_matches(segment, tokens[index])
+        for index, segment in enumerate(segments)
+    )
 
 
-def _match_review_rule(rule: dict, method: str, host: str, path: str) -> bool:
-    if "method" in rule and rule["method"]:
-        if rule["method"].upper() != method.upper():
-            return False
-    if "host" in rule and rule["host"]:
-        if not _match_host_pattern(host, rule["host"]):
-            return False
-    if "path" in rule and rule["path"]:
-        query_index = path.find("?")
-        query_free_path = (
-            path if query_index == -1 else path[:query_index]
-        )
-        if query_free_path != rule["path"]:
-            return False
-    if "pathPrefix" in rule and rule["pathPrefix"]:
-        if not _matches_path_prefix(path, rule["pathPrefix"]):
-            return False
-    return True
+def _path_for_selection(path: str) -> str:
+    """The query string takes no part in selection."""
+    query = path.find("?")
+    return path if query == -1 else path[:query]
+
+
+def _is_candidate(rule: dict, method: str, path: str) -> bool:
+    methods = rule["match"]["methods"]
+    if methods is not None and method not in methods:
+        return False
+    return any(_path_matches(pattern, path) for pattern in rule["match"]["paths"])
+
+
+def _order_candidates(candidates: list) -> Optional[list]:
+    """Order this request's candidates, and only this request's candidates.
+
+    `precedes` names the rules a rule is evaluated before; it is a partial
+    order, so a plain sort cannot express it. This is a topological sort of
+    that order that prefers declaration order whenever the order does not
+    decide, which is exactly the tie-break the design gives to candidates the
+    specificity order leaves incomparable.
+
+    Restricting the sort to the candidates is load-bearing. Ordering the whole
+    scope first and filtering afterwards lets rules that cannot match this
+    request take part in the tie-break between rules that can, so adding one
+    unrelated rule reorders two others — and with evaluation stopping at the
+    first indeterminate candidate, that reordering is observable as a deny
+    turning into an allow.
+
+    Returns None when the order has a cycle. The document is rejected for
+    cycles before it is written, so this cannot happen; if it does, refusing
+    to choose is the only safe answer, because falling back to declaration
+    order would let a broad allow overtake a narrow deny."""
+    # predecessors[j] = the candidates that must be evaluated before j.
+    predecessors = [
+        {
+            earlier["key"]
+            for earlier in candidates
+            if earlier["key"] != rule["key"]
+            and rule["key"] in earlier["precedes"]
+        }
+        for rule in candidates
+    ]
+
+    ordered: list = []
+    emitted: set = set()
+    while len(ordered) < len(candidates):
+        for index, rule in enumerate(candidates):
+            if rule["key"] in emitted:
+                continue
+            if predecessors[index].issubset(emitted):
+                emitted.add(rule["key"])
+                ordered.append(rule)
+                break
+        else:
+            return None
+    return ordered
+
+
+def _evaluate_body_format(body_format: Optional[str], body_kind: str) -> str:
+    """Three-valued evaluation of `match.body.format`.
+
+    Indeterminate is not folded into false. Folding them would mean a broken
+    body evades a condition: the rule that declares the condition would
+    decline, and a broader rule would pick the request up."""
+    if body_format is None:
+        return "true"
+    # A request with no body satisfies no format: every format asks the body
+    # to exist. This is why a match with no body condition is wider than
+    # "opaque".
+    if body_kind == "absent":
+        return "false"
+    if body_format == "none":
+        return "true" if body_kind == "empty" else "false"
+    if body_format == "opaque":
+        return "true"
+    # "json": an empty body and a broken body are both unparseable, which is
+    # indeterminate rather than false.
+    return "true" if body_kind == "json" else "indeterminate"
+
+
+def _decide(document: dict, host: str, port: int, method: str,
+            path: str, body_kind: str) -> dict:
+    """Return {action, ruleId, reason, scope, rule} for one request."""
+    scope = _select_scope(document, host, port)
+    if scope is None:
+        return {
+            "action": document["fallback"],
+            "ruleId": FALLBACK_RULE_KEY,
+            "reason": "network-fallback",
+            "scope": None,
+            "rule": None,
+        }
+
+    candidates = [
+        rule
+        for rule in scope["rules"]
+        if _is_candidate(rule, method, _path_for_selection(path))
+    ]
+    ordered = _order_candidates(candidates) if len(candidates) > 1 else candidates
+    if ordered is None:
+        return {
+            "action": "deny",
+            "ruleId": scope["fallbackRuleId"],
+            "reason": "unorderable-candidates",
+            "scope": scope,
+            "rule": None,
+        }
+
+    for rule in ordered:
+        truth = _evaluate_body_format(rule["match"]["bodyFormat"], body_kind)
+        if truth == "false":
+            continue
+        if truth == "true":
+            return {
+                "action": rule["onMatch"],
+                "ruleId": rule["id"],
+                "reason": "rule",
+                "scope": scope,
+                "rule": rule,
+            }
+        # Evaluation stops here on purpose. Carrying on would let a broader
+        # rule quietly cover for a narrower rule that could not be decided.
+        return {
+            "action": rule.get("onIndeterminate", "deny"),
+            "ruleId": rule["id"],
+            "reason": "indeterminate",
+            "scope": scope,
+            "rule": None,
+        }
+
+    return {
+        "action": scope["fallback"],
+        "ruleId": scope["fallbackRuleId"],
+        "reason": "scope-fallback",
+        "scope": scope,
+        "rule": None,
+    }
+
+
+def _decide_under_rule_budget(
+    document: dict, host: str, port: int, method: str, path: str,
+    body_kind: str, body_size: Optional[int],
+) -> tuple[dict, str]:
+    """Decide, then decide again under the chosen rule's own `maxBodyBytes`.
+
+    The body has to be classified before selection, because `match.body.format`
+    takes part in choosing the rule, and before selection only the scope's
+    budget is known. A rule may declare a smaller `maxBodyBytes` than its
+    scope. A body over that number was never read within the budget the rule
+    asked for, so as far as that rule is concerned it is a body that could not
+    be parsed: its `json` condition is indeterminate, and `onIndeterminate`
+    settles the request rather than `onMatch`.
+
+    Re-deciding cannot land on a different rule. Counting the body as
+    unparseable only ever turns a `json` condition from true to indeterminate;
+    `"none"` and `"opaque"` and the absence of a condition all keep their
+    value, and both truth values stop the walk at the same candidate. The
+    second run therefore names the same rule, whose budget is the one already
+    applied, so one re-run is a fixed point.
+
+    A rule that declares a *larger* `maxBodyBytes` than its scope does not get
+    the body re-parsed. The scope's budget is what was actually spent, and
+    widening after the fact would turn an indeterminate match into a match on
+    a body nobody parsed.
+
+    This lives outside `_decide` so that `_decide` stays what it claims to be:
+    the same function as the host's `decide`, over the same inputs, checked
+    case for case against it. The budget is applied to the classification the
+    two of them share, and the addon sends the result of that to the broker,
+    so both sides still decide on the same body kind."""
+    decision = _decide(document, host, port, method, path, body_kind)
+    rule = decision["rule"]
+    if rule is None or body_size is None:
+        return decision, body_kind
+    if body_size <= rule.get("limits", _LIMIT_CEILINGS)["maxBodyBytes"]:
+        return decision, body_kind
+    return _decide(document, host, port, method, path, "binary"), "binary"
 
 
 def _safe_session_label(session_id: str) -> str:
@@ -913,6 +1726,8 @@ class NasAddon:
         # variants per secret on every allowed request.
         self._mask_values_cache: Optional[list[str]] = None
         self._mask_patterns_cache: list[bytes] = []
+        self._forbid_values_cache: Optional[list[str]] = None
+        self._forbid_patterns_cache: list[bytes] = []
         self._request_policy_block_counts: dict[tuple[str, ...], int] = {}
         self._client_sessions: dict[str, set[str]] = {}
 
@@ -922,6 +1737,14 @@ class NasAddon:
         patterns = _build_mask_patterns(mask_values)
         self._mask_values_cache = mask_values
         self._mask_patterns_cache = patterns
+        return patterns
+
+    def _forbid_patterns_for(self, forbid_values: list[str]) -> list[bytes]:
+        if forbid_values == self._forbid_values_cache:
+            return self._forbid_patterns_cache
+        patterns = _build_mask_patterns(forbid_values)
+        self._forbid_values_cache = forbid_values
+        self._forbid_patterns_cache = patterns
         return patterns
 
     def http_connect(self, flow: http.HTTPFlow) -> None:
@@ -1004,13 +1827,13 @@ class NasAddon:
         method = flow.request.method
         request_path = flow.request.path
 
-        review_document = _load_review_rules(session_id)
+        document = _load_authz_document(session_id)
         if (
-            review_document is _INVALID_REVIEW_RULES
-            or not isinstance(review_document, dict)
+            document is _INVALID_AUTHZ_DOCUMENT
+            or not isinstance(document, dict)
         ):
             print(
-                "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
+                "[nas-addon] AUTHZ-CONTRACT-INVALID: "
                 f"session={_safe_session_label(session_id)}",
                 file=sys.stderr,
             )
@@ -1024,20 +1847,50 @@ class NasAddon:
             session_id
         )
 
-        review_rules = review_document["rules"]
-        # The local match only decides whether to attach a bounded body
-        # preview to the authorization request. It must not decide the
-        # verdict or which policy runs — the broker owns both, and letting
-        # a local pre-match win would execute a policy the broker never
-        # approved whenever the two documents disagree.
-        preview_rule = None
-        for rule in review_rules:
-            if _match_review_rule(rule, method, host, request_path):
-                preview_rule = rule
-                break
+        # The body has to be read and classified before selection, because
+        # `match.body.format` takes part in choosing the rule. The parse
+        # budget comes from the scope, since the rule is not known yet; the
+        # chosen rule's own budget is applied to that classification once the
+        # rule is known.
+        scope = _select_scope(document, host, port)
+        limits = (
+            scope.get("limits", _LIMIT_CEILINGS)
+            if scope is not None
+            else document["defaults"]["limits"]
+        )
+        try:
+            request_body = flow.request.content
+        except ValueError:
+            request_body = None
+        body_kind, parsed_body = _classify_body(
+            request_body,
+            limits["maxBodyBytes"],
+            _request_carries_body(flow.request),
+        )
+
+        local, budgeted_kind = _decide_under_rule_budget(
+            document, host, port, method, request_path, body_kind,
+            None if request_body is None else len(request_body),
+        )
+        if budgeted_kind != body_kind:
+            # The tree came out of a parse the chosen rule did not pay for.
+            # Handing it to the inspection would be inspecting a body the
+            # rule's own budget says was never read.
+            body_kind = budgeted_kind
+            parsed_body = None
 
         request_id = _generate_request_id()
         broker_socket = os.path.join(BROKERS_DIR, session_id, "sock")
+
+        body_bytes = request_body or b""
+        body_preview = None
+        if body_bytes:
+            try:
+                body_preview = body_bytes[:BODY_PREVIEW_MAX].decode(
+                    "utf-8", errors="replace"
+                )
+            except Exception:
+                body_preview = f"<binary {len(body_bytes)} bytes>"
 
         authorize_req = {
             "version": 1,
@@ -1047,39 +1900,20 @@ class NasAddon:
             "target": {"host": host, "port": port},
             "method": method,
             "requestKind": "forward",
-            "observedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
-        }
-
-        # Always include path for credential matching (pathPrefix credentials
-        # need the path even when no review rule matched).
-        authorize_req["reviewContext"] = {
-            "path": request_path,
-            "contentType": None,
-            "bodyPreview": None,
-            "bodySize": 0,
-        }
-
-        request_body = None
-        request_body_loaded = False
-        if preview_rule:
-            try:
-                request_body = flow.request.content
-            except ValueError:
-                request_body = None
-            request_body_loaded = True
-            body_bytes = request_body or b""
-            body_preview = None
-            if body_bytes:
-                try:
-                    body_preview = body_bytes[:BODY_PREVIEW_MAX].decode("utf-8", errors="replace")
-                except Exception:
-                    body_preview = f"<binary {len(body_bytes)} bytes>"
-            authorize_req["reviewContext"] = {
+            "observedAt": time.strftime(
+                "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
+            ),
+            "reviewContext": {
                 "path": request_path,
                 "contentType": flow.request.headers.get("content-type"),
                 "bodyPreview": body_preview,
                 "bodySize": len(body_bytes),
-            }
+                # The broker runs the same selection on the same document.
+                # It cannot see the body, so the one fact selection needs
+                # from it travels here.
+                "bodyKind": body_kind,
+            },
+        }
 
         decision = _query_broker(broker_socket, authorize_req)
 
@@ -1090,58 +1924,55 @@ class NasAddon:
             )
             return
 
+        # The broker names the rule it approved. Both sides ran the same
+        # selection over the same document, so a disagreement means one of
+        # them is working from something the other never saw. Executing
+        # either side's answer at that point would run a rule nobody
+        # authorized for this request.
+        rule_id = decision.get("ruleId")
+        if rule_id != local["ruleId"]:
+            print(
+                "[nas-addon] AUTHZ-RULE-MISMATCH: "
+                f"session={_safe_session_label(session_id)} "
+                f"broker={_safe_rule_label(rule_id)} "
+                f"addon={_safe_rule_label(local['ruleId'])}",
+                file=sys.stderr,
+            )
+            flow.response = http.Response.make(403, REQUEST_POLICY_BLOCK_BODY)
+            return
+
         # Mask secrets out of the outgoing request (URL / headers / body)
         # before credential injection so injected headers stay intact.
         mask_values = decision.get("maskValues") or []
         patterns = self._patterns_for(mask_values) if mask_values else []
 
-        # The broker names the rule it approved. Resolve it here rather than
-        # reusing the local pre-match so a disagreement fails closed instead
-        # of silently running a different policy.
-        rule_id = decision.get("ruleId")
-        policy = None
-        if rule_id is not None:
-            approved_rule = _find_rule_by_id(review_rules, rule_id)
-            if approved_rule is None:
-                print(
-                    "[nas-addon] REQUEST-POLICY-RULE-UNKNOWN: "
-                    f"session={_safe_session_label(session_id)} "
-                    f"rule={_safe_rule_label(rule_id)}",
-                    file=sys.stderr,
-                )
-                flow.response = http.Response.make(
-                    403, REQUEST_POLICY_BLOCK_BODY
-                )
-                return
-            policy = approved_rule.get("requestPolicy")
+        # A `forbid` secret may not leave the sandbox at all, so its presence
+        # is checked before anything is rewritten — masking would erase the
+        # very occurrence that has to stop the request.
+        forbid_values = decision.get("forbidValues") or []
+        if forbid_values and _contains_forbidden(
+            flow, self._forbid_patterns_for(forbid_values)
+        ):
+            print(
+                "[nas-addon] FORBIDDEN-SECRET: "
+                f"session={_safe_session_label(session_id)} "
+                f"rule={_safe_rule_label(rule_id)}",
+                file=sys.stderr,
+            )
+            flow.response = http.Response.make(403, REQUEST_POLICY_BLOCK_BODY)
+            return
 
-        if policy is None:
-            # Ordinary rule (with or without an ID): byte-pattern masking
-            # only, exactly as before request policies existed.
-            if mask_values:
-                _apply_request_masking(flow, patterns)
-                if getattr(flow, "mask_blocked", False):
-                    flow.response = http.Response.make(
-                        403,
-                        b"blocked: cannot decode request body for secret masking",
-                    )
-                    return
-        else:
-            # Order is load-bearing: mask the URL and headers before anything
-            # can log them, execute the policy on the body, apply the rewrite,
-            # report the outcome, and only then block or inject credentials —
-            # so a blocked request never carries an injected credential.
+        # Inspection runs first, and only for a request a rule owns: a
+        # fallback or an indeterminate match has no acceptance conditions.
+        # Order is load-bearing here — mask the URL and headers before
+        # anything can log them, inspect, apply the rewrite, report the
+        # outcome, and block before any credential is injected, so a blocked
+        # request never carries one.
+        rule = local["rule"]
+        if rule is not None:
             _mask_url_and_headers(flow, patterns)
-            if request_body_loaded:
-                body = request_body
-            else:
-                try:
-                    body = flow.request.content
-                except ValueError:
-                    body = None
-
-            result, rewritten, reason = _execute_request_policy(
-                policy, body, patterns
+            result, rewritten, reason = _inspect_body(
+                rule, request_body, parsed_body, patterns
             )
             if result == "rewrite" and rewritten is not None:
                 flow.request.content = rewritten
@@ -1156,15 +1987,14 @@ class NasAddon:
             )
 
             if result == "block":
-                kind = policy.get("kind")
-                block_key = (session_id, rule_id, kind, result, reason)
+                block_key = (session_id, rule_id, result, reason)
                 count = self._request_policy_block_counts.get(block_key, 0) + 1
                 self._request_policy_block_counts[block_key] = count
                 if _should_emit_block_log(count):
                     print(
                         f"[nas-addon] REQUEST-POLICY-BLOCKED: "
                         f"session={_safe_session_label(session_id)} "
-                        f"rule={_safe_rule_label(rule_id)} kind={kind} "
+                        f"rule={_safe_rule_label(rule_id)} "
                         f"result={result} reason={reason} count={count}",
                         file=sys.stderr,
                     )
@@ -1173,20 +2003,33 @@ class NasAddon:
                 )
                 return
 
-        # Inject credential headers from broker decision (overwrites existing).
+        # Everything below this line is forwarded, so everything below this
+        # line is masked. Masking is not a service inspection performs: a rule
+        # that declares no `json` body condition never reads the tree, a rule
+        # that reads it leaves numbers alone, and a fallback owns no rule at
+        # all — yet all three put the body on the wire. Placing the one masking
+        # call on the single path out makes "every forwarded body is masked" a
+        # property of the control flow instead of a coincidence of which
+        # branch ran. A structural rewrite above has already masked the tree;
+        # this pass is idempotent over it and covers what it could not reach.
+        _apply_request_masking(flow, patterns)
+        if getattr(flow, "mask_blocked", False):
+            flow.response = http.Response.make(
+                403,
+                b"blocked: cannot decode request body for secret masking",
+            )
+            return
+
+        # Inject headers from the broker decision (overwrites existing).
         # These lines carry the request path, so they stay off for
-        # policy-governed rules: those log only the closed outcome fields.
+        # rule-governed requests: those log only the closed outcome fields.
         inject_headers = decision.get("injectHeaders", [])
         for h in inject_headers:
             flow.request.headers[h["name"]] = h["value"]
-            if policy is None:
+            if rule is None:
                 print(f"[nas-addon] INJECT: {h['name']} -> {host}:{port}{flow.request.path} "
                       f"(cred_source={cred_source})", file=sys.stderr)
-        if (
-            not inject_headers
-            and decision.get("decision") == "allow"
-            and policy is None
-        ):
+        if not inject_headers and rule is None:
             print(f"[nas-addon] NO INJECT: no credentials matched for "
                   f"{host}:{port}{flow.request.path}", file=sys.stderr)
 

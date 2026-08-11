@@ -6,6 +6,7 @@ Direct invocation:
 """
 
 import base64
+import contextlib
 import copy
 import io
 import json
@@ -17,6 +18,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import nas_addon
+
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "network"
+    / "fixtures"
+    / "authz"
+    / "anthropic-v1.json"
+)
 
 
 class BuildMaskPatternsTest(unittest.TestCase):
@@ -283,27 +292,53 @@ class PatternsForCacheTest(unittest.TestCase):
         self.assertIn(b"other-secret", third)
 
 
-class ResolvedReviewRulesContractTest(unittest.TestCase):
+class SafeRuleLabelTest(unittest.TestCase):
+    """Rule IDs printed to stderr are re-checked against the ID syntax.
+
+    Both pseudo IDs are real identities — an approval is remembered against
+    one — so a log line that names them has to print them, not "invalid".
+    """
+
+    def test_prints_a_rule_id_and_both_pseudo_ids(self):
+        for rule_id in ("github.repos.read", "github.$fallback", "$fallback"):
+            with self.subTest(rule_id):
+                self.assertEqual(nas_addon._safe_rule_label(rule_id), rule_id)
+
+    def test_replaces_anything_outside_the_syntax(self):
+        for rule_id in (
+            "Github.Repos",
+            "github repos",
+            "github.$fallback.extra",
+            "$other",
+            "",
+            None,
+            42,
+        ):
+            with self.subTest(rule_id):
+                self.assertEqual(nas_addon._safe_rule_label(rule_id), "invalid")
+
+
+class AuthzDocumentContractTest(unittest.TestCase):
+    """The addon re-validates the document the host wrote.
+
+    Anything unrecognised invalidates the document whole rather than the one
+    rule that carries it: a document the addon only half understands is a
+    document whose selection it cannot reproduce, and reproducing it is what
+    the rule-ID cross-check depends on."""
+
     def setUp(self):
-        fixture_path = (
-            Path(__file__).resolve().parents[2]
-            / "network"
-            / "fixtures"
-            / "resolved_review_rules"
-            / "anthropic-v1.json"
-        )
-        self.fixture = json.loads(fixture_path.read_text())
+        self.fixture = json.loads(_FIXTURE_PATH.read_text())
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.rules_dir_patch = patch.object(
-            nas_addon, "REVIEW_RULES_DIR", self.temp_dir.name
+        self.dir_patch = patch.object(
+            nas_addon, "AUTHZ_DIR", self.temp_dir.name
         )
-        self.rules_dir_patch.start()
-        nas_addon._review_rules_cache.clear()
+        self.dir_patch.start()
+        nas_addon._authz_cache.clear()
 
     def tearDown(self):
-        self.rules_dir_patch.stop()
+        self.dir_patch.stop()
         self.temp_dir.cleanup()
-        nas_addon._review_rules_cache.clear()
+        nas_addon._authz_cache.clear()
 
     def _path(self, session_id="sess-contract"):
         return Path(self.temp_dir.name) / f"{session_id}.json"
@@ -314,46 +349,55 @@ class ResolvedReviewRulesContractTest(unittest.TestCase):
         return path
 
     def _load(self, session_id="sess-contract"):
-        return nas_addon._load_review_rules(session_id)
+        return nas_addon._load_authz_document(session_id)
 
     def assert_invalid(self, document):
-        nas_addon._review_rules_cache.clear()
+        nas_addon._authz_cache.clear()
         self._write(document)
-        loaded = self._load()
-        invalid = getattr(nas_addon, "_INVALID_REVIEW_RULES", None)
-        self.assertIs(loaded, invalid)
+        self.assertIs(self._load(), nas_addon._INVALID_AUTHZ_DOCUMENT)
 
-    def test_accepts_shared_anthropic_v1_fixture(self):
+    def _scope(self, document=None):
+        return (document or self.fixture)["scopes"][0]
+
+    def _messages_rule(self, document):
+        return next(
+            rule
+            for rule in document["scopes"][0]["rules"]
+            if rule["key"] == "messages"
+        )
+
+    def test_accepts_the_shared_anthropic_fixture(self):
         self._write(self.fixture)
 
         self.assertEqual(self._load(), self.fixture)
 
-    def test_rejects_non_v1_and_non_document_roots(self):
+    def test_rejects_a_root_that_is_not_this_contract(self):
         cases = [
-            ("top-level list", self.fixture["rules"]),
-            ("missing version", {"rules": self.fixture["rules"]}),
+            ("top-level list", self.fixture["scopes"]),
             (
-                "unknown version",
-                {**self.fixture, "contractVersion": 2},
+                "missing version",
+                {k: v for k, v in self.fixture.items()
+                 if k != "contractVersion"},
             ),
+            ("older version", {**self.fixture, "contractVersion": 1}),
+            ("newer version", {**self.fixture, "contractVersion": 3}),
+            ("boolean version", {**self.fixture, "contractVersion": True}),
             (
-                "boolean version",
-                {**self.fixture, "contractVersion": True},
+                "missing scopes",
+                {k: v for k, v in self.fixture.items() if k != "scopes"},
             ),
+            ("non-list scopes", {**self.fixture, "scopes": {}}),
+            ("allow as network fallback", {**self.fixture, "fallback": "allow"}),
             (
-                "missing rules",
-                {"contractVersion": 1},
-            ),
-            (
-                "non-list rules",
-                {"contractVersion": 1, "rules": {}},
+                "missing defaults",
+                {k: v for k, v in self.fixture.items() if k != "defaults"},
             ),
         ]
         for name, document in cases:
             with self.subTest(name=name):
                 self.assert_invalid(document)
 
-    def test_rejects_unknown_document_rule_handler_and_ast_keys(self):
+    def test_rejects_a_key_the_addon_does_not_understand(self):
         cases = []
 
         document = copy.deepcopy(self.fixture)
@@ -361,294 +405,274 @@ class ResolvedReviewRulesContractTest(unittest.TestCase):
         cases.append(("document", document))
 
         document = copy.deepcopy(self.fixture)
-        document["rules"][0]["unknown"] = "SECRET-rule"
+        self._scope(document)["unknown"] = "SECRET-scope"
+        cases.append(("scope", document))
+
+        document = copy.deepcopy(self.fixture)
+        self._messages_rule(document)["unknown"] = "SECRET-rule"
         cases.append(("rule", document))
 
         document = copy.deepcopy(self.fixture)
-        document["rules"][0]["requestPolicy"]["unknown"] = "SECRET-policy"
-        cases.append(("handler", document))
+        self._messages_rule(document)["match"]["unknown"] = "SECRET-match"
+        cases.append(("match", document))
 
         document = copy.deepcopy(self.fixture)
-        document["rules"][0]["requestPolicy"]["taggedUnions"][0]["unknown"] = (
-            "SECRET-tagged"
-        )
-        cases.append(("tagged union", document))
+        self._messages_rule(document)["expect"][0]["unknown"] = "SECRET-expect"
+        cases.append(("acceptance condition", document))
 
         document = copy.deepcopy(self.fixture)
-        document["rules"][0]["requestPolicy"]["encodedFields"][0]["unknown"] = (
-            "SECRET-encoded"
-        )
-        cases.append(("encoded field", document))
+        self._scope(document)["targets"][0]["unknown"] = "SECRET-target"
+        cases.append(("target", document))
 
         for name, document in cases:
             with self.subTest(name=name):
                 self.assert_invalid(document)
 
-    def test_rejects_malformed_rule_ids_and_primitive_fields(self):
+    def test_rejects_a_rule_ID_that_does_not_name_its_own_scope_and_key(self):
         cases = [
-            ("empty ID", "id", ""),
-            ("uppercase ID", "id", "Anthropic.rule"),
-            ("bad ID character", "id", "anthropic/rule"),
-            ("overlong ID", "id", "a" + ("0" * 64)),
+            ("empty key", "key", ""),
+            ("uppercase key", "key", "Messages"),
+            ("bad key character", "key", "messages/create"),
+            ("overlong key", "key", "a" + ("0" * 64)),
+            ("non-string key", "key", 1),
+            ("ID from another scope", "id", "other.messages"),
+            ("ID that is only the key", "id", "messages"),
             ("non-string ID", "id", 1),
-            ("null ID", "id", None),
-            ("unknown action", "action", "permit"),
-            ("non-boolean audit", "audit", 1),
-            ("empty method", "method", ""),
-            ("non-string host", "host", 1),
-            ("query-bearing exact path", "path", "/v1/messages?x=1"),
+            ("unknown onMatch", "onMatch", "permit"),
+            ("unknown onIndeterminate", "onIndeterminate", "allow"),
+            ("unknown audit", "audit", "sometimes"),
         ]
         for name, field, value in cases:
             with self.subTest(name=name):
                 document = copy.deepcopy(self.fixture)
-                document["rules"][0][field] = value
+                self._messages_rule(document)[field] = value
                 self.assert_invalid(document)
 
-    def test_rejects_unknown_kinds_and_illegal_rule_policy_combinations(self):
-        cases = []
+    def test_rejects_a_precedence_edge_that_names_nothing(self):
+        # 存在しないキーを黙って捨てると優先の辺が 1 本消える。消えた辺は
+        # 「広い allow が狭い deny を追い越す」形になりうるので、辺を落とす
+        # くらいならドキュメントごと拒否する。
+        for precedes in (["absent"], ["messages"], "bootstrap", [1]):
+            with self.subTest(precedes=precedes):
+                document = copy.deepcopy(self.fixture)
+                self._messages_rule(document)["precedes"] = precedes
+                self.assert_invalid(document)
 
-        document = copy.deepcopy(self.fixture)
-        document["rules"][0]["requestPolicy"] = {"kind": "graphql"}
-        cases.append(("graphql", document))
-
-        document = copy.deepcopy(self.fixture)
-        document["rules"][0]["requestPolicy"] = {"kind": "future"}
-        cases.append(("unknown kind", document))
-
-        document = copy.deepcopy(self.fixture)
-        document["rules"][0]["action"] = "deny"
-        cases.append(("deny policy", document))
-
-        document = copy.deepcopy(self.fixture)
-        document["rules"][0]["pathPrefix"] = "/v1"
-        cases.append(("path and prefix", document))
-
-        document = copy.deepcopy(self.fixture)
-        document["rules"][2]["method"] = "POST"
-        cases.append(("bodyless non-GET", document))
-
-        document = copy.deepcopy(self.fixture)
-        document["rules"][0]["method"] = "GET"
-        cases.append(("json non-POST", document))
-
-        for name, document in cases:
+    def test_rejects_a_scope_whose_fallback_ID_or_targets_are_malformed(self):
+        cases = [
+            ("unknown fallback", "fallback", "permit"),
+            ("empty name", "name", ""),
+            ("mismatched fallback ID", "fallbackRuleId", "other.$fallback"),
+            ("plain fallback ID", "fallbackRuleId", "anthropic.fallback"),
+            ("no targets", "targets", []),
+            ("non-list targets", "targets", {}),
+        ]
+        for name, field, value in cases:
             with self.subTest(name=name):
-                self.assert_invalid(document)
-
-    def test_rejects_policy_rules_without_every_exact_match_field(self):
-        for field in ("id", "method", "host", "path"):
-            with self.subTest(field=field):
                 document = copy.deepcopy(self.fixture)
-                del document["rules"][0][field]
+                self._scope(document)[field] = value
                 self.assert_invalid(document)
 
-        invalid_hosts = [
-            "*.anthropic.com",
-            "api.anthropic.com:443",
-            " api.anthropic.com",
+    def test_rejects_a_target_that_is_not_a_host_pattern_and_port(self):
+        cases = [
+            ("unknown host kind", {"kind": "regex", "pattern": ".*"}),
+            ("empty exact host", {"kind": "exact", "host": ""}),
+            ("exact host carrying a suffix", {"kind": "exact", "suffix": "x"}),
+            ("non-object host", "api.anthropic.com"),
         ]
-        for host in invalid_hosts:
-            with self.subTest(host=host):
+        for name, host in cases:
+            with self.subTest(name=name):
                 document = copy.deepcopy(self.fixture)
-                document["rules"][0]["host"] = host
+                self._scope(document)["targets"][0]["host"] = host
                 self.assert_invalid(document)
 
-    def test_exact_policy_hosts_use_ascii_only_case_insensitive_matching(self):
-        document = copy.deepcopy(self.fixture)
-        document["rules"][0]["host"] = "API.Anthropic.COM"
-        self._write(document)
-        self.assertEqual(self._load(), document)
-
-        non_ascii_hosts = [
-            "api.K.example",
-            "api.ſ.example",
-            "api.İ.example",
-            "api.é.example",
-            "api.例.example",
-        ]
-        for host in non_ascii_hosts:
-            with self.subTest(host=host):
+        for port in (0, -1, 65_536, True, "443", 1.5):
+            with self.subTest(port=port):
                 document = copy.deepcopy(self.fixture)
-                document["rules"][0]["host"] = host
+                self._scope(document)["targets"][0]["port"] = port
                 self.assert_invalid(document)
 
-    def test_rejects_invalid_json_limits_including_python_booleans(self):
-        maximums = {
+    def test_rejects_a_limit_above_its_ceiling_including_python_booleans(self):
+        ceilings = {
             "maxBodyBytes": 33_554_432,
             "maxDepth": 64,
             "maxNodes": 200_000,
-            "maxDecodedBytes": 33_554_432,
+            "maxSelectorExpansions": 1_000_000,
         }
-        for field, maximum in maximums.items():
-            values = (
-                True,
-                False,
-                0,
-                -1,
-                1.5,
-                str(maximum),
-                maximum + 1,
-            )
-            for value in values:
+        for field, ceiling in ceilings.items():
+            for value in (True, False, 0, -1, 1.5, str(ceiling), ceiling + 1):
                 with self.subTest(field=field, value=value):
                     document = copy.deepcopy(self.fixture)
-                    document["rules"][0]["requestPolicy"][field] = value
+                    self._messages_rule(document)["limits"][field] = value
                     self.assert_invalid(document)
 
-    def test_rejects_malformed_json_policy_children(self):
+    def test_rejects_a_body_condition_or_path_pattern_it_cannot_evaluate(self):
         mutations = [
             (
-                "tagged unions not list",
-                lambda policy: policy.__setitem__("taggedUnions", {}),
+                "unknown body format",
+                lambda rule: rule["match"].__setitem__("bodyFormat", "yaml"),
             ),
             (
-                "tagged union not object",
-                lambda policy: policy.__setitem__("taggedUnions", ["bad"]),
+                "no path pattern",
+                lambda rule: rule["match"].__setitem__("paths", []),
+            ),
+            (
+                "non-list methods",
+                lambda rule: rule["match"].__setitem__("methods", "POST"),
+            ),
+            (
+                "empty method",
+                lambda rule: rule["match"].__setitem__("methods", [""]),
+            ),
+            (
+                "unknown segment kind",
+                lambda rule: rule["match"]["paths"][0]["segments"][0]
+                .__setitem__("kind", "regex"),
+            ),
+            (
+                "non-string segment value",
+                lambda rule: rule["match"]["paths"][0]["segments"][1]
+                .__setitem__("values", [1]),
+            ),
+            (
+                "non-boolean trailing star",
+                lambda rule: rule["match"]["paths"][0]
+                .__setitem__("trailingDoubleStar", "yes"),
+            ),
+        ]
+        for name, mutate in mutations:
+            with self.subTest(name=name):
+                document = copy.deepcopy(self.fixture)
+                mutate(self._messages_rule(document))
+                self.assert_invalid(document)
+
+    def test_rejects_an_acceptance_condition_it_cannot_run(self):
+        mutations = [
+            (
+                "unknown kind",
+                lambda expects: expects[0].__setitem__("kind", "graphql"),
+            ),
+            (
+                "review is not implemented yet",
+                lambda expects: expects[0].__setitem__(
+                    "onViolation", "review"
+                ),
+            ),
+            (
+                "unknown consequence",
+                lambda expects: expects[0].__setitem__("onViolation", "skip"),
             ),
             (
                 "bad selector escape",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
-                    "at", "/bad/~2"
-                ),
+                lambda expects: expects[0].__setitem__("at", "/bad/~2"),
             ),
             (
                 "embedded selector wildcard",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
-                    "at", "/bad/prefix*"
-                ),
+                lambda expects: expects[0].__setitem__("at", "/bad/prefix*"),
             ),
             # `*` を含むセグメントは _parse_selector がリテラル扱いするため、
-            # 通すと guard が 0 ノードにマッチして何も検査しなくなる
+            # 通すと受理条件が 0 ノードに一致して何も検査しなくなる
             # (fail-closed の制御が fail-open に転ぶ)。文字種によらず弾く。
             (
                 "selector wildcard after punctuation",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
+                lambda expects: expects[0].__setitem__(
                     "at", "/messages/*/content:*"
                 ),
             ),
             (
-                "selector wildcard after whitespace",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
-                    "at", "/messages/*/con tent*"
-                ),
-            ),
-            (
                 "selector wildcard with non-ASCII",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
+                lambda expects: expects[0].__setitem__(
                     "at", "/messages/\u5185\u5bb9*"
                 ),
             ),
             (
+                "bad exclude selector",
+                lambda expects: expects[0].__setitem__("exclude", ["/a*b"]),
+            ),
+            (
                 "empty discriminator",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
-                    "discriminator", ""
-                ),
+                lambda expects: expects[0].__setitem__("discriminator", ""),
             ),
             (
-                "allowed tags not list",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
-                    "allowedTags", "text"
-                ),
+                "allowed not a list",
+                lambda expects: expects[0].__setitem__("allowed", "text"),
             ),
             (
-                "empty allowed tags",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
-                    "allowedTags", []
-                ),
+                "empty allowed",
+                lambda expects: expects[0].__setitem__("allowed", []),
             ),
             (
                 "non-string allowed tag",
-                lambda policy: policy["taggedUnions"][0].__setitem__(
-                    "allowedTags", ["text", 1]
+                lambda expects: expects[0].__setitem__(
+                    "allowed", ["text", 1]
                 ),
             ),
             (
-                "encoded fields not list",
-                lambda policy: policy.__setitem__("encodedFields", {}),
-            ),
-            (
-                "encoded field not object",
-                lambda policy: policy.__setitem__("encodedFields", ["bad"]),
-            ),
-            (
-                "unknown encoding",
-                lambda policy: policy["encodedFields"][0].__setitem__(
-                    "encoding", "base64url"
-                ),
-            ),
-            (
-                "non-string encoded field",
-                lambda policy: policy["encodedFields"][0].__setitem__(
-                    "dataField", 1
+                "unknown root type",
+                lambda expects: expects.__setitem__(
+                    0,
+                    {"kind": "jsonRoot", "onViolation": "deny",
+                     "rootType": "scalar"},
                 ),
             ),
         ]
         for name, mutate in mutations:
             with self.subTest(name=name):
                 document = copy.deepcopy(self.fixture)
-                mutate(document["rules"][0]["requestPolicy"])
+                mutate(self._messages_rule(document)["expect"])
                 self.assert_invalid(document)
 
-    def test_selector_grammar_accepts_producer_literal_segments(self):
-        """式に見えるテキストはリテラルとして受け入れる (injection しない)。
-        ただし `*` を含むものは別扱いで、下の rejects テストが押さえる。"""
-        selectors = [
-            "/$schema",
-            "/foo|bar",
-            r"/\d+",
-            "/filter[?(@.x)]",
-        ]
-        for selector in selectors:
-            with self.subTest(selector=selector):
-                nas_addon._review_rules_cache.clear()
+    def test_rejects_a_json_shaped_condition_on_a_rule_that_never_parses(self):
+        # format が "json" でないルールに UnionShape / JsonRoot を置くと、
+        # 検査は決して走らないのに設定は検査したつもりでいる。
+        for body_format in (None, "none", "opaque"):
+            with self.subTest(body_format=body_format):
                 document = copy.deepcopy(self.fixture)
-                document["rules"][0]["requestPolicy"]["taggedUnions"][0][
-                    "at"
-                ] = selector
-                document["rules"][0]["requestPolicy"]["encodedFields"][0][
-                    "at"
-                ] = selector
+                self._messages_rule(document)["match"]["bodyFormat"] = (
+                    body_format
+                )
+                self.assert_invalid(document)
+
+    def test_accepts_literal_selector_segments_that_look_like_expressions(
+        self,
+    ):
+        """式に見えるテキストはリテラルとして受け入れる (injection しない)。
+        ただし `*` を含むものは別扱いで、上の rejects テストが押さえる。"""
+        for selector in ("/$schema", "/foo|bar", r"/\d+", "/filter[?(@.x)]"):
+            with self.subTest(selector=selector):
+                nas_addon._authz_cache.clear()
+                document = copy.deepcopy(self.fixture)
+                self._messages_rule(document)["expect"][0]["at"] = selector
                 self._write(document)
                 self.assertEqual(self._load(), document)
 
-    def test_rejects_empty_matcher_fields(self):
-        """空文字は TS 側 (validateRule) も弾く。片方だけが通すと、
-        ドキュメント全体が無効になってセッション中の全リクエストが 403 に
-        なるので、両者の条件を一致させておく。"""
-        for field in ("method", "host", "path", "pathPrefix"):
-            with self.subTest(field=field):
-                document = copy.deepcopy(self.fixture)
-                rule = document["rules"][0]
-                rule.pop("path", None)
-                rule.pop("pathPrefix", None)
-                rule.pop("requestPolicy", None)
-                rule[field] = ""
-                self.assert_invalid(document)
-
-    def test_selector_grammar_rejects_producer_partial_wildcards_and_escapes(
-        self,
-    ):
-        selectors = [
-            "/foo*bar",
-            "/foo**bar",
-            "/***",
-            "/prefix*",
-            "/*suffix",
-            "/foo~2bar",
-            "/foo~",
-            # `*` を含む式に見えるテキストは、リテラル扱いすると guard が
-            # 0 ノードにマッチして何も検査しなくなる。受け入れてはならない。
-            "/(.*)",
-            "/script:mask(*)",
-            "/messages/*/content:*",
-            "/messages/\u5185\u5bb9*",
+    def test_rejects_a_secret_disposition_or_inject_it_cannot_honour(self):
+        cases = [
+            (
+                "unknown disposition",
+                lambda scope: scope.__setitem__("secrets", {"t": "hide"}),
+            ),
+            (
+                "non-list inject",
+                lambda scope: scope.__setitem__("inject", {}),
+            ),
+            (
+                "inject without a header name",
+                lambda scope: scope.__setitem__(
+                    "inject", [{"name": "", "value": "literal:x"}]
+                ),
+            ),
+            (
+                "inject without a value",
+                lambda scope: scope.__setitem__(
+                    "inject", [{"name": "Authorization"}]
+                ),
+            ),
         ]
-        for selector in selectors:
-            with self.subTest(selector=selector):
+        for name, mutate in cases:
+            with self.subTest(name=name):
                 document = copy.deepcopy(self.fixture)
-                document["rules"][0]["requestPolicy"]["taggedUnions"][0][
-                    "at"
-                ] = selector
+                mutate(self._scope(document))
                 self.assert_invalid(document)
 
     def test_missing_unreadable_and_malformed_files_are_silent_invalid_states(
@@ -670,7 +694,7 @@ class ResolvedReviewRulesContractTest(unittest.TestCase):
             ):
                 unreadable = self._load("sess-unreadable")
 
-        invalid = getattr(nas_addon, "_INVALID_REVIEW_RULES", None)
+        invalid = nas_addon._INVALID_AUTHZ_DOCUMENT
         self.assertIs(missing, invalid)
         self.assertIs(malformed, invalid)
         self.assertIs(unreadable, invalid)
@@ -687,10 +711,7 @@ class ResolvedReviewRulesContractTest(unittest.TestCase):
         ), redirect_stderr(stderr):
             loaded = self._load()
 
-        self.assertIs(
-            loaded,
-            getattr(nas_addon, "_INVALID_REVIEW_RULES", None),
-        )
+        self.assertIs(loaded, nas_addon._INVALID_AUTHZ_DOCUMENT)
         self.assertEqual(stderr.getvalue(), "")
 
     def test_caches_valid_and_invalid_states_until_mtime_changes(self):
@@ -700,89 +721,356 @@ class ResolvedReviewRulesContractTest(unittest.TestCase):
             self.assertIs(self._load(), valid)
 
         old_mtime = path.stat().st_mtime_ns
-        path.write_text('{"contractVersion": 1, "rules": "invalid"}')
+        path.write_text('{"contractVersion": 2, "scopes": "invalid"}')
         os.utime(
             path,
             ns=(old_mtime + 1_000_000, old_mtime + 1_000_000),
         )
         invalid = self._load()
-        self.assertIs(
-            invalid,
-            getattr(nas_addon, "_INVALID_REVIEW_RULES", None),
-        )
+        self.assertIs(invalid, nas_addon._INVALID_AUTHZ_DOCUMENT)
         with patch("builtins.open", side_effect=AssertionError("re-read")):
             self.assertIs(self._load(), invalid)
 
 
-class ReviewRuleMatchTest(unittest.TestCase):
-    def test_exact_path_strips_only_the_query(self):
-        rule = {
-            "method": "POST",
-            "host": "api.anthropic.com",
-            "path": "/v1/messages",
+class ClassifyBodyTest(unittest.TestCase):
+    """A body that is not there and a body that is there and empty are two
+    different requests.
+
+    Every `format` asks the body to exist, so an absent body satisfies none of
+    them and the request falls through to a rule that asks for no body. An
+    empty body satisfies `"opaque"` and `"none"`. mitmproxy reports `b""` for
+    both, so the classification reads the framing headers instead."""
+
+    def _classify(self, body, carries_body):
+        return nas_addon._classify_body(body, 1024, carries_body)
+
+    def test_no_framing_and_no_bytes_is_an_absent_body(self):
+        self.assertEqual(self._classify(b"", False), ("absent", None))
+
+    def test_declared_framing_and_no_bytes_is_an_empty_body(self):
+        self.assertEqual(self._classify(b"", True), ("empty", None))
+
+    def test_bytes_without_framing_still_count_as_a_body(self):
+        self.assertEqual(self._classify(b'{"a":1}', False), ("json", {"a": 1}))
+
+    def test_an_unreadable_body_stays_binary(self):
+        self.assertEqual(self._classify(None, False), ("binary", None))
+
+    def test_content_length_zero_declares_a_body(self):
+        request = FakeRequest(headers=[("content-length", "0")])
+        self.assertTrue(nas_addon._request_carries_body(request))
+
+    def test_chunked_transfer_encoding_declares_a_body(self):
+        request = FakeRequest(headers=[("transfer-encoding", "chunked")])
+        self.assertTrue(nas_addon._request_carries_body(request))
+
+    def test_a_request_without_framing_headers_declares_no_body(self):
+        request = FakeRequest(headers=[("accept", "*/*")])
+        self.assertFalse(nas_addon._request_carries_body(request))
+
+
+class SelectionTest(unittest.TestCase):
+    """The addon reproduces the host's selection on the host's document.
+
+    Both sides run this; a divergence fails the request closed, so the two
+    have to agree on every axis the host resolved."""
+
+    def _document(self, scopes, fallback="deny"):
+        return {
+            "contractVersion": 2,
+            "fallback": fallback,
+            "defaults": {
+                "limits": dict(_DEFAULT_LIMITS),
+                "secrets": {"*": "mask"},
+                "audit": "always",
+            },
+            "scopes": scopes,
         }
+
+    def _scope(self, name, targets, rules=(), fallback="deny"):
+        return {
+            "name": name,
+            "targets": list(targets),
+            "fallback": fallback,
+            "fallbackRuleId": f"{name}.$fallback",
+            "limits": dict(_DEFAULT_LIMITS),
+            "secrets": {},
+            "inject": [],
+            "audit": "always",
+            "rules": list(rules),
+        }
+
+    def _exact(self, host, port=None):
+        return {
+            "source": host,
+            "host": {"kind": "exact", "host": host},
+            "port": port,
+        }
+
+    def _suffix(self, suffix, port=None):
+        return {
+            "source": f"*.{suffix}",
+            "host": {"kind": "suffix", "suffix": suffix},
+            "port": port,
+        }
+
+    def test_paths_are_compared_without_normalization(self):
+        rule = _rule(key="messages", paths=["/v1/messages"])
+        document = self._document([
+            self._scope("api", [self._exact("api.anthropic.com")], [rule]),
+        ])
         cases = [
-            ("/v1/messages", True),
-            ("/v1/messages?beta=true", True),
-            ("/v1/messages/", False),
-            ("/v1//messages", False),
-            ("/v1/%6dessages", False),
+            ("/v1/messages", "api.messages"),
+            # クエリは選択に参加しない。
+            ("/v1/messages?beta=true", "api.messages"),
+            # 末尾スラッシュ・連続スラッシュ・パーセント符号化のいずれも
+            # 正規化しないので、別のパスとして fallback に落ちる。
+            ("/v1/messages/", "api.$fallback"),
+            ("/v1//messages", "api.$fallback"),
+            ("/v1/%6dessages", "api.$fallback"),
         ]
-        for path, expected in cases:
+        for path, rule_id in cases:
             with self.subTest(path=path):
-                self.assertEqual(
-                    nas_addon._match_review_rule(
-                        rule, "post", "API.ANTHROPIC.COM", path
-                    ),
-                    expected,
+                decision = nas_addon._decide(
+                    document, "api.anthropic.com", 443, "POST", path, "absent"
                 )
+                self.assertEqual(decision["ruleId"], rule_id)
 
-    def test_path_prefix_method_and_host_matching_remain_segment_aware(self):
-        rule = {
-            "method": "GET",
-            "host": "*.example.com",
-            "pathPrefix": "/api/v1",
-        }
-        self.assertTrue(
-            nas_addon._match_review_rule(
-                rule, "get", "sub.example.com", "/api/v1/items?x=1"
-            )
+    def test_method_and_trailing_double_star_narrow_the_candidates(self):
+        rule = _rule(key="items", paths=["/api/v1/**"], scope="wide")
+        rule["match"]["methods"] = ["GET"]
+        document = self._document([
+            self._scope(
+                "wide", [self._suffix("example.com")], [rule], fallback="deny"
+            ),
+        ])
+
+        def decide(method, host, path):
+            return nas_addon._decide(
+                document, host, 443, method, path, "absent"
+            )["ruleId"]
+
+        self.assertEqual(decide("GET", "sub.example.com", "/api/v1/items"),
+                         "wide.items")
+        self.assertEqual(decide("GET", "sub.example.com", "/api/v1"),
+                         "wide.items")
+        self.assertEqual(decide("POST", "sub.example.com", "/api/v1/items"),
+                         "wide.$fallback")
+        self.assertEqual(decide("GET", "sub.example.com", "/api/v10/items"),
+                         "wide.$fallback")
+        # サフィックスは真の部分ドメインだけに一致する。
+        self.assertEqual(decide("GET", "example.com", "/api/v1/items"),
+                         "$fallback")
+
+    def test_the_narrowest_matching_scope_owns_the_target(self):
+        document = self._document([
+            # ドキュメントはターゲットの特異度の降順で届く。
+            self._scope("exact", [self._exact("api.example.com")],
+                        fallback="allow"),
+            self._scope("wide", [self._suffix("example.com")],
+                        fallback="deny"),
+        ])
+        self.assertEqual(
+            nas_addon._decide(
+                document, "api.example.com", 443, "GET", "/", "absent"
+            )["action"],
+            "allow",
         )
-        self.assertFalse(
-            nas_addon._match_review_rule(
-                rule, "POST", "sub.example.com", "/api/v1/items"
-            )
-        )
-        self.assertFalse(
-            nas_addon._match_review_rule(
-                rule, "GET", "example.net", "/api/v1/items"
-            )
-        )
-        self.assertFalse(
-            nas_addon._match_review_rule(
-                rule, "GET", "sub.example.com", "/api/v10/items"
-            )
+        self.assertEqual(
+            nas_addon._decide(
+                document, "other.example.com", 443, "GET", "/", "absent"
+            )["action"],
+            "deny",
         )
 
-    def test_trailing_dot_rule_hosts_match_exact_and_wildcard_targets(self):
-        cases = [
-            ("api.example.com.", "api.example.com", True),
-            ("api.example.com.", "API.EXAMPLE.COM.", True),
-            ("*.example.com.", "sub.example.com", True),
-            ("*.example.com.", "example.com.", True),
-            ("*.example.com.", "example.net", False),
-        ]
-        for pattern, host, expected in cases:
-            with self.subTest(pattern=pattern, host=host):
-                self.assertEqual(
-                    nas_addon._match_review_rule(
-                        {"host": pattern},
-                        "GET",
-                        host,
-                        "/",
-                    ),
-                    expected,
-                )
+    def test_a_port_bound_target_does_not_claim_other_ports(self):
+        document = self._document([
+            self._scope("tls", [self._exact("api.example.com", 443)],
+                        fallback="allow"),
+        ], fallback="review")
+        self.assertEqual(
+            nas_addon._decide(
+                document, "api.example.com", 443, "GET", "/", "absent"
+            )["action"],
+            "allow",
+        )
+        self.assertEqual(
+            nas_addon._decide(
+                document, "api.example.com", 80, "GET", "/", "absent"
+            )["action"],
+            "review",
+        )
+
+    def test_candidates_are_ordered_by_precedence_not_declaration(self):
+        # 宣言順は broad が先。broad は json、narrow は none を要求するので、
+        # 空ボディで broad を先に評価すると判定不能で打ち切られて deny に
+        # なる。precedes が narrow を先に立てるからこそ allow になる。
+        broad = _rule(key="broad", paths=["/v1/ping"], body_format="json")
+        narrow = _rule(key="narrow", paths=["/v1/ping"], body_format="none")
+        narrow["precedes"] = ["broad"]
+        document = self._document([
+            self._scope("api", [self._exact("api.example.com")],
+                        [broad, narrow]),
+        ])
+        decision = nas_addon._decide(
+            document, "api.example.com", 443, "POST", "/v1/ping", "empty"
+        )
+        self.assertEqual(
+            (decision["ruleId"], decision["action"], decision["reason"]),
+            ("api.narrow", "allow", "rule"),
+        )
+
+    def test_only_this_request_s_candidates_take_part_in_the_order(self):
+        # broad と narrow の相対順序は、この 2 本だけで決まらなければ
+        # ならない。候補になれない 3 本目が並べ替えに口を出すと、
+        # 無関係なルールを 1 本足すだけで deny と allow が入れ替わる。
+        broad = _rule(key="broad", paths=["/v1/ping"], body_format="json")
+        narrow = _rule(key="narrow", paths=["/v1/ping"], body_format="none")
+        narrow["precedes"] = ["broad"]
+        unrelated = _rule(key="unrelated", paths=["/v1/other"])
+        unrelated["precedes"] = ["narrow"]
+        document = self._document([
+            self._scope(
+                "api",
+                [self._exact("api.example.com")],
+                [unrelated, broad, narrow],
+            ),
+        ])
+        decision = nas_addon._decide(
+            document, "api.example.com", 443, "POST", "/v1/ping", "empty"
+        )
+        self.assertEqual(decision["ruleId"], "api.narrow")
+
+    def test_an_indeterminate_body_stops_the_walk_at_that_candidate(self):
+        # 壊れたボディを送れば狭いルールを回避できる、という抜け道を塞ぐ。
+        narrow = _rule(key="narrow", paths=["/v1/ping"], body_format="json")
+        narrow["precedes"] = ["broad"]
+        narrow["onIndeterminate"] = "deny"
+        broad = _rule(key="broad", paths=["/v1/ping"])
+        broad["onMatch"] = "allow"
+        document = self._document([
+            self._scope("api", [self._exact("api.example.com")],
+                        [narrow, broad], fallback="allow"),
+        ])
+        decision = nas_addon._decide(
+            document, "api.example.com", 443, "POST", "/v1/ping", "binary"
+        )
+        self.assertEqual(
+            (decision["action"], decision["reason"], decision["ruleId"]),
+            ("deny", "indeterminate", "api.narrow"),
+        )
+
+    def test_a_cyclic_precedence_denies_rather_than_guessing(self):
+        a = _rule(key="a", paths=["/x"])
+        b = _rule(key="b", paths=["/x"])
+        a["precedes"] = ["b"]
+        b["precedes"] = ["a"]
+        a["onMatch"] = "allow"
+        b["onMatch"] = "allow"
+        document = self._document([
+            self._scope("api", [self._exact("api.example.com")], [a, b],
+                        fallback="allow"),
+        ])
+        decision = nas_addon._decide(
+            document, "api.example.com", 443, "POST", "/x", "absent"
+        )
+        self.assertEqual(
+            (decision["action"], decision["reason"]),
+            ("deny", "unorderable-candidates"),
+        )
+
+    def test_body_format_is_three_valued(self):
+        evaluate = nas_addon._evaluate_body_format
+        self.assertEqual(evaluate(None, "absent"), "true")
+        self.assertEqual(evaluate("none", "absent"), "false")
+        self.assertEqual(evaluate("none", "empty"), "true")
+        self.assertEqual(evaluate("none", "json"), "false")
+        self.assertEqual(evaluate("opaque", "binary"), "true")
+        self.assertEqual(evaluate("opaque", "absent"), "false")
+        self.assertEqual(evaluate("json", "json"), "true")
+        # 0 バイトも壊れたボディも「偽」ではなく判定不能である。
+        self.assertEqual(evaluate("json", "empty"), "indeterminate")
+        self.assertEqual(evaluate("json", "binary"), "indeterminate")
+
+
+class RuleBudgetSelectionTest(unittest.TestCase):
+    """The chosen rule's own `maxBodyBytes` settles its body condition.
+
+    Classification runs before selection, so it can only spend the scope's
+    budget. A rule that asked for a smaller one never had its body read within
+    the budget it declared, and a body it could not read cannot make its
+    `json` condition true."""
+
+    def _document(self, rule, scope_budget=None):
+        scope_limits = dict(_DEFAULT_LIMITS)
+        if scope_budget is not None:
+            scope_limits["maxBodyBytes"] = scope_budget
+        document = _flow_document([rule])
+        document["scopes"][0]["limits"] = scope_limits
+        return document
+
+    def _decide(self, rule, body_kind, body_size, scope_budget=None):
+        return nas_addon._decide_under_rule_budget(
+            self._document(rule, scope_budget),
+            "api.example.com", 443, "POST", "/v1/messages",
+            body_kind, body_size,
+        )
+
+    def _budgeted(self, max_body_bytes, **overrides):
+        rule = _messages_rule(**overrides)
+        rule["limits"] = dict(rule["limits"], maxBodyBytes=max_body_bytes)
+        return rule
+
+    def test_a_body_over_the_rules_budget_is_indeterminate(self):
+        decision, body_kind = self._decide(self._budgeted(16), "json", 4096)
+
+        self.assertEqual(
+            (decision["action"], decision["reason"], decision["ruleId"]),
+            ("deny", "indeterminate", "api.messages"),
+        )
+        self.assertEqual(body_kind, "binary")
+        self.assertIsNone(decision["rule"])
+
+    def test_a_body_within_the_rules_budget_matches(self):
+        decision, body_kind = self._decide(self._budgeted(4096), "json", 16)
+
+        self.assertEqual(
+            (decision["action"], decision["reason"], decision["ruleId"]),
+            ("allow", "rule", "api.messages"),
+        )
+        self.assertEqual(body_kind, "json")
+
+    def test_the_budget_moves_the_verdict_and_not_the_rule(self):
+        """A tighter budget only turns a `json` condition from true to
+        indeterminate. Every other condition keeps its value, and both truth
+        values stop the walk at the same candidate, so the rule whose budget
+        was applied stays the rule the re-run names."""
+        opaque = self._budgeted(16)
+        opaque["match"]["bodyFormat"] = "opaque"
+        decision, body_kind = self._decide(opaque, "json", 4096)
+
+        self.assertEqual(
+            (decision["action"], decision["reason"], decision["ruleId"]),
+            ("allow", "rule", "api.messages"),
+        )
+        self.assertEqual(body_kind, "binary")
+
+    def test_a_body_that_could_not_be_read_has_no_size_to_compare(self):
+        decision, body_kind = self._decide(self._budgeted(16), "binary", None)
+
+        self.assertEqual(decision["reason"], "indeterminate")
+        self.assertEqual(body_kind, "binary")
+
+    def test_a_rule_cannot_widen_the_budget_its_scope_spent(self):
+        """The scope's budget is the one that was actually spent on the parse.
+        Raising `maxBodyBytes` on the rule does not get the body re-read, so a
+        body the scope refused to parse stays unparsed."""
+        decision, body_kind = self._decide(
+            self._budgeted(4096), "binary", 1024, scope_budget=16
+        )
+
+        self.assertEqual(decision["reason"], "indeterminate")
+        self.assertEqual(body_kind, "binary")
 
 
 class RequestPolicyOutcomeReportTest(unittest.TestCase):
@@ -906,23 +1194,140 @@ class MaskUrlAndHeadersTest(unittest.TestCase):
         self.assertIn(b"SECRET123", flow.request.content)  # body は触らない
 
 
-_DEFAULT_JSON_LIMITS = {
+_DEFAULT_LIMITS = {
     "maxBodyBytes": 33_554_432,
     "maxDepth": 64,
     "maxNodes": 200_000,
-    "maxDecodedBytes": 33_554_432,
+    "maxSelectorExpansions": 1_000_000,
 }
 
 
-def _json_policy(**overrides):
-    policy = {
-        "kind": "json",
-        **_DEFAULT_JSON_LIMITS,
-        "taggedUnions": [],
-        "encodedFields": [],
+# The expansion ceiling moved out of the addon and into each rule's limits,
+# so a test that wants a small budget sets the default the helpers build rules
+# from rather than patching a module constant.
+_EXPANSION_CEILING = [1_000_000]
+
+
+@contextlib.contextmanager
+def _expansion_ceiling(value):
+    previous = _EXPANSION_CEILING[0]
+    _EXPANSION_CEILING[0] = value
+    try:
+        yield
+    finally:
+        _EXPANSION_CEILING[0] = previous
+
+
+def _rule(
+    expects=(), body_format=None, key="messages", paths=None, scope="api",
+    **limits,
+):
+    """A resolved rule, in the shape the host writes and the addon re-checks."""
+    budget = dict(_DEFAULT_LIMITS)
+    budget["maxSelectorExpansions"] = _EXPANSION_CEILING[0]
+    budget.update(limits)
+    return {
+        "id": f"{scope}.{key}",
+        "key": key,
+        "precedes": [],
+        "match": {
+            "methods": ["POST"],
+            "paths": [_path_pattern(pattern) for pattern in (paths or ["/v1/messages"])],
+            "bodyFormat": body_format,
+        },
+        "onMatch": "allow",
+        "onIndeterminate": "deny",
+        "expect": list(expects),
+        "limits": budget,
+        "secrets": {},
+        "inject": [],
+        "audit": "always",
     }
-    policy.update(overrides)
-    return policy
+
+
+def _path_pattern(source):
+    segments = []
+    trailing = False
+    for token in source.split("/"):
+        if token == "**":
+            trailing = True
+            continue
+        if token == "*":
+            segments.append({"kind": "all"})
+        else:
+            segments.append({"kind": "finite", "values": [token]})
+    return {
+        "source": source,
+        "segments": segments,
+        "trailingDoubleStar": trailing,
+    }
+
+
+def _union_shape(guard, on_violation="deny"):
+    """Translate the old guard spelling into an acceptance condition."""
+    return {
+        "kind": "unionShape",
+        "onViolation": on_violation,
+        "at": guard["at"],
+        "exclude": list(guard.get("exclude") or []),
+        "discriminator": guard["discriminator"],
+        "allowed": list(guard["allowedTags"]),
+    }
+
+
+def _json_policy(guards=(), **limits):
+    """A rule that reads the body as JSON and requires an object at the root.
+
+    The old JSON policy hard-coded "the root must be an object"; that is now
+    an ordinary acceptance condition, so it is spelled out here."""
+    return _rule(
+        expects=[_union_shape(guard) for guard in guards]
+        + [{"kind": "jsonRoot", "onViolation": "deny", "rootType": "object"}],
+        body_format="json",
+        **limits,
+    )
+
+
+def _bodyless_policy():
+    """A rule that refuses a body, the way the old bodyless policy did."""
+    return _rule(expects=[{"kind": "emptyBody", "onViolation": "deny"}])
+
+
+def _execute_request_policy(rule, body, patterns):
+    """Classify the body, apply the rule's body condition, then inspect.
+
+    The addon does these in two places — selection reads the classification,
+    inspection reads the tree — so a test that only called the inspector
+    would miss the half of the outcome that selection decides. A body that
+    cannot be parsed no longer reaches inspection at all: it makes the body
+    condition indeterminate, and the rule's `onIndeterminate` (deny here)
+    settles it."""
+    if body is None:
+        return "block", None, "body-unavailable"
+    limits = rule["limits"]
+    # The caller handed a body over, so the request declared one: these cases
+    # are about what the body contains, not about whether it is there.
+    kind, parsed = nas_addon._classify_body(
+        body, limits["maxBodyBytes"], True
+    )
+    truth = nas_addon._evaluate_body_format(rule["match"]["bodyFormat"], kind)
+    if truth == "indeterminate":
+        over_budget = len(body) > limits["maxBodyBytes"]
+        return "block", None, (
+            "resource-limit" if over_budget else "invalid-json"
+        )
+    if truth == "false":
+        return "block", None, "unexpected-body"
+    return nas_addon._inspect_body(rule, body, parsed, patterns)
+
+
+def _validate_tagged_unions(root, guards, patterns, budget):
+    """Evaluate guard-shaped acceptance conditions and return the findings."""
+    _severity, findings = nas_addon._evaluate_expects(
+        [_union_shape(guard) for guard in guards], b"{}", root, patterns,
+        budget,
+    )
+    return findings
 
 
 class RequestPolicyBodylessEngineTest(unittest.TestCase):
@@ -930,9 +1335,7 @@ class RequestPolicyBodylessEngineTest(unittest.TestCase):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
     def _run(self, body):
-        return nas_addon._execute_request_policy(
-            {"kind": "bodyless"}, body, self.patterns
-        )
+        return _execute_request_policy(_bodyless_policy(), body, self.patterns)
 
     def test_empty_body_passes(self):
         self.assertEqual(self._run(b""), ("pass", None, "empty-body"))
@@ -949,7 +1352,7 @@ class RequestPolicyJsonParseTest(unittest.TestCase):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
     def _run(self, body, **overrides):
-        return nas_addon._execute_request_policy(
+        return _execute_request_policy(
             _json_policy(**overrides), body, self.patterns
         )
 
@@ -1042,8 +1445,8 @@ class RequestPolicyTaggedUnionTest(unittest.TestCase):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
     def _run(self, body_obj, guards):
-        policy = _json_policy(taggedUnions=guards)
-        return nas_addon._execute_request_policy(
+        policy = _json_policy(guards=guards)
+        return _execute_request_policy(
             policy, json.dumps(body_obj).encode("utf-8"), self.patterns
         )
 
@@ -1191,28 +1594,22 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        fixture_path = (
-            Path(__file__).resolve().parents[2]
-            / "network"
-            / "fixtures"
-            / "resolved_review_rules"
-            / "anthropic-v1.json"
+        fixture = json.loads(_FIXTURE_PATH.read_text())
+        assert nas_addon._is_valid_authz_document(fixture)
+        cls.rule = next(
+            rule
+            for scope in fixture["scopes"]
+            for rule in scope["rules"]
+            if rule["id"] == "anthropic.messages"
         )
-        fixture = json.loads(fixture_path.read_text())
-        rule = next(
-            r
-            for r in fixture["rules"]
-            if r["id"] == "anthropic.messages.create"
-        )
-        cls.policy = rule["requestPolicy"]
-        assert cls.policy["kind"] == "json"
+        assert cls.rule["match"]["bodyFormat"] == "json"
 
     def setUp(self):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
     def _run(self, body_obj):
-        return nas_addon._execute_request_policy(
-            self.policy, json.dumps(body_obj).encode("utf-8"), self.patterns
+        return _execute_request_policy(
+            self.rule, json.dumps(body_obj).encode("utf-8"), self.patterns
         )
 
     def _claude_code_body(self, **overrides):
@@ -1377,9 +1774,13 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
 
         self.assertEqual((result, reason), ("pass", "recognized-json"))
 
-    def test_base64_payload_in_a_realistic_request_is_masked(self):
-        """encodedFields の `/**` は絞っていない。運び手はどこにでも現れうる
-        ので、ネストした tool_result の中でも復号→マスク→再エンコードされる。"""
+    def test_a_secret_inside_a_base64_payload_is_still_masked(self):
+        """base64 blob の中の秘密は、blob を復号せずにマスク層が捕まえる。
+
+        マスクのパターン集合は秘密ごとに base64 の確定部分文字列を含むので、
+        運び手を宣言して復号する仕組み (旧 encodedFields) は要らない。代償は
+        出力が正常な blob でなく壊れた blob になることで、それが起きるのは
+        秘密が漏れかけたときだけである。"""
         blob = base64.b64encode(b"leaked SECRET123 here").decode("ascii")
         body = self._claude_code_body()
         body["messages"][2]["content"][0]["content"].append(
@@ -1400,7 +1801,8 @@ class ShippedAnthropicPolicyTest(unittest.TestCase):
         data = rewritten["messages"][2]["content"][0]["content"][1][
             "source"
         ]["data"]
-        self.assertNotIn(b"SECRET123", base64.b64decode(data))
+        self.assertNotEqual(data, blob)
+        self.assertNotIn(b"SECRET123", out)
 
 
 class RequestPolicySelectorArrayIndexTest(unittest.TestCase):
@@ -1412,10 +1814,10 @@ class RequestPolicySelectorArrayIndexTest(unittest.TestCase):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
     def _run(self, body_obj, at, tags=("text",)):
-        policy = _json_policy(taggedUnions=[{
+        policy = _json_policy(guards=[{
             "at": at, "discriminator": "type", "allowedTags": list(tags),
         }])
-        return nas_addon._execute_request_policy(
+        return _execute_request_policy(
             policy, json.dumps(body_obj).encode("utf-8"), self.patterns
         )
 
@@ -1516,17 +1918,37 @@ def _count_json_nodes(node):
     return total
 
 
+def _tagged_union(at, tags=("text",), exclude=None):
+    guard = {"at": at, "discriminator": "type", "allowedTags": list(tags)}
+    if exclude is not None:
+        guard["exclude"] = list(exclude)
+    return guard
+
+
+def _selector_budget():
+    """The shared budget a rule's body inspection draws on. Read the
+    expansion ceiling at call time so `_expansion_ceiling` still takes
+    effect."""
+    return nas_addon._SelectorBudget(_EXPANSION_CEILING[0])
+
+
 class RequestPolicySelectorExpansionBoundTest(unittest.TestCase):
-    """Selector evaluation memoizes (node, segment-index) states, so multiple
-    `**` segments cannot multiply the work done per node."""
+    """Selector evaluation memoizes (JSON Pointer, segment-index) states, so
+    multiple `**` segments cannot multiply the work done per node, and the
+    expansion ceiling is one allowance for the whole body inspection rather
+    than one per walk, so the number of guards cannot multiply it either."""
 
     def _collect(self, document, selector):
         segments = nas_addon._parse_selector(selector)
-        matches: list = []
-        expansions = nas_addon._collect_selector_matches(
-            document, segments, matches, set()
+        budget = _selector_budget()
+        matches = nas_addon._collect_selector_matches(
+            document, segments, budget
         )
-        return segments, matches, expansions
+        return segments, matches, budget.spent_expansions
+
+    def _walk_cost(self, document, selector):
+        _segments, _matches, expansions = self._collect(document, selector)
+        return expansions
 
     def test_repeated_double_star_expansion_stays_bounded(self):
         document = _nested_content_document(6, 3)
@@ -1541,7 +1963,8 @@ class RequestPolicySelectorExpansionBoundTest(unittest.TestCase):
                 self.assertIsInstance(
                     expansions, int, "expansion count is not reported"
                 )
-                # Each (node, segment-index) state is expanded at most once.
+                # Each (pointer, segment-index) state is expanded at most
+                # once, and a pointer addresses one position in the document.
                 self.assertLessEqual(expansions, nodes * (len(segments) + 1))
 
     def test_repeated_double_star_matches_are_unchanged(self):
@@ -1555,21 +1978,97 @@ class RequestPolicySelectorExpansionBoundTest(unittest.TestCase):
                     document, selector
                 )
                 self.assertEqual(
-                    [id(node) for node in matches],
-                    [id(node) for node in baseline],
+                    [(pointer, id(node)) for pointer, node in matches],
+                    [(pointer, id(node)) for pointer, node in baseline],
                 )
+
+    def test_successive_guards_draw_on_one_shared_budget(self):
+        # Neither guard's walk reaches the ceiling on its own, so a fresh
+        # allowance per guard would let both finish and the body would pass.
+        # They spend from one allowance, so the second guard runs out.
+        document = {"content": [{"type": "text"}],
+                    "system": [{"type": "text"}]}
+        ceiling = 4
+        for selector in ("/content/*", "/system/*"):
+            self.assertLessEqual(
+                self._walk_cost(document, selector), ceiling
+            )
+        guards = [_tagged_union("/content/*"), _tagged_union("/system/*")]
+        patterns = nas_addon._build_mask_patterns(["SECRET123"])
+        with _expansion_ceiling(ceiling):
+            for guard in guards:
+                with self.subTest(guard=guard["at"]):
+                    self.assertEqual(
+                        _validate_tagged_unions(
+                            document, [guard], patterns, _selector_budget()
+                        ),
+                        [],
+                    )
+            findings = _validate_tagged_unions(
+                document, guards, patterns, _selector_budget()
+            )
+        self.assertEqual(
+            [f["kind"] for f in findings], ["inspection-incomplete"]
+        )
+        # The finding names the guard whose walk ran out, not the first one.
+        self.assertEqual(findings[0]["at"], "/system/*")
+        self.assertEqual(findings[0]["pointer"], "/system")
+
+    def test_exclude_and_at_walks_of_one_guard_share_the_budget(self):
+        # The exclude walk is the expensive one here; the `at` walk that
+        # follows it inherits what is left rather than starting over.
+        document = {"content": [{"type": "text"}],
+                    "system": [{"type": "text"}]}
+        ceiling = 8
+        for selector in ("/system/**", "/content/*"):
+            self.assertLessEqual(
+                self._walk_cost(document, selector), ceiling
+            )
+        guard = _tagged_union("/content/*", exclude=["/system/**"])
+        with _expansion_ceiling(ceiling):
+            findings = _validate_tagged_unions(
+                document, [guard], nas_addon._build_mask_patterns([]),
+                _selector_budget(),
+            )
+        self.assertEqual(
+            [f["kind"] for f in findings], ["inspection-incomplete"]
+        )
+        self.assertEqual(findings[0]["at"], "/content/*")
+        self.assertEqual(findings[0]["pointer"], "/content")
+
+    def test_shared_budget_exhaustion_blocks_the_request(self):
+        # End to end: an inspection that ran out is not a pass, whichever
+        # guard happened to spend the last of the budget.
+        document = {"content": [{"type": "text"}],
+                    "system": [{"type": "text"}]}
+        # 2 歩は 1 本目の走査で使い切る。2 本目が同じ残量から引くからこそ、
+        # 「どちらの受理条件が最後の 1 歩を使ったか」に関わらず未完了になる。
+        policy = _json_policy(
+            guards=[
+                _tagged_union("/content/*"), _tagged_union("/system/*"),
+            ],
+            maxSelectorExpansions=2,
+        )
+        self.assertEqual(
+            _execute_request_policy(
+                policy,
+                json.dumps(document).encode("utf-8"),
+                nas_addon._build_mask_patterns(["SECRET123"]),
+            ),
+            ("block", None, "resource-limit"),
+        )
 
     def test_bounded_traversal_keeps_guard_semantics(self):
         document = {"content": [
             {"type": "text", "content": [{"type": "future"}]},
         ]}
-        policy = _json_policy(taggedUnions=[{
+        policy = _json_policy(guards=[{
             "at": "/**/**/content/*",
             "discriminator": "type",
             "allowedTags": ["text"],
         }])
         self.assertEqual(
-            nas_addon._execute_request_policy(
+            _execute_request_policy(
                 policy,
                 json.dumps(document).encode("utf-8"),
                 nas_addon._build_mask_patterns(["SECRET123"]),
@@ -1578,134 +2077,663 @@ class RequestPolicySelectorExpansionBoundTest(unittest.TestCase):
         )
 
 
-_BASE64_FIELD = {
-    "at": "/**",
-    "whenField": "type",
-    "whenEquals": "base64",
-    "dataField": "data",
-    "encoding": "base64",
-}
+class RequestPolicySelectorExcludeTest(unittest.TestCase):
+    """`exclude` cuts a whole subtree out of the selector walk, so nothing
+    inside it is inspected. This is what lets one `/**/content/*` guard
+    replace an enumeration of the positions a content block may appear in."""
 
-
-class RequestPolicyEncodedFieldTest(unittest.TestCase):
     def setUp(self):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
-    def _run(self, body_obj, patterns=None, **overrides):
-        policy = _json_policy(encodedFields=[_BASE64_FIELD], **overrides)
-        return nas_addon._execute_request_policy(
-            policy,
+    def _run(self, body_obj, at, exclude=None, tags=("text",)):
+        return _execute_request_policy(
+            _json_policy(guards=[_tagged_union(at, tags, exclude)]),
             json.dumps(body_obj).encode("utf-8"),
-            self.patterns if patterns is None else patterns,
+            self.patterns,
         )
 
-    def _source(self, data):
-        return {"source": {"type": "base64", "data": data}}
+    def _tool_schema_body(self):
+        # `/**/content/*` also reaches a JSON Schema below tools[], whose
+        # {"type": "string"} is not a content block.
+        return {
+            "tools": [
+                {"input_schema": {"properties": {"content": {
+                    "type": "string",
+                }}}}
+            ],
+            "messages": [{"content": [{"type": "text"}]}],
+        }
 
-    def test_non_matching_discriminator_is_a_no_op(self):
-        # type != "base64" so the rule does nothing; the value is then an
-        # ordinary string and stays untouched because it holds no secret.
+    def test_body_that_only_violates_inside_the_exclusion_passes(self):
         result, _out, reason = self._run(
-            {"source": {"type": "url", "data": "not!base64!"}}
+            self._tool_schema_body(), "/**/content/*", exclude=["/tools/**"]
         )
         self.assertEqual((result, reason), ("pass", "recognized-json"))
 
-    def test_non_object_selector_matches_are_skipped(self):
-        # "/**" also selects scalars and lists; they must not block.
+    def test_the_same_body_without_exclude_still_blocks(self):
+        self.assertEqual(
+            self._run(self._tool_schema_body(), "/**/content/*"),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_violation_outside_the_exclusion_still_blocks(self):
+        body = self._tool_schema_body()
+        body["messages"] = [{"content": [{"type": "future"}]}]
+        self.assertEqual(
+            self._run(body, "/**/content/*", exclude=["/tools/**"]),
+            ("block", None, "schema-mismatch"),
+        )
+
+    def test_excluded_node_is_cut_together_with_its_descendants(self):
+        # "/tools" addresses the array itself; its elements go with it.
         result, _out, reason = self._run(
-            {"a": "plain", "b": [1, 2], "c": None}
+            self._tool_schema_body(), "/**/content/*", exclude=["/tools"]
         )
         self.assertEqual((result, reason), ("pass", "recognized-json"))
 
-    def test_matching_rule_requires_string_data_field(self):
-        result, out, reason = self._run(self._source(123))
-        self.assertEqual(result, "block")
-        self.assertIsNone(out)
-        self.assertEqual(reason, "schema-mismatch")
-
-    def test_matching_rule_requires_present_data_field(self):
-        result, _out, reason = self._run({"source": {"type": "base64"}})
-        self.assertEqual((result, reason), ("block", "schema-mismatch"))
-
-    def test_clean_base64_is_unchanged_and_passes(self):
-        blob = base64.b64encode(b"clean payload bytes").decode("ascii")
-        result, out, reason = self._run(self._source(blob))
-        self.assertEqual((result, out, reason), ("pass", None, "recognized-json"))
-
-    def test_secret_inside_base64_is_masked_and_re_encoded(self):
-        blob = base64.b64encode(b"prefix SECRET123 suffix").decode("ascii")
-        result, out, reason = self._run(self._source(blob))
-        self.assertEqual((result, reason), ("rewrite", "masked-json"))
-        parsed = json.loads(out)
-        decoded = base64.b64decode(parsed["source"]["data"])
-        self.assertNotIn(b"SECRET123", decoded)
-        self.assertIn(b"****", decoded)
-        self.assertEqual(decoded, b"prefix **** suffix")
-
-    def test_invalid_base64_alphabet_blocks(self):
+    def test_exclusion_does_not_hide_an_equal_value_elsewhere(self):
+        # Python hands out one shared object for small ints, so a walk that
+        # remembers where it has been by object identity would treat the
+        # second 1 as already visited and let it through unchecked.
+        body = {"tools": {"content": [1]}, "messages": {"content": [1]}}
         self.assertEqual(
-            self._run(self._source("not!valid!base64!")),
-            ("block", None, "encoded-decode-failed"),
+            self._run(body, "/*/content/*", exclude=["/tools/content/*"]),
+            ("block", None, "schema-mismatch"),
         )
 
-    def test_invalid_base64_padding_blocks(self):
-        self.assertEqual(
-            self._run(self._source("YWJjZA")),
-            ("block", None, "encoded-decode-failed"),
+    def test_exclude_selector_supports_wildcards(self):
+        body = {"a": {"content": [{"type": "future"}]},
+                "b": {"content": [{"type": "text"}]}}
+        result, _out, reason = self._run(
+            body, "/**/content/*", exclude=["/*/content/0"]
+        )
+        self.assertEqual((result, reason), ("pass", "recognized-json"))
+
+
+class RequestPolicyViolationFindingTest(unittest.TestCase):
+    """Every violation is collected, not just the first, and each one is
+    reported with enough detail to be reviewed on its own."""
+
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _findings(self, body_obj, guards):
+        parsed = json.loads(json.dumps(body_obj))
+        return _validate_tagged_unions(
+            parsed, guards, self.patterns, _selector_budget()
         )
 
-    def test_whitespace_and_line_wrapped_base64_block(self):
-        raw = base64.b64encode(b"x" * 90).decode("ascii")
-        for variant in (
-            f"{raw[:40]}\n{raw[40:]}",
-            f"{raw[:40]} {raw[40:]}",
-            f" {raw}",
-            f"{raw}\n",
-            f"{raw[:40]}\r\n{raw[40:]}",
-        ):
-            with self.subTest(variant=repr(variant[:12])):
-                self.assertEqual(
-                    self._run(self._source(variant)),
-                    ("block", None, "encoded-decode-failed"),
+    def test_valid_body_produces_no_findings(self):
+        self.assertEqual(
+            self._findings(
+                {"content": [{"type": "text"}]},
+                [_tagged_union("/**/content/*")],
+            ),
+            [],
+        )
+
+    def test_every_guard_is_evaluated_not_only_the_first(self):
+        findings = self._findings(
+            {"content": [{"type": "future"}],
+             "system": [{"type": "legacy"}]},
+            [_tagged_union("/**/content/*"), _tagged_union("/**/system/*")],
+        )
+        self.assertEqual(
+            [(f["at"], f["value"]) for f in findings],
+            [("/**/content/*", "future"), ("/**/system/*", "legacy")],
+        )
+
+    def test_distinct_unknown_tags_are_separate_findings(self):
+        findings = self._findings(
+            {"content": [{"type": "future"}, {"type": "legacy"}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertEqual(
+            [(f["value"], f["pointer"], f["count"]) for f in findings],
+            [("future", "/content/0", 1), ("legacy", "/content/1", 1)],
+        )
+
+    def test_repeated_unknown_tag_is_one_finding_with_a_count(self):
+        findings = self._findings(
+            {"content": [{"type": "future"}, {"type": "future"}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["count"], 2)
+        self.assertEqual(findings[0]["pointer"], "/content/0")
+
+    def test_finding_names_the_acceptance_condition_and_its_selector(self):
+        findings = self._findings(
+            {"content": [{"type": "future"}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertEqual(findings[0]["expect"], 0)
+        self.assertEqual(findings[0]["expectKind"], "unionShape")
+        self.assertEqual(findings[0]["at"], "/**/content/*")
+        self.assertEqual(findings[0]["kind"], "schema-mismatch")
+
+    def test_pointer_escapes_reserved_characters(self):
+        findings = self._findings(
+            {"a/b": {"c~d": [{"type": "future"}]}},
+            [_tagged_union("/a~1b/c~0d/*")],
+        )
+        self.assertEqual(findings[0]["pointer"], "/a~1b/c~0d/0")
+
+    def test_pointer_masks_a_secret_used_as_an_object_key(self):
+        findings = self._findings(
+            {"k-SECRET123": {"content": [{"type": "future"}]}},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertEqual(findings[0]["pointer"], "/k-****/content/0")
+
+    def test_pointer_masks_a_secret_that_pointer_escaping_would_hide(self):
+        # The key holds the secret across characters a pointer escapes, so in
+        # the raw pointer the secret is spelled "SEC~1RET~012" and masking the
+        # pointer as one flat string would not match it at all.
+        patterns = nas_addon._build_mask_patterns(["SEC/RET~12"])
+        parsed = json.loads(json.dumps(
+            {"k-SEC/RET~12": {"content": [{"type": "future"}]}}
+        ))
+        findings = _validate_tagged_unions(
+            parsed, [_tagged_union("/**/content/*")], patterns,
+            _selector_budget(),
+        )
+        # Masked, and still a pointer: separators and escaping intact.
+        self.assertEqual(findings[0]["pointer"], "/k-****/content/0")
+
+    def test_pointer_masks_a_secret_that_spans_a_separator(self):
+        # The secret is split across two keys, so in the pointer it is spelled
+        # with the "/" that separates them. Masking token by token never sees
+        # it; the two tokens have to collapse into one masked token.
+        patterns = nas_addon._build_mask_patterns(["aws/key123"])
+        parsed = json.loads(json.dumps(
+            {"aws": {"key123": {"content": [{"type": "future"}]}}}
+        ))
+        findings = _validate_tagged_unions(
+            parsed, [_tagged_union("/**/content/*")], patterns,
+            _selector_budget(),
+        )
+        self.assertEqual(findings[0]["pointer"], "/****/content/0")
+
+    def test_pointer_masks_a_secret_spanning_an_escaped_token(self):
+        # Both hard cases at once: the secret spans the separator between two
+        # keys, and each key holds a character the pointer escapes. It matches
+        # neither the raw pointer ("a~0b/c~1d") nor any single token.
+        patterns = nas_addon._build_mask_patterns(["a~b/c/d"])
+        parsed = json.loads(json.dumps(
+            {"a~b": {"c/d": {"content": [{"type": "future"}]}}}
+        ))
+        findings = _validate_tagged_unions(
+            parsed, [_tagged_union("/**/content/*")], patterns,
+            _selector_budget(),
+        )
+        self.assertEqual(findings[0]["pointer"], "/****/content/0")
+
+    def test_pointer_masking_leaves_untouched_tokens_escaped(self):
+        # Only the tokens the secret covered may collapse. The rest keep their
+        # own separators and their own "~0"/"~1" escaping.
+        patterns = nas_addon._build_mask_patterns(["aws/key123"])
+        parsed = json.loads(json.dumps(
+            {"aws": {"key123": {"x/y": {"z~w": [{"type": "future"}]}}}}
+        ))
+        findings = _validate_tagged_unions(
+            parsed, [_tagged_union("/**/z~0w/*")], patterns,
+            _selector_budget(),
+        )
+        self.assertEqual(findings[0]["pointer"], "/****/x~1y/z~0w/0")
+
+    def test_node_without_a_tag_has_no_value(self):
+        findings = self._findings(
+            {"content": [{"text": "hi"}, "bare-string", {"type": 1}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIsNone(findings[0]["value"])
+        self.assertEqual(findings[0]["count"], 3)
+
+    def test_excerpt_covers_the_violating_node_only(self):
+        findings = self._findings(
+            {"other": "sibling-value",
+             "content": [{"type": "future", "text": "hi"}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertEqual(
+            findings[0]["excerpt"], '{"type":"future","text":"hi"}'
+        )
+
+    def test_reported_value_masks_secrets(self):
+        findings = self._findings(
+            {"content": [{"type": "tag-SECRET123"}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertEqual(findings[0]["value"], "tag-****")
+
+    def test_excerpt_masks_secrets(self):
+        findings = self._findings(
+            {"content": [{"type": "future", "text": "x SECRET123 y"}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertNotIn("SECRET123", findings[0]["excerpt"])
+        self.assertIn("****", findings[0]["excerpt"])
+
+    def test_excerpt_masks_secrets_that_json_escaping_would_hide(self):
+        # json.dumps escapes quotes, backslashes and newlines, and the mask
+        # patterns hold the raw secret bytes. A secret masked only after
+        # serialization would no longer match and would be printed verbatim.
+        for secret in ('ab"cd-efgh', "ab\\cd-efgh", "line1\nline2-efgh"):
+            with self.subTest(secret=secret):
+                patterns = nas_addon._build_mask_patterns([secret])
+                parsed = json.loads(json.dumps(
+                    {"content": [{"type": "future", "text": f"x{secret}y"}]}
+                ))
+                findings = _validate_tagged_unions(
+                    parsed, [_tagged_union("/**/content/*")], patterns,
+                    _selector_budget(),
                 )
+                excerpt = findings[0]["excerpt"]
+                self.assertNotIn(secret, excerpt)
+                self.assertNotIn(json.dumps(secret)[1:-1], excerpt)
+                self.assertIn("****", excerpt)
 
-    def test_non_canonical_trailing_bits_block(self):
-        # "YR==" decodes to b"a" but canonically re-encodes to "YQ==".
+    def test_excerpt_masks_a_secret_spelled_as_a_number(self):
+        patterns = nas_addon._build_mask_patterns(["31415926535"])
+        parsed = json.loads(json.dumps(
+            {"content": [{"type": "future", "pin": 31415926535}]}
+        ))
+        findings = _validate_tagged_unions(
+            parsed, [_tagged_union("/**/content/*")], patterns,
+            _selector_budget(),
+        )
+        self.assertNotIn("31415926535", findings[0]["excerpt"])
+        self.assertIn("****", findings[0]["excerpt"])
+
+    def test_excerpt_masks_a_secret_used_as_an_object_key(self):
+        findings = self._findings(
+            {"content": [{"type": "future", "k-SECRET123": "v"}]},
+            [_tagged_union("/**/content/*")],
+        )
+        self.assertNotIn("SECRET123", findings[0]["excerpt"])
+        self.assertIn("****", findings[0]["excerpt"])
+
+    def test_excerpt_is_cut_off_by_depth(self):
+        deep = {"type": "future"}
+        for _ in range(nas_addon.EXCERPT_MAX_DEPTH + 2):
+            deep = {"nested": deep}
+        findings = self._findings(
+            {"content": [deep]}, [_tagged_union("/**/content/*")]
+        )
+        self.assertNotIn("future", findings[0]["excerpt"])
+        self.assertIn(nas_addon.EXCERPT_ELIDED, findings[0]["excerpt"])
+
+    def test_excerpt_is_cut_off_by_bytes(self):
+        text = "x" * (nas_addon.EXCERPT_MAX_BYTES + 100)
+        self.assertLess(len(text), nas_addon.EXCERPT_MASK_BUDGET)
+        findings = self._findings(
+            {"content": [{"type": "future", "text": text}]},
+            [_tagged_union("/**/content/*")],
+        )
+        excerpt = findings[0]["excerpt"]
+        self.assertLessEqual(
+            len(excerpt.encode("utf-8")),
+            nas_addon.EXCERPT_MAX_BYTES + len(nas_addon.EXCERPT_ELIDED),
+        )
+        self.assertTrue(excerpt.endswith(nas_addon.EXCERPT_ELIDED))
+
+    def test_excerpt_is_cut_off_by_width(self):
+        wide = {"type": "future"}
+        wide.update({f"k{i}": i for i in range(nas_addon.EXCERPT_MAX_WIDTH)})
+        findings = self._findings(
+            {"content": [wide]}, [_tagged_union("/**/content/*")]
+        )
+        excerpt = findings[0]["excerpt"]
+        self.assertIn('"type":"future"', excerpt)
+        self.assertIn(nas_addon.EXCERPT_ELIDED, excerpt)
+        self.assertIn('"k0"', excerpt)
+        first_dropped = f'"k{nas_addon.EXCERPT_MAX_WIDTH - 1}"'
+        self.assertNotIn(first_dropped, excerpt)
+
+    def test_excerpt_elides_a_scalar_too_large_to_scan(self):
+        findings = self._findings(
+            {"content": [{
+                "type": "future",
+                "text": "x" * (nas_addon.EXCERPT_MASK_BUDGET + 1),
+            }]},
+            [_tagged_union("/**/content/*")],
+        )
+        excerpt = findings[0]["excerpt"]
         self.assertEqual(
-            self._run(self._source("YR==")),
-            ("block", None, "encoded-decode-failed"),
+            excerpt, '{"type":"future","text":"%s"}' % nas_addon.EXCERPT_ELIDED
         )
 
-    def test_cumulative_decoded_budget_is_enforced(self):
-        blob = base64.b64encode(b"y" * 60).decode("ascii")
-        body = {"a": self._source(blob), "b": self._source(blob)}
-        # Each field decodes to 60 bytes; 120 total.
-        self.assertEqual(
-            self._run(body, maxDecodedBytes=119),
-            ("block", None, "resource-limit"),
+    def test_excerpt_scan_work_is_bounded_by_the_budget(self):
+        # The violating node is attacker-controlled and can hold most of the
+        # body. Masking scans its text once per pattern, so the excerpt must
+        # bound how much text it scans, not only how much it prints.
+        huge = {"type": "future",
+                "items": [{"note": "y" * 1_000} for _ in range(5_000)],
+                "blob": "z" * 1_000_000}
+        scanned = []
+        real_mask_bytes = nas_addon._mask_bytes
+
+        def counting_mask_bytes(data, patterns):
+            scanned.append(len(data))
+            return real_mask_bytes(data, patterns)
+
+        with patch.object(nas_addon, "_mask_bytes", counting_mask_bytes):
+            findings = self._findings(
+                {"content": [huge]}, [_tagged_union("/**/content/*")]
+            )
+        self.assertLessEqual(sum(scanned), 8 * nas_addon.EXCERPT_MASK_BUDGET)
+        # Bounded, but still recognizable as the node that violated.
+        self.assertIn('"type":"future"', findings[0]["excerpt"])
+
+
+class RequestPolicyAllowedViolationTest(unittest.TestCase):
+    """A violation that was let through has to say so in the outcome.
+
+    `onViolation = "allow"` is the one setting that lets a request the rule
+    itself calls wrong reach the network, which is why a rule that uses it
+    cannot also turn its audit off. The record it leaves is the only trace
+    that the violation happened, so nothing else the inspection did may
+    overwrite the reason that names it."""
+
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _rule_allowing_violations(self):
+        return _rule(
+            expects=[_union_shape(
+                _tagged_union("/content/*"), on_violation="allow"
+            )],
+            body_format="json",
         )
-        result, _out, reason = self._run(body, maxDecodedBytes=120)
-        self.assertEqual((result, reason), ("pass", "recognized-json"))
 
-    def test_consumed_data_is_not_masked_a_second_time_as_text(self):
-        # The base64 TEXT itself contains the secret, but the decoded bytes
-        # do not. Because the field was consumed by the encoded-field rule it
-        # must not be masked again as an ordinary string.
-        blob = base64.b64encode(b"hello world payload").decode("ascii")
-        secret = blob[:10]
-        patterns = nas_addon._build_mask_patterns([secret])
-        result, out, reason = self._run(self._source(blob), patterns=patterns)
-        self.assertEqual((result, out, reason), ("pass", None, "recognized-json"))
+    def _inspect(self, body):
+        return nas_addon._inspect_body(
+            self._rule_allowing_violations(),
+            body,
+            json.loads(body),
+            self.patterns,
+        )
 
-    def test_unconsumed_sibling_strings_are_still_masked(self):
-        blob = base64.b64encode(b"clean").decode("ascii")
-        body = {"source": {"type": "base64", "data": blob,
-                           "note": "SECRET123"}}
-        result, out, reason = self._run(body)
+    def test_an_allowed_violation_is_reported_when_nothing_is_masked(self):
+        result, rewritten, reason = self._inspect(
+            b'{"content":[{"type":"future"}]}'
+        )
+        self.assertEqual((result, rewritten), ("pass", None))
+        self.assertEqual(reason, "violations-allowed")
+
+    def test_an_allowed_violation_survives_the_body_being_masked(self):
+        result, rewritten, reason = self._inspect(
+            b'{"content":[{"type":"future","note":"SECRET123"}]}'
+        )
+        self.assertEqual(result, "rewrite")
+        self.assertEqual(
+            rewritten, b'{"content":[{"type":"future","note":"****"}]}'
+        )
+        self.assertEqual(reason, "violations-allowed")
+
+    def test_a_masked_body_with_no_violation_still_reports_the_rewrite(self):
+        result, _rewritten, reason = self._inspect(
+            b'{"content":[{"type":"text","note":"SECRET123"}]}'
+        )
         self.assertEqual((result, reason), ("rewrite", "masked-json"))
-        parsed = json.loads(out)
-        self.assertEqual(parsed["source"]["note"], "****")
-        self.assertEqual(parsed["source"]["data"], blob)
+
+
+class RequestPolicyFindingCapTest(unittest.TestCase):
+    """Violations are grouped by a value taken from the request body, so a
+    body that spends a fresh value at every node produces a fresh finding at
+    every node. The retained list is capped; the counts are not."""
+
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+
+    def _findings(self, tags, cap=4):
+        parsed = json.loads(json.dumps(
+            {"content": [{"type": tag} for tag in tags]}
+        ))
+        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", cap):
+            return _validate_tagged_unions(
+                parsed, [_tagged_union("/**/content/*")], self.patterns,
+                _selector_budget(),
+            )
+
+    def test_no_truncation_marker_when_the_cap_is_not_reached(self):
+        findings = self._findings(["a", "b", "c", "d"])
+        self.assertEqual(
+            [f["kind"] for f in findings], ["schema-mismatch"] * 4
+        )
+
+    def test_distinct_violations_past_the_cap_are_not_retained(self):
+        findings = self._findings(["a", "b", "c", "d", "e", "f"])
+        self.assertEqual(
+            [f["value"] for f in findings if f["kind"] == "schema-mismatch"],
+            ["a", "b", "c", "d"],
+        )
+
+    def test_a_finding_reports_that_retention_was_capped(self):
+        findings = self._findings(["a", "b", "c", "d", "e", "f"])
+        truncated = findings[-1]
+        self.assertEqual(truncated["kind"], "findings-truncated")
+        self.assertEqual(truncated["count"], 2)
+        self.assertIsNone(truncated["value"])
+        self.assertIsNone(truncated["excerpt"])
+
+    def test_counts_stay_truthful_past_the_cap(self):
+        # "a" repeats after the cap is full: it is already retained, so it
+        # keeps counting. "e" and "f" are new and only add to the total.
+        tags = ["a", "b", "c", "d", "e", "a", "a", "f", "f"]
+        findings = self._findings(tags)
+        self.assertEqual(
+            [(f["value"], f["count"]) for f in findings],
+            [("a", 3), ("b", 1), ("c", 1), ("d", 1), (None, 3)],
+        )
+        self.assertEqual(sum(f["count"] for f in findings), len(tags))
+
+    def test_a_capped_body_still_blocks_on_the_shape_mismatch(self):
+        body = {"content": [{"type": "a%d" % i} for i in range(200)]}
+        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 4):
+            self.assertEqual(
+                _execute_request_policy(
+                    _json_policy(guards=[
+                        _tagged_union("/**/content/*"),
+                    ]),
+                    json.dumps(body).encode("utf-8"),
+                    self.patterns,
+                ),
+                ("block", None, "schema-mismatch"),
+            )
+
+    def test_excerpts_are_not_built_past_the_cap(self):
+        # The excerpt is the expensive part of a finding. Capping the list
+        # only bounds the memory; it has to bound the work as well.
+        built = []
+        real_excerpt = nas_addon._violation_excerpt
+
+        def counting_excerpt(node, patterns):
+            built.append(node)
+            return real_excerpt(node, patterns)
+
+        with patch.object(nas_addon, "_violation_excerpt", counting_excerpt):
+            self._findings(["a%d" % i for i in range(500)])
+        self.assertEqual(len(built), 4)
+
+    def _capped_and_truncated_walk(self):
+        # Eight distinct violations against a cap of two, and a sibling array
+        # wide enough that the walk runs out of expansions before it finishes.
+        body = {"content": [{"type": "a%d" % i} for i in range(8)],
+                "extra": ["x"] * 40}
+        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 2), \
+                _expansion_ceiling(20):
+            return body, _validate_tagged_unions(
+                json.loads(json.dumps(body)),
+                [_tagged_union("/**/content/*")], self.patterns,
+                _selector_budget(),
+            )
+
+    def test_incomplete_inspection_is_recorded_even_with_the_cap_full(self):
+        # The cap bounds how many violations are described. It must not bound
+        # the record that the walk was truncated: that record is the only
+        # thing saying subtrees went uninspected, and dropping it would turn a
+        # capped inspection into one that looks complete.
+        _body, findings = self._capped_and_truncated_walk()
+        self.assertEqual(
+            [f["kind"] for f in findings],
+            ["schema-mismatch", "schema-mismatch",
+             "inspection-incomplete", "findings-truncated"],
+        )
+
+    def test_incomplete_inspection_still_wins_the_reason_when_capped(self):
+        _body, findings = self._capped_and_truncated_walk()
+        self.assertEqual(
+            nas_addon._findings_block_reason(findings), "resource-limit"
+        )
+
+    def test_a_capped_and_truncated_walk_blocks_on_the_resource_limit(self):
+        body, _findings = self._capped_and_truncated_walk()
+        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 2), \
+                _expansion_ceiling(20):
+            self.assertEqual(
+                _execute_request_policy(
+                    _json_policy(guards=[
+                        _tagged_union("/**/content/*"),
+                    ]),
+                    json.dumps(body).encode("utf-8"),
+                    self.patterns,
+                ),
+                ("block", None, "resource-limit"),
+            )
+
+    def test_the_cap_is_shared_across_checks(self):
+        # One allowance for the whole body inspection, not one per check. The
+        # first check fills it, so the second check's violations have to land
+        # in the truncated record rather than disappear from the totals.
+        body = {"content": [{"type": "a"}, {"type": "b"}],
+                "system": [{"type": "c"}, {"type": "d"}, {"type": "c"}]}
+        with patch.object(nas_addon, "MAX_RETAINED_FINDINGS", 2):
+            findings = _validate_tagged_unions(
+                json.loads(json.dumps(body)),
+                [_tagged_union("/**/content/*"),
+                 _tagged_union("/**/system/*")],
+                self.patterns, _selector_budget(),
+            )
+        self.assertEqual(
+            [(f["at"], f["value"], f["count"]) for f in findings],
+            [("/**/content/*", "a", 1), ("/**/content/*", "b", 1),
+             ("", None, 3)],
+        )
+        self.assertEqual(findings[-1]["kind"], "findings-truncated")
+        self.assertEqual(sum(f["count"] for f in findings), 5)
+
+
+class RequestPolicyIncompleteInspectionTest(unittest.TestCase):
+    """A walk that runs out of budget leaves subtrees uninspected. That is a
+    violation, not a pass: the finding records which selector ran out and how
+    far the walk got."""
+
+    def setUp(self):
+        self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
+        self.body = {"messages": [{"content": [{"type": "text"}]}]}
+
+    def _findings(self, guards):
+        parsed = json.loads(json.dumps(self.body))
+        return _validate_tagged_unions(
+            parsed, guards, self.patterns, _selector_budget()
+        )
+
+    def test_expansion_budget_exhaustion_blocks_the_request(self):
+        with _expansion_ceiling(3):
+            self.assertEqual(
+                _execute_request_policy(
+                    _json_policy(guards=[
+                        _tagged_union("/messages/*/content/*"),
+                    ]),
+                    json.dumps(self.body).encode("utf-8"),
+                    self.patterns,
+                ),
+                ("block", None, "resource-limit"),
+            )
+
+    def test_finding_records_the_selector_and_the_last_pointer_reached(self):
+        with _expansion_ceiling(3):
+            findings = self._findings(
+                [_tagged_union("/messages/*/content/*")]
+            )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["kind"], "inspection-incomplete")
+        self.assertEqual(findings[0]["at"], "/messages/*/content/*")
+        self.assertEqual(findings[0]["pointer"], "/messages/0/content")
+
+    def test_exhausted_exclude_walk_names_the_exclude_selector(self):
+        with _expansion_ceiling(1):
+            findings = self._findings([_tagged_union(
+                "/messages/*/content/*", exclude=["/messages/**"]
+            )])
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["kind"], "inspection-incomplete")
+        self.assertEqual(findings[0]["at"], "/messages/**")
+        self.assertEqual(findings[0]["pointer"], "/messages")
+
+    def test_incomplete_finding_masks_a_secret_in_the_last_pointer(self):
+        parsed = json.loads(json.dumps(
+            {"k-SECRET123": {"content": [{"type": "text"}]}}
+        ))
+        with _expansion_ceiling(3):
+            findings = _validate_tagged_unions(
+                parsed, [_tagged_union("/**/content/*")], self.patterns,
+                _selector_budget(),
+            )
+        self.assertEqual(findings[0]["kind"], "inspection-incomplete")
+        self.assertNotIn("SECRET123", findings[0]["pointer"])
+        self.assertIn("****", findings[0]["pointer"])
+
+    def test_incomplete_finding_masks_a_secret_spanning_a_separator(self):
+        # The pointer a truncated walk reports is built the same way as a
+        # mismatch's, so a secret split across two keys reaches it the same
+        # way and has to be masked the same way.
+        patterns = nas_addon._build_mask_patterns(["aws/key123"])
+        parsed = json.loads(json.dumps(
+            {"aws": {"key123": {"content": [{"type": "text"}]}}}
+        ))
+        with _expansion_ceiling(6):
+            findings = _validate_tagged_unions(
+                parsed, [_tagged_union("/**/content/*")], patterns,
+                _selector_budget(),
+            )
+        self.assertEqual(findings[0]["kind"], "inspection-incomplete")
+        self.assertEqual(findings[0]["pointer"], "/****/content")
+
+    def test_violations_found_before_the_budget_ran_out_are_kept(self):
+        body = {"content": [{"type": "future"}], "extra": ["x"] * 50}
+        parsed = json.loads(json.dumps(body))
+        with _expansion_ceiling(12):
+            findings = _validate_tagged_unions(
+                parsed, [_tagged_union("/**/content/*")], self.patterns,
+                _selector_budget(),
+            )
+        self.assertEqual(
+            [f["kind"] for f in findings],
+            ["schema-mismatch", "inspection-incomplete"],
+        )
+        # An unfinished walk proved nothing about what it never reached, so
+        # it outranks the mismatch it did find.
+        self.assertEqual(
+            nas_addon._findings_block_reason(findings), "resource-limit"
+        )
+
+    def test_incomplete_inspection_outranks_a_mismatch_in_the_reason(self):
+        body = {"content": [{"type": "future"}], "extra": ["x"] * 50}
+        with _expansion_ceiling(12):
+            self.assertEqual(
+                _execute_request_policy(
+                    _json_policy(guards=[
+                        _tagged_union("/**/content/*"),
+                    ]),
+                    json.dumps(body).encode("utf-8"),
+                    self.patterns,
+                ),
+                ("block", None, "resource-limit"),
+            )
 
 
 class RequestPolicyKeyCollisionTest(unittest.TestCase):
@@ -1713,7 +2741,7 @@ class RequestPolicyKeyCollisionTest(unittest.TestCase):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
     def _run(self, raw_body, patterns=None):
-        return nas_addon._execute_request_policy(
+        return _execute_request_policy(
             _json_policy(),
             raw_body,
             self.patterns if patterns is None else patterns,
@@ -1749,7 +2777,7 @@ class RequestPolicyLimitBoundaryTest(unittest.TestCase):
         self.patterns = nas_addon._build_mask_patterns(["SECRET123"])
 
     def _run(self, raw_body, **overrides):
-        return nas_addon._execute_request_policy(
+        return _execute_request_policy(
             _json_policy(**overrides), raw_body, self.patterns
         )
 
@@ -1799,22 +2827,6 @@ class RequestPolicyLimitBoundaryTest(unittest.TestCase):
             self._run(body, maxNodes=4), ("block", None, "resource-limit")
         )
 
-    def test_decoded_bytes_at_limit_passes_and_over_limit_blocks(self):
-        blob = base64.b64encode(b"z" * 30).decode("ascii")
-        body = json.dumps(
-            {"source": {"type": "base64", "data": blob}}
-        ).encode("utf-8")
-        result, _out, reason = self._run(
-            body, encodedFields=[_BASE64_FIELD], maxDecodedBytes=30
-        )
-        self.assertEqual((result, reason), ("pass", "recognized-json"))
-        self.assertEqual(
-            self._run(
-                body, encodedFields=[_BASE64_FIELD], maxDecodedBytes=29
-            ),
-            ("block", None, "resource-limit"),
-        )
-
     def test_deeply_nested_body_fails_closed(self):
         deep = ("[" * 40000 + "]" * 40000).encode("utf-8")
         result, out, reason = self._run(deep)
@@ -1847,8 +2859,8 @@ class RequestPolicyInjectedExceptionTest(unittest.TestCase):
         with patch.object(
             nas_addon, target, **patch_kwargs
         ), redirect_stderr(stderr):
-            result = nas_addon._execute_request_policy(
-                _json_policy(encodedFields=[_BASE64_FIELD]),
+            result = _execute_request_policy(
+                _json_policy(guards=[_tagged_union("/**/content/*")]),
                 self.body,
                 self.patterns,
             )
@@ -1857,8 +2869,7 @@ class RequestPolicyInjectedExceptionTest(unittest.TestCase):
     def test_traversal_exception_blocks_as_processing_failed(self):
         for target in (
             "_account_json",
-            "_validate_tagged_unions",
-            "_process_encoded_fields",
+            "_evaluate_expects",
             "_recursively_mask_json",
         ):
             with self.subTest(target=target):
@@ -1880,7 +2891,7 @@ class RequestPolicyInjectedExceptionTest(unittest.TestCase):
             "loads",
             side_effect=RuntimeError("SECRET123 parser detail"),
         ), redirect_stderr(stderr):
-            result = nas_addon._execute_request_policy(
+            result = _execute_request_policy(
                 _json_policy(), self.body, self.patterns
             )
         self.assertEqual(result, ("block", None, "invalid-json"))
@@ -1893,84 +2904,94 @@ class RequestPolicyInjectedExceptionTest(unittest.TestCase):
             "dumps",
             side_effect=RuntimeError("SECRET123 serializer detail"),
         ), redirect_stderr(stderr):
-            result = nas_addon._execute_request_policy(
+            result = _execute_request_policy(
                 _json_policy(), self.body, self.patterns
             )
         self.assertEqual(result, ("block", None, "serialization-failed"))
         self.assertEqual(stderr.getvalue(), "")
 
-    def test_bodyless_engine_exception_blocks_as_processing_failed(self):
+    def test_empty_body_check_exception_blocks_as_processing_failed(self):
         class ExplodingBody:
             def __len__(self):
                 raise RuntimeError("SECRET123 length detail")
 
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            result = nas_addon._execute_request_policy(
-                {"kind": "bodyless"}, ExplodingBody(), self.patterns
+            result = nas_addon._inspect_body(
+                _bodyless_policy(), ExplodingBody(), None, self.patterns
             )
         self.assertEqual(result, ("block", None, "processing-failed"))
         self.assertEqual(stderr.getvalue(), "")
 
-    def test_unknown_policy_kind_blocks(self):
-        for policy in (
-            {"kind": "graphql"},
-            {"kind": "future"},
-            {},
-        ):
-            with self.subTest(policy=policy):
-                self.assertEqual(
-                    nas_addon._execute_request_policy(
-                        policy, b"{}", self.patterns
-                    ),
-                    ("block", None, "processing-failed"),
-                )
-
     def test_engine_emits_nothing_to_stderr_on_success(self):
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            nas_addon._execute_request_policy(
+            _execute_request_policy(
                 _json_policy(), self.body, self.patterns
             )
         self.assertEqual(stderr.getvalue(), "")
 
 
-def _policy_rule(rule_id, **overrides):
-    """許可 + JSON ポリシー付きの解決済みルール。"""
-    rule = {
-        "id": rule_id,
-        "method": "POST",
-        "host": "api.example.com",
-        "path": "/v1/messages",
-        "action": "allow",
-        "audit": True,
-        "requestPolicy": _json_policy(),
+def _flow_document(rules=(), scope="api", targets=("api.example.com",),
+                   fallback="deny", network_fallback="deny"):
+    """A resolved document with one scope, in the shape the addon reads."""
+    return {
+        "contractVersion": 2,
+        "fallback": network_fallback,
+        "defaults": {
+            "limits": dict(_DEFAULT_LIMITS),
+            "secrets": {"*": "mask"},
+            "audit": "always",
+        },
+        "scopes": [
+            {
+                "name": scope,
+                "targets": [
+                    {
+                        "source": host,
+                        "host": {"kind": "exact", "host": host},
+                        "port": None,
+                    }
+                    for host in targets
+                ],
+                "fallback": fallback,
+                "fallbackRuleId": f"{scope}.$fallback",
+                "limits": dict(_DEFAULT_LIMITS),
+                "secrets": {},
+                "inject": [],
+                "audit": "always",
+                "rules": list(rules),
+            }
+        ],
     }
+
+
+def _messages_rule(key="messages", **overrides):
+    """A rule that reads /v1/messages as JSON, like the anthropic preset."""
+    rule = _json_policy()
+    rule["key"] = key
+    rule["id"] = f"api.{key}"
     rule.update(overrides)
     return rule
 
 
-def _bodyless_rule(rule_id, **overrides):
-    rule = {
-        "id": rule_id,
-        "method": "GET",
-        "host": "api.example.com",
-        "path": "/v1/models",
-        "action": "allow",
-        "audit": True,
-        "requestPolicy": {"kind": "bodyless"},
-    }
+def _models_rule(key="models", **overrides):
+    """A rule that refuses a body on GET /v1/models."""
+    rule = _bodyless_policy()
+    rule["key"] = key
+    rule["id"] = f"api.{key}"
+    rule["match"]["methods"] = ["GET"]
+    rule["match"]["paths"] = [_path_pattern("/v1/models")]
     rule.update(overrides)
     return rule
 
 
 class RequestPolicyFlowTest(unittest.TestCase):
-    """request() が broker の権威的な ruleId でポリシーを実行することの検証。
+    """request() が、自分の選択と broker の答えが一致したときにだけ進むこと。
 
-    ローカルの事前マッチはプレビュー選択のためだけに使ってよく、どのポリシーを
-    実行するかを決めてはならない。決めてしまうと、broker が持つ解決済み
-    ドキュメントとローカルの判断がずれたときに、承認されていないポリシーが
-    実行されうる。"""
+    addon と broker は同じドキュメントの上で同じ選択を再現する。食い違ったら、
+    どちらかが相手の見ていないものを見ているということなので、どちらの答えで
+    進んでも「誰も承認していないルール」を走らせることになる。"""
 
     def setUp(self):
         self.session_id = "sess-test"
@@ -1983,8 +3004,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
     def _run(
         self,
         *,
-        rules,
-        rule_id="messages",
+        document,
+        rule_id="api.messages",
         method="POST",
         path="/v1/messages",
         host="api.example.com",
@@ -1994,8 +3015,9 @@ class RequestPolicyFlowTest(unittest.TestCase):
         inject=True,
         addon=None,
         client_id="client-test",
+        mask_values=("SECRET123",),
     ):
-        """rule_id は broker が返す権威的な ID。省略記法として None で ID 無し。"""
+        """rule_id は broker が返す答え。addon の選択と食い違えば止まる。"""
         request_headers = list(headers or [])
         request_headers.append(("proxy-authorization", self.proxy_auth))
         flow = FakeFlow(request_class(
@@ -2015,8 +3037,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
                 decision = {
                     "decision": "allow",
                     "requestId": request["requestId"],
-                    "reason": "review-rule",
-                    "maskValues": ["SECRET123"],
+                    "reason": "rule",
+                    "maskValues": list(mask_values),
                 }
                 if rule_id is not None:
                     decision["ruleId"] = rule_id
@@ -2036,12 +3058,12 @@ class RequestPolicyFlowTest(unittest.TestCase):
             nas_addon, "_load_registry", return_value=self.registry
         ), patch.object(
             nas_addon,
-            "_load_review_rules",
-            # rules=None は「契約として読めないドキュメント」を表す。
+            "_load_authz_document",
+            # document=None は「契約として読めないドキュメント」を表す。
             return_value=(
-                None
-                if rules is None
-                else {"contractVersion": 1, "rules": rules}
+                nas_addon._INVALID_AUTHZ_DOCUMENT
+                if document is None
+                else document
             ),
         ), patch.object(
             nas_addon, "_generate_request_id", return_value="req-test"
@@ -2087,16 +3109,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
             addon.http_connect(flow)
         return flow
 
-    def test_broker_rule_id_beats_local_pre_match(self):
-        # ローカルの first-match は bodyless (非空ボディを block) を選ぶが、
-        # broker は JSON ポリシーの ID を返す。実行されるのは broker の方。
-        local = _bodyless_rule(
-            "local-first", method="POST", path="/v1/messages"
-        )
-        local["requestPolicy"] = {"kind": "bodyless"}
+    def test_the_rule_both_sides_chose_is_the_rule_that_runs(self):
         flow, messages, _stderr = self._run(
-            rules=[local, _policy_rule("broker-choice")],
-            rule_id="broker-choice",
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
         )
 
         self.assertIsNone(flow.response)
@@ -2104,13 +3120,13 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual(
             [(m["ruleId"], m["result"], m["reason"])
              for m in self._outcomes(messages)],
-            [("broker-choice", "rewrite", "masked-json")],
+            [("api.messages", "rewrite", "masked-json")],
         )
 
-    def test_unknown_rule_id_blocks_before_injection(self):
+    def test_a_broker_answer_the_addon_did_not_reach_blocks(self):
         flow, messages, _stderr = self._run(
-            rules=[_policy_rule("messages")],
-            rule_id="not-in-document",
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.$fallback",
         )
 
         self.assertEqual(flow.response.status_code, 403)
@@ -2120,10 +3136,22 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertIsNone(self._injected(flow))
         self.assertEqual(self._outcomes(messages), [])
 
-    def test_id_less_allow_keeps_generic_masking(self):
+    def test_an_unknown_broker_rule_id_blocks_before_injection(self):
         flow, messages, _stderr = self._run(
-            rules=[],
-            rule_id=None,
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.not-in-document",
+        )
+
+        self.assertEqual(flow.response.status_code, 403)
+        self.assertIsNone(self._injected(flow))
+        self.assertEqual(self._outcomes(messages), [])
+
+    def test_a_scope_fallback_keeps_generic_masking(self):
+        flow, messages, _stderr = self._run(
+            document=_flow_document(
+                [], targets=("example.com",), fallback="allow"
+            ),
+            rule_id="api.$fallback",
             method="POST",
             path="/submit",
             host="example.com",
@@ -2135,19 +3163,13 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual(self._outcomes(messages), [])
         self.assertEqual(self._injected(flow), "injected-value")
 
-    def test_rule_without_policy_keeps_generic_masking(self):
-        ordinary = {
-            "id": "ordinary",
-            "host": "example.com",
-            "action": "allow",
-            "audit": True,
-        }
+    def test_a_network_fallback_keeps_generic_masking(self):
         flow, messages, _stderr = self._run(
-            rules=[ordinary],
-            rule_id="ordinary",
+            document=_flow_document([], network_fallback="review"),
+            rule_id="$fallback",
             method="POST",
             path="/submit",
-            host="example.com",
+            host="elsewhere.example",
             content=b"value=SECRET123",
         )
 
@@ -2156,10 +3178,213 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual(self._outcomes(messages), [])
         self.assertEqual(self._injected(flow), "injected-value")
 
-    def test_approved_review_executes_policy(self):
+    def test_a_rule_with_nothing_to_inspect_keeps_generic_masking(self):
+        ordinary = _rule(key="ordinary", paths=["/submit"], scope="api")
         flow, messages, _stderr = self._run(
-            rules=[_policy_rule("messages", action="review")],
-            rule_id="messages",
+            document=_flow_document([ordinary], targets=("example.com",)),
+            rule_id="api.ordinary",
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b"value=SECRET123",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b"value=****")
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("pass", "no-inspection")],
+        )
+        self.assertEqual(self._injected(flow), "injected-value")
+
+    def test_a_json_body_no_rule_reads_as_json_is_still_masked(self):
+        """Masking does not depend on any rule having asked for the body.
+
+        The rule declares no body condition, so nothing inspects the tree —
+        but the body is still forwarded, so the secret in it still has to be
+        replaced."""
+        ordinary = _rule(key="ordinary", paths=["/submit"], scope="api")
+        flow, messages, _stderr = self._run(
+            document=_flow_document([ordinary], targets=("example.com",)),
+            rule_id="api.ordinary",
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b'{"value":"SECRET123"}',
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b'{"value":"****"}')
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("pass", "no-inspection")],
+        )
+        self.assertEqual(self._injected(flow), "injected-value")
+
+    def test_an_opaque_rule_masks_the_json_body_it_forwards(self):
+        """`format = "opaque"` accepts the body without parsing it. The body
+        still leaves the sandbox, so it still gets masked."""
+        opaque = _rule(
+            key="opaque", paths=["/submit"], scope="api", body_format="opaque"
+        )
+        flow, _messages, _stderr = self._run(
+            document=_flow_document([opaque], targets=("example.com",)),
+            rule_id="api.opaque",
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b'{"value":"SECRET123"}',
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b'{"value":"****"}')
+
+    def _opaque_over_broad_document(self):
+        """`opaque` is narrower than a rule with no body condition, so it is
+        evaluated first. Only a request that carries a body reaches its
+        `allow`; anything else falls through to the broad `deny`."""
+        opaque = _rule(
+            key="opaque", paths=["/**"], scope="api", body_format="opaque"
+        )
+        opaque["match"]["methods"] = None
+        opaque["precedes"] = ["all"]
+        broad = _rule(key="all", paths=["/**"], scope="api")
+        broad["match"]["methods"] = None
+        broad["onMatch"] = "deny"
+        return _flow_document([opaque, broad], targets=("example.com",))
+
+    def test_a_bodyless_get_does_not_satisfy_an_opaque_rule(self):
+        """A GET with no body is not a GET with an empty body. Reporting it as
+        empty hands it to every rule written for requests that carry
+        something."""
+        flow, messages, _stderr = self._run(
+            document=self._opaque_over_broad_document(),
+            rule_id="api.all",
+            method="GET",
+            path="/v1/models",
+            host="example.com",
+            content=b"",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(
+            messages[0]["reviewContext"]["bodyKind"], "absent"
+        )
+
+    def test_a_declared_empty_body_does_satisfy_an_opaque_rule(self):
+        """`Content-Length: 0` is a body that exists and is empty, which is
+        what `opaque` accepts."""
+        flow, messages, _stderr = self._run(
+            document=self._opaque_over_broad_document(),
+            rule_id="api.opaque",
+            method="POST",
+            path="/v1/models",
+            host="example.com",
+            headers=[("content-length", "0")],
+            content=b"",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(messages[0]["reviewContext"]["bodyKind"], "empty")
+
+    def test_a_masked_body_still_reports_the_violation_it_let_through(self):
+        """The rewrite and the allowed violation are both true of this
+        request. The audit gets one reason, and it has to be the one that says
+        a violation passed — that record is the reason the rule is allowed to
+        pass one at all."""
+        rule = _rule(
+            key="messages",
+            expects=[_union_shape(
+                _tagged_union("/content/*"), on_violation="allow"
+            )],
+            body_format="json",
+        )
+        flow, messages, _stderr = self._run(
+            document=_flow_document([rule]),
+            rule_id="api.messages",
+            content=b'{"content":[{"type":"future","note":"SECRET123"}]}',
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(
+            flow.request.content,
+            b'{"content":[{"type":"future","note":"****"}]}',
+        )
+        self.assertEqual(
+            [(m["result"], m["reason"]) for m in self._outcomes(messages)],
+            [("rewrite", "violations-allowed")],
+        )
+
+    def test_a_body_over_the_rules_budget_is_never_inspected(self):
+        """The rule asked for bodies no larger than 16 bytes. A larger one was
+        not read within that budget, so its `json` condition is indeterminate
+        and the rule inspects nothing — the broker is told the body could not
+        be parsed, and it decides on that."""
+        rule = _messages_rule()
+        rule["limits"] = dict(rule["limits"], maxBodyBytes=16)
+        flow, messages, _stderr = self._run(
+            document=_flow_document([rule]),
+            rule_id="api.messages",
+            content=b'{"text":"SECRET123","padding":"'
+                    + b"x" * 64 + b'"}',
+        )
+
+        self.assertEqual(messages[0]["reviewContext"]["bodyKind"], "binary")
+        self.assertEqual(self._outcomes(messages), [])
+        self.assertNotIn(b"SECRET123", flow.request.content)
+
+    def test_a_rule_that_refuses_a_body_masks_what_the_fallback_forwards(self):
+        """`format = "none"` declines a request that carries a body, so the
+        scope fallback takes it. No rule owns the body, and it is masked."""
+        bodyless = _rule(
+            key="bodyless", paths=["/submit"], scope="api", body_format="none"
+        )
+        flow, messages, _stderr = self._run(
+            document=_flow_document(
+                [bodyless], targets=("example.com",), fallback="allow"
+            ),
+            rule_id="api.$fallback",
+            method="POST",
+            path="/submit",
+            host="example.com",
+            content=b'{"value":"SECRET123"}',
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b'{"value":"****"}')
+        self.assertEqual(self._outcomes(messages), [])
+
+    def test_an_indeterminate_body_is_masked_when_it_is_forwarded(self):
+        """A body a `json` rule could not parse leaves the rule unresolved, so
+        no rule inspects it. If it is forwarded anyway, it is masked."""
+        flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
+            content=b"value=SECRET123",
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertEqual(flow.request.content, b"value=****")
+        self.assertEqual(self._outcomes(messages), [])
+
+    def test_a_secret_the_json_walk_cannot_reach_is_masked_on_the_wire(self):
+        """The structural walk masks strings and keys, not numbers. A secret
+        spelled as a number leaves the tree unchanged, so the byte pass is the
+        only thing standing between it and the wire."""
+        flow, _messages, _stderr = self._run(
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
+            content=b'{"pin":12345678}',
+            mask_values=["12345678"],
+        )
+
+        self.assertIsNone(flow.response)
+        self.assertNotIn(b"12345678", flow.request.content)
+
+    def test_an_approved_review_still_runs_the_acceptance_conditions(self):
+        flow, messages, _stderr = self._run(
+            document=_flow_document([_messages_rule(onMatch="review")]),
+            rule_id="api.messages",
         )
 
         self.assertIsNone(flow.response)
@@ -2168,10 +3393,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
             [m["result"] for m in self._outcomes(messages)], ["rewrite"]
         )
 
-    def test_policy_block_prevents_credential_injection(self):
+    def test_a_violation_prevents_credential_injection(self):
         flow, messages, _stderr = self._run(
-            rules=[_bodyless_rule("models")],
-            rule_id="models",
+            document=_flow_document([_models_rule()]),
+            rule_id="api.models",
             method="GET",
             path="/v1/models",
             content=b"unexpected",
@@ -2187,10 +3412,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
             [("block", "unexpected-body")],
         )
 
-    def test_pass_injects_credentials_after_policy(self):
+    def test_pass_injects_credentials_after_the_inspection(self):
         flow, messages, _stderr = self._run(
-            rules=[_bodyless_rule("models")],
-            rule_id="models",
+            document=_flow_document([_models_rule()]),
+            rule_id="api.models",
             method="GET",
             path="/v1/models",
             content=b"",
@@ -2203,10 +3428,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
             [("pass", "empty-body")],
         )
 
-    def test_rewrite_injects_credentials_after_policy(self):
+    def test_rewrite_injects_credentials_after_the_inspection(self):
         flow, _messages, _stderr = self._run(
-            rules=[_policy_rule("messages")],
-            rule_id="messages",
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
         )
 
         self.assertIsNone(flow.response)
@@ -2215,8 +3440,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
 
     def test_outcome_carries_only_the_closed_field_set(self):
         _flow, messages, _stderr = self._run(
-            rules=[_policy_rule("messages")],
-            rule_id="messages",
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
         )
 
         outcome = self._outcomes(messages)[0]
@@ -2257,7 +3482,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertNotIn("/private/", stderr.getvalue())
 
     def test_invalid_contract_blocks_before_broker_or_injection(self):
-        flow, messages, stderr = self._run(rules=None)
+        flow, messages, stderr = self._run(document=None)
 
         self.assertEqual(flow.response.status_code, 403)
         self.assertEqual(
@@ -2267,8 +3492,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual(messages, [])
         self.assertEqual(
             stderr,
-            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
-            "session=sess-test\n",
+            "[nas-addon] AUTHZ-CONTRACT-INVALID: session=sess-test\n",
         )
 
     def test_invalid_contract_log_sanitizes_untrusted_session_id(self):
@@ -2277,34 +3501,34 @@ class RequestPolicyFlowTest(unittest.TestCase):
             f"{self.session_id}:{self.token}".encode()
         ).decode()
 
-        flow, messages, stderr = self._run(rules=None)
+        flow, messages, stderr = self._run(document=None)
 
         self.assertEqual(flow.response.status_code, 403)
         self.assertEqual(messages, [])
         self.assertEqual(
             stderr,
-            "[nas-addon] REQUEST-POLICY-CONTRACT-INVALID: "
-            "session=invalid\n",
+            "[nas-addon] AUTHZ-CONTRACT-INVALID: session=invalid\n",
         )
 
-    def test_unknown_rule_id_log_sanitizes_the_broker_supplied_id(self):
+    def test_rule_mismatch_log_sanitizes_the_broker_supplied_id(self):
         _flow, _messages, stderr = self._run(
-            rules=[_policy_rule("messages")],
+            document=_flow_document([_messages_rule()]),
             rule_id="NOT A VALID ID\nSECRET-rule",
         )
 
         self.assertEqual(
             stderr,
-            "[nas-addon] REQUEST-POLICY-RULE-UNKNOWN: "
-            "session=sess-test rule=invalid\n",
+            "[nas-addon] AUTHZ-RULE-MISMATCH: session=sess-test "
+            "broker=invalid addon=api.messages\n",
         )
 
-    def test_pre_match_attaches_bounded_preview_for_trailing_dot_host(self):
+    def test_authorization_carries_a_bounded_preview_and_the_body_kind(self):
         body = b'{"text":"hello"}'
-        rule = _policy_rule("messages", host="api.example.com.")
 
         _flow, messages, _stderr = self._run(
-            rules=[rule], rule_id="messages", content=body
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
+            content=body,
         )
 
         authorization = next(
@@ -2317,13 +3541,15 @@ class RequestPolicyFlowTest(unittest.TestCase):
                 "contentType": None,
                 "bodyPreview": body.decode(),
                 "bodySize": len(body),
+                # broker はボディを見ないので、選択に効く事実だけを渡す。
+                "bodyKind": "json",
             },
         )
 
     def test_query_and_header_are_masked_before_injection(self):
         flow, _messages, stderr = self._run(
-            rules=[_policy_rule("messages")],
-            rule_id="messages",
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
             path="/v1/messages?k=SECRET123",
             headers=[("x-custom", "SECRET123")],
         )
@@ -2333,10 +3559,10 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertEqual(self._injected(flow), "injected-value")
         self.assertNotIn("SECRET123", stderr)
 
-    def test_policy_request_never_logs_the_path_or_its_query(self):
+    def test_a_rule_governed_request_never_logs_the_path_or_its_query(self):
         _flow, _messages, stderr = self._run(
-            rules=[_policy_rule("messages")],
-            rule_id="messages",
+            document=_flow_document([_messages_rule()]),
+            rule_id="api.messages",
             path="/v1/messages?filename=PRIVATE-NOT-A-MASK-VALUE.txt",
         )
 
@@ -2344,15 +3570,15 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertNotIn("/v1/messages", stderr)
 
     def test_outcome_failure_does_not_change_the_computed_result(self):
-        rules = [_policy_rule("messages")]
+        document = _flow_document([_messages_rule()])
 
         def failing_broker(_socket_path, request):
             if request["type"] == "authorize":
                 return {
                     "decision": "allow",
                     "requestId": request["requestId"],
-                    "reason": "review-rule",
-                    "ruleId": "messages",
+                    "reason": "rule",
+                    "ruleId": "api.messages",
                     "maskValues": ["SECRET123"],
                 }
             raise RuntimeError("SECRET123 /raw/private-path")
@@ -2368,9 +3594,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         with patch.object(
             nas_addon, "_load_registry", return_value=self.registry
         ), patch.object(
-            nas_addon,
-            "_load_review_rules",
-            return_value={"contractVersion": 1, "rules": rules},
+            nas_addon, "_load_authz_document", return_value=document
         ), patch.object(
             nas_addon, "_generate_request_id", return_value="req-test"
         ), patch.object(
@@ -2397,8 +3621,8 @@ class RequestPolicyFlowTest(unittest.TestCase):
         lines = []
         for _ in range(5):
             _flow, _messages, stderr = self._run(
-                rules=[_bodyless_rule("models")],
-                rule_id="models",
+                document=_flow_document([_models_rule()]),
+                rule_id="api.models",
                 method="GET",
                 path="/v1/models",
                 content=b"unexpected",
@@ -2411,13 +3635,13 @@ class RequestPolicyFlowTest(unittest.TestCase):
         self.assertIn("count=1", emitted[0])
         self.assertIn("count=2", emitted[1])
         self.assertIn("count=4", emitted[2])
-        self.assertIn("rule=models kind=bodyless", emitted[0])
+        self.assertIn("rule=api.models", emitted[0])
         self.assertIn("result=block reason=unexpected-body", emitted[0])
 
     def _block_once(self, addon, client_id):
         return self._run(
-            rules=[_bodyless_rule("models")],
-            rule_id="models",
+            document=_flow_document([_models_rule()]),
+            rule_id="api.models",
             method="GET",
             path="/v1/models",
             content=b"unexpected",
@@ -2456,6 +3680,7 @@ class RequestPolicyFlowTest(unittest.TestCase):
         addon.client_disconnected(FakeClientConnection("client-a"))
 
         self.assertTrue(addon._request_policy_block_counts)
+
 
     def test_failed_connect_does_not_keep_session_counts(self):
         addon = nas_addon.NasAddon()
