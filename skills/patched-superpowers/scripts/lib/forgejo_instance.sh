@@ -97,6 +97,17 @@ fj_healthy() {
         "http://localhost:$port/api/v1/user" | jq -r '.login // empty')" = agent ]
 }
 
+fj_process_is_isolated() {
+  local pid="$1" actual_pid pgid sid tty
+  read -r actual_pid pgid sid tty < <(
+    ps -o pid=,pgid=,sid=,tty= -p "$pid" 2>/dev/null
+  ) || return 1
+  [ "$actual_pid" = "$pid" ] &&
+    [ "$pgid" = "$pid" ] &&
+    [ "$sid" = "$pid" ] &&
+    [ "$tty" = "?" ]
+}
+
 # 人間が打つ reviewer のパスワードは固定値にする。ランダムな長い文字列にすると、
 # セッションが切れたときの再ログインで打てない。ブラウザの保存パスワードも、
 # ポートが変わると照合されないことがある。
@@ -200,9 +211,11 @@ EOF
 }
 
 fj_up() {
+  FJ_STARTED_PID=""
   fj_healthy && return 0
   command -v forgejo >/dev/null || { fj_die "forgejo が見つからない"; return 1; }
   command -v jq >/dev/null || { fj_die "jq が見つからない"; return 1; }
+  command -v setsid >/dev/null || { fj_die "setsid が見つからない"; return 1; }
 
   # 空きポートの確認と bind の間に別プロセスが同じポートを取ることがある。
   # bind に失敗したら別のポートで作り直す。
@@ -244,13 +257,24 @@ fj_boot_once() {
     { fj_die "トークンの生成に失敗した: $run/log/user.log"; return 1; }
   echo "$port" >"$run/port"
 
-  nohup forgejo web -c "$conf" >"$run/log/web.log" 2>&1 &
+  set +m
+  setsid forgejo web -c "$conf" </dev/null >"$run/log/web.log" 2>&1 &
   pid=$!
   echo "$pid" >"$run/web.pid"
   fj_log_process_event forgejo_spawned "$pid"
 
   for _ in $(seq 1 120); do
-    fj_healthy && return 0
+    if fj_healthy; then
+      if ! fj_process_is_isolated "$pid"; then
+        fj_log_process_event forgejo_isolation_failed "$pid"
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        return 1
+      fi
+      # shellcheck disable=SC2034 # Exposed to the caller that sourced this library.
+      FJ_STARTED_PID="$pid"
+      return 0
+    fi
     # bind に失敗すると web はすぐ終了する。生存を見ずに healthz だけを待つと、
     # 同じポートの別インスタンスの応答で成功と誤認する。
     kill -0 "$pid" 2>/dev/null || return 1

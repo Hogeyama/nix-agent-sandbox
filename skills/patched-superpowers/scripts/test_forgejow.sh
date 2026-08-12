@@ -74,6 +74,12 @@ setup_repo
 fj_up || ng "fj_up が失敗した" "$(tail -3 "$(fj_run_dir)/log/web.log" 2>/dev/null)"
 DIAGNOSTICS_FILE="$(fj_diagnostics_file)"
 FORGEJO_PID="$(cat "$(fj_run_dir)/web.pid")"
+read -r FORGEJO_PGID FORGEJO_SID FORGEJO_TTY < <(
+  ps -o pgid=,sid=,tty= -p "$FORGEJO_PID"
+)
+assert_eq "Forgejo が専用 process group にいる" "$FORGEJO_PID" "$FORGEJO_PGID"
+assert_eq "Forgejo が専用 session にいる" "$FORGEJO_PID" "$FORGEJO_SID"
+assert_eq "Forgejo が controlling TTY を持たない" "?" "$FORGEJO_TTY"
 assert_eq "healthz が 200 を返す" 200 \
   "$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:$(fj_port)/api/healthz")"
 assert_eq "agent が uid 1 になる" 1 \
