@@ -64,12 +64,41 @@ export async function dtachIsAvailable(): Promise<boolean> {
   }
 }
 
+/**
+ * テスト実行中に本物のセッションを起動させないための関門。
+ *
+ * `dtach -n` はデタッチ起動なので、生成されたセッションはテストランナーの
+ * 終了後もホストに残り続ける。しかもこの関数を呼ぶのは「nas 本体を起動する」
+ * 経路だけ (`src/cli.ts` / `src/domain/launch/service.ts`) なので、残るのは
+ * 単なるプロセスではなく、エージェントとコンテナを抱えた nas セッションに
+ * なる。実際に `src/ui/launch_test.ts` が 1 回の実行で 13 セッションを
+ * 起動しっぱなしにしていた。
+ *
+ * ユニットテストがこの関数に到達したら、それは設計の誤りを示すシグナルなので
+ * 黙って起動せずに失敗させる。dtach プリミティブそのものを検証する少数の
+ * テストは `NAS_TEST_ALLOW_DTACH=1` で明示的に opt-in する。
+ *
+ * `NODE_ENV=test` は `bun test` が設定する (既に設定済みなら尊重される)。
+ */
+function assertSpawnAllowed(socketPath: string): void {
+  if (process.env.NODE_ENV !== "test") return;
+  if (process.env.NAS_TEST_ALLOW_DTACH === "1") return;
+  throw new Error(
+    `dtachNewSession was called during a test run (socket: ${socketPath}). ` +
+      "A detached session would outlive the test runner. Use a fake " +
+      "SessionLaunchService, or set NAS_TEST_ALLOW_DTACH=1 for tests that " +
+      "deliberately exercise the dtach primitive.",
+  );
+}
+
 /** dtach セッションを新規作成（デタッチ状態） */
 export async function dtachNewSession(
   socketPath: string,
   shellCommand: string,
   options?: { cwd?: string; env?: Record<string, string | undefined> },
 ): Promise<void> {
+  assertSpawnAllowed(socketPath);
+
   // ソケットディレクトリを作成
   const dir = path.dirname(socketPath);
   await Bun.spawn(["mkdir", "-p", dir], {

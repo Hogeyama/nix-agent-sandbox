@@ -158,12 +158,18 @@ export function validateCwd(cwd: string): void {
   }
 }
 
-export async function launchSession(
-  ctx: UiDataContext,
-  req: LaunchRequest,
-): Promise<LaunchResult> {
-  // --- Input validation ---
-
+/**
+ * Validate a launch request and return it normalized.
+ *
+ * 副作用を持たない純粋関数として `launchSession` から切り離してある。入力検証の
+ * テストが「バリデーションを通る入力」を渡したときに、そのまま本物の dtach
+ * セッションを起動してしまうのを防ぐため。起動されたセッションはデタッチ済み
+ * なのでテストランナーより長生きする (`src/dtach/client.ts` の関門も参照)。
+ *
+ * 正常化するのは session name のサニタイズだけで、他のフィールドは検証を
+ * 通れば素通しする。
+ */
+export function validateLaunchRequest(req: LaunchRequest): LaunchRequest {
   if (!req.profile || !/^[a-zA-Z0-9_-]+$/.test(req.profile)) {
     throw new LaunchValidationError("Invalid profile name");
   }
@@ -177,6 +183,8 @@ export async function launchSession(
     }
   }
 
+  let normalized = req;
+
   if (req.name !== undefined) {
     // Strip ASCII control characters and trim — same sanitization as the
     // rename endpoint (src/ui/routes/api.ts) so the two paths are consistent.
@@ -188,12 +196,24 @@ export async function launchSession(
       );
     }
     // Treat empty-after-sanitization as "no name provided".
-    req = { ...req, name: sanitized.length === 0 ? undefined : sanitized };
+    normalized = {
+      ...normalized,
+      name: sanitized.length === 0 ? undefined : sanitized,
+    };
   }
 
   if (req.cwd !== undefined) {
     validateCwd(req.cwd);
   }
+
+  return normalized;
+}
+
+export async function launchSession(
+  ctx: UiDataContext,
+  req: LaunchRequest,
+): Promise<LaunchResult> {
+  req = validateLaunchRequest(req);
 
   // --- dtach availability ---
 

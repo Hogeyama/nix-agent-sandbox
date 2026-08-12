@@ -14,16 +14,16 @@ import {
   LaunchValidationError,
   launchSession,
   resolveStableNasCommand,
+  validateLaunchRequest,
 } from "./launch.ts";
 
 /**
- * Tests for launchSession() input validation.
+ * Tests for launch request validation.
  *
- * Validation runs before the dtach availability check, so validation-failure
- * cases never need dtach.  For inputs that *pass* validation the function
- * proceeds to the dtach check or actual launch; we verify the rejection is
- * NOT an input validation error (it may be "dtach is not available" or
- * the call may succeed).
+ * バリデーションは純粋関数 `validateLaunchRequest` に分離してあるので、
+ * ここでは入力と戻り値だけを見る。`launchSession` 経由で検証すると、通る
+ * 入力に対して本物の dtach セッションが起動してしまう (かつてそれで 1 回の
+ * テスト実行あたり 13 セッションがホストに残っていた)。
  */
 
 // Helper: a valid base request that passes all validation.
@@ -83,65 +83,39 @@ function createDummyCtx(): UiDataContext {
 
 const dummyCtx = createDummyCtx();
 
-/**
- * Assert that `launchSession(ctx, req)` does NOT throw a LaunchValidationError
- * with the given message.  The promise may resolve (dtach present) or reject
- * with a different error (dtach absent) — both are fine.
- */
-async function expectNoValidationError(
-  req: LaunchRequest,
-  forbiddenMessage: string,
-): Promise<void> {
-  try {
-    await launchSession(dummyCtx, req);
-    // resolved — validation passed, dtach was available and launch succeeded
-  } catch (err: unknown) {
-    if (
-      err instanceof LaunchValidationError &&
-      err.message === forbiddenMessage
-    ) {
-      throw new Error(
-        `Expected validation to pass, but got LaunchValidationError: ${err.message}`,
-      );
-    }
-    // Other errors (e.g. "dtach is not available") are acceptable
-  }
-}
-
 // ---------------------------------------------------------------------------
 // profile validation
 // ---------------------------------------------------------------------------
 
-describe("launchSession: profile validation", () => {
+describe("validateLaunchRequest: profile", () => {
   test("empty string throws 'Invalid profile name'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, profile: "" }),
-    ).rejects.toThrow("Invalid profile name");
+    expect(() => validateLaunchRequest({ ...validReq, profile: "" })).toThrow(
+      "Invalid profile name",
+    );
   });
 
   test("undefined-ish (empty after cast) throws 'Invalid profile name'", () => {
-    expect(
-      launchSession(dummyCtx, { profile: undefined as unknown as string }),
-    ).rejects.toThrow("Invalid profile name");
+    expect(() =>
+      validateLaunchRequest({ profile: undefined as unknown as string }),
+    ).toThrow("Invalid profile name");
   });
 
   test("shell meta-characters throw 'Invalid profile name'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, profile: "my;profile" }),
-    ).rejects.toThrow("Invalid profile name");
+    expect(() =>
+      validateLaunchRequest({ ...validReq, profile: "my;profile" }),
+    ).toThrow("Invalid profile name");
   });
 
   test("spaces throw 'Invalid profile name'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, profile: "my profile" }),
-    ).rejects.toThrow("Invalid profile name");
+    expect(() =>
+      validateLaunchRequest({ ...validReq, profile: "my profile" }),
+    ).toThrow("Invalid profile name");
   });
 
-  test("valid profile names pass validation", async () => {
-    for (const name of ["my-profile", "profile_1"]) {
-      await expectNoValidationError(
-        { ...validReq, profile: name },
-        "Invalid profile name",
+  test("valid profile names are returned unchanged", () => {
+    for (const profile of ["my-profile", "profile_1"]) {
+      expect(validateLaunchRequest({ ...validReq, profile }).profile).toEqual(
+        profile,
       );
     }
   });
@@ -151,31 +125,30 @@ describe("launchSession: profile validation", () => {
 // worktreeBase validation
 // ---------------------------------------------------------------------------
 
-describe("launchSession: worktreeBase validation", () => {
+describe("validateLaunchRequest: worktreeBase", () => {
   test("shell meta-characters throw 'Invalid worktree base branch'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, worktreeBase: "main;rm" }),
-    ).rejects.toThrow("Invalid worktree base branch");
+    expect(() =>
+      validateLaunchRequest({ ...validReq, worktreeBase: "main;rm" }),
+    ).toThrow("Invalid worktree base branch");
   });
 
   test("path traversal (..) throws 'Invalid worktree base branch'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, worktreeBase: "../../etc" }),
-    ).rejects.toThrow("Invalid worktree base branch");
+    expect(() =>
+      validateLaunchRequest({ ...validReq, worktreeBase: "../../etc" }),
+    ).toThrow("Invalid worktree base branch");
   });
 
   test("spaces throw 'Invalid worktree base branch'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, worktreeBase: "my branch" }),
-    ).rejects.toThrow("Invalid worktree base branch");
+    expect(() =>
+      validateLaunchRequest({ ...validReq, worktreeBase: "my branch" }),
+    ).toThrow("Invalid worktree base branch");
   });
 
-  test("valid branch names pass validation", async () => {
-    for (const branch of ["main", "feature/foo", "origin/main"]) {
-      await expectNoValidationError(
-        { ...validReq, worktreeBase: branch },
-        "Invalid worktree base branch",
-      );
+  test("valid branch names are returned unchanged", () => {
+    for (const worktreeBase of ["main", "feature/foo", "origin/main"]) {
+      expect(
+        validateLaunchRequest({ ...validReq, worktreeBase }).worktreeBase,
+      ).toEqual(worktreeBase);
     }
   });
 });
@@ -184,30 +157,45 @@ describe("launchSession: worktreeBase validation", () => {
 // name validation
 // ---------------------------------------------------------------------------
 
-describe("launchSession: name validation", () => {
+describe("validateLaunchRequest: name", () => {
   test("201-char name throws validation error", () => {
-    const longName = "a".repeat(201);
+    expect(() =>
+      validateLaunchRequest({ ...validReq, name: "a".repeat(201) }),
+    ).toThrow("Session name must be 200 characters or fewer");
+  });
+
+  test("200-char name is accepted", () => {
+    const name = "a".repeat(200);
+    expect(validateLaunchRequest({ ...validReq, name }).name).toEqual(name);
+  });
+
+  test("control characters are stripped", () => {
     expect(
-      launchSession(dummyCtx, { ...validReq, name: longName }),
-    ).rejects.toThrow("Session name must be 200 characters or fewer");
+      validateLaunchRequest({ ...validReq, name: "my\x01session" }).name,
+    ).toEqual("mysession");
   });
 
-  test("200-char name passes validation", async () => {
-    await expectNoValidationError(
-      { ...validReq, name: "a".repeat(200) },
-      "Session name must be 200 characters or fewer",
+  test("a name of only control characters becomes undefined", () => {
+    expect(
+      validateLaunchRequest({ ...validReq, name: "\x01\x02\x03" }).name,
+    ).toBeUndefined();
+  });
+
+  test("surrounding whitespace is trimmed", () => {
+    expect(
+      validateLaunchRequest({ ...validReq, name: "  spaced  " }).name,
+    ).toEqual("spaced");
+  });
+
+  test("201 chars that shrink to 200 after stripping are accepted", () => {
+    // 長さ判定はサニタイズ後の文字列に対して行う。
+    const name = `\x01${"a".repeat(200)}`;
+    expect(validateLaunchRequest({ ...validReq, name }).name).toEqual(
+      "a".repeat(200),
     );
   });
 
-  test("control characters are stripped", async () => {
-    // Name with only control chars becomes empty → treated as undefined (no error)
-    await expectNoValidationError(
-      { ...validReq, name: "\x01\x02\x03" },
-      "Session name",
-    );
-  });
-
-  test("valid names pass validation", async () => {
+  test("valid names are returned unchanged", () => {
     for (const name of [
       "my-session",
       "test_1",
@@ -216,7 +204,7 @@ describe("launchSession: name validation", () => {
       "v1.0-fix",
       "hello world!",
     ]) {
-      await expectNoValidationError({ ...validReq, name }, "Session name");
+      expect(validateLaunchRequest({ ...validReq, name }).name).toEqual(name);
     }
   });
 });
@@ -225,24 +213,39 @@ describe("launchSession: name validation", () => {
 // cwd validation
 // ---------------------------------------------------------------------------
 
-describe("launchSession: cwd validation", () => {
+describe("validateLaunchRequest: cwd", () => {
   test("relative path throws 'must be an absolute path'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, cwd: "./relative" }),
-    ).rejects.toThrow("Invalid cwd: must be an absolute path");
+    expect(() =>
+      validateLaunchRequest({ ...validReq, cwd: "./relative" }),
+    ).toThrow("Invalid cwd: must be an absolute path");
   });
 
   test("path with .. throws 'path contains disallowed segments'", () => {
-    expect(
-      launchSession(dummyCtx, { ...validReq, cwd: "/foo/../bar" }),
-    ).rejects.toThrow("Invalid cwd: path contains disallowed segments");
+    expect(() =>
+      validateLaunchRequest({ ...validReq, cwd: "/foo/../bar" }),
+    ).toThrow("Invalid cwd: path contains disallowed segments");
   });
 
-  test("valid absolute path passes validation", async () => {
-    await expectNoValidationError(
-      { ...validReq, cwd: "/home/user/project" },
-      "Invalid cwd",
-    );
+  test("valid absolute path is returned unchanged", () => {
+    expect(
+      validateLaunchRequest({ ...validReq, cwd: "/home/user/project" }).cwd,
+    ).toEqual("/home/user/project");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// launchSession delegates to the validator
+//
+// 起動そのものを踏むテストはここには置かない。dtach セッションはデタッチ
+// 起動なのでテストランナーより長生きする (`src/dtach/client.ts` の関門を
+// 参照)。ここではバリデーションが起動前に働くことだけを確かめる。
+// ---------------------------------------------------------------------------
+
+describe("launchSession", () => {
+  test("rejects an invalid request before launching anything", () => {
+    expect(
+      launchSession(dummyCtx, { ...validReq, profile: "my;profile" }),
+    ).rejects.toThrow(LaunchValidationError);
   });
 });
 

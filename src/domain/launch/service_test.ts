@@ -61,6 +61,23 @@ async function withTmpRuntimeDir<T>(
 // に素通しされることと失敗時 cleanup が走ることに絞って検証する。
 // ---------------------------------------------------------------------------
 
+/**
+ * `dtachNewSession` はテスト実行中、既定で起動を拒否する (デタッチ済み
+ * セッションがテストランナーより長生きするため)。この describe は Live 実装が
+ * dtach プリミティブへ届くこと自体を検証対象にしているので、明示的に opt-in
+ * する。
+ */
+async function withRealDtachAllowed<T>(f: () => Promise<T>): Promise<T> {
+  const saved = process.env.NAS_TEST_ALLOW_DTACH;
+  process.env.NAS_TEST_ALLOW_DTACH = "1";
+  try {
+    return await f();
+  } finally {
+    if (saved === undefined) delete process.env.NAS_TEST_ALLOW_DTACH;
+    else process.env.NAS_TEST_ALLOW_DTACH = saved;
+  }
+}
+
 describe("SessionLaunchService (Live): launchAgentSession", () => {
   test("存在しない cwd では Error channel で失敗し、socket 残骸も残らない", async () => {
     // `dtachNewSession` に bad cwd を渡すと child 起動で non-zero exit する。
@@ -75,14 +92,21 @@ describe("SessionLaunchService (Live): launchAgentSession", () => {
         extraArgs: ["default"],
         cwd: "/definitely/does/not/exist/for/nas/test",
       };
-      await expect(
+      const error = await withRealDtachAllowed(() =>
         Effect.runPromise(
           Effect.gen(function* () {
             const svc = yield* SessionLaunchService;
             return yield* svc.launchAgentSession(runtimeDir, spec);
           }).pipe(Effect.provide(SessionLaunchServiceLive)),
+        ).then(
+          () => null,
+          (e: unknown) => e as Error,
         ),
-      ).rejects.toThrow();
+      );
+      expect(error).not.toBeNull();
+      // 関門のエラーで素通りしていないこと。opt-in が外れるとこの検証は
+      // dtach へ到達しないまま緑になるので、ここで縛る。
+      expect(error?.message).not.toMatch(/NAS_TEST_ALLOW_DTACH/);
 
       // cleanup が走った結果、socket は残っていない。
       // (`dtachNewSession` 側の mkdir -p で runtimeDir 自体は作られるが、
