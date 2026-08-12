@@ -21,7 +21,9 @@ function makeNetwork(
 }
 
 function makeHostExec(
-  overrides: Partial<HostExecPendingItemLike> = {},
+  overrides: Partial<
+    HostExecPendingItemLike & { integrityChanged: boolean }
+  > = {},
 ): HostExecPendingItemLike {
   return {
     requestId: "exec-1",
@@ -154,6 +156,20 @@ describe("normalizeHostExecPending", () => {
       makeHostExec({ requestId: "exec-zzz" }),
     ]);
     expect(rows[0]?.id).toBe("exec-zzz");
+  });
+
+  test("normalizeHostExecPending: carries integrityChanged flag", () => {
+    const rows = normalizeHostExecPending([
+      makeHostExec({ argv0: "tool.sh", args: [], integrityChanged: true }),
+    ]);
+    expect(rows[0].integrityChanged).toBe(true);
+  });
+
+  test("normalizeHostExecPending: defaults integrityChanged to false", () => {
+    const rows = normalizeHostExecPending([
+      makeHostExec({ argv0: "tool.sh", args: [] }),
+    ]);
+    expect(rows[0].integrityChanged).toBe(false);
   });
 });
 

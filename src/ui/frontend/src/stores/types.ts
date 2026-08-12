@@ -55,6 +55,7 @@ export type HostExecPendingItemLike = {
   argv0: string;
   args: string[];
   cwd?: string | null;
+  integrityChanged?: boolean | null;
 };
 
 // SSE-received payload subset describing one dtach socket exposed by the

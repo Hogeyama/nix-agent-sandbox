@@ -60,6 +60,7 @@ function makeHostExecRow(
     sessionShortId: "s_1",
     sessionName: null,
     command: "git push",
+    integrityChanged: false,
     createdAtMs: 0,
     ...overrides,
   };
