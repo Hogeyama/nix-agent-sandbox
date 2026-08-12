@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -88,18 +88,29 @@ test("readFileIntegrity: non-ENOENT stat error (ENOTDIR) throws instead of retur
   }
 });
 
-test("readFileIntegrity: fast-path returns prev when stat is unchanged", async () => {
+test("readFileIntegrity: detects an in-place content swap of the same byte length", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "nas-integrity-"));
   try {
     const p = path.join(dir, "f.sh");
     await writeFile(p, "hello");
     const first = await readFileIntegrity(p);
     if (first === "absent") throw new Error("unexpected absent");
-    // prev with the same inode/mtime/size but a bogus sha proves the fast-path
-    // skipped rehashing and returned prev verbatim.
-    const bogus = { ...first, sha256: "BOGUS" };
-    const second = await readFileIntegrity(p, bogus);
-    expect(second).toBe(bogus);
+
+    // 同一 byte 長の別内容で上書きし、mtime も攻撃者が touch -r 等で復元した
+    // 状況を模して元の値に戻す。同じファイルを書き換えているため inode は
+    // 変化しない。fast-path が残存していれば、inode+mtimeMs+size の一致だけを
+    // 理由に first をそのまま返却し、この置換を検出できない。
+    await writeFile(p, "world");
+    await utimes(p, new Date(first.mtimeMs), new Date(first.mtimeMs));
+
+    const second = await readFileIntegrity(p);
+    expect(second).not.toBe("absent");
+    if (second === "absent") return;
+    expect(second.size).toBe(first.size);
+    expect(second.mtimeMs).toBe(first.mtimeMs);
+    expect(second.inode).toBe(first.inode);
+    expect(second.sha256).not.toBe(first.sha256);
+    expect(decideIntegrity(first, second)).toBe("prompt");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

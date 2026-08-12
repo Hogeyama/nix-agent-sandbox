@@ -718,8 +718,10 @@ export class HostExecBroker {
       ? request.argv0
       : path.resolve(resolved.cwd, request.argv0);
     const baseline = this.integrityBaseline.get(hostPath);
-    const prev = baseline && baseline !== "absent" ? baseline : undefined;
-    const current = await readFileIntegrity(hostPath, prev);
+    // 常に再ハッシュする（inode/mtime/size による fast-path は持たない）。
+    // 同一 inode・同一サイズのまま内容を差し替える攻撃（mtime を touch -r で
+    // 復元する等）を検出するため、baseline を渡さずに毎回 stat+read+sha256 する。
+    const current = await readFileIntegrity(hostPath);
     return decideIntegrity(baseline, current);
   }
 

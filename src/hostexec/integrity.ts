@@ -32,13 +32,14 @@ export function decideIntegrity(
 
 /**
  * ファイルの integrity スナップショットを読む（D1）。
- * `prev` が与えられ inode+mtimeMs+size が一致する場合、content は変わっていないと
- * みなして再ハッシュを省き `prev` をそのまま返す（fast-path）。ファイルが無ければ
- * "absent" を返す。
+ * stat・読み込み・sha256 算出を毎回実行し、再ハッシュを省略する高速パスは
+ * 持たない。inode/mtimeMs/size が一致していても content の差し替えを検出
+ * する必要があるため（同一 inode に同一サイズで別内容を書き込み、mtime を
+ * utimensat で復元する攻撃を防止するため）、常に実ファイルを読んでハッシュを
+ * 再計算する。ファイルが存在しない場合は "absent" を返す。
  */
 export async function readFileIntegrity(
   filePath: string,
-  prev?: IntegritySnapshot,
 ): Promise<IntegritySnapshot> {
   let st: Awaited<ReturnType<typeof stat>>;
   try {
@@ -46,15 +47,6 @@ export async function readFileIntegrity(
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return "absent";
     throw e;
-  }
-  if (
-    prev &&
-    prev !== "absent" &&
-    prev.inode === st.ino &&
-    prev.mtimeMs === st.mtimeMs &&
-    prev.size === st.size
-  ) {
-    return prev;
   }
   let content: Awaited<ReturnType<typeof readFile>>;
   try {
