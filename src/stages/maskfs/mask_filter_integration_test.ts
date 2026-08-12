@@ -378,6 +378,59 @@ describe("nas-mask-filter binary", () => {
     expect(result).toBe("password=******* done");
   });
 
+  test("streams masked output before stdin EOF", async () => {
+    if (!binaryPath) throw new Error("nas-mask-filter binary not found");
+    const secretsFile = writeSecretsFile(["hunter2"]);
+    const proc = Bun.spawn([binaryPath], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { NAS_MASK_SECRETS_FILE: secretsFile },
+    });
+    const stdoutReader = proc.stdout.getReader();
+    const firstRead = stdoutReader.read();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let childError: string | undefined;
+
+    try {
+      // hunter2 の overlap (6 bytes) より長く、stdout writer の 64KiB より短い。
+      // stdin は閉じず、マスク確定済みの prefix が先に届くことを検証する。
+      proc.stdin.write("password=hunter2 done\n");
+      await proc.stdin.flush();
+
+      const early = await Promise.race([
+        firstRead.then((result) => ({ kind: "output" as const, result })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: "timeout" }), 1000);
+        }),
+      ]);
+
+      if (early.kind === "timeout") {
+        throw new Error("masked stdout was not streamed before stdin EOF");
+      }
+      if (early.result.done) {
+        throw new Error("stdout closed before streaming masked output");
+      }
+      expect(Buffer.from(early.result.value).toString()).toContain(
+        "password=*******",
+      );
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      await proc.stdin.end();
+      await firstRead.catch(() => undefined);
+      while (!(await stdoutReader.read()).done) {
+        // Drain stdout so the child can exit even if the assertion failed.
+      }
+      stdoutReader.releaseLock();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+      if (exitCode !== 0) {
+        childError = `filter exited ${exitCode}: ${stderr}`;
+      }
+    }
+    if (childError) throw new Error(childError);
+  });
+
   test("masks multiple secrets", async () => {
     if (!binaryPath) return;
     const result = await runFilter("a=tok1 b=tok22 c=tok1", ["tok1", "tok22"]);

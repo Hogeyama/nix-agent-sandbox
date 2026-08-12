@@ -34,8 +34,6 @@ const mask_stream = @import("mask_stream.zig");
 const serve = @import("serve.zig");
 const supervise = @import("supervise.zig");
 
-const BUF_SIZE = mask_stream.BUF_SIZE;
-
 const allocator = std.heap.page_allocator;
 
 fn readSecretsFromFile(file_path: []const u8) ![][]u8 {
@@ -217,13 +215,10 @@ pub fn main() !u8 {
         .filter => {
             const stdin = std.fs.File.stdin();
             const stdout = std.fs.File.stdout();
-            var out_buf: [BUF_SIZE]u8 = undefined;
-            var stdout_writer = stdout.writer(&out_buf);
-            mask_stream.streamMask(stdin.deprecatedReader(), &stdout_writer.interface, secrets) catch |err| {
+            mask_stream.streamMask(stdin.deprecatedReader(), stdout.deprecatedWriter(), secrets) catch |err| {
                 std.debug.print("nas-mask-filter: stream error: {}\n", .{err});
                 return 1;
             };
-            try stdout_writer.interface.flush();
             return 0;
         },
     }
