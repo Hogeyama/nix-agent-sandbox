@@ -74,6 +74,7 @@ setup_repo
 fj_up || ng "fj_up が失敗した" "$(tail -3 "$(fj_run_dir)/log/web.log" 2>/dev/null)"
 DIAGNOSTICS_FILE="$(fj_diagnostics_file)"
 FORGEJO_PID="$(cat "$(fj_run_dir)/web.pid")"
+assert_eq "新規起動した Forgejo の PID を所有する" "$FORGEJO_PID" "$FJ_STARTED_PID"
 read -r FORGEJO_PGID FORGEJO_SID FORGEJO_TTY < <(
   ps -o pgid=,sid=,tty= -p "$FORGEJO_PID"
 )
@@ -103,6 +104,7 @@ wait "$UNSAFE_PID" 2>/dev/null || true
 echo "$FORGEJO_PID" >"$(fj_run_dir)/web.pid"
 fj_up
 assert_eq "再実行で同じインスタンスを再利用する" "$PORT_BEFORE" "$(fj_port)"
+assert_eq "再利用した Forgejo の PID は所有しない" "" "$FJ_STARTED_PID"
 
 FORGEJO_PID="$(cat "$(fj_run_dir)/web.pid")"
 fj_down
