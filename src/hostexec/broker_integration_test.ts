@@ -2369,3 +2369,83 @@ test("HostExecBroker: start() survives a snapshot error and falls back to prompt
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test("HostExecBroker: an integrity check error is audited and reported instead of crashing the connection", async () => {
+  // readFileIntegrity は ENOENT 以外のエラー（EACCES, ENOTDIR 等）を rethrow
+  // する。integrityVerdict がそれを伝播させると、他の deny 系分岐（policy-deny
+  // / integrity-mismatch / prompt-disabled）と違って recordAudit が一度も呼ば
+  // れないまま接続が失敗し、監査ログに証跡が残らない。executeStreaming が
+  // integrityVerdict 呼び出しを try/catch し、"integrity-check-error" として
+  // audit してから error 応答を返すことを確認する。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+
+  // integrity 機能自体を有効化するための placeholder target を用意する。実際の
+  // 呼び出し対象とは別に、正常に snapshot できるファイルを指定する。
+  const dummyTarget = path.join(runtimeDir, "dummy.sh");
+  await writeFile(dummyTarget, "#!/bin/sh\necho dummy\n");
+
+  // 通常ファイルの中に "子パス" を作ることで、stat が ENOTDIR で失敗する
+  // ホストパスを用意する。ENOTDIR は ENOENT ではないので readFileIntegrity は
+  // absent を返さず rethrow する。
+  const regularFile = path.join(runtimeDir, "bad.sh");
+  await writeFile(regularFile, "#!/bin/sh\necho unreachable\n");
+  const brokenArgv0 = path.join(regularFile, "child");
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-broken",
+        match: { argv0: brokenArgv0 },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ6",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: runtimeDir,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
+    hostexec: config,
+    integrityTargets: [dummyTarget],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ6");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ6");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const response = await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      execSocketPath,
+      request([], runtimeDir, "req_integrity_error", brokenArgv0),
+    );
+    expect(response.type).toEqual("error");
+    if (response.type === "error") {
+      expect(response.message).toMatch(/integrity/i);
+    }
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].reason).toEqual("integrity-check-error");
+    expect(logs[0].requestId).toEqual("req_integrity_error");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

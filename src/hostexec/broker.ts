@@ -410,7 +410,27 @@ export class HostExecBroker {
     }
 
     const approvalKey = await buildApprovalKey(resolved.capability);
-    const integrity = await this.integrityVerdict(message, resolved);
+    let integrity: IntegrityVerdict;
+    try {
+      integrity = await this.integrityVerdict(message, resolved);
+    } catch (e) {
+      // stat/read が ENOENT 以外で失敗するケース（実行時に EACCES/ENOTDIR に
+      // なった対象など）を想定する。deny 系の他の分岐と同様に監査ログへ記録
+      // してからエラー応答を返す。記録せずに throw を伝播させると、この経路
+      // だけ audit 証跡が欠落する。
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        "integrity-check-error",
+        commandStr,
+      );
+      await writeJsonLine(socket, {
+        type: "error",
+        requestId: message.requestId,
+        message: `hostexec integrity check failed: ${e}`,
+      });
+      return;
+    }
 
     // 対象ファイルが起動時 baseline から変化していれば、allow ルールでも承認
     // キャッシュでも即実行させない。prompt 無効時は承認手段が無いので deny。
