@@ -201,6 +201,11 @@ export function PendingPane(props: Props) {
                     <span class="verb">run</span>
                     {row.command}
                   </p>
+                  <Show when={row.integrityChanged}>
+                    <p class="card-warning">
+                      ⚠ 実行対象ファイルがセッション開始時から変化しています
+                    </p>
+                  </Show>
                   <div class="scope-row">
                     <For each={HOSTEXEC_SCOPES}>
                       {(opt) => (

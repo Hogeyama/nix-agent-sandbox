@@ -42,6 +42,7 @@ export interface HostExecBrokerConfig {
   readonly uiIdleTimeout?: number;
   readonly auditDir?: string;
   readonly maskFilter?: MaskFilterConfig;
+  readonly integrityTargets?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +92,7 @@ export const HostExecBrokerServiceLive: Layer.Layer<HostExecBrokerService> =
               uiIdleTimeout: config.uiIdleTimeout,
               auditDir: config.auditDir,
               maskFilter: config.maskFilter,
+              integrityTargets: config.integrityTargets,
             });
             await broker.start(config.execSocketPath, config.controlSocketPath);
             try {

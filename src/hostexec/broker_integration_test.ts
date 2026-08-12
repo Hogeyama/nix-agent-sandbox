@@ -4,15 +4,21 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { queryAuditLogs } from "../audit/store.ts";
 import type { HostExecConfig } from "../config/types.ts";
-import { connectUnix, writeJsonLine } from "../lib/unix_socket.ts";
+import {
+  connectUnix,
+  readJsonLine,
+  writeJsonLine,
+} from "../lib/unix_socket.ts";
 import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
 import {
   hostExecBrokerSocketPath,
@@ -1790,5 +1796,656 @@ test("HostExecBroker: close() removes both socket and session subdir", async () 
     expect(await readdir(paths.brokersDir)).toEqual([]);
   } finally {
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: allow rule prompts when the target file changed since start", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const scriptPath = path.join(runtimeDir, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool",
+        match: { argv0: scriptPath },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: runtimeDir,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    // 差し替え: baseline 取得後に同じパスの中身を変える
+    await writeFile(scriptPath, "#!/bin/sh\necho SWAPPED\n");
+
+    // execute を送る。allow ルールでも即実行されず承認待ちに入るため、応答は
+    // 返らない（このソケットは開いたまま pending となる）。
+    const execSocket = await connectUnix(execSocketPath);
+    await writeJsonLine(execSocket, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ",
+      requestId: "req_1",
+      argv0: scriptPath,
+      args: [],
+      cwd: runtimeDir,
+      tty: false,
+    });
+
+    // control 側で pending を列挙し、integrityChanged が立つことを確認する。
+    // pending 生成は非同期なので短くポーリングする。
+    let hit: { requestId: string; integrityChanged?: boolean } | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+        type: "list_pending",
+      })) as PendingListResponse;
+      hit = res.items.find((it) => it.requestId === "req_1");
+      if (hit) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(hit).toBeDefined();
+    expect(hit?.integrityChanged).toBe(true);
+
+    // pending グループを deny で正常に解消してから teardown する。exec ソケットを
+    // 開いたまま破棄すると、ブローカー側が pending waiter へエラーを書き込む際に
+    // 相手が既に消えたソケットへの書き込みが完了しない（write callback が発火
+    // しない）ことがあり、broker.close() が無限に待機してしまうため。deny 応答の
+    // 読み取りリスナーは deny 送信前に登録する（送信後に登録すると、データが
+    // 既に到着済みでも取りこぼすことがあるため）。
+    const responsePromise = readJsonLine(execSocket);
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId: "req_1",
+    });
+    await responsePromise;
+    execSocket.destroy();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: approved capability cache does not bypass a changed integrity target", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const scriptPath = path.join(workspace, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+  await chmod(scriptPath, 0o755);
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-prompt",
+        match: { argv0: scriptPath },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "prompt",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ2",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ2");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ2");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    // 最初の execute: prompt ルールなので pending になる。capability スコープで
+    // 承認し、approvedKeys にキャッシュされることを前提とする。sessionId は
+    // ブローカー構築時と同じ "sess_integ2" を使う（waitForPendingEntries は
+    // "sess_test" 固定のため使えず、list_pending で直接確認する）。
+    const firstPromise = sendStreamingRequest(execSocketPath, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ2",
+      requestId: "req_cache_1",
+      argv0: scriptPath,
+      args: [],
+      cwd: workspace,
+      tty: false,
+    });
+
+    let firstHit: { requestId: string } | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+        type: "list_pending",
+      })) as PendingListResponse;
+      firstHit = res.items.find((it) => it.requestId === "req_cache_1");
+      if (firstHit) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(firstHit).toBeDefined();
+
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "approve",
+      requestId: "req_cache_1",
+      scope: "capability",
+    });
+    const firstResult = await firstPromise;
+    expect(firstResult.exitCode).toEqual(0);
+    expect(collectStdout(firstResult).trim()).toEqual("original");
+
+    // baseline snapshot 済み・承認キャッシュ済みの後にファイル内容を差し替える。
+    await writeFile(scriptPath, "#!/bin/sh\necho SWAPPED\n");
+
+    // 同一 capability key の 2 回目の execute は、承認キャッシュから即実行され
+    // てはならない。integrity チェックが cache チェックより優先されるはずで、
+    // 変化を検出して再度 pending に入り、integrityChanged が立つ。
+    const execSocket = await connectUnix(execSocketPath);
+    await writeJsonLine(execSocket, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ2",
+      requestId: "req_cache_2",
+      argv0: scriptPath,
+      args: [],
+      cwd: workspace,
+      tty: false,
+    });
+
+    let hit: { requestId: string; integrityChanged?: boolean } | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+        type: "list_pending",
+      })) as PendingListResponse;
+      hit = res.items.find((it) => it.requestId === "req_cache_2");
+      if (hit) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(hit).toBeDefined();
+    expect(hit?.integrityChanged).toBe(true);
+
+    const responsePromise = readJsonLine(execSocket);
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId: "req_cache_2",
+    });
+    await responsePromise;
+    execSocket.destroy();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: allow rule denies when target changed and prompt is disabled", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const scriptPath = path.join(workspace, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+  await chmod(scriptPath, 0o755);
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: false,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-allow",
+        match: { argv0: scriptPath },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ3",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ3");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ3");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    // baseline snapshot 後にファイル内容を差し替える。
+    await writeFile(scriptPath, "#!/bin/sh\necho SWAPPED\n");
+
+    // approval: allow であっても、integrity mismatch かつ prompt.enable が
+    // false のときは承認手段が無いので単発の error 応答で deny される
+    // （pending にはならない）。
+    const response = await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      execSocketPath,
+      request([], workspace, "req_mismatch_deny", scriptPath),
+    );
+    expect(response.type).toEqual("error");
+    if (response.type === "error") {
+      expect(response.message).toMatch(/changed since session start/);
+    }
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].reason).toEqual("integrity-mismatch");
+    expect(logs[0].requestId).toEqual("req_mismatch_deny");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: relative argv0 resolves integrity target via cwd at execute time", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspaceRaw = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  // resolveRequest normalizes cwd via realpath before the integrity check
+  // resolves the relative argv0 against it, so the integrityTargets entry
+  // must be built from the same canonical (realpath'd) directory, not the
+  // raw mkdtemp path, to avoid a spurious mismatch on platforms where tmpdir
+  // itself is a symlink.
+  const workspace = await realpath(workspaceRaw);
+  const scriptPath = path.join(workspace, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+  await chmod(scriptPath, 0o755);
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-relative",
+        match: { argv0: "./tool.sh" },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ4",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ4");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ4");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    // baseline snapshot 後にファイル内容を差し替える。
+    await writeFile(scriptPath, "#!/bin/sh\necho SWAPPED\n");
+
+    // execute 時の argv0 は相対パス "./tool.sh"。integrityVerdict が
+    // resolve(cwd, argv0) で baseline のキー（integrityTargets に渡した絶対
+    // パス）に正しく到達することを確認する。allow ルールでも即実行されず
+    // pending になり、integrityChanged が立つはず。
+    const execSocket = await connectUnix(execSocketPath);
+    await writeJsonLine(execSocket, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ4",
+      requestId: "req_rel_1",
+      argv0: "./tool.sh",
+      args: [],
+      cwd: workspace,
+      tty: false,
+    });
+
+    let hit: { requestId: string; integrityChanged?: boolean } | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+        type: "list_pending",
+      })) as PendingListResponse;
+      hit = res.items.find((it) => it.requestId === "req_rel_1");
+      if (hit) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(hit).toBeDefined();
+    expect(hit?.integrityChanged).toBe(true);
+
+    const responsePromise = readJsonLine(execSocket);
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId: "req_rel_1",
+    });
+    await responsePromise;
+    execSocket.destroy();
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspaceRaw, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: symlinked workspace root does not break the integrity baseline lookup", async () => {
+  // integrityTargets のキーは、呼び出し元（HostExecStage 相当）が
+  // path.resolve(workDir, a) で組み立てる（realpath はしない）契約になって
+  // いる。一方 broker は execute 時に normalizeAllowedCwd で cwd を realpath
+  // 済みに正規化してから hostPath を組み立てる。workDir の途中に symlink が
+  // 挟まっていると、この2つのキーは単純な比較では不一致になる。broker 側で両方を
+  // canonicalizeIntegrityPath（realpath, フォールバック path.resolve）に通す
+  // ことで、symlink があってもキーが一致し、内容が変わっていないファイルが
+  // 誤って integrity-mismatch（prompt/deny）にならないことを確認する。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const base = await realpath(
+    await mkdtemp(path.join(tmpdir(), "nas-hostexec-symlink-")),
+  );
+  const realDir = path.join(base, "real");
+  const symDir = path.join(base, "sym");
+  await mkdir(realDir, { recursive: true });
+  await symlink(realDir, symDir);
+
+  // stage 相当のコードが行う「realpath せずに resolve するだけ」のキー生成を
+  // symDir（symlink 経由のパス）を使って再現する。
+  const scriptPath = path.resolve(symDir, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+  await chmod(scriptPath, 0o755);
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-symlink",
+        match: { argv0: "./tool.sh" },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ5",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: symDir,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ5");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ5");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    // ファイル内容は baseline から一切変えていない。cwd に symlink 経由の
+    // symDir を渡し、argv0 は相対パス "./tool.sh"。baseline キーと lookup
+    // キーが symlink のせいで食い違えば、変化していないのに毎回 prompt
+    // （このテストでは pending 発生）になってしまう。
+    const result = await sendStreamingRequest(execSocketPath, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ5",
+      requestId: "req_symlink_1",
+      argv0: "./tool.sh",
+      args: [],
+      cwd: symDir,
+      tty: false,
+    });
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result).trim()).toEqual("original");
+
+    // 承認待ちに一切入らず即実行されたことも明示的に確認する。
+    const pending = (await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "list_pending",
+    })) as PendingListResponse;
+    expect(pending.items.find((it) => it.requestId === "req_symlink_1")).toBe(
+      undefined,
+    );
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(base, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: start() survives a snapshot error and falls back to prompt for that target", async () => {
+  // start() の baseline snapshot ループが対象ファイルの EACCES で例外を投げると
+  // ブローカー全体の起動が失敗する。broker はエラーを個別に捕捉し、そのファイル
+  // だけ baseline に登録せずに起動を継続する。以降その target を execute する
+  // 際は baseline 未登録 = decideIntegrity(undefined, …) が prompt に倒れる
+  // fail-safe を確認する。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const scriptPath = path.join(runtimeDir, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+  // start() の snapshot 中は読み取り不可にしておき、EACCES で
+  // readFileIntegrity が rethrow する状況を作る。
+  await chmod(scriptPath, 0o000);
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-eacces",
+        match: { argv0: scriptPath },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ7",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: runtimeDir,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ7");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ7");
+  try {
+    // ここで throw すればテストが fail する。start() が例外を握り込んで
+    // 起動を完了させることを確認する。
+    await broker.start(execSocketPath, controlSocketPath);
+
+    // 起動後にパーミッションを戻す。baseline には登録されていないので、以降の
+    // execute では「変化なし」ではなく「未追跡ゆえの prompt」に倒れるはず。
+    await chmod(scriptPath, 0o755);
+
+    const execSocket = await connectUnix(execSocketPath);
+    await writeJsonLine(execSocket, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ7",
+      requestId: "req_eacces_1",
+      argv0: scriptPath,
+      args: [],
+      cwd: runtimeDir,
+      tty: false,
+    });
+
+    let hit: { requestId: string; integrityChanged?: boolean } | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+        type: "list_pending",
+      })) as PendingListResponse;
+      hit = res.items.find((it) => it.requestId === "req_eacces_1");
+      if (hit) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(hit).toBeDefined();
+    expect(hit?.integrityChanged).toBe(true);
+
+    const responsePromise = readJsonLine(execSocket);
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId: "req_eacces_1",
+    });
+    await responsePromise;
+    execSocket.destroy();
+  } finally {
+    await chmod(scriptPath, 0o755).catch(() => {});
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: an integrity check error is audited and reported instead of crashing the connection", async () => {
+  // readFileIntegrity は ENOENT 以外のエラー（EACCES, ENOTDIR 等）を rethrow
+  // する。integrityVerdict がそれを伝播させると、他の deny 系分岐（policy-deny
+  // / integrity-mismatch / prompt-disabled）と違って recordAudit が一度も呼ば
+  // れないまま接続が失敗し、監査ログに証跡が残らない。executeStreaming が
+  // integrityVerdict 呼び出しを try/catch し、"integrity-check-error" として
+  // audit してから error 応答を返すことを確認する。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const auditDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-audit-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+
+  // integrity 機能自体を有効化するための placeholder target を用意する。実際の
+  // 呼び出し対象とは別に、正常に snapshot できるファイルを指定する。
+  const dummyTarget = path.join(runtimeDir, "dummy.sh");
+  await writeFile(dummyTarget, "#!/bin/sh\necho dummy\n");
+
+  // 通常ファイルの中に "子パス" を作ることで、stat が ENOTDIR で失敗する
+  // ホストパスを用意する。ENOTDIR は ENOENT ではないので readFileIntegrity は
+  // absent を返さず rethrow する。
+  const regularFile = path.join(runtimeDir, "bad.sh");
+  await writeFile(regularFile, "#!/bin/sh\necho unreachable\n");
+  const brokenArgv0 = path.join(regularFile, "child");
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-broken",
+        match: { argv0: brokenArgv0 },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ6",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: runtimeDir,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    auditDir,
+    hostexec: config,
+    integrityTargets: [dummyTarget],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ6");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ6");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const response = await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+      execSocketPath,
+      request([], runtimeDir, "req_integrity_error", brokenArgv0),
+    );
+    expect(response.type).toEqual("error");
+    if (response.type === "error") {
+      expect(response.message).toMatch(/integrity/i);
+    }
+
+    const logs = await queryAuditLogs({ domain: "hostexec" }, auditDir);
+    expect(logs.length).toEqual(1);
+    expect(logs[0].decision).toEqual("deny");
+    expect(logs[0].reason).toEqual("integrity-check-error");
+    expect(logs[0].requestId).toEqual("req_integrity_error");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(auditDir, { recursive: true, force: true }).catch(() => {});
   }
 });

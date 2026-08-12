@@ -42,6 +42,7 @@ function makeHostExecRow(
     sessionShortId: sessionId.slice(0, 4),
     sessionName: null,
     command: "ls -la",
+    integrityChanged: false,
     createdAtMs: 1000,
   };
 }

@@ -22,6 +22,12 @@ export interface HostExecPendingEntry {
   state: "pending";
   createdAt: string;
   updatedAt: string;
+  /**
+   * true のとき、この pending は「対象ファイルがブローカー起動時の baseline から
+   * 変化した」ために allow ルールを承認へ格上げした結果である。承認 UI が
+   * 「変化した事実」を提示するために使う。
+   */
+  integrityChanged?: boolean;
 }
 
 export interface ExecuteRequest {

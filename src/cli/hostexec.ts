@@ -34,7 +34,9 @@ export async function runHostExecCommand(nasArgs: string[]): Promise<void> {
           return {
             sessionId: item.sessionId,
             requestId: item.requestId,
-            displayLine: `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}`,
+            displayLine: `${item.sessionId} ${item.requestId} ${item.ruleId} ${item.cwd} ${argv}${
+              item.integrityChanged ? " [CHANGED-SINCE-START]" : ""
+            }`,
             structured: {
               sessionId: item.sessionId,
               requestId: item.requestId,

@@ -43,6 +43,7 @@ export type HostExecPendingRow = {
   sessionShortId: string;
   sessionName: string | null;
   command: string; // argv joined by space, presentation only
+  integrityChanged: boolean; // true のとき対象ファイルが起動時 baseline から変化
   createdAtMs: number | null;
 };
 
@@ -72,6 +73,7 @@ export function normalizeHostExecPending(
     sessionShortId: shortenSessionId(it.sessionId),
     sessionName: null,
     command: [it.argv0, ...it.args].join(" "),
+    integrityChanged: it.integrityChanged === true,
     createdAtMs: parseIsoToMs(it.createdAt),
   }));
 }
