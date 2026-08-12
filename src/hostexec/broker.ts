@@ -19,6 +19,12 @@ import {
   writeJsonLine,
 } from "../lib/unix_socket.ts";
 import { logInfo } from "../log.ts";
+import {
+  decideIntegrity,
+  type IntegritySnapshot,
+  type IntegrityVerdict,
+  readFileIntegrity,
+} from "./integrity.ts";
 import type { MatchContext } from "./match.ts";
 import { isRelativeHostExecArgv0, matchRule } from "./match.ts";
 import {
@@ -72,6 +78,11 @@ interface HostExecBrokerOptions {
   auditDir?: string;
   /** If set, stdout/stderr of host commands are piped through nas-mask-filter. */
   maskFilter?: MaskFilterConfig;
+  /**
+   * LD_PRELOAD 型 argv0 が指すホスト絶対パス集合。ブローカー起動時に各ファイルの
+   * integrity を snapshot し、execute ごとに再検証する。
+   */
+  integrityTargets?: readonly string[];
 }
 
 interface PendingWaiter {
@@ -138,6 +149,8 @@ export class HostExecBroker {
   private readonly requestToApprovalKey = new Map<string, string>();
   private readonly notificationTasks = new Set<Promise<void>>();
   private readonly maskFilter?: MaskFilterConfig;
+  private readonly integrityTargets: readonly string[];
+  private readonly integrityBaseline = new Map<string, IntegritySnapshot>();
 
   constructor(options: HostExecBrokerOptions) {
     this.paths = options.paths;
@@ -153,6 +166,7 @@ export class HostExecBroker {
     this.auditDir = options.auditDir;
     this.secretStore = new SecretStore(this.config.secrets);
     this.maskFilter = options.maskFilter;
+    this.integrityTargets = options.integrityTargets ?? [];
   }
 
   async start(
@@ -178,6 +192,11 @@ export class HostExecBroker {
       execSocketPath,
       (socket) => void this.handleConnection(socket, "exec"),
     );
+    // ブローカー起動時点（コンテナ起動より前）に対象ファイルの baseline を取る。
+    // この時点でコンテナプロセスは存在せず、差し替えは不可能。
+    for (const target of this.integrityTargets) {
+      this.integrityBaseline.set(target, await readFileIntegrity(target));
+    }
   }
 
   async close(): Promise<void> {
@@ -374,10 +393,31 @@ export class HostExecBroker {
     }
 
     const approvalKey = await buildApprovalKey(resolved.capability);
+    const integrity = await this.integrityVerdict(message, resolved);
+
+    // 対象ファイルが起動時 baseline から変化していれば、allow ルールでも承認
+    // キャッシュでも即実行させない。prompt 無効時は承認手段が無いので deny。
+    if (integrity === "prompt" && !this.config.prompt.enable) {
+      await this.recordAudit(
+        message.requestId,
+        "deny",
+        "integrity-mismatch",
+        commandStr,
+      );
+      await writeJsonLine(socket, {
+        type: "error",
+        requestId: message.requestId,
+        message:
+          "hostexec target changed since session start; approval required but prompt is disabled",
+      });
+      return;
+    }
+
     if (
-      resolved.rule.approval === "allow" ||
-      this.approvedKeys.has(approvalKey) ||
-      !this.config.prompt.enable
+      integrity === "pass" &&
+      (resolved.rule.approval === "allow" ||
+        this.approvedKeys.has(approvalKey) ||
+        !this.config.prompt.enable)
     ) {
       if (resolved.rule.approval === "prompt" && !this.config.prompt.enable) {
         await this.recordAudit(
@@ -402,7 +442,12 @@ export class HostExecBroker {
 
     const group =
       this.groups.get(approvalKey) ??
-      (await this.createPendingGroup(approvalKey, message, resolved));
+      (await this.createPendingGroup(
+        approvalKey,
+        message,
+        resolved,
+        integrity === "prompt",
+      ));
     if (!group.requests.has(message.requestId)) {
       group.requestIds.add(message.requestId);
       group.requests.set(message.requestId, { request: message, resolved });
@@ -412,6 +457,7 @@ export class HostExecBroker {
         resolved,
         approvalKey,
         group.createdAt,
+        integrity === "prompt",
       );
       group.pendingEntries.set(message.requestId, entry);
       await writeHostExecPendingEntry(this.paths, entry);
@@ -429,6 +475,7 @@ export class HostExecBroker {
     approvalKey: string,
     message: ExecuteRequest,
     resolved: ResolvedExecution,
+    integrityChanged: boolean,
   ): Promise<PendingGroup> {
     const createdAt = new Date().toISOString();
     const notificationAbort = new AbortController();
@@ -453,7 +500,13 @@ export class HostExecBroker {
     };
     this.groups.set(approvalKey, group);
     this.requestToApprovalKey.set(message.requestId, approvalKey);
-    const entry = toPendingEntry(message, resolved, approvalKey, createdAt);
+    const entry = toPendingEntry(
+      message,
+      resolved,
+      approvalKey,
+      createdAt,
+      integrityChanged,
+    );
     group.pendingEntries.set(message.requestId, entry);
     await writeHostExecPendingEntry(this.paths, entry);
     const notificationTask = notifyHostExecPendingRequest({
@@ -626,6 +679,48 @@ export class HostExecBroker {
       command,
     };
     await appendAuditLog(entry, this.auditDir);
+  }
+
+  /**
+   * この execute 要求が実行するホストファイルが、起動時 baseline から変化して
+   * いないかを判定する。LD_PRELOAD 型 argv0（絶対・相対）のみが対象。bare name は
+   * ホスト PATH 依存で対象外（design の Non-Goals）。
+   *
+   * `integrityTargets` が一つも設定されていないブローカーでは、この機能自体を
+   * 呼び出し側がまだ opt-in していないとみなし常に pass する（stage 側の全面
+   * 配線は Task 3）。opt-in 済み（1件以上設定済み）のブローカーでは、個々の
+   * パスが baseline 未登録でも安全側に倒して prompt する — 設計上、LD_PRELOAD
+   * 型ルールの対象パスは全て integrityTargets に列挙されている前提であり、
+   * 未登録は配線漏れを意味するため。
+   */
+  private async integrityVerdict(
+    request: ExecuteRequest,
+    resolved: ResolvedExecution,
+  ): Promise<IntegrityVerdict> {
+    // この early return は冗長な高速パスとして機能する。呼び出し元
+    // （HostExecStage）は LD_PRELOAD 型 argv0 が指す全てのホストパスを
+    // integrityTargets に列挙する契約として規定されており、integrityTargets が
+    // 空集合であることは LD_PRELOAD 型ルールが一件も存在しないことを意味する。
+    // 呼び出し元が将来この契約に反し、LD_PRELOAD 型ルールを維持したまま
+    // integrityTargets を部分的にしか渡さないように変化した場合でも、パス単位の
+    // 照合自体は baseline 未登録（追跡対象外）を検出して安全側の prompt へ
+    // フォールバックする（この既定動作は decideIntegrity(undefined, ...) が
+    // 処理する）。しかし本 early return はそのフォールバックを経由せず全件を
+    // 素通りさせるため、「integrityTargets は全 LD_PRELOAD パスを網羅する」と
+    // いう前提が破綻した瞬間に安全性が消失する。したがってこの結合関係を維持
+    // することを前提とし、本 guard の動作自体は変更しない。
+    if (this.integrityTargets.length === 0) return "pass";
+    const ruleArgv0 = resolved.rule.match.argv0;
+    if (!path.isAbsolute(ruleArgv0) && !isRelativeHostExecArgv0(ruleArgv0)) {
+      return "pass";
+    }
+    const hostPath = path.isAbsolute(request.argv0)
+      ? request.argv0
+      : path.resolve(resolved.cwd, request.argv0);
+    const baseline = this.integrityBaseline.get(hostPath);
+    const prev = baseline && baseline !== "absent" ? baseline : undefined;
+    const current = await readFileIntegrity(hostPath, prev);
+    return decideIntegrity(baseline, current);
   }
 
   private async resolveRequest(
@@ -992,6 +1087,7 @@ function toPendingEntry(
   resolved: ResolvedExecution,
   approvalKey: string,
   createdAt: string,
+  integrityChanged: boolean,
 ): HostExecPendingEntry {
   return {
     version: 1,
@@ -1005,6 +1101,7 @@ function toPendingEntry(
     state: "pending",
     createdAt,
     updatedAt: new Date().toISOString(),
+    ...(integrityChanged ? { integrityChanged: true } : {}),
   };
 }
 
