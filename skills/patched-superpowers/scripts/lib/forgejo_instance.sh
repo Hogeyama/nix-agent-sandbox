@@ -33,17 +33,29 @@ fj_diagnostics_file() {
   echo "$(fj_state_dir)/diagnostics/$(fj_repo_hash).jsonl"
 }
 
+FJ_DIAGNOSTICS_WARNING_SHOWN=0
+
+fj_diagnostics_warn_once() {
+  if [ "$FJ_DIAGNOSTICS_WARNING_SHOWN" -eq 0 ]; then
+    echo "Warning: Forgejo diagnostics unavailable: $1" >&2
+    FJ_DIAGNOSTICS_WARNING_SHOWN=1
+  fi
+}
+
 # Forgejo は hostexec 経由でホスト上に残るため、コンテナ終了後も読める state
 # directory にプロセスグループ情報を保存する。診断失敗でレビューを止めない。
 fj_log_process_event() {
   local event="$1" pid="$2" signal="${3:-}" reason="${4:-}"
   local file ppid pgid sid tpgid tty stat comm
   file="$(fj_diagnostics_file)"
-  mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
+  if ! mkdir -p "$(dirname "$file")" 2>/dev/null; then
+    fj_diagnostics_warn_once "could not create $(dirname "$file")"
+    return 0
+  fi
   if read -r _ ppid pgid sid tpgid tty stat comm < <(
     ps -o pid=,ppid=,pgid=,sid=,tpgid=,tty=,stat=,comm= -p "$pid" 2>/dev/null
   ); then
-    (
+    if ! (
       umask 077
       jq -cn \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
@@ -53,9 +65,11 @@ fj_log_process_event() {
         --arg tty "$tty" --arg state "$stat" --arg comm "$comm" \
         '{timestamp:$timestamp,event:$event,signal:($signal|if length>0 then . else null end),reason:($reason|if length>0 then . else null end),process:{pid:$pid,ppid:$ppid,processGroupId:$pgid,sessionId:$sid,foregroundProcessGroupId:$tpgid,tty:$tty,state:$state,comm:$comm}}' \
         >>"$file"
-    ) 2>/dev/null || true
+    ) 2>/dev/null; then
+      fj_diagnostics_warn_once "could not write $file"
+    fi
   else
-    (
+    if ! (
       umask 077
       jq -cn \
         --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
@@ -63,7 +77,9 @@ fj_log_process_event() {
         --argjson pid "$pid" \
         '{timestamp:$timestamp,event:$event,signal:($signal|if length>0 then . else null end),reason:($reason|if length>0 then . else null end),process:{pid:$pid,unavailable:true}}' \
         >>"$file"
-    ) 2>/dev/null || true
+    ) 2>/dev/null; then
+      fj_diagnostics_warn_once "could not write $file"
+    fi
   fi
 }
 
