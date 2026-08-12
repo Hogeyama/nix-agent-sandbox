@@ -20,7 +20,7 @@ superpowers の brainstorming / writing-plans は `docs/superpowers/specs/` と 
 
 ## 起動時にやること
 
-1. 前提スキルの確認: `superpowers:brainstorming`、`superpowers:writing-plans`、`superpowers:subagent-driven-development` がスキル一覧に存在するか確認する。存在しないものがあればユーザーに伝えて停止する。また `diffity` CLI が利用可能か `which diffity` で確認する
+1. 前提スキルの確認: `superpowers:brainstorming`、`superpowers:writing-plans`、`superpowers:subagent-driven-development` がスキル一覧に存在するか確認する。存在しないものがあればユーザーに伝えて停止する。また `diffity` CLI（Phase 1 で使う）と `forgejo` CLI（Phase 3 で使う）が利用可能か `which diffity forgejo` で確認する
 2. `docs/superpowers/.git` の存在を確認し、独立リポジトリかどうかを判定する
 3. ユーザーに、設計・実装に先立って読んでおくべきドキュメントやスキルがないか確認する（例: コーディング規約、アーキテクチャガイド、既存の設計ドキュメントなど）。ユーザーが指定したものがあれば Skill ツールや Read ツールで読み、内容を把握しておく
 4. Skill ツールで `superpowers:brainstorming` を呼び出す
@@ -131,17 +131,27 @@ findings のうち correctness bugs は修正サブエージェントを起動�
 
 ### 全体 diff の人間レビュー
 
-`/code-review` の findings 対応が終わったら、ブランチ全体の diff をユーザーにレビューしてもらう。
+`/code-review` の findings 対応が終わったら、この skill 同梱の `scripts/forgejow` で使い捨ての Forgejo を立て、1本の PR としてユーザーにレビューしてもらう。
 
-実装コードの変更なので、tree ではなく diff（差分ビュー）でレビューする。
+1. progress ledger から `implementation-base` のコミットハッシュを読む。これが PR の base になる
+2. `./skills/patched-superpowers/scripts/forgejow request-review implementation-base..HEAD` を実行し、出力された PR URL とコミットごとの URL をテーブル形式でユーザーに提示する。出力にはログイン情報も含まれるので、そのまま伝える
+3. ユーザーがコメントを付けて知らせてきたら、`./skills/patched-superpowers/scripts/forgejow fetch-comments` でスレッドを一括取得する
+4. 各コメントに対応する（下記「修正はコミットして URL を返す」に従う）
+5. どこを直せばいいか読み取れないコメントは、推測で修正せず `reply` で対象を確認する。推測で修正すると、ユーザーが求めていない変更がレビュー対象に混入する
+6. resolve はユーザーが UI で実行する。エージェントは `fetch-comments` の `resolved` を見て判定する。ユーザーが明示的に resolve を指示した場合だけ `echo "<summary>" | ./skills/patched-superpowers/scripts/forgejow resolve <thread-id>` を使う
+7. `awaiting_reply` のスレッドが無くなったらユーザーに承認を求める。回答待ちのまま承認を求めると、意図が未確定の指摘を残したまま Phase 4 に進んでしまう。ユーザーが追加コメントを付けた場合は 3-6 を繰り返す
+8. ユーザーが承認を伝えたら `./skills/patched-superpowers/scripts/forgejow down` でインスタンスを破棄し、Phase 4 に進む
 
-1. progress ledger から `implementation-base` のコミットハッシュを読む。これが diff の base ref になる
-2. Skill ツールで `diffity-tour` を読み、`implementation-base..HEAD` の diff に対する Review mode のツアーを作成する
-3. Skill ツールで `diffity-diff` を読み、`diffity <implementation-base>..HEAD` でブラウザを開く。ユーザーにレビューを依頼する
-4. ユーザーがコメントを付けて知らせてきたら、`diffity agent list --status open --json` でコメントを取得する
-5. 各コメントに対応する — 修正が必要なら修正し `diffity agent resolve <id> --summary "..."` で解決、質問なら `diffity agent reply <id> --body "..."` で返答
-6. open コメントがなくなったらユーザーに承認を求める。ユーザーが追加コメントを付けた場合は 4-5 を繰り返す
-7. ユーザーが承認を伝えたら Phase 4 に進む
+#### 修正はコミットして URL を返す
+
+指摘に応じて修正したら1コメント1コミットでコミットし、`push` してから `reply` の本文にその修正コミットの URL を含める。「修正しました」だけではユーザーは直ったかを確認できないが、リンクがあればその場で検証できる。修正しないと判断した場合も理由を返す。
+
+```bash
+./skills/patched-superpowers/scripts/forgejow push
+echo "<返信本文>" | ./skills/patched-superpowers/scripts/forgejow reply <thread-id>
+```
+
+コミットしても既存のスレッドは消えない。Forgejo はコメントを PR に紐づけて保持し、修正コミット自体が同じ PR のレビュー対象コミットとして加わる。ユーザーが開いているタブもそのまま使えるので、URL を貼り直す必要はない。
 
 ---
 
@@ -189,6 +199,9 @@ Task N: complete (commits abc1234..def5678, design-decision: <設計判断> → 
 - 全体レビューをスキップする
 - 複数の修正を1コミットにまとめる
 - progress ledger を更新せずに次のタスクに進む
-- Phase 3 の diff ref に `implementation-base` 以外の値（ブランチ名、`main` など）を使う
+- Phase 3 の PR の base に `implementation-base` 以外の値（ブランチ名、`main` など）を使う
+- 返答待ち（`awaiting_reply`）のスレッドを残したまま Phase 4 に進む
+- ユーザーの指示なしにエージェントがスレッドを resolve する
+- Phase 3 の承認後に `forgejow down` を実行せず、インスタンスを残したままにする
 - レビュー修正の1行 fixup コミットを整理せずにそのまま finish する
 - fixup 対象をユーザーに確認せずに勝手にリライトする

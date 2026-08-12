@@ -221,6 +221,17 @@ local commonHostexec: HostExecConfig = new {
       approval = "allow"
       fallback = "container"
     }
+    new {
+      id = "forgejow"
+      match {
+        argv0 = "./skills/patched-superpowers/scripts/forgejow"
+      }
+      cwd {
+        mode = "workspace-or-session-tmp"
+      }
+      approval = "allow"
+      fallback = "container"
+    }
   }
 }
 
