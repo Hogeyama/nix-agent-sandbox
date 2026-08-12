@@ -40,7 +40,7 @@ async function withTempHome(
 /** 一時的に PATH 上にダミーバイナリを配置してテストを実行する */
 async function withFakeBinary(
   name: string,
-  fn: () => Promise<void> | void,
+  fn: (tmpBinDir: string) => Promise<void> | void,
 ): Promise<void> {
   const origPath = process.env.PATH;
   const tmpBinDir = await mkdtemp(path.join(tmpdir(), "nas-test-bin-"));
@@ -48,7 +48,7 @@ async function withFakeBinary(
     await writeFile(`${tmpBinDir}/${name}`, "#!/bin/sh\nexit 0\n");
     await chmod(`${tmpBinDir}/${name}`, 0o755);
     process.env.PATH = `${tmpBinDir}:${origPath ?? ""}`;
-    await fn();
+    await fn(tmpBinDir);
   } finally {
     if (origPath !== undefined) process.env.PATH = origPath;
     else delete process.env.PATH;
@@ -126,6 +126,7 @@ test("configureAgent: dispatches codex configuration", () => {
     probes: {
       codexDirExists: false,
       codexBinPath: "/usr/bin/codex",
+      codexCodeModeHostBinPath: null,
     },
     priorDockerArgs: [],
     priorEnvVars: {},
@@ -553,6 +554,7 @@ test("configureCodex: uses ['codex'] when binary found", () => {
   const probes: CodexProbes = {
     codexDirExists: false,
     codexBinPath: "/usr/bin/codex",
+    codexCodeModeHostBinPath: null,
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
@@ -570,6 +572,7 @@ test("configureCodex: uses error command when codex binary not found", () => {
   const probes: CodexProbes = {
     codexDirExists: false,
     codexBinPath: null,
+    codexCodeModeHostBinPath: null,
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
@@ -590,6 +593,7 @@ test("configureCodex: mounts ~/.codex when directory exists", () => {
   const probes: CodexProbes = {
     codexDirExists: true,
     codexBinPath: null,
+    codexCodeModeHostBinPath: null,
   };
   const result = configureCodex({
     containerHome,
@@ -606,6 +610,7 @@ test("configureCodex: does not mount ~/.codex when directory is absent", () => {
   const probes: CodexProbes = {
     codexDirExists: false,
     codexBinPath: null,
+    codexCodeModeHostBinPath: null,
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
@@ -622,6 +627,7 @@ test("configureCodex: uses containerHome for codex mount path", () => {
   const probes: CodexProbes = {
     codexDirExists: true,
     codexBinPath: null,
+    codexCodeModeHostBinPath: null,
   };
   const result = configureCodex({
     containerHome: "/home/custom",
@@ -638,6 +644,7 @@ test("configureCodex: preserves existing dockerArgs and envVars", () => {
   const probes: CodexProbes = {
     codexDirExists: false,
     codexBinPath: null,
+    codexCodeModeHostBinPath: null,
   };
   const result = configureCodex({
     containerHome: "/home/testuser",
@@ -673,6 +680,80 @@ test("resolveCodexProbes: finds codex binary on PATH", async () => {
   await withFakeBinary("codex", () => {
     const probes = resolveCodexProbes("/tmp");
     expect(probes.codexBinPath !== null).toEqual(true);
+  });
+});
+
+test("configureCodex: mounts detected code-mode host read-only", () => {
+  const probes: CodexProbes = {
+    codexDirExists: false,
+    codexBinPath: "/opt/codex/bin/codex",
+    codexCodeModeHostBinPath: "/opt/codex/bin/codex-code-mode-host",
+  };
+  const result = configureCodex({
+    containerHome: "/home/testuser",
+    hostHome: "/home/host",
+    probes,
+    priorDockerArgs: ["--existing"],
+    priorEnvVars: {},
+  });
+
+  expect(result.dockerArgs).toContain("--existing");
+  expect(result.dockerArgs).toContain(
+    "/opt/codex/bin/codex-code-mode-host:/usr/local/bin/codex-code-mode-host:ro",
+  );
+});
+
+test("resolveCodexProbes: finds executable code-mode host beside codex", async () => {
+  await withFakeBinary("codex", async (tmpBinDir) => {
+    const helperPath = `${tmpBinDir}/codex-code-mode-host`;
+    await writeFile(helperPath, "#!/bin/sh\nexit 0\n");
+    await chmod(helperPath, 0o755);
+
+    const probes = resolveCodexProbes("/tmp");
+
+    expect(probes.codexCodeModeHostBinPath).toEqual(helperPath);
+  });
+});
+
+test("resolveCodexProbes: ignores missing code-mode host", async () => {
+  await withFakeBinary("codex", () => {
+    const probes = resolveCodexProbes("/tmp");
+    expect(probes.codexCodeModeHostBinPath).toEqual(null);
+  });
+});
+
+test("resolveCodexProbes: ignores non-executable code-mode host", async () => {
+  await withFakeBinary("codex", async (tmpBinDir) => {
+    const helperPath = `${tmpBinDir}/codex-code-mode-host`;
+    await writeFile(helperPath, "#!/bin/sh\nexit 0\n");
+    await chmod(helperPath, 0o644);
+
+    const probes = resolveCodexProbes("/tmp");
+
+    expect(probes.codexCodeModeHostBinPath).toEqual(null);
+  });
+});
+
+test("resolveCodexProbes: ignores unreadable executable code-mode host", async () => {
+  await withFakeBinary("codex", async (tmpBinDir) => {
+    const helperPath = `${tmpBinDir}/codex-code-mode-host`;
+    await writeFile(helperPath, "#!/bin/sh\nexit 0\n");
+    await chmod(helperPath, 0o111);
+
+    const probes = resolveCodexProbes("/tmp");
+
+    expect(probes.codexCodeModeHostBinPath).toEqual(null);
+  });
+});
+
+test("resolveCodexProbes: ignores non-regular code-mode host", async () => {
+  await withFakeBinary("codex", async (tmpBinDir) => {
+    const helperPath = `${tmpBinDir}/codex-code-mode-host`;
+    await mkdir(helperPath);
+
+    const probes = resolveCodexProbes("/tmp");
+
+    expect(probes.codexCodeModeHostBinPath).toEqual(null);
   });
 });
 

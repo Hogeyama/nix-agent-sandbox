@@ -1083,6 +1083,7 @@ test("MountStage: codex agent sets agentCommand", () => {
   const codexProbes: AgentProbes = {
     codexDirExists: false,
     codexBinPath: "/usr/bin/codex",
+    codexCodeModeHostBinPath: null,
   };
   const profile = makeProfile({ agent: "codex" });
   const mountProbes = makeMountProbes({ agentProbes: codexProbes });

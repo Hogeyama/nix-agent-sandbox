@@ -2,6 +2,7 @@
  * OpenAI Codex CLI エージェント対応
  */
 
+import path from "node:path";
 import type { AgentConfigResult } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -12,13 +13,19 @@ import type { AgentConfigResult } from "./types.ts";
 export interface CodexProbes {
   readonly codexDirExists: boolean;
   readonly codexBinPath: string | null;
+  readonly codexCodeModeHostBinPath: string | null;
 }
 
 /** ホスト環境を調べて CodexProbes を返す (副作用あり) */
 export function resolveCodexProbes(hostHome: string): CodexProbes {
+  const codexBinPath = findBinaryResolved("codex");
   return {
     codexDirExists: dirExistsSync(`${hostHome}/.codex`),
-    codexBinPath: findBinaryResolved("codex"),
+    codexBinPath,
+    codexCodeModeHostBinPath: findSiblingExecutableResolved(
+      codexBinPath,
+      "codex-code-mode-host",
+    ),
   };
 }
 
@@ -52,6 +59,13 @@ export function configureCodex(input: CodexConfigInput): AgentConfigResult {
     args.push("-v", `${probes.codexBinPath}:/usr/local/bin/codex:ro`);
   }
 
+  if (probes.codexCodeModeHostBinPath) {
+    args.push(
+      "-v",
+      `${probes.codexCodeModeHostBinPath}:/usr/local/bin/codex-code-mode-host:ro`,
+    );
+  }
+
   const agentCommand: string[] = probes.codexBinPath
     ? ["codex"]
     : ["bash", "-c", "echo 'codex binary not found'; exit 1"];
@@ -81,6 +95,24 @@ function findBinaryResolved(name: string): string | null {
   try {
     const fs = require("node:fs");
     return fs.realpathSync(which);
+  } catch {
+    return null;
+  }
+}
+
+function findSiblingExecutableResolved(
+  executablePath: string | null,
+  siblingName: string,
+): string | null {
+  if (!executablePath) return null;
+  try {
+    const fs = require("node:fs");
+    const siblingPath = fs.realpathSync(
+      path.join(path.dirname(executablePath), siblingName),
+    );
+    if (!fs.statSync(siblingPath).isFile()) return null;
+    fs.accessSync(siblingPath, fs.constants.R_OK | fs.constants.X_OK);
+    return siblingPath;
   } catch {
     return null;
   }

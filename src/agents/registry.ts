@@ -75,7 +75,11 @@ function expectCopilotProbes(probes: AgentProbes): CopilotProbes {
 }
 
 function expectCodexProbes(probes: AgentProbes): CodexProbes {
-  if ("codexDirExists" in probes && "codexBinPath" in probes) {
+  if (
+    "codexDirExists" in probes &&
+    "codexBinPath" in probes &&
+    "codexCodeModeHostBinPath" in probes
+  ) {
     return probes;
   }
   throw new Error("Agent probe mismatch: expected codex probes");
