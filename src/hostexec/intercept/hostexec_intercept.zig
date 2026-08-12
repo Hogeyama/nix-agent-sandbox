@@ -315,14 +315,30 @@ const stdin_read_size = 65536;
 const o_accmode: usize = 0o3;
 const o_wronly: usize = 0o1;
 
-/// Collect whatever is already buffered on fd 0, base64-encoded, without
-/// blocking. Returns null when there is nothing this exec path may forward.
+/// How long to wait for the *first* byte before concluding there is no stdin.
+///
+/// A zero timeout does not work here. This code runs inside `execve`, before
+/// the other members of the caller's pipeline have necessarily run at all:
+/// with `producer | intercepted-command` the pipe is reliably still empty at
+/// that instant, and a non-blocking poll always loses that race. (The python
+/// shim can afford a zero timeout only because a python interpreter takes tens
+/// of milliseconds to start, by which point the producer has written.)
+const stdin_first_wait_ms = 250;
+
+/// How long to wait for *more* bytes once some have arrived, before treating
+/// the producer as finished. Covers a writer that emits in several `write`
+/// calls without closing the pipe immediately after the first.
+const stdin_more_wait_ms = 50;
+
+/// Collect what the caller's fd 0 offers, base64-encoded, within a bounded
+/// wait. Returns null when there is nothing this exec path may forward.
 ///
 /// The broker carries stdin as a single field on the initial request, so
 /// everything the host child will ever receive has to be gathered before the
-/// request goes out. A producer that writes after that point is not
-/// represented: the command sees EOF at whatever was buffered here. That is
-/// the same contract the python shim has always given bare-command rules.
+/// request goes out. This is therefore a one-shot snapshot, not a stream: a
+/// producer still writing when the wait expires is not fully represented, and
+/// the command sees EOF at what was collected. That is the same contract the
+/// python shim has always given bare-command rules.
 ///
 /// Returns null rather than empty for the cases where fd 0 must not be read:
 ///   - a tty, where reading would steal the user's keystrokes
@@ -330,28 +346,34 @@ const o_wronly: usize = 0o1;
 ///   - a write-only fd 0 (e.g. `cmd 0>&1 | ...`), which can never satisfy
 ///     `POLLIN` — the kernel does not report read readiness on the write end
 ///
-/// Callers must only pass fd 0 they own on behalf of the command being run;
+/// Callers must only pass an fd they own on behalf of the command being run;
 /// see `stdin_capable` on `callBroker`.
 fn readAvailableStdin(alloc: Allocator) !?[]const u8 {
-    if (std.posix.isatty(0)) return null;
+    return readAvailableFd(alloc, 0);
+}
 
-    const flags = std.posix.fcntl(0, std.posix.F.GETFL, 0) catch return null;
+fn readAvailableFd(alloc: Allocator, fd: std.posix.fd_t) !?[]const u8 {
+    if (std.posix.isatty(fd)) return null;
+
+    const flags = std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch return null;
     if ((flags & o_accmode) == o_wronly) return null;
 
     var collected: std.ArrayList(u8) = .{};
     defer collected.deinit(alloc);
 
     var read_buf: [stdin_read_size]u8 = undefined;
+    var wait_ms: i32 = stdin_first_wait_ms;
     while (true) {
         var fds = [_]std.posix.pollfd{
-            .{ .fd = 0, .events = std.posix.POLL.IN, .revents = 0 },
+            .{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 },
         };
-        const ready = std.posix.poll(&fds, 0) catch break;
+        const ready = std.posix.poll(&fds, wait_ms) catch break;
         if (ready == 0) break;
         if ((fds[0].revents & std.posix.POLL.IN) == 0) break;
-        const n = std.posix.read(0, &read_buf) catch break;
+        const n = std.posix.read(fd, &read_buf) catch break;
         if (n == 0) break;
         try collected.appendSlice(alloc, read_buf[0..n]);
+        wait_ms = stdin_more_wait_ms;
     }
 
     if (collected.items.len == 0) return null;
@@ -741,6 +763,45 @@ test "buildRequest: basic JSON" {
     try std.testing.expectEqual(@as(usize, 2), json_args.items.len);
     try std.testing.expectEqualStrings("install", json_args.items[0].string);
     try std.testing.expectEqualStrings("hello", json_args.items[1].string);
+}
+
+test "readAvailableFd: drains a pipe written after the call would have polled" {
+    const alloc = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+
+    // Write *then* close, mirroring `producer | intercepted-command`: the
+    // bytes are not in the pipe when the read side is first polled with a
+    // zero timeout, which is exactly the race the first-byte wait covers.
+    _ = try std.posix.write(fds[1], "hello");
+    std.posix.close(fds[1]);
+
+    const encoded = (try readAvailableFd(alloc, fds[0])).?;
+    defer alloc.free(encoded);
+
+    const decoded = try decodeBase64(alloc, encoded);
+    defer alloc.free(decoded);
+    try std.testing.expectEqualStrings("hello", decoded);
+}
+
+test "readAvailableFd: returns null for a pipe that closes with no bytes" {
+    const alloc = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    std.posix.close(fds[1]);
+
+    try std.testing.expect(try readAvailableFd(alloc, fds[0]) == null);
+}
+
+test "readAvailableFd: returns null for a write-only fd" {
+    const alloc = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+
+    // The write end can never satisfy POLLIN, so it must be rejected up front
+    // rather than waited on.
+    try std.testing.expect(try readAvailableFd(alloc, fds[1]) == null);
 }
 
 test "buildRequest: omits stdin entirely when null" {
