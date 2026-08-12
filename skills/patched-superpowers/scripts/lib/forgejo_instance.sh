@@ -237,6 +237,19 @@ fj_up() {
   fj_die "インスタンスを起動できなかった: $(fj_run_dir)/log/web.log"
 }
 
+# 自分で起動した Forgejo は子プロセスなので wait で終了状態を回収する。既存
+# インスタンスを再利用した場合だけ子ではないため、有限間隔で生存を監視する。
+fj_wait_for_web() {
+  local pid="$1" owned_pid="${2:-}"
+  if [ -n "$owned_pid" ] && [ "$pid" = "$owned_pid" ]; then
+    wait "$pid"
+    return $?
+  fi
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 0.25
+  done
+}
+
 fj_boot_once() {
   local run state port conf pid old_pid
   run="$(fj_run_dir)"

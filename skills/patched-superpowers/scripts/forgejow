@@ -20,7 +20,7 @@ usage() {
 Usage:
   forgejow request-review <range>
       インスタンスを起動し、range を push して PR を用意し、
-      PR の URL とコミットごとの URL を出力する。
+      PR の URL とコミットごとの URL を出力してから、Forgejo が停止するまで待機する。
   forgejow fetch-comments [--json]
       未 resolve のスレッドを一括取得する。既定は平文、--json で生の JSON。
   forgejow push
@@ -37,10 +37,16 @@ EOF
 }
 
 cmd_request_review() {
-  local range="${1:-}" short subject
+  local range="${1:-}" short subject web_pid owned_pid rc
   [ -n "$range" ] || { fj_die "range を指定する (例: implementation-base..HEAD)"; return 1; }
 
   fj_up || return 1
+  trap 'fj_down' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  web_pid="$(cat "$(fj_run_dir)/web.pid")"
+  owned_pid="${FJ_STARTED_PID:-}"
   fj_smoke || return 1
   fj_push_range "$range" || return 1
   fj_ensure_pr >"$(fj_run_dir)/pr" || return 1
@@ -64,6 +70,12 @@ cmd_request_review() {
   echo "  パスワード: $FJ_REVIEWER_PASS"
   echo
   echo "診断ログ: $(fj_diagnostics_file)"
+
+  fj_wait_for_web "$web_pid" "$owned_pid"
+  rc=$?
+  trap - HUP INT TERM EXIT
+  fj_down
+  return "$rc"
 }
 
 cmd_fetch_comments() {

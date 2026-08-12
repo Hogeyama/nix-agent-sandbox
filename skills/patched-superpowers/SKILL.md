@@ -134,7 +134,7 @@ findings のうち correctness bugs は修正サブエージェントを起動�
 `/code-review` の findings 対応が終わったら、この skill 同梱の `scripts/forgejow` で使い捨ての Forgejo を立て、1本の PR としてユーザーにレビューしてもらう。
 
 1. progress ledger から `implementation-base` のコミットハッシュを読む。これが PR の base になる
-2. `./skills/patched-superpowers/scripts/forgejow request-review implementation-base..HEAD` を実行し、出力された PR URL とコミットごとの URL をテーブル形式でユーザーに提示する。出力にはログイン情報も含まれるので、そのまま伝える
+2. `./skills/patched-superpowers/scripts/forgejow request-review implementation-base..HEAD` を長時間実行として起動する。PR URL とログイン情報が出力された後も、この tool session/job を終了させず、レビュー完了まで handle を保持する。Codex では yield された exec session を保持し、background execution を明示する必要がある agent では background job として起動する。出力された PR URL とコミットごとの URL をテーブル形式でユーザーに提示する。出力にはログイン情報も含まれるので、そのまま伝える
 3. ユーザーがコメントを付けて知らせてきたら、`./skills/patched-superpowers/scripts/forgejow fetch-comments` でスレッドを一括取得する
 4. 各コメントに対応する（下記「修正はコミットして URL を返す」に従う）
 5. どこを直せばいいか読み取れないコメントは、推測で修正せず `reply` で対象を確認する。推測で修正すると、ユーザーが求めていない変更がレビュー対象に混入する
