@@ -47,71 +47,25 @@ const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
 
 /**
- * Allowed prefixes for absolute `argv0` values in hostexec rules.
- *
- * These are the only container paths where nas is permitted to shadow a
- * binary with the hostexec wrapper (either via LD_PRELOAD intercept or as a
- * fallback bind-mount). Paths under system-sensitive directories like
- * `/etc`, `/bin`, `/lib`, `/var`, `/root`, etc. must never be targetable
- * from repo config.
- *
- * `CONTAINER_HOME_LOCAL_BIN_PREFIX` is a suffix under the dynamic per-user
- * container home (`/home/<user>/.local/bin`), matched by suffix check.
- */
-const ABSOLUTE_ARGV0_ALLOWED_PREFIXES = [
-  "/usr/bin/",
-  "/usr/local/bin/",
-] as const;
-const ABSOLUTE_ARGV0_ALLOWED_OPT_PATTERN = /^\/opt\/[^/]+\/bin\//;
-const CONTAINER_HOME_LOCAL_BIN_SUFFIX = "/.local/bin/";
-
-/**
- * Validate that an absolute `argv0` in a hostexec rule points at a safe
- * container path. Throws with a descriptive error on rejection.
+ * 絶対パス argv0 の入力健全性を検証する。フォールバック bind-mount 経路を
+ * 廃止したため、コンテナ側 system パスを shadow する経路は存在しない。ホスト側
+ * exec の差し替えは integrity 検証（ブローカー）が守るので、ここではファイルパス
+ * として異常なもの（`/` 単体・末尾スラッシュ・`.`/`..` セグメント）だけを弾く。
  *
  * Exported for tests.
  */
 export function validateAbsoluteArgv0(ruleId: string, argv0: string): void {
-  // Reject exactly "/" or any trailing slash (non-file targets).
   if (argv0 === "/" || argv0.endsWith("/")) {
     throw new Error(
-      `hostexec rule ${JSON.stringify(ruleId)}: argv0 ${JSON.stringify(argv0)} is not a file path. ` +
-        `Absolute argv0 must be a file under one of: /usr/bin/*, /usr/local/bin/*, /opt/*/bin/*, /home/<user>/.local/bin/*`,
+      `hostexec rule ${JSON.stringify(ruleId)}: argv0 ${JSON.stringify(argv0)} is not a file path.`,
     );
   }
-  // Reject any ".." segments to prevent traversal-based prefix bypass.
   const segments = argv0.split("/");
   if (segments.includes("..") || segments.includes(".")) {
     throw new Error(
-      `hostexec rule ${JSON.stringify(ruleId)}: argv0 ${JSON.stringify(argv0)} must not contain '.' or '..' segments. ` +
-        `Absolute argv0 must be a file under one of: /usr/bin/*, /usr/local/bin/*, /opt/*/bin/*, /home/<user>/.local/bin/*`,
+      `hostexec rule ${JSON.stringify(ruleId)}: argv0 ${JSON.stringify(argv0)} must not contain '.' or '..' segments.`,
     );
   }
-  for (const prefix of ABSOLUTE_ARGV0_ALLOWED_PREFIXES) {
-    if (argv0.startsWith(prefix) && argv0.length > prefix.length) return;
-  }
-  if (ABSOLUTE_ARGV0_ALLOWED_OPT_PATTERN.test(argv0)) return;
-  // Allow /home/<user>/.local/bin/<file>
-  if (argv0.startsWith("/home/")) {
-    const idx = argv0.indexOf(CONTAINER_HOME_LOCAL_BIN_SUFFIX, "/home/".length);
-    // ensure the suffix appears directly after the user segment: /home/<user>/.local/bin/...
-    if (idx > 0) {
-      const afterHome = argv0.slice("/home/".length);
-      const userSeg = afterHome.split("/", 1)[0];
-      const expected = `/home/${userSeg}${CONTAINER_HOME_LOCAL_BIN_SUFFIX}`;
-      if (
-        userSeg.length > 0 &&
-        argv0.startsWith(expected) &&
-        argv0.length > expected.length
-      ) {
-        return;
-      }
-    }
-  }
-  throw new Error(
-    `hostexec rule ${JSON.stringify(ruleId)}: absolute argv0 ${JSON.stringify(argv0)} targets a disallowed container path. ` +
-      `Allowed prefixes: /usr/bin/*, /usr/local/bin/*, /opt/*/bin/*, /home/<user>/.local/bin/*`,
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +110,7 @@ export interface HostExecPlan {
     readonly uiIdleTimeout: number;
     readonly auditDir: string | undefined;
     readonly agent: StageInput["profile"]["agent"];
+    readonly integrityTargets: readonly string[];
   };
 }
 
@@ -239,9 +194,11 @@ export async function planHostExec(
   const config =
     input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
   config.rules = [...config.rules, NAS_HOOK_RULE];
-  // Reject absolute argv0 values that would bind-mount a wrapper over a
-  // sensitive container path (e.g. /etc/passwd, /bin/sh). Validate before
-  // any filesystem/mount planning so we fail fast with a clear error.
+  // validateAbsoluteArgv0 はパスの健全性のみを検証する。具体的には `/` 単独、
+  // 末尾スラッシュ、`.`/`..` セグメントを拒否する。ホストexecの差し替え防止は
+  // ブローカーのintegrity検証がランタイムで担当する。フォールバックの
+  // bind-mountパスは削除済みのため、コンテナ側からのシャドーイングはもう
+  // 発生しない。
   for (const rule of config.rules) {
     if (path.isAbsolute(rule.match.argv0)) {
       validateAbsoluteArgv0(rule.id, rule.match.argv0);
@@ -339,8 +296,14 @@ export async function planHostExec(
     NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
   };
 
-  if (interceptPaths.length > 0 && interceptLibPath) {
-    // LD_PRELOAD 方式: .so をマウントし、環境変数を設定
+  if (interceptPaths.length > 0) {
+    if (!interceptLibPath) {
+      throw new Error(
+        "[nas] hostexec: 相対・絶対パス argv0 のルールには intercept ライブラリ " +
+          "(hostexec_intercept.so) が必要ですが、見つかりませんでした。" +
+          "nix ビルド（または `cd src/hostexec/intercept && zig build`）で生成するか、nas を再インストールしてください。",
+      );
+    }
     const existingLdPreload = envVars.LD_PRELOAD;
     envVars.LD_PRELOAD = existingLdPreload
       ? `${INTERCEPT_LIB_CONTAINER_PATH}:${existingLdPreload}`
@@ -350,15 +313,6 @@ export async function planHostExec(
       "-v",
       addMount(mounts, interceptLibPath, INTERCEPT_LIB_CONTAINER_PATH, true),
     );
-  } else if (interceptPaths.length > 0) {
-    // フォールバック: .so が見つからない場合は従来の bind mount 方式
-    for (const argv0 of relativeArgv0s) {
-      const target = path.resolve(workDir, argv0);
-      dockerArgs.push("-v", addMount(mounts, wrapperScript, target, true));
-    }
-    for (const argv0 of absoluteArgv0s) {
-      dockerArgs.push("-v", addMount(mounts, wrapperScript, argv0, true));
-    }
   }
 
   // Pure intent only: whether to enable mask filtering. The secrets frame
@@ -404,6 +358,7 @@ export async function planHostExec(
       uiIdleTimeout: input.config.ui.idleTimeout,
       auditDir: input.probes.auditDir,
       agent: input.profile.agent,
+      integrityTargets: interceptPaths,
     },
   };
 }
@@ -475,6 +430,7 @@ function runHostExec(
         uiIdleTimeout: spec.uiIdleTimeout,
         auditDir: spec.auditDir,
         agent: spec.agent,
+        integrityTargets: spec.integrityTargets,
         maskFilter,
       }),
       (handle) => handle.close(),

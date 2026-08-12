@@ -428,7 +428,7 @@ test("HostExecStage plan: auto notify resolves to desktop", async () => {
   expect(plan.broker.notify).toEqual("desktop");
 });
 
-test("HostExecStage plan: falls back to bind mount when interceptLibPath is null", async () => {
+test("HostExecStage plan: throws when a relative/absolute rule has no intercept lib", async () => {
   const profile = makeProfile();
   profile.hostexec!.rules = [
     {
@@ -441,30 +441,56 @@ test("HostExecStage plan: falls back to bind mount when interceptLibPath is null
       fallback: "container",
     },
   ];
-  const runtimeDir = "/tmp/nas-test-runtime";
-  const hostEnv = makeHostEnv(runtimeDir);
-  const workspace = "/workspace";
+  const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const input = {
     ...makeSharedInput(profile, hostEnv),
     ...makeStageState({
-      workspace: { workDir: workspace, imageName: "nas-test" },
+      workspace: { workDir: "/workspace", imageName: "nas-test" },
     }),
   };
-  const plan = await planHostExec(input, { interceptLibPath: null });
+  await expect(planHostExec(input, { interceptLibPath: null })).rejects.toThrow(
+    /intercept/i,
+  );
+});
 
-  expect(plan).not.toEqual(null);
+test("HostExecStage plan: broker.integrityTargets lists resolved LD_PRELOAD argv0 paths", async () => {
+  const profile = makeProfile();
+  profile.hostexec!.rules = [
+    {
+      id: "abs",
+      match: { argv0: "/home/user/.local/share/nas/tool.sh" },
+      cwd: { mode: "any", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "deny",
+    },
+    {
+      id: "rel",
+      match: { argv0: "./gradlew" },
+      cwd: { mode: "workspace-only", allow: [] },
+      env: {},
+      inheritEnv: { mode: "minimal", keys: [] },
+      approval: "allow",
+      fallback: "container",
+    },
+  ];
+  const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState({
+      workspace: { workDir: "/workspace", imageName: "nas-test" },
+    }),
+  };
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
+  expect(plan).not.toBeNull();
   if (!plan) return;
-
-  // LD_PRELOAD should NOT be set in fallback mode
-  expect(plan.envVars.LD_PRELOAD).toBeUndefined();
-  expect(plan.envVars.NAS_HOSTEXEC_INTERCEPT_PATHS).toBeUndefined();
-
-  // Traditional bind mount should be present
-  expect(
-    plan.dockerArgs.some((arg) =>
-      arg.endsWith(`:${path.join(workspace, "gradlew")}:ro`),
-    ),
-  ).toEqual(true);
+  expect(plan.broker.integrityTargets).toContain(
+    "/home/user/.local/share/nas/tool.sh",
+  );
+  expect(plan.broker.integrityTargets).toContain("/workspace/gradlew");
 });
 
 test("HostExecStage plan: LD_PRELOAD value has no spurious colons when set", async () => {
@@ -736,25 +762,14 @@ test("validateAbsoluteArgv0: accepts allowed prefixes", () => {
   }
 });
 
-test("validateAbsoluteArgv0: rejects sensitive container paths", () => {
+test("validateAbsoluteArgv0: allows non-system absolute paths (allowlist removed)", () => {
   for (const argv0 of [
     "/etc/passwd",
-    "/etc/cron.d/evil",
-    "/bin/sh",
-    "/sbin/init",
-    "/lib/x.so",
-    "/lib64/x.so",
-    "/usr/lib/x.so",
-    "/usr/sbin/sshd",
-    "/boot/vmlinuz",
-    "/dev/null",
-    "/proc/self/mem",
-    "/sys/kernel/x",
-    "/root/.ssh/authorized_keys",
-    "/var/log/x",
-    "/run/docker.sock",
+    "/home/user/.local/share/nas/tool.sh",
+    "/home/user/.claude/skills/x/scripts/diffityw",
+    "/opt/whatever/tool",
   ]) {
-    expect(() => validateAbsoluteArgv0("bad-rule", argv0)).toThrow(/bad-rule/);
+    expect(() => validateAbsoluteArgv0("r", argv0)).not.toThrow();
   }
 });
 
@@ -767,32 +782,33 @@ test("validateAbsoluteArgv0: rejects '/', trailing slash, '..', and '.' segments
   expect(() => validateAbsoluteArgv0("r", "/usr/bin/./git")).toThrow(/'\.'/);
 });
 
-test("validateAbsoluteArgv0: rejects partial prefix matches like /usr/bin (no trailing file)", () => {
-  expect(() => validateAbsoluteArgv0("r", "/usr/bin")).toThrow();
-  // /opt/foo without /bin/<file> should be rejected
-  expect(() => validateAbsoluteArgv0("r", "/opt/foo/lib/x")).toThrow();
-  // /opt/bin/x is not /opt/*/bin/x (missing product segment)
-  expect(() => validateAbsoluteArgv0("r", "/opt/bin/x")).toThrow();
-});
-
-test("HostExecStage plan: rejects rule whose absolute argv0 targets a sensitive path", async () => {
+test("HostExecStage plan: absolute argv0 pointing at a sensitive container path resolves without throwing", async () => {
+  // Complements the validateAbsoluteArgv0 unit tests above by exercising the
+  // actual call site in planHostExec (the path.isAbsolute loop). Now that the
+  // argv0 allowlist and its fallback bind-mount have been removed, the caller
+  // must no longer reject sensitive absolute paths such as /etc/passwd.
   const profile = makeProfile();
   profile.hostexec!.rules = [
     {
-      id: "evil",
+      id: "etc-passwd",
       match: { argv0: "/etc/passwd" },
       cwd: { mode: "any", allow: [] },
       env: {},
       inheritEnv: { mode: "minimal", keys: [] },
       approval: "allow",
-      fallback: "container",
+      fallback: "deny",
     },
   ];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
-  const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  await expect(
-    planHostExec(input, { interceptLibPath: "/fake/intercept.so" }),
-  ).rejects.toThrow(/evil.*\/etc\/passwd/);
+  const input = {
+    ...makeSharedInput(profile, hostEnv),
+    ...makeStageState(),
+  };
+  const plan = await planHostExec(input, {
+    interceptLibPath: "/fake/intercept.so",
+  });
+
+  expect(plan).not.toBeNull();
 });
 
 // ============================================================
