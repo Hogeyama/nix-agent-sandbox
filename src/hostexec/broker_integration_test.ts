@@ -7,6 +7,7 @@ import {
   realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -2181,5 +2182,96 @@ test("HostExecBroker: relative argv0 resolves integrity target via cwd at execut
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     await rm(workspaceRaw, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: symlinked workspace root does not break the integrity baseline lookup", async () => {
+  // integrityTargets のキーは、呼び出し元（HostExecStage 相当）が
+  // path.resolve(workDir, a) で組み立てる（realpath はしない）契約になって
+  // いる。一方 broker は execute 時に normalizeAllowedCwd で cwd を realpath
+  // 済みに正規化してから hostPath を組み立てる。workDir の途中に symlink が
+  // 挟まっていると、この2つのキーは単純な比較では不一致になる。broker 側で両方を
+  // canonicalizeIntegrityPath（realpath, フォールバック path.resolve）に通す
+  // ことで、symlink があってもキーが一致し、内容が変わっていないファイルが
+  // 誤って integrity-mismatch（prompt/deny）にならないことを確認する。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const base = await realpath(
+    await mkdtemp(path.join(tmpdir(), "nas-hostexec-symlink-")),
+  );
+  const realDir = path.join(base, "real");
+  const symDir = path.join(base, "sym");
+  await mkdir(realDir, { recursive: true });
+  await symlink(realDir, symDir);
+
+  // stage 相当のコードが行う「realpath せずに resolve するだけ」のキー生成を
+  // symDir（symlink 経由のパス）を使って再現する。
+  const scriptPath = path.resolve(symDir, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+  await chmod(scriptPath, 0o755);
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-symlink",
+        match: { argv0: "./tool.sh" },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ5",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: symDir,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ5");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ5");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    // ファイル内容は baseline から一切変えていない。cwd に symlink 経由の
+    // symDir を渡し、argv0 は相対パス "./tool.sh"。baseline キーと lookup
+    // キーが symlink のせいで食い違えば、変化していないのに毎回 prompt
+    // （このテストでは pending 発生）になってしまう。
+    const result = await sendStreamingRequest(execSocketPath, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ5",
+      requestId: "req_symlink_1",
+      argv0: "./tool.sh",
+      args: [],
+      cwd: symDir,
+      tty: false,
+    });
+    expect(result.exitCode).toEqual(0);
+    expect(collectStdout(result).trim()).toEqual("original");
+
+    // 承認待ちに一切入らず即実行されたことも明示的に確認する。
+    const pending = (await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "list_pending",
+    })) as PendingListResponse;
+    expect(pending.items.find((it) => it.requestId === "req_symlink_1")).toBe(
+      undefined,
+    );
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(base, { recursive: true, force: true }).catch(() => {});
   }
 });

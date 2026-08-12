@@ -1,4 +1,4 @@
-import { mkdir, rm, rmdir } from "node:fs/promises";
+import { mkdir, realpath, rm, rmdir } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { appendAuditLog } from "../audit/store.ts";
@@ -193,9 +193,16 @@ export class HostExecBroker {
       (socket) => void this.handleConnection(socket, "exec"),
     );
     // ブローカー起動時点（コンテナ起動より前）に対象ファイルの baseline を取る。
-    // この時点でコンテナプロセスは存在せず、差し替えは不可能。
+    // この時点でコンテナプロセスは存在せず、差し替えは不可能。baseline のキーは
+    // execute 時の lookup（integrityVerdict）と同じ canonicalizeIntegrityPath を
+    // 通すことで、ワークスペースパスに symlink が含まれていてもキーが一致する
+    // ようにする。
     for (const target of this.integrityTargets) {
-      this.integrityBaseline.set(target, await readFileIntegrity(target));
+      const canonicalTarget = await canonicalizeIntegrityPath(target);
+      this.integrityBaseline.set(
+        canonicalTarget,
+        await readFileIntegrity(canonicalTarget),
+      );
     }
   }
 
@@ -717,11 +724,16 @@ export class HostExecBroker {
     const hostPath = path.isAbsolute(request.argv0)
       ? request.argv0
       : path.resolve(resolved.cwd, request.argv0);
-    const baseline = this.integrityBaseline.get(hostPath);
+    // baseline は start() で canonicalizeIntegrityPath 済みのパスをキーにして
+    // 格納されているため、lookup 側も同じ関数で正規化してからキーを合わせる
+    // （symlink を含むワークスペースでキーがずれて baseline 未検出になるのを
+    // 防ぐ）。
+    const canonicalHostPath = await canonicalizeIntegrityPath(hostPath);
+    const baseline = this.integrityBaseline.get(canonicalHostPath);
     // 常に再ハッシュする（inode/mtime/size による fast-path は持たない）。
     // 同一 inode・同一サイズのまま内容を差し替える攻撃（mtime を touch -r で
     // 復元する等）を検出するため、baseline を渡さずに毎回 stat+read+sha256 する。
-    const current = await readFileIntegrity(hostPath);
+    const current = await readFileIntegrity(canonicalHostPath);
     return decideIntegrity(baseline, current);
   }
 
@@ -967,6 +979,18 @@ export async function sendHostExecBrokerRequest<
   } finally {
     socket.destroy();
   }
+}
+
+/**
+ * integrity baseline のキーとして使うパスを正規化する。realpath に失敗する
+ * パス（存在しない・権限不足など）は path.resolve へフォールバックする。
+ * `normalizeAllowedCwd` が cwd を realpath で正規化する挙動と揃えるための
+ * もので、snapshot 時（start()）と execute 時（integrityVerdict）の両方で
+ * 同じ関数を通すことにより、ワークスペースパスの途中に symlink が挟まって
+ * いても baseline のキーと lookup 時のキーが一致するようにする。
+ */
+async function canonicalizeIntegrityPath(p: string): Promise<string> {
+  return await realpath(p).catch(() => path.resolve(p));
 }
 
 async function normalizeAllowedCwd(
