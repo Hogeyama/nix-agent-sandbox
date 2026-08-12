@@ -211,8 +211,20 @@ EOF
 }
 
 fj_up() {
+  local pid
   FJ_STARTED_PID=""
-  fj_healthy && return 0
+  if fj_healthy; then
+    pid="$(cat "$(fj_run_dir)/web.pid")" || {
+      fj_die "実行中インスタンスの PID を読めない"
+      return 1
+    }
+    if ! fj_process_is_isolated "$pid"; then
+      fj_log_process_event forgejo_isolation_failed "$pid"
+      fj_die "実行中インスタンスが隔離されていない"
+      return 1
+    fi
+    return 0
+  fi
   command -v forgejo >/dev/null || { fj_die "forgejo が見つからない"; return 1; }
   command -v jq >/dev/null || { fj_die "jq が見つからない"; return 1; }
   command -v setsid >/dev/null || { fj_die "setsid が見つからない"; return 1; }

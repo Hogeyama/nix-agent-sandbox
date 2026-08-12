@@ -94,6 +94,13 @@ assert_eq "spawned 診断イベントがプロセス識別情報を持つ" 1 \
   "$(jq -s --argjson pid "$FORGEJO_PID" '[.[] | select(.event == "forgejo_spawned" and .process.pid == $pid and (.process.ppid | type) == "number" and (.process.processGroupId | type) == "number" and (.process.sessionId | type) == "number")] | length' "$DIAGNOSTICS_FILE")"
 
 PORT_BEFORE="$(fj_port)"
+sleep 300 &
+UNSAFE_PID=$!
+echo "$UNSAFE_PID" >"$(fj_run_dir)/web.pid"
+assert_eq "安全でない既存 Forgejo を再利用しない" 1 "$(fj_up; echo $?)"
+kill "$UNSAFE_PID" 2>/dev/null || true
+wait "$UNSAFE_PID" 2>/dev/null || true
+echo "$FORGEJO_PID" >"$(fj_run_dir)/web.pid"
 fj_up
 assert_eq "再実行で同じインスタンスを再利用する" "$PORT_BEFORE" "$(fj_port)"
 
