@@ -2275,3 +2275,97 @@ test("HostExecBroker: symlinked workspace root does not break the integrity base
     await rm(base, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test("HostExecBroker: start() survives a snapshot error and falls back to prompt for that target", async () => {
+  // start() の baseline snapshot ループが対象ファイルの EACCES で例外を投げると
+  // ブローカー全体の起動が失敗する。broker はエラーを個別に捕捉し、そのファイル
+  // だけ baseline に登録せずに起動を継続する。以降その target を execute する
+  // 際は baseline 未登録 = decideIntegrity(undefined, …) が prompt に倒れる
+  // fail-safe を確認する。
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-integ-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const scriptPath = path.join(runtimeDir, "tool.sh");
+  await writeFile(scriptPath, "#!/bin/sh\necho original\n");
+  // start() の snapshot 中は読み取り不可にしておき、EACCES で
+  // readFileIntegrity が rethrow する状況を作る。
+  await chmod(scriptPath, 0o000);
+
+  const config: HostExecConfig = {
+    prompt: {
+      enable: true,
+      timeoutSeconds: 300,
+      defaultScope: "capability",
+      notify: "off",
+    },
+    secrets: {},
+    rules: [
+      {
+        id: "tool-eacces",
+        match: { argv0: scriptPath },
+        cwd: { mode: "any", allow: [] },
+        env: {},
+        inheritEnv: { mode: "minimal", keys: [] },
+        approval: "allow",
+        fallback: "deny",
+      },
+    ],
+  };
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_integ7",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: runtimeDir,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: config,
+    integrityTargets: [scriptPath],
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_integ7");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_integ7");
+  try {
+    // ここで throw すればテストが fail する。start() が例外を握り込んで
+    // 起動を完了させることを確認する。
+    await broker.start(execSocketPath, controlSocketPath);
+
+    // 起動後にパーミッションを戻す。baseline には登録されていないので、以降の
+    // execute では「変化なし」ではなく「未追跡ゆえの prompt」に倒れるはず。
+    await chmod(scriptPath, 0o755);
+
+    const execSocket = await connectUnix(execSocketPath);
+    await writeJsonLine(execSocket, {
+      version: 1,
+      type: "execute",
+      sessionId: "sess_integ7",
+      requestId: "req_eacces_1",
+      argv0: scriptPath,
+      args: [],
+      cwd: runtimeDir,
+      tty: false,
+    });
+
+    let hit: { requestId: string; integrityChanged?: boolean } | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+        type: "list_pending",
+      })) as PendingListResponse;
+      hit = res.items.find((it) => it.requestId === "req_eacces_1");
+      if (hit) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(hit).toBeDefined();
+    expect(hit?.integrityChanged).toBe(true);
+
+    const responsePromise = readJsonLine(execSocket);
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId: "req_eacces_1",
+    });
+    await responsePromise;
+    execSocket.destroy();
+  } finally {
+    await chmod(scriptPath, 0o755).catch(() => {});
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

@@ -18,7 +18,7 @@ import {
   type Socket,
   writeJsonLine,
 } from "../lib/unix_socket.ts";
-import { logInfo } from "../log.ts";
+import { logInfo, logWarn } from "../log.ts";
 import {
   decideIntegrity,
   type IntegritySnapshot,
@@ -199,10 +199,20 @@ export class HostExecBroker {
     // ようにする。
     for (const target of this.integrityTargets) {
       const canonicalTarget = await canonicalizeIntegrityPath(target);
-      this.integrityBaseline.set(
-        canonicalTarget,
-        await readFileIntegrity(canonicalTarget),
-      );
+      try {
+        this.integrityBaseline.set(
+          canonicalTarget,
+          await readFileIntegrity(canonicalTarget),
+        );
+      } catch (e) {
+        // EACCES（root 所有ファイルなど）や ENOTDIR 等、stat/read が失敗する
+        // ケースでブローカー起動全体を落とさない。baseline に登録しないことで
+        // execute 時の lookup が undefined を返し、decideIntegrity(undefined, …)
+        // が prompt に倒す（fail-safe）。エラーは黙殺せず警告として記録する。
+        logWarn(
+          `[nas] HostExecBroker: failed to snapshot integrity target ${canonicalTarget}: ${e}`,
+        );
+      }
     }
   }
 
