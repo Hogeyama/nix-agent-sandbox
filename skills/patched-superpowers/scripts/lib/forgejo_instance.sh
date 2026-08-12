@@ -29,6 +29,60 @@ fj_port() { cat "$(fj_run_dir)/port" 2>/dev/null; }
 fj_token() { cat "$(fj_run_dir)/token" 2>/dev/null; }
 fj_conf() { echo "$(fj_run_dir)/custom/conf/app.ini"; }
 
+fj_diagnostics_file() {
+  echo "$(fj_state_dir)/diagnostics/$(fj_repo_hash).jsonl"
+}
+
+FJ_DIAGNOSTICS_WARNING_SHOWN=0
+
+fj_diagnostics_warn_once() {
+  if [ "$FJ_DIAGNOSTICS_WARNING_SHOWN" -eq 0 ]; then
+    echo "Warning: Forgejo diagnostics unavailable: $1" >&2
+    FJ_DIAGNOSTICS_WARNING_SHOWN=1
+  fi
+}
+
+# Forgejo は hostexec 経由でホスト上に残るため、コンテナ終了後も読める state
+# directory にプロセスグループ情報を保存する。診断失敗でレビューを止めない。
+fj_log_process_event() {
+  local event="$1" pid="$2" signal="${3:-}" reason="${4:-}"
+  local file ppid pgid sid tpgid tty stat comm
+  file="$(fj_diagnostics_file)"
+  if ! mkdir -p "$(dirname "$file")" 2>/dev/null; then
+    fj_diagnostics_warn_once "could not create $(dirname "$file")"
+    return 0
+  fi
+  if read -r _ ppid pgid sid tpgid tty stat comm < <(
+    ps -o pid=,ppid=,pgid=,sid=,tpgid=,tty=,stat=,comm= -p "$pid" 2>/dev/null
+  ); then
+    if ! (
+      umask 077
+      jq -cn \
+        --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+        --arg event "$event" --arg signal "$signal" --arg reason "$reason" \
+        --argjson pid "$pid" --argjson ppid "$ppid" --argjson pgid "$pgid" \
+        --argjson sid "$sid" --argjson tpgid "$tpgid" \
+        --arg tty "$tty" --arg state "$stat" --arg comm "$comm" \
+        '{timestamp:$timestamp,event:$event,signal:($signal|if length>0 then . else null end),reason:($reason|if length>0 then . else null end),process:{pid:$pid,ppid:$ppid,processGroupId:$pgid,sessionId:$sid,foregroundProcessGroupId:$tpgid,tty:$tty,state:$state,comm:$comm}}' \
+        >>"$file"
+    ) 2>/dev/null; then
+      fj_diagnostics_warn_once "could not write $file"
+    fi
+  else
+    if ! (
+      umask 077
+      jq -cn \
+        --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+        --arg event "$event" --arg signal "$signal" --arg reason "$reason" \
+        --argjson pid "$pid" \
+        '{timestamp:$timestamp,event:$event,signal:($signal|if length>0 then . else null end),reason:($reason|if length>0 then . else null end),process:{pid:$pid,unavailable:true}}' \
+        >>"$file"
+    ) 2>/dev/null; then
+      fj_diagnostics_warn_once "could not write $file"
+    fi
+  fi
+}
+
 # 「そのポートで何かが応答するか」では足りない。ポートを掴んだままの別インスタンス
 # が居ると、自分の起動が bind に失敗しても健全と誤判定し、以後の API 呼び出しが
 # 別インスタンスに飛んでトークンが通らず 404 になる。トークンが通ることまで
@@ -41,6 +95,17 @@ fj_healthy() {
   curl -sf -o /dev/null --max-time 3 "http://localhost:$port/api/healthz" || return 1
   [ "$(curl -sf --max-time 3 -H "Authorization: token $token" \
         "http://localhost:$port/api/v1/user" | jq -r '.login // empty')" = agent ]
+}
+
+fj_process_is_isolated() {
+  local pid="$1" actual_pid pgid sid tty
+  read -r actual_pid pgid sid tty < <(
+    ps -o pid=,pgid=,sid=,tty= -p "$pid" 2>/dev/null
+  ) || return 1
+  [ "$actual_pid" = "$pid" ] &&
+    [ "$pgid" = "$pid" ] &&
+    [ "$sid" = "$pid" ] &&
+    [ "$tty" = "?" ]
 }
 
 # 人間が打つ reviewer のパスワードは固定値にする。ランダムな長い文字列にすると、
@@ -146,9 +211,23 @@ EOF
 }
 
 fj_up() {
-  fj_healthy && return 0
+  local pid
+  FJ_STARTED_PID=""
+  if fj_healthy; then
+    pid="$(cat "$(fj_run_dir)/web.pid")" || {
+      fj_die "実行中インスタンスの PID を読めない"
+      return 1
+    }
+    if ! fj_process_is_isolated "$pid"; then
+      fj_log_process_event forgejo_isolation_failed "$pid"
+      fj_die "実行中インスタンスが隔離されていない"
+      return 1
+    fi
+    return 0
+  fi
   command -v forgejo >/dev/null || { fj_die "forgejo が見つからない"; return 1; }
   command -v jq >/dev/null || { fj_die "jq が見つからない"; return 1; }
+  command -v setsid >/dev/null || { fj_die "setsid が見つからない"; return 1; }
 
   # 空きポートの確認と bind の間に別プロセスが同じポートを取ることがある。
   # bind に失敗したら別のポートで作り直す。
@@ -158,11 +237,28 @@ fj_up() {
   fj_die "インスタンスを起動できなかった: $(fj_run_dir)/log/web.log"
 }
 
+# 自分で起動した Forgejo は子プロセスなので wait で終了状態を回収する。既存
+# インスタンスを再利用した場合だけ子ではないため、有限間隔で生存を監視する。
+fj_wait_for_web() {
+  local pid="$1" owned_pid="${2:-}"
+  if [ -n "$owned_pid" ] && [ "$pid" = "$owned_pid" ]; then
+    wait "$pid"
+    return $?
+  fi
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 0.25
+  done
+}
+
 fj_boot_once() {
-  local run state port conf pid
+  local run state port conf pid old_pid
   run="$(fj_run_dir)"
   state="$(fj_state_dir)"
-  [ -f "$run/web.pid" ] && kill "$(cat "$run/web.pid")" 2>/dev/null
+  if [ -f "$run/web.pid" ]; then
+    old_pid="$(cat "$run/web.pid")"
+    fj_log_process_event forgejo_signal_sent "$old_pid" SIGTERM restart
+    kill "$old_pid" 2>/dev/null
+  fi
   rm -rf "$run"
   port="$(fj_free_port)" || return 1
   fj_credentials
@@ -186,12 +282,24 @@ fj_boot_once() {
     { fj_die "トークンの生成に失敗した: $run/log/user.log"; return 1; }
   echo "$port" >"$run/port"
 
-  nohup forgejo web -c "$conf" >"$run/log/web.log" 2>&1 &
+  set +m
+  setsid forgejo web -c "$conf" </dev/null >"$run/log/web.log" 2>&1 &
   pid=$!
   echo "$pid" >"$run/web.pid"
+  fj_log_process_event forgejo_spawned "$pid"
 
   for _ in $(seq 1 120); do
-    fj_healthy && return 0
+    if fj_healthy; then
+      if ! fj_process_is_isolated "$pid"; then
+        fj_log_process_event forgejo_isolation_failed "$pid"
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        return 1
+      fi
+      # shellcheck disable=SC2034 # Exposed to the caller that sourced this library.
+      FJ_STARTED_PID="$pid"
+      return 0
+    fi
     # bind に失敗すると web はすぐ終了する。生存を見ずに healthz だけを待つと、
     # 同じポートの別インスタンスの応答で成功と誤認する。
     kill -0 "$pid" 2>/dev/null || return 1
@@ -203,10 +311,12 @@ fj_boot_once() {
 # プロセス名は nix のラッパによって .forgejo-wrappe になるため、停止は必ず
 # pid ファイルで行う。pgrep -x forgejo では検出できない。
 fj_down() {
-  local run
+  local run pid
   run="$(fj_run_dir)"
   if [ -f "$run/web.pid" ]; then
-    kill "$(cat "$run/web.pid")" 2>/dev/null || true
+    pid="$(cat "$run/web.pid")"
+    fj_log_process_event forgejo_signal_sent "$pid" SIGTERM down
+    kill "$pid" 2>/dev/null || true
     for _ in $(seq 1 40); do
       fj_healthy || break
       sleep 0.25

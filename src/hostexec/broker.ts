@@ -33,6 +33,10 @@ import {
   type ResolvedNotifyBackend,
 } from "./notify.ts";
 import {
+  HostExecProcessDiagnostics,
+  readProcessIdentity,
+} from "./process_diagnostics.ts";
+import {
   type HostExecRuntimePaths,
   hostExecBrokerSocketPath,
   hostExecExecSocketPath,
@@ -151,6 +155,7 @@ export class HostExecBroker {
   private readonly maskFilter?: MaskFilterConfig;
   private readonly integrityTargets: readonly string[];
   private readonly integrityBaseline = new Map<string, IntegritySnapshot>();
+  private readonly diagnostics: HostExecProcessDiagnostics;
 
   constructor(options: HostExecBrokerOptions) {
     this.paths = options.paths;
@@ -167,12 +172,17 @@ export class HostExecBroker {
     this.secretStore = new SecretStore(this.config.secrets);
     this.maskFilter = options.maskFilter;
     this.integrityTargets = options.integrityTargets ?? [];
+    this.diagnostics = new HostExecProcessDiagnostics(
+      options.paths.runtimeDir,
+      options.sessionId,
+    );
   }
 
   async start(
     execSocketPath: string,
     controlSocketPath: string,
   ): Promise<void> {
+    await this.diagnostics.record("broker_started");
     this.execSocketPath = execSocketPath;
     this.controlSocketPath = controlSocketPath;
     // The control socket lives directly in the session broker dir; the exec
@@ -217,6 +227,7 @@ export class HostExecBroker {
   }
 
   async close(): Promise<void> {
+    await this.diagnostics.record("broker_closing");
     if (this.execServer) {
       this.execServer.close();
       this.execServer = null;
@@ -286,6 +297,7 @@ export class HostExecBroker {
         );
       }
     });
+    await this.diagnostics.record("broker_closed");
   }
 
   async listPending(): Promise<HostExecPendingEntry[]> {
@@ -867,6 +879,13 @@ export class HostExecBroker {
         `Command '${commandArgv0}' not found on host. PATH=${searchedPath}`,
       );
     }
+    const childProcess = await readProcessIdentity(proc.pid);
+    await this.diagnostics.record("command_spawned", {
+      requestId: request.requestId,
+      command: commandArgv0,
+      argumentCount: request.args.length,
+      process: childProcess,
+    });
     if (stdin && proc.stdin) {
       (proc.stdin as import("bun").FileSink).write(stdin);
       (proc.stdin as import("bun").FileSink).end();
@@ -915,14 +934,31 @@ export class HostExecBroker {
           break;
         }
       }
-    } catch {
+    } catch (error) {
       // The client likely disconnected mid-stream; make sure the child
       // process (and any mask-filter subprocesses it feeds) don't leak.
       // Escalate to SIGKILL if a child ignores SIGTERM instead of hanging
       // forever.
+      await this.diagnostics.record("client_disconnected", {
+        requestId: request.requestId,
+        command: commandArgv0,
+        argumentCount: request.args.length,
+        process: childProcess,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.diagnostics.record("signal_sent", {
+        requestId: request.requestId,
+        process: childProcess,
+        signal: "SIGTERM",
+      });
       proc.kill();
       for (const f of filterProcs) f.kill();
       const killTimeout = setTimeout(() => {
+        void this.diagnostics.record("signal_sent", {
+          requestId: request.requestId,
+          process: childProcess,
+          signal: "SIGKILL",
+        });
         proc.kill(9);
         for (const f of filterProcs) f.kill(9);
       }, 5000);
@@ -933,6 +969,13 @@ export class HostExecBroker {
       }
     } finally {
       exitCode = await proc.exited;
+      await this.diagnostics.record("command_exited", {
+        requestId: request.requestId,
+        command: commandArgv0,
+        argumentCount: request.args.length,
+        process: childProcess,
+        exitCode,
+      });
     }
     if (filterError) {
       try {

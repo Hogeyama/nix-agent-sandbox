@@ -19,11 +19,17 @@ mkdir -p "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
 
 pass=0
 fail=0
+REQUEST_PID=""
+REQUEST_OUT=""
 
 # 起動したインスタンスは pid ファイルから直接止める。$WORK を消してから down を
 # 呼ぶ順序になるとプロセスが取り残され、ポートを掴んだまま次回のテストに干渉する。
 cleanup() {
   local f
+  if [ -n "$REQUEST_PID" ]; then
+    kill -TERM "$REQUEST_PID" 2>/dev/null || true
+    wait "$REQUEST_PID" 2>/dev/null || true
+  fi
   for f in "$XDG_RUNTIME_DIR"/patched-superpowers/forgejo/*/web.pid; do
     [ -f "$f" ] || continue
     kill "$(cat "$f")" 2>/dev/null || true
@@ -50,6 +56,29 @@ assert_contains() {
   esac
 }
 
+wait_until() {
+  local description="$1"
+  shift
+  for _ in $(seq 1 120); do
+    "$@" && return 0
+    sleep 0.25
+  done
+  ng "$description" "timed out"
+  return 1
+}
+
+process_is_dead() { ! ps -o stat= -p "$1" 2>/dev/null | grep -qv '^Z'; }
+process_is_running() { ps -o stat= -p "$1" 2>/dev/null | grep -qv '^Z'; }
+output_has_pr() { grep -q '診断ログ:' "$1" 2>/dev/null; }
+
+start_request_lease() {
+  REQUEST_OUT="$WORK/request-review-$RANDOM.out"
+  setsid "$FORGEJOW" request-review "$(cat "$WORK/base")..HEAD" \
+    >"$REQUEST_OUT" 2>&1 &
+  REQUEST_PID=$!
+  wait_until "request-review が PR 情報を出力する" output_has_pr "$REQUEST_OUT"
+}
+
 # レビュー対象のリポジトリを作る。base の後に2コミット積む。
 setup_repo() {
   mkdir -p "$WORK/repo"
@@ -72,6 +101,15 @@ setup_repo
 # shellcheck source=lib/forgejo_instance.sh
 . "$SCRIPT_DIR/lib/forgejo_instance.sh"
 fj_up || ng "fj_up が失敗した" "$(tail -3 "$(fj_run_dir)/log/web.log" 2>/dev/null)"
+DIAGNOSTICS_FILE="$(fj_diagnostics_file)"
+FORGEJO_PID="$(cat "$(fj_run_dir)/web.pid")"
+assert_eq "新規起動した Forgejo の PID を所有する" "$FORGEJO_PID" "$FJ_STARTED_PID"
+read -r FORGEJO_PGID FORGEJO_SID FORGEJO_TTY < <(
+  ps -o pgid=,sid=,tty= -p "$FORGEJO_PID"
+)
+assert_eq "Forgejo が専用 process group にいる" "$FORGEJO_PID" "$FORGEJO_PGID"
+assert_eq "Forgejo が専用 session にいる" "$FORGEJO_PID" "$FORGEJO_SID"
+assert_eq "Forgejo が controlling TTY を持たない" "?" "$FORGEJO_TTY"
 assert_eq "healthz が 200 を返す" 200 \
   "$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:$(fj_port)/api/healthz")"
 assert_eq "agent が uid 1 になる" 1 \
@@ -82,24 +120,41 @@ assert_eq "credentials が永続ディレクトリに在る" yes \
   "$([ -f "$(fj_state_dir)/credentials" ] && echo yes || echo no)"
 assert_eq "セッションストアが永続ディレクトリに在る" yes \
   "$([ -d "$(fj_state_dir)/sessions" ] && echo yes || echo no)"
+assert_eq "spawned 診断イベントがプロセス識別情報を持つ" 1 \
+  "$(jq -s --argjson pid "$FORGEJO_PID" '[.[] | select(.event == "forgejo_spawned" and .process.pid == $pid and (.process.ppid | type) == "number" and (.process.processGroupId | type) == "number" and (.process.sessionId | type) == "number")] | length' "$DIAGNOSTICS_FILE")"
 
 PORT_BEFORE="$(fj_port)"
+sleep 300 &
+UNSAFE_PID=$!
+echo "$UNSAFE_PID" >"$(fj_run_dir)/web.pid"
+assert_eq "安全でない既存 Forgejo を再利用しない" 1 "$(fj_up; echo $?)"
+kill "$UNSAFE_PID" 2>/dev/null || true
+wait "$UNSAFE_PID" 2>/dev/null || true
+echo "$FORGEJO_PID" >"$(fj_run_dir)/web.pid"
 fj_up
 assert_eq "再実行で同じインスタンスを再利用する" "$PORT_BEFORE" "$(fj_port)"
+assert_eq "再利用した Forgejo の PID は所有しない" "" "$FJ_STARTED_PID"
 
+FORGEJO_PID="$(cat "$(fj_run_dir)/web.pid")"
 fj_down
 assert_eq "down で実行ディレクトリが消える" no \
   "$([ -d "$(fj_run_dir)" ] && echo yes || echo no)"
 assert_eq "down でも credentials は残る" yes \
   "$([ -f "$(fj_state_dir)/credentials" ] && echo yes || echo no)"
+assert_eq "down の SIGTERM 診断イベントが記録される" 1 \
+  "$(jq -s --argjson pid "$FORGEJO_PID" '[.[] | select(.event == "forgejo_signal_sent" and .signal == "SIGTERM" and .reason == "down" and .process.pid == $pid)] | length' "$DIAGNOSTICS_FILE")"
 
 echo "=== Task 2: リポジトリ作成と PR の用意 ==="
 cd "$WORK/repo" || exit 1
-OUT="$("$FORGEJOW" request-review "$(cat "$WORK/base")..HEAD" 2>&1)"
+start_request_lease
+OUT="$(cat "$REQUEST_OUT")"
 assert_contains "PR の URL を出力する" "/pulls/1" "$OUT"
 assert_contains "div のコミットを列挙する" "div() を追加する" "$OUT"
 assert_contains "mul のコミットを列挙する" "mul() を追加する" "$OUT"
 assert_contains "ログイン情報を出力する" "ユーザー:   reviewer" "$OUT"
+assert_contains "診断ログのパスを出力する" "診断ログ: $DIAGNOSTICS_FILE" "$OUT"
+assert_eq "request-review が出力後も lease を保持する" yes \
+  "$(process_is_running "$REQUEST_PID" && echo yes || echo no)"
 
 # shellcheck source=lib/forgejo_api.sh
 . "$SCRIPT_DIR/lib/forgejo_api.sh"
@@ -198,6 +253,16 @@ assert_eq "スモークがスクラッチリポジトリを残さない" 404 \
 # 経路が壊れた場合に落ちることを、返信の経路を差し替えて確認する。
 assert_eq "返信経路が壊れていれば失敗する" 1 \
   "$(FJ_SMOKE_REPLY_PATH=/does/not/exist fj_smoke >/dev/null 2>&1; echo $?)"
+
+echo "=== Task 7: foreground lease の SIGHUP cleanup ==="
+HUP_WEB_PID="$(cat "$(fj_run_dir)/web.pid")"
+kill -HUP -- "-$REQUEST_PID" || ng "waiter process group に SIGHUP を送れる" "kill failed"
+wait_until "SIGHUP 後に request-review が終了する" process_is_dead "$REQUEST_PID"
+wait_until "SIGHUP cleanup 後に Forgejo が終了する" process_is_dead "$HUP_WEB_PID"
+assert_eq "waiter の SIGHUP で Forgejo も終了する" no \
+  "$(process_is_running "$HUP_WEB_PID" && echo yes || echo no)"
+wait "$REQUEST_PID" 2>/dev/null || true
+REQUEST_PID=""
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
