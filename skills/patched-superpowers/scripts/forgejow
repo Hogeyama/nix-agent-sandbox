@@ -62,6 +62,8 @@ cmd_request_review() {
   echo "  URL:        http://localhost:$(fj_port)/user/login"
   echo "  ユーザー:   reviewer"
   echo "  パスワード: $FJ_REVIEWER_PASS"
+  echo
+  echo "診断ログ: $(fj_diagnostics_file)"
 }
 
 cmd_fetch_comments() {

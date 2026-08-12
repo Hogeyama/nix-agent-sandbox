@@ -29,6 +29,44 @@ fj_port() { cat "$(fj_run_dir)/port" 2>/dev/null; }
 fj_token() { cat "$(fj_run_dir)/token" 2>/dev/null; }
 fj_conf() { echo "$(fj_run_dir)/custom/conf/app.ini"; }
 
+fj_diagnostics_file() {
+  echo "$(fj_state_dir)/diagnostics/$(fj_repo_hash).jsonl"
+}
+
+# Forgejo は hostexec 経由でホスト上に残るため、コンテナ終了後も読める state
+# directory にプロセスグループ情報を保存する。診断失敗でレビューを止めない。
+fj_log_process_event() {
+  local event="$1" pid="$2" signal="${3:-}" reason="${4:-}"
+  local file ppid pgid sid tpgid tty stat comm
+  file="$(fj_diagnostics_file)"
+  mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
+  if read -r _ ppid pgid sid tpgid tty stat comm < <(
+    ps -o pid=,ppid=,pgid=,sid=,tpgid=,tty=,stat=,comm= -p "$pid" 2>/dev/null
+  ); then
+    (
+      umask 077
+      jq -cn \
+        --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+        --arg event "$event" --arg signal "$signal" --arg reason "$reason" \
+        --argjson pid "$pid" --argjson ppid "$ppid" --argjson pgid "$pgid" \
+        --argjson sid "$sid" --argjson tpgid "$tpgid" \
+        --arg tty "$tty" --arg state "$stat" --arg comm "$comm" \
+        '{timestamp:$timestamp,event:$event,signal:($signal|if length>0 then . else null end),reason:($reason|if length>0 then . else null end),process:{pid:$pid,ppid:$ppid,processGroupId:$pgid,sessionId:$sid,foregroundProcessGroupId:$tpgid,tty:$tty,state:$state,comm:$comm}}' \
+        >>"$file"
+    ) 2>/dev/null || true
+  else
+    (
+      umask 077
+      jq -cn \
+        --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+        --arg event "$event" --arg signal "$signal" --arg reason "$reason" \
+        --argjson pid "$pid" \
+        '{timestamp:$timestamp,event:$event,signal:($signal|if length>0 then . else null end),reason:($reason|if length>0 then . else null end),process:{pid:$pid,unavailable:true}}' \
+        >>"$file"
+    ) 2>/dev/null || true
+  fi
+}
+
 # 「そのポートで何かが応答するか」では足りない。ポートを掴んだままの別インスタンス
 # が居ると、自分の起動が bind に失敗しても健全と誤判定し、以後の API 呼び出しが
 # 別インスタンスに飛んでトークンが通らず 404 になる。トークンが通ることまで
@@ -159,10 +197,14 @@ fj_up() {
 }
 
 fj_boot_once() {
-  local run state port conf pid
+  local run state port conf pid old_pid
   run="$(fj_run_dir)"
   state="$(fj_state_dir)"
-  [ -f "$run/web.pid" ] && kill "$(cat "$run/web.pid")" 2>/dev/null
+  if [ -f "$run/web.pid" ]; then
+    old_pid="$(cat "$run/web.pid")"
+    fj_log_process_event forgejo_signal_sent "$old_pid" SIGTERM restart
+    kill "$old_pid" 2>/dev/null
+  fi
   rm -rf "$run"
   port="$(fj_free_port)" || return 1
   fj_credentials
@@ -189,6 +231,7 @@ fj_boot_once() {
   nohup forgejo web -c "$conf" >"$run/log/web.log" 2>&1 &
   pid=$!
   echo "$pid" >"$run/web.pid"
+  fj_log_process_event forgejo_spawned "$pid"
 
   for _ in $(seq 1 120); do
     fj_healthy && return 0
@@ -203,10 +246,12 @@ fj_boot_once() {
 # プロセス名は nix のラッパによって .forgejo-wrappe になるため、停止は必ず
 # pid ファイルで行う。pgrep -x forgejo では検出できない。
 fj_down() {
-  local run
+  local run pid
   run="$(fj_run_dir)"
   if [ -f "$run/web.pid" ]; then
-    kill "$(cat "$run/web.pid")" 2>/dev/null || true
+    pid="$(cat "$run/web.pid")"
+    fj_log_process_event forgejo_signal_sent "$pid" SIGTERM down
+    kill "$pid" 2>/dev/null || true
     for _ in $(seq 1 40); do
       fj_healthy || break
       sleep 0.25
