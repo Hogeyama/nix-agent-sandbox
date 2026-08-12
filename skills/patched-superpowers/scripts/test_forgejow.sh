@@ -72,6 +72,8 @@ setup_repo
 # shellcheck source=lib/forgejo_instance.sh
 . "$SCRIPT_DIR/lib/forgejo_instance.sh"
 fj_up || ng "fj_up が失敗した" "$(tail -3 "$(fj_run_dir)/log/web.log" 2>/dev/null)"
+DIAGNOSTICS_FILE="$(fj_diagnostics_file)"
+FORGEJO_PID="$(cat "$(fj_run_dir)/web.pid")"
 assert_eq "healthz が 200 を返す" 200 \
   "$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:$(fj_port)/api/healthz")"
 assert_eq "agent が uid 1 になる" 1 \
@@ -82,16 +84,21 @@ assert_eq "credentials が永続ディレクトリに在る" yes \
   "$([ -f "$(fj_state_dir)/credentials" ] && echo yes || echo no)"
 assert_eq "セッションストアが永続ディレクトリに在る" yes \
   "$([ -d "$(fj_state_dir)/sessions" ] && echo yes || echo no)"
+assert_eq "spawned 診断イベントがプロセス識別情報を持つ" 1 \
+  "$(jq -s --argjson pid "$FORGEJO_PID" '[.[] | select(.event == "forgejo_spawned" and .process.pid == $pid and (.process.ppid | type) == "number" and (.process.processGroupId | type) == "number" and (.process.sessionId | type) == "number")] | length' "$DIAGNOSTICS_FILE")"
 
 PORT_BEFORE="$(fj_port)"
 fj_up
 assert_eq "再実行で同じインスタンスを再利用する" "$PORT_BEFORE" "$(fj_port)"
 
+FORGEJO_PID="$(cat "$(fj_run_dir)/web.pid")"
 fj_down
 assert_eq "down で実行ディレクトリが消える" no \
   "$([ -d "$(fj_run_dir)" ] && echo yes || echo no)"
 assert_eq "down でも credentials は残る" yes \
   "$([ -f "$(fj_state_dir)/credentials" ] && echo yes || echo no)"
+assert_eq "down の SIGTERM 診断イベントが記録される" 1 \
+  "$(jq -s --argjson pid "$FORGEJO_PID" '[.[] | select(.event == "forgejo_signal_sent" and .signal == "SIGTERM" and .reason == "down" and .process.pid == $pid)] | length' "$DIAGNOSTICS_FILE")"
 
 echo "=== Task 2: リポジトリ作成と PR の用意 ==="
 cd "$WORK/repo" || exit 1
@@ -100,6 +107,7 @@ assert_contains "PR の URL を出力する" "/pulls/1" "$OUT"
 assert_contains "div のコミットを列挙する" "div() を追加する" "$OUT"
 assert_contains "mul のコミットを列挙する" "mul() を追加する" "$OUT"
 assert_contains "ログイン情報を出力する" "ユーザー:   reviewer" "$OUT"
+assert_contains "診断ログのパスを出力する" "診断ログ: $DIAGNOSTICS_FILE" "$OUT"
 
 # shellcheck source=lib/forgejo_api.sh
 . "$SCRIPT_DIR/lib/forgejo_api.sh"
