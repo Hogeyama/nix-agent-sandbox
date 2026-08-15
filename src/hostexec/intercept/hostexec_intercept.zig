@@ -253,6 +253,7 @@ test {
     // Pull the sibling modules' tests into this root's test binary.
     _ = @import("protocol.zig");
     _ = @import("client_main.zig");
+    _ = @import("fd_transport.zig");
 }
 
 test "matchesInterceptPaths: exact match" {
