@@ -77,6 +77,8 @@ function makeStageInput(
     dbusSessionAddress: "unix:path=/run/user/1000/bus",
     gpgAgentSocket: null,
     auditDir: "/tmp/nas-test-audit",
+    hostexecInterceptLibPath: null,
+    hostexecClientPath: null,
   };
   return {
     config,

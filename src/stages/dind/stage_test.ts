@@ -93,6 +93,8 @@ function makeSharedInput(
     dbusSessionAddress: null,
     gpgAgentSocket: null,
     auditDir: "/tmp/audit",
+    hostexecInterceptLibPath: null,
+    hostexecClientPath: null,
   };
   return {
     config,

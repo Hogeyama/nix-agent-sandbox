@@ -62,6 +62,14 @@ test("resolveProbes: returns ProbeResults with expected fields", async () => {
   expect(
     probes.gpgAgentSocket === null || typeof probes.gpgAgentSocket === "string",
   ).toEqual(true);
+  expect(
+    probes.hostexecInterceptLibPath === null ||
+      typeof probes.hostexecInterceptLibPath === "string",
+  ).toEqual(true);
+  expect(
+    probes.hostexecClientPath === null ||
+      typeof probes.hostexecClientPath === "string",
+  ).toEqual(true);
 });
 
 test("resolveProbes: auditDir uses XDG_DATA_HOME when set", async () => {

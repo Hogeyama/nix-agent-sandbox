@@ -270,9 +270,10 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 ## D. 巨大ファイル分割 / 構造（P3）
 
-- [ ] **hostexec の Python ラッパを文字列リテラルからアセットへ**。[検証] CONFIRMED。`buildWrapperScript`
-  （`src/stages/hostexec/stage.ts:485-609` ~125 行）が Python を文字列埋め込み。他の埋め込み同様
-  `src/docker/embed/`（現在 Dockerfile/entrypoint.sh/local-proxy.mjs）へ。
+- [x] ~~**hostexec の Python ラッパを文字列リテラルからアセットへ**~~ — 解決済み。Python ラッパ自体を
+  廃止し、LD_PRELOAD ライブラリと protocol を共有する静的リンクの `nas-hostexec-client`
+  （`src/hostexec/intercept/client_main.zig`）に置き換えた。埋め込み文字列も、コンテナ内の
+  python3 依存も消えている。
 - [ ] **`conversationDetailView.ts`（1078 行）分割**。[検証] CONFIRMED。ターンイベントタイムラインパーサ
   （`toTurnEventView:830`/`buildTurnEvents:893` 他）が自己完結で切り出し容易。
 - [ ] **`history/store.ts`（1073 行）reader/writer 分離**。[検証] CONFIRMED（接続 `:82-171` / writer / reader

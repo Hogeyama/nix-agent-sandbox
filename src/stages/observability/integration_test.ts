@@ -103,6 +103,8 @@ function makeProbes(): ProbeResults {
     dbusSessionAddress: null,
     gpgAgentSocket: null,
     auditDir: "/audit",
+    hostexecInterceptLibPath: null,
+    hostexecClientPath: null,
   };
 }
 

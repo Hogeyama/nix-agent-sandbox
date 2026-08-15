@@ -50,6 +50,13 @@ export interface ProbeResults {
   readonly dbusSessionAddress: string | null;
   readonly gpgAgentSocket: string | null;
   readonly auditDir: string;
+  /**
+   * ホスト側にビルド済みの hostexec クライアント。未ビルドなら null。
+   * どちらもコンテナに bind mount するため、HostExecStage の planner は
+   * ホスト側パスを知る必要があるが、その解決自体は I/O なのでここで行う。
+   */
+  readonly hostexecInterceptLibPath: string | null;
+  readonly hostexecClientPath: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,10 @@
 import { stat } from "node:fs/promises";
 import { userInfo } from "node:os";
 import * as path from "node:path";
+import {
+  resolveHostExecClientPath,
+  resolveInterceptLibPath,
+} from "../hostexec/intercept_path.ts";
 import type { HostEnv, ProbeResults } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -49,12 +53,16 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     xdgDbusProxyPath,
     dbusSessionAddress,
     gpgAgentSocket,
+    hostexecInterceptLibPath,
+    hostexecClientPath,
   ] = await Promise.all([
     probeHasHostNix(),
     Promise.resolve(resolveAuditDirFromEnv(hostEnv)),
     probeXdgDbusProxy(),
     Promise.resolve(probeDbusSessionAddress(hostEnv)),
     probeGpgAgentSocket(hostEnv),
+    resolveInterceptLibPath(),
+    resolveHostExecClientPath(),
   ]);
 
   return {
@@ -63,6 +71,8 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     xdgDbusProxyPath,
     dbusSessionAddress,
     gpgAgentSocket,
+    hostexecInterceptLibPath,
+    hostexecClientPath,
   };
 }
 

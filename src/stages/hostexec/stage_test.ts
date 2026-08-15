@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import * as path from "node:path";
-import { Effect, Exit, Scope } from "effect";
+import { Cause, Effect, Exit, Option, Scope } from "effect";
 import type { Config, Profile } from "../../config/types.ts";
 import {
   DEFAULT_DISPLAY_CONFIG,
@@ -96,7 +96,11 @@ function makeHostEnv(runtimeDir: string): HostEnv {
   };
 }
 
-function makeSharedInput(profile: Profile, hostEnv: HostEnv): StageInput {
+function makeSharedInput(
+  profile: Profile,
+  hostEnv: HostEnv,
+  probeOverrides: Partial<StageInput["probes"]> = {},
+): StageInput {
   const config: Config = {
     profiles: { default: profile },
     ui: DEFAULT_UI_CONFIG,
@@ -114,6 +118,11 @@ function makeSharedInput(profile: Profile, hostEnv: HostEnv): StageInput {
       dbusSessionAddress: null,
       gpgAgentSocket: null,
       auditDir: "/tmp/nas-test-audit",
+      // Both clients present by default: the interesting cases are the two
+      // tests that take one away.
+      hostexecInterceptLibPath: "/fake/intercept.so",
+      hostexecClientPath: "/fake/nas-hostexec-client",
+      ...probeOverrides,
     },
   };
 }
@@ -145,9 +154,7 @@ test("HostExecStage plan: returns a plan with __nas_hook even when user rules ar
   profile.hostexec!.rules = [];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
   expect(plan).not.toBeNull();
   // The internal __nas_hook rule creates a "nas" symlink
   expect(plan!.symlinks.some((s) => path.basename(s.path) === "nas")).toEqual(
@@ -160,9 +167,7 @@ test("HostExecStage plan: produces correct docker args and env vars", async () =
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -204,9 +209,7 @@ test("HostExecStage plan: creates symlinks for bare command argv0s", async () =>
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -215,36 +218,44 @@ test("HostExecStage plan: creates symlinks for bare command argv0s", async () =>
   expect(plan.symlinks.length).toEqual(2);
   const names = plan.symlinks.map((s) => path.basename(s.path)).sort();
   expect(names).toEqual(["git", "nas"]);
+  // Every wrapper symlink points at the standalone client, by its
+  // *container* path: the link is only ever resolved from inside the
+  // container, where the binary is bind-mounted there.
   for (const s of plan.symlinks) {
-    expect(s.target).toEqual("hostexec-wrapper.py");
+    expect(s.target).toEqual("/opt/nas/hostexec/libexec/nas-hostexec-client");
   }
 });
 
-test("HostExecStage plan: creates file entry for wrapper script", async () => {
+test("HostExecStage plan: mounts the hostexec client for bare command rules", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
 
-  expect(plan.files.length).toEqual(1);
-  expect(
-    plan.files[0].content.includes("select.select([fd], [], [], 0)"),
-  ).toEqual(true);
-  expect(plan.files[0].content.includes('"argv0": argv0,')).toEqual(true);
-  expect(
-    plan.files[0].content.includes("relative argv0 fallback is not supported"),
-  ).toEqual(true);
-  expect(
-    plan.files[0].content.includes(
-      "(not os.path.isabs(argv0)) and (os.path.sep in argv0)",
-    ),
-  ).toEqual(true);
+  const mount = plan.mounts.find(
+    (m) => m.target === "/opt/nas/hostexec/libexec/nas-hostexec-client",
+  );
+  expect(mount).toBeDefined();
+  expect(mount!.source).toEqual("/fake/nas-hostexec-client");
+  expect(mount!.readOnly).toEqual(true);
+});
+
+test("HostExecStage plan: rejects bare command rules when the client binary is missing", async () => {
+  const profile = makeProfile();
+  const runtimeDir = "/tmp/nas-test-runtime";
+  const hostEnv = makeHostEnv(runtimeDir);
+  const input = {
+    ...makeSharedInput(profile, hostEnv, { hostexecClientPath: null }),
+    ...makeStageState(),
+  };
+
+  // Without the client there is nothing for the wrapper symlinks to point at,
+  // so the command would silently run in the container instead of on the host.
+  expect(() => planHostExec(input)).toThrow(/nas-hostexec-client/);
 });
 
 test("HostExecStage plan: broker spec contains correct fields", async () => {
@@ -252,9 +263,7 @@ test("HostExecStage plan: broker spec contains correct fields", async () => {
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -274,9 +283,7 @@ test("HostExecStage plan: mounts only the exec socket dir, never the control soc
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -328,9 +335,7 @@ test("HostExecStage plan: sets LD_PRELOAD for relative argv0 intercept", async (
       workspace: { workDir: workspace, imageName: "nas-test" },
     }),
   };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/path/to/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -367,9 +372,7 @@ test("HostExecStage plan: uses workspace slice for LD_PRELOAD intercept and brok
       },
     }),
   };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/path/to/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -397,9 +400,7 @@ test("HostExecStage plan: sets LD_PRELOAD for absolute argv0 intercept", async (
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const input = { ...makeSharedInput(profile, hostEnv), ...makeStageState() };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/path/to/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -418,9 +419,7 @@ test("HostExecStage plan: auto notify resolves to desktop", async () => {
     ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime")),
     ...makeStageState(),
   };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -443,14 +442,12 @@ test("HostExecStage plan: throws when a relative/absolute rule has no intercept 
   ];
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
   const input = {
-    ...makeSharedInput(profile, hostEnv),
+    ...makeSharedInput(profile, hostEnv, { hostexecInterceptLibPath: null }),
     ...makeStageState({
       workspace: { workDir: "/workspace", imageName: "nas-test" },
     }),
   };
-  await expect(planHostExec(input, { interceptLibPath: null })).rejects.toThrow(
-    /intercept/i,
-  );
+  expect(() => planHostExec(input)).toThrow(/intercept/i);
 });
 
 test("HostExecStage plan: broker.integrityTargets lists resolved LD_PRELOAD argv0 paths", async () => {
@@ -482,9 +479,7 @@ test("HostExecStage plan: broker.integrityTargets lists resolved LD_PRELOAD argv
       workspace: { workDir: "/workspace", imageName: "nas-test" },
     }),
   };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
   expect(plan).not.toBeNull();
   if (!plan) return;
   expect(plan.broker.integrityTargets).toContain(
@@ -518,9 +513,7 @@ test("HostExecStage plan: LD_PRELOAD value has no spurious colons when set", asy
       workspace: { workDir: workspace, imageName: "nas-test" },
     }),
   };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/path/to/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -561,9 +554,7 @@ test("HostExecStage plan: mixed relative and absolute argv0s produce multi-line 
       workspace: { workDir: workspace, imageName: "nas-test" },
     }),
   };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/path/to/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toEqual(null);
   if (!plan) return;
@@ -609,7 +600,7 @@ test("HostExecStage plan: sets maskFilterIntent when mask.filter enabled and val
     ...makeSharedInput(profile, hostEnvWithSecret),
     ...makeStageState(),
   };
-  const plan = await planHostExec(input, { interceptLibPath: null });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toBeNull();
   if (!plan) return;
@@ -652,7 +643,7 @@ test("HostExecStage plan: omits maskFilterIntent when mask.filter disabled", asy
     ...makeSharedInput(profile, hostEnvWithSecret),
     ...makeStageState(),
   };
-  const plan = await planHostExec(input, { interceptLibPath: null });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toBeNull();
   if (!plan) return;
@@ -668,7 +659,7 @@ test("HostExecStage plan: omits maskFilterIntent when mask config is absent", as
     ...makeSharedInput(profile, hostEnv),
     ...makeStageState(),
   };
-  const plan = await planHostExec(input, { interceptLibPath: null });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toBeNull();
   if (!plan) return;
@@ -690,7 +681,7 @@ test("HostExecStage plan: omits maskFilterIntent when mask.values is empty", asy
     ...makeSharedInput(profile, hostEnv),
     ...makeStageState(),
   };
-  const plan = await planHostExec(input, { interceptLibPath: null });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toBeNull();
   if (!plan) return;
@@ -804,9 +795,7 @@ test("HostExecStage plan: absolute argv0 pointing at a sensitive container path 
     ...makeSharedInput(profile, hostEnv),
     ...makeStageState(),
   };
-  const plan = await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  });
+  const plan = await planHostExec(input);
 
   expect(plan).not.toBeNull();
 });
@@ -814,6 +803,42 @@ test("HostExecStage plan: absolute argv0 pointing at a sensitive container path 
 // ============================================================
 // EffectStage run() tests
 // ============================================================
+
+test("HostExecStage: a missing client binary is a stage failure, not a defect", async () => {
+  const profile = makeProfile();
+  const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
+  // Artifact resolution is a pipeline-startup probe, so a test drops the
+  // client by fabricating the probe result -- no filesystem, no fake layer.
+  const sharedInput = makeSharedInput(profile, hostEnv, {
+    hostexecClientPath: null,
+  });
+  const stageState = makeStageState();
+  const stage = createHostExecStage(sharedInput);
+
+  const scope = Effect.runSync(Scope.make());
+  const exit = await Effect.runPromiseExit(
+    stage
+      .run(stageState)
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(makeHostExecSetupServiceFake()),
+        Effect.provide(makeHostExecBrokerServiceFake()),
+      ),
+  );
+  await Effect.runPromise(Scope.close(scope, Exit.void));
+
+  expect(Exit.isFailure(exit)).toEqual(true);
+  if (!Exit.isFailure(exit)) return;
+  // A defect would print as an unhandled error and bury the instructions for
+  // building the missing artifact.
+  expect(Cause.isDieType(exit.cause)).toEqual(false);
+  expect(Cause.isFailType(exit.cause)).toEqual(true);
+  const failure = Cause.failureOption(exit.cause);
+  expect(Option.isSome(failure)).toEqual(true);
+  if (Option.isSome(failure)) {
+    expect(String(failure.value)).toContain("nas-hostexec-client");
+  }
+});
 
 test("HostExecStage: run still starts broker when user rules are empty (internal __nas_hook)", async () => {
   const profile = makeProfile();
@@ -840,16 +865,14 @@ test("HostExecStage: run still starts broker when user rules are empty (internal
   expect(result.container?.mounts.length).toBeGreaterThan(0);
 });
 
-test("HostExecStage: run delegates directories, files, and symlinks to HostExecSetupService", async () => {
+test("HostExecStage: run delegates directories and symlinks to HostExecSetupService", async () => {
   const profile = makeProfile();
   const runtimeDir = "/tmp/nas-test-runtime";
   const hostEnv = makeHostEnv(runtimeDir);
   const sharedInput = makeSharedInput(profile, hostEnv);
   const stageState = makeStageState();
   const input = { ...sharedInput, ...stageState };
-  const plan = (await planHostExec(input, {
-    interceptLibPath: "/fake/intercept.so",
-  }))!;
+  const plan = (await planHostExec(input))!;
 
   let capturedPlan: HostExecWorkspacePlan | null = null;
   const setupLayer = makeHostExecSetupServiceFake({
@@ -876,7 +899,6 @@ test("HostExecStage: run delegates directories, files, and symlinks to HostExecS
 
   expect(capturedPlan).not.toBeNull();
   expect(capturedPlan!.directories).toEqual(plan.directories);
-  expect(capturedPlan!.files).toEqual(plan.files);
   expect(capturedPlan!.symlinks).toEqual(plan.symlinks);
 });
 

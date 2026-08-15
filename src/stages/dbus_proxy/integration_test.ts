@@ -73,6 +73,8 @@ function makeProbes(overrides?: Partial<ProbeResults>): ProbeResults {
     dbusSessionAddress: null,
     gpgAgentSocket: null,
     auditDir: "/tmp/nas-test-audit",
+    hostexecInterceptLibPath: null,
+    hostexecClientPath: null,
     ...overrides,
   };
 }

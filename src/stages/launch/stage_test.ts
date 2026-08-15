@@ -396,6 +396,8 @@ function createTestInput(overrides: { container?: ContainerPlan } = {}): {
         dbusSessionAddress: null,
         gpgAgentSocket: null,
         auditDir: "/tmp/audit",
+        hostexecInterceptLibPath: null,
+        hostexecClientPath: null,
       },
     },
     container,

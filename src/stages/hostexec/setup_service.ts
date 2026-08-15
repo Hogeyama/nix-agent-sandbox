@@ -1,7 +1,7 @@
 /**
  * HostExecSetupService — Effect-based abstraction over hostexec workspace preparation.
  *
- * Creates directories, writes files, and creates symlinks required by the hostexec stage.
+ * Creates the directories and command symlinks the hostexec stage needs.
  *
  * Live implementation delegates to FsService.
  * Fake implementation provides configurable stubs for testing.
@@ -16,11 +16,6 @@ import { FsService } from "../../services/fs.ts";
 
 export interface HostExecWorkspacePlan {
   readonly directories: ReadonlyArray<{ path: string; mode: number }>;
-  readonly files: ReadonlyArray<{
-    path: string;
-    content: string | Uint8Array;
-    mode: number;
-  }>;
   readonly symlinks: ReadonlyArray<{ target: string; path: string }>;
 }
 
@@ -57,10 +52,6 @@ export const HostExecSetupServiceLive: Layer.Layer<
         Effect.gen(function* () {
           for (const dir of plan.directories) {
             yield* fs.mkdir(dir.path, { recursive: true, mode: dir.mode });
-          }
-
-          for (const file of plan.files) {
-            yield* fs.writeFile(file.path, file.content, { mode: file.mode });
           }
 
           for (const link of plan.symlinks) {

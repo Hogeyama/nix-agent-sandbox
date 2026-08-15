@@ -117,6 +117,8 @@ function makeProbes(): ProbeResults {
     dbusSessionAddress: null,
     gpgAgentSocket: null,
     auditDir: "/tmp/nas-audit",
+    hostexecInterceptLibPath: null,
+    hostexecClientPath: null,
   };
 }
 

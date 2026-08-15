@@ -80,8 +80,9 @@
             zig build test --global-cache-dir "$TMPDIR/zig-cache"
           '';
           installPhase = ''
-            mkdir -p $out/lib
+            mkdir -p $out/lib $out/bin
             cp zig-out/lib/libhostexec_intercept.so $out/lib/hostexec_intercept.so
+            cp zig-out/bin/nas-hostexec-client $out/bin/
           '';
         };
 
@@ -159,6 +160,7 @@
           cp ${self}/scripts/notify-send-wsl $out/scripts/
           cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
+          cp ${hostexecIntercept}/bin/nas-hostexec-client $out/hostexec/
           cp ${maskfs}/bin/nas-maskfs $out/maskfs/
           cp ${maskFilter}/bin/nas-mask-filter $out/mask-filter/
           cp ${self}/src/config/Schema.pkl $out/config/

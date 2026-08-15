@@ -1,0 +1,49 @@
+/**
+ * Test-only helper: build the hostexec intercept artifacts before a suite that
+ * can only observe them through the built binary.
+ *
+ * Not imported by production code. It lives here rather than inside
+ * `intercept/` so the zig package directory stays pure zig, and outside
+ * `intercept_path.ts` so nothing that ships can spawn a compiler.
+ */
+
+import { fileURLToPath } from "node:url";
+
+/**
+ * Keep the dev artifacts in step with the source before measuring them.
+ *
+ * Both `hostexec_intercept.so` and `nas-hostexec-client` are the only place the
+ * protocol's behaviour is observable, so forgetting `zig build` makes the suite
+ * **reproduce bugs that are already fixed in the source** — the tests would be
+ * exercising yesterday's binary while the reader assumes they exercise the
+ * diff. The mask-filter suite hit exactly that (see
+ * `mask_filter_integration_test.ts`), so building is the test's job here too.
+ *
+ * An mtime comparison is not a substitute: `zig build` leaves the artifact
+ * untouched when the output is byte-identical, so a correctly rebuilt binary
+ * still looks "old".
+ *
+ * Two environments deliberately skip the build:
+ *   - `NAS_ASSET_DIR` (bundled mode): nix built both artifacts from this same
+ *     source already.
+ *   - no `zig` on PATH (outside the devShell): nothing can be built, and
+ *     failing here would not help anyone fix it. The caller's `skipIf` then
+ *     reports the missing artifact as a skip rather than a silent pass.
+ */
+export async function buildInterceptArtifactsForDev(): Promise<void> {
+  if (process.env.NAS_ASSET_DIR) return;
+  if (Bun.which("zig") === null) return;
+  const srcDir = fileURLToPath(new URL("./intercept/", import.meta.url));
+  const proc = Bun.spawn(["zig", "build"], {
+    cwd: srcDir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [code, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stderr).text(),
+  ]);
+  if (code !== 0) {
+    throw new Error(`zig build failed in ${srcDir} (exit ${code}):\n${stderr}`);
+  }
+}

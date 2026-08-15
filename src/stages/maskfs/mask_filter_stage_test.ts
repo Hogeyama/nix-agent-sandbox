@@ -66,6 +66,8 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       dbusSessionAddress: null,
       gpgAgentSocket: null,
       auditDir: "/tmp/audit",
+      hostexecInterceptLibPath: null,
+      hostexecClientPath: null,
     },
     ...overrides,
   } as StageInput;

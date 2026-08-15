@@ -3,7 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  HOSTEXEC_CLIENT_CONTAINER_PATH,
   INTERCEPT_LIB_CONTAINER_PATH,
+  resolveHostExecClientPath,
   resolveInterceptLibPath,
 } from "./intercept_path.ts";
 
@@ -34,5 +36,35 @@ test("resolveInterceptLibPath: returns null when .so does not exist", async () =
 test("INTERCEPT_LIB_CONTAINER_PATH has expected value", () => {
   expect(INTERCEPT_LIB_CONTAINER_PATH).toEqual(
     "/opt/nas/hostexec/lib/hostexec_intercept.so",
+  );
+});
+
+test("resolveHostExecClientPath: returns path when client exists", async () => {
+  const tmp = await mkdtemp(path.join(tmpdir(), "nas-client-test-"));
+  try {
+    const clientDir = path.join(tmp, "hostexec");
+    await mkdir(clientDir, { recursive: true });
+    await writeFile(path.join(clientDir, "nas-hostexec-client"), "fake-client");
+
+    const result = await resolveHostExecClientPath({ assetDir: tmp });
+    expect(result).toEqual(path.join(tmp, "hostexec/nas-hostexec-client"));
+  } finally {
+    await rm(tmp, { recursive: true });
+  }
+});
+
+test("resolveHostExecClientPath: returns null when client does not exist", async () => {
+  const tmp = await mkdtemp(path.join(tmpdir(), "nas-client-test-"));
+  try {
+    const result = await resolveHostExecClientPath({ assetDir: tmp });
+    expect(result).toEqual(null);
+  } finally {
+    await rm(tmp, { recursive: true });
+  }
+});
+
+test("HOSTEXEC_CLIENT_CONTAINER_PATH has expected value", () => {
+  expect(HOSTEXEC_CLIENT_CONTAINER_PATH).toEqual(
+    "/opt/nas/hostexec/libexec/nas-hostexec-client",
   );
 });

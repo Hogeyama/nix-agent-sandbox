@@ -2,7 +2,9 @@
  * HostExec Stage (EffectStage)
  *
  * ホスト上のコマンド実行を仲介する HostExecBroker を起動し、
- * エージェントコンテナ内からラッパースクリプト経由でアクセスできるようにする。
+ * エージェントコンテナ内からアクセスできるようにする。コンテナ側の入口は
+ * コマンド名ごとの wrapper symlink (nas-hostexec-client) と、パス指定の
+ * ルール用の LD_PRELOAD ライブラリの二つ。
  */
 
 import * as path from "node:path";
@@ -13,8 +15,8 @@ import {
 } from "../../config/types.ts";
 import type { MaskFilterConfig } from "../../hostexec/broker.ts";
 import {
+  HOSTEXEC_CLIENT_CONTAINER_PATH,
   INTERCEPT_LIB_CONTAINER_PATH,
-  resolveInterceptLibPath,
 } from "../../hostexec/intercept_path.ts";
 import {
   isBareCommandHostExecArgv0,
@@ -74,11 +76,6 @@ export function validateAbsoluteArgv0(ruleId: string, argv0: string): void {
 
 export interface HostExecPlan {
   readonly directories: ReadonlyArray<{ path: string; mode: number }>;
-  readonly files: ReadonlyArray<{
-    path: string;
-    content: string;
-    mode: number;
-  }>;
   readonly symlinks: ReadonlyArray<{ target: string; path: string }>;
   readonly mounts: readonly MountSpec[];
   readonly dockerArgs: string[];
@@ -155,7 +152,12 @@ export function createHostExecStage(
         ...input,
       };
       return Effect.gen(function* () {
-        const plan = yield* Effect.promise(() => planHostExec(stageInput));
+        // Convert actionable planner errors (for example, a missing build
+        // artifact) into stage failures instead of unhandled defects.
+        const plan = yield* Effect.try({
+          try: () => planHostExec(stageInput),
+          catch: (e) => e,
+        });
         if (plan === null) {
           return {};
         }
@@ -183,14 +185,15 @@ const NAS_HOOK_RULE: HostExecRule = {
   fallback: "container",
 };
 
-export async function planHostExec(
-  input: HostExecStageInput,
-  opts?: { interceptLibPath?: string | null },
-): Promise<HostExecPlan | null> {
-  const interceptLibPath =
-    opts?.interceptLibPath !== undefined
-      ? opts.interceptLibPath
-      : await resolveInterceptLibPath();
+export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
+  // Both container-side clients are build artifacts whose host paths can only
+  // be learned by looking at the filesystem. That lookup is a probe resolved
+  // once at pipeline startup (`resolveProbes`), so the planner stays pure and
+  // tests fabricate the paths instead of needing the artifacts on disk.
+  const {
+    hostexecInterceptLibPath: interceptLibPath,
+    hostexecClientPath: clientBinPath,
+  } = input.probes;
   const config =
     input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
   config.rules = [...config.rules, NAS_HOOK_RULE];
@@ -223,7 +226,6 @@ export async function planHostExec(
   const execSocketDir = hostExecExecSocketDir(runtimePaths, input.sessionId);
   const wrapperRoot = path.join(runtimePaths.wrappersDir, input.sessionId);
   const wrapperBinDir = path.join(wrapperRoot, "bin");
-  const wrapperScript = path.join(wrapperBinDir, "hostexec-wrapper.py");
   const sessionTmpDir = path.join(wrapperRoot, "tmp");
   const containerSessionTmp = path.join(SESSION_TMP_ROOT, input.sessionId);
 
@@ -239,10 +241,10 @@ export async function planHostExec(
     { path: sessionTmpDir, mode: 0o700 },
   ];
 
-  const files: HostExecPlan["files"] = [
-    { path: wrapperScript, content: buildWrapperScript(), mode: 0o755 },
-  ];
-
+  // One symlink per bare-command argv0, all pointing at the standalone client.
+  // The target is a container path, so these links dangle on the host -- they
+  // are only ever resolved from inside the container, where the binary is
+  // bind-mounted at that location.
   const symlinks: Array<{ target: string; path: string }> = [];
   const argv0Names = new Set(
     config.rules
@@ -251,7 +253,7 @@ export async function planHostExec(
   );
   for (const argv0 of argv0Names) {
     symlinks.push({
-      target: "hostexec-wrapper.py",
+      target: HOSTEXEC_CLIENT_CONTAINER_PATH,
       path: path.join(wrapperBinDir, argv0),
     });
   }
@@ -296,6 +298,20 @@ export async function planHostExec(
     NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
   };
 
+  if (symlinks.length > 0) {
+    if (!clientBinPath) {
+      throw new Error(
+        "[nas] hostexec: コマンド名 argv0 のルールには hostexec クライアント " +
+          "(nas-hostexec-client) が必要ですが、見つかりませんでした。" +
+          "nix ビルド（または `cd src/hostexec/intercept && zig build`）で生成するか、nas を再インストールしてください。",
+      );
+    }
+    dockerArgs.push(
+      "-v",
+      addMount(mounts, clientBinPath, HOSTEXEC_CLIENT_CONTAINER_PATH, true),
+    );
+  }
+
   if (interceptPaths.length > 0) {
     if (!interceptLibPath) {
       throw new Error(
@@ -330,7 +346,6 @@ export async function planHostExec(
 
   return {
     directories,
-    files,
     symlinks,
     mounts,
     dockerArgs,
@@ -385,7 +400,6 @@ function runHostExec(
 
     yield* setupService.prepareWorkspace({
       directories: plan.directories,
-      files: plan.files,
       symlinks: plan.symlinks,
     });
 
@@ -501,130 +515,4 @@ function addMount(
     readOnly ? { source, target, readOnly: true } : { source, target },
   );
   return `${source}:${target}${readOnly ? ":ro" : ""}`;
-}
-
-function buildWrapperScript(): string {
-  return `#!/usr/bin/env python3
-# nas hostexec wrapper — a shim installed by nas (nix-agent-sandbox) to intercept
-# commands inside the container. When invoked, it forwards the request to the
-# hostexec broker running on the host via a Unix socket. The broker evaluates
-# approval rules, executes the command on the host if approved, and streams
-# stdout/stderr back. If no rule matches, this wrapper falls back to the real
-# binary on PATH. See: https://github.com/anthropics/nix-agent-sandbox
-import base64
-import json
-import os
-import select
-import shutil
-import socket
-import subprocess
-import sys
-
-
-def find_fallback_binary(argv0: str, wrapper_dir: str) -> str:
-    if os.path.sep in argv0:
-        argv0 = os.path.basename(argv0)
-    path_value = os.environ.get("PATH", "")
-    for directory in path_value.split(":"):
-        if not directory:
-            continue
-        candidate = os.path.join(directory, argv0)
-        if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
-            continue
-        if os.path.realpath(candidate).startswith(os.path.realpath(wrapper_dir)):
-            continue
-        return candidate
-    resolved = shutil.which(argv0)
-    if resolved and not os.path.realpath(resolved).startswith(os.path.realpath(wrapper_dir)):
-        return resolved
-    raise FileNotFoundError(f"fallback binary not found: {argv0}")
-
-
-def stream_broker(payload: dict):
-    # Once any chunk has been written to stdout/stderr, we must never fall
-    # back to the real binary -- that would re-execute the command and
-    # duplicate output/side effects. All error/fallback paths below must
-    # check this flag before returning "fallback".
-    wrote_any_chunks = False
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(os.environ["NAS_HOSTEXEC_SOCKET"])
-    try:
-        sock.sendall((json.dumps(payload) + "\\n").encode())
-        buf = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-            while b"\\n" in buf:
-                line, buf = buf.split(b"\\n", 1)
-                msg = json.loads(line)
-                if msg["type"] == "chunk":
-                    data = base64.b64decode(msg["data"])
-                    if msg["fd"] == 1:
-                        sys.stdout.buffer.write(data)
-                        sys.stdout.flush()
-                    else:
-                        sys.stderr.buffer.write(data)
-                        sys.stderr.flush()
-                    wrote_any_chunks = True
-                elif msg["type"] == "result":
-                    return ("result", int(msg.get("exitCode", 0)))
-                elif msg["type"] == "fallback":
-                    if wrote_any_chunks:
-                        print("broker requested fallback after chunks were written", file=sys.stderr)
-                        return ("error", 1)
-                    return ("fallback", 0)
-                elif msg["type"] == "error":
-                    print(msg.get("message", "unknown error"), file=sys.stderr)
-                    return ("error", 1)
-        print("hostexec broker connection closed unexpectedly", file=sys.stderr)
-        return ("error", 1)
-    finally:
-        sock.close()
-
-def read_available_stdin() -> bytes:
-    fd = sys.stdin.fileno()
-    chunks = []
-    while True:
-        ready, _, _ = select.select([fd], [], [], 0)
-        if not ready:
-            break
-        chunk = os.read(fd, 65536)
-        if not chunk:
-            break
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
-def main() -> int:
-    argv0 = sys.argv[0]
-    payload = {
-        "version": 1,
-        "type": "execute",
-        "sessionId": os.environ.get("NAS_HOSTEXEC_SESSION_ID", ""),
-        "requestId": f"req_{os.getpid()}_{os.urandom(4).hex()}",
-        "argv0": argv0,
-        "args": sys.argv[1:],
-        "cwd": os.getcwd(),
-        "tty": sys.stdin.isatty(),
-    }
-    if not sys.stdin.isatty():
-        stdin_data = read_available_stdin()
-        if stdin_data:
-            payload["stdin"] = base64.b64encode(stdin_data).decode()
-
-    result_type, exit_code = stream_broker(payload)
-    if result_type == "fallback":
-        if (not os.path.isabs(argv0)) and (os.path.sep in argv0):
-            print(f"relative argv0 fallback is not supported: {argv0}", file=sys.stderr)
-            return 1
-        binary = find_fallback_binary(argv0, os.environ["NAS_HOSTEXEC_WRAPPER_DIR"])
-        os.execv(binary, [binary, *sys.argv[1:]])
-    return exit_code
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-`;
 }

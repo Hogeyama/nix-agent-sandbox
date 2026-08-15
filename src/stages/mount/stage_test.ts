@@ -93,6 +93,8 @@ const defaultProbeResults: ProbeResults = {
   dbusSessionAddress: null,
   gpgAgentSocket: null,
   auditDir: "/tmp/audit",
+  hostexecInterceptLibPath: null,
+  hostexecClientPath: null,
 };
 
 const defaultClaudeProbes: AgentProbes = {

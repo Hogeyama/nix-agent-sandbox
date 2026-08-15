@@ -50,6 +50,8 @@ const dummyStageInput: StageInput = {
     dbusSessionAddress: null,
     gpgAgentSocket: null,
     auditDir: "/tmp/nas-audit",
+    hostexecInterceptLibPath: null,
+    hostexecClientPath: null,
   },
 };
 
@@ -78,6 +80,8 @@ test("ProbeResults: can construct with all fields", () => {
     dbusSessionAddress: "unix:path=/run/user/1000/bus",
     gpgAgentSocket: "/run/user/1000/gnupg/S.gpg-agent",
     auditDir: "/tmp/nas-audit",
+    hostexecInterceptLibPath: null,
+    hostexecClientPath: null,
   };
 
   expect(probes.hasHostNix).toEqual(true);

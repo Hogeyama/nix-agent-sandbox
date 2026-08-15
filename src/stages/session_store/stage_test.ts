@@ -229,6 +229,8 @@ function createTestInput(opts: {
         dbusSessionAddress: null,
         gpgAgentSocket: null,
         auditDir: "/tmp/audit",
+        hostexecInterceptLibPath: null,
+        hostexecClientPath: null,
       },
     },
     workspace,
