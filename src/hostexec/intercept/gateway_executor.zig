@@ -166,7 +166,7 @@ pub const ChildHandle = struct {
                 options,
             );
             if (result == 0) {
-                if (info._sifields._sigchld.si_pid == 0) return null;
+                if (siginfoPid(&info) == 0) return null;
                 const term = termFromSiginfo(info);
                 self.term = term;
                 self.exit_observed = true;
@@ -465,10 +465,33 @@ fn termFromStatus(status: u32) ChildTerm {
 
 fn termFromSiginfo(info: c.siginfo_t) ChildTerm {
     return switch (info.si_code) {
-        c.CLD_EXITED => .{ .Exited = @intCast(info._sifields._sigchld.si_status) },
-        c.CLD_KILLED, c.CLD_DUMPED => .{ .Signal = @intCast(info._sifields._sigchld.si_status) },
-        else => .{ .Unknown = @bitCast(@as(i32, info._sifields._sigchld.si_status)) },
+        c.CLD_EXITED => .{ .Exited = @intCast(siginfoStatus(&info)) },
+        c.CLD_KILLED, c.CLD_DUMPED => .{ .Signal = @intCast(siginfoStatus(&info)) },
+        else => .{ .Unknown = @bitCast(siginfoStatus(&info)) },
     };
+}
+
+// glibc exposes the Linux siginfo union through `_sifields`; musl exposes the
+// same ABI storage as an anonymous `__si_fields` union.  SIGCHLD's pid and
+// status members occupy stable offsets within that union in both layouts.
+fn siginfoPid(info: *const c.siginfo_t) i32 {
+    if (comptime @hasField(c.siginfo_t, "_sifields")) {
+        return info._sifields._sigchld.si_pid;
+    }
+    const raw: [*]const u8 = @ptrCast(info);
+    const fields = @offsetOf(c.siginfo_t, "__si_fields");
+    const value: *const i32 = @ptrCast(@alignCast(raw + fields));
+    return value.*;
+}
+
+fn siginfoStatus(info: *const c.siginfo_t) i32 {
+    if (comptime @hasField(c.siginfo_t, "_sifields")) {
+        return info._sifields._sigchld.si_status;
+    }
+    const raw: [*]const u8 = @ptrCast(info);
+    const fields = @offsetOf(c.siginfo_t, "__si_fields");
+    const value: *const i32 = @ptrCast(@alignCast(raw + fields + 8));
+    return value.*;
 }
 
 fn graceDurationNs(duration_ms: u64) u64 {

@@ -49,6 +49,20 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(client);
 
+    // ── per-session host gateway ──
+    const gateway_mod = b.createModule(.{
+        .root_source_file = b.path("gateway_main.zig"),
+        .target = client_target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const gateway = b.addExecutable(.{
+        .name = "nas-hostexec-gateway",
+        .root_module = gateway_mod,
+    });
+    gateway.linkage = .static;
+    b.installArtifact(gateway);
+
     // ── unit tests (use host target so tests can run in Nix sandbox) ──
     //
     // The root pulls in protocol.zig and client_main.zig via an `_ = @import`
