@@ -254,6 +254,8 @@ test {
     _ = @import("protocol.zig");
     _ = @import("client_main.zig");
     _ = @import("fd_transport.zig");
+    _ = @import("gateway_protocol.zig");
+    _ = @import("gateway_executor.zig");
 }
 
 test "matchesInterceptPaths: exact match" {
