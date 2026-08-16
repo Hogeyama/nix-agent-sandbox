@@ -32,6 +32,9 @@ let gatewayTestArtifactsPromise: Promise<GatewayTestArtifacts> | undefined;
 
 export function resolveGatewayTestArtifacts(): Promise<GatewayTestArtifacts> {
   gatewayTestArtifactsPromise ??= (async () => {
+    // A single `zig build` produces this whole transport boundary. Resolve all
+    // three outputs together so a native integration test cannot accidentally
+    // combine a current client with a stale gateway or interceptor artifact.
     await buildInterceptArtifactsForDev();
     const [clientPath, gatewayPath, interceptLibPath] = await Promise.all([
       resolveHostExecClientPath(),
@@ -58,6 +61,8 @@ export type GatewayDecision =
 export interface GatewayTestHarnessOptions {
   readonly artifacts: GatewayTestArtifacts;
   readonly sessionId?: string;
+  /** Directory visible to Docker when an integration test uses DinD. */
+  readonly tempDir?: string;
   readonly decide?: (
     request: ExternalExecuteRequestV2,
   ) => GatewayDecision | Promise<GatewayDecision>;
@@ -92,6 +97,8 @@ export interface GatewayTestHarness {
   readonly wrapperDir: string;
   readonly realDir: string;
   readonly interceptedNoReadPath: string;
+  /** The only host directory a container-side client may mount. */
+  readonly externalSocketDir: string;
   readonly externalSocketPath: string;
   readonly internalSocketPath: string;
   readonly requests: ExternalExecuteRequestV2[];
@@ -110,6 +117,8 @@ export interface GatewayTestHarness {
       readonly sessionId?: string | null;
     },
   ): Promise<ShellResult>;
+  /** Disconnect every host-only broker handler without stopping the gateway. */
+  disconnectBroker(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -337,12 +346,18 @@ export async function startGatewayTestHarness(
     );
   }
   const sessionId = options.sessionId ?? "test-session";
-  const rootDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-gateway-"));
+  const rootDir = await mkdtemp(
+    path.join(options.tempDir ?? tmpdir(), "nas-hostexec-gateway-"),
+  );
   const wrapperDir = path.join(rootDir, "wrapper");
   const realDir = path.join(rootDir, "real");
   const interceptedNoReadPath = path.join(rootDir, "intercepted-no-read");
-  const externalSocketPath = path.join(rootDir, "external.sock");
-  const internalSocketPath = path.join(rootDir, "internal.sock");
+  // Keep the external endpoint in its own directory. Docker integration tests
+  // mount this exact directory, which makes an accidental host-only socket
+  // sibling visible rather than silently testing a broader mount.
+  const externalSocketDir = path.join(rootDir, "external");
+  const externalSocketPath = path.join(externalSocketDir, "external.sock");
+  const internalSocketPath = path.join(rootDir, "internal", "gateway.sock");
   const requests: ExternalExecuteRequestV2[] = [];
   const events: GatewayTestEvent[] = [];
   let brokerServer: Server | null = null;
@@ -363,6 +378,8 @@ export async function startGatewayTestHarness(
   try {
     await mkdir(wrapperDir, { recursive: true });
     await mkdir(realDir, { recursive: true });
+    await mkdir(externalSocketDir, { recursive: true });
+    await mkdir(path.dirname(internalSocketPath), { recursive: true });
     if (artifacts.clientPath) {
       await symlink(
         artifacts.clientPath,
@@ -479,6 +496,7 @@ export async function startGatewayTestHarness(
       wrapperDir,
       realDir,
       interceptedNoReadPath,
+      externalSocketDir,
       externalSocketPath,
       internalSocketPath,
       requests,
@@ -487,6 +505,21 @@ export async function startGatewayTestHarness(
       runInterceptedShell: (script) =>
         runShell(script, { interceptedPath: interceptedNoReadPath }),
       runShell,
+      disconnectBroker: async () => {
+        const sockets = [...activeBrokerSockets];
+        const closed = sockets.map(
+          (socket) =>
+            new Promise<void>((resolve) => {
+              if (socket.destroyed) {
+                resolve();
+                return;
+              }
+              socket.once("close", () => resolve());
+              socket.destroy();
+            }),
+        );
+        await Promise.all(closed);
+      },
       close: async () => {
         for (const socket of activeBrokerSockets) socket.destroy();
         brokerServer?.close();

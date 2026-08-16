@@ -26,3 +26,13 @@ jobs:
 
       - name: Unit tests
         run: nix develop -c bun run test:unit
+
+      - name: Hostexec Zig tests
+        run: nix develop -c bash -lc 'cd src/hostexec/intercept && zig build test'
+
+      - name: Hostexec native integration
+        run: >-
+          nix develop -c bun test
+          src/hostexec/fd_gateway_integration_test.ts
+          src/hostexec/client_integration_test.ts
+          src/hostexec/intercept_integration_test.ts

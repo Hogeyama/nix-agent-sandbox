@@ -1,14 +1,36 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  stat,
+  symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Cause, Effect, Layer } from "effect";
-import type { HostExecBroker } from "../../hostexec/broker.ts";
+import {
+  type HostExecBroker,
+  sendHostExecBrokerRequest,
+} from "../../hostexec/broker.ts";
+import { resolveGatewayTestArtifacts } from "../../hostexec/gateway_test_harness.ts";
+import {
+  hostExecPendingSessionDir,
+  hostExecSessionRegistryPath,
+  listHostExecPendingEntries,
+} from "../../hostexec/registry.ts";
 import type { HostExecBrokerConfig } from "./broker_service.ts";
 import {
   awaitGatewayReadyLive,
   closeHostExecStack,
   type GatewayProcess,
+  HostExecBrokerService,
+  HostExecBrokerServiceLive,
   HostExecStackOps,
   type HostExecStackOpsShape,
   startBrokerLive,
@@ -37,6 +59,7 @@ const config = {
 
 const broker = {} as HostExecBroker;
 const gateway = {} as GatewayProcess;
+const gatewayArtifacts = await resolveGatewayTestArtifacts();
 
 function makeLiveConfig(root: string): HostExecBrokerConfig {
   const brokerDir = path.join(root, "brokers", "session-1");
@@ -55,6 +78,150 @@ function makeLiveConfig(root: string): HostExecBrokerConfig {
     workspaceRoot: root,
     sessionTmpDir: path.join(root, "tmp"),
   };
+}
+
+interface ProcIdentity {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly processGroupId: number;
+  readonly sessionId: number;
+  readonly startTime: number;
+  readonly state: string;
+}
+
+async function readProcIdentity(pid: number): Promise<ProcIdentity | null> {
+  try {
+    const statText = await readFile(`/proc/${pid}/stat`, "utf8");
+    const close = statText.lastIndexOf(") ");
+    if (close <= 0) return null;
+    const fields = statText
+      .slice(close + 2)
+      .trim()
+      .split(/\s+/);
+    const values = [
+      Number(fields[1]),
+      Number(fields[2]),
+      Number(fields[3]),
+      Number(fields[19]),
+    ];
+    if (values.some((value) => !Number.isSafeInteger(value))) return null;
+    return {
+      pid,
+      state: fields[0],
+      ppid: values[0],
+      processGroupId: values[1],
+      sessionId: values[2],
+      startTime: values[3],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function waitForGatewayPid(
+  gatewayPath: string,
+  externalSocketPath: string,
+  timeoutMs = 5_000,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const entry of await readdir("/proc", { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+      const pid = Number(entry.name);
+      try {
+        if ((await readlink(`/proc/${pid}/exe`)) !== gatewayPath) continue;
+        if (
+          !(await readFile(`/proc/${pid}/cmdline`, "utf8")).includes(
+            externalSocketPath,
+          )
+        ) {
+          continue;
+        }
+        if (await readProcIdentity(pid)) return pid;
+      } catch {
+        // The process can exit between /proc lookups.
+      }
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error("real hostexec gateway did not start");
+}
+
+async function waitForGatewayHandler(
+  gatewayPid: number,
+  gatewayPath: string,
+  timeoutMs = 5_000,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const children = (
+        await readFile(
+          `/proc/${gatewayPid}/task/${gatewayPid}/children`,
+          "utf8",
+        )
+      )
+        .trim()
+        .split(/\s+/);
+      for (const child of children) {
+        if (!child) continue;
+        const pid = Number(child);
+        if ((await readlink(`/proc/${pid}/exe`)) === gatewayPath) return pid;
+      }
+    } catch {
+      // The gateway can reap a handler between proc reads.
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error("real hostexec gateway handler did not start");
+}
+
+async function waitForProcessGone(
+  pid: number,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const identity = await readProcIdentity(pid);
+    if (!identity) return;
+    await Bun.sleep(10);
+  }
+  throw new Error(`process ${pid} did not exit`);
+}
+
+async function waitForPendingEntry(
+  paths: HostExecBrokerConfig["paths"],
+  sessionId: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await listHostExecPendingEntries(paths, sessionId)).length === 1) {
+      return;
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error("pending approval entry did not appear");
+}
+
+async function processFdCount(): Promise<number> {
+  return (await readdir("/proc/self/fd")).length;
+}
+
+async function processFdCountFor(pid: number): Promise<number> {
+  return (await readdir(`/proc/${pid}/fd`)).length;
+}
+
+async function waitForFdBaseline(
+  baseline: number,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await processFdCount()) === baseline) return;
+    await Bun.sleep(10);
+  }
+  expect(await processFdCount()).toBe(baseline);
 }
 
 function spawnReadinessFixture(script: string): GatewayProcess {
@@ -353,6 +520,181 @@ test("startBrokerWithCleanup preserves startup and cleanup errors", async () => 
   const aggregate = thrown as AggregateError;
   expect(aggregate.errors).toEqual([startError, cleanupError]);
 });
+
+test.skipIf(!gatewayArtifacts.gatewayPath || !gatewayArtifacts.clientPath)(
+  "HostExecBrokerService closes a pending FD-bearing request and its stack",
+  async () => {
+    const gatewayPath = gatewayArtifacts.gatewayPath;
+    const clientPath = gatewayArtifacts.clientPath;
+    if (!gatewayPath || !clientPath) return;
+
+    const root = await mkdtemp(path.join(tmpdir(), "nas-broker-close-live-"));
+    const liveConfig: HostExecBrokerConfig = {
+      ...makeLiveConfig(root),
+      sessionId: "service-close",
+      gatewayBinaryPath: gatewayPath,
+      hostexec: {
+        prompt: {
+          enable: true,
+          timeoutSeconds: 30,
+          defaultScope: "capability",
+          notify: "off",
+        },
+        secrets: {},
+        rules: [
+          {
+            id: "close-pending",
+            match: { argv0: "node", argRegex: "^-e(?:\\s|$)" },
+            cwd: { mode: "workspace-only", allow: [] },
+            env: {},
+            inheritEnv: { mode: "minimal", keys: [] },
+            approval: "prompt",
+            fallback: "container",
+          },
+        ],
+      },
+    };
+    const clientAlias = path.join(root, "node");
+    const localFdBaseline = await processFdCount();
+    let handle: {
+      readonly close: () => Effect.Effect<void, unknown>;
+    } | null = null;
+    let client: ReturnType<typeof Bun.spawn> | null = null;
+    let clientOutput: Promise<[string, string]> | null = null;
+    let stdinReader: Awaited<ReturnType<typeof open>> | null = null;
+    let stdinWriter: Awaited<ReturnType<typeof open>> | null = null;
+    let closed = false;
+
+    try {
+      await symlink(clientPath, clientAlias);
+      await mkdir(path.dirname(liveConfig.execSocketPath), {
+        recursive: true,
+        mode: 0o700,
+      });
+      handle = await Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* HostExecBrokerService;
+          return yield* service.start(liveConfig);
+        }).pipe(Effect.provide(HostExecBrokerServiceLive)),
+      );
+
+      const gatewayPid = await waitForGatewayPid(
+        gatewayPath,
+        liveConfig.execSocketPath,
+      );
+      const gatewayIdentity = await readProcIdentity(gatewayPid);
+      expect(gatewayIdentity).not.toBeNull();
+      const gatewayFdBaseline = await processFdCountFor(gatewayPid);
+
+      const fifoPath = path.join(root, "stdin.pipe");
+      const mkfifo = Bun.spawn(["mkfifo", fifoPath], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "pipe",
+      });
+      expect(await mkfifo.exited).toBe(0);
+      stdinReader = await open(
+        fifoPath,
+        constants.O_RDONLY | constants.O_NONBLOCK,
+      );
+      stdinWriter = await open(
+        fifoPath,
+        constants.O_WRONLY | constants.O_NONBLOCK,
+      );
+      client = Bun.spawn([clientAlias, "-e", "console.log('LOCAL_FALLBACK')"], {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          NAS_HOSTEXEC_SOCKET: liveConfig.execSocketPath,
+          NAS_HOSTEXEC_SESSION_ID: liveConfig.sessionId,
+          NAS_HOSTEXEC_WRAPPER_DIR: root,
+        },
+        stdin: stdinReader.fd,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      clientOutput = Promise.all([
+        new Response(client.stdout as ReadableStream<Uint8Array>).text(),
+        new Response(client.stderr as ReadableStream<Uint8Array>).text(),
+      ]);
+
+      await waitForPendingEntry(liveConfig.paths, liveConfig.sessionId);
+      const handlerPid = await waitForGatewayHandler(gatewayPid, gatewayPath);
+      expect(await readProcIdentity(handlerPid)).not.toBeNull();
+      expect(
+        await listHostExecPendingEntries(
+          liveConfig.paths,
+          liveConfig.sessionId,
+        ),
+      ).toHaveLength(1);
+      expect(await processFdCountFor(gatewayPid)).toBeGreaterThanOrEqual(
+        gatewayFdBaseline,
+      );
+
+      await Effect.runPromise(handle.close());
+      closed = true;
+
+      expect(await client.exited).not.toBe(0);
+      const [stdout, stderr] = await clientOutput;
+      expect(stdout).toBe("");
+      expect(stderr).not.toContain("LOCAL_FALLBACK");
+      await waitForProcessGone(handlerPid);
+      await waitForProcessGone(gatewayPid);
+
+      await expect(stat(liveConfig.execSocketPath)).rejects.toThrow();
+      await expect(stat(liveConfig.internalSocketPath)).rejects.toThrow();
+      await expect(stat(liveConfig.controlSocketPath)).rejects.toThrow();
+      await expect(
+        stat(
+          hostExecSessionRegistryPath(liveConfig.paths, liveConfig.sessionId),
+        ),
+      ).rejects.toThrow();
+      await expect(
+        stat(hostExecPendingSessionDir(liveConfig.paths, liveConfig.sessionId)),
+      ).rejects.toThrow();
+      expect(
+        await listHostExecPendingEntries(
+          liveConfig.paths,
+          liveConfig.sessionId,
+        ),
+      ).toHaveLength(0);
+      await expect(
+        sendHostExecBrokerRequest(liveConfig.controlSocketPath, {
+          type: "list_pending",
+        }),
+      ).rejects.toThrow();
+
+      await Promise.resolve(
+        (client.stdin as { end?: () => unknown } | null)?.end?.(),
+      );
+      await stdinWriter?.close();
+      stdinWriter = null;
+      await stdinReader?.close();
+      stdinReader = null;
+      await waitForFdBaseline(localFdBaseline);
+    } finally {
+      if (handle && !closed) {
+        await Effect.runPromise(handle.close())
+          .then(() => {
+            closed = true;
+          })
+          .catch(() => {});
+      }
+      if (client) {
+        if (client.exitCode === null) client.kill("SIGKILL");
+        await client.exited.catch(() => -1);
+        await Promise.resolve(
+          (client.stdin as { end?: () => unknown } | null)?.end?.(),
+        ).catch(() => {});
+      }
+      await clientOutput?.catch(() => ["", ""] as [string, string]);
+      await stdinWriter?.close().catch(() => {});
+      await stdinReader?.close().catch(() => {});
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("startup rollback retains a stop failure and still closes the broker", async () => {
   const startupError = new Error("gateway was not ready");

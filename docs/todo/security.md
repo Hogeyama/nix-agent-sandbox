@@ -272,8 +272,10 @@ nas の課題・監査記録・設計メモを 1 本化したファイル。
 
 - [x] ~~**hostexec の Python ラッパを文字列リテラルからアセットへ**~~ — 解決済み。Python ラッパ自体を
   廃止し、LD_PRELOAD ライブラリと protocol を共有する静的リンクの `nas-hostexec-client`
-  （`src/hostexec/intercept/client_main.zig`）に置き換えた。埋め込み文字列も、コンテナ内の
-  python3 依存も消えている。
+  （`src/hostexec/intercept/client_main.zig`）と、FD を受け取る session ごとの
+  `nas-hostexec-gateway` に置き換えた。コンテナへは static client と gateway の external
+  exec socket directory だけを渡し、gateway/broker の internal socket と control socket は
+  host-only に保つ。埋め込み文字列も、コンテナ内の python3 依存も消えている。
 - [ ] **`conversationDetailView.ts`（1078 行）分割**。[検証] CONFIRMED。ターンイベントタイムラインパーサ
   （`toTurnEventView:830`/`buildTurnEvents:893` 他）が自己完結で切り出し容易。
 - [ ] **`history/store.ts`（1073 行）reader/writer 分離**。[検証] CONFIRMED（接続 `:82-171` / writer / reader

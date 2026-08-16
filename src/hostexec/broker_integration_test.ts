@@ -24,8 +24,11 @@ import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
 import {
   hostExecBrokerSocketPath,
   hostExecExecSocketPath,
+  hostExecPendingSessionDir,
+  hostExecSessionRegistryPath,
   listHostExecPendingEntries,
   resolveHostExecRuntimePaths,
+  writeHostExecSessionRegistry,
 } from "./registry.ts";
 import type {
   ExecuteChunkResponse,
@@ -2299,6 +2302,140 @@ async function waitForNoPendingEntries(
   }
   throw new Error("Timed out waiting for hostexec pending entries to clear");
 }
+
+async function processFdCount(): Promise<number> {
+  return (await readdir("/proc/self/fd")).length;
+}
+
+async function waitForProcessFdBaseline(
+  baseline: number,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await processFdCount()) <= baseline) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(await processFdCount()).toBeLessThanOrEqual(baseline);
+}
+
+test("HostExecBroker: close tears down a pending approval session", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-close-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-close-workspace-"),
+  );
+  const sessionId = "sess_test";
+  const broker = new HostExecBroker({
+    paths,
+    sessionId,
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: path.join(runtimeDir, "tmp"),
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-close-pending",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, sessionId);
+  const execSocketPath = hostExecExecSocketPath(paths, sessionId);
+  const registryPath = hostExecSessionRegistryPath(paths, sessionId);
+  const pendingDir = hostExecPendingSessionDir(paths, sessionId);
+  let handler: import("node:net").Socket | undefined;
+  let brokerClosed = false;
+  try {
+    await broker.start(execSocketPath, controlSocketPath);
+    await writeHostExecSessionRegistry(paths, {
+      version: 1,
+      sessionId,
+      brokerSocket: controlSocketPath,
+      profileName: "test",
+      createdAt: new Date().toISOString(),
+      pid: process.pid,
+    });
+
+    const fdBaseline = await processFdCount();
+    handler = await connectUnix(execSocketPath);
+    handler.on("error", () => {});
+    const handlerClosed = new Promise<void>((resolve) =>
+      handler?.once("close", () => resolve()),
+    );
+    await writeJsonLine(handler, {
+      type: "execute",
+      request: request(
+        ["-e", "console.log('must-not-start')"],
+        workspace,
+        "req_close_pending",
+      ),
+    });
+
+    const pendingDeadline = Date.now() + 5_000;
+    while (Date.now() < pendingDeadline) {
+      if ((await broker.listPending()).length === 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(await broker.listPending()).toHaveLength(1);
+    expect(await listHostExecPendingEntries(paths, sessionId)).toHaveLength(1);
+
+    const responsePromise = readJsonLine(handler);
+    await broker.close();
+    brokerClosed = true;
+    const responseLine = await Promise.race([
+      responsePromise,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("pending close response timed out")),
+          1_000,
+        ),
+      ),
+    ]);
+    expect(JSON.parse(responseLine!)).toMatchObject({
+      type: "error",
+      requestId: "req_close_pending",
+      message: "hostexec broker closed",
+    });
+    await Promise.race([
+      handlerClosed,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("pending handler did not close")),
+          1_000,
+        ),
+      ),
+    ]);
+
+    // The public pending view and the control endpoint both prove that the
+    // waiter/request maps are no longer reachable after service close.
+    expect(await broker.listPending()).toHaveLength(0);
+    expect(await listHostExecPendingEntries(paths, sessionId)).toHaveLength(0);
+    await expect(
+      sendHostExecBrokerRequest(controlSocketPath, { type: "list_pending" }),
+    ).rejects.toThrow();
+    await expect(stat(registryPath)).rejects.toThrow();
+    await expect(stat(execSocketPath)).rejects.toThrow();
+    await expect(stat(controlSocketPath)).rejects.toThrow();
+    await expect(stat(pendingDir)).rejects.toThrow();
+
+    // The handler's accepted transport descriptor is the received gateway
+    // FD in this lifecycle test. It must return to the process baseline.
+    await waitForProcessFdBaseline(fdBaseline);
+  } finally {
+    handler?.destroy();
+    if (!brokerClosed) await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
 
 test("HostExecBroker: isolates sockets per session under 0o700 subdirs", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));

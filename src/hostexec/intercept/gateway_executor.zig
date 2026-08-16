@@ -16,6 +16,7 @@ const EnvMap = std.process.EnvMap;
 const ChildTerm = std.process.Child.Term;
 const posix = std.posix;
 const pid_t = posix.pid_t;
+const test_paths = @import("test_paths.zig");
 
 pub const ExecutionSpec = struct {
     /// Prefer an already assembled argv.  The argv0/args form mirrors the
@@ -520,7 +521,7 @@ test "child that does not read delegated stdin leaves the pipe untouched" {
 
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     var child = try spawn(allocator, .{ .argv = &argv, .cwd = null, .env = env }, fds[0]);
     defer child.deinit() catch {};
     _ = try child.wait();
@@ -550,7 +551,7 @@ test "zero-grace cleanup does not require a timer" {
     const allocator = std.testing.allocator;
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{ "/bin/sh", "-c", "while :; do :; done" };
+    const argv = [_][]const u8{ test_paths.executable("sh"), "-c", "while :; do :; done" };
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, null);
     defer child.deinit() catch {};
 
@@ -566,7 +567,7 @@ test "nonzero cleanup surfaces timer start errors for retry" {
     const allocator = std.testing.allocator;
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{ "/bin/sh", "-c", "while :; do :; done" };
+    const argv = [_][]const u8{ test_paths.executable("sh"), "-c", "while :; do :; done" };
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, null);
     defer child.deinit() catch {};
 
@@ -607,7 +608,7 @@ test "delegated child does not inherit the handler's original stdin descriptor" 
     defer env.deinit();
     try env.put("NAS_EXECUTOR_ORIGINAL_STDIN", original_path);
     const argv = [_][]const u8{
-        "/bin/ls",
+        test_paths.executable("ls"),
         "-l",
         "/proc/self/fd",
     };
@@ -643,8 +644,9 @@ test "child consumes only the bytes it reads" {
 
     var env = EnvMap.init(allocator);
     defer env.deinit();
+    try test_paths.addToolPath(&env);
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
         "dd bs=1 count=3 status=none >&2",
     };
@@ -670,8 +672,9 @@ test "delegated regular-file stdin preserves the shared open-file-description of
 
     var env = EnvMap.init(allocator);
     defer env.deinit();
+    try test_paths.addToolPath(&env);
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
         "dd bs=1 count=3 status=none >&2",
     };
@@ -688,7 +691,7 @@ test "stdin null gives the child EOF" {
     const allocator = std.testing.allocator;
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{"/bin/cat"};
+    const argv = [_][]const u8{test_paths.executable("cat")};
     var child = try spawn(allocator, .{ .argv = &argv, .cwd = null, .env = env }, null);
     defer child.deinit() catch {};
 
@@ -703,7 +706,7 @@ test "execution spec can be built directly from start fields" {
     defer env.deinit();
     const args = [_][]const u8{ "-c", "exit 7" };
     var child = try spawn(allocator, .{
-        .argv0 = "/bin/sh",
+        .argv0 = test_paths.executable("sh"),
         .args = &args,
         .env = env,
     }, null);
@@ -717,7 +720,7 @@ test "pollExit keeps final stdout and stderr bytes available to drain" {
     var env = EnvMap.init(allocator);
     defer env.deinit();
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
         "printf out; printf err >&2",
     };
@@ -747,7 +750,7 @@ test "missing executable and cwd failures are reported by spawn" {
         spawn(allocator, .{ .argv = &missing, .cwd = null, .env = env }, null),
     );
 
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     try std.testing.expectError(
         error.FileNotFound,
         spawn(allocator, .{ .argv = &argv, .cwd = "/definitely/missing/nas-cwd", .env = env }, null),
@@ -785,7 +788,7 @@ test "exec and cwd failures leave no child or descriptor ownership" {
     var env = EnvMap.init(allocator);
     defer env.deinit();
     const missing = [_][]const u8{"/definitely/missing/nas-executor"};
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     for (0..4) |_| {
         try std.testing.expectError(
             error.FileNotFound,
@@ -817,7 +820,7 @@ test "delegated stdin restores a handler whose fd 0 was already closed" {
 
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, fds[0]);
     defer child.deinit() catch {};
 
@@ -842,7 +845,7 @@ test "closed delegated stdin cleanup leaves no child or descriptor leak" {
 
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, fds[0]);
     defer child.deinit() catch {};
     _ = try child.wait();
@@ -882,7 +885,7 @@ test "delegated stdin restores the original open fd 0 after repeated cleanup" {
 
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, fds[0]);
     defer child.deinit() catch {};
     _ = try child.wait();
@@ -920,7 +923,7 @@ test "delegated stdin restores fd 0 close-on-exec flags exactly" {
     defer posix.close(fds[1]);
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, fds[0]);
     defer child.deinit() catch {};
     _ = try child.wait();
@@ -946,7 +949,7 @@ test "stdin restoration failure kills and reaps the started child" {
 
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{ "/bin/sh", "-c", "while :; do :; done" };
+    const argv = [_][]const u8{ test_paths.executable("sh"), "-c", "while :; do :; done" };
     try std.testing.expectError(
         error.TestRestoreFailure,
         spawnWithRestore(
@@ -1004,7 +1007,7 @@ test "environment replacement is passed exactly to the child" {
     var env = EnvMap.init(allocator);
     defer env.deinit();
     try env.put("NAS_EXECUTOR_TEST_ONLY", "present");
-    const argv = [_][]const u8{"/usr/bin/env"};
+    const argv = [_][]const u8{test_paths.executable("env")};
     var child = try spawn(allocator, .{ .argv = &argv, .cwd = null, .env = env }, null);
     defer child.deinit() catch {};
 
@@ -1024,7 +1027,7 @@ test "wait observes exit but leaves group cleanup for deinit" {
     const allocator = std.testing.allocator;
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{"/bin/true"};
+    const argv = [_][]const u8{test_paths.executable("true")};
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, null);
     defer child.deinit() catch {};
 
@@ -1047,10 +1050,11 @@ test "terminateGroup kills a descendant that ignores SIGTERM" {
     var env = EnvMap.init(allocator);
     defer env.deinit();
     try env.put("NAS_EXECUTOR_PID_FILE", pid_path);
+    try test_paths.addToolPath(&env);
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
-        "trap '' TERM; (trap '' TERM; while :; do /bin/sleep 1; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; while :; do /bin/sleep 1; done",
+        "trap '' TERM; (trap '' TERM; while :; do sleep 1; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; while :; do sleep 1; done",
     };
     var child = try spawn(allocator, .{ .argv = &argv, .cwd = null, .env = env }, null);
     defer child.deinit() catch {};
@@ -1105,8 +1109,9 @@ test "terminateGroup gives a TERM-handling descendant the full grace period" {
     defer env.deinit();
     try env.put("NAS_EXECUTOR_PID_FILE", pid_path);
     try env.put("NAS_EXECUTOR_DONE_FILE", done_path);
+    try test_paths.addToolPath(&env);
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
         "trap 'exit 0' TERM; (trap 'sleep 0.02; echo done > \"$NAS_EXECUTOR_DONE_FILE\"; exit 0' TERM; while :; do :; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; while :; do :; done",
     };
@@ -1135,10 +1140,11 @@ test "terminateGroup kills a same-group descendant after the leader exits on TER
     var env = EnvMap.init(allocator);
     defer env.deinit();
     try env.put("NAS_EXECUTOR_PID_FILE", pid_path);
+    try test_paths.addToolPath(&env);
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
-        "trap 'exit 0' TERM; (trap '' TERM; while :; do /bin/sleep 1; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; while :; do :; done",
+        "trap 'exit 0' TERM; (trap '' TERM; while :; do sleep 1; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; while :; do :; done",
     };
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, null);
     defer child.deinit() catch {};
@@ -1162,10 +1168,11 @@ test "wait leaves a lingering same-group child for later cleanup" {
     var env = EnvMap.init(allocator);
     defer env.deinit();
     try env.put("NAS_EXECUTOR_PID_FILE", pid_path);
+    try test_paths.addToolPath(&env);
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
-        "(trap '' TERM; while :; do /bin/sleep 1; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; exit 0",
+        "(trap '' TERM; while :; do sleep 1; done) & echo $! > \"$NAS_EXECUTOR_PID_FILE\"; exit 0",
     };
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, null);
     defer child.deinit() catch {};
@@ -1184,7 +1191,7 @@ test "wait leaves final stdout and stderr bytes available to drain" {
     var env = EnvMap.init(allocator);
     defer env.deinit();
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
         "printf out; printf err >&2",
     };
@@ -1204,7 +1211,7 @@ test "wait leaves final stdout and stderr bytes available to drain" {
 test "rollback cleanup emits TERM then KILL" {
     const allocator = std.testing.allocator;
     const argv = [_][]const u8{
-        "/bin/sh",
+        test_paths.executable("sh"),
         "-c",
         "trap '' TERM; while :; do :; done",
     };
@@ -1285,7 +1292,7 @@ test "deinit reports cleanup failure and can be retried" {
     const allocator = std.testing.allocator;
     var env = EnvMap.init(allocator);
     defer env.deinit();
-    const argv = [_][]const u8{ "/bin/sh", "-c", "while :; do :; done" };
+    const argv = [_][]const u8{ test_paths.executable("sh"), "-c", "while :; do :; done" };
     var child = try spawn(allocator, .{ .argv = &argv, .env = env }, null);
     defer child.deinit() catch {};
 

@@ -75,14 +75,22 @@
               --global-cache-dir "$TMPDIR/zig-cache" \
               -Doptimize=ReleaseSafe
           '';
-          checkPhase = ''
+          checkPhase = let
+            testTools = pkgs.symlinkJoin {
+              name = "hostexec-test-tools";
+              paths = [ pkgs.bash pkgs.coreutils ];
+            };
+          in ''
             export HOME=$TMPDIR
-            zig build test --global-cache-dir "$TMPDIR/zig-cache"
+            zig build test \
+              --global-cache-dir "$TMPDIR/zig-cache" \
+              -Dtest-bin-dir=${testTools}/bin
           '';
           installPhase = ''
             mkdir -p $out/lib $out/bin
             cp zig-out/lib/libhostexec_intercept.so $out/lib/hostexec_intercept.so
             cp zig-out/bin/nas-hostexec-client $out/bin/
+            cp zig-out/bin/nas-hostexec-gateway $out/bin/
           '';
         };
 
@@ -161,6 +169,7 @@
           cp -r ${nasUnwrapped}/share/nas/dist $out/ui/
           cp ${hostexecIntercept}/lib/hostexec_intercept.so $out/hostexec/
           cp ${hostexecIntercept}/bin/nas-hostexec-client $out/hostexec/
+          cp ${hostexecIntercept}/bin/nas-hostexec-gateway $out/hostexec/
           cp ${maskfs}/bin/nas-maskfs $out/maskfs/
           cp ${maskFilter}/bin/nas-mask-filter $out/mask-filter/
           cp ${self}/src/config/Schema.pkl $out/config/

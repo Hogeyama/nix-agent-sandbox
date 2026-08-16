@@ -13,6 +13,7 @@ const Allocator = std.mem.Allocator;
 const fd_transport = @import("fd_transport.zig");
 const gateway_executor = @import("gateway_executor.zig");
 const gateway_protocol = @import("gateway_protocol.zig");
+const test_paths = @import("test_paths.zig");
 
 const max_handlers = 1024;
 const poll_timeout_ms: i32 = 50;
@@ -1508,6 +1509,39 @@ fn restoreTestSubreaper(previous: i32) void {
     _ = posix.prctl(.SET_CHILD_SUBREAPER, .{@as(usize, @intCast(previous))}) catch {};
 }
 
+fn processIsLive(pid: posix.pid_t) bool {
+    var path: [64]u8 = undefined;
+    const path_slice = std.fmt.bufPrint(&path, "/proc/{d}/stat", .{pid}) catch return false;
+    var file = std.fs.cwd().openFile(path_slice, .{}) catch return false;
+    defer file.close();
+    var buffer: [4096]u8 = undefined;
+    const len = file.read(&buffer) catch return false;
+    const stat = buffer[0..len];
+    const comm_end = std.mem.lastIndexOfScalar(u8, stat, ')') orelse return false;
+    if (comm_end + 2 >= stat.len) return false;
+    return stat[comm_end + 2] != 'Z';
+}
+
+fn expectProcessGone(pid: posix.pid_t) !void {
+    var rounds: usize = 0;
+    while (rounds < 300) : (rounds += 1) {
+        if (!processIsLive(pid)) return;
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+    return error.IntegrationTimeout;
+}
+
+fn openDescriptorCount(pid: posix.pid_t) !usize {
+    var path: [96]u8 = undefined;
+    const path_slice = try std.fmt.bufPrint(&path, "/proc/{d}/fd", .{pid});
+    var dir = try std.fs.cwd().openDir(path_slice, .{ .iterate = true });
+    defer dir.close();
+    var count: usize = 0;
+    var iterator = dir.iterate();
+    while (try iterator.next()) |_| count += 1;
+    return count;
+}
+
 fn spawnTestOwnedGroup() !posix.pid_t {
     const pid = try posix.fork();
     if (pid == 0) {
@@ -1792,7 +1826,7 @@ const GatewayIntegration = struct {
             .type = "execute",
             .sessionId = session_id,
             .requestId = request_id,
-            .argv0 = "/bin/true",
+            .argv0 = test_paths.executable("true"),
             .args = &.{},
             .cwd = "/",
             .tty = false,
@@ -1817,7 +1851,7 @@ const GatewayIntegration = struct {
             .type = "execute",
             .sessionId = "integration",
             .requestId = request_id,
-            .argv0 = "/bin/true",
+            .argv0 = test_paths.executable("true"),
             .args = &args,
             .cwd = "/",
             .tty = false,
@@ -1832,8 +1866,51 @@ const GatewayIntegration = struct {
         try fd_transport.sendLine(self.external_fd, line, stdin_fd);
     }
 
+    fn sendOversizedExecute(self: *GatewayIntegration, request_id: []const u8, stdin_fd: posix.fd_t) !void {
+        const argument = try self.allocator.alloc(u8, gateway_protocol.max_control_bytes + 1024);
+        defer self.allocator.free(argument);
+        @memset(argument, 'x');
+        const args = [_][]const u8{argument};
+        const request = gateway_protocol.ExternalExecuteRequest{
+            .version = 2,
+            .type = "execute",
+            .sessionId = "integration",
+            .requestId = request_id,
+            .argv0 = test_paths.executable("true"),
+            .args = &args,
+            .cwd = "/",
+            .tty = false,
+            .stdinMode = .fd,
+        };
+        const encoded = try std.json.Stringify.valueAlloc(self.allocator, request, .{});
+        defer self.allocator.free(encoded);
+        const line = try self.allocator.alloc(u8, encoded.len + 1);
+        defer self.allocator.free(line);
+        @memcpy(line[0..encoded.len], encoded);
+        line[encoded.len] = '\n';
+        try fd_transport.sendLine(self.external_fd, line, stdin_fd);
+    }
+
     fn sendBroker(self: *GatewayIntegration, line: []const u8) !void {
         try sendSocketAll(self.broker_fd, line);
+    }
+
+    fn sendOversized(self: *GatewayIntegration, fd: posix.fd_t) !void {
+        const payload = try self.allocator.alloc(u8, gateway_protocol.max_control_bytes + 1);
+        defer self.allocator.free(payload);
+        @memset(payload, 'x');
+        try sendSocketAll(fd, payload);
+    }
+
+    fn expectHandlerCleanup(self: *GatewayIntegration, handler_pid: posix.pid_t, parent_fd_count: usize) !void {
+        try expectProcessGone(handler_pid);
+        const gateway_pid = self.gateway_pid orelse return error.IntegrationProcessGone;
+        var rounds: usize = 0;
+        while (rounds < 300) : (rounds += 1) {
+            if ((openDescriptorCount(gateway_pid) catch 0) == parent_fd_count) return;
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
+        return error.IntegrationTimeout;
     }
 
     fn sendDelayedMaximumFrame(self: *GatewayIntegration, request_id: []const u8, crlf: bool) !void {
@@ -1932,7 +2009,7 @@ const GatewayIntegration = struct {
         try self.sendExecute("integration", request_id, .none, null);
         try self.acceptBroker();
         try self.expectExecute(request_id);
-        try self.sendStart(request_id, "/bin/sleep", &.{"30"});
+        try self.sendStart(request_id, test_paths.executable("sleep"), &.{"30"});
         return self.expectSpawned(.running, request_id);
     }
 
@@ -1940,7 +2017,7 @@ const GatewayIntegration = struct {
         try self.sendExecute("integration", request_id, .none, null);
         try self.acceptBroker();
         try self.expectExecute(request_id);
-        try self.sendStart(request_id, "/bin/sh", &.{ "-c", "while :; do printf xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done" });
+        try self.sendStart(request_id, test_paths.executable("sh"), &.{ "-c", "while :; do printf xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done" });
         return self.expectSpawned(.running, request_id);
     }
 
@@ -1989,7 +2066,7 @@ const GatewayIntegration = struct {
         try self.sendExecute("integration", "masked", .none, null);
         try self.acceptBroker();
         try self.expectExecute("masked");
-        try self.sendStart("masked", "/bin/sh", &.{ "-c", "printf raw" });
+        try self.sendStart("masked", test_paths.executable("sh"), &.{ "-c", "printf raw" });
 
         var broker_state: gateway_protocol.GatewayState = .running;
         var saw_raw = false;
@@ -2103,7 +2180,7 @@ const GatewayIntegration = struct {
 
         try self.acceptBroker();
         try self.expectExecute("no-read");
-        try self.sendStart("no-read", "/bin/true", &.{});
+        try self.sendStart("no-read", test_paths.executable("true"), &.{});
         _ = try self.expectSpawned(.running, "no-read");
 
         const process_exit = try self.readBroker();
@@ -2622,7 +2699,7 @@ test "handler retains child ownership across transient cleanup failure" {
 test "handler retains a real child until transient cleanup retry succeeds" {
     var env = std.process.EnvMap.init(std.testing.allocator);
     defer env.deinit();
-    const argv = [_][]const u8{ "/bin/sleep", "30" };
+    const argv = [_][]const u8{ test_paths.executable("sleep"), "30" };
     const child = try gateway_executor.spawn(std.testing.allocator, .{
         .argv = &argv,
         .env = env,
@@ -2743,7 +2820,7 @@ test "executed child restores default SIGTERM mask and disposition after handler
 
     var env = std.process.EnvMap.init(std.testing.allocator);
     defer env.deinit();
-    const argv = [_][]const u8{ "/bin/cat", "/proc/self/status" };
+    const argv = [_][]const u8{ test_paths.executable("cat"), "/proc/self/status" };
     var deferral = SigtermDeferral.begin();
     var child = try gateway_executor.spawn(std.testing.allocator, .{
         .argv = &argv,
@@ -2803,7 +2880,12 @@ test "external disconnect cleans a real descendant process group" {
     var handler = Handler.init(std.testing.allocator, "session", "", sockets[0]);
     defer handler.deinit();
     handler.request_id = "request";
-    const start = "{\"type\":\"start\",\"requestId\":\"request\",\"argv0\":\"/bin/sh\",\"args\":[\"-c\",\"trap '' TERM; sleep 30 & wait\"],\"cwd\":\"/\",\"env\":{}}";
+    const start = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"type\":\"start\",\"requestId\":\"request\",\"argv0\":\"{s}\",\"args\":[\"-c\",\"trap '' TERM; {s} 30 & wait\"],\"cwd\":\"/\",\"env\":{{}}}}",
+        .{ test_paths.executable("sh"), test_paths.executable("sleep") },
+    );
+    defer std.testing.allocator.free(start);
     try handler.handleBrokerLine(start);
     const pgid = handler.child.?.pgid;
     handler.externalDisconnected();
@@ -3113,6 +3195,82 @@ test "gateway integration rejects session and descriptor mismatches" {
     var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
     defer gateway.deinit();
     try gateway.runSessionAndFdMismatch();
+}
+
+test "gateway malformed FD and oversized frames close handlers without leaks" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+    defer gateway.deinit();
+
+    const gateway_pid = gateway.gateway_pid orelse return error.IntegrationProcessGone;
+
+    var pipe_fds = try posix.pipe2(.{ .CLOEXEC = true });
+    defer {
+        if (pipe_fds[0] >= 0) posix.close(pipe_fds[0]);
+        if (pipe_fds[1] >= 0) posix.close(pipe_fds[1]);
+    }
+    try gateway.sendExecute("integration", "fd-mismatch", .fd, pipe_fds[0]);
+    posix.close(pipe_fds[0]);
+    pipe_fds[0] = -1;
+    posix.close(pipe_fds[1]);
+    pipe_fds[1] = -1;
+    try gateway.acceptBroker();
+    try gateway.expectExecute("fd-mismatch");
+    const parent_fd_count = try openDescriptorCount(gateway_pid);
+    const mismatch_handler = try gateway.waitForHandlerPid();
+    try gateway.sendBroker("{\"type\":\"fallback\",\"requestId\":\"wrong-id\"}\n");
+    const mismatch_broker = try gateway.readBroker();
+    defer gateway.allocator.free(mismatch_broker);
+    try std.testing.expect(std.mem.indexOf(u8, mismatch_broker, "transport_error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, mismatch_broker, "fd-mismatch") != null);
+    const mismatch_external = try gateway.expectExternal("error", "fd-mismatch");
+    defer gateway.allocator.free(mismatch_external);
+    try std.testing.expect(std.mem.indexOf(u8, mismatch_external, "invalid broker message") != null);
+    try std.testing.expectError(error.EndOfStream, gateway.readBroker());
+    try std.testing.expectError(error.EndOfStream, gateway.readExternal());
+    try gateway.expectHandlerCleanup(mismatch_handler, parent_fd_count);
+
+    gateway.closeBroker();
+    gateway.closeExternal();
+    try gateway.reconnectExternal();
+    const external_handler = try gateway.waitForHandlerPid();
+    const external_fd_count = try openDescriptorCount(gateway_pid);
+    var oversized_pipe = try posix.pipe2(.{ .CLOEXEC = true });
+    try gateway.sendOversizedExecute("oversized-external", oversized_pipe[0]);
+    posix.close(oversized_pipe[0]);
+    oversized_pipe[0] = -1;
+    posix.close(oversized_pipe[1]);
+    oversized_pipe[1] = -1;
+    defer {
+        if (oversized_pipe[0] >= 0) posix.close(oversized_pipe[0]);
+        if (oversized_pipe[1] >= 0) posix.close(oversized_pipe[1]);
+    }
+    const oversized_external = try gateway.readExternal();
+    defer gateway.allocator.free(oversized_external);
+    try std.testing.expect(std.mem.indexOf(u8, oversized_external, "\"type\":\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, oversized_external, "MessageTooLong") != null);
+    if (gateway.readExternal()) |line| {
+        gateway.allocator.free(line);
+        return error.ExpectedConnectionClose;
+    } else |err| switch (err) {
+        error.EndOfStream, error.ConnectionResetByPeer => {},
+        else => return err,
+    }
+    try gateway.expectNoBrokerConnection();
+    try gateway.expectHandlerCleanup(external_handler, external_fd_count);
+
+    gateway.closeExternal();
+    try gateway.reconnectExternal();
+    try gateway.sendExecute("integration", "oversized-internal", .none, null);
+    try gateway.acceptBroker();
+    try gateway.expectExecute("oversized-internal");
+    const internal_handler = try gateway.waitForHandlerPid();
+    const internal_fd_count = try openDescriptorCount(gateway_pid);
+    try gateway.sendOversized(gateway.broker_fd);
+    try std.testing.expectError(error.EndOfStream, gateway.readBroker());
+    try std.testing.expectError(error.EndOfStream, gateway.readExternal());
+    try gateway.expectHandlerCleanup(internal_handler, internal_fd_count);
 }
 
 test "gateway integration forwards only masked chunks through the external socket" {

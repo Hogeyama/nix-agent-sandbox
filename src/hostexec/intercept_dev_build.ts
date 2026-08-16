@@ -12,11 +12,12 @@ import { fileURLToPath } from "node:url";
 /**
  * Keep the dev artifacts in step with the source before measuring them.
  *
- * Both `hostexec_intercept.so` and `nas-hostexec-client` are the only place the
- * protocol's behaviour is observable, so forgetting `zig build` makes the suite
- * **reproduce bugs that are already fixed in the source** — the tests would be
- * exercising yesterday's binary while the reader assumes they exercise the
- * diff. The mask-filter suite hit exactly that (see
+ * `hostexec_intercept.so`, `nas-hostexec-client`, and `nas-hostexec-gateway`
+ * are built from one Zig graph and together implement the protocol boundary.
+ * Forgetting `zig build` makes a suite **reproduce bugs that are already fixed
+ * in the source** — it would exercise yesterday's client, interceptor, or
+ * gateway while the reader assumes it exercises the diff. The mask-filter
+ * suite hit exactly that (see
  * `mask_filter_integration_test.ts`), so building is the test's job here too.
  *
  * An mtime comparison is not a substitute: `zig build` leaves the artifact
@@ -24,8 +25,8 @@ import { fileURLToPath } from "node:url";
  * still looks "old".
  *
  * Two environments deliberately skip the build:
- *   - `NAS_ASSET_DIR` (bundled mode): nix built both artifacts from this same
- *     source already.
+ *   - `NAS_ASSET_DIR` (bundled mode): nix built all three artifacts from this
+ *     same source already.
  *   - no `zig` on PATH (outside the devShell): nothing can be built, and
  *     failing here would not help anyone fix it. The caller's `skipIf` then
  *     reports the missing artifact as a skip rather than a silent pass.
