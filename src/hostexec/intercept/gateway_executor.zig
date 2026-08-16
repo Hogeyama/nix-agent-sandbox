@@ -700,21 +700,6 @@ test "stdin null gives the child EOF" {
     _ = try child.wait();
 }
 
-test "execution spec can be built directly from start fields" {
-    const allocator = std.testing.allocator;
-    var env = EnvMap.init(allocator);
-    defer env.deinit();
-    const args = [_][]const u8{ "-c", "exit 7" };
-    var child = try spawn(allocator, .{
-        .argv0 = test_paths.executable("sh"),
-        .args = &args,
-        .env = env,
-    }, null);
-    defer child.deinit() catch {};
-    const term = try child.wait();
-    try std.testing.expectEqual(std.process.Child.Term{ .Exited = 7 }, term);
-}
-
 test "pollExit keeps final stdout and stderr bytes available to drain" {
     const allocator = std.testing.allocator;
     var env = EnvMap.init(allocator);
@@ -737,46 +722,6 @@ test "pollExit keeps final stdout and stderr bytes available to drain" {
     try std.testing.expectEqualStrings("out", &stdout);
     try std.testing.expectEqualStrings("err", &stderr);
     _ = try child.wait();
-}
-
-test "missing executable and cwd failures are reported by spawn" {
-    const allocator = std.testing.allocator;
-    var env = EnvMap.init(allocator);
-    defer env.deinit();
-
-    const missing = [_][]const u8{"/definitely/missing/nas-executor"};
-    try std.testing.expectError(
-        error.FileNotFound,
-        spawn(allocator, .{ .argv = &missing, .cwd = null, .env = env }, null),
-    );
-
-    const argv = [_][]const u8{test_paths.executable("true")};
-    try std.testing.expectError(
-        error.FileNotFound,
-        spawn(allocator, .{ .argv = &argv, .cwd = "/definitely/missing/nas-cwd", .env = env }, null),
-    );
-}
-
-test "spawn failures reap the failed child and release their pipes" {
-    const allocator = std.testing.allocator;
-    const before_children = try testChildrenSnapshot(allocator);
-    defer allocator.free(before_children);
-    const before_fds = try testOpenDescriptorCount();
-
-    var env = EnvMap.init(allocator);
-    defer env.deinit();
-    const missing = [_][]const u8{"/definitely/missing/nas-executor"};
-    for (0..8) |_| {
-        try std.testing.expectError(
-            error.FileNotFound,
-            spawn(allocator, .{ .argv = &missing, .env = env }, null),
-        );
-    }
-
-    const after_children = try testChildrenSnapshot(allocator);
-    defer allocator.free(after_children);
-    try std.testing.expectEqualStrings(before_children, after_children);
-    try std.testing.expectEqual(before_fds, try testOpenDescriptorCount());
 }
 
 test "exec and cwd failures leave no child or descriptor ownership" {

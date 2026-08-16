@@ -57,31 +57,12 @@ export interface ListPendingRequest {
   type: "list_pending";
 }
 
-export type HostExecBrokerMessage =
-  | ExecuteRequest
+export type HostExecControlRequest =
   | ApprovalRequest
   | DenyRequest
   | ListPendingRequest;
 
-export interface ExecuteChunkResponse {
-  type: "chunk";
-  requestId: string;
-  fd: 1 | 2;
-  data: string;
-}
-
-export interface ExecuteResultResponse {
-  type: "result";
-  requestId: string;
-  exitCode: number;
-}
-
-export interface ExecuteFallbackResponse {
-  type: "fallback";
-  requestId: string;
-}
-
-export interface ExecuteErrorResponse {
+export interface HostExecErrorResponse {
   type: "error";
   requestId: string;
   message: string;
@@ -98,11 +79,8 @@ export interface AckResponse {
   decision: "approve" | "deny";
 }
 
-export type HostExecBrokerResponse =
-  | ExecuteChunkResponse
-  | ExecuteResultResponse
-  | ExecuteFallbackResponse
-  | ExecuteErrorResponse
+export type HostExecControlResponse =
+  | HostExecErrorResponse
   | PendingListResponse
   | AckResponse;
 

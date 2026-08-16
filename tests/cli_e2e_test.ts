@@ -24,17 +24,14 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditLog } from "../src/audit/store.ts";
 import { initConfig } from "../src/config/init.ts";
-import {
-  HostExecBroker,
-  sendHostExecBrokerRequest,
-} from "../src/hostexec/broker.ts";
+import { HostExecBroker } from "../src/hostexec/broker.ts";
 import {
   hostExecBrokerSocketPath,
   hostExecExecSocketPath,
   resolveHostExecRuntimePaths,
+  writeHostExecPendingEntry,
   writeHostExecSessionRegistry,
 } from "../src/hostexec/registry.ts";
-import type { PendingListResponse } from "../src/hostexec/types.ts";
 import { SessionBroker, sendBrokerRequest } from "../src/network/broker.ts";
 import {
   type AuthorizeRequest,
@@ -91,11 +88,7 @@ async function runNas(
   // (NAS_HOSTEXEC_SOCKET etc.) so that any `git` invoked via the mounted
   // /opt/nas/hostexec/bin shim can still reach its broker.
   const cleanedParent: Record<string, string | undefined> = { ...process.env };
-  for (const key of [
-    "NAS_SESSION_ID",
-    "NAS_HOSTEXEC_SESSION_ID",
-    "NAS_HOSTEXEC_SESSION_TMP",
-  ]) {
+  for (const key of ["NAS_SESSION_ID", "NAS_HOSTEXEC_SESSION_ID"]) {
     delete cleanedParent[key];
   }
   const proc = Bun.spawn(["bun", "run", MAIN_TS, ...args], {
@@ -563,41 +556,14 @@ test("CLI: container with unknown subcommand exits with error", async () => {
 test("CLI: hostexec pending lists queued approvals", async () => {
   const runtimeRoot = await mkdtemp(path.join(tmpdir(), "nas-cli-hostexec-"));
   const runtimeDir = `${runtimeRoot}/nas/hostexec`;
-  const workspace = await mkdtemp(
-    path.join(tmpdir(), "nas-cli-hostexec-work-"),
-  );
-  const oldToken = process.env.HOSTEXEC_CLI_TOKEN;
-  process.env.HOSTEXEC_CLI_TOKEN = "cli-secret";
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const broker = new HostExecBroker({
     paths,
     sessionId: "sess_cli",
     profileName: "test",
     notify: "off",
-    workspaceRoot: workspace,
+    workspaceRoot: runtimeRoot,
     sessionTmpDir: `${runtimeDir}/tmp`,
-    hostexec: {
-      prompt: {
-        enable: true,
-        timeoutSeconds: 30,
-        defaultScope: "capability",
-        notify: "off",
-      },
-      secrets: {
-        cli_token: { from: "env:HOSTEXEC_CLI_TOKEN", required: true },
-      },
-      rules: [
-        {
-          id: "deno-eval",
-          match: { argv0: "deno", argRegex: "^eval\\b" },
-          cwd: { mode: "workspace-only", allow: [] },
-          env: { TOKEN: "secret:cli_token" },
-          inheritEnv: { mode: "minimal", keys: [] },
-          approval: "prompt",
-          fallback: "container",
-        },
-      ],
-    },
   });
   const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_cli");
   const execSocketPath = hostExecExecSocketPath(paths, "sess_cli");
@@ -611,18 +577,20 @@ test("CLI: hostexec pending lists queued approvals", async () => {
     pid: process.pid,
   });
   try {
-    const execPromise = sendHostExecBrokerRequest(execSocketPath, {
-      version: 2,
-      type: "execute",
+    const createdAt = new Date().toISOString();
+    await writeHostExecPendingEntry(paths, {
+      version: 1,
       sessionId: "sess_cli",
       requestId: "req_cli",
+      approvalKey: "deno-eval:cli",
+      ruleId: "deno-eval",
       argv0: "deno",
       args: ["eval", "console.log(process.env['TOKEN'])"],
-      cwd: workspace,
-      tty: false,
-      stdinMode: "none",
+      cwd: runtimeRoot,
+      state: "pending",
+      createdAt,
+      updatedAt: createdAt,
     });
-    await waitForHostExecPending(paths, 1);
     const result = await runNas([
       "hostexec",
       "pending",
@@ -631,17 +599,9 @@ test("CLI: hostexec pending lists queued approvals", async () => {
     ]);
     expect(result.code).toEqual(0);
     expect(result.stdout.includes("sess_cli req_cli deno-eval")).toEqual(true);
-    await sendHostExecBrokerRequest(controlSocketPath, {
-      type: "deny",
-      requestId: "req_cli",
-    });
-    await execPromise;
   } finally {
-    if (oldToken !== undefined) process.env.HOSTEXEC_CLI_TOKEN = oldToken;
-    else delete process.env.HOSTEXEC_CLI_TOKEN;
     await broker.close().catch(() => {});
     await rm(runtimeRoot, { recursive: true, force: true }).catch(() => {});
-    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -1233,23 +1193,3 @@ test("CLI E2E: network gc removes stale runtime state", async () => {
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
   }
 });
-
-// ============================================================
-// Internal helpers
-// ============================================================
-
-async function waitForHostExecPending(
-  paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
-  count: number,
-): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const items = await sendHostExecBrokerRequest<PendingListResponse>(
-      hostExecBrokerSocketPath(paths, "sess_cli"),
-      { type: "list_pending" },
-    );
-    if (items.type === "pending" && items.items.length >= count) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error("Timed out waiting for hostexec pending entry");
-}

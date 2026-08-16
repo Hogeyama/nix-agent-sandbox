@@ -339,6 +339,24 @@ printf payload | { intercepted-no-read; cat; }
 - Docker不要のZig testsとhost-native regressionをPR CIで実行する。Docker caseは
   integration環境で実行する。
 
+### Test ownership and consolidation
+
+各security・lifecycle不変条件には、それを最も直接観測するtestを一つownerとして
+置く。unit、host-native integration、Docker E2Eの複数層が同じ内部経路と結果だけを
+繰り返す場合は、境界をまたぐ代表的なproofを残し、それ以外を重複coverageとして
+統合する。
+
+- bare clientとLD_PRELOAD interceptorは異なるentry pointなので、双方の代表的な
+  end-to-end proofを残す。
+- protocol validation、FD ownership、fail-closed、process-group cleanup、shutdown、
+  backpressure、maskingには少なくとも一つの直接testを残す。
+- test harness自身のfault injectionを検証するtestは置かない。production invariantを
+  観測しないfixture、fault hook、process probeは削除する。
+- listener fault branch、forced shutdown ownership simulation、fake child cleanup hookは
+  production lifecycleのownerではないため削除し、実際のcooperative cleanup testをownerとして残す。
+- production state machine、timeout、signal処理の簡略化をtest削減の根拠にしない。
+- 同じlifecycleを入力値だけ変えて繰り返す場合はtable-driven testへまとめる。
+
 ## Non-Goals
 
 - TTY / PTY forwarding とjob control

@@ -323,7 +323,6 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
     NAS_HOSTEXEC_SOCKET: execSocketPath,
     NAS_HOSTEXEC_WRAPPER_DIR: WRAPPER_DIR,
     NAS_HOSTEXEC_SESSION_ID: input.sessionId,
-    NAS_HOSTEXEC_SESSION_TMP: containerSessionTmp,
   };
 
   if (symlinks.length > 0) {

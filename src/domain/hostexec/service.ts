@@ -18,7 +18,7 @@
 
 import { Context, Effect, Layer } from "effect";
 import type { HostExecPromptScope } from "../../config/types.ts";
-import { sendHostExecBrokerRequest } from "../../hostexec/broker.ts";
+import { sendHostExecControlRequest } from "../../hostexec/broker.ts";
 import {
   gcHostExecRuntime,
   type HostExecRuntimePaths,
@@ -81,7 +81,7 @@ export const HostExecApprovalServiceLive: Layer.Layer<HostExecApprovalService> =
             if (!session) {
               throw new Error(`Session not found: ${sessionId}`);
             }
-            await sendHostExecBrokerRequest(session.brokerSocket, {
+            await sendHostExecControlRequest(session.brokerSocket, {
               type: "approve",
               requestId,
               scope,
@@ -97,7 +97,7 @@ export const HostExecApprovalServiceLive: Layer.Layer<HostExecApprovalService> =
             if (!session) {
               throw new Error(`Session not found: ${sessionId}`);
             }
-            await sendHostExecBrokerRequest(session.brokerSocket, {
+            await sendHostExecControlRequest(session.brokerSocket, {
               type: "deny",
               requestId,
             });

@@ -993,7 +993,6 @@ test("HostExecStage: run merges hostexec mounts and env into container and hoste
       "/tmp/nas-test-runtime/nas/hostexec/brokers/test-session-id/exec/sock",
     NAS_HOSTEXEC_WRAPPER_DIR: "/opt/nas/hostexec/bin",
     NAS_HOSTEXEC_SESSION_ID: "test-session-id",
-    NAS_HOSTEXEC_SESSION_TMP: "/tmp/nas-hostexec/test-session-id",
   });
   expect(result.container?.extraRunArgs).toEqual(["--shm-size", "2g"]);
   expect(result.container?.command).toEqual({

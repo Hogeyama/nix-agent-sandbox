@@ -54,8 +54,6 @@ const interceptedGatewayAvailable =
   prerequisiteAvailability.gateway &&
   prerequisiteAvailability.interceptor;
 const bareBackpressureAvailable = bareGatewayAvailable && setsidAvailable;
-const interceptedBackpressureAvailable =
-  interceptedGatewayAvailable && setsidAvailable;
 
 type GatewayHarness = Awaited<ReturnType<typeof startGatewayTestHarness>>;
 
@@ -112,12 +110,10 @@ async function waitForRssKiB(pid: number, timeoutMs = 2_000): Promise<number> {
 
 interface ProcessSnapshot {
   readonly pid: number;
-  readonly ppid: number;
   readonly processGroupId: number;
   readonly sessionId: number;
   readonly startTime: number;
   readonly state: string;
-  readonly cwd: string;
 }
 
 async function readProcessSnapshot(
@@ -131,80 +127,18 @@ async function readProcessSnapshot(
       .slice(close + 2)
       .trim()
       .split(/\s+/);
-    const values = [
-      Number(fields[1]),
-      Number(fields[2]),
-      Number(fields[3]),
-      Number(fields[19]),
-    ];
+    const values = [Number(fields[2]), Number(fields[3]), Number(fields[19])];
     if (values.some((value) => !Number.isSafeInteger(value))) return null;
     return {
       pid,
       state: fields[0],
-      ppid: values[0],
-      processGroupId: values[1],
-      sessionId: values[2],
-      startTime: values[3],
-      cwd: await readlink(`/proc/${pid}/cwd`),
+      processGroupId: values[0],
+      sessionId: values[1],
+      startTime: values[2],
     };
   } catch {
     return null;
   }
-}
-
-async function isDescendantOf(
-  pid: number,
-  ancestorPid: number,
-): Promise<boolean> {
-  const seen = new Set<number>();
-  let current = pid;
-  for (let depth = 0; depth < 32; depth += 1) {
-    if (current === ancestorPid) return true;
-    if (seen.has(current) || current <= 1) return false;
-    seen.add(current);
-    const snapshot = await readProcessSnapshot(current);
-    if (!snapshot) return false;
-    current = snapshot.ppid;
-  }
-  return false;
-}
-
-async function waitForRecordedClient(
-  pidPath: string,
-  harnessShellPid: number,
-  cwd: string,
-  timeoutMs = 2_000,
-): Promise<ProcessSnapshot> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const [clientText, shellText] = (await readFile(pidPath, "utf8"))
-        .trim()
-        .split(/\s+/)
-        .map(Number);
-      if (
-        Number.isSafeInteger(clientText) &&
-        Number.isSafeInteger(shellText) &&
-        clientText > 1 &&
-        shellText === harnessShellPid
-      ) {
-        const snapshot = await readProcessSnapshot(clientText);
-        if (
-          snapshot &&
-          snapshot.cwd === cwd &&
-          snapshot.startTime > 0 &&
-          (await isDescendantOf(clientText, harnessShellPid))
-        ) {
-          return snapshot;
-        }
-      }
-    } catch {
-      // The exact PID file is written immediately before exec and may be
-      // observed while the line is still being flushed.
-    }
-    await Bun.sleep(10);
-  }
-  throw new Error(`exact LD_PRELOAD client identity did not start: ${pidPath}`);
 }
 
 async function waitForGatewayHandler(
@@ -366,7 +300,6 @@ async function waitForExecutable(
 function spawnHarnessShell(
   harness: GatewayHarness,
   script: string,
-  interceptedPath?: string,
 ): ReturnType<typeof Bun.spawn> {
   const bashPath = Bun.which("bash");
   if (!bashPath) throw new Error("bash is required for gateway tests");
@@ -386,12 +319,6 @@ function spawnHarnessShell(
       NAS_HOSTEXEC_WRAPPER_DIR: harness.wrapperDir,
       NAS_HOSTEXEC_SOCKET: harness.externalSocketPath,
       NAS_HOSTEXEC_SESSION_ID: "test-session",
-      ...(interceptedPath
-        ? {
-            LD_PRELOAD: artifacts.interceptLibPath!,
-            NAS_HOSTEXEC_INTERCEPT_PATHS: interceptedPath,
-          }
-        : {}),
     },
     stdin: "ignore",
     stdout: "pipe",
@@ -399,28 +326,15 @@ function spawnHarnessShell(
   });
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 async function runBackpressureCase(
   harness: GatewayHarness,
   command: string,
-  interceptedPath?: string,
-  clientExecutable: string | null = artifacts.clientPath,
 ): Promise<{ readonly stdout: string; readonly stderr: string }> {
   const releasePath = path.join(harness.rootDir, "release-payload");
   const release = JSON.stringify(releasePath);
-  const clientPidPath = interceptedPath
-    ? path.join(harness.rootDir, "ld-client.pid")
-    : null;
-  const clientCommand = interceptedPath
-    ? `{ printf '%s %s\\n' "$BASHPID" "$$" > ${shellQuote(clientPidPath!)}; exec ${shellQuote(interceptedPath)}; }`
-    : command;
   const child = spawnHarnessShell(
     harness,
-    `{ while [ ! -e ${release} ]; do sleep 0.01; done; dd if=/dev/zero bs=65536 count=256 status=none; } | ${clientCommand}`,
-    interceptedPath,
+    `{ while [ ! -e ${release} ]; do sleep 0.01; done; dd if=/dev/zero bs=65536 count=256 status=none; } | ${command}`,
   );
   let shellIdentity: ProcessSnapshot | null = null;
   let finished = false;
@@ -445,12 +359,11 @@ async function runBackpressureCase(
       harness.externalSocketPath,
     );
     const handlerPid = await waitForGatewayHandler(gatewayPid);
-    const clientSnapshot = clientExecutable
-      ? null
-      : await waitForRecordedClient(clientPidPath!, child.pid, harness.rootDir);
-    const clientPidBefore =
-      clientSnapshot?.pid ??
-      (await waitForExecutable(clientExecutable!, 2_000, harness.rootDir));
+    const clientPidBefore = await waitForExecutable(
+      artifacts.clientPath!,
+      2_000,
+      harness.rootDir,
+    );
     expect(clientPidBefore).not.toBe(child.pid);
     expect(clientPidBefore).not.toBe(gatewayPid);
     // Keep the producer gate closed until both exact processes have a real
@@ -465,14 +378,10 @@ async function runBackpressureCase(
     while (!finished) {
       const handlerRss = await readRssKiB(handlerPid);
       if (handlerRss !== null) handlerPeak = Math.max(handlerPeak, handlerRss);
-      const currentClient = clientSnapshot
-        ? await readProcessSnapshot(clientSnapshot.pid)
-        : null;
-      const clientPid = clientSnapshot
-        ? currentClient?.startTime === clientSnapshot.startTime
-          ? clientSnapshot.pid
-          : null
-        : await findProcessByExecutable(clientExecutable!, harness.rootDir);
+      const clientPid = await findProcessByExecutable(
+        artifacts.clientPath!,
+        harness.rootDir,
+      );
       if (clientPid !== null) {
         const clientRss = await readRssKiB(clientPid);
         if (clientRss !== null) clientPeak = Math.max(clientPeak, clientRss);
@@ -627,41 +536,6 @@ test.skipIf(!interceptedGatewayAvailable)(
   },
 );
 
-test.skipIf(!interceptedGatewayAvailable)(
-  "LD_PRELOAD hostexec follows a slow producer without dropping delayed stdin",
-  async () => {
-    const hostCat = Bun.which("cat");
-    if (!hostCat) throw new Error("cat is required for this regression");
-    let harness: Awaited<ReturnType<typeof startGatewayTestHarness>> | null =
-      null;
-    try {
-      harness = await startGatewayTestHarness({
-        artifacts,
-        decide: (request): GatewayDecision => ({
-          type: "start",
-          spec: {
-            argv0: hostCat,
-            args: request.args,
-            cwd: harness!.rootDir,
-            env: { PATH: process.env.PATH ?? "" },
-          },
-        }),
-      });
-
-      const result = await harness.runInterceptedShell(
-        `{ printf a; sleep 0.4; printf b; } | '${harness.interceptedNoReadPath}'`,
-      );
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe("ab");
-      expect(harness.requests).toHaveLength(1);
-      expect(harness.requests[0].stdinMode).toBe("fd");
-    } finally {
-      await harness?.close();
-    }
-  },
-);
-
 test.skipIf(!bareBackpressureAvailable)(
   "bare hostexec applies bounded backpressure to a slow 16 MiB host consumer",
   async () => {
@@ -701,52 +575,6 @@ process.stdout.write(String(count) + ":" + hash.digest("hex") + "\\n");
       );
 
       await runBackpressureCase(harness, "git");
-    } finally {
-      await harness?.close();
-    }
-  },
-);
-
-test.skipIf(!interceptedBackpressureAvailable)(
-  "LD_PRELOAD hostexec applies bounded backpressure to a slow 16 MiB host consumer",
-  async () => {
-    let harness: GatewayHarness | null = null;
-    let slowConsumerPath = "";
-    try {
-      harness = await startGatewayTestHarness({
-        artifacts,
-        decide: (request): GatewayDecision => ({
-          type: "start",
-          spec: {
-            argv0: process.execPath,
-            args: [slowConsumerPath, ...request.args],
-            cwd: harness!.rootDir,
-            env: { PATH: process.env.PATH ?? "" },
-          },
-        }),
-      });
-      slowConsumerPath = path.join(harness.rootDir, "slow-consumer.ts");
-      await writeFile(
-        slowConsumerPath,
-        `import { createHash } from "node:crypto";
-const hash = createHash("sha256");
-let count = 0;
-for await (const chunk of Bun.stdin.stream()) {
-  hash.update(chunk);
-  count += chunk.length;
-  await Bun.sleep(5);
-}
-process.stdout.write(String(count) + ":" + hash.digest("hex") + "\\n");
-`,
-      );
-      await chmod(slowConsumerPath, 0o700);
-
-      await runBackpressureCase(
-        harness,
-        `'${harness.interceptedNoReadPath}'`,
-        harness.interceptedNoReadPath,
-        null,
-      );
     } finally {
       await harness?.close();
     }

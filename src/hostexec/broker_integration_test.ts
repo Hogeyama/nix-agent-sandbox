@@ -20,7 +20,8 @@ import {
   readJsonLine,
   writeJsonLine,
 } from "../lib/unix_socket.ts";
-import { HostExecBroker, sendHostExecBrokerRequest } from "./broker.ts";
+import { HostExecBroker, sendHostExecControlRequest } from "./broker.ts";
+import type { BrokerToGatewayMessage } from "./gateway_protocol.ts";
 import {
   hostExecBrokerSocketPath,
   hostExecExecSocketPath,
@@ -31,25 +32,58 @@ import {
   writeHostExecSessionRegistry,
 } from "./registry.ts";
 import type {
-  ExecuteChunkResponse,
   ExecuteRequest,
-  HostExecBrokerResponse,
+  HostExecControlResponse,
   PendingListResponse,
 } from "./types.ts";
+
+type MaskedChunkMessage = Extract<
+  BrokerToGatewayMessage,
+  { type: "masked_chunk" }
+>;
+type BrokerTestResponse = BrokerToGatewayMessage | HostExecControlResponse;
+
+/**
+ * Test-only single-response reader for raw protocol frames. Production control
+ * callers use `sendHostExecControlRequest`; this helper exists for malformed
+ * gateway-channel frames and must not become a general broker API.
+ */
+async function sendTestRawRequest<
+  T extends BrokerTestResponse = BrokerTestResponse,
+>(socketPath: string, message: unknown): Promise<T> {
+  const socket = await connectUnix(socketPath);
+  try {
+    await writeJsonLine(socket, message);
+    const response = await readJsonLine(socket);
+    if (!response) throw new Error("empty broker response");
+    return JSON.parse(response) as T;
+  } finally {
+    socket.destroy();
+  }
+}
+
+async function sendTestGatewayRequest<
+  T extends BrokerToGatewayMessage = BrokerToGatewayMessage,
+>(socketPath: string, request: ExecuteRequest): Promise<T> {
+  return await sendTestRawRequest<T>(socketPath, {
+    type: "execute",
+    request,
+  });
+}
 
 type HostExecConfigOverrides = Omit<Partial<HostExecConfig>, "prompt"> & {
   prompt?: Partial<HostExecConfig["prompt"]>;
 };
 
 interface StreamingResult {
-  chunks: ExecuteChunkResponse[];
+  chunks: MaskedChunkMessage[];
   exitCode: number;
 }
 
 /**
  * Sends an execute request and reads the resulting NDJSON stream to
- * completion, collecting every `chunk` message until the final `result`
- * line arrives. Unlike `sendHostExecBrokerRequest` (which reads a single
+ * completion, collecting every `masked_chunk` message until the final `result`
+ * line arrives. Unlike `sendTestGatewayRequest` (which reads a single
  * JSON line), this is required for execute requests because the broker now
  * streams stdout/stderr as they are produced instead of buffering a single
  * response.
@@ -61,7 +95,7 @@ async function sendStreamingRequest(
   const socket = await connectUnix(socketPath);
   try {
     await writeJsonLine(socket, { type: "execute", request: message });
-    const chunks: ExecuteChunkResponse[] = [];
+    const chunks: MaskedChunkMessage[] = [];
     let exitCode = -1;
     let buffer = "";
     let pump: Promise<void> | undefined;
@@ -104,7 +138,7 @@ async function sendStreamingRequest(
       }
       if (msg.type === "masked_chunk") {
         chunks.push({
-          type: "chunk",
+          type: "masked_chunk",
           requestId: String(msg.requestId),
           fd: Number(msg.fd) as 1 | 2,
           data: String(msg.data),
@@ -137,7 +171,7 @@ async function sendStreamingRequestRaw(
   message: ExecuteRequest,
   options: { spawnedPid?: number } = {},
 ): Promise<{
-  chunks: ExecuteChunkResponse[];
+  chunks: MaskedChunkMessage[];
   finalType: string;
   finalMessage?: string;
   exitCode?: number;
@@ -145,7 +179,7 @@ async function sendStreamingRequestRaw(
   const socket = await connectUnix(socketPath);
   try {
     await writeJsonLine(socket, { type: "execute", request: message });
-    const chunks: ExecuteChunkResponse[] = [];
+    const chunks: MaskedChunkMessage[] = [];
     let finalType = "";
     let finalMessage: string | undefined;
     let exitCode: number | undefined;
@@ -196,7 +230,7 @@ async function sendStreamingRequestRaw(
       }
       if (msg.type === "masked_chunk") {
         chunks.push({
-          type: "chunk",
+          type: "masked_chunk",
           requestId: String(msg.requestId),
           fd: Number(msg.fd) as 1 | 2,
           data: String(msg.data),
@@ -344,7 +378,7 @@ test("HostExecBroker: falls back when no rule matches", async () => {
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const response = await sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('x')"], process.cwd()),
     );
@@ -594,7 +628,7 @@ test("HostExecBroker: rejects duplicate request IDs across approval groups", asy
     expect(stillPending).toHaveLength(1);
     expect(stillPending[0].ruleId).toBe("node-eval");
 
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId,
     });
@@ -790,7 +824,7 @@ test("HostExecBroker: prompts and resumes after approve", async () => {
     const pending = await waitForPendingEntries(paths, 1);
     expect(pending.length).toEqual(1);
     expect(pending[0].ruleId).toEqual("node-eval");
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_approve",
     });
@@ -852,13 +886,13 @@ test("HostExecBroker: pending request can be denied via broker", async () => {
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const executePromise = sendHostExecBrokerRequest(
+    const executePromise = sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('x')"], workspace, "req_deny"),
     );
     const pending = await waitForPendingEntries(paths, 1);
     expect(pending.length).toEqual(1);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_deny",
     });
@@ -993,65 +1027,7 @@ test("HostExecBroker: cancellation removes pending request before approval", asy
       ),
     ]);
     await waitForNoPendingEntries(paths);
-    const approval = await sendHostExecBrokerRequest(controlSocketPath, {
-      type: "approve",
-      requestId,
-    });
-    expect(approval.type).toBe("error");
-  } finally {
-    socket.destroy();
-    await broker.close();
-    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
-    await rm(workspace, { recursive: true, force: true }).catch(() => {});
-  }
-});
-
-test("HostExecBroker: transport_error removes a pending request", async () => {
-  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
-  const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await mkdtemp(
-    path.join(tmpdir(), "nas-hostexec-workspace-"),
-  );
-  const broker = new HostExecBroker({
-    paths,
-    sessionId: "sess_test",
-    profileName: "test",
-    notify: "off",
-    workspaceRoot: workspace,
-    sessionTmpDir: `${runtimeDir}/tmp`,
-    hostexec: makeConfig({
-      rules: [
-        {
-          id: "node-eval",
-          match: { argv0: "node", argRegex: "^-e\\b" },
-          cwd: { mode: "workspace-only", allow: [] },
-          env: {},
-          inheritEnv: { mode: "minimal", keys: [] },
-          approval: "prompt",
-          fallback: "container",
-        },
-      ],
-    }),
-  });
-  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
-  await broker.start(execSocketPath, controlSocketPath);
-  const socket = await connectUnix(execSocketPath);
-  socket.on("error", () => {});
-  try {
-    const requestId = "req_transport_pending";
-    await writeJsonLine(socket, {
-      type: "execute",
-      request: request(["-e", "console.log('never')"], workspace, requestId),
-    });
-    await waitForPendingEntries(paths, 1);
-    await writeJsonLine(socket, {
-      type: "transport_error",
-      requestId,
-      message: "internal gateway socket failed",
-    });
-    await waitForNoPendingEntries(paths);
-    const approval = await sendHostExecBrokerRequest(controlSocketPath, {
+    const approval = await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId,
     });
@@ -1111,7 +1087,7 @@ test("HostExecBroker: cancellation and approval race cleanup is idempotent", asy
     // Give the read monitor the first chance, then deliberately issue the
     // control decision. Either ordering must leave the same clean state.
     await new Promise((resolve) => setTimeout(resolve, 25));
-    const approval = await sendHostExecBrokerRequest(controlSocketPath, {
+    const approval = await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId,
     });
@@ -1157,7 +1133,7 @@ test("HostExecBroker: internal gateway channel cannot approve a pending request"
   await broker.start(execSocketPath, controlSocketPath);
   try {
     // A gateway connection submits a request that goes to pending.
-    const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const execPromise = sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('x')"], workspace, "req_self_approve"),
     );
@@ -1167,7 +1143,7 @@ test("HostExecBroker: internal gateway channel cannot approve a pending request"
     // rejects the first frame because it is not an execute envelope and
     // closes the connection without disclosing pending state.
     await expect(
-      sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
+      sendTestRawRequest<BrokerTestResponse>(execSocketPath, {
         type: "approve",
         requestId: "req_self_approve",
       }),
@@ -1185,68 +1161,9 @@ test("HostExecBroker: internal gateway channel cannot approve a pending request"
     ).toEqual(true);
 
     // Clean up: deny via the control channel and drain.
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_self_approve",
-    });
-    await execPromise;
-  } finally {
-    await broker.close();
-    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
-    await rm(workspace, { recursive: true, force: true }).catch(() => {});
-  }
-});
-
-test("HostExecBroker: internal gateway channel list_pending does not act as control", async () => {
-  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
-  const paths = await resolveHostExecRuntimePaths(runtimeDir);
-  const workspace = await mkdtemp(
-    path.join(tmpdir(), "nas-hostexec-workspace-"),
-  );
-  const broker = new HostExecBroker({
-    paths,
-    sessionId: "sess_test",
-    profileName: "test",
-    notify: "off",
-    workspaceRoot: workspace,
-    sessionTmpDir: `${runtimeDir}/tmp`,
-    hostexec: makeConfig({
-      rules: [
-        {
-          id: "node-eval",
-          match: { argv0: "node", argRegex: "^-e\\b" },
-          cwd: { mode: "workspace-only", allow: [] },
-          env: {},
-          inheritEnv: { mode: "minimal", keys: [] },
-          approval: "prompt",
-          fallback: "container",
-        },
-      ],
-    }),
-  });
-  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
-  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
-  await broker.start(execSocketPath, controlSocketPath);
-  try {
-    const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
-      execSocketPath,
-      request(["-e", "console.log('x')"], workspace, "req_list_probe"),
-    );
-    await waitForPendingEntries(paths, 1);
-
-    // list_pending on the internal channel must not leak pending info or act
-    // as a control operation: the malformed first frame is rejected and the
-    // socket is closed.
-    await expect(
-      sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
-        type: "list_pending",
-      }),
-    ).rejects.toThrow(/empty broker response|socket|connection/i);
-
-    // Clean up.
-    await sendHostExecBrokerRequest(controlSocketPath, {
-      type: "deny",
-      requestId: "req_list_probe",
     });
     await execPromise;
   } finally {
@@ -1287,7 +1204,7 @@ test("HostExecBroker: control channel rejects execute", async () => {
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const response = await sendTestRawRequest<BrokerTestResponse>(
       controlSocketPath,
       request(["-e", "console.log('ok')"], workspace, "req_control_exec"),
     );
@@ -1347,13 +1264,13 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const firstPromise = sendHostExecBrokerRequest(
+    const firstPromise = sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('a')"], workspace, "req_a"),
     );
     const nested = `${workspace}/nested`;
     await mkdir(nested, { recursive: true });
-    const secondPromise = sendHostExecBrokerRequest(
+    const secondPromise = sendTestGatewayRequest(
       execSocketPath,
       request(["fmt", "--help"], nested, "req_b"),
     );
@@ -1377,11 +1294,11 @@ test("HostExecBroker: capability key differs by secret reference and cwd", async
     expect(entries[0].approvalKey).toMatch(/^[0-9a-f]{64}$/);
     expect(entries[1].approvalKey).toMatch(/^[0-9a-f]{64}$/);
     expect(entries[0].approvalKey === entries[1].approvalKey).toEqual(false);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_a",
     });
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_b",
     });
@@ -1628,7 +1545,7 @@ test("HostExecBroker: absolute rule does not match bare-name invocation", async 
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const response = await sendTestGatewayRequest(
       execSocketPath,
       request([], workspace, "req_helper_bare", "helper.sh"),
     );
@@ -1718,7 +1635,7 @@ test("HostExecBroker: rejects cwd outside workspace with workspace-only mode", a
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const response = await sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('x')"], outsideDir, "req_cwd"),
     );
@@ -1811,14 +1728,14 @@ test("HostExecBroker: fallback deny returns error for unmatched command", async 
   await broker.start(execSocketPath, controlSocketPath);
   try {
     // Unmatched command: no rule for "fmt"
-    const fallbackResponse = await sendHostExecBrokerRequest(
+    const fallbackResponse = await sendTestGatewayRequest(
       execSocketPath,
       request(["fmt", "--help"], process.cwd(), "req_unmatched"),
     );
     expect(fallbackResponse.type).toEqual("fallback");
 
     // Matched command with approval: deny
-    const denyResponse = await sendHostExecBrokerRequest(
+    const denyResponse = await sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('x')"], process.cwd(), "req_deny"),
     );
@@ -1879,11 +1796,11 @@ test("HostExecBroker: capability key differs by inheritEnv", async () => {
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const firstPromise = sendHostExecBrokerRequest(
+    const firstPromise = sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('a')"], workspace, "req_ie_a"),
     );
-    const secondPromise = sendHostExecBrokerRequest(
+    const secondPromise = sendTestGatewayRequest(
       execSocketPath,
       request(["fmt", "--help"], workspace, "req_ie_b"),
     );
@@ -1898,11 +1815,11 @@ test("HostExecBroker: capability key differs by inheritEnv", async () => {
     const entries = await waitForPendingCount(paths, 2);
     expect(entries[0].approvalKey === entries[1].approvalKey).toEqual(false);
     // Clean up
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_ie_a",
     });
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_ie_b",
     });
@@ -1952,7 +1869,7 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
       request(["-e", "console.log('first')"], workspace, "req_once_1"),
     );
     await waitForPendingEntries(paths, 1);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_once_1",
       scope: "once",
@@ -1962,7 +1879,7 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
     expect(collectStdout(firstResult).trim()).toEqual("first");
 
     // Second identical request (same args) should go to pending again (not auto-approved)
-    const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const secondPromise = sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_once_2"),
     );
@@ -1973,7 +1890,7 @@ test("HostExecBroker: scope once does not cache approval key", async () => {
     expect(earlyResponse).toEqual(null);
 
     // Clean up
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_once_2",
     });
@@ -2022,7 +1939,7 @@ test("HostExecBroker: scope capability caches approval key", async () => {
       request(["-e", "console.log('first')"], workspace, "req_cap_1"),
     );
     await waitForPendingEntries(paths, 1);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_cap_1",
       scope: "capability",
@@ -2082,7 +1999,7 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
       request(["-e", "console.log('first')"], workspace, "req_def_1"),
     );
     await waitForPendingEntries(paths, 1);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_def_1",
     });
@@ -2090,7 +2007,7 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
     expect(firstResult.exitCode).toEqual(0);
 
     // Second request (same args) should go to pending (defaultScope was "once", so not cached)
-    const secondPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const secondPromise = sendTestGatewayRequest(
       execSocketPath,
       request(["-e", "console.log('first')"], workspace, "req_def_2"),
     );
@@ -2100,7 +2017,7 @@ test("HostExecBroker: defaultScope once used when no explicit scope", async () =
     ]);
     expect(earlyResponse).toEqual(null);
 
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_def_2",
     });
@@ -2419,7 +2336,7 @@ test("HostExecBroker: close tears down a pending approval session", async () => 
     expect(await broker.listPending()).toHaveLength(0);
     expect(await listHostExecPendingEntries(paths, sessionId)).toHaveLength(0);
     await expect(
-      sendHostExecBrokerRequest(controlSocketPath, { type: "list_pending" }),
+      sendHostExecControlRequest(controlSocketPath, { type: "list_pending" }),
     ).rejects.toThrow();
     await expect(stat(registryPath)).rejects.toThrow();
     await expect(stat(execSocketPath)).rejects.toThrow();
@@ -2844,7 +2761,7 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     // pending 生成は非同期なので短くポーリングする。
     let hit: { requestId: string; integrityChanged?: boolean } | undefined;
     for (let i = 0; i < 50; i++) {
-      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+      const res = (await sendHostExecControlRequest(controlSocketPath, {
         type: "list_pending",
       })) as PendingListResponse;
       hit = res.items.find((it) => it.requestId === "req_1");
@@ -2861,7 +2778,7 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     // 読み取りリスナーは deny 送信前に登録する（送信後に登録すると、データが
     // 既に到着済みでも取りこぼすことがあるため）。
     const responsePromise = readJsonLine(execSocket);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_1",
     });
@@ -2936,7 +2853,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
 
     let firstHit: { requestId: string } | undefined;
     for (let i = 0; i < 50; i++) {
-      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+      const res = (await sendHostExecControlRequest(controlSocketPath, {
         type: "list_pending",
       })) as PendingListResponse;
       firstHit = res.items.find((it) => it.requestId === "req_cache_1");
@@ -2945,7 +2862,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
     }
     expect(firstHit).toBeDefined();
 
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "approve",
       requestId: "req_cache_1",
       scope: "capability",
@@ -2978,7 +2895,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
 
     let hit: { requestId: string; integrityChanged?: boolean } | undefined;
     for (let i = 0; i < 50; i++) {
-      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+      const res = (await sendHostExecControlRequest(controlSocketPath, {
         type: "list_pending",
       })) as PendingListResponse;
       hit = res.items.find((it) => it.requestId === "req_cache_2");
@@ -2989,7 +2906,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
     expect(hit?.integrityChanged).toBe(true);
 
     const responsePromise = readJsonLine(execSocket);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_cache_2",
     });
@@ -3055,7 +2972,7 @@ test("HostExecBroker: allow rule denies when target changed and prompt is disabl
     // approval: allow であっても、integrity mismatch かつ prompt.enable が
     // false のときは承認手段が無いので単発の error 応答で deny される
     // （pending にはならない）。
-    const response = await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const response = await sendTestGatewayRequest(
       execSocketPath,
       request([], workspace, "req_mismatch_deny", scriptPath),
     );
@@ -3153,7 +3070,7 @@ test("HostExecBroker: relative argv0 resolves integrity target via cwd at execut
 
     let hit: { requestId: string; integrityChanged?: boolean } | undefined;
     for (let i = 0; i < 50; i++) {
-      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+      const res = (await sendHostExecControlRequest(controlSocketPath, {
         type: "list_pending",
       })) as PendingListResponse;
       hit = res.items.find((it) => it.requestId === "req_rel_1");
@@ -3164,7 +3081,7 @@ test("HostExecBroker: relative argv0 resolves integrity target via cwd at execut
     expect(hit?.integrityChanged).toBe(true);
 
     const responsePromise = readJsonLine(execSocket);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_rel_1",
     });
@@ -3256,7 +3173,7 @@ test("HostExecBroker: symlinked workspace root does not break the integrity base
     expect(collectStdout(result).trim()).toEqual("original");
 
     // 承認待ちに一切入らず即実行されたことも明示的に確認する。
-    const pending = (await sendHostExecBrokerRequest(controlSocketPath, {
+    const pending = (await sendHostExecControlRequest(controlSocketPath, {
       type: "list_pending",
     })) as PendingListResponse;
     expect(pending.items.find((it) => it.requestId === "req_symlink_1")).toBe(
@@ -3343,7 +3260,7 @@ test("HostExecBroker: start() survives a snapshot error and falls back to prompt
 
     let hit: { requestId: string; integrityChanged?: boolean } | undefined;
     for (let i = 0; i < 50; i++) {
-      const res = (await sendHostExecBrokerRequest(controlSocketPath, {
+      const res = (await sendHostExecControlRequest(controlSocketPath, {
         type: "list_pending",
       })) as PendingListResponse;
       hit = res.items.find((it) => it.requestId === "req_eacces_1");
@@ -3354,7 +3271,7 @@ test("HostExecBroker: start() survives a snapshot error and falls back to prompt
     expect(hit?.integrityChanged).toBe(true);
 
     const responsePromise = readJsonLine(execSocket);
-    await sendHostExecBrokerRequest(controlSocketPath, {
+    await sendHostExecControlRequest(controlSocketPath, {
       type: "deny",
       requestId: "req_eacces_1",
     });
@@ -3426,7 +3343,7 @@ test("HostExecBroker: an integrity check error is audited and reported instead o
   const execSocketPath = hostExecExecSocketPath(paths, "sess_integ6");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest<HostExecBrokerResponse>(
+    const response = await sendTestGatewayRequest(
       execSocketPath,
       request([], runtimeDir, "req_integrity_error", brokenArgv0),
     );

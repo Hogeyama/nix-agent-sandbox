@@ -168,7 +168,6 @@ async function readGatewayReadyLine(
   }
   const reader = stdout.getReader();
   let buffered = "";
-  let readTask: Promise<Record<string, unknown>> | undefined;
   const read = async (): Promise<Record<string, unknown>> => {
     while (true) {
       const next = await reader.read();
@@ -195,7 +194,7 @@ async function readGatewayReadyLine(
       return parsed as Record<string, unknown>;
     }
   };
-  readTask = read();
+  const readTask = read();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const message = await Promise.race([

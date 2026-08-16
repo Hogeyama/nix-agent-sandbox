@@ -56,11 +56,7 @@ async function runNas(
   options: { cwd?: string; env?: Record<string, string> } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const cleanedParent: Record<string, string | undefined> = { ...process.env };
-  for (const key of [
-    "NAS_SESSION_ID",
-    "NAS_HOSTEXEC_SESSION_ID",
-    "NAS_HOSTEXEC_SESSION_TMP",
-  ]) {
+  for (const key of ["NAS_SESSION_ID", "NAS_HOSTEXEC_SESSION_ID"]) {
     delete cleanedParent[key];
   }
   const proc = Bun.spawn(["bun", "run", MAIN_TS, ...args], {

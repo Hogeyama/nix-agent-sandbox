@@ -440,12 +440,6 @@ const ExternalError = struct {
     message: []const u8,
 };
 
-const ChildCleanupFn = *const fn (*gateway_executor.ChildHandle) anyerror!void;
-
-fn defaultChildCleanup(child: *gateway_executor.ChildHandle) !void {
-    try child.deinit();
-}
-
 const Handler = struct {
     allocator: Allocator,
     session_id: []const u8,
@@ -466,7 +460,6 @@ const Handler = struct {
     stderr_eof: bool = false,
     process_exit_sent: bool = false,
     max_chunk_frame_bytes: usize = 0,
-    cleanup_child_fn: ChildCleanupFn = defaultChildCleanup,
 
     fn init(allocator: Allocator, session_id: []const u8, internal_socket_path: []const u8, external_fd: posix.fd_t) Handler {
         return .{
@@ -621,7 +614,7 @@ const Handler = struct {
 
     fn cleanupChild(self: *Handler) !void {
         if (self.child) |*child| {
-            try self.cleanup_child_fn(child);
+            try child.deinit();
             self.child = null;
         }
     }
@@ -1095,12 +1088,6 @@ const HandlerPid = struct {
     pid: posix.pid_t,
 };
 
-const GatewayLoopFault = enum {
-    none,
-    after_first_handler,
-    registry_reserve_failure,
-};
-
 fn cleanupGateway(
     listener: posix.fd_t,
     external_socket: []const u8,
@@ -1139,10 +1126,9 @@ fn signalHandlers(handlers: []const HandlerPid, signal: u8) void {
     }
 }
 
-fn runGatewayWithFault(
+fn runGatewayLoop(
     allocator: Allocator,
     options: GatewayOptions,
-    fault: GatewayLoopFault,
     emit_readiness: bool,
 ) !void {
     shutdown_requested.store(false, .seq_cst);
@@ -1175,10 +1161,6 @@ fn runGatewayWithFault(
             // Reserve the registry slot before fork. A post-fork allocation
             // failure would leave a live handler that the parent cannot
             // address during shutdown.
-            if (fault == .registry_reserve_failure) {
-                posix.close(connection);
-                return error.InjectedRegistryReserve;
-            }
             handlers.ensureUnusedCapacity(allocator, 1) catch |err| {
                 posix.close(connection);
                 return err;
@@ -1221,63 +1203,12 @@ fn runGatewayWithFault(
             };
             handlers.appendAssumeCapacity(.{ .pid = child_pid });
             fork_signals.restore();
-            if (fault == .after_first_handler) return error.InjectedLoopError;
         }
     }
 }
 
 fn runGateway(allocator: Allocator, options: GatewayOptions) !void {
-    return runGatewayWithFault(allocator, options, .none, true);
-}
-
-const ConnectorState = struct {
-    path: []const u8,
-    stop: *std.atomic.Value(bool),
-    connected: *std.atomic.Value(bool),
-    disconnected: *std.atomic.Value(bool),
-};
-
-fn connectAndHold(state: *ConnectorState) void {
-    const address = socketAddress(state.path) catch return;
-    while (!state.stop.load(.acquire)) {
-        const fd = posix.socket(
-            posix.AF.UNIX,
-            posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
-            0,
-        ) catch return;
-        posix.connect(fd, @ptrCast(&address), @sizeOf(posix.sockaddr.un)) catch {
-            posix.close(fd);
-            std.Thread.sleep(std.time.ns_per_ms);
-            continue;
-        };
-        defer posix.close(fd);
-        state.connected.store(true, .release);
-        while (!state.stop.load(.acquire)) {
-            var pollfd = [_]posix.pollfd{.{
-                .fd = fd,
-                .events = posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR,
-                .revents = 0,
-            }};
-            const ready = posix.poll(&pollfd, 25) catch return;
-            if (ready == 0) continue;
-            if (pollfd[0].revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
-                state.disconnected.store(true, .release);
-                return;
-            }
-            if (pollfd[0].revents & posix.POLL.IN != 0) {
-                var byte: [1]u8 = undefined;
-                const count = posix.read(fd, &byte) catch {
-                    state.disconnected.store(true, .release);
-                    return;
-                };
-                if (count == 0) {
-                    state.disconnected.store(true, .release);
-                    return;
-                }
-            }
-        }
-        return;
-    }
+    return runGatewayLoop(allocator, options, true);
 }
 
 pub fn main() void {
@@ -1299,37 +1230,6 @@ pub fn main() void {
         std.debug.print("nas-hostexec-gateway: failed ({s})\n", .{@errorName(err)});
         posix.exit(1);
     };
-}
-
-var injected_cleanup_attempts: usize = 0;
-var injected_cleanup_failures: usize = 0;
-var transient_real_cleanup_attempts: usize = 0;
-var release_cleanup_attempts = std.atomic.Value(usize).init(0);
-var release_cleanup = std.atomic.Value(bool).init(false);
-
-fn injectedCleanup(child: *gateway_executor.ChildHandle) !void {
-    _ = child;
-    injected_cleanup_attempts += 1;
-    if (injected_cleanup_attempts <= injected_cleanup_failures) return error.InjectedCleanup;
-}
-
-fn transientRealCleanup(child: *gateway_executor.ChildHandle) !void {
-    if (transient_real_cleanup_attempts == 0) {
-        transient_real_cleanup_attempts += 1;
-        return error.InjectedCleanup;
-    }
-    try child.deinit();
-    transient_real_cleanup_attempts += 1;
-}
-
-fn releaseCleanup(child: *gateway_executor.ChildHandle) !void {
-    _ = child;
-    _ = release_cleanup_attempts.fetchAdd(1, .seq_cst);
-    if (!release_cleanup.load(.acquire)) return error.InjectedCleanup;
-}
-
-fn retryCleanupWorker(handler: *Handler) void {
-    handler.retryCleanupChild();
 }
 
 // These helpers intentionally exercise the same forked listener and handler
@@ -1387,207 +1287,13 @@ const IntegrationReader = struct {
     }
 };
 
-const GatewayIntegrationInitFault = enum {
-    none,
-    wait_external_socket,
-    connect_external_socket,
-};
-
-const ShutdownRequest = enum {
-    normal,
-    force_timeout,
-};
-
-const ShutdownOutcome = enum {
-    cooperative,
-    forced,
-};
-
-const TestProcessGroupOwner = struct {
-    pid: ?posix.pid_t,
-    signal_attempts: *usize,
-    reap_on_cleanup: bool = false,
-    reaped: bool = false,
-    injected_reap_failures: usize = 0,
-    persistent_reap_failure: bool = false,
-
-    fn init(pid: posix.pid_t, signal_attempts: *usize) TestProcessGroupOwner {
-        return .{ .pid = pid, .signal_attempts = signal_attempts };
-    }
-
-    fn disarm(self: *TestProcessGroupOwner) void {
-        self.pid = null;
-    }
-
-    fn signalWith(self: *TestProcessGroupOwner, signal_value: u8) !void {
-        if (!self.reaped) {
-            if (self.pid) |pid| {
-                self.signal_attempts.* += 1;
-                posix.kill(-pid, signal_value) catch |err| switch (err) {
-                    error.ProcessNotFound => {},
-                    else => return err,
-                };
-            }
-        }
-    }
-
-    fn signal(self: *TestProcessGroupOwner) !void {
-        try self.signalWith(posix.SIG.KILL);
-    }
-
-    fn cleanup(self: *TestProcessGroupOwner) void {
-        if (self.pid == null) return;
-        if (self.reap_on_cleanup) {
-            self.mustCleanOwnedGroup() catch |err| {
-                std.debug.panic("test-owned process group cleanup failed: {s}", .{@errorName(err)});
-            };
-        } else {
-            self.signal() catch |err| {
-                std.debug.panic("test-owned process group signal failed: {s}", .{@errorName(err)});
-            };
-            self.disarm();
-        }
-    }
-
-    fn enableReapOnCleanup(self: *TestProcessGroupOwner) void {
-        self.reap_on_cleanup = true;
-    }
-
-    fn injectFirstReapFailure(self: *TestProcessGroupOwner) void {
-        self.injected_reap_failures = 1;
-        self.persistent_reap_failure = false;
-    }
-
-    fn injectPersistentReapFailure(self: *TestProcessGroupOwner) void {
-        self.injected_reap_failures = 0;
-        self.persistent_reap_failure = true;
-    }
-
-    fn clearInjectedReapFailure(self: *TestProcessGroupOwner) void {
-        self.injected_reap_failures = 0;
-        self.persistent_reap_failure = false;
-    }
-
-    fn mustCleanOwnedGroup(self: *TestProcessGroupOwner) !void {
-        if (self.pid == null) return;
-        if (!self.reaped) {
-            try self.signal();
-            try self.reap();
-        }
-        self.disarm();
-    }
-
-    fn reap(self: *TestProcessGroupOwner) !void {
-        if (self.reaped) return;
-        const pid = self.pid orelse return;
-        if (self.persistent_reap_failure) return error.InjectedReapFailure;
-        if (self.injected_reap_failures > 0) {
-            self.injected_reap_failures -= 1;
-            return error.InjectedReapFailure;
-        }
-        var rounds: usize = 0;
-        while (rounds < 300) : (rounds += 1) {
-            const result = posix.waitpid(pid, posix.W.NOHANG);
-            if (result.pid == pid) {
-                self.reaped = true;
-                return;
-            }
-            std.Thread.sleep(10 * std.time.ns_per_ms);
-        }
-        return error.IntegrationTimeout;
-    }
-};
-
-fn installTestSubreaper() !i32 {
-    var previous: i32 = 0;
-    _ = try posix.prctl(.GET_CHILD_SUBREAPER, .{@intFromPtr(&previous)});
-    _ = try posix.prctl(.SET_CHILD_SUBREAPER, .{1});
-    return previous;
-}
-
-fn restoreTestSubreaper(previous: i32) void {
-    _ = posix.prctl(.SET_CHILD_SUBREAPER, .{@as(usize, @intCast(previous))}) catch {};
-}
-
-fn processIsLive(pid: posix.pid_t) bool {
-    var path: [64]u8 = undefined;
-    const path_slice = std.fmt.bufPrint(&path, "/proc/{d}/stat", .{pid}) catch return false;
-    var file = std.fs.cwd().openFile(path_slice, .{}) catch return false;
-    defer file.close();
-    var buffer: [4096]u8 = undefined;
-    const len = file.read(&buffer) catch return false;
-    const stat = buffer[0..len];
-    const comm_end = std.mem.lastIndexOfScalar(u8, stat, ')') orelse return false;
-    if (comm_end + 2 >= stat.len) return false;
-    return stat[comm_end + 2] != 'Z';
-}
-
-fn expectProcessGone(pid: posix.pid_t) !void {
-    var rounds: usize = 0;
-    while (rounds < 300) : (rounds += 1) {
-        if (!processIsLive(pid)) return;
-        std.Thread.sleep(10 * std.time.ns_per_ms);
-    }
-    return error.IntegrationTimeout;
-}
-
-fn openDescriptorCount(pid: posix.pid_t) !usize {
-    var path: [96]u8 = undefined;
-    const path_slice = try std.fmt.bufPrint(&path, "/proc/{d}/fd", .{pid});
-    var dir = try std.fs.cwd().openDir(path_slice, .{ .iterate = true });
-    defer dir.close();
-    var count: usize = 0;
-    var iterator = dir.iterate();
-    while (try iterator.next()) |_| count += 1;
-    return count;
-}
-
-fn spawnTestOwnedGroup() !posix.pid_t {
-    const pid = try posix.fork();
-    if (pid == 0) {
-        posix.setpgid(0, 0) catch posix.exit(1);
-        while (true) std.Thread.sleep(std.time.ns_per_s);
-    }
-    errdefer {
-        posix.kill(pid, posix.SIG.KILL) catch {};
-        _ = posix.waitpid(pid, 0);
-    }
-    try posix.setpgid(pid, pid);
-    return pid;
-}
-
-test "owned process-group cleanup retries after an injected reap failure" {
-    var signal_attempts: usize = 0;
-    var owner = TestProcessGroupOwner.init(try spawnTestOwnedGroup(), &signal_attempts);
-    owner.enableReapOnCleanup();
-    defer owner.cleanup();
-
-    owner.injectFirstReapFailure();
-    try std.testing.expectError(error.InjectedReapFailure, owner.mustCleanOwnedGroup());
-    try std.testing.expect(owner.pid != null);
-
-    try owner.mustCleanOwnedGroup();
-    try std.testing.expect(owner.pid == null);
-    try std.testing.expectEqual(@as(usize, 2), signal_attempts);
-}
-
-test "owned process-group cleanup reports persistent reap failure without orphan" {
-    var signal_attempts: usize = 0;
-    var owner = TestProcessGroupOwner.init(try spawnTestOwnedGroup(), &signal_attempts);
-    owner.enableReapOnCleanup();
-    defer {
-        owner.clearInjectedReapFailure();
-        owner.cleanup();
-    }
-
-    owner.injectPersistentReapFailure();
-    try std.testing.expectError(error.InjectedReapFailure, owner.mustCleanOwnedGroup());
-    try std.testing.expectError(error.InjectedReapFailure, owner.mustCleanOwnedGroup());
-    try std.testing.expect(owner.pid != null);
-
-    owner.clearInjectedReapFailure();
-    try owner.mustCleanOwnedGroup();
-    try std.testing.expect(owner.pid == null);
+// Lifecycle tests use this only if an assertion interrupts normal cleanup
+// after the test has captured ownership of a handler or command group.
+fn killProcessGroup(pid: posix.pid_t) void {
+    posix.kill(-pid, posix.SIG.KILL) catch |err| switch (err) {
+        error.ProcessNotFound => {},
+        else => {},
+    };
 }
 
 const GatewayIntegration = struct {
@@ -1604,10 +1310,6 @@ const GatewayIntegration = struct {
     deinitialized: bool = false,
 
     fn init(allocator: Allocator, tmp: anytype) !GatewayIntegration {
-        return initWithFault(allocator, tmp, .none);
-    }
-
-    fn initWithFault(allocator: Allocator, tmp: anytype, fault: GatewayIntegrationInitFault) !GatewayIntegration {
         var root: ?[]u8 = try tmp.dir.realpathAlloc(allocator, ".");
         errdefer if (root) |value| allocator.free(value);
         var external_socket: ?[]u8 = try std.fs.path.join(allocator, &.{ root.?, "external.sock" });
@@ -1622,11 +1324,11 @@ const GatewayIntegration = struct {
             // The broker listener belongs to the test process.  Closing the
             // inherited copy is important for deterministic EOF tests.
             posix.close(internal_listener.?);
-            runGatewayWithFault(std.heap.page_allocator, .{
+            runGatewayLoop(std.heap.page_allocator, .{
                 .session_id = "integration",
                 .external_socket = external_socket.?,
                 .internal_socket = internal_socket.?,
-            }, .none, false) catch posix.exit(1);
+            }, false) catch posix.exit(1);
             posix.exit(0);
         }
 
@@ -1645,9 +1347,7 @@ const GatewayIntegration = struct {
         internal_socket = null;
         internal_listener = null;
         errdefer result.deinit();
-        if (fault == .wait_external_socket) return error.InjectedIntegrationWait;
         try result.waitForExternalSocket();
-        if (fault == .connect_external_socket) return error.InjectedIntegrationConnect;
         const stream = try std.net.connectUnixSocket(result.external_socket);
         result.external_fd = stream.handle;
         return result;
@@ -1670,7 +1370,7 @@ const GatewayIntegration = struct {
             self.internal_listener = -1;
         }
 
-        _ = self.shutdownGateway(.normal);
+        self.shutdownGateway();
 
         removeStaleSocket(self.external_socket) catch {};
         removeStaleSocket(self.internal_socket) catch {};
@@ -1682,26 +1382,17 @@ const GatewayIntegration = struct {
         self.* = undefined;
     }
 
-    fn shutdownGateway(self: *GatewayIntegration, request: ShutdownRequest) ShutdownOutcome {
-        const pid = self.gateway_pid orelse return .cooperative;
-        if (request == .force_timeout) {
-            // Test-only fault injection: stop the parent before TERM so the
-            // timeout branch SIGKILLs/reaps only the gateway, leaving its
-            // descendant groups for their still-armed owners to clean up.
-            posix.kill(pid, posix.SIG.STOP) catch {};
-            std.Thread.sleep(10 * std.time.ns_per_ms);
-        }
+    fn shutdownGateway(self: *GatewayIntegration) void {
+        const pid = self.gateway_pid orelse return;
         signalGatewayShutdown(pid);
-        const max_signal_retries: usize = if (request == .force_timeout) 1 else 30;
         var signal_retries: usize = 0;
-        var outcome: ShutdownOutcome = .cooperative;
         while (true) {
             const result = posix.waitpid(pid, posix.W.NOHANG);
             if (result.pid == pid) break;
-            if (signal_retries == max_signal_retries) {
-                outcome = .forced;
-                // Keep a failed test from leaking a gateway process, while
-                // leaving descendant cleanup to their still-owned groups.
+            if (signal_retries == 30) {
+                // Keep a failed test from leaking a gateway process. Normal
+                // test cleanup should complete cooperatively before this
+                // leak-safe fallback is needed.
                 posix.kill(pid, posix.SIG.KILL) catch {};
                 _ = posix.waitpid(pid, 0);
                 break;
@@ -1715,7 +1406,6 @@ const GatewayIntegration = struct {
             signal_retries += 1;
         }
         self.gateway_pid = null;
-        return outcome;
     }
 
     fn signalGatewayShutdown(pid: posix.pid_t) void {
@@ -1866,51 +1556,8 @@ const GatewayIntegration = struct {
         try fd_transport.sendLine(self.external_fd, line, stdin_fd);
     }
 
-    fn sendOversizedExecute(self: *GatewayIntegration, request_id: []const u8, stdin_fd: posix.fd_t) !void {
-        const argument = try self.allocator.alloc(u8, gateway_protocol.max_control_bytes + 1024);
-        defer self.allocator.free(argument);
-        @memset(argument, 'x');
-        const args = [_][]const u8{argument};
-        const request = gateway_protocol.ExternalExecuteRequest{
-            .version = 2,
-            .type = "execute",
-            .sessionId = "integration",
-            .requestId = request_id,
-            .argv0 = test_paths.executable("true"),
-            .args = &args,
-            .cwd = "/",
-            .tty = false,
-            .stdinMode = .fd,
-        };
-        const encoded = try std.json.Stringify.valueAlloc(self.allocator, request, .{});
-        defer self.allocator.free(encoded);
-        const line = try self.allocator.alloc(u8, encoded.len + 1);
-        defer self.allocator.free(line);
-        @memcpy(line[0..encoded.len], encoded);
-        line[encoded.len] = '\n';
-        try fd_transport.sendLine(self.external_fd, line, stdin_fd);
-    }
-
     fn sendBroker(self: *GatewayIntegration, line: []const u8) !void {
         try sendSocketAll(self.broker_fd, line);
-    }
-
-    fn sendOversized(self: *GatewayIntegration, fd: posix.fd_t) !void {
-        const payload = try self.allocator.alloc(u8, gateway_protocol.max_control_bytes + 1);
-        defer self.allocator.free(payload);
-        @memset(payload, 'x');
-        try sendSocketAll(fd, payload);
-    }
-
-    fn expectHandlerCleanup(self: *GatewayIntegration, handler_pid: posix.pid_t, parent_fd_count: usize) !void {
-        try expectProcessGone(handler_pid);
-        const gateway_pid = self.gateway_pid orelse return error.IntegrationProcessGone;
-        var rounds: usize = 0;
-        while (rounds < 300) : (rounds += 1) {
-            if ((openDescriptorCount(gateway_pid) catch 0) == parent_fd_count) return;
-            std.Thread.sleep(10 * std.time.ns_per_ms);
-        }
-        return error.IntegrationTimeout;
     }
 
     fn sendDelayedMaximumFrame(self: *GatewayIntegration, request_id: []const u8, crlf: bool) !void {
@@ -2033,11 +1680,6 @@ const GatewayIntegration = struct {
         return error.IntegrationTimeout;
     }
 
-    fn expectProcessGroupGoneWithFault(pid: posix.pid_t, force_failure: bool) !void {
-        if (force_failure) return error.InjectedProcessGroupProbe;
-        return expectProcessGroupGone(pid);
-    }
-
     fn runPreStartFallback(self: *GatewayIntegration) !void {
         try self.sendExecute("integration", "fallback", .none, null);
         try self.acceptBroker();
@@ -2118,7 +1760,16 @@ const GatewayIntegration = struct {
     }
 
     fn runPostStartFallback(self: *GatewayIntegration) !void {
-        const pid = try self.startPersistentCommand("post-start-fallback");
+        const handler_pid = try self.waitForHandlerPid();
+        var handler_cleanup_armed = true;
+        defer {
+            if (handler_cleanup_armed) killProcessGroup(handler_pid);
+        }
+        const command_pid = try self.startPersistentCommand("post-start-fallback");
+        var command_cleanup_armed = true;
+        defer {
+            if (command_cleanup_armed) killProcessGroup(command_pid);
+        }
         try self.sendBroker("{\"type\":\"fallback\",\"requestId\":\"post-start-fallback\"}\n");
 
         const broker_line = try self.readBroker();
@@ -2133,11 +1784,23 @@ const GatewayIntegration = struct {
         }
         const external = try self.expectExternal("error", "post-start-fallback");
         self.allocator.free(external);
-        try expectProcessGroupGone(pid);
+        try expectProcessGroupGone(command_pid);
+        try expectProcessGroupGone(handler_pid);
+        command_cleanup_armed = false;
+        handler_cleanup_armed = false;
     }
 
     fn runExternalDisconnect(self: *GatewayIntegration) !void {
-        const pid = try self.startPersistentCommand("external-disconnect");
+        const handler_pid = try self.waitForHandlerPid();
+        var handler_cleanup_armed = true;
+        defer {
+            if (handler_cleanup_armed) killProcessGroup(handler_pid);
+        }
+        const command_pid = try self.startPersistentCommand("external-disconnect");
+        var command_cleanup_armed = true;
+        defer {
+            if (command_cleanup_armed) killProcessGroup(command_pid);
+        }
         self.closeExternal();
         const line = try self.readBroker();
         defer self.allocator.free(line);
@@ -2150,16 +1813,31 @@ const GatewayIntegration = struct {
             },
             else => return error.UnexpectedBrokerMessage,
         }
-        try expectProcessGroupGone(pid);
+        try expectProcessGroupGone(command_pid);
+        try expectProcessGroupGone(handler_pid);
+        command_cleanup_armed = false;
+        handler_cleanup_armed = false;
     }
 
     fn runInternalDisconnect(self: *GatewayIntegration) !void {
-        const pid = try self.startPersistentCommand("internal-disconnect");
+        const handler_pid = try self.waitForHandlerPid();
+        var handler_cleanup_armed = true;
+        defer {
+            if (handler_cleanup_armed) killProcessGroup(handler_pid);
+        }
+        const command_pid = try self.startPersistentCommand("internal-disconnect");
+        var command_cleanup_armed = true;
+        defer {
+            if (command_cleanup_armed) killProcessGroup(command_pid);
+        }
         self.closeBroker();
         const external = try self.expectExternal("error", "internal-disconnect");
         defer self.allocator.free(external);
         try std.testing.expect(std.mem.indexOf(u8, external, "hostexec broker disconnected") != null);
-        try expectProcessGroupGone(pid);
+        try expectProcessGroupGone(command_pid);
+        try expectProcessGroupGone(handler_pid);
+        command_cleanup_armed = false;
+        handler_cleanup_armed = false;
     }
 
     fn runNoReadRequest(self: *GatewayIntegration) !void {
@@ -2199,7 +1877,7 @@ const GatewayIntegration = struct {
 };
 
 fn shutdownGatewayWorker(gateway: *GatewayIntegration) void {
-    _ = gateway.shutdownGateway(.normal);
+    gateway.shutdownGateway();
 }
 
 test "gateway CLI parses its required session and socket arguments" {
@@ -2518,77 +2196,6 @@ test "gateway readiness is a v2 newline-delimited handshake" {
     );
 }
 
-test "gateway loop errors clean up live handler groups and socket" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
-    defer std.testing.allocator.free(root);
-    const socket_path = try std.fs.path.join(std.testing.allocator, &.{ root, "gateway.sock" });
-    defer std.testing.allocator.free(socket_path);
-
-    var stop = std.atomic.Value(bool).init(false);
-    var connected = std.atomic.Value(bool).init(false);
-    var disconnected = std.atomic.Value(bool).init(false);
-    var connector = ConnectorState{
-        .path = socket_path,
-        .stop = &stop,
-        .connected = &connected,
-        .disconnected = &disconnected,
-    };
-    var thread = try std.Thread.spawn(.{}, connectAndHold, .{&connector});
-    defer {
-        stop.store(true, .release);
-        thread.join();
-    }
-
-    const result = runGatewayWithFault(std.testing.allocator, .{
-        .session_id = "session",
-        .external_socket = socket_path,
-        .internal_socket = "/tmp/no-broker.sock",
-    }, .after_first_handler, false);
-    try std.testing.expectError(error.InjectedLoopError, result);
-    try std.testing.expect(connected.load(.acquire));
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(socket_path, .{}));
-}
-
-test "registry reservation failure closes the accepted client before fork" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
-    defer std.testing.allocator.free(root);
-    const socket_path = try std.fs.path.join(std.testing.allocator, &.{ root, "gateway.sock" });
-    defer std.testing.allocator.free(socket_path);
-
-    var stop = std.atomic.Value(bool).init(false);
-    var connected = std.atomic.Value(bool).init(false);
-    var disconnected = std.atomic.Value(bool).init(false);
-    var connector = ConnectorState{
-        .path = socket_path,
-        .stop = &stop,
-        .connected = &connected,
-        .disconnected = &disconnected,
-    };
-    var thread = try std.Thread.spawn(.{}, connectAndHold, .{&connector});
-    defer {
-        stop.store(true, .release);
-        thread.join();
-    }
-
-    const result = runGatewayWithFault(std.testing.allocator, .{
-        .session_id = "session",
-        .external_socket = socket_path,
-        .internal_socket = "/tmp/no-broker.sock",
-    }, .registry_reserve_failure, false);
-    try std.testing.expectError(error.InjectedRegistryReserve, result);
-    try std.testing.expect(connected.load(.acquire));
-    var rounds: usize = 0;
-    while (!disconnected.load(.acquire) and rounds < 100) : (rounds += 1) {
-        std.Thread.sleep(std.time.ns_per_ms);
-    }
-    try std.testing.expect(disconnected.load(.acquire));
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(socket_path, .{}));
-}
-
 test "handler keeps pre-start fallback on the external response path" {
     var sockets: [2]posix.fd_t = undefined;
     try std.testing.expectEqual(
@@ -2638,7 +2245,7 @@ test "handler rejects broker raw chunks and post-start fallback" {
     try std.testing.expectEqual(gateway_protocol.GatewayState.terminal, fallback_handler.state);
 }
 
-test "slow external consumer reserves room for multiple maximum chunks" {
+test "slow consumers reserve room for multiple maximum chunks" {
     var handler = Handler.init(std.testing.allocator, "session", "", -1);
     defer handler.deinit();
     handler.request_id = "request";
@@ -2648,55 +2255,20 @@ test "slow external consumer reserves room for multiple maximum chunks" {
     defer std.testing.allocator.free(frame);
     @memset(frame, 'x');
 
-    var chunks: usize = 0;
-    while (handler.hasExternalChunkRoom()) {
-        try handler.external_out.append(frame);
-        chunks += 1;
+    for ([_]*ByteQueue{ &handler.external_out, &handler.broker_out }) |queue| {
+        var chunks: usize = 0;
+        while (handler.hasChunkRoom(queue)) {
+            try queue.append(frame);
+            chunks += 1;
+        }
+        try std.testing.expect(chunks >= 2);
+        try std.testing.expect(!handler.hasChunkRoom(queue));
+        queue.clear();
+        try std.testing.expect(handler.hasChunkRoom(queue));
     }
-    try std.testing.expect(chunks >= 2);
-    try std.testing.expect(!handler.hasExternalChunkRoom());
-    handler.external_out.clear();
-    try std.testing.expect(handler.hasExternalChunkRoom());
 }
 
-test "slow broker reserves room for multiple maximum chunks" {
-    var handler = Handler.init(std.testing.allocator, "session", "", -1);
-    defer handler.deinit();
-    handler.request_id = "request";
-    handler.max_chunk_frame_bytes = try handler.maximumChunkFrameBytes();
-
-    const frame = try std.testing.allocator.alloc(u8, handler.max_chunk_frame_bytes);
-    defer std.testing.allocator.free(frame);
-    @memset(frame, 'x');
-
-    var chunks: usize = 0;
-    while (handler.hasBrokerChunkRoom()) {
-        try handler.broker_out.append(frame);
-        chunks += 1;
-    }
-    try std.testing.expect(chunks >= 2);
-    try std.testing.expect(!handler.hasBrokerChunkRoom());
-    handler.broker_out.clear();
-    try std.testing.expect(handler.hasBrokerChunkRoom());
-}
-
-test "handler retains child ownership across transient cleanup failure" {
-    var handler = Handler.init(std.testing.allocator, "session", "", -1);
-    defer handler.deinit();
-    const fake_child: gateway_executor.ChildHandle = undefined;
-    handler.child = fake_child;
-    handler.cleanup_child_fn = injectedCleanup;
-    injected_cleanup_attempts = 0;
-    injected_cleanup_failures = 1;
-
-    try std.testing.expectError(error.InjectedCleanup, handler.cleanupChild());
-    try std.testing.expect(handler.child != null);
-    try handler.cleanupChild();
-    try std.testing.expect(handler.child == null);
-    try std.testing.expectEqual(@as(usize, 2), injected_cleanup_attempts);
-}
-
-test "handler retains a real child until transient cleanup retry succeeds" {
+test "handler retains a real child until cleanup retry succeeds" {
     var env = std.process.EnvMap.init(std.testing.allocator);
     defer env.deinit();
     const argv = [_][]const u8{ test_paths.executable("sleep"), "30" };
@@ -2707,59 +2279,19 @@ test "handler retains a real child until transient cleanup retry succeeds" {
     const child_pid = child.pid;
 
     var handler = Handler.init(std.testing.allocator, "session", "", -1);
-    defer handler.deinit();
+    defer {
+        if (handler.child) |*owned_child| owned_child.wait_error = null;
+        handler.deinit();
+    }
     handler.child = child;
-    handler.cleanup_child_fn = transientRealCleanup;
-    transient_real_cleanup_attempts = 0;
+    handler.child.?.wait_error = error.InjectedCleanup;
 
     try std.testing.expectError(error.InjectedCleanup, handler.cleanupChild());
     try std.testing.expect(handler.child != null);
+    handler.child.?.wait_error = null;
     try handler.cleanupChild();
     try std.testing.expect(handler.child == null);
     try GatewayIntegration.expectProcessGroupGone(child_pid);
-}
-
-test "handler retains ownership after persistent cleanup failure" {
-    var handler = Handler.init(std.testing.allocator, "session", "", -1);
-    defer handler.deinit();
-    const fake_child: gateway_executor.ChildHandle = undefined;
-    handler.child = fake_child;
-    handler.cleanup_child_fn = injectedCleanup;
-    injected_cleanup_attempts = 0;
-    injected_cleanup_failures = 100;
-
-    try std.testing.expectError(error.InjectedCleanup, handler.cleanupChild());
-    try std.testing.expect(handler.child != null);
-    handler.child = null;
-}
-
-test "handler retry retains ownership until a persistent cleanup failure is released" {
-    var handler = Handler.init(std.testing.allocator, "session", "", -1);
-    defer handler.deinit();
-    const fake_child: gateway_executor.ChildHandle = undefined;
-    handler.child = fake_child;
-    handler.cleanup_child_fn = releaseCleanup;
-    release_cleanup_attempts.store(0, .seq_cst);
-    release_cleanup.store(false, .release);
-
-    var worker = try std.Thread.spawn(.{}, retryCleanupWorker, .{&handler});
-    var joined = false;
-    defer {
-        release_cleanup.store(true, .release);
-        if (!joined) worker.join();
-    }
-
-    var rounds: usize = 0;
-    while (release_cleanup_attempts.load(.acquire) == 0 and rounds < 100) : (rounds += 1) {
-        std.Thread.sleep(std.time.ns_per_ms);
-    }
-    try std.testing.expect(release_cleanup_attempts.load(.acquire) > 0);
-    try std.testing.expect(handler.child != null);
-
-    release_cleanup.store(true, .release);
-    worker.join();
-    joined = true;
-    try std.testing.expect(handler.child == null);
 }
 
 test "SIGTERM deferral restores the handler's original signal mask" {
@@ -2805,11 +2337,11 @@ test "pthread_atfork registration failure aborts gateway setup" {
 
     try std.testing.expectError(
         error.PthreadAtforkFailed,
-        runGatewayWithFault(std.testing.allocator, .{
+        runGatewayLoop(std.testing.allocator, .{
             .session_id = "session",
             .external_socket = socket_path,
             .internal_socket = "/tmp/no-broker.sock",
-        }, .none, false),
+        }, false),
     );
     try std.testing.expect(!sigterm_atfork_registered);
     try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(socket_path, .{}));
@@ -2921,6 +2453,11 @@ test "gateway shutdown closes stdin while broker does not read initial execute" 
     var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
     defer gateway.deinit();
 
+    const handler_pid = try gateway.waitForHandlerPid();
+    var handler_cleanup_armed = true;
+    defer {
+        if (handler_cleanup_armed) killProcessGroup(handler_pid);
+    }
     var pipe_fds = try posix.pipe2(.{ .CLOEXEC = true });
     defer {
         if (pipe_fds[0] >= 0) posix.close(pipe_fds[0]);
@@ -2933,9 +2470,10 @@ test "gateway shutdown closes stdin while broker does not read initial execute" 
     std.Thread.sleep(100 * std.time.ns_per_ms);
 
     var timer = try std.time.Timer.start();
-    _ = gateway.shutdownGateway(.normal);
+    gateway.shutdownGateway();
     try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
     try std.testing.expect(gateway.gateway_pid == null);
+    try GatewayIntegration.expectProcessGroupGone(handler_pid);
 
     var old_sigpipe: posix.Sigaction = undefined;
     const ignore_sigpipe: posix.Sigaction = .{
@@ -2946,146 +2484,63 @@ test "gateway shutdown closes stdin while broker does not read initial execute" 
     posix.sigaction(posix.SIG.PIPE, &ignore_sigpipe, &old_sigpipe);
     defer posix.sigaction(posix.SIG.PIPE, &old_sigpipe, null);
     try std.testing.expectError(error.BrokenPipe, posix.write(pipe_fds[1], "x"));
+    handler_cleanup_armed = false;
 }
 
 test "gateway shutdown reaps a running command with a stalled broker queue" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const previous_subreaper = try installTestSubreaper();
-    defer restoreTestSubreaper(previous_subreaper);
-
     var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
     defer gateway.deinit();
 
-    var cleanup_signals: usize = 0;
-    {
-        var command = TestProcessGroupOwner.init(try gateway.startNoisyCommand("stalled-raw"), &cleanup_signals);
-        defer command.cleanup();
-        var handler = TestProcessGroupOwner.init(try gateway.waitForHandlerPid(), &cleanup_signals);
-        defer handler.cleanup();
-
-        // Allow the command output to fill the broker socket and stage raw
-        // frames in broker_out. The broker is deliberately never read after
-        // spawned.
-        std.Thread.sleep(250 * std.time.ns_per_ms);
-
-        const command_pid = command.pid orelse return error.IntegrationProcessGone;
-        const handler_pid = handler.pid orelse return error.IntegrationProcessGone;
-        var timer = try std.time.Timer.start();
-        const shutdown_outcome = gateway.shutdownGateway(.normal);
-        // Establish cleanup ownership immediately from the returned outcome.
-        // An unexpected forced result must retain both groups for forced reap
-        // cleanup before the scenario assertion can fail.
-        switch (shutdown_outcome) {
-            .cooperative => {
-                command.disarm();
-                handler.disarm();
-            },
-            .forced => {
-                command.enableReapOnCleanup();
-                handler.enableReapOnCleanup();
-                try handler.mustCleanOwnedGroup();
-                try command.mustCleanOwnedGroup();
-            },
-        }
-        const elapsed = timer.read();
-        try std.testing.expectEqual(ShutdownOutcome.cooperative, shutdown_outcome);
-        try std.testing.expect(elapsed < 2 * std.time.ns_per_s);
-        try std.testing.expect(gateway.gateway_pid == null);
-
-        // Force both read-only absence probes to fail once. The owners are
-        // already disarmed, so the deferred cleanup must remain signal-free
-        // even when an assertion takes an error path.
-        try std.testing.expectError(
-            error.InjectedProcessGroupProbe,
-            GatewayIntegration.expectProcessGroupGoneWithFault(command_pid, true),
-        );
-        try std.testing.expectError(
-            error.InjectedProcessGroupProbe,
-            GatewayIntegration.expectProcessGroupGoneWithFault(handler_pid, true),
-        );
-        try GatewayIntegration.expectProcessGroupGone(command_pid);
-        try GatewayIntegration.expectProcessGroupGone(handler_pid);
+    const handler_pid = try gateway.waitForHandlerPid();
+    var handler_cleanup_armed = true;
+    defer {
+        if (handler_cleanup_armed) killProcessGroup(handler_pid);
     }
-    try std.testing.expectEqual(@as(usize, 0), cleanup_signals);
-}
-
-test "gateway forced shutdown retains descendant cleanup ownership" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const previous_subreaper = try installTestSubreaper();
-    defer restoreTestSubreaper(previous_subreaper);
-
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
-    defer gateway.deinit();
-
-    var cleanup_signals: usize = 0;
-    {
-        var command = TestProcessGroupOwner.init(try gateway.startNoisyCommand("forced-stalled"), &cleanup_signals);
-        defer command.cleanup();
-        var handler = TestProcessGroupOwner.init(try gateway.waitForHandlerPid(), &cleanup_signals);
-        defer handler.cleanup();
-
-        const command_pid = command.pid orelse return error.IntegrationProcessGone;
-        const handler_pid = handler.pid orelse return error.IntegrationProcessGone;
-        const shutdown_outcome = gateway.shutdownGateway(.force_timeout);
-        // Establish cleanup ownership immediately from the returned outcome.
-        // An unexpected cooperative result disarms only after the parent has
-        // synchronously cleaned both groups; the scenario assertion follows.
-        switch (shutdown_outcome) {
-            .cooperative => {
-                command.disarm();
-                handler.disarm();
-            },
-            .forced => {
-                command.enableReapOnCleanup();
-                handler.enableReapOnCleanup();
-                try handler.mustCleanOwnedGroup();
-                try command.mustCleanOwnedGroup();
-            },
-        }
-        try std.testing.expectEqual(ShutdownOutcome.forced, shutdown_outcome);
-        try std.testing.expect(gateway.gateway_pid == null);
-
-        // The timeout only reaps the stopped gateway parent. The must-clean
-        // helpers above terminate and directly reap both descendant groups;
-        // only successful reaps disarm their owners.
-        try std.testing.expect(command.pid == null);
-        try std.testing.expect(handler.pid == null);
-        try GatewayIntegration.expectProcessGroupGone(command_pid);
-        try GatewayIntegration.expectProcessGroupGone(handler_pid);
+    const command_pid = try gateway.startNoisyCommand("stalled-raw");
+    var command_cleanup_armed = true;
+    defer {
+        if (command_cleanup_armed) killProcessGroup(command_pid);
     }
-    try std.testing.expectEqual(@as(usize, 2), cleanup_signals);
+
+    // Allow the command output to fill the broker socket and stage raw
+    // frames in broker_out. The broker is deliberately never read after
+    // spawned.
+    std.Thread.sleep(250 * std.time.ns_per_ms);
+
+    var timer = try std.time.Timer.start();
+    gateway.shutdownGateway();
+    try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
+    try std.testing.expect(gateway.gateway_pid == null);
+    try GatewayIntegration.expectProcessGroupGone(command_pid);
+    try GatewayIntegration.expectProcessGroupGone(handler_pid);
+    command_cleanup_armed = false;
+    handler_cleanup_armed = false;
 }
 
-test "gateway event loop admits a delayed LF after a maximum broker frame" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
-    defer gateway.deinit();
+test "gateway event loop admits delayed maximum broker frames" {
+    const cases = [_]struct {
+        request_id: []const u8,
+        crlf: bool,
+    }{
+        .{ .request_id = "maximum-lf", .crlf = false },
+        .{ .request_id = "maximum-crlf", .crlf = true },
+    };
+    for (cases) |case| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
+        defer gateway.deinit();
 
-    try gateway.sendExecute("integration", "maximum-lf", .none, null);
-    try gateway.acceptBroker();
-    try gateway.expectExecute("maximum-lf");
-    try gateway.sendDelayedMaximumFrame("maximum-lf", false);
-    const response = try gateway.expectExternal("fallback", "maximum-lf");
-    defer gateway.allocator.free(response);
-}
-
-test "gateway event loop admits a delayed CRLF after a maximum broker frame" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
-    defer gateway.deinit();
-
-    try gateway.sendExecute("integration", "maximum-crlf", .none, null);
-    try gateway.acceptBroker();
-    try gateway.expectExecute("maximum-crlf");
-    try gateway.sendDelayedMaximumFrame("maximum-crlf", true);
-    const response = try gateway.expectExternal("fallback", "maximum-crlf");
-    defer gateway.allocator.free(response);
+        try gateway.sendExecute("integration", case.request_id, .none, null);
+        try gateway.acceptBroker();
+        try gateway.expectExecute(case.request_id);
+        try gateway.sendDelayedMaximumFrame(case.request_id, case.crlf);
+        const response = try gateway.expectExternal("fallback", case.request_id);
+        gateway.allocator.free(response);
+    }
 }
 
 test "gateway parent shutdown cooperatively cleans a pre-start handler" {
@@ -3094,14 +2549,23 @@ test "gateway parent shutdown cooperatively cleans a pre-start handler" {
     var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
     defer gateway.deinit();
 
+    const handler_pid = try gateway.waitForHandlerPid();
+    var handler_cleanup_armed = true;
+    defer {
+        if (handler_cleanup_armed) killProcessGroup(handler_pid);
+    }
     // Leave the accepted handler in receiveLine with an incomplete request so
     // the parent TERM races the handler's pre-start setup path.
     try sendSocketAll(gateway.external_fd, "{");
+    var timer = try std.time.Timer.start();
     var shutdown_thread = try std.Thread.spawn(.{}, shutdownGatewayWorker, .{&gateway});
     std.Thread.sleep(10 * std.time.ns_per_ms);
     shutdown_thread.join();
+    try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
     try std.testing.expect(gateway.gateway_pid == null);
     try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(gateway.external_socket, .{}));
+    try GatewayIntegration.expectProcessGroupGone(handler_pid);
+    handler_cleanup_armed = false;
 }
 
 test "gateway parent shutdown waits for running command-group cleanup" {
@@ -3110,48 +2574,28 @@ test "gateway parent shutdown waits for running command-group cleanup" {
     var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
     defer gateway.deinit();
 
-    const pid = try gateway.startPersistentCommand("shutdown-running");
+    const handler_pid = try gateway.waitForHandlerPid();
+    var handler_cleanup_armed = true;
+    defer {
+        if (handler_cleanup_armed) killProcessGroup(handler_pid);
+    }
+    const command_pid = try gateway.startPersistentCommand("shutdown-running");
+    var command_cleanup_armed = true;
+    defer {
+        if (command_cleanup_armed) killProcessGroup(command_pid);
+    }
     // Run parent shutdown concurrently with the child-group disappearance;
     // the handler must complete its normal cooperative cleanup before the
     // parent reports that shutdown is complete.
+    var timer = try std.time.Timer.start();
     var shutdown_thread = try std.Thread.spawn(.{}, shutdownGatewayWorker, .{&gateway});
-    try GatewayIntegration.expectProcessGroupGone(pid);
+    try GatewayIntegration.expectProcessGroupGone(command_pid);
     shutdown_thread.join();
+    try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
     try std.testing.expect(gateway.gateway_pid == null);
-}
-
-test "GatewayIntegration wait failure releases staged resources once" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try std.testing.expectError(
-        error.InjectedIntegrationWait,
-        GatewayIntegration.initWithFault(std.testing.allocator, &tmp, .wait_external_socket),
-    );
-    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
-    defer std.testing.allocator.free(root);
-    const external_socket = try std.fs.path.join(std.testing.allocator, &.{ root, "external.sock" });
-    defer std.testing.allocator.free(external_socket);
-    const internal_socket = try std.fs.path.join(std.testing.allocator, &.{ root, "internal.sock" });
-    defer std.testing.allocator.free(internal_socket);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(external_socket, .{}));
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(internal_socket, .{}));
-}
-
-test "GatewayIntegration connect failure releases staged resources once" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try std.testing.expectError(
-        error.InjectedIntegrationConnect,
-        GatewayIntegration.initWithFault(std.testing.allocator, &tmp, .connect_external_socket),
-    );
-    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
-    defer std.testing.allocator.free(root);
-    const external_socket = try std.fs.path.join(std.testing.allocator, &.{ root, "external.sock" });
-    defer std.testing.allocator.free(external_socket);
-    const internal_socket = try std.fs.path.join(std.testing.allocator, &.{ root, "internal.sock" });
-    defer std.testing.allocator.free(internal_socket);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(external_socket, .{}));
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(internal_socket, .{}));
+    try GatewayIntegration.expectProcessGroupGone(handler_pid);
+    command_cleanup_armed = false;
+    handler_cleanup_armed = false;
 }
 
 test "gateway integration returns pre-start fallback without spawning" {
@@ -3195,82 +2639,6 @@ test "gateway integration rejects session and descriptor mismatches" {
     var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
     defer gateway.deinit();
     try gateway.runSessionAndFdMismatch();
-}
-
-test "gateway malformed FD and oversized frames close handlers without leaks" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var gateway = try GatewayIntegration.init(std.testing.allocator, &tmp);
-    defer gateway.deinit();
-
-    const gateway_pid = gateway.gateway_pid orelse return error.IntegrationProcessGone;
-
-    var pipe_fds = try posix.pipe2(.{ .CLOEXEC = true });
-    defer {
-        if (pipe_fds[0] >= 0) posix.close(pipe_fds[0]);
-        if (pipe_fds[1] >= 0) posix.close(pipe_fds[1]);
-    }
-    try gateway.sendExecute("integration", "fd-mismatch", .fd, pipe_fds[0]);
-    posix.close(pipe_fds[0]);
-    pipe_fds[0] = -1;
-    posix.close(pipe_fds[1]);
-    pipe_fds[1] = -1;
-    try gateway.acceptBroker();
-    try gateway.expectExecute("fd-mismatch");
-    const parent_fd_count = try openDescriptorCount(gateway_pid);
-    const mismatch_handler = try gateway.waitForHandlerPid();
-    try gateway.sendBroker("{\"type\":\"fallback\",\"requestId\":\"wrong-id\"}\n");
-    const mismatch_broker = try gateway.readBroker();
-    defer gateway.allocator.free(mismatch_broker);
-    try std.testing.expect(std.mem.indexOf(u8, mismatch_broker, "transport_error") != null);
-    try std.testing.expect(std.mem.indexOf(u8, mismatch_broker, "fd-mismatch") != null);
-    const mismatch_external = try gateway.expectExternal("error", "fd-mismatch");
-    defer gateway.allocator.free(mismatch_external);
-    try std.testing.expect(std.mem.indexOf(u8, mismatch_external, "invalid broker message") != null);
-    try std.testing.expectError(error.EndOfStream, gateway.readBroker());
-    try std.testing.expectError(error.EndOfStream, gateway.readExternal());
-    try gateway.expectHandlerCleanup(mismatch_handler, parent_fd_count);
-
-    gateway.closeBroker();
-    gateway.closeExternal();
-    try gateway.reconnectExternal();
-    const external_handler = try gateway.waitForHandlerPid();
-    const external_fd_count = try openDescriptorCount(gateway_pid);
-    var oversized_pipe = try posix.pipe2(.{ .CLOEXEC = true });
-    try gateway.sendOversizedExecute("oversized-external", oversized_pipe[0]);
-    posix.close(oversized_pipe[0]);
-    oversized_pipe[0] = -1;
-    posix.close(oversized_pipe[1]);
-    oversized_pipe[1] = -1;
-    defer {
-        if (oversized_pipe[0] >= 0) posix.close(oversized_pipe[0]);
-        if (oversized_pipe[1] >= 0) posix.close(oversized_pipe[1]);
-    }
-    const oversized_external = try gateway.readExternal();
-    defer gateway.allocator.free(oversized_external);
-    try std.testing.expect(std.mem.indexOf(u8, oversized_external, "\"type\":\"error\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, oversized_external, "MessageTooLong") != null);
-    if (gateway.readExternal()) |line| {
-        gateway.allocator.free(line);
-        return error.ExpectedConnectionClose;
-    } else |err| switch (err) {
-        error.EndOfStream, error.ConnectionResetByPeer => {},
-        else => return err,
-    }
-    try gateway.expectNoBrokerConnection();
-    try gateway.expectHandlerCleanup(external_handler, external_fd_count);
-
-    gateway.closeExternal();
-    try gateway.reconnectExternal();
-    try gateway.sendExecute("integration", "oversized-internal", .none, null);
-    try gateway.acceptBroker();
-    try gateway.expectExecute("oversized-internal");
-    const internal_handler = try gateway.waitForHandlerPid();
-    const internal_fd_count = try openDescriptorCount(gateway_pid);
-    try gateway.sendOversized(gateway.broker_fd);
-    try std.testing.expectError(error.EndOfStream, gateway.readBroker());
-    try std.testing.expectError(error.EndOfStream, gateway.readExternal());
-    try gateway.expectHandlerCleanup(internal_handler, internal_fd_count);
 }
 
 test "gateway integration forwards only masked chunks through the external socket" {

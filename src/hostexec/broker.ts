@@ -60,8 +60,9 @@ import {
 import { SecretStore } from "./secret_store.ts";
 import type {
   ExecuteRequest,
-  HostExecBrokerMessage,
-  HostExecBrokerResponse,
+  HostExecControlRequest,
+  HostExecControlResponse,
+  HostExecErrorResponse,
   HostExecPendingEntry,
   ResolvedExecution,
   ResolvedExecutionCapability,
@@ -454,9 +455,11 @@ export class HostExecBroker {
       }
       const line = await readJsonLine(socket);
       if (!line) return;
-      const message = JSON.parse(line) as HostExecBrokerMessage;
-      const response = await this.handleMessage(message, channel).catch(
-        (error) => toErrorResponse(message, (error as Error).message),
+      const message = JSON.parse(line) as
+        | HostExecControlRequest
+        | ExecuteRequest;
+      const response = await this.handleControlMessage(message).catch((error) =>
+        toErrorResponse(message, (error as Error).message),
       );
       try {
         await writeJsonLine(socket, response);
@@ -607,28 +610,9 @@ export class HostExecBroker {
     }
   }
 
-  private async handleMessage(
-    message: HostExecBrokerMessage,
-    channel: "internal" | "control",
-  ): Promise<HostExecBrokerResponse> {
-    // Enforce the channel contract before dispatching on message type. The
-    // exec socket is the only socket mounted into the agent container, so it
-    // must never be able to drive approve/deny/list_pending; otherwise a
-    // hostile agent could self-approve its own execute requests.
-    //
-    // `execute` on the exec channel is intercepted by handleConnection
-    // before reaching here (it streams directly to the socket via
-    // executeStreaming), so any message that reaches this branch is a
-    // disallowed approve/deny/list_pending sent on the exec channel.
-    if (channel === "internal") {
-      return {
-        type: "error",
-        requestId: message.type === "list_pending" ? "" : message.requestId,
-        message:
-          "approve/deny/list_pending are not accepted on the internal channel",
-      };
-    }
-    // control channel: host-side CLI/UI operations only.
+  private async handleControlMessage(
+    message: HostExecControlRequest | ExecuteRequest,
+  ): Promise<HostExecControlResponse> {
     if (message.type === "list_pending") {
       return { type: "pending", items: await this.listPending() };
     }
@@ -913,7 +897,7 @@ export class HostExecBroker {
   private async approve(
     requestId: string,
     scope?: HostExecPromptScope,
-  ): Promise<HostExecBrokerResponse> {
+  ): Promise<HostExecControlResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
       return {
@@ -937,7 +921,7 @@ export class HostExecBroker {
     return { type: "ack", requestId, decision: "approve" };
   }
 
-  private async deny(requestId: string): Promise<HostExecBrokerResponse> {
+  private async deny(requestId: string): Promise<HostExecControlResponse> {
     const group = this.findGroupByRequestId(requestId);
     if (!group) {
       return {
@@ -991,7 +975,7 @@ export class HostExecBroker {
   private async resolveGroup(
     approvalKey: string,
     mode: "approve" | "deny",
-    denyResponse?: HostExecBrokerResponse,
+    denyResponse?: HostExecErrorResponse,
   ): Promise<void> {
     const group = this.groups.get(approvalKey);
     if (!group) return;
@@ -1304,17 +1288,12 @@ async function writeGatewayError(
   );
 }
 
-export async function sendHostExecBrokerRequest<
-  T extends HostExecBrokerResponse,
->(socketPath: string, message: HostExecBrokerMessage): Promise<T> {
+export async function sendHostExecControlRequest<
+  T extends HostExecControlResponse = HostExecControlResponse,
+>(socketPath: string, message: HostExecControlRequest): Promise<T> {
   const socket = await connectUnix(socketPath);
   try {
-    await writeJsonLine(
-      socket,
-      message.type === "execute"
-        ? { type: "execute", request: message }
-        : message,
-    );
+    await writeJsonLine(socket, message);
     const response = await readJsonLine(socket);
     if (!response) throw new Error("empty broker response");
     return JSON.parse(response) as T;
@@ -1474,9 +1453,9 @@ function toPendingEntry(
 }
 
 function toErrorResponse(
-  message: HostExecBrokerMessage,
+  message: HostExecControlRequest | ExecuteRequest,
   errorMessage: string,
-): HostExecBrokerResponse {
+): HostExecControlResponse {
   if ("requestId" in message) {
     return {
       type: "error",
