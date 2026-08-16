@@ -126,6 +126,7 @@ type GatewayLifecycleState =
 class GatewayRequestLifecycle {
   private state: GatewayLifecycleState = "preflight";
   private cancelledError: Error | null = null;
+  private readonly cancellation = new AbortController();
   private deferredMonitorEvent: GatewayReadMonitorEvent | null = null;
   private cleanup: (() => Promise<void>) | null = null;
   private cleanupPromise: Promise<void> | null = null;
@@ -152,6 +153,10 @@ class GatewayRequestLifecycle {
 
   get currentState(): GatewayLifecycleState {
     return this.state;
+  }
+
+  get cancellationSignal(): AbortSignal {
+    return this.cancellation.signal;
   }
 
   setCleanup(cleanup: () => Promise<void>): void {
@@ -187,6 +192,7 @@ class GatewayRequestLifecycle {
     this.cancelledError = error;
     this.state = "cancelled";
     this.cleanupRequested = true;
+    this.cancellation.abort(error);
     this.detachSocketListeners();
     this.reader.abort(error);
     this.socket.destroy();
@@ -774,7 +780,13 @@ export class HostExecBroker {
       await this.recordAudit(message.requestId, "allow", reason, commandStr);
       if (await wasCancelled()) return;
       lifecycle.markRunning();
-      await this.runGatewayResolved(message, resolved, socket, reader);
+      await this.runGatewayResolved(
+        message,
+        resolved,
+        socket,
+        reader,
+        lifecycle.cancellationSignal,
+      );
       lifecycle.markTerminal();
       return;
     }
@@ -1034,20 +1046,23 @@ export class HostExecBroker {
             pending.resolved,
             waiter.socket,
             waiter.reader,
+            waiter.lifecycle.cancellationSignal,
           );
         } catch (error) {
-          try {
-            await writeGatewayError(
-              waiter.socket,
-              requestId,
-              error instanceof Error ? error.message : String(error),
-              "awaiting_result",
-            );
-          } catch (e) {
-            console.error(
-              `resolveGroup: failed to write error response for request ${requestId}`,
-              e,
-            );
+          if (!waiter.lifecycle.isCancelled) {
+            try {
+              await writeGatewayError(
+                waiter.socket,
+                requestId,
+                error instanceof Error ? error.message : String(error),
+                "awaiting_result",
+              );
+            } catch (e) {
+              console.error(
+                `resolveGroup: failed to write error response for request ${requestId}`,
+                e,
+              );
+            }
           }
         }
         waiter.lifecycle.markTerminal();
@@ -1217,6 +1232,7 @@ export class HostExecBroker {
     resolved: ResolvedExecution,
     socket: Socket,
     reader: GatewayLineReader,
+    cancellation: AbortSignal,
   ): Promise<void> {
     const commandArgv0 =
       isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
@@ -1240,6 +1256,7 @@ export class HostExecBroker {
         env: resolved.envVars,
       },
       maskFilter: this.maskFilter,
+      cancellation,
       onSpawned: async (pid) => {
         processIdentity = await readProcessIdentity(pid);
         await this.diagnostics.record("command_spawned", {

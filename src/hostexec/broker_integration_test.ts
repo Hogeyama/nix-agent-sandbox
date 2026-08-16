@@ -23,6 +23,15 @@ import {
 import { HostExecBroker, sendHostExecControlRequest } from "./broker.ts";
 import type { BrokerToGatewayMessage } from "./gateway_protocol.ts";
 import {
+  captureFilterProcessIdentities,
+  createPostEofStallFilter,
+  type FilterProcessIdentity,
+  forceFilterProcessesGone,
+  readFilterProcessIdentity,
+  waitForFilterProcessesGone,
+  waitForRecordedFilterPids,
+} from "./post_eof_filter_test_support.ts";
+import {
   hostExecBrokerSocketPath,
   hostExecExecSocketPath,
   hostExecPendingSessionDir,
@@ -361,6 +370,137 @@ function request(
     stdinMode: "none",
   };
 }
+
+async function assertPostExitDisconnectStopsFilters(
+  approval: "allow" | "prompt",
+): Promise<void> {
+  const runtimeDir = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-post-exit-filter-"),
+  );
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-post-exit-workspace-"),
+  );
+  const { filterPath, pidPath, eofPath } =
+    await createPostEofStallFilter(runtimeDir);
+
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "true",
+          match: { argv0: "true" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval,
+          fallback: "deny",
+        },
+      ],
+    }),
+    maskFilter: {
+      binaryPath: filterPath,
+      secretsFramePath: path.join(runtimeDir, "secrets.frame"),
+    },
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await mkdir(`${runtimeDir}/tmp`, { recursive: true });
+  await broker.start(execSocketPath, controlSocketPath);
+
+  const socket = await connectUnix(execSocketPath);
+  socket.on("error", () => {});
+  let filterIdentities: FilterProcessIdentity[] = [];
+  let cleanupArmed = true;
+  let primaryError: unknown;
+  let cleanupError: unknown;
+  try {
+    const requestId = `req_post_exit_${approval}`;
+    await writeJsonLine(socket, {
+      type: "execute",
+      request: request([], workspace, requestId, "true"),
+    });
+    let approvalResult:
+      | Promise<Awaited<ReturnType<typeof sendHostExecControlRequest>>>
+      | undefined;
+    if (approval === "prompt") {
+      await waitForPendingEntries(paths, 1);
+      approvalResult = sendHostExecControlRequest(controlSocketPath, {
+        type: "approve",
+        requestId,
+      });
+      void approvalResult.catch(() => {});
+    }
+
+    const startLine = await readJsonLine(socket);
+    if (!startLine) throw new Error("gateway disconnected before start");
+    const start = JSON.parse(startLine) as Record<string, unknown>;
+    expect(start).toMatchObject({ type: "start", requestId });
+    await writeJsonLine(socket, {
+      type: "spawned",
+      requestId,
+      pid: process.pid,
+    });
+    const pids = await waitForRecordedFilterPids(pidPath);
+    expect(pids).toHaveLength(2);
+    expect(new Set(pids).size).toBe(2);
+    filterIdentities = await captureFilterProcessIdentities(pids);
+
+    await writeJsonLine(socket, {
+      type: "process_exit",
+      requestId,
+      exitCode: 0,
+    });
+    // This proves both filters received EOF from finish() and are now stalled
+    // after the terminal gateway frame, rather than before finalization.
+    await waitForRecordedFilterPids(eofPath);
+    socket.destroy();
+
+    await waitForFilterProcessesGone(filterIdentities);
+    if (approvalResult) {
+      expect(await approvalResult).toMatchObject({
+        type: "ack",
+        requestId,
+        decision: "approve",
+      });
+    }
+    for (const identity of filterIdentities) {
+      expect(await readFilterProcessIdentity(identity.pid)).toBeNull();
+    }
+    filterIdentities = [];
+    cleanupArmed = false;
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    socket.destroy();
+    if (cleanupArmed && filterIdentities.length > 0) {
+      try {
+        await forceFilterProcessesGone(filterIdentities);
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+  if (!primaryError && cleanupError) throw cleanupError;
+}
+
+test("HostExecBroker: disconnect after process_exit stops post-EOF filters for immediate allow", async () => {
+  await assertPostExitDisconnectStopsFilters("allow");
+});
+
+test("HostExecBroker: disconnect after process_exit stops post-EOF filters after approval", async () => {
+  await assertPostExitDisconnectStopsFilters("prompt");
+});
 
 test("HostExecBroker: falls back when no rule matches", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));

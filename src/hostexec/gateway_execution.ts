@@ -27,6 +27,8 @@ export interface GatewayExecutionOptions {
   readonly onSpawned: (pid: number) => Promise<void>;
   /** Optional lifecycle hook used by broker diagnostics. */
   readonly onProcessExit?: (exitCode: number) => Promise<void>;
+  /** Cancels terminal filter draining when the owning gateway disconnects. */
+  readonly cancellation?: AbortSignal;
   /** Test instrumentation for the single aggregate filter-health subscription. */
   readonly onPipelineHealthSubscription?: () => void;
 }
@@ -601,6 +603,7 @@ export async function runGatewayExecution(
   const pipelines: Partial<Record<StreamFd, OutputPipeline>> = {};
   const writer = new MessageWriter(options.socket, () => state);
   let healthMonitor: PipelineHealthMonitor | null = null;
+  let terminalRead: Promise<never> | null = null;
 
   const sendMasked = (fd: StreamFd, data: Uint8Array): Promise<void> =>
     writer.send({
@@ -687,17 +690,38 @@ export async function runGatewayExecution(
         }
         case "process_exit": {
           if (!spawned) throw new Error("gateway exited before spawned");
+          // process_exit moves the gateway to awaiting_result before any
+          // asynchronous work. A late filter or diagnostic failure must not
+          // cause a kill that the gateway protocol only permits while running.
+          state = "awaiting_result";
+          // Keep one bounded read active while filters drain. RawLineReader
+          // intentionally pauses its socket between reads, so without this a
+          // peer close may not reach the lifecycle's cancellation signal.
+          terminalRead = awaitGatewayTerminalRead(reader);
+          void terminalRead.catch(() => {});
           // The gateway's process_exit is the authoritative point at which
           // command termination is known. Record it before draining filters
           // so diagnostics survive a masking failure or an already-gone PID.
-          await options.onProcessExit?.(message.exitCode);
-          const exits = await Promise.all(
-            ([1, 2] as const).map(async (fd) => {
-              const pipeline = pipelines[fd];
-              if (!pipeline)
-                throw new Error(`missing mask pipeline for fd ${fd}`);
-              return await pipeline.finish();
-            }),
+          await raceWithCancellation(
+            Promise.race([
+              options.onProcessExit?.(message.exitCode) ?? Promise.resolve(),
+              terminalRead,
+            ]),
+            options.cancellation,
+          );
+          const exits = await raceWithCancellation(
+            Promise.race([
+              Promise.all(
+                ([1, 2] as const).map(async (fd) => {
+                  const pipeline = pipelines[fd];
+                  if (!pipeline)
+                    throw new Error(`missing mask pipeline for fd ${fd}`);
+                  return await pipeline.finish();
+                }),
+              ),
+              terminalRead,
+            ]),
+            options.cancellation,
           );
           const failed = exits.find((exitCode) => exitCode !== 0);
           if (failed !== undefined) {
@@ -705,7 +729,6 @@ export async function runGatewayExecution(
               `nas-mask-filter exited with code ${failed}; output may be incomplete`,
             );
           }
-          state = "awaiting_result";
           await writer.drain();
           await writer.send({
             type: "result",
@@ -740,6 +763,9 @@ export async function runGatewayExecution(
     );
     throw error;
   } finally {
+    if (terminalRead) {
+      reader.abort(new Error("gateway execution reached terminal state"));
+    }
     healthMonitor?.close();
     reader.close();
   }
@@ -749,6 +775,49 @@ function protocolError(error: unknown): Error {
   return new Error(
     `invalid gateway message: ${error instanceof Error ? error.message : String(error)}`,
   );
+}
+
+async function awaitGatewayTerminalRead(
+  reader: GatewayLineReader,
+): Promise<never> {
+  const line = await reader.read();
+  if (line === null) {
+    throw new Error("gateway disconnected before terminal result");
+  }
+  throw new Error("gateway sent message after process_exit");
+}
+
+function raceWithCancellation<T>(
+  promise: Promise<T>,
+  cancellation: AbortSignal | undefined,
+): Promise<T> {
+  if (!cancellation) return promise;
+  if (cancellation.aborted) {
+    return Promise.reject(cancellationError(cancellation));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cancellation.removeEventListener("abort", onAbort);
+      reject(cancellationError(cancellation));
+    };
+    cancellation.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cancellation.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        cancellation.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function cancellationError(cancellation: AbortSignal): Error {
+  return cancellation.reason instanceof Error
+    ? cancellation.reason
+    : new Error("gateway execution cancelled");
 }
 
 async function waitForExit(
