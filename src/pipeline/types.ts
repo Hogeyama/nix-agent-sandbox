@@ -57,6 +57,8 @@ export interface ProbeResults {
    */
   readonly hostexecInterceptLibPath: string | null;
   readonly hostexecClientPath: string | null;
+  /** Host-side per-session gateway binary, or null when artifacts are absent. */
+  readonly hostexecGatewayPath: string | null;
 }
 
 // ---------------------------------------------------------------------------

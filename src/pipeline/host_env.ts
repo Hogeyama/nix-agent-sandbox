@@ -10,6 +10,7 @@ import { userInfo } from "node:os";
 import * as path from "node:path";
 import {
   resolveHostExecClientPath,
+  resolveHostExecGatewayPath,
   resolveInterceptLibPath,
 } from "../hostexec/intercept_path.ts";
 import type { HostEnv, ProbeResults } from "./types.ts";
@@ -55,6 +56,7 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     gpgAgentSocket,
     hostexecInterceptLibPath,
     hostexecClientPath,
+    hostexecGatewayPath,
   ] = await Promise.all([
     probeHasHostNix(),
     Promise.resolve(resolveAuditDirFromEnv(hostEnv)),
@@ -63,6 +65,7 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     probeGpgAgentSocket(hostEnv),
     resolveInterceptLibPath(),
     resolveHostExecClientPath(),
+    resolveHostExecGatewayPath(),
   ]);
 
   return {
@@ -73,6 +76,7 @@ export async function resolveProbes(hostEnv: HostEnv): Promise<ProbeResults> {
     gpgAgentSocket,
     hostexecInterceptLibPath,
     hostexecClientPath,
+    hostexecGatewayPath,
   };
 }
 

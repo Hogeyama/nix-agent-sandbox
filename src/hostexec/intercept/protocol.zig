@@ -26,6 +26,8 @@ const linux = std.os.linux;
 const json = std.json;
 const base64_mod = std.base64.standard;
 const Allocator = std.mem.Allocator;
+const fd_transport = @import("fd_transport.zig");
+const gateway_protocol = @import("gateway_protocol.zig");
 
 // ─── Debug logging ──────────────────────────────────────────────────
 
@@ -50,9 +52,9 @@ pub fn debugLog(comptime fmt: []const u8, args: anytype) void {
 
 // ─── JSON protocol ──────────────────────────────────────────────────
 
-/// JSON request structure matching the broker's ExecuteRequest.
+/// JSON request structure matching the gateway's external ExecuteRequestV2.
 const ExecuteRequest = struct {
-    version: u32 = 1,
+    version: u32 = 2,
     type: []const u8 = "execute",
     sessionId: []const u8,
     requestId: []const u8,
@@ -60,17 +62,11 @@ const ExecuteRequest = struct {
     args: []const []const u8,
     cwd: []const u8,
     tty: bool = false,
-    /// Base64 of whatever was already buffered on fd 0 at request time, or
-    /// null when this exec path has no stdin to offer. The broker starts the
-    /// host child with stdin "ignore" unless this is present, so a command
-    /// that reads stdin sees EOF when it is omitted.
-    stdin: ?[]const u8 = null,
+    stdinMode: gateway_protocol.StdinMode,
 };
 
 /// Build a JSON request string for the broker, terminated with newline.
 ///
-/// `stdin_b64` is emitted only when non-null; see `readAvailableStdin` for
-/// which exec paths may supply it.
 pub fn buildRequest(
     alloc: Allocator,
     session_id: []const u8,
@@ -79,7 +75,7 @@ pub fn buildRequest(
     args: []const []const u8,
     cwd: []const u8,
     tty: bool,
-    stdin_b64: ?[]const u8,
+    stdin_mode: gateway_protocol.StdinMode,
 ) ![]const u8 {
     const req = ExecuteRequest{
         .sessionId = session_id,
@@ -88,7 +84,7 @@ pub fn buildRequest(
         .args = args,
         .cwd = cwd,
         .tty = tty,
-        .stdin = stdin_b64,
+        .stdinMode = stdin_mode,
     };
 
     const json_bytes = try json.Stringify.valueAlloc(alloc, req, .{
@@ -265,98 +261,14 @@ pub fn collectArgv(alloc: Allocator, argv: [*:null]const ?[*:0]const u8) ![]cons
     return list;
 }
 
-/// Bytes taken from fd 0 per `read` call.
-const stdin_read_size = 65536;
-
-/// Access-mode bits within the flags word `F_GETFL` returns, and the value
-/// meaning write-only. `O_RDONLY` is 0, so there is no single "readable" bit
-/// to test — the mode has to be masked out and compared.
-const o_accmode: usize = 0o3;
-const o_wronly: usize = 0o1;
-
-/// How long to wait for the *first* byte before concluding there is no stdin.
-///
-/// A zero timeout does not work for either client. A shell starts the members
-/// of `producer | intercepted-command` concurrently, so at the instant the
-/// consumer side reaches this code the pipe is reliably still empty and a
-/// non-blocking poll loses the race — in the LD_PRELOAD client because it runs
-/// inside `execve`, and in the standalone client because it is a small static
-/// binary that starts in well under a millisecond. (The python wrapper this
-/// replaced could get away with a zero timeout only because starting an
-/// interpreter took tens of milliseconds, by which point the producer had
-/// written.)
-///
-/// The cost is that a command whose fd 0 is an idle-but-open pipe pays this
-/// wait on every interception. That is a property of stdin being a single
-/// eager field on the request, and goes away when stdin stops being collected
-/// up front.
-const stdin_first_wait_ms = 250;
-
-/// How long to wait for *more* bytes once some have arrived, before treating
-/// the producer as finished. Covers a writer that emits in several `write`
-/// calls without closing the pipe immediately after the first.
-const stdin_more_wait_ms = 50;
-
-/// Collect what the caller's fd 0 offers, base64-encoded, within a bounded
-/// wait. Returns null when there is nothing this exec path may forward.
-///
-/// The broker carries stdin as a single field on the initial request, so
-/// everything the host child will ever receive has to be gathered before the
-/// request goes out. This is therefore a one-shot snapshot, not a stream: a
-/// producer still writing when the wait expires is not fully represented, and
-/// the command sees EOF at what was collected.
-///
-/// Returns null rather than empty for the cases where fd 0 must not be read:
-///   - a tty, where reading would steal the user's keystrokes
-///   - a closed fd 0, where `F_GETFL` fails
-///   - a write-only fd 0 (e.g. `cmd 0>&1 | ...`), which can never satisfy
-///     `POLLIN` — the kernel does not report read readiness on the write end
-///
-/// Callers must only pass an fd they own on behalf of the command being run;
-/// see `stdin_capable` on `callBroker`.
-fn readAvailableStdin(alloc: Allocator) !?[]const u8 {
-    return readAvailableFd(alloc, 0);
-}
-
-pub fn readAvailableFd(alloc: Allocator, fd: std.posix.fd_t) !?[]const u8 {
-    if (std.posix.isatty(fd)) return null;
-
-    const flags = std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch return null;
-    if ((flags & o_accmode) == o_wronly) return null;
-
-    var collected: std.ArrayList(u8) = .{};
-    defer collected.deinit(alloc);
-
-    var read_buf: [stdin_read_size]u8 = undefined;
-    var wait_ms: i32 = stdin_first_wait_ms;
-    while (true) {
-        var fds = [_]std.posix.pollfd{
-            .{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 },
-        };
-        const ready = std.posix.poll(&fds, wait_ms) catch break;
-        if (ready == 0) break;
-        if ((fds[0].revents & std.posix.POLL.IN) == 0) break;
-        const n = std.posix.read(fd, &read_buf) catch break;
-        if (n == 0) break;
-        try collected.appendSlice(alloc, read_buf[0..n]);
-        wait_ms = stdin_more_wait_ms;
-    }
-
-    if (collected.items.len == 0) return null;
-
-    const encoder = base64_mod.Encoder;
-    const encoded = try alloc.alloc(u8, encoder.calcSize(collected.items.len));
-    return encoder.encode(encoded, collected.items);
-}
-
 /// `stdin_capable`: whether the calling client owns fd 0 on behalf of the
 /// command being run. The standalone client and the LD_PRELOAD hooks for
 /// execve/execv/execvp/execvpe pass true — the calling process image *becomes*
 /// the command, so fd 0 legitimately is its stdin. posix_spawn/posix_spawnp
 /// pass false: `posixSpawnViaBroker` ignores `file_actions` and forks, so the
 /// child's fd 0 is really the *caller's*, and the caller keeps running (and
-/// may read fd 0 itself) after the spawn returns. Reading it here would
-/// consume bytes that were never ours.
+/// may read fd 0 itself) after the spawn returns. Passing its fd here would
+/// give the host child input owned by a process that continues running.
 pub fn callBroker(
     pathname: [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
@@ -382,9 +294,10 @@ pub fn callBroker(
         // Everything from here on is a broker that was configured but could not
         // be reached or spoke nonsense. Running the command locally would be
         // fail-open — the command was configured to go through the broker, and
-        // by now its stdin may already have been drained into a request that
-        // never arrived, so a local run would silently see EOF. Fail closed and
-        // say why.
+        // transport/protocol failures must not silently bypass its policy.
+        // The delegated stdin descriptor remains untouched on this path, but
+        // there is still no safe way to execute a host-requested command
+        // locally after the gateway exchange fails.
         debugLog("broker communication failed: {s}", .{@errorName(err)});
         writeAll(std.posix.STDERR_FILENO, "nas hostexec: cannot reach the broker (");
         writeAll(std.posix.STDERR_FILENO, @errorName(err));
@@ -417,8 +330,18 @@ fn callBrokerInner(
     var req_id_buf: [36]u8 = undefined;
     const request_id = generateRequestId(&req_id_buf);
 
-    const stdin_b64 = if (stdin_capable) try readAvailableStdin(alloc) else null;
-    defer if (stdin_b64) |s| alloc.free(s);
+    const stdin_fd: ?std.posix.fd_t = switch (fd_transport.selectStdin(0, stdin_capable)) {
+        .none => null,
+        .pass_fd => |fd| fd,
+        .reject_read_write => {
+            writeAll(
+                std.posix.STDERR_FILENO,
+                "nas hostexec: refusing read-write stdin because it can bypass output masking\n",
+            );
+            return .{ .exit_code = 1, .outcome = .failed };
+        },
+    };
+    const stdin_mode: gateway_protocol.StdinMode = if (stdin_fd == null) .none else .fd;
 
     const request_json = try buildRequest(
         alloc,
@@ -428,7 +351,7 @@ fn callBrokerInner(
         args,
         cwd,
         std.posix.isatty(0),
-        stdin_b64,
+        stdin_mode,
     );
     defer alloc.free(request_json);
 
@@ -438,8 +361,9 @@ fn callBrokerInner(
     const sock = try std.net.connectUnixSocket(socket_path);
     defer sock.close();
 
-    // Send request
-    try sock.writeAll(request_json);
+    // Send the request line and, when supported, the still-open fd 0 in one
+    // SCM_RIGHTS transport operation. The client never reads stdin itself.
+    try fd_transport.sendLine(sock.handle, request_json, stdin_fd);
 
     // NDJSON streaming loop: the broker emits zero or more `chunk` lines
     // followed by a terminal `result` (or `fallback`/`error`) line.
@@ -449,17 +373,10 @@ fn callBrokerInner(
 
     // Once any chunk has been written to stdout/stderr, we must never fall
     // back to the real binary — that would re-execute the command and
-    // duplicate output/side effects. Bytes drained off fd 0 are just as
-    // final: there is no way to push them back, so a fallback would run the
-    // real binary starved of the input it already lost. Both conditions are
-    // folded into this flag, and the only path below that may still answer
-    // `.fallback` has to check it first.
-    //
-    // Suppressing a fallback turns a command the user expected to run into a
-    // bare exit 1, so the site that does it says why on stderr;
-    // `consumed_stdin` distinguishes the two reasons.
-    const consumed_stdin = stdin_b64 != null;
-    var wrote_any_chunks: bool = consumed_stdin;
+    // duplicate output/side effects. The delegated stdin fd is deliberately
+    // not part of this decision: it remains unread until an approved host
+    // command receives it, so a pre-start fallback can safely use fd 0.
+    var wrote_any_chunks: bool = false;
 
     while (true) {
         // Process all complete lines currently buffered.
@@ -504,7 +421,7 @@ fn callBrokerInner(
                 },
                 .fallback => {
                     if (wrote_any_chunks) {
-                        reportSuppressedFallback(consumed_stdin);
+                        reportSuppressedFallback();
                         return .{ .exit_code = 1, .outcome = .failed };
                     }
                     debugLog("broker requested fallback", .{});
@@ -555,10 +472,8 @@ fn callBrokerInner(
 /// Explain a fallback that could not be taken. Without this the command dies
 /// with a bare exit 1 and no output at all, which is indistinguishable from
 /// the command itself failing.
-fn reportSuppressedFallback(consumed_stdin: bool) void {
-    const reason = if (consumed_stdin)
-        "nas hostexec: no rule matched, but stdin was already consumed and cannot be replayed to the local command\n"
-    else
+fn reportSuppressedFallback() void {
+    const reason =
         "nas hostexec: no rule matched, but output was already written and the local command cannot be run again\n";
     debugLog("suppressing fallback: {s}", .{reason});
     writeAll(std.posix.STDERR_FILENO, reason);
@@ -601,7 +516,7 @@ test "generateRequestId: returns independent 128-bit lowercase hex ids" {
 test "buildRequest: basic JSON" {
     const alloc = std.testing.allocator;
     const args = [_][]const u8{ "install", "hello" };
-    const result = try buildRequest(alloc, "sess-123", "req-001", "/usr/bin/nix", &args, "/home/user", false, null);
+    const result = try buildRequest(alloc, "sess-123", "req-001", "/usr/bin/nix", &args, "/home/user", false, .none);
     defer alloc.free(result);
 
     // Parse it back to verify it's valid JSON
@@ -615,7 +530,8 @@ test "buildRequest: basic JSON" {
     try std.testing.expectEqualStrings("/usr/bin/nix", obj.get("argv0").?.string);
     try std.testing.expectEqualStrings("/home/user", obj.get("cwd").?.string);
     try std.testing.expectEqual(false, obj.get("tty").?.bool);
-    try std.testing.expectEqual(@as(i64, 1), obj.get("version").?.integer);
+    try std.testing.expectEqual(@as(i64, 2), obj.get("version").?.integer);
+    try std.testing.expectEqualStrings("none", obj.get("stdinMode").?.string);
 
     const json_args = obj.get("args").?.array;
     try std.testing.expectEqual(@as(usize, 2), json_args.items.len);
@@ -626,7 +542,7 @@ test "buildRequest: basic JSON" {
 test "buildRequest: carries the tty flag" {
     const alloc = std.testing.allocator;
     const args = [_][]const u8{};
-    const result = try buildRequest(alloc, "s", "r", "/bin/ls", &args, "/", true, null);
+    const result = try buildRequest(alloc, "s", "r", "/bin/ls", &args, "/", true, .none);
     defer alloc.free(result);
 
     const parsed = try json.parseFromSlice(json.Value, alloc, result, .{});
@@ -634,79 +550,21 @@ test "buildRequest: carries the tty flag" {
     try std.testing.expectEqual(true, parsed.value.object.get("tty").?.bool);
 }
 
-test "readAvailableFd: drains a pipe written after the call would have polled" {
-    const alloc = std.testing.allocator;
-    const fds = try std.posix.pipe();
-    defer std.posix.close(fds[0]);
-
-    // Write *then* close, mirroring `producer | intercepted-command`: the
-    // bytes are not in the pipe when the read side is first polled with a
-    // zero timeout, which is exactly the race the first-byte wait covers.
-    _ = try std.posix.write(fds[1], "hello");
-    std.posix.close(fds[1]);
-
-    const encoded = (try readAvailableFd(alloc, fds[0])).?;
-    defer alloc.free(encoded);
-
-    const decoded = try decodeBase64(alloc, encoded);
-    defer alloc.free(decoded);
-    try std.testing.expectEqualStrings("hello", decoded);
-}
-
-test "readAvailableFd: returns null for a pipe that closes with no bytes" {
-    const alloc = std.testing.allocator;
-    const fds = try std.posix.pipe();
-    defer std.posix.close(fds[0]);
-    std.posix.close(fds[1]);
-
-    try std.testing.expect(try readAvailableFd(alloc, fds[0]) == null);
-}
-
-test "readAvailableFd: returns null for a write-only fd" {
-    const alloc = std.testing.allocator;
-    const fds = try std.posix.pipe();
-    defer std.posix.close(fds[0]);
-    defer std.posix.close(fds[1]);
-
-    // The write end can never satisfy POLLIN, so it must be rejected up front
-    // rather than waited on.
-    try std.testing.expect(try readAvailableFd(alloc, fds[1]) == null);
-}
-
-test "buildRequest: omits stdin entirely when null" {
+test "buildRequest: carries delegated stdin mode" {
     const alloc = std.testing.allocator;
     const args = [_][]const u8{};
-    const result = try buildRequest(alloc, "s", "r", "/bin/ls", &args, "/", false, null);
-    defer alloc.free(result);
-
-    // The broker starts the child with stdin "ignore" on a missing field, so
-    // the key must be absent rather than present-and-null.
-    const parsed = try json.parseFromSlice(json.Value, alloc, result, .{});
-    defer parsed.deinit();
-    try std.testing.expect(parsed.value.object.get("stdin") == null);
-}
-
-test "buildRequest: carries base64 stdin when supplied" {
-    const alloc = std.testing.allocator;
-    const args = [_][]const u8{};
-    const result = try buildRequest(alloc, "s", "r", "/bin/cat", &args, "/", false, "aGVsbG8=");
+    const result = try buildRequest(alloc, "s", "r", "/bin/cat", &args, "/", false, .fd);
     defer alloc.free(result);
 
     const parsed = try json.parseFromSlice(json.Value, alloc, result, .{});
     defer parsed.deinit();
-    try std.testing.expectEqualStrings("aGVsbG8=", parsed.value.object.get("stdin").?.string);
-
-    // Round-trip through the decoder the broker mirrors, so an encoding
-    // change on either side shows up here.
-    const decoded = try decodeBase64(alloc, parsed.value.object.get("stdin").?.string);
-    defer alloc.free(decoded);
-    try std.testing.expectEqualStrings("hello", decoded);
+    try std.testing.expectEqualStrings("fd", parsed.value.object.get("stdinMode").?.string);
 }
 
 test "buildRequest: empty args" {
     const alloc = std.testing.allocator;
     const args = [_][]const u8{};
-    const result = try buildRequest(alloc, "sess-1", "req-1", "/usr/bin/ls", &args, "/tmp", false, null);
+    const result = try buildRequest(alloc, "sess-1", "req-1", "/usr/bin/ls", &args, "/tmp", false, .none);
     defer alloc.free(result);
 
     const parsed = try json.parseFromSlice(json.Value, alloc, result, .{});
@@ -719,7 +577,7 @@ test "buildRequest: empty args" {
 test "buildRequest: special characters in args" {
     const alloc = std.testing.allocator;
     const args = [_][]const u8{ "hello world", "foo\"bar", "a\nb" };
-    const result = try buildRequest(alloc, "s", "r", "/bin/echo", &args, "/", false, null);
+    const result = try buildRequest(alloc, "s", "r", "/bin/echo", &args, "/", false, .none);
     defer alloc.free(result);
 
     const parsed = try json.parseFromSlice(json.Value, alloc, result, .{});
@@ -735,7 +593,7 @@ test "buildRequest: special characters in args" {
 test "buildRequest: ends with newline" {
     const alloc = std.testing.allocator;
     const args = [_][]const u8{};
-    const result = try buildRequest(alloc, "s", "r", "/bin/ls", &args, "/", false, null);
+    const result = try buildRequest(alloc, "s", "r", "/bin/ls", &args, "/", false, .none);
     defer alloc.free(result);
 
     try std.testing.expect(result.len > 0);

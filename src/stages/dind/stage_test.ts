@@ -95,6 +95,7 @@ function makeSharedInput(
     auditDir: "/tmp/audit",
     hostexecInterceptLibPath: null,
     hostexecClientPath: null,
+    hostexecGatewayPath: null,
   };
   return {
     config,

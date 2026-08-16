@@ -95,6 +95,7 @@ const defaultProbeResults: ProbeResults = {
   auditDir: "/tmp/audit",
   hostexecInterceptLibPath: null,
   hostexecClientPath: null,
+  hostexecGatewayPath: null,
 };
 
 const defaultClaudeProbes: AgentProbes = {

@@ -64,6 +64,7 @@ function makeInput(
       auditDir: "/tmp/nas-audit",
       hostexecInterceptLibPath: null,
       hostexecClientPath: null,
+      hostexecGatewayPath: null,
     },
   };
 }

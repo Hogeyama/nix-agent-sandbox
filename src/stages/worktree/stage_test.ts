@@ -92,6 +92,7 @@ function makeInput(
       auditDir: "/tmp/audit",
       hostexecInterceptLibPath: null,
       hostexecClientPath: null,
+      hostexecGatewayPath: null,
     },
     workspace: { workDir, imageName },
   };

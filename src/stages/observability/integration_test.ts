@@ -105,6 +105,7 @@ function makeProbes(): ProbeResults {
     auditDir: "/audit",
     hostexecInterceptLibPath: null,
     hostexecClientPath: null,
+    hostexecGatewayPath: null,
   };
 }
 

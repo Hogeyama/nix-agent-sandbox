@@ -68,6 +68,7 @@ function makeStageInput(overrides: Partial<StageInput> = {}): StageInput {
       auditDir: "/tmp/audit",
       hostexecInterceptLibPath: null,
       hostexecClientPath: null,
+      hostexecGatewayPath: null,
     },
     ...overrides,
   } as StageInput;

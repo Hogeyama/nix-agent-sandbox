@@ -53,3 +53,22 @@ export async function resolveHostExecClientPath(opts?: {
     opts,
   );
 }
+
+/**
+ * Resolve the host-side path to the per-session hostexec gateway binary.
+ *
+ * The gateway owns the container-visible exec socket and receives delegated
+ * stdin descriptors from the two container-side clients.
+ */
+export const HOSTEXEC_GATEWAY_BINARY_NAME = "nas-hostexec-gateway";
+
+export async function resolveHostExecGatewayPath(opts?: {
+  assetDir?: string;
+}): Promise<string | null> {
+  return resolveAssetBinary(
+    "hostexec/nas-hostexec-gateway",
+    import.meta.url,
+    "./intercept/zig-out/bin/nas-hostexec-gateway",
+    opts,
+  );
+}

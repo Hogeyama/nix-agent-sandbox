@@ -14,7 +14,10 @@ import { resolveRuntimeSubdir } from "../../lib/runtime_dir.ts";
 import { emptyContainerPlan } from "../../pipeline/container_plan.ts";
 import type { PipelineState } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput } from "../../pipeline/types.ts";
-import { makeHostExecBrokerServiceFake } from "./broker_service.ts";
+import {
+  HostExecTeardownError,
+  makeHostExecBrokerServiceFake,
+} from "./broker_service.ts";
 import {
   type HostExecWorkspacePlan,
   makeHostExecSetupServiceFake,
@@ -122,6 +125,7 @@ function makeSharedInput(
       // tests that take one away.
       hostexecInterceptLibPath: "/fake/intercept.so",
       hostexecClientPath: "/fake/nas-hostexec-client",
+      hostexecGatewayPath: "/fake/nas-hostexec-gateway",
       ...probeOverrides,
     },
   };
@@ -276,6 +280,11 @@ test("HostExecStage plan: broker spec contains correct fields", async () => {
   expect(plan.broker.execSocketPath.includes("/exec/")).toEqual(true);
   expect(plan.broker.controlSocketPath.includes("/exec/")).toEqual(false);
   expect(plan.broker.execSocketPath).not.toEqual(plan.broker.controlSocketPath);
+  expect(plan.broker.gatewayBinaryPath).toEqual("/fake/nas-hostexec-gateway");
+  expect(plan.broker.internalSocketPath).toContain("/gateway.sock");
+  expect(plan.broker.internalSocketPath).not.toEqual(
+    plan.broker.execSocketPath,
+  );
 });
 
 test("HostExecStage plan: mounts only the exec socket dir, never the control socket dir", async () => {
@@ -305,6 +314,14 @@ test("HostExecStage plan: mounts only the exec socket dir, never the control soc
   }
   for (const arg of plan.dockerArgs) {
     expect(arg.includes(plan.broker.controlSocketPath)).toEqual(false);
+    expect(arg.includes(plan.broker.internalSocketPath)).toEqual(false);
+  }
+  for (const mount of plan.mounts) {
+    expect(mount.source).not.toEqual(plan.broker.internalSocketPath);
+    expect(mount.target).not.toEqual(plan.broker.internalSocketPath);
+  }
+  for (const value of Object.values(plan.envVars)) {
+    expect(value).not.toContain(plan.broker.internalSocketPath);
   }
 
   // The exec socket dir is provisioned with 0o700 in the directories plan.
@@ -804,6 +821,19 @@ test("HostExecStage plan: absolute argv0 pointing at a sensitive container path 
 // EffectStage run() tests
 // ============================================================
 
+test("HostExecStage plan: a missing gateway artifact fails with rebuild guidance", async () => {
+  const profile = makeProfile();
+  const input = {
+    ...makeSharedInput(profile, makeHostEnv("/tmp/nas-test-runtime"), {
+      hostexecGatewayPath: null,
+    }),
+    ...makeStageState(),
+  };
+
+  expect(() => planHostExec(input)).toThrow(/nas-hostexec-gateway/);
+  expect(() => planHostExec(input)).toThrow(/zig build|reinstall/);
+});
+
 test("HostExecStage: a missing client binary is a stage failure, not a defect", async () => {
   const profile = makeProfile();
   const hostEnv = makeHostEnv("/tmp/nas-test-runtime");
@@ -971,4 +1001,108 @@ test("HostExecStage: run merges hostexec mounts and env into container and hoste
     extraArgs: ["--safe"],
   });
   expect(result.container?.extraRunArgs).toEqual(["--shm-size", "2g"]);
+});
+
+test("HostExecStage: scope release retries a transient broker close failure", async () => {
+  const profile = makeProfile();
+  const sharedInput = makeSharedInput(
+    profile,
+    makeHostEnv("/tmp/nas-test-runtime"),
+  );
+  const stage = createHostExecStage(sharedInput);
+  const closeError = new Error("transient teardown failure");
+  let closeAttempts = 0;
+  let diagnostics = 0;
+  const brokerLayer = makeHostExecBrokerServiceFake({
+    start: () =>
+      Effect.succeed({
+        close: () =>
+          Effect.suspend(() => {
+            closeAttempts += 1;
+            return closeAttempts === 1 ? Effect.fail(closeError) : Effect.void;
+          }),
+        reportTeardown: () =>
+          Effect.sync(() => {
+            diagnostics += 1;
+          }),
+      }),
+  });
+  const scope = Effect.runSync(Scope.make());
+
+  const stageExit = await Effect.runPromiseExit(
+    stage
+      .run(makeStageState())
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(makeHostExecSetupServiceFake()),
+        Effect.provide(brokerLayer),
+      ),
+  );
+  const scopeExit = await Effect.runPromiseExit(Scope.close(scope, Exit.void));
+
+  expect(Exit.isSuccess(stageExit)).toBe(true);
+  expect(Exit.isSuccess(scopeExit)).toBe(true);
+  expect(closeAttempts).toBe(2);
+  expect(diagnostics).toBe(0);
+});
+
+test("HostExecStage: persistent broker close failure is reported once and finalizer recovers", async () => {
+  const profile = makeProfile();
+  const sharedInput = makeSharedInput(
+    profile,
+    makeHostEnv("/tmp/nas-test-runtime"),
+  );
+  const stage = createHostExecStage(sharedInput);
+  const closeError = new HostExecTeardownError([
+    { operation: "stopGateway", error: new Error("gateway stop failed") },
+    { operation: "closeBroker", error: new Error("broker close failed") },
+  ]);
+  let closeAttempts = 0;
+  const diagnostics: Cause.Cause<unknown>[] = [];
+  const brokerLayer = makeHostExecBrokerServiceFake({
+    start: () =>
+      Effect.succeed({
+        close: () =>
+          Effect.suspend(() => {
+            closeAttempts += 1;
+            return Effect.fail(closeError);
+          }),
+        reportTeardown: (cause) =>
+          Effect.sync(() => {
+            diagnostics.push(cause);
+          }),
+      }),
+  });
+  const scope = Effect.runSync(Scope.make());
+
+  const stageExit = await Effect.runPromiseExit(
+    stage
+      .run(makeStageState())
+      .pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provide(makeHostExecSetupServiceFake()),
+        Effect.provide(brokerLayer),
+      ),
+  );
+  const scopeExit = await Effect.runPromiseExit(Scope.close(scope, Exit.void));
+
+  expect(Exit.isSuccess(stageExit)).toBe(true);
+  expect(Exit.isSuccess(scopeExit)).toBe(true);
+  expect(closeAttempts).toBe(3);
+  expect(diagnostics).toHaveLength(1);
+  const diagnostic = diagnostics[0];
+  expect(diagnostic).toBeDefined();
+  if (diagnostic !== undefined) {
+    const failure = Cause.failureOption(diagnostic);
+    expect(failure._tag).toBe("Some");
+    if (failure._tag === "Some") {
+      expect(failure.value).toBe(closeError);
+      expect(
+        (failure.value as HostExecTeardownError).failures.map(
+          ({ operation }) => operation,
+        ),
+      ).toEqual(["stopGateway", "closeBroker"]);
+      expect(String(failure.value)).toContain("stopGateway -> closeBroker");
+    }
+  }
 });

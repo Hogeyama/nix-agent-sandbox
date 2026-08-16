@@ -70,6 +70,10 @@ test("resolveProbes: returns ProbeResults with expected fields", async () => {
     probes.hostexecClientPath === null ||
       typeof probes.hostexecClientPath === "string",
   ).toEqual(true);
+  expect(
+    probes.hostexecGatewayPath === null ||
+      typeof probes.hostexecGatewayPath === "string",
+  ).toEqual(true);
 });
 
 test("resolveProbes: auditDir uses XDG_DATA_HOME when set", async () => {

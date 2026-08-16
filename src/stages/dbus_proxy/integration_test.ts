@@ -75,6 +75,7 @@ function makeProbes(overrides?: Partial<ProbeResults>): ProbeResults {
     auditDir: "/tmp/nas-test-audit",
     hostexecInterceptLibPath: null,
     hostexecClientPath: null,
+    hostexecGatewayPath: null,
     ...overrides,
   };
 }

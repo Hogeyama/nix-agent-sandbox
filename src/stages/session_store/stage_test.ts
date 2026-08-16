@@ -231,6 +231,7 @@ function createTestInput(opts: {
         auditDir: "/tmp/audit",
         hostexecInterceptLibPath: null,
         hostexecClientPath: null,
+        hostexecGatewayPath: null,
       },
     },
     workspace,

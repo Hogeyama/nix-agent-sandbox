@@ -52,6 +52,7 @@ const dummyStageInput: StageInput = {
     auditDir: "/tmp/nas-audit",
     hostexecInterceptLibPath: null,
     hostexecClientPath: null,
+    hostexecGatewayPath: null,
   },
 };
 
@@ -82,6 +83,7 @@ test("ProbeResults: can construct with all fields", () => {
     auditDir: "/tmp/nas-audit",
     hostexecInterceptLibPath: null,
     hostexecClientPath: null,
+    hostexecGatewayPath: null,
   };
 
   expect(probes.hasHostNix).toEqual(true);

@@ -398,6 +398,7 @@ function createTestInput(overrides: { container?: ContainerPlan } = {}): {
         auditDir: "/tmp/audit",
         hostexecInterceptLibPath: null,
         hostexecClientPath: null,
+        hostexecGatewayPath: null,
       },
     },
     container,

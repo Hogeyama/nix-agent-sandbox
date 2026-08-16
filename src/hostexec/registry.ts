@@ -6,6 +6,7 @@ import {
   gcRuntime,
   listPendingEntries as genericListPendingEntries,
   readSessionRegistry as genericReadSessionRegistry,
+  sessionBrokerDir,
 } from "../lib/runtime_registry.ts";
 import type {
   HostExecPendingEntry,
@@ -33,6 +34,14 @@ export interface HostExecRuntimePaths extends BaseRuntimePaths {
 }
 
 export type HostExecGcResult = GcResult;
+
+/** Host-only Unix socket used by the per-session gateway to reach the broker. */
+export function hostExecInternalSocketPath(
+  paths: HostExecRuntimePaths,
+  sessionId: string,
+): string {
+  return path.join(sessionBrokerDir(paths, sessionId), "gateway.sock");
+}
 
 export async function resolveHostExecRuntimePaths(
   runtimeDir?: string,

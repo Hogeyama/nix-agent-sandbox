@@ -84,6 +84,7 @@ function makeStageInput(
     auditDir: "/tmp/nas-test-audit",
     hostexecInterceptLibPath: null,
     hostexecClientPath: null,
+    hostexecGatewayPath: null,
   };
   return {
     config,

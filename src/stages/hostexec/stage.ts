@@ -8,7 +8,7 @@
  */
 
 import * as path from "node:path";
-import { Effect, type Scope } from "effect";
+import { Effect, Schedule, type Scope } from "effect";
 import {
   DEFAULT_HOSTEXEC_CONFIG,
   type HostExecRule,
@@ -27,6 +27,7 @@ import {
   hostExecBrokerSocketPath,
   hostExecExecSocketDir,
   hostExecExecSocketPath,
+  hostExecInternalSocketPath,
   hostExecSessionBrokerDir,
 } from "../../hostexec/registry.ts";
 import { resolveNotifyBackend } from "../../lib/notify_utils.ts";
@@ -42,11 +43,26 @@ import type {
 } from "../../pipeline/state.ts";
 import type { HostEnv, StageInput, StageResult } from "../../pipeline/types.ts";
 import { resolveMaskFilterBinPath } from "../maskfs/mask_filter_path.ts";
-import { HostExecBrokerService } from "./broker_service.ts";
+import {
+  type HostExecBrokerHandle,
+  HostExecBrokerService,
+} from "./broker_service.ts";
 import { HostExecSetupService } from "./setup_service.ts";
 
 const WRAPPER_DIR = "/opt/nas/hostexec/bin";
 const SESSION_TMP_ROOT = "/tmp/nas-hostexec";
+const HOSTEXEC_CLOSE_MAX_RETRIES = 2;
+
+function releaseHostExecBroker(
+  handle: HostExecBrokerHandle,
+): Effect.Effect<void> {
+  return handle.close().pipe(
+    Effect.retry(Schedule.recurs(HOSTEXEC_CLOSE_MAX_RETRIES)),
+    Effect.catchAllCause((cause) =>
+      handle.reportTeardown(cause).pipe(Effect.asVoid),
+    ),
+  );
+}
 
 /**
  * 絶対パス argv0 の入力健全性を検証する。フォールバック bind-mount 経路を
@@ -94,7 +110,9 @@ export interface HostExecPlan {
   };
   readonly broker: {
     readonly execSocketPath: string;
+    readonly internalSocketPath: string;
     readonly controlSocketPath: string;
+    readonly gatewayBinaryPath: string;
     readonly paths: HostExecRuntimePaths;
     readonly sessionId: string;
     readonly profileName: string;
@@ -193,7 +211,13 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   const {
     hostexecInterceptLibPath: interceptLibPath,
     hostexecClientPath: clientBinPath,
+    hostexecGatewayPath: gatewayBinaryPath,
   } = input.probes;
+  if (!gatewayBinaryPath) {
+    throw new Error(
+      "[nas] hostexec: nas-hostexec-gateway is missing. Build with `cd src/hostexec/intercept && zig build` or reinstall nas before starting a hostexec session.",
+    );
+  }
   const config =
     input.profile.hostexec ?? structuredClone(DEFAULT_HOSTEXEC_CONFIG);
   config.rules = [...config.rules, NAS_HOOK_RULE];
@@ -219,6 +243,10 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
   // the container. The exec socket (execute/fallback only) lives in the
   // `exec/` subdir, which is the only part mounted into the container.
   const controlSocketPath = hostExecBrokerSocketPath(
+    runtimePaths,
+    input.sessionId,
+  );
+  const internalSocketPath = hostExecInternalSocketPath(
     runtimePaths,
     input.sessionId,
   );
@@ -360,7 +388,9 @@ export function planHostExec(input: HostExecStageInput): HostExecPlan | null {
     maskFilterIntent,
     broker: {
       execSocketPath,
+      internalSocketPath,
       controlSocketPath,
+      gatewayBinaryPath,
       paths: runtimePaths,
       sessionId: input.sessionId,
       profileName: input.profileName,
@@ -433,7 +463,9 @@ function runHostExec(
         paths: spec.paths,
         sessionId: spec.sessionId,
         execSocketPath: spec.execSocketPath,
+        internalSocketPath: spec.internalSocketPath,
         controlSocketPath: spec.controlSocketPath,
+        gatewayBinaryPath: spec.gatewayBinaryPath,
         profileName: spec.profileName,
         workspaceRoot: spec.workspaceRoot,
         sessionTmpDir: spec.sessionTmpDir,
@@ -447,7 +479,7 @@ function runHostExec(
         integrityTargets: spec.integrityTargets,
         maskFilter,
       }),
-      (handle) => handle.close(),
+      (handle) => releaseHostExecBroker(handle),
     );
 
     return {
