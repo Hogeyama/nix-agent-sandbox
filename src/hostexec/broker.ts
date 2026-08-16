@@ -20,6 +20,18 @@ import {
 } from "../lib/unix_socket.ts";
 import { logInfo, logWarn } from "../log.ts";
 import {
+  BufferedGatewayLineReader,
+  type GatewayLineReader,
+  type GatewayReadMonitorEvent,
+  RawLineReader,
+  runGatewayExecution,
+} from "./gateway_execution.ts";
+import {
+  type BrokerToGatewayMessage,
+  parseBrokerToGatewayLine,
+  parseGatewayToBrokerLine,
+} from "./gateway_protocol.ts";
+import {
   decideIntegrity,
   type IntegritySnapshot,
   type IntegrityVerdict,
@@ -39,7 +51,6 @@ import {
 import {
   type HostExecRuntimePaths,
   hostExecBrokerSocketPath,
-  hostExecExecSocketPath,
   listHostExecPendingEntries,
   removeHostExecPendingDir,
   removeHostExecPendingEntry,
@@ -90,10 +101,120 @@ interface HostExecBrokerOptions {
 }
 
 interface PendingWaiter {
-  /** Socket the original `execute` request arrived on; streamed responses go here. */
+  /** Internal gateway socket retained while approval is pending. */
   socket: Socket;
+  reader: GatewayLineReader;
+  lifecycle: GatewayRequestLifecycle;
   resolve: () => void;
   reject: (error: unknown) => void;
+}
+
+type GatewayLifecycleState =
+  | "preflight"
+  | "awaiting_approval"
+  | "running"
+  | "terminal"
+  | "cancelled";
+
+/**
+ * Owns the gateway connection while policy and approval are asynchronous.
+ * The socket/read monitor is installed before policy, registry, or
+ * notification work begins so a peer cannot disappear leaving an orphaned
+ * pending request behind.
+ */
+class GatewayRequestLifecycle {
+  private state: GatewayLifecycleState = "preflight";
+  private cancelledError: Error | null = null;
+  private deferredMonitorEvent: GatewayReadMonitorEvent | null = null;
+  private cleanup: (() => Promise<void>) | null = null;
+  private cleanupPromise: Promise<void> | null = null;
+  private cleanupRequested = false;
+
+  private readonly onClose = (): void => {
+    this.cancel(new Error("gateway disconnected"));
+  };
+  private readonly onError = (error: Error): void => {
+    this.cancel(new Error(`gateway transport error: ${error.message}`));
+  };
+
+  constructor(
+    private readonly socket: Socket,
+    private readonly reader: GatewayLineReader,
+  ) {
+    socket.once("close", this.onClose);
+    socket.once("error", this.onError);
+  }
+
+  get isCancelled(): boolean {
+    return this.cancelledError !== null;
+  }
+
+  get currentState(): GatewayLifecycleState {
+    return this.state;
+  }
+
+  setCleanup(cleanup: () => Promise<void>): void {
+    this.cleanup = cleanup;
+    if (this.cleanupRequested) this.startCleanup();
+  }
+
+  markAwaitingApproval(): GatewayReadMonitorEvent | null {
+    if (!this.isCancelled && this.state === "preflight") {
+      this.state = "awaiting_approval";
+    }
+    const event = this.deferredMonitorEvent;
+    this.deferredMonitorEvent = null;
+    return event;
+  }
+
+  deferMonitorEvent(event: GatewayReadMonitorEvent): void {
+    if (this.state === "preflight" && !this.isCancelled) {
+      this.deferredMonitorEvent = event;
+    }
+  }
+
+  markRunning(): void {
+    if (!this.isCancelled) this.state = "running";
+  }
+
+  markTerminal(): void {
+    if (!this.isCancelled) this.state = "terminal";
+  }
+
+  cancel(error: Error): void {
+    if (this.isCancelled || this.state === "terminal") return;
+    this.cancelledError = error;
+    this.state = "cancelled";
+    this.cleanupRequested = true;
+    this.detachSocketListeners();
+    this.reader.abort(error);
+    this.socket.destroy();
+    this.startCleanup();
+  }
+
+  async waitForCleanup(): Promise<void> {
+    await this.cleanupPromise;
+  }
+
+  finish(): void {
+    this.detachSocketListeners();
+  }
+
+  private startCleanup(): void {
+    if (!this.cleanup || this.cleanupPromise) return;
+    this.cleanupPromise = Promise.resolve()
+      .then(() => this.cleanup?.())
+      .catch((error) => {
+        logWarn(
+          `[nas] HostExecBroker: pending request cleanup failed: ${error}`,
+        );
+      });
+  }
+
+  private detachSocketListeners(): void {
+    this.socket.off("close", this.onClose);
+    this.socket.off("error", this.onError);
+  }
 }
 
 interface PendingGroup {
@@ -144,11 +265,12 @@ export class HostExecBroker {
   private readonly uiIdleTimeout?: number;
   private readonly auditDir?: string;
   private readonly secretStore: SecretStore;
-  private execSocketPath: string | null = null;
+  private internalSocketPath: string | null = null;
   private controlSocketPath: string | null = null;
-  private execServer: Server | null = null;
+  private internalServer: Server | null = null;
   private controlServer: Server | null = null;
   private readonly approvedKeys = new Set<string>();
+  private readonly activeRequestIds = new Set<string>();
   private readonly groups = new Map<string, PendingGroup>();
   private readonly requestToApprovalKey = new Map<string, string>();
   private readonly notificationTasks = new Set<Promise<void>>();
@@ -179,28 +301,32 @@ export class HostExecBroker {
   }
 
   async start(
-    execSocketPath: string,
+    internalSocketPath: string,
     controlSocketPath: string,
   ): Promise<void> {
     await this.diagnostics.record("broker_started");
-    this.execSocketPath = execSocketPath;
+    this.internalSocketPath = internalSocketPath;
     this.controlSocketPath = controlSocketPath;
-    // The control socket lives directly in the session broker dir; the exec
-    // socket lives in the `exec/` subdir (mounted into the container).
+    // Both sockets listened to by this process are host-only. The gateway,
+    // which is the only process that may be mounted into the container,
+    // owns the external exec socket and is deliberately absent here.
     await mkdir(path.dirname(controlSocketPath), {
       recursive: true,
       mode: 0o700,
     });
-    await mkdir(path.dirname(execSocketPath), { recursive: true, mode: 0o700 });
+    await mkdir(path.dirname(internalSocketPath), {
+      recursive: true,
+      mode: 0o700,
+    });
     await rm(controlSocketPath, { force: true });
-    await rm(execSocketPath, { force: true });
+    await rm(internalSocketPath, { force: true });
     this.controlServer = await createUnixServer(
       controlSocketPath,
       (socket) => void this.handleConnection(socket, "control"),
     );
-    this.execServer = await createUnixServer(
-      execSocketPath,
-      (socket) => void this.handleConnection(socket, "exec"),
+    this.internalServer = await createUnixServer(
+      internalSocketPath,
+      (socket) => void this.handleConnection(socket, "internal"),
     );
     // ブローカー起動時点（コンテナ起動より前）に対象ファイルの baseline を取る。
     // この時点でコンテナプロセスは存在せず、差し替えは不可能。baseline のキーは
@@ -228,9 +354,9 @@ export class HostExecBroker {
 
   async close(): Promise<void> {
     await this.diagnostics.record("broker_closing");
-    if (this.execServer) {
-      this.execServer.close();
-      this.execServer = null;
+    if (this.internalServer) {
+      this.internalServer.close();
+      this.internalServer = null;
     }
     if (this.controlServer) {
       this.controlServer.close();
@@ -241,20 +367,23 @@ export class HostExecBroker {
       group.notificationAbort.abort();
       for (const [requestId, waiter] of group.waiters.entries()) {
         try {
-          await writeJsonLine(waiter.socket, {
-            type: "error",
+          await writeGatewayError(
+            waiter.socket,
             requestId,
-            message: "hostexec broker closed",
-          });
+            "hostexec broker closed",
+            "awaiting_decision",
+          );
         } catch {
           // Client socket may already be gone; nothing to notify.
         }
+        waiter.lifecycle.finish();
         waiter.resolve();
       }
     }
     await Promise.allSettled(this.notificationTasks);
     this.groups.clear();
     this.requestToApprovalKey.clear();
+    this.activeRequestIds.clear();
     await removeHostExecPendingDir(this.paths, this.sessionId);
     await removeHostExecSessionRegistry(this.paths, this.sessionId);
     if (this.maskFilter) {
@@ -269,21 +398,25 @@ export class HostExecBroker {
     const controlTarget =
       this.controlSocketPath ??
       hostExecBrokerSocketPath(this.paths, this.sessionId);
-    const execTarget =
-      this.execSocketPath ?? hostExecExecSocketPath(this.paths, this.sessionId);
-    // Remove exec socket and its `exec/` dir first: leaving the subdir behind
-    // makes the session broker dir rmdir fail with ENOTEMPTY.
-    await rm(execTarget, { force: true }).catch((e) => {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-        logInfo(`[nas] HostExecBroker: failed to remove exec socket: ${e}`);
-      }
-    });
-    await rmdir(path.dirname(execTarget)).catch((e) => {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTEMPTY") {
-        logInfo(`[nas] HostExecBroker: failed to remove exec socket dir: ${e}`);
-      }
-    });
+    // The external socket is owned by nas-hostexec-gateway. Only remove the
+    // host-only internal endpoint created by this broker.
+    if (this.internalSocketPath) {
+      await rm(this.internalSocketPath, { force: true }).catch((e) => {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          logInfo(
+            `[nas] HostExecBroker: failed to remove internal socket: ${e}`,
+          );
+        }
+      });
+      await rmdir(path.dirname(this.internalSocketPath)).catch((e) => {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTEMPTY") {
+          logInfo(
+            `[nas] HostExecBroker: failed to remove internal socket dir: ${e}`,
+          );
+        }
+      });
+    }
     await rm(controlTarget, { force: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
         logInfo(`[nas] HostExecBroker: failed to remove control socket: ${e}`);
@@ -306,29 +439,22 @@ export class HostExecBroker {
 
   private async handleConnection(
     socket: Socket,
-    channel: "exec" | "control",
+    channel: "internal" | "control",
   ): Promise<void> {
     try {
-      const line = await readJsonLine(socket);
-      if (!line) return;
-      const message = JSON.parse(line) as HostExecBrokerMessage;
-      if (channel === "exec" && message.type === "execute") {
+      if (channel === "internal") {
         try {
-          await this.executeStreaming(message, socket);
-        } catch (error) {
-          try {
-            await writeJsonLine(
-              socket,
-              toErrorResponse(message, (error as Error).message),
-            );
-          } catch (e) {
-            const code = (e as NodeJS.ErrnoException).code;
-            if (code === "EPIPE" || code === "ECONNRESET") return;
-            throw e;
-          }
+          await this.handleGatewayConnection(socket);
+        } catch {
+          // Invalid internal frames are fail-closed. The gateway owns the
+          // external terminal response, so there is no safe request ID to
+          // echo when the first frame itself is malformed.
         }
         return;
       }
+      const line = await readJsonLine(socket);
+      if (!line) return;
+      const message = JSON.parse(line) as HostExecBrokerMessage;
       const response = await this.handleMessage(message, channel).catch(
         (error) => toErrorResponse(message, (error as Error).message),
       );
@@ -344,9 +470,146 @@ export class HostExecBroker {
     }
   }
 
+  private async handleGatewayConnection(socket: Socket): Promise<void> {
+    const reader = new BufferedGatewayLineReader(new RawLineReader(socket));
+    let requestId: string | undefined;
+    let activeRequestReserved = false;
+    let lifecycle: GatewayRequestLifecycle | undefined;
+    try {
+      const line = await reader.read();
+      if (line === null) return;
+      let message: ReturnType<typeof parseGatewayToBrokerLine>;
+      try {
+        // Keep the original wire framing visible to the gateway protocol
+        // parser so oversized or malformed internal requests fail closed.
+        message = parseGatewayToBrokerLine(line, "awaiting_decision");
+      } catch (error) {
+        throw new Error(
+          `invalid gateway execute request: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (message.type !== "execute") {
+        throw new Error("internal gateway connection must begin with execute");
+      }
+      requestId = message.request.requestId;
+      if (this.activeRequestIds.has(requestId)) {
+        try {
+          await writeGatewayError(
+            socket,
+            requestId,
+            "duplicate active request ID",
+            "awaiting_decision",
+          );
+        } catch {
+          // The duplicate peer may disconnect while receiving the terminal
+          // error; the original request remains the sole active owner.
+        }
+        return;
+      }
+      this.activeRequestIds.add(requestId);
+      activeRequestReserved = true;
+      const requestLifecycle = new GatewayRequestLifecycle(socket, reader);
+      lifecycle = requestLifecycle;
+      reader.startMonitor((event) => {
+        this.handleGatewayLifecycleEvent(
+          requestLifecycle,
+          message.request.requestId,
+          event,
+        );
+      });
+      requestLifecycle.setCleanup(() =>
+        this.removePendingRequest(message.request.requestId),
+      );
+      await this.executeStreaming(
+        message.request,
+        socket,
+        reader,
+        requestLifecycle,
+      );
+    } catch (error) {
+      if (!requestId || lifecycle?.isCancelled) return;
+      try {
+        await writeGatewayError(
+          socket,
+          requestId,
+          error instanceof Error ? error.message : String(error),
+          "awaiting_result",
+        );
+      } catch (writeError) {
+        const code = (writeError as NodeJS.ErrnoException).code;
+        if (code !== "EPIPE" && code !== "ECONNRESET") throw writeError;
+      }
+    } finally {
+      lifecycle?.finish();
+      reader.close();
+      if (activeRequestReserved && requestId !== undefined) {
+        this.activeRequestIds.delete(requestId);
+      }
+    }
+  }
+
+  private handleGatewayLifecycleEvent(
+    lifecycle: GatewayRequestLifecycle,
+    requestId: string,
+    event: GatewayReadMonitorEvent,
+  ): void {
+    if (lifecycle.currentState === "preflight") {
+      lifecycle.deferMonitorEvent(event);
+      return;
+    }
+    // Once execution starts, the same buffered line belongs to
+    // runGatewayExecution. The monitor only owns the pre-approval window.
+    if (
+      lifecycle.currentState === "running" ||
+      lifecycle.currentState === "terminal" ||
+      lifecycle.isCancelled
+    ) {
+      return;
+    }
+    if (event.error) {
+      lifecycle.cancel(event.error);
+      return;
+    }
+    if (event.line === undefined || event.line === null) {
+      lifecycle.cancel(new Error("gateway disconnected before approval"));
+      return;
+    }
+    try {
+      const message = parseGatewayToBrokerLine(event.line, "awaiting_decision");
+      const messageRequestId =
+        message.type === "execute"
+          ? message.request.requestId
+          : message.requestId;
+      if (messageRequestId !== requestId) {
+        throw new Error(
+          `gateway request ID mismatch: expected ${requestId}, got ${messageRequestId}`,
+        );
+      }
+      if (message.type === "cancelled") {
+        lifecycle.cancel(
+          new Error(`gateway cancelled request: ${message.reason}`),
+        );
+        return;
+      }
+      if (message.type === "transport_error") {
+        lifecycle.cancel(
+          new Error(`gateway transport error: ${message.message}`),
+        );
+        return;
+      }
+      throw new Error(
+        `gateway message ${message.type} is not accepted before approval`,
+      );
+    } catch (error) {
+      lifecycle.cancel(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
+  }
+
   private async handleMessage(
     message: HostExecBrokerMessage,
-    channel: "exec" | "control",
+    channel: "internal" | "control",
   ): Promise<HostExecBrokerResponse> {
     // Enforce the channel contract before dispatching on message type. The
     // exec socket is the only socket mounted into the agent container, so it
@@ -357,12 +620,12 @@ export class HostExecBroker {
     // before reaching here (it streams directly to the socket via
     // executeStreaming), so any message that reaches this branch is a
     // disallowed approve/deny/list_pending sent on the exec channel.
-    if (channel === "exec") {
+    if (channel === "internal") {
       return {
         type: "error",
         requestId: message.type === "list_pending" ? "" : message.requestId,
         message:
-          "approve/deny/list_pending are not accepted on the exec channel",
+          "approve/deny/list_pending are not accepted on the internal channel",
       };
     }
     // control channel: host-side CLI/UI operations only.
@@ -384,44 +647,62 @@ export class HostExecBroker {
 
   /**
    * Resolves an execute request and streams its responses directly to the
-   * exec socket, rather than returning a single buffered response. This
-   * lets `runResolved` emit `chunk` messages as the child process produces
-   * output instead of waiting for it to exit.
+   * internal gateway socket. The gateway owns the host command; this broker
+   * only sends an approved execution spec and receives masked output.
    *
    * The pending-approval flow keeps the socket open: when approval is
-   * required, the request waits in `group.waiters` (with the socket
-   * attached) until `resolveGroup` runs `runResolved` (or writes a denial)
+   * required, the request waits in `group.waiters` (with the internal socket
+   * attached) until `resolveGroup` sends `start` (or writes a denial)
    * directly to that socket.
    */
   private async executeStreaming(
     message: ExecuteRequest,
     socket: Socket,
+    reader: GatewayLineReader,
+    lifecycle: GatewayRequestLifecycle,
   ): Promise<void> {
+    const wasCancelled = async (): Promise<boolean> => {
+      if (!lifecycle.isCancelled) return false;
+      await lifecycle.waitForCleanup();
+      return true;
+    };
+
     const resolved = await this.resolveRequest(message);
+    if (await wasCancelled()) return;
     if (!resolved) {
-      await writeJsonLine(socket, {
-        type: "fallback",
-        requestId: message.requestId,
-      });
+      await writeGatewayMessage(
+        socket,
+        { type: "fallback", requestId: message.requestId },
+        "awaiting_decision",
+      );
+      lifecycle.markTerminal();
       return;
     }
     const commandStr = [message.argv0, ...message.args].join(" ");
     if (resolved.rule.approval === "deny") {
+      if (await wasCancelled()) return;
       await this.recordAudit(
         message.requestId,
         "deny",
         "policy-deny",
         commandStr,
       );
-      await writeJsonLine(socket, {
-        type: "error",
-        requestId: message.requestId,
-        message: "permission denied by hostexec policy",
-      });
+      if (await wasCancelled()) return;
+      await writeGatewayMessage(
+        socket,
+        {
+          type: "error",
+          requestId: message.requestId,
+          message: "permission denied by hostexec policy",
+        },
+        "awaiting_decision",
+      );
+      lifecycle.markTerminal();
       return;
     }
 
     const approvalKey = await buildApprovalKey(resolved.capability);
+    if (await wasCancelled()) return;
     let integrity: IntegrityVerdict;
     try {
       integrity = await this.integrityVerdict(message, resolved);
@@ -430,35 +711,49 @@ export class HostExecBroker {
       // なった対象など）を想定する。deny 系の他の分岐と同様に監査ログへ記録
       // してからエラー応答を返す。記録せずに throw を伝播させると、この経路
       // だけ audit 証跡が欠落する。
+      if (await wasCancelled()) return;
       await this.recordAudit(
         message.requestId,
         "deny",
         "integrity-check-error",
         commandStr,
       );
-      await writeJsonLine(socket, {
-        type: "error",
-        requestId: message.requestId,
-        message: `hostexec integrity check failed: ${e}`,
-      });
+      if (await wasCancelled()) return;
+      await writeGatewayMessage(
+        socket,
+        {
+          type: "error",
+          requestId: message.requestId,
+          message: `hostexec integrity check failed: ${e}`,
+        },
+        "awaiting_decision",
+      );
+      lifecycle.markTerminal();
       return;
     }
 
     // 対象ファイルが起動時 baseline から変化していれば、allow ルールでも承認
     // キャッシュでも即実行させない。prompt 無効時は承認手段が無いので deny。
     if (integrity === "prompt" && !this.config.prompt.enable) {
+      if (await wasCancelled()) return;
       await this.recordAudit(
         message.requestId,
         "deny",
         "integrity-mismatch",
         commandStr,
       );
-      await writeJsonLine(socket, {
-        type: "error",
-        requestId: message.requestId,
-        message:
-          "hostexec target changed since session start; approval required but prompt is disabled",
-      });
+      if (await wasCancelled()) return;
+      await writeGatewayMessage(
+        socket,
+        {
+          type: "error",
+          requestId: message.requestId,
+          message:
+            "hostexec target changed since session start; approval required but prompt is disabled",
+        },
+        "awaiting_decision",
+      );
+      lifecycle.markTerminal();
       return;
     }
 
@@ -469,35 +764,71 @@ export class HostExecBroker {
         !this.config.prompt.enable)
     ) {
       if (resolved.rule.approval === "prompt" && !this.config.prompt.enable) {
+        if (await wasCancelled()) return;
         await this.recordAudit(
           message.requestId,
           "deny",
           "prompt-disabled",
           commandStr,
         );
-        await writeJsonLine(socket, {
-          type: "error",
-          requestId: message.requestId,
-          message: "hostexec prompt is disabled",
-        });
+        if (await wasCancelled()) return;
+        await writeGatewayMessage(
+          socket,
+          {
+            type: "error",
+            requestId: message.requestId,
+            message: "hostexec prompt is disabled",
+          },
+          "awaiting_decision",
+        );
+        lifecycle.markTerminal();
         return;
       }
       const reason =
         resolved.rule.approval === "allow" ? "rule-allow" : "approved-cached";
+      if (await wasCancelled()) return;
       await this.recordAudit(message.requestId, "allow", reason, commandStr);
-      await this.runResolved(message, resolved, socket);
+      if (await wasCancelled()) return;
+      lifecycle.markRunning();
+      await this.runGatewayResolved(message, resolved, socket, reader);
+      lifecycle.markTerminal();
       return;
     }
 
-    const group =
-      this.groups.get(approvalKey) ??
-      (await this.createPendingGroup(
+    const deferredMonitorEvent = lifecycle.markAwaitingApproval();
+    if (deferredMonitorEvent) {
+      this.handleGatewayLifecycleEvent(
+        lifecycle,
+        message.requestId,
+        deferredMonitorEvent,
+      );
+    }
+    if (await wasCancelled()) return;
+    const deferred = Promise.withResolvers<void>();
+    const waiter: PendingWaiter = {
+      socket,
+      reader,
+      lifecycle,
+      resolve: deferred.resolve,
+      reject: deferred.reject,
+    };
+    let group = this.groups.get(approvalKey);
+    if (!group) {
+      group = await this.createPendingGroup(
         approvalKey,
         message,
         resolved,
         integrity === "prompt",
-      ));
-    if (!group.requests.has(message.requestId)) {
+        waiter,
+      );
+      if (await wasCancelled()) {
+        await this.removePendingRequest(message.requestId);
+        return;
+      }
+    } else {
+      if (group.requests.has(message.requestId)) {
+        throw new Error(`duplicate pending request ID: ${message.requestId}`);
+      }
       group.requestIds.add(message.requestId);
       group.requests.set(message.requestId, { request: message, resolved });
       this.requestToApprovalKey.set(message.requestId, approvalKey);
@@ -509,14 +840,13 @@ export class HostExecBroker {
         integrity === "prompt",
       );
       group.pendingEntries.set(message.requestId, entry);
+      group.waiters.set(message.requestId, waiter);
       await writeHostExecPendingEntry(this.paths, entry);
     }
-    const deferred = Promise.withResolvers<void>();
-    group.waiters.set(message.requestId, {
-      socket,
-      resolve: deferred.resolve,
-      reject: deferred.reject,
-    });
+    if (await wasCancelled()) {
+      await this.removePendingRequest(message.requestId);
+      return;
+    }
     await deferred.promise;
   }
 
@@ -525,6 +855,7 @@ export class HostExecBroker {
     message: ExecuteRequest,
     resolved: ResolvedExecution,
     integrityChanged: boolean,
+    waiter: PendingWaiter,
   ): Promise<PendingGroup> {
     const createdAt = new Date().toISOString();
     const notificationAbort = new AbortController();
@@ -549,6 +880,10 @@ export class HostExecBroker {
     };
     this.groups.set(approvalKey, group);
     this.requestToApprovalKey.set(message.requestId, approvalKey);
+    // Publish the waiter before the registry write can yield. A control
+    // approval racing that write must either resolve this waiter or observe
+    // a lifecycle cancellation, never approve an entry with no waiter.
+    group.waiters.set(message.requestId, waiter);
     const entry = toPendingEntry(
       message,
       resolved,
@@ -619,6 +954,40 @@ export class HostExecBroker {
     return { type: "ack", requestId, decision: "deny" };
   }
 
+  /**
+   * Removes one request from every pending-approval ownership structure.
+   * This operation is deliberately idempotent: socket lifecycle, approval,
+   * timeout, and broker shutdown can all race for the same request.
+   */
+  private async removePendingRequest(requestId: string): Promise<void> {
+    const approvalKey = this.requestToApprovalKey.get(requestId);
+    const group = approvalKey ? this.groups.get(approvalKey) : undefined;
+    this.requestToApprovalKey.delete(requestId);
+
+    if (!group) {
+      await removeHostExecPendingEntry(this.paths, this.sessionId, requestId);
+      return;
+    }
+
+    const waiter = group.waiters.get(requestId);
+    group.waiters.delete(requestId);
+    group.requests.delete(requestId);
+    group.requestIds.delete(requestId);
+    group.pendingEntries.delete(requestId);
+    await removeHostExecPendingEntry(this.paths, this.sessionId, requestId);
+
+    if (group.requests.size === 0) {
+      clearTimeout(group.timer);
+      if (this.groups.get(group.approvalKey) === group) {
+        this.groups.delete(group.approvalKey);
+      }
+      group.notificationAbort.abort();
+      await closeNotification();
+    }
+    waiter?.lifecycle.finish();
+    waiter?.resolve();
+  }
+
   private async resolveGroup(
     approvalKey: string,
     mode: "approve" | "deny",
@@ -641,6 +1010,7 @@ export class HostExecBroker {
       if (!waiter) continue;
       try {
         if (mode === "deny") {
+          if (waiter.lifecycle.isCancelled) continue;
           const reason =
             denyResponse?.type === "error" &&
             denyResponse.message === "pending approval timed out"
@@ -648,41 +1018,47 @@ export class HostExecBroker {
               : "denied-by-user";
           await this.recordAudit(requestId, "deny", reason, commandStr);
           try {
-            await writeJsonLine(waiter.socket, {
-              ...(denyResponse ?? {
-                type: "error",
-                requestId,
-                message: "permission denied by user",
-              }),
+            await writeGatewayError(
+              waiter.socket,
               requestId,
-            } as HostExecBrokerResponse);
+              denyResponse?.type === "error"
+                ? denyResponse.message
+                : "permission denied by user",
+              "awaiting_decision",
+            );
           } catch (e) {
             console.error(
               `resolveGroup: failed to write deny response for request ${requestId}`,
               e,
             );
           }
+          waiter.lifecycle.markTerminal();
           continue;
         }
+        if (waiter.lifecycle.isCancelled) continue;
         await this.recordAudit(
           requestId,
           "allow",
           "approved-by-user",
           commandStr,
         );
+        if (waiter.lifecycle.isCancelled) continue;
+        waiter.lifecycle.markRunning();
         try {
-          await this.runResolved(
+          await this.runGatewayResolved(
             pending.request,
             pending.resolved,
             waiter.socket,
+            waiter.reader,
           );
         } catch (error) {
           try {
-            await writeJsonLine(waiter.socket, {
-              type: "error",
+            await writeGatewayError(
+              waiter.socket,
               requestId,
-              message: (error as Error).message,
-            });
+              error instanceof Error ? error.message : String(error),
+              "awaiting_result",
+            );
           } catch (e) {
             console.error(
               `resolveGroup: failed to write error response for request ${requestId}`,
@@ -690,6 +1066,7 @@ export class HostExecBroker {
             );
           }
         }
+        waiter.lifecycle.markTerminal();
       } catch (error) {
         // A dead/misbehaving socket for one waiter must not prevent the
         // remaining sibling waiters sharing this approvalKey from being
@@ -699,6 +1076,7 @@ export class HostExecBroker {
           error,
         );
       } finally {
+        waiter.lifecycle.finish();
         waiter.resolve();
       }
     }
@@ -850,194 +1228,80 @@ export class HostExecBroker {
     return envVars;
   }
 
-  private async runResolved(
+  private async runGatewayResolved(
     request: ExecuteRequest,
     resolved: ResolvedExecution,
     socket: Socket,
+    reader: GatewayLineReader,
   ): Promise<void> {
     const commandArgv0 =
       isRelativeHostExecArgv0(resolved.rule.match.argv0) ||
       path.isAbsolute(resolved.rule.match.argv0)
         ? request.argv0
         : path.basename(request.argv0);
-    const stdin = request.stdin
-      ? Uint8Array.from(atob(request.stdin), (c) => c.charCodeAt(0))
-      : undefined;
     resolved.envVars.PWD = resolved.cwd;
-    let proc: ReturnType<typeof Bun.spawn>;
-    try {
-      proc = Bun.spawn([commandArgv0, ...request.args], {
+    let processIdentity: Awaited<
+      ReturnType<typeof readProcessIdentity>
+    > | null = null;
+    await runGatewayExecution({
+      socket,
+      reader,
+      requestId: request.requestId,
+      start: {
+        type: "start",
+        requestId: request.requestId,
+        argv0: commandArgv0,
+        args: request.args,
         cwd: resolved.cwd,
         env: resolved.envVars,
-        stdin: stdin ? "pipe" : "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-    } catch {
-      const searchedPath = resolved.envVars.PATH ?? "(unset)";
-      throw new Error(
-        `Command '${commandArgv0}' not found on host. PATH=${searchedPath}`,
-      );
-    }
-    const childProcess = await readProcessIdentity(proc.pid);
-    await this.diagnostics.record("command_spawned", {
-      requestId: request.requestId,
-      command: commandArgv0,
-      argumentCount: request.args.length,
-      process: childProcess,
+      },
+      maskFilter: this.maskFilter,
+      onSpawned: async (pid) => {
+        processIdentity = await readProcessIdentity(pid);
+        await this.diagnostics.record("command_spawned", {
+          requestId: request.requestId,
+          command: commandArgv0,
+          argumentCount: request.args.length,
+          process: processIdentity,
+        });
+      },
+      onProcessExit: async (exitCode) => {
+        await this.diagnostics.record("command_exited", {
+          requestId: request.requestId,
+          command: commandArgv0,
+          argumentCount: request.args.length,
+          process: processIdentity,
+          exitCode,
+        });
+      },
     });
-    if (stdin && proc.stdin) {
-      (proc.stdin as import("bun").FileSink).write(stdin);
-      (proc.stdin as import("bun").FileSink).end();
-    }
-    const filterProcs: ReturnType<typeof Bun.spawn>[] = [];
-    const wrapStream = (
-      stream: ReadableStream<Uint8Array>,
-    ): ReadableStream<Uint8Array> => {
-      if (!this.maskFilter) return stream;
-      const filter = Bun.spawn([this.maskFilter.binaryPath], {
-        stdin: stream,
-        stdout: "pipe",
-        stderr: "ignore",
-        env: { NAS_MASK_SECRETS_FILE: this.maskFilter.secretsFramePath },
-      });
-      filterProcs.push(filter);
-      return filter.stdout as ReadableStream<Uint8Array>;
-    };
-
-    let exitCode: number;
-    // Set when a mask-filter subprocess exits non-zero after streaming
-    // completes successfully. In that case the client saw a truncated or
-    // otherwise corrupted stream (e.g. a deleted/corrupt secrets frame), so
-    // we must not report the real command's (possibly zero) exit code as
-    // success -- that would silently hide the truncation from the client.
-    let filterError: string | undefined;
-    try {
-      await Promise.all([
-        pipeStreamToSocket(
-          wrapStream(proc.stdout as ReadableStream<Uint8Array>),
-          socket,
-          request.requestId,
-          1,
-        ),
-        pipeStreamToSocket(
-          wrapStream(proc.stderr as ReadableStream<Uint8Array>),
-          socket,
-          request.requestId,
-          2,
-        ),
-      ]);
-      for (const f of filterProcs) {
-        const filterExit = await f.exited;
-        if (filterExit !== 0) {
-          filterError = `nas-mask-filter exited with code ${filterExit}; output may be incomplete`;
-          break;
-        }
-      }
-    } catch (error) {
-      // The client likely disconnected mid-stream; make sure the child
-      // process (and any mask-filter subprocesses it feeds) don't leak.
-      // Escalate to SIGKILL if a child ignores SIGTERM instead of hanging
-      // forever.
-      await this.diagnostics.record("client_disconnected", {
-        requestId: request.requestId,
-        command: commandArgv0,
-        argumentCount: request.args.length,
-        process: childProcess,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await this.diagnostics.record("signal_sent", {
-        requestId: request.requestId,
-        process: childProcess,
-        signal: "SIGTERM",
-      });
-      proc.kill();
-      for (const f of filterProcs) f.kill();
-      const killTimeout = setTimeout(() => {
-        void this.diagnostics.record("signal_sent", {
-          requestId: request.requestId,
-          process: childProcess,
-          signal: "SIGKILL",
-        });
-        proc.kill(9);
-        for (const f of filterProcs) f.kill(9);
-      }, 5000);
-      try {
-        await Promise.all([proc.exited, ...filterProcs.map((f) => f.exited)]);
-      } finally {
-        clearTimeout(killTimeout);
-      }
-    } finally {
-      exitCode = await proc.exited;
-      await this.diagnostics.record("command_exited", {
-        requestId: request.requestId,
-        command: commandArgv0,
-        argumentCount: request.args.length,
-        process: childProcess,
-        exitCode,
-      });
-    }
-    if (filterError) {
-      try {
-        await writeJsonLine(socket, {
-          type: "error",
-          requestId: request.requestId,
-          message: filterError,
-        });
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code;
-        if (
-          code === "EPIPE" ||
-          code === "ECONNRESET" ||
-          code === "ERR_STREAM_DESTROYED"
-        )
-          return;
-        throw e;
-      }
-      return;
-    }
-    try {
-      await writeJsonLine(socket, {
-        type: "result",
-        requestId: request.requestId,
-        exitCode,
-      });
-    } catch (e) {
-      // If streaming failed above because the client disconnected, the
-      // socket is already dead and this write will throw again; swallow
-      // it rather than surfacing an unhandled rejection.
-      const code = (e as NodeJS.ErrnoException).code;
-      if (
-        code === "EPIPE" ||
-        code === "ECONNRESET" ||
-        code === "ERR_STREAM_DESTROYED"
-      )
-        return;
-      throw e;
-    }
   }
 }
 
-/**
- * Streams a child process's stdout/stderr ReadableStream to the exec socket
- * as NDJSON `chunk` messages, base64-encoding each chunk. Replaces the old
- * approach of buffering the full stream and returning it in a single
- * response — this lets output reach the client as it's produced.
- */
-async function pipeStreamToSocket(
-  stream: ReadableStream<Uint8Array>,
+async function writeGatewayMessage(
+  socket: Socket,
+  message: BrokerToGatewayMessage,
+  state: "awaiting_decision" | "awaiting_result" | "running",
+): Promise<void> {
+  const line = `${JSON.stringify(message)}\n`;
+  // Use the raw-line parser on all broker-to-gateway decisions too. This
+  // preserves the protocol's 4 MiB limit even for policy/error messages that
+  // bypass runGatewayExecution.
+  parseBrokerToGatewayLine(line, state);
+  await writeJsonLine(socket, message);
+}
+
+async function writeGatewayError(
   socket: Socket,
   requestId: string,
-  fd: 1 | 2,
+  message: string,
+  state: "awaiting_decision" | "awaiting_result" | "running",
 ): Promise<void> {
-  for await (const chunk of stream) {
-    await writeJsonLine(socket, {
-      type: "chunk",
-      requestId,
-      fd,
-      data: Buffer.from(chunk).toString("base64"),
-    });
-  }
+  await writeGatewayMessage(
+    socket,
+    { type: "error", requestId, message },
+    state,
+  );
 }
 
 export async function sendHostExecBrokerRequest<
@@ -1045,7 +1309,12 @@ export async function sendHostExecBrokerRequest<
 >(socketPath: string, message: HostExecBrokerMessage): Promise<T> {
   const socket = await connectUnix(socketPath);
   try {
-    await writeJsonLine(socket, message);
+    await writeJsonLine(
+      socket,
+      message.type === "execute"
+        ? { type: "execute", request: message }
+        : message,
+    );
     const response = await readJsonLine(socket);
     if (!response) throw new Error("empty broker response");
     return JSON.parse(response) as T;

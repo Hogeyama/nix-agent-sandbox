@@ -612,7 +612,7 @@ test("CLI: hostexec pending lists queued approvals", async () => {
   });
   try {
     const execPromise = sendHostExecBrokerRequest(execSocketPath, {
-      version: 1,
+      version: 2,
       type: "execute",
       sessionId: "sess_cli",
       requestId: "req_cli",
@@ -620,6 +620,7 @@ test("CLI: hostexec pending lists queued approvals", async () => {
       args: ["eval", "console.log(process.env['TOKEN'])"],
       cwd: workspace,
       tty: false,
+      stdinMode: "none",
     });
     await waitForHostExecPending(paths, 1);
     const result = await runNas([

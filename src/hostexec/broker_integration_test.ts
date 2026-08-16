@@ -57,37 +57,66 @@ async function sendStreamingRequest(
 ): Promise<StreamingResult> {
   const socket = await connectUnix(socketPath);
   try {
-    await writeJsonLine(socket, message);
+    await writeJsonLine(socket, { type: "execute", request: message });
     const chunks: ExecuteChunkResponse[] = [];
     let exitCode = -1;
-    let text = "";
-    await new Promise<void>((resolve, reject) => {
-      const onData = (chunk: Buffer) => {
-        text += chunk.toString();
-        let nl = text.indexOf("\n");
-        while (nl !== -1) {
-          const line = text.slice(0, nl);
-          text = text.slice(nl + 1);
-          const msg = JSON.parse(line);
-          if (msg.type === "chunk") {
-            chunks.push(msg);
-          } else if (msg.type === "result") {
-            exitCode = msg.exitCode;
-            socket.off("data", onData);
-            resolve();
-            return;
-          } else if (msg.type === "fallback" || msg.type === "error") {
-            socket.off("data", onData);
-            reject(new Error(`unexpected response: ${msg.type}`));
-            return;
-          }
-          nl = text.indexOf("\n");
+    let buffer = "";
+    let pump: Promise<void> | undefined;
+    const readLine = async (): Promise<Record<string, unknown>> => {
+      const line = await new Promise<string>((resolve, reject) => {
+        const onData = (chunk: Buffer) => {
+          buffer += chunk.toString();
+          const nl = buffer.indexOf("\n");
+          if (nl < 0) return;
+          socket.off("data", onData);
+          const line = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 1);
+          resolve(line);
+        };
+        const existing = buffer.indexOf("\n");
+        if (existing >= 0) {
+          const line = buffer.slice(0, existing);
+          buffer = buffer.slice(existing + 1);
+          resolve(line);
+          return;
         }
-      };
-      socket.on("data", onData);
-      socket.on("end", () => resolve());
-      socket.on("error", reject);
-    });
+        socket.on("data", onData);
+        socket.once("error", reject);
+        socket.once("end", () => reject(new Error("gateway disconnected")));
+      });
+      return JSON.parse(line) as Record<string, unknown>;
+    };
+    while (true) {
+      const msg = await readLine();
+      if (msg.type === "start") {
+        const start = msg as unknown as {
+          argv0: string;
+          args: string[];
+          cwd: string;
+          env: Record<string, string>;
+          requestId: string;
+        };
+        pump = spawnFakeGatewayCommand(socket, start);
+        continue;
+      }
+      if (msg.type === "masked_chunk") {
+        chunks.push({
+          type: "chunk",
+          requestId: String(msg.requestId),
+          fd: Number(msg.fd) as 1 | 2,
+          data: String(msg.data),
+        });
+      } else if (msg.type === "result") {
+        exitCode = Number(msg.exitCode);
+        await pump;
+        break;
+      } else if (msg.type === "fallback" || msg.type === "error") {
+        if (pump) await pump.catch(() => {});
+        throw new Error(
+          `unexpected response: ${msg.type}: ${String(msg.message ?? "")}`,
+        );
+      }
+    }
     return { chunks, exitCode };
   } finally {
     socket.destroy();
@@ -103,6 +132,7 @@ async function sendStreamingRequest(
 async function sendStreamingRequestRaw(
   socketPath: string,
   message: ExecuteRequest,
+  options: { spawnedPid?: number } = {},
 ): Promise<{
   chunks: ExecuteChunkResponse[];
   finalType: string;
@@ -111,40 +141,141 @@ async function sendStreamingRequestRaw(
 }> {
   const socket = await connectUnix(socketPath);
   try {
-    await writeJsonLine(socket, message);
+    await writeJsonLine(socket, { type: "execute", request: message });
     const chunks: ExecuteChunkResponse[] = [];
     let finalType = "";
     let finalMessage: string | undefined;
     let exitCode: number | undefined;
     let text = "";
-    await new Promise<void>((resolve, reject) => {
-      const onData = (chunk: Buffer) => {
-        text += chunk.toString();
-        let nl = text.indexOf("\n");
-        while (nl !== -1) {
+    let pump: Promise<void> | undefined;
+    const readLine = async (): Promise<Record<string, unknown>> => {
+      const line = await new Promise<string>((resolve, reject) => {
+        const onData = (chunk: Buffer) => {
+          text += chunk.toString();
+          const nl = text.indexOf("\n");
+          if (nl < 0) return;
+          socket.off("data", onData);
           const line = text.slice(0, nl);
           text = text.slice(nl + 1);
-          const msg = JSON.parse(line);
-          if (msg.type === "chunk") {
-            chunks.push(msg);
-          } else {
-            finalType = msg.type;
-            finalMessage = msg.message;
-            exitCode = msg.exitCode;
-            socket.off("data", onData);
-            resolve();
-            return;
-          }
-          nl = text.indexOf("\n");
+          resolve(line);
+        };
+        const existing = text.indexOf("\n");
+        if (existing >= 0) {
+          const line = text.slice(0, existing);
+          text = text.slice(existing + 1);
+          resolve(line);
+          return;
         }
-      };
-      socket.on("data", onData);
-      socket.on("end", () => resolve());
-      socket.on("error", reject);
-    });
+        socket.on("data", onData);
+        socket.once("error", reject);
+        socket.once("end", () => reject(new Error("gateway disconnected")));
+      });
+      return JSON.parse(line) as Record<string, unknown>;
+    };
+    while (finalType === "") {
+      const msg = await readLine();
+      if (msg.type === "start") {
+        if (options.spawnedPid !== undefined) {
+          await writeJsonLine(socket, {
+            type: "spawned",
+            requestId: String(msg.requestId),
+            pid: options.spawnedPid,
+          });
+          await writeJsonLine(socket, {
+            type: "process_exit",
+            requestId: String(msg.requestId),
+            exitCode: 0,
+          });
+        } else {
+          pump = spawnFakeGatewayCommand(socket, msg as never);
+        }
+        continue;
+      }
+      if (msg.type === "masked_chunk") {
+        chunks.push({
+          type: "chunk",
+          requestId: String(msg.requestId),
+          fd: Number(msg.fd) as 1 | 2,
+          data: String(msg.data),
+        });
+        continue;
+      }
+      if (msg.type === "kill") {
+        // The broker asks the gateway to stop the command before publishing
+        // its terminal error. A real gateway will finish the process group;
+        // this fake command has already exited, so keep reading for error.
+        continue;
+      }
+      finalType = String(msg.type);
+      finalMessage =
+        msg.message === undefined ? undefined : String(msg.message);
+      exitCode = msg.exitCode === undefined ? undefined : Number(msg.exitCode);
+    }
+    await pump;
     return { chunks, finalType, finalMessage, exitCode };
   } finally {
     socket.destroy();
+  }
+}
+
+interface FakeGatewayStart {
+  argv0: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+  requestId: string;
+}
+
+async function spawnFakeGatewayCommand(
+  socket: import("node:net").Socket,
+  start: FakeGatewayStart,
+): Promise<void> {
+  const proc = Bun.spawn([start.argv0, ...start.args], {
+    cwd: start.cwd,
+    env: start.env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await writeJsonLine(socket, {
+    type: "spawned",
+    requestId: start.requestId,
+    pid: proc.pid,
+  });
+  await Promise.all([
+    relayGatewayStream(
+      proc.stdout as ReadableStream<Uint8Array>,
+      socket,
+      start.requestId,
+      1,
+    ),
+    relayGatewayStream(
+      proc.stderr as ReadableStream<Uint8Array>,
+      socket,
+      start.requestId,
+      2,
+    ),
+  ]);
+  await writeJsonLine(socket, {
+    type: "process_exit",
+    requestId: start.requestId,
+    exitCode: await proc.exited,
+  });
+}
+
+async function relayGatewayStream(
+  stream: ReadableStream<Uint8Array>,
+  socket: import("node:net").Socket,
+  requestId: string,
+  fd: 1 | 2,
+): Promise<void> {
+  for await (const chunk of stream) {
+    await writeJsonLine(socket, {
+      type: "raw_chunk",
+      requestId,
+      fd,
+      data: Buffer.from(chunk).toString("base64"),
+    });
   }
 }
 
@@ -182,7 +313,7 @@ function request(
   argv0 = "node",
 ): ExecuteRequest {
   return {
-    version: 1,
+    version: 2,
     type: "execute",
     sessionId: "sess_test",
     requestId,
@@ -190,6 +321,7 @@ function request(
     args,
     cwd,
     tty: false,
+    stdinMode: "none",
   };
 }
 
@@ -217,6 +349,258 @@ test("HostExecBroker: falls back when no rule matches", async () => {
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: preserves a coalesced frame after the execute request", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-any",
+          match: { argv0: "node" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  const socket = await connectUnix(execSocketPath);
+  try {
+    let received = "";
+    const readGatewayLine = async (): Promise<Record<string, unknown>> => {
+      const line = await new Promise<string>((resolve, reject) => {
+        const onData = (chunk: Buffer) => {
+          received += chunk.toString();
+          const newline = received.indexOf("\n");
+          if (newline < 0) return;
+          socket.off("data", onData);
+          const result = received.slice(0, newline);
+          received = received.slice(newline + 1);
+          resolve(result);
+        };
+        const existing = received.indexOf("\n");
+        if (existing >= 0) {
+          const result = received.slice(0, existing);
+          received = received.slice(existing + 1);
+          resolve(result);
+          return;
+        }
+        socket.on("data", onData);
+        socket.once("error", reject);
+        socket.once("end", () => reject(new Error("gateway disconnected")));
+      });
+      return JSON.parse(line) as Record<string, unknown>;
+    };
+    const execute = {
+      type: "execute" as const,
+      request: request(["-e", "process.exit(0)"], workspace, "req_coalesced"),
+    };
+    const cancelled = {
+      type: "cancelled" as const,
+      requestId: "req_coalesced",
+      reason: "gateway disconnected",
+    };
+    socket.write(`${JSON.stringify(execute)}\n${JSON.stringify(cancelled)}\n`);
+
+    expect(await readGatewayLine()).toMatchObject({
+      type: "start",
+      requestId: "req_coalesced",
+    });
+    expect(await readGatewayLine()).toMatchObject({
+      type: "kill",
+      requestId: "req_coalesced",
+      signal: "SIGTERM",
+    });
+    const terminal = await Promise.race([
+      readGatewayLine(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+    ]);
+    expect(terminal).toMatchObject({
+      type: "error",
+      requestId: "req_coalesced",
+    });
+  } finally {
+    socket.destroy();
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: rejects duplicate request IDs while direct execution is active", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-any",
+          match: { argv0: "node" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  const firstSocket = await connectUnix(execSocketPath);
+  firstSocket.on("error", () => {});
+  try {
+    const requestId = "req_duplicate_direct";
+    await writeJsonLine(firstSocket, {
+      type: "execute",
+      request: request(["-e", "process.exit(0)"], workspace, requestId),
+    });
+    const start = await new Promise<Record<string, unknown>>(
+      (resolve, reject) => {
+        let text = "";
+        const onData = (chunk: Buffer) => {
+          text += chunk.toString();
+          const newline = text.indexOf("\n");
+          if (newline < 0) return;
+          firstSocket.off("data", onData);
+          try {
+            resolve(
+              JSON.parse(text.slice(0, newline)) as Record<string, unknown>,
+            );
+          } catch (error) {
+            reject(error);
+          }
+        };
+        firstSocket.on("data", onData);
+        firstSocket.once("error", reject);
+      },
+    );
+    expect(start).toMatchObject({ type: "start", requestId });
+
+    const duplicate = await sendStreamingRequestRaw(
+      execSocketPath,
+      request(["-e", "process.exit(0)"], workspace, requestId),
+    );
+    expect(duplicate.finalType).toBe("error");
+    expect(duplicate.finalMessage).toContain("duplicate active request ID");
+
+    firstSocket.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Once the original connection is gone, its reservation is released and
+    // the same ID can be used for a fresh request without an orphaned owner.
+    const reused = await sendStreamingRequestRaw(
+      execSocketPath,
+      request(["-e", "process.exit(0)"], workspace, requestId),
+    );
+    expect(reused.finalType).toBe("result");
+  } finally {
+    firstSocket.destroy();
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: rejects duplicate request IDs across approval groups", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "deny",
+        },
+        {
+          id: "node-version",
+          match: { argv0: "node", argRegex: "^--version\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "deny",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  const firstSocket = await connectUnix(execSocketPath);
+  firstSocket.on("error", () => {});
+  try {
+    const requestId = "req_duplicate_groups";
+    await writeJsonLine(firstSocket, {
+      type: "execute",
+      request: request(["-e", "console.log('first')"], workspace, requestId),
+    });
+    const pending = await waitForPendingEntries(paths, 1);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].ruleId).toBe("node-eval");
+    expect(pending[0].args).toEqual(["-e", "console.log('first')"]);
+
+    const duplicate = await sendStreamingRequestRaw(
+      execSocketPath,
+      request(["--version"], workspace, requestId),
+    );
+    expect(duplicate.finalType).toBe("error");
+    expect(duplicate.finalMessage).toContain("duplicate active request ID");
+    const stillPending = await listHostExecPendingEntries(paths, "sess_test");
+    expect(stillPending).toHaveLength(1);
+    expect(stillPending[0].ruleId).toBe("node-eval");
+
+    await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "deny",
+      requestId,
+    });
+    await waitForNoPendingEntries(paths);
+  } finally {
+    firstSocket.destroy();
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -284,6 +668,69 @@ test("HostExecBroker: records command process lifecycle diagnostics", async () =
     expect(spawned.command).toBe("node");
     expect(spawned.argumentCount).toBe(2);
     expect(exited.exitCode).toBe(0);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: records command exit even when process identity is unavailable", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_null_identity",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "true",
+          match: { argv0: "true" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(
+    paths,
+    "sess_null_identity",
+  );
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_null_identity");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequestRaw(
+      execSocketPath,
+      request([], workspace, "req_null_identity", "true"),
+      { spawnedPid: 2_147_483_647 },
+    );
+    expect(result.finalType).toBe("result");
+    const contents = await readFile(
+      path.join(runtimeDir, "diagnostics", "sess_null_identity.jsonl"),
+      "utf8",
+    );
+    const exited = contents
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .find(
+        (event) =>
+          event.event === "command_exited" &&
+          event.requestId === "req_null_identity",
+      );
+    expect(exited).toBeDefined();
+    expect(exited.exitCode).toBe(0);
+    expect(exited.process).toBe(null);
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -431,7 +878,251 @@ test("HostExecBroker: pending request can be denied via broker", async () => {
   }
 });
 
-test("HostExecBroker: exec channel cannot approve a pending request (self-approval blocked)", async () => {
+test("HostExecBroker: disconnect during policy resolution clears pending state", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  const socket = await connectUnix(execSocketPath);
+  socket.on("error", () => {});
+  try {
+    await writeJsonLine(socket, {
+      type: "execute",
+      request: request(
+        ["-e", "console.log('never')"],
+        workspace,
+        "req_disconnect",
+      ),
+    });
+    // Let the server consume the execute frame, then disconnect while the
+    // asynchronous policy/secret/cwd work is still in flight.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    socket.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(await listHostExecPendingEntries(paths, "sess_test")).toHaveLength(
+      0,
+    );
+  } finally {
+    socket.destroy();
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: cancellation removes pending request before approval", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  const socket = await connectUnix(execSocketPath);
+  socket.on("error", () => {});
+  const closed = new Promise<void>((resolve) => socket.once("close", resolve));
+  try {
+    const requestId = "req_cancel_pending";
+    await writeJsonLine(socket, {
+      type: "execute",
+      request: request(["-e", "console.log('never')"], workspace, requestId),
+    });
+    await waitForPendingEntries(paths, 1);
+    await writeJsonLine(socket, {
+      type: "cancelled",
+      requestId,
+      reason: "client cancelled approval",
+    });
+    await Promise.race([
+      closed,
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("gateway socket did not close")),
+          1_000,
+        ),
+      ),
+    ]);
+    await waitForNoPendingEntries(paths);
+    const approval = await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "approve",
+      requestId,
+    });
+    expect(approval.type).toBe("error");
+  } finally {
+    socket.destroy();
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: transport_error removes a pending request", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  const socket = await connectUnix(execSocketPath);
+  socket.on("error", () => {});
+  try {
+    const requestId = "req_transport_pending";
+    await writeJsonLine(socket, {
+      type: "execute",
+      request: request(["-e", "console.log('never')"], workspace, requestId),
+    });
+    await waitForPendingEntries(paths, 1);
+    await writeJsonLine(socket, {
+      type: "transport_error",
+      requestId,
+      message: "internal gateway socket failed",
+    });
+    await waitForNoPendingEntries(paths);
+    const approval = await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "approve",
+      requestId,
+    });
+    expect(approval.type).toBe("error");
+  } finally {
+    socket.destroy();
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: cancellation and approval race cleanup is idempotent", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_test",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "node-eval",
+          match: { argv0: "node", argRegex: "^-e\\b" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "prompt",
+          fallback: "container",
+        },
+      ],
+    }),
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_test");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
+  await broker.start(execSocketPath, controlSocketPath);
+  const socket = await connectUnix(execSocketPath);
+  socket.on("error", () => {});
+  try {
+    const requestId = "req_cancel_approve_race";
+    await writeJsonLine(socket, {
+      type: "execute",
+      request: request(["-e", "process.exit(0)"], workspace, requestId),
+    });
+    await waitForPendingEntries(paths, 1);
+    await writeJsonLine(socket, {
+      type: "cancelled",
+      requestId,
+      reason: "approval race",
+    });
+    // Give the read monitor the first chance, then deliberately issue the
+    // control decision. Either ordering must leave the same clean state.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const approval = await sendHostExecBrokerRequest(controlSocketPath, {
+      type: "approve",
+      requestId,
+    });
+    expect(["ack", "error"]).toContain(approval.type);
+    await waitForNoPendingEntries(paths);
+  } finally {
+    socket.destroy();
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: internal gateway channel cannot approve a pending request", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const workspace = await mkdtemp(
@@ -462,21 +1153,22 @@ test("HostExecBroker: exec channel cannot approve a pending request (self-approv
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    // Container (exec channel) submits a request that goes to pending.
+    // A gateway connection submits a request that goes to pending.
     const execPromise = sendHostExecBrokerRequest<HostExecBrokerResponse>(
       execSocketPath,
       request(["-e", "console.log('x')"], workspace, "req_self_approve"),
     );
     await waitForPendingEntries(paths, 1);
 
-    // The container tries to self-approve via the exec channel: must be
-    // rejected with an error and must not resolve the pending request.
-    const approveResponse =
-      await sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
+    // A gateway connection cannot drive control operations. The broker
+    // rejects the first frame because it is not an execute envelope and
+    // closes the connection without disclosing pending state.
+    await expect(
+      sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
         type: "approve",
         requestId: "req_self_approve",
-      });
-    expect(approveResponse.type).toEqual("error");
+      }),
+    ).rejects.toThrow(/empty broker response|socket|connection/i);
 
     // The execute request is still pending (was not approved).
     const early = await Promise.race([
@@ -502,7 +1194,7 @@ test("HostExecBroker: exec channel cannot approve a pending request (self-approv
   }
 });
 
-test("HostExecBroker: exec channel list_pending does not act as a control operation", async () => {
+test("HostExecBroker: internal gateway channel list_pending does not act as control", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
   const workspace = await mkdtemp(
@@ -539,13 +1231,14 @@ test("HostExecBroker: exec channel list_pending does not act as a control operat
     );
     await waitForPendingEntries(paths, 1);
 
-    // list_pending on the exec channel must not leak pending info or act as a
-    // control operation: it returns an error (no pending items disclosed).
-    const listResponse =
-      await sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
+    // list_pending on the internal channel must not leak pending info or act
+    // as a control operation: the malformed first frame is rejected and the
+    // socket is closed.
+    await expect(
+      sendHostExecBrokerRequest<HostExecBrokerResponse>(execSocketPath, {
         type: "list_pending",
-      });
-    expect(listResponse.type).toEqual("error");
+      }),
+    ).rejects.toThrow(/empty broker response|socket|connection/i);
 
     // Clean up.
     await sendHostExecBrokerRequest(controlSocketPath, {
@@ -976,14 +1669,11 @@ test("HostExecBroker: argv0-only rule also matches no-args command", async () =>
   const execSocketPath = hostExecExecSocketPath(paths, "sess_test");
   await broker.start(execSocketPath, controlSocketPath);
   try {
-    const response = await sendHostExecBrokerRequest(
+    const response = await sendStreamingRequest(
       execSocketPath,
       request([], workspace, "req_true_noargs", "true"),
     );
-    expect(response.type).toEqual("result");
-    if (response.type === "result") {
-      expect(response.exitCode).toEqual(0);
-    }
+    expect(response.exitCode).toEqual(0);
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -1597,6 +2287,19 @@ async function waitForPendingCount(
   return await waitForPendingEntries(paths, count);
 }
 
+async function waitForNoPendingEntries(
+  paths: Awaited<ReturnType<typeof resolveHostExecRuntimePaths>>,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const entries = await listHostExecPendingEntries(paths, "sess_test");
+    if (entries.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Timed out waiting for hostexec pending entries to clear");
+}
+
 test("HostExecBroker: isolates sockets per session under 0o700 subdirs", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
   const paths = await resolveHostExecRuntimePaths(runtimeDir);
@@ -1839,7 +2542,74 @@ test("HostExecBroker: surfaces an error instead of a truncated result when the m
       request(["hello world"], workspace, undefined, "echo"),
     );
     expect(result.finalType).toEqual("error");
-    expect(result.finalMessage).toMatch(/nas-mask-filter exited with code/);
+    expect(result.finalMessage).toMatch(
+      /nas-mask-filter exited (before command completion )?with code/,
+    );
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("HostExecBroker: records command exit before mask-filter finish failure", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-hostexec-"));
+  const paths = await resolveHostExecRuntimePaths(runtimeDir);
+  const workspace = await mkdtemp(
+    path.join(tmpdir(), "nas-hostexec-workspace-"),
+  );
+  const filterPath = path.join(runtimeDir, "late-failing-filter.sh");
+  await writeFile(filterPath, "#!/bin/sh\ncat >/dev/null\nexit 7\n");
+  await chmod(filterPath, 0o755);
+  const broker = new HostExecBroker({
+    paths,
+    sessionId: "sess_filter_exit",
+    profileName: "test",
+    notify: "off",
+    workspaceRoot: workspace,
+    sessionTmpDir: `${runtimeDir}/tmp`,
+    hostexec: makeConfig({
+      rules: [
+        {
+          id: "true",
+          match: { argv0: "true" },
+          cwd: { mode: "workspace-only", allow: [] },
+          env: {},
+          inheritEnv: { mode: "minimal", keys: [] },
+          approval: "allow",
+          fallback: "deny",
+        },
+      ],
+    }),
+    maskFilter: {
+      binaryPath: filterPath,
+      secretsFramePath: path.join(runtimeDir, "unused.frame"),
+    },
+  });
+  const controlSocketPath = hostExecBrokerSocketPath(paths, "sess_filter_exit");
+  const execSocketPath = hostExecExecSocketPath(paths, "sess_filter_exit");
+  await broker.start(execSocketPath, controlSocketPath);
+  try {
+    const result = await sendStreamingRequestRaw(
+      execSocketPath,
+      request([], workspace, "req_filter_exit", "true"),
+    );
+    expect(result.finalType).toBe("error");
+    const contents = await readFile(
+      path.join(runtimeDir, "diagnostics", "sess_filter_exit.jsonl"),
+      "utf8",
+    );
+    const exited = contents
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .find(
+        (event) =>
+          event.event === "command_exited" &&
+          event.requestId === "req_filter_exit",
+      );
+    expect(exited).toBeDefined();
+    expect(exited.exitCode).toBe(0);
   } finally {
     await broker.close();
     await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
@@ -1919,14 +2689,18 @@ test("HostExecBroker: allow rule prompts when the target file changed since star
     // 返らない（このソケットは開いたまま pending となる）。
     const execSocket = await connectUnix(execSocketPath);
     await writeJsonLine(execSocket, {
-      version: 1,
       type: "execute",
-      sessionId: "sess_integ",
-      requestId: "req_1",
-      argv0: scriptPath,
-      args: [],
-      cwd: runtimeDir,
-      tty: false,
+      request: {
+        version: 2,
+        type: "execute",
+        sessionId: "sess_integ",
+        requestId: "req_1",
+        argv0: scriptPath,
+        args: [],
+        cwd: runtimeDir,
+        tty: false,
+        stdinMode: "none",
+      },
     });
 
     // control 側で pending を列挙し、integrityChanged が立つことを確認する。
@@ -2012,7 +2786,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
     // ブローカー構築時と同じ "sess_integ2" を使う（waitForPendingEntries は
     // "sess_test" 固定のため使えず、list_pending で直接確認する）。
     const firstPromise = sendStreamingRequest(execSocketPath, {
-      version: 1,
+      version: 2,
       type: "execute",
       sessionId: "sess_integ2",
       requestId: "req_cache_1",
@@ -2020,6 +2794,7 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
       args: [],
       cwd: workspace,
       tty: false,
+      stdinMode: "none",
     });
 
     let firstHit: { requestId: string } | undefined;
@@ -2050,14 +2825,18 @@ test("HostExecBroker: approved capability cache does not bypass a changed integr
     // 変化を検出して再度 pending に入り、integrityChanged が立つ。
     const execSocket = await connectUnix(execSocketPath);
     await writeJsonLine(execSocket, {
-      version: 1,
       type: "execute",
-      sessionId: "sess_integ2",
-      requestId: "req_cache_2",
-      argv0: scriptPath,
-      args: [],
-      cwd: workspace,
-      tty: false,
+      request: {
+        version: 2,
+        type: "execute",
+        sessionId: "sess_integ2",
+        requestId: "req_cache_2",
+        argv0: scriptPath,
+        args: [],
+        cwd: workspace,
+        tty: false,
+        stdinMode: "none",
+      },
     });
 
     let hit: { requestId: string; integrityChanged?: boolean } | undefined;
@@ -2221,14 +3000,18 @@ test("HostExecBroker: relative argv0 resolves integrity target via cwd at execut
     // pending になり、integrityChanged が立つはず。
     const execSocket = await connectUnix(execSocketPath);
     await writeJsonLine(execSocket, {
-      version: 1,
       type: "execute",
-      sessionId: "sess_integ4",
-      requestId: "req_rel_1",
-      argv0: "./tool.sh",
-      args: [],
-      cwd: workspace,
-      tty: false,
+      request: {
+        version: 2,
+        type: "execute",
+        sessionId: "sess_integ4",
+        requestId: "req_rel_1",
+        argv0: "./tool.sh",
+        args: [],
+        cwd: workspace,
+        tty: false,
+        stdinMode: "none",
+      },
     });
 
     let hit: { requestId: string; integrityChanged?: boolean } | undefined;
@@ -2322,7 +3105,7 @@ test("HostExecBroker: symlinked workspace root does not break the integrity base
     // キーが symlink のせいで食い違えば、変化していないのに毎回 prompt
     // （このテストでは pending 発生）になってしまう。
     const result = await sendStreamingRequest(execSocketPath, {
-      version: 1,
+      version: 2,
       type: "execute",
       sessionId: "sess_integ5",
       requestId: "req_symlink_1",
@@ -2330,6 +3113,7 @@ test("HostExecBroker: symlinked workspace root does not break the integrity base
       args: [],
       cwd: symDir,
       tty: false,
+      stdinMode: "none",
     });
     expect(result.exitCode).toEqual(0);
     expect(collectStdout(result).trim()).toEqual("original");
@@ -2406,14 +3190,18 @@ test("HostExecBroker: start() survives a snapshot error and falls back to prompt
 
     const execSocket = await connectUnix(execSocketPath);
     await writeJsonLine(execSocket, {
-      version: 1,
       type: "execute",
-      sessionId: "sess_integ7",
-      requestId: "req_eacces_1",
-      argv0: scriptPath,
-      args: [],
-      cwd: runtimeDir,
-      tty: false,
+      request: {
+        version: 2,
+        type: "execute",
+        sessionId: "sess_integ7",
+        requestId: "req_eacces_1",
+        argv0: scriptPath,
+        args: [],
+        cwd: runtimeDir,
+        tty: false,
+        stdinMode: "none",
+      },
     });
 
     let hit: { requestId: string; integrityChanged?: boolean } | undefined;

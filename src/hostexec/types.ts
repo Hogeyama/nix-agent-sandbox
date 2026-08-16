@@ -31,15 +31,15 @@ export interface HostExecPendingEntry {
 }
 
 export interface ExecuteRequest {
-  version: 1;
+  version: 2;
   type: "execute";
   sessionId: string;
   requestId: string;
   argv0: string;
   args: string[];
   cwd: string;
-  stdin?: string;
   tty: boolean;
+  stdinMode: "fd" | "none";
 }
 
 export interface ApprovalRequest {

@@ -217,7 +217,7 @@ test.skipIf(!clientPath)(
         expect(path.basename(request.argv0)).toBe("git");
         expect(request.args).toEqual(["status", "--short"]);
         expect(request.sessionId).toBe("test-session");
-        expect(request.stdin).toBeUndefined();
+        expect(request.stdinMode).toBe("none");
       } finally {
         broker.server.close();
       }
@@ -249,11 +249,7 @@ test.skipIf(!clientPath)(
 
         expect(result.exitCode).toBe(0);
         expect(broker.requests.length).toBe(1);
-        const { stdin } = broker.requests[0];
-        expect(stdin).toBeDefined();
-        expect(Buffer.from(stdin as string, "base64").toString()).toBe(
-          "piped input",
-        );
+        expect(broker.requests[0].stdinMode).toBe("fd");
       } finally {
         broker.server.close();
       }
