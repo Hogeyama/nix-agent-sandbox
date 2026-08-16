@@ -47,11 +47,15 @@ kernel 上にいるため、mount / PID / user namespace をまたいでも同�
 FD passing の対象は次の条件をすべて満たす fd 0 に限定する。
 
 - `isatty(fd) == false`
-- `F_GETFL & O_ACCMODE == O_RDONLY`
+- 次のいずれか
+  - `F_GETFL & O_ACCMODE == O_RDONLY`
+  - `AF_UNIX` の `SOCK_STREAM` socket であり、write 方向が失われていること
+- fd 1 および fd 2 と同一 socket でないこと
 - LD_PRELOAD 経路では、呼び出し元が command image へ置き換わる `exec*` hook
 
 通常の pipeline、input redirection、here document、process substitution はこの
-範囲に入る。
+範囲に入る。libuv が `stdio: 'pipe'` を `socketpair` で実装するため、Node/Bun が
+piped stdin で起動した child の fd 0 も `O_RDWR` socket としてこの範囲に入る。
 
 次は対象外とする。
 
@@ -59,15 +63,55 @@ FD passing の対象は次の条件をすべて満たす fd 0 に限定する。
 - `O_WRONLY`: stdin として読めないため forwarding しない。
 - `posix_spawn*`: file actions を解釈せずに caller の fd 0 を移譲すると、spawn 後も
   実行を続ける caller の入力を別 process に渡してしまうため forwarding しない。
-- `O_RDWR`: fail-closed にする。socketpair 等を stdin に置くと host command が
-  fd 0 へ書き戻せる。secret env を持つ host command に unmasked な host-to-
-  container channel を与え、stdout/stderr mask-filter を迂回できるためである。
+- write 方向を恒久的に閉じられない `O_RDWR` fd: fail-closed にする。書き込み可能な
+  fd 0 は host command が書き戻せるため、secret env を持つ host command に unmasked な
+  host-to-container channel を与え、stdout/stderr mask-filter を迂回できる。pipe と
+  regular file は方向ごとの shutdown を持たないので常にここに該当する。`AF_UNIX`
+  `SOCK_STREAM` 以外の socket も該当する（理由は下記）。
+- fd 1 または fd 2 と同一 socket である fd 0: `socat EXEC:`、inetd、
+  `systemd Accept=yes` が生成する形である。この fd 0 の write 方向は client 自身の
+  出力経路でもあるため、閉じれば stdout/stderr も閉じる。client は SIGPIPE を無視して
+  いないので、診断を出す前に signal で死ぬ。閉じる前に拒否して診断を残す。
 - Docker Desktop、remote Docker、その他 broker と container が別 kernel にいる
   runtime: `SCM_RIGHTS` は kernel boundary を越えられない。
 
 TTY、closed fd、`O_WRONLY`、`posix_spawn*` は request の `stdinMode` を `none` に
-する。非 TTY の `O_RDWR` は silent degradation せず、理由を stderr に出して
-request を送る前に失敗する。
+する。write 方向を閉じられない非 TTY の `O_RDWR` は silent degradation せず、理由を
+stderr に出して request を送る前に失敗する。拒否理由は 2 つあり、区別して報告する。
+「host command が書き戻せるため拒否」と「client 自身の出力経路であるため拒否」は
+原因も対処も異なるためである。
+
+なお fd 1 / fd 2 との同一性判定は自 process 内に限られる。他 process の fd table を
+走査せずに判定できる範囲がそこまでだからである。したがって同じ socket を自分の
+stdout として保持したまま生き続ける親族 process は保護されない。`socat EXEC:` 配下の
+`sh -c 'cmd; echo done'` のように、委譲後も実行を続ける shell は stdout の write 方向を
+失い、次の書き込みで SIGPIPE を受ける。この形は従来クリーンな拒否を得られていたので
+狭い範囲の後退である。libuv 由来の child を全滅させ続ける代替と比較して受容する。
+
+`O_RDWR` socket の扱いは client と gateway で非対称にする。client は自分の fd 0 に
+`shutdown(SHUT_WR)` を適用してから委譲してよい。gateway は trust boundary 上にあり
+container を信用できないため、検証だけを実行し、閉じられていない descriptor は修復
+せずに拒否する。
+
+検証には長さ 0 の `send` を使う。これは `SEND_SHUTDOWN` を直接参照し、stream に
+byte を積まない。writability probe（`poll(POLLOUT)` 等）は使わない。container は
+送信 buffer を任意に満杯にできるので、buffer 満杯と write 方向閉鎖を区別できない
+probe では書き込み可能な descriptor を通過させられてしまう。
+
+gateway は受信時に一度検証するだけなので、判定が descriptor の生存期間を通じて
+有効でなければならない。**この不可逆性は socket 種別に依存する。** 対象を `AF_UNIX`
+`SOCK_STREAM` に限定するのはこのためである。
+
+- `AF_UNIX` `SOCK_STREAM`: 不可逆である。`connect` は `AF_UNSPEC` を EINVAL、接続済み
+  socket を EISCONN で拒否するため、`SEND_SHUTDOWN` を解除する経路がない。peer が
+  close して write 方向が失われた場合も同様に復帰しない。
+- `AF_INET` `SOCK_STREAM`: **可逆である。** `tcp_disconnect()` が `sk_shutdown` を 0 に
+  戻し、`connect(fd, AF_UNSPEC)` がそこへ到達する。container は shutdown 済みの TCP
+  socket を渡して gateway の承認を得たあと write 方向を復活させ、自分が読む sink へ
+  再接続できる。これは検証を通過する masking 迂回経路になるので拒否する。
+- datagram / seqpacket: 長さ 0 の `send` が空メッセージとして配送される。受信側は
+  それを end-of-input と区別できないため、probe 自体が副作用になる。よって probe の
+  前に socket 種別を判定する。
 
 ## Architecture
 
@@ -181,7 +225,7 @@ JSON prefix を同時に受け取る。JSON line が分割されていれば通�
 - `stdinMode: "none"` なのに FD が添付されている
 - ancillary data が truncated している
 - ancillary type が `SCM_RIGHTS` でない
-- FD が TTY、`O_RDWR`、`O_WRONLY`、または検査不能
+- FD が TTY、`O_WRONLY`、書き込み可能な `O_RDWR`、または検査不能
 - request が 4 MiB を超える
 - protocol version または message type が未知
 - request の session ID が gateway の session と一致しない
@@ -281,8 +325,10 @@ broker cleanup の順とする。異常終了でも socket、process、FDを残�
   とする。client へ送る data frame は broker の `masked_chunk` からだけ生成する。
 - **N1** — container/host communication は既存どおり明示的に mount された Unix
   socket に限定する。TCP listener は追加しない。
-- **Bidirectional FD defense** — `O_RDWR` fd 0 を拒否し、host command が secret を
-  stdin descriptor 経由でcontainerへ書き戻す経路を作らない。
+- **Bidirectional FD defense** — host command が secret を stdin descriptor 経由で
+  container へ書き戻す経路を作らない。書き込み可能な `O_RDWR` fd 0 は拒否し、write 方向
+  の閉鎖が不可逆な socket 種別（`AF_UNIX` `SOCK_STREAM`）に限り、閉じていることを
+  gateway が検証した上で委譲する。
 
 gateway は通常の nas user として実行し、追加 capability や root privilege を
 要求しない。
@@ -295,6 +341,12 @@ gateway は通常の nas user として実行し、追加 capability や root pr
 - `SCM_RIGHTS` 付きrequestとFDなしrequest
 - FDなし、複数FD、unknown ancillary、`MSG_CTRUNC` の拒否とclose
 - TTY、`O_RDONLY` pipe/file、`O_RDWR` socketpair、`O_WRONLY` の分類
+- write 方向を shutdown 済みの `AF_UNIX` stream socket は通過し、書き込み可能な socket
+  は拒否されること。送信 buffer 満杯を shutdown と誤認しないこと
+- shutdown 済みでも `AF_INET` stream socket は拒否されること（write 方向を復活できる）
+- datagram socket は拒否され、かつ probe が空メッセージを配送しないこと
+- fd 1 / fd 2 と同一 socket の fd 0 は、write 方向の失われ方によらず拒否されること
+- 委譲できない descriptor は shutdown されずそのまま呼び出し元へ返ること
 - `MSG_CMSG_CLOEXEC` によりreceived FDへclose-on-execが付くこと
 - received FDをchild stdinへ設定したspawnとprocess-group cleanup
 - protocol stateごとのmessage direction validation
@@ -324,7 +376,10 @@ printf payload | { intercepted-no-read; cat; }
 - explicit fallback後にlocal commandが元のstdinを読む
 - approval前にpipe内容が消費されない
 - broker/gateway failureはstdinを消費せずfail-closed
-- `O_RDWR` socketpairが明示的に拒否される
+- 書き込み可能な `O_RDWR` socketpairが明示的に拒否される
+- write 方向を閉じた socketpair stdin が委譲され、host commandがfd 0へ書き戻せない
+- fd 0 が fd 1 を兼ねる場合、signal ではなく専用の診断付きの exit 1 で拒否される
+  （peer が生きている、つまり write 方向が実際に閉じられる状態で検証する）
 - client disconnectでhost process groupが残らない
 - split chunkをまたぐsecretがmaskedされ、raw bytesがclientへ出ない
 
@@ -362,7 +417,7 @@ printf payload | { intercepted-no-read; cat; }
 - TTY / PTY forwarding とjob control
 - `posix_spawn*` file actions の解釈
 - stdin以外の任意FD forwarding
-- `O_RDWR` stdinのsemantics保存
+- 書き込み可能なままの `O_RDWR` stdin の受け入れ
 - 別kernel/VM/remote daemon境界を越えるFD transport
 - transport failure時のlocal fallback
 - protocol version 1との互換mode
@@ -397,9 +452,22 @@ host command、cleanupをsession scopeに一致させられる。別sessionのre
 - **Global Zig gateway** — process数は減るが、全sessionのexternal sockets、FD、
   command、secret-bearing execution specを一つのlong-lived processが管理することに
   なる。session isolationとteardownの単純さを優先し、per-sessionとする。
-- **`O_RDWR` FDも許可する** — socketpair等を通じてhost commandがfd 0へ書き戻せ、
+- **`O_RDWR` FDをそのまま許可する** — socketpair等を通じてhost commandがfd 0へ書き戻せ、
   stdout/stderr mask-filterを迂回するhost-to-container channelになる。exact semantics
-  よりsecurity invariant C3を優先して拒否する。
+  よりsecurity invariant C3を優先し、書き込み可能なまま渡すことはしない。代わりに
+  client側で`shutdown(SHUT_WR)`を適用し、書き戻し能力そのものをkernelレベルで
+  取り除いてから委譲する。
+- **`O_RDWR` socketを無条件に拒否する** — 当初の判断だが、`O_RDWR` socket stdinに
+  ユースケースがないという前提が誤りだった。libuvは`stdio: 'pipe'`を`socketpair`で
+  実装するため、Node/Bunがpiped stdinで起動する全childのfd 0がこの形になる。nas自身の
+  Claude Code hook (`nas hook`) もこれに該当して全数失敗していた。無害なcallerと
+  攻撃者をfdの検査では区別できないので、例外の追加ではなく書き戻し能力の除去で
+  解決する。
+- **shutdown 済みなら socket 種別を問わず許可する** — `SEND_SHUTDOWN` の不可逆性は
+  socket 種別に依存するため成立しない。TCP は `connect(AF_UNSPEC)` から
+  `tcp_disconnect()` に到達して `sk_shutdown` が 0 に戻るので、gateway の検証を通した
+  あとに書き戻し経路を復活させられる。不可逆性を保証できる `AF_UNIX` `SOCK_STREAM`
+  だけを対象にする。
 - **FDをread-onlyでreopenする** — `/proc/<pid>/fd/<n>`等から開き直せるfile typeも
   あるが、新しいopen file descriptionになる場合はoffsetを共有せず、対象によって
   動作も異なる。securityとsemanticsの両方を一貫して満たさない。

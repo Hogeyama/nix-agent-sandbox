@@ -4,21 +4,190 @@ pub const StdinSelection = union(enum) {
     none,
     pass_fd: std.posix.fd_t,
     reject_read_write,
+    /// fd 0 is the same socket as an output descriptor. Only `prepareStdin`
+    /// produces this; `selectStdin` does not look at other descriptors.
+    reject_output_alias,
 };
 
 pub fn selectStdin(fd: std.posix.fd_t, capable: bool) StdinSelection {
     if (!capable) return .none;
     if (std.posix.isatty(fd)) return .none;
-    // The std.posix fcntl wrapper treats EBADF as an unreachable race. This
-    // classification intentionally accepts a closed descriptor as input, so
-    // use libc directly and make every failure a non-forwardable result.
-    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL, @as(c_int, 0));
-    if (raw_flags < 0) return .none;
-    return switch (@as(usize, @intCast(raw_flags)) & 0o3) {
-        0o0 => .{ .pass_fd = fd },
-        0o2 => .reject_read_write,
-        else => .none,
+    return switch (accessMode(fd)) {
+        .read_only => .{ .pass_fd = fd },
+        // A read-write descriptor is only forwardable once its write direction
+        // is provably and permanently closed, because a writable fd 0 would give
+        // the host child an unmasked channel back into the container. Only an
+        // AF_UNIX stream socket can offer that guarantee.
+        .read_write => if (isUnixStreamSocket(fd) and writeSideShutDown(fd))
+            .{ .pass_fd = fd }
+        else
+            .reject_read_write,
+        .write_only, .unknown => .none,
     };
+}
+
+const AccessMode = enum { read_only, write_only, read_write, unknown };
+
+/// `F_GETFL & O_ACCMODE`, with every failure reported as `.unknown`.
+///
+/// The std.posix fcntl wrapper treats EBADF as an unreachable race. This
+/// classification intentionally accepts a closed descriptor as input, so use
+/// libc directly.
+fn accessMode(fd: std.posix.fd_t) AccessMode {
+    const raw_flags = std.c.fcntl(fd, std.c.F.GETFL, @as(c_int, 0));
+    if (raw_flags < 0) return .unknown;
+    return switch (@as(usize, @intCast(raw_flags)) & 0o3) {
+        0o0 => .read_only,
+        0o1 => .write_only,
+        0o2 => .read_write,
+        else => .unknown,
+    };
+}
+
+/// `send` validates its buffer address even when the payload length is zero, and
+/// a zero-length Zig array has no real address — it lands on the undefined-memory
+/// sentinel and the kernel answers EFAULT. One real byte that is never read keeps
+/// the probe a pure state query.
+const zero_length_probe: [1]u8 = .{0};
+
+/// Whether `fd` is an AF_UNIX stream socket.
+///
+/// Every other socket kind is non-forwardable, for two independent reasons.
+///
+/// A closed write direction has to stay closed, because the gateway checks it
+/// once when it receives the descriptor and then hands the same socket to the
+/// host command. `shutdown(SHUT_WR)` is irreversible for AF_UNIX stream sockets:
+/// `connect` rejects `AF_UNSPEC` with EINVAL and an already-connected socket with
+/// EISCONN, so nothing clears `SEND_SHUTDOWN`. TCP is the counter-example —
+/// `tcp_disconnect()` resets `sk_shutdown` and `connect(AF_UNSPEC)` reaches it, so
+/// a container could pass a shut-down TCP socket, wait for approval, then reopen
+/// the write direction and reconnect the socket to a sink it reads.
+///
+/// The `writeSideShutDown` probe is also only side-effect-free on stream sockets.
+/// On a datagram or seqpacket socket a zero-length `send` delivers an empty
+/// message, which the peer cannot tell apart from end-of-input.
+fn isUnixStreamSocket(fd: std.posix.fd_t) bool {
+    const domain = socketOption(fd, std.posix.SO.DOMAIN) orelse return false;
+    const kind = socketOption(fd, std.posix.SO.TYPE) orelse return false;
+    return domain == std.posix.AF.UNIX and kind == std.posix.SOCK.STREAM;
+}
+
+/// A socket-level integer option, or null when `fd` is not a socket or the option
+/// cannot be read.
+fn socketOption(fd: std.posix.fd_t, option: u32) ?c_int {
+    var value: c_int = undefined;
+    var len: std.posix.socklen_t = @sizeOf(c_int);
+    if (std.c.getsockopt(fd, std.posix.SOL.SOCKET, @intCast(option), &value, &len) != 0) return null;
+    if (len != @sizeOf(c_int)) return null;
+    return value;
+}
+
+/// Whether `shutdown(SHUT_WR)` has already been applied to `fd`'s socket.
+///
+/// A zero-length `send` never enqueues stream bytes, so this observes
+/// `SEND_SHUTDOWN` without disturbing the peer. It deliberately is not a
+/// writability probe: a full send buffer still answers "writable" here, whereas
+/// `poll(POLLOUT)` would report the same absence of writability for a filled
+/// buffer as for a closed write direction. A container process can fill a
+/// buffer on demand, so only the shutdown state is safe to trust.
+///
+/// Callers must establish that `fd` is a stream socket first; see
+/// `isUnixStreamSocket`.
+fn writeSideShutDown(fd: std.posix.fd_t) bool {
+    const rc = std.c.send(fd, &zero_length_probe, 0, std.os.linux.MSG.NOSIGNAL);
+    if (rc >= 0) return false;
+    // Anything other than EPIPE leaves the write direction unproven: a pipe or
+    // regular file answers ENOTSOCK and cannot be closed one-directionally at
+    // all, so it stays non-forwardable.
+    return std.posix.errno(rc) == .PIPE;
+}
+
+/// Classify fd 0 the way `selectStdin` does, but first close the write
+/// direction of a read-write socket so it becomes forwardable.
+///
+/// Only the client calls this. The gateway must keep using `selectStdin`, which
+/// verifies without mutating: it sits on the trust boundary and has to reject a
+/// descriptor the container failed to shut down rather than quietly repair it.
+///
+/// `shutdown` acts on the socket, not on this descriptor, so it is visible to
+/// every process holding that socket. The caller's peer observes EOF on its own
+/// read side, which is harmless because the client never writes to fd 0.
+///
+/// The shape that must not be papered over is an fd 0 that is also fd 1 or fd 2 —
+/// `socat EXEC:`, inetd, `systemd Accept=yes`. There the write direction this
+/// function relies on being closed is also the one carrying the process's own
+/// output, and the client does not ignore SIGPIPE, so it would die by signal on
+/// its first output write instead of reporting anything. Such a descriptor is
+/// refused, with its own diagnostic.
+///
+/// That refusal is necessarily per-process: it compares fd 0 against *this*
+/// process's output descriptors, which is all a process can inspect without
+/// walking every other process's fd table. A still-running relative holding the
+/// same socket as its own stdout is therefore not covered — a shell that runs
+/// more commands after this one, say `sh -c 'cmd; echo done'` under
+/// `socat EXEC:`, loses the write direction of its stdout and takes SIGPIPE on
+/// the next write. Such a caller used to get a clean refusal instead, so this is
+/// a real if narrow regression, accepted because the alternative is to keep
+/// failing every libuv-spawned child.
+pub fn prepareStdin(fd: std.posix.fd_t, capable: bool) StdinSelection {
+    return prepareStdinAmong(fd, capable, &.{
+        std.posix.STDOUT_FILENO,
+        std.posix.STDERR_FILENO,
+    });
+}
+
+/// `prepareStdin` with the output descriptors named explicitly, so the
+/// aliasing refusal is testable without touching the real fd 1 and fd 2.
+fn prepareStdinAmong(
+    fd: std.posix.fd_t,
+    capable: bool,
+    outputs: []const std.posix.fd_t,
+) StdinSelection {
+    const initial = selectStdin(fd, capable);
+    switch (initial) {
+        .none => return .none,
+        .pass_fd, .reject_read_write => {},
+        // `selectStdin` inspects one descriptor and never compares descriptors.
+        .reject_output_alias => unreachable,
+    }
+
+    // Only a read-write fd 0 can be an output descriptor as well, and only a
+    // read-write fd 0 is ever mutated below. A read-only one passes through.
+    if (accessMode(fd) != .read_write) return initial;
+
+    // Refuse an aliased descriptor whichever verdict it arrived with. A socket
+    // whose write direction is already gone — because the peer closed, not
+    // because anyone shut it down — reaches here as `.pass_fd`, and using it as
+    // stdout would fail just as badly as one this function closes itself.
+    for (outputs) |output| {
+        if (sharesSocket(fd, output)) return .reject_output_alias;
+    }
+
+    switch (initial) {
+        .pass_fd => return initial,
+        else => {},
+    }
+
+    // Refuse before mutating anything the client cannot make forwardable
+    // anyway, so a rejected descriptor is handed back exactly as it arrived.
+    if (!isUnixStreamSocket(fd)) return .reject_read_write;
+    // The std.posix wrapper treats ENOTSOCK as an unreachable race, and a
+    // read-write pipe or regular file reaches exactly that path, so go through
+    // libc and let every failure stay non-forwardable.
+    if (std.c.shutdown(fd, std.posix.SHUT.WR) < 0) return .reject_read_write;
+    return selectStdin(fd, capable);
+}
+
+/// Whether both descriptors name the same socket. Socket inodes are unique, so
+/// matching device and inode means one `shutdown` would affect both; the two ends
+/// of a socketpair are distinct sockets and do not match.
+fn sharesSocket(a: std.posix.fd_t, b: std.posix.fd_t) bool {
+    var stat_a: std.c.Stat = undefined;
+    var stat_b: std.c.Stat = undefined;
+    // An unusable descriptor cannot be an alias, so failure means "not shared".
+    if (std.c.fstat(a, &stat_a) != 0) return false;
+    if (std.c.fstat(b, &stat_b) != 0) return false;
+    return stat_a.dev == stat_b.dev and stat_a.ino == stat_b.ino;
 }
 
 pub const ReceivedLine = struct {
@@ -297,6 +466,209 @@ test "selectStdin ignores a write-only fd" {
     try std.testing.expectEqual(StdinSelection.none, selectStdin(fds[1], true));
 }
 
+test "selectStdin accepts a socket whose write side is shut down" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.posix.shutdown(fds[0], .send);
+    try std.testing.expectEqual(
+        StdinSelection{ .pass_fd = fds[0] },
+        selectStdin(fds[0], true),
+    );
+}
+
+// A full send buffer must not be mistaken for a shut-down write side. This is
+// the difference between consulting SEND_SHUTDOWN and polling for writability:
+// a container process can fill the buffer on demand, so a writability probe
+// would let it pass a still-writable descriptor through the gateway's check.
+test "selectStdin rejects a read-write socket whose send buffer is full" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try fillSendBuffer(fds[0]);
+    try std.testing.expectEqual(StdinSelection.reject_read_write, selectStdin(fds[0], true));
+}
+
+test "prepareStdin shuts down the write side of a read-write socket and delegates it" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.testing.expectEqual(
+        StdinSelection{ .pass_fd = fds[0] },
+        prepareStdin(fds[0], true),
+    );
+    try std.testing.expectError(
+        error.BrokenPipe,
+        std.posix.send(fds[0], "secret", std.os.linux.MSG.NOSIGNAL),
+    );
+}
+
+test "prepareStdin keeps the delegated socket readable from its peer" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.testing.expectEqual(
+        StdinSelection{ .pass_fd = fds[0] },
+        prepareStdin(fds[0], true),
+    );
+    try std.testing.expectEqual(@as(usize, 5), try std.posix.write(fds[1], "hello"));
+    var buf: [8]u8 = undefined;
+    const read_len = try std.posix.read(fds[0], &buf);
+    try std.testing.expectEqualStrings("hello", buf[0..read_len]);
+}
+
+// `shutdown(SHUT_WR)` is only irreversible for AF_UNIX stream sockets. TCP
+// clears `sk_shutdown` in `tcp_disconnect()`, which `connect(AF_UNSPEC)` reaches,
+// so a container could hand over a shut-down TCP socket, wait for the gateway to
+// approve it, then reopen the write direction and reconnect the socket to a sink
+// it controls. Restricting the accepted set to AF_UNIX stream sockets is what
+// makes a one-shot check at the trust boundary sound.
+test "selectStdin rejects a shut-down socket whose write direction can be reopened" {
+    const fds = testTcpConnectedPair() catch return error.SkipZigTest;
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.posix.shutdown(fds[0], .send);
+    try std.testing.expectEqual(StdinSelection.reject_read_write, selectStdin(fds[0], true));
+}
+
+// The zero-length probe is only side-effect-free on stream sockets. A datagram
+// socket delivers it as an empty message, which a reader cannot distinguish from
+// end-of-input, so the socket kind has to be checked before probing.
+test "selectStdin rejects a read-write datagram socket without delivering a message" {
+    var fds: [2]std.posix.fd_t = undefined;
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.socketpair(
+            @intCast(std.posix.AF.UNIX),
+            @intCast(std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK),
+            0,
+            &fds,
+        ),
+    );
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.testing.expectEqual(StdinSelection.reject_read_write, selectStdin(fds[0], true));
+    var buf: [8]u8 = undefined;
+    try std.testing.expectError(error.WouldBlock, std.posix.read(fds[1], &buf));
+}
+
+test "sharesSocket detects a second descriptor for the same socket" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    const duplicate = try std.posix.dup(fds[0]);
+    defer std.posix.close(duplicate);
+    try std.testing.expect(sharesSocket(fds[0], duplicate));
+}
+
+test "sharesSocket separates the two ends of one socketpair" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.testing.expect(!sharesSocket(fds[0], fds[1]));
+}
+
+// `shutdown` acts on the socket, so closing the write direction of an fd 0 that
+// is also fd 1 or fd 2 would close stdout/stderr with it. The client does not
+// ignore SIGPIPE, so it would then die by signal on its first output write
+// instead of reporting anything. Refuse such a descriptor and keep the
+// diagnostic it used to get.
+test "prepareStdinAmong refuses a read-write socket that is also an output descriptor" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    const output = try std.posix.dup(fds[0]);
+    defer std.posix.close(output);
+    try std.testing.expectEqual(
+        StdinSelection.reject_output_alias,
+        prepareStdinAmong(fds[0], true, &.{output}),
+    );
+    // Left untouched: the refusal must not have closed the write direction.
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        try std.posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
+    );
+}
+
+// A socket whose peer closed answers the probe with EPIPE without anyone having
+// called `shutdown`, so it is delegated on the `.pass_fd` path. Verified
+// irreversible: after the peer is gone, `connect` still answers EISCONN and
+// `AF_UNSPEC` still answers EINVAL, so no write direction can come back.
+test "selectStdin delegates a read-write socket whose peer already closed" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    std.posix.close(fds[1]);
+    try std.testing.expectEqual(
+        StdinSelection{ .pass_fd = fds[0] },
+        selectStdin(fds[0], true),
+    );
+}
+
+// The aliasing refusal must not depend on how the write direction was lost.
+test "prepareStdinAmong refuses an aliased socket whose peer already closed" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    std.posix.close(fds[1]);
+    const output = try std.posix.dup(fds[0]);
+    defer std.posix.close(output);
+    try std.testing.expectEqual(
+        StdinSelection.reject_output_alias,
+        prepareStdinAmong(fds[0], true, &.{output}),
+    );
+}
+
+test "prepareStdin leaves a socket it cannot make forwardable unmutated" {
+    const fds = testTcpConnectedPair() catch return error.SkipZigTest;
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.testing.expectEqual(StdinSelection.reject_read_write, prepareStdin(fds[0], true));
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        try std.posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
+    );
+}
+
+test "prepareStdinAmong delegates a read-write socket that no output descriptor shares" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    const unrelated = try testSocketPair();
+    defer std.posix.close(unrelated[0]);
+    defer std.posix.close(unrelated[1]);
+    try std.testing.expectEqual(
+        StdinSelection{ .pass_fd = fds[0] },
+        prepareStdinAmong(fds[0], true, &.{unrelated[0]}),
+    );
+}
+
+test "prepareStdin rejects a read-write descriptor that is not a socket" {
+    const fd = try std.posix.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0);
+    defer std.posix.close(fd);
+    try std.testing.expectEqual(StdinSelection.reject_read_write, prepareStdin(fd, true));
+}
+
+test "prepareStdin passes a read-only pipe without touching it" {
+    const fds = try std.posix.pipe2(.{ .CLOEXEC = true });
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.testing.expectEqual(
+        StdinSelection{ .pass_fd = fds[0] },
+        prepareStdin(fds[0], true),
+    );
+    try std.testing.expectEqual(@as(usize, 2), try std.posix.write(fds[1], "hi"));
+}
+
+test "prepareStdin ignores an incapable caller without shutting the socket down" {
+    const fds = try testSocketPair();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    try std.testing.expectEqual(StdinSelection.none, prepareStdin(fds[0], false));
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        try std.posix.send(fds[0], "x", std.os.linux.MSG.NOSIGNAL),
+    );
+}
+
 test "selectStdin ignores a tty when /dev/ptmx is available" {
     const fd = std.posix.open("/dev/ptmx", .{ .ACCMODE = .RDWR, .CLOEXEC = true }, 0) catch |err| switch (err) {
         error.FileNotFound,
@@ -412,6 +784,51 @@ fn testSocketPair() ![2]std.posix.fd_t {
         ),
     );
     return fds;
+}
+
+/// A connected loopback TCP pair, returned as `.{ client, server }`. Returns an
+/// error when the sandbox has no usable loopback, so callers can skip.
+fn testTcpConnectedPair() ![2]std.posix.fd_t {
+    const listener = try std.posix.socket(
+        std.posix.AF.INET,
+        std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+        0,
+    );
+    defer std.posix.close(listener);
+
+    var address = try std.net.Address.parseIp4("127.0.0.1", 0);
+    try std.posix.bind(listener, &address.any, address.getOsSockLen());
+    try std.posix.listen(listener, 1);
+    var bound_len: std.posix.socklen_t = address.getOsSockLen();
+    try std.posix.getsockname(listener, &address.any, &bound_len);
+
+    const client = try std.posix.socket(
+        std.posix.AF.INET,
+        std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+        0,
+    );
+    errdefer std.posix.close(client);
+    try std.posix.connect(client, &address.any, bound_len);
+    const server = try std.posix.accept(listener, null, null, std.posix.SOCK.CLOEXEC);
+    return .{ client, server };
+}
+
+/// Write until the socket's send buffer refuses more, then restore the
+/// original blocking mode so the caller probes a blocking full socket.
+fn fillSendBuffer(fd: std.posix.fd_t) !void {
+    const original = try std.posix.fcntl(fd, std.posix.F.GETFL, 0);
+    const nonblock: u32 = @bitCast(std.posix.O{ .NONBLOCK = true });
+    _ = try std.posix.fcntl(fd, std.posix.F.SETFL, original | nonblock);
+    defer _ = std.posix.fcntl(fd, std.posix.F.SETFL, original) catch 0;
+
+    var blob: [4096]u8 = undefined;
+    @memset(&blob, 'z');
+    while (true) {
+        _ = std.posix.send(fd, &blob, std.os.linux.MSG.NOSIGNAL) catch |err| switch (err) {
+            error.WouldBlock => return,
+            else => return err,
+        };
+    }
 }
 
 fn reserveNextFd() !std.posix.fd_t {

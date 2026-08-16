@@ -1048,7 +1048,11 @@ const Handler = struct {
                 };
                 switch (fd_transport.selectStdin(fd, true)) {
                     .pass_fd => {},
-                    .reject_read_write => {
+                    // `selectStdin` cannot answer `.reject_output_alias`, which
+                    // compares descriptors the gateway does not own. Handled
+                    // alongside the refusal it belongs with so a future
+                    // classification change stays fail-closed here.
+                    .reject_read_write, .reject_output_alias => {
                         self.sendExternalErrorBlocking("read-write stdin descriptors are not supported");
                         return error.InvalidStdinDescriptor;
                     },
@@ -1239,6 +1243,11 @@ pub fn main() void {
 const IntegrationReader = struct {
     allocator: Allocator,
     bytes: std.ArrayList(u8) = .{},
+    start: usize = 0,
+    // Counts read(2) calls so a test can assert the reader stays chunked
+    // instead of asserting on wall-clock time, which a loaded machine makes
+    // meaningless.
+    reads: usize = 0,
 
     fn init(allocator: Allocator) IntegrationReader {
         return .{ .allocator = allocator };
@@ -1249,8 +1258,38 @@ const IntegrationReader = struct {
         self.* = undefined;
     }
 
-    fn nextLine(self: *IntegrationReader, fd: posix.fd_t, timeout_ms: i32) ![]u8 {
+    // Buffered bytes belong to one connection.  Callers that close or replace
+    // the underlying fd must drop them so a new peer never inherits them.
+    fn reset(self: *IntegrationReader) void {
         self.bytes.clearRetainingCapacity();
+        self.start = 0;
+    }
+
+    fn takeBufferedLine(self: *IntegrationReader) !?[]u8 {
+        const remaining = self.bytes.items[self.start..];
+        const newline = std.mem.indexOfScalar(u8, remaining, '\n') orelse {
+            if (remaining.len > gateway_protocol.max_control_bytes) return error.MessageTooLong;
+            return null;
+        };
+        const line = try self.allocator.dupe(u8, remaining[0..newline]);
+        self.start += newline + 1;
+        if (self.start == self.bytes.items.len) {
+            self.bytes.clearRetainingCapacity();
+            self.start = 0;
+        } else if (self.start >= self.bytes.items.len / 2) {
+            std.mem.copyForwards(u8, self.bytes.items[0 .. self.bytes.items.len - self.start], self.bytes.items[self.start..]);
+            self.bytes.items.len -= self.start;
+            self.start = 0;
+        }
+        return line;
+    }
+
+    fn nextLine(self: *IntegrationReader, fd: posix.fd_t, timeout_ms: i32) ![]u8 {
+        // Read in chunks and keep whatever follows the newline.  A syscall
+        // pair per byte costs seconds on the multi-megabyte execute frames
+        // these tests send, which overruns the caller's read budget as soon
+        // as the machine is busy.
+        if (try self.takeBufferedLine()) |line| return line;
         var timer = try std.time.Timer.start();
         while (true) {
             const elapsed_ms = timer.read() / std.time.ns_per_ms;
@@ -1270,19 +1309,15 @@ const IntegrationReader = struct {
             }
             if (revents & posix.POLL.IN == 0) continue;
 
-            var byte: [1]u8 = undefined;
-            const count = posix.read(fd, &byte) catch |err| switch (err) {
+            var scratch: [64 * 1024]u8 = undefined;
+            self.reads += 1;
+            const count = posix.read(fd, &scratch) catch |err| switch (err) {
                 error.WouldBlock => continue,
                 else => return err,
             };
             if (count == 0) return error.EndOfStream;
-            if (self.bytes.items.len >= gateway_protocol.max_control_bytes) return error.MessageTooLong;
-            try self.bytes.append(self.allocator, byte[0]);
-            if (byte[0] == '\n') {
-                const line = try self.allocator.dupe(u8, self.bytes.items[0 .. self.bytes.items.len - 1]);
-                self.bytes.clearRetainingCapacity();
-                return line;
-            }
+            try self.bytes.appendSlice(self.allocator, scratch[0..count]);
+            if (try self.takeBufferedLine()) |line| return line;
         }
     }
 };
@@ -1495,6 +1530,7 @@ const GatewayIntegration = struct {
             posix.close(self.external_fd);
             self.external_fd = -1;
         }
+        self.external_reader.reset();
     }
 
     fn reconnectExternal(self: *GatewayIntegration) !void {
@@ -1508,6 +1544,7 @@ const GatewayIntegration = struct {
             posix.close(self.broker_fd);
             self.broker_fd = -1;
         }
+        self.broker_reader.reset();
     }
 
     fn sendExecute(self: *GatewayIntegration, session_id: []const u8, request_id: []const u8, stdin_mode: gateway_protocol.StdinMode, stdin_fd: ?posix.fd_t) !void {
@@ -1701,6 +1738,31 @@ const GatewayIntegration = struct {
         const fd_error = try self.expectExternal("error", "fd-mismatch");
         defer self.allocator.free(fd_error);
         try std.testing.expect(std.mem.indexOf(u8, fd_error, "stdinMode fd requires") != null);
+        try self.expectNoBrokerConnection();
+
+        // The client closes the write direction of a read-write stdin socket
+        // before delegating it. The gateway sits on the trust boundary and must
+        // verify that independently rather than assume it: a still-writable
+        // descriptor would hand the host command an unmasked channel back into
+        // the container.
+        try self.reconnectExternal();
+        var writable: [2]posix.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(
+            @intCast(posix.AF.UNIX),
+            @intCast(posix.SOCK.STREAM | posix.SOCK.CLOEXEC),
+            0,
+            &writable,
+        ));
+        defer posix.close(writable[0]);
+        defer posix.close(writable[1]);
+        try self.sendExecute("integration", "writable-stdin", .fd, writable[0]);
+        const writable_error = try self.expectExternal("error", "writable-stdin");
+        defer self.allocator.free(writable_error);
+        try std.testing.expect(std.mem.indexOf(
+            u8,
+            writable_error,
+            "read-write stdin descriptors are not supported",
+        ) != null);
         try self.expectNoBrokerConnection();
     }
 
@@ -2174,6 +2236,79 @@ test "LineReader accepts max payload plus CR until the following LF arrives" {
     const line = (try line_reader.next()) orelse return error.UnexpectedEndOfStream;
     defer std.testing.allocator.free(line);
     try std.testing.expectEqual(gateway_protocol.max_control_bytes, line.len);
+}
+
+test "IntegrationReader reads a multi-megabyte frame in chunks" {
+    var sockets: [2]posix.fd_t = undefined;
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.socketpair(
+            @intCast(posix.AF.UNIX),
+            @intCast(posix.SOCK.STREAM | posix.SOCK.CLOEXEC),
+            0,
+            &sockets,
+        ),
+    );
+    defer posix.close(sockets[0]);
+
+    const payload_len = 2 * 1024 * 1024;
+    const frame = try std.testing.allocator.alloc(u8, payload_len + 1);
+    defer std.testing.allocator.free(frame);
+    @memset(frame[0..payload_len], 'x');
+    frame[payload_len] = '\n';
+
+    // The socket buffer cannot hold the whole frame, so the sender has to run
+    // concurrently with the reader — exactly as the gateway does in the
+    // integration tests that carry a large execute request.
+    const sender = try std.Thread.spawn(.{}, struct {
+        fn run(fd: posix.fd_t, bytes: []const u8) void {
+            sendSocketAll(fd, bytes) catch {};
+            posix.close(fd);
+        }
+    }.run, .{ sockets[1], frame });
+    defer sender.join();
+
+    var reader = IntegrationReader.init(std.testing.allocator);
+    defer reader.deinit();
+    const line = try reader.nextLine(sockets[0], 30_000);
+    defer std.testing.allocator.free(line);
+
+    try std.testing.expectEqual(payload_len, line.len);
+    // A byte-at-a-time reader needs one read per byte, which costs seconds
+    // for this frame on an idle machine and overran the 3 s budget the
+    // gateway integration tests read large execute frames with. Assert on the
+    // read count rather than elapsed time so a loaded machine cannot make the
+    // bound meaningless: chunked reads need a few hundred at worst, a
+    // per-byte reader over two million.
+    try std.testing.expect(reader.reads < 10_000);
+}
+
+test "IntegrationReader keeps bytes buffered past a frame boundary" {
+    var sockets: [2]posix.fd_t = undefined;
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        std.c.socketpair(
+            @intCast(posix.AF.UNIX),
+            @intCast(posix.SOCK.STREAM | posix.SOCK.CLOEXEC),
+            0,
+            &sockets,
+        ),
+    );
+    defer posix.close(sockets[0]);
+    defer posix.close(sockets[1]);
+
+    // Both frames land in a single read, so the second one is only observable
+    // if the reader retains what it consumed past the first newline.
+    try sendSocketAll(sockets[1], "first\nsecond\n");
+
+    var reader = IntegrationReader.init(std.testing.allocator);
+    defer reader.deinit();
+    const first = try reader.nextLine(sockets[0], 3000);
+    defer std.testing.allocator.free(first);
+    try std.testing.expectEqualStrings("first", first);
+    const second = try reader.nextLine(sockets[0], 3000);
+    defer std.testing.allocator.free(second);
+    try std.testing.expectEqualStrings("second", second);
 }
 
 test "external responses are newline terminated and preserve request identity" {

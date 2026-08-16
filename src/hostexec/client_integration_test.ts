@@ -336,16 +336,113 @@ os._exit(os.waitstatus_to_exitcode(status))
   },
 );
 
+/**
+ * A socketpair on fd 0 is what every libuv-spawned child gets, so the client
+ * has to delegate it.  It may only do so after closing the socket's write
+ * direction: an fd 0 the host command can write to would be an unmasked
+ * host-to-container channel.  This asserts both halves — the payload arrives,
+ * and the write-back attempt fails on the host side and delivers nothing to the
+ * container-side peer.
+ */
 test.skipIf(!clientGatewayAvailable)(
-  "hostexec client: rejects O_RDWR socketpair stdin before sending or falling back",
+  "hostexec client: delegates socketpair stdin with its write direction closed",
+  async () => {
+    const harness = await startClientHarness(
+      async (harnessForDecision, request) => {
+        const binary = await writeRealBinary(
+          harnessForDecision,
+          "git",
+          "#!/bin/sh\n" +
+            // Writing to a shut-down socket raises SIGPIPE exactly like writing
+            // to a closed pipe. Ignore it so the attempt is observable as a
+            // failed write instead of killing this fixture.
+            "trap '' PIPE\n" +
+            "if printf LEAKED-VIA-STDIN >&0 2>/dev/null; then\n" +
+            "  printf WROTE-TO-STDIN\n" +
+            "else\n" +
+            "  printf STDIN-WRITE-REFUSED\n" +
+            "fi\n" +
+            "exec cat\n",
+        );
+        return startRealBinary(harnessForDecision, request, binary);
+      },
+    );
+    const helperPath = path.join(harness.rootDir, "exec-client-socketpair.py");
+    const leakPath = path.join(harness.rootDir, "peer-received");
+    try {
+      await linkClient(harness, "git");
+      await writeFile(
+        helperPath,
+        `#!/usr/bin/env python3
+import os
+import socket
+
+left, right = socket.socketpair()
+child = os.fork()
+if child == 0:
+    right.close()
+    os.dup2(left.fileno(), 0)
+    os.execv(${JSON.stringify(artifacts.clientPath!)}, ["git"])
+    os._exit(127)
+
+left.close()
+right.sendall(b"PAYLOAD-VIA-SOCKETPAIR")
+right.shutdown(socket.SHUT_WR)
+_, status = os.waitpid(child, 0)
+
+# Whatever the host command managed to push back into fd 0 would surface here.
+right.setblocking(False)
+try:
+    received = right.recv(4096)
+except BlockingIOError:
+    received = b""
+except ConnectionResetError:
+    # Only reachable when the delegated end closed with bytes still unread,
+    # which means the host command never consumed the payload.
+    received = b"<reset:payload-not-consumed>"
+with open(${JSON.stringify(leakPath)}, "wb") as marker:
+    marker.write(received)
+os._exit(os.waitstatus_to_exitcode(status))
+`,
+      );
+      await chmod(helperPath, 0o700);
+
+      const result = await harness.runShell(`exec '${helperPath}'`);
+
+      expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("STDIN-WRITE-REFUSEDPAYLOAD-VIA-SOCKETPAIR");
+      expect(await Bun.file(leakPath).text()).toBe("");
+      expect(harness.requests).toHaveLength(1);
+      expect(harness.requests[0].stdinMode).toBe("fd");
+    } finally {
+      await harness.close();
+    }
+  },
+);
+
+/**
+ * `socat EXEC:`, inetd and `systemd Accept=yes` hand a process one socket as
+ * fd 0, fd 1 and fd 2 at once.  Closing the write direction of that fd 0 would
+ * close stdout and stderr with it, and the client — which does not ignore
+ * SIGPIPE — would then die by signal on its first output write.  It must refuse
+ * instead, and say which of the two refusal reasons applies.
+ *
+ * The peer is deliberately kept open across the exec (CPython socketpair
+ * descriptors are non-inheritable by default), so the socket really is writable
+ * when the client starts.  Otherwise this would only exercise the branch where
+ * the write direction was already gone before the client ran.
+ */
+test.skipIf(!clientGatewayAvailable)(
+  "hostexec client: refuses writable stdin that is also its stdout",
   async () => {
     const harness = await startGatewayTestHarness({
       artifacts,
       decide: () => {
-        throw new Error("O_RDWR stdin must not reach the broker");
+        throw new Error("stdin aliased with stdout must not reach the broker");
       },
     });
-    const helperPath = path.join(harness.rootDir, "exec-client-rw.py");
+    const helperPath = path.join(harness.rootDir, "exec-client-aliased.py");
     try {
       await linkClient(harness, "git");
       await writeRealBinary(
@@ -360,12 +457,58 @@ import os
 import socket
 
 left, right = socket.socketpair()
-try:
-    os.dup2(left.fileno(), 0)
-    os.execv(${JSON.stringify(artifacts.clientPath!)}, ["git"])
-finally:
-    right.close()
-    left.close()
+os.set_inheritable(right.fileno(), True)
+os.dup2(left.fileno(), 0)
+os.dup2(left.fileno(), 1)
+os.execv(${JSON.stringify(artifacts.clientPath!)}, ["git"])
+`,
+      );
+      await chmod(helperPath, 0o700);
+
+      const result = await harness.runShell(`exec '${helperPath}'`);
+
+      // Signal death would surface as a null/negative status, never as 1.
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "refusing read-write stdin that is also stdout or stderr",
+      );
+      expect(result.stderr).not.toContain("LOCAL-FALLBACK-RAN");
+      expect(harness.requests).toHaveLength(0);
+    } finally {
+      await harness.close();
+    }
+  },
+);
+
+test.skipIf(!clientGatewayAvailable)(
+  "hostexec client: rejects read-write stdin it cannot close before sending or falling back",
+  async () => {
+    const harness = await startGatewayTestHarness({
+      artifacts,
+      decide: () => {
+        throw new Error(
+          "unclosable read-write stdin must not reach the broker",
+        );
+      },
+    });
+    const helperPath = path.join(harness.rootDir, "exec-client-rw.py");
+    try {
+      await linkClient(harness, "git");
+      await writeRealBinary(
+        harness,
+        "git",
+        "#!/bin/sh\nprintf LOCAL-FALLBACK-RAN >&2\nexit 99\n",
+      );
+      // A regular-file descriptor has no per-direction shutdown, so the client
+      // cannot make it forwardable and must fail closed.
+      await writeFile(
+        helperPath,
+        `#!/usr/bin/env python3
+import os
+
+fd = os.open("/dev/null", os.O_RDWR)
+os.dup2(fd, 0)
+os.execv(${JSON.stringify(artifacts.clientPath!)}, ["git"])
 `,
       );
       await chmod(helperPath, 0o700);

@@ -330,13 +330,29 @@ fn callBrokerInner(
     var req_id_buf: [36]u8 = undefined;
     const request_id = generateRequestId(&req_id_buf);
 
-    const stdin_fd: ?std.posix.fd_t = switch (fd_transport.selectStdin(0, stdin_capable)) {
+    // `prepareStdin`, not `selectStdin`: a read-write socket on fd 0 is the
+    // ordinary shape for any child a libuv-based parent spawns with a piped
+    // stdin, so closing its write direction here is what keeps those callers
+    // working without handing the host command a channel back into the
+    // container. Descriptors whose write direction cannot be closed stay
+    // rejected.
+    const stdin_fd: ?std.posix.fd_t = switch (fd_transport.prepareStdin(0, stdin_capable)) {
         .none => null,
         .pass_fd => |fd| fd,
         .reject_read_write => {
             writeAll(
                 std.posix.STDERR_FILENO,
                 "nas hostexec: refusing read-write stdin because it can bypass output masking\n",
+            );
+            return .{ .exit_code = 1, .outcome = .failed };
+        },
+        // A distinct reason: this descriptor is not refused for what a host
+        // command could write through it, but because it is this process's own
+        // output channel and cannot be made stdin-only without breaking that.
+        .reject_output_alias => {
+            writeAll(
+                std.posix.STDERR_FILENO,
+                "nas hostexec: refusing read-write stdin that is also stdout or stderr\n",
             );
             return .{ .exit_code = 1, .outcome = .failed };
         },
@@ -375,7 +391,10 @@ fn callBrokerInner(
     // back to the real binary — that would re-execute the command and
     // duplicate output/side effects. The delegated stdin fd is deliberately
     // not part of this decision: it remains unread until an approved host
-    // command receives it, so a pre-start fallback can safely use fd 0.
+    // command receives it, so a pre-start fallback can safely read fd 0. What a
+    // fallback cannot do is write to a read-write fd 0, whose write direction
+    // `prepareStdin` has closed by then. That costs nothing, because such an
+    // fd 0 used to fail the request outright instead of reaching a fallback.
     var wrote_any_chunks: bool = false;
 
     while (true) {

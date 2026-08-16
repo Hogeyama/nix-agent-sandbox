@@ -76,6 +76,76 @@ Codex の設定例は `Stop` を `attention` にするところまでで、`stop
 
 対策するなら、hook ではなく Codex プロセス終了を監視する NAS 側 lifecycle から `done` を記録する必要があります。
 
+**4. Codex の shell command では mask-filter 用 env が欠落し、Bash が exit 121 になる**
+
+2026-08-17 に、`mask.filter = true` の Codex セッションで shell command を実行すると、
+コマンド本文が一度も動かず、stdout/stderr が空のまま exit 121 になることを確認した。
+たとえば次の stdin 保持確認も、loop や hostexec へ到達する前に終了する。
+
+```bash
+while read -r line; do diffity; echo "$line"; done < <(echo hoge; echo fuga)
+```
+
+exit 121 は hostexec client や `diffity` の終了コードではない。mask-filter が有効な
+コンテナでは entrypoint が `/bin/bash` を wrapper に置き換えており、wrapper は次の
+いずれかが欠けると、未マスク出力を通さないため何も表示せず exit 121 する。
+
+```text
+NAS_MASK_FILTER
+NAS_MASK_SOCKET
+```
+
+関係ファイル:
+
+- `src/stages/maskfs/mask_filter_service.ts`
+  - mask-filter binary と session socket をマウントし、両変数を container plan へ追加する
+- `src/stages/maskfs/mask_filter_stage.ts`
+  - service の env を既存の container plan へマージする
+- `src/docker/embed/entrypoint.sh`
+  - 両変数がある場合だけ Bash wrapper を設置する
+  - 設置後に変数が欠落した Bash は、fail-openせず予約コード121で終了する
+
+切り分け結果:
+
+1. Codex PID 1 の environment には `NAS_MASK_FILTER` と `NAS_MASK_SOCKET` がある。
+2. `codex-code-mode-host` の environment にも両変数がある。
+3. shell command runner が起動した直接の子プロセスでは、両変数を含む `NAS_*` が欠落している。
+4. mask-filter socket は存在し、daemon も応答可能な状態だった。
+5. PID 1 と同じ2変数を明示して同じ `/bin/bash` wrapper を起動すると、exit 0 で出力された。
+
+したがって `.nas/config.pkl` や MaskFilterStage の注入漏れではない。Codex の shell
+command 実行境界が子プロセス用 environment を再構築する際に、NAS がcontainerへ
+注入した変数を伝播しないことが直接原因と考えられる。Codex 本体の通常プロセスには
+変数が届いているため、agent起動時のcontainer env全体が欠落しているわけでもない。
+
+影響:
+
+- `mask.filter = true` の Codex セッションでは、shell command が `/bin/bash -c` を使うと
+  コマンド全体が実行不能になる。
+- 何も出力しないexit 121は意図したfail-closed挙動なので、秘密値が素通りする問題ではない。
+  ただし利用者からは原因が分かりにくく、Codex の主要toolが使用不能になる可用性バグである。
+- `/bin/sh` や保存された `bash.real` の直接実行はwrapperを迂回して未マスク出力を許すため、
+  正式な回避策として案内してはならない。
+- `mask.filter = false` にすればBash wrapper自体が設置されないが、出力マスクを無効化する
+  一時的な診断・回避にすぎない。
+
+対応候補:
+
+1. Bash wrapper の生成時に、filter binary と session socket の検証済みパスをwrapperへ
+   固定し、実行時のenv継承へ依存しないようにする。socket pathはsession固有だが秘密値ではなく、
+   現在もcontainer envとmount tableから観測可能である。
+2. Codex shell command runner が `NAS_MASK_FILTER` / `NAS_MASK_SOCKET` を子へ引き継ぐようにする。
+   ただしNAS外のruntime実装に依存するため、NAS単独で保証しにくい。
+
+NAS側で直す場合は1を優先候補とする。`env -i` や外部runnerのenv sanitizationでも
+マスクを維持でき、現在の「変数を失ったらexit 121」という安全側の性質も、固定先socketが
+消失・接続不能ならsupervisorがfail-closedする形で保てる。回帰テストには少なくとも、
+wrapper起動時だけ両変数を与え、その子のenvironmentから両変数を除いたケース、socket
+消失時の無出力exit 121、nested Bashのsupervisor一層制約を含める。
+
+状態: **未修正**。セキュリティ上はfail-closedだが、Codex + `mask.filter = true` の標準的な
+shell利用を壊すため、可用性の優先度は高い。
+
 **補足**
 mouse mode が Codex だけ無効ですが、コード上は意図的な trait です。現時点では未実装とは判断できません。
 
