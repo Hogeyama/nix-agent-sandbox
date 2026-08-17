@@ -1261,6 +1261,8 @@ describe("旧識別子の検出", () => {
   });
 
   test("12 個の廃止識別子をすべて名指しする", () => {
+    const migrationGuideUrl =
+      "https://github.com/Hogeyama/nix-agent-sandbox/blob/develop/docs/migration/network-scopes.md#legacy-identifier-mapping";
     const removed = [
       "reviewRules",
       "ReviewRule",
@@ -1279,6 +1281,8 @@ describe("旧識別子の検出", () => {
       const found = detectLegacyIdentifiers(`x = ${identifier}`, "c.pkl");
       expect(found.map((diagnostic) => diagnostic.severity)).toEqual(["error"]);
       expect(found[0]?.message).toContain(identifier);
+      expect(found[0]?.message).toContain(migrationGuideUrl);
+      expect(found[0]?.message).not.toContain("docs/superpowers/");
     }
   });
 

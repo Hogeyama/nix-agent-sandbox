@@ -1050,8 +1050,8 @@ const LEGACY_IDENTIFIERS: readonly (readonly [string, string])[] = [
   ],
 ];
 
-const SPEC_REFERENCE =
-  "docs/superpowers/specs/2026-08-06-network-authorization-config-model-design.md#移行";
+const MIGRATION_GUIDE_URL =
+  "https://github.com/Hogeyama/nix-agent-sandbox/blob/develop/docs/migration/network-scopes.md#legacy-identifier-mapping";
 
 /**
  * 評価前の生ソースから廃止した識別子を探す。
@@ -1076,7 +1076,7 @@ export function detectLegacyIdentifiers(
           [
             `設定エラー: ${fileName}:${index + 1} で廃止された \`${identifier}\` を参照しています。`,
             `            ${migration}`,
-            `            対応表: ${SPEC_REFERENCE}`,
+            `            対応表: ${MIGRATION_GUIDE_URL}`,
           ].join("\n"),
         ),
       );

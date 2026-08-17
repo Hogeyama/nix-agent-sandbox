@@ -26,6 +26,7 @@ import { appendAuditLog } from "../src/audit/store.ts";
 import { initConfig } from "../src/config/init.ts";
 import { useRepoSchemaAsset } from "../src/config/schema_asset_testing.ts";
 import { HostExecBroker } from "../src/hostexec/broker.ts";
+import { buildInterceptArtifactsForDev } from "../src/hostexec/intercept_dev_build.ts";
 import {
   hostExecBrokerSocketPath,
   hostExecExecSocketPath,
@@ -54,6 +55,7 @@ import {
 let restoreSchemaAsset: (() => Promise<void>) | undefined;
 
 beforeAll(async () => {
+  await buildInterceptArtifactsForDev();
   restoreSchemaAsset = await useRepoSchemaAsset();
 });
 
@@ -959,7 +961,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         env,
       });
 
-      expect(result.code).toEqual(0);
+      expect(result.code, result.stderr).toEqual(0);
       expect(result.stdout.includes(`PWD=${projectDir}`)).toEqual(true);
       expect(result.stdout.includes("ARGS=hello world")).toEqual(true);
       expect(result.stdout.includes("MY_VAR=from-config")).toEqual(true);
@@ -978,7 +980,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
         env,
       });
 
-      expect(result.code).toEqual(0);
+      expect(result.code, result.stderr).toEqual(0);
       const content = await readFile(outputPath, "utf8");
       expect(content.trim()).toEqual("written-by-fake-codex");
     });

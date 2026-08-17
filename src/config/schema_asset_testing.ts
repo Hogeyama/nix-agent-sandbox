@@ -39,6 +39,35 @@ export async function useRepoSchemaAsset(): Promise<() => Promise<void>> {
       if (entry === "config") continue;
       await symlink(path.join(previous, entry), path.join(assetDir, entry));
     }
+  } else {
+    // ソースツリーから直接テストするときも、NAS_ASSET_DIR を立てた瞬間に
+    // resolveAsset の通常 fallback は使われなくなる。CLI E2E が読む Docker
+    // アセットはリポジトリ側へつなぎ、Schema だけを差し替える状態を保つ。
+    await symlink(
+      fileURLToPath(new URL("../docker", import.meta.url)),
+      path.join(assetDir, "docker"),
+    );
+    await mkdir(path.join(assetDir, "hostexec"));
+    await symlink(
+      fileURLToPath(
+        new URL(
+          "../hostexec/intercept/zig-out/lib/libhostexec_intercept.so",
+          import.meta.url,
+        ),
+      ),
+      path.join(assetDir, "hostexec", "hostexec_intercept.so"),
+    );
+    for (const binary of ["nas-hostexec-client", "nas-hostexec-gateway"]) {
+      await symlink(
+        fileURLToPath(
+          new URL(
+            `../hostexec/intercept/zig-out/bin/${binary}`,
+            import.meta.url,
+          ),
+        ),
+        path.join(assetDir, "hostexec", binary),
+      );
+    }
   }
 
   await mkdir(path.join(assetDir, "config"), { recursive: true });
