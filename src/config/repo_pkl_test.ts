@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { resolveAsset } from "../lib/asset.ts";
+import { decide, resolveAuthzConfig } from "../network/authz/resolve.ts";
+import type { JsonValue } from "../network/authz/types.ts";
 import { loadConfig } from "./load.ts";
 import { useRepoSchemaAsset } from "./schema_asset_testing.ts";
 
@@ -30,6 +32,126 @@ async function pklAvailable(): Promise<boolean> {
 }
 
 const hasPkl = await pklAvailable();
+
+test.skipIf(!hasPkl)(
+  "repository config routes OpenAI Responses by the stream flag",
+  async () => {
+    const repoRoot = path.resolve(import.meta.dir, "../..");
+    const config = await loadConfig({ startDir: repoRoot });
+    const profile = config.profiles.codex;
+    const resolved = resolveAuthzConfig(profile);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.document).not.toBeNull();
+
+    const decideStream = (value: JsonValue) =>
+      decide(
+        resolved.document!,
+        { host: "api.openai.com", port: 443 },
+        {
+          method: "POST",
+          path: "/v1/responses",
+          body: { kind: "json", value },
+        },
+      );
+
+    expect(decideStream({ stream: false })).toMatchObject({
+      action: "allow",
+      ruleId: "openai-responses.non-streaming",
+      reason: "rule",
+    });
+    expect(decideStream({ stream: true })).toMatchObject({
+      action: "review",
+      ruleId: "openai-responses.streaming",
+      reason: "rule",
+    });
+    expect(decideStream({})).toMatchObject({
+      action: "review",
+      ruleId: "openai-responses.$fallback",
+      reason: "scope-fallback",
+    });
+    expect(decideStream({ stream: {} })).toMatchObject({
+      action: "deny",
+      ruleId: "openai-responses.streaming",
+      reason: "indeterminate",
+    });
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "repository default Claude profile masks through the fail-closed Anthropic preset",
+  async () => {
+    const repoRoot = path.resolve(import.meta.dir, "../..");
+    const config = await loadConfig({ startDir: repoRoot });
+    expect(config.default).toBe("claude");
+
+    const profile = config.profiles.claude;
+    expect(profile.mask).toBeDefined();
+    expect(profile.mask!.proxy).toBe(true);
+    expect(profile.mask!.apply).toContain("workspace-demo");
+    expect(config.profiles["claude-remote"].network).toEqual(profile.network);
+    expect(config.profiles["claude-remote"].mask).toEqual(profile.mask);
+
+    const resolved = resolveAuthzConfig(profile);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.document).not.toBeNull();
+
+    const messages = decide(
+      resolved.document!,
+      { host: "api.anthropic.com", port: 443 },
+      {
+        method: "POST",
+        path: "/v1/messages",
+        body: {
+          kind: "json",
+          value: {
+            model: "claude-opus-4-8",
+            messages: [
+              { role: "user", content: [{ type: "text", text: "hello" }] },
+            ],
+          },
+        },
+      },
+    );
+    expect(messages).toMatchObject({
+      action: "allow",
+      ruleId: "anthropic.messages",
+      reason: "rule",
+      secrets: { "*": "mask" },
+    });
+
+    expect(
+      decide(
+        resolved.document!,
+        { host: "api.anthropic.com", port: 443 },
+        {
+          method: "POST",
+          path: "/v1/files",
+          body: { kind: "json", value: {} },
+        },
+      ),
+    ).toMatchObject({
+      action: "deny",
+      ruleId: "anthropic.$fallback",
+      reason: "scope-fallback",
+    });
+
+    expect(
+      decide(
+        resolved.document!,
+        { host: "api.anthropic.com", port: 443 },
+        {
+          method: "POST",
+          path: "/v1/messages",
+          body: { kind: "binary" },
+        },
+      ),
+    ).toMatchObject({
+      action: "deny",
+      ruleId: "anthropic.messages",
+      reason: "indeterminate",
+    });
+  },
+);
 
 /** バンドルされた Schema.pkl のテキストを読み込む */
 async function readBundledSchema(): Promise<string> {

@@ -395,6 +395,17 @@ local baseProfile: Profile = new {
   mask = commonMask
 }
 
+local anthropicPolicyProfile: Profile = (baseProfile) {
+  agent = "claude"
+  network = anthropicPolicyNetwork
+  mask = new MaskConfig {
+    maskfs = false
+    proxy = true
+    filter = false
+    apply = new Listing { "workspace-demo" }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Top-level config
 // ---------------------------------------------------------------------------
@@ -412,13 +423,11 @@ observability {
 }
 
 profiles {
-  ["claude"] = (baseProfile) {
-    agent = "claude"
+  ["claude"] = (anthropicPolicyProfile) {
     agentArgs = new Listing { "--dangerously-skip-permissions" }
   }
 
-  ["claude-remote"] = (baseProfile) {
-    agent = "claude"
+  ["claude-remote"] = (anthropicPolicyProfile) {
     agentArgs = new Listing { "remote" }
   }
 
@@ -538,14 +547,5 @@ profiles {
   // preset のターゲットが特異なので、そちらが選ばれる)。
   // /v1/messages と count_tokens のボディは JSON として解析され、未知の
   // content block 型・未知構造は fail-closed で 403。
-  ["anthropic-policy-demo"] = (baseProfile) {
-    agent = "claude"
-    network = anthropicPolicyNetwork
-    mask = new MaskConfig {
-      maskfs = false
-      proxy = true
-      filter = false
-      apply = new Listing { "workspace-demo" }
-    }
-  }
+  ["anthropic-policy-demo"] = (anthropicPolicyProfile) {}
 }

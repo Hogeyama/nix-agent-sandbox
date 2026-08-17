@@ -12,7 +12,7 @@ import net from "node:net";
 import path from "node:path";
 import { queryAuditLogs } from "../../audit/store.ts";
 import type { ResolvedDocument } from "../../network/authz/resolve.ts";
-import { SessionBroker } from "../../network/broker.ts";
+import { SessionBroker, sendBrokerRequest } from "../../network/broker.ts";
 import { hashToken } from "../../network/protocol.ts";
 import {
   brokerSocketPath,
@@ -695,12 +695,11 @@ test.skipIf(!dockerAvailable || !canBindMount)(
 );
 
 test.skipIf(!dockerAvailable || !canBindMount)(
-  "anthropic: unknown content block type is failed closed (403)",
+  "anthropic: unknown content block is held for review and denied closed",
   async () => {
-    // 未知の content block type は request() 内の schema チェックで
-    // upstream への connect より前に 403 を返すため、fake upstream や
-    // DNS 到達性は不要（既存の DNS ブロックテストと違い target server 自体
-    // を用意する必要がない）。
+    // 未知の content block type は upstream connect より前に review へ回る。
+    // 明示的に deny するまで応答が保留され、deny 後は 403 で閉じることを確認する。
+    // fake upstream や DNS 到達性は不要。
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
     let fixture: AnthropicFixture | undefined;
 
@@ -743,7 +742,7 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           { role: "user", content: [{ type: "quantum_payload", data: "x" }] },
         ],
       });
-      const response = await sendProxyRequest(
+      const responsePromise = sendProxyRequest(
         proxyPort,
         "http://api.anthropic.com/v1/messages",
         `${sessionId}:${token}`,
@@ -753,19 +752,47 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           body: requestBody,
         },
       );
-      const outcome = await expectSinglePolicyOutcome(
-        fixture.auditDir,
-        {
-          ruleId: "anthropic.messages",
-          requestPolicyResult: "block",
-          // 未知の判別子は tagged union のガードに弾かれる。
-          reason: "schema-mismatch",
-        },
-        "unknown content block",
+
+      const pendingDeadline = Date.now() + 5_000;
+      let pending = (await fixture.broker.listPending())[0];
+      while (!pending && Date.now() < pendingDeadline) {
+        await Bun.sleep(25);
+        pending = (await fixture.broker.listPending())[0];
+      }
+      expect(pending).toMatchObject({
+        ruleId: "anthropic.messages",
+        state: "pending",
+        violations: [{ value: "quantum_payload" }],
+      });
+
+      await sendBrokerRequest(
+        brokerSocketPath(fixture.paths, fixture.sessionId),
+        { type: "deny", requestId: pending!.requestId },
       );
+      const response = await responsePromise;
+      const outcomes = await readPolicyOutcomes(fixture.auditDir);
+      expect(outcomes).toHaveLength(2);
+      const deniedReview = outcomes.find(
+        (entry) => entry.requestPolicyResult === undefined,
+      );
+      const blockedOutcome = outcomes.find(
+        (entry) => entry.requestPolicyResult === "block",
+      );
+      expect(deniedReview).toMatchObject({
+        ruleId: "anthropic.messages",
+        decision: "deny",
+        reason: "denied-by-user",
+      });
+      expect(blockedOutcome).toMatchObject({
+        ruleId: "anthropic.messages",
+        decision: "deny",
+        requestPolicyResult: "block",
+        reason: "violations-denied",
+      });
+      expect(blockedOutcome?.requestId).toBe(deniedReview?.requestId);
 
       expect(response).toContain("403");
-      expect(JSON.stringify(outcome)).not.toContain("SECRET123");
+      expect(JSON.stringify(outcomes)).not.toContain("SECRET123");
     } finally {
       await dockerStop(containerName, { timeoutSeconds: 0 }).catch(() => {});
       await dockerRm(containerName).catch(() => {});
