@@ -12,15 +12,46 @@
  */
 
 import { expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
 import * as path from "node:path";
 import type { AuthzConfig } from "../../network/authz/config.ts";
-import { decide, resolveAuthzConfig } from "../../network/authz/resolve.ts";
-import type { RequestBody } from "../../network/authz/types.ts";
+import { normalizeBody } from "../../network/authz/relation.ts";
+import {
+  decide,
+  type ResolvedDocument,
+  type ResolvedRule,
+  resolveAuthzConfig,
+} from "../../network/authz/resolve.ts";
+import { evaluateBody } from "../../network/authz/semantics.ts";
+import type { JsonValue, RequestBody } from "../../network/authz/types.ts";
 
 const python3 = Bun.which("python3");
 const addonDir = path.dirname(new URL(import.meta.url).pathname);
 
-type BodyKind = "absent" | "empty" | "binary" | "json";
+interface BodyCase {
+  readonly name: string;
+  readonly bytes: Uint8Array;
+  readonly carriesBody: boolean;
+}
+
+interface DecisionCase {
+  readonly name: string;
+  readonly host: string;
+  readonly port: number;
+  readonly method: string;
+  readonly path: string;
+  readonly body: BodyCase;
+}
+
+interface SerializedDecisionCase {
+  readonly name: string;
+  readonly host: string;
+  readonly port: number;
+  readonly method: string;
+  readonly path: string;
+  readonly carriesBody: boolean;
+  readonly bodyBase64: string;
+}
 
 /**
  * 選択の各軸を 1 つずつ突く設定。
@@ -84,6 +115,64 @@ const CONFIG: AuthzConfig = {
         },
       },
       tls: { targets: ["other.example:8443"], fallback: "allow" },
+      // 値条件は同じ入力を `equals` / `oneOf` の真・偽・判定不能それぞれに
+      // 通すためだけの小さな scope。個別の意味論は resolve_test.ts が持ち、
+      // ここでは同じ実バイト列に対する Python との選択結果を見る。
+      values: {
+        targets: ["values.example"],
+        fallback: "deny",
+        rules: {
+          equals: {
+            match: {
+              paths: ["/v1/equals"],
+              body: { format: "json", equals: { "/tier": "gold" } },
+            },
+            onMatch: "allow",
+            onIndeterminate: "review",
+          },
+          oneof: {
+            match: {
+              paths: ["/v1/oneof"],
+              body: {
+                format: "json",
+                oneOf: { "/tier": ["gold", "silver"] },
+              },
+            },
+            onMatch: "review",
+            onIndeterminate: "deny",
+          },
+          broad: { match: { paths: ["/**"] }, onMatch: "deny" },
+        },
+      },
+      scopeBudget: {
+        targets: ["scope-budget.example"],
+        limits: { maxBodyBytes: 8 },
+        rules: {
+          json: {
+            match: {
+              paths: ["/v1/run"],
+              body: { format: "json", equals: { "/tier": "gold" } },
+            },
+            onMatch: "allow",
+            onIndeterminate: "review",
+          },
+        },
+      },
+      ruleBudget: {
+        targets: ["rule-budget.example"],
+        limits: { maxBodyBytes: 64 },
+        rules: {
+          json: {
+            match: {
+              paths: ["/v1/run"],
+              body: { format: "json", equals: { "/tier": "gold" } },
+            },
+            onMatch: "allow",
+            onIndeterminate: "review",
+            limits: { maxBodyBytes: 8 },
+          },
+        },
+      },
       // 宣言順は broad → ping → echo.opaque → echo.json、特異度順はその逆。
       // 宣言順に歩く実装は POST /v1/ping を broad の allow で答え、
       // /v1/echo をどのボディでも broad の allow で答えるので、正しい実装の
@@ -129,10 +218,344 @@ const ROUTES: readonly (readonly [string, string])[] = [
   ["GET", "/repos/other/x"],
   ["GET", "/a/b?q=1"],
 ];
-const BODY_KINDS: readonly BodyKind[] = ["absent", "empty", "binary", "json"];
 
-function requestBody(kind: BodyKind): RequestBody {
-  return kind === "json" ? { kind: "json", value: {} } : { kind };
+function body(name: string, source: string, carriesBody: boolean): BodyCase {
+  return { name, bytes: new TextEncoder().encode(source), carriesBody };
+}
+
+const NO_BODY = body("no-body", "", false);
+const EMPTY_BODY = body("empty", "", true);
+const OPAQUE_BODY = body("opaque-non-json", "not json", true);
+const VALID_JSON_BODY = body("valid-json", '{"probe":true}', true);
+
+const AXIS_BODIES: readonly BodyCase[] = [
+  NO_BODY,
+  EMPTY_BODY,
+  OPAQUE_BODY,
+  VALID_JSON_BODY,
+];
+
+const VALUE_CASES: readonly DecisionCase[] = [
+  {
+    name: "scope-budget-classifies-oversize-body-as-binary",
+    host: "scope-budget.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/run",
+    body: body("over-scope-budget", '{"tier":"gold"}', true),
+  },
+  {
+    name: "rule-budget-downgrades-parsed-body-to-binary",
+    host: "rule-budget.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/run",
+    body: body("over-rule-budget", '{"tier":"gold"}', true),
+  },
+  {
+    name: "malformed-json-stops-ping-json",
+    host: "api.example.com",
+    port: 443,
+    method: "POST",
+    path: "/v1/ping",
+    body: body("malformed-json", '{"tier":', true),
+  },
+  {
+    name: "scalar-json-has-no-tier",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body("scalar-json", "7", true),
+  },
+  {
+    name: "equals-true",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body("structured-json", '{"tier":"gold"}', true),
+  },
+  {
+    name: "equals-false",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body("structured-json", '{"tier":"bronze"}', true),
+  },
+  {
+    name: "duplicate-json-members-are-unparseable",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body(
+      "duplicate-json-members",
+      '{"tier":"gold","tier":"bronze"}',
+      true,
+    ),
+  },
+  {
+    name: "escaped-equivalent-json-members-are-unparseable",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body(
+      "escaped-equivalent-json-members",
+      '{"tier":"gold","t\\u0069er":"bronze"}',
+      true,
+    ),
+  },
+  {
+    name: "integer-beyond-python-digit-limit-remains-json",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body(
+      "integer-beyond-python-digit-limit",
+      `{"tier":${"9".repeat(4_301)}}`,
+      true,
+    ),
+  },
+  {
+    name: "equals-missing-pointer",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body("structured-json", "{}", true),
+  },
+  {
+    name: "equals-non-scalar-target",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/equals",
+    body: body("structured-json", '{"tier":{}}', true),
+  },
+  {
+    name: "oneof-true",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/oneof",
+    body: body("structured-json", '{"tier":"silver"}', true),
+  },
+  {
+    name: "oneof-false",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/oneof",
+    body: body("structured-json", '{"tier":"bronze"}', true),
+  },
+  {
+    name: "oneof-missing-pointer",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/oneof",
+    body: body("structured-json", "{}", true),
+  },
+  {
+    name: "oneof-non-scalar-target",
+    host: "values.example",
+    port: 443,
+    method: "POST",
+    path: "/v1/oneof",
+    body: body("structured-json", '{"tier":[]}', true),
+  },
+];
+
+function requestBody(
+  bodyCase: BodyCase,
+  maxBodyBytes = Number.POSITIVE_INFINITY,
+): RequestBody {
+  if (bodyCase.bytes.byteLength === 0) {
+    return bodyCase.carriesBody ? { kind: "empty" } : { kind: "absent" };
+  }
+  if (bodyCase.bytes.byteLength > maxBodyBytes) return { kind: "binary" };
+  try {
+    const source = new TextDecoder("utf-8", { fatal: true }).decode(
+      bodyCase.bytes,
+    );
+    rejectDuplicateJsonMembers(source);
+    return { kind: "json", value: JSON.parse(source) as JsonValue };
+  } catch {
+    return { kind: "binary" };
+  }
+}
+
+function resolvedBodyMatch(rule: ResolvedRule) {
+  return rule.match.bodyFormat === null
+    ? undefined
+    : {
+        format: rule.match.bodyFormat,
+        equals: rule.match.equals,
+        oneOf: rule.match.oneOf,
+      };
+}
+
+function decideCase(
+  document: ResolvedDocument,
+  case_: DecisionCase,
+): {
+  readonly body: RequestBody;
+  readonly decision: ReturnType<typeof decide>;
+} {
+  const address = { host: case_.host, port: case_.port };
+  // Scope selection depends only on the target, so this exposes its effective
+  // body budget without letting a provisional body decision affect it.
+  const scope = decide(document, address, {
+    method: case_.method,
+    path: case_.path,
+    body: { kind: "absent" },
+  }).scope;
+  const body = requestBody(
+    case_.body,
+    scope?.limits.maxBodyBytes ?? document.defaults.limits.maxBodyBytes,
+  );
+  const decision = decide(
+    document,
+    address,
+    { method: case_.method, path: case_.path, body },
+    (rule) =>
+      evaluateBody(
+        normalizeBody(resolvedBodyMatch(rule)),
+        requestBody(case_.body, rule.limits.maxBodyBytes),
+      ),
+  );
+  return { body, decision };
+}
+
+/** Mirror the addon's `object_pairs_hook=_reject_duplicate_members`. */
+function rejectDuplicateJsonMembers(source: string): void {
+  let index = 0;
+
+  const skipWhitespace = (): void => {
+    while (/[\t\n\r ]/.test(source[index] ?? "")) index++;
+  };
+  const requireCharacter = (character: string): void => {
+    if (source[index] !== character) throw new Error(`expected ${character}`);
+    index++;
+  };
+  const scanString = (): string => {
+    const start = index;
+    requireCharacter('"');
+    while (index < source.length) {
+      const character = source[index++];
+      if (character === '"') {
+        return JSON.parse(source.slice(start, index)) as string;
+      }
+      if (character === "\\") {
+        if (source[index] === "u") index += 5;
+        else index++;
+      }
+    }
+    throw new Error("unterminated JSON string");
+  };
+  const scanValue = (): void => {
+    skipWhitespace();
+    switch (source[index]) {
+      case "{":
+        scanObject();
+        return;
+      case "[":
+        scanArray();
+        return;
+      case '"':
+        scanString();
+        return;
+      default: {
+        const start = index;
+        while (
+          index < source.length &&
+          !/[\t\n\r ,\]}]/.test(source[index] ?? "")
+        ) {
+          index++;
+        }
+        if (start === index) throw new Error("expected JSON value");
+      }
+    }
+  };
+  const scanObject = (): void => {
+    requireCharacter("{");
+    skipWhitespace();
+    if (source[index] === "}") {
+      index++;
+      return;
+    }
+    const keys = new Set<string>();
+    while (true) {
+      skipWhitespace();
+      const key = scanString();
+      if (keys.has(key)) throw new Error("duplicate JSON object member");
+      keys.add(key);
+      skipWhitespace();
+      requireCharacter(":");
+      scanValue();
+      skipWhitespace();
+      if (source[index] === "}") {
+        index++;
+        return;
+      }
+      requireCharacter(",");
+    }
+  };
+  const scanArray = (): void => {
+    requireCharacter("[");
+    skipWhitespace();
+    if (source[index] === "]") {
+      index++;
+      return;
+    }
+    while (true) {
+      scanValue();
+      skipWhitespace();
+      if (source[index] === "]") {
+        index++;
+        return;
+      }
+      requireCharacter(",");
+    }
+  };
+
+  scanValue();
+  skipWhitespace();
+  if (index !== source.length) throw new Error("trailing JSON input");
+}
+
+function serializeCase(case_: DecisionCase): SerializedDecisionCase {
+  return {
+    name: case_.name,
+    host: case_.host,
+    port: case_.port,
+    method: case_.method,
+    path: case_.path,
+    carriesBody: case_.body.carriesBody,
+    bodyBase64: Buffer.from(case_.body.bytes).toString("base64"),
+  };
+}
+
+function decisionLine(
+  case_: DecisionCase,
+  bodyKind: RequestBody["kind"],
+  decision: ReturnType<typeof decide>,
+): string {
+  return [
+    case_.name,
+    case_.host,
+    String(case_.port),
+    case_.method,
+    case_.path,
+    bodyKind,
+    decision.action,
+    decision.reason,
+    decision.ruleId,
+  ].join("|");
 }
 
 test.skipIf(!python3)(
@@ -145,33 +568,28 @@ test.skipIf(!python3)(
     const document = resolved.document;
     if (document === null) throw new Error("unresolvable fixture config");
 
-    const cases: [string, number, string, string, BodyKind][] = [];
+    const cases: DecisionCase[] = [];
     for (const host of HOSTS) {
       for (const port of PORTS) {
         for (const [method, requestPath] of ROUTES) {
-          for (const kind of BODY_KINDS) {
-            cases.push([host, port, method, requestPath, kind]);
+          for (const body of AXIS_BODIES) {
+            cases.push({
+              name: `${host}:${port} ${method} ${requestPath} ${body.name}`,
+              host,
+              port,
+              method,
+              path: requestPath,
+              body,
+            });
           }
         }
       }
     }
+    cases.push(...VALUE_CASES);
 
-    const expected = cases.map(([host, port, method, requestPath, kind]) => {
-      const decision = decide(
-        document,
-        { host, port },
-        { method, path: requestPath, body: requestBody(kind) },
-      );
-      return [
-        host,
-        String(port),
-        method,
-        requestPath,
-        kind,
-        decision.action,
-        decision.reason,
-        decision.ruleId,
-      ].join("|");
+    const expected = cases.map((case_) => {
+      const { body: classifiedBody, decision } = decideCase(document, case_);
+      return decisionLine(case_, classifiedBody.kind, decision);
     });
 
     const proc = Bun.spawn(
@@ -179,7 +597,7 @@ test.skipIf(!python3)(
         python3 as string,
         "decide_parity.py",
         JSON.stringify(document),
-        JSON.stringify(cases),
+        JSON.stringify(cases.map(serializeCase)),
       ],
       {
         cwd: addonDir,
@@ -229,35 +647,23 @@ test.skipIf(!python3)(
     const document = resolved.document;
     if (document === null) throw new Error("unresolvable overflow config");
 
-    const bodyJson = '{"n":1e400}';
-    const decision = decide(
-      document,
-      { host: "overflow.example", port: 443 },
-      {
-        method: "POST",
-        path: "/v1/run",
-        body: { kind: "json", value: JSON.parse(bodyJson) },
-      },
-    );
-    const expected = [
-      "overflow.example",
-      "443",
-      "POST",
-      "/v1/run",
-      "json",
-      decision.action,
-      decision.reason,
-      decision.ruleId,
-    ].join("|");
+    const case_: DecisionCase = {
+      name: "overflowing-json-number",
+      host: "overflow.example",
+      port: 443,
+      method: "POST",
+      path: "/v1/run",
+      body: body("overflowing-number", '{"n":1e400}', true),
+    };
+    const { body: classifiedBody, decision } = decideCase(document, case_);
+    const expected = decisionLine(case_, classifiedBody.kind, decision);
 
     const proc = Bun.spawn(
       [
         python3 as string,
         "decide_parity.py",
         JSON.stringify(document),
-        JSON.stringify([
-          ["overflow.example", 443, "POST", "/v1/run", "json", bodyJson],
-        ]),
+        JSON.stringify([serializeCase(case_)]),
       ],
       {
         cwd: addonDir,

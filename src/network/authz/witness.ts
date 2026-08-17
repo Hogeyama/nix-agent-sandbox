@@ -173,7 +173,10 @@ function bodyWitness(a: NormalizedBody, b: NormalizedBody): RequestBody | null {
   if (format === null) return { kind: "absent" };
   if (format === "none") return { kind: "empty" };
 
-  const value: Record<string, JsonValue> = {};
+  const value: WitnessValue = {
+    value: createWitnessObject(),
+    constrained: false,
+  };
   const documents: Record<string, GraphqlDocument> = {};
 
   for (const [pointer, values] of mergedPointers(a, b)) {
@@ -189,7 +192,7 @@ function bodyWitness(a: NormalizedBody, b: NormalizedBody): RequestBody | null {
     documents[document.at] = document.facts;
   }
 
-  return { kind: "json", value, documents };
+  return { kind: "json", value: value.value, documents };
 }
 
 /**
@@ -313,42 +316,89 @@ function pickRootField(
  * JSON Pointer の位置にスカラーを置く。途中の位置がすでに別の型で埋まっている
  * 場合や、同じ位置に別の値を要求された場合は false を返す。
  */
+interface WitnessValue {
+  value: JsonValue;
+  constrained: boolean;
+}
+
 function setPointer(
-  root: Record<string, JsonValue>,
+  root: WitnessValue,
   pointer: string,
   value: JsonScalar,
 ): boolean {
-  if (!pointer.startsWith("/")) return false;
-  const tokens = pointer
-    .slice(1)
-    .split("/")
-    .map((token) => token.replaceAll("~1", "/").replaceAll("~0", "~"));
-  let current = root;
-  for (let index = 0; index < tokens.length - 1; index++) {
-    const token = tokens[index] as string;
-    const next = current[token];
-    if (next === undefined) {
-      const created: Record<string, JsonValue> = {};
-      current[token] = created;
-      current = created;
-      continue;
+  if (pointer === "") {
+    if (!root.constrained) {
+      root.value = value;
+      root.constrained = true;
+      return true;
     }
-    if (typeof next !== "object" || next === null || Array.isArray(next)) {
-      return false;
-    }
-    current = next as Record<string, JsonValue>;
-  }
-  const last = tokens[tokens.length - 1] as string;
-  const existing = current[last];
-  if (existing !== undefined) {
+    const existing = root.value;
     return (
       typeof existing !== "object" &&
       existing !== null &&
       scalarKey(existing) === scalarKey(value)
     );
   }
-  current[last] = value;
+  if (!pointer.startsWith("/")) return false;
+  const tokens = pointer
+    .slice(1)
+    .split("/")
+    .map((token) => token.replaceAll("~1", "/").replaceAll("~0", "~"));
+  if (
+    typeof root.value !== "object" ||
+    root.value === null ||
+    Array.isArray(root.value)
+  ) {
+    return false;
+  }
+  let current = root.value as Record<string, JsonValue>;
+  for (let index = 0; index < tokens.length - 1; index++) {
+    const token = tokens[index] as string;
+    const descriptor = Object.getOwnPropertyDescriptor(current, token);
+    if (descriptor === undefined) {
+      const created = createWitnessObject();
+      defineWitnessProperty(current, token, created);
+      current = created;
+      continue;
+    }
+    if (!("value" in descriptor)) return false;
+    const next = descriptor.value as JsonValue;
+    if (typeof next !== "object" || next === null || Array.isArray(next)) {
+      return false;
+    }
+    current = next as Record<string, JsonValue>;
+  }
+  const last = tokens[tokens.length - 1] as string;
+  const descriptor = Object.getOwnPropertyDescriptor(current, last);
+  if (descriptor !== undefined) {
+    if (!("value" in descriptor)) return false;
+    const existing = descriptor.value as JsonValue;
+    return (
+      typeof existing !== "object" &&
+      existing !== null &&
+      scalarKey(existing) === scalarKey(value)
+    );
+  }
+  defineWitnessProperty(current, last, value);
+  root.constrained = true;
   return true;
+}
+
+function createWitnessObject(): Record<string, JsonValue> {
+  return Object.create(null) as Record<string, JsonValue>;
+}
+
+function defineWitnessProperty(
+  target: Record<string, JsonValue>,
+  token: string,
+  value: JsonValue,
+): void {
+  Object.defineProperty(target, token, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
 }
 
 // -------------------------------------------------------------- ターゲット

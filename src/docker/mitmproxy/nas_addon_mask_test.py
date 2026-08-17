@@ -566,6 +566,34 @@ class AuthzDocumentContractTest(unittest.TestCase):
 
         self.assertEqual(self._load(), document)
 
+    def test_expected_integers_must_be_finite_javascript_numbers(self):
+        finite_literal = "1" + ("0" * 308)
+        overflowing_literal = "1" + ("0" * 309)
+
+        for field in ("equals", "oneOf"):
+            for name, literal, is_valid in (
+                ("large finite", finite_literal, True),
+                ("overflowing", overflowing_literal, False),
+            ):
+                with self.subTest(field=field, name=name):
+                    nas_addon._authz_cache.clear()
+                    document = copy.deepcopy(self.fixture)
+                    expected = json.loads(literal)
+                    value = expected if field == "equals" else [expected]
+                    self._messages_rule(document)["match"][field] = {
+                        "/value": value
+                    }
+                    path = self._write(document)
+                    self.assertIn(literal, path.read_text())
+
+                    loaded = self._load()
+                    if is_valid:
+                        self.assertEqual(loaded, document)
+                    else:
+                        self.assertIs(
+                            loaded, nas_addon._INVALID_AUTHZ_DOCUMENT
+                        )
+
     def test_an_oversized_array_index_is_a_missing_pointer(self):
         document = copy.deepcopy(self.fixture)
         match = self._messages_rule(document)["match"]

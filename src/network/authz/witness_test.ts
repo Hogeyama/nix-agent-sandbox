@@ -85,6 +85,20 @@ describe("matchIntersectionWitness", () => {
     expect(accepts(b, witness)).toBe(true);
   });
 
+  test("root スカラーと子孫 Pointer の制約は同時に満たせない", () => {
+    const root = compile({
+      paths: ["/v1/x"],
+      body: { format: "json", equals: { "": "root-value" } },
+    });
+    const descendant = compile({
+      paths: ["/v1/x"],
+      body: { format: "json", equals: { "/child": "value" } },
+    });
+
+    expect(matchIntersectionWitness(root, descendant)).toBeNull();
+    expect(matchIntersectionWitness(descendant, root)).toBeNull();
+  });
+
   test("format の交差は狭い側を採る", () => {
     const opaque = compile({ paths: ["/x"], body: { format: "opaque" } });
     const none = compile({ paths: ["/x"], body: { format: "none" } });

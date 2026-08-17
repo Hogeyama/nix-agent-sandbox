@@ -9,6 +9,7 @@ answer — and a divergence the other way, where both sides are wrong in the
 same way, is what the matrix is meant to catch.
 """
 
+import base64
 import json
 import sys
 
@@ -23,13 +24,22 @@ def main() -> int:
         return 1
     lines = []
     for case in cases:
-        host, port, method, path, body_kind = case[:5]
-        body_json = case[5] if len(case) > 5 else None
-        parsed_body = json.loads(body_json) if body_json is not None else None
-        body_size = (
-            len(body_json.encode()) if body_json is not None
-            else 2 if body_kind == "json" else 0
+        name = case["name"]
+        host = case["host"]
+        port = case["port"]
+        method = case["method"]
+        path = case["path"]
+        body = base64.b64decode(case["bodyBase64"], validate=True)
+        scope = nas_addon._select_scope(document, host, port)
+        limits = (
+            scope.get("limits", nas_addon._LIMIT_CEILINGS)
+            if scope is not None
+            else document["defaults"]["limits"]
         )
+        body_kind, parsed_body = nas_addon._classify_body(
+            body, limits["maxBodyBytes"], case["carriesBody"]
+        )
+        body_size = len(body)
         body_truth = nas_addon._body_truth_table(
             document, host, port, method, path, body_kind,
             body_size, parsed_body,
@@ -37,7 +47,7 @@ def main() -> int:
         decision = nas_addon._decide(
             document, host, port, method, path, body_truth
         )
-        lines.append("|".join([
+        line = [
             host,
             str(port),
             method,
@@ -46,7 +56,9 @@ def main() -> int:
             decision["action"],
             decision["reason"],
             decision["ruleId"],
-        ]))
+        ]
+        line.insert(0, name)
+        lines.append("|".join(line))
     print("\n".join(lines))
     return 0
 

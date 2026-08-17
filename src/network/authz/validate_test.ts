@@ -118,6 +118,33 @@ describe("ルールの重なり", () => {
     expect(message).toContain("GET /repos/my-org/x/pulls");
   });
 
+  test("競合する root スカラー条件の診断に証人を載せる", () => {
+    const message = joined(
+      oneRule({
+        "exact-path": {
+          match: {
+            methods: ["GET", "POST"],
+            paths: ["/run"],
+            body: { format: "json", equals: { "": "root-value" } },
+          },
+          onMatch: "allow",
+        },
+        "exact-method": {
+          match: {
+            methods: ["GET"],
+            paths: ["/**"],
+            body: { format: "json", equals: { "": "root-value" } },
+          },
+          onMatch: "deny",
+        },
+      }),
+    );
+
+    expect(message).toContain("ルール api.exact-path と api.exact-method");
+    expect(message).toContain("両方に一致するリクエストの例");
+    expect(message).toContain('ボディ: "root-value"');
+  });
+
   test("エラーには両方の match と 3 つの解決方法が載る", () => {
     const message = joined(ambiguous);
     expect(message).toContain("GET|HEAD");
@@ -290,6 +317,77 @@ describe("ルールの重なり", () => {
         }),
       ),
     ).toContain("受理集合が交差します");
+  });
+
+  test("__proto__ Pointer は交差診断の JSON データとして提示する", () => {
+    const pollutionKey = "stage3SuccessfulWitnessPollution";
+    expect(Object.hasOwn(Object.prototype, pollutionKey)).toBe(false);
+
+    try {
+      const message = joined(
+        oneRule({
+          prototype: {
+            match: {
+              paths: ["/run"],
+              body: {
+                format: "json",
+                equals: { [`/__proto__/${pollutionKey}`]: "blocked" },
+              },
+            },
+            onMatch: "allow",
+          },
+          tier: {
+            match: {
+              paths: ["/run"],
+              body: { format: "json", equals: { "/tier": "pro" } },
+            },
+            onMatch: "deny",
+          },
+        }),
+      );
+
+      expect(Object.hasOwn(Object.prototype, pollutionKey)).toBe(false);
+      expect(message).toContain(
+        `ボディ: {"__proto__":{"${pollutionKey}":"blocked"},"tier":"pro"}`,
+      );
+    } finally {
+      delete (Object.prototype as Record<string, unknown>)[pollutionKey];
+    }
+  });
+
+  test("__proto__ Pointer の証人構成失敗も Object.prototype を変更しない", () => {
+    const pollutionKey = "stage3FailedWitnessPollution";
+    expect(Object.hasOwn(Object.prototype, pollutionKey)).toBe(false);
+
+    try {
+      const message = joined(
+        oneRule({
+          descendant: {
+            match: {
+              paths: ["/run"],
+              body: {
+                format: "json",
+                equals: { [`/__proto__/${pollutionKey}`]: "blocked" },
+              },
+            },
+            onMatch: "allow",
+          },
+          root: {
+            match: {
+              paths: ["/run"],
+              body: { format: "json", equals: { "/__proto__": "scalar" } },
+            },
+            onMatch: "deny",
+          },
+        }),
+      );
+
+      expect(Object.hasOwn(Object.prototype, pollutionKey)).toBe(false);
+      expect(message).toContain("受理集合が交差します");
+      expect(message).not.toContain("両方に一致するリクエストの例");
+    } finally {
+      delete (Object.prototype as Record<string, unknown>)[pollutionKey];
+    }
   });
 
   test("値集合が素なルールへの overrides はエラーになる", () => {

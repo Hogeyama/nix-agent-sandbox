@@ -169,6 +169,10 @@ _ACTIONS = frozenset(("allow", "review", "deny"))
 _BODY_FORMATS = frozenset(("none", "json", "opaque"))
 _VIOLATION_ACTIONS = frozenset(("deny", "review", "allow"))
 
+# A decimal integer with more digits cannot fit in JavaScript's finite
+# IEEE-754 Number range, regardless of its leading digits.
+_MAX_JS_FINITE_INTEGER_DIGITS = 309
+
 # --- request masking -------------------------------------------------------
 # Pattern expansion mirrors src/network/mask_patterns.ts (broker-side
 # reviewContext masking). Keep both implementations in sync.
@@ -367,7 +371,7 @@ def _is_json_scalar(value: object) -> bool:
     if isinstance(value, (str, bool)):
         return True
     if type(value) is int:
-        return True
+        return math.isfinite(_javascript_number(value))
     return type(value) is float and math.isfinite(value)
 
 
@@ -1333,6 +1337,22 @@ def _reject_duplicate_members(pairs):
     return parsed_object
 
 
+def _parse_javascript_integer(literal: str):
+    """Parse a JSON integer without crossing Python's bigint digit limit.
+
+    JavaScript parses every JSON number as an IEEE-754 Number. Any integer
+    with more than 309 decimal digits is therefore infinite regardless of its
+    leading digits. Shorter literals stay as bounded Python ints so ordinary
+    request rewriting retains its existing spelling; numeric comparisons
+    convert them to JavaScript Number precision in `_javascript_number`.
+    """
+    negative = literal.startswith("-")
+    digits = literal[1:] if negative else literal
+    if len(digits) > _MAX_JS_FINITE_INTEGER_DIGITS:
+        return -math.inf if negative else math.inf
+    return int(literal)
+
+
 def _cut_finding_value(value: Optional[str]) -> Optional[str]:
     """Bound a masked offending value without merging two of them.
 
@@ -1593,6 +1613,7 @@ def _classify_body(
             body,
             object_pairs_hook=_reject_duplicate_members,
             parse_constant=_reject_non_standard_constant,
+            parse_int=_parse_javascript_integer,
         )
     except Exception:
         return "binary", None
