@@ -238,6 +238,29 @@ describe("軸の合成", () => {
     expect(matchSubsumes(narrow, wide)).toBe(true);
     expect(matchSubsumes(wide, narrow)).toBe(false);
   });
+
+  test("値集合の交差と包含を完全な match の関係に合成する", () => {
+    const narrow = compile({
+      methods: ["POST"],
+      paths: ["/run"],
+      body: { format: "json", equals: { "/mode": "fast" } },
+    });
+    const wide = compile({
+      methods: ["POST"],
+      paths: ["/run"],
+      body: { format: "json", oneOf: { "/mode": ["fast", "safe"] } },
+    });
+    const disjoint = compile({
+      methods: ["POST"],
+      paths: ["/run"],
+      body: { format: "json", equals: { "/mode": "debug" } },
+    });
+
+    expect(matchesIntersect(narrow, wide)).toBe(true);
+    expect(matchSubsumes(narrow, wide)).toBe(true);
+    expect(matchSubsumes(wide, narrow)).toBe(false);
+    expect(matchesIntersect(narrow, disjoint)).toBe(false);
+  });
 });
 
 describe("ターゲット", () => {

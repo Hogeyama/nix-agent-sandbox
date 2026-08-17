@@ -16,6 +16,7 @@
 import {
   type AuditMode,
   type AuthzConfig,
+  type BodyMatchConfig,
   DEFAULT_AUDIT_MODE,
   DEFAULT_SECRET_DISPOSITIONS,
   type Expect,
@@ -69,6 +70,7 @@ export interface CompiledRule {
   /** 実 ID。`<スコープ名>.<キー>`。 */
   readonly id: string;
   readonly config: RuleConfig;
+  /** 実行時の選択と設定診断に使う、値条件を含む完全な match。 */
   readonly match: CompiledMatch;
 }
 
@@ -220,7 +222,13 @@ function compileScope(
 
     const match = compileRuleMatch(diagnostics, id, ruleConfig);
     if (match === null) continue;
-    rules.push({ scopeName: name, key, id, config: ruleConfig, match });
+    rules.push({
+      scopeName: name,
+      key,
+      id,
+      config: ruleConfig,
+      match,
+    });
   }
 
   return { name, config, targets, rules, dispositions };
@@ -272,23 +280,101 @@ function compileRuleMatch(
   }
 
   checkMethods(diagnostics, id, rule.match.methods);
+  broken = checkBodyMatch(diagnostics, id, rule.match.body) || broken;
 
   if (broken) return null;
-  // Value-aware relation diagnostics are enabled separately from the runtime
-  // contract. Until then, preserve the previous format-only relation so this
-  // contract change does not start rejecting configurations early.
-  const compiled = compileMatch({
-    ...rule.match,
-    body:
-      rule.match.body === undefined
-        ? undefined
-        : { format: rule.match.body.format },
-  });
+  const compiled = compileMatch(rule.match);
   if (!compiled.ok) {
     diagnostics.push(error(`ルール ${id} の match: ${compiled.error}`));
     return null;
   }
   return compiled.value;
+}
+
+function checkBodyMatch(
+  diagnostics: Diagnostic[],
+  id: string,
+  body: BodyMatchConfig | undefined,
+): boolean {
+  if (body === undefined) return false;
+
+  let broken = false;
+  if (body.format !== "json" && Object.keys(body.equals ?? {}).length > 0) {
+    diagnostics.push(
+      error(
+        `ルール ${id} の match.body.format = "${body.format}" に equals を併記できません。値条件は format = "json" を要します。`,
+      ),
+    );
+    broken = true;
+  }
+  if (body.format !== "json" && Object.keys(body.oneOf ?? {}).length > 0) {
+    diagnostics.push(
+      error(
+        `ルール ${id} の match.body.format = "${body.format}" に oneOf を併記できません。値条件は format = "json" を要します。`,
+      ),
+    );
+    broken = true;
+  }
+
+  for (const [pointer, value] of Object.entries(body.equals ?? {})) {
+    if (!isValidJsonPointer(pointer)) {
+      diagnostics.push(
+        error(
+          `ルール ${id} の match.body.equals の ${pointer} は RFC 6901 JSON Pointer として不正です。`,
+        ),
+      );
+      broken = true;
+    }
+    if (isFiniteJsonScalar(value)) continue;
+    diagnostics.push(
+      error(
+        `ルール ${id} の match.body.equals の ${pointer} は文字列・有限な数値・真偽値のいずれかである必要があります。`,
+      ),
+    );
+    broken = true;
+  }
+  for (const [pointer, values] of Object.entries(body.oneOf ?? {})) {
+    if (!isValidJsonPointer(pointer)) {
+      diagnostics.push(
+        error(
+          `ルール ${id} の match.body.oneOf の ${pointer} は RFC 6901 JSON Pointer として不正です。`,
+        ),
+      );
+      broken = true;
+    }
+    if (values.length === 0) {
+      diagnostics.push(
+        error(
+          `ルール ${id} の match.body.oneOf の ${pointer} が空の Listing です。受理集合が空になり、このルールは決して発火しません。`,
+        ),
+      );
+      broken = true;
+    }
+    for (const value of values as readonly unknown[]) {
+      if (isFiniteJsonScalar(value)) continue;
+      diagnostics.push(
+        error(
+          `ルール ${id} の match.body.oneOf の ${pointer} は文字列・有限な数値・真偽値のみを持つ必要があります。`,
+        ),
+      );
+      broken = true;
+    }
+  }
+  return broken;
+}
+
+function isValidJsonPointer(pointer: string): boolean {
+  return (
+    pointer === "" || (pointer.startsWith("/") && !/~(?![01])/u.test(pointer))
+  );
+}
+
+function isFiniteJsonScalar(value: unknown): boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
 }
 
 /**

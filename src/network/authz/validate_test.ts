@@ -268,6 +268,91 @@ describe("ルールの重なり", () => {
       ),
     ).toContain("交差しない");
   });
+
+  test("別の Pointer を縛る値条件の重なりは比較不能としてエラーになる", () => {
+    expect(
+      joined(
+        oneRule({
+          bymode: {
+            match: {
+              paths: ["/run"],
+              body: { format: "json", equals: { "/mode": "fast" } },
+            },
+            onMatch: "allow",
+          },
+          bytier: {
+            match: {
+              paths: ["/run"],
+              body: { format: "json", equals: { "/tier": "pro" } },
+            },
+            onMatch: "deny",
+          },
+        }),
+      ),
+    ).toContain("受理集合が交差します");
+  });
+
+  test("値集合が素なルールへの overrides はエラーになる", () => {
+    expect(
+      joined(
+        oneRule({
+          fast: {
+            match: {
+              paths: ["/run"],
+              body: { format: "json", equals: { "/mode": "fast" } },
+            },
+            onMatch: "allow",
+            overrides: ["safe"],
+          },
+          safe: {
+            match: {
+              paths: ["/run"],
+              body: { format: "json", equals: { "/mode": "safe" } },
+            },
+            onMatch: "deny",
+          },
+        }),
+      ),
+    ).toContain("交差しない相手");
+  });
+
+  test("値条件の包含と overrides が作る優先関係の閉路はエラーになる", () => {
+    const message = joined(
+      oneRule({
+        x: {
+          match: {
+            paths: ["/run"],
+            body: {
+              format: "json",
+              oneOf: { "/mode": ["fast", "safe", "debug"] },
+            },
+          },
+          onMatch: "allow",
+          overrides: ["y"],
+        },
+        y: {
+          match: {
+            paths: ["/run"],
+            body: { format: "json", equals: { "/mode": "fast" } },
+          },
+          onMatch: "deny",
+        },
+        z: {
+          match: {
+            paths: ["/run"],
+            body: {
+              format: "json",
+              oneOf: { "/mode": ["fast", "safe"] },
+            },
+          },
+          onMatch: "review",
+          overrides: ["x"],
+        },
+      }),
+    );
+    expect(message).toContain("優先関係が循環しています");
+    expect(message).toContain("y は api.z より特異なので先");
+  });
 });
 
 describe("実 ID の一意性", () => {
@@ -394,6 +479,168 @@ describe("match の構文", () => {
         }),
       ).replaceAll("\n", " "),
     ).toMatch(/空.*受理集合/s);
+  });
+
+  for (const format of ["opaque", "none"] as const) {
+    test(`${format} に equals を併記するとエラーになる`, () => {
+      expect(
+        joined(
+          oneRule({
+            a: {
+              match: {
+                paths: ["/a"],
+                body: { format, equals: { "/mode": "fast" } },
+              },
+              onMatch: "allow",
+            },
+          }),
+        ),
+      ).toContain(`format = "${format}" に equals`);
+    });
+
+    test(`${format} に oneOf を併記するとエラーになる`, () => {
+      expect(
+        joined(
+          oneRule({
+            a: {
+              match: {
+                paths: ["/a"],
+                body: { format, oneOf: { "/mode": ["fast", "safe"] } },
+              },
+              onMatch: "allow",
+            },
+          }),
+        ),
+      ).toContain(`format = "${format}" に oneOf`);
+    });
+  }
+
+  const invalidBodyValues: readonly (readonly [string, unknown])[] = [
+    ["配列", ["fast"]],
+    ["オブジェクト", { mode: "fast" }],
+    ["null", null],
+    ["NaN", Number.NaN],
+    ["正の無限大", Number.POSITIVE_INFINITY],
+    ["負の無限大", Number.NEGATIVE_INFINITY],
+  ];
+
+  for (const [label, value] of invalidBodyValues) {
+    test(`equals の ${label} を拒否する`, () => {
+      const equals = { "/value": value } as unknown as Record<string, string>;
+      const message = joined(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: { format: "json", equals },
+            },
+            onMatch: "allow",
+          },
+        }),
+      );
+      expect(message).toContain("equals の /value");
+      expect(message).toContain("文字列・有限な数値・真偽値");
+    });
+
+    test(`oneOf の ${label} を拒否する`, () => {
+      const oneOf = { "/value": [value] } as unknown as Record<
+        string,
+        readonly string[]
+      >;
+      const message = joined(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: { format: "json", oneOf },
+            },
+            onMatch: "allow",
+          },
+        }),
+      );
+      expect(message).toContain("oneOf の /value");
+      expect(message).toContain("文字列・有限な数値・真偽値");
+    });
+  }
+
+  for (const [label, pointer] of [
+    ["先頭の slash がない", "mode"],
+    ["不正な escape を持つ", "/bad~2escape"],
+    ["末尾が単独の ~ である", "/bad~"],
+  ] as const) {
+    test(`equals の ${label} Pointer を拒否する`, () => {
+      const message = joined(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: {
+                format: "json",
+                equals: { [pointer]: "fast" },
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      );
+      expect(message).toContain(`equals の ${pointer}`);
+      expect(message).toContain("RFC 6901 JSON Pointer");
+    });
+
+    test(`oneOf の ${label} Pointer を拒否する`, () => {
+      const message = joined(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: {
+                format: "json",
+                oneOf: { [pointer]: ["fast"] },
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      );
+      expect(message).toContain(`oneOf の ${pointer}`);
+      expect(message).toContain("RFC 6901 JSON Pointer");
+    });
+  }
+
+  test("root と escape 済みの JSON Pointer は受理する", () => {
+    expect(
+      errorsOf(
+        oneRule({
+          a: {
+            match: {
+              paths: ["/a"],
+              body: {
+                format: "json",
+                equals: { "": "root" },
+                oneOf: { "/a~0b~1c": [true, 1, "x"] },
+              },
+            },
+            onMatch: "allow",
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("oneOf の値集合が空だとエラーになる", () => {
+    const message = joined(
+      oneRule({
+        a: {
+          match: {
+            paths: ["/a"],
+            body: { format: "json", oneOf: { "/mode": [] } },
+          },
+          onMatch: "allow",
+        },
+      }),
+    );
+    expect(message).toContain("oneOf の /mode が空の Listing");
+    expect(message).toContain("決して発火しません");
   });
 });
 

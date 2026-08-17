@@ -477,6 +477,47 @@ describe("ボディの値条件", () => {
     ]);
   });
 
+  test("equals は包含する oneOf より宣言順にかかわらず先に評価する", () => {
+    const ordered = documentOf({
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com"],
+            rules: {
+              broad: {
+                match: {
+                  paths: ["/v1/run"],
+                  body: {
+                    format: "json",
+                    oneOf: { "/mode": ["fast", "safe"] },
+                  },
+                },
+                onMatch: "allow",
+              },
+              narrow: {
+                match: {
+                  paths: ["/v1/run"],
+                  body: { format: "json", equals: { "/mode": "fast" } },
+                },
+                onMatch: "deny",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const decision = decide(
+      ordered,
+      address,
+      request("POST", "/v1/run", {
+        kind: "json",
+        value: { mode: "fast" },
+      }),
+    );
+    expect([decision.ruleId, decision.action]).toEqual(["api.narrow", "deny"]);
+  });
+
   test("存在しない Pointer は偽として次の候補または fallback へ進む", () => {
     const decision = run({ kind: "json", value: {} });
     expect([decision.ruleId, decision.reason]).toEqual([

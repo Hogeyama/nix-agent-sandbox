@@ -52,6 +52,19 @@ describe("compareSpecificity", () => {
     const none = compile({ paths: ["/v1/ping"], body: { format: "none" } });
     expect(compareSpecificity(json, none)).toBe("incomparable");
   });
+
+  test("equals はその値を含む oneOf より特異である", () => {
+    const narrow = compile({
+      paths: ["/run"],
+      body: { format: "json", equals: { "/mode": "fast" } },
+    });
+    const wide = compile({
+      paths: ["/run"],
+      body: { format: "json", oneOf: { "/mode": ["fast", "safe"] } },
+    });
+    expect(compareSpecificity(narrow, wide)).toBe("narrower");
+    expect(compareSpecificity(wide, narrow)).toBe("wider");
+  });
 });
 
 describe("compareTargetSpecificity", () => {

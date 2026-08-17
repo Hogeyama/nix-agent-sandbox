@@ -537,6 +537,44 @@ profiles {
   },
 );
 
+test.skipIf(!hasPkl)(
+  "loadConfig: rejects an invalid body value match before startup",
+  async () => {
+    const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      scopes {
+        ["api"] {
+          targets { "api.example.com" }
+          rules {
+            ["matched"] {
+              match {
+                paths { "/v1/run" }
+                body {
+                  format = "json"
+                  equals { ["mode"] = "fast" }
+                }
+              }
+              onMatch = "allow"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+    await withNasConfig(configPkl, async (dir) => {
+      await expect(loadConfig({ startDir: dir })).rejects.toThrow(
+        /profile "dev": ルール api\.matched.*RFC 6901 JSON Pointer/,
+      );
+    });
+  },
+);
+
 test.skipIf(!hasPkl)("loadConfig: rejects an unknown rule field", async () => {
   const configPkl = `amends "Schema.pkl"
 

@@ -566,6 +566,23 @@ class AuthzDocumentContractTest(unittest.TestCase):
 
         self.assertEqual(self._load(), document)
 
+    def test_an_oversized_array_index_is_a_missing_pointer(self):
+        document = copy.deepcopy(self.fixture)
+        match = self._messages_rule(document)["match"]
+        match["equals"] = {f"/items/{'9' * 5000}": "value"}
+        self._write(document)
+
+        loaded = self._load()
+        self.assertEqual(loaded, document)
+        self.assertEqual(
+            nas_addon._evaluate_body_match(
+                self._messages_rule(loaded)["match"],
+                "json",
+                {"items": []},
+            ),
+            "false",
+        )
+
     def test_rejects_malformed_pointer_conditions_and_non_scalar_values(self):
         cases = [
             ("equals is not an object", "equals", []),
@@ -1102,6 +1119,18 @@ class SelectionTest(unittest.TestCase):
             "json", 2, {},
         )
         self.assertEqual(truth, {"api.matched": "false"})
+
+    def test_numeric_scalar_equality_uses_javascript_number_precision(self):
+        rule = _rule(
+            key="matched", paths=["/v1/run"], body_format="json",
+            equals={"/number": 9007199254740992},
+        )
+        parsed = json.loads('{"number":9007199254740993}')
+
+        self.assertEqual(
+            nas_addon._evaluate_body_match(rule["match"], "json", parsed),
+            "true",
+        )
 
     def test_non_scalar_and_false_conditions_make_indeterminate_win(self):
         rule = _rule(

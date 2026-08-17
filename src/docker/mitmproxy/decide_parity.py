@@ -22,10 +22,17 @@ def main() -> int:
         print("INVALID-DOCUMENT")
         return 1
     lines = []
-    for host, port, method, path, body_kind in cases:
+    for case in cases:
+        host, port, method, path, body_kind = case[:5]
+        body_json = case[5] if len(case) > 5 else None
+        parsed_body = json.loads(body_json) if body_json is not None else None
+        body_size = (
+            len(body_json.encode()) if body_json is not None
+            else 2 if body_kind == "json" else 0
+        )
         body_truth = nas_addon._body_truth_table(
             document, host, port, method, path, body_kind,
-            2 if body_kind == "json" else 0,
+            body_size, parsed_body,
         )
         decision = nas_addon._decide(
             document, host, port, method, path, body_truth

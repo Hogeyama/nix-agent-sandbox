@@ -202,3 +202,80 @@ test.skipIf(!python3)(
     expect(stdout.trimEnd().split("\n")).toEqual(expected);
   },
 );
+
+test.skipIf(!python3)(
+  "overflowing JSON numbers have the same candidate truth on host and addon",
+  async () => {
+    const resolved = resolveAuthzConfig({
+      network: {
+        scopes: {
+          overflow: {
+            targets: ["overflow.example"],
+            rules: {
+              broad: { match: { paths: ["/**"] }, onMatch: "allow" },
+              narrow: {
+                match: {
+                  paths: ["/v1/run"],
+                  body: { format: "json", equals: { "/n": 1 } },
+                },
+                onMatch: "deny",
+                onIndeterminate: "deny",
+              },
+            },
+          },
+        },
+      },
+    });
+    const document = resolved.document;
+    if (document === null) throw new Error("unresolvable overflow config");
+
+    const bodyJson = '{"n":1e400}';
+    const decision = decide(
+      document,
+      { host: "overflow.example", port: 443 },
+      {
+        method: "POST",
+        path: "/v1/run",
+        body: { kind: "json", value: JSON.parse(bodyJson) },
+      },
+    );
+    const expected = [
+      "overflow.example",
+      "443",
+      "POST",
+      "/v1/run",
+      "json",
+      decision.action,
+      decision.reason,
+      decision.ruleId,
+    ].join("|");
+
+    const proc = Bun.spawn(
+      [
+        python3 as string,
+        "decide_parity.py",
+        JSON.stringify(document),
+        JSON.stringify([
+          ["overflow.example", 443, "POST", "/v1/run", "json", bodyJson],
+        ]),
+      ],
+      {
+        cwd: addonDir,
+        env: {
+          ...process.env,
+          PYTHONPATH: path.join(addonDir, "testdata", "mitmproxy_stub"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    expect(stderr).toEqual("");
+    expect(exitCode).toEqual(0);
+    expect(stdout.trim()).toEqual(expected);
+  },
+);

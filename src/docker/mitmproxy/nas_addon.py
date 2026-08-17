@@ -371,6 +371,16 @@ def _is_json_scalar(value: object) -> bool:
     return type(value) is float and math.isfinite(value)
 
 
+def _is_observed_json_scalar(value: object) -> bool:
+    """Recognize values JavaScript JSON.parse exposes as scalar numbers.
+
+    Python's decoder produces infinity when a valid numeric exponent exceeds
+    double precision. JavaScript does the same, so request values allow it even
+    though expected contract values remain finite-only via _is_json_scalar.
+    """
+    return isinstance(value, (str, bool)) or type(value) in (int, float)
+
+
 def _is_valid_value_conditions(equals: object, one_of: object) -> bool:
     return (
         isinstance(equals, dict)
@@ -975,7 +985,13 @@ def _json_pointer_index(literal: str) -> Optional[int]:
         return None
     if len(literal) > 1 and literal[0] == "0":
         return None
-    return int(literal)
+    try:
+        return int(literal)
+    except ValueError:
+        # Python limits decimal-to-int conversion length. Any index beyond
+        # that limit cannot address an in-memory request array, so it is a
+        # missing member rather than an evaluator failure.
+        return None
 
 
 class _SelectorBudget:
@@ -1844,18 +1860,24 @@ def _scalars_equal(left, right) -> bool:
         return type(left) is bool and type(right) is bool and left == right
     if isinstance(left, str) or isinstance(right, str):
         return type(left) is str and type(right) is str and left == right
-    return (
-        type(left) in (int, float)
-        and type(right) in (int, float)
-        and left == right
-    )
+    if type(left) not in (int, float) or type(right) not in (int, float):
+        return False
+    return _javascript_number(left) == _javascript_number(right)
+
+
+def _javascript_number(value):
+    """Convert a Python JSON number to JavaScript's IEEE-754 Number."""
+    try:
+        return float(value)
+    except OverflowError:
+        return math.inf if value > 0 else -math.inf
 
 
 def _evaluate_pointer(root, pointer: str, expected: list) -> str:
     found = _resolve_json_pointer(root, pointer)
     if found is _POINTER_MISSING:
         return "false"
-    if not _is_json_scalar(found):
+    if not _is_observed_json_scalar(found):
         return "indeterminate"
     return (
         "true"
