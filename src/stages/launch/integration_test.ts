@@ -810,6 +810,55 @@ printf 'mode=script stderr=${secret}\\n' >&2
   },
 );
 
+test.skipIf(!canBindMount)(
+  "Integration: captured mask paths survive an agent child with stripped public variables",
+  async () => {
+    const fixtureDir = await makeTempDir("nas-e2e-mask-stripped-");
+    const workDir = await makeTempDir("nas-e2e-mask-stripped-ws-");
+    const containerFixtureDir = "/tmp/nas-mask-stripped-test";
+    const secret = "codex-stripped-env-secret";
+    const masked = "*".repeat(secret.length);
+    let broker: MaskBroker | null = null;
+
+    try {
+      const filterPath = await writeMaskFilterFixture(fixtureDir);
+      broker = await startMaskBroker(filterPath, [secret]);
+      const result = await dockerRun(
+        [
+          "/usr/bin/env",
+          "-u",
+          "NAS_MASK_FILTER",
+          "-u",
+          "NAS_MASK_SOCKET",
+          "/bin/bash",
+          "-c",
+          `printf 'codex=${secret}\\n'`,
+        ],
+        {
+          workDir,
+          envVars: {
+            NAS_MASK_FILTER: `${containerFixtureDir}/nas-mask-filter`,
+            NAS_MASK_SOCKET: broker.socketPath,
+          },
+          extraArgs: [
+            "-v",
+            `${fixtureDir}:${containerFixtureDir}:ro`,
+            "-v",
+            `${broker.socketDir}:${broker.socketDir}:ro`,
+          ],
+        },
+      );
+      expect(result.code).toEqual(0);
+      expect(result.stdout).toContain(`codex=${masked}`);
+      expect(result.stdout).not.toContain(secret);
+    } finally {
+      await broker?.stop();
+      await rm(fixtureDir, { recursive: true, force: true });
+      await rm(workDir, { recursive: true, force: true });
+    }
+  },
+);
+
 // ブローカーへ届かないときに素通しする経路は存在しない。マスクされたか
 // 確信できないバイトは 1 バイトも出さず、121 (出力抑止) で落ちる。
 test.skipIf(!canBindMount)(

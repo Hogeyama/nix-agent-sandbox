@@ -321,31 +321,33 @@ if [ -n "${NAS_MASK_FILTER:-}" ] && [ -n "${NAS_MASK_SOCKET:-}" ]; then
   # 出力は既にマスクされており、最外周から逃げる出力 (ファイルへのリダイレクト、
   # /dev/tty) は内側の層からも同様に逃げる。
   #
-  # ラッパーは本物の /bin/bash の inode を置き換えて設置されるので、環境を落として
-  # 起動された bash (env -i、env_reset 付きの sudo、su -) もここを通る。そのとき
-  # NAS_MASK_FILTER / NAS_MASK_SOCKET は空になり、素朴に exec すると空文字列を
-  # 実行しようとして "exec: : not found" の 127 になる — 運用者にはマスクの話だと
-  # 分からない。ブローカーの居場所が分からない以上マスクは保証できないので、素の
-  # bash へフォールバックはせず (fail-open になる)、何も出力せず予約コード
-  # 121 (= 出力抑止) で落とす。このラッパー自身が /bin/bash の inode を占めている
-  # ため、ここで echo すると呼び出し元 (env -i された sudo/su 経由の無関係な
-  # プログラム) の stderr に nas 由来のテキストが紛れ込んでしまう。終了コード
-  # 121 だけで意味を伝える。
+  # ラッパーは検証済みの非secret broker path を設置時に private な readonly 変数へ
+  # 埋め込むので、環境を落として起動された bash (env -i、env_reset 付きの sudo、
+  # su -) もマスクを維持する。固定された socket が消えた、または接続不能なら
+  # supervisor が何も出力せず予約コード 121 (= 出力抑止) で落とす。通常の呼び出しは
+  # bash.real へフォールバックしないため、マスク不能な出力を通さない。
   BASH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.tmp.$$"
-  cat > "$BASH_WRAPPER_TMP" << 'MASK_WRAPPER'
+  {
+    cat << 'MASK_WRAPPER_HEADER'
 #!/tmp/nas-bash-override/bash.real
+MASK_WRAPPER_HEADER
+    printf 'readonly nas_mask_filter_path=%q\n' "$NAS_MASK_FILTER"
+    printf 'readonly nas_mask_socket_path=%q\n' "$NAS_MASK_SOCKET"
+    cat << 'MASK_WRAPPER_BODY'
 if [ "${1:-}" = "/entrypoint.sh" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
 if [ -n "${NAS_MASK_SUPERVISED:-}" ]; then
   exec -a "$0" /tmp/nas-bash-override/bash.real "$@"
 fi
-if [ -z "${NAS_MASK_FILTER:-}" ] || [ -z "${NAS_MASK_SOCKET:-}" ]; then
+if [ ! -S "$nas_mask_socket_path" ]; then
   exit 121
 fi
-exec "$NAS_MASK_FILTER" --supervise --argv0 "$0" --socket "$NAS_MASK_SOCKET" -- \
+exec "$nas_mask_filter_path" --supervise --argv0 "$0" \
+  --socket "$nas_mask_socket_path" -- \
   /tmp/nas-bash-override/bash.real "$@"
-MASK_WRAPPER
+MASK_WRAPPER_BODY
+  } > "$BASH_WRAPPER_TMP"
   chmod +x "$BASH_WRAPPER_TMP"
 
   BASH_PATH_WRAPPER_TMP="$NAS_BASH_OVERRIDE/bash.next.$$"

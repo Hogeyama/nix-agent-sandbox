@@ -76,7 +76,7 @@ Codex の設定例は `Stop` を `attention` にするところまでで、`stop
 
 対策するなら、hook ではなく Codex プロセス終了を監視する NAS 側 lifecycle から `done` を記録する必要があります。
 
-**4. Codex の shell command では mask-filter 用 env が欠落し、Bash が exit 121 になる**
+**4. Codex の shell command では mask-filter 用 env が欠落し、Bash が exit 121 になる（2026-08-17 修正済み）**
 
 2026-08-17 に、`mask.filter = true` の Codex セッションで shell command を実行すると、
 コマンド本文が一度も動かず、stdout/stderr が空のまま exit 121 になることを確認した。
@@ -129,22 +129,21 @@ command 実行境界が子プロセス用 environment を再構築する際に�
 - `mask.filter = false` にすればBash wrapper自体が設置されないが、出力マスクを無効化する
   一時的な診断・回避にすぎない。
 
-対応候補:
+対応:
 
-1. Bash wrapper の生成時に、filter binary と session socket の検証済みパスをwrapperへ
-   固定し、実行時のenv継承へ依存しないようにする。socket pathはsession固有だが秘密値ではなく、
-   現在もcontainer envとmount tableから観測可能である。
-2. Codex shell command runner が `NAS_MASK_FILTER` / `NAS_MASK_SOCKET` を子へ引き継ぐようにする。
-   ただしNAS外のruntime実装に依存するため、NAS単独で保証しにくい。
+Bash wrapper の生成時に、filter binary と session socket の検証済みパスを `printf '%q'`
+で private な read-only wrapper 変数へ埋め込み、実行時の public environment 継承へ
+依存しないようにした。socket path は session 固有だが秘密値ではなく、現在も container
+environment と mount table から観測可能である。
 
-NAS側で直す場合は1を優先候補とする。`env -i` や外部runnerのenv sanitizationでも
-マスクを維持でき、現在の「変数を失ったらexit 121」という安全側の性質も、固定先socketが
-消失・接続不能ならsupervisorがfail-closedする形で保てる。回帰テストには少なくとも、
-wrapper起動時だけ両変数を与え、その子のenvironmentから両変数を除いたケース、socket
-消失時の無出力exit 121、nested Bashのsupervisor一層制約を含める。
+これにより Codex の child が `NAS_MASK_FILTER` / `NAS_MASK_SOCKET` を欠いても、固定された
+broker を経由して実行され、出力は引き続きマスクされる。`env -i` や外部 runner の
+environment sanitization でも同様である。固定された socket が消失・接続不能なら、
+supervisor は引き続き fail-closed で出力を抑止し exit 121 になる。alternate shell はこの
+修正の対象外であり、Bash wrapper を迂回する `/bin/sh` や保存された `bash.real` を正式な
+回避策として案内してはならない。
 
-状態: **未修正**。セキュリティ上はfail-closedだが、Codex + `mask.filter = true` の標準的な
-shell利用を壊すため、可用性の優先度は高い。
+状態: **修正済み**。死んだ captured broker は出力を抑止して exit 121 になる。
 
 **補足**
 mouse mode が Codex だけ無効ですが、コード上は意図的な trait です。現時点では未実装とは判断できません。

@@ -91,26 +91,48 @@ function realBashPath(): string {
 }
 
 /**
- * entrypoint.sh の MASK_WRAPPER ヒアドキュメントからラッパー本体を取り出して
- * 実行可能ファイルとして書き出す。
+ * entrypoint.sh の wrapper header/body ヒアドキュメントからラッパー本体を取り出し、
+ * installation 時に埋め込まれる broker path を再現して実行可能ファイルとして書き出す。
  *
  * 入れ子抑止の判定はラッパー側にあるので、bash.real を直接叩くテストでは
  * ラッパーごと素通りして何も検証できない。出荷されるスクリプトそのものを
  * 使うために、コピーではなく entrypoint から抽出する。
  */
-function writeWrapperScript(): string {
+function quoteForBash(value: string): string {
+  const proc = Bun.spawnSync(
+    [realBashPath(), "-c", `printf '%q' "$1"`, "bash", value],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  );
+  if (proc.exitCode !== 0) {
+    throw new Error(
+      `failed to quote Bash word: ${new TextDecoder().decode(proc.stderr)}`,
+    );
+  }
+  return new TextDecoder().decode(proc.stdout);
+}
+
+function writeWrapperScript(filterPath: string, socketPath: string): string {
   const entry = fs.readFileSync(
     path.join(import.meta.dir, "../../docker/embed/entrypoint.sh"),
     "utf8",
   );
-  const m = entry.match(/<< 'MASK_WRAPPER'\n([\s\S]*?)\nMASK_WRAPPER\n/);
-  if (!m) throw new Error("MASK_WRAPPER heredoc not found");
-  const body = m[1].replaceAll(
-    "/tmp/nas-bash-override/bash.real",
-    realBashPath(),
+  const header = entry.match(
+    /<< 'MASK_WRAPPER_HEADER'\n([\s\S]*?)\nMASK_WRAPPER_HEADER\n/,
   );
+  const body = entry.match(
+    /<< 'MASK_WRAPPER_BODY'\n([\s\S]*?)\nMASK_WRAPPER_BODY\n/,
+  );
+  if (!header || !body) throw new Error("MASK_WRAPPER heredocs not found");
+  const script = [
+    header[1],
+    `readonly nas_mask_filter_path=${quoteForBash(filterPath)}`,
+    `readonly nas_mask_socket_path=${quoteForBash(socketPath)}`,
+    body[1],
+  ]
+    .join("\n")
+    .replaceAll("/tmp/nas-bash-override/bash.real", realBashPath());
   const p = path.join(tmpDir, `wrapper-${secretsFileSeq++}.sh`);
-  fs.writeFileSync(p, `${body}\n`, { mode: 0o755 });
+  fs.writeFileSync(p, `${script}\n`, { mode: 0o755 });
   return p;
 }
 
@@ -902,7 +924,7 @@ describe("nas-mask-filter --supervise", () => {
       const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
       try {
         expect(await waitForSocket(sockPath)).toBe(true);
-        const wrapper = writeWrapperScript();
+        const wrapper = writeWrapperScript(binaryPath!, sockPath);
         const proc = Bun.spawn(
           [
             wrapper,
@@ -966,7 +988,7 @@ echo "layers=$n"
       const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
       try {
         expect(await waitForSocket(sockPath)).toBe(true);
-        const wrapper = writeWrapperScript();
+        const wrapper = writeWrapperScript(binaryPath!, sockPath);
         // 数えるスクリプトは**ラッパー経由で**起動する。bash.real を直接叩くと
         // ガードごと素通りして何も検証しないことになる。
         const script = path.join(tmpDir, `layers-${secretsFileSeq++}.sh`);
@@ -1070,34 +1092,92 @@ echo "layers=$n"
     30000,
   );
 
-  // ラッパーは本物の /bin/bash の inode を置き換えて設置されるので、環境を
-  // 落として起動された bash (env -i、env_reset 付きの sudo、su -) もここを通る。
-  // ブローカーの居場所が分からない以上マスクは保証できないので素の bash へ
-  // フォールバックしてはならないが、そのまま exec すると空文字列を実行しようと
-  // して "exec: : not found" の 127 になり、運用者にはマスクの話だと分からない。
-  // このラッパー自身が /bin/bash の inode を占めているため、ここで診断を出すと
-  // 呼び出し元 (無関係なプログラム) の stderr に nas 由来のテキストが紛れ込む。
-  // fail-closed のまま何も出力せず、予約コード 121 だけで原因が伝わることを見る。
-  //
-  // `skipIf(!binaryPath)` を付けない。検証対象はラッパースクリプト側のガード
-  // だけで、nas-mask-filter のバイナリを起動しないため (env を落としたラッパーは
-  // バイナリに辿り着く前に 121 で降りる)。
-  test("fails closed with no output when the broker env is stripped", async () => {
-    const wrapper = writeWrapperScript();
-    const proc = Bun.spawn([wrapper, "-c", "echo hi"], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {}, // env -i 相当
-    });
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    expect(await proc.exited).toBe(121);
-    expect(stdout).toBe("");
-    expect(stderr).toBe("");
-  }, 15000);
+  test.skipIf(!binaryPath)(
+    "uses captured broker paths when the public environment is stripped",
+    async () => {
+      const sockPath = shortSockPath("stripped");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const wrapper = writeWrapperScript(binaryPath!, sockPath);
+        const proc = Bun.spawn(
+          [
+            wrapper,
+            "-c",
+            "printf 'stdout=hunter2\\n'; printf 'stderr=hunter2\\n' >&2",
+          ],
+          { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: {} },
+        );
+        const [stdout, stderr] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        expect(await proc.exited).toBe(0);
+        expect(stdout).toBe("stdout=*******\n");
+        expect(stderr).toBe("stderr=*******\n");
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    15000,
+  );
+
+  test.skipIf(!binaryPath)(
+    "ignores hostile public broker path overrides",
+    async () => {
+      const sockPath = shortSockPath("overridden");
+      const server = startServe(writeSecretsFile(["hunter2"]), sockPath);
+      try {
+        expect(await waitForSocket(sockPath)).toBe(true);
+        const wrapper = writeWrapperScript(binaryPath!, sockPath);
+        const proc = Bun.spawn([wrapper, "-c", "printf 'stdout=hunter2\\n'"], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: {
+            NAS_MASK_FILTER: "/bin/false",
+            NAS_MASK_SOCKET: "/tmp/nas-mask-filter-bogus.sock",
+          },
+        });
+        const stdout = await new Response(proc.stdout).text();
+        expect(await proc.exited).toBe(0);
+        expect(stdout).toBe("stdout=*******\n");
+      } finally {
+        server.kill();
+        await server.exited;
+        fs.rmSync(sockPath, { force: true });
+      }
+    },
+    15000,
+  );
+
+  test.skipIf(!binaryPath)(
+    "fails closed when the captured broker is unavailable under a stripped environment",
+    async () => {
+      const sockPath = shortSockPath("stripped-dead");
+      const markerPath = path.join(tmpDir, `ran-${secretsFileSeq++}`);
+      const wrapper = writeWrapperScript(binaryPath!, sockPath);
+      const proc = Bun.spawn(
+        [
+          wrapper,
+          "-c",
+          `printf 'command-stdout\\n'; printf 'command-stderr\\n' >&2; touch "${markerPath}"`,
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: {} },
+      );
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      expect(await proc.exited).toBe(121);
+      expect(stdout).toBe("");
+      expect(stderr).toBe("");
+      expect(fs.existsSync(markerPath)).toBe(false);
+    },
+    15000,
+  );
 
   // socket fd が子へ漏れると単なる情報漏れでは済まず、注入オラクルになる:
   // ストリーム途中に 1 バイト差し込むとサーバ側のマッチが崩れて原文が返るため、
