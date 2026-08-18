@@ -137,8 +137,8 @@ connection before a message is relayed.
 
 State is removed at `websocket_end`, client disconnect, failed upgrade, or
 any fail-closed termination. A client message also rechecks that its session
-registry entry still exists, so removing the session closes an otherwise
-long-lived socket on its next message.
+registry entry still exists, so removing the session prevents every later
+client message from reaching the upstream.
 
 ## Message Processing
 
@@ -150,14 +150,14 @@ reassembling WebSocket fragments and processing negotiated per-message
 compression. The addon applies the same derived byte patterns used for HTTP
 request masking:
 
-1. If any effective forbid pattern occurs, drop the message and close the
-   connection.
+1. If any effective forbid pattern occurs, drop the message and remove the
+   session state so later client messages are also dropped.
 2. Replace effective mask patterns with the fixed mask marker.
 3. Forward the rewritten message.
 
 If the message exceeds the selected rule or fallback `maxBodyBytes`, the
 session is missing, state is invalid, or processing raises, the addon drops
-the message and closes the connection.
+the message and removes its session state.
 
 The handshake keeps the existing authorization and request-policy audit
 behavior. WebSocket hooks do not create one structured audit row per message:
@@ -242,8 +242,8 @@ An ordinary authorized HTTP request is unchanged by this feature.
   messages without per-message review.
 - A plaintext secret in a client message reaches the fake echo server only as
   the mask marker.
-- Forbid, oversize, and expired-session paths close before their offending
-  message reaches the fake upstream.
+- Forbid, oversize, and expired-session paths drop their offending message
+  and keep later client messages from reaching the fake upstream.
 - Arbitrary bytes after an authenticated `CONNECT` never reach a raw TCP fake
   upstream.
 - The production command test pins `rawtcp=false`.

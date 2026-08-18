@@ -43,6 +43,11 @@ test.skipIf(!hasPkl)(
     expect(resolved.diagnostics).toEqual([]);
     expect(resolved.document).not.toBeNull();
 
+    const openai = resolved.document!.scopes.find(
+      (scope) => scope.name === "openai",
+    );
+    expect(openai?.webSocket).toBe("allow");
+
     const decideStream = (value: JsonValue) =>
       decide(
         resolved.document!,
@@ -56,23 +61,39 @@ test.skipIf(!hasPkl)(
 
     expect(decideStream({ stream: false })).toMatchObject({
       action: "allow",
-      ruleId: "openai-responses.non-streaming",
+      ruleId: "openai.non-streaming",
       reason: "rule",
     });
     expect(decideStream({ stream: true })).toMatchObject({
       action: "review",
-      ruleId: "openai-responses.streaming",
+      ruleId: "openai.streaming",
       reason: "rule",
     });
     expect(decideStream({})).toMatchObject({
       action: "review",
-      ruleId: "openai-responses.$fallback",
+      ruleId: "openai.$fallback",
       reason: "scope-fallback",
     });
     expect(decideStream({ stream: {} })).toMatchObject({
       action: "deny",
-      ruleId: "openai-responses.streaming",
+      ruleId: "openai.streaming",
       reason: "indeterminate",
+    });
+
+    expect(
+      decide(
+        resolved.document!,
+        { host: "chatgpt.openai.com", port: 443 },
+        {
+          method: "GET",
+          path: "/ws-handshake-probe",
+          transport: "websocket",
+        },
+      ),
+    ).toMatchObject({
+      action: "review",
+      ruleId: "openai.$fallback",
+      reason: "scope-fallback",
     });
   },
 );

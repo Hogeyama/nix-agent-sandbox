@@ -193,3 +193,36 @@ to request operator approval. There is no `pendingDefaultScope`: approval
 identity and reuse are derived from the matched rule and, for expectation
 violations, the specific violation. Timeouts remain fail-closed and are
 configured with `network.pendingTimeoutSeconds`.
+
+## WebSocket and Raw TCP
+
+WebSocket is denied by default. Opt in only on a scope whose targets need it:
+
+```pkl
+network {
+  scopes {
+    ["chatgpt"] {
+      targets { "chatgpt.com:443" }
+      webSocket = "allow"
+      fallback = "review"
+    }
+  }
+}
+```
+
+The opening HTTP Upgrade request goes through the scope's ordinary rules and
+fallback exactly once. After approval, individual WebSocket messages do not
+create further review requests. Client-to-server messages still receive the
+configured byte-pattern mask and forbid checks, but those checks are
+supplementary: they cannot establish a JSON schema or prove that a secret is
+absent from an application-specific encoding. Use ordinary HTTP with JSON
+`expect` conditions when a structural guarantee is required.
+
+A forbidden, over-budget, stale-session, or otherwise unprocessable client
+message is dropped and the addon's private authorization state is retired, so
+later messages are not forwarded. Physical socket closure is best-effort and
+is not the security boundary.
+
+Raw TCP is not configurable per scope and is always denied. Non-HTTP tunnel
+bytes are not forwarded upstream; immediate client socket closure is not
+guaranteed.

@@ -2165,6 +2165,9 @@ class NasAddon:
             session_id
         )
 
+    def tcp_start(self, flow) -> None:
+        flow.kill()
+
     def request(self, flow: http.HTTPFlow) -> None:
         # Try request header first (HTTP forward proxy),
         # fall back to stored CONNECT creds (HTTPS after MitM).

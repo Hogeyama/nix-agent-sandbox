@@ -12,6 +12,10 @@ import net from "node:net";
 import path from "node:path";
 import { queryAuditLogs } from "../../audit/store.ts";
 import type { ResolvedDocument } from "../../network/authz/resolve.ts";
+import {
+  documentWithScopes,
+  resolvedDocument,
+} from "../../network/authz/testing.ts";
 import { SessionBroker, sendBrokerRequest } from "../../network/broker.ts";
 import { hashToken } from "../../network/protocol.ts";
 import {
@@ -258,6 +262,417 @@ function rawEchoServerScript(port: number): string {
   ].join("\n");
 }
 
+function webSocketEchoServerScript(port: number): string {
+  return [
+    "import base64, hashlib, socket",
+    "def recv_exact(conn, size):",
+    '    data = b""',
+    "    while len(data) < size:",
+    "        chunk = conn.recv(size - len(data))",
+    "        if not chunk:",
+    "            return None",
+    "        data += chunk",
+    "    return data",
+    "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+    "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+    `srv.bind(("0.0.0.0", ${port}))`,
+    "srv.listen(8)",
+    "while True:",
+    "    conn, _ = srv.accept()",
+    `    conn.settimeout(${WEBSOCKET_TARGET_IDLE_TIMEOUT_SECONDS})`,
+    '    request = b""',
+    "    try:",
+    '        while b"\\r\\n\\r\\n" not in request and len(request) <= 16384:',
+    "            chunk = conn.recv(4096)",
+    "            if not chunk:",
+    "                break",
+    "            request += chunk",
+    '        if b"\\r\\n\\r\\n" not in request:',
+    "            conn.close()",
+    "            continue",
+    '        lines = request.split(b"\\r\\n\\r\\n", 1)[0].decode("latin1").split("\\r\\n")',
+    '        headers = {line.split(":", 1)[0].strip().lower(): line.split(":", 1)[1].strip() for line in lines[1:] if ":" in line}',
+    '        key = headers.get("sec-websocket-key")',
+    '        if headers.get("upgrade", "").lower() != "websocket" or not key:',
+    "            conn.close()",
+    "            continue",
+    '        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()',
+    '        conn.sendall(("HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: " + accept + "\\r\\n\\r\\n").encode())',
+    '        print("HANDSHAKE", flush=True)',
+    "        while True:",
+    "            head = recv_exact(conn, 2)",
+    "            if head is None:",
+    "                break",
+    "            if head[0] != 0x81 or not (head[1] & 0x80) or (head[1] & 0x7f) > 125:",
+    "                break",
+    "            length = head[1] & 0x7f",
+    "            mask = recv_exact(conn, 4)",
+    "            payload = recv_exact(conn, length)",
+    "            if mask is None or payload is None:",
+    "                break",
+    "            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))",
+    '            print("MESSAGE " + payload.decode("utf-8", "replace"), flush=True)',
+    "            conn.sendall(bytes((0x81, len(payload))) + payload)",
+    "    except (OSError, ValueError):",
+    "        pass",
+    "    finally:",
+    "        conn.close()",
+  ].join("\n");
+}
+
+function rawByteServerScript(port: number): string {
+  return [
+    "import socket",
+    "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+    "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+    `srv.bind(("0.0.0.0", ${port}))`,
+    "srv.listen(8)",
+    "while True:",
+    "    conn, _ = srv.accept()",
+    "    conn.settimeout(5)",
+    "    try:",
+    "        data = conn.recv(65536)",
+    "        if data:",
+    '            print(data.decode("utf-8", "replace"), flush=True)',
+    '            conn.sendall(b"RAW-ECHO:" + data)',
+    "    except OSError:",
+    "        pass",
+    "    finally:",
+    "        conn.close()",
+  ].join("\n");
+}
+
+class BoundedSocketReader {
+  private buffer = Buffer.alloc(0);
+  private ended = false;
+  private readonly waiters = new Set<() => void>();
+
+  private readonly onData = (chunk: Buffer): void => {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    this.wake();
+  };
+  private readonly onEnd = (): void => {
+    this.ended = true;
+    this.wake();
+  };
+
+  constructor(private readonly socket: net.Socket) {
+    socket.on("data", this.onData);
+    socket.on("end", this.onEnd);
+    socket.on("close", this.onEnd);
+    socket.on("error", this.onEnd);
+  }
+
+  async readUntil(delimiter: Buffer, maxBytes: number): Promise<Buffer> {
+    const deadline = Date.now() + 5_000;
+    while (true) {
+      const index = this.buffer.indexOf(delimiter);
+      if (index !== -1) {
+        const end = index + delimiter.length;
+        const result = this.buffer.subarray(0, end);
+        this.buffer = this.buffer.subarray(end);
+        return result;
+      }
+      if (this.buffer.length > maxBytes) {
+        throw new Error("socket response exceeded test limit");
+      }
+      await this.waitForData(deadline);
+    }
+  }
+
+  async readExact(length: number): Promise<Buffer> {
+    const deadline = Date.now() + 5_000;
+    while (this.buffer.length < length) {
+      await this.waitForData(deadline);
+    }
+    const result = this.buffer.subarray(0, length);
+    this.buffer = this.buffer.subarray(length);
+    return result;
+  }
+
+  dispose(): void {
+    this.socket.off("data", this.onData);
+    this.socket.off("end", this.onEnd);
+    this.socket.off("close", this.onEnd);
+    this.socket.off("error", this.onEnd);
+  }
+
+  private wake(): void {
+    for (const waiter of this.waiters) waiter();
+    this.waiters.clear();
+  }
+
+  private async waitForData(deadline: number): Promise<void> {
+    if (this.ended) throw new Error("socket closed before read completed");
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("timed out waiting for socket data");
+    await new Promise<void>((resolve, reject) => {
+      const wake = (): void => {
+        clearTimeout(timer);
+        this.waiters.delete(wake);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.waiters.delete(wake);
+        reject(new Error("timed out waiting for socket data"));
+      }, remaining);
+      this.waiters.add(wake);
+    });
+  }
+}
+
+function encodeClientTextFrame(text: string): Buffer {
+  const payload = Buffer.from(text);
+  if (payload.length > 125) throw new Error("test frame exceeds 125 bytes");
+  const mask = crypto.getRandomValues(new Uint8Array(4));
+  const frame = Buffer.alloc(2 + 4 + payload.length);
+  frame[0] = 0x81;
+  frame[1] = 0x80 | payload.length;
+  Buffer.from(mask).copy(frame, 2);
+  for (let i = 0; i < payload.length; i++) {
+    frame[6 + i] = payload[i]! ^ mask[i % 4]!;
+  }
+  return frame;
+}
+
+interface ProxyWebSocket {
+  socket: net.Socket;
+  responseHeaders: string;
+  sendText(text: string): void;
+  readText(): Promise<string>;
+  close(): void;
+}
+
+async function openWebSocketThroughProxy(
+  proxyPort: number,
+  targetUrl: string,
+  credentials: string,
+): Promise<ProxyWebSocket> {
+  const target = new URL(targetUrl);
+  const socket = net.createConnection({ host: "127.0.0.1", port: proxyPort });
+  const reader = new BoundedSocketReader(socket);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("timed out connecting to proxy"));
+    }, 5_000);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      reject(new Error("failed to connect to proxy"));
+    });
+  });
+  socket.write(
+    [
+      `GET ${targetUrl} HTTP/1.1`,
+      `Host: ${target.host}`,
+      `Proxy-Authorization: Basic ${btoa(credentials)}`,
+      "Connection: Upgrade",
+      "Upgrade: websocket",
+      "Sec-WebSocket-Version: 13",
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+      "",
+      "",
+    ].join("\r\n"),
+  );
+  const responseHeaders = (
+    await reader.readUntil(Buffer.from("\r\n\r\n"), 32_768)
+  ).toString("latin1");
+  const upgraded = /^HTTP\/1\.[01] 101\b/.test(responseHeaders);
+  if (!upgraded) socket.destroy();
+
+  return {
+    socket,
+    responseHeaders,
+    sendText(text: string): void {
+      if (!upgraded || socket.destroyed) {
+        throw new Error("WebSocket is not open");
+      }
+      socket.write(encodeClientTextFrame(text));
+    },
+    async readText(): Promise<string> {
+      if (!upgraded) throw new Error("WebSocket upgrade was rejected");
+      const head = await reader.readExact(2);
+      if (head[0] !== 0x81) {
+        throw new Error("expected a complete text WebSocket frame");
+      }
+      if ((head[1]! & 0x80) !== 0) {
+        throw new Error("server WebSocket frame must be unmasked");
+      }
+      const length = head[1]! & 0x7f;
+      if (length > 125) {
+        throw new Error("server WebSocket frame used an extended length");
+      }
+      return (await reader.readExact(length)).toString("utf8");
+    },
+    close(): void {
+      reader.dispose();
+      socket.destroy();
+    },
+  };
+}
+
+async function expectNoWebSocketEcho(websocket: ProxyWebSocket): Promise<void> {
+  await expect(websocket.readText()).rejects.toThrow(
+    "timed out waiting for socket data",
+  );
+}
+
+async function openConnectTunnel(
+  proxyPort: number,
+  target: string,
+  credentials: string,
+): Promise<net.Socket> {
+  const socket = net.createConnection({ host: "127.0.0.1", port: proxyPort });
+  const reader = new BoundedSocketReader(socket);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("timed out connecting to proxy"));
+    }, 5_000);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      reject(new Error("failed to connect to proxy"));
+    });
+  });
+  socket.write(
+    [
+      `CONNECT ${target} HTTP/1.1`,
+      `Host: ${target}`,
+      `Proxy-Authorization: Basic ${btoa(credentials)}`,
+      "",
+      "",
+    ].join("\r\n"),
+  );
+  const responseHeaders = (
+    await reader.readUntil(Buffer.from("\r\n\r\n"), 32_768)
+  ).toString("latin1");
+  reader.dispose();
+  socket.on("error", () => {});
+  if (!/^HTTP\/1\.[01] 200\b/.test(responseHeaders)) {
+    socket.destroy();
+    throw new Error("CONNECT tunnel was rejected");
+  }
+  return socket;
+}
+
+interface ProtocolResources {
+  networkName: string;
+  proxyName: string;
+  targetName: string;
+  networkCreated: boolean;
+}
+
+function protocolResources(prefix: string): ProtocolResources {
+  const suffix = crypto.randomUUID().slice(0, 8);
+  return {
+    networkName: `${prefix}-net-${suffix}`,
+    proxyName: `${prefix}-proxy-${suffix}`,
+    targetName: `${prefix}-target-${suffix}`,
+    networkCreated: false,
+  };
+}
+
+async function startProtocolContainers(
+  resources: ProtocolResources,
+  fixture: AddonFixture,
+  targetHost: string,
+  targetPort: number,
+  targetScript: string,
+): Promise<number> {
+  await createBenchmarkNetworkWithRetry(resources.networkName);
+  resources.networkCreated = true;
+  await dockerRunDetached({
+    name: resources.targetName,
+    image: "mitmproxy/mitmproxy:11",
+    args: [],
+    envVars: {},
+    network: resources.networkName,
+    entrypoint: "python3",
+    command: ["-c", targetScript],
+  });
+  await waitForContainerTcp(resources.targetName, targetPort);
+  const targetIp = await dockerContainerIpOnNetwork(
+    resources.targetName,
+    resources.networkName,
+  );
+  if (!targetIp) throw new Error("could not determine fake target IP");
+
+  await dockerRunDetached({
+    name: resources.proxyName,
+    image: "mitmproxy/mitmproxy:11",
+    args: [`--add-host=${targetHost}:${targetIp}`],
+    envVars: {},
+    network: resources.networkName,
+    mounts: [
+      { source: fixture.runtimeDir, target: "/nas-network", mode: "rw" },
+    ],
+    publishedPorts: ["127.0.0.1::8080"],
+    command: [
+      "mitmdump",
+      "--mode",
+      "regular@8080",
+      "--set",
+      "connection_strategy=lazy",
+      "--set",
+      "rawtcp=false",
+      "--set",
+      "websocket=true",
+      "--set",
+      "confdir=/nas-network/mitmproxy-ca",
+      "--ssl-insecure",
+      "-s",
+      "/nas-network/nas_addon.py",
+    ],
+  });
+  const proxyPort = await publishedPort(resources.proxyName);
+  await waitForContainerTcp(resources.proxyName, 8080);
+  await waitForTcp(proxyPort);
+  return proxyPort;
+}
+
+async function cleanupProtocolResources(
+  resources: ProtocolResources,
+): Promise<void> {
+  await dockerStop(resources.proxyName, { timeoutSeconds: 0 }).catch(() => {});
+  await dockerRm(resources.proxyName).catch(() => {});
+  await dockerStop(resources.targetName, { timeoutSeconds: 0 }).catch(() => {});
+  await dockerRm(resources.targetName).catch(() => {});
+  if (resources.networkCreated) {
+    await dockerNetworkRemove(resources.networkName).catch(() => {});
+  }
+}
+
+async function waitForPendingItem(fixture: AddonFixture) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const pending = (await fixture.broker.listPending())[0];
+    if (pending) return pending;
+    await Bun.sleep(25);
+  }
+  throw new Error("timed out waiting for pending WebSocket handshake");
+}
+
+async function waitForContainerLog(
+  containerName: string,
+  marker: string,
+): Promise<string> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const logs = await dockerLogs(containerName);
+    if (logs.includes(marker)) return logs;
+    await Bun.sleep(25);
+  }
+  throw new Error(`timed out waiting for container log marker: ${marker}`);
+}
+
 /**
  * addon が読む解決済みドキュメントと、broker が権威として使うルールは
  * **同一の出荷物**でなければならない。片方だけを手書きすると、両者が
@@ -271,7 +686,54 @@ const RESOLVED_DOCUMENT = JSON.parse(
   ),
 ) as ResolvedDocument;
 
-interface AnthropicFixture {
+const DENIED_WEBSOCKET_DOCUMENT = documentWithScopes({
+  chatgpt: {
+    targets: ["chatgpt.test:8091"],
+    rules: {
+      ws: { match: { methods: ["GET"], paths: ["/ws"] }, onMatch: "allow" },
+    },
+  },
+});
+
+const REVIEWED_WEBSOCKET_DOCUMENT = documentWithScopes({
+  chatgpt: {
+    targets: ["chatgpt.test:8091"],
+    webSocket: "allow",
+    fallback: "deny",
+    rules: {
+      ws: {
+        match: { methods: ["GET"], paths: ["/ws"] },
+        onMatch: "review",
+      },
+    },
+  },
+});
+
+const PROTECTED_WEBSOCKET_DOCUMENT = resolvedDocument({
+  secrets: {
+    masking: { from: "env:MASKING" },
+    blocking: { from: "env:BLOCKING" },
+  },
+  mask: { proxy: true, apply: ["masking"] },
+  network: {
+    scopes: {
+      chatgpt: {
+        targets: ["chatgpt.test:8091"],
+        webSocket: "allow",
+        secrets: { masking: "mask", blocking: "forbid" },
+        rules: {
+          ws: {
+            match: { methods: ["GET"], paths: ["/ws"] },
+            onMatch: "allow",
+            limits: { maxBodyBytes: 64 },
+          },
+        },
+      },
+    },
+  },
+});
+
+interface AddonFixture {
   runtimeDir: string;
   auditDir: string;
   paths: Awaited<ReturnType<typeof resolveNetworkRuntimePaths>>;
@@ -280,7 +742,7 @@ interface AnthropicFixture {
   broker: SessionBroker;
 }
 
-interface AnthropicFixtureSetupOptions {
+interface AddonFixtureSetupOptions {
   afterBrokerStarted?: (partial: {
     runtimeDir: string;
     broker: SessionBroker;
@@ -350,10 +812,14 @@ async function expectSinglePolicyOutcome(
  * セッションレジストリ + fake broker (allow + maskValues:["SECRET123"])
  * を用意する共通セットアップ。
  */
-async function setupAnthropicFixture(
+async function setupAddonFixture(
   dirPrefix: string,
-  options: AnthropicFixtureSetupOptions = {},
-): Promise<AnthropicFixture> {
+  document: ResolvedDocument = RESOLVED_DOCUMENT,
+  secretValues: Readonly<Record<string, readonly string[]>> = {
+    workspace: ["SECRET123"],
+  },
+  options: AddonFixtureSetupOptions = {},
+): Promise<AddonFixture> {
   const base = SHARED_TMP ?? "/tmp";
   const runtimeDir = await mkdtemp(path.join(base, dirPrefix));
   const auditDir = await mkdtemp(path.join(base, `${dirPrefix}audit-`));
@@ -377,7 +843,7 @@ async function setupAnthropicFixture(
     );
     await writeFile(
       `${paths.authzDir}/${sessionId}.json`,
-      JSON.stringify(RESOLVED_DOCUMENT),
+      JSON.stringify(document),
     );
     await writeSessionRegistry(paths, {
       version: 1,
@@ -394,10 +860,10 @@ async function setupAnthropicFixture(
     broker = new SessionBroker({
       paths,
       sessionId,
-      document: RESOLVED_DOCUMENT,
+      document,
       pendingTimeoutSeconds: 30,
       pendingNotify: "off",
-      secretValues: { workspace: ["SECRET123"] },
+      secretValues,
       auditDir,
     });
     await broker.start(socketPath);
@@ -406,8 +872,8 @@ async function setupAnthropicFixture(
 
     return { runtimeDir, auditDir, paths, sessionId, token, broker };
   } catch (error) {
+    await broker?.close().catch(() => {});
     await Promise.allSettled([
-      broker ? broker.close() : Promise.resolve(),
       rm(runtimeDir, { recursive: true, force: true }),
       rm(auditDir, { recursive: true, force: true }),
     ]);
@@ -416,7 +882,7 @@ async function setupAnthropicFixture(
 }
 
 /** テスト終了時のフィクスチャ解体。broker を閉じ、一時ディレクトリを消す。 */
-async function teardownFixture(fixture?: AnthropicFixture): Promise<void> {
+async function teardownFixture(fixture?: AddonFixture): Promise<void> {
   if (!fixture) return;
   await fixture.broker.close().catch(() => {});
   await rm(fixture.runtimeDir, { recursive: true, force: true }).catch(
@@ -425,19 +891,24 @@ async function teardownFixture(fixture?: AnthropicFixture): Promise<void> {
   await rm(fixture.auditDir, { recursive: true, force: true }).catch(() => {});
 }
 
-test("setupAnthropicFixture cleans partial state when setup fails after broker start", async () => {
+test("setupAddonFixture cleans partial state when setup fails after broker start", async () => {
   const setupError = new Error("injected post-broker setup failure");
   let partial: { runtimeDir: string; broker: SessionBroker } | undefined;
   let thrown: unknown;
 
   try {
     try {
-      await setupAnthropicFixture("nas-addon-partial-setup-", {
-        afterBrokerStarted: async (state) => {
-          partial = state;
-          throw setupError;
+      await setupAddonFixture(
+        "nas-addon-partial-setup-",
+        RESOLVED_DOCUMENT,
+        { workspace: ["SECRET123"] },
+        {
+          afterBrokerStarted: async (state) => {
+            partial = state;
+            throw setupError;
+          },
         },
-      });
+      );
     } catch (error) {
       thrown = error;
     }
@@ -453,8 +924,8 @@ test("setupAnthropicFixture cleans partial state when setup fails after broker s
   }
 });
 
-test("setupAnthropicFixture installs the shipped resolved document", async () => {
-  const fixture = await setupAnthropicFixture("nas-addon-review-rule-");
+test("setupAddonFixture installs the shipped resolved document", async () => {
+  const fixture = await setupAddonFixture("nas-addon-review-rule-");
   try {
     const document = await Bun.file(
       `${fixture.paths.authzDir}/${fixture.sessionId}.json`,
@@ -468,6 +939,345 @@ test("setupAnthropicFixture installs the shipped resolved document", async () =>
     await teardownFixture(fixture);
   }
 });
+
+const WEBSOCKET_TARGET_PORT = 8091;
+const RAW_TARGET_PORT = 8092;
+const WEBSOCKET_TARGET_IDLE_TIMEOUT_SECONDS = 15;
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "websocket: default-denied scope returns 403 before upstream handshake",
+  async () => {
+    const resources = protocolResources("nas-ws-denied");
+    let fixture: AddonFixture | undefined;
+    let websocket: ProxyWebSocket | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-ws-denied-",
+        DENIED_WEBSOCKET_DOCUMENT,
+        {},
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "chatgpt.test",
+        WEBSOCKET_TARGET_PORT,
+        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
+      );
+
+      websocket = await openWebSocketThroughProxy(
+        proxyPort,
+        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+
+      expect(websocket.responseHeaders).toContain(" 403 ");
+      expect(await fixture.broker.listPending()).toEqual([]);
+      const upstreamLogs = await dockerLogs(resources.targetName);
+      expect(upstreamLogs.includes("HANDSHAKE")).toBe(false);
+    } finally {
+      websocket?.close();
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "websocket: one handshake approval releases multiple messages without another pending item",
+  async () => {
+    const resources = protocolResources("nas-ws-review");
+    let fixture: AddonFixture | undefined;
+    let websocket: ProxyWebSocket | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-ws-review-",
+        REVIEWED_WEBSOCKET_DOCUMENT,
+        {},
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "chatgpt.test",
+        WEBSOCKET_TARGET_PORT,
+        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
+      );
+
+      const websocketPromise = openWebSocketThroughProxy(
+        proxyPort,
+        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+      const pending = await waitForPendingItem(fixture);
+      expect(await fixture.broker.listPending()).toHaveLength(1);
+      await sendBrokerRequest(
+        brokerSocketPath(fixture.paths, fixture.sessionId),
+        { type: "approve", requestId: pending.requestId, scope: "once" },
+      );
+      websocket = await websocketPromise;
+
+      expect(websocket.responseHeaders).toContain(" 101 ");
+      websocket.sendText("first-message");
+      expect(await websocket.readText()).toBe("first-message");
+      websocket.sendText("second-message");
+      expect(await websocket.readText()).toBe("second-message");
+      expect(await fixture.broker.listPending()).toEqual([]);
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "MESSAGE second-message",
+      );
+      expect(upstreamLogs.match(/^HANDSHAKE$/gm)).toHaveLength(1);
+      expect(upstreamLogs.match(/^MESSAGE /gm)).toHaveLength(2);
+    } finally {
+      websocket?.close();
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "websocket: masks an authorized client message before upstream echo",
+  async () => {
+    const resources = protocolResources("nas-ws-mask");
+    const maskingSecret = "MASKME123";
+    let fixture: AddonFixture | undefined;
+    let websocket: ProxyWebSocket | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-ws-mask-",
+        PROTECTED_WEBSOCKET_DOCUMENT,
+        { masking: [maskingSecret], blocking: ["BLOCKME123"] },
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "chatgpt.test",
+        WEBSOCKET_TARGET_PORT,
+        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
+      );
+      websocket = await openWebSocketThroughProxy(
+        proxyPort,
+        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+
+      expect(websocket.responseHeaders).toContain(" 101 ");
+      websocket.sendText(`hello ${maskingSecret}`);
+      const echoed = await websocket.readText();
+      expect(echoed === "hello ****").toBe(true);
+      expect(echoed.includes(maskingSecret)).toBe(false);
+      const upstreamLogs = await waitForContainerLog(
+        resources.targetName,
+        "MESSAGE hello ****",
+      );
+      const proxyLogs = await dockerLogs(resources.proxyName);
+      expect(upstreamLogs.includes(maskingSecret)).toBe(false);
+      expect(addonLogLines(proxyLogs).includes(maskingSecret)).toBe(false);
+    } finally {
+      websocket?.close();
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "websocket: forbidden secret is never delivered and leaves the session fail-closed",
+  async () => {
+    const resources = protocolResources("nas-ws-forbid");
+    const blockingSecret = "BLOCKME123";
+    let fixture: AddonFixture | undefined;
+    let websocket: ProxyWebSocket | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-ws-forbid-",
+        PROTECTED_WEBSOCKET_DOCUMENT,
+        { masking: ["MASKME123"], blocking: [blockingSecret] },
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "chatgpt.test",
+        WEBSOCKET_TARGET_PORT,
+        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
+      );
+      websocket = await openWebSocketThroughProxy(
+        proxyPort,
+        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+
+      expect(websocket.responseHeaders).toContain(" 101 ");
+      await waitForContainerLog(resources.targetName, "HANDSHAKE");
+      websocket.sendText(blockingSecret);
+      await waitForContainerLog(resources.proxyName, "reason=forbidden-secret");
+      await expectNoWebSocketEcho(websocket);
+      let upstreamLogs = await dockerLogs(resources.targetName);
+      const proxyLogs = await dockerLogs(resources.proxyName);
+      expect(upstreamLogs.includes("HANDSHAKE")).toBe(true);
+      expect(upstreamLogs.includes("MESSAGE ")).toBe(false);
+      expect(upstreamLogs.includes(blockingSecret)).toBe(false);
+      expect(addonLogLines(proxyLogs).includes(blockingSecret)).toBe(false);
+
+      websocket.sendText("benign-after-forbidden");
+      await waitForContainerLog(resources.proxyName, "reason=missing-state");
+      await expectNoWebSocketEcho(websocket);
+      upstreamLogs = await dockerLogs(resources.targetName);
+      expect(upstreamLogs.includes("MESSAGE benign-after-forbidden")).toBe(
+        false,
+      );
+    } finally {
+      websocket?.close();
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "websocket: over-budget message is never delivered and leaves the session fail-closed",
+  async () => {
+    const resources = protocolResources("nas-ws-budget");
+    let fixture: AddonFixture | undefined;
+    let websocket: ProxyWebSocket | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-ws-budget-",
+        PROTECTED_WEBSOCKET_DOCUMENT,
+        { masking: ["MASKME123"], blocking: ["BLOCKME123"] },
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "chatgpt.test",
+        WEBSOCKET_TARGET_PORT,
+        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
+      );
+      websocket = await openWebSocketThroughProxy(
+        proxyPort,
+        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+
+      expect(websocket.responseHeaders).toContain(" 101 ");
+      await waitForContainerLog(resources.targetName, "HANDSHAKE");
+      websocket.sendText("x".repeat(65));
+      await waitForContainerLog(resources.proxyName, "reason=resource-limit");
+      await expectNoWebSocketEcho(websocket);
+      let upstreamLogs = await dockerLogs(resources.targetName);
+      expect(upstreamLogs.includes("HANDSHAKE")).toBe(true);
+      expect(upstreamLogs.includes("MESSAGE ")).toBe(false);
+
+      websocket.sendText("benign-after-budget");
+      await waitForContainerLog(resources.proxyName, "reason=missing-state");
+      await expectNoWebSocketEcho(websocket);
+      upstreamLogs = await dockerLogs(resources.targetName);
+      expect(upstreamLogs.includes("MESSAGE benign-after-budget")).toBe(false);
+    } finally {
+      websocket?.close();
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "websocket: stale session message is never delivered and leaves the session fail-closed",
+  async () => {
+    const resources = protocolResources("nas-ws-stale");
+    let fixture: AddonFixture | undefined;
+    let websocket: ProxyWebSocket | undefined;
+    try {
+      fixture = await setupAddonFixture(
+        "nas-addon-ws-stale-",
+        PROTECTED_WEBSOCKET_DOCUMENT,
+        { masking: ["MASKME123"], blocking: ["BLOCKME123"] },
+      );
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "chatgpt.test",
+        WEBSOCKET_TARGET_PORT,
+        webSocketEchoServerScript(WEBSOCKET_TARGET_PORT),
+      );
+      websocket = await openWebSocketThroughProxy(
+        proxyPort,
+        `http://chatgpt.test:${WEBSOCKET_TARGET_PORT}/ws`,
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+
+      expect(websocket.responseHeaders).toContain(" 101 ");
+      await waitForContainerLog(resources.targetName, "HANDSHAKE");
+      await rm(sessionRegistryPath(fixture.paths, fixture.sessionId), {
+        force: true,
+      });
+      websocket.sendText("after-session-expiry");
+      await waitForContainerLog(resources.proxyName, "reason=stale-session");
+      await expectNoWebSocketEcho(websocket);
+      let upstreamLogs = await dockerLogs(resources.targetName);
+      expect(upstreamLogs.includes("HANDSHAKE")).toBe(true);
+      expect(upstreamLogs.includes("MESSAGE ")).toBe(false);
+
+      websocket.sendText("benign-after-stale-session");
+      await waitForContainerLog(resources.proxyName, "reason=missing-state");
+      await expectNoWebSocketEcho(websocket);
+      upstreamLogs = await dockerLogs(resources.targetName);
+      expect(upstreamLogs.includes("MESSAGE benign-after-stale-session")).toBe(
+        false,
+      );
+    } finally {
+      websocket?.close();
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!dockerAvailable || !canBindMount)(
+  "raw CONNECT: authenticated non-HTTP bytes never reach upstream",
+  async () => {
+    const resources = protocolResources("nas-raw-connect");
+    let fixture: AddonFixture | undefined;
+    let tunnel: net.Socket | undefined;
+    try {
+      fixture = await setupAddonFixture("nas-addon-raw-connect-");
+      const proxyPort = await startProtocolContainers(
+        resources,
+        fixture,
+        "raw.test",
+        RAW_TARGET_PORT,
+        rawByteServerScript(RAW_TARGET_PORT),
+      );
+
+      tunnel = await openConnectTunnel(
+        proxyPort,
+        `raw.test:${RAW_TARGET_PORT}`,
+        `${fixture.sessionId}:${fixture.token}`,
+      );
+      let responseBytes = 0;
+      tunnel.on("data", (chunk) => {
+        responseBytes += chunk.length;
+      });
+      tunnel.write("SSH-2.0-nas-raw-probe\r\n");
+      await Bun.sleep(2_000);
+      const upstreamLogs = await dockerLogs(resources.targetName);
+      expect(upstreamLogs.includes("nas-raw-probe")).toBe(false);
+      expect(responseBytes).toBe(0);
+    } finally {
+      tunnel?.destroy();
+      await cleanupProtocolResources(resources);
+      await teardownFixture(fixture);
+    }
+  },
+  60_000,
+);
+
 const ANTHROPIC_TARGET_PORT = 8090;
 
 test.skipIf(!dockerAvailable || !canBindMount)(
@@ -476,11 +1286,11 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     const networkName = `nas-addon-net-${crypto.randomUUID().slice(0, 8)}`;
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
     const targetName = `nas-addon-upstream-${crypto.randomUUID().slice(0, 8)}`;
-    let fixture: AnthropicFixture | undefined;
+    let fixture: AddonFixture | undefined;
     let networkCreated = false;
 
     try {
-      fixture = await setupAnthropicFixture("nas-addon-bodyless-");
+      fixture = await setupAddonFixture("nas-addon-bodyless-");
       const { runtimeDir, sessionId, token } = fixture;
 
       await createBenchmarkNetworkWithRetry(networkName);
@@ -520,6 +1330,10 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           "regular@8080",
           "--set",
           "connection_strategy=lazy",
+          "--set",
+          "rawtcp=false",
+          "--set",
+          "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
           "--ssl-insecure",
@@ -591,11 +1405,11 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     const networkName = `nas-addon-net-${crypto.randomUUID().slice(0, 8)}`;
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
     const targetName = `nas-addon-upstream-${crypto.randomUUID().slice(0, 8)}`;
-    let fixture: AnthropicFixture | undefined;
+    let fixture: AddonFixture | undefined;
     let networkCreated = false;
 
     try {
-      fixture = await setupAnthropicFixture("nas-addon-mask-");
+      fixture = await setupAddonFixture("nas-addon-mask-");
       const { runtimeDir, sessionId, token } = fixture;
 
       // 衝突時は新しい乱数サブネットで数回だけ retry する
@@ -638,6 +1452,10 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           "regular@8080",
           "--set",
           "connection_strategy=lazy",
+          "--set",
+          "rawtcp=false",
+          "--set",
+          "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
           "--ssl-insecure",
@@ -701,10 +1519,10 @@ test.skipIf(!dockerAvailable || !canBindMount)(
     // 明示的に deny するまで応答が保留され、deny 後は 403 で閉じることを確認する。
     // fake upstream や DNS 到達性は不要。
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
-    let fixture: AnthropicFixture | undefined;
+    let fixture: AddonFixture | undefined;
 
     try {
-      fixture = await setupAnthropicFixture("nas-addon-block-type-");
+      fixture = await setupAddonFixture("nas-addon-block-type-");
       const { runtimeDir, sessionId, token } = fixture;
 
       await dockerRunDetached({
@@ -725,6 +1543,10 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           "regular@8080",
           "--set",
           "connection_strategy=lazy",
+          "--set",
+          "rawtcp=false",
+          "--set",
+          "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
           "--ssl-insecure",
@@ -806,10 +1628,10 @@ test.skipIf(!dockerAvailable || !canBindMount)(
   "anthropic: blocked endpoint policy is enforced before upstream connect",
   async () => {
     const containerName = `nas-addon-test-${crypto.randomUUID().slice(0, 8)}`;
-    let fixture: AnthropicFixture | undefined;
+    let fixture: AddonFixture | undefined;
 
     try {
-      fixture = await setupAnthropicFixture("nas-addon-blocked-policy-");
+      fixture = await setupAddonFixture("nas-addon-blocked-policy-");
       const { runtimeDir, sessionId, token } = fixture;
 
       await dockerRunDetached({
@@ -830,6 +1652,10 @@ test.skipIf(!dockerAvailable || !canBindMount)(
           "regular@8080",
           "--set",
           "connection_strategy=lazy",
+          "--set",
+          "rawtcp=false",
+          "--set",
+          "websocket=true",
           "--set",
           "confdir=/nas-network/mitmproxy-ca",
           "--ssl-insecure",

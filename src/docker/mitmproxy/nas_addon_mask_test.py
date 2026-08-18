@@ -300,6 +300,16 @@ class FakeFlow:
         self.killed = True
 
 
+class TcpLifecycleTest(unittest.TestCase):
+    def test_tcp_start_always_kills(self):
+        addon = nas_addon.NasAddon()
+        flow = FakeFlow(FakeRequest())
+
+        addon.tcp_start(flow)
+
+        self.assertTrue(flow.killed)
+
+
 class ApplyRequestMaskingTest(unittest.TestCase):
     def setUp(self):
         self.patterns = nas_addon._build_mask_patterns(["s3cret-value"])

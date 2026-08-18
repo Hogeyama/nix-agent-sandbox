@@ -712,10 +712,12 @@ const protectedWebSocketDocument = resolvedDocument({
 Install `{ masking: ["MASKME123"], blocking: ["BLOCKME123"] }`. Prove:
 
 - `hello MASKME123` is logged and echoed only as `hello ****`;
-- `BLOCKME123` closes and never appears upstream;
-- a 65-byte message closes and never appears upstream;
-- deleting `sessionRegistryPath(...)` after `101` makes the next message close
-  without reaching upstream.
+- `BLOCKME123` is dropped and never appears upstream; later messages stay
+  blocked;
+- a 65-byte message is dropped and never appears upstream; later messages
+  stay blocked;
+- deleting `sessionRegistryPath(...)` after `101` drops the next message and
+  keeps later messages from reaching upstream.
 
 - [ ] **Step 6: Add the raw CONNECT regression**
 
