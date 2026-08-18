@@ -83,7 +83,7 @@ test.skipIf(!hasPkl)(
     expect(
       decide(
         resolved.document!,
-        { host: "chatgpt.openai.com", port: 443 },
+        { host: "chatgpt.com", port: 443 },
         {
           method: "GET",
           path: "/ws-handshake-probe",

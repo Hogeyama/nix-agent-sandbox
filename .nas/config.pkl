@@ -100,7 +100,7 @@ local commonNetwork: NetworkConfig = new {
     ["openai"] {
       targets {
         "api.openai.com:443"
-        "chatgpt.openai.com:443"
+        "chatgpt.com:443"
       }
       webSocket = "allow" // "allow" | "deny" (規定deny) (reviewはない)
       fallback = "review"
@@ -141,7 +141,6 @@ local commonNetwork: NetworkConfig = new {
         // OpenAI / ChatGPT
         "*.api.openai.com"
         "ab.chatgpt.com"
-        "chatgpt.com"
         "developers.openai.com"
 
         // Google

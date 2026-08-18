@@ -58,7 +58,7 @@ For example:
 
 ```pkl
 ["chatgpt"] {
-  targets { "chatgpt.openai.com:443" }
+  targets { "chatgpt.com:443" }
   webSocket = "allow"
   fallback = "review"
 

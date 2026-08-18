@@ -771,7 +771,7 @@ git commit -m "test(network): close WebSocket and raw TCP bypasses"
 
 **Interfaces:**
 - Consumes: checked-in `.nas/config.pkl` scope `openai`, including
-  `chatgpt.openai.com:443` and `webSocket = "allow"`.
+  `chatgpt.com:443` and `webSocket = "allow"`.
 - Produces: public guidance and real-config regression coverage.
 
 - [ ] **Step 1: Add the repository-config RED assertion**
@@ -784,7 +784,7 @@ expect(openai?.webSocket).toBe("allow");
 
 expect(decide(
   resolved.document!,
-  { host: "chatgpt.openai.com", port: 443 },
+  { host: "chatgpt.com", port: 443 },
   {
     method: "GET",
     path: "/ws-handshake-probe",
@@ -815,7 +815,7 @@ Add `## WebSocket and Raw TCP` to `docs/migration/network-scopes.md` with:
 
 ```pkl
 ["chatgpt"] {
-  targets { "chatgpt.openai.com:443" }
+  targets { "chatgpt.com:443" }
   webSocket = "allow"
   fallback = "review"
 }
@@ -849,10 +849,10 @@ Expected: formatting introduces no semantic change, every static check exits
 - [ ] **Step 6: Perform the real Codex WebSocket smoke test**
 
 ```bash
-nix run .#default -- codex -p 'Reply exactly websocket-ok'
+nix run .#default -- codex exec 'Reply exactly websocket-ok'
 ```
 
-Approve the single pending `chatgpt.openai.com:443` handshake in the nas UI.
+Approve the single pending `chatgpt.com:443` handshake in the nas UI.
 Expected: Codex replies `websocket-ok`, the socket does not create one pending
 item per message, and proxy logs contain no raw prompt or secret. If OAuth
 fails, report it separately and do not weaken network policy.
