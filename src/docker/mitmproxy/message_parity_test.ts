@@ -85,6 +85,7 @@ test.skipIf(!python3)(
       null,
     );
     expect(authorize).toMatchObject({
+      transport: "http",
       bodyTruth: { "anthropic.messages": "true" },
       reviewContext: {
         path: "/v1/messages",

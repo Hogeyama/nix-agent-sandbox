@@ -617,6 +617,7 @@ test("SessionBroker: approving a rule does not approve its violations", async ()
       sessionId: "sess_policy",
       target: { host: "api.example.com", port: 443 },
       method: "POST",
+      transport: "http",
       requestKind: "forward",
       observedAt: new Date().toISOString(),
       bodyTruth: { "policy.json": "true" },
@@ -1593,7 +1594,8 @@ function authorize(
   host: string,
   port: number,
   ruleId?: string,
-): AuthorizeRequest {
+  transport: "http" | "websocket" = "http",
+): AuthorizeRequest & { transport: "http" | "websocket" } {
   return {
     version: 1,
     type: "authorize",
@@ -1601,11 +1603,110 @@ function authorize(
     sessionId,
     target: { host, port },
     method: "CONNECT",
+    transport,
     requestKind: "connect",
     observedAt: new Date().toISOString(),
     bodyTruth: ruleId ? { [ruleId]: "true" } : {},
   };
 }
+
+test("SessionBroker: default-denied WebSocket returns immediately without pending", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    document: documentWithScopes(
+      {
+        api: {
+          targets: ["api.example.com"],
+          fallback: "review",
+          rules: { ws: { match: { paths: ["/**"] }, onMatch: "allow" } },
+        },
+      },
+      "review",
+    ),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const response = await sendBrokerRequest<DecisionResponse>(
+      socketPath,
+      authorize(
+        "sess_test",
+        "req_websocket_deny",
+        "api.example.com",
+        443,
+        undefined,
+        "websocket",
+      ),
+    );
+
+    expect(response).toMatchObject({
+      decision: "deny",
+      reason: "websocket-denied",
+    });
+    expect(await broker.listPending()).toEqual([]);
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("SessionBroker: allowed WebSocket review creates one handshake pending group", async () => {
+  const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));
+  const paths = await resolveNetworkRuntimePaths(runtimeDir);
+  const broker = new SessionBroker({
+    paths,
+    sessionId: "sess_test",
+    document: documentWithScopes({
+      api: {
+        targets: ["api.example.com"],
+        webSocket: "allow",
+        rules: {
+          ws: {
+            match: { methods: ["GET"], paths: ["/ws"] },
+            onMatch: "review",
+          },
+        },
+      },
+    }),
+    pendingTimeoutSeconds: 30,
+    pendingNotify: "off",
+  });
+  const socketPath = `${paths.brokersDir}/sess_test/sock`;
+  await broker.start(socketPath);
+  try {
+    const pendingDecision = sendBrokerRequest<DecisionResponse>(socketPath, {
+      ...authorize(
+        "sess_test",
+        "req_websocket_review",
+        "api.example.com",
+        443,
+        "api.ws",
+        "websocket",
+      ),
+      method: "GET",
+      requestKind: "forward",
+      reviewContext: { path: "/ws", contentType: null, bodySize: 0 },
+    });
+
+    const pending = await waitForPending(socketPath);
+    expect(pending.items).toHaveLength(1);
+    expect(pending.items[0]?.requestId).toBe("req_websocket_review");
+    await sendBrokerRequest(socketPath, {
+      type: "approve",
+      requestId: "req_websocket_review",
+      scope: "once",
+    });
+    expect((await pendingDecision).decision).toBe("allow");
+  } finally {
+    await broker.close();
+    await rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
 
 test("SessionBroker: deny rule returns deny immediately", async () => {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), "nas-broker-"));

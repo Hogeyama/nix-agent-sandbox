@@ -151,6 +151,65 @@ class FakeHeaders:
         self._items = [(key, value) for key, value in self._items if key != name]
 
 
+class RequestTransportTest(unittest.TestCase):
+    def test_classifies_comma_separated_case_insensitive_websocket_upgrade(self):
+        request = FakeRequest(headers={"upgrade": "h2c, WebSocket"})
+        self.assertEqual(nas_addon._request_transport(request), "websocket")
+
+    def test_defaults_non_websocket_requests_to_http(self):
+        self.assertEqual(nas_addon._request_transport(FakeRequest()), "http")
+
+
+class WebSocketDecisionGateTest(unittest.TestCase):
+    def setUp(self):
+        self.document = json.loads(_FIXTURE_PATH.read_text())
+        self.scope = self.document["scopes"][0]
+
+    def test_denies_default_scope_before_an_allow_rule(self):
+        decision = nas_addon._decide(
+            self.document,
+            "api.anthropic.com",
+            443,
+            "POST",
+            "/v1/messages",
+            {"anthropic.messages": "true"},
+            "websocket",
+        )
+        self.assertEqual(decision["action"], "deny")
+        self.assertEqual(decision["ruleId"], "anthropic.$fallback")
+        self.assertEqual(decision["reason"], "websocket-denied")
+
+    def test_allow_scope_reaches_ordinary_review_rule(self):
+        self.scope["webSocket"] = "allow"
+        self.scope["rules"][0]["onMatch"] = "review"
+        decision = nas_addon._decide(
+            self.document,
+            "api.anthropic.com",
+            443,
+            "POST",
+            "/v1/messages",
+            {"anthropic.messages": "true"},
+            "websocket",
+        )
+        self.assertEqual(decision["action"], "review")
+        self.assertEqual(decision["reason"], "rule")
+
+    def test_unscoped_websocket_denies_instead_of_network_review(self):
+        self.document["fallback"] = "review"
+        decision = nas_addon._decide(
+            self.document,
+            "outside.example",
+            443,
+            "GET",
+            "/ws",
+            {},
+            "websocket",
+        )
+        self.assertEqual(decision["action"], "deny")
+        self.assertEqual(decision["ruleId"], "$fallback")
+        self.assertEqual(decision["reason"], "websocket-denied")
+
+
 class FakeRequest:
     """flow.request の最小フェイク。headers は FakeHeaders (multidict) で
     代用する。dict を渡した場合は (name, value) ペアの列に変換する。"""
@@ -213,11 +272,28 @@ class FakeResponse:
         self.headers = headers or {}
 
 
+class FakeWebSocketMessage:
+    def __init__(self, content: bytes, from_client: bool = True):
+        self.content = content
+        self.from_client = from_client
+        self.dropped = False
+
+    def drop(self):
+        self.dropped = True
+
+
+class FakeWebSocketData:
+    def __init__(self, message):
+        self.messages = [message]
+
+
 class FakeFlow:
-    def __init__(self, request):
+    def __init__(self, request, flow_id="flow-test", websocket=None):
+        self.id = flow_id
         self.request = request
         self.client_conn = FakeClientConnection()
         self.response = None
+        self.websocket = websocket
         self.killed = False
 
     def kill(self):
@@ -482,6 +558,23 @@ class AuthzDocumentContractTest(unittest.TestCase):
             with self.subTest(name=name):
                 document = copy.deepcopy(self.fixture)
                 self._scope(document)[field] = value
+                self.assert_invalid(document)
+
+    def test_accepts_optional_websocket_policies_and_rejects_invalid_values(self):
+        for policy in (None, "allow", "deny"):
+            with self.subTest(policy=policy):
+                document = copy.deepcopy(self.fixture)
+                if policy is None:
+                    self._scope(document).pop("webSocket", None)
+                else:
+                    self._scope(document)["webSocket"] = policy
+                self._write(document)
+                self.assertEqual(self._load(), document)
+
+        for policy in ("review", True, False, 1, 0, "unknown"):
+            with self.subTest(policy=policy):
+                document = copy.deepcopy(self.fixture)
+                self._scope(document)["webSocket"] = policy
                 self.assert_invalid(document)
 
     def test_rejects_a_target_that_is_not_a_host_pattern_and_port(self):
@@ -808,7 +901,7 @@ class AuthzDocumentContractTest(unittest.TestCase):
             self.assertIs(self._load(), valid)
 
         old_mtime = path.stat().st_mtime_ns
-        path.write_text('{"contractVersion": 3, "scopes": "invalid"}')
+        path.write_text('{"contractVersion": 1, "scopes": "invalid"}')
         os.utime(
             path,
             ns=(old_mtime + 1_000_000, old_mtime + 1_000_000),
@@ -864,7 +957,7 @@ class SelectionTest(unittest.TestCase):
 
     def _document(self, scopes, fallback="deny"):
         return {
-            "contractVersion": 3,
+            "contractVersion": 1,
             "fallback": fallback,
             "defaults": {
                 "limits": dict(_DEFAULT_LIMITS),
@@ -3298,7 +3391,7 @@ def _flow_document(rules=(), scope="api", targets=("api.example.com",),
                    fallback="deny", network_fallback="deny"):
     """A resolved document with one scope, in the shape the addon reads."""
     return {
-        "contractVersion": 3,
+        "contractVersion": 1,
         "fallback": network_fallback,
         "defaults": {
             "limits": dict(_DEFAULT_LIMITS),
@@ -3962,6 +4055,21 @@ class RequestPolicyFlowTest(unittest.TestCase):
             authorization["bodyTruth"], {"api.messages": "true"}
         )
 
+    def test_websocket_upgrade_reaches_the_broker_with_websocket_transport(self):
+        document = _flow_document([_messages_rule()])
+        document["scopes"][0]["webSocket"] = "allow"
+
+        _flow, messages, _stderr = self._run(
+            document=document,
+            rule_id="api.messages",
+            headers=[("upgrade", "h2c, WebSocket")],
+        )
+
+        authorization = next(
+            message for message in messages if message["type"] == "authorize"
+        )
+        self.assertEqual(authorization["transport"], "websocket")
+
     def _review_rule(self):
         rule = _messages_rule()
         rule["expect"] = [
@@ -4208,6 +4316,187 @@ class RequestPolicyFlowTest(unittest.TestCase):
         addon.client_disconnected(FakeClientConnection("client-a"))
 
         self.assertEqual(addon._request_policy_block_counts, {})
+
+    def test_authorized_websocket_handshake_retains_private_message_state(self):
+        document = _flow_document([_models_rule()])
+        document["scopes"][0]["webSocket"] = "allow"
+        addon = nas_addon.NasAddon()
+        flow, _messages, _stderr = self._run(
+            document=document,
+            rule_id="api.models",
+            method="GET",
+            path="/v1/models",
+            headers=[("upgrade", "websocket")],
+            content=b"",
+            addon=addon,
+        )
+
+        self.assertEqual(flow.request.headers.get("proxy-authorization"), None)
+        self.assertEqual(self._injected(flow), "injected-value")
+        self.assertEqual(flow.request.content, b"")
+        self.assertEqual(
+            addon._websocket_states[flow.id],
+            {
+                "clientId": "client-test",
+                "sessionId": self.session_id,
+                "ruleId": "api.models",
+                "maxBodyBytes": _DEFAULT_LIMITS["maxBodyBytes"],
+                "maskPatterns": tuple(nas_addon._build_mask_patterns(["SECRET123"])),
+                "forbidPatterns": (),
+            },
+        )
+        self.assertFalse(hasattr(flow, "metadata"))
+
+
+class WebSocketLifecycleTest(unittest.TestCase):
+    def _flow(self, content=b"message", *, from_client=True, flow_id="flow-ws"):
+        message = FakeWebSocketMessage(content, from_client)
+        return FakeFlow(
+            FakeRequest(),
+            flow_id=flow_id,
+            websocket=FakeWebSocketData(message),
+        ), message
+
+    def _state(self, *, client_id="client-test", max_body_bytes=64,
+               forbid_values=()):
+        return {
+            "clientId": client_id,
+            "sessionId": "sess-test",
+            "ruleId": "api.messages",
+            "maxBodyBytes": max_body_bytes,
+            "maskPatterns": tuple(nas_addon._build_mask_patterns(["SECRET123"])),
+            "forbidPatterns": tuple(
+                nas_addon._build_mask_patterns(list(forbid_values))
+            ),
+        }
+
+    def _authorized_addon(self, flow, **state):
+        addon = nas_addon.NasAddon()
+        addon._websocket_states[flow.id] = self._state(**state)
+        return addon
+
+    def test_client_message_is_masked_after_an_authorized_handshake(self):
+        flow, message = self._flow(b"token=SECRET123")
+        addon = self._authorized_addon(flow)
+
+        with patch.object(nas_addon, "_load_registry", return_value={}):
+            addon.websocket_message(flow)
+
+        self.assertEqual(message.content, b"token=****")
+        self.assertFalse(message.dropped)
+        self.assertFalse(flow.killed)
+
+    def test_server_message_is_not_mutated(self):
+        flow, message = self._flow(b"token=SECRET123", from_client=False)
+        addon = self._authorized_addon(flow)
+
+        addon.websocket_message(flow)
+
+        self.assertEqual(message.content, b"token=SECRET123")
+        self.assertFalse(message.dropped)
+        self.assertFalse(flow.killed)
+
+    def test_forbidden_client_message_is_dropped_and_closed_without_content_log(self):
+        flow, message = self._flow(b"token=BLOCKME123")
+        addon = self._authorized_addon(flow, forbid_values=("BLOCKME123",))
+        stderr = io.StringIO()
+
+        with patch.object(nas_addon, "_load_registry", return_value={}), redirect_stderr(stderr):
+            addon.websocket_message(flow)
+
+        self.assertTrue(message.dropped)
+        self.assertTrue(flow.killed)
+        self.assertNotIn(flow.id, addon._websocket_states)
+        self.assertIn("reason=forbidden-secret", stderr.getvalue())
+        self.assertNotIn("BLOCKME123", stderr.getvalue())
+
+    def test_oversize_client_message_is_dropped_and_closed(self):
+        flow, message = self._flow(b"x" * 65)
+        addon = self._authorized_addon(flow, max_body_bytes=64)
+
+        with patch.object(nas_addon, "_load_registry", return_value={}):
+            addon.websocket_message(flow)
+
+        self.assertTrue(message.dropped)
+        self.assertTrue(flow.killed)
+        self.assertNotIn(flow.id, addon._websocket_states)
+
+    def test_stale_session_message_is_dropped_and_closed(self):
+        flow, message = self._flow()
+        addon = self._authorized_addon(flow)
+
+        with patch.object(nas_addon, "_load_registry", return_value=None):
+            addon.websocket_message(flow)
+
+        self.assertTrue(message.dropped)
+        self.assertTrue(flow.killed)
+        self.assertNotIn(flow.id, addon._websocket_states)
+
+    def test_websocket_start_without_authorized_state_closes(self):
+        flow, message = self._flow()
+        addon = nas_addon.NasAddon()
+
+        addon.websocket_start(flow)
+
+        self.assertTrue(message.dropped)
+        self.assertTrue(flow.killed)
+
+    def test_non_upgrade_response_discards_websocket_state(self):
+        flow, _message = self._flow()
+        flow.response = FakeResponse(200, b"not an upgrade")
+        addon = self._authorized_addon(flow)
+
+        addon.response(flow)
+
+        self.assertNotIn(flow.id, addon._websocket_states)
+
+    def test_error_discards_only_its_websocket_state(self):
+        first, _first_message = self._flow(flow_id="flow-first")
+        second, _second_message = self._flow(flow_id="flow-second")
+        addon = self._authorized_addon(first, client_id="client-a")
+        addon._websocket_states[second.id] = self._state(client_id="client-b")
+
+        addon.error(first)
+
+        self.assertNotIn(first.id, addon._websocket_states)
+        self.assertIn(second.id, addon._websocket_states)
+
+    def test_websocket_end_discards_state(self):
+        flow, _message = self._flow()
+        addon = self._authorized_addon(flow)
+
+        addon.websocket_end(flow)
+
+        self.assertNotIn(flow.id, addon._websocket_states)
+
+    def test_client_disconnect_discards_only_its_websocket_states(self):
+        first, _first_message = self._flow(flow_id="flow-first")
+        second, _second_message = self._flow(flow_id="flow-second")
+        addon = self._authorized_addon(first, client_id="client-a")
+        addon._websocket_states[second.id] = self._state(client_id="client-b")
+
+        addon.client_disconnected(FakeClientConnection("client-a"))
+
+        self.assertNotIn(first.id, addon._websocket_states)
+        self.assertIn(second.id, addon._websocket_states)
+
+    def test_masking_exception_drops_and_closes_without_message_content_log(self):
+        flow, message = self._flow(b"SECRET123")
+        addon = self._authorized_addon(flow)
+        stderr = io.StringIO()
+
+        with patch.object(nas_addon, "_load_registry", return_value={}), patch.object(
+            nas_addon,
+            "_mask_bytes",
+            side_effect=RuntimeError("SECRET123 details"),
+        ), redirect_stderr(stderr):
+            addon.websocket_message(flow)
+
+        self.assertTrue(message.dropped)
+        self.assertTrue(flow.killed)
+        self.assertNotIn(flow.id, addon._websocket_states)
+        self.assertIn("reason=processing-failed", stderr.getvalue())
+        self.assertNotIn("SECRET123", stderr.getvalue())
 
 
 if __name__ == "__main__":

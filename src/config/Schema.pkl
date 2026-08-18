@@ -340,6 +340,10 @@ class Scope {
   /// 構造上つねに最後に評価されるので、ルールの追加位置を気にする必要はない。
   fallback: "allow"|"review"|"deny" = "deny"
 
+  /// HTTP handshake の認可後に WebSocket への Upgrade を許すか。
+  /// message ごとの review は行わず、mask/forbid は補助的に行う。
+  webSocket: "allow"|"deny" = "deny"
+
   limits: Limits?
 
   /// 秘密ごとの扱い。`network.defaults.secrets` を上書きする。

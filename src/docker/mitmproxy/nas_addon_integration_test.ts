@@ -463,7 +463,7 @@ test("setupAnthropicFixture installs the shipped resolved document", async () =>
     // addon が読むファイルと broker が握るルールが同一であることが、
     // このスイートの前提そのもの。
     expect(document).toEqual(RESOLVED_DOCUMENT);
-    expect(document.contractVersion).toBe(3);
+    expect(document.contractVersion).toBe(1);
   } finally {
     await teardownFixture(fixture);
   }

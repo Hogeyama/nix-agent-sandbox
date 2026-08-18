@@ -40,6 +40,7 @@ export const APPROVAL_SCOPES = [
 
 export type ApprovalScope = (typeof APPROVAL_SCOPES)[number];
 export type RequestKind = "connect" | "forward";
+export type RequestTransport = "http" | "websocket";
 export type Decision = "allow" | "deny";
 
 export interface InjectHeader {
@@ -90,6 +91,7 @@ export interface AuthorizeRequest {
   sessionId: string;
   target: NormalizedTarget;
   method: string;
+  transport: RequestTransport;
   requestKind: RequestKind;
   observedAt: string;
   /** 候補ルールごとに、そのルール自身の予算で評価したボディ条件の真偽。 */
@@ -285,12 +287,14 @@ const AUTHORIZE_FIELDS = new Set([
   "sessionId",
   "target",
   "method",
+  "transport",
   "requestKind",
   "observedAt",
   "bodyTruth",
   "reviewContext",
 ]);
 const REQUEST_KINDS = ["connect", "forward"] as const;
+const REQUEST_TRANSPORTS = ["http", "websocket"] as const;
 const TRUTH_VALUES = ["true", "false", "indeterminate"] as const;
 
 export function validateAuthorizeRequest(
@@ -318,6 +322,9 @@ export function validateAuthorizeRequest(
   if (!isNormalizedTarget(message.target)) return "invalid authorize target";
   if (typeof message.method !== "string" || !HTTP_METHOD.test(message.method)) {
     return "invalid authorize method";
+  }
+  if (!isListedValue(message.transport, REQUEST_TRANSPORTS)) {
+    return "invalid authorize transport";
   }
   if (!isListedValue(message.requestKind, REQUEST_KINDS)) {
     return "invalid authorize request kind";

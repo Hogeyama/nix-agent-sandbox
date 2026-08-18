@@ -12,6 +12,7 @@
  * 照合はこの関数と同じ順序・同じ打ち切りに従わなければならない。
  */
 
+import type { RequestTransport } from "../protocol.ts";
 import {
   type Action,
   type AuditMode,
@@ -31,13 +32,13 @@ import {
   type ResolvedLimits,
   type SecretDisposition,
   type ViolationAction,
+  type WebSocketPolicy,
 } from "./config.ts";
 import { type CompiledPath, compiledPathMatches } from "./pattern.ts";
 import { type CompiledMatch, hostMatches, normalizeBody } from "./relation.ts";
 import { evaluateBody, type Truth } from "./semantics.ts";
 import { compareTargetSpecificity, precedenceOrder } from "./specificity.ts";
 import type {
-  AuthzRequest,
   BodyFormat,
   JsonScalar,
   RequestBody,
@@ -94,6 +95,7 @@ export interface ResolvedScope {
   readonly name: string;
   readonly targets: readonly Target[];
   readonly fallback: Action;
+  readonly webSocket: WebSocketPolicy;
   /** `fallback` から生じた確認の擬似ルール ID。 */
   readonly fallbackRuleId: string;
   readonly limits: ResolvedLimits;
@@ -116,7 +118,7 @@ export interface ResolvedDefaults {
 }
 
 export interface ResolvedDocument {
-  readonly contractVersion: 3;
+  readonly contractVersion: 1;
   /** どのスコープにも属さないターゲットの帰結。 */
   readonly fallback: NetworkFallback;
   readonly defaults: ResolvedDefaults;
@@ -128,6 +130,8 @@ export interface DecisionRequest {
   readonly method: string;
   readonly path: string;
   readonly body?: RequestBody;
+  /** Omission preserves ordinary HTTP authorization behavior. */
+  readonly transport?: RequestTransport;
 }
 
 export interface ResolveOutcome {
@@ -176,7 +180,7 @@ export function resolveAuthzConfig(config: AuthzConfig): ResolveOutcome {
 
   return {
     document: {
-      contractVersion: 3,
+      contractVersion: 1,
       fallback: config.network.fallback ?? "deny",
       defaults,
       scopes: ordered.value,
@@ -213,6 +217,7 @@ function resolveScope(
       name: scope.name,
       targets: scope.targets,
       fallback: scope.config.fallback ?? "deny",
+      webSocket: scope.config.webSocket ?? "deny",
       fallbackRuleId: `${scope.name}.${FALLBACK_RULE_KEY}`,
       limits,
       secrets,
@@ -422,7 +427,9 @@ export type DecisionReason =
   /** スコープのどのルールも引き受けなかった。 */
   | "scope-fallback"
   /** どのスコープにも属さない。 */
-  | "network-fallback";
+  | "network-fallback"
+  /** WebSocket はスコープごとの明示的な opt-in を必要とする。 */
+  | "websocket-denied";
 
 export interface Decision {
   readonly action: Action;
@@ -487,7 +494,7 @@ function scopeMatchesAddress(
 export function decide(
   document: ResolvedDocument,
   address: TargetAddress,
-  request: AuthzRequest,
+  request: DecisionRequest,
 ): Decision;
 export function decide(
   document: ResolvedDocument,
@@ -502,6 +509,36 @@ export function decide(
   evaluateRuleBody?: (rule: ResolvedRule) => Truth,
 ): Decision {
   const scope = selectScope(document, address);
+  if (request.transport === "websocket") {
+    if (scope === null) {
+      return {
+        action: "deny",
+        ruleId: FALLBACK_RULE_KEY,
+        reason: "websocket-denied",
+        scope: null,
+        rule: null,
+        expect: [],
+        inject: [],
+        secrets: document.defaults.secrets,
+        limits: document.defaults.limits,
+        audit: document.defaults.audit,
+      };
+    }
+    if (scope.webSocket !== "allow") {
+      return {
+        action: "deny",
+        ruleId: scope.fallbackRuleId,
+        reason: "websocket-denied",
+        scope,
+        rule: null,
+        expect: [],
+        inject: [],
+        secrets: scope.secrets,
+        limits: scope.limits,
+        audit: scope.audit,
+      };
+    }
+  }
   if (scope === null) {
     return {
       action: document.fallback,

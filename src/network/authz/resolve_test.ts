@@ -41,6 +41,108 @@ function request(
 
 const JSON_BODY: RequestBody = { kind: "json", value: { a: 1 } };
 
+describe("WebSocket handshake gate", () => {
+  test("WebSocket deny は allow rule と review fallback より先に閉じる", () => {
+    const document = documentOf({
+      network: {
+        fallback: "review",
+        scopes: {
+          api: {
+            targets: ["api.example.com"],
+            fallback: "review",
+            rules: {
+              all: { match: { paths: ["/**"] }, onMatch: "allow" },
+            },
+          },
+        },
+      },
+    });
+    const handshake = {
+      ...request("GET", "/ws"),
+      transport: "websocket" as const,
+    };
+
+    expect(decide(document, at("api.example.com"), handshake)).toMatchObject({
+      action: "deny",
+      ruleId: "api.$fallback",
+      reason: "websocket-denied",
+      rule: null,
+      inject: [],
+    });
+  });
+
+  test("WebSocket allow scope は通常の review ルールへ進む", () => {
+    const document = documentOf({
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com"],
+            webSocket: "allow",
+            rules: {
+              handshake: {
+                match: { methods: ["GET"], paths: ["/ws"] },
+                onMatch: "review",
+              },
+            },
+          },
+        },
+      },
+    });
+    const handshake = {
+      ...request("GET", "/ws"),
+      transport: "websocket" as const,
+    };
+
+    expect(decide(document, at("api.example.com"), handshake)).toMatchObject({
+      action: "review",
+      ruleId: "api.handshake",
+      reason: "rule",
+    });
+  });
+
+  test("scope 外の WebSocket は network fallback が review でも閉じる", () => {
+    const document = documentOf({
+      network: { fallback: "review", scopes: {} },
+    });
+    const handshake = {
+      ...request("GET", "/ws"),
+      transport: "websocket" as const,
+    };
+
+    expect(decide(document, at("outside.example"), handshake)).toMatchObject({
+      action: "deny",
+      ruleId: "$fallback",
+      reason: "websocket-denied",
+      scope: null,
+      rule: null,
+      inject: [],
+    });
+  });
+
+  test("transport を省略したリクエストは HTTP として通常どおり評価する", () => {
+    const document = documentOf({
+      network: {
+        scopes: {
+          api: {
+            targets: ["api.example.com"],
+            rules: {
+              all: { match: { paths: ["/**"] }, onMatch: "allow" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      decide(document, at("api.example.com"), request("GET", "/ws")),
+    ).toMatchObject({
+      action: "allow",
+      ruleId: "api.all",
+      reason: "rule",
+    });
+  });
+});
+
 describe("要件 1 の GraphQL スコープ", () => {
   const document = documentOf(githubGraphqlExample());
   const github = at("api.github.com");
@@ -451,8 +553,8 @@ describe("ボディの値条件", () => {
   const run = (value: RequestBody) =>
     decide(document, address, request("POST", "/v1/run", value));
 
-  test("解決済み契約 v3 に equals と oneOf を保存する", () => {
-    expect(document.contractVersion).toBe(3);
+  test("解決済み契約 v1 に equals と oneOf を保存する", () => {
+    expect(document.contractVersion).toBe(1);
     expect(document.scopes[0]?.rules.map((rule) => rule.match)).toEqual([
       expect.objectContaining({
         equals: { "/mode": "fast", "/checked": true },
@@ -462,6 +564,25 @@ describe("ボディの値条件", () => {
         equals: {},
         oneOf: { "/mode": ["safe"] },
       }),
+    ]);
+  });
+
+  test("WebSocket はスコープごとに既定 deny で解決する", () => {
+    const document = documentOf({
+      network: {
+        scopes: {
+          closed: { targets: ["closed.example"] },
+          open: { targets: ["open.example"], webSocket: "allow" },
+        },
+      },
+    });
+
+    expect(document.contractVersion).toBe(1);
+    expect(
+      document.scopes.map(({ name, webSocket }) => [name, webSocket]),
+    ).toEqual([
+      ["closed", "deny"],
+      ["open", "allow"],
     ]);
   });
 

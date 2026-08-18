@@ -24,6 +24,7 @@ import {
 } from "../../network/authz/resolve.ts";
 import { evaluateBody } from "../../network/authz/semantics.ts";
 import type { JsonValue, RequestBody } from "../../network/authz/types.ts";
+import type { RequestTransport } from "../../network/protocol.ts";
 
 const python3 = Bun.which("python3");
 const addonDir = path.dirname(new URL(import.meta.url).pathname);
@@ -40,6 +41,7 @@ interface DecisionCase {
   readonly port: number;
   readonly method: string;
   readonly path: string;
+  readonly transport?: RequestTransport;
   readonly body: BodyCase;
 }
 
@@ -49,6 +51,7 @@ interface SerializedDecisionCase {
   readonly port: number;
   readonly method: string;
   readonly path: string;
+  readonly transport: RequestTransport;
   readonly carriesBody: boolean;
   readonly bodyBase64: string;
 }
@@ -75,6 +78,7 @@ const CONFIG: AuthzConfig = {
     scopes: {
       exact: {
         targets: ["api.example.com"],
+        webSocket: "allow",
         fallback: "deny",
         rules: {
           "ping.none": {
@@ -407,11 +411,13 @@ function decideCase(
   readonly decision: ReturnType<typeof decide>;
 } {
   const address = { host: case_.host, port: case_.port };
+  const transport = case_.transport ?? "http";
   // Scope selection depends only on the target, so this exposes its effective
   // body budget without letting a provisional body decision affect it.
   const scope = decide(document, address, {
     method: case_.method,
     path: case_.path,
+    transport,
     body: { kind: "absent" },
   }).scope;
   const body = requestBody(
@@ -421,7 +427,7 @@ function decideCase(
   const decision = decide(
     document,
     address,
-    { method: case_.method, path: case_.path, body },
+    { method: case_.method, path: case_.path, transport, body },
     (rule) =>
       evaluateBody(
         normalizeBody(resolvedBodyMatch(rule)),
@@ -535,6 +541,7 @@ function serializeCase(case_: DecisionCase): SerializedDecisionCase {
     port: case_.port,
     method: case_.method,
     path: case_.path,
+    transport: case_.transport ?? "http",
     carriesBody: case_.body.carriesBody,
     bodyBase64: Buffer.from(case_.body.bytes).toString("base64"),
   };
@@ -551,6 +558,7 @@ function decisionLine(
     String(case_.port),
     case_.method,
     case_.path,
+    case_.transport ?? "http",
     bodyKind,
     decision.action,
     decision.reason,
@@ -586,6 +594,35 @@ test.skipIf(!python3)(
       }
     }
     cases.push(...VALUE_CASES);
+    cases.push(
+      {
+        name: "websocket-allow-scope-reaches-review-rule",
+        host: "api.example.com",
+        port: 443,
+        method: "POST",
+        path: "/v1/ping",
+        transport: "websocket",
+        body: VALID_JSON_BODY,
+      },
+      {
+        name: "websocket-default-denied-scope-closes-before-fallback",
+        host: "sub.example.com",
+        port: 443,
+        method: "GET",
+        path: "/ws",
+        transport: "websocket",
+        body: NO_BODY,
+      },
+      {
+        name: "websocket-unscoped-closes-before-network-fallback",
+        host: "nope.test",
+        port: 443,
+        method: "GET",
+        path: "/ws",
+        transport: "websocket",
+        body: NO_BODY,
+      },
+    );
 
     const expected = cases.map((case_) => {
       const { body: classifiedBody, decision } = decideCase(document, case_);

@@ -177,7 +177,11 @@ profiles {
     agent = "claude"
     network {
       scopes {
-        ["github"] { targets { "api.github.com" }; fallback = "allow" }
+        ["github"] {
+          targets { "api.github.com" }
+          fallback = "allow"
+          webSocket = "allow"
+        }
       }
     }
   }
@@ -203,6 +207,7 @@ profiles {
         github: {
           targets: ["api.github.com"],
           fallback: "allow",
+          webSocket: "allow",
           inject: [],
           rules: {},
         },
@@ -271,6 +276,7 @@ profiles {
       const network = config.profiles.dev.network;
       expect(network.fallback).toEqual("review");
       expect(Object.keys(network.scopes)).toEqual(["github", "httpbin"]);
+      expect(network.scopes.github?.webSocket).toBe("deny");
       expect(network.scopes.httpbin?.rules?.post).toEqual({
         match: { paths: ["/**"], methods: ["POST"], captures: {} },
         onMatch: "review",
@@ -497,8 +503,13 @@ test.skipIf(!hasPkl)(
 profiles {
   ["dev"] {
     agent = "claude"
-    display {
-      sandbox = "wrong-enum"
+    network {
+      scopes {
+        ["api"] {
+          targets { "api.example.com" }
+          webSocket = "review"
+        }
+      }
     }
   }
 }

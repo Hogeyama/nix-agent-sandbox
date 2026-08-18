@@ -18,6 +18,7 @@
 import type { BodyFormat, GraphqlMatch, JsonScalar, Result } from "./types.ts";
 
 export type Action = "allow" | "review" | "deny";
+export type WebSocketPolicy = "allow" | "deny";
 /** どのスコープにも属さないターゲットの帰結。`allow` は選べない。 */
 export type NetworkFallback = "review" | "deny";
 export type IndeterminateAction = "review" | "deny";
@@ -159,6 +160,8 @@ export interface ScopeConfig {
   readonly targets: readonly string[];
   /** このスコープのどのルールも引き受けなかったリクエストの帰結。既定は `deny`。 */
   readonly fallback?: Action;
+  /** HTTP handshake の認可後に WebSocket への Upgrade を許すか。 */
+  readonly webSocket?: WebSocketPolicy;
   readonly limits?: Limits;
   readonly secrets?: Readonly<Record<string, SecretDisposition>>;
   readonly inject?: readonly Inject[];

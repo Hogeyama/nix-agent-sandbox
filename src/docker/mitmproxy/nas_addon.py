@@ -32,7 +32,7 @@ REQUEST_POLICY_BLOCK_BODY = b"blocked: request policy"
 # does not carry exactly this version is rejected whole: the host writes it
 # and the addon re-validates it, so a mismatch means the two halves of the
 # session were built from different releases.
-AUTHZ_CONTRACT_VERSION = 3
+AUTHZ_CONTRACT_VERSION = 1
 
 # A violation finding quotes the offending node. The depth and byte ceilings
 # keep that quote readable and stop a finding from growing into a copy of the
@@ -116,6 +116,7 @@ _SCOPE_KEYS = frozenset((
     "name",
     "targets",
     "fallback",
+    "webSocket",
     "fallbackRuleId",
     "limits",
     "secrets",
@@ -586,6 +587,9 @@ def _is_valid_scope(value: object) -> bool:
         return False
     if value["fallback"] not in _ACTIONS:
         return False
+    websocket_policy = value.get("webSocket", "deny")
+    if websocket_policy not in ("allow", "deny"):
+        return False
     targets = value["targets"]
     if (
         not isinstance(targets, list)
@@ -852,6 +856,7 @@ def _authorize_message(
     host: str,
     port: int,
     method: str,
+    transport: str,
     body_truth: dict[str, str],
     review_context: dict,
 ) -> dict:
@@ -863,6 +868,7 @@ def _authorize_message(
         "sessionId": session_id,
         "target": {"host": host, "port": port},
         "method": method,
+        "transport": transport,
         "requestKind": "forward",
         "observedAt": time.strftime(
             "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
@@ -1586,6 +1592,16 @@ def _request_carries_body(request) -> bool:
     return "content-length" in headers or "transfer-encoding" in headers
 
 
+def _request_transport(request) -> str:
+    upgrade = request.headers.get("upgrade", "")
+    tokens = {
+        token.strip().lower()
+        for token in upgrade.split(",")
+        if token.strip()
+    }
+    return "websocket" if "websocket" in tokens else "http"
+
+
 def _classify_body(
     body: Optional[bytes], max_body_bytes: int, carries_body: bool
 ) -> tuple[str, object]:
@@ -1969,9 +1985,29 @@ def _body_truth_table(
 
 
 def _decide(document: dict, host: str, port: int, method: str,
-            path: str, body_truth: dict[str, str]) -> dict:
-    """Return {action, ruleId, reason, scope, rule} for one request."""
+            path: str, body_truth: dict[str, str],
+            transport: str = "http") -> dict:
+    """Return the local half of the resolved authorization decision."""
     scope = _select_scope(document, host, port)
+    if transport == "websocket":
+        if scope is None:
+            return {
+                "action": "deny",
+                "ruleId": FALLBACK_RULE_KEY,
+                "reason": "websocket-denied",
+                "scope": None,
+                "rule": None,
+                "limits": document["defaults"]["limits"],
+            }
+        if scope.get("webSocket", "deny") != "allow":
+            return {
+                "action": "deny",
+                "ruleId": scope["fallbackRuleId"],
+                "reason": "websocket-denied",
+                "scope": scope,
+                "rule": None,
+                "limits": scope.get("limits", _LIMIT_CEILINGS),
+            }
     if scope is None:
         return {
             "action": document["fallback"],
@@ -1979,6 +2015,7 @@ def _decide(document: dict, host: str, port: int, method: str,
             "reason": "network-fallback",
             "scope": None,
             "rule": None,
+            "limits": document["defaults"]["limits"],
         }
 
     candidates = [
@@ -1994,6 +2031,7 @@ def _decide(document: dict, host: str, port: int, method: str,
             "reason": "unorderable-candidates",
             "scope": scope,
             "rule": None,
+            "limits": scope.get("limits", _LIMIT_CEILINGS),
         }
 
     for rule in ordered:
@@ -2007,6 +2045,7 @@ def _decide(document: dict, host: str, port: int, method: str,
                 "reason": "rule",
                 "scope": scope,
                 "rule": rule,
+                "limits": rule.get("limits", _LIMIT_CEILINGS),
             }
         # Evaluation stops here on purpose. Carrying on would let a broader
         # rule quietly cover for a narrower rule that could not be decided.
@@ -2016,6 +2055,7 @@ def _decide(document: dict, host: str, port: int, method: str,
             "reason": "indeterminate",
             "scope": scope,
             "rule": None,
+            "limits": rule.get("limits", _LIMIT_CEILINGS),
         }
 
     return {
@@ -2024,6 +2064,7 @@ def _decide(document: dict, host: str, port: int, method: str,
         "reason": "scope-fallback",
         "scope": scope,
         "rule": None,
+        "limits": scope.get("limits", _LIMIT_CEILINGS),
     }
 
 def _safe_session_label(session_id: str) -> str:
@@ -2069,6 +2110,10 @@ class NasAddon:
         self._forbid_patterns_cache: list[bytes] = []
         self._request_policy_block_counts: dict[tuple[str, ...], int] = {}
         self._client_sessions: dict[str, set[str]] = {}
+        # Secret-derived byte patterns must not enter flow metadata, which
+        # mitmproxy can export. Keep the state just long enough to protect
+        # messages following an authorized WebSocket handshake.
+        self._websocket_states: dict[str, dict] = {}
 
     def _patterns_for(self, mask_values: list[str]) -> list[bytes]:
         if mask_values == self._mask_values_cache:
@@ -2165,6 +2210,7 @@ class NasAddon:
         port = flow.request.port
         method = flow.request.method
         request_path = flow.request.path
+        transport = _request_transport(flow.request)
 
         document = _load_authz_document(session_id)
         if (
@@ -2211,7 +2257,7 @@ class NasAddon:
             body_size, parsed_body,
         )
         local = _decide(
-            document, host, port, method, request_path, body_truth
+            document, host, port, method, request_path, body_truth, transport
         )
         selected_rule = local["rule"]
         if (
@@ -2241,7 +2287,7 @@ class NasAddon:
         }
 
         authorize_req = _authorize_message(
-            request_id, session_id, host, port, method, body_truth,
+            request_id, session_id, host, port, method, transport, body_truth,
             review_context,
         )
 
@@ -2381,7 +2427,93 @@ class NasAddon:
         if "proxy-authorization" in flow.request.headers:
             del flow.request.headers["proxy-authorization"]
 
+        if transport == "websocket":
+            self._websocket_states[flow.id] = {
+                "clientId": flow.client_conn.id,
+                "sessionId": session_id,
+                "ruleId": rule_id,
+                "maxBodyBytes": local["limits"]["maxBodyBytes"],
+                "maskPatterns": tuple(patterns),
+                "forbidPatterns": tuple(
+                    self._forbid_patterns_for(forbid_values)
+                    if forbid_values else []
+                ),
+            }
+
+    def _close_websocket(self, flow, reason: str) -> None:
+        state = self._websocket_states.pop(flow.id, None)
+        safe_state = state if isinstance(state, dict) else {}
+        try:
+            websocket = getattr(flow, "websocket", None)
+            if websocket and websocket.messages:
+                websocket.messages[-1].drop()
+        except Exception:
+            # Cleanup and termination must not depend on a malformed message.
+            pass
+        print(
+            "[nas-addon] WEBSOCKET-CLOSED: "
+            f"session={_safe_session_label(safe_state.get('sessionId', ''))} "
+            f"rule={_safe_rule_label(safe_state.get('ruleId'))} "
+            f"reason={reason}",
+            file=sys.stderr,
+        )
+        flow.kill()
+
+    def response(self, flow: http.HTTPFlow) -> None:
+        response = getattr(flow, "response", None)
+        if (
+            getattr(response, "status_code", None) != 101
+            or getattr(flow, "websocket", None) is None
+        ):
+            self._websocket_states.pop(flow.id, None)
+
+    def error(self, flow: http.HTTPFlow) -> None:
+        self._websocket_states.pop(flow.id, None)
+
+    def websocket_start(self, flow: http.HTTPFlow) -> None:
+        if flow.id not in self._websocket_states:
+            self._close_websocket(flow, "missing-state")
+
+    def websocket_message(self, flow: http.HTTPFlow) -> None:
+        state = self._websocket_states.get(flow.id)
+        if state is None:
+            self._close_websocket(flow, "missing-state")
+            return
+        try:
+            message = flow.websocket.messages[-1]
+            if not isinstance(state, dict):
+                self._close_websocket(flow, "processing-failed")
+                return
+            if not message.from_client:
+                return
+            session_id = state["sessionId"]
+            # A deleted registry must close a long-lived socket on its next
+            # client message, rather than surviving for the normal HTTP cache
+            # TTL. The handshake has already been authorized; this is only a
+            # liveness check for its private session state.
+            _registry_cache.pop(session_id, None)
+            if _load_registry(session_id) is None:
+                self._close_websocket(flow, "stale-session")
+                return
+            if len(message.content) > state["maxBodyBytes"]:
+                self._close_websocket(flow, "resource-limit")
+                return
+            if any(pattern in message.content for pattern in state["forbidPatterns"]):
+                self._close_websocket(flow, "forbidden-secret")
+                return
+            message.content = _mask_bytes(message.content, state["maskPatterns"])
+        except Exception:
+            self._close_websocket(flow, "processing-failed")
+
+    def websocket_end(self, flow: http.HTTPFlow) -> None:
+        self._websocket_states.pop(flow.id, None)
+
     def client_disconnected(self, client: connection.Client) -> None:
+        self._websocket_states = {
+            flow_id: state
+            for flow_id, state in self._websocket_states.items()
+            if isinstance(state, dict) and state.get("clientId") != client.id
+        }
         self._connect_creds.pop(client.id, None)
         disconnected_sessions = self._client_sessions.pop(client.id, set())
         active_sessions = {

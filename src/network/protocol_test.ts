@@ -53,6 +53,7 @@ const validAuthorize = {
   sessionId: "sess_test",
   target: { host: "api.example.com", port: 443 },
   method: "POST",
+  transport: "http",
   requestKind: "forward",
   observedAt: "2026-08-17T00:00:00.000Z",
   bodyTruth: {
@@ -70,6 +71,18 @@ test("authorize validation accepts a bounded rule truth table", () => {
     validateAuthorizeRequest(validAuthorize, "sess_test", document),
   ).toBeNull();
 });
+
+for (const transport of [undefined, "ws", "WebSocket", true, null]) {
+  test(`authorize validation rejects invalid transport ${String(transport)}`, () => {
+    const message = { ...validAuthorize } as Record<string, unknown>;
+    if (transport === undefined) delete message.transport;
+    else message.transport = transport;
+
+    expect(
+      validateAuthorizeRequest(message, "sess_test", document),
+    ).not.toBeNull();
+  });
+}
 
 const invalidAuthorizeTruth = [
   ["a missing truth table", { bodyTruth: undefined }],

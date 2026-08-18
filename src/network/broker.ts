@@ -1338,10 +1338,12 @@ export async function sendBrokerRequest<T extends BrokerResponse>(
 function toAuthzRequest(message: AuthorizeRequest): {
   method: string;
   path: string;
+  transport: AuthorizeRequest["transport"];
 } {
   return {
     method: message.method.toUpperCase(),
     path: pathForSelection(message.reviewContext?.path ?? ""),
+    transport: message.transport,
   };
 }
 

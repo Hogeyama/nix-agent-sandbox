@@ -29,6 +29,7 @@ def main() -> int:
         port = case["port"]
         method = case["method"]
         path = case["path"]
+        transport = case["transport"]
         body = base64.b64decode(case["bodyBase64"], validate=True)
         scope = nas_addon._select_scope(document, host, port)
         limits = (
@@ -45,13 +46,14 @@ def main() -> int:
             body_size, parsed_body,
         )
         decision = nas_addon._decide(
-            document, host, port, method, path, body_truth
+            document, host, port, method, path, body_truth, transport
         )
         line = [
             host,
             str(port),
             method,
             path,
+            transport,
             body_kind,
             decision["action"],
             decision["reason"],

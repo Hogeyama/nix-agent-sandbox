@@ -1,5 +1,5 @@
 {
-  "contractVersion": 3,
+  "contractVersion": 1,
   "fallback": "deny",
   "defaults": {
     "limits": {
@@ -27,6 +27,7 @@
         }
       ],
       "fallback": "deny",
+      "webSocket": "deny",
       "fallbackRuleId": "anthropic.$fallback",
       "limits": {
         "maxBodyBytes": 33554432,

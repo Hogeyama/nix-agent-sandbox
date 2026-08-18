@@ -1052,6 +1052,7 @@ async function authorizeThroughBroker(
     sessionId,
     target: { host, port },
     method: "CONNECT",
+    transport: "http",
     requestKind: "connect",
     observedAt: new Date().toISOString(),
     bodyTruth: {},
