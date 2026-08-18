@@ -281,8 +281,17 @@
             # ホストの profile 次第でテストが黙って skip される。
             pkgs.python3
             pklNative
+            # 静的に検出できる規約は prompt ではなく ast-grep ルールに落とす。
+            pkgs.ast-grep
           ];
           shellHook = ''
+            # ast-grep は Zig を組み込みでサポートしないため、tree-sitter の
+            # grammar を customLanguages として登録する。sgconfig.yml は store
+            # path を含められないので、安定した相対パスへの symlink をここで張る。
+            mkdir -p .ast-grep
+            ln -sfn ${pkgs.tree-sitter-grammars.tree-sitter-zig}/parser \
+              .ast-grep/tree-sitter-zig.so
+
             if [ ! -f .playwright/cli.config.json ]; then
               mkdir -p .playwright
               cat > .playwright/cli.config.json <<EOF

@@ -1,0 +1,20 @@
+# ast-grep configuration.
+#
+# Rules here encode conventions that are detectable from syntax alone, so they
+# are enforced by a tool rather than restated in prompts or review checklists.
+#
+# `.ast-grep/tree-sitter-zig.so` is a symlink the devShell's shellHook creates,
+# because ast-grep has no built-in Zig support and a nix store path cannot be
+# committed. Outside `nix develop`, create the symlink or run `nix develop -c`.
+ruleDirs:
+  - rules
+
+testConfigs:
+  - testDir: rule-tests
+
+customLanguages:
+  zig:
+    libraryPath: .ast-grep/tree-sitter-zig.so
+    extensions:
+      - zig
+    expandoChar: _

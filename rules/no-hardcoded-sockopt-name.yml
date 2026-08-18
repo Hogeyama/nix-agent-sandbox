@@ -1,0 +1,22 @@
+id: no-hardcoded-sockopt-name
+language: zig
+severity: error
+rule:
+  any:
+    - pattern: std.c.getsockopt($FD, $LEVEL, $OPT, $VALUE, $LEN)
+    - pattern: std.c.setsockopt($FD, $LEVEL, $OPT, $VALUE, $LEN)
+    - pattern: std.posix.getsockopt($FD, $LEVEL, $OPT, $VALUE, $LEN)
+    - pattern: std.posix.setsockopt($FD, $LEVEL, $OPT, $VALUE, $LEN)
+constraints:
+  OPT:
+    # `kind:` ではなく捕捉テキストで判定する。整数リテラルのノード名は
+    # tree-sitter-zig の世代で `INTEGER` と `integer` に分かれており、
+    # nixpkgs を上げると kind 指定はルールの parse error になる。Zig の数値
+    # リテラルは必ず数字で始まり識別子は数字で始まれないので、この regex で
+    # 十分に区別できる。
+    regex: '^[0-9]'
+message: >-
+  socket option の名前を数値リテラルで書かず std.posix.SO.* を使う。値は target
+  依存で、たとえば SO_DOMAIN は x86_64 で 39、mips で 0x1029 である。直書きすると
+  -Dtarget でのクロスコンパイル時に getsockopt が黙って失敗し、それを見て分類を
+  false に倒す呼び出し側が診断なく fail-closed する。

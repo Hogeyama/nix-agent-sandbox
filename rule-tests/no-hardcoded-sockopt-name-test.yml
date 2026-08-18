@@ -1,0 +1,24 @@
+id: no-hardcoded-sockopt-name
+valid:
+  - |
+    fn classify(fd: std.posix.fd_t) bool {
+        return std.c.getsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.DOMAIN, &value, &len) == 0;
+    }
+  - |
+    fn kind(fd: std.posix.fd_t) bool {
+        return std.posix.getsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.TYPE, &value, &len) == 0;
+    }
+  # A literal elsewhere in the call is not this rule's concern.
+  - |
+    fn other(fd: std.posix.fd_t) bool {
+        return std.c.getsockopt(fd, 1, std.posix.SO.DOMAIN, &value, &len) == 0;
+    }
+invalid:
+  - |
+    fn bad(fd: std.posix.fd_t) bool {
+        return std.c.getsockopt(fd, std.posix.SOL.SOCKET, 39, &value, &len) == 0;
+    }
+  - |
+    fn worse(fd: std.posix.fd_t) bool {
+        return std.posix.setsockopt(fd, std.posix.SOL.SOCKET, 39, &value, &len) == 0;
+    }

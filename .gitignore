@@ -3,6 +3,8 @@
 src/ui/dist/
 .playwright/cli.config.json
 .playwright-cli/
+# devShell が張る tree-sitter grammar への symlink（store path を含む）
+.ast-grep/
 .worktrees/
 .direnv/
 node_modules/
