@@ -1051,7 +1051,7 @@ const LEGACY_IDENTIFIERS: readonly (readonly [string, string])[] = [
 ];
 
 const MIGRATION_GUIDE_URL =
-  "https://github.com/Hogeyama/nix-agent-sandbox/blob/develop/docs/migration/network-scopes.md#legacy-identifier-mapping";
+  "https://github.com/Hogeyama/nix-agent-sandbox/blob/main/docs/migration/network-scopes.md#legacy-identifier-mapping";
 
 /**
  * 評価前の生ソースから廃止した識別子を探す。

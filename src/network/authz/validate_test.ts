@@ -1262,7 +1262,7 @@ describe("旧識別子の検出", () => {
 
   test("12 個の廃止識別子をすべて名指しする", () => {
     const migrationGuideUrl =
-      "https://github.com/Hogeyama/nix-agent-sandbox/blob/develop/docs/migration/network-scopes.md#legacy-identifier-mapping";
+      "https://github.com/Hogeyama/nix-agent-sandbox/blob/main/docs/migration/network-scopes.md#legacy-identifier-mapping";
     const removed = [
       "reviewRules",
       "ReviewRule",
