@@ -15,7 +15,10 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
-import { detectLegacyIdentifiers } from "../network/authz/validate.ts";
+import {
+  type Diagnostic,
+  detectLegacyIdentifiers,
+} from "../network/authz/validate.ts";
 import { initConfig, resolveSchemaAsset } from "./init.ts";
 import {
   findNixConfig,
@@ -75,18 +78,52 @@ export async function loadConfig(
 /**
  * 廃止した識別子を、Pkl が「解決できない参照」と言う前に名指しする。
  *
+ * 走査するのは config.pkl だけではない。旧識別子がグローバル設定の側にあると、
+ * config.pkl しか見ないこの検査は何も見つけられず、案内の代わりに pkl の
+ * `Cannot find property` がそのまま出る。amends の連鎖をたどって出た型エラーは
+ * どの識別子が廃止されたのかも、書き換え先も名指ししない。config.pkl が取り込む
+ * global.pkl も同じ目で見る。
+ *
  * 移行案内の専用であって互換モードではない。旧識別子を含む設定は動かない。
  */
 async function reportLegacyIdentifiers(configPath: string): Promise<void> {
   const source = await readFile(configPath, "utf8");
-  const diagnostics = detectLegacyIdentifiers(
-    source,
-    path.basename(configPath),
-  );
+  const diagnostics = [
+    ...(await legacyIdentifiersInGlobal(source)),
+    ...detectLegacyIdentifiers(source, path.basename(configPath)),
+  ];
   if (diagnostics.length === 0) return;
   throw new Error(
     diagnostics.map((diagnostic) => diagnostic.message).join("\n\n"),
   );
+}
+
+const GLOBAL_MODULE_REFERENCE = /^\s*(?:amends|import)\s+"[^"]*global\.pkl"/m;
+
+/**
+ * config.pkl が取り込むグローバル設定を走査する。
+ *
+ * 取り込んでいない config.pkl のために落とすことはしない。evalPklConfig は
+ * global.pkl を必ず modulePath に置くが、参照されなければ pkl は評価しないので、
+ * 使っていない設定の中身で起動を止めるのは筋が通らない。
+ */
+async function legacyIdentifiersInGlobal(
+  configSource: string,
+): Promise<readonly Diagnostic[]> {
+  if (!GLOBAL_MODULE_REFERENCE.test(configSource)) return [];
+
+  const globalPath = path.join(getGlobalConfigDir(), "global.pkl");
+  let source: string;
+  try {
+    source = await readFile(globalPath, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+
+  // ここだけ絶対パスで示す。global.pkl はプロジェクトの外にあり、名前だけでは
+  // どこを直せばいいのか分からない。
+  return detectLegacyIdentifiers(source, globalPath);
 }
 
 /**

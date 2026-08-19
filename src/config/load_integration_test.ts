@@ -693,6 +693,110 @@ profiles {
 );
 
 test.skipIf(!hasPkl)(
+  "loadConfig: names the replacement for a dropped setting left in global.pkl",
+  async () => {
+    const rootDir = await mkdtemp(
+      path.join(tmpdir(), "nas-cfg-global-legacy-"),
+    );
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    try {
+      const xdgConfig = path.join(rootDir, "xdg-config");
+      const globalDir = path.join(xdgConfig, "nas");
+      process.env.XDG_CONFIG_HOME = xdgConfig;
+      await mkdir(globalDir, { recursive: true });
+      const schemaText = await readBundledSchema();
+      await writeFile(path.join(globalDir, "Schema.pkl"), schemaText);
+      const globalPkl = path.join(globalDir, "global.pkl");
+      await writeFile(
+        globalPkl,
+        `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules {
+        new ReviewRule { host = "api.github.com"; action = "allow" }
+      }
+    }
+  }
+}
+`,
+      );
+
+      const configPkl = `amends "modulepath:/global.pkl"
+`;
+      await withNasConfig(configPkl, async (dir) => {
+        // 旧識別子がグローバル側にあると、pkl は amends の連鎖の先で
+        // "Cannot find property" と言うだけで、移行先も直すファイルも示さない。
+        const error = await loadConfig({ startDir: dir }).then(
+          () => null,
+          (thrown: unknown) => String(thrown),
+        );
+        expect(error).toContain("reviewRules");
+        expect(error).toContain("network.scopes");
+        expect(error).toContain(globalPkl);
+        expect(error).not.toContain("Cannot find property");
+      });
+    } finally {
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
+  "loadConfig: a dropped name in an unused global.pkl does not block startup",
+  async () => {
+    const rootDir = await mkdtemp(
+      path.join(tmpdir(), "nas-cfg-global-unused-"),
+    );
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    try {
+      const xdgConfig = path.join(rootDir, "xdg-config");
+      const globalDir = path.join(xdgConfig, "nas");
+      process.env.XDG_CONFIG_HOME = xdgConfig;
+      await mkdir(globalDir, { recursive: true });
+      const schemaText = await readBundledSchema();
+      await writeFile(path.join(globalDir, "Schema.pkl"), schemaText);
+      await writeFile(
+        path.join(globalDir, "global.pkl"),
+        `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+    network {
+      reviewRules {}
+    }
+  }
+}
+`,
+      );
+
+      // config.pkl が global.pkl を取り込まない以上、pkl はその中身を評価しない。
+      const configPkl = `amends "Schema.pkl"
+
+profiles {
+  ["dev"] {
+    agent = "claude"
+  }
+}
+`;
+      await withNasConfig(configPkl, async (dir) => {
+        const config = await loadConfig({ startDir: dir });
+        expect(config.profiles.dev.agent).toEqual("claude");
+      });
+    } finally {
+      if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = origXdg;
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(!hasPkl)(
   "loadConfig: throws when global.pkl does not amend Schema.pkl (broken amends chain)",
   async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "nas-cfg-broken-chain-"));
